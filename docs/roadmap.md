@@ -33,6 +33,11 @@ API path, a Web manager console that reads from the API, an Electron remote sync
 approved Run/Test Evidence summaries, explicit demo session headers, and CI coverage for macOS
 verify, Windows compatibility checks, and Postgres integration smoke.
 
+v0.4 Knowledge Governance is implemented in the desktop workbench. DevFlow now indexes
+Git-managed Markdown knowledge sources into governance documents, graph entities, and tag
+relations; selected workflow nodes show standards checks; and the Knowledge page displays the
+Markdown index plus current Run references.
+
 Current validation remains macOS-local for the full real Electron window path. Windows compatibility
 is preserved through static automation checks and Windows CI for typecheck/unit/audit; full Windows
 Electron smoke is still tracked as future compatibility expansion. See
@@ -107,18 +112,20 @@ Electron smoke is still tracked as future compatibility expansion. See
 - Added Windows compatibility guardrails through `corepack pnpm test:cross-platform` and Windows CI
   typecheck/unit/audit coverage.
 
-## Planned Milestones
-
 ### v0.4: Knowledge Governance
 
-- Build the standards-focused Knowledge Base on top of Git-managed Markdown.
-- Index development standards, testing standards, PR and review checklists, ADRs, API contracts,
-  onboarding notes, and Skill/MCP usage rules.
-- Build a lightweight Knowledge Graph with nodes for systems, modules, standards, terms, owners,
-  Skills, testing strategies, and ADRs.
-- Link Runs, Artifacts, Test Evidence, and Gate decisions back to relevant standards and knowledge
-  nodes.
-- Keep Markdown as the source of truth so knowledge changes can be reviewed like code.
+- Added `KnowledgeSourceFile`, `KnowledgeDocument`, `KnowledgeReference`, and
+  `KnowledgeGovernanceCheck` domain types.
+- Added Markdown indexing for standards, testing evidence rules, PR review checklists, ADRs, and
+  Skill/MCP usage rules.
+- Added a lightweight graph projection with standard and term nodes plus `defines` relations.
+- Added shared reference/check helpers that link Runs, Artifacts, Test Evidence, and Gate decisions
+  back to relevant standards.
+- Added desktop Inspector governance checks and an upgraded Knowledge page with Git Markdown index,
+  graph, tags, source paths, and current Run references.
+- Added representative source Markdown under `docs/knowledge/`.
+
+## Planned Milestones
 
 ### v0.5: Agent Knowledge Enforcement
 
@@ -133,7 +140,7 @@ Electron smoke is still tracked as future compatibility expansion. See
 - HoneyAI adapter or execution-engine bridge.
 - Real LLM or multi-agent orchestration.
 - Real MCP process management, permissions audit, and tool-call telemetry.
-- Git Markdown indexing pipeline and editor.
+- Repository file watcher, in-app Markdown editor, and remote knowledge synchronization.
 - Electron packaging, macOS signing/notarization, Windows installer/signing, auto-update, and release
   distribution.
 - Full release/distribution CI beyond the current verify workflow.

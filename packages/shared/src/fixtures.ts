@@ -2,6 +2,7 @@ import type {
   AgentEvent,
   Artifact,
   KnowledgeEntity,
+  KnowledgeSourceFile,
   KnowledgeRelation,
   McpServerDefinition,
   Project,
@@ -10,6 +11,7 @@ import type {
   TokenUsage,
   WorkflowRun,
 } from './domain'
+import { indexKnowledgeSources } from './knowledge'
 
 export const members: TeamMember[] = [
   { id: 'u-erich', name: 'Erich', role: 'owner', avatarInitials: 'ER', focus: 'Platform' },
@@ -345,15 +347,101 @@ export const mcpServers: McpServerDefinition[] = [
   },
 ]
 
-export const knowledgeEntities: KnowledgeEntity[] = [
-  { id: 'kg-health', label: 'Health Endpoint', kind: 'system', sourcePath: 'docs/api/health.md' },
-  { id: 'kg-gate', label: '分级 Gate', kind: 'decision', sourcePath: 'docs/adr/0001.md' },
-  { id: 'kg-test', label: '测试准备', kind: 'skill', sourcePath: 'task-lifecycle-kb/standards/testing.md' },
-  { id: 'kg-ling', label: 'Ling', kind: 'owner', sourcePath: 'team/members.md' },
+export const knowledgeSources: KnowledgeSourceFile[] = [
+  {
+    sourcePath: 'docs/knowledge/standards/api-health.md',
+    updatedAt: '2026-06-16T08:00:00.000Z',
+    markdown: `---
+title: API Health Endpoint Standard
+category: api_contract
+ownerId: u-ling
+tags: api, health, degraded
+summary: Health endpoints must expose ok, degraded, and down states with explicit status mapping.
+---
+
+# API Health Endpoint Standard
+
+Health endpoints must expose ok, degraded, and down states with explicit status mapping.
+
+- Route handlers compose service results; services own dependency checks.
+- Degraded dependencies must remain observable in test evidence.
+- Runtime, database, and cache checks must be safe to call during deploy smoke.
+`,
+  },
+  {
+    sourcePath: 'docs/knowledge/standards/testing-evidence.md',
+    updatedAt: '2026-06-16T08:00:00.000Z',
+    markdown: `---
+title: Local Test Evidence Standard
+category: testing_standard
+ownerId: u-yu
+tags: test, evidence, smoke
+summary: Local test evidence needs command, exit code, duration, and redacted output.
+---
+
+# Local Test Evidence Standard
+
+Local test evidence needs command, exit code, duration, and redacted output.
+
+- Store only bounded stdout and stderr.
+- Redact API keys and tokens before evidence is persisted or synchronized.
+- Failed tests must remain visible to reviewers.
+`,
+  },
+  {
+    sourcePath: 'docs/knowledge/checklists/pr-review.md',
+    updatedAt: '2026-06-16T08:00:00.000Z',
+    markdown: `---
+title: PR Review Readiness Checklist
+category: review_checklist
+ownerId: u-ling
+tags: pr, review, gate
+summary: Pull requests should link design, test evidence, reviewer decisions, and rollout notes.
+---
+
+# PR Review Readiness Checklist
+
+Pull requests should link design, test evidence, reviewer decisions, and rollout notes.
+`,
+  },
+  {
+    sourcePath: 'docs/knowledge/adr/gate-governance.md',
+    updatedAt: '2026-06-16T08:00:00.000Z',
+    markdown: `---
+title: Gate Governance ADR
+category: adr
+ownerId: u-erich
+tags: gate, approval, governance
+summary: Gates are review decisions that must cite evidence and the standards used by reviewers.
+---
+
+# Gate Governance ADR
+
+Gates are review decisions that must cite evidence and the standards used by reviewers.
+`,
+  },
+  {
+    sourcePath: 'docs/knowledge/rules/mcp-skill-usage.md',
+    updatedAt: '2026-06-16T08:00:00.000Z',
+    markdown: `---
+title: Skill and MCP Usage Rules
+category: mcp_rule
+ownerId: u-erich
+tags: skill, mcp, permission
+summary: Tool usage must show command intent, permission scope, and audit evidence.
+---
+
+# Skill and MCP Usage Rules
+
+Tool usage must show command intent, permission scope, and audit evidence.
+`,
+  },
 ]
 
-export const knowledgeRelations: KnowledgeRelation[] = [
-  { id: 'kr-1', source: 'kg-health', target: 'kg-test', label: 'tests' },
-  { id: 'kr-2', source: 'kg-gate', target: 'kg-ling', label: 'owned_by' },
-  { id: 'kr-3', source: 'kg-test', target: 'kg-gate', label: 'depends_on' },
-]
+export const knowledgeIndex = indexKnowledgeSources(knowledgeSources)
+
+export const knowledgeDocuments = knowledgeIndex.documents
+
+export const knowledgeEntities: KnowledgeEntity[] = knowledgeIndex.entities
+
+export const knowledgeRelations: KnowledgeRelation[] = knowledgeIndex.relations

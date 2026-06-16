@@ -359,6 +359,22 @@ describe('App', () => {
     expect(screen.getByText('没有匹配的知识节点')).toBeInTheDocument()
   })
 
+  it('shows v0.4 knowledge governance documents and selected-node checks', () => {
+    render(<App />)
+
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Governance')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('API Health Endpoint Standard')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Local Test Evidence Standard')
+
+    fireEvent.click(screen.getByRole('button', { name: /Knowledge/ }))
+
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Knowledge Governance')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Git Markdown Index')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('docs/knowledge/standards/api-health.md')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Run references')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('art-design')
+  })
+
   it('selects a local project, saves an editable test command, and archives local test evidence', async () => {
     const api = installDesktopApi()
     render(<App />)

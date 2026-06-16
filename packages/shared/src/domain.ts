@@ -186,7 +186,7 @@ export type McpServerDefinition = {
 export type KnowledgeEntity = {
   id: string
   label: string
-  kind: 'system' | 'term' | 'decision' | 'template' | 'skill' | 'owner'
+  kind: 'system' | 'module' | 'standard' | 'term' | 'decision' | 'template' | 'skill' | 'owner'
   sourcePath: string
 }
 
@@ -195,6 +195,73 @@ export type KnowledgeRelation = {
   source: string
   target: string
   label: 'depends_on' | 'owned_by' | 'uses' | 'defines' | 'tests' | 'approves'
+}
+
+export type KnowledgeDocumentCategory =
+  | 'development_standard'
+  | 'testing_standard'
+  | 'review_checklist'
+  | 'adr'
+  | 'api_contract'
+  | 'onboarding'
+  | 'skill_rule'
+  | 'mcp_rule'
+
+export type KnowledgeSourceFile = {
+  sourcePath: string
+  markdown: string
+  updatedAt: string
+}
+
+export type KnowledgeDocument = {
+  id: string
+  title: string
+  category: KnowledgeDocumentCategory
+  sourcePath: string
+  summary: string
+  tags: string[]
+  ownerId?: string
+  updatedAt: string
+  markdown: string
+}
+
+export type KnowledgeReferenceTargetType =
+  | 'run'
+  | 'node'
+  | 'artifact'
+  | 'test_evidence'
+  | 'gate_decision'
+
+export type KnowledgeReferenceRelation =
+  | 'cites'
+  | 'satisfies'
+  | 'requires_evidence'
+  | 'violates'
+
+export type KnowledgeReference = {
+  id: string
+  runId: string
+  targetType: KnowledgeReferenceTargetType
+  documentId: string
+  relation: KnowledgeReferenceRelation
+  reason: string
+  nodeId?: string
+  artifactId?: string
+  evidenceId?: string
+}
+
+export type KnowledgeGovernanceStatus = 'satisfied' | 'needs_evidence' | 'violated'
+
+export type KnowledgeGovernanceCheck = {
+  id: string
+  runId: string
+  nodeId: string
+  documentId: string
+  title: string
+  category: KnowledgeDocumentCategory
+  status: KnowledgeGovernanceStatus
+  summary: string
+  referenceIds: string[]
 }
 
 export type TeamOverview = {

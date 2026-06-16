@@ -35,11 +35,14 @@ import {
 import { useEffect, useMemo, useState } from 'react'
 import {
   validateTestCommandSafety,
+  buildKnowledgeGovernanceChecks,
+  buildKnowledgeReferences,
   createRemoteRunSummary,
   createRemoteTestEvidenceSummary,
   artifacts as fixtureArtifacts,
   events as fixtureEvents,
   formatUsd,
+  knowledgeDocuments,
   knowledgeEntities,
   knowledgeRelations,
   mcpServers as fixtureMcpServers,
@@ -60,6 +63,9 @@ import {
   type DataOrigin,
   type LocalExecutionState,
   type LocalProject,
+  type KnowledgeDocument,
+  type KnowledgeGovernanceCheck,
+  type KnowledgeReference,
   type Project,
   type TeamMember,
   type TestEvidence,
@@ -308,6 +314,31 @@ export function App() {
     localProjects.find((project) => project.id === selectedLocalProjectId) ?? localProjects[0]
   const currentUser = teamMembers.find((member) => member.id === 'u-ling') ?? teamMembers[1]
   const flow = useMemo(() => (selectedRun ? buildFlow(selectedRun) : { nodes: [], edges: [] }), [selectedRun])
+  const knowledgeReferences = useMemo(
+    () =>
+      selectedRun
+        ? buildKnowledgeReferences({
+            run: selectedRun,
+            artifacts,
+            documents: knowledgeDocuments,
+            testEvidence,
+          })
+        : [],
+    [artifacts, selectedRun, testEvidence],
+  )
+  const selectedGovernanceChecks = useMemo(
+    () =>
+      selectedRun && selectedNode
+        ? buildKnowledgeGovernanceChecks({
+            run: selectedRun,
+            node: selectedNode,
+            artifacts,
+            documents: knowledgeDocuments,
+            testEvidence,
+          })
+        : [],
+    [artifacts, selectedNode, selectedRun, testEvidence],
+  )
 
   function resetTeamSnapshot() {
     setTeamProjects(projects)
@@ -852,6 +883,7 @@ export function App() {
               selectedNode={selectedNode}
               artifacts={selectedArtifacts}
               events={selectedEvents}
+              governanceChecks={selectedGovernanceChecks}
               canApprove={selectedNode ? canApproveGate(currentUser?.role ?? 'member', selectedNode) : false}
               onApprove={approveSelectedGate}
               onRunTests={executeTestPlan}
@@ -872,7 +904,12 @@ export function App() {
         )}
 
         {activeView === 'knowledge' && (
-          <KnowledgeView query={normalizedSearchQuery} />
+          <KnowledgeView
+            query={normalizedSearchQuery}
+            documents={knowledgeDocuments}
+            references={knowledgeReferences}
+            selectedRun={selectedRun}
+          />
         )}
 
         {activeView === 'skills' && (
@@ -1044,6 +1081,7 @@ function Inspector({
   selectedNode,
   artifacts,
   events,
+  governanceChecks,
   canApprove,
   onApprove,
   onRunTests,
@@ -1052,6 +1090,7 @@ function Inspector({
   selectedNode: WorkflowNode | undefined
   artifacts: Artifact[]
   events: AgentEvent[]
+  governanceChecks: KnowledgeGovernanceCheck[]
   canApprove: boolean
   onApprove: () => void
   onRunTests: () => void
@@ -1070,6 +1109,27 @@ function Inspector({
       <div className="node-summary">
         <span>{stageLabels[selectedNode.stage]}</span>
         <p>{selectedNode.subtitle}</p>
+      </div>
+
+      <div className="governance-list">
+        <span className="panel-label">Knowledge Governance</span>
+        {governanceChecks.length === 0 ? (
+          <p className="empty-note">当前节点没有关联的知识治理检查。</p>
+        ) : (
+          governanceChecks.map((check) => (
+            <article
+              className={`governance-card governance-card--${check.status}`}
+              key={check.id}
+            >
+              <div className="compact-row">
+                <strong>{check.title}</strong>
+                <span>{check.status}</span>
+              </div>
+              <p>{check.summary}</p>
+              <code>{check.category}</code>
+            </article>
+          ))
+        )}
       </div>
 
       <div className="inspector-actions">
@@ -1170,7 +1230,26 @@ function TeamOverview({
   )
 }
 
-function KnowledgeView({ query }: { query: string }) {
+function KnowledgeView({
+  query,
+  documents,
+  references,
+  selectedRun,
+}: {
+  query: string
+  documents: KnowledgeDocument[]
+  references: KnowledgeReference[]
+  selectedRun: WorkflowRun | undefined
+}) {
+  const visibleDocuments = documents.filter((document) =>
+    matchesQuery(query, [
+      document.title,
+      document.category,
+      document.summary,
+      document.sourcePath,
+      ...document.tags,
+    ]),
+  )
   const visibleEntities = knowledgeEntities.filter((entity) =>
     matchesQuery(query, [entity.label, entity.kind, entity.sourcePath]),
   )
@@ -1186,6 +1265,32 @@ function KnowledgeView({ query }: { query: string }) {
     <section className="page-grid" data-testid="knowledge-view">
       <div className="page-main">
         <div className="section-heading">
+          <span>Knowledge Governance</span>
+          <strong>Git Markdown Index</strong>
+        </div>
+        {visibleDocuments.length === 0 ? (
+          <p className="empty-note">没有匹配的知识文档</p>
+        ) : (
+          <div className="knowledge-doc-list">
+            {visibleDocuments.map((document) => (
+              <article className="knowledge-doc-card" key={document.id}>
+                <div>
+                  <span>{document.category}</span>
+                  <strong>{document.title}</strong>
+                </div>
+                <p>{document.summary}</p>
+                <code>{document.sourcePath}</code>
+                <div className="tag-list">
+                  {document.tags.map((tag) => (
+                    <span key={tag}>{tag}</span>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+
+        <div className="section-heading section-heading--inline">
           <span>Knowledge Graph</span>
           <strong>轻量知识图谱</strong>
         </div>
@@ -1214,6 +1319,20 @@ function KnowledgeView({ query }: { query: string }) {
       <aside className="page-side">
         <strong>Git + Markdown 真源</strong>
         <p>知识库保留在项目仓库，平台只负责索引、图谱、检索和 Run 证据回链。</p>
+        <strong>Run references</strong>
+        <p>{selectedRun?.title ?? 'No selected Run'}</p>
+        {references.length === 0 ? (
+          <p className="empty-note">当前 Run 尚未匹配到知识引用。</p>
+        ) : (
+          references.slice(0, 8).map((reference) => (
+            <article className="reference-row" key={reference.id}>
+              <span>{reference.targetType}</span>
+              <strong>{reference.relation}</strong>
+              <p>{reference.documentId}</p>
+              <code>{reference.artifactId ?? reference.evidenceId ?? reference.nodeId ?? reference.runId}</code>
+            </article>
+          ))
+        )}
       </aside>
     </section>
   )

@@ -34,10 +34,30 @@ developer configuration.
 The team-maintained Git and Markdown source of reusable standards, templates, decisions, examples,
 project context, and glossary.
 
+## Knowledge Source File
+
+A Markdown file in the repository that remains the reviewable source of truth for a team standard,
+checklist, ADR, contract, onboarding note, Skill rule, or MCP rule.
+
+## Knowledge Document
+
+The indexed representation of a Knowledge Source File, including title, category, summary, tags,
+owner, source path, and Markdown content.
+
 ## Knowledge Graph
 
 A lightweight relationship layer extracted from the Knowledge Base and Run artifacts. It links terms,
 systems, decisions, tasks, artifacts, and owners.
+
+## Knowledge Reference
+
+A relationship between a Run, Node, Artifact, Test Evidence, or Gate decision and a Knowledge
+Document. References can cite, satisfy, require evidence for, or violate a standard.
+
+## Knowledge Governance Check
+
+A reviewer-facing summary of whether the currently selected workflow node has enough evidence for
+the standards that apply to it. v0.4 displays these checks; later versions can enforce them.
 
 ## Token Usage
 

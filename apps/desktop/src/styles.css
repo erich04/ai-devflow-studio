@@ -562,6 +562,7 @@ button:disabled {
 .node-summary,
 .artifact-card,
 .event-row,
+.governance-card,
 .test-report {
   padding: 12px;
   border: 1px solid var(--border);
@@ -593,9 +594,38 @@ button:disabled {
 }
 
 .artifact-list,
-.event-list {
+.event-list,
+.governance-list {
   display: grid;
   gap: 8px;
+}
+
+.governance-card {
+  border-left: 3px solid var(--accent);
+}
+
+.governance-card--satisfied {
+  border-left-color: var(--green);
+}
+
+.governance-card--needs_evidence {
+  border-left-color: var(--amber);
+}
+
+.governance-card--violated {
+  border-left-color: var(--danger);
+}
+
+.governance-card p {
+  margin: 6px 0 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.governance-card code {
+  color: var(--text-faint);
+  font-size: 11px;
 }
 
 .artifact-card code {
@@ -686,6 +716,90 @@ button:disabled {
 
 .compact-row strong {
   color: var(--text);
+}
+
+.section-heading--inline {
+  margin-top: 18px;
+}
+
+.knowledge-doc-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.knowledge-doc-card {
+  display: grid;
+  gap: 8px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.knowledge-doc-card div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.knowledge-doc-card div:first-child span {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.knowledge-doc-card p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.knowledge-doc-card code,
+.reference-row code {
+  overflow-wrap: anywhere;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-list span {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.reference-row {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.reference-row span {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.reference-row p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .knowledge-map {

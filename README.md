@@ -12,7 +12,8 @@ token cost visible.
 - `apps/web`: team and manager overview console.
 - `apps/api`: team API for runs, projects, skills, MCP definitions, and cost telemetry.
 - `apps/worker`: async rollup worker placeholder.
-- `packages/shared`: domain types, fixtures, cost aggregation, gate policy, redaction, and graph helpers.
+- `packages/shared`: domain types, fixtures, cost aggregation, gate policy, redaction, knowledge
+  governance, and graph helpers.
 
 Long-term roadmap: [`docs/roadmap.md`](docs/roadmap.md).
 

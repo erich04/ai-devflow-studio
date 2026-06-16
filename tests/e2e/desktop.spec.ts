@@ -181,10 +181,15 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('team-overview').getByText('Payments API')).toBeVisible()
 
     await page.getByRole('button', { name: /Knowledge/ }).click()
+    await expect(page.getByTestId('knowledge-view')).toContainText('Knowledge Governance')
+    await expect(page.getByTestId('knowledge-view')).toContainText('Git Markdown Index')
     await expect(page.getByTestId('knowledge-view')).toContainText('轻量知识图谱')
     await expect(page.getByText('没有匹配的知识节点')).toBeVisible()
     await page.getByLabel('Search runs and knowledge').fill('')
-    await expect(page.getByText('Health Endpoint')).toBeVisible()
+    await expect(page.getByTestId('knowledge-view')).toContainText('API Health Endpoint Standard')
+    await expect(page.getByTestId('knowledge-view')).toContainText('docs/knowledge/standards/api-health.md')
+    await expect(page.getByTestId('knowledge-view')).toContainText('Run references')
+    await expect(page.getByTestId('knowledge-view')).toContainText('artifact')
 
     await page.getByRole('button', { name: /^Skills$/ }).click()
     await expect(page.getByTestId('skill-view')).toContainText('团队能力目录')
