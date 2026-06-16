@@ -5,6 +5,10 @@ import type {
   LocalSettings,
   LocalProject,
   McpServerDefinition,
+  RemoteRunSummary,
+  RemoteSyncUploadResult,
+  RemoteTeamSnapshot,
+  RemoteTestEvidenceSummary,
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
@@ -28,9 +32,18 @@ export type RunProjectTestsResult = {
   state: LocalExecutionState
 }
 
+export type LoadRemoteSnapshotInput = {
+  organizationId?: string
+}
+
 export type DevFlowDesktopApi = {
   platform: string
   loadState: () => Promise<LocalExecutionState>
+  loadRemoteSnapshot: (input?: LoadRemoteSnapshotInput) => Promise<RemoteTeamSnapshot>
+  uploadRunSummary: (summary: RemoteRunSummary) => Promise<RemoteSyncUploadResult>
+  uploadTestEvidenceSummary: (
+    summary: RemoteTestEvidenceSummary,
+  ) => Promise<RemoteSyncUploadResult>
   selectLocalProject: () => Promise<LocalProject | null>
   saveProjectTestCommand: (input: SaveProjectTestCommandInput) => Promise<LocalProject>
   validateTestCommand: (input: ValidateTestCommandInput) => Promise<CommandSafetyResult>

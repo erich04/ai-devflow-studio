@@ -240,6 +240,50 @@ export type LocalExecutionState = {
   mcpServers: McpServerDefinition[]
 }
 
+export type RemoteTeamSnapshot = {
+  projects: Project[]
+  members: TeamMember[]
+  runs: WorkflowRun[]
+  artifacts: Artifact[]
+  events: AgentEvent[]
+  projectCost: import('./cost').TokenUsageRollup[]
+  memberCost: import('./cost').TokenUsageRollup[]
+  totalCost: string
+}
+
+export type RemoteRunSummaryKind = 'run' | 'approval' | 'event'
+
+export type RemoteRunSummary = {
+  kind: RemoteRunSummaryKind
+  runId: string
+  projectId: string
+  title: string
+  status: RunStatus
+  currentNodeId: string
+  branchName: string
+  updatedAt: string
+}
+
+export type RemoteTestEvidenceSummary = {
+  id: string
+  runId: string
+  nodeId: string
+  projectId: string
+  command: string
+  status: TestEvidenceStatus
+  exitCode: number | null
+  durationMs: number
+  summary: string
+  redacted: boolean
+  createdAt: string
+}
+
+export type RemoteSyncUploadResult = {
+  accepted: boolean
+  syncedAt: string
+  message: string
+}
+
 export type CommandRiskLevel = 'safe' | 'warn' | 'blocked'
 
 export type CommandSafetyResult = {

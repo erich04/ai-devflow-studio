@@ -22,6 +22,7 @@ import {
   Network,
   Play,
   Plus,
+  RefreshCw,
   Save,
   Search,
   Settings2,
@@ -34,6 +35,8 @@ import {
 import { useEffect, useMemo, useState } from 'react'
 import {
   validateTestCommandSafety,
+  createRemoteRunSummary,
+  createRemoteTestEvidenceSummary,
   artifacts as fixtureArtifacts,
   events as fixtureEvents,
   formatUsd,
@@ -258,6 +261,7 @@ export function App() {
   const [testCommandDraft, setTestCommandDraft] = useState('')
   const [commandSafety, setCommandSafety] = useState<CommandSafetyResult | null>(null)
   const [isRunningTests, setIsRunningTests] = useState(false)
+  const [isSyncingRemote, setIsSyncingRemote] = useState(false)
   const [mcpServers, setMcpServers] = useState<McpServerDefinition[]>(fixtureMcpServers)
   const [isNewRunOpen, setIsNewRunOpen] = useState(false)
   const [draftTitle, setDraftTitle] = useState('重构 GitHub webhook 重试策略')
@@ -378,11 +382,12 @@ export function App() {
       return
     }
 
-    desktopApi
-      .validateTestCommand({
+    Promise.resolve(
+      desktopApi.validateTestCommand({
         projectId: selectedLocalProject.id,
         testCommand: testCommandDraft,
-      })
+      }),
+    )
       .then((safety) => {
         if (!disposed) {
           setCommandSafety(safety)
@@ -408,6 +413,39 @@ export function App() {
     void desktopApi.saveSettings({ themePreference: nextPreference }).catch((error: unknown) => {
       setToast(error instanceof Error ? error.message : '保存主题偏好失败')
     })
+  }
+
+  async function syncRemoteTeamState() {
+    if (!desktopApi) {
+      setToast('请在 Electron 应用中同步团队状态')
+      return
+    }
+
+    setIsSyncingRemote(true)
+    setToast('正在同步团队远端状态...')
+
+    try {
+      const snapshot = await desktopApi.loadRemoteSnapshot({ organizationId: 'org-demo' })
+      const nextRun = snapshot.runs[0]
+
+      setRuns(snapshot.runs.length > 0 ? snapshot.runs : fixtureRuns)
+      setArtifacts(snapshot.artifacts)
+      setEvents(snapshot.events)
+      setTestEvidence([])
+      setDataOrigin(snapshot.runs.length > 0 ? 'remote' : 'seed')
+
+      if (nextRun) {
+        setSelectedRunId(nextRun.id)
+        setSelectedNodeId(nextRun.currentNodeId)
+        setActiveView('workbench')
+      }
+
+      setToast('团队远端状态已同步')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '同步团队远端状态失败')
+    } finally {
+      setIsSyncingRemote(false)
+    }
   }
 
   function approveSelectedGate() {
@@ -450,6 +488,9 @@ export function App() {
       ]).catch((error: unknown) => {
         setToast(error instanceof Error ? error.message : '保存 Gate 审批失败')
       })
+      void desktopApi
+        .uploadRunSummary(createRemoteRunSummary(updatedRun, 'approval'))
+        .catch(() => undefined)
     }
   }
 
@@ -545,6 +586,9 @@ export function App() {
         run: runningRun,
       })
       applyLocalExecutionState(result.state)
+      void desktopApi
+        .uploadTestEvidenceSummary(createRemoteTestEvidenceSummary(result.evidence))
+        .catch(() => undefined)
       setSelectedRunId(runningRun.id)
       setSelectedNodeId(testNode.id)
       setActiveView('tests')
@@ -678,6 +722,10 @@ export function App() {
 
           <div className="topbar-actions">
             <ThemeToggle value={themePreference} onChange={changeThemePreference} />
+            <button className="ghost-button" onClick={syncRemoteTeamState} disabled={isSyncingRemote}>
+              <RefreshCw size={16} />
+              {isSyncingRemote ? '同步中' : '同步团队'}
+            </button>
             <button className="ghost-button" onClick={redactPreview} aria-label="Test redaction">
               <ShieldCheck size={16} />
               Redaction

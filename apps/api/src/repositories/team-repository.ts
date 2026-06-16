@@ -13,6 +13,9 @@ import {
   type Artifact,
   type McpServerDefinition,
   type Project,
+  type RemoteRunSummary,
+  type RemoteSyncUploadResult,
+  type RemoteTestEvidenceSummary,
   type SkillDefinition,
   type TeamMember,
   type TokenUsageRollup,
@@ -39,6 +42,8 @@ export type TeamRepository = {
   getTeamOverview(): Promise<TeamOverviewPayload>
   getSkills(): Promise<SkillDefinition[]>
   getMcpServers(): Promise<McpServerDefinition[]>
+  uploadRunSummary(summary: RemoteRunSummary): Promise<RemoteSyncUploadResult>
+  uploadTestEvidenceSummary(summary: RemoteTestEvidenceSummary): Promise<RemoteSyncUploadResult>
 }
 
 export function createSeedTeamRepository(): TeamRepository {
@@ -64,6 +69,22 @@ export function createSeedTeamRepository(): TeamRepository {
 
     async getMcpServers() {
       return mcpServers
+    },
+
+    async uploadRunSummary() {
+      return {
+        accepted: true,
+        syncedAt: new Date().toISOString(),
+        message: 'run summary accepted by seed repository',
+      }
+    },
+
+    async uploadTestEvidenceSummary() {
+      return {
+        accepted: true,
+        syncedAt: new Date().toISOString(),
+        message: 'test evidence summary accepted by seed repository',
+      }
     },
   }
 }

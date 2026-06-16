@@ -15,6 +15,14 @@ const localProject = {
   updatedAt: '2026-06-15T00:00:00.000Z',
 }
 
+const remoteRun = {
+  ...fixtureRuns[0]!,
+  id: 'run-remote-sync',
+  title: '远端同步 Run',
+  projectId: 'p-payments',
+  currentNodeId: 'n-design-gate',
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
   window.localStorage.clear()
@@ -34,6 +42,26 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       testEvidence: [],
       settings: { themePreference: 'system' },
       mcpServers: [],
+    }),
+    loadRemoteSnapshot: vi.fn().mockResolvedValue({
+      projects: [],
+      members: [],
+      runs: [],
+      artifacts: [],
+      events: [],
+      projectCost: [],
+      memberCost: [],
+      totalCost: '$0.000',
+    }),
+    uploadRunSummary: vi.fn().mockResolvedValue({
+      accepted: true,
+      syncedAt: '2026-06-16T00:00:00.000Z',
+      message: 'run summary accepted',
+    }),
+    uploadTestEvidenceSummary: vi.fn().mockResolvedValue({
+      accepted: true,
+      syncedAt: '2026-06-16T00:00:00.000Z',
+      message: 'test evidence summary accepted',
     }),
     selectLocalProject: vi.fn().mockResolvedValue(localProject),
     saveProjectTestCommand: vi.fn().mockImplementation(async ({ testCommand }) => ({
@@ -191,6 +219,29 @@ describe('App', () => {
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('healthService.check()')
   })
 
+  it('loads remote team state through the desktop sync boundary without local evidence', async () => {
+    const api = installDesktopApi({
+      loadRemoteSnapshot: vi.fn().mockResolvedValue({
+        projects: [],
+        members: [],
+        runs: [remoteRun],
+        artifacts: [],
+        events: [],
+        projectCost: [],
+        memberCost: [],
+        totalCost: '$0.000',
+      }),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+
+    await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalledWith({ organizationId: 'org-demo' }))
+    expect(await screen.findByText('远端同步 Run')).toBeInTheDocument()
+    expect(screen.getByTestId('toast')).toHaveTextContent('团队远端状态已同步')
+  })
+
   it('persists gate approval as a run update and approval event', async () => {
     const api = installDesktopApi()
     render(<App />)
@@ -202,7 +253,28 @@ describe('App', () => {
       kind: 'approval',
       message: expect.stringContaining('Gate 已通过'),
     })))
+    await waitFor(() =>
+      expect(api.uploadRunSummary).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'approval',
+        runId: fixtureRuns[0]!.id,
+        projectId: fixtureRuns[0]!.projectId,
+      })),
+    )
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('approval')
+  })
+
+  it('keeps local gate approval successful when remote run sync fails', async () => {
+    const api = installDesktopApi({
+      uploadRunSummary: vi.fn().mockRejectedValue(new Error('remote API unavailable')),
+    })
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
+
+    await waitFor(() => expect(api.saveRun).toHaveBeenCalled())
+    await waitFor(() => expect(api.saveEvent).toHaveBeenCalled())
+    await waitFor(() => expect(api.uploadRunSummary).toHaveBeenCalled())
+    expect(screen.getByTestId('toast')).toHaveTextContent('架构 Gate 已通过')
   })
 
   it('persists theme and MCP local preferences through the desktop API', async () => {
@@ -266,11 +338,43 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /执行测试/ }))
     await waitFor(() => expect(api.runProjectTests).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(api.uploadTestEvidenceSummary).toHaveBeenCalledWith({
+        id: 'evidence-1',
+        runId: fixtureRuns[0]!.id,
+        nodeId: 'n-test',
+        projectId: localProject.id,
+        command: 'pnpm test -- --run',
+        status: 'passed',
+        exitCode: 0,
+        durationMs: 900,
+        summary: 'Tests passed in 900ms',
+        redacted: true,
+        createdAt: '2026-06-15T00:02:00.000Z',
+      }),
+    )
     await screen.findByText('Local test evidence')
     expect(screen.getByTestId('tests-view')).toHaveTextContent('8 tests passed')
     expect(screen.getByTestId('tests-view')).toHaveTextContent('Exit code 0')
     expect(screen.getByTestId('tests-view')).toHaveTextContent('900ms')
     expect(screen.getByTestId('tests-view')).toHaveTextContent('Redacted no')
+    expect(screen.getByTestId('toast')).toHaveTextContent('测试通过，证据已归档')
+  })
+
+  it('keeps local test evidence visible when remote evidence sync fails', async () => {
+    const api = installDesktopApi({
+      uploadTestEvidenceSummary: vi.fn().mockRejectedValue(new Error('remote API unavailable')),
+    })
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
+    await screen.findByText('fixture-project')
+
+    fireEvent.click(screen.getByRole('button', { name: /执行测试/ }))
+
+    await waitFor(() => expect(api.runProjectTests).toHaveBeenCalled())
+    await waitFor(() => expect(api.uploadTestEvidenceSummary).toHaveBeenCalled())
+    await screen.findByText('Local test evidence')
     expect(screen.getByTestId('toast')).toHaveTextContent('测试通过，证据已归档')
   })
 

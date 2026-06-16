@@ -24,6 +24,26 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
         settings: { themePreference: 'system' },
         mcpServers: [],
       }),
+      loadRemoteSnapshot: async () => ({
+        projects: [],
+        members: [],
+        runs: [],
+        artifacts: [],
+        events: [],
+        projectCost: [],
+        memberCost: [],
+        totalCost: '$0.000',
+      }),
+      uploadRunSummary: async () => ({
+        accepted: true,
+        syncedAt: '2026-06-16T00:00:00.000Z',
+        message: 'run summary accepted',
+      }),
+      uploadTestEvidenceSummary: async () => ({
+        accepted: true,
+        syncedAt: '2026-06-16T00:00:00.000Z',
+        message: 'test evidence summary accepted',
+      }),
       selectLocalProject: async () => localProject,
       saveProjectTestCommand: async ({ testCommand }: { testCommand: string }) => ({
         ...localProject,

@@ -15,18 +15,23 @@ import {
   ipcChannels,
   parseAgentEventInput,
   parseMcpServersInput,
+  parseRemoteRunSummaryInput,
+  parseRemoteSnapshotInput,
+  parseRemoteTestEvidenceSummaryInput,
   parseRunProjectTestsInput,
   parseSaveRunInput,
   parseSaveProjectTestCommandInput,
   parseSettingsInput,
   parseValidateTestCommandInput,
 } from './ipc-contract.js'
+import { createRemoteSyncClient, type RemoteSyncClient } from './remote-sync.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_TEST_TIMEOUT_MS = 120_000
 
 let storePromise: Promise<LocalStore> | undefined
+let remoteSyncClient: RemoteSyncClient | undefined
 
 function getStore() {
   const userDataPath = process.env['DEVFLOW_USER_DATA_DIR'] ?? app.getPath('userData')
@@ -34,6 +39,11 @@ function getStore() {
     dbPath: path.join(userDataPath, 'devflow.sqlite'),
   })
   return storePromise
+}
+
+function getRemoteSyncClient() {
+  remoteSyncClient ??= createRemoteSyncClient()
+  return remoteSyncClient
 }
 
 async function findProject(projectId: string): Promise<LocalProject> {
@@ -50,6 +60,21 @@ function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.loadState, async () => {
     const store = await getStore()
     return store.loadState()
+  })
+
+  ipcMain.handle(ipcChannels.loadRemoteSnapshot, async (_, payload: unknown) => {
+    const input = parseRemoteSnapshotInput(payload)
+    return getRemoteSyncClient().loadRemoteSnapshot(input)
+  })
+
+  ipcMain.handle(ipcChannels.uploadRunSummary, async (_, payload: unknown) => {
+    const summary = parseRemoteRunSummaryInput(payload)
+    return getRemoteSyncClient().uploadRunSummary(summary)
+  })
+
+  ipcMain.handle(ipcChannels.uploadTestEvidenceSummary, async (_, payload: unknown) => {
+    const summary = parseRemoteTestEvidenceSummaryInput(payload)
+    return getRemoteSyncClient().uploadTestEvidenceSummary(summary)
   })
 
   ipcMain.handle(ipcChannels.selectProject, async () => {

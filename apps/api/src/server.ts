@@ -1,4 +1,4 @@
-import { createServer, type ServerResponse } from 'node:http'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createSeedTeamRepository } from './repositories/team-repository'
 import { resolveTeamRoute } from './routes/team-routes'
 
@@ -11,6 +11,21 @@ function sendJson(response: ServerResponse, status: number, body: unknown) {
     'access-control-allow-origin': '*',
   })
   response.end(JSON.stringify(body, null, 2))
+}
+
+async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = []
+
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+  }
+
+  const rawBody = Buffer.concat(chunks).toString('utf8').trim()
+  if (!rawBody) {
+    return undefined
+  }
+
+  return JSON.parse(rawBody) as unknown
 }
 
 const server = createServer(async (request, response) => {
@@ -35,7 +50,25 @@ const server = createServer(async (request, response) => {
     return
   }
 
-  const route = await resolveTeamRoute(request.method ?? 'GET', url.pathname, repository)
+  let requestBody: unknown
+  if (request.method === 'POST') {
+    try {
+      requestBody = await readJsonBody(request)
+    } catch {
+      sendJson(response, 400, {
+        error: 'bad_request',
+        message: 'Invalid JSON body',
+      })
+      return
+    }
+  }
+
+  const route = await resolveTeamRoute(
+    request.method ?? 'GET',
+    url.pathname,
+    repository,
+    requestBody,
+  )
   if (route) {
     sendJson(response, route.status, route.body)
     return

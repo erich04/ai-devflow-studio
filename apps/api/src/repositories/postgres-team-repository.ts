@@ -369,5 +369,21 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
       )
       return rows.map(mapMcpServer)
     },
+
+    async uploadRunSummary() {
+      return {
+        accepted: true,
+        syncedAt: new Date().toISOString(),
+        message: 'run summary accepted by Postgres repository boundary',
+      }
+    },
+
+    async uploadTestEvidenceSummary() {
+      return {
+        accepted: true,
+        syncedAt: new Date().toISOString(),
+        message: 'test evidence summary accepted by Postgres repository boundary',
+      }
+    },
   }
 }

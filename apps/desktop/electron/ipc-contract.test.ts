@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import type { AgentEvent, McpServerDefinition, WorkflowRun } from '@ai-devflow/shared'
+import type {
+  AgentEvent,
+  McpServerDefinition,
+  RemoteRunSummary,
+  RemoteTestEvidenceSummary,
+  WorkflowRun,
+} from '@ai-devflow/shared'
 import {
   parseAgentEventInput,
   parseMcpServersInput,
+  parseRemoteRunSummaryInput,
+  parseRemoteSnapshotInput,
+  parseRemoteTestEvidenceSummaryInput,
   parseRunProjectTestsInput,
   parseSaveRunInput,
   parseSaveProjectTestCommandInput,
@@ -42,6 +51,31 @@ const mcpServer: McpServerDefinition = {
   permission: 'read',
   enabledLocally: true,
   lastAuditEvent: 'Enabled locally',
+}
+
+const remoteRunSummary: RemoteRunSummary = {
+  kind: 'approval',
+  runId: 'run-1',
+  projectId: 'project-1',
+  title: 'Run local tests',
+  status: 'building',
+  currentNodeId: 'node-test',
+  branchName: 'ai/local-tests',
+  updatedAt: '2026-06-15T00:02:00.000Z',
+}
+
+const remoteEvidenceSummary: RemoteTestEvidenceSummary = {
+  id: 'evidence-1',
+  runId: 'run-1',
+  nodeId: 'node-test',
+  projectId: 'project-1',
+  command: 'pnpm test',
+  status: 'passed',
+  exitCode: 0,
+  durationMs: 900,
+  summary: 'Tests passed in 900ms',
+  redacted: true,
+  createdAt: '2026-06-15T00:03:00.000Z',
 }
 
 describe('IPC contract parsers', () => {
@@ -103,5 +137,29 @@ describe('IPC contract parsers', () => {
   it('rejects invalid settings and MCP payloads', () => {
     expect(() => parseSettingsInput({ themePreference: 'neon' })).toThrow(/themePreference/)
     expect(() => parseMcpServersInput([{ id: 'mcp-bad', name: 'Bad' }])).toThrow(/MCP/)
+  })
+
+  it('accepts remote snapshot and upload payloads', () => {
+    expect(parseRemoteSnapshotInput({ organizationId: 'org-1' })).toEqual({
+      organizationId: 'org-1',
+    })
+    expect(parseRemoteSnapshotInput(undefined)).toEqual({})
+    expect(parseRemoteRunSummaryInput(remoteRunSummary)).toEqual(remoteRunSummary)
+    expect(parseRemoteTestEvidenceSummaryInput(remoteEvidenceSummary)).toEqual(remoteEvidenceSummary)
+  })
+
+  it('rejects local-only fields in remote test evidence upload payloads', () => {
+    expect(() =>
+      parseRemoteTestEvidenceSummaryInput({
+        ...remoteEvidenceSummary,
+        cwd: '/Users/erich/project',
+      }),
+    ).toThrow(/local-only/)
+    expect(() =>
+      parseRemoteTestEvidenceSummaryInput({
+        ...remoteEvidenceSummary,
+        stdout: 'secret output',
+      }),
+    ).toThrow(/local-only/)
   })
 })

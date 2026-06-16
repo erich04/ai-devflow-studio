@@ -5,6 +5,10 @@ import type {
   LocalSettings,
   LocalProject,
   McpServerDefinition,
+  RemoteRunSummary,
+  RemoteSyncUploadResult,
+  RemoteTeamSnapshot,
+  RemoteTestEvidenceSummary,
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
@@ -20,6 +24,9 @@ export const ipcChannels = {
   saveEvent: 'devflow:event:save',
   saveSettings: 'devflow:settings:save',
   saveMcpServers: 'devflow:mcp-servers:save',
+  loadRemoteSnapshot: 'devflow:remote:snapshot:load',
+  uploadRunSummary: 'devflow:remote:run-summary:upload',
+  uploadTestEvidenceSummary: 'devflow:remote:test-evidence-summary:upload',
 } as const
 
 export type SaveProjectTestCommandInput = {
@@ -41,9 +48,18 @@ export type RunProjectTestsResult = {
   state: LocalExecutionState
 }
 
+export type LoadRemoteSnapshotInput = {
+  organizationId?: string
+}
+
 export type DevFlowDesktopApi = {
   platform: string
   loadState: () => Promise<LocalExecutionState>
+  loadRemoteSnapshot: (input?: LoadRemoteSnapshotInput) => Promise<RemoteTeamSnapshot>
+  uploadRunSummary: (summary: RemoteRunSummary) => Promise<RemoteSyncUploadResult>
+  uploadTestEvidenceSummary: (
+    summary: RemoteTestEvidenceSummary,
+  ) => Promise<RemoteSyncUploadResult>
   selectLocalProject: () => Promise<LocalProject | null>
   saveProjectTestCommand: (input: SaveProjectTestCommandInput) => Promise<LocalProject>
   validateTestCommand: (input: ValidateTestCommandInput) => Promise<CommandSafetyResult>
@@ -106,6 +122,46 @@ function isMcpServer(value: unknown): value is McpServerDefinition {
       value['permission'] === 'shell') &&
     typeof value['enabledLocally'] === 'boolean' &&
     typeof value['lastAuditEvent'] === 'string'
+  )
+}
+
+function hasLocalOnlyEvidenceField(value: Record<string, unknown>): boolean {
+  return 'cwd' in value || 'stdout' in value || 'stderr' in value
+}
+
+function isRemoteRunSummary(value: unknown): value is RemoteRunSummary {
+  return (
+    isRecord(value) &&
+    (value['kind'] === 'run' || value['kind'] === 'approval' || value['kind'] === 'event') &&
+    typeof value['runId'] === 'string' &&
+    typeof value['projectId'] === 'string' &&
+    typeof value['title'] === 'string' &&
+    typeof value['status'] === 'string' &&
+    typeof value['currentNodeId'] === 'string' &&
+    typeof value['branchName'] === 'string' &&
+    typeof value['updatedAt'] === 'string'
+  )
+}
+
+function isRemoteTestEvidenceStatus(value: unknown): value is RemoteTestEvidenceSummary['status'] {
+  return value === 'running' || value === 'passed' || value === 'failed' || value === 'timed_out'
+}
+
+function isRemoteTestEvidenceSummary(value: unknown): value is RemoteTestEvidenceSummary {
+  return (
+    isRecord(value) &&
+    !hasLocalOnlyEvidenceField(value) &&
+    typeof value['id'] === 'string' &&
+    typeof value['runId'] === 'string' &&
+    typeof value['nodeId'] === 'string' &&
+    typeof value['projectId'] === 'string' &&
+    typeof value['command'] === 'string' &&
+    isRemoteTestEvidenceStatus(value['status']) &&
+    (typeof value['exitCode'] === 'number' || value['exitCode'] === null) &&
+    typeof value['durationMs'] === 'number' &&
+    typeof value['summary'] === 'string' &&
+    typeof value['redacted'] === 'boolean' &&
+    typeof value['createdAt'] === 'string'
   )
 }
 
@@ -179,6 +235,43 @@ export function parseSettingsInput(value: unknown): Partial<LocalSettings> {
 export function parseMcpServersInput(value: unknown): McpServerDefinition[] {
   if (!Array.isArray(value) || !value.every(isMcpServer)) {
     throw new Error('Invalid MCP servers payload')
+  }
+
+  return value
+}
+
+export function parseRemoteSnapshotInput(value: unknown): LoadRemoteSnapshotInput {
+  if (value === undefined || value === null) {
+    return {}
+  }
+
+  if (!isRecord(value)) {
+    throw new Error('Invalid remote snapshot payload')
+  }
+
+  const organizationId = value['organizationId']
+  if (organizationId !== undefined && (typeof organizationId !== 'string' || !organizationId.trim())) {
+    throw new Error('Invalid organizationId')
+  }
+
+  return organizationId ? { organizationId: organizationId.trim() } : {}
+}
+
+export function parseRemoteRunSummaryInput(value: unknown): RemoteRunSummary {
+  if (!isRemoteRunSummary(value)) {
+    throw new Error('Invalid remote run summary payload')
+  }
+
+  return value
+}
+
+export function parseRemoteTestEvidenceSummaryInput(value: unknown): RemoteTestEvidenceSummary {
+  if (isRecord(value) && hasLocalOnlyEvidenceField(value)) {
+    throw new Error('Remote test evidence summary contains local-only fields')
+  }
+
+  if (!isRemoteTestEvidenceSummary(value)) {
+    throw new Error('Invalid remote test evidence summary payload')
   }
 
   return value

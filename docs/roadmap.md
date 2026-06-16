@@ -34,8 +34,10 @@ constraint for Electron local execution, SQLite persistence, path handling, and 
 
 v0.3 development has started with the team database schema, initial Postgres migration,
 driver-agnostic database client boundary, API repository/route boundary, Postgres repository
-mapping, and Web manager console API client. The API still defaults to a seed-backed repository
-until the runtime Postgres driver/pool and synchronization paths are implemented.
+mapping, Web manager console API client, and the first Electron remote synchronization boundary for
+loading team snapshots plus uploading redacted local Run/Test Evidence summaries. The API still
+defaults to a seed-backed repository until the runtime Postgres driver/pool and sync write-through
+are implemented.
 
 ## Completed Milestones
 
