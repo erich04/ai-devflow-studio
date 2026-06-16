@@ -34,6 +34,14 @@ export function detectPackageManager(files: ProjectFileSnapshot): PackageManager
   return 'npm'
 }
 
+function packageManagerTestCommand(packageManager: PackageManager): string {
+  if (packageManager === 'pnpm' || packageManager === 'yarn') {
+    return `corepack ${packageManager} test`
+  }
+
+  return `${packageManager} test`
+}
+
 export function detectTestCommand(files: ProjectFileSnapshot): DetectedTestCommand | null {
   const packageJson = files['package.json']
   if (!packageJson) {
@@ -51,7 +59,7 @@ export function detectTestCommand(files: ProjectFileSnapshot): DetectedTestComma
     const packageManager = detectPackageManager(files)
 
     return {
-      command: `${packageManager} test`,
+      command: packageManagerTestCommand(packageManager),
       packageManager,
       source: 'package.json',
       reason: 'package.json scripts.test',

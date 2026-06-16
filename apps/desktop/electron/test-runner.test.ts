@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
-import { inspectProjectDirectory, runLocalTestCommand } from './test-runner'
+import { createLocalCommandEnv, inspectProjectDirectory, runLocalTestCommand } from './test-runner'
 
 let tempDirs: string[] = []
 
@@ -36,12 +36,29 @@ describe('inspectProjectDirectory', () => {
     expect(project.name).toBe('fixture-api')
     expect(project.path).toBe(projectPath)
     expect(project.packageManager).toBe('pnpm')
-    expect(project.detectedTestCommand).toBe('pnpm test')
-    expect(project.testCommand).toBe('pnpm test')
+    expect(project.detectedTestCommand).toBe('corepack pnpm test')
+    expect(project.testCommand).toBe('corepack pnpm test')
   })
 })
 
 describe('runLocalTestCommand', () => {
+  it('adds common package-manager paths to the command environment', () => {
+    const env = createLocalCommandEnv({
+      PATH: '/usr/bin:/bin',
+      HOME: '/Users/example',
+    })
+
+    expect(env.PATH?.split(path.delimiter)).toEqual([
+      '/usr/bin',
+      '/bin',
+      '/usr/local/bin',
+      '/opt/homebrew/bin',
+      '/Users/example/.local/bin',
+      '/Users/example/.local/share/pnpm',
+      '/Users/example/Library/pnpm',
+    ])
+  })
+
   it('runs the configured command in the project cwd and redacts secret output', async () => {
     const projectPath = await makeProject({
       'package.json': JSON.stringify({ name: 'runner-fixture', scripts: { test: 'node test.js' } }),

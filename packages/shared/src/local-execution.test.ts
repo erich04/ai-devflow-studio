@@ -36,14 +36,14 @@ const baseRun: WorkflowRun = {
 }
 
 describe('detectTestCommand', () => {
-  it('uses pnpm test when package.json has a test script and pnpm-lock.yaml exists', () => {
+  it('uses corepack pnpm test when package.json has a test script and pnpm-lock.yaml exists', () => {
     const detected = detectTestCommand({
       'package.json': JSON.stringify({ scripts: { test: 'vitest run' } }),
       'pnpm-lock.yaml': 'lockfileVersion: 9.0',
     })
 
     expect(detected).toEqual({
-      command: 'pnpm test',
+      command: 'corepack pnpm test',
       packageManager: 'pnpm',
       source: 'package.json',
       reason: 'package.json scripts.test',

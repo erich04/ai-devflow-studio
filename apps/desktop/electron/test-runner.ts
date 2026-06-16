@@ -50,6 +50,45 @@ function packageManagerFromSnapshot(snapshot: ProjectFileSnapshot): PackageManag
   return detectPackageManager(snapshot)
 }
 
+function appendUniquePath(paths: string[], value: string | undefined) {
+  if (!value || paths.includes(value)) {
+    return
+  }
+
+  paths.push(value)
+}
+
+function commonPackageManagerPaths(env: NodeJS.ProcessEnv): string[] {
+  if (process.platform === 'win32') {
+    const paths: string[] = []
+    appendUniquePath(paths, env['APPDATA'] ? path.join(env['APPDATA'], 'npm') : undefined)
+    appendUniquePath(paths, env['LOCALAPPDATA'] ? path.join(env['LOCALAPPDATA'], 'pnpm') : undefined)
+    appendUniquePath(paths, env['ProgramFiles'] ? path.join(env['ProgramFiles'], 'nodejs') : undefined)
+    return paths
+  }
+
+  const home = env['HOME']
+  const paths = ['/usr/local/bin', '/opt/homebrew/bin']
+  appendUniquePath(paths, home ? path.join(home, '.local', 'bin') : undefined)
+  appendUniquePath(paths, home ? path.join(home, '.local', 'share', 'pnpm') : undefined)
+  appendUniquePath(paths, home ? path.join(home, 'Library', 'pnpm') : undefined)
+  return paths
+}
+
+export function createLocalCommandEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const existingPath = baseEnv['PATH'] ?? baseEnv['Path'] ?? ''
+  const pathEntries = existingPath.split(path.delimiter).filter(Boolean)
+
+  for (const candidate of commonPackageManagerPaths(baseEnv)) {
+    appendUniquePath(pathEntries, candidate)
+  }
+
+  return {
+    ...baseEnv,
+    PATH: pathEntries.join(path.delimiter),
+  }
+}
+
 async function readProjectSnapshot(projectPath: string): Promise<ProjectFileSnapshot> {
   const entries = await Promise.all(
     PROJECT_FILES.map(async (fileName) => {
@@ -123,7 +162,7 @@ export function runLocalTestCommand(input: LocalTestCommandInput): Promise<Local
     const child = spawn(input.command, {
       cwd: input.cwd,
       shell: true,
-      env: process.env,
+      env: createLocalCommandEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
