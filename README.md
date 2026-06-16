@@ -24,6 +24,7 @@ corepack pnpm dev:desktop
 corepack pnpm dev:electron
 corepack pnpm typecheck
 corepack pnpm test
+corepack pnpm test:postgres-smoke
 corepack pnpm test:e2e
 corepack pnpm test:electron-smoke
 ```
@@ -45,6 +46,9 @@ For a local Postgres demo, set the database URL and run:
 corepack pnpm --filter @ai-devflow/api db:setup
 corepack pnpm dev:api
 ```
+
+Use `corepack pnpm test:postgres-smoke` with the same database URL to verify migration, seed,
+Postgres-backed API reads, and redacted sync write-through.
 
 Use `corepack pnpm build && corepack pnpm --filter @ai-devflow/desktop electron` to run the built
 desktop app against `apps/desktop/dist/index.html` without the Vite dev server.

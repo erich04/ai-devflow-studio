@@ -46,7 +46,9 @@ typecheck/unit/audit job. The API now has optional `pg` runtime wiring: without 
 keeps the seed-backed demo repository, and with `DEVFLOW_DATABASE_URL` or `DATABASE_URL` it uses the
 Postgres repository and writes redacted Run/Test Evidence summaries into team tables. A local
 Postgres demo can now be prepared with `corepack pnpm --filter @ai-devflow/api db:setup`, which
-applies the schema migration and seeds DevFlow demo team data.
+applies the schema migration and seeds DevFlow demo team data. CI also includes a Postgres
+integration job that runs `corepack pnpm test:postgres-smoke` against a real Postgres service and
+verifies seeded reads plus redacted sync write-through.
 
 ## Completed Milestones
 

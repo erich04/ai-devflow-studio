@@ -36,3 +36,32 @@ jobs:
       - run: corepack pnpm typecheck
       - run: corepack pnpm test
       - run: corepack pnpm test:cross-platform
+
+  postgres-integration:
+    name: Postgres integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: devflow_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d devflow_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DEVFLOW_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devflow_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm test:postgres-smoke

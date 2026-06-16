@@ -19,6 +19,10 @@ const checks = [
         pattern: /"test:electron-smoke":\s*"node scripts\/electron-smoke\.mjs"/,
         reason: 'test:electron-smoke should use the Node Electron smoke runner',
       },
+      {
+        pattern: /"test:postgres-smoke":\s*"node scripts\/postgres-smoke\.mjs"/,
+        reason: 'test:postgres-smoke should use the Node Postgres smoke runner',
+      },
     ],
   },
   {
@@ -45,6 +49,18 @@ const checks = [
       { pattern: /corepack\.cmd/, reason: 'Electron smoke should resolve corepack.cmd on Windows' },
       { pattern: /os\.tmpdir\(\)/, reason: 'Electron smoke should use os.tmpdir() for temporary files' },
       { pattern: /path\.join/, reason: 'Electron smoke should use path.join for paths' },
+    ],
+  },
+  {
+    file: 'scripts/postgres-smoke.mjs',
+    blocked: [
+      { pattern: /\/tmp\//, reason: 'Postgres smoke must not hard-code POSIX /tmp paths' },
+      { pattern: /\bcurl\b/, reason: 'Postgres smoke must use fetch instead of curl' },
+      { pattern: /\bbash\b|\bzsh\b/, reason: 'Postgres smoke must not depend on bash/zsh' },
+    ],
+    required: [
+      { pattern: /corepack\.cmd/, reason: 'Postgres smoke should resolve corepack.cmd on Windows' },
+      { pattern: /fileURLToPath/, reason: 'Postgres smoke should resolve paths with fileURLToPath' },
     ],
   },
 ]
