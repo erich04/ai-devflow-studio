@@ -104,10 +104,22 @@ describe('Electron remote sync client', () => {
       events: [],
     })
     expect(fetcher).toHaveBeenCalledWith('http://api.local/api/team/overview?organizationId=org-1', {
-      headers: { accept: 'application/json' },
+      headers: {
+        accept: 'application/json',
+        'x-devflow-organization-id': 'org-1',
+        'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
+        'x-devflow-user-id': 'u-erich',
+        'x-devflow-user-role': 'owner',
+      },
     })
     expect(fetcher).toHaveBeenCalledWith('http://api.local/api/runs?organizationId=org-1', {
-      headers: { accept: 'application/json' },
+      headers: {
+        accept: 'application/json',
+        'x-devflow-organization-id': 'org-1',
+        'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
+        'x-devflow-user-id': 'u-erich',
+        'x-devflow-user-role': 'owner',
+      },
     })
   })
 
@@ -135,6 +147,12 @@ describe('Electron remote sync client', () => {
 
     const uploadedBodies = calls.map(({ init }) => JSON.parse(String(init?.body)))
     expect(uploadedBodies[1]).toEqual(evidenceSummary)
+    expect(calls[0]?.init?.headers).toMatchObject({
+      'x-devflow-organization-id': 'org-demo',
+      'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
+      'x-devflow-user-id': 'u-erich',
+      'x-devflow-user-role': 'owner',
+    })
     expect(JSON.stringify(uploadedBodies[1])).not.toContain('stdout')
     expect(JSON.stringify(uploadedBodies[1])).not.toContain('stderr')
     expect(JSON.stringify(uploadedBodies[1])).not.toContain('cwd')

@@ -51,7 +51,9 @@ integration job that runs `corepack pnpm test:postgres-smoke` against a real Pos
 verifies seeded reads plus redacted sync write-through. On the desktop side, an explicit remote sync
 can now replace the Team Overview's project list, member list, project cost rollups, member cost
 rollups, and top-level token cost metric with the remote team snapshot while keeping local artifacts
-and raw Test Evidence private.
+and raw Test Evidence private. Web and Electron remote clients now send explicit demo session
+headers, and the Postgres smoke runs with `DEVFLOW_REQUIRE_AUTH=true` so the integration path does
+not depend on unauthenticated demo fallback.
 
 ## Completed Milestones
 
@@ -115,6 +117,8 @@ and raw Test Evidence private.
 - Make desktop Team Overview and manager-facing summary widgets consume remote snapshot data after
   explicit sync, without blending remote summaries into private local execution evidence.
 - Add basic authentication plus tenant/project/member role boundaries.
+- Send explicit demo session headers from Web and Electron remote clients and keep the Postgres
+  integration smoke green with API demo fallback disabled.
 - Define `seed`, `local`, `remote`, and future `adapter` data precedence in the app state model.
 - Preserve Windows compatibility for local execution, command safety, `userData` SQLite storage,
   path display, and Electron smoke tests.

@@ -1,10 +1,12 @@
 import type {
+  DevFlowSessionHeaders,
   Project,
   RemoteTestEvidenceSummary,
   TeamMember,
   TokenUsageRollup,
   WorkflowRun,
 } from '@ai-devflow/shared'
+import { createDemoTeamSessionHeaders } from '@ai-devflow/shared'
 
 export type TeamOverviewResponse = {
   projects: Project[]
@@ -19,6 +21,7 @@ export type TeamOverviewResponse = {
 export type FetchTeamOverviewOptions = {
   apiBaseUrl?: string
   fetcher?: typeof fetch
+  sessionHeaders?: DevFlowSessionHeaders
 }
 
 export function resolveDevFlowApiBaseUrl(
@@ -37,9 +40,10 @@ export async function fetchTeamOverview(
 ): Promise<TeamOverviewResponse> {
   const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
   const fetcher = options.fetcher ?? fetch
+  const sessionHeaders = options.sessionHeaders ?? createDemoTeamSessionHeaders()
   const response = await fetcher(`${apiBaseUrl}/api/team/overview`, {
     cache: 'no-store',
-    headers: { accept: 'application/json' },
+    headers: { accept: 'application/json', ...sessionHeaders },
   })
 
   if (!response.ok) {

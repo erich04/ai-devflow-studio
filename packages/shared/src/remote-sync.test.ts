@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TestEvidence, WorkflowRun } from './domain'
 import {
+  createDemoTeamSessionHeaders,
   createRemoteTestEvidenceSummary,
   createRemoteRunSummary,
 } from './remote-sync'
@@ -38,6 +39,15 @@ const evidence: TestEvidence = {
 }
 
 describe('remote sync helpers', () => {
+  it('creates explicit demo team session headers for API clients', () => {
+    expect(createDemoTeamSessionHeaders()).toEqual({
+      'x-devflow-organization-id': 'org-demo',
+      'x-devflow-user-id': 'u-erich',
+      'x-devflow-user-role': 'owner',
+      'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
+    })
+  })
+
   it('creates a remote run summary without local-only execution details', () => {
     expect(createRemoteRunSummary(run, 'approval')).toEqual({
       kind: 'approval',

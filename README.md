@@ -48,7 +48,8 @@ corepack pnpm dev:api
 ```
 
 Use `corepack pnpm test:postgres-smoke` with the same database URL to verify migration, seed,
-Postgres-backed API reads, and redacted sync write-through.
+Postgres-backed API reads, explicit demo session headers with `DEVFLOW_REQUIRE_AUTH=true`, and
+redacted sync write-through.
 
 Use `corepack pnpm build && corepack pnpm --filter @ai-devflow/desktop electron` to run the built
 desktop app against `apps/desktop/dist/index.html` without the Vite dev server.

@@ -39,7 +39,13 @@ describe('DevFlow web API client', () => {
     })
     expect(fetcher).toHaveBeenCalledWith('http://api.local/api/team/overview', {
       cache: 'no-store',
-      headers: { accept: 'application/json' },
+      headers: {
+        accept: 'application/json',
+        'x-devflow-organization-id': 'org-demo',
+        'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
+        'x-devflow-user-id': 'u-erich',
+        'x-devflow-user-role': 'owner',
+      },
     })
   })
 

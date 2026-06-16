@@ -1,6 +1,7 @@
 import type {
   AgentEvent,
   Artifact,
+  DevFlowSessionHeaders,
   RemoteRunSummary,
   RemoteSyncUploadResult,
   RemoteTeamSnapshot,
@@ -10,6 +11,7 @@ import type {
   TokenUsageRollup,
   WorkflowRun,
 } from '@ai-devflow/shared'
+import { createDemoTeamSessionHeaders } from '@ai-devflow/shared'
 import type { LoadRemoteSnapshotInput } from './ipc-contract'
 
 type Fetcher = typeof fetch
@@ -17,6 +19,7 @@ type Fetcher = typeof fetch
 export type RemoteSyncClientOptions = {
   apiBaseUrl?: string
   fetcher?: Fetcher
+  sessionHeaders?: DevFlowSessionHeaders
 }
 
 export type RemoteRunsBundleResponse = {
@@ -60,6 +63,25 @@ function buildUrl(baseUrl: string, pathname: string, input?: LoadRemoteSnapshotI
   return url.toString()
 }
 
+function jsonGetHeaders(sessionHeaders: DevFlowSessionHeaders): Record<string, string> {
+  return { accept: 'application/json', ...sessionHeaders }
+}
+
+function jsonPostHeaders(sessionHeaders: DevFlowSessionHeaders): Record<string, string> {
+  return { ...jsonGetHeaders(sessionHeaders), 'content-type': 'application/json' }
+}
+
+function headersForSnapshotRequest(
+  sessionHeaders: DevFlowSessionHeaders,
+  input?: LoadRemoteSnapshotInput,
+): DevFlowSessionHeaders {
+  if (!input?.organizationId) {
+    return sessionHeaders
+  }
+
+  return { ...sessionHeaders, 'x-devflow-organization-id': input.organizationId }
+}
+
 async function readJson<T>(response: Response, path: string): Promise<T> {
   if (!response.ok) {
     throw new Error(`DevFlow API ${path} failed with ${response.status}`)
@@ -73,13 +95,11 @@ async function postJson<T>(
   url: string,
   body: unknown,
   path: string,
+  sessionHeaders: DevFlowSessionHeaders,
 ): Promise<T> {
   const response = await fetcher(url, {
     method: 'POST',
-    headers: {
-      accept: 'application/json',
-      'content-type': 'application/json',
-    },
+    headers: jsonPostHeaders(sessionHeaders),
     body: JSON.stringify(body),
   })
 
@@ -91,17 +111,19 @@ export function createRemoteSyncClient(
 ): RemoteSyncClient {
   const apiBaseUrl = options.apiBaseUrl ?? resolveRemoteApiBaseUrl()
   const fetcher = options.fetcher ?? fetch
+  const sessionHeaders = options.sessionHeaders ?? createDemoTeamSessionHeaders()
 
   return {
     async loadRemoteSnapshot(input) {
       const overviewPath = '/api/team/overview'
       const runsPath = '/api/runs'
+      const snapshotHeaders = headersForSnapshotRequest(sessionHeaders, input)
       const [overview, runsBundle] = await Promise.all([
         fetcher(buildUrl(apiBaseUrl, overviewPath, input), {
-          headers: { accept: 'application/json' },
+          headers: jsonGetHeaders(snapshotHeaders),
         }).then((response) => readJson<RemoteTeamOverviewResponse>(response, overviewPath)),
         fetcher(buildUrl(apiBaseUrl, runsPath, input), {
-          headers: { accept: 'application/json' },
+          headers: jsonGetHeaders(snapshotHeaders),
         }).then((response) => readJson<RemoteRunsBundleResponse>(response, runsPath)),
       ])
 
@@ -123,6 +145,7 @@ export function createRemoteSyncClient(
         buildUrl(apiBaseUrl, '/api/sync/run-summary'),
         summary,
         '/api/sync/run-summary',
+        sessionHeaders,
       )
     },
 
@@ -132,6 +155,7 @@ export function createRemoteSyncClient(
         buildUrl(apiBaseUrl, '/api/sync/test-evidence-summary'),
         summary,
         '/api/sync/test-evidence-summary',
+        sessionHeaders,
       )
     },
   }

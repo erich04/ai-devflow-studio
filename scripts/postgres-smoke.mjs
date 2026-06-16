@@ -5,6 +5,12 @@ const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const rootDir = fileURLToPath(new URL('..', import.meta.url))
 const apiUrl = 'http://127.0.0.1:4322'
 const databaseUrl = process.env.DEVFLOW_DATABASE_URL ?? process.env.DATABASE_URL
+const demoSessionHeaders = {
+  'x-devflow-organization-id': 'org-demo',
+  'x-devflow-user-id': 'u-erich',
+  'x-devflow-user-role': 'owner',
+  'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
+}
 
 if (!databaseUrl) {
   throw new Error('Set DEVFLOW_DATABASE_URL or DATABASE_URL before running test:postgres-smoke.')
@@ -85,6 +91,7 @@ async function postJson(pathname, body) {
       headers: {
         accept: 'application/json',
         'content-type': 'application/json',
+        ...demoSessionHeaders,
       },
       body: JSON.stringify(body),
     }),
@@ -110,12 +117,15 @@ try {
 
   api = spawnService('api-postgres', ['pnpm', '--filter', '@ai-devflow/api', 'dev'], {
     DEVFLOW_DATABASE_URL: databaseUrl,
+    DEVFLOW_REQUIRE_AUTH: 'true',
     PORT: '4322',
   })
   await waitForServer(`${apiUrl}/health`)
 
   const initialOverview = await readJson(
-    await fetch(`${apiUrl}/api/team/overview`, { headers: { accept: 'application/json' } }),
+    await fetch(`${apiUrl}/api/team/overview`, {
+      headers: { accept: 'application/json', ...demoSessionHeaders },
+    }),
     '/api/team/overview',
   )
   expect(
@@ -152,7 +162,9 @@ try {
   })
 
   const syncedOverview = await readJson(
-    await fetch(`${apiUrl}/api/team/overview`, { headers: { accept: 'application/json' } }),
+    await fetch(`${apiUrl}/api/team/overview`, {
+      headers: { accept: 'application/json', ...demoSessionHeaders },
+    }),
     '/api/team/overview',
   )
   expect(
