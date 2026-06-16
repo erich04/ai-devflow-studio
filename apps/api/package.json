@@ -7,7 +7,10 @@
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:seed": "tsx src/db/seed-demo.ts",
+    "db:setup": "corepack pnpm db:migrate && corepack pnpm db:seed"
   },
   "dependencies": {
     "@ai-devflow/shared": "workspace:*",

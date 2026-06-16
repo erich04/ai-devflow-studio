@@ -44,7 +44,9 @@ test:cross-platform` audits automation for POSIX-only assumptions, command safet
 PowerShell and `cmd` patterns, and GitHub Actions runs macOS full verify plus a Windows
 typecheck/unit/audit job. The API now has optional `pg` runtime wiring: without a database URL it
 keeps the seed-backed demo repository, and with `DEVFLOW_DATABASE_URL` or `DATABASE_URL` it uses the
-Postgres repository and writes redacted Run/Test Evidence summaries into team tables.
+Postgres repository and writes redacted Run/Test Evidence summaries into team tables. A local
+Postgres demo can now be prepared with `corepack pnpm --filter @ai-devflow/api db:setup`, which
+applies the schema migration and seeds DevFlow demo team data.
 
 ## Completed Milestones
 

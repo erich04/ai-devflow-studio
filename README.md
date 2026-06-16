@@ -39,5 +39,12 @@ The API uses seed data by default for local demos. Set `DEVFLOW_DATABASE_URL` or
 before `corepack pnpm dev:api` to run it against Postgres; uploaded Electron Run/Test Evidence
 summaries are written as redacted team records.
 
+For a local Postgres demo, set the database URL and run:
+
+```bash
+corepack pnpm --filter @ai-devflow/api db:setup
+corepack pnpm dev:api
+```
+
 Use `corepack pnpm build && corepack pnpm --filter @ai-devflow/desktop electron` to run the built
 desktop app against `apps/desktop/dist/index.html` without the Vite dev server.
