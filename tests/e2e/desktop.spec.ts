@@ -190,6 +190,8 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('knowledge-view')).toContainText('docs/knowledge/standards/api-health.md')
     await expect(page.getByTestId('knowledge-view')).toContainText('Run references')
     await expect(page.getByTestId('knowledge-view')).toContainText('artifact')
+    await expect(page.getByTestId('knowledge-view')).toContainText('lexical')
+    await expect(page.getByTestId('knowledge-view')).toContainText(/kh-[a-f0-9]{8}/)
 
     await page.getByRole('button', { name: /^Skills$/ }).click()
     await expect(page.getByTestId('skill-view')).toContainText('团队能力目录')
@@ -205,5 +207,8 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.getByRole('button', { name: /执行本地测试/ }).click()
     await expect(page.getByTestId('toast')).toContainText('测试通过，证据已归档')
     await expect(page.getByTestId('tests-view')).toContainText('Local test evidence')
+    await page.getByRole('button', { name: /工作台/ }).click()
+    await expect(page.getByTestId('node-inspector')).toContainText('Local Test Evidence Standard')
+    await expect(page.getByTestId('node-inspector')).toContainText('satisfied')
   })
 })

@@ -442,6 +442,8 @@ export const knowledgeIndex = indexKnowledgeSources(knowledgeSources)
 
 export const knowledgeDocuments = knowledgeIndex.documents
 
+export const knowledgeChunks = knowledgeIndex.chunks
+
 export const knowledgeEntities: KnowledgeEntity[] = knowledgeIndex.entities
 
 export const knowledgeRelations: KnowledgeRelation[] = knowledgeIndex.relations

@@ -4,6 +4,7 @@ import {
   buildKnowledgeGovernanceChecks,
   buildKnowledgeReferences,
   indexKnowledgeSources,
+  lexicalKnowledgeRetriever,
 } from './knowledge'
 
 const sources = [
@@ -44,6 +45,7 @@ describe('indexKnowledgeSources', () => {
     const index = indexKnowledgeSources(sources)
 
     expect(index.documents).toHaveLength(2)
+    expect(index.chunks).toHaveLength(2)
     expect(index.documents[0]).toMatchObject({
       id: 'knowledge-doc-api-health',
       title: 'API Health Endpoint Standard',
@@ -75,6 +77,55 @@ describe('indexKnowledgeSources', () => {
         }),
       ]),
     )
+    expect(index.chunks[0]).toMatchObject({
+      id: 'knowledge-chunk-api-health-1-api-health-endpoint-standard',
+      documentId: 'knowledge-doc-api-health',
+      sourcePath: 'docs/knowledge/standards/api-health.md',
+      headingPath: ['API Health Endpoint Standard'],
+      contentHash: expect.stringMatching(/^kh-[a-f0-9]{8}$/),
+      tokenCount: expect.any(Number),
+    })
+  })
+
+  it('changes chunk content hashes when Markdown section content changes', () => {
+    const original = indexKnowledgeSources(sources)
+    const changed = indexKnowledgeSources([
+      {
+        ...sources[0]!,
+        markdown: sources[0]!.markdown.replace('ok, degraded, and down', 'ok, degraded, down, and maintenance'),
+      },
+    ])
+
+    expect(changed.chunks[0]!.sourcePath).toBe(original.chunks[0]!.sourcePath)
+    expect(changed.chunks[0]!.contentHash).not.toBe(original.chunks[0]!.contentHash)
+  })
+})
+
+describe('lexicalKnowledgeRetriever', () => {
+  it('returns scored TopK chunk hits with retrieval provenance', () => {
+    const index = indexKnowledgeSources(sources)
+    const hits = lexicalKnowledgeRetriever.retrieve(
+      {
+        id: 'query-health',
+        runId: 'run-health-001',
+        targetType: 'run',
+        text: 'health endpoint degraded redis smoke',
+        topK: 1,
+        minScore: 2,
+      },
+      index,
+    )
+
+    expect(hits).toHaveLength(1)
+    expect(hits[0]).toMatchObject({
+      documentId: 'knowledge-doc-api-health',
+      chunkId: 'knowledge-chunk-api-health-1-api-health-endpoint-standard',
+      strategy: 'lexical',
+      score: expect.any(Number),
+      contentHash: expect.stringMatching(/^kh-[a-f0-9]{8}$/),
+      headingPath: ['API Health Endpoint Standard'],
+    })
+    expect(hits[0]!.score).toBeGreaterThanOrEqual(2)
   })
 })
 
@@ -120,6 +171,10 @@ describe('buildKnowledgeReferences', () => {
           artifactId: 'art-design',
           documentId: 'knowledge-doc-api-health',
           relation: 'satisfies',
+          chunkId: 'knowledge-chunk-api-health-1-api-health-endpoint-standard',
+          strategy: 'lexical',
+          score: expect.any(Number),
+          contentHash: expect.stringMatching(/^kh-[a-f0-9]{8}$/),
         }),
         expect.objectContaining({
           targetType: 'gate_decision',
@@ -161,6 +216,43 @@ describe('buildKnowledgeGovernanceChecks', () => {
         expect.objectContaining({
           documentId: 'knowledge-doc-testing-evidence',
           title: 'Local Test Evidence Standard',
+          status: 'needs_evidence',
+        }),
+      ]),
+    )
+  })
+
+  it('does not treat retrieval-only run citations as governance evidence', () => {
+    const index = indexKnowledgeSources(sources)
+    const run = runs[0]!
+    const designGate = run.nodes.find((node) => node.id === 'n-design-gate')!
+    const checks = buildKnowledgeGovernanceChecks({
+      run,
+      node: designGate,
+      artifacts: [],
+      documents: index.documents,
+      testEvidence: [],
+    })
+
+    expect(buildKnowledgeReferences({
+      run,
+      artifacts: [],
+      documents: index.documents,
+      testEvidence: [],
+    })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          targetType: 'run',
+          documentId: 'knowledge-doc-api-health',
+          relation: 'cites',
+          strategy: 'lexical',
+        }),
+      ]),
+    )
+    expect(checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          documentId: 'knowledge-doc-api-health',
           status: 'needs_evidence',
         }),
       ]),

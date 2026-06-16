@@ -42,6 +42,7 @@ import {
   artifacts as fixtureArtifacts,
   events as fixtureEvents,
   formatUsd,
+  knowledgeChunks,
   knowledgeDocuments,
   knowledgeEntities,
   knowledgeRelations,
@@ -321,6 +322,7 @@ export function App() {
             run: selectedRun,
             artifacts,
             documents: knowledgeDocuments,
+            chunks: knowledgeChunks,
             testEvidence,
           })
         : [],
@@ -334,6 +336,7 @@ export function App() {
             node: selectedNode,
             artifacts,
             documents: knowledgeDocuments,
+            chunks: knowledgeChunks,
             testEvidence,
           })
         : [],
@@ -884,6 +887,7 @@ export function App() {
               artifacts={selectedArtifacts}
               events={selectedEvents}
               governanceChecks={selectedGovernanceChecks}
+              references={knowledgeReferences}
               canApprove={selectedNode ? canApproveGate(currentUser?.role ?? 'member', selectedNode) : false}
               onApprove={approveSelectedGate}
               onRunTests={executeTestPlan}
@@ -1082,6 +1086,7 @@ function Inspector({
   artifacts,
   events,
   governanceChecks,
+  references,
   canApprove,
   onApprove,
   onRunTests,
@@ -1091,6 +1096,7 @@ function Inspector({
   artifacts: Artifact[]
   events: AgentEvent[]
   governanceChecks: KnowledgeGovernanceCheck[]
+  references: KnowledgeReference[]
   canApprove: boolean
   onApprove: () => void
   onRunTests: () => void
@@ -1116,19 +1122,35 @@ function Inspector({
         {governanceChecks.length === 0 ? (
           <p className="empty-note">当前节点没有关联的知识治理检查。</p>
         ) : (
-          governanceChecks.map((check) => (
-            <article
-              className={`governance-card governance-card--${check.status}`}
-              key={check.id}
-            >
-              <div className="compact-row">
-                <strong>{check.title}</strong>
-                <span>{check.status}</span>
-              </div>
-              <p>{check.summary}</p>
-              <code>{check.category}</code>
-            </article>
-          ))
+          governanceChecks.map((check) => {
+            const supportingReference = check.referenceIds
+              .map((referenceId) => references.find((reference) => reference.id === referenceId))
+              .find(Boolean)
+
+            return (
+              <article
+                className={`governance-card governance-card--${check.status}`}
+                key={check.id}
+              >
+                <div className="compact-row">
+                  <strong>{check.title}</strong>
+                  <span>{check.status}</span>
+                </div>
+                <p>{check.summary}</p>
+                <div className="knowledge-reference-meta">
+                  <code>{check.category}</code>
+                  {supportingReference?.strategy ? <span>{supportingReference.strategy}</span> : null}
+                  {typeof supportingReference?.score === 'number' ? (
+                    <span>score {supportingReference.score}</span>
+                  ) : null}
+                  {supportingReference?.headingPath ? (
+                    <span>{supportingReference.headingPath.join(' / ')}</span>
+                  ) : null}
+                  {supportingReference?.contentHash ? <code>{supportingReference.contentHash}</code> : null}
+                </div>
+              </article>
+            )
+          })
         )}
       </div>
 
@@ -1241,6 +1263,7 @@ function KnowledgeView({
   references: KnowledgeReference[]
   selectedRun: WorkflowRun | undefined
 }) {
+  const documentById = new Map(documents.map((document) => [document.id, document]))
   const visibleDocuments = documents.filter((document) =>
     matchesQuery(query, [
       document.title,
@@ -1324,14 +1347,24 @@ function KnowledgeView({
         {references.length === 0 ? (
           <p className="empty-note">当前 Run 尚未匹配到知识引用。</p>
         ) : (
-          references.slice(0, 8).map((reference) => (
-            <article className="reference-row" key={reference.id}>
-              <span>{reference.targetType}</span>
-              <strong>{reference.relation}</strong>
-              <p>{reference.documentId}</p>
-              <code>{reference.artifactId ?? reference.evidenceId ?? reference.nodeId ?? reference.runId}</code>
-            </article>
-          ))
+          references.slice(0, 8).map((reference) => {
+            const document = documentById.get(reference.documentId)
+
+            return (
+              <article className="reference-row" key={reference.id}>
+                <span>{reference.targetType}</span>
+                <strong>{reference.relation}</strong>
+                <p>{document?.title ?? reference.documentId}</p>
+                <div className="knowledge-reference-meta">
+                  {reference.strategy ? <span>{reference.strategy}</span> : null}
+                  {typeof reference.score === 'number' ? <span>score {reference.score}</span> : null}
+                  {reference.headingPath ? <span>{reference.headingPath.join(' / ')}</span> : null}
+                </div>
+                <code>{reference.artifactId ?? reference.evidenceId ?? reference.nodeId ?? reference.runId}</code>
+                {reference.contentHash ? <code>{reference.contentHash}</code> : null}
+              </article>
+            )
+          })
         )}
       </aside>
     </section>

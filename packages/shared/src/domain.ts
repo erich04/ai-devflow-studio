@@ -225,6 +225,48 @@ export type KnowledgeDocument = {
   markdown: string
 }
 
+export type KnowledgeRetrievalStrategy = 'heuristic' | 'lexical' | 'vector' | 'hybrid'
+
+export type KnowledgeChunk = {
+  id: string
+  documentId: string
+  sourcePath: string
+  headingPath: string[]
+  content: string
+  contentHash: string
+  tokenCount: number
+  tags: string[]
+  updatedAt: string
+}
+
+export type KnowledgeRetrievalQuery = {
+  id: string
+  runId: string
+  targetType: KnowledgeReferenceTargetType
+  text: string
+  nodeId?: string
+  artifactId?: string
+  evidenceId?: string
+  categories?: KnowledgeDocumentCategory[]
+  tags?: string[]
+  stage?: NodeStage
+  minScore?: number
+  topK?: number
+}
+
+export type KnowledgeRetrievalHit = {
+  documentId: string
+  chunkId: string
+  sourcePath: string
+  headingPath: string[]
+  contentHash: string
+  score: number
+  strategy: KnowledgeRetrievalStrategy
+  reason: string
+  matchedText?: string
+  category: KnowledgeDocumentCategory
+}
+
 export type KnowledgeReferenceTargetType =
   | 'run'
   | 'node'
@@ -245,6 +287,11 @@ export type KnowledgeReference = {
   documentId: string
   relation: KnowledgeReferenceRelation
   reason: string
+  chunkId?: string
+  score?: number
+  strategy?: KnowledgeRetrievalStrategy
+  contentHash?: string
+  headingPath?: string[]
   nodeId?: string
   artifactId?: string
   evidenceId?: string

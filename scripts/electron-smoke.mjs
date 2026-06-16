@@ -165,6 +165,14 @@ try {
   await expect(first.page.getByLabel('测试命令')).toHaveValue('npm test')
   await expect(first.page.getByText(/safe/i)).toBeVisible()
 
+  await first.page.getByRole('button', { name: /Knowledge/ }).click()
+  await expect(first.page.getByTestId('knowledge-view')).toContainText('Knowledge Governance')
+  await first.page.getByLabel('Search runs and knowledge').fill('api')
+  await expect(first.page.getByTestId('knowledge-view')).toContainText('API Health Endpoint Standard')
+  await expect(first.page.getByTestId('knowledge-view')).toContainText('lexical')
+  await expect(first.page.getByTestId('knowledge-view')).toContainText(/kh-[a-f0-9]{8}/)
+  await first.page.getByLabel('Search runs and knowledge').fill('')
+
   await first.page.getByTestId('theme-toggle').click()
   await expect(first.page.locator('html')).toHaveAttribute('data-theme-preference', 'light')
 
@@ -191,6 +199,9 @@ try {
   await expect(first.page.getByTestId('tests-view')).toContainText('Local test evidence')
   await expect(first.page.getByTestId('tests-view')).toContainText('passed')
   await expect(first.page.getByTestId('tests-view')).toContainText('npm test')
+  await first.page.getByRole('button', { name: /工作台/ }).click()
+  await expect(first.page.getByTestId('node-inspector')).toContainText('Local Test Evidence Standard')
+  await expect(first.page.getByTestId('node-inspector')).toContainText('satisfied')
 
   const browser = await chromium.launch()
   try {

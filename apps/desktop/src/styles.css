@@ -628,6 +628,31 @@ button:disabled {
   font-size: 11px;
 }
 
+.knowledge-reference-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.knowledge-reference-meta span,
+.knowledge-reference-meta code {
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: none;
+}
+
+.knowledge-reference-meta code {
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
 .artifact-card code {
   display: block;
   margin-top: 10px;

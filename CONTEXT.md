@@ -44,10 +44,24 @@ checklist, ADR, contract, onboarding note, Skill rule, or MCP rule.
 The indexed representation of a Knowledge Source File, including title, category, summary, tags,
 owner, source path, and Markdown content.
 
+## Knowledge Chunk
+
+A section-level slice of a Knowledge Document that can be retrieved and cited independently while
+still pointing back to the original Markdown source.
+
 ## Knowledge Graph
 
 A lightweight relationship layer extracted from the Knowledge Base and Run artifacts. It links terms,
 systems, decisions, tasks, artifacts, and owners.
+
+## Knowledge Retrieval
+
+The process of finding relevant Knowledge Chunks for a Run, Node, Artifact, Test Evidence, or Gate
+decision. Retrieval recommends references; it does not decide whether a standard is satisfied.
+
+## Knowledge Retrieval Hit
+
+A scored retrieval result that explains which Knowledge Chunk matched a workflow context and why.
 
 ## Knowledge Reference
 

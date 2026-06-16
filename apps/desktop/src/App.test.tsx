@@ -365,6 +365,9 @@ describe('App', () => {
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Governance')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('API Health Endpoint Standard')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Local Test Evidence Standard')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('lexical')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent(/score \d+/)
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('API Health Endpoint Standard')
 
     fireEvent.click(screen.getByRole('button', { name: /Knowledge/ }))
 
@@ -372,6 +375,8 @@ describe('App', () => {
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Git Markdown Index')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('docs/knowledge/standards/api-health.md')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Run references')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('lexical')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent(/kh-[a-f0-9]{8}/)
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('art-design')
   })
 
@@ -418,6 +423,10 @@ describe('App', () => {
     expect(screen.getByTestId('tests-view')).toHaveTextContent('900ms')
     expect(screen.getByTestId('tests-view')).toHaveTextContent('Redacted no')
     expect(screen.getByTestId('toast')).toHaveTextContent('测试通过，证据已归档')
+
+    fireEvent.click(screen.getByRole('button', { name: /工作台/ }))
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Local Test Evidence Standard')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('satisfied')
   })
 
   it('keeps local test evidence visible when remote evidence sync fails', async () => {

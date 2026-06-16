@@ -1,10 +1,14 @@
 import type {
   Artifact,
+  KnowledgeChunk,
   KnowledgeDocument,
   KnowledgeDocumentCategory,
   KnowledgeEntity,
   KnowledgeGovernanceCheck,
   KnowledgeReference,
+  KnowledgeRetrievalHit,
+  KnowledgeRetrievalQuery,
+  KnowledgeRetrievalStrategy,
   KnowledgeRelation,
   KnowledgeSourceFile,
   TestEvidence,
@@ -19,20 +23,30 @@ export type KnowledgeGraph = {
 
 export type KnowledgeIndex = KnowledgeGraph & {
   documents: KnowledgeDocument[]
+  chunks: KnowledgeChunk[]
 }
 
 export type KnowledgeReferenceInput = {
   run: WorkflowRun
   artifacts: Artifact[]
   documents: KnowledgeDocument[]
+  chunks?: KnowledgeChunk[]
   testEvidence: TestEvidence[]
+  retriever?: KnowledgeRetriever
 }
 
 export type KnowledgeGovernanceInput = KnowledgeReferenceInput & {
   node: WorkflowNode
 }
 
+export type KnowledgeRetriever = {
+  strategy: KnowledgeRetrievalStrategy
+  retrieve: (query: KnowledgeRetrievalQuery, index: KnowledgeIndex) => KnowledgeRetrievalHit[]
+}
+
 const DEFAULT_UPDATED_AT = '2026-06-16T00:00:00.000Z'
+const DEFAULT_MIN_SCORE = 2
+const DEFAULT_TOP_K = 3
 
 export function findEntityNeighborhood(graph: KnowledgeGraph, entityId: string): KnowledgeGraph {
   const relations = graph.relations.filter(
@@ -131,6 +145,34 @@ function summaryFromMarkdown(body: string): string {
   return paragraph ?? 'No summary available.'
 }
 
+function stableContentHash(value: string): string {
+  let hash = 0x811c9dc5
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+
+  return `kh-${(hash >>> 0).toString(16).padStart(8, '0')}`
+}
+
+function tokenize(value: string): string[] {
+  return (
+    value
+      .toLocaleLowerCase()
+      .match(/[\p{L}\p{N}]+/gu)
+      ?.filter((token) => token.length >= 3) ?? []
+  )
+}
+
+function uniqueTokens(value: string): string[] {
+  return Array.from(new Set(tokenize(value)))
+}
+
+function countTokens(value: string): number {
+  return tokenize(value).length
+}
+
 function parseCategory(value: string | undefined, sourcePath: string): KnowledgeDocumentCategory {
   const normalized = value?.trim() as KnowledgeDocumentCategory | undefined
   const allowed = new Set<KnowledgeDocumentCategory>([
@@ -173,6 +215,77 @@ function parseCategory(value: string | undefined, sourcePath: string): Knowledge
   return 'development_standard'
 }
 
+function buildKnowledgeChunksForDocument(
+  document: KnowledgeDocument,
+  body: string,
+): KnowledgeChunk[] {
+  const lines = body.split('\n')
+  const chunks: KnowledgeChunk[] = []
+  const headingStack: string[] = []
+  let currentHeadingPath = [document.title]
+  let currentLines: string[] = []
+
+  function flushChunk() {
+    const content = currentLines.join('\n').trim()
+    if (!content) {
+      return
+    }
+
+    const chunkNumber = chunks.length + 1
+    const headingSlug = slugify(currentHeadingPath.at(-1) ?? document.title) || 'body'
+
+    chunks.push({
+      id: `knowledge-chunk-${slugify(basenameWithoutExtension(document.sourcePath))}-${chunkNumber}-${headingSlug}`,
+      documentId: document.id,
+      sourcePath: document.sourcePath,
+      headingPath: currentHeadingPath,
+      content,
+      contentHash: stableContentHash(content),
+      tokenCount: countTokens(content),
+      tags: document.tags,
+      updatedAt: document.updatedAt,
+    })
+  }
+
+  for (const line of lines) {
+    const headingMatch = /^(#{1,3})\s+(.+)$/u.exec(line.trim())
+
+    if (headingMatch) {
+      flushChunk()
+      const level = headingMatch[1]!.length
+      const heading = headingMatch[2]!.trim()
+      headingStack.length = level - 1
+      headingStack[level - 1] = heading
+      currentHeadingPath = headingStack.filter(Boolean)
+      currentLines = [line]
+      continue
+    }
+
+    currentLines.push(line)
+  }
+
+  flushChunk()
+
+  if (chunks.length > 0) {
+    return chunks
+  }
+
+  const fallbackContent = body.trim() || document.summary
+  return [
+    {
+      id: `knowledge-chunk-${slugify(basenameWithoutExtension(document.sourcePath))}-1-body`,
+      documentId: document.id,
+      sourcePath: document.sourcePath,
+      headingPath: [document.title],
+      content: fallbackContent,
+      contentHash: stableContentHash(fallbackContent),
+      tokenCount: countTokens(fallbackContent),
+      tags: document.tags,
+      updatedAt: document.updatedAt,
+    },
+  ]
+}
+
 function documentEntityKind(category: KnowledgeDocumentCategory): KnowledgeEntity['kind'] {
   if (category === 'adr') {
     return 'decision'
@@ -185,23 +298,30 @@ function documentEntityKind(category: KnowledgeDocumentCategory): KnowledgeEntit
 }
 
 export function indexKnowledgeSources(sources: KnowledgeSourceFile[]): KnowledgeIndex {
-  const documents = sources.map((source) => {
+  const indexedDocuments = sources.map((source) => {
     const { fields, body } = parseFrontmatter(source.markdown)
     const title = fields['title']?.trim() || titleFromMarkdown(body, source.sourcePath)
     const category = parseCategory(fields['category'], source.sourcePath)
 
     return {
-      id: `knowledge-doc-${slugify(basenameWithoutExtension(source.sourcePath))}`,
-      title,
-      category,
-      sourcePath: source.sourcePath,
-      summary: fields['summary']?.trim() || summaryFromMarkdown(body),
-      tags: parseTags(fields['tags']),
-      updatedAt: source.updatedAt || DEFAULT_UPDATED_AT,
-      markdown: source.markdown,
-      ...(fields['ownerId']?.trim() ? { ownerId: fields['ownerId'].trim() } : {}),
-    } satisfies KnowledgeDocument
+      document: {
+        id: `knowledge-doc-${slugify(basenameWithoutExtension(source.sourcePath))}`,
+        title,
+        category,
+        sourcePath: source.sourcePath,
+        summary: fields['summary']?.trim() || summaryFromMarkdown(body),
+        tags: parseTags(fields['tags']),
+        updatedAt: source.updatedAt || DEFAULT_UPDATED_AT,
+        markdown: source.markdown,
+        ...(fields['ownerId']?.trim() ? { ownerId: fields['ownerId'].trim() } : {}),
+      } satisfies KnowledgeDocument,
+      body,
+    }
   })
+  const documents = indexedDocuments.map((item) => item.document)
+  const chunks = indexedDocuments.flatMap((item) =>
+    buildKnowledgeChunksForDocument(item.document, item.body),
+  )
 
   const entities = new Map<string, KnowledgeEntity>()
   const relations: KnowledgeRelation[] = []
@@ -233,6 +353,7 @@ export function indexKnowledgeSources(sources: KnowledgeSourceFile[]): Knowledge
 
   return {
     documents,
+    chunks,
     entities: Array.from(entities.values()),
     relations,
   }
@@ -256,28 +377,199 @@ function documentMatchesText(document: KnowledgeDocument, text: string): boolean
   return documentNeedles(document).some((needle) => haystack.includes(needle))
 }
 
-function documentsForNode(node: WorkflowNode, documents: KnowledgeDocument[]): KnowledgeDocument[] {
-  return documents.filter((document) => {
-    if (node.stage === 'test') {
-      return document.category === 'testing_standard'
-    }
-    if (node.stage === 'pr') {
-      return document.category === 'review_checklist'
-    }
-    if (node.stage === 'accept') {
-      return document.category === 'review_checklist' || document.category === 'adr'
-    }
-    if (node.stage === 'design') {
-      return ['api_contract', 'adr', 'review_checklist', 'testing_standard'].includes(
+function indexFromDocuments(
+  documents: KnowledgeDocument[],
+  chunks: KnowledgeChunk[] | undefined,
+): KnowledgeIndex {
+  return {
+    documents,
+    chunks:
+      chunks ??
+      documents.flatMap((document) => {
+        const { body } = parseFrontmatter(document.markdown)
+        return buildKnowledgeChunksForDocument(document, body)
+      }),
+    entities: [],
+    relations: [],
+  }
+}
+
+function formatMatchedText(tokens: string[]): string | undefined {
+  return tokens.length > 0 ? tokens.slice(0, 6).join(', ') : undefined
+}
+
+function scoreLexicalHit(
+  query: KnowledgeRetrievalQuery,
+  document: KnowledgeDocument,
+  chunk: KnowledgeChunk,
+): { score: number; matchedTokens: string[] } {
+  const queryTokens = uniqueTokens(searchableText([query.text, ...(query.tags ?? [])]))
+  const chunkTokens = new Set(
+    uniqueTokens(
+      searchableText([
+        document.title,
+        document.summary,
         document.category,
-      )
-    }
-    if (node.stage === 'clarify') {
-      return document.category === 'development_standard' || document.category === 'onboarding'
+        ...document.tags,
+        ...chunk.headingPath,
+        chunk.content,
+      ]),
+    ),
+  )
+  const matchedTokens: string[] = []
+  let score = 0
+
+  for (const token of queryTokens) {
+    if (!chunkTokens.has(token)) {
+      continue
     }
 
-    return document.category === 'development_standard'
-  })
+    matchedTokens.push(token)
+    score += document.tags.includes(token) ? 3 : 1
+    if (document.title.toLocaleLowerCase().includes(token)) {
+      score += 1
+    }
+  }
+
+  if (query.categories?.includes(document.category)) {
+    score += 2
+  }
+
+  if (query.stage && documentsForNodeStage(query.stage).includes(document.category)) {
+    score += 1
+  }
+
+  return { score, matchedTokens }
+}
+
+function documentsForNodeStage(stage: WorkflowNode['stage']): KnowledgeDocumentCategory[] {
+  if (stage === 'test') {
+    return ['testing_standard']
+  }
+  if (stage === 'pr') {
+    return ['review_checklist']
+  }
+  if (stage === 'accept') {
+    return ['review_checklist', 'adr']
+  }
+  if (stage === 'design') {
+    return ['api_contract', 'adr', 'review_checklist', 'testing_standard']
+  }
+  if (stage === 'clarify') {
+    return ['development_standard', 'onboarding']
+  }
+
+  return ['development_standard']
+}
+
+export const lexicalKnowledgeRetriever: KnowledgeRetriever = {
+  strategy: 'lexical',
+  retrieve(query, index) {
+    const documentById = new Map(index.documents.map((document) => [document.id, document]))
+    const minScore = query.minScore ?? DEFAULT_MIN_SCORE
+    const topK = query.topK ?? DEFAULT_TOP_K
+
+    return index.chunks
+      .flatMap((chunk) => {
+        const document = documentById.get(chunk.documentId)
+        if (!document) {
+          return []
+        }
+        if (query.categories?.length && !query.categories.includes(document.category)) {
+          return []
+        }
+
+        const { score, matchedTokens } = scoreLexicalHit(query, document, chunk)
+        if (score < minScore) {
+          return []
+        }
+        const matchedText = formatMatchedText(matchedTokens)
+
+        return [
+          {
+            documentId: document.id,
+            chunkId: chunk.id,
+            sourcePath: chunk.sourcePath,
+            headingPath: chunk.headingPath,
+            contentHash: chunk.contentHash,
+            score,
+            strategy: 'lexical',
+            reason: `Matched ${matchedTokens.length} terms for ${document.title}.`,
+            ...(matchedText ? { matchedText } : {}),
+            category: document.category,
+          } satisfies KnowledgeRetrievalHit,
+        ]
+      })
+      .sort((left, right) => right.score - left.score || left.documentId.localeCompare(right.documentId))
+      .slice(0, topK)
+  },
+}
+
+export const heuristicKnowledgeRetriever: KnowledgeRetriever = {
+  strategy: 'heuristic',
+  retrieve(query, index) {
+    return index.documents
+      .filter((document) => documentMatchesText(document, query.text))
+      .slice(0, query.topK ?? DEFAULT_TOP_K)
+      .map((document) => {
+        const chunk = index.chunks.find((item) => item.documentId === document.id)
+        const fallbackContent = document.markdown || document.summary
+        const headingPath = chunk?.headingPath ?? [document.title]
+        const contentHash = chunk?.contentHash ?? stableContentHash(fallbackContent)
+        const matchedText = documentNeedles(document).find((needle) =>
+          query.text.toLocaleLowerCase().includes(needle),
+        )
+
+        return {
+          documentId: document.id,
+          chunkId: chunk?.id ?? `knowledge-chunk-${slugify(basenameWithoutExtension(document.sourcePath))}-1-body`,
+          sourcePath: document.sourcePath,
+          headingPath,
+          contentHash,
+          score: 1,
+          strategy: 'heuristic',
+          reason: `Heuristic match for ${document.title}.`,
+          ...(matchedText ? { matchedText } : {}),
+          category: document.category,
+        } satisfies KnowledgeRetrievalHit
+      })
+  },
+}
+
+function referenceMetadataFromHit(hit: KnowledgeRetrievalHit) {
+  return {
+    chunkId: hit.chunkId,
+    score: hit.score,
+    strategy: hit.strategy,
+    contentHash: hit.contentHash,
+    headingPath: hit.headingPath,
+  }
+}
+
+function firstChunkMetadataForDocument(
+  document: KnowledgeDocument,
+  chunks: KnowledgeChunk[],
+): Pick<KnowledgeReference, 'chunkId' | 'contentHash' | 'headingPath'> {
+  const chunk = chunks.find((item) => item.documentId === document.id)
+
+  if (!chunk) {
+    return {
+      chunkId: `knowledge-chunk-${slugify(basenameWithoutExtension(document.sourcePath))}-1-body`,
+      contentHash: stableContentHash(document.markdown || document.summary),
+      headingPath: [document.title],
+    }
+  }
+
+  return {
+    chunkId: chunk.id,
+    contentHash: chunk.contentHash,
+    headingPath: chunk.headingPath,
+  }
+}
+
+function documentsForNode(node: WorkflowNode, documents: KnowledgeDocument[]): KnowledgeDocument[] {
+  const categories = documentsForNodeStage(node.stage)
+  return documents.filter((document) => categories.includes(document.category))
 }
 
 function pushReference(references: KnowledgeReference[], reference: Omit<KnowledgeReference, 'id'>) {
@@ -305,21 +597,33 @@ export function buildKnowledgeReferences({
   run,
   artifacts,
   documents,
+  chunks,
   testEvidence,
+  retriever = lexicalKnowledgeRetriever,
 }: KnowledgeReferenceInput): KnowledgeReference[] {
   const references: KnowledgeReference[] = []
+  const index = indexFromDocuments(documents, chunks)
   const runText = searchableText([run.title, run.request, run.branchName, run.status])
 
-  for (const document of documents) {
-    if (documentMatchesText(document, runText)) {
-      pushReference(references, {
-        runId: run.id,
-        targetType: 'run',
-        documentId: document.id,
-        relation: 'cites',
-        reason: `Run request matches ${document.title}.`,
-      })
-    }
+  for (const hit of retriever.retrieve(
+    {
+      id: `knowledge-query-run-${run.id}`,
+      runId: run.id,
+      targetType: 'run',
+      text: runText,
+      topK: 3,
+      minScore: 2,
+    },
+    index,
+  )) {
+    pushReference(references, {
+      runId: run.id,
+      targetType: 'run',
+      documentId: hit.documentId,
+      relation: 'cites',
+      reason: hit.reason,
+      ...referenceMetadataFromHit(hit),
+    })
   }
 
   for (const artifact of artifacts.filter((artifact) => artifact.runId === run.id)) {
@@ -329,18 +633,29 @@ export function buildKnowledgeReferences({
       artifact.content,
       artifact.kind,
     ])
-    for (const document of documents) {
-      if (documentMatchesText(document, artifactText)) {
-        pushReference(references, {
-          runId: run.id,
-          targetType: 'artifact',
-          artifactId: artifact.id,
-          nodeId: artifact.nodeId,
-          documentId: document.id,
-          relation: 'satisfies',
-          reason: `${artifact.title} provides evidence for ${document.title}.`,
-        })
-      }
+    for (const hit of retriever.retrieve(
+      {
+        id: `knowledge-query-artifact-${artifact.id}`,
+        runId: run.id,
+        targetType: 'artifact',
+        artifactId: artifact.id,
+        nodeId: artifact.nodeId,
+        text: artifactText,
+        topK: 3,
+        minScore: 2,
+      },
+      index,
+    )) {
+      pushReference(references, {
+        runId: run.id,
+        targetType: 'artifact',
+        artifactId: artifact.id,
+        nodeId: artifact.nodeId,
+        documentId: hit.documentId,
+        relation: 'satisfies',
+        reason: `${artifact.title} provides evidence. ${hit.reason}`,
+        ...referenceMetadataFromHit(hit),
+      })
     }
   }
 
@@ -353,6 +668,7 @@ export function buildKnowledgeReferences({
         documentId: document.id,
         relation: 'requires_evidence',
         reason: `${node.title} should review ${document.title}.`,
+        ...firstChunkMetadataForDocument(document, index.chunks),
       })
     }
   }
@@ -367,6 +683,7 @@ export function buildKnowledgeReferences({
         documentId: document.id,
         relation: evidence.status === 'passed' ? 'satisfies' : 'violates',
         reason: `${evidence.command} ${evidence.status} against ${document.title}.`,
+        ...firstChunkMetadataForDocument(document, index.chunks),
       })
     }
   }
@@ -379,21 +696,21 @@ export function buildKnowledgeGovernanceChecks({
   node,
   artifacts,
   documents,
+  chunks,
   testEvidence,
+  retriever = lexicalKnowledgeRetriever,
 }: KnowledgeGovernanceInput): KnowledgeGovernanceCheck[] {
-  const references = buildKnowledgeReferences({ run, artifacts, documents, testEvidence })
-  const nodeArtifacts = artifacts.filter(
-    (artifact) => artifact.runId === run.id && node.artifactIds.includes(artifact.id),
-  )
+  const references = buildKnowledgeReferences({
+    run,
+    artifacts,
+    documents,
+    ...(chunks ? { chunks } : {}),
+    testEvidence,
+    retriever,
+  })
   const runEvidence = testEvidence.filter((evidence) => evidence.runId === run.id)
 
   return documentsForNode(node, documents).map((document) => {
-    const artifactMatches = nodeArtifacts.filter((artifact) =>
-      documentMatchesText(
-        document,
-        searchableText([artifact.title, artifact.summary, artifact.content, artifact.kind]),
-      ),
-    )
     const matchingEvidence = runEvidence.filter((evidence) =>
       document.category === 'testing_standard' && evidence.nodeId === node.id,
     )
@@ -404,6 +721,13 @@ export function buildKnowledgeGovernanceChecks({
           (!reference.nodeId || reference.nodeId === node.id || node.artifactIds.includes(reference.artifactId ?? '')),
       )
       .map((reference) => reference.id)
+    const satisfyingArtifactReferences = references.filter(
+      (reference) =>
+        reference.documentId === document.id &&
+        reference.targetType === 'artifact' &&
+        reference.relation === 'satisfies' &&
+        node.artifactIds.includes(reference.artifactId ?? ''),
+    )
 
     if (document.category === 'testing_standard') {
       const hasPassingEvidence = matchingEvidence.some((evidence) => evidence.status === 'passed')
@@ -435,10 +759,13 @@ export function buildKnowledgeGovernanceChecks({
       documentId: document.id,
       title: document.title,
       category: document.category,
-      status: artifactMatches.length > 0 ? 'satisfied' : 'needs_evidence',
+      status: satisfyingArtifactReferences.length > 0 ? 'satisfied' : 'needs_evidence',
       summary:
-        artifactMatches.length > 0
-          ? `${artifactMatches.map((artifact) => artifact.id).join(', ')} cites this standard.`
+        satisfyingArtifactReferences.length > 0
+          ? `${satisfyingArtifactReferences
+              .map((reference) => reference.artifactId)
+              .filter(Boolean)
+              .join(', ')} cites this standard.`
           : 'No artifact evidence is linked yet.',
       referenceIds,
     } satisfies KnowledgeGovernanceCheck

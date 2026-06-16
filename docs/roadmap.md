@@ -125,6 +125,17 @@ Electron smoke is still tracked as future compatibility expansion. See
   graph, tags, source paths, and current Run references.
 - Added representative source Markdown under `docs/knowledge/`.
 
+### v0.4.x: Knowledge Retrieval / RAG-Ready Hardening
+
+- Added section-level Knowledge Chunks with stable content hashes for source-version awareness.
+- Added Knowledge Retrieval as the recommendation layer between workflow context and Knowledge
+  References.
+- Added lexical retrieval metadata including strategy, score, source section, and content hash.
+- Kept Governance Checks evidence-driven: Run-level retrieval citations do not satisfy or violate
+  standards by themselves.
+- Added ADR 0007 to preserve the boundary between retrieval recommendations and governance
+  evidence before future RAG work.
+
 ## Planned Milestones
 
 ### v0.5: Agent Knowledge Enforcement

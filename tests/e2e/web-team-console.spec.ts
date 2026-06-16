@@ -57,7 +57,7 @@ test.describe('AI DevFlow web team console', () => {
     await expect(page.getByText('Test Evidence')).toBeVisible()
     await expect(page.getByText(runTitle)).toBeVisible()
     await expect(page.getByText(evidenceSummary)).toBeVisible()
-    await expect(page.getByText('pnpm test -- --run')).toBeVisible()
+    await expect(page.getByText('pnpm test -- --run').first()).toBeVisible()
     await expect(page.locator('body')).not.toContainText('stdout')
     await expect(page.locator('body')).not.toContainText('stderr')
   })
