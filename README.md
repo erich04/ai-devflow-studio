@@ -35,5 +35,9 @@ Use `corepack pnpm dev:electron` for the real local demo. It builds the Electron
 starts the Vite renderer at `http://127.0.0.1:5173`, and launches Electron with local repository
 selection, controlled IPC, command safety checks, and SQLite persistence enabled.
 
+The API uses seed data by default for local demos. Set `DEVFLOW_DATABASE_URL` or `DATABASE_URL`
+before `corepack pnpm dev:api` to run it against Postgres; uploaded Electron Run/Test Evidence
+summaries are written as redacted team records.
+
 Use `corepack pnpm build && corepack pnpm --filter @ai-devflow/desktop electron` to run the built
 desktop app against `apps/desktop/dist/index.html` without the Vite dev server.

@@ -192,19 +192,21 @@ export async function resolveTeamRoute(
       return unauthorized()
     }
 
+    let summary: RemoteRunSummary
     try {
-      const summary = parseRemoteRunSummary(options.body)
-      const requiredRole = summary.kind === 'approval' ? 'lead' : 'member'
-      if (!canSyncProject(options.session, summary.projectId, requiredRole)) {
-        return forbidden(`Project role ${requiredRole} required`)
-      }
-
-      return {
-        status: 202,
-        body: await repository.uploadRunSummary(summary),
-      }
+      summary = parseRemoteRunSummary(options.body)
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : 'Invalid sync payload')
+    }
+
+    const requiredRole = summary.kind === 'approval' ? 'lead' : 'member'
+    if (!canSyncProject(options.session, summary.projectId, requiredRole)) {
+      return forbidden(`Project role ${requiredRole} required`)
+    }
+
+    return {
+      status: 202,
+      body: await repository.uploadRunSummary(summary, options.session),
     }
   }
 
@@ -213,18 +215,20 @@ export async function resolveTeamRoute(
       return unauthorized()
     }
 
+    let summary: RemoteTestEvidenceSummary
     try {
-      const summary = parseRemoteTestEvidenceSummary(options.body)
-      if (!canSyncProject(options.session, summary.projectId, 'member')) {
-        return forbidden('Project role member required')
-      }
-
-      return {
-        status: 202,
-        body: await repository.uploadTestEvidenceSummary(summary),
-      }
+      summary = parseRemoteTestEvidenceSummary(options.body)
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : 'Invalid sync payload')
+    }
+
+    if (!canSyncProject(options.session, summary.projectId, 'member')) {
+      return forbidden('Project role member required')
+    }
+
+    return {
+      status: 202,
+      body: await repository.uploadTestEvidenceSummary(summary, options.session),
     }
   }
 

@@ -269,7 +269,7 @@ describe('team API route resolver', () => {
     })
 
     expect(result?.status).toBe(202)
-    expect(repository.uploadRunSummary).toHaveBeenCalledWith(summary)
+    expect(repository.uploadRunSummary).toHaveBeenCalledWith(summary, leadSession)
   })
 
   it('requires lead access for approval summary sync', async () => {
@@ -323,7 +323,7 @@ describe('team API route resolver', () => {
     )
 
     expect(result?.status).toBe(202)
-    expect(repository.uploadTestEvidenceSummary).toHaveBeenCalledWith(summary)
+    expect(repository.uploadTestEvidenceSummary).toHaveBeenCalledWith(summary, memberSession)
   })
 
   it('rejects local-only test evidence fields before repository sync', async () => {
@@ -355,6 +355,29 @@ describe('team API route resolver', () => {
       },
     })
     expect(repository.uploadTestEvidenceSummary).not.toHaveBeenCalled()
+  })
+
+  it('lets repository sync failures bubble to the server error boundary', async () => {
+    const repository = createRepository()
+    repository.uploadRunSummary = vi.fn(async () => {
+      throw new Error('database write failed')
+    })
+
+    await expect(
+      resolveTeamRoute('POST', '/api/sync/run-summary', repository, {
+        body: {
+          kind: 'run',
+          runId: 'run-1',
+          projectId: 'p-payments',
+          title: 'Approve payment workflow',
+          status: 'building',
+          currentNodeId: 'node-build',
+          branchName: 'ai/payments',
+          updatedAt: '2026-06-16T00:00:00.000Z',
+        },
+        session: memberSession,
+      }),
+    ).rejects.toThrow('database write failed')
   })
 
   it('returns null for unknown paths so the server can emit 404', async () => {

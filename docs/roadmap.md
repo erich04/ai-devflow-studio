@@ -42,8 +42,9 @@ Evidence summaries from the API, and E2E coverage starts Desktop/API/Web togethe
 sync loop. The first Windows compatibility gate is also in place: `corepack pnpm
 test:cross-platform` audits automation for POSIX-only assumptions, command safety covers dangerous
 PowerShell and `cmd` patterns, and GitHub Actions runs macOS full verify plus a Windows
-typecheck/unit/audit job. The API still defaults to a seed-backed repository until the runtime
-Postgres driver/pool and sync write-through are implemented.
+typecheck/unit/audit job. The API now has optional `pg` runtime wiring: without a database URL it
+keeps the seed-backed demo repository, and with `DEVFLOW_DATABASE_URL` or `DATABASE_URL` it uses the
+Postgres repository and writes redacted Run/Test Evidence summaries into team tables.
 
 ## Completed Milestones
 

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { createSeedTeamRepository } from './team-repository'
 
 describe('seed team repository', () => {
+  const syncContext = { organizationId: 'org-demo', userId: 'u-erich' }
+
   it('exposes team overview data through the repository boundary', async () => {
     const repository = createSeedTeamRepository()
     const overview = await repository.getTeamOverview()
@@ -37,7 +39,7 @@ describe('seed team repository', () => {
         currentNodeId: 'node-build',
         branchName: 'ai/payments',
         updatedAt: '2026-06-16T00:00:00.000Z',
-      }),
+      }, syncContext),
     ).resolves.toMatchObject({ accepted: true })
 
     const evidenceSummary = {
@@ -54,7 +56,9 @@ describe('seed team repository', () => {
       createdAt: '2026-06-16T00:01:00.000Z',
     }
 
-    await expect(repository.uploadTestEvidenceSummary(evidenceSummary)).resolves.toMatchObject({
+    await expect(
+      repository.uploadTestEvidenceSummary(evidenceSummary, syncContext),
+    ).resolves.toMatchObject({
       accepted: true,
     })
 
@@ -62,7 +66,7 @@ describe('seed team repository', () => {
       repository.uploadTestEvidenceSummary({
         ...evidenceSummary,
         summary: 'Tests passed after retry',
-      }),
+      }, syncContext),
     ).resolves.toMatchObject({ accepted: true })
 
     const overview = await repository.getTeamOverview()

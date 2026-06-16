@@ -18,6 +18,7 @@ import {
   type RemoteTestEvidenceSummary,
   type SkillDefinition,
   type TeamMember,
+  type TeamSession,
   type TokenUsageRollup,
   type WorkflowRun,
 } from '@ai-devflow/shared'
@@ -38,13 +39,21 @@ export type TeamOverviewPayload = {
   testEvidenceSummaries: RemoteTestEvidenceSummary[]
 }
 
+export type TeamRepositorySyncContext = Pick<TeamSession, 'organizationId' | 'userId'>
+
 export type TeamRepository = {
   getRunsBundle(): Promise<RunsBundle>
   getTeamOverview(): Promise<TeamOverviewPayload>
   getSkills(): Promise<SkillDefinition[]>
   getMcpServers(): Promise<McpServerDefinition[]>
-  uploadRunSummary(summary: RemoteRunSummary): Promise<RemoteSyncUploadResult>
-  uploadTestEvidenceSummary(summary: RemoteTestEvidenceSummary): Promise<RemoteSyncUploadResult>
+  uploadRunSummary(
+    summary: RemoteRunSummary,
+    context: TeamRepositorySyncContext,
+  ): Promise<RemoteSyncUploadResult>
+  uploadTestEvidenceSummary(
+    summary: RemoteTestEvidenceSummary,
+    context: TeamRepositorySyncContext,
+  ): Promise<RemoteSyncUploadResult>
 }
 
 export function createSeedTeamRepository(): TeamRepository {

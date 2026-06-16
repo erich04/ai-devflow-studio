@@ -3,10 +3,10 @@ import type { TeamDbClient } from '../db/client'
 import { createPostgresTeamRepository } from './postgres-team-repository'
 
 class FakeTeamDbClient implements TeamDbClient {
-  readonly queries: string[] = []
+  readonly queries: Array<{ sql: string; params?: unknown[] }> = []
 
-  async query<T>(sql: string): Promise<T[]> {
-    this.queries.push(sql)
+  async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    this.queries.push(params === undefined ? { sql } : { sql, params })
 
     if (sql.includes('FROM projects')) {
       return [
@@ -271,6 +271,111 @@ describe('Postgres team repository', () => {
         enabledLocally: false,
         lastAuditEvent: 'Query PR checks.',
       },
+    ])
+  })
+
+  it('writes run summaries into workflow_runs with tenant context', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.uploadRunSummary(
+        {
+          kind: 'approval',
+          runId: 'run-synced',
+          projectId: 'p-payments',
+          title: 'Synced approval',
+          status: 'building',
+          currentNodeId: 'n-build',
+          branchName: 'ai/synced-approval',
+          updatedAt: '2026-06-16T12:00:00.000Z',
+        },
+        { organizationId: 'org-demo', userId: 'u-ling' },
+      ),
+    ).resolves.toMatchObject({
+      accepted: true,
+      message: 'run summary written to Postgres repository',
+    })
+
+    const write = db.queries.at(-1)
+    expect(write?.sql).toContain('INSERT INTO workflow_runs')
+    expect(write?.sql).toContain('ON CONFLICT (id) DO UPDATE')
+    expect(write?.params).toEqual([
+      'run-synced',
+      'org-demo',
+      'p-payments',
+      'u-ling',
+      'Synced approval',
+      'Synced from DevFlow Electron.',
+      'building',
+      'run-synced:n-build',
+      'ai/synced-approval',
+      '2026-06-16T12:00:00.000Z',
+    ])
+  })
+
+  it('writes test evidence summaries after ensuring a minimal run and test node', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.uploadTestEvidenceSummary(
+        {
+          id: 'evidence-synced',
+          runId: 'run-synced',
+          nodeId: 'n-test',
+          projectId: 'p-payments',
+          command: 'pnpm test',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1234,
+          summary: 'Tests passed in 1.2s.',
+          redacted: true,
+          createdAt: '2026-06-16T12:05:00.000Z',
+        },
+        { organizationId: 'org-demo', userId: 'u-ling' },
+      ),
+    ).resolves.toMatchObject({
+      accepted: true,
+      message: 'test evidence summary written to Postgres repository',
+    })
+
+    const writes = db.queries.slice(-3)
+    expect(writes[0]?.sql).toContain('INSERT INTO workflow_runs')
+    expect(writes[0]?.params).toEqual([
+      'run-synced',
+      'org-demo',
+      'p-payments',
+      'u-ling',
+      'Synced test evidence',
+      'Redacted test evidence summary synced from DevFlow Electron.',
+      'completed',
+      'run-synced:n-test',
+      'sync/run-synced',
+      '2026-06-16T12:05:00.000Z',
+    ])
+    expect(writes[1]?.sql).toContain('INSERT INTO workflow_nodes')
+    expect(writes[1]?.params).toEqual([
+      'run-synced:n-test',
+      'run-synced',
+      'pnpm test',
+      'success',
+      'u-ling',
+      '2026-06-16T12:05:00.000Z',
+    ])
+    expect(writes[2]?.sql).toContain('INSERT INTO test_evidence_summaries')
+    expect(writes[2]?.params).toEqual([
+      'evidence-synced',
+      'run-synced',
+      'run-synced:n-test',
+      'p-payments',
+      'pnpm test',
+      'passed',
+      0,
+      1234,
+      'Tests passed in 1.2s.',
+      true,
+      '2026-06-16T12:05:00.000Z',
     ])
   })
 })

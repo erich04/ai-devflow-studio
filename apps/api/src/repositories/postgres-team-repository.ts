@@ -13,6 +13,7 @@ import {
   type RemoteTestEvidenceSummary,
   type RequiredGateRole,
   type Role,
+  type TestEvidenceStatus,
   type RunStatus,
   type SkillDefinition,
   type TeamMember,
@@ -22,7 +23,12 @@ import {
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import type { TeamDbClient } from '../db/client'
-import type { RunsBundle, TeamOverviewPayload, TeamRepository } from './team-repository'
+import type {
+  RunsBundle,
+  TeamOverviewPayload,
+  TeamRepository,
+  TeamRepositorySyncContext,
+} from './team-repository'
 
 type TimestampValue = string | Date
 
@@ -334,6 +340,34 @@ function mapMcpServer(row: McpServerRow): McpServerDefinition {
   }
 }
 
+function remoteNodeId(runId: string, nodeId: string): string {
+  return `${runId}:${nodeId}`
+}
+
+function mapEvidenceStatusToNodeStatus(status: TestEvidenceStatus): NodeStatus {
+  if (status === 'passed') {
+    return 'success'
+  }
+
+  if (status === 'running') {
+    return 'running'
+  }
+
+  return 'failed'
+}
+
+function mapEvidenceStatusToRunStatus(status: TestEvidenceStatus): RunStatus {
+  if (status === 'passed') {
+    return 'completed'
+  }
+
+  if (status === 'running') {
+    return 'testing'
+  }
+
+  return 'failed'
+}
+
 export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
   async function loadRunsBundle(): Promise<RunsBundle> {
     const [runRows, nodeRows, edgeRows, artifactRows, eventRows] = await Promise.all([
@@ -405,19 +439,171 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
       return rows.map(mapMcpServer)
     },
 
-    async uploadRunSummary() {
+    async uploadRunSummary(summary, context: TeamRepositorySyncContext) {
+      await db.query(
+        `
+          INSERT INTO workflow_runs (
+            id,
+            organization_id,
+            project_id,
+            creator_id,
+            data_origin,
+            title,
+            request,
+            status,
+            current_node_id,
+            branch_name,
+            pull_request_url,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, 'remote', $5, $6, $7, $8, $9, NULL, $10, $10)
+          ON CONFLICT (id) DO UPDATE
+          SET title = excluded.title,
+              project_id = excluded.project_id,
+              status = excluded.status,
+              current_node_id = excluded.current_node_id,
+              branch_name = excluded.branch_name,
+              updated_at = excluded.updated_at
+        `,
+        [
+          summary.runId,
+          context.organizationId,
+          summary.projectId,
+          context.userId,
+          summary.title,
+          'Synced from DevFlow Electron.',
+          summary.status,
+          remoteNodeId(summary.runId, summary.currentNodeId),
+          summary.branchName,
+          summary.updatedAt,
+        ],
+      )
+
       return {
         accepted: true,
         syncedAt: new Date().toISOString(),
-        message: 'run summary accepted by Postgres repository boundary',
+        message: 'run summary written to Postgres repository',
       }
     },
 
-    async uploadTestEvidenceSummary() {
+    async uploadTestEvidenceSummary(summary, context: TeamRepositorySyncContext) {
+      const syncedNodeId = remoteNodeId(summary.runId, summary.nodeId)
+      const nodeStatus = mapEvidenceStatusToNodeStatus(summary.status)
+
+      await db.query(
+        `
+          INSERT INTO workflow_runs (
+            id,
+            organization_id,
+            project_id,
+            creator_id,
+            data_origin,
+            title,
+            request,
+            status,
+            current_node_id,
+            branch_name,
+            pull_request_url,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, 'remote', $5, $6, $7, $8, $9, NULL, $10, $10)
+          ON CONFLICT (id) DO UPDATE
+          SET status = excluded.status,
+              current_node_id = excluded.current_node_id,
+              updated_at = excluded.updated_at
+        `,
+        [
+          summary.runId,
+          context.organizationId,
+          summary.projectId,
+          context.userId,
+          'Synced test evidence',
+          'Redacted test evidence summary synced from DevFlow Electron.',
+          mapEvidenceStatusToRunStatus(summary.status),
+          syncedNodeId,
+          `sync/${summary.runId}`,
+          summary.createdAt,
+        ],
+      )
+      await db.query(
+        `
+          INSERT INTO workflow_nodes (
+            id,
+            run_id,
+            stage,
+            title,
+            subtitle,
+            kind,
+            status,
+            owner_id,
+            required_role,
+            retry_count,
+            token_usage_id,
+            position,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, 'test', 'Test Evidence', $3, 'test', $4, $5, NULL, 0, NULL, 999, $6, $6)
+          ON CONFLICT (id) DO UPDATE
+          SET subtitle = excluded.subtitle,
+              status = excluded.status,
+              updated_at = excluded.updated_at
+        `,
+        [
+          syncedNodeId,
+          summary.runId,
+          summary.command,
+          nodeStatus,
+          context.userId,
+          summary.createdAt,
+        ],
+      )
+      await db.query(
+        `
+          INSERT INTO test_evidence_summaries (
+            id,
+            run_id,
+            node_id,
+            project_id,
+            command,
+            status,
+            exit_code,
+            duration_ms,
+            summary,
+            redacted,
+            created_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          ON CONFLICT (id) DO UPDATE
+          SET command = excluded.command,
+              status = excluded.status,
+              exit_code = excluded.exit_code,
+              duration_ms = excluded.duration_ms,
+              summary = excluded.summary,
+              redacted = excluded.redacted,
+              created_at = excluded.created_at
+        `,
+        [
+          summary.id,
+          summary.runId,
+          syncedNodeId,
+          summary.projectId,
+          summary.command,
+          summary.status,
+          summary.exitCode,
+          summary.durationMs,
+          summary.summary,
+          summary.redacted,
+          summary.createdAt,
+        ],
+      )
+
       return {
         accepted: true,
         syncedAt: new Date().toISOString(),
-        message: 'test evidence summary accepted by Postgres repository boundary',
+        message: 'test evidence summary written to Postgres repository',
       }
     },
   }

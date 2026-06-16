@@ -1,10 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { resolveRequestSession } from './auth/session'
-import { createSeedTeamRepository } from './repositories/team-repository'
+import { createTeamRepositoryRuntime } from './repositories/repository-runtime'
 import { resolveTeamRoute } from './routes/team-routes'
 
 const port = Number(process.env['PORT'] ?? 4310)
-const repository = createSeedTeamRepository()
+const repositoryRuntime = await createTeamRepositoryRuntime()
+const repository = repositoryRuntime.repository
 
 function sendJson(response: ServerResponse, status: number, body: unknown) {
   response.writeHead(status, {
@@ -68,10 +69,20 @@ const server = createServer(async (request, response) => {
   const session = resolveRequestSession(request.headers, {
     allowDemoFallback: process.env['DEVFLOW_REQUIRE_AUTH'] !== 'true',
   })
-  const route = await resolveTeamRoute(request.method ?? 'GET', url.pathname, repository, {
-    body: requestBody,
-    session,
-  })
+  let route
+  try {
+    route = await resolveTeamRoute(request.method ?? 'GET', url.pathname, repository, {
+      body: requestBody,
+      session,
+    })
+  } catch (error) {
+    sendJson(response, 500, {
+      error: 'internal_error',
+      message: error instanceof Error ? error.message : 'Unexpected API error',
+    })
+    return
+  }
+
   if (route) {
     sendJson(response, route.status, route.body)
     return
@@ -85,4 +96,11 @@ const server = createServer(async (request, response) => {
 
 server.listen(port, '127.0.0.1', () => {
   console.log(`AI DevFlow API listening on http://127.0.0.1:${port}`)
+})
+
+process.once('SIGTERM', () => {
+  server.close(async () => {
+    await repositoryRuntime.close()
+    process.exit(0)
+  })
 })
