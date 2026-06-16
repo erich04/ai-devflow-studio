@@ -28,32 +28,15 @@ separate local state from seed fixtures. The previously intermittent Electron sm
 selecting the new Run's Gate node has been stabilized, and `corepack pnpm verify` has passed
 repeatedly.
 
-Current v0.2 validation is macOS-local. Starting in v0.3, Windows compatibility becomes a product
-constraint for Electron local execution, SQLite persistence, path handling, and smoke testing. See
-`docs/adr/0006-cross-platform-electron-compatibility.md`.
+v0.3 Team Backend Synchronization is complete and verified. DevFlow now has a Postgres-backed team
+API path, a Web manager console that reads from the API, an Electron remote sync boundary for
+approved Run/Test Evidence summaries, explicit demo session headers, and CI coverage for macOS
+verify, Windows compatibility checks, and Postgres integration smoke.
 
-v0.3 development has started with the team database schema, initial Postgres migration,
-driver-agnostic database client boundary, API repository/route boundary, Postgres repository
-mapping, Web manager console API client, and the first Electron remote synchronization boundary for
-loading team snapshots plus uploading redacted local Run/Test Evidence summaries. The API now has a
-demo session boundary with organization/project membership filtering and owner/lead/member route
-authorization. The Web manager console can now show seed-backed synced Runs and redacted Test
-Evidence summaries from the API, and E2E coverage starts Desktop/API/Web together to prove the team
-sync loop. The first Windows compatibility gate is also in place: `corepack pnpm
-test:cross-platform` audits automation for POSIX-only assumptions, command safety covers dangerous
-PowerShell and `cmd` patterns, and GitHub Actions runs macOS full verify plus a Windows
-typecheck/unit/audit job. The API now has optional `pg` runtime wiring: without a database URL it
-keeps the seed-backed demo repository, and with `DEVFLOW_DATABASE_URL` or `DATABASE_URL` it uses the
-Postgres repository and writes redacted Run/Test Evidence summaries into team tables. A local
-Postgres demo can now be prepared with `corepack pnpm --filter @ai-devflow/api db:setup`, which
-applies the schema migration and seeds DevFlow demo team data. CI also includes a Postgres
-integration job that runs `corepack pnpm test:postgres-smoke` against a real Postgres service and
-verifies seeded reads plus redacted sync write-through. On the desktop side, an explicit remote sync
-can now replace the Team Overview's project list, member list, project cost rollups, member cost
-rollups, and top-level token cost metric with the remote team snapshot while keeping local artifacts
-and raw Test Evidence private. Web and Electron remote clients now send explicit demo session
-headers, and the Postgres smoke runs with `DEVFLOW_REQUIRE_AUTH=true` so the integration path does
-not depend on unauthenticated demo fallback.
+Current validation remains macOS-local for the full real Electron window path. Windows compatibility
+is preserved through static automation checks and Windows CI for typecheck/unit/audit; full Windows
+Electron smoke is still tracked as future compatibility expansion. See
+`docs/adr/0006-cross-platform-electron-compatibility.md`.
 
 ## Completed Milestones
 
@@ -104,25 +87,27 @@ not depend on unauthenticated demo fallback.
 - Confirmed `corepack pnpm verify` passes repeatedly after the smoke wait path fix.
 - Kept the patch limited to test stability and documentation, without adding v0.3 backend features.
 
-## Planned Milestones
-
 ### v0.3: Team Backend Synchronization
 
-- Introduce the team backend as the synchronized source of truth for shared Runs, projects, members,
-  costs, and manager dashboards.
-- Replace the current fixture-backed `apps/api` server with API routes backed by Postgres.
-- Connect the current fixture-importing `apps/web` manager console to real API data.
-- Keep Electron SQLite as the local/offline/private state boundary and sync only approved summaries
+- Added the team database schema, initial Postgres migration, demo seed CLI, and `pg` runtime
+  repository selector with seed fallback for local demos.
+- Replaced direct API fixture serving with a repository/route boundary for Runs, team overview,
+  Skills, MCP definitions, and redacted sync summaries.
+- Connected the Web manager console to `/api/team/overview` through a DevFlow API client instead of
+  importing manager dashboard fixtures.
+- Kept Electron SQLite as the local/offline/private state boundary and sync only approved summaries
   or redacted evidence to the team backend.
-- Make desktop Team Overview and manager-facing summary widgets consume remote snapshot data after
-  explicit sync, without blending remote summaries into private local execution evidence.
-- Add basic authentication plus tenant/project/member role boundaries.
-- Send explicit demo session headers from Web and Electron remote clients and keep the Postgres
-  integration smoke green with API demo fallback disabled.
-- Define `seed`, `local`, `remote`, and future `adapter` data precedence in the app state model.
-- Preserve Windows compatibility for local execution, command safety, `userData` SQLite storage,
-  path display, and Electron smoke tests.
-- Leave real LLM orchestration, real MCP process management, and HoneyAI adapter work out of v0.3.
+- Added Electron remote sync IPC/client support for loading team snapshots and uploading approved
+  Run/Test Evidence summaries while keeping raw stdout/stderr/cwd private.
+- Made desktop Team Overview and top-level project/cost indicators consume remote snapshot projects,
+  members, and cost rollups after explicit sync.
+- Added demo session and tenant/project/member role boundaries, including explicit demo headers in
+  Web/Electron clients and a Postgres smoke path with `DEVFLOW_REQUIRE_AUTH=true`.
+- Added `corepack pnpm test:postgres-smoke` and GitHub Actions coverage for a real Postgres service.
+- Added Windows compatibility guardrails through `corepack pnpm test:cross-platform` and Windows CI
+  typecheck/unit/audit coverage.
+
+## Planned Milestones
 
 ### v0.4: Knowledge Governance
 
