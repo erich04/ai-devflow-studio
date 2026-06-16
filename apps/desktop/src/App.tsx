@@ -523,7 +523,11 @@ export function App() {
     }
 
     try {
-      const safety = commandSafety ?? validateTestCommandSafety(testCommandDraft)
+      const localSafety = validateTestCommandSafety(testCommandDraft)
+      const safety =
+        commandSafety?.normalizedCommand === localSafety.normalizedCommand
+          ? commandSafety
+          : localSafety
       if (safety.level === 'blocked') {
         setCommandSafety(safety)
         setToast(`测试命令已阻断：${safety.reasons.join(' ')}`)
@@ -557,7 +561,12 @@ export function App() {
       return
     }
 
-    const safety = commandSafety ?? validateTestCommandSafety(testCommandDraft || selectedLocalProject.testCommand)
+    const commandDraft = testCommandDraft || selectedLocalProject.testCommand
+    const localSafety = validateTestCommandSafety(commandDraft)
+    const safety =
+      commandSafety?.normalizedCommand === localSafety.normalizedCommand
+        ? commandSafety
+        : localSafety
     if (safety.level === 'blocked') {
       setCommandSafety(safety)
       setToast(`测试命令已阻断：${safety.reasons.join(' ')}`)

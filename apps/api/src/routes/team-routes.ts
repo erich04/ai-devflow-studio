@@ -1,9 +1,15 @@
-import type { RemoteRunSummary, RemoteTestEvidenceSummary } from '@ai-devflow/shared'
-import type { TeamRepository } from '../repositories/team-repository'
+import { formatUsd, type RemoteRunSummary, type RemoteTestEvidenceSummary, type TeamSession } from '@ai-devflow/shared'
+import { canAccessProject, canSyncProject } from '../auth/session'
+import type { RunsBundle, TeamOverviewPayload, TeamRepository } from '../repositories/team-repository'
 
 export type ApiRouteResult = {
   status: number
   body: unknown
+}
+
+export type ResolveTeamRouteOptions = {
+  body?: unknown
+  session?: TeamSession | null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -80,27 +86,87 @@ function badRequest(message: string): ApiRouteResult {
   }
 }
 
+function unauthorized(): ApiRouteResult {
+  return {
+    status: 401,
+    body: {
+      error: 'unauthorized',
+      message: 'Authentication required',
+    },
+  }
+}
+
+function forbidden(message: string): ApiRouteResult {
+  return {
+    status: 403,
+    body: {
+      error: 'forbidden',
+      message,
+    },
+  }
+}
+
+function filterRunsBundleForSession(bundle: RunsBundle, session: TeamSession): RunsBundle {
+  const runs = bundle.runs.filter((run) => canAccessProject(session, run.projectId))
+  const runIds = new Set(runs.map((run) => run.id))
+
+  return {
+    runs,
+    artifacts: bundle.artifacts.filter((artifact) => runIds.has(artifact.runId)),
+    events: bundle.events.filter((event) => runIds.has(event.runId)),
+  }
+}
+
+function filterOverviewForSession(
+  overview: TeamOverviewPayload,
+  session: TeamSession,
+): TeamOverviewPayload {
+  const projects = overview.projects.filter((project) => canAccessProject(session, project.id))
+  const projectIds = new Set(projects.map((project) => project.id))
+  const projectCost = overview.projectCost.filter((rollup) => projectIds.has(rollup.key))
+
+  return {
+    ...overview,
+    projects,
+    runs: overview.runs.filter((run) => projectIds.has(run.projectId)),
+    projectCost,
+    totalCost: formatUsd(projectCost.reduce((sum, rollup) => sum + rollup.costUsd, 0)),
+  }
+}
+
 export async function resolveTeamRoute(
   method: string,
   pathname: string,
   repository: TeamRepository,
-  body?: unknown,
+  options: ResolveTeamRouteOptions = {},
 ): Promise<ApiRouteResult | null> {
   if (method === 'GET' && pathname === '/api/runs') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
     return {
       status: 200,
-      body: await repository.getRunsBundle(),
+      body: filterRunsBundleForSession(await repository.getRunsBundle(), options.session),
     }
   }
 
   if (method === 'GET' && pathname === '/api/team/overview') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
     return {
       status: 200,
-      body: await repository.getTeamOverview(),
+      body: filterOverviewForSession(await repository.getTeamOverview(), options.session),
     }
   }
 
   if (method === 'GET' && pathname === '/api/skills') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
     return {
       status: 200,
       body: { skills: await repository.getSkills() },
@@ -108,6 +174,10 @@ export async function resolveTeamRoute(
   }
 
   if (method === 'GET' && pathname === '/api/mcp') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
     return {
       status: 200,
       body: { servers: await repository.getMcpServers() },
@@ -115,10 +185,20 @@ export async function resolveTeamRoute(
   }
 
   if (method === 'POST' && pathname === '/api/sync/run-summary') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
     try {
+      const summary = parseRemoteRunSummary(options.body)
+      const requiredRole = summary.kind === 'approval' ? 'lead' : 'member'
+      if (!canSyncProject(options.session, summary.projectId, requiredRole)) {
+        return forbidden(`Project role ${requiredRole} required`)
+      }
+
       return {
         status: 202,
-        body: await repository.uploadRunSummary(parseRemoteRunSummary(body)),
+        body: await repository.uploadRunSummary(summary),
       }
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : 'Invalid sync payload')
@@ -126,10 +206,19 @@ export async function resolveTeamRoute(
   }
 
   if (method === 'POST' && pathname === '/api/sync/test-evidence-summary') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
     try {
+      const summary = parseRemoteTestEvidenceSummary(options.body)
+      if (!canSyncProject(options.session, summary.projectId, 'member')) {
+        return forbidden('Project role member required')
+      }
+
       return {
         status: 202,
-        body: await repository.uploadTestEvidenceSummary(parseRemoteTestEvidenceSummary(body)),
+        body: await repository.uploadTestEvidenceSummary(summary),
       }
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : 'Invalid sync payload')

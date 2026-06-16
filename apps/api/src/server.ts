@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { resolveRequestSession } from './auth/session'
 import { createSeedTeamRepository } from './repositories/team-repository'
 import { resolveTeamRoute } from './routes/team-routes'
 
@@ -35,7 +36,8 @@ const server = createServer(async (request, response) => {
     response.writeHead(204, {
       'access-control-allow-origin': '*',
       'access-control-allow-methods': 'GET,POST,OPTIONS',
-      'access-control-allow-headers': 'content-type',
+      'access-control-allow-headers':
+        'content-type,x-devflow-organization-id,x-devflow-user-id,x-devflow-user-role,x-devflow-project-roles',
     })
     response.end()
     return
@@ -63,12 +65,13 @@ const server = createServer(async (request, response) => {
     }
   }
 
-  const route = await resolveTeamRoute(
-    request.method ?? 'GET',
-    url.pathname,
-    repository,
-    requestBody,
-  )
+  const session = resolveRequestSession(request.headers, {
+    allowDemoFallback: process.env['DEVFLOW_REQUIRE_AUTH'] !== 'true',
+  })
+  const route = await resolveTeamRoute(request.method ?? 'GET', url.pathname, repository, {
+    body: requestBody,
+    session,
+  })
   if (route) {
     sendJson(response, route.status, route.body)
     return

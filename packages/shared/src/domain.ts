@@ -61,6 +61,25 @@ export type TeamMember = {
   focus: string
 }
 
+export type Organization = {
+  id: string
+  name: string
+  slug: string
+}
+
+export type ProjectMembership = {
+  projectId: string
+  userId: string
+  role: Role
+}
+
+export type TeamSession = {
+  organizationId: string
+  userId: string
+  role: Role
+  projectMemberships: ProjectMembership[]
+}
+
 export type WorkflowNode = {
   id: string
   stage: NodeStage
