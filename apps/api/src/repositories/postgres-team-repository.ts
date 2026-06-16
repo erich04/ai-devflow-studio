@@ -10,6 +10,7 @@ import {
   type NodeStage,
   type NodeStatus,
   type Project,
+  type RemoteTestEvidenceSummary,
   type RequiredGateRole,
   type Role,
   type RunStatus,
@@ -134,6 +135,20 @@ type McpServerRow = {
   permission: McpServerDefinition['permission']
   enabled_by_default: boolean
   last_audit_event: string
+}
+
+type TestEvidenceSummaryRow = {
+  id: string
+  run_id: string
+  node_id: string
+  project_id: string
+  command: string
+  status: RemoteTestEvidenceSummary['status']
+  exit_code: number | null
+  duration_ms: number
+  summary: string
+  redacted: boolean
+  created_at: TimestampValue
 }
 
 function timestamp(value: TimestampValue): string {
@@ -280,6 +295,22 @@ function mapTokenUsage(row: TokenUsageRow): TokenUsage {
   }
 }
 
+function mapTestEvidenceSummary(row: TestEvidenceSummaryRow): RemoteTestEvidenceSummary {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    nodeId: row.node_id,
+    projectId: row.project_id,
+    command: row.command,
+    status: row.status,
+    exitCode: row.exit_code,
+    durationMs: row.duration_ms,
+    summary: row.summary,
+    redacted: row.redacted,
+    createdAt: timestamp(row.created_at),
+  }
+}
+
 function mapSkill(row: SkillRow): SkillDefinition {
   return {
     id: row.id,
@@ -340,11 +371,14 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
     },
 
     async getTeamOverview(): Promise<TeamOverviewPayload> {
-      const [projectRows, memberRows, runsBundle, tokenRows] = await Promise.all([
+      const [projectRows, memberRows, runsBundle, tokenRows, evidenceRows] = await Promise.all([
         db.query<ProjectRow>('SELECT * FROM projects ORDER BY name ASC'),
         db.query<UserRow>('SELECT * FROM users ORDER BY name ASC'),
         loadRunsBundle(),
         db.query<TokenUsageRow>('SELECT * FROM token_usage ORDER BY timestamp DESC'),
+        db.query<TestEvidenceSummaryRow>(
+          'SELECT * FROM test_evidence_summaries ORDER BY created_at DESC',
+        ),
       ])
       const tokenUsage = tokenRows.map(mapTokenUsage)
 
@@ -355,6 +389,7 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         projectCost: rollupTokenUsage(tokenUsage, 'projectId'),
         memberCost: rollupTokenUsage(tokenUsage, 'userId'),
         totalCost: formatUsd(tokenUsage.reduce((sum, row) => sum + row.costUsd, 0)),
+        testEvidenceSummaries: evidenceRows.map(mapTestEvidenceSummary),
       }
     },
 

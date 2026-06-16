@@ -596,7 +596,10 @@ export function App() {
       })
       applyLocalExecutionState(result.state)
       void desktopApi
-        .uploadTestEvidenceSummary(createRemoteTestEvidenceSummary(result.evidence))
+        .uploadTestEvidenceSummary({
+          ...createRemoteTestEvidenceSummary(result.evidence),
+          projectId: runningRun.projectId,
+        })
         .catch(() => undefined)
       setSelectedRunId(runningRun.id)
       setSelectedNodeId(testNode.id)

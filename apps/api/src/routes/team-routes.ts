@@ -131,6 +131,9 @@ function filterOverviewForSession(
     runs: overview.runs.filter((run) => projectIds.has(run.projectId)),
     projectCost,
     totalCost: formatUsd(projectCost.reduce((sum, rollup) => sum + rollup.costUsd, 0)),
+    testEvidenceSummaries: overview.testEvidenceSummaries.filter((evidence) =>
+      projectIds.has(evidence.projectId),
+    ),
   }
 }
 

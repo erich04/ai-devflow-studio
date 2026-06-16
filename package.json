@@ -14,7 +14,7 @@
     "typecheck": "corepack pnpm -r --if-present typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "corepack pnpm --filter @ai-devflow/desktop dev > /tmp/ai-devflow-vite.log 2>&1 & VITE_PID=$!; for i in $(seq 1 90); do curl -fsS http://127.0.0.1:5173 >/dev/null && break; sleep 1; done; PLAYWRIGHT_SKIP_WEBSERVER=1 playwright test; STATUS=$?; kill $VITE_PID 2>/dev/null || true; exit $STATUS",
+    "test:e2e": "node scripts/e2e.mjs",
     "test:electron-smoke": "node scripts/electron-smoke.mjs",
     "verify": "corepack pnpm typecheck && corepack pnpm test && corepack pnpm test:e2e && corepack pnpm test:electron-smoke"
   },

@@ -12,6 +12,7 @@ describe('seed team repository', () => {
     expect(overview.projectCost.length).toBeGreaterThan(0)
     expect(overview.memberCost.length).toBeGreaterThan(0)
     expect(overview.totalCost).toMatch(/^\$/)
+    expect(overview.testEvidenceSummaries).toEqual([])
   })
 
   it('returns workflow runs with their artifacts and events', async () => {
@@ -23,7 +24,7 @@ describe('seed team repository', () => {
     expect(bundle.events.every((event) => event.runId === 'run-health-001')).toBe(true)
   })
 
-  it('accepts remote sync summaries without mutating local seed data', async () => {
+  it('makes accepted remote sync summaries visible to team overview readers', async () => {
     const repository = createSeedTeamRepository()
 
     await expect(
@@ -39,20 +40,45 @@ describe('seed team repository', () => {
       }),
     ).resolves.toMatchObject({ accepted: true })
 
+    const evidenceSummary = {
+      id: 'evidence-1',
+      runId: 'run-1',
+      nodeId: 'node-test',
+      projectId: 'project-1',
+      command: 'pnpm test',
+      status: 'passed' as const,
+      exitCode: 0,
+      durationMs: 900,
+      summary: 'Tests passed in 900ms',
+      redacted: true,
+      createdAt: '2026-06-16T00:01:00.000Z',
+    }
+
+    await expect(repository.uploadTestEvidenceSummary(evidenceSummary)).resolves.toMatchObject({
+      accepted: true,
+    })
+
     await expect(
       repository.uploadTestEvidenceSummary({
-        id: 'evidence-1',
-        runId: 'run-1',
-        nodeId: 'node-test',
-        projectId: 'project-1',
-        command: 'pnpm test',
-        status: 'passed',
-        exitCode: 0,
-        durationMs: 900,
-        summary: 'Tests passed in 900ms',
-        redacted: true,
-        createdAt: '2026-06-16T00:01:00.000Z',
+        ...evidenceSummary,
+        summary: 'Tests passed after retry',
       }),
     ).resolves.toMatchObject({ accepted: true })
+
+    const overview = await repository.getTeamOverview()
+    const bundle = await repository.getRunsBundle()
+
+    expect(overview.runs[0]).toMatchObject({
+      id: 'run-1',
+      title: 'Approve payment workflow',
+      projectId: 'project-1',
+    })
+    expect(bundle.runs[0]).toMatchObject({ id: 'run-1' })
+    expect(overview.testEvidenceSummaries).toEqual([
+      {
+        ...evidenceSummary,
+        summary: 'Tests passed after retry',
+      },
+    ])
   })
 })

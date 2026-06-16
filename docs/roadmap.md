@@ -37,8 +37,10 @@ driver-agnostic database client boundary, API repository/route boundary, Postgre
 mapping, Web manager console API client, and the first Electron remote synchronization boundary for
 loading team snapshots plus uploading redacted local Run/Test Evidence summaries. The API now has a
 demo session boundary with organization/project membership filtering and owner/lead/member route
-authorization. The API still defaults to a seed-backed repository until the runtime Postgres
-driver/pool and sync write-through are implemented.
+authorization. The Web manager console can now show seed-backed synced Runs and redacted Test
+Evidence summaries from the API, and E2E coverage starts Desktop/API/Web together to prove the team
+sync loop. The API still defaults to a seed-backed repository until the runtime Postgres driver/pool
+and sync write-through are implemented.
 
 ## Completed Milestones
 

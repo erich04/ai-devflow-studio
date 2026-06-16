@@ -1,5 +1,6 @@
 import type {
   Project,
+  RemoteTestEvidenceSummary,
   TeamMember,
   TokenUsageRollup,
   WorkflowRun,
@@ -12,6 +13,7 @@ export type TeamOverviewResponse = {
   projectCost: TokenUsageRollup[]
   memberCost: TokenUsageRollup[]
   totalCost: string
+  testEvidenceSummaries: RemoteTestEvidenceSummary[]
 }
 
 export type FetchTeamOverviewOptions = {

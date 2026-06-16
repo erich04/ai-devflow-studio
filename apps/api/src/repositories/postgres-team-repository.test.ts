@@ -132,6 +132,24 @@ class FakeTeamDbClient implements TeamDbClient {
       ] as T[]
     }
 
+    if (sql.includes('FROM test_evidence_summaries')) {
+      return [
+        {
+          id: 'evidence-remote-1',
+          run_id: 'run-remote-1',
+          node_id: 'n-test',
+          project_id: 'p-payments',
+          command: 'pnpm test',
+          status: 'passed',
+          exit_code: 0,
+          duration_ms: 1200,
+          summary: 'Remote tests passed.',
+          redacted: true,
+          created_at: '2026-06-16T10:20:00.000Z',
+        },
+      ] as T[]
+    }
+
     if (sql.includes('FROM skills')) {
       return [
         {
@@ -213,6 +231,21 @@ describe('Postgres team repository', () => {
       },
     ])
     expect(overview.totalCost).toBe('$0.109')
+    expect(overview.testEvidenceSummaries).toEqual([
+      {
+        id: 'evidence-remote-1',
+        runId: 'run-remote-1',
+        nodeId: 'n-test',
+        projectId: 'p-payments',
+        command: 'pnpm test',
+        status: 'passed',
+        exitCode: 0,
+        durationMs: 1200,
+        summary: 'Remote tests passed.',
+        redacted: true,
+        createdAt: '2026-06-16T10:20:00.000Z',
+      },
+    ])
   })
 
   it('maps skills and MCP server definitions from team tables', async () => {

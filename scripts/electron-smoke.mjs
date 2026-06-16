@@ -3,11 +3,13 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { _electron as electron, expect } from '@playwright/test'
+import { _electron as electron, chromium, expect } from '@playwright/test'
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const desktopDir = path.join(rootDir, 'apps/desktop')
 const devServerUrl = 'http://127.0.0.1:5173'
+const apiServerUrl = 'http://127.0.0.1:4310'
+const webServerUrl = 'http://127.0.0.1:4311'
 const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'devflow-electron-smoke-'))
 const repoDir = path.join(tempRoot, 'fixture-repo')
 const userDataDir = path.join(tempRoot, 'user-data')
@@ -62,6 +64,7 @@ async function launchApp() {
     env: {
       ...process.env,
       DEVFLOW_USER_DATA_DIR: userDataDir,
+      DEVFLOW_API_BASE_URL: apiServerUrl,
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
       VITE_DEV_SERVER_URL: devServerUrl,
     },
@@ -99,6 +102,8 @@ async function selectWorkflowNode(page, testId, expectedTitle) {
 }
 
 let vite
+let api
+let web
 
 try {
   await mkdir(repoDir, { recursive: true })
@@ -115,6 +120,11 @@ try {
 
   await run('corepack', ['pnpm', '--filter', '@ai-devflow/desktop', 'build'])
 
+  api = spawnQuiet('corepack', ['pnpm', '--filter', '@ai-devflow/api', 'dev'])
+  web = spawnQuiet('corepack', ['pnpm', '--filter', '@ai-devflow/web', 'dev'], {
+    DEVFLOW_API_BASE_URL: apiServerUrl,
+    NEXT_PUBLIC_DEVFLOW_API_URL: apiServerUrl,
+  })
   vite = spawnQuiet('corepack', [
     'pnpm',
     '--filter',
@@ -127,7 +137,11 @@ try {
     '5173',
     '--strictPort',
   ])
-  await waitForServer(devServerUrl)
+  await Promise.all([
+    waitForServer(`${apiServerUrl}/health`),
+    waitForServer(webServerUrl),
+    waitForServer(devServerUrl),
+  ])
 
   const first = await launchApp()
   await first.app.evaluate(({ dialog }, selectedPath) => {
@@ -176,6 +190,23 @@ try {
   await expect(first.page.getByTestId('tests-view')).toContainText('passed')
   await expect(first.page.getByTestId('tests-view')).toContainText('npm test')
 
+  const browser = await chromium.launch()
+  try {
+    const webPage = await browser.newPage()
+    await expect
+      .poll(async () => {
+        await webPage.goto(webServerUrl)
+        return (await webPage.locator('body').textContent()) ?? ''
+      }, { timeout: 20_000 })
+      .toContain('重构 GitHub webhook 重试策略')
+    await expect(webPage.locator('body')).toContainText(/Tests passed in/)
+    await expect(webPage.locator('body')).toContainText('npm test')
+    await expect(webPage.locator('body')).not.toContainText(repoDir)
+    await expect(webPage.locator('body')).not.toContainText('smoke passed')
+  } finally {
+    await browser.close()
+  }
+
   await first.page.getByRole('button', { name: /工作台/ }).click()
   await first.page.getByLabel('测试命令').fill('rm -rf /tmp/devflow')
   await expect(first.page.getByText(/blocked/i)).toBeVisible()
@@ -195,5 +226,7 @@ try {
   await second.app.close()
 } finally {
   vite?.kill('SIGTERM')
+  web?.kill('SIGTERM')
+  api?.kill('SIGTERM')
   await rm(tempRoot, { recursive: true, force: true })
 }

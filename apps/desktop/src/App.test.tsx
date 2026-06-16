@@ -340,11 +340,11 @@ describe('App', () => {
     await waitFor(() => expect(api.runProjectTests).toHaveBeenCalled())
     await waitFor(() =>
       expect(api.uploadTestEvidenceSummary).toHaveBeenCalledWith({
-        id: 'evidence-1',
-        runId: fixtureRuns[0]!.id,
-        nodeId: 'n-test',
-        projectId: localProject.id,
-        command: 'pnpm test -- --run',
+      id: 'evidence-1',
+      runId: fixtureRuns[0]!.id,
+      nodeId: 'n-test',
+      projectId: fixtureRuns[0]!.projectId,
+      command: 'pnpm test -- --run',
         status: 'passed',
         exitCode: 0,
         durationMs: 900,

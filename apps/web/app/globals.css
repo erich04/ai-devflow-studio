@@ -153,7 +153,9 @@ button {
 
 .project-row,
 .member-row,
-.cost-row {
+.cost-row,
+.run-row,
+.evidence-row {
   display: grid;
   align-items: center;
   gap: 14px;
@@ -161,11 +163,15 @@ button {
   border-bottom: 1px solid var(--border);
 }
 
-.project-row {
+.project-row,
+.run-row,
+.evidence-row {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.project-row p {
+.project-row p,
+.run-row p,
+.evidence-row p {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 13px;
@@ -186,7 +192,9 @@ button {
 }
 
 .member-row span,
-.cost-row span {
+.cost-row span,
+.run-row span,
+.evidence-row span {
   color: var(--muted);
   font-size: 13px;
 }

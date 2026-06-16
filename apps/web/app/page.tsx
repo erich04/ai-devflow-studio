@@ -24,6 +24,8 @@ export default async function Page() {
   const hasProjects = overview.projects.length > 0
   const hasMembers = overview.members.length > 0
   const hasProjectCost = overview.projectCost.length > 0
+  const hasRuns = overview.runs.length > 0
+  const hasEvidence = overview.testEvidenceSummaries.length > 0
 
   return (
     <WebShell>
@@ -99,6 +101,46 @@ export default async function Page() {
               <EmptyState title="暂无成本数据" body="同步 Token usage 后会显示项目成本。" />
             )}
           </div>
+
+          <div className="web-panel" id="runs">
+            <div className="panel-title">
+              <span>Recent Runs</span>
+              <strong>团队同步</strong>
+            </div>
+            {hasRuns ? (
+              overview.runs.slice(0, 5).map((run) => (
+                <article className="run-row" key={run.id}>
+                  <div>
+                    <strong>{run.title}</strong>
+                    <p>{run.branchName}</p>
+                  </div>
+                  <span>{run.status}</span>
+                </article>
+              ))
+            ) : (
+              <EmptyState title="暂无同步 Run" body="Electron 同步 Run 后会显示团队级状态。" />
+            )}
+          </div>
+
+          <div className="web-panel" id="evidence">
+            <div className="panel-title">
+              <span>Test Evidence</span>
+              <strong>测试证据</strong>
+            </div>
+            {hasEvidence ? (
+              overview.testEvidenceSummaries.slice(0, 5).map((evidence) => (
+                <article className="evidence-row" key={evidence.id}>
+                  <div>
+                    <strong>{evidence.summary}</strong>
+                    <p>{evidence.command}</p>
+                  </div>
+                  <span>{evidence.status}</span>
+                </article>
+              ))
+            ) : (
+              <EmptyState title="暂无测试证据" body="Electron 上传脱敏测试摘要后会显示在这里。" />
+            )}
+          </div>
         </section>
       </section>
     </WebShell>
@@ -116,6 +158,8 @@ function WebShell({ children }: { children: React.ReactNode }) {
           <a href="#projects">Projects</a>
           <a href="#members">Members</a>
           <a href="#cost">Token Cost</a>
+          <a href="#runs">Runs</a>
+          <a href="#evidence">Evidence</a>
         </nav>
       </aside>
 

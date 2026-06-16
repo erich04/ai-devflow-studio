@@ -142,6 +142,34 @@ function createRepository(): TeamRepository {
     ],
     memberCost: [],
     totalCost: '$0.000',
+    testEvidenceSummaries: [
+      {
+        id: 'evidence-payments',
+        runId: 'run-payments',
+        nodeId: 'node-test',
+        projectId: 'p-payments',
+        command: 'pnpm test',
+        status: 'passed',
+        exitCode: 0,
+        durationMs: 900,
+        summary: 'Payments tests passed',
+        redacted: true,
+        createdAt: '2026-06-16T00:02:00.000Z',
+      },
+      {
+        id: 'evidence-admin',
+        runId: 'run-admin',
+        nodeId: 'node-test',
+        projectId: 'p-admin',
+        command: 'npm test',
+        status: 'failed',
+        exitCode: 1,
+        durationMs: 1200,
+        summary: 'Admin tests failed',
+        redacted: true,
+        createdAt: '2026-06-16T00:03:00.000Z',
+      },
+    ],
   }
 
   return {
@@ -207,8 +235,10 @@ describe('team API route resolver', () => {
       projects: [{ id: 'p-payments' }],
       runs: [{ id: 'run-payments' }],
       projectCost: [{ key: 'p-payments' }],
+      testEvidenceSummaries: [{ id: 'evidence-payments' }],
     })
     expect(JSON.stringify(overviewResult?.body)).not.toContain('p-admin')
+    expect(JSON.stringify(overviewResult?.body)).not.toContain('evidence-admin')
   })
 
   it('requires an authenticated session for team routes', async () => {

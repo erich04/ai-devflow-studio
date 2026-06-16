@@ -59,6 +59,21 @@ const overview: TeamOverviewResponse = {
   ],
   memberCost: [],
   totalCost: '$0.123',
+  testEvidenceSummaries: [
+    {
+      id: 'evidence-remote',
+      runId: 'run-remote',
+      nodeId: 'n-test',
+      projectId: 'p-remote',
+      command: 'pnpm test',
+      status: 'passed',
+      exitCode: 0,
+      durationMs: 1200,
+      summary: 'Remote tests passed.',
+      redacted: true,
+      createdAt: '2026-06-16T10:12:00.000Z',
+    },
+  ],
 }
 
 afterEach(() => {
@@ -75,6 +90,9 @@ describe('web manager console page', () => {
     expect(screen.getByText('erich/remote-api')).toBeInTheDocument()
     expect(screen.getByText('Remote Lead')).toBeInTheDocument()
     expect(screen.getByText('RL')).toBeInTheDocument()
+    expect(screen.getByText('Remote run')).toBeInTheDocument()
+    expect(screen.getByText('Remote tests passed.')).toBeInTheDocument()
+    expect(screen.getByText('pnpm test')).toBeInTheDocument()
     expect(screen.getAllByText('$0.123')).toHaveLength(2)
     expect(mockedFetchTeamOverview).toHaveBeenCalled()
   })
@@ -87,6 +105,7 @@ describe('web manager console page', () => {
       projectCost: [],
       memberCost: [],
       totalCost: '$0.000',
+      testEvidenceSummaries: [],
     })
 
     render(await Page())

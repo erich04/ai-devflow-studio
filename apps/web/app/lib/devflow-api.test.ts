@@ -22,6 +22,7 @@ describe('DevFlow web API client', () => {
           projectCost: [],
           memberCost: [],
           totalCost: '$0.000',
+          testEvidenceSummaries: [],
         }),
         { status: 200 },
       ),
@@ -34,6 +35,7 @@ describe('DevFlow web API client', () => {
       projectCost: [],
       memberCost: [],
       totalCost: '$0.000',
+      testEvidenceSummaries: [],
     })
     expect(fetcher).toHaveBeenCalledWith('http://api.local/api/team/overview', {
       cache: 'no-store',

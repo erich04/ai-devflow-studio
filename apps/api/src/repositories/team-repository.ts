@@ -35,6 +35,7 @@ export type TeamOverviewPayload = {
   projectCost: TokenUsageRollup[]
   memberCost: TokenUsageRollup[]
   totalCost: string
+  testEvidenceSummaries: RemoteTestEvidenceSummary[]
 }
 
 export type TeamRepository = {
@@ -47,19 +48,43 @@ export type TeamRepository = {
 }
 
 export function createSeedTeamRepository(): TeamRepository {
+  const syncedRuns = [...runs]
+  const syncedTestEvidenceSummaries: RemoteTestEvidenceSummary[] = []
+
+  function upsertSyncedRun(run: WorkflowRun) {
+    const index = syncedRuns.findIndex((candidate) => candidate.id === run.id)
+    if (index >= 0) {
+      syncedRuns[index] = run
+      return
+    }
+
+    syncedRuns.unshift(run)
+  }
+
+  function upsertSyncedEvidence(summary: RemoteTestEvidenceSummary) {
+    const index = syncedTestEvidenceSummaries.findIndex((evidence) => evidence.id === summary.id)
+    if (index >= 0) {
+      syncedTestEvidenceSummaries[index] = summary
+      return
+    }
+
+    syncedTestEvidenceSummaries.unshift(summary)
+  }
+
   return {
     async getRunsBundle() {
-      return { runs, artifacts, events }
+      return { runs: syncedRuns, artifacts, events }
     },
 
     async getTeamOverview() {
       return {
         projects,
         members,
-        runs,
+        runs: syncedRuns,
         projectCost: rollupTokenUsage(tokenUsage, 'projectId'),
         memberCost: rollupTokenUsage(tokenUsage, 'userId'),
         totalCost: formatUsd(tokenUsage.reduce((sum, row) => sum + row.costUsd, 0)),
+        testEvidenceSummaries: syncedTestEvidenceSummaries,
       }
     },
 
@@ -71,7 +96,35 @@ export function createSeedTeamRepository(): TeamRepository {
       return mcpServers
     },
 
-    async uploadRunSummary() {
+    async uploadRunSummary(summary) {
+      const existingRun = syncedRuns.find((run) => run.id === summary.runId)
+      const syncedRun: WorkflowRun = existingRun
+        ? {
+            ...existingRun,
+            title: summary.title,
+            projectId: summary.projectId,
+            status: summary.status,
+            currentNodeId: summary.currentNodeId,
+            branchName: summary.branchName,
+            updatedAt: summary.updatedAt,
+          }
+        : {
+            id: summary.runId,
+            title: summary.title,
+            request: 'Synced from DevFlow Electron.',
+            projectId: summary.projectId,
+            creatorId: 'u-erich',
+            status: summary.status,
+            currentNodeId: summary.currentNodeId,
+            branchName: summary.branchName,
+            createdAt: summary.updatedAt,
+            updatedAt: summary.updatedAt,
+            nodes: [],
+            edges: [],
+          }
+
+      upsertSyncedRun(syncedRun)
+
       return {
         accepted: true,
         syncedAt: new Date().toISOString(),
@@ -79,7 +132,9 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
 
-    async uploadTestEvidenceSummary() {
+    async uploadTestEvidenceSummary(summary) {
+      upsertSyncedEvidence(summary)
+
       return {
         accepted: true,
         syncedAt: new Date().toISOString(),
