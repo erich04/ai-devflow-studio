@@ -72,6 +72,32 @@ async function launchApp() {
   return { app, page }
 }
 
+async function selectRunByTitle(page, title) {
+  const runRow = page.locator('.run-row').filter({ hasText: title })
+  await expect(runRow).toBeVisible()
+  await runRow.click()
+  await expect(runRow).toHaveClass(/is-selected/)
+}
+
+async function selectWorkflowNode(page, testId, expectedTitle) {
+  const node = page.getByTestId(testId)
+  const inspector = page.getByTestId('node-inspector')
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await expect(node).toBeAttached()
+    await node.dispatchEvent('click')
+
+    try {
+      await expect(inspector).toContainText(expectedTitle, { timeout: 2_000 })
+      return
+    } catch (error) {
+      if (attempt === 2) {
+        throw error
+      }
+    }
+  }
+}
+
 let vite
 
 try {
@@ -134,9 +160,11 @@ try {
   await first.page.getByRole('button', { name: /新建 Run/ }).click()
   await first.page.getByRole('button', { name: /创建并开始澄清/ }).click()
   await expect(first.page.getByText('重构 GitHub webhook 重试策略')).toBeVisible()
-  await first.page.locator('.run-row').filter({ hasText: '重构 GitHub webhook 重试策略' }).click()
-  await first.page.getByTestId('flow-node-n-design-gate').click({ force: true })
-  await first.page.getByRole('button', { name: /通过 Gate/ }).click()
+  await selectRunByTitle(first.page, '重构 GitHub webhook 重试策略')
+  await selectWorkflowNode(first.page, 'flow-node-n-design-gate', '架构 Gate')
+  const approveGateButton = first.page.getByRole('button', { name: /通过 Gate/ })
+  await expect(approveGateButton).toBeEnabled()
+  await approveGateButton.click()
   await expect(first.page.getByTestId('toast')).toContainText('架构 Gate 已通过')
   await expect(first.page.getByTestId('node-inspector')).toContainText('approval')
 

@@ -9,6 +9,7 @@ completed and what should come next.
 Use these files by responsibility:
 
 - `docs/roadmap.md`: completed milestones, current project progress, next milestones, and long-term product planning.
+- `docs/plans/`: executable milestone plans that are checked against the current codebase before implementation.
 - `CONTEXT.md`: stable domain language and ubiquitous terms such as Run, Gate, Artifact, Skill, MCP Server, Knowledge Base, and Test Evidence.
 - `docs/adr/`: accepted architecture decisions and tradeoffs. ADRs explain why a direction was chosen; they do not track delivery progress.
 - `docs/research/`: research notes, comparisons, and investigation artifacts. Research can inform roadmap decisions, but it is not the active plan.
@@ -20,9 +21,20 @@ AI DevFlow Studio is currently an Electron-first team developer workbench with a
 selected-node inspector, local test execution, SQLite-backed test evidence, light/dark/system theme
 support, and Team, Knowledge, Skills, MCP, and Tests views.
 
-The v0.2.1 local execution loop is complete: a developer can select a local repository, detect and
-edit its test command, validate command safety, run the command through controlled Electron IPC,
-persist test evidence in SQLite, and verify the path with a real Electron smoke test.
+The v0.2 Final feature set is complete and release-confirmed locally: a developer can select a
+local repository, create a Run, approve a Gate, validate and execute the project's test command
+through controlled Electron IPC, persist evidence/settings/MCP state in SQLite schema v2, and
+separate local state from seed fixtures. The previously intermittent Electron smoke path around
+selecting the new Run's Gate node has been stabilized, and `corepack pnpm verify` has passed
+repeatedly.
+
+Current v0.2 validation is macOS-local. Starting in v0.3, Windows compatibility becomes a product
+constraint for Electron local execution, SQLite persistence, path handling, and smoke testing. See
+`docs/adr/0006-cross-platform-electron-compatibility.md`.
+
+v0.3 development has started with the team database schema, initial Postgres migration,
+driver-agnostic database client boundary, and API repository/route boundary. The API still uses a
+seed-backed repository until the Postgres repository and synchronization paths are implemented.
 
 ## Completed Milestones
 
@@ -55,8 +67,6 @@ persist test evidence in SQLite, and verify the path with a real Electron smoke 
 - Expanded Tests view evidence with command, exit code, duration, redaction status, and output
   summary.
 
-## Planned Milestones
-
 ### v0.2 Final: Local State Stabilization
 
 - Persist newly created Runs immediately instead of keeping them only in React state.
@@ -66,15 +76,30 @@ persist test evidence in SQLite, and verify the path with a real Electron smoke 
 - Separate seeded fixture data from real local SQLite state so local Runs do not mix with fixture
   Artifacts or Events.
 - Wire the search input to filter Runs, Artifacts, Events, and Knowledge labels.
+- Added `DataOrigin = 'seed' | 'local' | 'remote' | 'adapter'` and local execution state types so
+  v0.3 can add synchronized remote data without replacing the local slice.
+
+### v0.2 Final: Validation Stabilization
+
+- Stabilize the real Electron smoke test around selecting the newly created Run and its Gate node.
+- Confirmed `corepack pnpm verify` passes repeatedly after the smoke wait path fix.
+- Kept the patch limited to test stability and documentation, without adding v0.3 backend features.
+
+## Planned Milestones
 
 ### v0.3: Team Backend Synchronization
 
-- Introduce the team backend as the synchronized source of truth for shared Runs, projects,
-  members, costs, and manager dashboards.
-- Add Postgres-backed persistence for team data.
-- Connect the Web manager console to real API data instead of importing fixtures.
-- Add basic authentication and tenant/project boundaries.
-- Define which local SQLite evidence is synchronized and which local-only details remain private.
+- Introduce the team backend as the synchronized source of truth for shared Runs, projects, members,
+  costs, and manager dashboards.
+- Replace the current fixture-backed `apps/api` server with API routes backed by Postgres.
+- Connect the current fixture-importing `apps/web` manager console to real API data.
+- Keep Electron SQLite as the local/offline/private state boundary and sync only approved summaries
+  or redacted evidence to the team backend.
+- Add basic authentication plus tenant/project/member role boundaries.
+- Define `seed`, `local`, `remote`, and future `adapter` data precedence in the app state model.
+- Preserve Windows compatibility for local execution, command safety, `userData` SQLite storage,
+  path display, and Electron smoke tests.
+- Leave real LLM orchestration, real MCP process management, and HoneyAI adapter work out of v0.3.
 
 ### v0.4: Knowledge Governance
 
@@ -101,7 +126,8 @@ persist test evidence in SQLite, and verify the path with a real Electron smoke 
 - Real LLM or multi-agent orchestration.
 - Real MCP process management, permissions audit, and tool-call telemetry.
 - Git Markdown indexing pipeline and editor.
-- Electron packaging, signing, notarization, auto-update, and release distribution.
+- Electron packaging, macOS signing/notarization, Windows installer/signing, auto-update, and release
+  distribution.
 - CI workflows for the project.
 
 ## Knowledge Roadmap Notes

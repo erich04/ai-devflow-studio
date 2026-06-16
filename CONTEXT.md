@@ -57,3 +57,36 @@ command and collecting evidence. Local Execution is separate from team-wide sync
 
 The durable record of a local test execution, including command, working directory, result status,
 duration, and redacted output.
+
+## Data Origin
+
+The source class for data shown in the app. `seed` is fixture/demo data, `local` is Electron SQLite
+state, `remote` is future team backend state, and `adapter` is reserved for future external execution
+engine snapshots such as a HoneyAI bridge.
+
+## Local Settings
+
+Developer-machine preferences stored in Electron SQLite, such as the theme preference and local MCP
+UI state. Browser preview can still fall back to localStorage when the Electron preload API is not
+available.
+
+## Remote State
+
+Team-shared state that will be owned by the backend in v0.3, including shared Runs, projects,
+members, costs, Gate decisions, and manager dashboard summaries.
+
+## Cross-Platform Desktop
+
+The requirement that the Electron client work across macOS and Windows. Windows 11 is the primary
+Windows target; Windows 10 is best-effort.
+
+## Windows Compatibility
+
+The product constraint that local execution, SQLite persistence, path handling, command safety, and
+smoke tests must not assume macOS-only behavior.
+
+## Platform-Safe Local Execution
+
+Local execution implemented with cross-platform Node/Electron APIs such as `path`, `os.tmpdir()`,
+`spawn` with explicit `cwd`/`env`, and Electron `app.getPath('userData')`, without requiring
+`bash`, `zsh`, `/tmp`, or POSIX path separators.

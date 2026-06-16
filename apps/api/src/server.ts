@@ -1,22 +1,11 @@
 import { createServer, type ServerResponse } from 'node:http'
-import {
-  artifacts,
-  events,
-  formatUsd,
-  mcpServers,
-  members,
-  projects,
-  rollupTokenUsage,
-  runs,
-  skills,
-  tokenUsage,
-} from '@ai-devflow/shared'
+import { createSeedTeamRepository } from './repositories/team-repository'
+import { resolveTeamRoute } from './routes/team-routes'
 
 const port = Number(process.env['PORT'] ?? 4310)
+const repository = createSeedTeamRepository()
 
-type JsonValue = Record<string, unknown> | unknown[]
-
-function sendJson(response: ServerResponse, status: number, body: JsonValue) {
+function sendJson(response: ServerResponse, status: number, body: unknown) {
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-origin': '*',
@@ -24,7 +13,7 @@ function sendJson(response: ServerResponse, status: number, body: JsonValue) {
   response.end(JSON.stringify(body, null, 2))
 }
 
-const server = createServer((request, response) => {
+const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`)
 
   if (request.method === 'OPTIONS') {
@@ -46,30 +35,9 @@ const server = createServer((request, response) => {
     return
   }
 
-  if (url.pathname === '/api/runs') {
-    sendJson(response, 200, { runs, artifacts, events })
-    return
-  }
-
-  if (url.pathname === '/api/team/overview') {
-    sendJson(response, 200, {
-      projects,
-      members,
-      runs,
-      projectCost: rollupTokenUsage(tokenUsage, 'projectId'),
-      memberCost: rollupTokenUsage(tokenUsage, 'userId'),
-      totalCost: formatUsd(tokenUsage.reduce((sum, row) => sum + row.costUsd, 0)),
-    })
-    return
-  }
-
-  if (url.pathname === '/api/skills') {
-    sendJson(response, 200, { skills })
-    return
-  }
-
-  if (url.pathname === '/api/mcp') {
-    sendJson(response, 200, { servers: mcpServers })
+  const route = await resolveTeamRoute(request.method ?? 'GET', url.pathname, repository)
+  if (route) {
+    sendJson(response, route.status, route.body)
     return
   }
 

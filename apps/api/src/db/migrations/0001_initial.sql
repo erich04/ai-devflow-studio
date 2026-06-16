@@ -1,0 +1,197 @@
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS schema_meta (
+  key text PRIMARY KEY,
+  value text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS organizations (
+  id text PRIMARY KEY,
+  name text NOT NULL,
+  slug text NOT NULL UNIQUE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  role text NOT NULL CHECK (role IN ('owner', 'lead', 'member')),
+  avatar_initials text NOT NULL,
+  focus text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  repository text NOT NULL,
+  default_branch text NOT NULL,
+  health text NOT NULL CHECK (health IN ('on_track', 'at_risk', 'blocked')),
+  knowledge_base_path text NOT NULL,
+  test_command text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS project_members (
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role text NOT NULL CHECK (role IN ('owner', 'lead', 'member')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS workflow_runs (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  creator_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  data_origin text NOT NULL CHECK (data_origin IN ('seed', 'local', 'remote', 'adapter')),
+  title text NOT NULL,
+  request text NOT NULL,
+  status text NOT NULL CHECK (
+    status IN (
+      'created',
+      'clarifying',
+      'designing',
+      'building',
+      'testing',
+      'paused_at_gate',
+      'completed',
+      'failed',
+      'cancelled'
+    )
+  ),
+  current_node_id text NOT NULL,
+  branch_name text NOT NULL,
+  pull_request_url text,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workflow_nodes (
+  id text PRIMARY KEY,
+  run_id text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  stage text NOT NULL CHECK (stage IN ('clarify', 'design', 'build', 'test', 'pr', 'accept')),
+  title text NOT NULL,
+  subtitle text NOT NULL,
+  kind text NOT NULL CHECK (kind IN ('agent', 'gate', 'task', 'test', 'pr', 'acceptance')),
+  status text NOT NULL CHECK (status IN ('pending', 'running', 'blocked', 'success', 'failed', 'skipped')),
+  owner_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  required_role text CHECK (required_role IN ('member', 'lead', 'owner')),
+  retry_count integer NOT NULL DEFAULT 0,
+  token_usage_id text,
+  position integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS workflow_edges (
+  id text PRIMARY KEY,
+  run_id text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  source_node_id text NOT NULL REFERENCES workflow_nodes(id) ON DELETE CASCADE,
+  target_node_id text NOT NULL REFERENCES workflow_nodes(id) ON DELETE CASCADE,
+  kind text NOT NULL CHECK (kind IN ('normal', 'gate', 'retry', 'failure')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS artifacts (
+  id text PRIMARY KEY,
+  run_id text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  node_id text NOT NULL REFERENCES workflow_nodes(id) ON DELETE CASCADE,
+  kind text NOT NULL CHECK (
+    kind IN ('raw_request', 'clarification', 'design', 'diff', 'test_report', 'log', 'pr', 'acceptance')
+  ),
+  title text NOT NULL,
+  summary text NOT NULL,
+  content text NOT NULL,
+  redacted boolean NOT NULL DEFAULT true,
+  updated_at timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_events (
+  id text PRIMARY KEY,
+  run_id text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  node_id text REFERENCES workflow_nodes(id) ON DELETE SET NULL,
+  sequence integer NOT NULL,
+  kind text NOT NULL CHECK (
+    kind IN ('thinking', 'tool_call', 'tool_result', 'file_change', 'test_result', 'approval', 'error', 'sync')
+  ),
+  message text NOT NULL,
+  timestamp timestamptz NOT NULL,
+  UNIQUE (run_id, sequence)
+);
+
+CREATE TABLE IF NOT EXISTS test_evidence_summaries (
+  id text PRIMARY KEY,
+  run_id text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  node_id text NOT NULL REFERENCES workflow_nodes(id) ON DELETE CASCADE,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  command text NOT NULL,
+  status text NOT NULL CHECK (status IN ('running', 'passed', 'failed', 'timed_out')),
+  exit_code integer,
+  duration_ms integer NOT NULL,
+  summary text NOT NULL,
+  redacted boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mcp_server_definitions (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  command text NOT NULL,
+  permission text NOT NULL CHECK (permission IN ('read', 'write', 'network', 'shell')),
+  enabled_by_default boolean NOT NULL DEFAULT false,
+  last_audit_event text NOT NULL DEFAULT '未启用',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS skills (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  stage text NOT NULL CHECK (stage IN ('clarify', 'design', 'build', 'test', 'pr', 'accept', 'all')),
+  description text NOT NULL,
+  version text NOT NULL,
+  enabled boolean NOT NULL DEFAULT true,
+  source text NOT NULL CHECK (source IN ('team', 'project', 'local')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS token_usage (
+  id text PRIMARY KEY,
+  run_id text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  node_id text NOT NULL REFERENCES workflow_nodes(id) ON DELETE CASCADE,
+  user_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider text NOT NULL CHECK (provider IN ('openai', 'anthropic', 'dashscope', 'local')),
+  model text NOT NULL,
+  input_tokens integer NOT NULL DEFAULT 0,
+  output_tokens integer NOT NULL DEFAULT 0,
+  cache_read_tokens integer NOT NULL DEFAULT 0,
+  cost_usd numeric(12,6) NOT NULL DEFAULT 0,
+  timestamp timestamptz NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_projects_organization_id ON projects(organization_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_project_id ON workflow_runs(project_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_nodes_run_id ON workflow_nodes(run_id);
+CREATE INDEX IF NOT EXISTS idx_agent_events_run_id_sequence ON agent_events(run_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_test_evidence_summaries_run_id ON test_evidence_summaries(run_id);
+CREATE INDEX IF NOT EXISTS idx_token_usage_project_id ON token_usage(project_id);
+
+INSERT INTO schema_meta (key, value)
+VALUES ('schema_version', '1')
+ON CONFLICT (key) DO UPDATE
+SET value = excluded.value,
+    updated_at = now();
+
+COMMIT;
