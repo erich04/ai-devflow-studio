@@ -39,8 +39,11 @@ loading team snapshots plus uploading redacted local Run/Test Evidence summaries
 demo session boundary with organization/project membership filtering and owner/lead/member route
 authorization. The Web manager console can now show seed-backed synced Runs and redacted Test
 Evidence summaries from the API, and E2E coverage starts Desktop/API/Web together to prove the team
-sync loop. The API still defaults to a seed-backed repository until the runtime Postgres driver/pool
-and sync write-through are implemented.
+sync loop. The first Windows compatibility gate is also in place: `corepack pnpm
+test:cross-platform` audits automation for POSIX-only assumptions, command safety covers dangerous
+PowerShell and `cmd` patterns, and GitHub Actions runs macOS full verify plus a Windows
+typecheck/unit/audit job. The API still defaults to a seed-backed repository until the runtime
+Postgres driver/pool and sync write-through are implemented.
 
 ## Completed Milestones
 
@@ -134,7 +137,7 @@ and sync write-through are implemented.
 - Git Markdown indexing pipeline and editor.
 - Electron packaging, macOS signing/notarization, Windows installer/signing, auto-update, and release
   distribution.
-- CI workflows for the project.
+- Full release/distribution CI beyond the current verify workflow.
 
 ## Knowledge Roadmap Notes
 

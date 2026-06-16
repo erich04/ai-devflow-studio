@@ -1,0 +1,38 @@
+name: Verify
+
+on:
+  push:
+    branches:
+      - main
+      - devflow-v0.2-final-v0.3-start
+  pull_request:
+
+jobs:
+  macos-verify:
+    name: macOS verify
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm exec playwright install chromium
+      - run: corepack pnpm verify
+
+  windows-compatibility:
+    name: Windows compatibility
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm typecheck
+      - run: corepack pnpm test
+      - run: corepack pnpm test:cross-platform

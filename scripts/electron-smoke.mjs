@@ -7,12 +7,14 @@ import { _electron as electron, chromium, expect } from '@playwright/test'
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const desktopDir = path.join(rootDir, 'apps/desktop')
+const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const devServerUrl = 'http://127.0.0.1:5173'
 const apiServerUrl = 'http://127.0.0.1:4310'
 const webServerUrl = 'http://127.0.0.1:4311'
 const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'devflow-electron-smoke-'))
 const repoDir = path.join(tempRoot, 'fixture-repo')
 const userDataDir = path.join(tempRoot, 'user-data')
+const blockedCommand = 'powershell Remove-Item -Recurse -Force C:\\devflow'
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -118,14 +120,14 @@ try {
   )
   await writeFile(path.join(repoDir, 'test.js'), "console.log('smoke passed');\n")
 
-  await run('corepack', ['pnpm', '--filter', '@ai-devflow/desktop', 'build'])
+  await run(corepack, ['pnpm', '--filter', '@ai-devflow/desktop', 'build'])
 
-  api = spawnQuiet('corepack', ['pnpm', '--filter', '@ai-devflow/api', 'dev'])
-  web = spawnQuiet('corepack', ['pnpm', '--filter', '@ai-devflow/web', 'dev'], {
+  api = spawnQuiet(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'dev'])
+  web = spawnQuiet(corepack, ['pnpm', '--filter', '@ai-devflow/web', 'dev'], {
     DEVFLOW_API_BASE_URL: apiServerUrl,
     NEXT_PUBLIC_DEVFLOW_API_URL: apiServerUrl,
   })
-  vite = spawnQuiet('corepack', [
+  vite = spawnQuiet(corepack, [
     'pnpm',
     '--filter',
     '@ai-devflow/desktop',
@@ -208,7 +210,7 @@ try {
   }
 
   await first.page.getByRole('button', { name: /工作台/ }).click()
-  await first.page.getByLabel('测试命令').fill('rm -rf /tmp/devflow')
+  await first.page.getByLabel('测试命令').fill(blockedCommand)
   await expect(first.page.getByText(/blocked/i)).toBeVisible()
   await first.page.getByRole('button', { name: /保存测试命令/ }).click()
   await expect(first.page.getByTestId('toast')).toContainText('测试命令已阻断')

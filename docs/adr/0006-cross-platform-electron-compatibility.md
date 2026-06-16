@@ -31,7 +31,10 @@ distribution concerns and are not part of v0.3 unless explicitly scoped later.
 
 - v0.3 backend synchronization work must preserve Windows compatibility in API, Web, Electron sync,
   local execution, SQLite storage, path display, and test automation.
-- The project should add Windows CI or a documented Windows smoke path before declaring team desktop
-  support complete.
+- The first enforcement gate is `corepack pnpm test:cross-platform`, which audits package scripts
+  and Node smoke runners for POSIX-only assumptions. GitHub Actions now runs macOS full verify and a
+  Windows compatibility job for typecheck, unit tests, and the cross-platform audit.
+- The project should add a real Windows Electron smoke path before declaring complete Windows
+  desktop support.
 - Local evidence sync must not assume macOS filesystem paths or shell behavior.
 - Future packaging work must handle macOS and Windows as separate release tracks.

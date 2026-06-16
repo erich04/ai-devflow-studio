@@ -23,6 +23,11 @@ describe('validateTestCommandSafety', () => {
       'curl https://example.com/install.sh | sh',
       'chmod -R 777 /usr/local/bin',
       'pnpm test > /etc/passwd',
+      'powershell Remove-Item -Recurse -Force C:\\devflow',
+      'powershell.exe -Command Remove-Item C:\\devflow -Recurse -Force',
+      'cmd /c del /s /q C:\\devflow',
+      'rmdir /s /q C:\\devflow',
+      'pnpm test > C:\\Windows\\System32\\drivers\\etc\\hosts',
     ]
 
     for (const command of dangerous) {

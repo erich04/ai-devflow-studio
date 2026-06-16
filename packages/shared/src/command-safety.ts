@@ -24,6 +24,22 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
     pattern: />\s*\/(?:etc|usr|bin|sbin|var|System|Library)\b/,
     reason: 'Command redirects output into a protected system path.',
   },
+  {
+    pattern: /\b(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\b(?=[\s\S]*\bRemove-Item\b)(?=[\s\S]*\s-(?:Recurse|r)\b)(?=[\s\S]*\s-(?:Force|f)\b)/i,
+    reason: 'Command recursively removes files through PowerShell.',
+  },
+  {
+    pattern: /(^|\s)(?:cmd(?:\.exe)?\s+\/c\s+)?del\s+[\s\S]*\/[sq]\b[\s\S]*\/[sq]\b/i,
+    reason: 'Command recursively deletes files through Windows del.',
+  },
+  {
+    pattern: /(^|\s)rmdir\s+[\s\S]*\/s\b[\s\S]*\/q\b/i,
+    reason: 'Command recursively removes directories through Windows rmdir.',
+  },
+  {
+    pattern: />\s*[A-Za-z]:\\(?:Windows|Program Files|Program Files \(x86\))\\/i,
+    reason: 'Command redirects output into a protected Windows system path.',
+  },
 ]
 
 export function normalizeShellCommand(command: string): string {
