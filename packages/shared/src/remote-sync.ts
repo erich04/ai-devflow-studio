@@ -1,8 +1,10 @@
 import type {
   Role,
+  RemoteAgentReviewSummary,
   RemoteRunSummary,
   RemoteRunSummaryKind,
   RemoteTestEvidenceSummary,
+  AgentReviewResult,
   TestEvidence,
   WorkflowRun,
 } from './domain'
@@ -54,5 +56,28 @@ export function createRemoteTestEvidenceSummary(
     summary: evidence.summary,
     redacted: true,
     createdAt: evidence.createdAt,
+  }
+}
+
+export function createRemoteAgentReviewSummary(
+  review: AgentReviewResult,
+): RemoteAgentReviewSummary {
+  return {
+    id: review.id,
+    runId: review.runId,
+    nodeId: review.nodeId,
+    projectId: review.projectId,
+    runtime: review.runtime,
+    providerId: review.providerId,
+    model: review.model,
+    conclusion: review.conclusion,
+    summary: review.summary,
+    riskCount: review.risks.length,
+    missingEvidenceCount: review.missingEvidence.length,
+    advisoryLevel: review.gateAdvisory.level,
+    blocksApproval: review.gateAdvisory.blocksApproval,
+    confidence: review.confidence,
+    redacted: true,
+    createdAt: review.createdAt,
   }
 }

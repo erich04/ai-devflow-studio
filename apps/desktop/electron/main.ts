@@ -1,12 +1,22 @@
 import { randomUUID } from 'node:crypto'
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   applyTestEvidenceToRun,
+  buildAgentReviewContext,
+  createAgentReviewArtifacts,
+  createFakeAgentProvider,
+  createOpenAiCompatibleAgentProvider,
+  createRemoteAgentReviewSummary,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
+  knowledgeChunks,
+  knowledgeDocuments,
+  runKnowledgeReviewAgent,
+  type AgentProviderConfig,
   type LocalProject,
+  type ProviderCredentialMetadata,
   type TestEvidence,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
@@ -15,9 +25,12 @@ import {
   ipcChannels,
   parseAgentEventInput,
   parseMcpServersInput,
+  parseAgentProviderCredentialInput,
+  parseListAgentReviewsInput,
   parseRemoteRunSummaryInput,
   parseRemoteSnapshotInput,
   parseRemoteTestEvidenceSummaryInput,
+  parseRunKnowledgeReviewInput,
   parseRunProjectTestsInput,
   parseSaveRunInput,
   parseSaveProjectTestCommandInput,
@@ -33,6 +46,10 @@ const DEFAULT_TEST_TIMEOUT_MS = 120_000
 let storePromise: Promise<LocalStore> | undefined
 let remoteSyncClient: RemoteSyncClient | undefined
 
+const DEFAULT_OPENAI_PROVIDER_ID = 'openai-default'
+const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
+const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini'
+
 function getStore() {
   const userDataPath = process.env['DEVFLOW_USER_DATA_DIR'] ?? app.getPath('userData')
   storePromise ??= createLocalStore({
@@ -44,6 +61,61 @@ function getStore() {
 function getRemoteSyncClient() {
   remoteSyncClient ??= createRemoteSyncClient()
   return remoteSyncClient
+}
+
+function maskCredential(secret: string): string {
+  const trimmed = secret.trim()
+  if (trimmed.length <= 8) {
+    return `${trimmed.slice(0, 2)}...`
+  }
+
+  return `${trimmed.slice(0, 3)}...${trimmed.slice(-4)}`
+}
+
+function encryptCredential(secret: string): string {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('System credential encryption is not available')
+  }
+
+  return safeStorage.encryptString(secret).toString('base64')
+}
+
+function decryptCredential(secret: string): string {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('System credential encryption is not available')
+  }
+
+  return safeStorage.decryptString(Buffer.from(secret, 'base64'))
+}
+
+function providerConfigFromCredential(metadata: ProviderCredentialMetadata): AgentProviderConfig {
+  return {
+    id: metadata.providerId,
+    name: metadata.providerId === DEFAULT_OPENAI_PROVIDER_ID ? 'OpenAI Compatible' : metadata.providerId,
+    kind: 'openai-compatible',
+    model: metadata.model,
+    ...(metadata.baseUrl ? { baseUrl: metadata.baseUrl } : {}),
+    enabled: true,
+    maskedCredential: metadata.maskedCredential,
+    updatedAt: metadata.updatedAt,
+  }
+}
+
+async function listAgentProviderConfigs(): Promise<AgentProviderConfig[]> {
+  const store = await getStore()
+  const credentials = await store.listProviderCredentials()
+
+  return [
+    {
+      id: 'fake-knowledge-review',
+      name: 'Deterministic Fake Provider',
+      kind: 'fake',
+      model: 'fake',
+      enabled: true,
+      updatedAt: new Date(0).toISOString(),
+    },
+    ...credentials.map(providerConfigFromCredential),
+  ]
 }
 
 async function findProject(projectId: string): Promise<LocalProject> {
@@ -214,6 +286,112 @@ function registerIpcHandlers() {
     const servers = parseMcpServersInput(payload)
     const store = await getStore()
     return store.saveMcpServers(servers)
+  })
+
+  ipcMain.handle(ipcChannels.listAgentProviders, async () => {
+    return listAgentProviderConfigs()
+  })
+
+  ipcMain.handle(ipcChannels.saveAgentProviderCredential, async (_, payload: unknown) => {
+    const input = parseAgentProviderCredentialInput(payload)
+    const store = await getStore()
+    const metadata: ProviderCredentialMetadata = {
+      providerId: input.providerId,
+      model: input.model,
+      ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+      maskedCredential: maskCredential(input.apiKey),
+      updatedAt: new Date().toISOString(),
+    }
+
+    return store.saveProviderCredential(metadata, encryptCredential(input.apiKey))
+  })
+
+  ipcMain.handle(ipcChannels.listAgentReviews, async (_, payload: unknown) => {
+    const input = parseListAgentReviewsInput(payload)
+    const store = await getStore()
+    return store.listAgentReviews(input.runId)
+  })
+
+  ipcMain.handle(ipcChannels.runKnowledgeReview, async (_, payload: unknown) => {
+    const input = parseRunKnowledgeReviewInput(payload)
+    const store = await getStore()
+    const runs = await store.listRuns()
+    const run = runs.find((candidate) => candidate.id === input.runId)
+    if (!run) {
+      throw new Error(`Run not found: ${input.runId}`)
+    }
+    const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
+    if (!node) {
+      throw new Error(`Run node not found: ${input.nodeId}`)
+    }
+
+    const artifacts = await store.listArtifacts(input.runId)
+    const testEvidence = await store.listTestEvidence(input.runId)
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence,
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const providerId = input.providerId ?? 'fake-knowledge-review'
+    const provider =
+      providerId === 'fake-knowledge-review'
+        ? createFakeAgentProvider()
+        : (() => {
+            return undefined
+          })()
+    let resolvedProvider = provider
+
+    if (!resolvedProvider) {
+      const credentials = await store.listProviderCredentials()
+      const metadata = credentials.find((candidate) => candidate.providerId === providerId)
+      const encryptedSecret = await store.getProviderEncryptedSecret(providerId)
+      if (!metadata || !encryptedSecret) {
+        throw new Error(`Agent provider credential not found: ${providerId}`)
+      }
+      resolvedProvider = createOpenAiCompatibleAgentProvider({
+        id: metadata.providerId,
+        name: 'OpenAI Compatible',
+        model: metadata.model || DEFAULT_OPENAI_MODEL,
+        baseUrl: metadata.baseUrl || DEFAULT_OPENAI_BASE_URL,
+        apiKey: decryptCredential(encryptedSecret),
+      })
+    }
+
+    const result = await runKnowledgeReviewAgent({
+      request: {
+        id: `review-request-${Date.now()}`,
+        runId: input.runId,
+        nodeId: input.nodeId,
+        projectId: input.projectId,
+        requestedBy: input.requestedBy,
+        runtime: 'electron',
+        providerId,
+      },
+      context,
+      provider: resolvedProvider,
+    })
+    const output = createAgentReviewArtifacts(result)
+    const event: typeof output.event = {
+      ...output.event,
+      sequence: (await store.listEvents(input.runId)).length + 1,
+    }
+
+    await store.saveArtifact(output.artifact)
+    await store.saveEvent(event)
+    await store.saveAgentReview(result.review)
+    await store.saveAgentTrace(result.trace)
+    await store.saveAgentTokenUsage(result.tokenUsage)
+    void getRemoteSyncClient()
+      .uploadAgentReviewSummary(createRemoteAgentReviewSummary(result.review))
+      .catch(() => undefined)
+
+    return {
+      ...result,
+      state: await store.loadState(),
+    }
   })
 }
 

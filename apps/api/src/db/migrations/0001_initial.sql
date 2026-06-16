@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
   run_id text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
   node_id text NOT NULL REFERENCES workflow_nodes(id) ON DELETE CASCADE,
   kind text NOT NULL CHECK (
-    kind IN ('raw_request', 'clarification', 'design', 'diff', 'test_report', 'log', 'pr', 'acceptance')
+    kind IN ('raw_request', 'clarification', 'design', 'diff', 'test_report', 'agent_review', 'log', 'pr', 'acceptance')
   ),
   title text NOT NULL,
   summary text NOT NULL,
@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS agent_events (
   node_id text REFERENCES workflow_nodes(id) ON DELETE SET NULL,
   sequence integer NOT NULL,
   kind text NOT NULL CHECK (
-    kind IN ('thinking', 'tool_call', 'tool_result', 'file_change', 'test_result', 'approval', 'error', 'sync')
+    kind IN ('thinking', 'tool_call', 'tool_result', 'file_change', 'test_result', 'agent_review', 'approval', 'error', 'sync')
   ),
   message text NOT NULL,
   timestamp timestamptz NOT NULL,
@@ -181,12 +181,75 @@ CREATE TABLE IF NOT EXISTS token_usage (
   timestamp timestamptz NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS agent_provider_credentials (
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  provider_id text NOT NULL,
+  model text NOT NULL,
+  base_url text,
+  masked_credential text NOT NULL,
+  encrypted_secret text NOT NULL,
+  updated_at timestamptz NOT NULL,
+  PRIMARY KEY (organization_id, provider_id)
+);
+
+CREATE TABLE IF NOT EXISTS agent_reviews (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  request_id text NOT NULL,
+  run_id text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  node_id text NOT NULL REFERENCES workflow_nodes(id) ON DELETE CASCADE,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  runtime text NOT NULL CHECK (runtime IN ('electron', 'api')),
+  provider_id text NOT NULL,
+  model text NOT NULL,
+  conclusion text NOT NULL,
+  summary text NOT NULL,
+  risks jsonb NOT NULL DEFAULT '[]'::jsonb,
+  missing_evidence jsonb NOT NULL DEFAULT '[]'::jsonb,
+  suggested_tests jsonb NOT NULL DEFAULT '[]'::jsonb,
+  knowledge_references jsonb NOT NULL DEFAULT '[]'::jsonb,
+  confidence numeric(4,3) NOT NULL DEFAULT 0,
+  gate_advisory jsonb NOT NULL,
+  created_at timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_traces (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  run_id text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  node_id text NOT NULL REFERENCES workflow_nodes(id) ON DELETE CASCADE,
+  review_id text NOT NULL REFERENCES agent_reviews(id) ON DELETE CASCADE,
+  runtime text NOT NULL CHECK (runtime IN ('electron', 'api')),
+  steps jsonb NOT NULL DEFAULT '[]'::jsonb,
+  created_at timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_token_usage (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  run_id text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  node_id text NOT NULL REFERENCES workflow_nodes(id) ON DELETE CASCADE,
+  user_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider text NOT NULL CHECK (provider IN ('openai', 'anthropic', 'dashscope', 'local')),
+  model text NOT NULL,
+  input_tokens integer NOT NULL DEFAULT 0,
+  output_tokens integer NOT NULL DEFAULT 0,
+  cache_read_tokens integer NOT NULL DEFAULT 0,
+  cost_usd numeric(12,6) NOT NULL DEFAULT 0,
+  timestamp timestamptz NOT NULL,
+  source text NOT NULL CHECK (source IN ('provider_reported', 'estimated'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_projects_organization_id ON projects(organization_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_project_id ON workflow_runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_nodes_run_id ON workflow_nodes(run_id);
 CREATE INDEX IF NOT EXISTS idx_agent_events_run_id_sequence ON agent_events(run_id, sequence);
 CREATE INDEX IF NOT EXISTS idx_test_evidence_summaries_run_id ON test_evidence_summaries(run_id);
 CREATE INDEX IF NOT EXISTS idx_token_usage_project_id ON token_usage(project_id);
+CREATE INDEX IF NOT EXISTS idx_agent_reviews_run_id ON agent_reviews(run_id);
+CREATE INDEX IF NOT EXISTS idx_agent_traces_review_id ON agent_traces(review_id);
+CREATE INDEX IF NOT EXISTS idx_agent_token_usage_project_id ON agent_token_usage(project_id);
 
 INSERT INTO schema_meta (key, value)
 VALUES ('schema_version', '1')

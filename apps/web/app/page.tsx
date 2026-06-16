@@ -1,6 +1,25 @@
-import { Activity, CircleDollarSign, GitPullRequest, Users } from 'lucide-react'
+import { Activity, Bot, CircleDollarSign, GitPullRequest, Users } from 'lucide-react'
 import { formatUsd } from '@ai-devflow/shared'
-import { fetchTeamOverview, type TeamOverviewResponse } from './lib/devflow-api'
+import {
+  fetchTeamOverview,
+  runKnowledgeReview,
+  type TeamOverviewResponse,
+} from './lib/devflow-api'
+
+async function runKnowledgeReviewAction(formData: FormData) {
+  'use server'
+
+  const runId = String(formData.get('runId') ?? '')
+  const nodeId = String(formData.get('nodeId') ?? '')
+  const projectId = String(formData.get('projectId') ?? '')
+  const providerId = String(formData.get('providerId') ?? 'fake-knowledge-review')
+
+  if (!runId || !nodeId || !projectId) {
+    return
+  }
+
+  await runKnowledgeReview({ runId, nodeId, projectId, providerId })
+}
 
 export default async function Page() {
   let overview: TeamOverviewResponse
@@ -26,6 +45,12 @@ export default async function Page() {
   const hasProjectCost = overview.projectCost.length > 0
   const hasRuns = overview.runs.length > 0
   const hasEvidence = overview.testEvidenceSummaries.length > 0
+  const hasAgentReviews = overview.agentReviews.length > 0
+  const reviewTarget = overview.runs
+    .map((run) => ({ run, node: run.nodes.find((node) => node.kind === 'gate') ?? run.nodes[0] }))
+    .find((target) => target.node)
+  const latestReview = overview.agentReviews[0]
+  const latestUsage = overview.agentTokenUsage[0]
 
   return (
     <WebShell>
@@ -43,6 +68,7 @@ export default async function Page() {
           <Kpi icon={<GitPullRequest />} label="Pending PR" value="1" />
           <Kpi icon={<Users />} label="Members" value={String(overview.members.length)} />
           <Kpi icon={<CircleDollarSign />} label="Cost" value={overview.totalCost} />
+          <Kpi icon={<Bot />} label="Agent Reviews" value={String(overview.agentReviews.length)} />
         </div>
 
         <section className="web-grid">
@@ -141,6 +167,62 @@ export default async function Page() {
               <EmptyState title="暂无测试证据" body="Electron 上传脱敏测试摘要后会显示在这里。" />
             )}
           </div>
+
+          <div className="web-panel web-panel--wide" id="agent-review">
+            <div className="panel-title">
+              <span>Knowledge Review Agent</span>
+              <strong>后端 Agent 审查</strong>
+            </div>
+            <div className="agent-console">
+              <div>
+                <strong>Provider</strong>
+                {overview.agentProviders.map((provider) => (
+                  <article className="agent-provider-row" key={provider.id}>
+                    <span>{provider.name}</span>
+                    <code>{provider.maskedCredential ?? provider.model}</code>
+                  </article>
+                ))}
+              </div>
+              <form action={runKnowledgeReviewAction}>
+                <input type="hidden" name="runId" value={reviewTarget?.run.id ?? ''} />
+                <input type="hidden" name="nodeId" value={reviewTarget?.node?.id ?? ''} />
+                <input type="hidden" name="projectId" value={reviewTarget?.run.projectId ?? ''} />
+                <input type="hidden" name="providerId" value="fake-knowledge-review" />
+                <button type="submit" disabled={!reviewTarget}>
+                  <Bot size={16} />
+                  Run backend review
+                </button>
+              </form>
+              <div>
+                <strong>Latest advisory</strong>
+                {latestReview ? (
+                  <article className="agent-review-row">
+                    <span>{latestReview.gateAdvisory.level}</span>
+                    <p>{latestReview.gateAdvisory.summary}</p>
+                    <small>{latestReview.gateAdvisory.blocksApproval ? 'blocking' : 'warning-only'}</small>
+                  </article>
+                ) : (
+                  <EmptyState title="暂无 Agent Review" body="触发后端审查后会显示 advisory、trace 与成本。" />
+                )}
+              </div>
+            </div>
+            {hasAgentReviews ? (
+              overview.agentReviews.slice(0, 5).map((review) => (
+                <article className="agent-review-row" key={review.id}>
+                  <div>
+                    <strong>{review.conclusion}</strong>
+                    <p>{review.summary}</p>
+                  </div>
+                  <span>{review.runtime}</span>
+                </article>
+              ))
+            ) : null}
+            <div className="agent-cost-row">
+              <span>Latest review cost</span>
+              <strong>{latestUsage ? formatUsd(latestUsage.costUsd) : '$0.000'}</strong>
+              <span>{latestUsage?.source ?? 'none'}</span>
+            </div>
+          </div>
         </section>
       </section>
     </WebShell>
@@ -160,6 +242,7 @@ function WebShell({ children }: { children: React.ReactNode }) {
           <a href="#cost">Token Cost</a>
           <a href="#runs">Runs</a>
           <a href="#evidence">Evidence</a>
+          <a href="#agent-review">Agent Review</a>
         </nav>
       </aside>
 

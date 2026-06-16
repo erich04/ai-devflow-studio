@@ -38,7 +38,20 @@ function createRepository(): TeamRepository {
         branchName: 'ai/payments',
         createdAt: '2026-06-16T00:00:00.000Z',
         updatedAt: '2026-06-16T00:01:00.000Z',
-        nodes: [],
+        nodes: [
+          {
+            id: 'node-build',
+            stage: 'design',
+            title: 'Architecture Gate',
+            subtitle: 'Lead approval before build.',
+            kind: 'gate',
+            status: 'blocked',
+            ownerId: 'u-ling',
+            requiredRole: 'lead',
+            retryCount: 0,
+            artifactIds: ['artifact-payments'],
+          },
+        ],
         edges: [],
       },
       {
@@ -170,6 +183,19 @@ function createRepository(): TeamRepository {
         createdAt: '2026-06-16T00:03:00.000Z',
       },
     ],
+    agentReviews: [],
+    agentTraces: [],
+    agentTokenUsage: [],
+    agentProviders: [
+      {
+        id: 'fake-knowledge-review',
+        name: 'Deterministic Fake Provider',
+        kind: 'fake',
+        model: 'fake',
+        enabled: true,
+        updatedAt: '1970-01-01T00:00:00.000Z',
+      },
+    ],
   }
 
   return {
@@ -187,6 +213,20 @@ function createRepository(): TeamRepository {
       syncedAt: '2026-06-16T00:00:00.000Z',
       message: 'test evidence summary accepted',
     })),
+    uploadAgentReviewSummary: vi.fn(async () => ({
+      accepted: true,
+      syncedAt: '2026-06-16T00:00:00.000Z',
+      message: 'agent review summary accepted',
+    })),
+    listAgentProviders: vi.fn(async () => overview.agentProviders),
+    saveAgentProviderCredential: vi.fn(async (metadata) => metadata),
+    getAgentProviderCredential: vi.fn(async () => null),
+    saveAgentReviewBundle: vi.fn(async (bundle) => ({
+      review: bundle.review,
+      trace: bundle.trace,
+      tokenUsage: bundle.tokenUsage,
+    })),
+    listAgentReviews: vi.fn(async () => []),
   }
 }
 
@@ -248,6 +288,104 @@ describe('team API route resolver', () => {
       status: 401,
       body: { error: 'unauthorized', message: 'Authentication required' },
     })
+  })
+
+  it('lists agent providers without returning provider secrets', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('GET', '/api/agent/providers', repository, {
+      session: ownerSession,
+    })
+
+    expect(result?.status).toBe(200)
+    expect(result?.body).toEqual({
+      providers: [expect.objectContaining({ id: 'fake-knowledge-review', kind: 'fake' })],
+    })
+    expect(JSON.stringify(result?.body)).not.toContain('apiKey')
+    expect(JSON.stringify(result?.body)).not.toContain('encryptedSecret')
+  })
+
+  it('saves provider credentials as masked metadata for organization owners', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('POST', '/api/agent/providers', repository, {
+      session: ownerSession,
+      body: {
+        providerId: 'openai-default',
+        apiKey: 'sk-test-provider-secret',
+        model: 'gpt-4.1-mini',
+        baseUrl: 'https://api.openai.com/v1',
+      },
+    })
+
+    expect(result?.status).toBe(201)
+    expect(result?.body).toMatchObject({
+      providerId: 'openai-default',
+      maskedCredential: 'sk-...cret',
+    })
+    expect(repository.saveAgentProviderCredential).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'openai-default',
+        maskedCredential: 'sk-...cret',
+      }),
+      expect.any(String),
+      ownerSession,
+    )
+    expect(JSON.stringify(result?.body)).not.toContain('sk-test-provider-secret')
+  })
+
+  it('runs backend Knowledge Review with the deterministic fake provider', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('POST', '/api/agent/knowledge-review', repository, {
+      session: memberSession,
+      body: {
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        projectId: 'p-payments',
+        providerId: 'fake-knowledge-review',
+      },
+    })
+
+    expect(result?.status).toBe(201)
+    expect(result?.body).toMatchObject({
+      review: {
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        runtime: 'api',
+        providerId: 'fake-knowledge-review',
+        gateAdvisory: {
+          blocksApproval: false,
+        },
+      },
+      artifact: {
+        kind: 'agent_review',
+        redacted: true,
+      },
+      event: {
+        kind: 'agent_review',
+      },
+    })
+    expect(repository.saveAgentReviewBundle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        review: expect.objectContaining({ runtime: 'api' }),
+        artifact: expect.objectContaining({ kind: 'agent_review' }),
+        event: expect.objectContaining({ kind: 'agent_review' }),
+      }),
+      memberSession,
+    )
+  })
+
+  it('lists agent reviews with the runId query filter', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('GET', '/api/agent/reviews', repository, {
+      session: memberSession,
+      searchParams: new URLSearchParams('runId=run-payments'),
+    })
+
+    expect(result?.status).toBe(200)
+    expect(repository.listAgentReviews).toHaveBeenCalledWith({ runId: 'run-payments' }, memberSession)
   })
 
   it('routes run summary sync requests through the repository', async () => {
@@ -324,6 +462,71 @@ describe('team API route resolver', () => {
 
     expect(result?.status).toBe(202)
     expect(repository.uploadTestEvidenceSummary).toHaveBeenCalledWith(summary, memberSession)
+  })
+
+  it('routes redacted agent review summary sync requests through the repository', async () => {
+    const repository = createRepository()
+    const summary = {
+      id: 'agent-review-1',
+      runId: 'run-payments',
+      nodeId: 'node-build',
+      projectId: 'p-payments',
+      runtime: 'electron',
+      providerId: 'fake-knowledge-review',
+      model: 'fake',
+      conclusion: 'Knowledge review completed.',
+      summary: 'Warning-only advisory generated.',
+      riskCount: 1,
+      missingEvidenceCount: 1,
+      advisoryLevel: 'warn',
+      blocksApproval: false,
+      confidence: 0.82,
+      redacted: true,
+      createdAt: '2026-06-16T00:06:00.000Z',
+    }
+
+    const result = await resolveTeamRoute('POST', '/api/sync/agent-review-summary', repository, {
+      body: summary,
+      session: memberSession,
+    })
+
+    expect(result?.status).toBe(202)
+    expect(repository.uploadAgentReviewSummary).toHaveBeenCalledWith(summary, memberSession)
+  })
+
+  it('rejects non-redacted agent review summary sync payloads', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('POST', '/api/sync/agent-review-summary', repository, {
+      body: {
+        id: 'agent-review-1',
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        projectId: 'p-payments',
+        runtime: 'electron',
+        providerId: 'fake-knowledge-review',
+        model: 'fake',
+        conclusion: 'Knowledge review completed.',
+        summary: 'Warning-only advisory generated.',
+        riskCount: 1,
+        missingEvidenceCount: 1,
+        advisoryLevel: 'warn',
+        blocksApproval: false,
+        confidence: 0.82,
+        redacted: false,
+        createdAt: '2026-06-16T00:06:00.000Z',
+      },
+      session: memberSession,
+    })
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: 'bad_request',
+        message: 'Invalid remote agent review summary payload',
+      },
+    })
+    expect(repository.uploadAgentReviewSummary).not.toHaveBeenCalled()
   })
 
   it('rejects local-only test evidence fields before repository sync', async () => {

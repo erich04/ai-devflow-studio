@@ -11,6 +11,7 @@ import {
   Activity,
   BarChart3,
   BookOpen,
+  Bot,
   CheckCircle2,
   ChevronRight,
   CircleDollarSign,
@@ -59,6 +60,10 @@ import {
   type NodeStage,
   type ThemePreference,
   type AgentEvent,
+  type AgentProviderConfig,
+  type AgentReviewResult,
+  type AgentTokenUsage,
+  type AgentTrace,
   type Artifact,
   type CommandSafetyResult,
   type DataOrigin,
@@ -77,7 +82,7 @@ import {
 import { canApproveGate, nextStatusAfterApproval } from '@ai-devflow/shared'
 import { getDesktopApi } from './desktop-api'
 
-type ViewId = 'workbench' | 'team' | 'knowledge' | 'skills' | 'mcp' | 'tests'
+type ViewId = 'workbench' | 'team' | 'knowledge' | 'agents' | 'skills' | 'mcp' | 'tests'
 
 const stageLabels: Record<NodeStage, string> = {
   clarify: '方案澄清',
@@ -109,6 +114,14 @@ const stageTone: Record<NodeStage, string> = {
 const seedProjectRollups = rollupTokenUsage(tokenUsage, 'projectId')
 const seedMemberRollups = rollupTokenUsage(tokenUsage, 'userId')
 const seedTotalCost = formatUsd(tokenUsage.reduce((sum, row) => sum + row.costUsd, 0))
+const fakeAgentProvider: AgentProviderConfig = {
+  id: 'fake-knowledge-review',
+  name: 'Deterministic Fake Provider',
+  kind: 'fake',
+  model: 'fake',
+  enabled: true,
+  updatedAt: new Date(0).toISOString(),
+}
 
 function useThemePreference() {
   const [preference, setPreference] = useState<ThemePreference>(() =>
@@ -282,6 +295,13 @@ export function App() {
   const [isRunningTests, setIsRunningTests] = useState(false)
   const [isSyncingRemote, setIsSyncingRemote] = useState(false)
   const [mcpServers, setMcpServers] = useState<McpServerDefinition[]>(fixtureMcpServers)
+  const [agentProviders, setAgentProviders] = useState<AgentProviderConfig[]>([fakeAgentProvider])
+  const [selectedAgentProviderId, setSelectedAgentProviderId] = useState(fakeAgentProvider.id)
+  const [agentReviews, setAgentReviews] = useState<AgentReviewResult[]>([])
+  const [agentTraces, setAgentTraces] = useState<AgentTrace[]>([])
+  const [agentTokenUsage, setAgentTokenUsage] = useState<AgentTokenUsage[]>([])
+  const [providerKeyDraft, setProviderKeyDraft] = useState('')
+  const [isRunningAgentReview, setIsRunningAgentReview] = useState(false)
   const [isNewRunOpen, setIsNewRunOpen] = useState(false)
   const [draftTitle, setDraftTitle] = useState('重构 GitHub webhook 重试策略')
   const [searchQuery, setSearchQuery] = useState('')
@@ -342,6 +362,31 @@ export function App() {
         : [],
     [artifacts, selectedNode, selectedRun, testEvidence],
   )
+  const selectedAgentReviews = useMemo(
+    () =>
+      agentReviews
+        .filter(
+          (review) =>
+            review.runId === selectedRun?.id &&
+            (!selectedNode || review.nodeId === selectedNode.id),
+        )
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    [agentReviews, selectedNode, selectedRun],
+  )
+  const latestAgentReview = selectedAgentReviews[0]
+  const latestAgentTrace = latestAgentReview
+    ? agentTraces.find((trace) => trace.reviewId === latestAgentReview.id)
+    : undefined
+  const latestAgentUsage = latestAgentReview
+    ? agentTokenUsage
+        .filter(
+          (usage) =>
+            usage.runId === latestAgentReview.runId &&
+            usage.nodeId === latestAgentReview.nodeId &&
+            usage.timestamp <= latestAgentReview.createdAt,
+        )
+        .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0]
+    : undefined
 
   function resetTeamSnapshot() {
     setTeamProjects(projects)
@@ -387,6 +432,9 @@ export function App() {
     }
 
     setTestEvidence(state.testEvidence)
+    setAgentReviews(state.agentReviews)
+    setAgentTraces(state.agentTraces)
+    setAgentTokenUsage(state.agentTokenUsage)
     if (state.mcpServers.length > 0) {
       setMcpServers(state.mcpServers)
     }
@@ -410,6 +458,22 @@ export function App() {
       })
       .catch((error: unknown) => {
         setToast(error instanceof Error ? error.message : '加载本地状态失败')
+      })
+
+    desktopApi
+      .listAgentProviders()
+      .then((providers) => {
+        if (disposed || providers.length === 0) {
+          return
+        }
+
+        setAgentProviders(providers)
+        setSelectedAgentProviderId((current) =>
+          providers.some((provider) => provider.id === current) ? current : providers[0]!.id,
+        )
+      })
+      .catch((error: unknown) => {
+        setToast(error instanceof Error ? error.message : '加载 Agent Provider 失败')
       })
 
     return () => {
@@ -485,6 +549,9 @@ export function App() {
       setArtifacts(snapshot.artifacts)
       setEvents(snapshot.events)
       setTestEvidence([])
+      setAgentReviews([])
+      setAgentTraces([])
+      setAgentTokenUsage([])
       setTeamProjects(snapshot.projects.length > 0 ? snapshot.projects : projects)
       setTeamMembers(snapshot.members.length > 0 ? snapshot.members : members)
       setTeamProjectCost(snapshot.projectCost)
@@ -683,6 +750,68 @@ export function App() {
     }
   }
 
+  async function saveAgentProviderCredential() {
+    if (!desktopApi) {
+      setToast('请在 Electron 应用中保存 Provider Credential')
+      return
+    }
+
+    if (!providerKeyDraft.trim()) {
+      setToast('请输入 Provider API Key')
+      return
+    }
+
+    try {
+      const metadata = await desktopApi.saveAgentProviderCredential({
+        providerId: 'openai-default',
+        apiKey: providerKeyDraft,
+        model: 'gpt-4.1-mini',
+        baseUrl: 'https://api.openai.com/v1',
+      })
+      const providers = await desktopApi.listAgentProviders()
+      setAgentProviders(providers.length > 0 ? providers : [fakeAgentProvider])
+      setSelectedAgentProviderId(metadata.providerId)
+      setProviderKeyDraft('')
+      setToast(`Provider credential saved: ${metadata.maskedCredential}`)
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '保存 Provider Credential 失败')
+    }
+  }
+
+  async function runKnowledgeReview() {
+    if (!selectedRun || !selectedNode || !currentUser) {
+      return
+    }
+
+    if (!desktopApi) {
+      setToast('请在 Electron 应用中运行 Knowledge Review Agent')
+      return
+    }
+
+    setIsRunningAgentReview(true)
+    setToast('Knowledge Review Agent 正在生成审查意见...')
+
+    try {
+      const result = await desktopApi.runKnowledgeReview({
+        runId: selectedRun.id,
+        nodeId: selectedNode.id,
+        projectId: selectedRun.projectId,
+        requestedBy: currentUser.id,
+        runtime: 'electron',
+        providerId: selectedAgentProviderId,
+      })
+      applyLocalExecutionState(result.state)
+      setSelectedRunId(result.review.runId)
+      setSelectedNodeId(result.review.nodeId)
+      setActiveView('agents')
+      setToast('Knowledge Review 已归档，Gate Advisory 已生成')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Knowledge Review Agent 运行失败')
+    } finally {
+      setIsRunningAgentReview(false)
+    }
+  }
+
   async function createRun() {
     const newRun: WorkflowRun = {
       ...fixtureRuns[0]!,
@@ -758,6 +887,7 @@ export function App() {
           <NavButton active={activeView === 'workbench'} icon={<Workflow />} label="工作台" onClick={() => setActiveView('workbench')} />
           <NavButton active={activeView === 'team'} icon={<Users />} label="Team Overview" onClick={() => setActiveView('team')} />
           <NavButton active={activeView === 'knowledge'} icon={<BookOpen />} label="Knowledge" onClick={() => setActiveView('knowledge')} />
+          <NavButton active={activeView === 'agents'} icon={<Bot />} label="Agents" onClick={() => setActiveView('agents')} />
           <NavButton active={activeView === 'skills'} icon={<ShieldCheck />} label="Skills" onClick={() => setActiveView('skills')} />
           <NavButton active={activeView === 'mcp'} icon={<Network />} label="MCP" onClick={() => setActiveView('mcp')} />
           <NavButton active={activeView === 'tests'} icon={<TestTube2 />} label="测试" onClick={() => setActiveView('tests')} />
@@ -888,10 +1018,13 @@ export function App() {
               events={selectedEvents}
               governanceChecks={selectedGovernanceChecks}
               references={knowledgeReferences}
+              latestAgentReview={latestAgentReview}
               canApprove={selectedNode ? canApproveGate(currentUser?.role ?? 'member', selectedNode) : false}
               onApprove={approveSelectedGate}
               onRunTests={executeTestPlan}
+              onRunKnowledgeReview={runKnowledgeReview}
               isRunningTests={isRunningTests}
+              isRunningAgentReview={isRunningAgentReview}
             />
           </section>
         )}
@@ -913,6 +1046,26 @@ export function App() {
             documents={knowledgeDocuments}
             references={knowledgeReferences}
             selectedRun={selectedRun}
+          />
+        )}
+
+        {activeView === 'agents' && (
+          <AgentWorkbenchView
+            providers={agentProviders}
+            selectedProviderId={selectedAgentProviderId}
+            onProviderChange={setSelectedAgentProviderId}
+            providerKeyDraft={providerKeyDraft}
+            onProviderKeyDraftChange={setProviderKeyDraft}
+            onSaveProviderCredential={saveAgentProviderCredential}
+            onRunKnowledgeReview={runKnowledgeReview}
+            isRunning={isRunningAgentReview}
+            selectedRun={selectedRun}
+            selectedNode={selectedNode}
+            reviews={agentReviews}
+            selectedReviews={selectedAgentReviews}
+            latestReview={latestAgentReview}
+            latestTrace={latestAgentTrace}
+            latestUsage={latestAgentUsage}
           />
         )}
 
@@ -1087,20 +1240,26 @@ function Inspector({
   events,
   governanceChecks,
   references,
+  latestAgentReview,
   canApprove,
   onApprove,
   onRunTests,
+  onRunKnowledgeReview,
   isRunningTests,
+  isRunningAgentReview,
 }: {
   selectedNode: WorkflowNode | undefined
   artifacts: Artifact[]
   events: AgentEvent[]
   governanceChecks: KnowledgeGovernanceCheck[]
   references: KnowledgeReference[]
+  latestAgentReview: AgentReviewResult | undefined
   canApprove: boolean
   onApprove: () => void
   onRunTests: () => void
+  onRunKnowledgeReview: () => void
   isRunningTests: boolean
+  isRunningAgentReview: boolean
 }) {
   if (!selectedNode) {
     return <aside className="inspector">请选择一个节点</aside>
@@ -1154,10 +1313,34 @@ function Inspector({
         )}
       </div>
 
+      <div className="agent-advisory-list">
+        <span className="panel-label">Knowledge Review Agent</span>
+        {latestAgentReview ? (
+          <article className={`agent-advisory agent-advisory--${latestAgentReview.gateAdvisory.level}`}>
+            <div className="compact-row">
+              <strong>{latestAgentReview.model}</strong>
+              <span>{Math.round(latestAgentReview.confidence * 100)}%</span>
+            </div>
+            <p>{latestAgentReview.gateAdvisory.summary}</p>
+            <div className="knowledge-reference-meta">
+              <span>{latestAgentReview.runtime}</span>
+              <span>{latestAgentReview.providerId}</span>
+              <span>{latestAgentReview.gateAdvisory.blocksApproval ? 'blocking' : 'warning-only'}</span>
+            </div>
+          </article>
+        ) : (
+          <p className="empty-note">还没有 Agent Review。运行后会生成可审计 trace 与 token cost。</p>
+        )}
+      </div>
+
       <div className="inspector-actions">
         <button className="primary-button" disabled={!canApprove} onClick={onApprove}>
           <CheckCircle2 size={16} />
           通过 Gate
+        </button>
+        <button className="ghost-button" disabled={isRunningAgentReview} onClick={onRunKnowledgeReview}>
+          <Bot size={16} />
+          {isRunningAgentReview ? '审查中' : 'Agent Review'}
         </button>
         <button className="ghost-button" disabled={isRunningTests} onClick={onRunTests}>
           <Play size={16} />
@@ -1365,6 +1548,201 @@ function KnowledgeView({
               </article>
             )
           })
+        )}
+      </aside>
+    </section>
+  )
+}
+
+function AgentWorkbenchView({
+  providers,
+  selectedProviderId,
+  onProviderChange,
+  providerKeyDraft,
+  onProviderKeyDraftChange,
+  onSaveProviderCredential,
+  onRunKnowledgeReview,
+  isRunning,
+  selectedRun,
+  selectedNode,
+  reviews,
+  selectedReviews,
+  latestReview,
+  latestTrace,
+  latestUsage,
+}: {
+  providers: AgentProviderConfig[]
+  selectedProviderId: string
+  onProviderChange: (providerId: string) => void
+  providerKeyDraft: string
+  onProviderKeyDraftChange: (value: string) => void
+  onSaveProviderCredential: () => void
+  onRunKnowledgeReview: () => void
+  isRunning: boolean
+  selectedRun: WorkflowRun | undefined
+  selectedNode: WorkflowNode | undefined
+  reviews: AgentReviewResult[]
+  selectedReviews: AgentReviewResult[]
+  latestReview: AgentReviewResult | undefined
+  latestTrace: AgentTrace | undefined
+  latestUsage: AgentTokenUsage | undefined
+}) {
+  const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) ?? providers[0]
+
+  return (
+    <section className="page-grid" data-testid="agent-workbench">
+      <div className="page-main">
+        <div className="section-heading">
+          <span>Agent Workbench</span>
+          <strong>Knowledge Review Agent</strong>
+        </div>
+
+        <article className="agent-run-card">
+          <div>
+            <span className="panel-label">Current Review Target</span>
+            <strong>{selectedNode?.title ?? 'No selected node'}</strong>
+            <p>{selectedRun?.title ?? 'No selected run'}</p>
+          </div>
+          <label>
+            Agent Provider
+            <select
+              aria-label="Agent Provider"
+              value={selectedProviderId}
+              onChange={(event) => onProviderChange(event.target.value)}
+            >
+              {providers.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.name} · {provider.model}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button className="primary-button" disabled={!selectedRun || !selectedNode || isRunning} onClick={onRunKnowledgeReview}>
+            <Bot size={16} />
+            {isRunning ? 'Review running' : 'Run Knowledge Review'}
+          </button>
+        </article>
+
+        <article className="agent-provider-card">
+          <div className="section-heading">
+            <span>Provider Credential</span>
+            <strong>OpenAI-compatible</strong>
+          </div>
+          <p>系统只保存 masked metadata 到 UI；明文 key 不会回读到 renderer。</p>
+          <label>
+            API Key
+            <input
+              aria-label="Provider API Key"
+              type="password"
+              value={providerKeyDraft}
+              placeholder="sk-..."
+              onChange={(event) => onProviderKeyDraftChange(event.target.value)}
+            />
+          </label>
+          <button className="ghost-button" onClick={onSaveProviderCredential}>
+            <Save size={16} />
+            Save Credential
+          </button>
+        </article>
+
+        <div className="section-heading section-heading--inline">
+          <span>Review History</span>
+          <strong>当前节点审查记录</strong>
+        </div>
+        <div className="agent-review-list">
+          {selectedReviews.length === 0 ? (
+            <p className="empty-note">还没有 Knowledge Review。选择节点后运行一次审查。</p>
+          ) : (
+            selectedReviews.map((review) => (
+              <article className="agent-review-card" key={review.id}>
+                <div>
+                  <span className="panel-label">{review.runtime}</span>
+                  <strong>{review.conclusion}</strong>
+                  <p>{review.summary}</p>
+                </div>
+                <div className="knowledge-reference-meta">
+                  <span>{review.providerId}</span>
+                  <span>{review.model}</span>
+                  <span>{review.gateAdvisory.level}</span>
+                  <span>{Math.round(review.confidence * 100)}%</span>
+                </div>
+                {review.risks.length > 0 && (
+                  <ul>
+                    {review.risks.map((risk) => (
+                      <li key={risk}>{risk}</li>
+                    ))}
+                  </ul>
+                )}
+                {review.missingEvidence.length > 0 && (
+                  <ul>
+                    {review.missingEvidence.map((gap) => (
+                      <li key={gap}>{gap}</li>
+                    ))}
+                  </ul>
+                )}
+              </article>
+            ))
+          )}
+        </div>
+      </div>
+
+      <aside className="page-side">
+        <strong>Provider Status</strong>
+        {providers.map((provider) => (
+          <div className="provider-row" key={provider.id}>
+            <div>
+              <strong>{provider.name}</strong>
+              <span>{provider.kind}</span>
+            </div>
+            <code>{provider.maskedCredential ?? provider.model}</code>
+          </div>
+        ))}
+        <strong>Selected Runtime</strong>
+        <div className="compact-row">
+          <span>Provider</span>
+          <strong>{selectedProvider?.id ?? 'none'}</strong>
+        </div>
+        <div className="compact-row">
+          <span>Total reviews</span>
+          <strong>{reviews.length}</strong>
+        </div>
+        <div className="compact-row">
+          <span>Latest cost</span>
+          <strong>{latestUsage ? formatUsd(latestUsage.costUsd) : '$0.000'}</strong>
+        </div>
+        <div className="compact-row">
+          <span>Usage source</span>
+          <strong>{latestUsage?.source ?? 'none'}</strong>
+        </div>
+
+        <strong>Gate Advisory</strong>
+        {latestReview ? (
+          <article className={`agent-advisory agent-advisory--${latestReview.gateAdvisory.level}`}>
+            <span>{latestReview.gateAdvisory.level}</span>
+            <p>{latestReview.gateAdvisory.summary}</p>
+            <small>{latestReview.gateAdvisory.blocksApproval ? 'blocking' : 'warning-only'}</small>
+            <div className="compact-row">
+              <span>Blocks approval</span>
+              <strong>{latestReview.gateAdvisory.blocksApproval ? 'yes' : 'no'}</strong>
+            </div>
+          </article>
+        ) : (
+          <p className="empty-note">暂无 advisory。</p>
+        )}
+
+        <strong>Trace</strong>
+        {latestTrace ? (
+          <div className="trace-list">
+            {latestTrace.steps.map((step) => (
+              <div className="trace-step" key={step.id}>
+                <span>{step.kind}</span>
+                <strong>{step.label}</strong>
+                <p>{step.summary}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="empty-note">运行 Agent 后会显示 context、retrieval、provider_call、artifact trace。</p>
         )}
       </aside>
     </section>

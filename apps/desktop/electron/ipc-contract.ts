@@ -1,15 +1,19 @@
 import type {
   AgentEvent,
+  AgentProviderConfig,
+  AgentReviewExecutionResult,
   CommandSafetyResult,
   LocalExecutionState,
   LocalSettings,
   LocalProject,
   McpServerDefinition,
+  ProviderCredentialMetadata,
   RemoteRunSummary,
   RemoteSyncUploadResult,
   RemoteTeamSnapshot,
   RemoteTestEvidenceSummary,
   TestEvidence,
+  AgentReviewRuntime,
   WorkflowRun,
 } from '@ai-devflow/shared'
 
@@ -27,6 +31,10 @@ export const ipcChannels = {
   loadRemoteSnapshot: 'devflow:remote:snapshot:load',
   uploadRunSummary: 'devflow:remote:run-summary:upload',
   uploadTestEvidenceSummary: 'devflow:remote:test-evidence-summary:upload',
+  listAgentProviders: 'devflow:agent:providers:list',
+  saveAgentProviderCredential: 'devflow:agent:provider-credential:save',
+  runKnowledgeReview: 'devflow:agent:knowledge-review:run',
+  listAgentReviews: 'devflow:agent:reviews:list',
 } as const
 
 export type SaveProjectTestCommandInput = {
@@ -45,6 +53,30 @@ export type RunProjectTestsInput = {
 
 export type RunProjectTestsResult = {
   evidence: TestEvidence
+  state: LocalExecutionState
+}
+
+export type AgentProviderCredentialInput = {
+  providerId: string
+  apiKey: string
+  model: string
+  baseUrl?: string
+}
+
+export type RunKnowledgeReviewInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+  requestedBy: string
+  runtime: AgentReviewRuntime
+  providerId?: string
+}
+
+export type ListAgentReviewsInput = {
+  runId?: string
+}
+
+export type RunKnowledgeReviewResult = AgentReviewExecutionResult & {
   state: LocalExecutionState
 }
 
@@ -69,6 +101,10 @@ export type DevFlowDesktopApi = {
   saveEvent: (event: AgentEvent) => Promise<AgentEvent>
   saveSettings: (settings: Partial<LocalSettings>) => Promise<LocalSettings>
   saveMcpServers: (servers: McpServerDefinition[]) => Promise<McpServerDefinition[]>
+  listAgentProviders: () => Promise<AgentProviderConfig[]>
+  saveAgentProviderCredential: (input: AgentProviderCredentialInput) => Promise<ProviderCredentialMetadata>
+  runKnowledgeReview: (input: RunKnowledgeReviewInput) => Promise<RunKnowledgeReviewResult>
+  listAgentReviews: (input?: ListAgentReviewsInput) => Promise<AgentReviewExecutionResult['review'][]>
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -275,4 +311,58 @@ export function parseRemoteTestEvidenceSummaryInput(value: unknown): RemoteTestE
   }
 
   return value
+}
+
+export function parseAgentProviderCredentialInput(value: unknown): AgentProviderCredentialInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid agent provider credential payload')
+  }
+
+  const providerId = readRequiredString(value, 'providerId')
+  const apiKey = readRequiredString(value, 'apiKey')
+  const model = readRequiredString(value, 'model')
+  const baseUrl = value['baseUrl']
+
+  return {
+    providerId,
+    apiKey,
+    model,
+    ...(typeof baseUrl === 'string' && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
+  }
+}
+
+export function parseRunKnowledgeReviewInput(value: unknown): RunKnowledgeReviewInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid knowledge review payload')
+  }
+
+  const runId = readRequiredString(value, 'runId')
+  const nodeId = readRequiredString(value, 'nodeId')
+  const projectId = readRequiredString(value, 'projectId')
+  const requestedBy = readRequiredString(value, 'requestedBy')
+  const runtime = value['runtime']
+  if (runtime !== 'electron' && runtime !== 'api') {
+    throw new Error('Invalid runtime')
+  }
+  const providerId = value['providerId']
+
+  return {
+    runId,
+    nodeId,
+    projectId,
+    requestedBy,
+    runtime,
+    ...(typeof providerId === 'string' && providerId.trim() ? { providerId: providerId.trim() } : {}),
+  }
+}
+
+export function parseListAgentReviewsInput(value: unknown): ListAgentReviewsInput {
+  if (value === undefined || value === null) {
+    return {}
+  }
+  if (!isRecord(value)) {
+    throw new Error('Invalid list agent reviews payload')
+  }
+  const runId = value['runId']
+  return typeof runId === 'string' && runId.trim() ? { runId: runId.trim() } : {}
 }

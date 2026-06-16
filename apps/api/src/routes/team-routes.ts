@@ -1,5 +1,25 @@
-import { formatUsd, type RemoteRunSummary, type RemoteTestEvidenceSummary, type TeamSession } from '@ai-devflow/shared'
+import {
+  buildAgentReviewContext,
+  createAgentReviewArtifacts,
+  createFakeAgentProvider,
+  createOpenAiCompatibleAgentProvider,
+  formatUsd,
+  knowledgeChunks,
+  knowledgeDocuments,
+  runKnowledgeReviewAgent,
+  type ProviderCredentialMetadata,
+  type RemoteAgentReviewSummary,
+  type RemoteRunSummary,
+  type RemoteTestEvidenceSummary,
+  type TeamSession,
+  type TestEvidence,
+} from '@ai-devflow/shared'
 import { canAccessProject, canSyncProject } from '../auth/session'
+import {
+  decryptAgentCredential,
+  encryptAgentCredential,
+  maskAgentCredential,
+} from '../agent-credentials'
 import type { RunsBundle, TeamOverviewPayload, TeamRepository } from '../repositories/team-repository'
 
 export type ApiRouteResult = {
@@ -10,6 +30,21 @@ export type ApiRouteResult = {
 export type ResolveTeamRouteOptions = {
   body?: unknown
   session?: TeamSession | null
+  searchParams?: URLSearchParams
+}
+
+type AgentProviderCredentialInput = {
+  providerId: string
+  apiKey: string
+  model: string
+  baseUrl?: string
+}
+
+type KnowledgeReviewInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+  providerId?: string
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -56,6 +91,30 @@ function isRemoteTestEvidenceSummary(value: unknown): value is RemoteTestEvidenc
   )
 }
 
+function isRemoteAgentReviewSummary(value: unknown): value is RemoteAgentReviewSummary {
+  return (
+    isRecord(value) &&
+    typeof value['id'] === 'string' &&
+    typeof value['runId'] === 'string' &&
+    typeof value['nodeId'] === 'string' &&
+    typeof value['projectId'] === 'string' &&
+    (value['runtime'] === 'electron' || value['runtime'] === 'api') &&
+    typeof value['providerId'] === 'string' &&
+    typeof value['model'] === 'string' &&
+    typeof value['conclusion'] === 'string' &&
+    typeof value['summary'] === 'string' &&
+    typeof value['riskCount'] === 'number' &&
+    typeof value['missingEvidenceCount'] === 'number' &&
+    (value['advisoryLevel'] === 'info' ||
+      value['advisoryLevel'] === 'warn' ||
+      value['advisoryLevel'] === 'block') &&
+    typeof value['blocksApproval'] === 'boolean' &&
+    typeof value['confidence'] === 'number' &&
+    value['redacted'] === true &&
+    typeof value['createdAt'] === 'string'
+  )
+}
+
 function parseRemoteRunSummary(value: unknown): RemoteRunSummary {
   if (!isRemoteRunSummary(value)) {
     throw new Error('Invalid remote run summary payload')
@@ -74,6 +133,63 @@ function parseRemoteTestEvidenceSummary(value: unknown): RemoteTestEvidenceSumma
   }
 
   return value
+}
+
+function parseRemoteAgentReviewSummary(value: unknown): RemoteAgentReviewSummary {
+  if (!isRemoteAgentReviewSummary(value)) {
+    throw new Error('Invalid remote agent review summary payload')
+  }
+
+  return value
+}
+
+function readRequiredString(value: Record<string, unknown>, key: string): string {
+  const raw = value[key]
+  if (typeof raw !== 'string' || raw.trim().length === 0) {
+    throw new Error(`Invalid ${key}`)
+  }
+
+  return raw.trim()
+}
+
+function parseProviderCredential(value: unknown): AgentProviderCredentialInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid provider credential payload')
+  }
+
+  const baseUrl = value['baseUrl']
+
+  return {
+    providerId: readRequiredString(value, 'providerId'),
+    apiKey: readRequiredString(value, 'apiKey'),
+    model: readRequiredString(value, 'model'),
+    ...(typeof baseUrl === 'string' && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
+  }
+}
+
+function parseKnowledgeReviewInput(value: unknown): KnowledgeReviewInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid knowledge review payload')
+  }
+
+  const providerId = value['providerId']
+
+  return {
+    runId: readRequiredString(value, 'runId'),
+    nodeId: readRequiredString(value, 'nodeId'),
+    projectId: readRequiredString(value, 'projectId'),
+    ...(typeof providerId === 'string' && providerId.trim() ? { providerId: providerId.trim() } : {}),
+  }
+}
+
+function toTestEvidence(summary: RemoteTestEvidenceSummary): TestEvidence {
+  return {
+    ...summary,
+    cwd: '',
+    stdout: '',
+    stderr: '',
+    redacted: true,
+  }
 }
 
 function badRequest(message: string): ApiRouteResult {
@@ -187,6 +303,163 @@ export async function resolveTeamRoute(
     }
   }
 
+  if (method === 'GET' && pathname === '/api/agent/providers') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    return {
+      status: 200,
+      body: {
+        providers: await repository.listAgentProviders(options.session),
+      },
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/agent/providers') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    if (options.session.role !== 'owner') {
+      return forbidden('Organization owner role required')
+    }
+
+    let input: AgentProviderCredentialInput
+    try {
+      input = parseProviderCredential(options.body)
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : 'Invalid provider credential payload')
+    }
+
+    const metadata: ProviderCredentialMetadata = {
+      providerId: input.providerId,
+      model: input.model,
+      ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+      maskedCredential: maskAgentCredential(input.apiKey),
+      updatedAt: new Date().toISOString(),
+    }
+
+    return {
+      status: 201,
+      body: await repository.saveAgentProviderCredential(
+        metadata,
+        encryptAgentCredential(input.apiKey),
+        options.session,
+      ),
+    }
+  }
+
+  if (method === 'GET' && pathname === '/api/agent/reviews') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    const runId = options.searchParams?.get('runId') ?? undefined
+    return {
+      status: 200,
+      body: {
+        reviews: await repository.listAgentReviews(runId ? { runId } : {}, options.session),
+      },
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/agent/knowledge-review') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    let input: KnowledgeReviewInput
+    try {
+      input = parseKnowledgeReviewInput(options.body)
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : 'Invalid knowledge review payload')
+    }
+
+    if (!canSyncProject(options.session, input.projectId, 'member')) {
+      return forbidden('Project role member required')
+    }
+
+    const [bundle, overview] = await Promise.all([
+      repository.getRunsBundle(),
+      repository.getTeamOverview(),
+    ])
+    const run = bundle.runs.find((candidate) => candidate.id === input.runId)
+    if (!run || run.projectId !== input.projectId || !canAccessProject(options.session, run.projectId)) {
+      return forbidden('Project access required')
+    }
+
+    const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
+    if (!node) {
+      return badRequest(`Run node not found: ${input.nodeId}`)
+    }
+
+    const providerId = input.providerId ?? 'fake-knowledge-review'
+    const provider =
+      providerId === 'fake-knowledge-review'
+        ? createFakeAgentProvider()
+        : await (async () => {
+            const credential = await repository.getAgentProviderCredential(providerId, options.session!)
+            if (!credential) {
+              throw new Error(`Agent provider credential not found: ${providerId}`)
+            }
+
+            return createOpenAiCompatibleAgentProvider({
+              id: credential.metadata.providerId,
+              name: 'OpenAI Compatible',
+              model: credential.metadata.model,
+              ...(credential.metadata.baseUrl ? { baseUrl: credential.metadata.baseUrl } : {}),
+              apiKey: decryptAgentCredential(credential.encryptedSecret),
+            })
+          })()
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts: bundle.artifacts.filter((artifact) => artifact.runId === run.id),
+      testEvidence: overview.testEvidenceSummaries
+        .filter((summary) => summary.runId === run.id)
+        .map(toTestEvidence),
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const result = await runKnowledgeReviewAgent({
+      request: {
+        id: `api-review-request-${Date.now()}`,
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: options.session.userId,
+        runtime: 'api',
+        providerId,
+      },
+      context,
+      provider,
+    })
+    const artifactAndEvent = createAgentReviewArtifacts(result)
+    const event = {
+      ...artifactAndEvent.event,
+      sequence: bundle.events.filter((event) => event.runId === run.id).length + 1,
+    }
+
+    const saved = await repository.saveAgentReviewBundle(
+      {
+        ...result,
+        artifact: artifactAndEvent.artifact,
+        event,
+      },
+      options.session,
+    )
+
+    return {
+      status: 201,
+      body: {
+        ...saved,
+        artifact: artifactAndEvent.artifact,
+        event,
+      },
+    }
+  }
+
   if (method === 'POST' && pathname === '/api/sync/run-summary') {
     if (!options.session) {
       return unauthorized()
@@ -229,6 +502,28 @@ export async function resolveTeamRoute(
     return {
       status: 202,
       body: await repository.uploadTestEvidenceSummary(summary, options.session),
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/sync/agent-review-summary') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    let summary: RemoteAgentReviewSummary
+    try {
+      summary = parseRemoteAgentReviewSummary(options.body)
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : 'Invalid sync payload')
+    }
+
+    if (!canSyncProject(options.session, summary.projectId, 'member')) {
+      return forbidden('Project role member required')
+    }
+
+    return {
+      status: 202,
+      body: await repository.uploadAgentReviewSummary(summary, options.session),
     }
   }
 

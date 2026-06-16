@@ -100,7 +100,7 @@ button {
 
 .kpis {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -155,7 +155,10 @@ button {
 .member-row,
 .cost-row,
 .run-row,
-.evidence-row {
+.evidence-row,
+.agent-review-row,
+.agent-provider-row,
+.agent-cost-row {
   display: grid;
   align-items: center;
   gap: 14px;
@@ -165,13 +168,15 @@ button {
 
 .project-row,
 .run-row,
-.evidence-row {
+.evidence-row,
+.agent-review-row {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .project-row p,
 .run-row p,
-.evidence-row p {
+.evidence-row p,
+.agent-review-row p {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 13px;
@@ -194,7 +199,9 @@ button {
 .member-row span,
 .cost-row span,
 .run-row span,
-.evidence-row span {
+.evidence-row span,
+.agent-review-row span,
+.agent-cost-row span {
   color: var(--muted);
   font-size: 13px;
 }
@@ -206,4 +213,50 @@ button {
 .cost-row progress {
   width: 100%;
   accent-color: var(--accent);
+}
+
+.agent-console {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 14px;
+}
+
+.agent-console > div,
+.agent-console form {
+  min-height: 100%;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.agent-console form {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.agent-console button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-provider-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.agent-provider-row code {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.agent-review-row small {
+  color: var(--muted);
+}
+
+.agent-cost-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
 }

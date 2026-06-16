@@ -8,7 +8,9 @@ import type {
 } from '@ai-devflow/shared'
 import {
   parseAgentEventInput,
+  parseAgentProviderCredentialInput,
   parseMcpServersInput,
+  parseRunKnowledgeReviewInput,
   parseRemoteRunSummaryInput,
   parseRemoteSnapshotInput,
   parseRemoteTestEvidenceSummaryInput,
@@ -161,5 +163,52 @@ describe('IPC contract parsers', () => {
         stdout: 'secret output',
       }),
     ).toThrow(/local-only/)
+  })
+
+  it('accepts provider credential and knowledge review payloads', () => {
+    expect(
+      parseAgentProviderCredentialInput({
+        providerId: 'openai-default',
+        apiKey: 'sk-test-secret',
+        model: 'gpt-4.1-mini',
+      }),
+    ).toEqual({
+      providerId: 'openai-default',
+      apiKey: 'sk-test-secret',
+      model: 'gpt-4.1-mini',
+    })
+
+    expect(
+      parseRunKnowledgeReviewInput({
+        runId: 'run-1',
+        nodeId: 'node-test',
+        projectId: 'project-1',
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+      }),
+    ).toEqual({
+      runId: 'run-1',
+      nodeId: 'node-test',
+      projectId: 'project-1',
+      requestedBy: 'u-ling',
+      runtime: 'electron',
+    })
+  })
+
+  it('rejects empty provider credentials and malformed knowledge review payloads', () => {
+    expect(() =>
+      parseAgentProviderCredentialInput({
+        providerId: 'openai-default',
+        apiKey: ' ',
+        model: 'gpt-4.1-mini',
+      }),
+    ).toThrow(/apiKey/)
+
+    expect(() =>
+      parseRunKnowledgeReviewInput({
+        runId: 'run-1',
+        nodeId: 'node-test',
+      }),
+    ).toThrow(/projectId/)
   })
 })

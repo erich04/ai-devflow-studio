@@ -23,6 +23,15 @@ const remoteRun = {
   currentNodeId: 'n-design-gate',
 }
 
+const agentProvider = {
+  id: 'fake-knowledge-review',
+  name: 'Deterministic Fake Provider',
+  kind: 'fake' as const,
+  model: 'fake',
+  enabled: true,
+  updatedAt: '1970-01-01T00:00:00.000Z',
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
   window.localStorage.clear()
@@ -42,6 +51,9 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       testEvidence: [],
       settings: { themePreference: 'system' },
       mcpServers: [],
+      agentReviews: [],
+      agentTraces: [],
+      agentTokenUsage: [],
     }),
     loadRemoteSnapshot: vi.fn().mockResolvedValue({
       projects: [],
@@ -129,6 +141,9 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
           testEvidence: [evidence],
           settings: { themePreference: 'system' },
           mcpServers: [],
+          agentReviews: [],
+          agentTraces: [],
+          agentTokenUsage: [],
         },
       }
     }),
@@ -139,6 +154,97 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       themePreference: settings.themePreference ?? 'system',
     })),
     saveMcpServers: vi.fn().mockImplementation(async (servers) => servers),
+    listAgentProviders: vi.fn().mockResolvedValue([agentProvider]),
+    saveAgentProviderCredential: vi.fn().mockResolvedValue({
+      providerId: 'openai-default',
+      model: 'gpt-4.1-mini',
+      baseUrl: 'https://api.openai.com/v1',
+      maskedCredential: 'sk-...test',
+      updatedAt: '2026-06-15T00:03:00.000Z',
+    }),
+    runKnowledgeReview: vi.fn().mockImplementation(async (input) => {
+      const createdAt = '2026-06-15T00:04:00.000Z'
+      const review = {
+        id: 'agent-review-1',
+        requestId: 'agent-request-1',
+        runId: input.runId,
+        nodeId: input.nodeId,
+        projectId: input.projectId,
+        runtime: input.runtime,
+        providerId: input.providerId ?? 'fake-knowledge-review',
+        model: 'fake',
+        conclusion: 'Knowledge review completed for the selected gate.',
+        summary: 'Reviewed knowledge references and found one advisory.',
+        risks: ['Gate requires reviewer evidence before approval.'],
+        missingEvidence: ['Attach passing local test evidence before final approval.'],
+        suggestedTests: ['Run the local test command and archive redacted evidence.'],
+        knowledgeReferences: [],
+        confidence: 0.82,
+        gateAdvisory: {
+          id: 'gate-advisory-1',
+          runId: input.runId,
+          nodeId: input.nodeId,
+          level: 'warn' as const,
+          blocksApproval: false,
+          summary: '1 evidence gap needs reviewer attention.',
+          missingEvidence: ['Attach passing local test evidence before final approval.'],
+          riskCount: 1,
+          createdAt,
+        },
+        createdAt,
+      }
+      const trace = {
+        id: 'agent-trace-1',
+        runId: input.runId,
+        nodeId: input.nodeId,
+        reviewId: review.id,
+        runtime: input.runtime,
+        createdAt,
+        steps: [
+          {
+            id: 'agent-trace-step-1',
+            kind: 'context' as const,
+            label: 'Build redacted context',
+            summary: 'Prepared review context.',
+            timestamp: createdAt,
+          },
+        ],
+      }
+      const tokenUsage = {
+        id: 'agent-token-usage-1',
+        runId: input.runId,
+        nodeId: input.nodeId,
+        userId: input.requestedBy,
+        projectId: input.projectId,
+        provider: 'local' as const,
+        model: 'fake',
+        inputTokens: 128,
+        outputTokens: 72,
+        cacheReadTokens: 0,
+        costUsd: 0,
+        timestamp: createdAt,
+        source: 'estimated' as const,
+      }
+
+      return {
+        review,
+        trace,
+        tokenUsage,
+        state: {
+          projects: [localProject],
+          runs: fixtureRuns,
+          artifacts: [],
+          events: [],
+          testEvidence: [],
+          settings: { themePreference: 'system' },
+          mcpServers: [],
+          agentReviews: [review],
+          agentTraces: [trace],
+          agentTokenUsage: [tokenUsage],
+        },
+      }
+    }),
+    listAgentReviews: vi.fn().mockResolvedValue([]),
     ...overrides,
   }
 
@@ -210,6 +316,9 @@ describe('App', () => {
         testEvidence: [],
         settings: { themePreference: 'system' },
         mcpServers: [],
+        agentReviews: [],
+        agentTraces: [],
+        agentTokenUsage: [],
       }),
     })
     render(<App />)
@@ -378,6 +487,25 @@ describe('App', () => {
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('lexical')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent(/kh-[a-f0-9]{8}/)
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('art-design')
+  })
+
+  it('runs Knowledge Review Agent from the inspector and shows trace and advisory', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+
+    await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /Agent Review/ }))
+
+    await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
+      runId: fixtureRuns[0]!.id,
+      nodeId: fixtureRuns[0]!.currentNodeId,
+      runtime: 'electron',
+      providerId: 'fake-knowledge-review',
+    })))
+    expect(await screen.findByTestId('agent-workbench')).toHaveTextContent('Knowledge Review Agent')
+    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('warning-only')
+    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Build redacted context')
+    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('estimated')
   })
 
   it('selects a local project, saves an editable test command, and archives local test evidence', async () => {

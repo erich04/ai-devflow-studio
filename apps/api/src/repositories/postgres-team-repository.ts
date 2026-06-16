@@ -3,6 +3,10 @@ import {
   rollupTokenUsage,
   type AgentEvent,
   type AgentEventKind,
+  type AgentProviderConfig,
+  type AgentReviewResult,
+  type AgentTokenUsage,
+  type AgentTrace,
   type Artifact,
   type ArtifactKind,
   type McpServerDefinition,
@@ -10,6 +14,7 @@ import {
   type NodeStage,
   type NodeStatus,
   type Project,
+  type ProviderCredentialMetadata,
   type RemoteTestEvidenceSummary,
   type RequiredGateRole,
   type Role,
@@ -18,12 +23,15 @@ import {
   type SkillDefinition,
   type TeamMember,
   type TokenUsage,
+  type TokenUsageSource,
   type WorkflowEdge,
   type WorkflowNode,
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import type { TeamDbClient } from '../db/client'
 import type {
+  AgentProviderCredentialRecord,
+  AgentReviewBundle,
   RunsBundle,
   TeamOverviewPayload,
   TeamRepository,
@@ -155,6 +163,49 @@ type TestEvidenceSummaryRow = {
   summary: string
   redacted: boolean
   created_at: TimestampValue
+}
+
+type AgentProviderCredentialRow = {
+  provider_id: string
+  model: string
+  base_url: string | null
+  masked_credential: string
+  encrypted_secret: string
+  updated_at: TimestampValue
+}
+
+type AgentReviewRow = {
+  id: string
+  request_id: string
+  run_id: string
+  node_id: string
+  project_id: string
+  runtime: AgentReviewResult['runtime']
+  provider_id: string
+  model: string
+  conclusion: string
+  summary: string
+  risks: unknown
+  missing_evidence: unknown
+  suggested_tests: unknown
+  knowledge_references: unknown
+  confidence: string | number
+  gate_advisory: unknown
+  created_at: TimestampValue
+}
+
+type AgentTraceRow = {
+  id: string
+  run_id: string
+  node_id: string
+  review_id: string
+  runtime: AgentTrace['runtime']
+  steps: unknown
+  created_at: TimestampValue
+}
+
+type AgentTokenUsageRow = TokenUsageRow & {
+  source: TokenUsageSource
 }
 
 function timestamp(value: TimestampValue): string {
@@ -317,6 +368,79 @@ function mapTestEvidenceSummary(row: TestEvidenceSummaryRow): RemoteTestEvidence
   }
 }
 
+function readArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : []
+}
+
+function mapProviderCredential(row: AgentProviderCredentialRow): AgentProviderCredentialRecord {
+  const metadata: ProviderCredentialMetadata = {
+    providerId: row.provider_id,
+    model: row.model,
+    ...(row.base_url ? { baseUrl: row.base_url } : {}),
+    maskedCredential: row.masked_credential,
+    updatedAt: timestamp(row.updated_at),
+  }
+
+  return {
+    metadata,
+    encryptedSecret: row.encrypted_secret,
+  }
+}
+
+function mapProviderConfig(row: AgentProviderCredentialRow): AgentProviderConfig {
+  return {
+    id: row.provider_id,
+    name: row.provider_id === 'openai-default' ? 'OpenAI Compatible' : row.provider_id,
+    kind: 'openai-compatible',
+    ...(row.base_url ? { baseUrl: row.base_url } : {}),
+    model: row.model,
+    enabled: true,
+    maskedCredential: row.masked_credential,
+    updatedAt: timestamp(row.updated_at),
+  }
+}
+
+function mapAgentReview(row: AgentReviewRow): AgentReviewResult {
+  return {
+    id: row.id,
+    requestId: row.request_id,
+    runId: row.run_id,
+    nodeId: row.node_id,
+    projectId: row.project_id,
+    runtime: row.runtime,
+    providerId: row.provider_id,
+    model: row.model,
+    conclusion: row.conclusion,
+    summary: row.summary,
+    risks: readArray<string>(row.risks),
+    missingEvidence: readArray<string>(row.missing_evidence),
+    suggestedTests: readArray<string>(row.suggested_tests),
+    knowledgeReferences: readArray(row.knowledge_references),
+    confidence: Number(row.confidence),
+    gateAdvisory: row.gate_advisory as AgentReviewResult['gateAdvisory'],
+    createdAt: timestamp(row.created_at),
+  }
+}
+
+function mapAgentTrace(row: AgentTraceRow): AgentTrace {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    nodeId: row.node_id,
+    reviewId: row.review_id,
+    runtime: row.runtime,
+    steps: readArray(row.steps),
+    createdAt: timestamp(row.created_at),
+  }
+}
+
+function mapAgentTokenUsage(row: AgentTokenUsageRow): AgentTokenUsage {
+  return {
+    ...mapTokenUsage(row),
+    source: row.source,
+  }
+}
+
 function mapSkill(row: SkillRow): SkillDefinition {
   return {
     id: row.id,
@@ -405,13 +529,29 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
     },
 
     async getTeamOverview(): Promise<TeamOverviewPayload> {
-      const [projectRows, memberRows, runsBundle, tokenRows, evidenceRows] = await Promise.all([
+      const [
+        projectRows,
+        memberRows,
+        runsBundle,
+        tokenRows,
+        evidenceRows,
+        agentReviewRows,
+        agentTraceRows,
+        agentTokenRows,
+        providerRows,
+      ] = await Promise.all([
         db.query<ProjectRow>('SELECT * FROM projects ORDER BY name ASC'),
         db.query<UserRow>('SELECT * FROM users ORDER BY name ASC'),
         loadRunsBundle(),
         db.query<TokenUsageRow>('SELECT * FROM token_usage ORDER BY timestamp DESC'),
         db.query<TestEvidenceSummaryRow>(
           'SELECT * FROM test_evidence_summaries ORDER BY created_at DESC',
+        ),
+        db.query<AgentReviewRow>('SELECT * FROM agent_reviews ORDER BY created_at DESC'),
+        db.query<AgentTraceRow>('SELECT * FROM agent_traces ORDER BY created_at DESC'),
+        db.query<AgentTokenUsageRow>('SELECT * FROM agent_token_usage ORDER BY timestamp DESC'),
+        db.query<AgentProviderCredentialRow>(
+          'SELECT * FROM agent_provider_credentials ORDER BY updated_at DESC',
         ),
       ])
       const tokenUsage = tokenRows.map(mapTokenUsage)
@@ -424,6 +564,20 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         memberCost: rollupTokenUsage(tokenUsage, 'userId'),
         totalCost: formatUsd(tokenUsage.reduce((sum, row) => sum + row.costUsd, 0)),
         testEvidenceSummaries: evidenceRows.map(mapTestEvidenceSummary),
+        agentReviews: agentReviewRows.map(mapAgentReview),
+        agentTraces: agentTraceRows.map(mapAgentTrace),
+        agentTokenUsage: agentTokenRows.map(mapAgentTokenUsage),
+        agentProviders: [
+          {
+            id: 'fake-knowledge-review',
+            name: 'Deterministic Fake Provider',
+            kind: 'fake',
+            model: 'fake',
+            enabled: true,
+            updatedAt: new Date(0).toISOString(),
+          },
+          ...providerRows.map(mapProviderConfig),
+        ],
       }
     },
 
@@ -605,6 +759,464 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         syncedAt: new Date().toISOString(),
         message: 'test evidence summary written to Postgres repository',
       }
+    },
+
+    async uploadAgentReviewSummary(summary, context) {
+      const syncedNodeId = remoteNodeId(summary.runId, summary.nodeId)
+
+      await db.query(
+        `
+          INSERT INTO workflow_runs (
+            id,
+            organization_id,
+            project_id,
+            creator_id,
+            data_origin,
+            title,
+            request,
+            status,
+            current_node_id,
+            branch_name,
+            pull_request_url,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, 'remote', $5, $6, 'paused_at_gate', $7, $8, NULL, $9, $9)
+          ON CONFLICT (id) DO UPDATE
+          SET current_node_id = excluded.current_node_id,
+              updated_at = excluded.updated_at
+        `,
+        [
+          summary.runId,
+          context.organizationId,
+          summary.projectId,
+          context.userId,
+          'Synced agent review',
+          'Redacted Knowledge Review Agent summary synced from DevFlow Electron.',
+          syncedNodeId,
+          `sync/${summary.runId}`,
+          summary.createdAt,
+        ],
+      )
+      await db.query(
+        `
+          INSERT INTO workflow_nodes (
+            id,
+            run_id,
+            stage,
+            title,
+            subtitle,
+            kind,
+            status,
+            owner_id,
+            required_role,
+            retry_count,
+            token_usage_id,
+            position,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, 'design', 'Knowledge Review Target', $3, 'gate', 'blocked', $4, 'lead', 0, NULL, 998, $5, $5)
+          ON CONFLICT (id) DO UPDATE
+          SET subtitle = excluded.subtitle,
+              updated_at = excluded.updated_at
+        `,
+        [
+          syncedNodeId,
+          summary.runId,
+          summary.conclusion,
+          context.userId,
+          summary.createdAt,
+        ],
+      )
+      await db.query(
+        `
+          INSERT INTO agent_reviews (
+            id,
+            organization_id,
+            request_id,
+            run_id,
+            node_id,
+            project_id,
+            runtime,
+            provider_id,
+            model,
+            conclusion,
+            summary,
+            risks,
+            missing_evidence,
+            suggested_tests,
+            knowledge_references,
+            confidence,
+            gate_advisory,
+            created_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, '[]'::jsonb, '[]'::jsonb, $14, $15::jsonb, $16)
+          ON CONFLICT (id) DO UPDATE
+          SET conclusion = excluded.conclusion,
+              summary = excluded.summary,
+              risks = excluded.risks,
+              missing_evidence = excluded.missing_evidence,
+              confidence = excluded.confidence,
+              gate_advisory = excluded.gate_advisory
+        `,
+        [
+          summary.id,
+          context.organizationId,
+          `remote-summary-${summary.id}`,
+          summary.runId,
+          syncedNodeId,
+          summary.projectId,
+          summary.runtime,
+          summary.providerId,
+          summary.model,
+          summary.conclusion,
+          summary.summary,
+          JSON.stringify(Array.from({ length: summary.riskCount }, (_, index) => `Remote summary risk ${index + 1}`)),
+          JSON.stringify(
+            Array.from(
+              { length: summary.missingEvidenceCount },
+              (_, index) => `Remote summary missing evidence ${index + 1}`,
+            ),
+          ),
+          summary.confidence,
+          JSON.stringify({
+            id: `gate-advisory-${summary.id}`,
+            runId: summary.runId,
+            nodeId: syncedNodeId,
+            level: summary.advisoryLevel,
+            blocksApproval: summary.blocksApproval,
+            summary: summary.summary,
+            missingEvidence: [],
+            riskCount: summary.riskCount,
+            createdAt: summary.createdAt,
+          }),
+          summary.createdAt,
+        ],
+      )
+
+      return {
+        accepted: true,
+        syncedAt: new Date().toISOString(),
+        message: 'agent review summary written to Postgres repository',
+      }
+    },
+
+    async listAgentProviders() {
+      const rows = await db.query<AgentProviderCredentialRow>(
+        'SELECT * FROM agent_provider_credentials ORDER BY updated_at DESC',
+      )
+
+      return [
+        {
+          id: 'fake-knowledge-review',
+          name: 'Deterministic Fake Provider',
+          kind: 'fake',
+          model: 'fake',
+          enabled: true,
+          updatedAt: new Date(0).toISOString(),
+        },
+        ...rows.map(mapProviderConfig),
+      ]
+    },
+
+    async saveAgentProviderCredential(metadata, encryptedSecret, context) {
+      await db.query(
+        `
+          INSERT INTO agent_provider_credentials (
+            organization_id,
+            provider_id,
+            model,
+            base_url,
+            masked_credential,
+            encrypted_secret,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT (organization_id, provider_id) DO UPDATE
+          SET model = excluded.model,
+              base_url = excluded.base_url,
+              masked_credential = excluded.masked_credential,
+              encrypted_secret = excluded.encrypted_secret,
+              updated_at = excluded.updated_at
+        `,
+        [
+          context.organizationId,
+          metadata.providerId,
+          metadata.model,
+          metadata.baseUrl ?? null,
+          metadata.maskedCredential,
+          encryptedSecret,
+          metadata.updatedAt,
+        ],
+      )
+
+      return metadata
+    },
+
+    async getAgentProviderCredential(providerId, context) {
+      const rows = await db.query<AgentProviderCredentialRow>(
+        `
+          SELECT *
+          FROM agent_provider_credentials
+          WHERE organization_id = $1 AND provider_id = $2
+          LIMIT 1
+        `,
+        [context.organizationId, providerId],
+      )
+
+      return rows[0] ? mapProviderCredential(rows[0]) : null
+    },
+
+    async saveAgentReviewBundle(bundle: AgentReviewBundle, context: TeamRepositorySyncContext) {
+      await db.query(
+        `
+          INSERT INTO artifacts (
+            id,
+            run_id,
+            node_id,
+            kind,
+            title,
+            summary,
+            content,
+            redacted,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          ON CONFLICT (id) DO UPDATE
+          SET title = excluded.title,
+              summary = excluded.summary,
+              content = excluded.content,
+              redacted = excluded.redacted,
+              updated_at = excluded.updated_at
+        `,
+        [
+          bundle.artifact.id,
+          bundle.artifact.runId,
+          bundle.artifact.nodeId,
+          bundle.artifact.kind,
+          bundle.artifact.title,
+          bundle.artifact.summary,
+          bundle.artifact.content,
+          bundle.artifact.redacted,
+          bundle.artifact.updatedAt,
+        ],
+      )
+      await db.query(
+        `
+          INSERT INTO agent_events (
+            id,
+            run_id,
+            node_id,
+            sequence,
+            kind,
+            message,
+            timestamp
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT (run_id, sequence) DO UPDATE
+          SET id = excluded.id,
+              node_id = excluded.node_id,
+              kind = excluded.kind,
+              message = excluded.message,
+              timestamp = excluded.timestamp
+        `,
+        [
+          bundle.event.id,
+          bundle.event.runId,
+          bundle.event.nodeId ?? null,
+          bundle.event.sequence,
+          bundle.event.kind,
+          bundle.event.message,
+          bundle.event.timestamp,
+        ],
+      )
+      await db.query(
+        `
+          INSERT INTO agent_reviews (
+            id,
+            organization_id,
+            request_id,
+            run_id,
+            node_id,
+            project_id,
+            runtime,
+            provider_id,
+            model,
+            conclusion,
+            summary,
+            risks,
+            missing_evidence,
+            suggested_tests,
+            knowledge_references,
+            confidence,
+            gate_advisory,
+            created_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17::jsonb, $18)
+          ON CONFLICT (id) DO UPDATE
+          SET conclusion = excluded.conclusion,
+              summary = excluded.summary,
+              risks = excluded.risks,
+              missing_evidence = excluded.missing_evidence,
+              suggested_tests = excluded.suggested_tests,
+              knowledge_references = excluded.knowledge_references,
+              confidence = excluded.confidence,
+              gate_advisory = excluded.gate_advisory
+        `,
+        [
+          bundle.review.id,
+          context.organizationId,
+          bundle.review.requestId,
+          bundle.review.runId,
+          bundle.review.nodeId,
+          bundle.review.projectId,
+          bundle.review.runtime,
+          bundle.review.providerId,
+          bundle.review.model,
+          bundle.review.conclusion,
+          bundle.review.summary,
+          JSON.stringify(bundle.review.risks),
+          JSON.stringify(bundle.review.missingEvidence),
+          JSON.stringify(bundle.review.suggestedTests),
+          JSON.stringify(bundle.review.knowledgeReferences),
+          bundle.review.confidence,
+          JSON.stringify(bundle.review.gateAdvisory),
+          bundle.review.createdAt,
+        ],
+      )
+      await db.query(
+        `
+          INSERT INTO agent_traces (
+            id,
+            organization_id,
+            run_id,
+            node_id,
+            review_id,
+            runtime,
+            steps,
+            created_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+          ON CONFLICT (id) DO UPDATE
+          SET steps = excluded.steps,
+              created_at = excluded.created_at
+        `,
+        [
+          bundle.trace.id,
+          context.organizationId,
+          bundle.trace.runId,
+          bundle.trace.nodeId,
+          bundle.trace.reviewId,
+          bundle.trace.runtime,
+          JSON.stringify(bundle.trace.steps),
+          bundle.trace.createdAt,
+        ],
+      )
+      await db.query(
+        `
+          INSERT INTO agent_token_usage (
+            id,
+            organization_id,
+            run_id,
+            node_id,
+            user_id,
+            project_id,
+            provider,
+            model,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cost_usd,
+            timestamp,
+            source
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          ON CONFLICT (id) DO UPDATE
+          SET input_tokens = excluded.input_tokens,
+              output_tokens = excluded.output_tokens,
+              cache_read_tokens = excluded.cache_read_tokens,
+              cost_usd = excluded.cost_usd,
+              timestamp = excluded.timestamp,
+              source = excluded.source
+        `,
+        [
+          bundle.tokenUsage.id,
+          context.organizationId,
+          bundle.tokenUsage.runId,
+          bundle.tokenUsage.nodeId,
+          bundle.tokenUsage.userId,
+          bundle.tokenUsage.projectId,
+          bundle.tokenUsage.provider,
+          bundle.tokenUsage.model,
+          bundle.tokenUsage.inputTokens,
+          bundle.tokenUsage.outputTokens,
+          bundle.tokenUsage.cacheReadTokens,
+          bundle.tokenUsage.costUsd,
+          bundle.tokenUsage.timestamp,
+          bundle.tokenUsage.source,
+        ],
+      )
+      await db.query(
+        `
+          INSERT INTO token_usage (
+            id,
+            run_id,
+            node_id,
+            user_id,
+            project_id,
+            provider,
+            model,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cost_usd,
+            timestamp
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          ON CONFLICT (id) DO UPDATE
+          SET input_tokens = excluded.input_tokens,
+              output_tokens = excluded.output_tokens,
+              cache_read_tokens = excluded.cache_read_tokens,
+              cost_usd = excluded.cost_usd,
+              timestamp = excluded.timestamp
+        `,
+        [
+          bundle.tokenUsage.id,
+          bundle.tokenUsage.runId,
+          bundle.tokenUsage.nodeId,
+          bundle.tokenUsage.userId,
+          bundle.tokenUsage.projectId,
+          bundle.tokenUsage.provider,
+          bundle.tokenUsage.model,
+          bundle.tokenUsage.inputTokens,
+          bundle.tokenUsage.outputTokens,
+          bundle.tokenUsage.cacheReadTokens,
+          bundle.tokenUsage.costUsd,
+          bundle.tokenUsage.timestamp,
+        ],
+      )
+
+      return {
+        review: bundle.review,
+        trace: bundle.trace,
+        tokenUsage: bundle.tokenUsage,
+      }
+    },
+
+    async listAgentReviews(input, context) {
+      const rows = await db.query<AgentReviewRow>(
+        `
+          SELECT *
+          FROM agent_reviews
+          WHERE organization_id = $1
+            AND ($2::text IS NULL OR run_id = $2)
+          ORDER BY created_at DESC
+        `,
+        [context.organizationId, input.runId ?? null],
+      )
+
+      return rows.map(mapAgentReview)
     },
   }
 }

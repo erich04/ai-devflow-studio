@@ -18,6 +18,11 @@ const desktopApi: DevFlowDesktopApi = {
   saveEvent: (event) => ipcRenderer.invoke(ipcChannels.saveEvent, event),
   saveSettings: (settings) => ipcRenderer.invoke(ipcChannels.saveSettings, settings),
   saveMcpServers: (servers) => ipcRenderer.invoke(ipcChannels.saveMcpServers, servers),
+  listAgentProviders: () => ipcRenderer.invoke(ipcChannels.listAgentProviders),
+  saveAgentProviderCredential: (input) =>
+    ipcRenderer.invoke(ipcChannels.saveAgentProviderCredential, input),
+  runKnowledgeReview: (input) => ipcRenderer.invoke(ipcChannels.runKnowledgeReview, input),
+  listAgentReviews: (input) => ipcRenderer.invoke(ipcChannels.listAgentReviews, input),
 }
 
 contextBridge.exposeInMainWorld('aiDevFlowDesktop', desktopApi)

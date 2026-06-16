@@ -1,10 +1,14 @@
 import type {
   AgentEvent,
+  AgentProviderConfig,
+  AgentReviewResult,
+  AgentReviewExecutionResult,
   CommandSafetyResult,
   LocalExecutionState,
   LocalSettings,
   LocalProject,
   McpServerDefinition,
+  ProviderCredentialMetadata,
   RemoteRunSummary,
   RemoteSyncUploadResult,
   RemoteTeamSnapshot,
@@ -32,6 +36,26 @@ export type RunProjectTestsResult = {
   state: LocalExecutionState
 }
 
+export type AgentProviderCredentialInput = {
+  providerId: string
+  apiKey: string
+  model: string
+  baseUrl?: string
+}
+
+export type RunKnowledgeReviewInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+  requestedBy: string
+  runtime: 'electron' | 'api'
+  providerId?: string
+}
+
+export type RunKnowledgeReviewResult = AgentReviewExecutionResult & {
+  state: LocalExecutionState
+}
+
 export type LoadRemoteSnapshotInput = {
   organizationId?: string
 }
@@ -53,6 +77,10 @@ export type DevFlowDesktopApi = {
   saveEvent: (event: AgentEvent) => Promise<AgentEvent>
   saveSettings: (settings: Partial<LocalSettings>) => Promise<LocalSettings>
   saveMcpServers: (servers: McpServerDefinition[]) => Promise<McpServerDefinition[]>
+  listAgentProviders: () => Promise<AgentProviderConfig[]>
+  saveAgentProviderCredential: (input: AgentProviderCredentialInput) => Promise<ProviderCredentialMetadata>
+  runKnowledgeReview: (input: RunKnowledgeReviewInput) => Promise<RunKnowledgeReviewResult>
+  listAgentReviews: (input?: { runId?: string }) => Promise<AgentReviewResult[]>
 }
 
 declare global {

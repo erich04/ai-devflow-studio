@@ -23,6 +23,9 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
         testEvidence: [],
         settings: { themePreference: 'system' },
         mcpServers: [],
+        agentReviews: [],
+        agentTraces: [],
+        agentTokenUsage: [],
       }),
       loadRemoteSnapshot: async () => ({
         projects: [],
@@ -130,6 +133,123 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
             testEvidence: [evidence],
             settings: { themePreference: 'system' },
             mcpServers: [],
+            agentReviews: [],
+            agentTraces: [],
+            agentTokenUsage: [],
+          },
+        }
+      },
+      listAgentProviders: async () => [
+        {
+          id: 'fake-knowledge-review',
+          name: 'Deterministic Fake Provider',
+          kind: 'fake',
+          model: 'fake',
+          enabled: true,
+          updatedAt: '1970-01-01T00:00:00.000Z',
+        },
+      ],
+      saveAgentProviderCredential: async () => ({
+        providerId: 'openai-default',
+        model: 'gpt-4.1-mini',
+        baseUrl: 'https://api.openai.com/v1',
+        maskedCredential: 'sk-...test',
+        updatedAt: '2026-06-15T00:03:00.000Z',
+      }),
+      listAgentReviews: async () => [],
+      runKnowledgeReview: async ({
+        runId,
+        nodeId,
+        projectId,
+        requestedBy,
+        runtime,
+        providerId,
+      }: {
+        runId: string
+        nodeId: string
+        projectId: string
+        requestedBy: string
+        runtime: 'electron' | 'api'
+        providerId?: string
+      }) => {
+        const createdAt = '2026-06-15T00:04:00.000Z'
+        const review = {
+          id: 'agent-review-1',
+          requestId: 'agent-request-1',
+          runId,
+          nodeId,
+          projectId,
+          runtime,
+          providerId: providerId ?? 'fake-knowledge-review',
+          model: 'fake',
+          conclusion: 'Knowledge review completed for this node.',
+          summary: 'Reviewed knowledge references and generated warning-only advisory.',
+          risks: ['Gate requires reviewer evidence before approval.'],
+          missingEvidence: ['Attach passing local test evidence before final approval.'],
+          suggestedTests: ['Run the local test command and archive redacted evidence.'],
+          knowledgeReferences: [],
+          confidence: 0.82,
+          gateAdvisory: {
+            id: 'gate-advisory-1',
+            runId,
+            nodeId,
+            level: 'warn',
+            blocksApproval: false,
+            summary: '1 evidence gap needs reviewer attention.',
+            missingEvidence: ['Attach passing local test evidence before final approval.'],
+            riskCount: 1,
+            createdAt,
+          },
+          createdAt,
+        }
+        const trace = {
+          id: 'agent-trace-1',
+          runId,
+          nodeId,
+          reviewId: review.id,
+          runtime,
+          createdAt,
+          steps: [
+            {
+              id: 'agent-trace-step-1',
+              kind: 'context',
+              label: 'Build redacted context',
+              summary: 'Prepared review context.',
+              timestamp: createdAt,
+            },
+          ],
+        }
+        const tokenUsage = {
+          id: 'agent-token-usage-1',
+          runId,
+          nodeId,
+          userId: requestedBy,
+          projectId,
+          provider: 'local',
+          model: 'fake',
+          inputTokens: 128,
+          outputTokens: 72,
+          cacheReadTokens: 0,
+          costUsd: 0,
+          timestamp: createdAt,
+          source: 'estimated',
+        }
+
+        return {
+          review,
+          trace,
+          tokenUsage,
+          state: {
+            projects: [localProject],
+            runs: [],
+            artifacts: [],
+            events: [],
+            testEvidence: [],
+            settings: { themePreference: 'system' },
+            mcpServers: [],
+            agentReviews: [review],
+            agentTraces: [trace],
+            agentTokenUsage: [tokenUsage],
           },
         }
       },
@@ -192,6 +312,14 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('knowledge-view')).toContainText('artifact')
     await expect(page.getByTestId('knowledge-view')).toContainText('lexical')
     await expect(page.getByTestId('knowledge-view')).toContainText(/kh-[a-f0-9]{8}/)
+
+    await page.getByRole('button', { name: /^Agents$/ }).click()
+    await expect(page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
+    await expect(page.getByTestId('agent-workbench')).toContainText('Deterministic Fake Provider')
+    await page.getByRole('button', { name: /Run Knowledge Review/ }).click()
+    await expect(page.getByTestId('toast')).toContainText('Knowledge Review 已归档')
+    await expect(page.getByTestId('agent-workbench')).toContainText('warning-only')
+    await expect(page.getByTestId('agent-workbench')).toContainText('Build redacted context')
 
     await page.getByRole('button', { name: /^Skills$/ }).click()
     await expect(page.getByTestId('skill-view')).toContainText('团队能力目录')

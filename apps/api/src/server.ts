@@ -74,6 +74,7 @@ const server = createServer(async (request, response) => {
     route = await resolveTeamRoute(request.method ?? 'GET', url.pathname, repository, {
       body: requestBody,
       session,
+      searchParams: url.searchParams,
     })
   } catch (error) {
     sendJson(response, 500, {

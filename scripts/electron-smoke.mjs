@@ -192,6 +192,18 @@ try {
   await expect(first.page.getByTestId('toast')).toContainText('架构 Gate 已通过')
   await expect(first.page.getByTestId('node-inspector')).toContainText('approval')
 
+  await first.page.getByRole('button', { name: /Agent Review/ }).click()
+  await expect(first.page.getByTestId('toast')).toContainText('Knowledge Review 已归档', {
+    timeout: 20_000,
+  })
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('warning-only')
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('Build redacted context')
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('provider_reported')
+  await first.page.getByRole('button', { name: /工作台/ }).click()
+  await expect(first.page.getByTestId('node-inspector')).toContainText('Knowledge Review Agent')
+  await expect(first.page.getByTestId('node-inspector')).toContainText('warning-only')
+
   await first.page.getByRole('button', { name: /执行测试/ }).click()
   await expect(first.page.getByTestId('toast')).toContainText('测试通过，证据已归档', {
     timeout: 20_000,
@@ -231,6 +243,10 @@ try {
   await expect(second.page.locator('html')).toHaveAttribute('data-theme-preference', 'light')
   await expect(second.page.getByText('重构 GitHub webhook 重试策略')).toBeVisible()
   await expect(second.page.getByTestId('node-inspector')).toContainText('approval')
+  await second.page.getByRole('button', { name: /^Agents$/ }).click()
+  await expect(second.page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
+  await expect(second.page.getByTestId('agent-workbench')).toContainText('warning-only')
+  await expect(second.page.getByTestId('agent-workbench')).toContainText('Build redacted context')
   await second.page.getByRole('button', { name: /^MCP$/ }).click()
   await expect(second.page.getByRole('button', { name: /Enable/ }).first()).toBeVisible()
   await second.page.getByRole('button', { name: /^测试$/ }).click()

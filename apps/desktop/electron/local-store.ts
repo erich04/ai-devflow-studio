@@ -5,16 +5,20 @@ import { createRequire } from 'node:module'
 import initSqlJs, { type Database, type SqlJsStatic, type SqlValue } from 'sql.js'
 import type {
   AgentEvent,
+  AgentReviewResult,
+  AgentTrace,
+  AgentTokenUsage,
   Artifact,
   LocalExecutionState,
   LocalProject,
   LocalSettings,
   McpServerDefinition,
+  ProviderCredentialMetadata,
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 2
+export const CURRENT_SCHEMA_VERSION = 3
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -44,6 +48,18 @@ export type LocalStore = {
   listEvents(runId?: string): Promise<AgentEvent[]>
   saveTestEvidence(evidence: TestEvidence): Promise<void>
   listTestEvidence(runId?: string): Promise<TestEvidence[]>
+  saveAgentReview(review: AgentReviewResult): Promise<void>
+  listAgentReviews(runId?: string): Promise<AgentReviewResult[]>
+  saveAgentTrace(trace: AgentTrace): Promise<void>
+  listAgentTraces(runId?: string): Promise<AgentTrace[]>
+  saveAgentTokenUsage(usage: AgentTokenUsage): Promise<void>
+  listAgentTokenUsage(runId?: string): Promise<AgentTokenUsage[]>
+  saveProviderCredential(
+    metadata: ProviderCredentialMetadata,
+    encryptedSecret: string,
+  ): Promise<ProviderCredentialMetadata>
+  listProviderCredentials(): Promise<ProviderCredentialMetadata[]>
+  getProviderEncryptedSecret(providerId: string): Promise<string | null>
   saveSettings(settings: Partial<LocalSettings>): Promise<LocalSettings>
   getSettings(): Promise<LocalSettings>
   saveMcpServers(servers: McpServerDefinition[]): Promise<McpServerDefinition[]>
@@ -96,6 +112,38 @@ function migrateSchema(db: Database) {
       project_id text not null,
       json text not null,
       created_at text not null
+    );
+
+    create table if not exists agent_reviews (
+      id text primary key,
+      run_id text not null,
+      node_id text not null,
+      json text not null,
+      created_at text not null
+    );
+
+    create table if not exists agent_traces (
+      id text primary key,
+      run_id text not null,
+      node_id text not null,
+      review_id text not null,
+      json text not null,
+      created_at text not null
+    );
+
+    create table if not exists agent_token_usage (
+      id text primary key,
+      run_id text not null,
+      node_id text not null,
+      json text not null,
+      timestamp text not null
+    );
+
+    create table if not exists provider_credentials (
+      provider_id text primary key,
+      json text not null,
+      encrypted_secret text not null,
+      updated_at text not null
     );
 
     create table if not exists local_settings (
@@ -272,6 +320,127 @@ class SqlJsLocalStore implements LocalStore {
     return selectJson<TestEvidence>(this.db, 'select json from test_evidence order by created_at asc')
   }
 
+  async saveAgentReview(review: AgentReviewResult): Promise<void> {
+    this.db.run(
+      `
+      insert into agent_reviews (id, run_id, node_id, json, created_at)
+      values (?, ?, ?, ?, ?)
+      on conflict(id) do update set json = excluded.json, created_at = excluded.created_at
+      `,
+      [review.id, review.runId, review.nodeId, JSON.stringify(review), review.createdAt],
+    )
+    await this.persist()
+  }
+
+  async listAgentReviews(runId?: string): Promise<AgentReviewResult[]> {
+    if (runId) {
+      return selectJson<AgentReviewResult>(
+        this.db,
+        'select json from agent_reviews where run_id = ? order by created_at desc',
+        [runId],
+      )
+    }
+
+    return selectJson<AgentReviewResult>(
+      this.db,
+      'select json from agent_reviews order by created_at desc',
+    )
+  }
+
+  async saveAgentTrace(trace: AgentTrace): Promise<void> {
+    this.db.run(
+      `
+      insert into agent_traces (id, run_id, node_id, review_id, json, created_at)
+      values (?, ?, ?, ?, ?, ?)
+      on conflict(id) do update set json = excluded.json, created_at = excluded.created_at
+      `,
+      [trace.id, trace.runId, trace.nodeId, trace.reviewId, JSON.stringify(trace), trace.createdAt],
+    )
+    await this.persist()
+  }
+
+  async listAgentTraces(runId?: string): Promise<AgentTrace[]> {
+    if (runId) {
+      return selectJson<AgentTrace>(
+        this.db,
+        'select json from agent_traces where run_id = ? order by created_at desc',
+        [runId],
+      )
+    }
+
+    return selectJson<AgentTrace>(
+      this.db,
+      'select json from agent_traces order by created_at desc',
+    )
+  }
+
+  async saveAgentTokenUsage(usage: AgentTokenUsage): Promise<void> {
+    this.db.run(
+      `
+      insert into agent_token_usage (id, run_id, node_id, json, timestamp)
+      values (?, ?, ?, ?, ?)
+      on conflict(id) do update set json = excluded.json, timestamp = excluded.timestamp
+      `,
+      [usage.id, usage.runId, usage.nodeId, JSON.stringify(usage), usage.timestamp],
+    )
+    await this.persist()
+  }
+
+  async listAgentTokenUsage(runId?: string): Promise<AgentTokenUsage[]> {
+    if (runId) {
+      return selectJson<AgentTokenUsage>(
+        this.db,
+        'select json from agent_token_usage where run_id = ? order by timestamp desc',
+        [runId],
+      )
+    }
+
+    return selectJson<AgentTokenUsage>(
+      this.db,
+      'select json from agent_token_usage order by timestamp desc',
+    )
+  }
+
+  async saveProviderCredential(
+    metadata: ProviderCredentialMetadata,
+    encryptedSecret: string,
+  ): Promise<ProviderCredentialMetadata> {
+    this.db.run(
+      `
+      insert into provider_credentials (provider_id, json, encrypted_secret, updated_at)
+      values (?, ?, ?, ?)
+      on conflict(provider_id) do update set
+        json = excluded.json,
+        encrypted_secret = excluded.encrypted_secret,
+        updated_at = excluded.updated_at
+      `,
+      [
+        metadata.providerId,
+        JSON.stringify(metadata),
+        encryptedSecret,
+        metadata.updatedAt,
+      ],
+    )
+    await this.persist()
+    return metadata
+  }
+
+  async listProviderCredentials(): Promise<ProviderCredentialMetadata[]> {
+    return selectJson<ProviderCredentialMetadata>(
+      this.db,
+      'select json from provider_credentials order by updated_at desc',
+    )
+  }
+
+  async getProviderEncryptedSecret(providerId: string): Promise<string | null> {
+    const result = this.db.exec(
+      'select encrypted_secret from provider_credentials where provider_id = ?',
+      [providerId],
+    )
+    const value = result[0]?.values[0]?.[0]
+    return typeof value === 'string' ? value : null
+  }
+
   async saveSettings(settings: Partial<LocalSettings>): Promise<LocalSettings> {
     const updated: LocalSettings = {
       ...(await this.getSettings()),
@@ -325,17 +494,42 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async loadState(): Promise<LocalExecutionState> {
-    const [projects, runs, artifacts, events, testEvidence, settings, mcpServers] = await Promise.all([
+    const [
+      projects,
+      runs,
+      artifacts,
+      events,
+      testEvidence,
+      agentReviews,
+      agentTraces,
+      agentTokenUsage,
+      settings,
+      mcpServers,
+    ] = await Promise.all([
       this.listProjects(),
       this.listRuns(),
       this.listArtifacts(),
       this.listEvents(),
       this.listTestEvidence(),
+      this.listAgentReviews(),
+      this.listAgentTraces(),
+      this.listAgentTokenUsage(),
       this.getSettings(),
       this.listMcpServers(),
     ])
 
-    return { projects, runs, artifacts, events, testEvidence, settings, mcpServers }
+    return {
+      projects,
+      runs,
+      artifacts,
+      events,
+      testEvidence,
+      agentReviews,
+      agentTraces,
+      agentTokenUsage,
+      settings,
+      mcpServers,
+    }
   }
 
   close(): void {

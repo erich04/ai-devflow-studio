@@ -6,6 +6,7 @@ import type { TeamOverviewResponse } from './lib/devflow-api'
 
 vi.mock('./lib/devflow-api', () => ({
   fetchTeamOverview: vi.fn(),
+  runKnowledgeReview: vi.fn(),
 }))
 
 const mockedFetchTeamOverview = vi.mocked(fetchTeamOverview)
@@ -43,7 +44,20 @@ const overview: TeamOverviewResponse = {
       branchName: 'ai/remote-run',
       createdAt: '2026-06-16T10:00:00.000Z',
       updatedAt: '2026-06-16T10:10:00.000Z',
-      nodes: [],
+      nodes: [
+        {
+          id: 'n-build',
+          stage: 'design',
+          title: 'Architecture Gate',
+          subtitle: 'Lead review',
+          kind: 'gate',
+          status: 'blocked',
+          ownerId: 'u-remote',
+          requiredRole: 'lead',
+          retryCount: 0,
+          artifactIds: [],
+        },
+      ],
       edges: [],
     },
   ],
@@ -74,6 +88,65 @@ const overview: TeamOverviewResponse = {
       createdAt: '2026-06-16T10:12:00.000Z',
     },
   ],
+  agentReviews: [
+    {
+      id: 'agent-review-remote',
+      requestId: 'request-remote',
+      runId: 'run-remote',
+      nodeId: 'n-build',
+      projectId: 'p-remote',
+      runtime: 'api',
+      providerId: 'fake-knowledge-review',
+      model: 'fake',
+      conclusion: 'Knowledge review completed.',
+      summary: 'Reviewed remote gate evidence.',
+      risks: [],
+      missingEvidence: [],
+      suggestedTests: ['Run remote smoke tests.'],
+      knowledgeReferences: [],
+      confidence: 0.8,
+      gateAdvisory: {
+        id: 'gate-advisory-remote',
+        runId: 'run-remote',
+        nodeId: 'n-build',
+        level: 'info',
+        blocksApproval: false,
+        summary: 'No blocking knowledge gaps found.',
+        missingEvidence: [],
+        riskCount: 0,
+        createdAt: '2026-06-16T10:14:00.000Z',
+      },
+      createdAt: '2026-06-16T10:14:00.000Z',
+    },
+  ],
+  agentTraces: [],
+  agentTokenUsage: [
+    {
+      id: 'agent-token-remote',
+      runId: 'run-remote',
+      nodeId: 'n-build',
+      userId: 'u-remote',
+      projectId: 'p-remote',
+      provider: 'local',
+      model: 'fake',
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheReadTokens: 0,
+      costUsd: 0,
+      timestamp: '2026-06-16T10:14:00.000Z',
+      source: 'estimated',
+    },
+  ],
+  agentProviders: [
+    {
+      id: 'fake-knowledge-review',
+      name: 'Deterministic Fake Provider',
+      kind: 'fake',
+      model: 'fake',
+      enabled: true,
+      updatedAt: '1970-01-01T00:00:00.000Z',
+    },
+  ],
 }
 
 afterEach(() => {
@@ -93,6 +166,9 @@ describe('web manager console page', () => {
     expect(screen.getByText('Remote run')).toBeInTheDocument()
     expect(screen.getByText('Remote tests passed.')).toBeInTheDocument()
     expect(screen.getByText('pnpm test')).toBeInTheDocument()
+    expect(screen.getByText('Knowledge review completed.')).toBeInTheDocument()
+    expect(screen.getByText('No blocking knowledge gaps found.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Run backend review/ })).toBeInTheDocument()
     expect(screen.getAllByText('$0.123')).toHaveLength(2)
     expect(mockedFetchTeamOverview).toHaveBeenCalled()
   })
@@ -106,6 +182,10 @@ describe('web manager console page', () => {
       memberCost: [],
       totalCost: '$0.000',
       testEvidenceSummaries: [],
+      agentReviews: [],
+      agentTraces: [],
+      agentTokenUsage: [],
+      agentProviders: [],
     })
 
     render(await Page())

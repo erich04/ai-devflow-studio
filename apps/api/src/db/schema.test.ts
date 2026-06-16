@@ -29,6 +29,10 @@ describe('team database schema', () => {
       'mcp_server_definitions',
       'skills',
       'token_usage',
+      'agent_provider_credentials',
+      'agent_reviews',
+      'agent_traces',
+      'agent_token_usage',
     ])
 
     expect(teamTableDefinitions.map((table) => table.name)).toEqual(requiredTeamTableNames)

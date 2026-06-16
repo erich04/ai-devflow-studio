@@ -6,7 +6,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import initSqlJs from 'sql.js'
 import type {
   AgentEvent,
+  AgentReviewResult,
+  AgentTrace,
+  AgentTokenUsage,
   Artifact,
+  GateAdvisory,
   LocalProject,
   McpServerDefinition,
   TestEvidence,
@@ -166,26 +170,92 @@ const mcpServer: McpServerDefinition = {
   lastAuditEvent: 'Disabled for smoke test',
 }
 
+const gateAdvisory: GateAdvisory = {
+  id: 'gate-advisory-review-1',
+  runId: 'run-1',
+  nodeId: 'node-test',
+  level: 'warn',
+  blocksApproval: false,
+  summary: 'Review has non-blocking evidence gaps.',
+  missingEvidence: ['Attach local test evidence.'],
+  riskCount: 1,
+  createdAt: '2026-06-15T00:02:00.000Z',
+}
+
+const agentReview: AgentReviewResult = {
+  id: 'agent-review-1',
+  requestId: 'request-1',
+  runId: 'run-1',
+  nodeId: 'node-test',
+  projectId: 'project-1',
+  runtime: 'electron',
+  providerId: 'fake-knowledge-review',
+  model: 'fake',
+  conclusion: 'Knowledge review completed.',
+  summary: 'Review has non-blocking evidence gaps.',
+  risks: ['Gate requires evidence.'],
+  missingEvidence: ['Attach local test evidence.'],
+  suggestedTests: ['Run pnpm test.'],
+  knowledgeReferences: [],
+  confidence: 0.82,
+  gateAdvisory,
+  createdAt: '2026-06-15T00:02:00.000Z',
+}
+
+const agentTrace: AgentTrace = {
+  id: 'agent-trace-1',
+  runId: 'run-1',
+  nodeId: 'node-test',
+  reviewId: 'agent-review-1',
+  runtime: 'electron',
+  createdAt: '2026-06-15T00:02:00.000Z',
+  steps: [
+    {
+      id: 'agent-trace-step-1',
+      kind: 'context',
+      label: 'Build redacted context',
+      summary: 'Context prepared.',
+      timestamp: '2026-06-15T00:02:00.000Z',
+    },
+  ],
+}
+
+const agentTokenUsage: AgentTokenUsage = {
+  id: 'agent-token-usage-1',
+  runId: 'run-1',
+  nodeId: 'node-test',
+  userId: 'user-1',
+  projectId: 'project-1',
+  provider: 'local',
+  model: 'fake',
+  inputTokens: 100,
+  outputTokens: 50,
+  cacheReadTokens: 0,
+  costUsd: 0,
+  timestamp: '2026-06-15T00:02:00.000Z',
+  source: 'provider_reported',
+}
+
 describe('createLocalStore', () => {
-  it('initializes schema version 2 and keeps it stable across reopen', async () => {
+  it('initializes schema version 3 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(2)
+    expect(await first.getSchemaVersion()).toBe(3)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(2)
+    expect(await second.getSchemaVersion()).toBe(3)
     second.close()
   })
 
-  it('migrates an existing v1 database to v2 without losing local projects or runs', async () => {
+  it('migrates an existing v1 database to v3 without losing local projects or runs', async () => {
     const dbPath = await tempDbPath()
     await writeLegacyV1Database(dbPath)
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(2)
+    expect(await store.getSchemaVersion()).toBe(3)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -235,6 +305,48 @@ describe('createLocalStore', () => {
       settings: { themePreference: 'dark' },
       mcpServers: [mcpServer],
     })
+    second.close()
+  })
+
+  it('persists local agent reviews, traces, and token usage across reopen', async () => {
+    const dbPath = await tempDbPath()
+
+    const first = await createLocalStore({ dbPath })
+    await first.saveAgentReview(agentReview)
+    await first.saveAgentTrace(agentTrace)
+    await first.saveAgentTokenUsage(agentTokenUsage)
+    first.close()
+
+    const second = await createLocalStore({ dbPath })
+    expect(await second.listAgentReviews('run-1')).toEqual([agentReview])
+    expect(await second.listAgentTraces('run-1')).toEqual([agentTrace])
+    expect(await second.listAgentTokenUsage('run-1')).toEqual([agentTokenUsage])
+    expect(await second.loadState()).toMatchObject({
+      agentReviews: [agentReview],
+      agentTraces: [agentTrace],
+      agentTokenUsage: [agentTokenUsage],
+    })
+    second.close()
+  })
+
+  it('persists provider credential metadata separately from encrypted secret', async () => {
+    const dbPath = await tempDbPath()
+    const metadata = {
+      providerId: 'openai-default',
+      model: 'gpt-4.1-mini',
+      baseUrl: 'https://api.openai.com/v1',
+      maskedCredential: 'sk-...cret',
+      updatedAt: '2026-06-15T00:03:00.000Z',
+    }
+
+    const first = await createLocalStore({ dbPath })
+    await first.saveProviderCredential(metadata, 'encrypted-secret-value')
+    first.close()
+
+    const second = await createLocalStore({ dbPath })
+    expect(await second.listProviderCredentials()).toEqual([metadata])
+    expect(await second.getProviderEncryptedSecret('openai-default')).toBe('encrypted-secret-value')
+    expect(JSON.stringify(await second.listProviderCredentials())).not.toContain('encrypted-secret-value')
     second.close()
   })
 })

@@ -15,6 +15,12 @@ describe('seed team repository', () => {
     expect(overview.memberCost.length).toBeGreaterThan(0)
     expect(overview.totalCost).toMatch(/^\$/)
     expect(overview.testEvidenceSummaries).toEqual([])
+    expect(overview.agentReviews).toEqual([])
+    expect(overview.agentTraces).toEqual([])
+    expect(overview.agentTokenUsage).toEqual([])
+    expect(overview.agentProviders).toEqual([
+      expect.objectContaining({ id: 'fake-knowledge-review', kind: 'fake' }),
+    ])
   })
 
   it('returns workflow runs with their artifacts and events', async () => {

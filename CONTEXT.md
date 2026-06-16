@@ -73,6 +73,35 @@ Document. References can cite, satisfy, require evidence for, or violate a stand
 A reviewer-facing summary of whether the currently selected workflow node has enough evidence for
 the standards that apply to it. v0.4 displays these checks; later versions can enforce them.
 
+## Agent Review Artifact
+
+A durable review report produced by the Knowledge Review Agent. It summarizes risks, missing
+evidence, suggested tests, referenced knowledge, model confidence, and the Gate Advisory produced
+for a selected Run/Node.
+
+## Agent Trace
+
+An auditable step record for an Agent Review, including context preparation, retrieval attachment,
+provider call, and artifact creation. Traces explain how the review was produced without exposing
+private local paths or raw command output.
+
+## Gate Advisory
+
+A warning-only recommendation shown to Gate reviewers after an Agent Review. In v0.5 it does not
+disable or block the human approval button by default.
+
+## Provider Credential
+
+The secret used by an Agent Provider. Electron stores provider secrets through the desktop
+credential boundary and only returns masked metadata to the renderer. The API stores encrypted
+secrets and also only returns masked metadata.
+
+## Agent Provider
+
+The runtime dependency that turns a redacted Agent Review context into structured review output.
+DevFlow supports a deterministic fake provider for tests and OpenAI-compatible providers for
+explicit live use.
+
 ## Token Usage
 
 The measured model usage for a Run, Node, member, project, or model provider.

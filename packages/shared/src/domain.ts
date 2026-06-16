@@ -25,6 +25,7 @@ export type ArtifactKind =
   | 'design'
   | 'diff'
   | 'test_report'
+  | 'agent_review'
   | 'log'
   | 'pr'
   | 'acceptance'
@@ -35,6 +36,7 @@ export type AgentEventKind =
   | 'tool_result'
   | 'file_change'
   | 'test_result'
+  | 'agent_review'
   | 'approval'
   | 'error'
   | 'sync'
@@ -146,6 +148,124 @@ export type TokenUsage = {
   cacheReadTokens: number
   costUsd: number
   timestamp: string
+}
+
+export type TokenUsageSource = 'provider_reported' | 'estimated'
+
+export type AgentTokenUsage = TokenUsage & {
+  source: TokenUsageSource
+}
+
+export type AgentProviderKind = 'openai-compatible' | 'fake'
+
+export type AgentProviderConfig = {
+  id: string
+  name: string
+  kind: AgentProviderKind
+  baseUrl?: string
+  model: string
+  enabled: boolean
+  maskedCredential?: string
+  updatedAt: string
+}
+
+export type ProviderCredentialMetadata = {
+  providerId: string
+  model: string
+  baseUrl?: string
+  maskedCredential: string
+  updatedAt: string
+}
+
+export type AgentProviderUsage = {
+  inputTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+}
+
+export type AgentReviewRuntime = 'electron' | 'api'
+
+export type AgentReviewRequest = {
+  id: string
+  runId: string
+  nodeId: string
+  projectId: string
+  requestedBy: string
+  runtime: AgentReviewRuntime
+  providerId?: string
+}
+
+export type AgentReviewContext = {
+  run: Pick<WorkflowRun, 'id' | 'title' | 'request' | 'projectId' | 'status' | 'branchName'>
+  node: Pick<WorkflowNode, 'id' | 'stage' | 'title' | 'subtitle' | 'kind' | 'status'>
+  artifacts: Array<Pick<Artifact, 'id' | 'kind' | 'title' | 'summary' | 'content' | 'redacted'>>
+  testEvidence: Array<
+    Pick<TestEvidence, 'id' | 'command' | 'status' | 'exitCode' | 'durationMs' | 'summary' | 'redacted'>
+  >
+  knowledgeReferences: KnowledgeReference[]
+  knowledgeChunks: Array<
+    Pick<KnowledgeChunk, 'id' | 'documentId' | 'sourcePath' | 'headingPath' | 'contentHash' | 'content'>
+  >
+}
+
+export type GateAdvisory = {
+  id: string
+  runId: string
+  nodeId: string
+  level: 'info' | 'warn' | 'block'
+  blocksApproval: boolean
+  summary: string
+  missingEvidence: string[]
+  riskCount: number
+  createdAt: string
+}
+
+export type AgentReviewResult = {
+  id: string
+  requestId: string
+  runId: string
+  nodeId: string
+  projectId: string
+  runtime: AgentReviewRuntime
+  providerId: string
+  model: string
+  conclusion: string
+  summary: string
+  risks: string[]
+  missingEvidence: string[]
+  suggestedTests: string[]
+  knowledgeReferences: KnowledgeReference[]
+  confidence: number
+  gateAdvisory: GateAdvisory
+  createdAt: string
+}
+
+export type AgentReviewExecutionResult = {
+  review: AgentReviewResult
+  trace: AgentTrace
+  tokenUsage: AgentTokenUsage
+}
+
+export type AgentTraceStep = {
+  id: string
+  kind: 'context' | 'retrieval' | 'provider_call' | 'artifact'
+  label: string
+  summary: string
+  timestamp: string
+}
+
+export type AgentTrace = {
+  id: string
+  runId: string
+  nodeId: string
+  reviewId: string
+  runtime: AgentReviewRuntime
+  steps: AgentTraceStep[]
+  createdAt: string
+}
+
+export type AgentReviewArtifact = Artifact & {
+  kind: 'agent_review'
 }
 
 export type WorkflowRun = {
@@ -369,6 +489,9 @@ export type LocalExecutionState = {
   artifacts: Artifact[]
   events: AgentEvent[]
   testEvidence: TestEvidence[]
+  agentReviews: AgentReviewResult[]
+  agentTraces: AgentTrace[]
+  agentTokenUsage: AgentTokenUsage[]
   settings: LocalSettings
   mcpServers: McpServerDefinition[]
 }
@@ -407,6 +530,25 @@ export type RemoteTestEvidenceSummary = {
   exitCode: number | null
   durationMs: number
   summary: string
+  redacted: boolean
+  createdAt: string
+}
+
+export type RemoteAgentReviewSummary = {
+  id: string
+  runId: string
+  nodeId: string
+  projectId: string
+  runtime: AgentReviewRuntime
+  providerId: string
+  model: string
+  conclusion: string
+  summary: string
+  riskCount: number
+  missingEvidenceCount: number
+  advisoryLevel: GateAdvisory['level']
+  blocksApproval: boolean
+  confidence: number
   redacted: boolean
   createdAt: string
 }

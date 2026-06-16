@@ -563,6 +563,10 @@ button:disabled {
 .artifact-card,
 .event-row,
 .governance-card,
+.agent-advisory,
+.agent-run-card,
+.agent-provider-card,
+.agent-review-card,
 .test-report {
   padding: 12px;
   border: 1px solid var(--border);
@@ -579,6 +583,10 @@ button:disabled {
 .node-summary p,
 .artifact-card p,
 .event-row p,
+.agent-advisory p,
+.agent-run-card p,
+.agent-provider-card p,
+.agent-review-card p,
 .page-side p,
 .test-report p {
   margin: 7px 0 0;
@@ -589,13 +597,14 @@ button:disabled {
 
 .inspector-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
 .artifact-list,
 .event-list,
-.governance-list {
+.governance-list,
+.agent-advisory-list {
   display: grid;
   gap: 8px;
 }
@@ -613,6 +622,22 @@ button:disabled {
 }
 
 .governance-card--violated {
+  border-left-color: var(--danger);
+}
+
+.agent-advisory {
+  border-left: 3px solid var(--accent-2);
+}
+
+.agent-advisory--info {
+  border-left-color: var(--blue);
+}
+
+.agent-advisory--warn {
+  border-left-color: var(--amber);
+}
+
+.agent-advisory--block {
   border-left-color: var(--danger);
 }
 
@@ -825,6 +850,109 @@ button:disabled {
   margin: 0;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.agent-run-card,
+.agent-provider-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px) auto;
+  gap: 14px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.agent-provider-card {
+  align-items: start;
+}
+
+.agent-run-card label,
+.agent-provider-card label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.agent-run-card select,
+.agent-provider-card input {
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: 0;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.agent-run-card select:focus,
+.agent-provider-card input:focus {
+  box-shadow: var(--focus-ring);
+}
+
+.agent-review-list,
+.trace-list {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-review-card {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-review-card ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.provider-row {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.provider-row div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.provider-row span,
+.trace-step span {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.provider-row code {
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.trace-step {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.trace-step p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .knowledge-map {

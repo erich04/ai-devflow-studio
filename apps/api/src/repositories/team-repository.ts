@@ -10,9 +10,16 @@ import {
   skills,
   tokenUsage,
   type AgentEvent,
+  type AgentProviderConfig,
+  type AgentReviewExecutionResult,
+  type AgentReviewResult,
+  type AgentTokenUsage,
+  type AgentTrace,
   type Artifact,
   type McpServerDefinition,
   type Project,
+  type ProviderCredentialMetadata,
+  type RemoteAgentReviewSummary,
   type RemoteRunSummary,
   type RemoteSyncUploadResult,
   type RemoteTestEvidenceSummary,
@@ -29,6 +36,16 @@ export type RunsBundle = {
   events: AgentEvent[]
 }
 
+export type AgentProviderCredentialRecord = {
+  metadata: ProviderCredentialMetadata
+  encryptedSecret: string
+}
+
+export type AgentReviewBundle = AgentReviewExecutionResult & {
+  artifact: Artifact
+  event: AgentEvent
+}
+
 export type TeamOverviewPayload = {
   projects: Project[]
   members: TeamMember[]
@@ -37,6 +54,10 @@ export type TeamOverviewPayload = {
   memberCost: TokenUsageRollup[]
   totalCost: string
   testEvidenceSummaries: RemoteTestEvidenceSummary[]
+  agentReviews: AgentReviewResult[]
+  agentTraces: AgentTrace[]
+  agentTokenUsage: AgentTokenUsage[]
+  agentProviders: AgentProviderConfig[]
 }
 
 export type TeamRepositorySyncContext = Pick<TeamSession, 'organizationId' | 'userId'>
@@ -54,11 +75,39 @@ export type TeamRepository = {
     summary: RemoteTestEvidenceSummary,
     context: TeamRepositorySyncContext,
   ): Promise<RemoteSyncUploadResult>
+  uploadAgentReviewSummary(
+    summary: RemoteAgentReviewSummary,
+    context: TeamRepositorySyncContext,
+  ): Promise<RemoteSyncUploadResult>
+  listAgentProviders(context: TeamRepositorySyncContext): Promise<AgentProviderConfig[]>
+  saveAgentProviderCredential(
+    metadata: ProviderCredentialMetadata,
+    encryptedSecret: string,
+    context: TeamRepositorySyncContext,
+  ): Promise<ProviderCredentialMetadata>
+  getAgentProviderCredential(
+    providerId: string,
+    context: TeamRepositorySyncContext,
+  ): Promise<AgentProviderCredentialRecord | null>
+  saveAgentReviewBundle(
+    bundle: AgentReviewBundle,
+    context: TeamRepositorySyncContext,
+  ): Promise<AgentReviewExecutionResult>
+  listAgentReviews(
+    input: { runId?: string },
+    context: TeamRepositorySyncContext,
+  ): Promise<AgentReviewResult[]>
 }
 
 export function createSeedTeamRepository(): TeamRepository {
   const syncedRuns = [...runs]
+  const syncedArtifacts = [...artifacts]
+  const syncedEvents = [...events]
   const syncedTestEvidenceSummaries: RemoteTestEvidenceSummary[] = []
+  const providerCredentials = new Map<string, AgentProviderCredentialRecord>()
+  const agentReviews: AgentReviewResult[] = []
+  const agentTraces: AgentTrace[] = []
+  const agentTokenUsage: AgentTokenUsage[] = []
 
   function upsertSyncedRun(run: WorkflowRun) {
     const index = syncedRuns.findIndex((candidate) => candidate.id === run.id)
@@ -80,9 +129,42 @@ export function createSeedTeamRepository(): TeamRepository {
     syncedTestEvidenceSummaries.unshift(summary)
   }
 
+  function agentProviderConfigs(): AgentProviderConfig[] {
+    return [
+      {
+        id: 'fake-knowledge-review',
+        name: 'Deterministic Fake Provider',
+        kind: 'fake',
+        model: 'fake',
+        enabled: true,
+        updatedAt: new Date(0).toISOString(),
+      },
+      ...Array.from(providerCredentials.values()).map(({ metadata }) => ({
+        id: metadata.providerId,
+        name: metadata.providerId === 'openai-default' ? 'OpenAI Compatible' : metadata.providerId,
+        kind: 'openai-compatible' as const,
+        ...(metadata.baseUrl ? { baseUrl: metadata.baseUrl } : {}),
+        model: metadata.model,
+        enabled: true,
+        maskedCredential: metadata.maskedCredential,
+        updatedAt: metadata.updatedAt,
+      })),
+    ]
+  }
+
+  function upsertById<T extends { id: string }>(items: T[], item: T) {
+    const index = items.findIndex((candidate) => candidate.id === item.id)
+    if (index >= 0) {
+      items[index] = item
+      return
+    }
+
+    items.unshift(item)
+  }
+
   return {
     async getRunsBundle() {
-      return { runs: syncedRuns, artifacts, events }
+      return { runs: syncedRuns, artifacts: syncedArtifacts, events: syncedEvents }
     },
 
     async getTeamOverview() {
@@ -94,6 +176,10 @@ export function createSeedTeamRepository(): TeamRepository {
         memberCost: rollupTokenUsage(tokenUsage, 'userId'),
         totalCost: formatUsd(tokenUsage.reduce((sum, row) => sum + row.costUsd, 0)),
         testEvidenceSummaries: syncedTestEvidenceSummaries,
+        agentReviews,
+        agentTraces,
+        agentTokenUsage,
+        agentProviders: agentProviderConfigs(),
       }
     },
 
@@ -149,6 +235,79 @@ export function createSeedTeamRepository(): TeamRepository {
         syncedAt: new Date().toISOString(),
         message: 'test evidence summary accepted by seed repository',
       }
+    },
+
+    async uploadAgentReviewSummary(summary) {
+      const review: AgentReviewResult = {
+        id: summary.id,
+        requestId: `remote-summary-${summary.id}`,
+        runId: summary.runId,
+        nodeId: summary.nodeId,
+        projectId: summary.projectId,
+        runtime: summary.runtime,
+        providerId: summary.providerId,
+        model: summary.model,
+        conclusion: summary.conclusion,
+        summary: summary.summary,
+        risks: Array.from({ length: summary.riskCount }, (_, index) => `Remote summary risk ${index + 1}`),
+        missingEvidence: Array.from(
+          { length: summary.missingEvidenceCount },
+          (_, index) => `Remote summary missing evidence ${index + 1}`,
+        ),
+        suggestedTests: [],
+        knowledgeReferences: [],
+        confidence: summary.confidence,
+        gateAdvisory: {
+          id: `gate-advisory-${summary.id}`,
+          runId: summary.runId,
+          nodeId: summary.nodeId,
+          level: summary.advisoryLevel,
+          blocksApproval: summary.blocksApproval,
+          summary: summary.summary,
+          missingEvidence: [],
+          riskCount: summary.riskCount,
+          createdAt: summary.createdAt,
+        },
+        createdAt: summary.createdAt,
+      }
+
+      upsertById(agentReviews, review)
+
+      return {
+        accepted: true,
+        syncedAt: new Date().toISOString(),
+        message: 'agent review summary accepted by seed repository',
+      }
+    },
+
+    async listAgentProviders() {
+      return agentProviderConfigs()
+    },
+
+    async saveAgentProviderCredential(metadata, encryptedSecret) {
+      providerCredentials.set(metadata.providerId, { metadata, encryptedSecret })
+      return metadata
+    },
+
+    async getAgentProviderCredential(providerId) {
+      return providerCredentials.get(providerId) ?? null
+    },
+
+    async saveAgentReviewBundle(bundle) {
+      upsertById(agentReviews, bundle.review)
+      upsertById(agentTraces, bundle.trace)
+      upsertById(agentTokenUsage, bundle.tokenUsage)
+      upsertById(syncedArtifacts, bundle.artifact)
+      upsertById(syncedEvents, bundle.event)
+      return {
+        review: bundle.review,
+        trace: bundle.trace,
+        tokenUsage: bundle.tokenUsage,
+      }
+    },
+
+    async listAgentReviews(input) {
+      return agentReviews.filter((review) => !input.runId || review.runId === input.runId)
     },
   }
 }

@@ -2,6 +2,7 @@ import type {
   AgentEvent,
   Artifact,
   DevFlowSessionHeaders,
+  RemoteAgentReviewSummary,
   RemoteRunSummary,
   RemoteSyncUploadResult,
   RemoteTeamSnapshot,
@@ -41,6 +42,7 @@ export type RemoteSyncClient = {
   loadRemoteSnapshot(input?: LoadRemoteSnapshotInput): Promise<RemoteTeamSnapshot>
   uploadRunSummary(summary: RemoteRunSummary): Promise<RemoteSyncUploadResult>
   uploadTestEvidenceSummary(summary: RemoteTestEvidenceSummary): Promise<RemoteSyncUploadResult>
+  uploadAgentReviewSummary(summary: RemoteAgentReviewSummary): Promise<RemoteSyncUploadResult>
 }
 
 export function resolveRemoteApiBaseUrl(
@@ -155,6 +157,16 @@ export function createRemoteSyncClient(
         buildUrl(apiBaseUrl, '/api/sync/test-evidence-summary'),
         summary,
         '/api/sync/test-evidence-summary',
+        sessionHeaders,
+      )
+    },
+
+    async uploadAgentReviewSummary(summary) {
+      return postJson<RemoteSyncUploadResult>(
+        fetcher,
+        buildUrl(apiBaseUrl, '/api/sync/agent-review-summary'),
+        summary,
+        '/api/sync/agent-review-summary',
         sessionHeaders,
       )
     },

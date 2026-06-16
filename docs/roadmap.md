@@ -33,10 +33,15 @@ API path, a Web manager console that reads from the API, an Electron remote sync
 approved Run/Test Evidence summaries, explicit demo session headers, and CI coverage for macOS
 verify, Windows compatibility checks, and Postgres integration smoke.
 
-v0.4 Knowledge Governance is implemented in the desktop workbench. DevFlow now indexes
-Git-managed Markdown knowledge sources into governance documents, graph entities, and tag
-relations; selected workflow nodes show standards checks; and the Knowledge page displays the
-Markdown index plus current Run references.
+v0.4 Knowledge Governance and v0.4.x Knowledge Retrieval hardening are implemented in the desktop
+workbench. DevFlow indexes Git-managed Markdown knowledge sources into governance documents,
+section-level chunks, graph entities, tag relations, retrieval hits, and Run references.
+
+v0.5 Knowledge Review Agent Workbench is implemented as the first real Agent runtime slice.
+Electron can run a local Knowledge Review Agent against a selected Run/Node and persist Agent
+Review, trace, token usage, artifact, and event data in SQLite. The API/Web path can run the same
+shared Agent Core against team state and persist the result through the team repository boundary.
+Gate Advisory remains warning-only by default.
 
 Current validation remains macOS-local for the full real Electron window path. Windows compatibility
 is preserved through static automation checks and Windows CI for typecheck/unit/audit; full Windows
@@ -136,20 +141,37 @@ Electron smoke is still tracked as future compatibility expansion. See
 - Added ADR 0007 to preserve the boundary between retrieval recommendations and governance
   evidence before future RAG work.
 
+### v0.5: Knowledge Review Agent Workbench
+
+- Added a shared Knowledge Review Agent Core with deterministic fake provider and
+  OpenAI-compatible provider support.
+- Added Electron local Agent runtime through preload IPC and SQLite persistence for Agent Review,
+  Agent Trace, Agent Token Usage, `agent_review` Artifact, and `agent_review` Agent Event.
+- Added API backend Agent runtime using the same shared Agent Core and Postgres repository boundary.
+- Added provider credential flows that return only masked metadata to UI clients.
+- Added Desktop Agent Workbench and Inspector `Agent Review` action with provider status, review
+  history, trace, warning-only Gate Advisory, and cost source.
+- Added Web manager console display plus a server-action trigger for backend Knowledge Review.
+- Added redacted Electron `RemoteAgentReviewSummary` sync so local review summaries can appear in
+  team state without uploading prompts, raw traces, local paths, or raw command output.
+- Added ADR 0008 to lock the warning-only Gate Advisory and dual-runtime Agent Core boundary.
+
 ## Planned Milestones
 
-### v0.5: Agent Knowledge Enforcement
+### v0.6: Configurable Agent Knowledge Enforcement
 
-- Let Agents cite relevant standards during clarification and design.
-- Check designs against ADRs and project conventions before Gate approval.
-- Generate test checklists from team testing standards.
-- Show Gate reviewers which standards are satisfied, violated, or missing evidence.
-- Record which knowledge nodes were referenced during Agent Events.
+- Add project/team policy controls that can turn selected Gate Advisory categories from warnings
+  into blocking checks.
+- Let reviewers configure which Knowledge Governance Checks are advisory, required, or blocking.
+- Preserve the v0.5 default of human-controlled Gate approval unless policy explicitly enables
+  blocking.
+- Add stronger reviewer audit trails for policy decisions, overrides, and missing evidence.
+- Expand Agent Review to produce structured policy findings without becoming a coding Agent.
 
 ## Deferred / Not Yet Started
 
 - HoneyAI adapter or execution-engine bridge.
-- Real LLM or multi-agent orchestration.
+- Multi-agent orchestration.
 - Real MCP process management, permissions audit, and tool-call telemetry.
 - Repository file watcher, in-app Markdown editor, and remote knowledge synchronization.
 - Electron packaging, macOS signing/notarization, Windows installer/signing, auto-update, and release
