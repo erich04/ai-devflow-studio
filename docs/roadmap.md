@@ -48,7 +48,10 @@ Postgres repository and writes redacted Run/Test Evidence summaries into team ta
 Postgres demo can now be prepared with `corepack pnpm --filter @ai-devflow/api db:setup`, which
 applies the schema migration and seeds DevFlow demo team data. CI also includes a Postgres
 integration job that runs `corepack pnpm test:postgres-smoke` against a real Postgres service and
-verifies seeded reads plus redacted sync write-through.
+verifies seeded reads plus redacted sync write-through. On the desktop side, an explicit remote sync
+can now replace the Team Overview's project list, member list, project cost rollups, member cost
+rollups, and top-level token cost metric with the remote team snapshot while keeping local artifacts
+and raw Test Evidence private.
 
 ## Completed Milestones
 
@@ -109,6 +112,8 @@ verifies seeded reads plus redacted sync write-through.
 - Connect the current fixture-importing `apps/web` manager console to real API data.
 - Keep Electron SQLite as the local/offline/private state boundary and sync only approved summaries
   or redacted evidence to the team backend.
+- Make desktop Team Overview and manager-facing summary widgets consume remote snapshot data after
+  explicit sync, without blending remote summaries into private local execution evidence.
 - Add basic authentication plus tenant/project/member role boundaries.
 - Define `seed`, `local`, `remote`, and future `adapter` data precedence in the app state model.
 - Preserve Windows compatibility for local execution, command safety, `userData` SQLite storage,

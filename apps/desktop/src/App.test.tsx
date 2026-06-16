@@ -19,7 +19,7 @@ const remoteRun = {
   ...fixtureRuns[0]!,
   id: 'run-remote-sync',
   title: '远端同步 Run',
-  projectId: 'p-payments',
+  projectId: 'p-remote-team',
   currentNodeId: 'n-design-gate',
 }
 
@@ -222,14 +222,50 @@ describe('App', () => {
   it('loads remote team state through the desktop sync boundary without local evidence', async () => {
     const api = installDesktopApi({
       loadRemoteSnapshot: vi.fn().mockResolvedValue({
-        projects: [],
-        members: [],
+        projects: [
+          {
+            id: 'p-remote-team',
+            name: 'Remote Team API',
+            repository: 'erich/remote-team-api',
+            defaultBranch: 'main',
+            health: 'blocked',
+            knowledgeBasePath: 'docs/remote-team',
+            testCommand: 'pnpm test:remote',
+          },
+        ],
+        members: [
+          {
+            id: 'u-remote-lead',
+            name: 'Remote Lead',
+            role: 'lead',
+            avatarInitials: 'RL',
+            focus: 'Remote orchestration',
+          },
+        ],
         runs: [remoteRun],
         artifacts: [],
         events: [],
-        projectCost: [],
-        memberCost: [],
-        totalCost: '$0.000',
+        projectCost: [
+          {
+            key: 'p-remote-team',
+            inputTokens: 100,
+            outputTokens: 50,
+            cacheReadTokens: 25,
+            totalTokens: 175,
+            costUsd: 0.25,
+          },
+        ],
+        memberCost: [
+          {
+            key: 'u-remote-lead',
+            inputTokens: 100,
+            outputTokens: 50,
+            cacheReadTokens: 25,
+            totalTokens: 175,
+            costUsd: 0.25,
+          },
+        ],
+        totalCost: '$0.250',
       }),
     })
     render(<App />)
@@ -240,6 +276,13 @@ describe('App', () => {
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalledWith({ organizationId: 'org-demo' }))
     expect(await screen.findByText('远端同步 Run')).toBeInTheDocument()
     expect(screen.getByTestId('toast')).toHaveTextContent('团队远端状态已同步')
+
+    fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
+    expect(screen.getAllByText('Remote Team API').length).toBeGreaterThan(0)
+    expect(screen.getByText('erich/remote-team-api')).toBeInTheDocument()
+    expect(screen.getAllByText('$0.250').length).toBeGreaterThan(0)
+    expect(screen.getByText('Remote Lead')).toBeInTheDocument()
+    expect(screen.queryByText('erich/payments-api')).not.toBeInTheDocument()
   })
 
   it('persists gate approval as a run update and approval event', async () => {

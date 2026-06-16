@@ -60,7 +60,10 @@ import {
   type DataOrigin,
   type LocalExecutionState,
   type LocalProject,
+  type Project,
+  type TeamMember,
   type TestEvidence,
+  type TokenUsageRollup,
   type WorkflowNode,
   type WorkflowRun,
 } from '@ai-devflow/shared'
@@ -95,6 +98,10 @@ const stageTone: Record<NodeStage, string> = {
   pr: 'amber',
   accept: 'rose',
 }
+
+const seedProjectRollups = rollupTokenUsage(tokenUsage, 'projectId')
+const seedMemberRollups = rollupTokenUsage(tokenUsage, 'userId')
+const seedTotalCost = formatUsd(tokenUsage.reduce((sum, row) => sum + row.costUsd, 0))
 
 function useThemePreference() {
   const [preference, setPreference] = useState<ThemePreference>(() =>
@@ -257,6 +264,11 @@ export function App() {
   const [events, setEvents] = useState<AgentEvent[]>(fixtureEvents)
   const [testEvidence, setTestEvidence] = useState<TestEvidence[]>([])
   const [localProjects, setLocalProjects] = useState<LocalProject[]>([])
+  const [teamProjects, setTeamProjects] = useState<Project[]>(projects)
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>(members)
+  const [teamProjectCost, setTeamProjectCost] = useState<TokenUsageRollup[]>(seedProjectRollups)
+  const [teamMemberCost, setTeamMemberCost] = useState<TokenUsageRollup[]>(seedMemberRollups)
+  const [teamTotalCost, setTeamTotalCost] = useState(seedTotalCost)
   const [selectedLocalProjectId, setSelectedLocalProjectId] = useState('')
   const [testCommandDraft, setTestCommandDraft] = useState('')
   const [commandSafety, setCommandSafety] = useState<CommandSafetyResult | null>(null)
@@ -294,11 +306,16 @@ export function App() {
   )
   const selectedLocalProject =
     localProjects.find((project) => project.id === selectedLocalProjectId) ?? localProjects[0]
-  const currentUser = members[1]
-  const totalCost = tokenUsage.reduce((sum, row) => sum + row.costUsd, 0)
+  const currentUser = teamMembers.find((member) => member.id === 'u-ling') ?? teamMembers[1]
   const flow = useMemo(() => (selectedRun ? buildFlow(selectedRun) : { nodes: [], edges: [] }), [selectedRun])
-  const runRollups = rollupTokenUsage(tokenUsage, 'runId')
-  const projectRollups = rollupTokenUsage(tokenUsage, 'projectId')
+
+  function resetTeamSnapshot() {
+    setTeamProjects(projects)
+    setTeamMembers(members)
+    setTeamProjectCost(seedProjectRollups)
+    setTeamMemberCost(seedMemberRollups)
+    setTeamTotalCost(seedTotalCost)
+  }
 
   function applyLocalExecutionState(state: LocalExecutionState) {
     setLocalProjects(state.projects)
@@ -321,6 +338,7 @@ export function App() {
       setArtifacts(state.artifacts)
       setEvents(state.events)
       setDataOrigin('local')
+      resetTeamSnapshot()
     } else {
       setRuns(fixtureRuns)
       setSelectedRunId((current) => fixtureRuns.some((run) => run.id === current) ? current : fixtureRuns[0]!.id)
@@ -331,6 +349,7 @@ export function App() {
       setArtifacts(fixtureArtifacts)
       setEvents(fixtureEvents)
       setDataOrigin('seed')
+      resetTeamSnapshot()
     }
 
     setTestEvidence(state.testEvidence)
@@ -432,6 +451,11 @@ export function App() {
       setArtifacts(snapshot.artifacts)
       setEvents(snapshot.events)
       setTestEvidence([])
+      setTeamProjects(snapshot.projects.length > 0 ? snapshot.projects : projects)
+      setTeamMembers(snapshot.members.length > 0 ? snapshot.members : members)
+      setTeamProjectCost(snapshot.projectCost)
+      setTeamMemberCost(snapshot.memberCost)
+      setTeamTotalCost(snapshot.totalCost)
       setDataOrigin(snapshot.runs.length > 0 ? 'remote' : 'seed')
 
       if (nextRun) {
@@ -658,6 +682,7 @@ export function App() {
       setSelectedRunId(persistedRun.id)
       setSelectedNodeId(persistedRun.currentNodeId)
       setDataOrigin('local')
+      resetTeamSnapshot()
     } catch (error) {
       setToast(error instanceof Error ? error.message : '保存新 Run 失败')
     }
@@ -717,7 +742,11 @@ export function App() {
             <Code2 size={17} />
             <div>
               <span>Project</span>
-              <strong>{projects.find((project) => project.id === selectedRun?.projectId)?.name}</strong>
+              <strong>
+                {teamProjects.find((project) => project.id === selectedRun?.projectId)?.name ??
+                  selectedRun?.projectId ??
+                  'No project'}
+              </strong>
             </div>
             <ChevronRight size={16} />
           </div>
@@ -755,7 +784,7 @@ export function App() {
         <section className="status-strip" aria-live="polite">
           <Metric label="Active Runs" value={String(runs.length)} icon={<Activity />} />
           <Metric label="Pending Gates" value="2" icon={<ClipboardCheck />} />
-          <Metric label="Token Cost" value={formatUsd(totalCost)} icon={<CircleDollarSign />} />
+          <Metric label="Token Cost" value={teamTotalCost} icon={<CircleDollarSign />} />
           <Metric label="Tests Today" value="18 / 20" icon={<TestTube2 />} />
           <span className="toast" data-testid="toast">{toast}</span>
         </section>
@@ -832,7 +861,14 @@ export function App() {
         )}
 
         {activeView === 'team' && (
-          <TeamOverview projectRollups={projectRollups} runRollups={runRollups} />
+          <TeamOverview
+            projects={teamProjects}
+            members={teamMembers}
+            projectRollups={teamProjectCost}
+            memberRollups={teamMemberCost}
+            totalCost={teamTotalCost}
+            dataOrigin={dataOrigin}
+          />
         )}
 
         {activeView === 'knowledge' && (
@@ -1072,17 +1108,25 @@ function Inspector({
 }
 
 function TeamOverview({
+  projects,
+  members,
   projectRollups,
-  runRollups,
+  memberRollups,
+  totalCost,
+  dataOrigin,
 }: {
-  projectRollups: ReturnType<typeof rollupTokenUsage>
-  runRollups: ReturnType<typeof rollupTokenUsage>
+  projects: Project[]
+  members: TeamMember[]
+  projectRollups: TokenUsageRollup[]
+  memberRollups: TokenUsageRollup[]
+  totalCost: string
+  dataOrigin: DataOrigin
 }) {
   return (
     <section className="page-grid" data-testid="team-overview">
       <div className="page-main">
         <div className="section-heading">
-          <span>Team Overview</span>
+          <span>Team Overview · {dataOrigin}</span>
           <strong>项目交付健康</strong>
         </div>
         {projects.map((project) => (
@@ -1098,13 +1142,24 @@ function TeamOverview({
       </div>
       <aside className="page-side">
         <strong>Cost Rollup</strong>
+        <div className="compact-row">
+          <span>Total</span>
+          <strong>{totalCost}</strong>
+        </div>
         {projectRollups.map((rollup) => (
           <div className="compact-row" key={rollup.key}>
             <span>{rollup.key}</span>
             <strong>{formatUsd(rollup.costUsd)}</strong>
           </div>
         ))}
-        {runRollups.map((rollup) => (
+        <strong>Members</strong>
+        {members.map((member) => (
+          <div className="compact-row" key={member.id}>
+            <span>{member.name}</span>
+            <strong>{member.role}</strong>
+          </div>
+        ))}
+        {memberRollups.map((rollup) => (
           <div className="compact-row" key={rollup.key}>
             <span>{rollup.key}</span>
             <strong>{rollup.totalTokens.toLocaleString()} tokens</strong>
