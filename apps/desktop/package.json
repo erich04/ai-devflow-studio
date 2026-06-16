@@ -1,0 +1,29 @@
+{
+  "name": "@ai-devflow/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "dev:electron": "node ../../scripts/dev-electron.mjs",
+    "build": "vite build && corepack pnpm build:electron",
+    "build:electron": "vite build --config vite.electron.config.ts && vite build --config vite.preload.config.ts",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "electron": "electron ."
+  },
+  "dependencies": {
+    "@ai-devflow/shared": "workspace:*",
+    "@xyflow/react": "^12.8.5",
+    "electron": "^33.4.11",
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "sql.js": "^1.14.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@ai-devflow/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-devflow/shared": "workspace:*"
+  }
+}

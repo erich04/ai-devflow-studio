@@ -1,0 +1,240 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+import os from 'node:os'
+import { createRequire } from 'node:module'
+import { afterEach, describe, expect, it } from 'vitest'
+import initSqlJs from 'sql.js'
+import type {
+  AgentEvent,
+  Artifact,
+  LocalProject,
+  McpServerDefinition,
+  TestEvidence,
+  WorkflowRun,
+} from '@ai-devflow/shared'
+import { createLocalStore } from './local-store'
+
+let tempDirs: string[] = []
+
+afterEach(async () => {
+  await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })))
+  tempDirs = []
+})
+
+async function tempDbPath() {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'devflow-store-'))
+  tempDirs.push(dir)
+  return path.join(dir, 'devflow.sqlite')
+}
+
+const require = createRequire(import.meta.url)
+const sqlJsDist = path.dirname(require.resolve('sql.js/dist/sql-wasm.js'))
+
+async function writeLegacyV1Database(dbPath: string) {
+  const SQL = await initSqlJs({
+    locateFile: (fileName) => path.join(sqlJsDist, fileName),
+  })
+  const db = new SQL.Database()
+  db.run(`
+    create table schema_meta (
+      key text primary key,
+      value text not null
+    );
+
+    create table local_projects (
+      id text primary key,
+      json text not null,
+      created_at text not null,
+      updated_at text not null
+    );
+
+    create table workflow_runs (
+      id text primary key,
+      json text not null,
+      created_at text not null,
+      updated_at text not null
+    );
+
+    create table artifacts (
+      id text primary key,
+      run_id text not null,
+      json text not null,
+      updated_at text not null
+    );
+
+    create table agent_events (
+      id text primary key,
+      run_id text not null,
+      sequence integer not null,
+      json text not null,
+      timestamp text not null
+    );
+
+    create table test_evidence (
+      id text primary key,
+      run_id text not null,
+      node_id text not null,
+      project_id text not null,
+      json text not null,
+      created_at text not null
+    );
+  `)
+  db.run("insert into schema_meta (key, value) values ('schema_version', '1')")
+  db.run(
+    'insert into local_projects (id, json, created_at, updated_at) values (?, ?, ?, ?)',
+    [project.id, JSON.stringify(project), project.createdAt, project.updatedAt],
+  )
+  db.run(
+    'insert into workflow_runs (id, json, created_at, updated_at) values (?, ?, ?, ?)',
+    [run.id, JSON.stringify(run), run.createdAt, run.updatedAt],
+  )
+  await writeFile(dbPath, Buffer.from(db.export()))
+  db.close()
+}
+
+const project: LocalProject = {
+  id: 'project-1',
+  name: 'fixture-project',
+  path: '/tmp/fixture-project',
+  packageManager: 'pnpm',
+  detectedTestCommand: 'pnpm test',
+  testCommand: 'pnpm test -- --run',
+  createdAt: '2026-06-15T00:00:00.000Z',
+  updatedAt: '2026-06-15T00:00:00.000Z',
+}
+
+const run: WorkflowRun = {
+  id: 'run-1',
+  title: 'Run local tests',
+  request: 'Archive local test evidence.',
+  projectId: 'project-1',
+  creatorId: 'user-1',
+  status: 'testing',
+  currentNodeId: 'node-test',
+  branchName: 'ai/local-tests',
+  createdAt: '2026-06-15T00:00:00.000Z',
+  updatedAt: '2026-06-15T00:00:00.000Z',
+  nodes: [],
+  edges: [],
+}
+
+const evidence: TestEvidence = {
+  id: 'evidence-1',
+  runId: 'run-1',
+  nodeId: 'node-test',
+  projectId: 'project-1',
+  command: 'pnpm test',
+  cwd: '/tmp/fixture-project',
+  status: 'passed',
+  exitCode: 0,
+  durationMs: 1200,
+  stdout: 'tests passed',
+  stderr: '',
+  summary: 'Tests passed in 1.2s',
+  redacted: false,
+  createdAt: '2026-06-15T00:01:00.000Z',
+}
+
+const artifact: Artifact = {
+  id: 'artifact-evidence-1',
+  runId: 'run-1',
+  nodeId: 'node-test',
+  kind: 'test_report',
+  title: 'Local test evidence',
+  summary: 'Tests passed in 1.2s',
+  content: 'tests passed',
+  redacted: false,
+  updatedAt: '2026-06-15T00:01:00.000Z',
+}
+
+const event: AgentEvent = {
+  id: 'event-evidence-1',
+  runId: 'run-1',
+  nodeId: 'node-test',
+  sequence: 1,
+  kind: 'test_result',
+  message: 'Tests passed in 1.2s',
+  timestamp: '2026-06-15T00:01:00.000Z',
+}
+
+const mcpServer: McpServerDefinition = {
+  id: 'mcp-filesystem',
+  name: 'Filesystem',
+  command: 'npx @modelcontextprotocol/server-filesystem',
+  permission: 'read',
+  enabledLocally: false,
+  lastAuditEvent: 'Disabled for smoke test',
+}
+
+describe('createLocalStore', () => {
+  it('initializes schema version 2 and keeps it stable across reopen', async () => {
+    const dbPath = await tempDbPath()
+
+    const first = await createLocalStore({ dbPath })
+    expect(await first.getSchemaVersion()).toBe(2)
+    first.close()
+
+    const second = await createLocalStore({ dbPath })
+    expect(await second.getSchemaVersion()).toBe(2)
+    second.close()
+  })
+
+  it('migrates an existing v1 database to v2 without losing local projects or runs', async () => {
+    const dbPath = await tempDbPath()
+    await writeLegacyV1Database(dbPath)
+
+    const store = await createLocalStore({ dbPath })
+
+    expect(await store.getSchemaVersion()).toBe(2)
+    expect(await store.listProjects()).toEqual([project])
+    expect(await store.listRuns()).toEqual([run])
+    expect(await store.getSettings()).toEqual({ themePreference: 'system' })
+    expect(await store.listMcpServers()).toEqual([])
+    store.close()
+  })
+
+  it('throws a clear error when an existing database file is corrupted', async () => {
+    const dbPath = await tempDbPath()
+    await writeFile(dbPath, 'not a sqlite database')
+
+    await expect(createLocalStore({ dbPath })).rejects.toThrow(/DevFlow local database is unreadable/)
+  })
+
+  it('persists local projects, runs, artifacts, events, and test evidence across reopen', async () => {
+    const dbPath = await tempDbPath()
+
+    const first = await createLocalStore({ dbPath })
+    await first.upsertProject(project)
+    await first.saveRun(run)
+    await first.saveArtifact(artifact)
+    await first.saveEvent(event)
+    await first.saveTestEvidence(evidence)
+    first.close()
+
+    const second = await createLocalStore({ dbPath })
+    expect(await second.listProjects()).toEqual([project])
+    expect(await second.listRuns()).toEqual([run])
+    expect(await second.listArtifacts('run-1')).toEqual([artifact])
+    expect(await second.listEvents('run-1')).toEqual([event])
+    expect(await second.listTestEvidence('run-1')).toEqual([evidence])
+    second.close()
+  })
+
+  it('persists local settings and MCP server state across reopen', async () => {
+    const dbPath = await tempDbPath()
+
+    const first = await createLocalStore({ dbPath })
+    await first.saveSettings({ themePreference: 'dark' })
+    await first.saveMcpServers([mcpServer])
+    first.close()
+
+    const second = await createLocalStore({ dbPath })
+    expect(await second.getSettings()).toEqual({ themePreference: 'dark' })
+    expect(await second.listMcpServers()).toEqual([mcpServer])
+    expect(await second.loadState()).toMatchObject({
+      settings: { themePreference: 'dark' },
+      mcpServers: [mcpServer],
+    })
+    second.close()
+  })
+})

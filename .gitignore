@@ -1,0 +1,17 @@
+node_modules
+dist
+dist-electron
+.next
+out
+coverage
+test-results
+playwright-report
+.tmp
+.cursor
+.DS_Store
+*.log
+*.tsbuildinfo
+.env
+.env.local
+*.sqlite
+*.sqlite-journal
