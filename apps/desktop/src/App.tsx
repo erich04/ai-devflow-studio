@@ -35,6 +35,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import {
+  canRunCodingAgentOnNode,
   validateTestCommandSafety,
   buildKnowledgeGovernanceChecks,
   buildKnowledgeReferences,
@@ -495,6 +496,28 @@ export function App() {
       return
     }
 
+    const unsubscribeRun = desktopApi.onCodingRunStatusUpdated((run) => {
+      setCodingRuns((previous) => mergeById(previous, [run]))
+    })
+    const unsubscribeEvent = desktopApi.onCodingEventAppended((event) => {
+      setCodingEvents((previous) => mergeById(previous, [event]))
+    })
+    const unsubscribePermission = desktopApi.onCodingPermissionUpdated((request) => {
+      setCodingPermissionRequests((previous) => mergeById(previous, [request]))
+    })
+
+    return () => {
+      unsubscribeRun()
+      unsubscribeEvent()
+      unsubscribePermission()
+    }
+  }, [desktopApi])
+
+  useEffect(() => {
+    if (!desktopApi) {
+      return
+    }
+
     let disposed = false
 
     desktopApi
@@ -881,8 +904,8 @@ export function App() {
       setToast('请先选择本地 Git 仓库')
       return
     }
-    if (selectedNode.stage !== 'build' && selectedNode.kind !== 'task') {
-      setToast('Coding Agent 只能从开发实现节点启动')
+    if (!canRunCodingAgentOnNode(selectedNode)) {
+      setToast('Coding Agent 只能从开发实现任务节点启动')
       return
     }
 
@@ -1522,7 +1545,7 @@ function Inspector({
           <Bot size={16} />
           {isRunningAgentReview ? '审查中' : 'Agent Review'}
         </button>
-        {(selectedNode.stage === 'build' || selectedNode.kind === 'task') && (
+        {canRunCodingAgentOnNode(selectedNode) && (
           <button className="ghost-button" disabled={isStartingCodingAgent} onClick={onRunCodingAgent}>
             <Code2 size={16} />
             {isStartingCodingAgent ? '启动中' : 'Coding Agent'}

@@ -3,6 +3,7 @@ import type {
   AgentProviderConfig,
   AgentReviewExecutionResult,
   CommandSafetyResult,
+  CodingAgentEvent,
   CodingAgentRun,
   CodingPermissionDecision,
   CodingPermissionRequest,
@@ -181,6 +182,9 @@ export type DevFlowDesktopApi = {
   openManagedWorktree: (input: OpenManagedWorktreeInput) => Promise<ManagedCodingWorkspace>
   deleteManagedWorktree: (input: DeleteManagedWorktreeInput) => Promise<ManagedCodingWorkspace>
   uploadCodingAgentSummary: (summary: RemoteCodingAgentSummary) => Promise<RemoteSyncUploadResult>
+  onCodingRunStatusUpdated: (listener: (run: CodingAgentRun) => void) => () => void
+  onCodingEventAppended: (listener: (event: CodingAgentEvent) => void) => () => void
+  onCodingPermissionUpdated: (listener: (request: CodingPermissionRequest) => void) => () => void
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

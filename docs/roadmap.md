@@ -43,13 +43,14 @@ Review, trace, token usage, artifact, and event data in SQLite. The API/Web path
 shared Agent Core against team state and persist the result through the team repository boundary.
 Gate Advisory remains warning-only by default.
 
-v0.6 opencode Coding Adapter is underway with the fake harness and persistence/UI slice
-implemented. DevFlow can create a managed git worktree, start a fake Coding Agent Run, show a
-permission relay request, approve/reject the request, archive a redacted Coding Diff Artifact and
-Dependency Bootstrap Evidence, and sync a redacted Coding Agent summary through Electron, API, and
-Postgres. The real opencode HTTP adapter is spike-selected and wrapped behind a tested request
-module, but the full real opencode runtime remains a manual hardening path before making it the
-default engine.
+v0.6 opencode Coding Adapter is underway with the fake harness and runtime hardening slice
+implemented. DevFlow can create a managed git worktree, start a fake Coding Agent Run from a build
+task node, assemble the coding brief from persisted DevFlow context, show and push permission relay
+updates, expire unanswered permission requests, archive a redacted Coding Diff Artifact, persist
+Dependency Bootstrap Evidence and worktree Test Evidence, and sync a redacted Coding Agent summary
+through Electron, API, and Postgres. The real opencode HTTP adapter is spike-selected and wrapped
+behind a tested request module, but the full real opencode runtime remains a manual hardening path
+before making it the default engine.
 
 Current validation remains macOS-local for the full real Electron window path. Windows compatibility
 is preserved through static automation checks and Windows CI for typecheck/unit/audit; full Windows
@@ -174,6 +175,14 @@ Electron smoke is still tracked as future compatibility expansion. See
   evidence, and diff artifacts.
 - Added a deterministic fake coding harness that creates a managed git worktree, asks permission,
   writes a marker file after approval, captures a redacted diff, and archives bootstrap evidence.
+- Added a shared build-task eligibility helper so Coding Agent actions only start from DevFlow's
+  implementation task node.
+- Hardened the fake runtime path to assemble coding context from Run artifacts, Knowledge
+  references, governance checks, Gate decisions, and existing Test Evidence.
+- Added Coding Agent push IPC/preload subscriptions for status, event, and permission updates, with
+  snapshot/replay still available through `subscribeCodingRun`.
+- Added permission timeout expiry and worktree Test Evidence persistence after approved fake coding
+  runs.
 - Added Desktop Agents UI controls for running the fake Coding Agent, approving/rejecting
   permissions, cancelling runs, and opening/deleting managed worktrees.
 - Added a tested opencode HTTP adapter wrapper for session creation, permissions, replies, abort,

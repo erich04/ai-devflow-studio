@@ -1,12 +1,17 @@
 import type {
+  Artifact,
   CodingAgentEngine,
   CodingAgentEvent,
   CodingAgentRun,
   CodingDiffArtifact,
   CodingPermissionRequest,
   DependencyBootstrapEvidence,
+  GateDecision,
+  KnowledgeGovernanceCheck,
+  KnowledgeReference,
   LocalProject,
   ManagedCodingWorkspace,
+  TestEvidence,
   WorkflowNode,
   WorkflowRun,
 } from '@ai-devflow/shared'
@@ -34,6 +39,11 @@ export type CodingEngineStartInput = {
   requestedBy: string
   userInstruction: string
   now: string
+  upstreamArtifacts: Artifact[]
+  knowledgeReferences: KnowledgeReference[]
+  governanceChecks: KnowledgeGovernanceCheck[]
+  gateDecisions: GateDecision[]
+  testEvidence: TestEvidence[]
 }
 
 export type CodingEngineStartResult = {
@@ -93,6 +103,11 @@ export function createFakeCodingEngineAdapter(): CodingEngineAdapter {
         now: input.now,
         run: input.run,
         node: input.node,
+        upstreamArtifacts: input.upstreamArtifacts,
+        knowledgeReferences: input.knowledgeReferences,
+        governanceChecks: input.governanceChecks,
+        gateDecisions: input.gateDecisions,
+        testEvidence: input.testEvidence,
       })
 
       return {

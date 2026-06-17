@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import {
   buildCodingBrief,
   sanitizeCodingDiffArtifact,
+  type Artifact,
   type CodingBrief,
   type CodingBriefInput,
   type CodingAgentRun,
@@ -14,8 +15,12 @@ import {
   type CodingDiffArtifact,
   type CodingPermissionRequest,
   type DependencyBootstrapEvidence,
+  type GateDecision,
+  type KnowledgeGovernanceCheck,
+  type KnowledgeReference,
   type LocalProject,
   type ManagedCodingWorkspace,
+  type TestEvidence,
   type WorkflowNode,
   type WorkflowRun,
 } from '@ai-devflow/shared'
@@ -50,6 +55,11 @@ export type FakeCodingRunBundleInput = {
   now?: string
   run?: WorkflowRun
   node?: WorkflowNode
+  upstreamArtifacts?: Artifact[]
+  knowledgeReferences?: KnowledgeReference[]
+  governanceChecks?: KnowledgeGovernanceCheck[]
+  gateDecisions?: GateDecision[]
+  testEvidence?: TestEvidence[]
 }
 
 export type FakeCodingRunBundle = {
@@ -140,10 +150,11 @@ export function createFakeCodingRunBundle(input: FakeCodingRunBundleInput): Fake
     run,
     node,
     project: input.project,
-    upstreamArtifacts: [],
-    knowledgeReferences: [],
-    governanceChecks: [],
-    gateDecisions: [],
+    upstreamArtifacts: input.upstreamArtifacts ?? [],
+    knowledgeReferences: input.knowledgeReferences ?? [],
+    governanceChecks: input.governanceChecks ?? [],
+    gateDecisions: input.gateDecisions ?? [],
+    testEvidence: input.testEvidence ?? [],
     userInstruction: input.userInstruction,
     worktreePath: input.workspace.worktreePath,
     branchName: input.workspace.branchName,

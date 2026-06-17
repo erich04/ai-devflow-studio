@@ -396,6 +396,9 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
         syncedAt: '2026-06-16T00:00:00.000Z',
         message: 'coding agent summary accepted',
       }),
+      onCodingRunStatusUpdated: () => () => undefined,
+      onCodingEventAppended: () => () => undefined,
+      onCodingPermissionUpdated: () => () => undefined,
     }
   })
 }

@@ -5,6 +5,7 @@ import type {
   AgentReviewExecutionResult,
   CommandSafetyResult,
   CodingAgentRun,
+  CodingAgentEvent,
   CodingPermissionDecision,
   CodingPermissionRequest,
   LocalExecutionState,
@@ -115,6 +116,9 @@ export type DevFlowDesktopApi = {
   listCodingAgentRuns: (input?: { runId?: string }) => Promise<CodingAgentRun[]>
   openManagedWorktree: (input: { workspaceId: string }) => Promise<ManagedCodingWorkspace>
   deleteManagedWorktree: (input: { workspaceId: string }) => Promise<ManagedCodingWorkspace>
+  onCodingRunStatusUpdated: (listener: (run: CodingAgentRun) => void) => () => void
+  onCodingEventAppended: (listener: (event: CodingAgentEvent) => void) => () => void
+  onCodingPermissionUpdated: (listener: (request: CodingPermissionRequest) => void) => () => void
 }
 
 declare global {

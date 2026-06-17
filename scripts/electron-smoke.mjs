@@ -119,6 +119,11 @@ try {
     }),
   )
   await writeFile(path.join(repoDir, 'test.js'), "console.log('smoke passed');\n")
+  await run('git', ['init'], { cwd: repoDir })
+  await run('git', ['config', 'user.email', 'devflow@example.com'], { cwd: repoDir })
+  await run('git', ['config', 'user.name', 'DevFlow Smoke'], { cwd: repoDir })
+  await run('git', ['add', '.'], { cwd: repoDir })
+  await run('git', ['commit', '-m', 'fixture'], { cwd: repoDir })
 
   await run(corepack, ['pnpm', '--filter', '@ai-devflow/desktop', 'build'])
 
@@ -204,6 +209,25 @@ try {
   await expect(first.page.getByTestId('node-inspector')).toContainText('Knowledge Review Agent')
   await expect(first.page.getByTestId('node-inspector')).toContainText('warning-only')
 
+  await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
+  await first.page.getByRole('button', { name: /^Coding Agent$/ }).click()
+  await expect(first.page.getByTestId('toast')).toContainText('Coding Agent 已请求权限', {
+    timeout: 20_000,
+  })
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('Permission Relay')
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('Apply fake coding diff')
+  await first.page.getByRole('button', { name: /Approve once/ }).click()
+  await expect(first.page.getByTestId('toast')).toContainText('Coding Agent 已完成 fake diff 归档', {
+    timeout: 30_000,
+  })
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('completed')
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('Test evidence passed')
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('devflow-fake-change.txt')
+  await first.page.getByRole('button', { name: /^测试$/ }).click()
+  await expect(first.page.getByTestId('tests-view')).toContainText('Local test evidence')
+  await expect(first.page.getByTestId('tests-view')).toContainText('npm test')
+  await first.page.getByRole('button', { name: /工作台/ }).click()
+
   await first.page.getByRole('button', { name: /执行测试/ }).click()
   await expect(first.page.getByTestId('toast')).toContainText('测试通过，证据已归档', {
     timeout: 20_000,
@@ -245,6 +269,8 @@ try {
   await expect(second.page.getByTestId('node-inspector')).toContainText('approval')
   await second.page.getByRole('button', { name: /^Agents$/ }).click()
   await expect(second.page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
+  await expect(second.page.getByTestId('agent-workbench')).toContainText('completed')
+  await expect(second.page.getByTestId('agent-workbench')).toContainText('devflow-fake-change.txt')
   await expect(second.page.getByTestId('agent-workbench')).toContainText('warning-only')
   await expect(second.page.getByTestId('agent-workbench')).toContainText('Build redacted context')
   await second.page.getByRole('button', { name: /^MCP$/ }).click()

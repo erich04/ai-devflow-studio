@@ -56,6 +56,7 @@ const DEFAULT_TEST_TIMEOUT_MS = 120_000
 
 let storePromise: Promise<LocalStore> | undefined
 let remoteSyncClient: RemoteSyncClient | undefined
+const codingPermissionTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 
 const DEFAULT_OPENAI_PROVIDER_ID = 'openai-default'
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
@@ -74,11 +75,40 @@ function getRemoteSyncClient() {
   return remoteSyncClient
 }
 
+function broadcastToRenderers(channel: string, payload: unknown) {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send(channel, payload)
+  }
+}
+
+function scheduleCodingPermissionTimeout(requestId: string, expiresAt: string, expire: () => Promise<void>) {
+  const existing = codingPermissionTimeouts.get(requestId)
+  if (existing) {
+    clearTimeout(existing)
+  }
+
+  const delayMs = Math.max(0, Date.parse(expiresAt) - Date.now())
+  const timer = setTimeout(() => {
+    codingPermissionTimeouts.delete(requestId)
+    void expire().catch(() => undefined)
+  }, delayMs)
+  codingPermissionTimeouts.set(requestId, timer)
+}
+
 async function createCodingRuntimeForRequest() {
   return createCodingRuntime({
     store: await getStore(),
     engine: createFakeCodingEngineAdapter(),
     remoteSync: getRemoteSyncClient(),
+    runTestCommand: runLocalTestCommand,
+    testTimeoutMs: DEFAULT_TEST_TIMEOUT_MS,
+    schedulePermissionTimeout: (request, expire) =>
+      scheduleCodingPermissionTimeout(request.id, request.expiresAt, expire),
+    publisher: {
+      publishRunStatus: (run) => broadcastToRenderers(ipcChannels.codingRunStatusUpdated, run),
+      publishEvent: (event) => broadcastToRenderers(ipcChannels.codingEventAppended, event),
+      publishPermission: (request) => broadcastToRenderers(ipcChannels.codingPermissionUpdated, request),
+    },
     idGenerator: (prefix = 'id') => `${prefix}-${randomUUID()}`,
   })
 }

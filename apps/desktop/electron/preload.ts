@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { ipcChannels, type DevFlowDesktopApi } from './ipc-contract.js'
 
+function onIpcPayload<T>(channel: string, listener: (payload: T) => void) {
+  const handler = (_event: Electron.IpcRendererEvent, payload: T) => listener(payload)
+  ipcRenderer.on(channel, handler)
+  return () => ipcRenderer.removeListener(channel, handler)
+}
+
 const desktopApi: DevFlowDesktopApi = {
   platform: process.platform,
   loadState: () => ipcRenderer.invoke(ipcChannels.loadState),
@@ -33,6 +39,12 @@ const desktopApi: DevFlowDesktopApi = {
   listCodingAgentRuns: (input) => ipcRenderer.invoke(ipcChannels.listCodingAgentRuns, input),
   openManagedWorktree: (input) => ipcRenderer.invoke(ipcChannels.openManagedWorktree, input),
   deleteManagedWorktree: (input) => ipcRenderer.invoke(ipcChannels.deleteManagedWorktree, input),
+  onCodingRunStatusUpdated: (listener) =>
+    onIpcPayload(ipcChannels.codingRunStatusUpdated, listener),
+  onCodingEventAppended: (listener) =>
+    onIpcPayload(ipcChannels.codingEventAppended, listener),
+  onCodingPermissionUpdated: (listener) =>
+    onIpcPayload(ipcChannels.codingPermissionUpdated, listener),
 }
 
 contextBridge.exposeInMainWorld('aiDevFlowDesktop', desktopApi)

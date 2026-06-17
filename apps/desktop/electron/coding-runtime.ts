@@ -1,17 +1,31 @@
 import { randomUUID } from 'node:crypto'
 import {
+  buildKnowledgeGovernanceChecks,
+  buildKnowledgeReferences,
+  canRunCodingAgentOnNode,
   createRemoteCodingAgentSummary,
+  createTestEvidenceArtifact,
+  createTestEvidenceEvent,
+  knowledgeChunks as defaultKnowledgeChunks,
+  knowledgeDocuments as defaultKnowledgeDocuments,
+  type AgentEvent,
+  type Artifact,
   type CodingAgentEvent,
   type CodingAgentRun,
   type CodingPermissionDecision,
   type CodingPermissionRequest,
   type DependencyBootstrapEvidence,
   type CodingDiffArtifact,
+  type GateDecision,
+  type KnowledgeChunk,
+  type KnowledgeDocument,
   type LocalExecutionState,
   type LocalProject,
   type ManagedCodingWorkspace,
   type RemoteCodingAgentSummary,
   type RemoteSyncUploadResult,
+  type TestEvidence,
+  type TestEvidenceStatus,
   type WorkflowNode,
   type WorkflowRun,
 } from '@ai-devflow/shared'
@@ -25,6 +39,12 @@ import type { CodingEngineAdapter } from './coding-engine.js'
 export type CodingRuntimeStore = {
   listProjects(): Promise<LocalProject[]>
   listRuns(): Promise<WorkflowRun[]>
+  listArtifacts(runId?: string): Promise<Artifact[]>
+  listEvents(runId?: string): Promise<AgentEvent[]>
+  listTestEvidence(runId?: string): Promise<TestEvidence[]>
+  saveArtifact(artifact: Artifact): Promise<void>
+  saveEvent(event: AgentEvent): Promise<void>
+  saveTestEvidence(evidence: TestEvidence): Promise<void>
   listCodingAgentRuns(runId?: string): Promise<CodingAgentRun[]>
   saveCodingAgentRun(run: CodingAgentRun): Promise<void>
   saveCodingAgentEvent(event: CodingAgentEvent): Promise<void>
@@ -42,6 +62,33 @@ export type CodingRuntimeStore = {
 export type CodingRuntimeRemoteSync = {
   uploadCodingAgentSummary(summary: RemoteCodingAgentSummary): Promise<RemoteSyncUploadResult>
 }
+
+export type CodingRuntimePublisher = {
+  publishRunStatus(run: CodingAgentRun): void
+  publishEvent(event: CodingAgentEvent): void
+  publishPermission(request: CodingPermissionRequest): void
+}
+
+export type CodingRuntimeTestCommandResult = {
+  status: TestEvidenceStatus
+  exitCode: number | null
+  durationMs: number
+  stdout: string
+  stderr: string
+  redacted: boolean
+  summary: string
+}
+
+export type CodingRuntimeTestCommandRunner = (input: {
+  command: string
+  cwd: string
+  timeoutMs: number
+}) => Promise<CodingRuntimeTestCommandResult>
+
+export type CodingRuntimePermissionTimeoutScheduler = (
+  request: CodingPermissionRequest,
+  expire: () => Promise<void>,
+) => void
 
 export type RunCodingAgentRuntimeInput = {
   runId: string
@@ -79,9 +126,15 @@ export type CodingRuntimeDeps = {
   store: CodingRuntimeStore
   engine: CodingEngineAdapter
   remoteSync: CodingRuntimeRemoteSync
+  publisher?: CodingRuntimePublisher
+  runTestCommand?: CodingRuntimeTestCommandRunner
+  schedulePermissionTimeout?: CodingRuntimePermissionTimeoutScheduler
+  testTimeoutMs?: number
   worktreeRoot?: string
   idGenerator?: (prefix?: string) => string
   now?: () => string
+  knowledgeDocuments?: KnowledgeDocument[]
+  knowledgeChunks?: KnowledgeChunk[]
   createWorkspace?: typeof createManagedCodingWorkspace
   deleteWorkspace?: typeof deleteManagedCodingWorkspace
 }
@@ -104,6 +157,8 @@ export type CodingRuntime = {
 export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   const idGenerator = deps.idGenerator ?? ((prefix = 'id') => `${prefix}-${randomUUID()}`)
   const now = deps.now ?? (() => new Date().toISOString())
+  const knowledgeDocuments = deps.knowledgeDocuments ?? defaultKnowledgeDocuments
+  const knowledgeChunks = deps.knowledgeChunks ?? defaultKnowledgeChunks
   const createWorkspace = deps.createWorkspace ?? createManagedCodingWorkspace
   const deleteWorkspace = deps.deleteWorkspace ?? deleteManagedCodingWorkspace
 
@@ -128,8 +183,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     if (!node) {
       throw new Error(`Run node not found: ${nodeId}`)
     }
-    if (node.stage !== 'build' && node.kind !== 'task') {
-      throw new Error('Coding Agent can only run from an implementation/build node')
+    if (!canRunCodingAgentOnNode(node)) {
+      throw new Error('Coding Agent can only run from a build task node')
     }
     return node
   }
@@ -165,11 +220,242 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   async function saveEvents(events: CodingAgentEvent[]) {
     for (const event of events) {
       await deps.store.saveCodingAgentEvent(event)
+      deps.publisher?.publishEvent(event)
+    }
+  }
+
+  async function saveCodingRun(run: CodingAgentRun) {
+    await deps.store.saveCodingAgentRun(run)
+    deps.publisher?.publishRunStatus(run)
+  }
+
+  async function savePermissionRequest(request: CodingPermissionRequest) {
+    await deps.store.saveCodingPermissionRequest(request)
+    deps.publisher?.publishPermission(request)
+    if (request.status === 'pending') {
+      deps.schedulePermissionTimeout?.(request, async () => {
+        const latest = (await deps.store.listCodingPermissionRequests(request.codingRunId)).find(
+          (candidate) => candidate.id === request.id,
+        )
+        if (!latest || latest.status !== 'pending') {
+          return
+        }
+        await replyCodingPermission({
+          requestId: request.id,
+          codingRunId: request.codingRunId,
+          decidedBy: 'devflow-timeout',
+          decision: 'expired',
+          comment: 'Permission request expired.',
+        })
+      })
     }
   }
 
   async function nextSequence(codingRunId: string): Promise<number> {
     return (await deps.store.listCodingAgentEvents(codingRunId)).length + 1
+  }
+
+  async function nextAgentEventSequence(runId: string): Promise<number> {
+    return (await deps.store.listEvents(runId)).length + 1
+  }
+
+  async function loadCodingBriefContext(run: WorkflowRun, node: WorkflowNode) {
+    const artifacts = await deps.store.listArtifacts(run.id)
+    const events = await deps.store.listEvents(run.id)
+    const testEvidence = await deps.store.listTestEvidence(run.id)
+    const knowledgeReferences = buildKnowledgeReferences({
+      run,
+      artifacts,
+      documents: knowledgeDocuments,
+      chunks: knowledgeChunks,
+      testEvidence,
+    })
+    const governanceChecks = buildKnowledgeGovernanceChecks({
+      run,
+      node,
+      artifacts,
+      documents: knowledgeDocuments,
+      chunks: knowledgeChunks,
+      testEvidence,
+    })
+
+    return {
+      upstreamArtifacts: artifacts.filter((artifact) => artifact.nodeId !== node.id),
+      knowledgeReferences,
+      governanceChecks,
+      gateDecisions: events.flatMap((event) => gateDecisionFromEvent(event)),
+      testEvidence,
+    }
+  }
+
+  function gateDecisionFromEvent(event: AgentEvent): GateDecision[] {
+    if (event.kind !== 'approval' || !event.nodeId) {
+      return []
+    }
+
+    return [
+      {
+        id: `gate-decision-${event.id}`,
+        runId: event.runId,
+        nodeId: event.nodeId,
+        approverId: 'devflow',
+        decision: 'approved',
+        comment: event.message,
+        decidedAt: event.timestamp,
+      },
+    ]
+  }
+
+  async function runCodingTests(input: {
+    codingRun: CodingAgentRun
+    project: LocalProject
+    workspace: ManagedCodingWorkspace
+    timestamp: string
+  }): Promise<{ codingRun: CodingAgentRun; evidence?: TestEvidence }> {
+    const command = input.project.testCommand.trim()
+    if (!deps.runTestCommand || !command) {
+      return { codingRun: input.codingRun }
+    }
+
+    const startedEvent: CodingAgentEvent = {
+      id: idGenerator('coding-event'),
+      codingRunId: input.codingRun.id,
+      runId: input.codingRun.runId,
+      nodeId: input.codingRun.nodeId,
+      sequence: await nextSequence(input.codingRun.id),
+      kind: 'test',
+      message: `Running coding worktree tests: ${command}`,
+      timestamp: input.timestamp,
+      redacted: true,
+    }
+    await saveEvents([startedEvent])
+
+    const result = await deps.runTestCommand({
+      command,
+      cwd: input.workspace.worktreePath,
+      timeoutMs: deps.testTimeoutMs ?? 120_000,
+    })
+    const evidence: TestEvidence = {
+      id: idGenerator('evidence'),
+      runId: input.codingRun.runId,
+      nodeId: input.codingRun.nodeId,
+      projectId: input.project.id,
+      command,
+      cwd: input.workspace.worktreePath,
+      status: result.status,
+      exitCode: result.exitCode,
+      durationMs: result.durationMs,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      summary: result.summary,
+      redacted: result.redacted,
+      createdAt: input.timestamp,
+    }
+    const artifact = createTestEvidenceArtifact(evidence)
+    const agentEvent = createTestEvidenceEvent(evidence, await nextAgentEventSequence(evidence.runId))
+    const completedEvent: CodingAgentEvent = {
+      id: idGenerator('coding-event'),
+      codingRunId: input.codingRun.id,
+      runId: input.codingRun.runId,
+      nodeId: input.codingRun.nodeId,
+      sequence: await nextSequence(input.codingRun.id),
+      kind: 'test',
+      message: `Coding worktree tests ${result.status}: ${result.summary}`,
+      timestamp: input.timestamp,
+      metadata: { evidenceId: evidence.id, status: result.status },
+      redacted: true,
+    }
+    const codingRun: CodingAgentRun = {
+      ...input.codingRun,
+      testEvidenceId: evidence.id,
+      summary:
+        result.status === 'passed'
+          ? `${input.codingRun.summary} Test evidence passed.`
+          : `${input.codingRun.summary} Test evidence ${result.status}: ${result.summary}`,
+    }
+
+    await deps.store.saveTestEvidence(evidence)
+    await deps.store.saveArtifact(artifact)
+    await deps.store.saveEvent(agentEvent)
+    await saveEvents([completedEvent])
+
+    return { codingRun, evidence }
+  }
+
+  async function replyCodingPermission(input: ReplyCodingPermissionRuntimeInput): Promise<CodingPermissionRequest> {
+    const request = await findPermissionRequest(input)
+    const timestamp = now()
+    const updatedRequest: CodingPermissionRequest = {
+      ...request,
+      status:
+        input.decision === 'approved'
+          ? 'approved'
+          : input.decision === 'expired'
+            ? 'expired'
+            : 'rejected',
+    }
+    const decision: CodingPermissionDecision = {
+      id: idGenerator('coding-permission-decision'),
+      requestId: request.id,
+      codingRunId: input.codingRunId,
+      decidedBy: input.decidedBy,
+      decision: input.decision,
+      comment: input.comment,
+      decidedAt: timestamp,
+    }
+
+    await savePermissionRequest(updatedRequest)
+    await deps.store.saveCodingPermissionDecision(decision)
+
+    const codingRun = await findCodingRun(input.codingRunId)
+    if (input.decision === 'approved') {
+      const workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
+      const project = await findProject(codingRun.projectId)
+      const completed = await deps.engine.approvePermission({
+        request: updatedRequest,
+        codingRun,
+        workspace,
+        project,
+        now: timestamp,
+      })
+      await deps.store.saveDependencyBootstrapEvidence(completed.bootstrapEvidence)
+      await deps.store.saveCodingDiffArtifact(completed.diff)
+      await saveEvents(completed.events)
+      const tested = await runCodingTests({
+        codingRun: completed.codingRun,
+        workspace,
+        project,
+        timestamp,
+      })
+
+      await saveCodingRun(tested.codingRun)
+      await deps.remoteSync
+        .uploadCodingAgentSummary(createRemoteCodingAgentSummary(tested.codingRun, completed.diff))
+        .catch(() => undefined)
+    } else {
+      const updatedRun: CodingAgentRun = {
+        ...codingRun,
+        status: 'interrupted',
+        summary: `Coding Agent permission ${input.decision}; run interrupted.`,
+        completedAt: timestamp,
+      }
+      const event: CodingAgentEvent = {
+        id: idGenerator('coding-event'),
+        codingRunId: updatedRun.id,
+        runId: updatedRun.runId,
+        nodeId: updatedRun.nodeId,
+        sequence: await nextSequence(updatedRun.id),
+        kind: 'permission',
+        message: `Coding permission ${input.decision}; run interrupted.`,
+        timestamp,
+        metadata: { requestId: request.id },
+        redacted: true,
+      }
+      await saveCodingRun(updatedRun)
+      await saveEvents([event])
+    }
+
+    return updatedRequest
   }
 
   return {
@@ -192,6 +478,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const run = await findRun(input.runId)
       const node = findNode(run, input.nodeId)
       const codingRunId = idGenerator('coding-run')
+      const briefContext = await loadCodingBriefContext(run, node)
       const workspace = await createWorkspace({
         project,
         codingRunId,
@@ -208,12 +495,13 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         requestedBy: input.requestedBy,
         userInstruction: input.userInstruction,
         now: now(),
+        ...briefContext,
       })
 
       await deps.store.saveManagedCodingWorkspace(workspace)
-      await deps.store.saveCodingAgentRun(bundle.codingRun)
+      await saveCodingRun(bundle.codingRun)
       await saveEvents(bundle.events)
-      await deps.store.saveCodingPermissionRequest(bundle.permissionRequest)
+      await savePermissionRequest(bundle.permissionRequest)
 
       return {
         codingRun: bundle.codingRun,
@@ -242,80 +530,12 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         timestamp,
         redacted: true,
       }
-      await deps.store.saveCodingAgentRun(updated)
-      await deps.store.saveCodingAgentEvent(event)
+      await saveCodingRun(updated)
+      await saveEvents([event])
       return updated
     },
 
-    async replyCodingPermission(input) {
-      const request = await findPermissionRequest(input)
-      const timestamp = now()
-      const updatedRequest: CodingPermissionRequest = {
-        ...request,
-        status:
-          input.decision === 'approved'
-            ? 'approved'
-            : input.decision === 'expired'
-              ? 'expired'
-              : 'rejected',
-      }
-      const decision: CodingPermissionDecision = {
-        id: idGenerator('coding-permission-decision'),
-        requestId: request.id,
-        codingRunId: input.codingRunId,
-        decidedBy: input.decidedBy,
-        decision: input.decision,
-        comment: input.comment,
-        decidedAt: timestamp,
-      }
-
-      await deps.store.saveCodingPermissionRequest(updatedRequest)
-      await deps.store.saveCodingPermissionDecision(decision)
-
-      const codingRun = await findCodingRun(input.codingRunId)
-      if (input.decision === 'approved') {
-        const workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
-        const project = await findProject(codingRun.projectId)
-        const completed = await deps.engine.approvePermission({
-          request: updatedRequest,
-          codingRun,
-          workspace,
-          project,
-          now: timestamp,
-        })
-
-        await deps.store.saveCodingAgentRun(completed.codingRun)
-        await deps.store.saveDependencyBootstrapEvidence(completed.bootstrapEvidence)
-        await deps.store.saveCodingDiffArtifact(completed.diff)
-        await saveEvents(completed.events)
-        await deps.remoteSync
-          .uploadCodingAgentSummary(createRemoteCodingAgentSummary(completed.codingRun, completed.diff))
-          .catch(() => undefined)
-      } else {
-        const updatedRun: CodingAgentRun = {
-          ...codingRun,
-          status: 'interrupted',
-          summary: `Coding Agent permission ${input.decision}; run interrupted.`,
-          completedAt: timestamp,
-        }
-        const event: CodingAgentEvent = {
-          id: idGenerator('coding-event'),
-          codingRunId: updatedRun.id,
-          runId: updatedRun.runId,
-          nodeId: updatedRun.nodeId,
-          sequence: await nextSequence(updatedRun.id),
-          kind: 'permission',
-          message: `Coding permission ${input.decision}; run interrupted.`,
-          timestamp,
-          metadata: { requestId: request.id },
-          redacted: true,
-        }
-        await deps.store.saveCodingAgentRun(updatedRun)
-        await deps.store.saveCodingAgentEvent(event)
-      }
-
-      return updatedRequest
-    },
+    replyCodingPermission,
 
     async subscribeCodingRun() {
       return deps.store.loadState()

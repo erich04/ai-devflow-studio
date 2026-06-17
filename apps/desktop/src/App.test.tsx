@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mcpServers as fixtureMcpServers, runs as fixtureRuns, validateTestCommandSafety } from '@ai-devflow/shared'
 import { App } from './App'
@@ -339,6 +339,9 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     listCodingAgentRuns: vi.fn().mockResolvedValue([]),
     openManagedWorktree: vi.fn(),
     deleteManagedWorktree: vi.fn(),
+    onCodingRunStatusUpdated: vi.fn(() => vi.fn()),
+    onCodingEventAppended: vi.fn(() => vi.fn()),
+    onCodingPermissionUpdated: vi.fn(() => vi.fn()),
     ...overrides,
   }
 
@@ -607,6 +610,104 @@ describe('App', () => {
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('warning-only')
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Build redacted context')
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('estimated')
+  })
+
+  it('subscribes to coding push updates and merges pushed state into the Agents view', async () => {
+    const handlers: {
+      run?: Parameters<NonNullable<DevFlowDesktopApi['onCodingRunStatusUpdated']>>[0]
+      event?: Parameters<NonNullable<DevFlowDesktopApi['onCodingEventAppended']>>[0]
+      permission?: Parameters<NonNullable<DevFlowDesktopApi['onCodingPermissionUpdated']>>[0]
+    } = {}
+    const onCodingRunStatusUpdated = vi.fn((listener: NonNullable<typeof handlers.run>) => {
+      handlers.run = listener
+      return vi.fn()
+    })
+    const onCodingEventAppended = vi.fn((listener: NonNullable<typeof handlers.event>) => {
+      handlers.event = listener
+      return vi.fn()
+    })
+    const onCodingPermissionUpdated = vi.fn((listener: NonNullable<typeof handlers.permission>) => {
+      handlers.permission = listener
+      return vi.fn()
+    })
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue({
+        projects: [localProject],
+        runs: fixtureRuns,
+        artifacts: [],
+        events: [],
+        testEvidence: [],
+        settings: { themePreference: 'system' },
+        mcpServers: [],
+        agentReviews: [],
+        agentTraces: [],
+        agentTokenUsage: [],
+        codingRuns: [],
+        codingEvents: [],
+        codingPermissionRequests: [],
+        codingPermissionDecisions: [],
+        managedCodingWorkspaces: [],
+        dependencyBootstrapEvidence: [],
+        codingDiffArtifacts: [],
+      }),
+      onCodingRunStatusUpdated,
+      onCodingEventAppended,
+      onCodingPermissionUpdated,
+    })
+    render(<App />)
+
+    await waitFor(() => expect(onCodingRunStatusUpdated).toHaveBeenCalled())
+    act(() => {
+      handlers.run?.({
+        id: 'coding-run-push',
+        runId: fixtureRuns[0]!.id,
+        nodeId: 'n-build',
+        projectId: localProject.id,
+        requestedBy: 'u-ling',
+        providerId: 'fake-coding-engine',
+        engine: 'fake',
+        status: 'waiting_permission',
+        managedWorkspaceId: 'workspace-1',
+        branchName: 'devflow/run-push',
+        userInstruction: 'Use pushed context.',
+        prompt: 'local prompt',
+        summary: 'Waiting for pushed permission.',
+        changedPaths: [],
+        startedAt: '2026-06-17T00:00:00.000Z',
+        redacted: true,
+      })
+      handlers.permission?.({
+        id: 'permission-push',
+        codingRunId: 'coding-run-push',
+        runId: fixtureRuns[0]!.id,
+        nodeId: 'n-build',
+        permission: 'edit',
+        title: 'Apply pushed diff',
+        filePath: 'src/pushed.ts',
+        diffPreview: '+pushed',
+        risk: 'warn',
+        reasons: ['Pushed permission requires approval.'],
+        status: 'pending',
+        requestedAt: '2026-06-17T00:00:00.000Z',
+        expiresAt: '2026-06-17T00:01:00.000Z',
+      })
+      handlers.event?.({
+        id: 'coding-event-push',
+        codingRunId: 'coding-run-push',
+        runId: fixtureRuns[0]!.id,
+        nodeId: 'n-build',
+        sequence: 1,
+        kind: 'permission',
+        message: 'Pushed permission event.',
+        timestamp: '2026-06-17T00:00:00.000Z',
+        redacted: true,
+      })
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+
+    expect(await screen.findByTestId('agent-workbench')).toHaveTextContent('Waiting for pushed permission.')
+    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Apply pushed diff')
+    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Pushed permission event.')
   })
 
   it('selects a local project, saves an editable test command, and archives local test evidence', async () => {

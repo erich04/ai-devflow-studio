@@ -5,6 +5,8 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
+  AgentEvent,
+  Artifact,
   CodingAgentEvent,
   CodingAgentRun,
   CodingDiffArtifact,
@@ -14,6 +16,7 @@ import type {
   LocalProject,
   ManagedCodingWorkspace,
   RemoteCodingAgentSummary,
+  TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
 import { createFakeCodingEngineAdapter } from './coding-engine'
@@ -90,6 +93,159 @@ describe('CodingRuntime', () => {
     expect(store.workspaces).toHaveLength(0)
   })
 
+  it('rejects coding runs from nodes that are not build task nodes', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [
+        buildRun({
+          nodes: [
+            buildNode({ id: 'node-build-gate', stage: 'build', kind: 'gate' }),
+            buildNode({ id: 'node-design-task', stage: 'design', kind: 'task' }),
+          ],
+        }),
+      ],
+    })
+    const runtime = createCodingRuntime({
+      store,
+      engine: createFakeCodingEngineAdapter(),
+      remoteSync: { uploadCodingAgentSummary: vi.fn() },
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-1'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    })
+
+    await expect(
+      runtime.runCodingAgent({
+        runId: 'run-1',
+        nodeId: 'node-build-gate',
+        projectId: 'project-1',
+        requestedBy: 'user-1',
+        providerId: 'fake-coding-engine',
+        userInstruction: 'Do it.',
+      }),
+    ).rejects.toThrow('Coding Agent can only run from a build task node')
+    await expect(
+      runtime.runCodingAgent({
+        runId: 'run-1',
+        nodeId: 'node-design-task',
+        projectId: 'project-1',
+        requestedBy: 'user-1',
+        providerId: 'fake-coding-engine',
+        userInstruction: 'Do it.',
+      }),
+    ).rejects.toThrow('Coding Agent can only run from a build task node')
+    expect(store.workspaces).toHaveLength(0)
+  })
+
+  it('assembles the coding prompt from persisted DevFlow context', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+      artifacts: [designArtifact()],
+      events: [approvalEvent()],
+      testEvidence: [passingEvidence(repo)],
+    })
+    const runtime = createCodingRuntime({
+      store,
+      engine: createFakeCodingEngineAdapter(),
+      remoteSync: { uploadCodingAgentSummary: vi.fn() },
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-1'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    })
+
+    const result = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Use the approved health endpoint design.',
+    })
+
+    expect(result.codingRun.prompt).toContain('Health endpoint design')
+    expect(result.codingRun.prompt).toContain('knowledge-doc-api-health')
+    expect(result.codingRun.prompt).toContain('Gate Decisions')
+    expect(result.codingRun.prompt).toContain('approved by devflow: Lead Gate 已通过：架构 Gate')
+    expect(result.codingRun.prompt).toContain('Existing Test Evidence')
+    expect(result.codingRun.prompt).toContain('npm test [passed]: Existing local tests passed.')
+  })
+
+  it('publishes coding run, event, and permission updates as they are persisted', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const publisher = {
+      publishRunStatus: vi.fn(),
+      publishEvent: vi.fn(),
+      publishPermission: vi.fn(),
+    }
+    const runtime = createCodingRuntime({
+      store,
+      engine: createFakeCodingEngineAdapter(),
+      remoteSync: { uploadCodingAgentSummary: vi.fn() },
+      publisher,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-1'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    })
+
+    const result = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Add the marker file.',
+    })
+
+    expect(publisher.publishRunStatus).toHaveBeenCalledWith(result.codingRun)
+    expect(publisher.publishEvent).toHaveBeenCalledTimes(2)
+    expect(publisher.publishPermission).toHaveBeenCalledWith(store.permissionRequests[0])
+  })
+
+  it('expires unanswered permission requests through the scheduler callback', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    let expire: (() => Promise<void>) | undefined
+    const runtime = createCodingRuntime({
+      store,
+      engine: createFakeCodingEngineAdapter(),
+      remoteSync: { uploadCodingAgentSummary: vi.fn() },
+      schedulePermissionTimeout: (_request, callback) => {
+        expire = callback
+      },
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-1', 'decision-1', 'event-1'),
+      now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:01:00.000Z'),
+    })
+
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Add the marker file.',
+    })
+    await expire?.()
+
+    expect(store.permissionRequests[0]).toMatchObject({ status: 'expired' })
+    expect(store.permissionDecisions[0]).toMatchObject({
+      codingRunId: started.codingRun.id,
+      decision: 'expired',
+      decidedBy: 'devflow-timeout',
+    })
+    expect(store.codingRuns.at(-1)?.status).toBe('interrupted')
+  })
+
   it('archives diff and bootstrap evidence and uploads a redacted summary after approval', async () => {
     const repo = await gitRepo()
     const store = new MemoryCodingStore({
@@ -101,12 +257,22 @@ describe('CodingRuntime', () => {
       syncedAt: '2026-06-17T00:02:00.000Z',
       message: 'accepted',
     }))
+    const runTestCommand = vi.fn(async () => ({
+      status: 'passed' as const,
+      exitCode: 0,
+      durationMs: 77,
+      stdout: 'coding tests passed',
+      stderr: '',
+      redacted: true,
+      summary: 'Coding worktree tests passed.',
+    }))
     const runtime = createCodingRuntime({
       store,
       engine: createFakeCodingEngineAdapter(),
       remoteSync: { uploadCodingAgentSummary },
+      runTestCommand,
       worktreeRoot: await tempDir('devflow-worktrees-'),
-      idGenerator: fixedIds('coding-run-1', 'decision-1'),
+      idGenerator: fixedIds('coding-run-1', 'decision-1', 'evidence-1'),
       now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:01:00.000Z'),
     })
     const started = await runtime.runCodingAgent({
@@ -131,6 +297,21 @@ describe('CodingRuntime', () => {
     expect(store.codingRuns.at(-1)?.status).toBe('completed')
     expect(store.bootstrapEvidence).toHaveLength(1)
     expect(store.diffArtifacts[0]?.changedPaths).toEqual(['devflow-fake-change.txt'])
+    expect(runTestCommand).toHaveBeenCalledWith({
+      command: 'npm test',
+      cwd: store.workspaces[0]!.worktreePath,
+      timeoutMs: 120_000,
+    })
+    expect(store.testEvidence[0]).toMatchObject({
+      command: 'npm test',
+      cwd: store.workspaces[0]!.worktreePath,
+      status: 'passed',
+      summary: 'Coding worktree tests passed.',
+    })
+    expect(store.artifacts[0]).toMatchObject({ kind: 'test_report', title: 'Local test evidence' })
+    expect(store.events[0]).toMatchObject({ kind: 'test_result', message: 'Coding worktree tests passed.' })
+    expect(store.codingRuns.at(-1)?.testEvidenceId).toBe(store.testEvidence[0]?.id)
+    expect(store.codingEvents.map((event) => event.kind)).toContain('test')
     expect(uploadCodingAgentSummary).toHaveBeenCalledWith(
       expect.objectContaining({
         id: started.codingRun.id,
@@ -206,12 +387,18 @@ describe('CodingRuntime', () => {
 type StoreSeed = {
   projects?: LocalProject[]
   runs?: WorkflowRun[]
+  artifacts?: Artifact[]
+  events?: AgentEvent[]
+  testEvidence?: TestEvidence[]
   codingRuns?: CodingAgentRun[]
 }
 
 class MemoryCodingStore {
   readonly projects: LocalProject[]
   readonly runs: WorkflowRun[]
+  readonly artifacts: Artifact[]
+  readonly events: AgentEvent[]
+  readonly testEvidence: TestEvidence[]
   readonly workspaces: ManagedCodingWorkspace[] = []
   readonly codingRuns: CodingAgentRun[]
   readonly codingEvents: CodingAgentEvent[] = []
@@ -223,6 +410,9 @@ class MemoryCodingStore {
   constructor(seed: StoreSeed = {}) {
     this.projects = seed.projects ?? []
     this.runs = seed.runs ?? []
+    this.artifacts = seed.artifacts ?? []
+    this.events = seed.events ?? []
+    this.testEvidence = seed.testEvidence ?? []
     this.codingRuns = seed.codingRuns ?? []
   }
 
@@ -232,6 +422,34 @@ class MemoryCodingStore {
 
   async listRuns() {
     return this.runs
+  }
+
+  async listArtifacts(runId?: string) {
+    return runId ? this.artifacts.filter((artifact) => artifact.runId === runId) : this.artifacts
+  }
+
+  async listEvents(runId?: string) {
+    return runId ? this.events.filter((event) => event.runId === runId) : this.events
+  }
+
+  async listTestEvidence(runId?: string) {
+    return runId ? this.testEvidence.filter((evidence) => evidence.runId === runId) : this.testEvidence
+  }
+
+  async saveRun(run: WorkflowRun) {
+    upsert(this.runs, run)
+  }
+
+  async saveArtifact(artifact: Artifact) {
+    upsert(this.artifacts, artifact)
+  }
+
+  async saveEvent(event: AgentEvent) {
+    upsert(this.events, event)
+  }
+
+  async saveTestEvidence(evidence: TestEvidence) {
+    upsert(this.testEvidence, evidence)
   }
 
   async listCodingAgentRuns(runId?: string) {
@@ -286,9 +504,9 @@ class MemoryCodingStore {
     return {
       projects: this.projects,
       runs: this.runs,
-      artifacts: [],
-      events: [],
-      testEvidence: [],
+      artifacts: this.artifacts,
+      events: this.events,
+      testEvidence: this.testEvidence,
       agentReviews: [],
       agentTraces: [],
       agentTokenUsage: [],
@@ -345,7 +563,52 @@ function project(repo: string): LocalProject {
   }
 }
 
-function buildRun(): WorkflowRun {
+function designArtifact(): Artifact {
+  return {
+    id: 'artifact-design',
+    runId: 'run-1',
+    nodeId: 'node-design',
+    kind: 'design',
+    title: 'Health endpoint design',
+    summary: 'Follow the API health endpoint standard and include degraded dependency states.',
+    content: 'The implementation must expose ok, degraded, and down states with test evidence.',
+    redacted: false,
+    updatedAt: '2026-06-17T00:00:00.000Z',
+  }
+}
+
+function approvalEvent(): AgentEvent {
+  return {
+    id: 'event-approval-1',
+    runId: 'run-1',
+    nodeId: 'node-design-gate',
+    sequence: 1,
+    kind: 'approval',
+    message: 'Lead Gate 已通过：架构 Gate',
+    timestamp: '2026-06-17T00:00:00.000Z',
+  }
+}
+
+function passingEvidence(repo: string): TestEvidence {
+  return {
+    id: 'evidence-1',
+    runId: 'run-1',
+    nodeId: 'node-build',
+    projectId: 'project-1',
+    command: 'npm test',
+    cwd: repo,
+    status: 'passed',
+    exitCode: 0,
+    durationMs: 42,
+    stdout: 'ok',
+    stderr: '',
+    summary: 'Existing local tests passed.',
+    redacted: true,
+    createdAt: '2026-06-17T00:00:00.000Z',
+  }
+}
+
+function buildRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
     id: 'run-1',
     title: 'Implement build node',
@@ -357,20 +620,24 @@ function buildRun(): WorkflowRun {
     branchName: 'ai/build-node',
     createdAt: '2026-06-17T00:00:00.000Z',
     updatedAt: '2026-06-17T00:00:00.000Z',
-    nodes: [
-      {
-        id: 'node-build',
-        stage: 'build',
-        title: 'Build implementation',
-        subtitle: 'Make the requested code change.',
-        kind: 'task',
-        status: 'running',
-        ownerId: 'user-1',
-        retryCount: 0,
-        artifactIds: [],
-      },
-    ],
+    nodes: [buildNode()],
     edges: [],
+    ...overrides,
+  }
+}
+
+function buildNode(overrides: Partial<WorkflowRun['nodes'][number]> = {}): WorkflowRun['nodes'][number] {
+  return {
+    id: 'node-build',
+    stage: 'build',
+    title: 'Build implementation',
+    subtitle: 'Make the requested code change.',
+    kind: 'task',
+    status: 'running',
+    ownerId: 'user-1',
+    retryCount: 0,
+    artifactIds: [],
+    ...overrides,
   }
 }
 

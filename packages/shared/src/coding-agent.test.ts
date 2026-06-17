@@ -8,16 +8,19 @@ import type {
   KnowledgeGovernanceCheck,
   KnowledgeReference,
   LocalProject,
+  TestEvidence,
   WorkflowNode,
   WorkflowRun,
 } from './domain'
 import {
   MAX_DIFF_CHARS,
   buildCodingBrief,
+  canRunCodingAgentOnNode,
   createRemoteCodingAgentSummary,
   sanitizeCodingDiffArtifact,
   selectDependencyBootstrap,
 } from './coding-agent'
+import { runs } from './fixtures'
 
 const run: WorkflowRun = {
   id: 'run-1',
@@ -95,6 +98,23 @@ const gateDecision: GateDecision = {
   decidedAt: '2026-06-17T00:04:00.000Z',
 }
 
+const testEvidence: TestEvidence = {
+  id: 'evidence-1',
+  runId: run.id,
+  nodeId: buildNode.id,
+  projectId: 'project-1',
+  command: 'corepack pnpm test -- --run',
+  cwd: '/tmp/devflow-worktrees/run-1',
+  status: 'passed',
+  exitCode: 0,
+  durationMs: 1280,
+  stdout: 'tests passed',
+  stderr: '',
+  summary: 'Local tests passed with redacted output.',
+  redacted: true,
+  createdAt: '2026-06-17T00:05:00.000Z',
+}
+
 const project: LocalProject = {
   id: 'project-1',
   name: 'Audit API',
@@ -106,6 +126,24 @@ const project: LocalProject = {
   updatedAt: '2026-06-17T00:00:00.000Z',
 }
 
+describe('canRunCodingAgentOnNode', () => {
+  it('allows only build task nodes, including the seeded implementation node', () => {
+    const seededBuildNode = runs[0]!.nodes.find((node) => node.id === 'n-build')
+
+    expect(seededBuildNode).toMatchObject({ stage: 'build', kind: 'task' })
+    expect(canRunCodingAgentOnNode(buildNode)).toBe(true)
+    expect(canRunCodingAgentOnNode(seededBuildNode!)).toBe(true)
+  })
+
+  it('rejects non-build-task nodes even when either stage or kind partially matches', () => {
+    expect(canRunCodingAgentOnNode({ ...buildNode, kind: 'agent' })).toBe(false)
+    expect(canRunCodingAgentOnNode({ ...buildNode, kind: 'gate' })).toBe(false)
+    expect(canRunCodingAgentOnNode({ ...buildNode, stage: 'clarify' })).toBe(false)
+    expect(canRunCodingAgentOnNode({ ...buildNode, stage: 'design' })).toBe(false)
+    expect(canRunCodingAgentOnNode({ ...buildNode, stage: 'test' })).toBe(false)
+  })
+})
+
 describe('buildCodingBrief', () => {
   it('assembles a DevFlow-native coding brief from run, node, artifacts, knowledge, gates, and tests', () => {
     const brief = buildCodingBrief({
@@ -116,6 +154,7 @@ describe('buildCodingBrief', () => {
       knowledgeReferences: [knowledgeReference],
       governanceChecks: [governanceCheck],
       gateDecisions: [gateDecision],
+      testEvidence: [testEvidence],
       userInstruction: 'Keep the endpoint behind the existing auth middleware.',
       worktreePath: '/tmp/devflow-worktrees/run-1',
       branchName: 'devflow/run-1-node-build',
@@ -131,6 +170,8 @@ describe('buildCodingBrief', () => {
     expect(brief.prompt).toContain('Knowledge References')
     expect(brief.prompt).toContain('Testing Evidence Standard')
     expect(brief.prompt).toContain('Approved with test evidence required')
+    expect(brief.prompt).toContain('Existing Test Evidence')
+    expect(brief.prompt).toContain('corepack pnpm test -- --run [passed]: Local tests passed with redacted output.')
     expect(brief.prompt).toContain('Managed worktree: /tmp/devflow-worktrees/run-1')
   })
 })

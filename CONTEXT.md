@@ -106,7 +106,8 @@ explicit live use.
 
 The DevFlow boundary that hosts an external coding engine such as opencode. DevFlow does not
 rebuild the coding agent; it owns context assembly, permission relay, worktree management, evidence
-capture, tests, and team-safe summaries.
+capture, tests, and team-safe summaries. In the current workflow model, Coding Agent actions start
+only from build-stage task nodes.
 
 ## Managed Coding Workspace
 

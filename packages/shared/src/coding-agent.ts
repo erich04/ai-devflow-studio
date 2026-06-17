@@ -10,6 +10,7 @@ import type {
   LocalProject,
   PackageManager,
   RemoteCodingAgentSummary,
+  TestEvidence,
   WorkflowNode,
   WorkflowRun,
 } from './domain'
@@ -27,6 +28,7 @@ export type CodingBriefInput = {
   knowledgeReferences: KnowledgeReference[]
   governanceChecks: KnowledgeGovernanceCheck[]
   gateDecisions: GateDecision[]
+  testEvidence: TestEvidence[]
   userInstruction: string
   worktreePath: string
   branchName: string
@@ -53,6 +55,11 @@ export type RawCodingDiffArtifact = {
   createdAt: string
 }
 
+export function canRunCodingAgentOnNode(node: WorkflowNode): boolean {
+  // DevFlow models implementation work as build-stage task nodes.
+  return node.stage === 'build' && node.kind === 'task'
+}
+
 export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
   const userInstruction = input.userInstruction.trim()
   const artifactLines = input.upstreamArtifacts.length
@@ -77,6 +84,11 @@ export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
         return `- ${decision.decision} by ${decision.approverId}: ${decision.comment}`
       })
     : ['- No gate decisions have been recorded.']
+  const testEvidenceLines = input.testEvidence.length
+    ? input.testEvidence.map((evidence) => {
+        return `- ${evidence.command} [${evidence.status}]: ${evidence.summary}`
+      })
+    : ['- No test evidence has been recorded.']
 
   const prompt = [
     'You are the DevFlow managed coding adapter. Work only inside the managed worktree.',
@@ -100,6 +112,9 @@ export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
     '',
     'Gate Decisions',
     gateLines.join('\n'),
+    '',
+    'Existing Test Evidence',
+    testEvidenceLines.join('\n'),
     '',
     'User Instruction',
     userInstruction || 'Implement the node using the upstream context. Keep changes minimal and testable.',
