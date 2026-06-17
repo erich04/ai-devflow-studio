@@ -50,6 +50,7 @@ import { createRemoteSyncClient, type RemoteSyncClient } from './remote-sync.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
 import { createCodingEngineAdapterFromEnv } from './coding-engine.js'
 import { createCodingRuntime } from './coding-runtime.js'
+import { createOpencodeProcessManager } from './opencode-process.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_TEST_TIMEOUT_MS = 120_000
@@ -57,6 +58,7 @@ const DEFAULT_TEST_TIMEOUT_MS = 120_000
 let storePromise: Promise<LocalStore> | undefined
 let remoteSyncClient: RemoteSyncClient | undefined
 const codingPermissionTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+const opencodeProcessManager = createOpencodeProcessManager()
 
 const DEFAULT_OPENAI_PROVIDER_ID = 'openai-default'
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
@@ -543,4 +545,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  void opencodeProcessManager.stopAll()
 })
