@@ -20,7 +20,7 @@ export type DependencyBootstrapRunnerInput = {
   nodeId: string
   projectId: string
   worktreePath: string
-  previousDependencyHash?: string
+  previousDependencyHash?: string | undefined
   runCommand: DependencyBootstrapCommandRunner
   timeoutMs: number
   now: string
@@ -33,7 +33,7 @@ export async function runDependencyBootstrap(
   const decision = selectDependencyBootstrap({
     files,
     nodeModulesPresent: existsSync(path.join(input.worktreePath, 'node_modules')),
-    previousDependencyHash: input.previousDependencyHash,
+    ...(input.previousDependencyHash ? { previousDependencyHash: input.previousDependencyHash } : {}),
   })
 
   if (decision.status === 'skipped' || decision.status === 'needs_approval') {

@@ -24,21 +24,7 @@ describe('opencode HTTP coding engine', () => {
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
 
-    const result = await engine.start({
-      id: 'coding-run-1',
-      run,
-      node,
-      project,
-      workspace,
-      requestedBy: 'u-erich',
-      userInstruction: 'Implement the build node.',
-      now: '2026-06-17T00:00:00.000Z',
-      upstreamArtifacts: [],
-      knowledgeReferences: [],
-      governanceChecks: [],
-      gateDecisions: [],
-      testEvidence: [],
-    })
+    const result = await engine.start(startInput({ run, node, project, workspace }))
 
     expect(result.codingRun.engine).toBe('opencode-http')
     expect(result.codingRun.status).toBe('waiting_permission')
@@ -164,12 +150,12 @@ function sequenceFetcher(responses: unknown[]): Fetcher & { urls: string[]; bodi
 }
 
 function managedWorkspace(projectId: string, runId: string, nodeId: string): ManagedCodingWorkspace {
+  void runId
+  void nodeId
   return {
     id: 'workspace-1',
     projectId,
     codingRunId: 'coding-run-1',
-    runId,
-    nodeId,
     sourcePath: '/tmp/repo',
     worktreePath: '/tmp/worktree',
     branchName: 'devflow/coding-run-1',

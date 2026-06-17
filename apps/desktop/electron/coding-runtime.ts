@@ -95,7 +95,7 @@ export type CodingRuntimeDependencyBootstrapRunner = (input: {
   codingRun: CodingAgentRun
   project: LocalProject
   workspace: ManagedCodingWorkspace
-  previousDependencyHash?: string
+  previousDependencyHash?: string | undefined
   timestamp: string
 }) => Promise<DependencyBootstrapEvidence>
 
@@ -399,6 +399,9 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     timestamp: string
     engineBootstrapEvidence?: DependencyBootstrapEvidence
   }): Promise<{ codingRun: CodingAgentRun; canContinue: boolean }> {
+    const previousDependencyHash = deps.runDependencyBootstrap
+      ? await latestDependencyHash(input.project.id)
+      : undefined
     const evidence =
       input.engineBootstrapEvidence ??
       (deps.runDependencyBootstrap
@@ -406,7 +409,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             codingRun: input.codingRun,
             project: input.project,
             workspace: input.workspace,
-            previousDependencyHash: await latestDependencyHash(input.project.id),
+            ...(previousDependencyHash ? { previousDependencyHash } : {}),
             timestamp: input.timestamp,
           })
         : undefined)
@@ -496,7 +499,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         workspace,
         project,
         timestamp,
-        engineBootstrapEvidence: completed.bootstrapEvidence,
+        ...(completed.bootstrapEvidence ? { engineBootstrapEvidence: completed.bootstrapEvidence } : {}),
       })
       if (!bootstrapped.canContinue) {
         await saveCodingRun(bootstrapped.codingRun)

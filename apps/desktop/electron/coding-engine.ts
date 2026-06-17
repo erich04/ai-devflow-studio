@@ -100,15 +100,32 @@ export function createCodingEngineAdapterFromEnv(
     return createFakeCodingEngineAdapter()
   }
   if (engine === 'opencode-http') {
+    const apiKeyEnvName = env.DEVFLOW_OPENCODE_API_KEY_ENV ?? 'OPENAI_API_KEY'
     return createOpencodeHttpCodingEngineAdapter({
       binaryPath: env.DEVFLOW_OPENCODE_BIN ?? 'opencode',
       providerID: env.DEVFLOW_OPENCODE_PROVIDER_ID ?? 'openai',
       modelID: env.DEVFLOW_OPENCODE_MODEL_ID ?? 'gpt-4.1-mini',
-      apiKeyEnvName: env.DEVFLOW_OPENCODE_API_KEY_ENV ?? 'OPENAI_API_KEY',
+      apiKeyEnvName,
+      runtimeEnv: buildOpencodeRuntimeEnv({
+        baseEnv: process.env,
+        apiKeyEnvName,
+        apiKey: (env as NodeJS.ProcessEnv)[apiKeyEnvName],
+      }),
     })
   }
 
   throw new Error(`Unsupported Coding Agent engine: ${engine}`)
+}
+
+export function buildOpencodeRuntimeEnv(input: {
+  baseEnv: NodeJS.ProcessEnv
+  apiKeyEnvName: string
+  apiKey?: string | undefined
+}): NodeJS.ProcessEnv {
+  return {
+    ...input.baseEnv,
+    ...(input.apiKey ? { [input.apiKeyEnvName]: input.apiKey } : {}),
+  }
 }
 
 export function createFakeCodingEngineAdapter(): CodingEngineAdapter {

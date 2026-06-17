@@ -111,7 +111,7 @@ async function createCodingRuntimeForRequest() {
         nodeId: codingRun.nodeId,
         projectId: project.id,
         worktreePath: workspace.worktreePath,
-        previousDependencyHash,
+        ...(previousDependencyHash ? { previousDependencyHash } : {}),
         runCommand: runLocalTestCommand,
         timeoutMs: DEFAULT_TEST_TIMEOUT_MS,
         now: timestamp,

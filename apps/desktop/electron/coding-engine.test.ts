@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createCodingEngineAdapterFromEnv } from './coding-engine'
+import { buildOpencodeRuntimeEnv, createCodingEngineAdapterFromEnv } from './coding-engine'
 
 describe('coding engine selection', () => {
   it('uses the deterministic fake engine by default', () => {
@@ -22,5 +22,16 @@ describe('coding engine selection', () => {
     expect(() =>
       createCodingEngineAdapterFromEnv({ DEVFLOW_CODING_ENGINE: 'opencode-acp' }),
     ).toThrow('Unsupported Coding Agent engine: opencode-acp')
+  })
+
+  it('maps runtime provider secrets into process env without writing opencode auth', () => {
+    const env = buildOpencodeRuntimeEnv({
+      baseEnv: { PATH: '/usr/bin' },
+      apiKeyEnvName: 'OPENAI_API_KEY',
+      apiKey: 'sk-runtime-only',
+    })
+
+    expect(env['OPENAI_API_KEY']).toBe('sk-runtime-only')
+    expect(JSON.stringify(env)).not.toContain('auth.json')
   })
 })

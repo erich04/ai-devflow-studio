@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import {
   buildOpencodeServeArgs,
@@ -8,14 +8,21 @@ import {
 export type ManagedOpencodeServer = {
   projectId: string
   baseUrl: string
-  child: ChildProcess
+  child: ManagedOpencodeChild
+}
+
+export type ManagedOpencodeChild = {
+  exitCode: number | null
+  kill(): boolean
+  killed: boolean
+  once(event: 'exit', listener: () => void): unknown
 }
 
 export type SpawnOpencodeProcess = (
   command: string,
   args: string[],
   options: Parameters<typeof spawn>[2],
-) => ChildProcess
+) => ManagedOpencodeChild
 
 export type OpencodeProcessManagerDeps = {
   spawnProcess?: SpawnOpencodeProcess

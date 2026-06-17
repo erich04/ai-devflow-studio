@@ -30,9 +30,10 @@ export type OpencodeHttpCodingEngineConfig = {
   binaryPath: string
   providerID: string
   modelID: string
-  apiKeyEnvName: string
+  apiKeyEnvName?: string
   processManager?: OpencodeHttpProcessManager
   fetcher?: Fetcher
+  runtimeEnv?: NodeJS.ProcessEnv
   permissionPollMs?: number
   permissionDiscoveryTimeoutMs?: number
 }
@@ -57,7 +58,7 @@ export function createOpencodeHttpCodingEngineAdapter(
       await processManager.ensure({
         projectId: input.project.id,
         binaryPath: config.binaryPath,
-        env: process.env,
+        env: config.runtimeEnv ?? process.env,
       })
       return {
         projectId: input.project.id,
@@ -70,7 +71,7 @@ export function createOpencodeHttpCodingEngineAdapter(
       const server = await processManager.ensure({
         projectId: input.project.id,
         binaryPath: config.binaryPath,
-        env: process.env,
+        env: config.runtimeEnv ?? process.env,
       })
       const brief = buildCodingBrief({
         run: input.run,
@@ -90,14 +91,14 @@ export function createOpencodeHttpCodingEngineAdapter(
         directory: input.workspace.worktreePath,
         title: `DevFlow ${input.run.title}`,
         model: { providerID: config.providerID, id: config.modelID },
-        fetcher: config.fetcher,
+        ...fetcherOption(config.fetcher),
       })
       const messagePromise = sendOpencodeMessage({
         baseUrl: server.baseUrl,
         sessionId: session.id,
         model: { providerID: config.providerID, modelID: config.modelID },
         text: `DevFlow Coding Brief\n\n${brief.prompt}`,
-        fetcher: config.fetcher,
+        ...fetcherOption(config.fetcher),
       })
       sessions.set(input.id, {
         baseUrl: server.baseUrl,
@@ -107,10 +108,10 @@ export function createOpencodeHttpCodingEngineAdapter(
       })
       const permission = await waitForPermission({
         baseUrl: server.baseUrl,
-        fetcher: config.fetcher,
         pollMs: config.permissionPollMs ?? 1_000,
         sessionId: session.id,
         timeoutMs: config.permissionDiscoveryTimeoutMs ?? 60_000,
+        ...fetcherOption(config.fetcher),
       })
 
       return createStartResult(input, brief.prompt, session.id, permission)
@@ -124,14 +125,14 @@ export function createOpencodeHttpCodingEngineAdapter(
         directory: session.directory,
         reply: 'once',
         message: 'Approved by DevFlow.',
-        fetcher: config.fetcher,
+        ...fetcherOption(config.fetcher),
       })
       await session.messagePromise
       const diffFiles = await listOpencodeDiff({
         baseUrl: session.baseUrl,
         sessionId: session.sessionId,
         directory: session.directory,
-        fetcher: config.fetcher,
+        ...fetcherOption(config.fetcher),
       })
       const diff = sanitizeCodingDiffArtifact({
         id: `coding-diff-${input.codingRun.id}`,
@@ -183,7 +184,7 @@ export function createOpencodeHttpCodingEngineAdapter(
         baseUrl: session.baseUrl,
         sessionId: session.sessionId,
         directory: session.directory,
-        fetcher: config.fetcher,
+        ...fetcherOption(config.fetcher),
       })
       sessions.delete(input.codingRun.id)
     },
@@ -201,7 +202,7 @@ async function waitForPermission(input: {
   while (Date.now() <= expiresAt) {
     const permissions = await listOpencodePermissions({
       baseUrl: input.baseUrl,
-      fetcher: input.fetcher,
+      ...fetcherOption(input.fetcher),
     })
     const permission = permissions.find((candidate) => candidate.sessionID === input.sessionId)
     if (permission) {
@@ -263,6 +264,8 @@ function createStartResult(
       redacted: true,
     },
   ]
+  const filePath = metadataString(permission.metadata, 'filepath') ?? metadataString(permission.metadata, 'path')
+  const command = metadataString(permission.metadata, 'command')
   const permissionRequest: CodingPermissionRequest = {
     id: permission.id,
     codingRunId: codingRun.id,
@@ -270,8 +273,8 @@ function createStartResult(
     nodeId: codingRun.nodeId,
     permission: normalizePermission(permission.permission),
     title: `opencode requested ${permission.permission} permission`,
-    filePath: metadataString(permission.metadata, 'filepath') ?? metadataString(permission.metadata, 'path'),
-    command: metadataString(permission.metadata, 'command'),
+    ...(filePath ? { filePath } : {}),
+    ...(command ? { command } : {}),
     risk: 'warn',
     reasons: ['opencode requested a tool permission through the managed adapter.'],
     status: 'pending',
@@ -304,6 +307,10 @@ function normalizePermission(permission: string): CodingPermissionRequest['permi
   }
 
   return 'bash'
+}
+
+function fetcherOption(fetcher: Fetcher | undefined): { fetcher: Fetcher } | Record<string, never> {
+  return fetcher ? { fetcher } : {}
 }
 
 function findSession(
