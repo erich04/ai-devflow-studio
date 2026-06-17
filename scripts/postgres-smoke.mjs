@@ -41,11 +41,22 @@ function spawnService(name, args, env = {}) {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
+  child.devflowStopping = false
+  const writeServiceOutput = (stream, chunk) => {
+    const text = chunk.toString()
+    const expectedShutdownNoise =
+      child.devflowStopping &&
+      (text.includes('ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL') || text.includes('Exit status 143'))
+    if (!expectedShutdownNoise) {
+      stream.write(`[${name}] ${text}`)
+    }
+  }
+
   child.stdout.on('data', (chunk) => {
-    process.stdout.write(`[${name}] ${chunk}`)
+    writeServiceOutput(process.stdout, chunk)
   })
   child.stderr.on('data', (chunk) => {
-    process.stderr.write(`[${name}] ${chunk}`)
+    writeServiceOutput(process.stderr, chunk)
   })
 
   return child
@@ -73,6 +84,7 @@ function stop(child) {
     return
   }
 
+  child.devflowStopping = true
   child.kill('SIGTERM')
 }
 
@@ -99,14 +111,44 @@ async function postJson(pathname, body) {
   )
 }
 
+async function fetchOverview(label = '/api/team/overview') {
+  return readJson(
+    await fetch(`${apiUrl}/api/team/overview`, {
+      headers: { accept: 'application/json', ...demoSessionHeaders },
+    }),
+    label,
+  )
+}
+
 function expect(condition, message) {
   if (!condition) {
     throw new Error(message)
   }
 }
 
-const runId = `run-postgres-smoke-${Date.now()}`
-const evidenceId = `evidence-postgres-smoke-${Date.now()}`
+function expectNoLocalOnlyFields(value, label) {
+  const serialized = JSON.stringify(value).toLowerCase()
+  const blockedFragments = [
+    'cwd',
+    'stdout',
+    'stderr',
+    'raw trace',
+    'prompt',
+    'secret',
+    'sk-test',
+    '/users/',
+    '\\users\\',
+  ]
+
+  for (const fragment of blockedFragments) {
+    expect(!serialized.includes(fragment), `${label} leaked local-only fragment: ${fragment}`)
+  }
+}
+
+const suffix = Date.now()
+const runId = `run-postgres-smoke-${suffix}`
+const evidenceId = `evidence-postgres-smoke-${suffix}`
+const remoteReviewId = `agent-review-postgres-smoke-${suffix}`
 const timestamp = new Date().toISOString()
 let api
 
@@ -122,12 +164,7 @@ try {
   })
   await waitForServer(`${apiUrl}/health`)
 
-  const initialOverview = await readJson(
-    await fetch(`${apiUrl}/api/team/overview`, {
-      headers: { accept: 'application/json', ...demoSessionHeaders },
-    }),
-    '/api/team/overview',
-  )
+  const initialOverview = await fetchOverview()
   expect(
     initialOverview.projects?.some((project) => project.id === 'p-payments'),
     'Postgres overview did not include seeded Payments project.',
@@ -135,6 +172,14 @@ try {
   expect(
     initialOverview.runs?.some((run) => run.id === 'run-health-001'),
     'Postgres overview did not include seeded workflow run.',
+  )
+  expectNoLocalOnlyFields(initialOverview, 'initial overview')
+
+  const seededRun = initialOverview.runs?.find((run) => run.id === 'run-health-001')
+  expect(seededRun, 'Postgres overview did not return the seeded run object.')
+  expect(
+    seededRun.nodes?.some((node) => node.id === seededRun.currentNodeId),
+    'Seeded run current node was not available for backend Knowledge Review.',
   )
 
   await postJson('/api/sync/run-summary', {
@@ -161,12 +206,55 @@ try {
     createdAt: timestamp,
   })
 
-  const syncedOverview = await readJson(
-    await fetch(`${apiUrl}/api/team/overview`, {
-      headers: { accept: 'application/json', ...demoSessionHeaders },
-    }),
-    '/api/team/overview',
+  const backendReview = await postJson('/api/agent/knowledge-review', {
+    runId: seededRun.id,
+    nodeId: seededRun.currentNodeId,
+    projectId: seededRun.projectId,
+    providerId: 'fake-knowledge-review',
+  })
+  expect(backendReview.review?.runtime === 'api', 'Backend Knowledge Review did not run in API runtime.')
+  expect(
+    backendReview.review?.providerId === 'fake-knowledge-review',
+    'Backend Knowledge Review did not use the deterministic fake provider.',
   )
+  expect(
+    backendReview.review?.gateAdvisory?.blocksApproval === false,
+    'Backend Knowledge Review advisory should remain warning-only.',
+  )
+  expect(backendReview.trace?.steps?.length >= 4, 'Backend Knowledge Review did not include an agent trace.')
+  expect(backendReview.tokenUsage?.id, 'Backend Knowledge Review did not include token usage.')
+  expect(backendReview.artifact?.kind === 'agent_review', 'Backend Knowledge Review did not create review artifact.')
+  expect(backendReview.event?.kind === 'agent_review', 'Backend Knowledge Review did not create review event.')
+  expectNoLocalOnlyFields(
+    {
+      review: backendReview.review,
+      tokenUsage: backendReview.tokenUsage,
+      artifact: backendReview.artifact,
+      event: backendReview.event,
+    },
+    'backend review bundle',
+  )
+
+  await postJson('/api/sync/agent-review-summary', {
+    id: remoteReviewId,
+    runId,
+    nodeId: 'n-test',
+    projectId: 'p-payments',
+    runtime: 'electron',
+    providerId: 'fake-knowledge-review',
+    model: 'fake',
+    conclusion: 'Postgres smoke synced Knowledge Review',
+    summary: 'Warning-only redacted review summary from Electron smoke path.',
+    riskCount: 1,
+    missingEvidenceCount: 1,
+    advisoryLevel: 'warn',
+    blocksApproval: false,
+    confidence: 0.82,
+    redacted: true,
+    createdAt: timestamp,
+  })
+
+  const syncedOverview = await fetchOverview('/api/team/overview after sync')
   expect(
     syncedOverview.runs?.some((run) => run.id === runId && run.status === 'completed'),
     'Postgres overview did not include the synced smoke run.',
@@ -177,6 +265,24 @@ try {
     ),
     'Postgres overview did not include the synced redacted test evidence summary.',
   )
+  expect(
+    syncedOverview.agentReviews?.some((review) => review.id === backendReview.review.id && review.runtime === 'api'),
+    'Postgres overview did not include the backend Knowledge Review.',
+  )
+  expect(
+    syncedOverview.agentTokenUsage?.some((usage) => usage.id === backendReview.tokenUsage.id),
+    'Postgres overview did not include backend Knowledge Review token usage.',
+  )
+  expect(
+    syncedOverview.agentReviews?.some(
+      (review) =>
+        review.id === remoteReviewId &&
+        review.runtime === 'electron' &&
+        review.gateAdvisory?.blocksApproval === false,
+    ),
+    'Postgres overview did not include the synced Electron Agent Review summary.',
+  )
+  expectNoLocalOnlyFields(syncedOverview, 'synced overview')
 
   console.log('Postgres integration smoke passed.')
 } finally {

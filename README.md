@@ -26,6 +26,7 @@ corepack pnpm dev:electron
 corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm test:postgres-smoke
+corepack pnpm test:agent-live
 corepack pnpm test:e2e
 corepack pnpm test:electron-smoke
 ```
@@ -54,3 +55,46 @@ redacted sync write-through.
 
 Use `corepack pnpm build && corepack pnpm --filter @ai-devflow/desktop electron` to run the built
 desktop app against `apps/desktop/dist/index.html` without the Vite dev server.
+
+## v0.5 Knowledge Review Agent Demo
+
+The default demo uses the deterministic fake provider, so it is repeatable and cost-free. It proves
+the Agent runtime, trace, advisory, token usage, artifact, event, and redacted team summary paths
+without calling a live model.
+
+1. Start the real Electron app:
+
+   ```bash
+   corepack pnpm dev:electron
+   ```
+
+2. In Electron, choose a local repository from the project picker.
+3. Select a Gate node in the workflow canvas.
+4. Click `Agent Review` in the Inspector.
+5. Open the `Agents` view to inspect the Knowledge Review Agent history, trace, warning-only Gate
+   advisory, provider status, and token/cost source.
+6. To see the team-visible summary, start the API/Web pair and open the Web console:
+
+   ```bash
+   corepack pnpm dev:api
+   corepack pnpm dev:web
+   ```
+
+   Electron sync uploads only redacted Agent Review summaries. The Web console should show the
+   conclusion/advisory/cost without local cwd, stdout/stderr, raw prompt, or provider secrets.
+
+For a real OpenAI-compatible smoke test, set `DEVFLOW_AGENT_OPENAI_API_KEY` or `OPENAI_API_KEY`
+and run:
+
+```bash
+corepack pnpm test:agent-live
+```
+
+Optional live provider smoke is not part of `corepack pnpm verify`; it should be run manually when
+you explicitly want to spend provider quota and validate the live request/usage mapping path.
+
+The first Playwright run in a fresh environment may need browser binaries:
+
+```bash
+corepack pnpm exec playwright install
+```
