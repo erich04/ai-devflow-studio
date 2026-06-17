@@ -6,6 +6,7 @@ import type {
   AgentTokenUsage,
   AgentTrace,
   Project,
+  RemoteCodingAgentSummary,
   RemoteTestEvidenceSummary,
   TeamMember,
   TokenUsageRollup,
@@ -21,6 +22,7 @@ export type TeamOverviewResponse = {
   memberCost: TokenUsageRollup[]
   totalCost: string
   testEvidenceSummaries: RemoteTestEvidenceSummary[]
+  codingAgentSummaries: RemoteCodingAgentSummary[]
   agentReviews: AgentReviewResult[]
   agentTraces: AgentTrace[]
   agentTokenUsage: AgentTokenUsage[]

@@ -1,5 +1,6 @@
 export * from './cost'
 export * from './agent-review'
+export * from './coding-agent'
 export * from './command-safety'
 export * from './domain'
 export * from './fixtures'

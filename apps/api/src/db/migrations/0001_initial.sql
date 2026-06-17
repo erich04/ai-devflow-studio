@@ -241,6 +241,24 @@ CREATE TABLE IF NOT EXISTS agent_token_usage (
   source text NOT NULL CHECK (source IN ('provider_reported', 'estimated'))
 );
 
+CREATE TABLE IF NOT EXISTS coding_agent_summaries (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  run_id text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  node_id text NOT NULL,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  requested_by text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  provider_id text NOT NULL,
+  engine text NOT NULL CHECK (engine IN ('fake', 'opencode-http', 'opencode-acp')),
+  status text NOT NULL,
+  branch_name text NOT NULL,
+  summary text NOT NULL,
+  changed_paths jsonb NOT NULL DEFAULT '[]'::jsonb,
+  started_at timestamptz NOT NULL,
+  completed_at timestamptz,
+  redacted boolean NOT NULL DEFAULT true
+);
+
 CREATE INDEX IF NOT EXISTS idx_projects_organization_id ON projects(organization_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_project_id ON workflow_runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_nodes_run_id ON workflow_nodes(run_id);
@@ -250,9 +268,10 @@ CREATE INDEX IF NOT EXISTS idx_token_usage_project_id ON token_usage(project_id)
 CREATE INDEX IF NOT EXISTS idx_agent_reviews_run_id ON agent_reviews(run_id);
 CREATE INDEX IF NOT EXISTS idx_agent_traces_review_id ON agent_traces(review_id);
 CREATE INDEX IF NOT EXISTS idx_agent_token_usage_project_id ON agent_token_usage(project_id);
+CREATE INDEX IF NOT EXISTS idx_coding_agent_summaries_project_id ON coding_agent_summaries(project_id);
 
 INSERT INTO schema_meta (key, value)
-VALUES ('schema_version', '1')
+VALUES ('schema_version', '2')
 ON CONFLICT (key) DO UPDATE
 SET value = excluded.value,
     updated_at = now();

@@ -18,6 +18,7 @@ describe('seed team repository', () => {
     expect(overview.agentReviews).toEqual([])
     expect(overview.agentTraces).toEqual([])
     expect(overview.agentTokenUsage).toEqual([])
+    expect(overview.codingAgentSummaries).toEqual([])
     expect(overview.agentProviders).toEqual([
       expect.objectContaining({ id: 'fake-knowledge-review', kind: 'fake' }),
     ])
@@ -75,6 +76,27 @@ describe('seed team repository', () => {
       }, syncContext),
     ).resolves.toMatchObject({ accepted: true })
 
+    const codingSummary = {
+      id: 'coding-run-1',
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      engine: 'fake' as const,
+      status: 'completed' as const,
+      branchName: 'devflow/run-1-node-build',
+      summary: 'Fake coding run completed.',
+      changedPaths: ['src/export.ts'],
+      startedAt: '2026-06-16T00:02:00.000Z',
+      completedAt: '2026-06-16T00:03:00.000Z',
+      redacted: true,
+    }
+
+    await expect(repository.uploadCodingAgentSummary(codingSummary, syncContext)).resolves.toMatchObject({
+      accepted: true,
+    })
+
     const overview = await repository.getTeamOverview()
     const bundle = await repository.getRunsBundle()
 
@@ -90,5 +112,6 @@ describe('seed team repository', () => {
         summary: 'Tests passed after retry',
       },
     ])
+    expect(overview.codingAgentSummaries).toEqual([codingSummary])
   })
 })

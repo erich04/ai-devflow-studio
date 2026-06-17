@@ -53,5 +53,7 @@ local cwd, raw stdout/stderr, or provider secrets.
   Agent Workbench, or governance rendering.
 - Future enforcement can change Gate policy from warning-only to configurable blocking without
   changing review persistence.
-- The first Agent is intentionally narrow; coding Agents, multi-Agent handoff, real MCP execution,
-  repository edits, vector RAG, and auto-fix flows remain out of scope.
+- The first Agent is intentionally narrow; multi-Agent handoff, real MCP execution, vector RAG, and
+  auto-fix flows remain out of scope.
+- ADR 0009 updates the coding-agent boundary: DevFlow still does not build its own coding agent, but
+  v0.6 can host an external opencode engine through a managed adapter.

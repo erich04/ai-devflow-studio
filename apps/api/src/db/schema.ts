@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 1
+export const TEAM_SCHEMA_VERSION = 2
 
 export const requiredTeamTableNames = [
   'schema_meta',
@@ -19,6 +19,7 @@ export const requiredTeamTableNames = [
   'agent_reviews',
   'agent_traces',
   'agent_token_usage',
+  'coding_agent_summaries',
 ] as const
 
 export type TeamTableName = (typeof requiredTeamTableNames)[number]
@@ -319,6 +320,26 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('cost_usd', 'numeric(12,6)'),
       column('timestamp', 'timestamptz'),
       column('source', 'text'),
+    ],
+  },
+  {
+    name: 'coding_agent_summaries',
+    columns: [
+      column('id', 'text', { primaryKey: true }),
+      column('organization_id', 'text', { references: 'organizations.id' }),
+      column('run_id', 'text', { references: 'workflow_runs.id' }),
+      column('node_id', 'text'),
+      column('project_id', 'text', { references: 'projects.id' }),
+      column('requested_by', 'text', { references: 'users.id' }),
+      column('provider_id', 'text'),
+      column('engine', 'text'),
+      column('status', 'text'),
+      column('branch_name', 'text'),
+      column('summary', 'text'),
+      column('changed_paths', 'jsonb'),
+      column('started_at', 'timestamptz'),
+      column('completed_at', 'timestamptz', { nullable: true }),
+      column('redacted', 'boolean'),
     ],
   },
 ]

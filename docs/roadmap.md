@@ -43,6 +43,14 @@ Review, trace, token usage, artifact, and event data in SQLite. The API/Web path
 shared Agent Core against team state and persist the result through the team repository boundary.
 Gate Advisory remains warning-only by default.
 
+v0.6 opencode Coding Adapter is underway with the fake harness and persistence/UI slice
+implemented. DevFlow can create a managed git worktree, start a fake Coding Agent Run, show a
+permission relay request, approve/reject the request, archive a redacted Coding Diff Artifact and
+Dependency Bootstrap Evidence, and sync a redacted Coding Agent summary through Electron, API, and
+Postgres. The real opencode HTTP adapter is spike-selected and wrapped behind a tested request
+module, but the full real opencode runtime remains a manual hardening path before making it the
+default engine.
+
 Current validation remains macOS-local for the full real Electron window path. Windows compatibility
 is preserved through static automation checks and Windows CI for typecheck/unit/audit; full Windows
 Electron smoke is still tracked as future compatibility expansion. See
@@ -156,9 +164,35 @@ Electron smoke is still tracked as future compatibility expansion. See
   team state without uploading prompts, raw traces, local paths, or raw command output.
 - Added ADR 0008 to lock the warning-only Gate Advisory and dual-runtime Agent Core boundary.
 
+### v0.6.0 / v0.6.x: opencode Coding Adapter Foundation
+
+- Completed a Spike comparing `opencode serve` HTTP and `opencode acp`, selecting HTTP for the first
+  managed transport.
+- Added Coding Agent domain types for runs, events, permission requests/decisions, managed
+  workspaces, dependency bootstrap evidence, diff artifacts, and redacted remote summaries.
+- Added SQLite schema v4 persistence for local coding runs, permissions, workspaces, bootstrap
+  evidence, and diff artifacts.
+- Added a deterministic fake coding harness that creates a managed git worktree, asks permission,
+  writes a marker file after approval, captures a redacted diff, and archives bootstrap evidence.
+- Added Desktop Agents UI controls for running the fake Coding Agent, approving/rejecting
+  permissions, cancelling runs, and opening/deleting managed worktrees.
+- Added a tested opencode HTTP adapter wrapper for session creation, permissions, replies, abort,
+  prompt send, and diff fetch.
+- Added redacted `RemoteCodingAgentSummary` sync through Electron, API route, and Postgres overview
+  boundaries.
+- Added ADR 0009 and v0.6 plan/research docs.
+
 ## Planned Milestones
 
-### v0.6: Configurable Agent Knowledge Enforcement
+### v0.6.1: Real opencode Runtime Hardening
+
+- Wire the tested opencode HTTP adapter into Electron's Coding Agent runtime behind the same IPC/UI
+  contract used by the fake harness.
+- Add manual `test:opencode-smoke` for real opencode permission relay, abort, timeout reject, diff
+  capture, dependency bootstrap, and test evidence.
+- Keep default `verify` deterministic with the fake harness.
+
+### v0.7: Configurable Agent Knowledge Enforcement
 
 - Add project/team policy controls that can turn selected Gate Advisory categories from warnings
   into blocking checks.

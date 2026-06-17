@@ -102,6 +102,32 @@ The runtime dependency that turns a redacted Agent Review context into structure
 DevFlow supports a deterministic fake provider for tests and OpenAI-compatible providers for
 explicit live use.
 
+## Coding Agent Adapter
+
+The DevFlow boundary that hosts an external coding engine such as opencode. DevFlow does not
+rebuild the coding agent; it owns context assembly, permission relay, worktree management, evidence
+capture, tests, and team-safe summaries.
+
+## Managed Coding Workspace
+
+A per-Coding Agent Run git worktree and branch created by Electron main process. It isolates edits
+from the developer's primary checkout but is not a security sandbox.
+
+## Dependency Bootstrap
+
+The visible step that prepares a managed worktree before tests run. Lockfile-based installs can run
+with frozen commands; non-frozen installs require human approval.
+
+## Permission Relay
+
+The DevFlow-mediated path for coding engine tool requests such as edit, bash, write, patch, install,
+or external-directory access. If nobody answers before timeout, DevFlow rejects by default.
+
+## Coding Diff Artifact
+
+A local artifact containing changed repo-relative paths and a redacted, capped diff from a managed
+coding workspace. The team backend receives only a redacted summary, not the raw patch.
+
 ## Token Usage
 
 The measured model usage for a Run, Node, member, project, or model provider.

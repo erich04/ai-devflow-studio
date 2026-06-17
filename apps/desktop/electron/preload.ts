@@ -8,6 +8,8 @@ const desktopApi: DevFlowDesktopApi = {
   uploadRunSummary: (summary) => ipcRenderer.invoke(ipcChannels.uploadRunSummary, summary),
   uploadTestEvidenceSummary: (summary) =>
     ipcRenderer.invoke(ipcChannels.uploadTestEvidenceSummary, summary),
+  uploadCodingAgentSummary: (summary) =>
+    ipcRenderer.invoke(ipcChannels.uploadCodingAgentSummary, summary),
   selectLocalProject: () => ipcRenderer.invoke(ipcChannels.selectProject),
   saveProjectTestCommand: (input) =>
     ipcRenderer.invoke(ipcChannels.saveProjectTestCommand, input),
@@ -23,6 +25,14 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.saveAgentProviderCredential, input),
   runKnowledgeReview: (input) => ipcRenderer.invoke(ipcChannels.runKnowledgeReview, input),
   listAgentReviews: (input) => ipcRenderer.invoke(ipcChannels.listAgentReviews, input),
+  ensureCodingEngine: (input) => ipcRenderer.invoke(ipcChannels.ensureCodingEngine, input),
+  runCodingAgent: (input) => ipcRenderer.invoke(ipcChannels.runCodingAgent, input),
+  cancelCodingAgentRun: (input) => ipcRenderer.invoke(ipcChannels.cancelCodingAgentRun, input),
+  replyCodingPermission: (input) => ipcRenderer.invoke(ipcChannels.replyCodingPermission, input),
+  subscribeCodingRun: (input) => ipcRenderer.invoke(ipcChannels.subscribeCodingRun, input),
+  listCodingAgentRuns: (input) => ipcRenderer.invoke(ipcChannels.listCodingAgentRuns, input),
+  openManagedWorktree: (input) => ipcRenderer.invoke(ipcChannels.openManagedWorktree, input),
+  deleteManagedWorktree: (input) => ipcRenderer.invoke(ipcChannels.deleteManagedWorktree, input),
 }
 
 contextBridge.exposeInMainWorld('aiDevFlowDesktop', desktopApi)

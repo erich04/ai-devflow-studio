@@ -3,12 +3,11 @@ import type {
   Artifact,
   DetectedTestCommand,
   PackageManager,
+  ProjectFileSnapshot,
   TestEvidence,
   WorkflowRun,
 } from './domain'
 import { redactSecrets } from './redaction'
-
-export type ProjectFileSnapshot = Record<string, string>
 
 function hasFile(files: ProjectFileSnapshot, fileName: string): boolean {
   return Object.prototype.hasOwnProperty.call(files, fileName)

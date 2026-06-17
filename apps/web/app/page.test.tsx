@@ -88,6 +88,24 @@ const overview: TeamOverviewResponse = {
       createdAt: '2026-06-16T10:12:00.000Z',
     },
   ],
+  codingAgentSummaries: [
+    {
+      id: 'coding-run-remote',
+      runId: 'run-remote',
+      nodeId: 'n-build',
+      projectId: 'p-remote',
+      requestedBy: 'u-remote',
+      providerId: 'fake-coding-engine',
+      engine: 'fake',
+      status: 'completed',
+      branchName: 'devflow/run-remote-n-build-coding-run-remote',
+      summary: 'Coding Agent completed with redacted changed paths.',
+      changedPaths: ['src/remote.ts'],
+      startedAt: '2026-06-16T10:13:00.000Z',
+      completedAt: '2026-06-16T10:14:00.000Z',
+      redacted: true,
+    },
+  ],
   agentReviews: [
     {
       id: 'agent-review-remote',
@@ -182,6 +200,7 @@ describe('web manager console page', () => {
       memberCost: [],
       totalCost: '$0.000',
       testEvidenceSummaries: [],
+      codingAgentSummaries: [],
       agentReviews: [],
       agentTraces: [],
       agentTokenUsage: [],

@@ -4,11 +4,16 @@ import type {
   AgentReviewResult,
   AgentReviewExecutionResult,
   CommandSafetyResult,
+  CodingAgentRun,
+  CodingPermissionDecision,
+  CodingPermissionRequest,
   LocalExecutionState,
   LocalSettings,
   LocalProject,
+  ManagedCodingWorkspace,
   McpServerDefinition,
   ProviderCredentialMetadata,
+  RemoteCodingAgentSummary,
   RemoteRunSummary,
   RemoteSyncUploadResult,
   RemoteTeamSnapshot,
@@ -56,6 +61,20 @@ export type RunKnowledgeReviewResult = AgentReviewExecutionResult & {
   state: LocalExecutionState
 }
 
+export type RunCodingAgentInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+  requestedBy: string
+  providerId: string
+  userInstruction: string
+}
+
+export type RunCodingAgentResult = {
+  codingRun: CodingAgentRun
+  state: LocalExecutionState
+}
+
 export type LoadRemoteSnapshotInput = {
   organizationId?: string
 }
@@ -68,6 +87,7 @@ export type DevFlowDesktopApi = {
   uploadTestEvidenceSummary: (
     summary: RemoteTestEvidenceSummary,
   ) => Promise<RemoteSyncUploadResult>
+  uploadCodingAgentSummary: (summary: RemoteCodingAgentSummary) => Promise<RemoteSyncUploadResult>
   selectLocalProject: () => Promise<LocalProject | null>
   saveProjectTestCommand: (input: SaveProjectTestCommandInput) => Promise<LocalProject>
   validateTestCommand: (input: ValidateTestCommandInput) => Promise<CommandSafetyResult>
@@ -81,6 +101,20 @@ export type DevFlowDesktopApi = {
   saveAgentProviderCredential: (input: AgentProviderCredentialInput) => Promise<ProviderCredentialMetadata>
   runKnowledgeReview: (input: RunKnowledgeReviewInput) => Promise<RunKnowledgeReviewResult>
   listAgentReviews: (input?: { runId?: string }) => Promise<AgentReviewResult[]>
+  ensureCodingEngine: (input: { projectId: string }) => Promise<{ projectId: string; engine: CodingAgentRun['engine']; status: 'ready' }>
+  runCodingAgent: (input: RunCodingAgentInput) => Promise<RunCodingAgentResult>
+  cancelCodingAgentRun: (input: { codingRunId: string }) => Promise<CodingAgentRun>
+  replyCodingPermission: (input: {
+    requestId: string
+    codingRunId: string
+    decidedBy: string
+    decision: CodingPermissionDecision['decision']
+    comment: string
+  }) => Promise<CodingPermissionRequest>
+  subscribeCodingRun: (input: { codingRunId: string }) => Promise<LocalExecutionState>
+  listCodingAgentRuns: (input?: { runId?: string }) => Promise<CodingAgentRun[]>
+  openManagedWorktree: (input: { workspaceId: string }) => Promise<ManagedCodingWorkspace>
+  deleteManagedWorktree: (input: { workspaceId: string }) => Promise<ManagedCodingWorkspace>
 }
 
 declare global {

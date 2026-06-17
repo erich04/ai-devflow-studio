@@ -20,6 +20,7 @@ import {
   type Project,
   type ProviderCredentialMetadata,
   type RemoteAgentReviewSummary,
+  type RemoteCodingAgentSummary,
   type RemoteRunSummary,
   type RemoteSyncUploadResult,
   type RemoteTestEvidenceSummary,
@@ -58,6 +59,7 @@ export type TeamOverviewPayload = {
   agentTraces: AgentTrace[]
   agentTokenUsage: AgentTokenUsage[]
   agentProviders: AgentProviderConfig[]
+  codingAgentSummaries: RemoteCodingAgentSummary[]
 }
 
 export type TeamRepositorySyncContext = Pick<TeamSession, 'organizationId' | 'userId'>
@@ -77,6 +79,10 @@ export type TeamRepository = {
   ): Promise<RemoteSyncUploadResult>
   uploadAgentReviewSummary(
     summary: RemoteAgentReviewSummary,
+    context: TeamRepositorySyncContext,
+  ): Promise<RemoteSyncUploadResult>
+  uploadCodingAgentSummary(
+    summary: RemoteCodingAgentSummary,
     context: TeamRepositorySyncContext,
   ): Promise<RemoteSyncUploadResult>
   listAgentProviders(context: TeamRepositorySyncContext): Promise<AgentProviderConfig[]>
@@ -108,6 +114,7 @@ export function createSeedTeamRepository(): TeamRepository {
   const agentReviews: AgentReviewResult[] = []
   const agentTraces: AgentTrace[] = []
   const agentTokenUsage: AgentTokenUsage[] = []
+  const codingAgentSummaries: RemoteCodingAgentSummary[] = []
 
   function upsertSyncedRun(run: WorkflowRun) {
     const index = syncedRuns.findIndex((candidate) => candidate.id === run.id)
@@ -180,6 +187,7 @@ export function createSeedTeamRepository(): TeamRepository {
         agentTraces,
         agentTokenUsage,
         agentProviders: agentProviderConfigs(),
+        codingAgentSummaries,
       }
     },
 
@@ -277,6 +285,16 @@ export function createSeedTeamRepository(): TeamRepository {
         accepted: true,
         syncedAt: new Date().toISOString(),
         message: 'agent review summary accepted by seed repository',
+      }
+    },
+
+    async uploadCodingAgentSummary(summary) {
+      upsertById(codingAgentSummaries, summary)
+
+      return {
+        accepted: true,
+        syncedAt: new Date().toISOString(),
+        message: 'coding agent summary accepted by seed repository',
       }
     },
 

@@ -10,9 +10,16 @@ import type {
   AgentTrace,
   AgentTokenUsage,
   Artifact,
+  CodingAgentEvent,
+  CodingAgentRun,
+  CodingDiffArtifact,
+  CodingPermissionDecision,
+  CodingPermissionRequest,
+  DependencyBootstrapEvidence,
   GateAdvisory,
   LocalProject,
   McpServerDefinition,
+  ManagedCodingWorkspace,
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
@@ -236,26 +243,130 @@ const agentTokenUsage: AgentTokenUsage = {
   source: 'provider_reported',
 }
 
+const codingRun: CodingAgentRun = {
+  id: 'coding-run-1',
+  runId: 'run-1',
+  nodeId: 'node-build',
+  projectId: 'project-1',
+  requestedBy: 'user-1',
+  providerId: 'fake-coding-engine',
+  engine: 'fake',
+  status: 'completed',
+  managedWorkspaceId: 'workspace-1',
+  branchName: 'devflow/run-1-node-build',
+  userInstruction: 'Keep the change minimal.',
+  prompt: 'DevFlow assembled prompt stays local.',
+  summary: 'Fake coding run produced a diff and test evidence.',
+  changedPaths: ['src/export.ts'],
+  startedAt: '2026-06-15T00:03:00.000Z',
+  completedAt: '2026-06-15T00:04:00.000Z',
+  tokenUsageId: 'agent-token-usage-1',
+  diffArtifactId: 'coding-diff-1',
+  bootstrapEvidenceId: 'bootstrap-1',
+  testEvidenceId: 'evidence-1',
+  redacted: true,
+}
+
+const codingEvent: CodingAgentEvent = {
+  id: 'coding-event-1',
+  codingRunId: 'coding-run-1',
+  runId: 'run-1',
+  nodeId: 'node-build',
+  sequence: 1,
+  kind: 'permission',
+  message: 'Permission approved.',
+  timestamp: '2026-06-15T00:03:10.000Z',
+  metadata: { requestId: 'permission-1' },
+  redacted: true,
+}
+
+const permissionRequest: CodingPermissionRequest = {
+  id: 'permission-1',
+  codingRunId: 'coding-run-1',
+  runId: 'run-1',
+  nodeId: 'node-build',
+  permission: 'edit',
+  title: 'Edit src/export.ts',
+  filePath: 'src/export.ts',
+  diffPreview: '+export const ok = true',
+  risk: 'warn',
+  reasons: ['Editing source code requires approval.'],
+  status: 'approved',
+  requestedAt: '2026-06-15T00:03:05.000Z',
+  expiresAt: '2026-06-15T00:04:05.000Z',
+}
+
+const permissionDecision: CodingPermissionDecision = {
+  id: 'permission-decision-1',
+  requestId: 'permission-1',
+  codingRunId: 'coding-run-1',
+  decidedBy: 'user-1',
+  decision: 'approved',
+  comment: 'Allow fake harness edit.',
+  decidedAt: '2026-06-15T00:03:08.000Z',
+}
+
+const workspace: ManagedCodingWorkspace = {
+  id: 'workspace-1',
+  projectId: 'project-1',
+  codingRunId: 'coding-run-1',
+  sourcePath: '/tmp/fixture-project',
+  worktreePath: '/tmp/devflow-worktrees/run-1',
+  branchName: 'devflow/run-1-node-build',
+  baseBranch: 'main',
+  createdAt: '2026-06-15T00:03:00.000Z',
+}
+
+const bootstrapEvidence: DependencyBootstrapEvidence = {
+  id: 'bootstrap-1',
+  codingRunId: 'coding-run-1',
+  runId: 'run-1',
+  nodeId: 'node-build',
+  projectId: 'project-1',
+  command: '',
+  status: 'skipped',
+  exitCode: 0,
+  durationMs: 0,
+  stdout: '',
+  stderr: '',
+  summary: 'Dependency bootstrap skipped.',
+  dependencyHash: 'fnv1a-test',
+  redacted: true,
+  createdAt: '2026-06-15T00:03:20.000Z',
+}
+
+const codingDiff: CodingDiffArtifact = {
+  id: 'coding-diff-1',
+  runId: 'run-1',
+  nodeId: 'node-build',
+  projectId: 'project-1',
+  changedPaths: ['src/export.ts'],
+  patch: '+export const ok = true',
+  truncated: false,
+  redacted: true,
+  createdAt: '2026-06-15T00:03:30.000Z',
+}
+
 describe('createLocalStore', () => {
-  it('initializes schema version 3 and keeps it stable across reopen', async () => {
+  it('initializes schema version 4 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(3)
+    expect(await first.getSchemaVersion()).toBe(4)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(3)
+    expect(await second.getSchemaVersion()).toBe(4)
     second.close()
   })
 
-  it('migrates an existing v1 database to v3 without losing local projects or runs', async () => {
+  it('migrates an existing v1 database to v4 without losing local projects or runs', async () => {
     const dbPath = await tempDbPath()
     await writeLegacyV1Database(dbPath)
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(3)
+    expect(await store.getSchemaVersion()).toBe(4)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -347,6 +458,39 @@ describe('createLocalStore', () => {
     expect(await second.listProviderCredentials()).toEqual([metadata])
     expect(await second.getProviderEncryptedSecret('openai-default')).toBe('encrypted-secret-value')
     expect(JSON.stringify(await second.listProviderCredentials())).not.toContain('encrypted-secret-value')
+    second.close()
+  })
+
+  it('persists coding agent runs, permissions, workspaces, bootstrap evidence, and diffs across reopen', async () => {
+    const dbPath = await tempDbPath()
+
+    const first = await createLocalStore({ dbPath })
+    await first.saveCodingAgentRun(codingRun)
+    await first.saveCodingAgentEvent(codingEvent)
+    await first.saveCodingPermissionRequest(permissionRequest)
+    await first.saveCodingPermissionDecision(permissionDecision)
+    await first.saveManagedCodingWorkspace(workspace)
+    await first.saveDependencyBootstrapEvidence(bootstrapEvidence)
+    await first.saveCodingDiffArtifact(codingDiff)
+    first.close()
+
+    const second = await createLocalStore({ dbPath })
+    expect(await second.listCodingAgentRuns('run-1')).toEqual([codingRun])
+    expect(await second.listCodingAgentEvents('coding-run-1')).toEqual([codingEvent])
+    expect(await second.listCodingPermissionRequests('coding-run-1')).toEqual([permissionRequest])
+    expect(await second.listCodingPermissionDecisions('coding-run-1')).toEqual([permissionDecision])
+    expect(await second.listManagedCodingWorkspaces('project-1')).toEqual([workspace])
+    expect(await second.listDependencyBootstrapEvidence('coding-run-1')).toEqual([bootstrapEvidence])
+    expect(await second.listCodingDiffArtifacts('run-1')).toEqual([codingDiff])
+    expect(await second.loadState()).toMatchObject({
+      codingRuns: [codingRun],
+      codingEvents: [codingEvent],
+      codingPermissionRequests: [permissionRequest],
+      codingPermissionDecisions: [permissionDecision],
+      managedCodingWorkspaces: [workspace],
+      dependencyBootstrapEvidence: [bootstrapEvidence],
+      codingDiffArtifacts: [codingDiff],
+    })
     second.close()
   })
 })

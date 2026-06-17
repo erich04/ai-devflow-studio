@@ -186,6 +186,7 @@ function createRepository(): TeamRepository {
     agentReviews: [],
     agentTraces: [],
     agentTokenUsage: [],
+    codingAgentSummaries: [],
     agentProviders: [
       {
         id: 'fake-knowledge-review',
@@ -217,6 +218,11 @@ function createRepository(): TeamRepository {
       accepted: true,
       syncedAt: '2026-06-16T00:00:00.000Z',
       message: 'agent review summary accepted',
+    })),
+    uploadCodingAgentSummary: vi.fn(async () => ({
+      accepted: true,
+      syncedAt: '2026-06-16T00:00:00.000Z',
+      message: 'coding agent summary accepted',
     })),
     listAgentProviders: vi.fn(async () => overview.agentProviders),
     saveAgentProviderCredential: vi.fn(async (metadata) => metadata),
@@ -527,6 +533,67 @@ describe('team API route resolver', () => {
       },
     })
     expect(repository.uploadAgentReviewSummary).not.toHaveBeenCalled()
+  })
+
+  it('routes redacted coding agent summary sync requests through the repository', async () => {
+    const repository = createRepository()
+    const summary = {
+      id: 'coding-run-1',
+      runId: 'run-payments',
+      nodeId: 'node-build',
+      projectId: 'p-payments',
+      requestedBy: 'u-ling',
+      providerId: 'fake-coding-engine',
+      engine: 'fake' as const,
+      status: 'completed' as const,
+      branchName: 'devflow/run-payments-node-build',
+      summary: 'Coding run completed with redacted diff summary.',
+      changedPaths: ['src/export.ts'],
+      startedAt: '2026-06-16T00:07:00.000Z',
+      completedAt: '2026-06-16T00:09:00.000Z',
+      redacted: true,
+    }
+
+    const result = await resolveTeamRoute('POST', '/api/sync/coding-agent-summary', repository, {
+      body: summary,
+      session: memberSession,
+    })
+
+    expect(result?.status).toBe(202)
+    expect(repository.uploadCodingAgentSummary).toHaveBeenCalledWith(summary, memberSession)
+  })
+
+  it('rejects coding agent summaries with local-only fields or unsafe paths', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('POST', '/api/sync/coding-agent-summary', repository, {
+      body: {
+        id: 'coding-run-1',
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        projectId: 'p-payments',
+        requestedBy: 'u-ling',
+        providerId: 'fake-coding-engine',
+        engine: 'fake',
+        status: 'completed',
+        branchName: 'devflow/run-payments-node-build',
+        summary: 'Should be rejected.',
+        changedPaths: ['/Users/erich/project/src/export.ts'],
+        startedAt: '2026-06-16T00:07:00.000Z',
+        redacted: true,
+        prompt: 'raw prompt must stay local',
+      },
+      session: memberSession,
+    })
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: 'bad_request',
+        message: 'Remote coding agent summary contains local-only fields',
+      },
+    })
+    expect(repository.uploadCodingAgentSummary).not.toHaveBeenCalled()
   })
 
   it('rejects local-only test evidence fields before repository sync', async () => {

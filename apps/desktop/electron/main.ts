@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage, shell } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -9,11 +9,16 @@ import {
   createFakeAgentProvider,
   createOpenAiCompatibleAgentProvider,
   createRemoteAgentReviewSummary,
+  createRemoteCodingAgentSummary,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   knowledgeChunks,
   knowledgeDocuments,
   runKnowledgeReviewAgent,
+  type CodingAgentEvent,
+  type CodingAgentRun,
+  type CodingPermissionDecision,
+  type CodingPermissionRequest,
   type AgentProviderConfig,
   type LocalProject,
   type ProviderCredentialMetadata,
@@ -24,21 +29,37 @@ import { createLocalStore, type LocalStore } from './local-store.js'
 import {
   ipcChannels,
   parseAgentEventInput,
+  parseCancelCodingAgentRunInput,
+  parseDeleteManagedWorktreeInput,
+  parseEnsureCodingEngineInput,
+  parseListCodingAgentRunsInput,
   parseMcpServersInput,
+  parseOpenManagedWorktreeInput,
   parseAgentProviderCredentialInput,
   parseListAgentReviewsInput,
+  parseReplyCodingPermissionInput,
+  parseRemoteCodingAgentSummaryInput,
   parseRemoteRunSummaryInput,
   parseRemoteSnapshotInput,
   parseRemoteTestEvidenceSummaryInput,
+  parseRunCodingAgentInput,
   parseRunKnowledgeReviewInput,
   parseRunProjectTestsInput,
   parseSaveRunInput,
   parseSaveProjectTestCommandInput,
   parseSettingsInput,
+  parseSubscribeCodingRunInput,
   parseValidateTestCommandInput,
 } from './ipc-contract.js'
 import { createRemoteSyncClient, type RemoteSyncClient } from './remote-sync.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
+import {
+  completeFakeCodingRun,
+  createFakeCodingRunBundle,
+  createManagedCodingWorkspace,
+  deleteManagedCodingWorkspace,
+  findActiveCodingRun,
+} from './coding-runner.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_TEST_TIMEOUT_MS = 120_000
@@ -147,6 +168,11 @@ function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.uploadTestEvidenceSummary, async (_, payload: unknown) => {
     const summary = parseRemoteTestEvidenceSummaryInput(payload)
     return getRemoteSyncClient().uploadTestEvidenceSummary(summary)
+  })
+
+  ipcMain.handle(ipcChannels.uploadCodingAgentSummary, async (_, payload: unknown) => {
+    const summary = parseRemoteCodingAgentSummaryInput(payload)
+    return getRemoteSyncClient().uploadCodingAgentSummary(summary)
   })
 
   ipcMain.handle(ipcChannels.selectProject, async () => {
@@ -310,6 +336,223 @@ function registerIpcHandlers() {
     const input = parseListAgentReviewsInput(payload)
     const store = await getStore()
     return store.listAgentReviews(input.runId)
+  })
+
+  ipcMain.handle(ipcChannels.ensureCodingEngine, async (_, payload: unknown) => {
+    const input = parseEnsureCodingEngineInput(payload)
+    await findProject(input.projectId)
+    return {
+      projectId: input.projectId,
+      engine: 'fake' as const,
+      status: 'ready' as const,
+    }
+  })
+
+  ipcMain.handle(ipcChannels.listCodingAgentRuns, async (_, payload: unknown) => {
+    const input = parseListCodingAgentRunsInput(payload)
+    const store = await getStore()
+    return store.listCodingAgentRuns(input.runId)
+  })
+
+  ipcMain.handle(ipcChannels.runCodingAgent, async (_, payload: unknown) => {
+    const input = parseRunCodingAgentInput(payload)
+    const store = await getStore()
+    const project = await findProject(input.projectId)
+    const active = findActiveCodingRun(await store.listCodingAgentRuns(), input.projectId)
+    if (active) {
+      throw new Error(`Coding Agent run already active for this project: ${active.id}`)
+    }
+
+    const run = (await store.listRuns()).find((candidate) => candidate.id === input.runId)
+    if (!run) {
+      throw new Error(`Run not found: ${input.runId}`)
+    }
+    const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
+    if (!node) {
+      throw new Error(`Run node not found: ${input.nodeId}`)
+    }
+    if (node.stage !== 'build' && node.kind !== 'task') {
+      throw new Error('Coding Agent can only run from an implementation/build node')
+    }
+
+    const codingRunId = `coding-run-${randomUUID()}`
+    const workspace = await createManagedCodingWorkspace({
+      project,
+      codingRunId,
+      runId: run.id,
+      nodeId: node.id,
+    })
+    const bundle = createFakeCodingRunBundle({
+      id: codingRunId,
+      runId: run.id,
+      nodeId: node.id,
+      project,
+      requestedBy: input.requestedBy,
+      userInstruction: input.userInstruction,
+      workspace,
+      run,
+      node,
+    })
+
+    await store.saveManagedCodingWorkspace(workspace)
+    await store.saveCodingAgentRun(bundle.codingRun)
+    for (const event of bundle.events) {
+      await store.saveCodingAgentEvent(event)
+    }
+    await store.saveCodingPermissionRequest(bundle.permissionRequest)
+
+    return {
+      codingRun: bundle.codingRun,
+      state: await store.loadState(),
+    }
+  })
+
+  ipcMain.handle(ipcChannels.cancelCodingAgentRun, async (_, payload: unknown) => {
+    const input = parseCancelCodingAgentRunInput(payload)
+    const store = await getStore()
+    const codingRun = (await store.listCodingAgentRuns()).find((candidate) => candidate.id === input.codingRunId)
+    if (!codingRun) {
+      throw new Error(`Coding Agent run not found: ${input.codingRunId}`)
+    }
+    const timestamp = new Date().toISOString()
+    const updated: CodingAgentRun = {
+      ...codingRun,
+      status: 'interrupted',
+      summary: 'Coding Agent run interrupted by user cancel.',
+      completedAt: timestamp,
+    }
+    const event: CodingAgentEvent = {
+      id: `coding-event-${randomUUID()}`,
+      codingRunId: updated.id,
+      runId: updated.runId,
+      nodeId: updated.nodeId,
+      sequence: (await store.listCodingAgentEvents(updated.id)).length + 1,
+      kind: 'status',
+      message: 'Coding Agent run interrupted by user cancel.',
+      timestamp,
+      redacted: true,
+    }
+    await store.saveCodingAgentRun(updated)
+    await store.saveCodingAgentEvent(event)
+    return updated
+  })
+
+  ipcMain.handle(ipcChannels.replyCodingPermission, async (_, payload: unknown) => {
+    const input = parseReplyCodingPermissionInput(payload)
+    const store = await getStore()
+    const request = (await store.listCodingPermissionRequests(input.codingRunId)).find(
+      (candidate) => candidate.id === input.requestId,
+    )
+    if (!request) {
+      throw new Error(`Coding permission request not found: ${input.requestId}`)
+    }
+    const timestamp = new Date().toISOString()
+    const updatedRequest: CodingPermissionRequest = {
+      ...request,
+      status:
+        input.decision === 'approved'
+          ? 'approved'
+          : input.decision === 'expired'
+            ? 'expired'
+            : 'rejected',
+    }
+    const decision: CodingPermissionDecision = {
+      id: `coding-permission-decision-${randomUUID()}`,
+      requestId: request.id,
+      codingRunId: input.codingRunId,
+      decidedBy: input.decidedBy,
+      decision: input.decision,
+      comment: input.comment,
+      decidedAt: timestamp,
+    }
+
+    await store.saveCodingPermissionRequest(updatedRequest)
+    await store.saveCodingPermissionDecision(decision)
+
+    const codingRun = (await store.listCodingAgentRuns()).find((candidate) => candidate.id === input.codingRunId)
+    if (!codingRun) {
+      throw new Error(`Coding Agent run not found: ${input.codingRunId}`)
+    }
+
+    if (input.decision === 'approved') {
+      const workspace = (await store.listManagedCodingWorkspaces(codingRun.projectId)).find(
+        (candidate) => candidate.id === codingRun.managedWorkspaceId,
+      )
+      if (!workspace) {
+        throw new Error(`Managed worktree not found: ${codingRun.managedWorkspaceId}`)
+      }
+      const project = await findProject(codingRun.projectId)
+      const completed = await completeFakeCodingRun({
+        codingRun,
+        workspace,
+        project,
+        now: timestamp,
+      })
+      await store.saveCodingAgentRun(completed.codingRun)
+      await store.saveDependencyBootstrapEvidence(completed.bootstrapEvidence)
+      await store.saveCodingDiffArtifact(completed.diff)
+      for (const event of completed.events) {
+        await store.saveCodingAgentEvent(event)
+      }
+      void getRemoteSyncClient()
+        .uploadCodingAgentSummary(createRemoteCodingAgentSummary(completed.codingRun, completed.diff))
+        .catch(() => undefined)
+    } else {
+      const updatedRun: CodingAgentRun = {
+        ...codingRun,
+        status: 'interrupted',
+        summary: `Coding Agent permission ${input.decision}; run interrupted.`,
+        completedAt: timestamp,
+      }
+      const event: CodingAgentEvent = {
+        id: `coding-event-${randomUUID()}`,
+        codingRunId: updatedRun.id,
+        runId: updatedRun.runId,
+        nodeId: updatedRun.nodeId,
+        sequence: (await store.listCodingAgentEvents(updatedRun.id)).length + 1,
+        kind: 'permission',
+        message: `Coding permission ${input.decision}; run interrupted.`,
+        timestamp,
+        metadata: { requestId: request.id },
+        redacted: true,
+      }
+      await store.saveCodingAgentRun(updatedRun)
+      await store.saveCodingAgentEvent(event)
+    }
+
+    return updatedRequest
+  })
+
+  ipcMain.handle(ipcChannels.subscribeCodingRun, async (_, payload: unknown) => {
+    parseSubscribeCodingRunInput(payload)
+    const store = await getStore()
+    return store.loadState()
+  })
+
+  ipcMain.handle(ipcChannels.openManagedWorktree, async (_, payload: unknown) => {
+    const input = parseOpenManagedWorktreeInput(payload)
+    const store = await getStore()
+    const workspace = (await store.listManagedCodingWorkspaces()).find((candidate) => candidate.id === input.workspaceId)
+    if (!workspace) {
+      throw new Error(`Managed worktree not found: ${input.workspaceId}`)
+    }
+    const error = await shell.openPath(workspace.worktreePath)
+    if (error) {
+      throw new Error(error)
+    }
+    return workspace
+  })
+
+  ipcMain.handle(ipcChannels.deleteManagedWorktree, async (_, payload: unknown) => {
+    const input = parseDeleteManagedWorktreeInput(payload)
+    const store = await getStore()
+    const workspace = (await store.listManagedCodingWorkspaces()).find((candidate) => candidate.id === input.workspaceId)
+    if (!workspace) {
+      throw new Error(`Managed worktree not found: ${input.workspaceId}`)
+    }
+    const deleted = await deleteManagedCodingWorkspace(workspace)
+    await store.saveManagedCodingWorkspace(deleted)
+    return deleted
   })
 
   ipcMain.handle(ipcChannels.runKnowledgeReview, async (_, payload: unknown) => {

@@ -15,6 +15,7 @@ import {
   type NodeStatus,
   type Project,
   type ProviderCredentialMetadata,
+  type RemoteCodingAgentSummary,
   type RemoteTestEvidenceSummary,
   type RequiredGateRole,
   type Role,
@@ -206,6 +207,23 @@ type AgentTraceRow = {
 
 type AgentTokenUsageRow = TokenUsageRow & {
   source: TokenUsageSource
+}
+
+type CodingAgentSummaryRow = {
+  id: string
+  run_id: string
+  node_id: string
+  project_id: string
+  requested_by: string
+  provider_id: string
+  engine: RemoteCodingAgentSummary['engine']
+  status: RemoteCodingAgentSummary['status']
+  branch_name: string
+  summary: string
+  changed_paths: unknown
+  started_at: TimestampValue
+  completed_at: TimestampValue | null
+  redacted: boolean
 }
 
 function timestamp(value: TimestampValue): string {
@@ -441,6 +459,29 @@ function mapAgentTokenUsage(row: AgentTokenUsageRow): AgentTokenUsage {
   }
 }
 
+function mapCodingAgentSummary(row: CodingAgentSummaryRow): RemoteCodingAgentSummary {
+  const changedPaths = Array.isArray(row.changed_paths)
+    ? row.changed_paths.filter((value): value is string => typeof value === 'string')
+    : []
+
+  return {
+    id: row.id,
+    runId: row.run_id,
+    nodeId: row.node_id,
+    projectId: row.project_id,
+    requestedBy: row.requested_by,
+    providerId: row.provider_id,
+    engine: row.engine,
+    status: row.status,
+    branchName: row.branch_name,
+    summary: row.summary,
+    changedPaths,
+    startedAt: timestamp(row.started_at),
+    ...(row.completed_at ? { completedAt: timestamp(row.completed_at) } : {}),
+    redacted: row.redacted,
+  }
+}
+
 function mapSkill(row: SkillRow): SkillDefinition {
   return {
     id: row.id,
@@ -539,6 +580,7 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         agentTraceRows,
         agentTokenRows,
         providerRows,
+        codingSummaryRows,
       ] = await Promise.all([
         db.query<ProjectRow>('SELECT * FROM projects ORDER BY name ASC'),
         db.query<UserRow>('SELECT * FROM users ORDER BY name ASC'),
@@ -552,6 +594,9 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         db.query<AgentTokenUsageRow>('SELECT * FROM agent_token_usage ORDER BY timestamp DESC'),
         db.query<AgentProviderCredentialRow>(
           'SELECT * FROM agent_provider_credentials ORDER BY updated_at DESC',
+        ),
+        db.query<CodingAgentSummaryRow>(
+          'SELECT * FROM coding_agent_summaries ORDER BY started_at DESC',
         ),
       ])
       const tokenUsage = tokenRows.map(mapTokenUsage)
@@ -567,6 +612,7 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         agentReviews: agentReviewRows.map(mapAgentReview),
         agentTraces: agentTraceRows.map(mapAgentTrace),
         agentTokenUsage: agentTokenRows.map(mapAgentTokenUsage),
+        codingAgentSummaries: codingSummaryRows.map(mapCodingAgentSummary),
         agentProviders: [
           {
             id: 'fake-knowledge-review',
@@ -899,6 +945,103 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         accepted: true,
         syncedAt: new Date().toISOString(),
         message: 'agent review summary written to Postgres repository',
+      }
+    },
+
+    async uploadCodingAgentSummary(summary: RemoteCodingAgentSummary, context) {
+      const syncedNodeId = remoteNodeId(summary.runId, summary.nodeId)
+
+      await db.query(
+        `
+          INSERT INTO workflow_runs (
+            id,
+            organization_id,
+            project_id,
+            creator_id,
+            data_origin,
+            title,
+            request,
+            status,
+            current_node_id,
+            branch_name,
+            pull_request_url,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, 'remote', $5, $6, 'building', $7, $8, NULL, $9, $9)
+          ON CONFLICT (id) DO UPDATE
+          SET current_node_id = excluded.current_node_id,
+              updated_at = excluded.updated_at
+        `,
+        [
+          summary.runId,
+          context.organizationId,
+          summary.projectId,
+          context.userId,
+          'Synced coding agent run',
+          'Redacted Coding Agent summary synced from DevFlow Electron.',
+          syncedNodeId,
+          summary.branchName,
+          summary.completedAt ?? summary.startedAt,
+        ],
+      )
+      await db.query(
+        `
+          INSERT INTO coding_agent_summaries (
+            id,
+            organization_id,
+            run_id,
+            node_id,
+            project_id,
+            requested_by,
+            provider_id,
+            engine,
+            status,
+            branch_name,
+            summary,
+            changed_paths,
+            started_at,
+            completed_at,
+            redacted
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15)
+          ON CONFLICT (id) DO UPDATE
+          SET node_id = excluded.node_id,
+              project_id = excluded.project_id,
+              requested_by = excluded.requested_by,
+              provider_id = excluded.provider_id,
+              engine = excluded.engine,
+              status = excluded.status,
+              branch_name = excluded.branch_name,
+              summary = excluded.summary,
+              changed_paths = excluded.changed_paths,
+              started_at = excluded.started_at,
+              completed_at = excluded.completed_at,
+              redacted = excluded.redacted
+        `,
+        [
+          summary.id,
+          context.organizationId,
+          summary.runId,
+          syncedNodeId,
+          summary.projectId,
+          context.userId,
+          summary.providerId,
+          summary.engine,
+          summary.status,
+          summary.branchName,
+          summary.summary,
+          JSON.stringify(summary.changedPaths),
+          summary.startedAt,
+          summary.completedAt ?? null,
+          summary.redacted,
+        ],
+      )
+
+      return {
+        accepted: true,
+        syncedAt: new Date().toISOString(),
+        message: 'coding agent summary written to Postgres repository',
       }
     },
 

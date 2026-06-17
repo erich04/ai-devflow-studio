@@ -3,6 +3,7 @@ import type {
   Artifact,
   DevFlowSessionHeaders,
   RemoteAgentReviewSummary,
+  RemoteCodingAgentSummary,
   RemoteRunSummary,
   RemoteSyncUploadResult,
   RemoteTeamSnapshot,
@@ -43,6 +44,7 @@ export type RemoteSyncClient = {
   uploadRunSummary(summary: RemoteRunSummary): Promise<RemoteSyncUploadResult>
   uploadTestEvidenceSummary(summary: RemoteTestEvidenceSummary): Promise<RemoteSyncUploadResult>
   uploadAgentReviewSummary(summary: RemoteAgentReviewSummary): Promise<RemoteSyncUploadResult>
+  uploadCodingAgentSummary(summary: RemoteCodingAgentSummary): Promise<RemoteSyncUploadResult>
 }
 
 export function resolveRemoteApiBaseUrl(
@@ -167,6 +169,16 @@ export function createRemoteSyncClient(
         buildUrl(apiBaseUrl, '/api/sync/agent-review-summary'),
         summary,
         '/api/sync/agent-review-summary',
+        sessionHeaders,
+      )
+    },
+
+    async uploadCodingAgentSummary(summary) {
+      return postJson<RemoteSyncUploadResult>(
+        fetcher,
+        buildUrl(apiBaseUrl, '/api/sync/coding-agent-summary'),
+        summary,
+        '/api/sync/coding-agent-summary',
         sessionHeaders,
       )
     },

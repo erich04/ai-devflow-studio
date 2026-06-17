@@ -9,16 +9,23 @@ import type {
   AgentTrace,
   AgentTokenUsage,
   Artifact,
+  CodingAgentEvent,
+  CodingAgentRun,
+  CodingDiffArtifact,
+  CodingPermissionDecision,
+  CodingPermissionRequest,
+  DependencyBootstrapEvidence,
   LocalExecutionState,
   LocalProject,
   LocalSettings,
+  ManagedCodingWorkspace,
   McpServerDefinition,
   ProviderCredentialMetadata,
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 3
+export const CURRENT_SCHEMA_VERSION = 4
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -54,6 +61,20 @@ export type LocalStore = {
   listAgentTraces(runId?: string): Promise<AgentTrace[]>
   saveAgentTokenUsage(usage: AgentTokenUsage): Promise<void>
   listAgentTokenUsage(runId?: string): Promise<AgentTokenUsage[]>
+  saveCodingAgentRun(run: CodingAgentRun): Promise<void>
+  listCodingAgentRuns(runId?: string): Promise<CodingAgentRun[]>
+  saveCodingAgentEvent(event: CodingAgentEvent): Promise<void>
+  listCodingAgentEvents(codingRunId?: string): Promise<CodingAgentEvent[]>
+  saveCodingPermissionRequest(request: CodingPermissionRequest): Promise<void>
+  listCodingPermissionRequests(codingRunId?: string): Promise<CodingPermissionRequest[]>
+  saveCodingPermissionDecision(decision: CodingPermissionDecision): Promise<void>
+  listCodingPermissionDecisions(codingRunId?: string): Promise<CodingPermissionDecision[]>
+  saveManagedCodingWorkspace(workspace: ManagedCodingWorkspace): Promise<void>
+  listManagedCodingWorkspaces(projectId?: string): Promise<ManagedCodingWorkspace[]>
+  saveDependencyBootstrapEvidence(evidence: DependencyBootstrapEvidence): Promise<void>
+  listDependencyBootstrapEvidence(codingRunId?: string): Promise<DependencyBootstrapEvidence[]>
+  saveCodingDiffArtifact(artifact: CodingDiffArtifact): Promise<void>
+  listCodingDiffArtifacts(runId?: string): Promise<CodingDiffArtifact[]>
   saveProviderCredential(
     metadata: ProviderCredentialMetadata,
     encryptedSecret: string,
@@ -137,6 +158,69 @@ function migrateSchema(db: Database) {
       node_id text not null,
       json text not null,
       timestamp text not null
+    );
+
+    create table if not exists coding_agent_runs (
+      id text primary key,
+      run_id text not null,
+      node_id text not null,
+      json text not null,
+      started_at text not null,
+      updated_at text not null
+    );
+
+    create table if not exists coding_agent_events (
+      id text primary key,
+      coding_run_id text not null,
+      run_id text not null,
+      node_id text not null,
+      sequence integer not null,
+      json text not null,
+      timestamp text not null
+    );
+
+    create table if not exists coding_permission_requests (
+      id text primary key,
+      coding_run_id text not null,
+      run_id text not null,
+      node_id text not null,
+      json text not null,
+      requested_at text not null
+    );
+
+    create table if not exists coding_permission_decisions (
+      id text primary key,
+      request_id text not null,
+      coding_run_id text not null,
+      json text not null,
+      decided_at text not null
+    );
+
+    create table if not exists managed_coding_workspaces (
+      id text primary key,
+      project_id text not null,
+      coding_run_id text not null,
+      json text not null,
+      created_at text not null
+    );
+
+    create table if not exists dependency_bootstrap_evidence (
+      id text primary key,
+      coding_run_id text not null,
+      run_id text not null,
+      node_id text not null,
+      project_id text not null,
+      json text not null,
+      created_at text not null
+    );
+
+    create table if not exists coding_diff_artifacts (
+      id text primary key,
+      run_id text not null,
+      node_id text not null,
+      project_id text not null,
+      json text not null,
+      created_at text not null
     );
 
     create table if not exists provider_credentials (
@@ -401,6 +485,244 @@ class SqlJsLocalStore implements LocalStore {
     )
   }
 
+  async saveCodingAgentRun(run: CodingAgentRun): Promise<void> {
+    this.db.run(
+      `
+      insert into coding_agent_runs (id, run_id, node_id, json, started_at, updated_at)
+      values (?, ?, ?, ?, ?, ?)
+      on conflict(id) do update set json = excluded.json, updated_at = excluded.updated_at
+      `,
+      [
+        run.id,
+        run.runId,
+        run.nodeId,
+        JSON.stringify(run),
+        run.startedAt,
+        run.completedAt ?? run.startedAt,
+      ],
+    )
+    await this.persist()
+  }
+
+  async listCodingAgentRuns(runId?: string): Promise<CodingAgentRun[]> {
+    if (runId) {
+      return selectJson<CodingAgentRun>(
+        this.db,
+        'select json from coding_agent_runs where run_id = ? order by updated_at desc, started_at desc',
+        [runId],
+      )
+    }
+
+    return selectJson<CodingAgentRun>(
+      this.db,
+      'select json from coding_agent_runs order by updated_at desc, started_at desc',
+    )
+  }
+
+  async saveCodingAgentEvent(event: CodingAgentEvent): Promise<void> {
+    this.db.run(
+      `
+      insert into coding_agent_events (id, coding_run_id, run_id, node_id, sequence, json, timestamp)
+      values (?, ?, ?, ?, ?, ?, ?)
+      on conflict(id) do update set json = excluded.json, sequence = excluded.sequence, timestamp = excluded.timestamp
+      `,
+      [
+        event.id,
+        event.codingRunId,
+        event.runId,
+        event.nodeId,
+        event.sequence,
+        JSON.stringify(event),
+        event.timestamp,
+      ],
+    )
+    await this.persist()
+  }
+
+  async listCodingAgentEvents(codingRunId?: string): Promise<CodingAgentEvent[]> {
+    if (codingRunId) {
+      return selectJson<CodingAgentEvent>(
+        this.db,
+        'select json from coding_agent_events where coding_run_id = ? order by sequence asc, timestamp asc',
+        [codingRunId],
+      )
+    }
+
+    return selectJson<CodingAgentEvent>(
+      this.db,
+      'select json from coding_agent_events order by timestamp asc, sequence asc',
+    )
+  }
+
+  async saveCodingPermissionRequest(request: CodingPermissionRequest): Promise<void> {
+    this.db.run(
+      `
+      insert into coding_permission_requests (id, coding_run_id, run_id, node_id, json, requested_at)
+      values (?, ?, ?, ?, ?, ?)
+      on conflict(id) do update set json = excluded.json, requested_at = excluded.requested_at
+      `,
+      [
+        request.id,
+        request.codingRunId,
+        request.runId,
+        request.nodeId,
+        JSON.stringify(request),
+        request.requestedAt,
+      ],
+    )
+    await this.persist()
+  }
+
+  async listCodingPermissionRequests(codingRunId?: string): Promise<CodingPermissionRequest[]> {
+    if (codingRunId) {
+      return selectJson<CodingPermissionRequest>(
+        this.db,
+        'select json from coding_permission_requests where coding_run_id = ? order by requested_at asc',
+        [codingRunId],
+      )
+    }
+
+    return selectJson<CodingPermissionRequest>(
+      this.db,
+      'select json from coding_permission_requests order by requested_at asc',
+    )
+  }
+
+  async saveCodingPermissionDecision(decision: CodingPermissionDecision): Promise<void> {
+    this.db.run(
+      `
+      insert into coding_permission_decisions (id, request_id, coding_run_id, json, decided_at)
+      values (?, ?, ?, ?, ?)
+      on conflict(id) do update set json = excluded.json, decided_at = excluded.decided_at
+      `,
+      [
+        decision.id,
+        decision.requestId,
+        decision.codingRunId,
+        JSON.stringify(decision),
+        decision.decidedAt,
+      ],
+    )
+    await this.persist()
+  }
+
+  async listCodingPermissionDecisions(codingRunId?: string): Promise<CodingPermissionDecision[]> {
+    if (codingRunId) {
+      return selectJson<CodingPermissionDecision>(
+        this.db,
+        'select json from coding_permission_decisions where coding_run_id = ? order by decided_at asc',
+        [codingRunId],
+      )
+    }
+
+    return selectJson<CodingPermissionDecision>(
+      this.db,
+      'select json from coding_permission_decisions order by decided_at asc',
+    )
+  }
+
+  async saveManagedCodingWorkspace(workspace: ManagedCodingWorkspace): Promise<void> {
+    this.db.run(
+      `
+      insert into managed_coding_workspaces (id, project_id, coding_run_id, json, created_at)
+      values (?, ?, ?, ?, ?)
+      on conflict(id) do update set json = excluded.json
+      `,
+      [
+        workspace.id,
+        workspace.projectId,
+        workspace.codingRunId,
+        JSON.stringify(workspace),
+        workspace.createdAt,
+      ],
+    )
+    await this.persist()
+  }
+
+  async listManagedCodingWorkspaces(projectId?: string): Promise<ManagedCodingWorkspace[]> {
+    if (projectId) {
+      return selectJson<ManagedCodingWorkspace>(
+        this.db,
+        'select json from managed_coding_workspaces where project_id = ? order by created_at desc',
+        [projectId],
+      )
+    }
+
+    return selectJson<ManagedCodingWorkspace>(
+      this.db,
+      'select json from managed_coding_workspaces order by created_at desc',
+    )
+  }
+
+  async saveDependencyBootstrapEvidence(evidence: DependencyBootstrapEvidence): Promise<void> {
+    this.db.run(
+      `
+      insert into dependency_bootstrap_evidence (id, coding_run_id, run_id, node_id, project_id, json, created_at)
+      values (?, ?, ?, ?, ?, ?, ?)
+      on conflict(id) do update set json = excluded.json, created_at = excluded.created_at
+      `,
+      [
+        evidence.id,
+        evidence.codingRunId,
+        evidence.runId,
+        evidence.nodeId,
+        evidence.projectId,
+        JSON.stringify(evidence),
+        evidence.createdAt,
+      ],
+    )
+    await this.persist()
+  }
+
+  async listDependencyBootstrapEvidence(codingRunId?: string): Promise<DependencyBootstrapEvidence[]> {
+    if (codingRunId) {
+      return selectJson<DependencyBootstrapEvidence>(
+        this.db,
+        'select json from dependency_bootstrap_evidence where coding_run_id = ? order by created_at asc',
+        [codingRunId],
+      )
+    }
+
+    return selectJson<DependencyBootstrapEvidence>(
+      this.db,
+      'select json from dependency_bootstrap_evidence order by created_at asc',
+    )
+  }
+
+  async saveCodingDiffArtifact(artifact: CodingDiffArtifact): Promise<void> {
+    this.db.run(
+      `
+      insert into coding_diff_artifacts (id, run_id, node_id, project_id, json, created_at)
+      values (?, ?, ?, ?, ?, ?)
+      on conflict(id) do update set json = excluded.json, created_at = excluded.created_at
+      `,
+      [
+        artifact.id,
+        artifact.runId,
+        artifact.nodeId,
+        artifact.projectId,
+        JSON.stringify(artifact),
+        artifact.createdAt,
+      ],
+    )
+    await this.persist()
+  }
+
+  async listCodingDiffArtifacts(runId?: string): Promise<CodingDiffArtifact[]> {
+    if (runId) {
+      return selectJson<CodingDiffArtifact>(
+        this.db,
+        'select json from coding_diff_artifacts where run_id = ? order by created_at asc',
+        [runId],
+      )
+    }
+
+    return selectJson<CodingDiffArtifact>(
+      this.db,
+      'select json from coding_diff_artifacts order by created_at asc',
+    )
+  }
+
   async saveProviderCredential(
     metadata: ProviderCredentialMetadata,
     encryptedSecret: string,
@@ -503,6 +825,13 @@ class SqlJsLocalStore implements LocalStore {
       agentReviews,
       agentTraces,
       agentTokenUsage,
+      codingRuns,
+      codingEvents,
+      codingPermissionRequests,
+      codingPermissionDecisions,
+      managedCodingWorkspaces,
+      dependencyBootstrapEvidence,
+      codingDiffArtifacts,
       settings,
       mcpServers,
     ] = await Promise.all([
@@ -514,6 +843,13 @@ class SqlJsLocalStore implements LocalStore {
       this.listAgentReviews(),
       this.listAgentTraces(),
       this.listAgentTokenUsage(),
+      this.listCodingAgentRuns(),
+      this.listCodingAgentEvents(),
+      this.listCodingPermissionRequests(),
+      this.listCodingPermissionDecisions(),
+      this.listManagedCodingWorkspaces(),
+      this.listDependencyBootstrapEvidence(),
+      this.listCodingDiffArtifacts(),
       this.getSettings(),
       this.listMcpServers(),
     ])
@@ -527,6 +863,13 @@ class SqlJsLocalStore implements LocalStore {
       agentReviews,
       agentTraces,
       agentTokenUsage,
+      codingRuns,
+      codingEvents,
+      codingPermissionRequests,
+      codingPermissionDecisions,
+      managedCodingWorkspaces,
+      dependencyBootstrapEvidence,
+      codingDiffArtifacts,
       settings,
       mcpServers,
     }

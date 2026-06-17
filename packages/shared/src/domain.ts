@@ -440,6 +440,8 @@ export type TeamOverview = {
 
 export type PackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun' | 'unknown'
 
+export type ProjectFileSnapshot = Record<string, string>
+
 export type DetectedTestCommand = {
   command: string
   packageManager: PackageManager
@@ -477,6 +479,156 @@ export type TestEvidence = {
   createdAt: string
 }
 
+export type CodingAgentEngine = 'fake' | 'opencode-http' | 'opencode-acp'
+
+export type CodingAgentRunStatus =
+  | 'queued'
+  | 'preparing'
+  | 'waiting_permission'
+  | 'bootstrapping'
+  | 'running'
+  | 'testing'
+  | 'completed'
+  | 'failed'
+  | 'interrupted'
+  | 'cancelled'
+
+export type CodingAgentRun = {
+  id: string
+  runId: string
+  nodeId: string
+  projectId: string
+  requestedBy: string
+  providerId: string
+  engine: CodingAgentEngine
+  status: CodingAgentRunStatus
+  managedWorkspaceId: string
+  branchName: string
+  userInstruction: string
+  prompt: string
+  summary: string
+  changedPaths: string[]
+  startedAt: string
+  completedAt?: string
+  tokenUsageId?: string
+  diffArtifactId?: string
+  bootstrapEvidenceId?: string
+  testEvidenceId?: string
+  redacted: boolean
+}
+
+export type CodingAgentEventKind =
+  | 'status'
+  | 'brief'
+  | 'workspace'
+  | 'permission'
+  | 'tool_call'
+  | 'bootstrap'
+  | 'diff'
+  | 'test'
+  | 'error'
+
+export type CodingAgentEvent = {
+  id: string
+  codingRunId: string
+  runId: string
+  nodeId: string
+  sequence: number
+  kind: CodingAgentEventKind
+  message: string
+  timestamp: string
+  metadata?: Record<string, unknown>
+  redacted: boolean
+}
+
+export type CodingPermissionRequestStatus = 'pending' | 'approved' | 'rejected' | 'expired'
+
+export type CodingPermissionRequest = {
+  id: string
+  codingRunId: string
+  runId: string
+  nodeId: string
+  permission: 'bash' | 'edit' | 'write' | 'patch' | 'install' | 'external_directory'
+  title: string
+  command?: string
+  filePath?: string
+  diffPreview?: string
+  risk: CommandRiskLevel
+  reasons: string[]
+  status: CodingPermissionRequestStatus
+  requestedAt: string
+  expiresAt: string
+}
+
+export type CodingPermissionDecision = {
+  id: string
+  requestId: string
+  codingRunId: string
+  decidedBy: string
+  decision: 'approved' | 'rejected' | 'expired'
+  comment: string
+  decidedAt: string
+}
+
+export type ManagedCodingWorkspace = {
+  id: string
+  projectId: string
+  codingRunId: string
+  sourcePath: string
+  worktreePath: string
+  branchName: string
+  baseBranch: string
+  createdAt: string
+  deletedAt?: string
+}
+
+export type DependencyBootstrapStatus = 'required' | 'skipped' | 'needs_approval' | 'running' | 'passed' | 'failed' | 'timed_out'
+
+export type DependencyBootstrapSnapshot = {
+  files: ProjectFileSnapshot
+  nodeModulesPresent: boolean
+  previousDependencyHash?: string
+}
+
+export type DependencyBootstrapDecision = {
+  status: Extract<DependencyBootstrapStatus, 'required' | 'skipped' | 'needs_approval'>
+  packageManager: PackageManager
+  command: string
+  dependencyHash: string
+  risk: CommandRiskLevel
+  reason: string
+}
+
+export type DependencyBootstrapEvidence = {
+  id: string
+  codingRunId: string
+  runId: string
+  nodeId: string
+  projectId: string
+  command: string
+  status: DependencyBootstrapStatus
+  exitCode: number | null
+  durationMs: number
+  stdout: string
+  stderr: string
+  summary: string
+  dependencyHash: string
+  redacted: boolean
+  createdAt: string
+}
+
+export type CodingDiffArtifact = {
+  id: string
+  runId: string
+  nodeId: string
+  projectId: string
+  changedPaths: string[]
+  patch: string
+  truncated: boolean
+  redacted: boolean
+  createdAt: string
+}
+
 export type DataOrigin = 'seed' | 'local' | 'remote' | 'adapter'
 
 export type LocalSettings = {
@@ -492,6 +644,13 @@ export type LocalExecutionState = {
   agentReviews: AgentReviewResult[]
   agentTraces: AgentTrace[]
   agentTokenUsage: AgentTokenUsage[]
+  codingRuns: CodingAgentRun[]
+  codingEvents: CodingAgentEvent[]
+  codingPermissionRequests: CodingPermissionRequest[]
+  codingPermissionDecisions: CodingPermissionDecision[]
+  managedCodingWorkspaces: ManagedCodingWorkspace[]
+  dependencyBootstrapEvidence: DependencyBootstrapEvidence[]
+  codingDiffArtifacts: CodingDiffArtifact[]
   settings: LocalSettings
   mcpServers: McpServerDefinition[]
 }
@@ -551,6 +710,23 @@ export type RemoteAgentReviewSummary = {
   confidence: number
   redacted: boolean
   createdAt: string
+}
+
+export type RemoteCodingAgentSummary = {
+  id: string
+  runId: string
+  nodeId: string
+  projectId: string
+  requestedBy: string
+  providerId: string
+  engine: CodingAgentEngine
+  status: CodingAgentRunStatus
+  branchName: string
+  summary: string
+  changedPaths: string[]
+  startedAt: string
+  completedAt?: string
+  redacted: boolean
 }
 
 export type RemoteSyncUploadResult = {

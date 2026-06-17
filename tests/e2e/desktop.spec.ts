@@ -26,6 +26,13 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
         agentReviews: [],
         agentTraces: [],
         agentTokenUsage: [],
+        codingRuns: [],
+        codingEvents: [],
+        codingPermissionRequests: [],
+        codingPermissionDecisions: [],
+        managedCodingWorkspaces: [],
+        dependencyBootstrapEvidence: [],
+        codingDiffArtifacts: [],
       }),
       loadRemoteSnapshot: async () => ({
         projects: [],
@@ -136,6 +143,13 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
             agentReviews: [],
             agentTraces: [],
             agentTokenUsage: [],
+            codingRuns: [],
+            codingEvents: [],
+            codingPermissionRequests: [],
+            codingPermissionDecisions: [],
+            managedCodingWorkspaces: [],
+            dependencyBootstrapEvidence: [],
+            codingDiffArtifacts: [],
           },
         }
       },
@@ -250,9 +264,138 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
             agentReviews: [review],
             agentTraces: [trace],
             agentTokenUsage: [tokenUsage],
+            codingRuns: [],
+            codingEvents: [],
+            codingPermissionRequests: [],
+            codingPermissionDecisions: [],
+            managedCodingWorkspaces: [],
+            dependencyBootstrapEvidence: [],
+            codingDiffArtifacts: [],
           },
         }
       },
+      ensureCodingEngine: async ({ projectId }: { projectId: string }) => ({
+        projectId,
+        engine: 'fake',
+        status: 'ready',
+      }),
+      runCodingAgent: async ({
+        runId,
+        nodeId,
+        projectId,
+        requestedBy,
+        providerId,
+      }: {
+        runId: string
+        nodeId: string
+        projectId: string
+        requestedBy: string
+        providerId: string
+        userInstruction: string
+      }) => {
+        const startedAt = '2026-06-15T00:05:00.000Z'
+        const codingRun = {
+          id: 'coding-run-1',
+          runId,
+          nodeId,
+          projectId,
+          requestedBy,
+          providerId,
+          engine: 'fake',
+          status: 'waiting_permission',
+          branchName: 'devflow/run-1-node-build-coding-run-1',
+          managedWorkspaceId: 'workspace-1',
+          summary: 'Waiting for permission relay.',
+          changedPaths: [],
+          startedAt,
+          redacted: true,
+        }
+        const permissionRequest = {
+          id: 'permission-1',
+          codingRunId: codingRun.id,
+          runId,
+          nodeId,
+          toolName: 'edit',
+          riskLevel: 'warn',
+          summary: 'Allow fake edit in managed worktree.',
+          details: 'devflow-fake-change.txt',
+          status: 'pending',
+          requestedAt: startedAt,
+          expiresAt: '2026-06-15T00:10:00.000Z',
+        }
+
+        return {
+          codingRun,
+          state: {
+            projects: [localProject],
+            runs: [],
+            artifacts: [],
+            events: [],
+            testEvidence: [],
+            settings: { themePreference: 'system' },
+            mcpServers: [],
+            agentReviews: [],
+            agentTraces: [],
+            agentTokenUsage: [],
+            codingRuns: [codingRun],
+            codingEvents: [],
+            codingPermissionRequests: [permissionRequest],
+            codingPermissionDecisions: [],
+            managedCodingWorkspaces: [],
+            dependencyBootstrapEvidence: [],
+            codingDiffArtifacts: [],
+          },
+        }
+      },
+      cancelCodingAgentRun: async ({ codingRunId }: { codingRunId: string }) => ({
+        id: codingRunId,
+        status: 'interrupted',
+      }),
+      replyCodingPermission: async ({
+        requestId,
+        codingRunId,
+        decision,
+      }: {
+        requestId: string
+        codingRunId: string
+        decision: string
+      }) => ({
+        id: requestId,
+        codingRunId,
+        status: decision === 'approved' ? 'approved' : 'rejected',
+      }),
+      subscribeCodingRun: async () => ({
+        projects: [localProject],
+        runs: [],
+        artifacts: [],
+        events: [],
+        testEvidence: [],
+        settings: { themePreference: 'system' },
+        mcpServers: [],
+        agentReviews: [],
+        agentTraces: [],
+        agentTokenUsage: [],
+        codingRuns: [],
+        codingEvents: [],
+        codingPermissionRequests: [],
+        codingPermissionDecisions: [],
+        managedCodingWorkspaces: [],
+        dependencyBootstrapEvidence: [],
+        codingDiffArtifacts: [],
+      }),
+      listCodingAgentRuns: async () => [],
+      openManagedWorktree: async ({ workspaceId }: { workspaceId: string }) => ({
+        id: workspaceId,
+      }),
+      deleteManagedWorktree: async ({ workspaceId }: { workspaceId: string }) => ({
+        id: workspaceId,
+        deletedAt: '2026-06-15T00:06:00.000Z',
+      }),
+      uploadCodingAgentSummary: async () => ({
+        accepted: true,
+        syncedAt: '2026-06-16T00:00:00.000Z',
+        message: 'coding agent summary accepted',
+      }),
     }
   })
 }

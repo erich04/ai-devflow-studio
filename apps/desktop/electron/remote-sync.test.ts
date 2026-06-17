@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type {
   RemoteAgentReviewSummary,
+  RemoteCodingAgentSummary,
   RemoteRunSummary,
   RemoteTestEvidenceSummary,
 } from '@ai-devflow/shared'
@@ -98,6 +99,23 @@ const agentReviewSummary: RemoteAgentReviewSummary = {
   createdAt: '2026-06-16T00:10:00.000Z',
 }
 
+const codingAgentSummary: RemoteCodingAgentSummary = {
+  id: 'coding-run-remote',
+  runId: 'run-remote',
+  nodeId: 'n-build',
+  projectId: 'p-remote',
+  requestedBy: 'u-remote',
+  providerId: 'fake-coding-engine',
+  engine: 'fake',
+  status: 'completed',
+  branchName: 'devflow/run-remote-n-build',
+  summary: 'Coding agent completed with a redacted diff summary.',
+  changedPaths: ['src/export.ts'],
+  startedAt: '2026-06-16T00:11:00.000Z',
+  completedAt: '2026-06-16T00:12:00.000Z',
+  redacted: true,
+}
+
 describe('Electron remote sync client', () => {
   it('resolves remote API base URL from env with a local default', () => {
     expect(resolveRemoteApiBaseUrl({ DEVFLOW_API_BASE_URL: 'http://team-api:4310/' })).toBe(
@@ -143,7 +161,7 @@ describe('Electron remote sync client', () => {
     })
   })
 
-  it('uploads run, test evidence, and agent review summaries without local-only raw fields', async () => {
+  it('uploads run, test evidence, agent review, and coding agent summaries without local-only raw fields', async () => {
     const calls: Array<{ url: string; init: RequestInit | undefined }> = []
     const fetcher = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       calls.push({ url: String(input), init })
@@ -167,10 +185,14 @@ describe('Electron remote sync client', () => {
     await expect(client.uploadAgentReviewSummary(agentReviewSummary)).resolves.toMatchObject({
       accepted: true,
     })
+    await expect(client.uploadCodingAgentSummary(codingAgentSummary)).resolves.toMatchObject({
+      accepted: true,
+    })
 
     const uploadedBodies = calls.map(({ init }) => JSON.parse(String(init?.body)))
     expect(uploadedBodies[1]).toEqual(evidenceSummary)
     expect(uploadedBodies[2]).toEqual(agentReviewSummary)
+    expect(uploadedBodies[3]).toEqual(codingAgentSummary)
     expect(calls[0]?.init?.headers).toMatchObject({
       'x-devflow-organization-id': 'org-demo',
       'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
@@ -183,5 +205,9 @@ describe('Electron remote sync client', () => {
     expect(JSON.stringify(uploadedBodies[2])).not.toContain('trace')
     expect(JSON.stringify(uploadedBodies[2])).not.toContain('prompt')
     expect(JSON.stringify(uploadedBodies[2])).not.toContain('cwd')
+    expect(JSON.stringify(uploadedBodies[3])).not.toContain('patch')
+    expect(JSON.stringify(uploadedBodies[3])).not.toContain('stdout')
+    expect(JSON.stringify(uploadedBodies[3])).not.toContain('stderr')
+    expect(JSON.stringify(uploadedBodies[3])).not.toContain('cwd')
   })
 })

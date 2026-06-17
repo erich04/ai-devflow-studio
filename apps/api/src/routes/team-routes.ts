@@ -9,6 +9,7 @@ import {
   runKnowledgeReviewAgent,
   type ProviderCredentialMetadata,
   type RemoteAgentReviewSummary,
+  type RemoteCodingAgentSummary,
   type RemoteRunSummary,
   type RemoteTestEvidenceSummary,
   type TeamSession,
@@ -115,6 +116,56 @@ function isRemoteAgentReviewSummary(value: unknown): value is RemoteAgentReviewS
   )
 }
 
+function hasLocalOnlyCodingField(value: Record<string, unknown>): boolean {
+  return (
+    'cwd' in value ||
+    'stdout' in value ||
+    'stderr' in value ||
+    'prompt' in value ||
+    'patch' in value ||
+    'rawTrace' in value ||
+    'providerSecret' in value ||
+    'secret' in value
+  )
+}
+
+function isRepoRelativePath(value: unknown): value is string {
+  if (typeof value !== 'string') {
+    return false
+  }
+  const normalized = value.replace(/\\/g, '/').trim()
+  return (
+    normalized.length > 0 &&
+    !normalized.startsWith('/') &&
+    !normalized.startsWith('../') &&
+    !normalized.includes('/../') &&
+    !/^[A-Za-z]:\//.test(normalized)
+  )
+}
+
+function isRemoteCodingAgentSummary(value: unknown): value is RemoteCodingAgentSummary {
+  return (
+    isRecord(value) &&
+    !hasLocalOnlyCodingField(value) &&
+    typeof value['id'] === 'string' &&
+    typeof value['runId'] === 'string' &&
+    typeof value['nodeId'] === 'string' &&
+    typeof value['projectId'] === 'string' &&
+    typeof value['requestedBy'] === 'string' &&
+    typeof value['providerId'] === 'string' &&
+    (value['engine'] === 'fake' || value['engine'] === 'opencode-http' || value['engine'] === 'opencode-acp') &&
+    typeof value['status'] === 'string' &&
+    typeof value['branchName'] === 'string' &&
+    typeof value['summary'] === 'string' &&
+    Array.isArray(value['changedPaths']) &&
+    value['changedPaths'].length <= 50 &&
+    value['changedPaths'].every(isRepoRelativePath) &&
+    typeof value['startedAt'] === 'string' &&
+    (value['completedAt'] === undefined || typeof value['completedAt'] === 'string') &&
+    value['redacted'] === true
+  )
+}
+
 function parseRemoteRunSummary(value: unknown): RemoteRunSummary {
   if (!isRemoteRunSummary(value)) {
     throw new Error('Invalid remote run summary payload')
@@ -138,6 +189,18 @@ function parseRemoteTestEvidenceSummary(value: unknown): RemoteTestEvidenceSumma
 function parseRemoteAgentReviewSummary(value: unknown): RemoteAgentReviewSummary {
   if (!isRemoteAgentReviewSummary(value)) {
     throw new Error('Invalid remote agent review summary payload')
+  }
+
+  return value
+}
+
+function parseRemoteCodingAgentSummary(value: unknown): RemoteCodingAgentSummary {
+  if (isRecord(value) && hasLocalOnlyCodingField(value)) {
+    throw new Error('Remote coding agent summary contains local-only fields')
+  }
+
+  if (!isRemoteCodingAgentSummary(value)) {
+    throw new Error('Invalid remote coding agent summary payload')
   }
 
   return value
@@ -249,6 +312,9 @@ function filterOverviewForSession(
     totalCost: formatUsd(projectCost.reduce((sum, rollup) => sum + rollup.costUsd, 0)),
     testEvidenceSummaries: overview.testEvidenceSummaries.filter((evidence) =>
       projectIds.has(evidence.projectId),
+    ),
+    codingAgentSummaries: overview.codingAgentSummaries.filter((summary) =>
+      projectIds.has(summary.projectId),
     ),
   }
 }
@@ -524,6 +590,28 @@ export async function resolveTeamRoute(
     return {
       status: 202,
       body: await repository.uploadAgentReviewSummary(summary, options.session),
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/sync/coding-agent-summary') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    let summary: RemoteCodingAgentSummary
+    try {
+      summary = parseRemoteCodingAgentSummary(options.body)
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : 'Invalid sync payload')
+    }
+
+    if (!canSyncProject(options.session, summary.projectId, 'member')) {
+      return forbidden('Project role member required')
+    }
+
+    return {
+      status: 202,
+      body: await repository.uploadCodingAgentSummary(summary, options.session),
     }
   }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type {
   AgentEvent,
   McpServerDefinition,
+  RemoteCodingAgentSummary,
   RemoteRunSummary,
   RemoteTestEvidenceSummary,
   WorkflowRun,
@@ -9,8 +10,13 @@ import type {
 import {
   parseAgentEventInput,
   parseAgentProviderCredentialInput,
+  parseCancelCodingAgentRunInput,
   parseMcpServersInput,
+  parseOpenManagedWorktreeInput,
+  parseReplyCodingPermissionInput,
+  parseRunCodingAgentInput,
   parseRunKnowledgeReviewInput,
+  parseRemoteCodingAgentSummaryInput,
   parseRemoteRunSummaryInput,
   parseRemoteSnapshotInput,
   parseRemoteTestEvidenceSummaryInput,
@@ -78,6 +84,23 @@ const remoteEvidenceSummary: RemoteTestEvidenceSummary = {
   summary: 'Tests passed in 900ms',
   redacted: true,
   createdAt: '2026-06-15T00:03:00.000Z',
+}
+
+const remoteCodingSummary: RemoteCodingAgentSummary = {
+  id: 'coding-run-1',
+  runId: 'run-1',
+  nodeId: 'node-build',
+  projectId: 'project-1',
+  requestedBy: 'user-1',
+  providerId: 'fake-coding-engine',
+  engine: 'fake',
+  status: 'completed',
+  branchName: 'devflow/run-1-node-build-coding-run-1',
+  summary: 'Created a small fake coding diff.',
+  changedPaths: ['src/example.ts'],
+  startedAt: '2026-06-15T00:04:00.000Z',
+  completedAt: '2026-06-15T00:05:00.000Z',
+  redacted: true,
 }
 
 describe('IPC contract parsers', () => {
@@ -148,6 +171,7 @@ describe('IPC contract parsers', () => {
     expect(parseRemoteSnapshotInput(undefined)).toEqual({})
     expect(parseRemoteRunSummaryInput(remoteRunSummary)).toEqual(remoteRunSummary)
     expect(parseRemoteTestEvidenceSummaryInput(remoteEvidenceSummary)).toEqual(remoteEvidenceSummary)
+    expect(parseRemoteCodingAgentSummaryInput(remoteCodingSummary)).toEqual(remoteCodingSummary)
   })
 
   it('rejects local-only fields in remote test evidence upload payloads', () => {
@@ -163,6 +187,27 @@ describe('IPC contract parsers', () => {
         stdout: 'secret output',
       }),
     ).toThrow(/local-only/)
+  })
+
+  it('rejects local-only fields and unsafe paths in remote coding summary payloads', () => {
+    expect(() =>
+      parseRemoteCodingAgentSummaryInput({
+        ...remoteCodingSummary,
+        cwd: '/Users/erich/project',
+      }),
+    ).toThrow(/local-only/)
+    expect(() =>
+      parseRemoteCodingAgentSummaryInput({
+        ...remoteCodingSummary,
+        patch: '+secret',
+      }),
+    ).toThrow(/local-only/)
+    expect(() =>
+      parseRemoteCodingAgentSummaryInput({
+        ...remoteCodingSummary,
+        changedPaths: ['/Users/erich/project/src/example.ts'],
+      }),
+    ).toThrow(/Invalid remote coding agent summary/)
   })
 
   it('accepts provider credential and knowledge review payloads', () => {
@@ -210,5 +255,63 @@ describe('IPC contract parsers', () => {
         nodeId: 'node-test',
       }),
     ).toThrow(/projectId/)
+  })
+
+  it('accepts coding agent payloads without accepting renderer-supplied raw prompts', () => {
+    expect(
+      parseRunCodingAgentInput({
+        runId: 'run-1',
+        nodeId: 'node-build',
+        projectId: 'project-1',
+        requestedBy: 'user-1',
+        providerId: 'fake-coding-engine',
+        userInstruction: 'Keep changes minimal.',
+      }),
+    ).toEqual({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Keep changes minimal.',
+    })
+
+    expect(() =>
+      parseRunCodingAgentInput({
+        runId: 'run-1',
+        nodeId: 'node-build',
+        projectId: 'project-1',
+        requestedBy: 'user-1',
+        providerId: 'fake-coding-engine',
+        userInstruction: 'Do it.',
+        prompt: 'renderer must not send prebuilt prompts',
+      }),
+    ).toThrow(/prompt/)
+  })
+
+  it('accepts coding permission replies, cancellations, and managed worktree actions', () => {
+    expect(
+      parseReplyCodingPermissionInput({
+        requestId: 'permission-1',
+        codingRunId: 'coding-run-1',
+        decidedBy: 'user-1',
+        decision: 'approved',
+        comment: 'Allow once.',
+      }),
+    ).toEqual({
+      requestId: 'permission-1',
+      codingRunId: 'coding-run-1',
+      decidedBy: 'user-1',
+      decision: 'approved',
+      comment: 'Allow once.',
+    })
+
+    expect(parseCancelCodingAgentRunInput({ codingRunId: 'coding-run-1' })).toEqual({
+      codingRunId: 'coding-run-1',
+    })
+
+    expect(parseOpenManagedWorktreeInput({ workspaceId: 'workspace-1' })).toEqual({
+      workspaceId: 'workspace-1',
+    })
   })
 })

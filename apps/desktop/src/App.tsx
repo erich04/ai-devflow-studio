@@ -65,13 +65,20 @@ import {
   type AgentTokenUsage,
   type AgentTrace,
   type Artifact,
+  type CodingAgentEvent,
+  type CodingAgentRun,
+  type CodingDiffArtifact,
+  type CodingPermissionDecision,
+  type CodingPermissionRequest,
   type CommandSafetyResult,
   type DataOrigin,
+  type DependencyBootstrapEvidence,
   type LocalExecutionState,
   type LocalProject,
   type KnowledgeDocument,
   type KnowledgeGovernanceCheck,
   type KnowledgeReference,
+  type ManagedCodingWorkspace,
   type Project,
   type TeamMember,
   type TestEvidence,
@@ -300,8 +307,16 @@ export function App() {
   const [agentReviews, setAgentReviews] = useState<AgentReviewResult[]>([])
   const [agentTraces, setAgentTraces] = useState<AgentTrace[]>([])
   const [agentTokenUsage, setAgentTokenUsage] = useState<AgentTokenUsage[]>([])
+  const [codingRuns, setCodingRuns] = useState<CodingAgentRun[]>([])
+  const [codingEvents, setCodingEvents] = useState<CodingAgentEvent[]>([])
+  const [codingPermissionRequests, setCodingPermissionRequests] = useState<CodingPermissionRequest[]>([])
+  const [codingPermissionDecisions, setCodingPermissionDecisions] = useState<CodingPermissionDecision[]>([])
+  const [managedCodingWorkspaces, setManagedCodingWorkspaces] = useState<ManagedCodingWorkspace[]>([])
+  const [dependencyBootstrapEvidence, setDependencyBootstrapEvidence] = useState<DependencyBootstrapEvidence[]>([])
+  const [codingDiffArtifacts, setCodingDiffArtifacts] = useState<CodingDiffArtifact[]>([])
   const [providerKeyDraft, setProviderKeyDraft] = useState('')
   const [isRunningAgentReview, setIsRunningAgentReview] = useState(false)
+  const [isStartingCodingAgent, setIsStartingCodingAgent] = useState(false)
   const [isNewRunOpen, setIsNewRunOpen] = useState(false)
   const [draftTitle, setDraftTitle] = useState('重构 GitHub webhook 重试策略')
   const [searchQuery, setSearchQuery] = useState('')
@@ -387,6 +402,34 @@ export function App() {
         )
         .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0]
     : undefined
+  const selectedCodingRuns = useMemo(
+    () =>
+      codingRuns
+        .filter((run) => run.runId === selectedRun?.id)
+        .sort((a, b) => (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt)),
+    [codingRuns, selectedRun],
+  )
+  const latestCodingRun = selectedCodingRuns[0]
+  const selectedCodingEvents = latestCodingRun
+    ? codingEvents
+        .filter((event) => event.codingRunId === latestCodingRun.id)
+        .sort((a, b) => a.sequence - b.sequence)
+    : []
+  const selectedCodingPermissionRequests = latestCodingRun
+    ? codingPermissionRequests
+        .filter((request) => request.codingRunId === latestCodingRun.id)
+        .sort((a, b) => a.requestedAt.localeCompare(b.requestedAt))
+    : []
+  const pendingCodingPermission = selectedCodingPermissionRequests.find((request) => request.status === 'pending')
+  const selectedManagedWorkspace = latestCodingRun
+    ? managedCodingWorkspaces.find((workspace) => workspace.id === latestCodingRun.managedWorkspaceId)
+    : undefined
+  const selectedCodingDiff = latestCodingRun
+    ? codingDiffArtifacts.find((artifact) => artifact.id === latestCodingRun.diffArtifactId)
+    : undefined
+  const selectedBootstrapEvidence = latestCodingRun
+    ? dependencyBootstrapEvidence.find((evidence) => evidence.id === latestCodingRun.bootstrapEvidenceId)
+    : undefined
 
   function resetTeamSnapshot() {
     setTeamProjects(projects)
@@ -435,6 +478,13 @@ export function App() {
     setAgentReviews(state.agentReviews)
     setAgentTraces(state.agentTraces)
     setAgentTokenUsage(state.agentTokenUsage)
+    setCodingRuns(state.codingRuns)
+    setCodingEvents(state.codingEvents)
+    setCodingPermissionRequests(state.codingPermissionRequests)
+    setCodingPermissionDecisions(state.codingPermissionDecisions)
+    setManagedCodingWorkspaces(state.managedCodingWorkspaces)
+    setDependencyBootstrapEvidence(state.dependencyBootstrapEvidence)
+    setCodingDiffArtifacts(state.codingDiffArtifacts)
     if (state.mcpServers.length > 0) {
       setMcpServers(state.mcpServers)
     }
@@ -552,6 +602,13 @@ export function App() {
       setAgentReviews([])
       setAgentTraces([])
       setAgentTokenUsage([])
+      setCodingRuns([])
+      setCodingEvents([])
+      setCodingPermissionRequests([])
+      setCodingPermissionDecisions([])
+      setManagedCodingWorkspaces([])
+      setDependencyBootstrapEvidence([])
+      setCodingDiffArtifacts([])
       setTeamProjects(snapshot.projects.length > 0 ? snapshot.projects : projects)
       setTeamMembers(snapshot.members.length > 0 ? snapshot.members : members)
       setTeamProjectCost(snapshot.projectCost)
@@ -812,6 +869,109 @@ export function App() {
     }
   }
 
+  async function runCodingAgent() {
+    if (!selectedRun || !selectedNode || !currentUser) {
+      return
+    }
+    if (!desktopApi) {
+      setToast('请在 Electron 应用中运行 Coding Agent')
+      return
+    }
+    if (!selectedLocalProject) {
+      setToast('请先选择本地 Git 仓库')
+      return
+    }
+    if (selectedNode.stage !== 'build' && selectedNode.kind !== 'task') {
+      setToast('Coding Agent 只能从开发实现节点启动')
+      return
+    }
+
+    setIsStartingCodingAgent(true)
+    setToast('正在创建 managed worktree 并启动 fake Coding Agent...')
+
+    try {
+      await desktopApi.ensureCodingEngine({ projectId: selectedLocalProject.id })
+      const result = await desktopApi.runCodingAgent({
+        runId: selectedRun.id,
+        nodeId: selectedNode.id,
+        projectId: selectedLocalProject.id,
+        requestedBy: currentUser.id,
+        providerId: 'fake-coding-engine',
+        userInstruction: `Implement ${selectedNode.title} with the existing DevFlow context.`,
+      })
+      applyLocalExecutionState(result.state)
+      setSelectedRunId(result.codingRun.runId)
+      setSelectedNodeId(result.codingRun.nodeId)
+      setActiveView('agents')
+      setToast('Coding Agent 已请求权限，请在 Agents 视图批准或拒绝')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Coding Agent 启动失败')
+    } finally {
+      setIsStartingCodingAgent(false)
+    }
+  }
+
+  async function replyCodingPermission(decision: CodingPermissionDecision['decision']) {
+    if (!desktopApi || !pendingCodingPermission || !currentUser) {
+      return
+    }
+
+    try {
+      await desktopApi.replyCodingPermission({
+        requestId: pendingCodingPermission.id,
+        codingRunId: pendingCodingPermission.codingRunId,
+        decidedBy: currentUser.id,
+        decision,
+        comment: decision === 'approved' ? 'Approved from DevFlow Agent Workbench.' : 'Rejected from DevFlow Agent Workbench.',
+      })
+      applyLocalExecutionState(await desktopApi.loadState())
+      setToast(decision === 'approved' ? 'Coding Agent 已完成 fake diff 归档' : 'Coding Agent 权限已拒绝')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '权限回复失败')
+    }
+  }
+
+  async function cancelCodingRun() {
+    if (!desktopApi || !latestCodingRun) {
+      return
+    }
+
+    try {
+      await desktopApi.cancelCodingAgentRun({ codingRunId: latestCodingRun.id })
+      applyLocalExecutionState(await desktopApi.loadState())
+      setToast('Coding Agent Run 已中断')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '中断 Coding Agent 失败')
+    }
+  }
+
+  async function openCodingWorktree() {
+    if (!desktopApi || !selectedManagedWorkspace) {
+      return
+    }
+
+    try {
+      await desktopApi.openManagedWorktree({ workspaceId: selectedManagedWorkspace.id })
+      setToast('Managed worktree 已打开')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '打开 managed worktree 失败')
+    }
+  }
+
+  async function deleteCodingWorktree() {
+    if (!desktopApi || !selectedManagedWorkspace) {
+      return
+    }
+
+    try {
+      await desktopApi.deleteManagedWorktree({ workspaceId: selectedManagedWorkspace.id })
+      applyLocalExecutionState(await desktopApi.loadState())
+      setToast('Managed worktree 已删除')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '删除 managed worktree 失败')
+    }
+  }
+
   async function createRun() {
     const newRun: WorkflowRun = {
       ...fixtureRuns[0]!,
@@ -1023,8 +1183,10 @@ export function App() {
               onApprove={approveSelectedGate}
               onRunTests={executeTestPlan}
               onRunKnowledgeReview={runKnowledgeReview}
+              onRunCodingAgent={runCodingAgent}
               isRunningTests={isRunningTests}
               isRunningAgentReview={isRunningAgentReview}
+              isStartingCodingAgent={isStartingCodingAgent}
             />
           </section>
         )}
@@ -1066,6 +1228,20 @@ export function App() {
             latestReview={latestAgentReview}
             latestTrace={latestAgentTrace}
             latestUsage={latestAgentUsage}
+            onRunCodingAgent={runCodingAgent}
+            onReplyCodingPermission={replyCodingPermission}
+            onCancelCodingRun={cancelCodingRun}
+            onOpenCodingWorktree={openCodingWorktree}
+            onDeleteCodingWorktree={deleteCodingWorktree}
+            isStartingCodingAgent={isStartingCodingAgent}
+            codingRuns={selectedCodingRuns}
+            latestCodingRun={latestCodingRun}
+            codingEvents={selectedCodingEvents}
+            pendingCodingPermission={pendingCodingPermission}
+            permissionRequests={selectedCodingPermissionRequests}
+            workspace={selectedManagedWorkspace}
+            diff={selectedCodingDiff}
+            bootstrapEvidence={selectedBootstrapEvidence}
           />
         )}
 
@@ -1245,8 +1421,10 @@ function Inspector({
   onApprove,
   onRunTests,
   onRunKnowledgeReview,
+  onRunCodingAgent,
   isRunningTests,
   isRunningAgentReview,
+  isStartingCodingAgent,
 }: {
   selectedNode: WorkflowNode | undefined
   artifacts: Artifact[]
@@ -1258,8 +1436,10 @@ function Inspector({
   onApprove: () => void
   onRunTests: () => void
   onRunKnowledgeReview: () => void
+  onRunCodingAgent: () => void
   isRunningTests: boolean
   isRunningAgentReview: boolean
+  isStartingCodingAgent: boolean
 }) {
   if (!selectedNode) {
     return <aside className="inspector">请选择一个节点</aside>
@@ -1342,6 +1522,12 @@ function Inspector({
           <Bot size={16} />
           {isRunningAgentReview ? '审查中' : 'Agent Review'}
         </button>
+        {(selectedNode.stage === 'build' || selectedNode.kind === 'task') && (
+          <button className="ghost-button" disabled={isStartingCodingAgent} onClick={onRunCodingAgent}>
+            <Code2 size={16} />
+            {isStartingCodingAgent ? '启动中' : 'Coding Agent'}
+          </button>
+        )}
         <button className="ghost-button" disabled={isRunningTests} onClick={onRunTests}>
           <Play size={16} />
           {isRunningTests ? '测试中' : '执行测试'}
@@ -1570,6 +1756,20 @@ function AgentWorkbenchView({
   latestReview,
   latestTrace,
   latestUsage,
+  onRunCodingAgent,
+  onReplyCodingPermission,
+  onCancelCodingRun,
+  onOpenCodingWorktree,
+  onDeleteCodingWorktree,
+  isStartingCodingAgent,
+  codingRuns,
+  latestCodingRun,
+  codingEvents,
+  pendingCodingPermission,
+  permissionRequests,
+  workspace,
+  diff,
+  bootstrapEvidence,
 }: {
   providers: AgentProviderConfig[]
   selectedProviderId: string
@@ -1586,6 +1786,20 @@ function AgentWorkbenchView({
   latestReview: AgentReviewResult | undefined
   latestTrace: AgentTrace | undefined
   latestUsage: AgentTokenUsage | undefined
+  onRunCodingAgent: () => void
+  onReplyCodingPermission: (decision: CodingPermissionDecision['decision']) => void
+  onCancelCodingRun: () => void
+  onOpenCodingWorktree: () => void
+  onDeleteCodingWorktree: () => void
+  isStartingCodingAgent: boolean
+  codingRuns: CodingAgentRun[]
+  latestCodingRun: CodingAgentRun | undefined
+  codingEvents: CodingAgentEvent[]
+  pendingCodingPermission: CodingPermissionRequest | undefined
+  permissionRequests: CodingPermissionRequest[]
+  workspace: ManagedCodingWorkspace | undefined
+  diff: CodingDiffArtifact | undefined
+  bootstrapEvidence: DependencyBootstrapEvidence | undefined
 }) {
   const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) ?? providers[0]
 
@@ -1644,6 +1858,85 @@ function AgentWorkbenchView({
             Save Credential
           </button>
         </article>
+
+        <article className="agent-run-card" data-testid="coding-agent-panel">
+          <div>
+            <span className="panel-label">Coding Agent Adapter</span>
+            <strong>{latestCodingRun ? latestCodingRun.status : 'No coding run yet'}</strong>
+            <p>{latestCodingRun?.summary ?? 'DevFlow 会组装上下文、创建 worktree、转发权限并归档 diff。'}</p>
+          </div>
+          <button
+            className="primary-button"
+            disabled={!selectedRun || !selectedNode || isStartingCodingAgent}
+            onClick={onRunCodingAgent}
+          >
+            <Code2 size={16} />
+            {isStartingCodingAgent ? 'Starting Coding Agent' : 'Run Coding Agent'}
+          </button>
+        </article>
+
+        {pendingCodingPermission ? (
+          <article className="agent-advisory agent-advisory--warn">
+            <span>Permission Relay</span>
+            <strong>{pendingCodingPermission.title}</strong>
+            <p>{pendingCodingPermission.reasons.join(' ')}</p>
+            <div className="knowledge-reference-meta">
+              <span>{pendingCodingPermission.permission}</span>
+              <span>{pendingCodingPermission.risk}</span>
+              {pendingCodingPermission.filePath ? <code>{pendingCodingPermission.filePath}</code> : null}
+            </div>
+            <div className="inspector-actions">
+              <button className="primary-button" onClick={() => onReplyCodingPermission('approved')}>
+                <CheckCircle2 size={16} />
+                Approve once
+              </button>
+              <button className="ghost-button" onClick={() => onReplyCodingPermission('rejected')}>
+                Reject
+              </button>
+            </div>
+          </article>
+        ) : null}
+
+        {latestCodingRun ? (
+          <article className="agent-provider-card">
+            <div className="section-heading">
+              <span>Coding Run Evidence</span>
+              <strong>{latestCodingRun.branchName}</strong>
+            </div>
+            <div className="compact-row">
+              <span>Engine</span>
+              <strong>{latestCodingRun.engine}</strong>
+            </div>
+            <div className="compact-row">
+              <span>Changed paths</span>
+              <strong>{latestCodingRun.changedPaths.length}</strong>
+            </div>
+            <div className="compact-row">
+              <span>Bootstrap</span>
+              <strong>{bootstrapEvidence?.status ?? 'pending'}</strong>
+            </div>
+            {workspace ? (
+              <code>{workspace.worktreePath}</code>
+            ) : null}
+            {diff ? (
+              <pre className="diff-preview">{diff.patch.slice(0, 1800)}</pre>
+            ) : (
+              <p className="empty-note">批准权限后会生成 Coding Diff Artifact。</p>
+            )}
+            <div className="inspector-actions">
+              <button className="ghost-button" disabled={!workspace} onClick={onOpenCodingWorktree}>
+                <FolderOpen size={16} />
+                Open worktree
+              </button>
+              <button className="ghost-button" onClick={onCancelCodingRun}>
+                Cancel
+              </button>
+              <button className="ghost-button" disabled={!workspace || Boolean(workspace.deletedAt)} onClick={onDeleteCodingWorktree}>
+                Delete worktree
+              </button>
+            </div>
+          </article>
+        ) : null}
 
         <div className="section-heading section-heading--inline">
           <span>Review History</span>
@@ -1744,6 +2037,29 @@ function AgentWorkbenchView({
         ) : (
           <p className="empty-note">运行 Agent 后会显示 context、retrieval、provider_call、artifact trace。</p>
         )}
+
+        <strong>Coding Trace</strong>
+        {codingEvents.length > 0 ? (
+          <div className="trace-list">
+            {codingEvents.map((event) => (
+              <div className="trace-step" key={event.id}>
+                <span>{event.kind}</span>
+                <strong>{event.message}</strong>
+                <p>{event.timestamp}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="empty-note">运行 Coding Agent 后会显示 brief、permission、diff、bootstrap trace。</p>
+        )}
+        <div className="compact-row">
+          <span>Coding runs</span>
+          <strong>{codingRuns.length}</strong>
+        </div>
+        <div className="compact-row">
+          <span>Permission requests</span>
+          <strong>{permissionRequests.length}</strong>
+        </div>
       </aside>
     </section>
   )

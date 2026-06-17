@@ -150,6 +150,27 @@ class FakeTeamDbClient implements TeamDbClient {
       ] as T[]
     }
 
+    if (sql.includes('FROM coding_agent_summaries')) {
+      return [
+        {
+          id: 'coding-run-remote-1',
+          run_id: 'run-remote-1',
+          node_id: 'n-build',
+          project_id: 'p-payments',
+          requested_by: 'u-ling',
+          provider_id: 'fake-coding-engine',
+          engine: 'fake',
+          status: 'completed',
+          branch_name: 'devflow/run-remote-1-n-build-coding-run-remote-1',
+          summary: 'Coding summary stored in Postgres.',
+          changed_paths: ['src/health.ts'],
+          started_at: '2026-06-16T10:18:00.000Z',
+          completed_at: '2026-06-16T10:19:00.000Z',
+          redacted: true,
+        },
+      ] as T[]
+    }
+
     if (sql.includes('FROM skills')) {
       return [
         {
@@ -244,6 +265,24 @@ describe('Postgres team repository', () => {
         summary: 'Remote tests passed.',
         redacted: true,
         createdAt: '2026-06-16T10:20:00.000Z',
+      },
+    ])
+    expect(overview.codingAgentSummaries).toEqual([
+      {
+        id: 'coding-run-remote-1',
+        runId: 'run-remote-1',
+        nodeId: 'n-build',
+        projectId: 'p-payments',
+        requestedBy: 'u-ling',
+        providerId: 'fake-coding-engine',
+        engine: 'fake',
+        status: 'completed',
+        branchName: 'devflow/run-remote-1-n-build-coding-run-remote-1',
+        summary: 'Coding summary stored in Postgres.',
+        changedPaths: ['src/health.ts'],
+        startedAt: '2026-06-16T10:18:00.000Z',
+        completedAt: '2026-06-16T10:19:00.000Z',
+        redacted: true,
       },
     ])
   })
@@ -376,6 +415,56 @@ describe('Postgres team repository', () => {
       'Tests passed in 1.2s.',
       true,
       '2026-06-16T12:05:00.000Z',
+    ])
+  })
+
+  it('writes coding agent summaries into the dedicated Postgres table', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.uploadCodingAgentSummary(
+        {
+          id: 'coding-run-synced',
+          runId: 'run-synced',
+          nodeId: 'n-build',
+          projectId: 'p-payments',
+          requestedBy: 'local-user',
+          providerId: 'fake-coding-engine',
+          engine: 'fake',
+          status: 'completed',
+          branchName: 'devflow/run-synced-n-build-coding-run-synced',
+          summary: 'Coding Agent completed with redacted paths.',
+          changedPaths: ['src/health.ts'],
+          startedAt: '2026-06-16T12:10:00.000Z',
+          completedAt: '2026-06-16T12:11:00.000Z',
+          redacted: true,
+        },
+        { organizationId: 'org-demo', userId: 'u-ling' },
+      ),
+    ).resolves.toMatchObject({
+      accepted: true,
+      message: 'coding agent summary written to Postgres repository',
+    })
+
+    const write = db.queries.at(-1)
+    expect(write?.sql).toContain('INSERT INTO coding_agent_summaries')
+    expect(write?.params).toEqual([
+      'coding-run-synced',
+      'org-demo',
+      'run-synced',
+      'run-synced:n-build',
+      'p-payments',
+      'u-ling',
+      'fake-coding-engine',
+      'fake',
+      'completed',
+      'devflow/run-synced-n-build-coding-run-synced',
+      'Coding Agent completed with redacted paths.',
+      JSON.stringify(['src/health.ts']),
+      '2026-06-16T12:10:00.000Z',
+      '2026-06-16T12:11:00.000Z',
+      true,
     ])
   })
 })

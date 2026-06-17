@@ -3,11 +3,16 @@ import type {
   AgentProviderConfig,
   AgentReviewExecutionResult,
   CommandSafetyResult,
+  CodingAgentRun,
+  CodingPermissionDecision,
+  CodingPermissionRequest,
   LocalExecutionState,
   LocalSettings,
   LocalProject,
+  ManagedCodingWorkspace,
   McpServerDefinition,
   ProviderCredentialMetadata,
+  RemoteCodingAgentSummary,
   RemoteRunSummary,
   RemoteSyncUploadResult,
   RemoteTeamSnapshot,
@@ -35,6 +40,18 @@ export const ipcChannels = {
   saveAgentProviderCredential: 'devflow:agent:provider-credential:save',
   runKnowledgeReview: 'devflow:agent:knowledge-review:run',
   listAgentReviews: 'devflow:agent:reviews:list',
+  ensureCodingEngine: 'devflow:coding:engine:ensure',
+  runCodingAgent: 'devflow:coding:agent:run',
+  cancelCodingAgentRun: 'devflow:coding:agent:cancel',
+  replyCodingPermission: 'devflow:coding:permission:reply',
+  subscribeCodingRun: 'devflow:coding:run:subscribe',
+  listCodingAgentRuns: 'devflow:coding:runs:list',
+  openManagedWorktree: 'devflow:coding:worktree:open',
+  deleteManagedWorktree: 'devflow:coding:worktree:delete',
+  uploadCodingAgentSummary: 'devflow:remote:coding-agent-summary:upload',
+  codingRunStatusUpdated: 'devflow:coding:push:status',
+  codingEventAppended: 'devflow:coding:push:event',
+  codingPermissionUpdated: 'devflow:coding:push:permission',
 } as const
 
 export type SaveProjectTestCommandInput = {
@@ -80,6 +97,56 @@ export type RunKnowledgeReviewResult = AgentReviewExecutionResult & {
   state: LocalExecutionState
 }
 
+export type EnsureCodingEngineInput = {
+  projectId: string
+}
+
+export type EnsureCodingEngineResult = {
+  projectId: string
+  engine: 'fake' | 'opencode-http' | 'opencode-acp'
+  status: 'ready'
+}
+
+export type RunCodingAgentInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+  requestedBy: string
+  providerId: string
+  userInstruction: string
+}
+
+export type RunCodingAgentResult = {
+  codingRun: CodingAgentRun
+  state: LocalExecutionState
+}
+
+export type CancelCodingAgentRunInput = {
+  codingRunId: string
+}
+
+export type ReplyCodingPermissionInput = {
+  requestId: string
+  codingRunId: string
+  decidedBy: string
+  decision: CodingPermissionDecision['decision']
+  comment: string
+}
+
+export type SubscribeCodingRunInput = {
+  codingRunId: string
+}
+
+export type ListCodingAgentRunsInput = {
+  runId?: string
+}
+
+export type OpenManagedWorktreeInput = {
+  workspaceId: string
+}
+
+export type DeleteManagedWorktreeInput = OpenManagedWorktreeInput
+
 export type LoadRemoteSnapshotInput = {
   organizationId?: string
 }
@@ -105,6 +172,15 @@ export type DevFlowDesktopApi = {
   saveAgentProviderCredential: (input: AgentProviderCredentialInput) => Promise<ProviderCredentialMetadata>
   runKnowledgeReview: (input: RunKnowledgeReviewInput) => Promise<RunKnowledgeReviewResult>
   listAgentReviews: (input?: ListAgentReviewsInput) => Promise<AgentReviewExecutionResult['review'][]>
+  ensureCodingEngine: (input: EnsureCodingEngineInput) => Promise<EnsureCodingEngineResult>
+  runCodingAgent: (input: RunCodingAgentInput) => Promise<RunCodingAgentResult>
+  cancelCodingAgentRun: (input: CancelCodingAgentRunInput) => Promise<CodingAgentRun>
+  replyCodingPermission: (input: ReplyCodingPermissionInput) => Promise<CodingPermissionRequest>
+  subscribeCodingRun: (input: SubscribeCodingRunInput) => Promise<LocalExecutionState>
+  listCodingAgentRuns: (input?: ListCodingAgentRunsInput) => Promise<CodingAgentRun[]>
+  openManagedWorktree: (input: OpenManagedWorktreeInput) => Promise<ManagedCodingWorkspace>
+  deleteManagedWorktree: (input: DeleteManagedWorktreeInput) => Promise<ManagedCodingWorkspace>
+  uploadCodingAgentSummary: (summary: RemoteCodingAgentSummary) => Promise<RemoteSyncUploadResult>
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -198,6 +274,56 @@ function isRemoteTestEvidenceSummary(value: unknown): value is RemoteTestEvidenc
     typeof value['summary'] === 'string' &&
     typeof value['redacted'] === 'boolean' &&
     typeof value['createdAt'] === 'string'
+  )
+}
+
+function hasLocalOnlyCodingField(value: Record<string, unknown>): boolean {
+  return (
+    'cwd' in value ||
+    'stdout' in value ||
+    'stderr' in value ||
+    'prompt' in value ||
+    'patch' in value ||
+    'rawTrace' in value ||
+    'providerSecret' in value ||
+    'secret' in value
+  )
+}
+
+function isRepoRelativePath(value: unknown): value is string {
+  if (typeof value !== 'string') {
+    return false
+  }
+  const normalized = value.replace(/\\/g, '/').trim()
+  return (
+    normalized.length > 0 &&
+    !normalized.startsWith('/') &&
+    !normalized.startsWith('../') &&
+    !normalized.includes('/../') &&
+    !/^[A-Za-z]:\//.test(normalized)
+  )
+}
+
+function isRemoteCodingAgentSummary(value: unknown): value is RemoteCodingAgentSummary {
+  return (
+    isRecord(value) &&
+    !hasLocalOnlyCodingField(value) &&
+    typeof value['id'] === 'string' &&
+    typeof value['runId'] === 'string' &&
+    typeof value['nodeId'] === 'string' &&
+    typeof value['projectId'] === 'string' &&
+    typeof value['requestedBy'] === 'string' &&
+    typeof value['providerId'] === 'string' &&
+    (value['engine'] === 'fake' || value['engine'] === 'opencode-http' || value['engine'] === 'opencode-acp') &&
+    typeof value['status'] === 'string' &&
+    typeof value['branchName'] === 'string' &&
+    typeof value['summary'] === 'string' &&
+    Array.isArray(value['changedPaths']) &&
+    value['changedPaths'].length <= 50 &&
+    value['changedPaths'].every(isRepoRelativePath) &&
+    typeof value['startedAt'] === 'string' &&
+    (value['completedAt'] === undefined || typeof value['completedAt'] === 'string') &&
+    value['redacted'] === true
   )
 }
 
@@ -313,6 +439,18 @@ export function parseRemoteTestEvidenceSummaryInput(value: unknown): RemoteTestE
   return value
 }
 
+export function parseRemoteCodingAgentSummaryInput(value: unknown): RemoteCodingAgentSummary {
+  if (isRecord(value) && hasLocalOnlyCodingField(value)) {
+    throw new Error('Remote coding agent summary contains local-only fields')
+  }
+
+  if (!isRemoteCodingAgentSummary(value)) {
+    throw new Error('Invalid remote coding agent summary payload')
+  }
+
+  return value
+}
+
 export function parseAgentProviderCredentialInput(value: unknown): AgentProviderCredentialInput {
   if (!isRecord(value)) {
     throw new Error('Invalid agent provider credential payload')
@@ -365,4 +503,87 @@ export function parseListAgentReviewsInput(value: unknown): ListAgentReviewsInpu
   }
   const runId = value['runId']
   return typeof runId === 'string' && runId.trim() ? { runId: runId.trim() } : {}
+}
+
+export function parseEnsureCodingEngineInput(value: unknown): EnsureCodingEngineInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid ensure coding engine payload')
+  }
+
+  return { projectId: readRequiredString(value, 'projectId') }
+}
+
+export function parseRunCodingAgentInput(value: unknown): RunCodingAgentInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid coding agent run payload')
+  }
+  if ('prompt' in value) {
+    throw new Error('Invalid coding agent run payload: renderer must not send prompt')
+  }
+
+  return {
+    runId: readRequiredString(value, 'runId'),
+    nodeId: readRequiredString(value, 'nodeId'),
+    projectId: readRequiredString(value, 'projectId'),
+    requestedBy: readRequiredString(value, 'requestedBy'),
+    providerId: readRequiredString(value, 'providerId'),
+    userInstruction: readRequiredString(value, 'userInstruction'),
+  }
+}
+
+export function parseCancelCodingAgentRunInput(value: unknown): CancelCodingAgentRunInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid cancel coding agent payload')
+  }
+
+  return { codingRunId: readRequiredString(value, 'codingRunId') }
+}
+
+export function parseReplyCodingPermissionInput(value: unknown): ReplyCodingPermissionInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid coding permission reply payload')
+  }
+  const decision = value['decision']
+  if (decision !== 'approved' && decision !== 'rejected' && decision !== 'expired') {
+    throw new Error('Invalid coding permission decision')
+  }
+
+  return {
+    requestId: readRequiredString(value, 'requestId'),
+    codingRunId: readRequiredString(value, 'codingRunId'),
+    decidedBy: readRequiredString(value, 'decidedBy'),
+    decision,
+    comment: typeof value['comment'] === 'string' ? value['comment'].trim() : '',
+  }
+}
+
+export function parseSubscribeCodingRunInput(value: unknown): SubscribeCodingRunInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid subscribe coding run payload')
+  }
+
+  return { codingRunId: readRequiredString(value, 'codingRunId') }
+}
+
+export function parseListCodingAgentRunsInput(value: unknown): ListCodingAgentRunsInput {
+  if (value === undefined || value === null) {
+    return {}
+  }
+  if (!isRecord(value)) {
+    throw new Error('Invalid list coding agent runs payload')
+  }
+  const runId = value['runId']
+  return typeof runId === 'string' && runId.trim() ? { runId: runId.trim() } : {}
+}
+
+export function parseOpenManagedWorktreeInput(value: unknown): OpenManagedWorktreeInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid managed worktree payload')
+  }
+
+  return { workspaceId: readRequiredString(value, 'workspaceId') }
+}
+
+export function parseDeleteManagedWorktreeInput(value: unknown): DeleteManagedWorktreeInput {
+  return parseOpenManagedWorktreeInput(value)
 }
