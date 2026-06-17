@@ -55,6 +55,7 @@ export type CodingRuntimeStore = {
   saveManagedCodingWorkspace(workspace: ManagedCodingWorkspace): Promise<void>
   listManagedCodingWorkspaces(projectId?: string): Promise<ManagedCodingWorkspace[]>
   saveDependencyBootstrapEvidence(evidence: DependencyBootstrapEvidence): Promise<void>
+  listDependencyBootstrapEvidence(codingRunId?: string): Promise<DependencyBootstrapEvidence[]>
   saveCodingDiffArtifact(artifact: CodingDiffArtifact): Promise<void>
   loadState(): Promise<LocalExecutionState>
 }
@@ -89,6 +90,14 @@ export type CodingRuntimePermissionTimeoutScheduler = (
   request: CodingPermissionRequest,
   expire: () => Promise<void>,
 ) => void
+
+export type CodingRuntimeDependencyBootstrapRunner = (input: {
+  codingRun: CodingAgentRun
+  project: LocalProject
+  workspace: ManagedCodingWorkspace
+  previousDependencyHash?: string
+  timestamp: string
+}) => Promise<DependencyBootstrapEvidence>
 
 export type RunCodingAgentRuntimeInput = {
   runId: string
@@ -128,6 +137,7 @@ export type CodingRuntimeDeps = {
   remoteSync: CodingRuntimeRemoteSync
   publisher?: CodingRuntimePublisher
   runTestCommand?: CodingRuntimeTestCommandRunner
+  runDependencyBootstrap?: CodingRuntimeDependencyBootstrapRunner
   schedulePermissionTimeout?: CodingRuntimePermissionTimeoutScheduler
   testTimeoutMs?: number
   worktreeRoot?: string
@@ -382,6 +392,67 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     return { codingRun, evidence }
   }
 
+  async function runCodingBootstrap(input: {
+    codingRun: CodingAgentRun
+    project: LocalProject
+    workspace: ManagedCodingWorkspace
+    timestamp: string
+    engineBootstrapEvidence?: DependencyBootstrapEvidence
+  }): Promise<{ codingRun: CodingAgentRun; canContinue: boolean }> {
+    const evidence =
+      input.engineBootstrapEvidence ??
+      (deps.runDependencyBootstrap
+        ? await deps.runDependencyBootstrap({
+            codingRun: input.codingRun,
+            project: input.project,
+            workspace: input.workspace,
+            previousDependencyHash: await latestDependencyHash(input.project.id),
+            timestamp: input.timestamp,
+          })
+        : undefined)
+
+    if (!evidence) {
+      return { codingRun: input.codingRun, canContinue: true }
+    }
+
+    await deps.store.saveDependencyBootstrapEvidence(evidence)
+    const event: CodingAgentEvent = {
+      id: idGenerator('coding-event'),
+      codingRunId: input.codingRun.id,
+      runId: input.codingRun.runId,
+      nodeId: input.codingRun.nodeId,
+      sequence: await nextSequence(input.codingRun.id),
+      kind: 'bootstrap',
+      message: `Dependency bootstrap ${evidence.status}: ${evidence.summary}`,
+      timestamp: input.timestamp,
+      metadata: { bootstrapEvidenceId: evidence.id, status: evidence.status },
+      redacted: true,
+    }
+    await saveEvents([event])
+
+    const canContinue = evidence.status === 'passed' || evidence.status === 'skipped'
+    const codingRun: CodingAgentRun = {
+      ...input.codingRun,
+      bootstrapEvidenceId: evidence.id,
+      ...(canContinue
+        ? { summary: `${input.codingRun.summary} Dependency bootstrap ${evidence.status}.` }
+        : {
+            status: 'failed',
+            summary: `Dependency bootstrap ${evidence.status}; coding tests were not run.`,
+            completedAt: input.timestamp,
+          }),
+    }
+
+    return { codingRun, canContinue }
+  }
+
+  async function latestDependencyHash(projectId: string): Promise<string | undefined> {
+    const evidence = await deps.store.listDependencyBootstrapEvidence()
+    return evidence
+      .filter((candidate) => candidate.projectId === projectId && candidate.dependencyHash)
+      .at(-1)?.dependencyHash
+  }
+
   async function replyCodingPermission(input: ReplyCodingPermissionRuntimeInput): Promise<CodingPermissionRequest> {
     const request = await findPermissionRequest(input)
     const timestamp = now()
@@ -418,13 +489,24 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         project,
         now: timestamp,
       })
-      if (completed.bootstrapEvidence) {
-        await deps.store.saveDependencyBootstrapEvidence(completed.bootstrapEvidence)
-      }
       await deps.store.saveCodingDiffArtifact(completed.diff)
       await saveEvents(completed.events)
-      const tested = await runCodingTests({
+      const bootstrapped = await runCodingBootstrap({
         codingRun: completed.codingRun,
+        workspace,
+        project,
+        timestamp,
+        engineBootstrapEvidence: completed.bootstrapEvidence,
+      })
+      if (!bootstrapped.canContinue) {
+        await saveCodingRun(bootstrapped.codingRun)
+        await deps.remoteSync
+          .uploadCodingAgentSummary(createRemoteCodingAgentSummary(bootstrapped.codingRun, completed.diff))
+          .catch(() => undefined)
+        return updatedRequest
+      }
+      const tested = await runCodingTests({
+        codingRun: bootstrapped.codingRun,
         workspace,
         project,
         timestamp,

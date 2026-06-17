@@ -19,7 +19,7 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
-import { createFakeCodingEngineAdapter } from './coding-engine'
+import { createFakeCodingEngineAdapter, type CodingEngineAdapter } from './coding-engine'
 import { createCodingRuntime } from './coding-runtime'
 
 const execFileAsync = promisify(execFile)
@@ -321,6 +321,107 @@ describe('CodingRuntime', () => {
     )
   })
 
+  it('runs runtime-owned dependency bootstrap before tests when the engine does not return bootstrap evidence', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const fakeEngine = createFakeCodingEngineAdapter()
+    const engineWithoutBootstrap: CodingEngineAdapter = {
+      ...fakeEngine,
+      engine: 'opencode-http',
+      async approvePermission(input) {
+        const completed = await fakeEngine.approvePermission(input)
+        return {
+          codingRun: {
+            ...completed.codingRun,
+            engine: 'opencode-http',
+          },
+          events: completed.events,
+          diff: completed.diff,
+        }
+      },
+    }
+    const runDependencyBootstrap = vi.fn(async (): Promise<DependencyBootstrapEvidence> => ({
+      id: 'bootstrap-runtime-1',
+      codingRunId: 'coding-run-1',
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      command: 'npm ci',
+      status: 'passed',
+      exitCode: 0,
+      durationMs: 15,
+      stdout: 'installed',
+      stderr: '',
+      summary: 'Runtime bootstrap passed.',
+      dependencyHash: 'hash-runtime',
+      redacted: false,
+      createdAt: '2026-06-17T00:01:00.000Z',
+    }))
+    const runTestCommand = vi.fn(async () => ({
+      status: 'passed' as const,
+      exitCode: 0,
+      durationMs: 77,
+      stdout: 'coding tests passed',
+      stderr: '',
+      redacted: true,
+      summary: 'Coding worktree tests passed.',
+    }))
+    const runtime = createCodingRuntime({
+      store,
+      engine: engineWithoutBootstrap,
+      remoteSync: {
+        uploadCodingAgentSummary: vi.fn(async () => ({
+          accepted: true,
+          syncedAt: '2026-06-17T00:02:00.000Z',
+          message: 'accepted',
+        })),
+      },
+      runDependencyBootstrap,
+      runTestCommand,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-1', 'decision-1', 'evidence-1'),
+      now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:01:00.000Z'),
+    })
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'openai',
+      userInstruction: 'Add the marker file.',
+    })
+
+    await runtime.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id,
+      codingRunId: started.codingRun.id,
+      decidedBy: 'user-1',
+      decision: 'approved',
+      comment: 'Approved from test.',
+    })
+
+    expect(runDependencyBootstrap).toHaveBeenCalledWith({
+      codingRun: expect.objectContaining({ id: 'coding-run-1' }),
+      project: expect.objectContaining({ id: 'project-1' }),
+      workspace: expect.objectContaining({ id: store.workspaces[0]!.id }),
+      previousDependencyHash: undefined,
+      timestamp: '2026-06-17T00:01:00.000Z',
+    })
+    expect(store.bootstrapEvidence[0]).toMatchObject({
+      id: 'bootstrap-runtime-1',
+      status: 'passed',
+      command: 'npm ci',
+    })
+    expect(runTestCommand).toHaveBeenCalled()
+    expect(store.codingRuns.at(-1)).toMatchObject({
+      status: 'completed',
+      bootstrapEvidenceId: 'bootstrap-runtime-1',
+      testEvidenceId: store.testEvidence[0]?.id,
+    })
+  })
+
   it('interrupts the coding run without uploading a summary when permission is rejected', async () => {
     const repo = await gitRepo()
     const store = new MemoryCodingStore({
@@ -494,6 +595,12 @@ class MemoryCodingStore {
 
   async saveDependencyBootstrapEvidence(evidence: DependencyBootstrapEvidence) {
     upsert(this.bootstrapEvidence, evidence)
+  }
+
+  async listDependencyBootstrapEvidence(codingRunId?: string) {
+    return codingRunId
+      ? this.bootstrapEvidence.filter((evidence) => evidence.codingRunId === codingRunId)
+      : this.bootstrapEvidence
   }
 
   async saveCodingDiffArtifact(artifact: CodingDiffArtifact) {

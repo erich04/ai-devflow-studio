@@ -104,6 +104,10 @@ async function readProjectSnapshot(projectPath: string): Promise<ProjectFileSnap
   return Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => entry !== null))
 }
 
+export function readProjectFileSnapshot(projectPath: string): Promise<ProjectFileSnapshot> {
+  return readProjectSnapshot(projectPath)
+}
+
 function projectName(projectPath: string, snapshot: ProjectFileSnapshot): string {
   const packageJson = snapshot['package.json']
   if (packageJson) {

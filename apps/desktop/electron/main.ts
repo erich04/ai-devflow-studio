@@ -51,6 +51,7 @@ import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
 import { createCodingEngineAdapterFromEnv } from './coding-engine.js'
 import { createCodingRuntime } from './coding-runtime.js'
 import { createOpencodeProcessManager } from './opencode-process.js'
+import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_TEST_TIMEOUT_MS = 120_000
@@ -103,6 +104,18 @@ async function createCodingRuntimeForRequest() {
     engine: createCodingEngineAdapterFromEnv(process.env),
     remoteSync: getRemoteSyncClient(),
     runTestCommand: runLocalTestCommand,
+    runDependencyBootstrap: ({ codingRun, project, workspace, previousDependencyHash, timestamp }) =>
+      runDependencyBootstrap({
+        codingRunId: codingRun.id,
+        runId: codingRun.runId,
+        nodeId: codingRun.nodeId,
+        projectId: project.id,
+        worktreePath: workspace.worktreePath,
+        previousDependencyHash,
+        runCommand: runLocalTestCommand,
+        timeoutMs: DEFAULT_TEST_TIMEOUT_MS,
+        now: timestamp,
+      }),
     testTimeoutMs: DEFAULT_TEST_TIMEOUT_MS,
     schedulePermissionTimeout: (request, expire) =>
       scheduleCodingPermissionTimeout(request.id, request.expiresAt, expire),
