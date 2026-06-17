@@ -1,14 +1,18 @@
-if (process.env['DEVFLOW_RUN_OPENCODE_SMOKE'] !== '1') {
-  console.log('Skipping opencode smoke: set DEVFLOW_RUN_OPENCODE_SMOKE=1 to run it.')
+import { evaluateOpencodeSmokePreflight } from './opencode-smoke-preflight'
+
+const preflight = evaluateOpencodeSmokePreflight(process.env)
+
+if (preflight.mode === 'skip') {
+  console.log(preflight.message)
   process.exit(0)
 }
 
-async function main() {
-  const providerID = requireEnv('DEVFLOW_OPENCODE_PROVIDER_ID')
-  const modelID = requireEnv('DEVFLOW_OPENCODE_MODEL_ID')
-  const apiKeyEnvName = process.env['DEVFLOW_OPENCODE_API_KEY_ENV'] ?? 'OPENAI_API_KEY'
-  requireEnv(apiKeyEnvName)
+if (preflight.mode === 'blocked') {
+  console.error(preflight.message)
+  process.exit(1)
+}
 
+async function main() {
   const { execFile } = await import('node:child_process')
   const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
   const os = await import('node:os')
@@ -89,10 +93,10 @@ async function main() {
   })
   const processManager = createOpencodeProcessManager()
   const engine = createOpencodeHttpCodingEngineAdapter({
-    binaryPath: process.env['DEVFLOW_OPENCODE_BIN'] ?? 'opencode',
-    providerID,
-    modelID,
-    apiKeyEnvName,
+    binaryPath: preflight.binaryPath,
+    providerID: preflight.providerID,
+    modelID: preflight.modelID,
+    apiKeyEnvName: preflight.apiKeyEnvName,
     processManager,
     runtimeEnv: process.env,
     permissionDiscoveryTimeoutMs: 120_000,
@@ -105,7 +109,7 @@ async function main() {
     project,
     workspace,
     requestedBy: 'devflow-smoke',
-    providerId: providerID,
+    providerId: preflight.providerID,
     userInstruction: 'Create devflow-opencode-smoke.txt with a short success message.',
     now,
     upstreamArtifacts: [],
@@ -155,14 +159,6 @@ async function main() {
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }
-}
-
-function requireEnv(name: string): string {
-  const value = process.env[name]
-  if (!value) {
-    throw new Error(`Missing required ${name} for real opencode smoke.`)
-  }
-  return value
 }
 
 main().catch((error) => {

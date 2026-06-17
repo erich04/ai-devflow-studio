@@ -27,6 +27,7 @@ corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm test:postgres-smoke
 corepack pnpm test:agent-live
+corepack pnpm test:opencode-smoke
 corepack pnpm test:e2e
 corepack pnpm test:electron-smoke
 ```
@@ -55,6 +56,39 @@ redacted sync write-through.
 
 Use `corepack pnpm build && corepack pnpm --filter @ai-devflow/desktop electron` to run the built
 desktop app against `apps/desktop/dist/index.html` without the Vite dev server.
+
+## v0.6.1 Coding Agent / opencode Signoff
+
+The default Coding Agent path is deterministic and uses the fake engine. It is covered by
+`corepack pnpm verify`, including the real Electron smoke flow: select a local Git repo, start the
+Coding Agent from the build task node, approve the permission relay request, archive a redacted diff,
+run the worktree test command, and persist Test Evidence.
+
+The real opencode runtime is explicitly env-gated. It is not part of default `verify` because it
+depends on a local opencode installation and provider credentials.
+
+Default safe check:
+
+```bash
+corepack pnpm test:opencode-smoke
+```
+
+Without live env vars, this exits successfully and prints the skip message. To manually sign off the
+real opencode path, configure the provider and run:
+
+```bash
+DEVFLOW_RUN_OPENCODE_SMOKE=1 \
+DEVFLOW_CODING_ENGINE=opencode-http \
+DEVFLOW_OPENCODE_PROVIDER_ID=openai \
+DEVFLOW_OPENCODE_MODEL_ID=gpt-4.1-mini \
+OPENAI_API_KEY="$OPENAI_API_KEY" \
+corepack pnpm test:opencode-smoke
+```
+
+Expected live-smoke result: DevFlow starts `opencode serve`, creates a managed Git worktree, sends
+the DevFlow coding brief, relays one opencode permission request, captures a redacted diff, runs
+dependency bootstrap when needed, runs `npm test` in the worktree, and removes the temporary smoke
+repo afterward. The smoke output must not print the provider key.
 
 ## v0.5 Knowledge Review Agent Demo
 
