@@ -56,6 +56,84 @@ describe('opencode HTTP coding engine', () => {
     expect(fetcher.bodies.join('\n')).toContain('Implement the build node.')
     expect(fetcher.bodies.join('\n')).toContain('DevFlow Coding Brief')
   })
+
+  it('replies to approved permissions and captures a redacted opencode diff', async () => {
+    const fetcher = sequenceFetcher([
+      { id: 'ses-1' },
+      {},
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
+      true,
+      [
+        {
+          file: 'src/app.ts',
+          patch: "diff --git a/src/app.ts b/src/app.ts\n+const key = 'sk-live-secret'\n",
+        },
+      ],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = await engine.start(startInput({ run, node, project, workspace }))
+
+    const completed = await engine.approvePermission({
+      codingRun: started.codingRun,
+      workspace,
+      project,
+      request: started.permissionRequest,
+      now: '2026-06-17T00:00:01.000Z',
+    })
+
+    expect(fetcher.urls).toContain('http://127.0.0.1:4097/permission/perm-1/reply')
+    expect(fetcher.urls).toContain('http://127.0.0.1:4097/session/ses-1/diff?directory=%2Ftmp%2Fworktree')
+    expect(fetcher.bodies).toContain(
+      JSON.stringify({
+        directory: '/tmp/worktree',
+        reply: 'once',
+        message: 'Approved by DevFlow.',
+      }),
+    )
+    expect(completed.codingRun.status).toBe('completed')
+    expect(completed.diff.changedPaths).toEqual(['src/app.ts'])
+    expect(completed.diff.patch).not.toContain('sk-live-secret')
+    expect(completed.bootstrapEvidence).toBeUndefined()
+  })
+
+  it('aborts the matching opencode session when cancelled', async () => {
+    const fetcher = sequenceFetcher([
+      { id: 'ses-1' },
+      {},
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
+      true,
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = await engine.start(startInput({ run, node, project, workspace }))
+
+    await engine.cancel({ codingRun: started.codingRun })
+
+    expect(fetcher.urls).toContain('http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree')
+  })
 })
 
 function readyServer(): OpencodeHttpProcessManager {
@@ -97,6 +175,30 @@ function managedWorkspace(projectId: string, runId: string, nodeId: string): Man
     branchName: 'devflow/coding-run-1',
     baseBranch: 'main',
     createdAt: '2026-06-17T00:00:00.000Z',
+  }
+}
+
+function startInput(input: {
+  run: typeof runs[number]
+  node: typeof runs[number]['nodes'][number]
+  project: ReturnType<typeof localProject>
+  workspace: ManagedCodingWorkspace
+}) {
+  return {
+    id: 'coding-run-1',
+    run: input.run,
+    node: input.node,
+    project: input.project,
+    workspace: input.workspace,
+    requestedBy: 'u-erich',
+    providerId: 'openai',
+    userInstruction: 'Implement the build node.',
+    now: '2026-06-17T00:00:00.000Z',
+    upstreamArtifacts: [],
+    knowledgeReferences: [],
+    governanceChecks: [],
+    gateDecisions: [],
+    testEvidence: [],
   }
 }
 

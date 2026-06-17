@@ -1,5 +1,6 @@
 import {
   buildCodingBrief,
+  sanitizeCodingDiffArtifact,
   type CodingAgentEvent,
   type CodingAgentRun,
   type CodingPermissionRequest,
@@ -7,7 +8,10 @@ import {
 import type { CodingEngineAdapter, CodingEngineStartInput } from './coding-engine.js'
 import {
   createOpencodeSession,
+  abortOpencodeSession,
+  listOpencodeDiff,
   listOpencodePermissions,
+  replyOpencodePermission,
   sendOpencodeMessage,
   type Fetcher,
   type OpencodePermission,
@@ -112,12 +116,76 @@ export function createOpencodeHttpCodingEngineAdapter(
       return createStartResult(input, brief.prompt, session.id, permission)
     },
 
-    async approvePermission() {
-      throw new Error('opencode-http permission approval is not wired yet')
+    async approvePermission(input) {
+      const session = findSession(sessions, input.codingRun.id)
+      await replyOpencodePermission({
+        baseUrl: session.baseUrl,
+        requestId: input.request.id,
+        directory: session.directory,
+        reply: 'once',
+        message: 'Approved by DevFlow.',
+        fetcher: config.fetcher,
+      })
+      await session.messagePromise
+      const diffFiles = await listOpencodeDiff({
+        baseUrl: session.baseUrl,
+        sessionId: session.sessionId,
+        directory: session.directory,
+        fetcher: config.fetcher,
+      })
+      const diff = sanitizeCodingDiffArtifact({
+        id: `coding-diff-${input.codingRun.id}`,
+        runId: input.codingRun.runId,
+        nodeId: input.codingRun.nodeId,
+        projectId: input.project.id,
+        changedPaths: diffFiles.map((file) => file.file),
+        patch: diffFiles.map((file) => file.patch).join('\n'),
+        createdAt: input.now,
+      })
+      const codingRun: CodingAgentRun = {
+        ...input.codingRun,
+        status: 'completed',
+        summary: 'opencode completed the managed coding run and produced a redacted diff artifact.',
+        changedPaths: diff.changedPaths,
+        completedAt: input.now,
+        diffArtifactId: diff.id,
+        redacted: true,
+      }
+      const events: CodingAgentEvent[] = [
+        {
+          id: `coding-event-${input.codingRun.id}-diff`,
+          codingRunId: codingRun.id,
+          runId: codingRun.runId,
+          nodeId: codingRun.nodeId,
+          sequence: 3,
+          kind: 'diff',
+          message: 'opencode completed and DevFlow captured a redacted worktree diff.',
+          timestamp: input.now,
+          metadata: { diffArtifactId: diff.id },
+          redacted: true,
+        },
+      ]
+      sessions.delete(input.codingRun.id)
+
+      return {
+        codingRun,
+        events,
+        diff,
+      }
     },
 
-    async cancel() {
-      return undefined
+    async cancel(input) {
+      const session = sessions.get(input.codingRun.id)
+      if (!session) {
+        return
+      }
+      await abortOpencodeSession({
+        baseUrl: session.baseUrl,
+        sessionId: session.sessionId,
+        directory: session.directory,
+        fetcher: config.fetcher,
+      })
+      sessions.delete(input.codingRun.id)
     },
   }
 }
@@ -236,4 +304,16 @@ function normalizePermission(permission: string): CodingPermissionRequest['permi
   }
 
   return 'bash'
+}
+
+function findSession(
+  sessions: Map<string, OpencodeRuntimeSession>,
+  codingRunId: string,
+): OpencodeRuntimeSession {
+  const session = sessions.get(codingRunId)
+  if (!session) {
+    throw new Error(`opencode session not found for ${codingRunId}`)
+  }
+
+  return session
 }

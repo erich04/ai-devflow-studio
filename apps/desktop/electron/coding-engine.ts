@@ -66,7 +66,7 @@ export type CodingEngineApprovePermissionResult = {
   codingRun: CodingAgentRun
   events: CodingAgentEvent[]
   diff: CodingDiffArtifact
-  bootstrapEvidence: DependencyBootstrapEvidence
+  bootstrapEvidence?: DependencyBootstrapEvidence
 }
 
 export type CodingEngineCancelInput = {

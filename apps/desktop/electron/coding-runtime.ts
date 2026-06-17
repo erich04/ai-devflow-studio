@@ -418,7 +418,9 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         project,
         now: timestamp,
       })
-      await deps.store.saveDependencyBootstrapEvidence(completed.bootstrapEvidence)
+      if (completed.bootstrapEvidence) {
+        await deps.store.saveDependencyBootstrapEvidence(completed.bootstrapEvidence)
+      }
       await deps.store.saveCodingDiffArtifact(completed.diff)
       await saveEvents(completed.events)
       const tested = await runCodingTests({
