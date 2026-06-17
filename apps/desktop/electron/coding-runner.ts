@@ -50,6 +50,7 @@ export type FakeCodingRunBundleInput = {
   nodeId: string
   project: LocalProject
   requestedBy: string
+  providerId?: string
   userInstruction: string
   workspace: ManagedCodingWorkspace
   now?: string
@@ -166,7 +167,7 @@ export function createFakeCodingRunBundle(input: FakeCodingRunBundleInput): Fake
     nodeId: input.nodeId,
     projectId: input.project.id,
     requestedBy: input.requestedBy,
-    providerId: 'fake-coding-engine',
+    providerId: input.providerId ?? 'fake-coding-engine',
     engine: 'fake',
     status: 'waiting_permission',
     managedWorkspaceId: input.workspace.id,

@@ -493,6 +493,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         project,
         workspace,
         requestedBy: input.requestedBy,
+        providerId: input.providerId,
         userInstruction: input.userInstruction,
         now: now(),
         ...briefContext,

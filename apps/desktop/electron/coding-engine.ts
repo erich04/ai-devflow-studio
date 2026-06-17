@@ -38,6 +38,7 @@ export type CodingEngineStartInput = {
   project: LocalProject
   workspace: ManagedCodingWorkspace
   requestedBy: string
+  providerId: string
   userInstruction: string
   now: string
   upstreamArtifacts: Artifact[]
@@ -129,6 +130,7 @@ export function createFakeCodingEngineAdapter(): CodingEngineAdapter {
         nodeId: input.node.id,
         project: input.project,
         requestedBy: input.requestedBy,
+        providerId: input.providerId,
         userInstruction: input.userInstruction,
         workspace: input.workspace,
         now: input.now,
