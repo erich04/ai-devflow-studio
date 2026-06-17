@@ -48,7 +48,7 @@ import {
 } from './ipc-contract.js'
 import { createRemoteSyncClient, type RemoteSyncClient } from './remote-sync.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
-import { createFakeCodingEngineAdapter } from './coding-engine.js'
+import { createCodingEngineAdapterFromEnv } from './coding-engine.js'
 import { createCodingRuntime } from './coding-runtime.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -98,7 +98,7 @@ function scheduleCodingPermissionTimeout(requestId: string, expiresAt: string, e
 async function createCodingRuntimeForRequest() {
   return createCodingRuntime({
     store: await getStore(),
-    engine: createFakeCodingEngineAdapter(),
+    engine: createCodingEngineAdapterFromEnv(process.env),
     remoteSync: getRemoteSyncClient(),
     runTestCommand: runLocalTestCommand,
     testTimeoutMs: DEFAULT_TEST_TIMEOUT_MS,

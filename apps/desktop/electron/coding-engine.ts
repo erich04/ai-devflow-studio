@@ -19,6 +19,7 @@ import {
   completeFakeCodingRun,
   createFakeCodingRunBundle,
 } from './coding-runner.js'
+import { createOpencodeHttpCodingEngineAdapter } from './opencode-http-engine.js'
 
 export type CodingEngineEnsureInput = {
   project: LocalProject
@@ -77,6 +78,36 @@ export type CodingEngineAdapter = {
   start(input: CodingEngineStartInput): Promise<CodingEngineStartResult>
   approvePermission(input: CodingEngineApprovePermissionInput): Promise<CodingEngineApprovePermissionResult>
   cancel(input: CodingEngineCancelInput): Promise<void>
+}
+
+export type CodingEngineSelectionEnv = Partial<
+  Pick<
+    NodeJS.ProcessEnv,
+    | 'DEVFLOW_CODING_ENGINE'
+    | 'DEVFLOW_OPENCODE_BIN'
+    | 'DEVFLOW_OPENCODE_PROVIDER_ID'
+    | 'DEVFLOW_OPENCODE_MODEL_ID'
+    | 'DEVFLOW_OPENCODE_API_KEY_ENV'
+  >
+>
+
+export function createCodingEngineAdapterFromEnv(
+  env: CodingEngineSelectionEnv = process.env,
+): CodingEngineAdapter {
+  const engine = env.DEVFLOW_CODING_ENGINE ?? 'fake'
+  if (engine === 'fake') {
+    return createFakeCodingEngineAdapter()
+  }
+  if (engine === 'opencode-http') {
+    return createOpencodeHttpCodingEngineAdapter({
+      binaryPath: env.DEVFLOW_OPENCODE_BIN ?? 'opencode',
+      providerID: env.DEVFLOW_OPENCODE_PROVIDER_ID ?? 'openai',
+      modelID: env.DEVFLOW_OPENCODE_MODEL_ID ?? 'gpt-4.1-mini',
+      apiKeyEnvName: env.DEVFLOW_OPENCODE_API_KEY_ENV ?? 'OPENAI_API_KEY',
+    })
+  }
+
+  throw new Error(`Unsupported Coding Agent engine: ${engine}`)
 }
 
 export function createFakeCodingEngineAdapter(): CodingEngineAdapter {
