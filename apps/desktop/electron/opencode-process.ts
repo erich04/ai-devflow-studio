@@ -13,7 +13,7 @@ export type ManagedOpencodeServer = {
 
 export type ManagedOpencodeChild = {
   exitCode: number | null
-  kill(): boolean
+  kill(signal?: NodeJS.Signals | number): boolean
   killed: boolean
   once(event: 'exit', listener: () => void): unknown
 }
@@ -28,6 +28,7 @@ export type OpencodeProcessManagerDeps = {
   spawnProcess?: SpawnOpencodeProcess
   findPort?: () => Promise<number>
   waitUntilReady?: (baseUrl: string) => Promise<void>
+  stopTimeoutMs?: number
 }
 
 export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = {}) {
@@ -35,6 +36,7 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
   const spawnProcess = deps.spawnProcess ?? spawn
   const findPort = deps.findPort ?? randomLocalPort
   const waitUntilReady = deps.waitUntilReady ?? waitForOpencodeReady
+  const stopTimeoutMs = deps.stopTimeoutMs ?? 5_000
 
   async function ensure(input: {
     projectId: string
@@ -73,13 +75,34 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
   }
 
   async function stopAll() {
-    for (const server of servers.values()) {
-      server.child.kill()
-    }
+    const shutdowns = Array.from(servers.values()).map((server) => stopChild(server.child, stopTimeoutMs))
+    await Promise.all(shutdowns)
     servers.clear()
   }
 
   return { ensure, stopAll }
+}
+
+async function stopChild(child: ManagedOpencodeChild, timeoutMs: number): Promise<void> {
+  if (child.exitCode !== null) {
+    return
+  }
+
+  const exited = new Promise<void>((resolve) => {
+    child.once('exit', () => resolve())
+  })
+  child.kill()
+  const gracefulExit = await Promise.race([
+    exited.then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+  ])
+  if (!gracefulExit && child.exitCode === null) {
+    child.kill('SIGKILL')
+    await Promise.race([
+      exited,
+      new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
+    ])
+  }
 }
 
 async function randomLocalPort(): Promise<number> {

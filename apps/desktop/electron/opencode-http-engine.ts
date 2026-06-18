@@ -16,6 +16,7 @@ import {
   type Fetcher,
   type OpencodePermission,
 } from './opencode-http-adapter.js'
+import { captureWorktreeDiff, type CapturedWorktreeDiff } from './coding-runner.js'
 import { createOpencodeProcessManager, type ManagedOpencodeServer } from './opencode-process.js'
 
 export type OpencodeHttpProcessManager = {
@@ -36,12 +37,16 @@ export type OpencodeHttpCodingEngineConfig = {
   runtimeEnv?: NodeJS.ProcessEnv
   permissionPollMs?: number
   permissionDiscoveryTimeoutMs?: number
+  captureWorktreeDiff?: (input: { worktreePath: string }) => Promise<CapturedWorktreeDiff>
 }
 
 type OpencodeRuntimeSession = {
   baseUrl: string
   directory: string
-  messagePromise: Promise<unknown>
+  messagePromise: Promise<
+    | { ok: true }
+    | { ok: false; error: unknown }
+  >
   sessionId: string
 }
 
@@ -99,7 +104,10 @@ export function createOpencodeHttpCodingEngineAdapter(
         model: { providerID: config.providerID, modelID: config.modelID },
         text: `DevFlow Coding Brief\n\n${brief.prompt}`,
         ...fetcherOption(config.fetcher),
-      })
+      }).then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      )
       sessions.set(input.id, {
         baseUrl: server.baseUrl,
         directory: input.workspace.worktreePath,
@@ -127,20 +135,24 @@ export function createOpencodeHttpCodingEngineAdapter(
         message: 'Approved by DevFlow.',
         ...fetcherOption(config.fetcher),
       })
-      await session.messagePromise
-      const diffFiles = await listOpencodeDiff({
+      const messageResult = await session.messagePromise
+      const diffSource = await readOpencodeDiffSource({
         baseUrl: session.baseUrl,
         sessionId: session.sessionId,
-        directory: session.directory,
+        worktreePath: session.directory,
+        captureDiff: config.captureWorktreeDiff ?? captureWorktreeDiff,
         ...fetcherOption(config.fetcher),
       })
+      if (!messageResult.ok && diffSource.changedPaths.length === 0 && diffSource.patch.trim().length === 0) {
+        throw messageResult.error
+      }
       const diff = sanitizeCodingDiffArtifact({
         id: `coding-diff-${input.codingRun.id}`,
         runId: input.codingRun.runId,
         nodeId: input.codingRun.nodeId,
         projectId: input.project.id,
-        changedPaths: diffFiles.map((file) => file.file),
-        patch: diffFiles.map((file) => file.patch).join('\n'),
+        changedPaths: diffSource.changedPaths,
+        patch: diffSource.patch,
         createdAt: input.now,
       })
       const codingRun: CodingAgentRun = {
@@ -189,6 +201,34 @@ export function createOpencodeHttpCodingEngineAdapter(
       sessions.delete(input.codingRun.id)
     },
   }
+}
+
+async function readOpencodeDiffSource(input: {
+  baseUrl: string
+  captureDiff: (input: { worktreePath: string }) => Promise<CapturedWorktreeDiff>
+  fetcher?: Fetcher
+  sessionId: string
+  worktreePath: string
+}): Promise<CapturedWorktreeDiff> {
+  try {
+    const opencodeDiff = await listOpencodeDiff({
+      baseUrl: input.baseUrl,
+      sessionId: input.sessionId,
+      directory: input.worktreePath,
+      ...fetcherOption(input.fetcher),
+    })
+    if (opencodeDiff.length) {
+      return {
+        changedPaths: opencodeDiff.map((file) => file.file),
+        patch: opencodeDiff.map((file) => file.patch).join('\n'),
+      }
+    }
+  } catch {
+    // opencode 1.17.x may close the HTTP session before diff retrieval.
+    // The managed worktree remains DevFlow's durable source of truth.
+  }
+
+  return input.captureDiff({ worktreePath: input.worktreePath })
 }
 
 async function waitForPermission(input: {

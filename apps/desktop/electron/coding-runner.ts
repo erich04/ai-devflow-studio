@@ -84,6 +84,11 @@ export type CompleteFakeCodingRunResult = {
   bootstrapEvidence: DependencyBootstrapEvidence
 }
 
+export type CapturedWorktreeDiff = {
+  changedPaths: string[]
+  patch: string
+}
+
 export function findActiveCodingRun(
   runs: CodingAgentRun[],
   projectId: string,
@@ -141,6 +146,40 @@ export async function deleteManagedCodingWorkspace(
     ...workspace,
     deletedAt: new Date().toISOString(),
   }
+}
+
+export async function captureWorktreeDiff(input: {
+  worktreePath: string
+}): Promise<CapturedWorktreeDiff> {
+  const { stdout: statusOutput } = await execGit(input.worktreePath, [
+    '-c',
+    'core.quotePath=false',
+    'status',
+    '--porcelain=v1',
+    '--untracked-files=all',
+  ])
+  const entries = parsePorcelainStatus(statusOutput)
+  if (!entries.length) {
+    return { changedPaths: [], patch: '' }
+  }
+
+  const untrackedPaths = entries
+    .filter((entry) => entry.status === '??')
+    .map((entry) => entry.path)
+  if (untrackedPaths.length) {
+    await execGit(input.worktreePath, ['add', '-N', '--', ...untrackedPaths])
+  }
+
+  const changedPaths = Array.from(new Set(entries.map((entry) => entry.path)))
+  const { stdout: patch } = await execGit(input.worktreePath, [
+    'diff',
+    '--no-ext-diff',
+    'HEAD',
+    '--',
+    ...changedPaths,
+  ])
+
+  return { changedPaths, patch }
 }
 
 export function createFakeCodingRunBundle(input: FakeCodingRunBundleInput): FakeCodingRunBundle {
@@ -237,15 +276,14 @@ export async function completeFakeCodingRun(
       '',
     ].join('\n'),
   )
-  await execGit(input.workspace.worktreePath, ['add', '-N', 'devflow-fake-change.txt'])
-  const { stdout } = await execGit(input.workspace.worktreePath, ['diff', '--', 'devflow-fake-change.txt'])
+  const capturedDiff = await captureWorktreeDiff({ worktreePath: input.workspace.worktreePath })
   const diff = sanitizeCodingDiffArtifact({
     id: `coding-diff-${input.codingRun.id}`,
     runId: input.codingRun.runId,
     nodeId: input.codingRun.nodeId,
     projectId: input.project.id,
-    changedPaths: ['devflow-fake-change.txt'],
-    patch: stdout,
+    changedPaths: capturedDiff.changedPaths,
+    patch: capturedDiff.patch,
     createdAt: now,
   })
   const bootstrapEvidence: DependencyBootstrapEvidence = {
@@ -329,6 +367,20 @@ function safeBranchName(value: string): string {
 
 function safePathSegment(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, '-')
+}
+
+function parsePorcelainStatus(output: string): Array<{ status: string; path: string }> {
+  return output
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => {
+      const status = line.slice(0, 2)
+      const rawPath = line.slice(3)
+      const renamedPath = rawPath.includes(' -> ') ? rawPath.split(' -> ').at(-1) : rawPath
+      return { status, path: renamedPath ?? rawPath }
+    })
+    .filter((entry) => entry.path.length > 0)
 }
 
 function fakeRun(runId: string, projectId: string, nodeId: string): WorkflowRun {

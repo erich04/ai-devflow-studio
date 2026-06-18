@@ -110,7 +110,8 @@ async function main() {
     workspace,
     requestedBy: 'devflow-smoke',
     providerId: preflight.providerID,
-    userInstruction: 'Create devflow-opencode-smoke.txt with a short success message.',
+    userInstruction:
+      'Create devflow-opencode-smoke.txt with a short success message. Use the edit tool directly; do not run bash, shell commands, package commands, or repository inspection.',
     now,
     upstreamArtifacts: [],
     knowledgeReferences: [],

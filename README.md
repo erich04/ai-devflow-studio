@@ -85,10 +85,24 @@ OPENAI_API_KEY="$OPENAI_API_KEY" \
 corepack pnpm test:opencode-smoke
 ```
 
+For Volcengine Ark Coding Plan through an opencode provider such as `double`:
+
+```bash
+DEVFLOW_RUN_OPENCODE_SMOKE=1 \
+DEVFLOW_CODING_ENGINE=opencode-http \
+DEVFLOW_OPENCODE_PROVIDER_ID=double \
+DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest \
+DEVFLOW_OPENCODE_API_KEY_ENV=VOLCENGINE_ARK_API_KEY \
+VOLCENGINE_ARK_API_KEY="$VOLCENGINE_ARK_API_KEY" \
+corepack pnpm test:opencode-smoke
+```
+
 Expected live-smoke result: DevFlow starts `opencode serve`, creates a managed Git worktree, sends
 the DevFlow coding brief, relays one opencode permission request, captures a redacted diff, runs
 dependency bootstrap when needed, runs `npm test` in the worktree, and removes the temporary smoke
-repo afterward. The smoke output must not print the provider key.
+repo afterward. The smoke output must not print the provider key. v0.6.1 live signoff has been
+verified with opencode `1.17.5` and Volcengine Ark `double/ark-code-latest`; multi-step live
+permission sequences such as `bash` before `edit` remain a v0.6.x hardening item.
 
 ## v0.5 Knowledge Review Agent Demo
 

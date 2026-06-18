@@ -8,6 +8,7 @@ import type { CodingAgentRun, LocalProject } from '@ai-devflow/shared'
 import {
   createFakeCodingRunBundle,
   createManagedCodingWorkspace,
+  captureWorktreeDiff,
   completeFakeCodingRun,
   findActiveCodingRun,
   isGitRepository,
@@ -147,6 +148,26 @@ describe('fake coding harness helpers', () => {
     expect(await readFile(path.join(workspace.worktreePath, 'devflow-fake-change.txt'), 'utf8')).toContain(
       'Add the fake marker file.',
     )
+  })
+})
+
+describe('worktree diff capture', () => {
+  it('captures untracked files from the managed worktree as reviewable diffs', async () => {
+    const repo = await gitRepo()
+    const workspace = await createManagedCodingWorkspace({
+      project: project(repo),
+      codingRunId: 'coding-run-1',
+      runId: 'run-1',
+      nodeId: 'node-build',
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+    })
+    await writeFile(path.join(workspace.worktreePath, 'probe-marker.txt'), 'ok\n')
+
+    const diff = await captureWorktreeDiff({ worktreePath: workspace.worktreePath })
+
+    expect(diff.changedPaths).toEqual(['probe-marker.txt'])
+    expect(diff.patch).toContain('diff --git a/probe-marker.txt b/probe-marker.txt')
+    expect(diff.patch).toContain('+ok')
   })
 })
 

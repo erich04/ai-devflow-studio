@@ -29,7 +29,7 @@ describe('opencode process manager', () => {
   })
 
   it('reuses a live process for the same project and stops it on shutdown', async () => {
-    const child = fakeChild()
+    const child = fakeChild({ exitOnKill: true })
     const kill = vi.spyOn(child, 'kill')
     const manager = createOpencodeProcessManager({
       spawnProcess: () => child,
@@ -45,15 +45,61 @@ describe('opencode process manager', () => {
     await manager.stopAll()
     expect(kill).toHaveBeenCalled()
   })
+
+  it('waits for the opencode child process to exit during shutdown', async () => {
+    const child = fakeChild()
+    const manager = createOpencodeProcessManager({
+      spawnProcess: () => child,
+      findPort: async () => 4097,
+      waitUntilReady: async () => undefined,
+    })
+    await manager.ensure({ projectId: 'local-1', binaryPath: 'opencode', env: {} })
+
+    let stopped = false
+    const stopPromise = manager.stopAll().then(() => {
+      stopped = true
+    })
+    await Promise.resolve()
+
+    expect(stopped).toBe(false)
+    child.exitCode = 0
+    child.emit('exit')
+    await stopPromise
+    expect(stopped).toBe(true)
+  })
+
+  it('force kills the opencode child when graceful shutdown times out', async () => {
+    const child = fakeChild()
+    const manager = createOpencodeProcessManager({
+      spawnProcess: () => child,
+      findPort: async () => 4097,
+      waitUntilReady: async () => undefined,
+      stopTimeoutMs: 1,
+    })
+    await manager.ensure({ projectId: 'local-1', binaryPath: 'opencode', env: {} })
+
+    await manager.stopAll()
+
+    expect(child.kill).toHaveBeenCalledWith()
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL')
+  })
 })
 
-function fakeChild() {
-  return Object.assign(new EventEmitter(), {
-    exitCode: null,
+function fakeChild(options: { exitOnKill?: boolean } = {}) {
+  const child = Object.assign(new EventEmitter(), {
+    exitCode: null as number | null,
     killed: false,
-    kill: vi.fn(),
+    kill: vi.fn(() => {
+      child.killed = true
+      if (options.exitOnKill) {
+        child.exitCode = 0
+        queueMicrotask(() => child.emit('exit'))
+      }
+      return true
+    }),
     pid: 123,
     stderr: new EventEmitter(),
     stdout: new EventEmitter(),
   })
+  return child
 }

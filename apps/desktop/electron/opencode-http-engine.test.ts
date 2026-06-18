@@ -94,6 +94,84 @@ describe('opencode HTTP coding engine', () => {
     expect(completed.bootstrapEvidence).toBeUndefined()
   })
 
+  it('falls back to managed worktree diff capture when opencode returns no diff files', async () => {
+    const fetcher = sequenceFetcher([
+      { id: 'ses-1' },
+      {},
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'new-file.txt' } }],
+      true,
+      [],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      fetcher,
+      captureWorktreeDiff: async () => ({
+        changedPaths: ['new-file.txt'],
+        patch: 'diff --git a/new-file.txt b/new-file.txt\n+hello\n',
+      }),
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = await engine.start(startInput({ run, node, project, workspace }))
+
+    const completed = await engine.approvePermission({
+      codingRun: started.codingRun,
+      workspace,
+      project,
+      request: started.permissionRequest,
+      now: '2026-06-17T00:00:01.000Z',
+    })
+
+    expect(completed.diff.changedPaths).toEqual(['new-file.txt'])
+    expect(completed.diff.patch).toContain('+hello')
+  })
+
+  it('uses managed worktree diff when the opencode message stream closes after applying changes', async () => {
+    const fetcher = sequenceFetcher([
+      { id: 'ses-1' },
+      new TypeError('fetch failed'),
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'new-file.txt' } }],
+      true,
+      [],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      fetcher,
+      captureWorktreeDiff: async () => ({
+        changedPaths: ['new-file.txt'],
+        patch: 'diff --git a/new-file.txt b/new-file.txt\n+hello\n',
+      }),
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = await engine.start(startInput({ run, node, project, workspace }))
+
+    const completed = await engine.approvePermission({
+      codingRun: started.codingRun,
+      workspace,
+      project,
+      request: started.permissionRequest,
+      now: '2026-06-17T00:00:01.000Z',
+    })
+
+    expect(completed.codingRun.status).toBe('completed')
+    expect(completed.diff.changedPaths).toEqual(['new-file.txt'])
+  })
+
   it('aborts the matching opencode session when cancelled', async () => {
     const fetcher = sequenceFetcher([
       { id: 'ses-1' },
@@ -142,6 +220,9 @@ function sequenceFetcher(responses: unknown[]): Fetcher & { urls: string[]; bodi
       bodies.push(String(init.body))
     }
     const body = queue.shift()
+    if (body instanceof Error) {
+      throw body
+    }
     return new Response(JSON.stringify(body), { status: 200 })
   }) as unknown as Fetcher & { urls: string[]; bodies: string[] }
   fetcher.urls = urls
