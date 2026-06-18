@@ -243,7 +243,13 @@ Electron smoke is still tracked as future compatibility expansion. See
   last cache or blocks when no cache exists.
 - Completed API sync hardening: `/api/sync/run-summary` rejects `approval` summaries so approval-like
   writes must use the Gate enforcement path.
-- Remaining: rejected provisional override reconciliation UX and audit events.
+- Completed provisional override reconciliation hardening: Desktop records server-confirmed
+  overrides as accepted, keeps network failures provisional, and shows server rejections as
+  rejected/blocking.
+- Added v0.7.5 engineering docs for testing strategy, demo/smoke reproduction, and contribution
+  signoff discipline.
+- Extracted the Desktop Gate Enforcement path into a focused hook and Inspector panel to reduce
+  `App.tsx` coupling without broad UI restructuring.
 
 ### v0.8: Policy-Aware Delivery Automation
 

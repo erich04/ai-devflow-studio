@@ -237,7 +237,66 @@ try {
     hasProcess: typeof window.process !== 'undefined',
   }))
   expect(security).toEqual({ hasApi: true, hasRequire: false, hasProcess: false })
-  await first.page.evaluate(async () => window.aiDevFlowDesktop.loadRemoteSnapshot({ organizationId: 'org-demo' }))
+  const remoteSeedRun = await first.page.evaluate(async () => {
+    const snapshot = await window.aiDevFlowDesktop.loadRemoteSnapshot({ organizationId: 'org-demo' })
+    const run = snapshot.runs.find((candidate) => candidate.id === 'run-health-001')
+    if (!run) {
+      throw new Error('Electron smoke could not find the seeded team Run.')
+    }
+    await window.aiDevFlowDesktop.createRun(run)
+    return run
+  })
+
+  const seededGateDecision = await first.page.evaluate(async (runId) => {
+    return window.aiDevFlowDesktop.evaluateGateEnforcement({
+      runId,
+      nodeId: 'n-clarify-gate',
+      projectId: 'p-payments',
+    })
+  }, remoteSeedRun.id)
+  expect(seededGateDecision.status).toBe('blocked')
+  expect(seededGateDecision.blocksApproval).toBe(true)
+  const seededDirectApproveRejected = await first.page.evaluate(async (runId) => {
+    try {
+      await window.aiDevFlowDesktop.approveGate({
+        runId,
+        nodeId: 'n-clarify-gate',
+        projectId: 'p-payments',
+        userId: 'u-erich',
+        userName: 'Erich',
+        role: 'owner',
+      })
+      return false
+    } catch (error) {
+      return error instanceof Error && error.message.includes('override_required')
+    }
+  }, remoteSeedRun.id)
+  expect(seededDirectApproveRejected).toBe(true)
+  const confirmedTeamOverride = await first.page.evaluate(async ({ runId, decision }) => {
+    return window.aiDevFlowDesktop.saveGateOverride({
+      runId,
+      nodeId: 'n-clarify-gate',
+      projectId: 'p-payments',
+      userId: 'u-ling',
+      role: 'lead',
+      reason: 'Electron smoke confirmed team override for missing Knowledge Review.',
+      blockedReasonIds: decision.blockingReasons.map((reason) => reason.id),
+      policyVersion: decision.policyVersion,
+      provisional: false,
+    })
+  }, { runId: remoteSeedRun.id, decision: seededGateDecision })
+  expect(confirmedTeamOverride.status).toBe('accepted')
+  const confirmedTeamApproval = await first.page.evaluate(async (runId) => {
+    return window.aiDevFlowDesktop.approveGate({
+      runId,
+      nodeId: 'n-clarify-gate',
+      projectId: 'p-payments',
+      userId: 'u-ling',
+      userName: 'Ling',
+      role: 'lead',
+    })
+  }, remoteSeedRun.id)
+  expect(confirmedTeamApproval.event.kind).toBe('approval')
 
   await first.page.getByRole('button', { name: /选择本地仓库/ }).click()
   await expect(first.page.locator('.local-project-panel').getByText('electron-smoke-fixture')).toBeVisible()
@@ -306,24 +365,29 @@ try {
       projectId: 'p-payments',
       userId: 'u-ling',
       role: 'lead',
-      reason: 'Electron smoke lead override for missing Knowledge Review.',
+      reason: 'Electron smoke rejected local override for missing Knowledge Review.',
       blockedReasonIds: decision.blockingReasons.map((reason) => reason.id),
       policyVersion: decision.policyVersion,
       provisional: false,
     })
   }, { runId: localRun.id, decision: clarifyGateDecision })
-  expect(localLeadOverride.status).toBe('accepted')
-  const overrideApproval = await first.page.evaluate(async (runId) => {
-    return window.aiDevFlowDesktop.approveGate({
-      runId,
-      nodeId: 'n-clarify-gate',
-      projectId: 'p-payments',
-      userId: 'u-ling',
-      userName: 'Ling',
-      role: 'lead',
-    })
+  expect(localLeadOverride.status).toBe('rejected')
+  const rejectedOverrideStillBlocksApproval = await first.page.evaluate(async (runId) => {
+    try {
+      await window.aiDevFlowDesktop.approveGate({
+        runId,
+        nodeId: 'n-clarify-gate',
+        projectId: 'p-payments',
+        userId: 'u-ling',
+        userName: 'Ling',
+        role: 'lead',
+      })
+      return false
+    } catch (error) {
+      return error instanceof Error && error.message.includes('blocked')
+    }
   }, localRun.id)
-  expect(overrideApproval.event.kind).toBe('approval')
+  expect(rejectedOverrideStillBlocksApproval).toBe(true)
 
   await selectWorkflowNode(first.page, 'flow-node-n-design-gate', '架构 Gate')
   await first.page.getByRole('button', { name: /Agent Review/ }).click()
@@ -413,12 +477,14 @@ try {
   const second = await launchApp()
   await expect(second.page.locator('html')).toHaveAttribute('data-theme-preference', 'light')
   await expect(second.page.getByText('重构 GitHub webhook 重试策略')).toBeVisible()
+  await selectRunByTitle(second.page, '重构 GitHub webhook 重试策略')
+  await selectWorkflowNode(second.page, 'flow-node-n-design-gate', '架构 Gate')
   const restoredOverrides = await second.page.evaluate(async (runId) => {
     return window.aiDevFlowDesktop.listGateOverrides({ runId })
   }, localRun.id)
   expect(
     restoredOverrides.some(
-      (override) => override.nodeId === 'n-clarify-gate' && override.status === 'accepted',
+      (override) => override.nodeId === 'n-clarify-gate' && override.status === 'rejected',
     ),
   ).toBe(true)
   await second.page.getByRole('button', { name: /^Agents$/ }).click()

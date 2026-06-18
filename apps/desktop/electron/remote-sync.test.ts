@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type {
   RemoteAgentReviewSummary,
   RemoteCodingAgentSummary,
+  GateOverrideDecision,
   RemoteRunSummary,
   RemoteTestEvidenceSummary,
 } from '@ai-devflow/shared'
@@ -116,6 +117,21 @@ const codingAgentSummary: RemoteCodingAgentSummary = {
   redacted: true,
 }
 
+const gateOverride: GateOverrideDecision = {
+  id: 'gate-override-remote',
+  runId: 'run-remote',
+  nodeId: 'n-design-gate',
+  projectId: 'p-remote',
+  userId: 'u-remote',
+  role: 'lead',
+  reason: 'Reviewed missing evidence and approved a temporary exception.',
+  blockedReasonIds: ['missing_agent_review:protected_gate:missing'],
+  policyVersion: 2,
+  provisional: false,
+  status: 'accepted',
+  createdAt: '2026-06-16T00:13:00.000Z',
+}
+
 describe('Electron remote sync client', () => {
   it('resolves remote API base URL from env with a local default', () => {
     expect(resolveRemoteApiBaseUrl({ DEVFLOW_API_BASE_URL: 'http://team-api:4310/' })).toBe(
@@ -209,5 +225,42 @@ describe('Electron remote sync client', () => {
     expect(JSON.stringify(uploadedBodies[3])).not.toContain('stdout')
     expect(JSON.stringify(uploadedBodies[3])).not.toContain('stderr')
     expect(JSON.stringify(uploadedBodies[3])).not.toContain('cwd')
+  })
+
+  it('submits Gate overrides through the enforcement API using the override actor session', async () => {
+    const calls: Array<{ url: string; init: RequestInit | undefined }> = []
+    const fetcher = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      calls.push({ url: String(input), init })
+      return new Response(JSON.stringify(gateOverride), { status: 201 })
+    })
+    const client = createRemoteSyncClient({ apiBaseUrl: 'http://api.local', fetcher })
+
+    await expect(client.saveGateOverride({
+      runId: gateOverride.runId,
+      nodeId: gateOverride.nodeId,
+      projectId: gateOverride.projectId,
+      userId: gateOverride.userId,
+      role: gateOverride.role,
+      reason: gateOverride.reason,
+      blockedReasonIds: gateOverride.blockedReasonIds,
+      policyVersion: gateOverride.policyVersion,
+    })).resolves.toEqual(gateOverride)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.url).toBe('http://api.local/api/gates/override')
+    expect(calls[0]?.init?.headers).toMatchObject({
+      'x-devflow-organization-id': 'org-demo',
+      'x-devflow-project-roles': 'p-remote:lead',
+      'x-devflow-user-id': 'u-remote',
+      'x-devflow-user-role': 'lead',
+    })
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      runId: gateOverride.runId,
+      nodeId: gateOverride.nodeId,
+      projectId: gateOverride.projectId,
+      reason: gateOverride.reason,
+      blockedReasonIds: gateOverride.blockedReasonIds,
+      policyVersion: gateOverride.policyVersion,
+    })
   })
 })

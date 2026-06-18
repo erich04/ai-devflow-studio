@@ -23,6 +23,7 @@ import {
   runKnowledgeReviewAgent,
   type AgentEvent,
   type AgentProviderConfig,
+  type GateOverrideDecision,
   type LocalProject,
   type PolicySnapshot,
   type ProviderCredentialMetadata,
@@ -69,6 +70,7 @@ import { createOpencodeProcessManager } from './opencode-process.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 import {
   loadPolicySnapshotForProject as loadStoredPolicySnapshotForProject,
+  resolveLocalGateOverrideSettlement,
 } from './enforcement-policy.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -313,6 +315,71 @@ async function evaluateLocalGateEnforcement(
   return { run, node, decision, policySnapshot, gateOverrides }
 }
 
+function isRemoteGateOverrideRejection(message: string): boolean {
+  return /Policy version is stale|Lead override is not allowed|Project access|required|forbidden|denied/i.test(message)
+}
+
+async function settleGateOverrideWithTeamApi(
+  override: GateOverrideDecision,
+  policySource: PolicySnapshot['source'],
+): Promise<GateOverrideDecision> {
+  if (policySource !== 'remote_cache') {
+    return resolveLocalGateOverrideSettlement(override, {
+      status: 'confirmed',
+      override: { ...override, provisional: false, status: 'accepted' },
+    })
+  }
+
+  try {
+    const confirmed = await getRemoteSyncClient().saveGateOverride({
+      runId: override.runId,
+      nodeId: override.nodeId,
+      projectId: override.projectId,
+      userId: override.userId,
+      role: override.role,
+      reason: override.reason,
+      blockedReasonIds: override.blockedReasonIds,
+      policyVersion: override.policyVersion,
+    })
+    return resolveLocalGateOverrideSettlement(override, { status: 'confirmed', override: confirmed })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to confirm Gate override with team API'
+    return resolveLocalGateOverrideSettlement(
+      override,
+      isRemoteGateOverrideRejection(message)
+        ? { status: 'rejected', reason: message }
+        : { status: 'offline' },
+    )
+  }
+}
+
+async function reconcilePendingGateOverrides(
+  store: LocalStore,
+  runId?: string,
+): Promise<GateOverrideDecision[]> {
+  const overrides = await store.listGateOverrides(runId)
+  const reconciled: GateOverrideDecision[] = []
+
+  for (const override of overrides) {
+    if (override.status !== 'provisional') {
+      reconciled.push(override)
+      continue
+    }
+
+    const snapshot = await loadPolicySnapshotForProject(override.projectId)
+    if (snapshot.source !== 'remote_cache') {
+      reconciled.push(override)
+      continue
+    }
+
+    const settled = await settleGateOverrideWithTeamApi(override, snapshot.source)
+    await store.saveGateOverride(settled)
+    reconciled.push(settled)
+  }
+
+  return reconciled
+}
+
 function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.loadState, async () => {
     const store = await getStore()
@@ -479,7 +546,7 @@ function registerIpcHandlers() {
     }
 
     const timestamp = new Date().toISOString()
-    return store.saveGateOverride({
+    const localOverride: GateOverrideDecision = {
       id: `gate-override-${input.runId}-${input.nodeId}-${randomUUID()}`,
       runId: input.runId,
       nodeId: input.nodeId,
@@ -492,13 +559,15 @@ function registerIpcHandlers() {
       provisional: input.provisional === true,
       status: input.provisional === true ? 'provisional' : 'accepted',
       createdAt: timestamp,
-    })
+    }
+    const settledOverride = await settleGateOverrideWithTeamApi(localOverride, decision.policySource)
+    return store.saveGateOverride(settledOverride)
   })
 
   ipcMain.handle(ipcChannels.listGateOverrides, async (_, payload: unknown) => {
     const input = parseListGateOverridesInput(payload)
     const store = await getStore()
-    return store.listGateOverrides(input.runId)
+    return reconcilePendingGateOverrides(store, input.runId)
   })
 
   ipcMain.handle(ipcChannels.createRun, async (_, payload: unknown) => {

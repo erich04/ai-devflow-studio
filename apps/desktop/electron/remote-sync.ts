@@ -55,6 +55,18 @@ export type RemoteSyncClient = {
   uploadTestEvidenceSummary(summary: RemoteTestEvidenceSummary): Promise<RemoteSyncUploadResult>
   uploadAgentReviewSummary(summary: RemoteAgentReviewSummary): Promise<RemoteSyncUploadResult>
   uploadCodingAgentSummary(summary: RemoteCodingAgentSummary): Promise<RemoteSyncUploadResult>
+  saveGateOverride(input: RemoteGateOverrideInput): Promise<GateOverrideDecision>
+}
+
+export type RemoteGateOverrideInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+  userId: string
+  role: GateOverrideDecision['role']
+  reason: string
+  blockedReasonIds: string[]
+  policyVersion: number
 }
 
 export function resolveRemoteApiBaseUrl(
@@ -85,6 +97,18 @@ function jsonPostHeaders(sessionHeaders: DevFlowSessionHeaders): Record<string, 
   return { ...jsonGetHeaders(sessionHeaders), 'content-type': 'application/json' }
 }
 
+function headersForGateOverride(
+  sessionHeaders: DevFlowSessionHeaders,
+  input: RemoteGateOverrideInput,
+): DevFlowSessionHeaders {
+  return {
+    ...sessionHeaders,
+    'x-devflow-user-id': input.userId,
+    'x-devflow-user-role': input.role,
+    'x-devflow-project-roles': `${input.projectId}:${input.role}`,
+  }
+}
+
 function headersForSnapshotRequest(
   sessionHeaders: DevFlowSessionHeaders,
   input?: LoadRemoteSnapshotInput,
@@ -98,7 +122,16 @@ function headersForSnapshotRequest(
 
 async function readJson<T>(response: Response, path: string): Promise<T> {
   if (!response.ok) {
-    throw new Error(`DevFlow API ${path} failed with ${response.status}`)
+    let message = `DevFlow API ${path} failed with ${response.status}`
+    try {
+      const body = await response.clone().json() as { message?: unknown }
+      if (typeof body.message === 'string' && body.message.trim()) {
+        message = body.message
+      }
+    } catch {
+      // Keep the status-based fallback when the API does not return JSON.
+    }
+    throw new Error(message)
   }
 
   return response.json() as Promise<T>
@@ -191,6 +224,23 @@ export function createRemoteSyncClient(
         summary,
         '/api/sync/coding-agent-summary',
         sessionHeaders,
+      )
+    },
+
+    async saveGateOverride(input) {
+      return postJson<GateOverrideDecision>(
+        fetcher,
+        buildUrl(apiBaseUrl, '/api/gates/override'),
+        {
+          runId: input.runId,
+          nodeId: input.nodeId,
+          projectId: input.projectId,
+          reason: input.reason,
+          blockedReasonIds: input.blockedReasonIds,
+          policyVersion: input.policyVersion,
+        },
+        '/api/gates/override',
+        headersForGateOverride(sessionHeaders, input),
       )
     },
   }

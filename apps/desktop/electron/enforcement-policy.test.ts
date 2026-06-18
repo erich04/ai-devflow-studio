@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   createRecommendedEnforcementPreset,
   resolveEffectivePolicy,
+  type GateOverrideDecision,
   type LocalProject,
   type PolicySnapshot,
 } from '@ai-devflow/shared'
-import { loadPolicySnapshotForProject } from './enforcement-policy'
+import { resolveLocalGateOverrideSettlement, loadPolicySnapshotForProject } from './enforcement-policy'
 
 const localProject: LocalProject = {
   id: 'local-abc123',
@@ -72,5 +73,61 @@ describe('loadPolicySnapshotForProject', () => {
 
     expect(snapshot.source).toBe('built_in_default')
     expect(snapshot.effectivePolicy?.rules.every((rule) => rule.action !== 'block')).toBe(true)
+  })
+})
+
+const localOverride: GateOverrideDecision = {
+  id: 'gate-override-local',
+  runId: 'run-1',
+  nodeId: 'n-gate',
+  projectId: 'p-payments',
+  userId: 'u-ling',
+  role: 'lead',
+  reason: 'Lead approved a temporary exception.',
+  blockedReasonIds: ['missing_agent_review:protected_gate:missing'],
+  policyVersion: 1,
+  provisional: true,
+  status: 'provisional',
+  createdAt: '2026-06-18T00:00:00.000Z',
+}
+
+describe('resolveLocalGateOverrideSettlement', () => {
+  it('keeps confirmed server overrides accepted locally', () => {
+    const remoteOverride: GateOverrideDecision = {
+      ...localOverride,
+      id: 'gate-override-remote',
+      provisional: false,
+      status: 'accepted',
+    }
+
+    expect(resolveLocalGateOverrideSettlement(localOverride, { status: 'confirmed', override: remoteOverride }))
+      .toEqual({
+        ...remoteOverride,
+        id: localOverride.id,
+        provisional: false,
+        status: 'accepted',
+      })
+  })
+
+  it('keeps network failures provisional for later reconciliation', () => {
+    expect(resolveLocalGateOverrideSettlement(localOverride, { status: 'offline' })).toEqual({
+      ...localOverride,
+      provisional: true,
+      status: 'provisional',
+    })
+  })
+
+  it('marks server rejections as rejected with the server reason', () => {
+    expect(
+      resolveLocalGateOverrideSettlement(localOverride, {
+        status: 'rejected',
+        reason: 'Policy version is stale; re-evaluate before overriding',
+      }),
+    ).toEqual({
+      ...localOverride,
+      provisional: true,
+      status: 'rejected',
+      reason: 'Policy version is stale; re-evaluate before overriding',
+    })
   })
 })

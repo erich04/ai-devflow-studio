@@ -1,6 +1,7 @@
 import {
   createWarnOnlyDefaultPolicy,
   resolveEffectivePolicy,
+  type GateOverrideDecision,
   type LocalProject,
   type PolicySnapshot,
 } from '@ai-devflow/shared'
@@ -58,4 +59,38 @@ export async function loadPolicySnapshotForProject(
   return isPureLocalProject
     ? createBuiltInPolicySnapshot(projectId)
     : createUnavailablePolicySnapshot(projectId)
+}
+
+export type GateOverrideSettlement =
+  | { status: 'confirmed'; override: GateOverrideDecision }
+  | { status: 'offline' }
+  | { status: 'rejected'; reason: string }
+
+export function resolveLocalGateOverrideSettlement(
+  localOverride: GateOverrideDecision,
+  settlement: GateOverrideSettlement,
+): GateOverrideDecision {
+  if (settlement.status === 'confirmed') {
+    return {
+      ...settlement.override,
+      id: localOverride.id,
+      provisional: false,
+      status: 'accepted',
+    }
+  }
+
+  if (settlement.status === 'rejected') {
+    return {
+      ...localOverride,
+      provisional: true,
+      status: 'rejected',
+      reason: settlement.reason,
+    }
+  }
+
+  return {
+    ...localOverride,
+    provisional: true,
+    status: 'provisional',
+  }
 }

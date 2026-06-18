@@ -669,6 +669,10 @@ button:disabled {
   color: var(--amber);
 }
 
+.override-state--rejected strong {
+  color: var(--danger);
+}
+
 .override-form {
   display: grid;
   gap: 8px;

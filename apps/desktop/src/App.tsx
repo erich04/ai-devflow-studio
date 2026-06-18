@@ -92,6 +92,8 @@ import {
 } from '@ai-devflow/shared'
 import { canApproveGate, nextStatusAfterApproval } from '@ai-devflow/shared'
 import { getDesktopApi } from './desktop-api'
+import { GateEnforcementPanel } from './GateEnforcementPanel'
+import { useGateEnforcement } from './useGateEnforcement'
 
 type ViewId = 'workbench' | 'team' | 'knowledge' | 'agents' | 'skills' | 'mcp' | 'tests'
 
@@ -120,24 +122,6 @@ const stageTone: Record<NodeStage, string> = {
   test: 'green',
   pr: 'amber',
   accept: 'rose',
-}
-
-const policySourceLabels: Record<GateEnforcementDecision['policySource'], string> = {
-  remote_cache: 'remote_cache',
-  built_in_default: 'built_in_default',
-  unavailable: 'unavailable',
-}
-
-function gateEnforcementTone(status: GateEnforcementDecision['status']) {
-  if (status === 'blocked' || status === 'hard_blocked' || status === 'blocked_policy_unavailable') {
-    return 'block'
-  }
-
-  if (status === 'warn' || status === 'overridden') {
-    return 'warn'
-  }
-
-  return 'info'
 }
 
 const seedProjectRollups = rollupTokenUsage(tokenUsage, 'projectId')
@@ -336,10 +320,6 @@ export function App() {
   const [managedCodingWorkspaces, setManagedCodingWorkspaces] = useState<ManagedCodingWorkspace[]>([])
   const [dependencyBootstrapEvidence, setDependencyBootstrapEvidence] = useState<DependencyBootstrapEvidence[]>([])
   const [codingDiffArtifacts, setCodingDiffArtifacts] = useState<CodingDiffArtifact[]>([])
-  const [selectedPolicySnapshot, setSelectedPolicySnapshot] = useState<PolicySnapshot | null>(null)
-  const [selectedGateDecision, setSelectedGateDecision] = useState<GateEnforcementDecision | null>(null)
-  const [gateOverrides, setGateOverrides] = useState<GateOverrideDecision[]>([])
-  const [isLoadingGateEnforcement, setIsLoadingGateEnforcement] = useState(false)
   const [providerKeyDraft, setProviderKeyDraft] = useState('')
   const [isRunningAgentReview, setIsRunningAgentReview] = useState(false)
   const [isStartingCodingAgent, setIsStartingCodingAgent] = useState(false)
@@ -456,6 +436,16 @@ export function App() {
   const selectedBootstrapEvidence = latestCodingRun
     ? dependencyBootstrapEvidence.find((evidence) => evidence.id === latestCodingRun.bootstrapEvidenceId)
     : undefined
+  const gateEnforcement = useGateEnforcement({
+    desktopApi,
+    selectedRun,
+    selectedNode,
+    currentUser,
+    artifacts,
+    agentReviews,
+    testEvidence,
+    onToast: setToast,
+  })
 
   function resetTeamSnapshot() {
     setTeamProjects(projects)
@@ -582,59 +572,6 @@ export function App() {
   useEffect(() => {
     setTestCommandDraft(selectedLocalProject?.testCommand ?? '')
   }, [selectedLocalProject?.id, selectedLocalProject?.testCommand])
-
-  useEffect(() => {
-    if (!desktopApi || !selectedRun || !selectedNode) {
-      setSelectedPolicySnapshot(null)
-      setSelectedGateDecision(null)
-      setGateOverrides([])
-      return
-    }
-
-    let disposed = false
-    setIsLoadingGateEnforcement(true)
-
-    Promise.all([
-      desktopApi.loadEnforcementPolicy({ projectId: selectedRun.projectId }),
-      desktopApi.evaluateGateEnforcement({
-        runId: selectedRun.id,
-        nodeId: selectedNode.id,
-        projectId: selectedRun.projectId,
-      }),
-      desktopApi.listGateOverrides({ runId: selectedRun.id }),
-    ])
-      .then(([snapshot, decision, overrides]) => {
-        if (disposed) {
-          return
-        }
-
-        setSelectedPolicySnapshot(snapshot)
-        setSelectedGateDecision(decision)
-        setGateOverrides(overrides)
-      })
-      .catch((error: unknown) => {
-        if (!disposed) {
-          setToast(error instanceof Error ? error.message : '加载 Gate Enforcement 失败')
-        }
-      })
-      .finally(() => {
-        if (!disposed) {
-          setIsLoadingGateEnforcement(false)
-        }
-      })
-
-    return () => {
-      disposed = true
-    }
-  }, [
-    artifacts.length,
-    desktopApi,
-    selectedNode?.id,
-    selectedRun?.id,
-    selectedRun?.projectId,
-    agentReviews.length,
-    testEvidence.length,
-  ])
 
   useEffect(() => {
     if (!selectedLocalProject || !testCommandDraft.trim()) {
@@ -783,36 +720,6 @@ export function App() {
     setRuns((previousRuns) => previousRuns.map((run) => (run.id === selectedRun.id ? updatedRun : run)))
     setEvents((previousEvents) => mergeById(previousEvents, [approvalEvent]))
     setToast('架构 Gate 已通过，Run 进入本地实现阶段')
-  }
-
-  async function saveSelectedGateOverride(reason: string, provisional: boolean) {
-    if (!desktopApi || !selectedRun || !selectedNode || !selectedGateDecision || !currentUser) {
-      return
-    }
-
-    try {
-      const override = await desktopApi.saveGateOverride({
-        runId: selectedRun.id,
-        nodeId: selectedNode.id,
-        projectId: selectedRun.projectId,
-        userId: currentUser.id,
-        role: currentUser.role,
-        reason,
-        blockedReasonIds: selectedGateDecision.blockingReasons.map((item) => item.id),
-        policyVersion: selectedGateDecision.policyVersion,
-        provisional,
-      })
-      setGateOverrides((previous) => mergeById(previous, [override]))
-      const decision = await desktopApi.evaluateGateEnforcement({
-        runId: selectedRun.id,
-        nodeId: selectedNode.id,
-        projectId: selectedRun.projectId,
-      })
-      setSelectedGateDecision(decision)
-      setToast(override.provisional ? '临时 override 已保存，等待团队确认' : 'Lead override 已保存')
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : '保存 Gate override 失败')
-    }
   }
 
   async function selectLocalProject() {
@@ -1171,18 +1078,6 @@ export function App() {
     setToast(redactSecrets(sample).value)
   }
 
-  const roleCanApproveSelectedGate = selectedNode ? canApproveGate(currentUser?.role ?? 'member', selectedNode) : false
-  const policyAllowsSelectedGateApproval = selectedGateDecision ? !selectedGateDecision.blocksApproval : true
-  const canApproveSelectedGate = roleCanApproveSelectedGate && policyAllowsSelectedGateApproval
-  const canSaveSelectedGateOverride =
-    Boolean(
-      selectedRun &&
-        selectedNode &&
-        currentUser?.role === 'lead' &&
-        currentUser.id !== selectedRun.creatorId &&
-        currentUser.id !== selectedNode.ownerId,
-    )
-
   return (
     <div className="app-shell" data-origin={dataOrigin}>
       <aside className="sidebar" aria-label="Primary navigation">
@@ -1330,14 +1225,14 @@ export function App() {
               governanceChecks={selectedGovernanceChecks}
               references={knowledgeReferences}
               latestAgentReview={latestAgentReview}
-              policySnapshot={selectedPolicySnapshot}
-              gateEnforcementDecision={selectedGateDecision}
-              gateOverrides={gateOverrides.filter((override) => override.nodeId === selectedNode?.id)}
-              isLoadingGateEnforcement={isLoadingGateEnforcement}
-              canApprove={canApproveSelectedGate}
-              canSaveOverride={canSaveSelectedGateOverride}
+              policySnapshot={gateEnforcement.policySnapshot}
+              gateEnforcementDecision={gateEnforcement.decision}
+              gateOverrides={gateEnforcement.overrides.filter((override) => override.nodeId === selectedNode?.id)}
+              isLoadingGateEnforcement={gateEnforcement.isLoading}
+              canApprove={gateEnforcement.canApprove}
+              canSaveOverride={gateEnforcement.canSaveOverride}
               onApprove={approveSelectedGate}
-              onSaveGateOverride={saveSelectedGateOverride}
+              onSaveGateOverride={gateEnforcement.saveOverride}
               onRunTests={executeTestPlan}
               onRunKnowledgeReview={runKnowledgeReview}
               onRunCodingAgent={runCodingAgent}
@@ -1610,19 +1505,9 @@ function Inspector({
   isRunningAgentReview: boolean
   isStartingCodingAgent: boolean
 }) {
-  const [overrideReason, setOverrideReason] = useState('Reviewed blocking reason and approved a temporary exception.')
-
   if (!selectedNode) {
     return <aside className="inspector">请选择一个节点</aside>
   }
-
-  const activeOverride = gateOverrides.find((override) =>
-    override.status === 'accepted' || override.status === 'provisional',
-  )
-  const canShowOverrideForm =
-    gateEnforcementDecision?.status === 'blocked' &&
-    gateEnforcementDecision.canOverride &&
-    canSaveOverride
 
   return (
     <aside className="inspector" data-testid="node-inspector">
@@ -1635,63 +1520,14 @@ function Inspector({
         <p>{selectedNode.subtitle}</p>
       </div>
 
-      <div className="agent-advisory-list">
-        <span className="panel-label">Gate Enforcement</span>
-        {isLoadingGateEnforcement ? (
-          <p className="empty-note">正在加载 Gate Enforcement...</p>
-        ) : gateEnforcementDecision ? (
-          <article className={`agent-advisory agent-advisory--${gateEnforcementTone(gateEnforcementDecision.status)}`}>
-            <div className="compact-row">
-              <strong>{gateEnforcementDecision.status}</strong>
-              <span>{gateEnforcementDecision.blocksApproval ? 'blocks approval' : 'approval allowed'}</span>
-            </div>
-            <div className="knowledge-reference-meta">
-              <span>{policySourceLabels[gateEnforcementDecision.policySource]}</span>
-              <span>policy v{gateEnforcementDecision.policyVersion}</span>
-              {policySnapshot?.syncedAt ? <span>synced {policySnapshot.syncedAt}</span> : null}
-            </div>
-            {gateEnforcementDecision.status === 'blocked_policy_unavailable' ? (
-              <p>Team enforcement policy is unavailable. Sync policy before approving this Gate.</p>
-            ) : null}
-            {[...gateEnforcementDecision.blockingReasons, ...gateEnforcementDecision.warningReasons].map((reason) => (
-              <div className="enforcement-reason" key={reason.id}>
-                <div className="compact-row">
-                  <strong>{reason.action}</strong>
-                  <code>{reason.ruleKey}</code>
-                </div>
-                <p>{reason.summary}</p>
-                {reason.remediation ? <small>{reason.remediation}</small> : null}
-              </div>
-            ))}
-            {activeOverride ? (
-              <div className={`override-state override-state--${activeOverride.status}`}>
-                <strong>{activeOverride.provisional ? 'Provisional override' : 'Confirmed override'}</strong>
-                <p>{activeOverride.reason}</p>
-              </div>
-            ) : null}
-            {canShowOverrideForm ? (
-              <div className="override-form">
-                <label>
-                  Lead override reason
-                  <textarea
-                    value={overrideReason}
-                    onChange={(event) => setOverrideReason(event.target.value)}
-                  />
-                </label>
-                <button
-                  className="ghost-button"
-                  disabled={!overrideReason.trim()}
-                  onClick={() => onSaveGateOverride(overrideReason, false)}
-                >
-                  Save lead override
-                </button>
-              </div>
-            ) : null}
-          </article>
-        ) : (
-          <p className="empty-note">当前环境尚未加载 Gate Enforcement。</p>
-        )}
-      </div>
+      <GateEnforcementPanel
+        policySnapshot={policySnapshot}
+        decision={gateEnforcementDecision}
+        overrides={gateOverrides}
+        isLoading={isLoadingGateEnforcement}
+        canSaveOverride={canSaveOverride}
+        onSaveOverride={onSaveGateOverride}
+      />
 
       <div className="governance-list">
         <span className="panel-label">Knowledge Governance</span>

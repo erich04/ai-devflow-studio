@@ -62,6 +62,9 @@ policy.
 - Desktop approval refreshes team policy on a best-effort basis before the main-process write guard.
   If refresh fails, Desktop continues with the last authoritative cache; if no cache exists for a
   team project, approval returns `blocked_policy_unavailable` instead of falling back to warn-only.
+- Desktop Gate override save/reconcile attempts team API confirmation first. Confirmed responses are
+  stored as accepted, network failures remain provisional, and stale or forbidden server responses
+  are stored as rejected so the Gate returns to a blocked, user-explainable state.
 - `/api/sync/run-summary` rejects `approval` summaries. Approval-like writes must be produced by
   the Gate approval enforcement path rather than by remote summary sync.
 - Default verification stays deterministic because the default and recommended preset do not make

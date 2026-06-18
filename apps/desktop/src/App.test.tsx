@@ -736,6 +736,58 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: /通过 Gate/ })).not.toBeDisabled()
   })
 
+  it('shows rejected provisional overrides as blocked and actionable', async () => {
+    const api = installDesktopApi({
+      evaluateGateEnforcement: vi.fn().mockResolvedValue({
+        status: 'blocked',
+        blocksApproval: true,
+        blockingReasons: [
+          {
+            id: 'missing_agent_review:protected_gate:missing',
+            target: 'missing_agent_review',
+            ruleKey: 'missing_agent_review:protected_gate:missing',
+            action: 'block',
+            summary: 'Knowledge Review Agent has not reviewed this protected Gate.',
+            remediation: 'Run Knowledge Review Agent for this protected Gate.',
+          },
+        ],
+        warningReasons: [],
+        requiredActions: ['Run Knowledge Review Agent for this protected Gate.'],
+        canOverride: true,
+        overrideRoleRequired: 'lead',
+        policySource: 'remote_cache',
+        policyVersion: 2,
+        provisional: false,
+      }),
+      listGateOverrides: vi.fn().mockResolvedValue([
+        {
+          id: 'override-rejected',
+          runId: fixtureRuns[0]!.id,
+          nodeId: 'n-design-gate',
+          projectId: fixtureRuns[0]!.projectId,
+          userId: 'u-review-lead',
+          role: 'lead',
+          reason: 'Rejected by team policy because version 1 is stale.',
+          blockedReasonIds: ['missing_agent_review:protected_gate:missing'],
+          policyVersion: 1,
+          provisional: true,
+          status: 'rejected',
+          createdAt: '2026-06-18T00:00:00.000Z',
+        },
+      ]),
+    })
+
+    render(<App />)
+
+    await waitFor(() => expect(api.listGateOverrides).toHaveBeenCalledWith({ runId: fixtureRuns[0]!.id }))
+
+    const inspector = screen.getByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('Rejected override')
+    expect(inspector).toHaveTextContent('Rejected by team policy because version 1 is stale.')
+    expect(inspector).toHaveTextContent('Run Knowledge Review Agent for this protected Gate.')
+    expect(screen.getByRole('button', { name: /通过 Gate/ })).toBeDisabled()
+  })
+
   it('persists theme and MCP local preferences through the desktop API', async () => {
     const api = installDesktopApi()
     render(<App />)
@@ -923,6 +975,7 @@ describe('App', () => {
     await screen.findByText('fixture-project')
 
     const commandInput = screen.getByLabelText('测试命令')
+    await waitFor(() => expect(commandInput).toHaveValue('pnpm test'))
     await act(async () => {
       fireEvent.change(commandInput, { target: { value: 'pnpm test -- --run' } })
     })
