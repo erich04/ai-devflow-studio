@@ -229,8 +229,6 @@ Electron smoke is still tracked as future compatibility expansion. See
   Electron direct-approval rejection smoke on 2026-06-18.
 - Added ADR 0010.
 
-## Planned Milestones
-
 ### v0.7.x: Enforcement UX and Reconciliation Hardening
 
 - Completed richer Desktop Inspector rendering for policy source, blocking reasons, hard-block
@@ -250,6 +248,8 @@ Electron smoke is still tracked as future compatibility expansion. See
   signoff discipline.
 - Extracted the Desktop Gate Enforcement path into a focused hook and Inspector panel to reduce
   `App.tsx` coupling without broad UI restructuring.
+
+## Planned Milestones
 
 ### v0.8: Policy-Aware Delivery Automation
 

@@ -97,6 +97,21 @@ The team-configurable rules that decide whether Gate approval should pass, warn,
 or require a policy sync. Policy evaluation considers deterministic Knowledge Governance Checks and
 probabilistic Agent Policy Findings.
 
+## Policy-Aware Delivery
+
+The delivery mode where policy outcomes, knowledge standards, evidence gaps, and human Gate
+decisions shape the next recommended development action without removing human approval.
+
+## Remediation Plan
+
+A reviewer-facing set of proposed actions for resolving a warning or blocked Gate, such as running a
+Knowledge Review, adding Test Evidence, updating an API contract, or retrying a Coding Agent task.
+
+## Retry Attempt
+
+A human-approved attempt to rerun or continue work using an existing Run's policy context,
+remediation plan, evidence, and prior Agent/Coding history.
+
 ## Policy Floor
 
 The organization-level minimum action for an enforcement rule. Project overrides can make a rule
