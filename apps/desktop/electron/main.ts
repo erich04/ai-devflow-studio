@@ -12,13 +12,13 @@ import {
   createFakeAgentProvider,
   createOpenAiCompatibleAgentProvider,
   createRemoteAgentReviewSummary,
-  createWarnOnlyDefaultPolicy,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   knowledgeChunks,
   knowledgeDocuments,
   evaluateGateEnforcement,
   nextStatusAfterApproval,
+  redactSecrets,
   resolveEffectivePolicy,
   runKnowledgeReviewAgent,
   type AgentEvent,
@@ -67,6 +67,9 @@ import { createCodingEngineAdapterFromEnv } from './coding-engine.js'
 import { createCodingRuntime } from './coding-runtime.js'
 import { createOpencodeProcessManager } from './opencode-process.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
+import {
+  loadPolicySnapshotForProject as loadStoredPolicySnapshotForProject,
+} from './enforcement-policy.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_TEST_TIMEOUT_MS = 120_000
@@ -208,26 +211,9 @@ async function findProject(projectId: string): Promise<LocalProject> {
   return project
 }
 
-function createBuiltInPolicySnapshot(projectId: string): PolicySnapshot {
-  const timestamp = new Date().toISOString()
-  const organizationPolicy = createWarnOnlyDefaultPolicy({ updatedAt: timestamp })
-  const effectivePolicy = resolveEffectivePolicy(organizationPolicy, null)
-
-  return {
-    projectId,
-    organizationPolicy,
-    projectOverride: null,
-    effectivePolicy,
-    version: effectivePolicy.version,
-    updatedAt: organizationPolicy.updatedAt,
-    syncedAt: timestamp,
-    source: 'built_in_default',
-  }
-}
-
 async function loadPolicySnapshotForProject(projectId: string): Promise<PolicySnapshot> {
   const store = await getStore()
-  return (await store.getPolicySnapshot(projectId)) ?? createBuiltInPolicySnapshot(projectId)
+  return loadStoredPolicySnapshotForProject(store, projectId)
 }
 
 async function cacheRemotePolicySnapshots(snapshot: RemoteTeamSnapshot): Promise<void> {
@@ -260,7 +246,23 @@ async function cacheRemotePolicySnapshots(snapshot: RemoteTeamSnapshot): Promise
   )
 }
 
-async function evaluateLocalGateEnforcement(input: { runId: string; nodeId: string; projectId?: string }) {
+async function refreshRemotePolicySnapshotForProject(projectId: string): Promise<void> {
+  if (projectId.startsWith('local-')) {
+    return
+  }
+
+  try {
+    const snapshot = await getRemoteSyncClient().loadRemoteSnapshot({ organizationId: 'org-demo' })
+    await cacheRemotePolicySnapshots(snapshot)
+  } catch {
+    // Keep the last authoritative cache if the team API is offline.
+  }
+}
+
+async function evaluateLocalGateEnforcement(
+  input: { runId: string; nodeId: string; projectId?: string },
+  options: { refreshPolicy?: boolean } = {},
+) {
   const store = await getStore()
   const run = (await store.listRuns()).find((candidate) => candidate.id === input.runId)
   if (!run) {
@@ -269,6 +271,10 @@ async function evaluateLocalGateEnforcement(input: { runId: string; nodeId: stri
   const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
   if (!node) {
     throw new Error(`Run node not found: ${input.nodeId}`)
+  }
+
+  if (options.refreshPolicy) {
+    await refreshRemotePolicySnapshotForProject(input.projectId ?? run.projectId)
   }
 
   const [artifacts, testEvidence, agentReviews, gateOverrides, policySnapshot] = await Promise.all([
@@ -455,6 +461,7 @@ function registerIpcHandlers() {
     const input = parseSaveGateOverrideInput(payload)
     const store = await getStore()
     const { run, node, decision } = await evaluateLocalGateEnforcement(input)
+    const redactedReason = redactSecrets(input.reason).value
 
     if (decision.policyVersion !== input.policyVersion) {
       throw new Error('Policy version is stale; re-evaluate before overriding')
@@ -466,7 +473,7 @@ function registerIpcHandlers() {
       run,
       node,
       enforcement: decision,
-      reason: input.reason,
+      reason: redactedReason,
     })) {
       throw new Error('Lead override is not allowed for this Gate')
     }
@@ -479,7 +486,7 @@ function registerIpcHandlers() {
       projectId: input.projectId,
       userId: input.userId,
       role: input.role,
-      reason: input.reason,
+      reason: redactedReason,
       blockedReasonIds: input.blockedReasonIds,
       policyVersion: input.policyVersion,
       provisional: input.provisional === true,
@@ -514,7 +521,7 @@ function registerIpcHandlers() {
     const { run, node, decision, gateOverrides } = await evaluateLocalGateEnforcement({
       runId: input.runId,
       nodeId: input.nodeId,
-    })
+    }, { refreshPolicy: true })
     const acceptedOverride = gateOverrides.find(
       (override) => override.runId === run.id && override.nodeId === node.id,
     )

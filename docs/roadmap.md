@@ -58,6 +58,9 @@ v0.7 Configurable Gate Enforcement Policy core is implemented. DevFlow now has a
 resolver/evaluator, warn-only default policy, recommended enforcement preset, Agent Policy Findings,
 API/Postgres policy persistence, Web policy controls, Electron policy snapshot/override persistence,
 and an Electron Gate approval write path that re-checks `canApproveGateNow` in the main process.
+The v0.7.x hardening patch adds explicit Electron app-path launch, Desktop Inspector enforcement
+explanations, no-cache team policy `blocked_policy_unavailable`, online policy refresh before
+approval, and API sync rejection for approval summaries that would bypass the Gate write path.
 
 Current validation remains macOS-local for the full real Electron window path. Windows compatibility
 is preserved through static automation checks and Windows CI for typecheck/unit/audit; full Windows
@@ -230,11 +233,17 @@ Electron smoke is still tracked as future compatibility expansion. See
 
 ### v0.7.x: Enforcement UX and Reconciliation Hardening
 
-- Add richer Desktop Inspector rendering for policy source, blocking reasons, hard-block remediation,
-  and provisional-vs-confirmed override state.
-- Refresh authoritative team policy before online Desktop approval.
-- Add rejected provisional override reconciliation UX and audit events.
-- Extend smoke coverage for offline policy-unavailable and provisional-reconcile edge cases.
+- Completed richer Desktop Inspector rendering for policy source, blocking reasons, hard-block
+  remediation, and provisional-vs-confirmed override state.
+- Completed Electron launch hardening so `corepack pnpm dev:electron` passes the desktop app path
+  explicitly instead of falling back to Electron's default app.
+- Completed no-cache team policy behavior: team projects without a cached authoritative policy use
+  `blocked_policy_unavailable`; pure local projects still use warn-only default policy.
+- Completed best-effort online team policy refresh before Desktop approval; failed refresh keeps the
+  last cache or blocks when no cache exists.
+- Completed API sync hardening: `/api/sync/run-summary` rejects `approval` summaries so approval-like
+  writes must use the Gate enforcement path.
+- Remaining: rejected provisional override reconciliation UX and audit events.
 
 ### v0.8: Policy-Aware Delivery Automation
 

@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  createRecommendedEnforcementPreset,
   createWarnOnlyDefaultPolicy,
   mcpServers as fixtureMcpServers,
   resolveEffectivePolicy,
@@ -601,7 +602,7 @@ describe('App', () => {
     })))
     await waitFor(() =>
       expect(api.uploadRunSummary).toHaveBeenCalledWith(expect.objectContaining({
-        kind: 'approval',
+        kind: 'run',
         runId: fixtureRuns[0]!.id,
         projectId: fixtureRuns[0]!.projectId,
       })),
@@ -620,6 +621,119 @@ describe('App', () => {
     await waitFor(() => expect(api.approveGate).toHaveBeenCalled())
     await waitFor(() => expect(api.uploadRunSummary).toHaveBeenCalled())
     expect(screen.getByTestId('toast')).toHaveTextContent('架构 Gate 已通过')
+  })
+
+  it('shows blocking enforcement details and keeps non-approval actions available', async () => {
+    const recommended = createRecommendedEnforcementPreset({
+      updatedAt: '2026-06-18T00:00:00.000Z',
+    })
+    const effectivePolicy = resolveEffectivePolicy(recommended, null)
+    const api = installDesktopApi({
+      loadEnforcementPolicy: vi.fn().mockResolvedValue({
+        projectId: fixtureRuns[0]!.projectId,
+        organizationPolicy: recommended,
+        projectOverride: null,
+        effectivePolicy,
+        version: effectivePolicy.version,
+        updatedAt: effectivePolicy.updatedAt,
+        syncedAt: '2026-06-18T00:00:10.000Z',
+        source: 'remote_cache',
+      }),
+      evaluateGateEnforcement: vi.fn().mockResolvedValue({
+        status: 'blocked',
+        blocksApproval: true,
+        blockingReasons: [
+          {
+            id: 'missing_agent_review:protected_gate:missing',
+            target: 'missing_agent_review',
+            ruleKey: 'missing_agent_review:protected_gate:missing',
+            action: 'block',
+            summary: 'Knowledge Review Agent has not reviewed this protected Gate.',
+            remediation: 'Run Knowledge Review Agent for this protected Gate.',
+          },
+        ],
+        warningReasons: [],
+        requiredActions: ['Run Knowledge Review Agent for this protected Gate.'],
+        canOverride: true,
+        overrideRoleRequired: 'lead',
+        policySource: 'remote_cache',
+        policyVersion: 1,
+        provisional: false,
+      }),
+      listGateOverrides: vi.fn().mockResolvedValue([]),
+    })
+
+    render(<App />)
+
+    await waitFor(() =>
+      expect(api.evaluateGateEnforcement).toHaveBeenCalledWith({
+        runId: fixtureRuns[0]!.id,
+        nodeId: 'n-design-gate',
+        projectId: fixtureRuns[0]!.projectId,
+      }),
+    )
+
+    const inspector = screen.getByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('Gate Enforcement')
+    expect(inspector).toHaveTextContent('blocked')
+    expect(inspector).toHaveTextContent('remote_cache')
+    expect(inspector).toHaveTextContent('policy v1')
+    expect(inspector).toHaveTextContent('Knowledge Review Agent has not reviewed this protected Gate.')
+    expect(inspector).toHaveTextContent('Run Knowledge Review Agent for this protected Gate.')
+    expect(screen.getByRole('button', { name: /通过 Gate/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Agent Review/ })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: /执行测试/ })).not.toBeDisabled()
+  })
+
+  it('shows provisional overrides distinctly from confirmed overrides', async () => {
+    const api = installDesktopApi({
+      evaluateGateEnforcement: vi.fn().mockResolvedValue({
+        status: 'overridden',
+        blocksApproval: false,
+        blockingReasons: [
+          {
+            id: 'missing_agent_review:protected_gate:missing',
+            target: 'missing_agent_review',
+            ruleKey: 'missing_agent_review:protected_gate:missing',
+            action: 'block',
+            summary: 'Knowledge Review Agent has not reviewed this protected Gate.',
+          },
+        ],
+        warningReasons: [],
+        requiredActions: [],
+        canOverride: true,
+        overrideRoleRequired: 'lead',
+        policySource: 'remote_cache',
+        policyVersion: 1,
+        provisional: true,
+      }),
+      listGateOverrides: vi.fn().mockResolvedValue([
+        {
+          id: 'override-provisional',
+          runId: fixtureRuns[0]!.id,
+          nodeId: 'n-design-gate',
+          projectId: fixtureRuns[0]!.projectId,
+          userId: 'u-review-lead',
+          role: 'lead',
+          reason: 'Offline lead override pending server confirmation.',
+          blockedReasonIds: ['missing_agent_review:protected_gate:missing'],
+          policyVersion: 1,
+          provisional: true,
+          status: 'provisional',
+          createdAt: '2026-06-18T00:00:00.000Z',
+        },
+      ]),
+    })
+
+    render(<App />)
+
+    await waitFor(() => expect(api.listGateOverrides).toHaveBeenCalledWith({ runId: fixtureRuns[0]!.id }))
+
+    const inspector = screen.getByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('overridden')
+    expect(inspector).toHaveTextContent('Provisional override')
+    expect(inspector).toHaveTextContent('Offline lead override pending server confirmation.')
+    expect(screen.getByRole('button', { name: /通过 Gate/ })).not.toBeDisabled()
   })
 
   it('persists theme and MCP local preferences through the desktop API', async () => {

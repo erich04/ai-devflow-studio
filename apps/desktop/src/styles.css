@@ -584,6 +584,8 @@ button:disabled {
 .artifact-card p,
 .event-row p,
 .agent-advisory p,
+.enforcement-reason p,
+.override-state p,
 .agent-run-card p,
 .agent-provider-card p,
 .agent-review-card p,
@@ -639,6 +641,54 @@ button:disabled {
 
 .agent-advisory--block {
   border-left-color: var(--danger);
+}
+
+.enforcement-reason,
+.override-state,
+.override-form {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.enforcement-reason small {
+  display: block;
+  margin-top: 6px;
+  color: var(--amber);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.override-state strong {
+  display: block;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.override-state--provisional strong {
+  color: var(--amber);
+}
+
+.override-form {
+  display: grid;
+  gap: 8px;
+}
+
+.override-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.override-form textarea {
+  min-height: 74px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  resize: vertical;
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .governance-card p {

@@ -508,7 +508,7 @@ describe('team API route resolver', () => {
     })).resolves.toMatchObject({ status: 403 })
   })
 
-  it('routes run summary sync requests through the repository', async () => {
+  it('rejects approval summary sync because Gate approval must use the enforcement write path', async () => {
     const repository = createRepository()
     const summary = {
       kind: 'approval',
@@ -526,18 +526,46 @@ describe('team API route resolver', () => {
       session: leadSession,
     })
 
-    expect(result?.status).toBe(202)
-    expect(repository.uploadRunSummary).toHaveBeenCalledWith(summary, leadSession)
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: 'bad_request',
+        message: 'Approval summaries must be produced by the Gate approval enforcement path',
+      },
+    })
+    expect(repository.uploadRunSummary).not.toHaveBeenCalled()
   })
 
-  it('requires lead access for approval summary sync', async () => {
+  it('routes non-approval run summary sync requests through the repository', async () => {
+    const repository = createRepository()
+    const summary = {
+      kind: 'run',
+      runId: 'run-1',
+      projectId: 'p-payments',
+      title: 'Update payment workflow',
+      status: 'building',
+      currentNodeId: 'node-build',
+      branchName: 'ai/payments',
+      updatedAt: '2026-06-16T00:00:00.000Z',
+    }
+
+    const result = await resolveTeamRoute('POST', '/api/sync/run-summary', repository, {
+      body: summary,
+      session: memberSession,
+    })
+
+    expect(result?.status).toBe(202)
+    expect(repository.uploadRunSummary).toHaveBeenCalledWith(summary, memberSession)
+  })
+
+  it('requires member access for non-approval run summary sync', async () => {
     const repository = createRepository()
 
     const result = await resolveTeamRoute('POST', '/api/sync/run-summary', repository, {
       body: {
-        kind: 'approval',
+        kind: 'run',
         runId: 'run-1',
-        projectId: 'p-payments',
+        projectId: 'p-admin',
         title: 'Approve payment workflow',
         status: 'building',
         currentNodeId: 'node-build',
@@ -551,7 +579,7 @@ describe('team API route resolver', () => {
       status: 403,
       body: {
         error: 'forbidden',
-        message: 'Project role lead required',
+        message: 'Project role member required',
       },
     })
     expect(repository.uploadRunSummary).not.toHaveBeenCalled()

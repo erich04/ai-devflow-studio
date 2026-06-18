@@ -783,7 +783,11 @@ export async function resolveTeamRoute(
       return badRequest(error instanceof Error ? error.message : 'Invalid sync payload')
     }
 
-    const requiredRole = summary.kind === 'approval' ? 'lead' : 'member'
+    if (summary.kind === 'approval') {
+      return badRequest('Approval summaries must be produced by the Gate approval enforcement path')
+    }
+
+    const requiredRole = 'member'
     if (!canSyncProject(options.session, summary.projectId, requiredRole)) {
       return forbidden(`Project role ${requiredRole} required`)
     }

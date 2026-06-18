@@ -371,6 +371,23 @@ try {
     'stale policy version override',
   )
 
+  await expectPostRejected(
+    '/api/sync/run-summary',
+    {
+      kind: 'approval',
+      runId,
+      projectId: 'p-payments',
+      title: 'Postgres smoke approval bypass attempt',
+      status: 'building',
+      currentNodeId: 'n-design-gate',
+      branchName: 'ai/postgres-smoke',
+      updatedAt: timestamp,
+    },
+    leadSessionHeaders,
+    400,
+    'approval summary sync bypass',
+  )
+
   await postJson('/api/sync/run-summary', {
     kind: 'run',
     runId,

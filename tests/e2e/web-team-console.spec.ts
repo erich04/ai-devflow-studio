@@ -23,7 +23,7 @@ test.describe('AI DevFlow web team console', () => {
     const runResponse = await request.post(`${apiUrl}/api/sync/run-summary`, {
       headers: teamHeaders,
       data: {
-        kind: 'approval',
+        kind: 'run',
         runId: `run-e2e-${suffix}`,
         projectId: 'p-payments',
         title: runTitle,
