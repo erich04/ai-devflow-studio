@@ -222,6 +222,8 @@ Electron smoke is still tracked as future compatibility expansion. See
 - Added Electron SQLite schema v5 policy snapshot and Gate override persistence.
 - Added Electron preload IPC for policy load/evaluate/override and a main-process Gate approval
   handler that re-checks policy before writing approval state.
+- Signed off committed-state `verify`, `build`, disposable-Postgres policy/override smoke, and real
+  Electron direct-approval rejection smoke on 2026-06-18.
 - Added ADR 0010.
 
 ## Planned Milestones
@@ -232,8 +234,7 @@ Electron smoke is still tracked as future compatibility expansion. See
   and provisional-vs-confirmed override state.
 - Refresh authoritative team policy before online Desktop approval.
 - Add rejected provisional override reconciliation UX and audit events.
-- Extend Postgres smoke and Electron smoke to cover policy cache, override, and direct approval
-  rejection paths.
+- Extend smoke coverage for offline policy-unavailable and provisional-reconcile edge cases.
 
 ### v0.8: Policy-Aware Delivery Automation
 
