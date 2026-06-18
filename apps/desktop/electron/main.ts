@@ -6,6 +6,8 @@ import {
   applyTestEvidenceToRun,
   buildAgentReviewContext,
   buildKnowledgeGovernanceChecks,
+  buildKnowledgeReferences,
+  buildRemediationPlan,
   canApproveGateNow,
   canOverrideBlockedGate,
   createAgentReviewArtifacts,
@@ -58,6 +60,7 @@ import {
   parseSaveGateOverrideInput,
   parseSaveRunInput,
   parseSaveProjectTestCommandInput,
+  parseStartRetryAttemptInput,
   parseSettingsInput,
   parseSubscribeCodingRunInput,
   parseValidateTestCommandInput,
@@ -286,6 +289,13 @@ async function evaluateLocalGateEnforcement(
     store.listGateOverrides(run.id),
     loadPolicySnapshotForProject(input.projectId ?? run.projectId),
   ])
+  const knowledgeReferences = buildKnowledgeReferences({
+    run,
+    artifacts,
+    documents: knowledgeDocuments,
+    chunks: knowledgeChunks,
+    testEvidence,
+  })
   const governanceChecks = buildKnowledgeGovernanceChecks({
     run,
     node,
@@ -312,7 +322,19 @@ async function evaluateLocalGateEnforcement(
     policySource: policySnapshot.source,
   })
 
-  return { run, node, decision, policySnapshot, gateOverrides }
+  return {
+    run,
+    node,
+    artifacts,
+    testEvidence,
+    agentReviews,
+    knowledgeReferences,
+    governanceChecks,
+    agentPolicyFindings,
+    decision,
+    policySnapshot,
+    gateOverrides,
+  }
 }
 
 function isRemoteGateOverrideRejection(message: string): boolean {
@@ -696,6 +718,39 @@ function registerIpcHandlers() {
     const input = parseRunCodingAgentInput(payload)
     const runtime = await createCodingRuntimeForRequest()
     return runtime.runCodingAgent(input)
+  })
+
+  ipcMain.handle(ipcChannels.startRetryAttempt, async (_, payload: unknown) => {
+    const input = parseStartRetryAttemptInput(payload)
+    const runtime = await createCodingRuntimeForRequest()
+    const {
+      run,
+      node,
+      decision,
+      governanceChecks,
+      agentPolicyFindings,
+      testEvidence,
+      knowledgeReferences,
+    } = await evaluateLocalGateEnforcement({
+      runId: input.runId,
+      nodeId: input.nodeId,
+      projectId: input.projectId,
+    })
+    const remediationPlan = buildRemediationPlan({
+      run,
+      node,
+      decision,
+      governanceChecks,
+      agentPolicyFindings,
+      testEvidence,
+      knowledgeReferences,
+      createdAt: new Date().toISOString(),
+    })
+
+    return runtime.startRetryAttempt({
+      ...input,
+      remediationPlan,
+    })
   })
 
   ipcMain.handle(ipcChannels.cancelCodingAgentRun, async (_, payload: unknown) => {

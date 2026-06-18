@@ -16,6 +16,8 @@ import type {
   LocalProject,
   ManagedCodingWorkspace,
   RemoteCodingAgentSummary,
+  RemediationPlan,
+  RetryAttempt,
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
@@ -171,6 +173,49 @@ describe('CodingRuntime', () => {
     expect(result.codingRun.prompt).toContain('approved by devflow: Lead Gate 已通过：架构 Gate')
     expect(result.codingRun.prompt).toContain('Existing Test Evidence')
     expect(result.codingRun.prompt).toContain('npm test [passed]: Existing local tests passed.')
+  })
+
+  it('starts a human-approved retry attempt with remediation context in the coding brief', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+      artifacts: [designArtifact()],
+      testEvidence: [passingEvidence(repo)],
+    })
+    const runtime = createCodingRuntime({
+      store,
+      engine: createFakeCodingEngineAdapter(),
+      remoteSync: { uploadCodingAgentSummary: vi.fn() },
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('retry-1', 'coding-run-1'),
+      now: fixedNow('2026-06-18T12:00:00.000Z'),
+    })
+
+    const result = await runtime.startRetryAttempt({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      remediationPlan: remediationPlan(),
+      candidateIds: ['candidate-api'],
+      userInstruction: 'Retry only the API contract remediation.',
+    })
+
+    expect(store.retryAttempts[0]).toMatchObject({
+      id: 'retry-1',
+      remediationPlanId: 'remediation-run-1-node-build-7',
+      candidateIds: ['candidate-api'],
+      status: 'started',
+      codingRunId: result.codingRun.id,
+    })
+    expect(store.artifacts.some((artifact) => artifact.title === 'Policy remediation retry attempt')).toBe(true)
+    expect(store.events.some((event) => event.message.includes('Retry Attempt approved'))).toBe(true)
+    expect(result.codingRun.prompt).toContain('Remediation Plan')
+    expect(result.codingRun.prompt).toContain('Retry Attempt: retry-1 [approved]')
+    expect(result.codingRun.prompt).toContain('Fix API contract violation')
+    expect(result.codingRun.prompt).toContain('Policy reason: governance_check:api_contract:violated:check-api')
   })
 
   it('publishes coding run, event, and permission updates as they are persisted', async () => {
@@ -592,6 +637,7 @@ type StoreSeed = {
   events?: AgentEvent[]
   testEvidence?: TestEvidence[]
   codingRuns?: CodingAgentRun[]
+  retryAttempts?: RetryAttempt[]
 }
 
 class MemoryCodingStore {
@@ -607,6 +653,7 @@ class MemoryCodingStore {
   readonly permissionDecisions: CodingPermissionDecision[] = []
   readonly bootstrapEvidence: DependencyBootstrapEvidence[] = []
   readonly diffArtifacts: CodingDiffArtifact[] = []
+  readonly retryAttempts: RetryAttempt[]
 
   constructor(seed: StoreSeed = {}) {
     this.projects = seed.projects ?? []
@@ -615,6 +662,7 @@ class MemoryCodingStore {
     this.events = seed.events ?? []
     this.testEvidence = seed.testEvidence ?? []
     this.codingRuns = seed.codingRuns ?? []
+    this.retryAttempts = seed.retryAttempts ?? []
   }
 
   async listProjects() {
@@ -707,6 +755,15 @@ class MemoryCodingStore {
     upsert(this.diffArtifacts, artifact)
   }
 
+  async saveRetryAttempt(attempt: RetryAttempt) {
+    upsert(this.retryAttempts, attempt)
+    return attempt
+  }
+
+  async listRetryAttempts(runId?: string) {
+    return runId ? this.retryAttempts.filter((attempt) => attempt.runId === runId) : this.retryAttempts
+  }
+
   async loadState() {
     return {
       projects: this.projects,
@@ -724,6 +781,7 @@ class MemoryCodingStore {
       managedCodingWorkspaces: this.workspaces,
       dependencyBootstrapEvidence: this.bootstrapEvidence,
       codingDiffArtifacts: this.diffArtifacts,
+      retryAttempts: this.retryAttempts,
       settings: { themePreference: 'system' as const },
       mcpServers: [],
     }
@@ -867,6 +925,36 @@ function codingRun(overrides: Partial<CodingAgentRun> = {}): CodingAgentRun {
     startedAt: '2026-06-17T00:00:00.000Z',
     redacted: true,
     ...overrides,
+  }
+}
+
+function remediationPlan(): RemediationPlan {
+  return {
+    id: 'remediation-run-1-node-build-7',
+    runId: 'run-1',
+    nodeId: 'node-build',
+    status: 'blocked',
+    policyVersion: 7,
+    blockingReasonIds: ['governance_check:api_contract:violated:check-api'],
+    warningReasonIds: [],
+    remainingEvidenceGaps: ['API contract'],
+    candidates: [
+      {
+        id: 'candidate-api',
+        kind: 'fix_api_contract',
+        title: 'Fix API contract violation',
+        summary: 'Update implementation to match the API contract.',
+        priority: 'high',
+        sourceReasonIds: ['governance_check:api_contract:violated:check-api'],
+        governanceCheckIds: ['check-api'],
+        agentFindingIds: [],
+        evidenceIds: [],
+        knowledgeReferenceIds: [],
+        requiresHumanApproval: true,
+        eligibleForCodingRetry: true,
+      },
+    ],
+    createdAt: '2026-06-18T12:00:00.000Z',
   }
 }
 

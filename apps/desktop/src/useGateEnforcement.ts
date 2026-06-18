@@ -1,11 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
+  buildRemediationPlan,
   canApproveGate,
   type AgentReviewResult,
   type Artifact,
   type GateEnforcementDecision,
   type GateOverrideDecision,
+  type KnowledgeGovernanceCheck,
+  type KnowledgeReference,
   type PolicySnapshot,
+  type RemediationPlan,
   type TeamMember,
   type TestEvidence,
   type WorkflowNode,
@@ -25,6 +29,7 @@ export type GateEnforcementState = {
   policySnapshot: PolicySnapshot | null
   decision: GateEnforcementDecision | null
   overrides: GateOverrideDecision[]
+  remediationPlan: RemediationPlan | null
   isLoading: boolean
   canApprove: boolean
   canSaveOverride: boolean
@@ -39,6 +44,8 @@ export function useGateEnforcement(input: {
   artifacts: Artifact[]
   agentReviews: AgentReviewResult[]
   testEvidence: TestEvidence[]
+  governanceChecks: KnowledgeGovernanceCheck[]
+  knowledgeReferences: KnowledgeReference[]
   onToast: (message: string) => void
 }): GateEnforcementState {
   const {
@@ -49,6 +56,8 @@ export function useGateEnforcement(input: {
     artifacts,
     agentReviews,
     testEvidence,
+    governanceChecks,
+    knowledgeReferences,
     onToast,
   } = input
   const [policySnapshot, setPolicySnapshot] = useState<PolicySnapshot | null>(null)
@@ -158,11 +167,30 @@ export function useGateEnforcement(input: {
       currentUser.id !== selectedRun.creatorId &&
       currentUser.id !== selectedNode.ownerId,
   )
+  const remediationPlan = useMemo(() => {
+    if (!selectedRun || !selectedNode || !decision) {
+      return null
+    }
+
+    return buildRemediationPlan({
+      run: selectedRun,
+      node: selectedNode,
+      decision,
+      governanceChecks,
+      agentPolicyFindings: agentReviews
+        .filter((review) => review.runId === selectedRun.id && review.nodeId === selectedNode.id)
+        .flatMap((review) => review.policyFindings),
+      testEvidence,
+      knowledgeReferences,
+      createdAt: new Date().toISOString(),
+    })
+  }, [agentReviews, decision, governanceChecks, knowledgeReferences, selectedNode, selectedRun, testEvidence])
 
   return {
     policySnapshot,
     decision,
     overrides,
+    remediationPlan,
     isLoading,
     canApprove,
     canSaveOverride,

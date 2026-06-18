@@ -84,6 +84,8 @@ import {
   type ManagedCodingWorkspace,
   type PolicySnapshot,
   type Project,
+  type RemediationPlan,
+  type RetryAttempt,
   type TeamMember,
   type TestEvidence,
   type TokenUsageRollup,
@@ -320,6 +322,7 @@ export function App() {
   const [managedCodingWorkspaces, setManagedCodingWorkspaces] = useState<ManagedCodingWorkspace[]>([])
   const [dependencyBootstrapEvidence, setDependencyBootstrapEvidence] = useState<DependencyBootstrapEvidence[]>([])
   const [codingDiffArtifacts, setCodingDiffArtifacts] = useState<CodingDiffArtifact[]>([])
+  const [retryAttempts, setRetryAttempts] = useState<RetryAttempt[]>([])
   const [providerKeyDraft, setProviderKeyDraft] = useState('')
   const [isRunningAgentReview, setIsRunningAgentReview] = useState(false)
   const [isStartingCodingAgent, setIsStartingCodingAgent] = useState(false)
@@ -415,6 +418,13 @@ export function App() {
         .sort((a, b) => (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt)),
     [codingRuns, selectedRun],
   )
+  const selectedRetryAttempts = useMemo(
+    () =>
+      retryAttempts
+        .filter((attempt) => attempt.runId === selectedRun?.id)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    [retryAttempts, selectedRun],
+  )
   const latestCodingRun = selectedCodingRuns[0]
   const selectedCodingEvents = latestCodingRun
     ? codingEvents
@@ -444,6 +454,8 @@ export function App() {
     artifacts,
     agentReviews,
     testEvidence,
+    governanceChecks: selectedGovernanceChecks,
+    knowledgeReferences,
     onToast: setToast,
   })
 
@@ -501,6 +513,7 @@ export function App() {
     setManagedCodingWorkspaces(state.managedCodingWorkspaces)
     setDependencyBootstrapEvidence(state.dependencyBootstrapEvidence)
     setCodingDiffArtifacts(state.codingDiffArtifacts)
+    setRetryAttempts(state.retryAttempts ?? [])
     if (state.mcpServers.length > 0) {
       setMcpServers(state.mcpServers)
     }
@@ -957,6 +970,46 @@ export function App() {
     }
   }
 
+  async function startRemediationRetry(candidateId: string) {
+    if (!selectedRun || !selectedNode || !currentUser) {
+      return
+    }
+    if (!desktopApi) {
+      setToast('请在 Electron 应用中启动 remediation retry')
+      return
+    }
+    if (!selectedLocalProject) {
+      setToast('请先选择本地 Git 仓库')
+      return
+    }
+
+    setIsStartingCodingAgent(true)
+    setToast('正在按 Remediation Plan 启动 Coding Retry...')
+
+    try {
+      await desktopApi.ensureCodingEngine({ projectId: selectedLocalProject.id })
+      const result = await desktopApi.startRetryAttempt({
+        runId: selectedRun.id,
+        nodeId: selectedNode.id,
+        projectId: selectedLocalProject.id,
+        requestedBy: currentUser.id,
+        providerId: 'fake-coding-engine',
+        candidateIds: [candidateId],
+        userInstruction: 'Apply the selected remediation candidate with the smallest safe change.',
+      })
+      applyLocalExecutionState(result.state)
+      setRetryAttempts((previous) => mergeById(previous, [result.retryAttempt]))
+      setSelectedRunId(result.codingRun.runId)
+      setSelectedNodeId(result.codingRun.nodeId)
+      setActiveView('agents')
+      setToast('Remediation retry 已启动，请在 Agents 视图处理权限请求')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Remediation retry 启动失败')
+    } finally {
+      setIsStartingCodingAgent(false)
+    }
+  }
+
   async function replyCodingPermission(decision: CodingPermissionDecision['decision']) {
     if (!desktopApi || !pendingCodingPermission || !currentUser) {
       return
@@ -1228,11 +1281,13 @@ export function App() {
               policySnapshot={gateEnforcement.policySnapshot}
               gateEnforcementDecision={gateEnforcement.decision}
               gateOverrides={gateEnforcement.overrides.filter((override) => override.nodeId === selectedNode?.id)}
+              remediationPlan={gateEnforcement.remediationPlan}
               isLoadingGateEnforcement={gateEnforcement.isLoading}
               canApprove={gateEnforcement.canApprove}
               canSaveOverride={gateEnforcement.canSaveOverride}
               onApprove={approveSelectedGate}
               onSaveGateOverride={gateEnforcement.saveOverride}
+              onStartRemediationRetry={startRemediationRetry}
               onRunTests={executeTestPlan}
               onRunKnowledgeReview={runKnowledgeReview}
               onRunCodingAgent={runCodingAgent}
@@ -1287,6 +1342,7 @@ export function App() {
             onDeleteCodingWorktree={deleteCodingWorktree}
             isStartingCodingAgent={isStartingCodingAgent}
             codingRuns={selectedCodingRuns}
+            retryAttempts={selectedRetryAttempts}
             latestCodingRun={latestCodingRun}
             codingEvents={selectedCodingEvents}
             pendingCodingPermission={pendingCodingPermission}
@@ -1472,11 +1528,13 @@ function Inspector({
   policySnapshot,
   gateEnforcementDecision,
   gateOverrides,
+  remediationPlan,
   isLoadingGateEnforcement,
   canApprove,
   canSaveOverride,
   onApprove,
   onSaveGateOverride,
+  onStartRemediationRetry,
   onRunTests,
   onRunKnowledgeReview,
   onRunCodingAgent,
@@ -1493,11 +1551,13 @@ function Inspector({
   policySnapshot: PolicySnapshot | null
   gateEnforcementDecision: GateEnforcementDecision | null
   gateOverrides: GateOverrideDecision[]
+  remediationPlan: RemediationPlan | null
   isLoadingGateEnforcement: boolean
   canApprove: boolean
   canSaveOverride: boolean
   onApprove: () => void
   onSaveGateOverride: (reason: string, provisional: boolean) => void
+  onStartRemediationRetry: (candidateId: string) => void
   onRunTests: () => void
   onRunKnowledgeReview: () => void
   onRunCodingAgent: () => void
@@ -1524,9 +1584,12 @@ function Inspector({
         policySnapshot={policySnapshot}
         decision={gateEnforcementDecision}
         overrides={gateOverrides}
+        remediationPlan={remediationPlan}
         isLoading={isLoadingGateEnforcement}
         canSaveOverride={canSaveOverride}
+        isStartingRetry={isStartingCodingAgent}
         onSaveOverride={onSaveGateOverride}
+        onStartRetry={onStartRemediationRetry}
       />
 
       <div className="governance-list">
@@ -1836,6 +1899,7 @@ function AgentWorkbenchView({
   onDeleteCodingWorktree,
   isStartingCodingAgent,
   codingRuns,
+  retryAttempts,
   latestCodingRun,
   codingEvents,
   pendingCodingPermission,
@@ -1866,6 +1930,7 @@ function AgentWorkbenchView({
   onDeleteCodingWorktree: () => void
   isStartingCodingAgent: boolean
   codingRuns: CodingAgentRun[]
+  retryAttempts: RetryAttempt[]
   latestCodingRun: CodingAgentRun | undefined
   codingEvents: CodingAgentEvent[]
   pendingCodingPermission: CodingPermissionRequest | undefined
@@ -1946,6 +2011,20 @@ function AgentWorkbenchView({
             <Code2 size={16} />
             {isStartingCodingAgent ? 'Starting Coding Agent' : 'Run Coding Agent'}
           </button>
+        </article>
+
+        <article className="agent-run-card">
+          <div>
+            <span className="panel-label">Policy Retry Attempts</span>
+            <strong>{retryAttempts.length}</strong>
+            <p>Human-approved retries launched from remediation candidates.</p>
+          </div>
+          {retryAttempts.slice(0, 3).map((attempt) => (
+            <div className="compact-row" key={attempt.id}>
+              <code>{attempt.status}</code>
+              <span>{attempt.candidateIds.join(', ')}</span>
+            </div>
+          ))}
         </article>
 
         {pendingCodingPermission ? (

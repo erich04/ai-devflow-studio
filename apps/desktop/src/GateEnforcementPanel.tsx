@@ -3,6 +3,7 @@ import type {
   GateEnforcementDecision,
   GateOverrideDecision,
   PolicySnapshot,
+  RemediationPlan,
 } from '@ai-devflow/shared'
 
 const policySourceLabels: Record<GateEnforcementDecision['policySource'], string> = {
@@ -35,16 +36,22 @@ export function GateEnforcementPanel({
   policySnapshot,
   decision,
   overrides,
+  remediationPlan,
   isLoading,
   canSaveOverride,
+  isStartingRetry = false,
   onSaveOverride,
+  onStartRetry,
 }: {
   policySnapshot: PolicySnapshot | null
   decision: GateEnforcementDecision | null
   overrides: GateOverrideDecision[]
+  remediationPlan: RemediationPlan | null
   isLoading: boolean
   canSaveOverride: boolean
+  isStartingRetry?: boolean
   onSaveOverride: (reason: string, provisional: boolean) => void
+  onStartRetry?: (candidateId: string) => void
 }) {
   const [overrideReason, setOverrideReason] = useState('Reviewed blocking reason and approved a temporary exception.')
   const activeOverride = overrides.find((override) =>
@@ -88,6 +95,40 @@ export function GateEnforcementPanel({
             <div className={`override-state override-state--${activeOverride.status}`}>
               <strong>{overrideLabel(activeOverride)}</strong>
               <p>{activeOverride.reason}</p>
+            </div>
+          ) : null}
+          {remediationPlan && remediationPlan.candidates.length > 0 ? (
+            <div className="remediation-plan" data-testid="remediation-plan">
+              <div className="compact-row">
+                <strong>Remediation Plan</strong>
+                <span>{remediationPlan.candidates.length} candidates</span>
+              </div>
+              {remediationPlan.remainingEvidenceGaps.length > 0 ? (
+                <p>
+                  Remaining evidence gaps:{' '}
+                  {remediationPlan.remainingEvidenceGaps.join(', ')}
+                </p>
+              ) : null}
+              {remediationPlan.candidates.map((candidate) => (
+                <div className="remediation-candidate" key={candidate.id}>
+                  <div className="compact-row">
+                    <strong>{candidate.title}</strong>
+                    <span>{candidate.priority}</span>
+                  </div>
+                  <p>{candidate.summary}</p>
+                  <small>{candidate.kind}</small>
+                  {candidate.eligibleForCodingRetry && onStartRetry ? (
+                    <button
+                      className="ghost-button"
+                      data-testid={`retry-coding-${candidate.id}`}
+                      disabled={isStartingRetry}
+                      onClick={() => onStartRetry(candidate.id)}
+                    >
+                      {isStartingRetry ? 'Starting retry...' : 'Retry Coding'}
+                    </button>
+                  ) : null}
+                </div>
+              ))}
             </div>
           ) : null}
           {canShowOverrideForm ? (

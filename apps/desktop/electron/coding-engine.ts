@@ -11,6 +11,8 @@ import type {
   KnowledgeReference,
   LocalProject,
   ManagedCodingWorkspace,
+  RemediationPlan,
+  RetryAttempt,
   TestEvidence,
   WorkflowNode,
   WorkflowRun,
@@ -46,6 +48,8 @@ export type CodingEngineStartInput = {
   governanceChecks: KnowledgeGovernanceCheck[]
   gateDecisions: GateDecision[]
   testEvidence: TestEvidence[]
+  remediationPlan?: RemediationPlan
+  retryAttempt?: RetryAttempt
 }
 
 export type CodingEngineStartResult = {
@@ -168,6 +172,8 @@ export function createFakeCodingEngineAdapter(): CodingEngineAdapter {
         governanceChecks: input.governanceChecks,
         gateDecisions: input.gateDecisions,
         testEvidence: input.testEvidence,
+        remediationPlan: input.remediationPlan,
+        retryAttempt: input.retryAttempt,
       })
 
       return {

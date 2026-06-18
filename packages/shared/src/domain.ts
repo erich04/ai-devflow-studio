@@ -674,6 +674,7 @@ export type LocalExecutionState = {
   managedCodingWorkspaces: ManagedCodingWorkspace[]
   dependencyBootstrapEvidence: DependencyBootstrapEvidence[]
   codingDiffArtifacts: CodingDiffArtifact[]
+  retryAttempts?: import('./remediation').RetryAttempt[]
   settings: LocalSettings
   mcpServers: McpServerDefinition[]
 }
@@ -693,6 +694,7 @@ export type RemoteTeamSnapshot = {
     effectivePolicies: import('./enforcement').EffectiveEnforcementPolicy[]
     gateOverrides: import('./enforcement').GateOverrideDecision[]
   }
+  policyAwareDeliverySummaries?: import('./remediation').PolicyAwareDeliverySummary[]
 }
 
 export type RemoteRunSummaryKind = 'run' | 'approval' | 'event'

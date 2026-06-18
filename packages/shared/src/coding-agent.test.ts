@@ -21,6 +21,7 @@ import {
   selectDependencyBootstrap,
 } from './coding-agent'
 import { runs } from './fixtures'
+import type { RemediationPlan, RetryAttempt } from './remediation'
 
 const run: WorkflowRun = {
   id: 'run-1',
@@ -115,6 +116,47 @@ const testEvidence: TestEvidence = {
   createdAt: '2026-06-17T00:05:00.000Z',
 }
 
+const remediationPlan: RemediationPlan = {
+  id: 'remediation-run-1-node-build-7',
+  runId: run.id,
+  nodeId: buildNode.id,
+  status: 'blocked',
+  policyVersion: 7,
+  blockingReasonIds: ['governance_check:api_contract:violated:check-api'],
+  warningReasonIds: [],
+  remainingEvidenceGaps: ['API contract'],
+  candidates: [
+    {
+      id: 'remediation-candidate-1',
+      kind: 'fix_api_contract',
+      title: 'Fix API contract violation',
+      summary: 'Update the endpoint response to satisfy the documented API contract.',
+      priority: 'high',
+      sourceReasonIds: ['governance_check:api_contract:violated:check-api'],
+      governanceCheckIds: ['check-api'],
+      agentFindingIds: [],
+      evidenceIds: [],
+      knowledgeReferenceIds: ['ref-1'],
+      requiresHumanApproval: true,
+      eligibleForCodingRetry: true,
+    },
+  ],
+  createdAt: '2026-06-18T12:00:00.000Z',
+}
+
+const retryAttempt: RetryAttempt = {
+  id: 'retry-1',
+  runId: run.id,
+  nodeId: buildNode.id,
+  projectId: 'project-1',
+  remediationPlanId: remediationPlan.id,
+  candidateIds: ['remediation-candidate-1'],
+  requestedBy: 'lead-1',
+  userInstruction: 'Apply the remediation candidate only.',
+  status: 'approved',
+  createdAt: '2026-06-18T12:01:00.000Z',
+}
+
 const project: LocalProject = {
   id: 'project-1',
   name: 'Audit API',
@@ -173,6 +215,46 @@ describe('buildCodingBrief', () => {
     expect(brief.prompt).toContain('Existing Test Evidence')
     expect(brief.prompt).toContain('corepack pnpm test -- --run [passed]: Local tests passed with redacted output.')
     expect(brief.prompt).toContain('Managed worktree: /tmp/devflow-worktrees/run-1')
+  })
+
+  it('includes remediation context only when a human-approved retry supplies it', () => {
+    const baseBrief = buildCodingBrief({
+      run,
+      node: buildNode,
+      project,
+      upstreamArtifacts: [designArtifact],
+      knowledgeReferences: [knowledgeReference],
+      governanceChecks: [governanceCheck],
+      gateDecisions: [],
+      testEvidence: [testEvidence],
+      userInstruction: 'Implement the build node.',
+      worktreePath: '/tmp/devflow-worktrees/run-1',
+      branchName: 'devflow/run-1-node-build',
+    })
+    const retryBrief = buildCodingBrief({
+      run,
+      node: buildNode,
+      project,
+      upstreamArtifacts: [designArtifact],
+      knowledgeReferences: [knowledgeReference],
+      governanceChecks: [governanceCheck],
+      gateDecisions: [],
+      testEvidence: [testEvidence],
+      remediationPlan,
+      retryAttempt,
+      userInstruction: 'Apply the remediation candidate only.',
+      worktreePath: '/tmp/devflow-worktrees/run-1',
+      branchName: 'devflow/run-1-node-build',
+    })
+
+    expect(baseBrief.prompt).not.toContain('Remediation Plan')
+    expect(baseBrief.prompt).not.toContain(remediationPlan.id)
+    expect(retryBrief.prompt).toContain('Remediation Plan')
+    expect(retryBrief.prompt).toContain('Retry Attempt')
+    expect(retryBrief.prompt).toContain(remediationPlan.id)
+    expect(retryBrief.prompt).toContain('Fix API contract violation')
+    expect(retryBrief.prompt).toContain('Policy reason: governance_check:api_contract:violated:check-api')
+    expect(retryBrief.prompt).toContain('Retry requested by: lead-1')
   })
 })
 

@@ -89,6 +89,8 @@ export function createOpencodeHttpCodingEngineAdapter(
         governanceChecks: input.governanceChecks,
         gateDecisions: input.gateDecisions,
         testEvidence: input.testEvidence,
+        remediationPlan: input.remediationPlan,
+        retryAttempt: input.retryAttempt,
         userInstruction: input.userInstruction,
         worktreePath: input.workspace.worktreePath,
         branchName: input.workspace.branchName,

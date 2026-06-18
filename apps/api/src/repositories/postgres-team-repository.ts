@@ -1,5 +1,6 @@
 import {
   formatUsd,
+  buildPolicyAwareDeliverySummaries,
   rollupTokenUsage,
   type AgentEvent,
   type AgentEventKind,
@@ -689,6 +690,11 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         .map(mapProjectOverride)
         .filter((override): override is ProjectEnforcementPolicyOverride => Boolean(override))
 
+      const testEvidenceSummaries = evidenceRows.map(mapTestEvidenceSummary)
+      const agentReviews = agentReviewRows.map(mapAgentReview)
+      const codingAgentSummaries = codingSummaryRows.map(mapCodingAgentSummary)
+      const gateOverrides = gateOverrideRows.map(mapGateOverride)
+
       return {
         projects: projectRows.map(mapProject),
         members: memberRows.map(mapMember),
@@ -696,11 +702,19 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         projectCost: rollupTokenUsage(tokenUsage, 'projectId'),
         memberCost: rollupTokenUsage(tokenUsage, 'userId'),
         totalCost: formatUsd(tokenUsage.reduce((sum, row) => sum + row.costUsd, 0)),
-        testEvidenceSummaries: evidenceRows.map(mapTestEvidenceSummary),
-        agentReviews: agentReviewRows.map(mapAgentReview),
+        testEvidenceSummaries,
+        agentReviews,
         agentTraces: agentTraceRows.map(mapAgentTrace),
         agentTokenUsage: agentTokenRows.map(mapAgentTokenUsage),
-        codingAgentSummaries: codingSummaryRows.map(mapCodingAgentSummary),
+        codingAgentSummaries,
+        policyAwareDeliverySummaries: buildPolicyAwareDeliverySummaries({
+          projectIds: projectRows.map((project) => project.id),
+          testEvidenceSummaries,
+          agentReviews,
+          codingAgentSummaries,
+          gateOverrides,
+          updatedAt: new Date().toISOString(),
+        }),
         enforcementPolicies: {
           organizationPolicy,
           projectOverrides,
@@ -710,7 +724,7 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
               projectOverrides.find((override) => override.projectId === project.id) ?? null,
             ),
           ),
-          gateOverrides: gateOverrideRows.map(mapGateOverride),
+          gateOverrides,
         },
         agentProviders: [
           {

@@ -108,6 +108,19 @@ const overview: TeamOverviewResponse = {
       redacted: true,
     },
   ],
+  policyAwareDeliverySummaries: [
+    {
+      projectId: 'p-remote',
+      warningCount: 2,
+      blockedCount: 1,
+      overrideCount: 1,
+      remediationPlanCount: 1,
+      retryAttemptCount: 1,
+      remainingEvidenceGapCount: 1,
+      redacted: true,
+      updatedAt: '2026-06-18T10:08:00.000Z',
+    },
+  ],
   agentReviews: [
     {
       id: 'agent-review-remote',
@@ -186,7 +199,7 @@ describe('web manager console page', () => {
 
     render(await Page())
 
-    expect(screen.getByText('Remote API')).toBeInTheDocument()
+    expect(screen.getAllByText('Remote API').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('erich/remote-api')).toBeInTheDocument()
     expect(screen.getByText('Remote Lead')).toBeInTheDocument()
     expect(screen.getByText('RL')).toBeInTheDocument()
@@ -196,6 +209,9 @@ describe('web manager console page', () => {
     expect(screen.getByText('Knowledge review completed.')).toBeInTheDocument()
     expect(screen.getByText('No blocking knowledge gaps found.')).toBeInTheDocument()
     expect(screen.getByText('Gate Enforcement Policy')).toBeInTheDocument()
+    expect(screen.getByText('Policy-Aware Delivery')).toBeInTheDocument()
+    expect(screen.getByText(/2 warnings/)).toBeInTheDocument()
+    expect(screen.getByText(/1 retry attempts/)).toBeInTheDocument()
     expect(screen.getByText('Warn-only default')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Apply recommended enforcement/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Run backend review/ })).toBeInTheDocument()
@@ -213,6 +229,7 @@ describe('web manager console page', () => {
       totalCost: '$0.000',
       testEvidenceSummaries: [],
       codingAgentSummaries: [],
+      policyAwareDeliverySummaries: [],
       agentReviews: [],
       agentTraces: [],
       agentTokenUsage: [],

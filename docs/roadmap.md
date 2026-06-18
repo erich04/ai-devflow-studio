@@ -249,13 +249,29 @@ Electron smoke is still tracked as future compatibility expansion. See
 - Extracted the Desktop Gate Enforcement path into a focused hook and Inspector panel to reduce
   `App.tsx` coupling without broad UI restructuring.
 
-## Planned Milestones
-
 ### v0.8: Policy-Aware Delivery Automation
 
-- Explore optional remediation planning and coding retry loops that remain human-approved.
-- Expand policy summaries for manager reporting and compliance review.
+- Added shared Remediation Model types and deterministic remediation generation from Gate
+  Enforcement decisions, Knowledge Governance Checks, Agent Policy Findings, Test Evidence, and
+  Knowledge References.
+- Added Coding Brief remediation context for human-approved retry attempts while keeping renderer
+  inputs limited to IDs and user instruction.
+- Added Electron `startRetryAttempt` IPC, SQLite retry persistence, Inspector remediation CTA, and
+  Agents retry history for policy-aware Coding Agent retries.
+- Added redacted Policy-Aware Delivery summaries to API/Web manager reporting, including warning,
+  blocking, override, remediation, retry, and evidence-gap counts.
+- Kept v0.8 within human-approved delivery automation: no auto-fix loop, no Gate bypass, no real MCP
+  policy execution, and no HoneyAI bridge.
+
+## Planned Milestones
+
+### v0.9: Runtime Expansion Candidates
+
+- Deepen the real opencode adapter beyond local signoff, including longer-running streamed traces
+  and release-grade smoke coverage.
 - Evaluate MCP policy enforcement and tool-call telemetry once the MCP runtime layer is real.
+- Revisit RAG/vector retrieval only after the deterministic Knowledge Retrieval boundary remains
+  stable under v0.8 remediation usage.
 
 ## Deferred / Not Yet Started
 

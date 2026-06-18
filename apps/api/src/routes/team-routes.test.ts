@@ -193,6 +193,7 @@ function createRepository(): TeamRepository {
     agentTraces: [],
     agentTokenUsage: [],
     codingAgentSummaries: [],
+    policyAwareDeliverySummaries: [],
     agentProviders: [
       {
         id: 'fake-knowledge-review',

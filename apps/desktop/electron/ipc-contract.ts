@@ -21,6 +21,7 @@ import type {
   RemoteSyncUploadResult,
   RemoteTeamSnapshot,
   RemoteTestEvidenceSummary,
+  RetryAttempt,
   TestEvidence,
   AgentReviewRuntime,
   Role,
@@ -52,6 +53,7 @@ export const ipcChannels = {
   listAgentReviews: 'devflow:agent:reviews:list',
   ensureCodingEngine: 'devflow:coding:engine:ensure',
   runCodingAgent: 'devflow:coding:agent:run',
+  startRetryAttempt: 'devflow:remediation:retry:start',
   cancelCodingAgentRun: 'devflow:coding:agent:cancel',
   replyCodingPermission: 'devflow:coding:permission:reply',
   subscribeCodingRun: 'devflow:coding:run:subscribe',
@@ -171,6 +173,20 @@ export type RunCodingAgentResult = {
   state: LocalExecutionState
 }
 
+export type StartRetryAttemptInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+  requestedBy: string
+  providerId: string
+  candidateIds: string[]
+  userInstruction: string
+}
+
+export type StartRetryAttemptResult = RunCodingAgentResult & {
+  retryAttempt: RetryAttempt
+}
+
 export type CancelCodingAgentRunInput = {
   codingRunId: string
 }
@@ -229,6 +245,7 @@ export type DevFlowDesktopApi = {
   listAgentReviews: (input?: ListAgentReviewsInput) => Promise<AgentReviewExecutionResult['review'][]>
   ensureCodingEngine: (input: EnsureCodingEngineInput) => Promise<EnsureCodingEngineResult>
   runCodingAgent: (input: RunCodingAgentInput) => Promise<RunCodingAgentResult>
+  startRetryAttempt: (input: StartRetryAttemptInput) => Promise<StartRetryAttemptResult>
   cancelCodingAgentRun: (input: CancelCodingAgentRunInput) => Promise<CodingAgentRun>
   replyCodingPermission: (input: ReplyCodingPermissionInput) => Promise<CodingPermissionRequest>
   subscribeCodingRun: (input: SubscribeCodingRunInput) => Promise<LocalExecutionState>
@@ -665,6 +682,33 @@ export function parseRunCodingAgentInput(value: unknown): RunCodingAgentInput {
     projectId: readRequiredString(value, 'projectId'),
     requestedBy: readRequiredString(value, 'requestedBy'),
     providerId: readRequiredString(value, 'providerId'),
+    userInstruction: readRequiredString(value, 'userInstruction'),
+  }
+}
+
+export function parseStartRetryAttemptInput(value: unknown): StartRetryAttemptInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid retry attempt payload')
+  }
+  if ('prompt' in value || 'remediationPlan' in value) {
+    throw new Error('Invalid retry attempt payload: renderer must not send prompt or remediation plan')
+  }
+  const candidateIds = value['candidateIds']
+  if (
+    !Array.isArray(candidateIds) ||
+    candidateIds.length === 0 ||
+    !candidateIds.every((candidateId) => typeof candidateId === 'string' && candidateId.trim().length > 0)
+  ) {
+    throw new Error('Invalid candidateIds')
+  }
+
+  return {
+    runId: readRequiredString(value, 'runId'),
+    nodeId: readRequiredString(value, 'nodeId'),
+    projectId: readRequiredString(value, 'projectId'),
+    requestedBy: readRequiredString(value, 'requestedBy'),
+    providerId: readRequiredString(value, 'providerId'),
+    candidateIds: candidateIds.map((candidateId) => candidateId.trim()),
     userInstruction: readRequiredString(value, 'userInstruction'),
   }
 }

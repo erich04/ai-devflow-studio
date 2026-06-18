@@ -384,6 +384,9 @@ function filterOverviewForSession(
     codingAgentSummaries: overview.codingAgentSummaries.filter((summary) =>
       projectIds.has(summary.projectId),
     ),
+    policyAwareDeliverySummaries: overview.policyAwareDeliverySummaries.filter((summary) =>
+      projectIds.has(summary.projectId),
+    ),
   }
 }
 

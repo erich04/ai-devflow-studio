@@ -9,6 +9,7 @@ import {
   runs,
   skills,
   tokenUsage,
+  buildPolicyAwareDeliverySummaries,
   createWarnOnlyDefaultPolicy,
   resolveEffectivePolicy,
   type AgentEvent,
@@ -27,6 +28,7 @@ import {
   type ProjectEnforcementPolicyOverride,
   type RemoteAgentReviewSummary,
   type RemoteCodingAgentSummary,
+  type PolicyAwareDeliverySummary,
   type RemoteRunSummary,
   type RemoteSyncUploadResult,
   type RemoteTestEvidenceSummary,
@@ -66,6 +68,7 @@ export type TeamOverviewPayload = {
   agentTokenUsage: AgentTokenUsage[]
   agentProviders: AgentProviderConfig[]
   codingAgentSummaries: RemoteCodingAgentSummary[]
+  policyAwareDeliverySummaries: PolicyAwareDeliverySummary[]
   enforcementPolicies: {
     organizationPolicy: OrganizationEnforcementPolicy
     projectOverrides: ProjectEnforcementPolicyOverride[]
@@ -223,6 +226,14 @@ export function createSeedTeamRepository(): TeamRepository {
         agentTokenUsage,
         agentProviders: agentProviderConfigs(),
         codingAgentSummaries,
+        policyAwareDeliverySummaries: buildPolicyAwareDeliverySummaries({
+          projectIds: projects.map((project) => project.id),
+          testEvidenceSummaries: syncedTestEvidenceSummaries,
+          agentReviews,
+          codingAgentSummaries,
+          gateOverrides,
+          updatedAt: new Date().toISOString(),
+        }),
         enforcementPolicies: {
           organizationPolicy,
           projectOverrides,

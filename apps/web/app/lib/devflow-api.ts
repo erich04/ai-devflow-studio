@@ -8,6 +8,7 @@ import type {
   EffectiveEnforcementPolicy,
   GateOverrideDecision,
   OrganizationEnforcementPolicy,
+  PolicyAwareDeliverySummary,
   Project,
   ProjectEnforcementPolicyOverride,
   RemoteCodingAgentSummary,
@@ -27,6 +28,7 @@ export type TeamOverviewResponse = {
   totalCost: string
   testEvidenceSummaries: RemoteTestEvidenceSummary[]
   codingAgentSummaries: RemoteCodingAgentSummary[]
+  policyAwareDeliverySummaries: PolicyAwareDeliverySummary[]
   agentReviews: AgentReviewResult[]
   agentTraces: AgentTrace[]
   agentTokenUsage: AgentTokenUsage[]

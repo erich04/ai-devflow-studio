@@ -20,6 +20,8 @@ import {
   type KnowledgeReference,
   type LocalProject,
   type ManagedCodingWorkspace,
+  type RemediationPlan,
+  type RetryAttempt,
   type TestEvidence,
   type WorkflowNode,
   type WorkflowRun,
@@ -61,6 +63,8 @@ export type FakeCodingRunBundleInput = {
   governanceChecks?: KnowledgeGovernanceCheck[]
   gateDecisions?: GateDecision[]
   testEvidence?: TestEvidence[]
+  remediationPlan?: RemediationPlan | undefined
+  retryAttempt?: RetryAttempt | undefined
 }
 
 export type FakeCodingRunBundle = {
@@ -195,6 +199,8 @@ export function createFakeCodingRunBundle(input: FakeCodingRunBundleInput): Fake
     governanceChecks: input.governanceChecks ?? [],
     gateDecisions: input.gateDecisions ?? [],
     testEvidence: input.testEvidence ?? [],
+    remediationPlan: input.remediationPlan,
+    retryAttempt: input.retryAttempt,
     userInstruction: input.userInstruction,
     worktreePath: input.workspace.worktreePath,
     branchName: input.workspace.branchName,

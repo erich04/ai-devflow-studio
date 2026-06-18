@@ -55,6 +55,7 @@ export default async function Page() {
   const hasRuns = overview.runs.length > 0
   const hasEvidence = overview.testEvidenceSummaries.length > 0
   const hasAgentReviews = overview.agentReviews.length > 0
+  const hasPolicyAwareDelivery = overview.policyAwareDeliverySummaries.length > 0
   const reviewTarget = overview.runs
     .map((run) => ({ run, node: run.nodes.find((node) => node.kind === 'gate') ?? run.nodes[0] }))
     .find((target) => target.node)
@@ -196,6 +197,34 @@ export default async function Page() {
             </div>
           </div>
 
+          <div className="web-panel web-panel--wide" id="policy-delivery">
+            <div className="panel-title">
+              <span>Policy-Aware Delivery</span>
+              <strong>remediation summary</strong>
+            </div>
+            {hasPolicyAwareDelivery ? (
+              <div className="agent-console">
+                {overview.policyAwareDeliverySummaries.map((summary) => {
+                  const project = overview.projects.find((item) => item.id === summary.projectId)
+                  return (
+                    <article className="agent-review-row" key={summary.projectId}>
+                      <div>
+                        <strong>{project?.name ?? summary.projectId}</strong>
+                        <p>
+                          {summary.warningCount} warnings · {summary.blockedCount} blocking signals ·{' '}
+                          {summary.overrideCount} overrides
+                        </p>
+                      </div>
+                      <span>{summary.retryAttemptCount} retry attempts</span>
+                    </article>
+                  )
+                })}
+              </div>
+            ) : (
+              <EmptyState title="暂无策略交付摘要" body="同步 Agent Review、override 或 Coding retry 后会显示 remediation 汇总。" />
+            )}
+          </div>
+
           <div className="web-panel" id="evidence">
             <div className="panel-title">
               <span>Test Evidence</span>
@@ -290,6 +319,7 @@ function WebShell({ children }: { children: React.ReactNode }) {
           <a href="#cost">Token Cost</a>
           <a href="#runs">Runs</a>
           <a href="#policy">Policy</a>
+          <a href="#policy-delivery">Delivery</a>
           <a href="#evidence">Evidence</a>
           <a href="#agent-review">Agent Review</a>
         </nav>

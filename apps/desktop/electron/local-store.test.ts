@@ -24,6 +24,7 @@ import type {
   LocalProject,
   McpServerDefinition,
   ManagedCodingWorkspace,
+  RetryAttempt,
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
@@ -380,27 +381,40 @@ const gateOverride = {
   status: 'provisional' as const,
   createdAt: '2026-06-15T00:04:30.000Z',
 }
+const retryAttempt: RetryAttempt = {
+  id: 'retry-1',
+  runId: 'run-1',
+  nodeId: 'node-build',
+  projectId: 'project-1',
+  remediationPlanId: 'remediation-run-1-node-build',
+  candidateIds: ['candidate-api'],
+  requestedBy: 'user-lead',
+  userInstruction: 'Apply the selected policy remediation.',
+  status: 'started',
+  codingRunId: 'coding-run-1',
+  createdAt: '2026-06-15T00:05:00.000Z',
+}
 
 describe('createLocalStore', () => {
-  it('initializes schema version 5 and keeps it stable across reopen', async () => {
+  it('initializes schema version 6 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(5)
+    expect(await first.getSchemaVersion()).toBe(6)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(5)
+    expect(await second.getSchemaVersion()).toBe(6)
     second.close()
   })
 
-  it('migrates an existing v1 database to v5 without losing local projects or runs', async () => {
+  it('migrates an existing v1 database to v6 without losing local projects or runs', async () => {
     const dbPath = await tempDbPath()
     await writeLegacyV1Database(dbPath)
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(5)
+    expect(await store.getSchemaVersion()).toBe(6)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -464,6 +478,21 @@ describe('createLocalStore', () => {
     const second = await createLocalStore({ dbPath })
     expect(await second.getPolicySnapshot('project-1')).toEqual(policySnapshot)
     expect(await second.listGateOverrides('run-1')).toEqual([gateOverride])
+    second.close()
+  })
+
+  it('persists policy remediation retry attempts across reopen', async () => {
+    const dbPath = await tempDbPath()
+
+    const first = await createLocalStore({ dbPath })
+    await first.saveRetryAttempt(retryAttempt)
+    first.close()
+
+    const second = await createLocalStore({ dbPath })
+    expect(await second.listRetryAttempts('run-1')).toEqual([retryAttempt])
+    expect(await second.loadState()).toMatchObject({
+      retryAttempts: [retryAttempt],
+    })
     second.close()
   })
 

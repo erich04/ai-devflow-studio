@@ -112,6 +112,11 @@ Knowledge Review, adding Test Evidence, updating an API contract, or retrying a 
 A human-approved attempt to rerun or continue work using an existing Run's policy context,
 remediation plan, evidence, and prior Agent/Coding history.
 
+## Policy-Aware Delivery Summary
+
+A redacted manager-facing rollup of warning, blocking, override, remediation, retry, and evidence-gap
+counts. It never includes local paths, raw logs, prompts, patches, or provider secrets.
+
 ## Policy Floor
 
 The organization-level minimum action for an enforcement rule. Project overrides can make a rule

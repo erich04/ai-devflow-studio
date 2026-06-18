@@ -586,6 +586,8 @@ button:disabled {
 .agent-advisory p,
 .enforcement-reason p,
 .override-state p,
+.remediation-plan p,
+.remediation-candidate p,
 .agent-run-card p,
 .agent-provider-card p,
 .agent-review-card p,
@@ -645,18 +647,31 @@ button:disabled {
 
 .enforcement-reason,
 .override-state,
+.remediation-plan,
+.remediation-candidate,
 .override-form {
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--border);
 }
 
-.enforcement-reason small {
+.enforcement-reason small,
+.remediation-candidate small {
   display: block;
   margin-top: 6px;
   color: var(--amber);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.remediation-plan {
+  display: grid;
+  gap: 8px;
+}
+
+.remediation-candidate {
+  display: grid;
+  gap: 8px;
 }
 
 .override-state strong {

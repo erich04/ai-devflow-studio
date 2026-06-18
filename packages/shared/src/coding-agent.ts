@@ -14,6 +14,7 @@ import type {
   WorkflowNode,
   WorkflowRun,
 } from './domain'
+import type { RemediationPlan, RetryAttempt } from './remediation'
 import { detectPackageManager } from './local-execution'
 import { redactSecrets } from './redaction'
 
@@ -29,6 +30,8 @@ export type CodingBriefInput = {
   governanceChecks: KnowledgeGovernanceCheck[]
   gateDecisions: GateDecision[]
   testEvidence: TestEvidence[]
+  remediationPlan?: RemediationPlan | undefined
+  retryAttempt?: RetryAttempt | undefined
   userInstruction: string
   worktreePath: string
   branchName: string
@@ -89,6 +92,20 @@ export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
         return `- ${evidence.command} [${evidence.status}]: ${evidence.summary}`
       })
     : ['- No test evidence has been recorded.']
+  const remediationLines =
+    input.remediationPlan && input.retryAttempt
+      ? [
+          `Plan: ${input.remediationPlan.id} [${input.remediationPlan.status}] policyVersion=${input.remediationPlan.policyVersion}`,
+          `Retry Attempt: ${input.retryAttempt.id} [${input.retryAttempt.status}]`,
+          `Retry requested by: ${input.retryAttempt.requestedBy}`,
+          ...input.remediationPlan.candidates
+            .filter((candidate) => input.retryAttempt?.candidateIds.includes(candidate.id))
+            .map((candidate) => {
+              const reasons = candidate.sourceReasonIds.map((reasonId) => `Policy reason: ${reasonId}`).join('; ')
+              return `- ${candidate.title} [${candidate.priority}]: ${candidate.summary}${reasons ? `\n  ${reasons}` : ''}`
+            }),
+        ]
+      : []
 
   const prompt = [
     'You are the DevFlow managed coding adapter. Work only inside the managed worktree.',
@@ -116,6 +133,9 @@ export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
     'Existing Test Evidence',
     testEvidenceLines.join('\n'),
     '',
+    ...(remediationLines.length
+      ? ['Remediation Plan', remediationLines.join('\n'), '']
+      : []),
     'User Instruction',
     userInstruction || 'Implement the node using the upstream context. Keep changes minimal and testable.',
     '',

@@ -23,11 +23,12 @@ import type {
   GateOverrideDecision,
   PolicySnapshot,
   ProviderCredentialMetadata,
+  RetryAttempt,
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 5
+export const CURRENT_SCHEMA_VERSION = 6
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -87,6 +88,8 @@ export type LocalStore = {
   getPolicySnapshot(projectId: string): Promise<PolicySnapshot | null>
   saveGateOverride(decision: GateOverrideDecision): Promise<GateOverrideDecision>
   listGateOverrides(runId?: string): Promise<GateOverrideDecision[]>
+  saveRetryAttempt(attempt: RetryAttempt): Promise<RetryAttempt>
+  listRetryAttempts(runId?: string): Promise<RetryAttempt[]>
   saveSettings(settings: Partial<LocalSettings>): Promise<LocalSettings>
   getSettings(): Promise<LocalSettings>
   saveMcpServers(servers: McpServerDefinition[]): Promise<McpServerDefinition[]>
@@ -243,6 +246,14 @@ function migrateSchema(db: Database) {
     );
 
     create table if not exists gate_overrides (
+      id text primary key,
+      run_id text not null,
+      node_id text not null,
+      json text not null,
+      created_at text not null
+    );
+
+    create table if not exists retry_attempts (
       id text primary key,
       run_id text not null,
       node_id text not null,
@@ -834,6 +845,34 @@ class SqlJsLocalStore implements LocalStore {
     )
   }
 
+  async saveRetryAttempt(attempt: RetryAttempt): Promise<RetryAttempt> {
+    this.db.run(
+      `
+      insert into retry_attempts (id, run_id, node_id, json, created_at)
+      values (?, ?, ?, ?, ?)
+      on conflict(id) do update set json = excluded.json, created_at = excluded.created_at
+      `,
+      [attempt.id, attempt.runId, attempt.nodeId, JSON.stringify(attempt), attempt.createdAt],
+    )
+    await this.persist()
+    return attempt
+  }
+
+  async listRetryAttempts(runId?: string): Promise<RetryAttempt[]> {
+    if (runId) {
+      return selectJson<RetryAttempt>(
+        this.db,
+        'select json from retry_attempts where run_id = ? order by created_at desc',
+        [runId],
+      )
+    }
+
+    return selectJson<RetryAttempt>(
+      this.db,
+      'select json from retry_attempts order by created_at desc',
+    )
+  }
+
   async saveSettings(settings: Partial<LocalSettings>): Promise<LocalSettings> {
     const updated: LocalSettings = {
       ...(await this.getSettings()),
@@ -903,6 +942,7 @@ class SqlJsLocalStore implements LocalStore {
       managedCodingWorkspaces,
       dependencyBootstrapEvidence,
       codingDiffArtifacts,
+      retryAttempts,
       settings,
       mcpServers,
     ] = await Promise.all([
@@ -921,6 +961,7 @@ class SqlJsLocalStore implements LocalStore {
       this.listManagedCodingWorkspaces(),
       this.listDependencyBootstrapEvidence(),
       this.listCodingDiffArtifacts(),
+      this.listRetryAttempts(),
       this.getSettings(),
       this.listMcpServers(),
     ])
@@ -941,6 +982,7 @@ class SqlJsLocalStore implements LocalStore {
       managedCodingWorkspaces,
       dependencyBootstrapEvidence,
       codingDiffArtifacts,
+      retryAttempts,
       settings,
       mcpServers,
     }

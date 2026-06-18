@@ -22,6 +22,7 @@ import type {
   RemoteSyncUploadResult,
   RemoteTeamSnapshot,
   RemoteTestEvidenceSummary,
+  RetryAttempt,
   Role,
   TestEvidence,
   WorkflowRun,
@@ -116,6 +117,20 @@ export type RunCodingAgentResult = {
   state: LocalExecutionState
 }
 
+export type StartRetryAttemptInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+  requestedBy: string
+  providerId: string
+  candidateIds: string[]
+  userInstruction: string
+}
+
+export type StartRetryAttemptResult = RunCodingAgentResult & {
+  retryAttempt: RetryAttempt
+}
+
 export type LoadRemoteSnapshotInput = {
   organizationId?: string
 }
@@ -149,6 +164,7 @@ export type DevFlowDesktopApi = {
   listAgentReviews: (input?: { runId?: string }) => Promise<AgentReviewResult[]>
   ensureCodingEngine: (input: { projectId: string }) => Promise<{ projectId: string; engine: CodingAgentRun['engine']; status: 'ready' }>
   runCodingAgent: (input: RunCodingAgentInput) => Promise<RunCodingAgentResult>
+  startRetryAttempt: (input: StartRetryAttemptInput) => Promise<StartRetryAttemptResult>
   cancelCodingAgentRun: (input: { codingRunId: string }) => Promise<CodingAgentRun>
   replyCodingPermission: (input: {
     requestId: string

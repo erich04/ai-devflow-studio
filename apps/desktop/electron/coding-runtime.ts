@@ -24,6 +24,8 @@ import {
   type ManagedCodingWorkspace,
   type RemoteCodingAgentSummary,
   type RemoteSyncUploadResult,
+  type RemediationPlan,
+  type RetryAttempt,
   type TestEvidence,
   type TestEvidenceStatus,
   type WorkflowNode,
@@ -57,6 +59,8 @@ export type CodingRuntimeStore = {
   saveDependencyBootstrapEvidence(evidence: DependencyBootstrapEvidence): Promise<void>
   listDependencyBootstrapEvidence(codingRunId?: string): Promise<DependencyBootstrapEvidence[]>
   saveCodingDiffArtifact(artifact: CodingDiffArtifact): Promise<void>
+  saveRetryAttempt(attempt: RetryAttempt): Promise<RetryAttempt>
+  listRetryAttempts(runId?: string): Promise<RetryAttempt[]>
   loadState(): Promise<LocalExecutionState>
 }
 
@@ -106,6 +110,8 @@ export type RunCodingAgentRuntimeInput = {
   requestedBy: string
   providerId: string
   userInstruction: string
+  remediationPlan?: RemediationPlan
+  retryAttempt?: RetryAttempt
 }
 
 export type RunCodingAgentRuntimeResult = {
@@ -123,6 +129,21 @@ export type ReplyCodingPermissionRuntimeInput = {
 
 export type CancelCodingAgentRunRuntimeInput = {
   codingRunId: string
+}
+
+export type StartRetryAttemptRuntimeInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+  requestedBy: string
+  providerId: string
+  remediationPlan: RemediationPlan
+  candidateIds: string[]
+  userInstruction: string
+}
+
+export type StartRetryAttemptRuntimeResult = RunCodingAgentRuntimeResult & {
+  retryAttempt: RetryAttempt
 }
 
 export type OpenManagedWorktreeRuntimeInput = {
@@ -157,6 +178,7 @@ export type CodingRuntime = {
   }>
   listCodingAgentRuns(input?: { runId?: string }): Promise<CodingAgentRun[]>
   runCodingAgent(input: RunCodingAgentRuntimeInput): Promise<RunCodingAgentRuntimeResult>
+  startRetryAttempt(input: StartRetryAttemptRuntimeInput): Promise<StartRetryAttemptRuntimeResult>
   cancelCodingAgentRun(input: CancelCodingAgentRunRuntimeInput): Promise<CodingAgentRun>
   replyCodingPermission(input: ReplyCodingPermissionRuntimeInput): Promise<CodingPermissionRequest>
   subscribeCodingRun(input: { codingRunId: string }): Promise<LocalExecutionState>
@@ -590,6 +612,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         userInstruction: input.userInstruction,
         now: now(),
         ...briefContext,
+        ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
+        ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
       })
 
       await deps.store.saveManagedCodingWorkspace(workspace)
@@ -600,6 +624,78 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       return {
         codingRun: bundle.codingRun,
         state: await deps.store.loadState(),
+      }
+    },
+
+    async startRetryAttempt(input) {
+      const run = await findRun(input.runId)
+      const node = findNode(run, input.nodeId)
+      const selectedCandidates = input.remediationPlan.candidates.filter((candidate) =>
+        input.candidateIds.includes(candidate.id),
+      )
+      if (selectedCandidates.length === 0) {
+        throw new Error('Retry Attempt requires at least one remediation candidate')
+      }
+      const nonRetryable = selectedCandidates.find((candidate) => !candidate.eligibleForCodingRetry)
+      if (nonRetryable) {
+        throw new Error(`Remediation candidate is not eligible for Coding retry: ${nonRetryable.id}`)
+      }
+
+      const timestamp = now()
+      const retryAttempt: RetryAttempt = {
+        id: idGenerator('retry'),
+        runId: input.runId,
+        nodeId: input.nodeId,
+        projectId: input.projectId,
+        remediationPlanId: input.remediationPlan.id,
+        candidateIds: selectedCandidates.map((candidate) => candidate.id),
+        requestedBy: input.requestedBy,
+        userInstruction: input.userInstruction,
+        status: 'approved',
+        createdAt: timestamp,
+      }
+      await deps.store.saveRetryAttempt(retryAttempt)
+      await deps.store.saveArtifact({
+        id: idGenerator('artifact'),
+        runId: run.id,
+        nodeId: node.id,
+        kind: 'log',
+        title: 'Policy remediation retry attempt',
+        summary: `Retry attempt approved for ${selectedCandidates.length} remediation candidate(s).`,
+        content: selectedCandidates.map((candidate) => `${candidate.title}: ${candidate.summary}`).join('\n'),
+        redacted: true,
+        updatedAt: timestamp,
+      })
+      await deps.store.saveEvent({
+        id: idGenerator('event'),
+        runId: run.id,
+        nodeId: node.id,
+        sequence: await nextAgentEventSequence(run.id),
+        kind: 'tool_call',
+        message: `Retry Attempt approved from remediation plan ${input.remediationPlan.id}.`,
+        timestamp,
+      })
+
+      const result = await this.runCodingAgent({
+        runId: input.runId,
+        nodeId: input.nodeId,
+        projectId: input.projectId,
+        requestedBy: input.requestedBy,
+        providerId: input.providerId,
+        userInstruction: input.userInstruction,
+        remediationPlan: input.remediationPlan,
+        retryAttempt,
+      })
+      const linkedRetryAttempt: RetryAttempt = {
+        ...retryAttempt,
+        status: 'started',
+        codingRunId: result.codingRun.id,
+      }
+      await deps.store.saveRetryAttempt(linkedRetryAttempt)
+
+      return {
+        ...result,
+        retryAttempt: linkedRetryAttempt,
       }
     },
 
