@@ -5,7 +5,11 @@ import type {
   AgentReviewResult,
   AgentTokenUsage,
   AgentTrace,
+  EffectiveEnforcementPolicy,
+  GateOverrideDecision,
+  OrganizationEnforcementPolicy,
   Project,
+  ProjectEnforcementPolicyOverride,
   RemoteCodingAgentSummary,
   RemoteTestEvidenceSummary,
   TeamMember,
@@ -27,6 +31,12 @@ export type TeamOverviewResponse = {
   agentTraces: AgentTrace[]
   agentTokenUsage: AgentTokenUsage[]
   agentProviders: AgentProviderConfig[]
+  enforcementPolicies: {
+    organizationPolicy: OrganizationEnforcementPolicy
+    projectOverrides: ProjectEnforcementPolicyOverride[]
+    effectivePolicies: EffectiveEnforcementPolicy[]
+    gateOverrides: GateOverrideDecision[]
+  }
 }
 
 export type FetchTeamOverviewOptions = {
@@ -98,4 +108,32 @@ export async function runKnowledgeReview(
   }
 
   return response.json() as Promise<AgentReviewExecutionResult>
+}
+
+export type SaveEnforcementPolicyOptions = FetchTeamOverviewOptions & {
+  policy: OrganizationEnforcementPolicy
+}
+
+export async function saveEnforcementPolicy(
+  options: SaveEnforcementPolicyOptions,
+): Promise<OrganizationEnforcementPolicy> {
+  const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
+  const fetcher = options.fetcher ?? fetch
+  const sessionHeaders = options.sessionHeaders ?? createDemoTeamSessionHeaders()
+  const response = await fetcher(`${apiBaseUrl}/api/enforcement/policy`, {
+    method: 'PUT',
+    cache: 'no-store',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      ...sessionHeaders,
+    },
+    body: JSON.stringify({ organizationPolicy: options.policy }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`DevFlow API /api/enforcement/policy failed with ${response.status}`)
+  }
+
+  return response.json() as Promise<OrganizationEnforcementPolicy>
 }

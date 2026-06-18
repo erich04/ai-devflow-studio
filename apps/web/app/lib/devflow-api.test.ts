@@ -1,5 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fetchTeamOverview, resolveDevFlowApiBaseUrl, runKnowledgeReview } from './devflow-api'
+import { createWarnOnlyDefaultPolicy, resolveEffectivePolicy } from '@ai-devflow/shared'
+import {
+  fetchTeamOverview,
+  resolveDevFlowApiBaseUrl,
+  runKnowledgeReview,
+  saveEnforcementPolicy,
+} from './devflow-api'
+
+const organizationPolicy = createWarnOnlyDefaultPolicy()
+const enforcementPolicies = {
+  organizationPolicy,
+  projectOverrides: [],
+  effectivePolicies: [resolveEffectivePolicy(organizationPolicy, null)],
+  gateOverrides: [],
+}
 
 describe('DevFlow web API client', () => {
   it('resolves the API base URL from server or public env', () => {
@@ -37,6 +51,7 @@ describe('DevFlow web API client', () => {
               updatedAt: '1970-01-01T00:00:00.000Z',
             },
           ],
+          enforcementPolicies,
         }),
         { status: 200 },
       ),
@@ -64,6 +79,7 @@ describe('DevFlow web API client', () => {
           updatedAt: '1970-01-01T00:00:00.000Z',
         },
       ],
+      enforcementPolicies,
     })
     expect(fetcher).toHaveBeenCalledWith('http://api.local/api/team/overview', {
       cache: 'no-store',
@@ -136,6 +152,33 @@ describe('DevFlow web API client', () => {
         projectId: 'p-payments',
         providerId: 'fake-knowledge-review',
       }),
+    })
+  })
+
+  it('saves enforcement policy through the API boundary', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(JSON.stringify(organizationPolicy), { status: 200 }),
+    )
+
+    await expect(
+      saveEnforcementPolicy({
+        apiBaseUrl: 'http://api.local',
+        fetcher,
+        policy: organizationPolicy,
+      }),
+    ).resolves.toEqual(organizationPolicy)
+    expect(fetcher).toHaveBeenCalledWith('http://api.local/api/enforcement/policy', {
+      method: 'PUT',
+      cache: 'no-store',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        'x-devflow-organization-id': 'org-demo',
+        'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
+        'x-devflow-user-id': 'u-erich',
+        'x-devflow-user-role': 'owner',
+      },
+      body: JSON.stringify({ organizationPolicy }),
     })
   })
 })

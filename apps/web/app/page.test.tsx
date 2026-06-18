@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createWarnOnlyDefaultPolicy, resolveEffectivePolicy } from '@ai-devflow/shared'
 import Page from './page'
 import { fetchTeamOverview } from './lib/devflow-api'
 import type { TeamOverviewResponse } from './lib/devflow-api'
@@ -10,6 +11,7 @@ vi.mock('./lib/devflow-api', () => ({
 }))
 
 const mockedFetchTeamOverview = vi.mocked(fetchTeamOverview)
+const organizationPolicy = createWarnOnlyDefaultPolicy()
 
 const overview: TeamOverviewResponse = {
   projects: [
@@ -122,6 +124,7 @@ const overview: TeamOverviewResponse = {
       missingEvidence: [],
       suggestedTests: ['Run remote smoke tests.'],
       knowledgeReferences: [],
+      policyFindings: [],
       confidence: 0.8,
       gateAdvisory: {
         id: 'gate-advisory-remote',
@@ -165,6 +168,12 @@ const overview: TeamOverviewResponse = {
       updatedAt: '1970-01-01T00:00:00.000Z',
     },
   ],
+  enforcementPolicies: {
+    organizationPolicy,
+    projectOverrides: [],
+    effectivePolicies: [resolveEffectivePolicy(organizationPolicy, null)],
+    gateOverrides: [],
+  },
 }
 
 afterEach(() => {
@@ -186,6 +195,9 @@ describe('web manager console page', () => {
     expect(screen.getByText('pnpm test')).toBeInTheDocument()
     expect(screen.getByText('Knowledge review completed.')).toBeInTheDocument()
     expect(screen.getByText('No blocking knowledge gaps found.')).toBeInTheDocument()
+    expect(screen.getByText('Gate Enforcement Policy')).toBeInTheDocument()
+    expect(screen.getByText('Warn-only default')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Apply recommended enforcement/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Run backend review/ })).toBeInTheDocument()
     expect(screen.getAllByText('$0.123')).toHaveLength(2)
     expect(mockedFetchTeamOverview).toHaveBeenCalled()
@@ -205,6 +217,12 @@ describe('web manager console page', () => {
       agentTraces: [],
       agentTokenUsage: [],
       agentProviders: [],
+      enforcementPolicies: {
+        organizationPolicy,
+        projectOverrides: [],
+        effectivePolicies: [],
+        gateOverrides: [],
+      },
     })
 
     render(await Page())

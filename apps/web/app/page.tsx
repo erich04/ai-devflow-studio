@@ -1,8 +1,9 @@
 import { Activity, Bot, CircleDollarSign, GitPullRequest, Users } from 'lucide-react'
-import { formatUsd } from '@ai-devflow/shared'
+import { createRecommendedEnforcementPreset, formatUsd } from '@ai-devflow/shared'
 import {
   fetchTeamOverview,
   runKnowledgeReview,
+  saveEnforcementPolicy,
   type TeamOverviewResponse,
 } from './lib/devflow-api'
 
@@ -19,6 +20,14 @@ async function runKnowledgeReviewAction(formData: FormData) {
   }
 
   await runKnowledgeReview({ runId, nodeId, projectId, providerId })
+}
+
+async function applyRecommendedPolicyAction() {
+  'use server'
+
+  await saveEnforcementPolicy({
+    policy: createRecommendedEnforcementPreset({ updatedAt: new Date().toISOString() }),
+  })
 }
 
 export default async function Page() {
@@ -51,6 +60,12 @@ export default async function Page() {
     .find((target) => target.node)
   const latestReview = overview.agentReviews[0]
   const latestUsage = overview.agentTokenUsage[0]
+  const organizationPolicy = overview.enforcementPolicies.organizationPolicy
+  const blockingRuleCount = organizationPolicy.rules.filter((rule) => rule.defaultAction === 'block').length
+  const clampedRuleCount = overview.enforcementPolicies.effectivePolicies.reduce(
+    (sum, policy) => sum + policy.rules.filter((rule) => rule.source === 'project_clamped').length,
+    0,
+  )
 
   return (
     <WebShell>
@@ -148,6 +163,39 @@ export default async function Page() {
             )}
           </div>
 
+          <div className="web-panel web-panel--wide" id="policy">
+            <div className="panel-title">
+              <span>Gate Enforcement Policy</span>
+              <strong>{organizationPolicy.name}</strong>
+            </div>
+            <div className="agent-console">
+              <article className="agent-review-row">
+                <div>
+                  <strong>{blockingRuleCount > 0 ? 'Recommended enforcement active' : 'Warn-only default'}</strong>
+                  <p>
+                    {blockingRuleCount > 0
+                      ? `${blockingRuleCount} deterministic rules can block protected Gate approval.`
+                      : 'No rules block approval until the team explicitly applies enforcement.'}
+                  </p>
+                </div>
+                <span>v{organizationPolicy.version}</span>
+              </article>
+              <article className="agent-review-row">
+                <div>
+                  <strong>Policy floor</strong>
+                  <p>{clampedRuleCount} project choices currently clamped by organization floor.</p>
+                </div>
+                <span>{organizationPolicy.updatedAt}</span>
+              </article>
+              <form action={applyRecommendedPolicyAction}>
+                <button type="submit">
+                  <GitPullRequest size={16} />
+                  Apply recommended enforcement
+                </button>
+              </form>
+            </div>
+          </div>
+
           <div className="web-panel" id="evidence">
             <div className="panel-title">
               <span>Test Evidence</span>
@@ -241,6 +289,7 @@ function WebShell({ children }: { children: React.ReactNode }) {
           <a href="#members">Members</a>
           <a href="#cost">Token Cost</a>
           <a href="#runs">Runs</a>
+          <a href="#policy">Policy</a>
           <a href="#evidence">Evidence</a>
           <a href="#agent-review">Agent Review</a>
         </nav>
