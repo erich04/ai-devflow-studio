@@ -809,7 +809,10 @@ describe('App', () => {
     await screen.findByText('fixture-project')
 
     const commandInput = screen.getByLabelText('测试命令')
-    fireEvent.change(commandInput, { target: { value: 'pnpm test -- --run' } })
+    await act(async () => {
+      fireEvent.change(commandInput, { target: { value: 'pnpm test -- --run' } })
+    })
+    expect(commandInput).toHaveValue('pnpm test -- --run')
     fireEvent.click(screen.getByRole('button', { name: /保存测试命令/ }))
 
     await waitFor(() =>
