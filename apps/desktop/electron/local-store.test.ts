@@ -4,6 +4,10 @@ import os from 'node:os'
 import { createRequire } from 'node:module'
 import { afterEach, describe, expect, it } from 'vitest'
 import initSqlJs from 'sql.js'
+import {
+  createWarnOnlyDefaultPolicy,
+  resolveEffectivePolicy,
+} from '@ai-devflow/shared'
 import type {
   AgentEvent,
   AgentReviewResult,
@@ -204,6 +208,7 @@ const agentReview: AgentReviewResult = {
   missingEvidence: ['Attach local test evidence.'],
   suggestedTests: ['Run pnpm test.'],
   knowledgeReferences: [],
+  policyFindings: [],
   confidence: 0.82,
   gateAdvisory,
   createdAt: '2026-06-15T00:02:00.000Z',
@@ -347,26 +352,55 @@ const codingDiff: CodingDiffArtifact = {
   createdAt: '2026-06-15T00:03:30.000Z',
 }
 
+const enforcementPolicy = createWarnOnlyDefaultPolicy({
+  organizationId: 'org-local',
+  updatedAt: '2026-06-15T00:04:00.000Z',
+})
+const policySnapshot = {
+  projectId: 'project-1',
+  organizationPolicy: enforcementPolicy,
+  projectOverride: null,
+  effectivePolicy: resolveEffectivePolicy(enforcementPolicy, null),
+  version: enforcementPolicy.version,
+  updatedAt: enforcementPolicy.updatedAt,
+  syncedAt: '2026-06-15T00:04:10.000Z',
+  source: 'remote_cache' as const,
+}
+const gateOverride = {
+  id: 'gate-override-1',
+  runId: 'run-1',
+  nodeId: 'node-test',
+  projectId: 'project-1',
+  userId: 'user-lead',
+  role: 'lead' as const,
+  reason: 'Emergency release with test evidence attached.',
+  blockedReasonIds: ['reason-1'],
+  policyVersion: 1,
+  provisional: true,
+  status: 'provisional' as const,
+  createdAt: '2026-06-15T00:04:30.000Z',
+}
+
 describe('createLocalStore', () => {
-  it('initializes schema version 4 and keeps it stable across reopen', async () => {
+  it('initializes schema version 5 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(4)
+    expect(await first.getSchemaVersion()).toBe(5)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(4)
+    expect(await second.getSchemaVersion()).toBe(5)
     second.close()
   })
 
-  it('migrates an existing v1 database to v4 without losing local projects or runs', async () => {
+  it('migrates an existing v1 database to v5 without losing local projects or runs', async () => {
     const dbPath = await tempDbPath()
     await writeLegacyV1Database(dbPath)
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(4)
+    expect(await store.getSchemaVersion()).toBe(5)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -416,6 +450,20 @@ describe('createLocalStore', () => {
       settings: { themePreference: 'dark' },
       mcpServers: [mcpServer],
     })
+    second.close()
+  })
+
+  it('persists policy snapshots and Gate override decisions across reopen', async () => {
+    const dbPath = await tempDbPath()
+
+    const first = await createLocalStore({ dbPath })
+    await first.savePolicySnapshot(policySnapshot)
+    await first.saveGateOverride(gateOverride)
+    first.close()
+
+    const second = await createLocalStore({ dbPath })
+    expect(await second.getPolicySnapshot('project-1')).toEqual(policySnapshot)
+    expect(await second.listGateOverrides('run-1')).toEqual([gateOverride])
     second.close()
   })
 

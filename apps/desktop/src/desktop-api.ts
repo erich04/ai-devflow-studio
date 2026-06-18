@@ -8,17 +8,21 @@ import type {
   CodingAgentEvent,
   CodingPermissionDecision,
   CodingPermissionRequest,
+  GateEnforcementDecision,
+  GateOverrideDecision,
   LocalExecutionState,
   LocalSettings,
   LocalProject,
   ManagedCodingWorkspace,
   McpServerDefinition,
+  PolicySnapshot,
   ProviderCredentialMetadata,
   RemoteCodingAgentSummary,
   RemoteRunSummary,
   RemoteSyncUploadResult,
   RemoteTeamSnapshot,
   RemoteTestEvidenceSummary,
+  Role,
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
@@ -40,6 +44,42 @@ export type RunProjectTestsInput = {
 export type RunProjectTestsResult = {
   evidence: TestEvidence
   state: LocalExecutionState
+}
+
+export type ApproveGateInput = {
+  runId: string
+  nodeId: string
+  userId: string
+  userName: string
+  role: Role
+}
+
+export type ApproveGateResult = {
+  run: WorkflowRun
+  event: AgentEvent
+  state: LocalExecutionState
+}
+
+export type LoadEnforcementPolicyInput = {
+  projectId: string
+}
+
+export type EvaluateGateEnforcementInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+}
+
+export type SaveGateOverrideInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+  userId: string
+  role: Role
+  reason: string
+  blockedReasonIds: string[]
+  policyVersion: number
+  provisional?: boolean
 }
 
 export type AgentProviderCredentialInput = {
@@ -93,8 +133,13 @@ export type DevFlowDesktopApi = {
   saveProjectTestCommand: (input: SaveProjectTestCommandInput) => Promise<LocalProject>
   validateTestCommand: (input: ValidateTestCommandInput) => Promise<CommandSafetyResult>
   runProjectTests: (input: RunProjectTestsInput) => Promise<RunProjectTestsResult>
+  loadEnforcementPolicy: (input: LoadEnforcementPolicyInput) => Promise<PolicySnapshot>
+  evaluateGateEnforcement: (input: EvaluateGateEnforcementInput) => Promise<GateEnforcementDecision>
   createRun: (run: WorkflowRun) => Promise<WorkflowRun>
   saveRun: (run: WorkflowRun) => Promise<WorkflowRun>
+  approveGate: (input: ApproveGateInput) => Promise<ApproveGateResult>
+  saveGateOverride: (input: SaveGateOverrideInput) => Promise<GateOverrideDecision>
+  listGateOverrides: (input?: { runId?: string }) => Promise<GateOverrideDecision[]>
   saveEvent: (event: AgentEvent) => Promise<AgentEvent>
   saveSettings: (settings: Partial<LocalSettings>) => Promise<LocalSettings>
   saveMcpServers: (servers: McpServerDefinition[]) => Promise<McpServerDefinition[]>

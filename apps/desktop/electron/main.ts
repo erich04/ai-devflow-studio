@@ -5,18 +5,28 @@ import { fileURLToPath } from 'node:url'
 import {
   applyTestEvidenceToRun,
   buildAgentReviewContext,
+  buildKnowledgeGovernanceChecks,
+  canApproveGateNow,
+  canOverrideBlockedGate,
   createAgentReviewArtifacts,
   createFakeAgentProvider,
   createOpenAiCompatibleAgentProvider,
   createRemoteAgentReviewSummary,
+  createWarnOnlyDefaultPolicy,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   knowledgeChunks,
   knowledgeDocuments,
+  evaluateGateEnforcement,
+  nextStatusAfterApproval,
+  resolveEffectivePolicy,
   runKnowledgeReviewAgent,
+  type AgentEvent,
   type AgentProviderConfig,
   type LocalProject,
+  type PolicySnapshot,
   type ProviderCredentialMetadata,
+  type RemoteTeamSnapshot,
   type TestEvidence,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
@@ -40,6 +50,11 @@ import {
   parseRunCodingAgentInput,
   parseRunKnowledgeReviewInput,
   parseRunProjectTestsInput,
+  parseApproveGateInput,
+  parseEvaluateGateEnforcementInput,
+  parseListGateOverridesInput,
+  parseLoadEnforcementPolicyInput,
+  parseSaveGateOverrideInput,
   parseSaveRunInput,
   parseSaveProjectTestCommandInput,
   parseSettingsInput,
@@ -193,6 +208,105 @@ async function findProject(projectId: string): Promise<LocalProject> {
   return project
 }
 
+function createBuiltInPolicySnapshot(projectId: string): PolicySnapshot {
+  const timestamp = new Date().toISOString()
+  const organizationPolicy = createWarnOnlyDefaultPolicy({ updatedAt: timestamp })
+  const effectivePolicy = resolveEffectivePolicy(organizationPolicy, null)
+
+  return {
+    projectId,
+    organizationPolicy,
+    projectOverride: null,
+    effectivePolicy,
+    version: effectivePolicy.version,
+    updatedAt: organizationPolicy.updatedAt,
+    syncedAt: timestamp,
+    source: 'built_in_default',
+  }
+}
+
+async function loadPolicySnapshotForProject(projectId: string): Promise<PolicySnapshot> {
+  const store = await getStore()
+  return (await store.getPolicySnapshot(projectId)) ?? createBuiltInPolicySnapshot(projectId)
+}
+
+async function cacheRemotePolicySnapshots(snapshot: RemoteTeamSnapshot): Promise<void> {
+  if (!snapshot.enforcementPolicies) {
+    return
+  }
+
+  const store = await getStore()
+  const syncedAt = new Date().toISOString()
+  const { organizationPolicy, projectOverrides, effectivePolicies } = snapshot.enforcementPolicies
+
+  await Promise.all(
+    snapshot.projects.map((project) => {
+      const projectOverride = projectOverrides.find((override) => override.projectId === project.id) ?? null
+      const effectivePolicy =
+        effectivePolicies.find((policy) => policy.projectId === project.id) ??
+        resolveEffectivePolicy(organizationPolicy, projectOverride)
+
+      return store.savePolicySnapshot({
+        projectId: project.id,
+        organizationPolicy,
+        projectOverride,
+        effectivePolicy,
+        version: effectivePolicy.version,
+        updatedAt: effectivePolicy.updatedAt,
+        syncedAt,
+        source: 'remote_cache',
+      })
+    }),
+  )
+}
+
+async function evaluateLocalGateEnforcement(input: { runId: string; nodeId: string; projectId?: string }) {
+  const store = await getStore()
+  const run = (await store.listRuns()).find((candidate) => candidate.id === input.runId)
+  if (!run) {
+    throw new Error(`Run not found: ${input.runId}`)
+  }
+  const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
+  if (!node) {
+    throw new Error(`Run node not found: ${input.nodeId}`)
+  }
+
+  const [artifacts, testEvidence, agentReviews, gateOverrides, policySnapshot] = await Promise.all([
+    store.listArtifacts(run.id),
+    store.listTestEvidence(run.id),
+    store.listAgentReviews(run.id),
+    store.listGateOverrides(run.id),
+    loadPolicySnapshotForProject(input.projectId ?? run.projectId),
+  ])
+  const governanceChecks = buildKnowledgeGovernanceChecks({
+    run,
+    node,
+    artifacts,
+    documents: knowledgeDocuments,
+    chunks: knowledgeChunks,
+    testEvidence,
+  })
+  const latestAgentReview =
+    agentReviews
+      .filter((review) => review.nodeId === node.id)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null
+  const agentPolicyFindings = agentReviews
+    .filter((review) => review.nodeId === node.id)
+    .flatMap((review) => review.policyFindings)
+  const decision = evaluateGateEnforcement({
+    run,
+    node,
+    effectivePolicy: policySnapshot.effectivePolicy,
+    governanceChecks,
+    agentPolicyFindings,
+    latestAgentReview,
+    overrides: gateOverrides,
+    policySource: policySnapshot.source,
+  })
+
+  return { run, node, decision, policySnapshot, gateOverrides }
+}
+
 function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.loadState, async () => {
     const store = await getStore()
@@ -201,7 +315,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.loadRemoteSnapshot, async (_, payload: unknown) => {
     const input = parseRemoteSnapshotInput(payload)
-    return getRemoteSyncClient().loadRemoteSnapshot(input)
+    const snapshot = await getRemoteSyncClient().loadRemoteSnapshot(input)
+    await cacheRemotePolicySnapshots(snapshot)
+    return snapshot
   })
 
   ipcMain.handle(ipcChannels.uploadRunSummary, async (_, payload: unknown) => {
@@ -325,6 +441,59 @@ function registerIpcHandlers() {
     }
   })
 
+  ipcMain.handle(ipcChannels.loadEnforcementPolicy, async (_, payload: unknown) => {
+    const input = parseLoadEnforcementPolicyInput(payload)
+    return loadPolicySnapshotForProject(input.projectId)
+  })
+
+  ipcMain.handle(ipcChannels.evaluateGateEnforcement, async (_, payload: unknown) => {
+    const input = parseEvaluateGateEnforcementInput(payload)
+    return (await evaluateLocalGateEnforcement(input)).decision
+  })
+
+  ipcMain.handle(ipcChannels.saveGateOverride, async (_, payload: unknown) => {
+    const input = parseSaveGateOverrideInput(payload)
+    const store = await getStore()
+    const { run, node, decision } = await evaluateLocalGateEnforcement(input)
+
+    if (decision.policyVersion !== input.policyVersion) {
+      throw new Error('Policy version is stale; re-evaluate before overriding')
+    }
+
+    if (!canOverrideBlockedGate({
+      userRole: input.role,
+      userId: input.userId,
+      run,
+      node,
+      enforcement: decision,
+      reason: input.reason,
+    })) {
+      throw new Error('Lead override is not allowed for this Gate')
+    }
+
+    const timestamp = new Date().toISOString()
+    return store.saveGateOverride({
+      id: `gate-override-${input.runId}-${input.nodeId}-${randomUUID()}`,
+      runId: input.runId,
+      nodeId: input.nodeId,
+      projectId: input.projectId,
+      userId: input.userId,
+      role: input.role,
+      reason: input.reason,
+      blockedReasonIds: input.blockedReasonIds,
+      policyVersion: input.policyVersion,
+      provisional: input.provisional === true,
+      status: input.provisional === true ? 'provisional' : 'accepted',
+      createdAt: timestamp,
+    })
+  })
+
+  ipcMain.handle(ipcChannels.listGateOverrides, async (_, payload: unknown) => {
+    const input = parseListGateOverridesInput(payload)
+    const store = await getStore()
+    return store.listGateOverrides(input.runId)
+  })
+
   ipcMain.handle(ipcChannels.createRun, async (_, payload: unknown) => {
     const run = parseSaveRunInput(payload)
     const store = await getStore()
@@ -337,6 +506,59 @@ function registerIpcHandlers() {
     const store = await getStore()
     await store.saveRun(run)
     return run
+  })
+
+  ipcMain.handle(ipcChannels.approveGate, async (_, payload: unknown) => {
+    const input = parseApproveGateInput(payload)
+    const store = await getStore()
+    const { run, node, decision, gateOverrides } = await evaluateLocalGateEnforcement({
+      runId: input.runId,
+      nodeId: input.nodeId,
+    })
+    const acceptedOverride = gateOverrides.find(
+      (override) => override.runId === run.id && override.nodeId === node.id,
+    )
+    const approval = canApproveGateNow({
+      userRole: input.role,
+      userId: input.userId,
+      run,
+      node,
+      enforcement: decision,
+      ...(acceptedOverride ? { override: acceptedOverride } : {}),
+    })
+
+    if (!approval.allowed) {
+      throw new Error(`Gate approval rejected: ${approval.reason}`)
+    }
+
+    const timestamp = new Date().toISOString()
+    const existingEvents = await store.listEvents(run.id)
+    const updatedRun = {
+      ...run,
+      status: 'building' as const,
+      nodes: run.nodes.map((candidate) =>
+        candidate.id === node.id ? nextStatusAfterApproval(candidate) : candidate,
+      ),
+      updatedAt: timestamp,
+    }
+    const event: AgentEvent = {
+      id: `event-approval-${randomUUID()}`,
+      runId: run.id,
+      nodeId: node.id,
+      sequence: existingEvents.length + 1,
+      kind: 'approval',
+      message: `${input.userName} Gate approved: ${node.title}`,
+      timestamp,
+    }
+
+    await store.saveRun(updatedRun)
+    await store.saveEvent(event)
+
+    return {
+      run: updatedRun,
+      event,
+      state: await store.loadState(),
+    }
   })
 
   ipcMain.handle(ipcChannels.saveEvent, async (_, payload: unknown) => {

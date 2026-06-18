@@ -7,11 +7,14 @@ import type {
   CodingAgentRun,
   CodingPermissionDecision,
   CodingPermissionRequest,
+  GateEnforcementDecision,
+  GateOverrideDecision,
   LocalExecutionState,
   LocalSettings,
   LocalProject,
   ManagedCodingWorkspace,
   McpServerDefinition,
+  PolicySnapshot,
   ProviderCredentialMetadata,
   RemoteCodingAgentSummary,
   RemoteRunSummary,
@@ -20,6 +23,7 @@ import type {
   RemoteTestEvidenceSummary,
   TestEvidence,
   AgentReviewRuntime,
+  Role,
   WorkflowRun,
 } from '@ai-devflow/shared'
 
@@ -29,8 +33,13 @@ export const ipcChannels = {
   saveProjectTestCommand: 'devflow:local-project:save-test-command',
   validateTestCommand: 'devflow:local-project:validate-test-command',
   runProjectTests: 'devflow:local-tests:run',
+  loadEnforcementPolicy: 'devflow:enforcement:policy:load',
+  evaluateGateEnforcement: 'devflow:enforcement:gate:evaluate',
   createRun: 'devflow:run:create',
   saveRun: 'devflow:run:save',
+  approveGate: 'devflow:gate:approve',
+  saveGateOverride: 'devflow:gate:override:save',
+  listGateOverrides: 'devflow:gate:overrides:list',
   saveEvent: 'devflow:event:save',
   saveSettings: 'devflow:settings:save',
   saveMcpServers: 'devflow:mcp-servers:save',
@@ -72,6 +81,46 @@ export type RunProjectTestsInput = {
 export type RunProjectTestsResult = {
   evidence: TestEvidence
   state: LocalExecutionState
+}
+
+export type ApproveGateInput = {
+  runId: string
+  nodeId: string
+  userId: string
+  userName: string
+  role: Role
+}
+
+export type ApproveGateResult = {
+  run: WorkflowRun
+  event: AgentEvent
+  state: LocalExecutionState
+}
+
+export type LoadEnforcementPolicyInput = {
+  projectId: string
+}
+
+export type EvaluateGateEnforcementInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+}
+
+export type SaveGateOverrideInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+  userId: string
+  role: Role
+  reason: string
+  blockedReasonIds: string[]
+  policyVersion: number
+  provisional?: boolean
+}
+
+export type ListGateOverridesInput = {
+  runId?: string
 }
 
 export type AgentProviderCredentialInput = {
@@ -164,8 +213,13 @@ export type DevFlowDesktopApi = {
   saveProjectTestCommand: (input: SaveProjectTestCommandInput) => Promise<LocalProject>
   validateTestCommand: (input: ValidateTestCommandInput) => Promise<CommandSafetyResult>
   runProjectTests: (input: RunProjectTestsInput) => Promise<RunProjectTestsResult>
+  loadEnforcementPolicy: (input: LoadEnforcementPolicyInput) => Promise<PolicySnapshot>
+  evaluateGateEnforcement: (input: EvaluateGateEnforcementInput) => Promise<GateEnforcementDecision>
   createRun: (run: WorkflowRun) => Promise<WorkflowRun>
   saveRun: (run: WorkflowRun) => Promise<WorkflowRun>
+  approveGate: (input: ApproveGateInput) => Promise<ApproveGateResult>
+  saveGateOverride: (input: SaveGateOverrideInput) => Promise<GateOverrideDecision>
+  listGateOverrides: (input?: ListGateOverridesInput) => Promise<GateOverrideDecision[]>
   saveEvent: (event: AgentEvent) => Promise<AgentEvent>
   saveSettings: (settings: Partial<LocalSettings>) => Promise<LocalSettings>
   saveMcpServers: (servers: McpServerDefinition[]) => Promise<McpServerDefinition[]>
@@ -367,12 +421,92 @@ export function parseRunProjectTestsInput(value: unknown): RunProjectTestsInput 
   return { projectId, runId, nodeId, run }
 }
 
+export function parseLoadEnforcementPolicyInput(value: unknown): LoadEnforcementPolicyInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid load enforcement policy payload')
+  }
+
+  return { projectId: readRequiredString(value, 'projectId') }
+}
+
+export function parseEvaluateGateEnforcementInput(value: unknown): EvaluateGateEnforcementInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid evaluate gate enforcement payload')
+  }
+
+  return {
+    runId: readRequiredString(value, 'runId'),
+    nodeId: readRequiredString(value, 'nodeId'),
+    projectId: readRequiredString(value, 'projectId'),
+  }
+}
+
+export function parseSaveGateOverrideInput(value: unknown): SaveGateOverrideInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid save gate override payload')
+  }
+  const role = value['role']
+  if (role !== 'member' && role !== 'lead' && role !== 'owner') {
+    throw new Error('Invalid role')
+  }
+  const blockedReasonIds = value['blockedReasonIds']
+  if (!Array.isArray(blockedReasonIds) || !blockedReasonIds.every((item) => typeof item === 'string')) {
+    throw new Error('Invalid blockedReasonIds')
+  }
+  const policyVersion = value['policyVersion']
+  if (typeof policyVersion !== 'number' || !Number.isInteger(policyVersion)) {
+    throw new Error('Invalid policyVersion')
+  }
+
+  return {
+    runId: readRequiredString(value, 'runId'),
+    nodeId: readRequiredString(value, 'nodeId'),
+    projectId: readRequiredString(value, 'projectId'),
+    userId: readRequiredString(value, 'userId'),
+    role,
+    reason: readRequiredString(value, 'reason'),
+    blockedReasonIds,
+    policyVersion,
+    provisional: value['provisional'] === true,
+  }
+}
+
+export function parseListGateOverridesInput(value: unknown): ListGateOverridesInput {
+  if (value === undefined || value === null) {
+    return {}
+  }
+  if (!isRecord(value)) {
+    throw new Error('Invalid list gate overrides payload')
+  }
+  const runId = value['runId']
+  return typeof runId === 'string' && runId.trim() ? { runId: runId.trim() } : {}
+}
+
 export function parseSaveRunInput(value: unknown): WorkflowRun {
   if (!isWorkflowRun(value)) {
     throw new Error('Invalid run')
   }
 
   return value
+}
+
+export function parseApproveGateInput(value: unknown): ApproveGateInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid approve gate payload')
+  }
+
+  const role = value['role']
+  if (role !== 'member' && role !== 'lead' && role !== 'owner') {
+    throw new Error('Invalid role')
+  }
+
+  return {
+    runId: readRequiredString(value, 'runId'),
+    nodeId: readRequiredString(value, 'nodeId'),
+    userId: readRequiredString(value, 'userId'),
+    userName: readRequiredString(value, 'userName'),
+    role,
+  }
 }
 
 export function parseAgentEventInput(value: unknown): AgentEvent {

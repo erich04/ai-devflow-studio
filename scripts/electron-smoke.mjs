@@ -15,6 +15,12 @@ const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'devflow-electron-smoke-')
 const repoDir = path.join(tempRoot, 'fixture-repo')
 const userDataDir = path.join(tempRoot, 'user-data')
 const blockedCommand = 'powershell Remove-Item -Recurse -Force C:\\devflow'
+const demoSessionHeaders = {
+  'x-devflow-organization-id': 'org-demo',
+  'x-devflow-user-id': 'u-erich',
+  'x-devflow-user-role': 'owner',
+  'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
+}
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -75,6 +81,72 @@ async function launchApp() {
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
   return { app, page }
+}
+
+function enforcementRule(target, category, statusOrSeverity, action, updatedAt, options = {}) {
+  return {
+    ruleKey: `${target}:${category}:${statusOrSeverity}`,
+    target,
+    category,
+    statusOrSeverity,
+    defaultAction: action,
+    floorAction: options.floorAction ?? 'ignore',
+    overridable: options.overridable ?? true,
+    ...(options.remediation ? { remediation: options.remediation } : {}),
+    updatedAt,
+  }
+}
+
+function createRecommendedEnforcementPolicy(version, updatedAt) {
+  return {
+    id: 'enforcement-policy-org-demo-recommended',
+    organizationId: 'org-demo',
+    name: 'Recommended enforcement preset',
+    version,
+    updatedAt,
+    rules: [
+      enforcementRule('missing_agent_review', 'protected_gate', 'missing', 'block', updatedAt, {
+        floorAction: 'block',
+        remediation: 'Run Knowledge Review Agent for this protected Gate.',
+      }),
+      enforcementRule('governance_check', 'testing_standard', 'needs_evidence', 'block', updatedAt, {
+        floorAction: 'block',
+        remediation: 'Attach passing test evidence for the affected Run.',
+      }),
+      enforcementRule('governance_check', 'testing_standard', 'violated', 'block', updatedAt, {
+        floorAction: 'block',
+        remediation: 'Fix the failing test evidence and rerun the configured test command.',
+      }),
+      enforcementRule('governance_check', 'api_contract', 'violated', 'block', updatedAt, {
+        floorAction: 'block',
+        remediation: 'Update the implementation or design artifact to satisfy the API contract.',
+      }),
+      enforcementRule('governance_check', 'review_checklist', 'needs_evidence', 'warn', updatedAt),
+      enforcementRule('agent_finding', 'missing_evidence', 'medium', 'warn', updatedAt),
+      enforcementRule('agent_finding', 'test_risk', 'high', 'warn', updatedAt),
+      enforcementRule('agent_finding', 'api_contract_risk', 'high', 'warn', updatedAt),
+      enforcementRule('agent_finding', 'security_risk', 'high', 'warn', updatedAt),
+      enforcementRule('agent_finding', 'review_gap', 'low', 'warn', updatedAt),
+    ],
+  }
+}
+
+async function saveRecommendedEnforcementPolicy() {
+  const response = await fetch(`${apiServerUrl}/api/enforcement/policy`, {
+    method: 'PUT',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      ...demoSessionHeaders,
+    },
+    body: JSON.stringify({
+      organizationPolicy: createRecommendedEnforcementPolicy(1, new Date().toISOString()),
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Unable to save Electron smoke enforcement policy: ${response.status} ${await response.text()}`)
+  }
 }
 
 async function selectRunByTitle(page, title) {
@@ -149,6 +221,7 @@ try {
     waitForServer(webServerUrl),
     waitForServer(devServerUrl),
   ])
+  await saveRecommendedEnforcementPolicy()
 
   const first = await launchApp()
   await first.app.evaluate(({ dialog }, selectedPath) => {
@@ -164,6 +237,7 @@ try {
     hasProcess: typeof window.process !== 'undefined',
   }))
   expect(security).toEqual({ hasApi: true, hasRequire: false, hasProcess: false })
+  await first.page.evaluate(async () => window.aiDevFlowDesktop.loadRemoteSnapshot({ organizationId: 'org-demo' }))
 
   await first.page.getByRole('button', { name: /选择本地仓库/ }).click()
   await expect(first.page.locator('.local-project-panel').getByText('electron-smoke-fixture')).toBeVisible()
@@ -190,13 +264,68 @@ try {
   await first.page.getByRole('button', { name: /创建并开始澄清/ }).click()
   await expect(first.page.getByText('重构 GitHub webhook 重试策略')).toBeVisible()
   await selectRunByTitle(first.page, '重构 GitHub webhook 重试策略')
-  await selectWorkflowNode(first.page, 'flow-node-n-design-gate', '架构 Gate')
-  const approveGateButton = first.page.getByRole('button', { name: /通过 Gate/ })
-  await expect(approveGateButton).toBeEnabled()
-  await approveGateButton.click()
-  await expect(first.page.getByTestId('toast')).toContainText('架构 Gate 已通过')
-  await expect(first.page.getByTestId('node-inspector')).toContainText('approval')
 
+  const localRun = await first.page.evaluate(async () => {
+    const state = await window.aiDevFlowDesktop.loadState()
+    const localRuns = state.runs
+      .filter((run) => run.title === '重构 GitHub webhook 重试策略')
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    return localRuns[0]
+  })
+  expect(localRun?.id, 'Electron smoke local Run was not persisted before Gate approval.').toBeTruthy()
+  const clarifyGateDecision = await first.page.evaluate(async (runId) => {
+    return window.aiDevFlowDesktop.evaluateGateEnforcement({
+      runId,
+      nodeId: 'n-clarify-gate',
+      projectId: 'p-payments',
+    })
+  }, localRun.id)
+  expect(clarifyGateDecision.status).toBe('blocked')
+  expect(clarifyGateDecision.blocksApproval).toBe(true)
+  expect(clarifyGateDecision.blockingReasons.some((reason) => reason.target === 'missing_agent_review')).toBe(true)
+  const directApproveRejected = await first.page.evaluate(async (runId) => {
+    try {
+      await window.aiDevFlowDesktop.approveGate({
+        runId,
+        nodeId: 'n-clarify-gate',
+        projectId: 'p-payments',
+        userId: 'u-erich',
+        userName: 'Erich',
+        role: 'owner',
+      })
+      return false
+    } catch (error) {
+      return error instanceof Error && error.message.includes('override_required')
+    }
+  }, localRun.id)
+  expect(directApproveRejected).toBe(true)
+  const localLeadOverride = await first.page.evaluate(async ({ runId, decision }) => {
+    return window.aiDevFlowDesktop.saveGateOverride({
+      runId,
+      nodeId: 'n-clarify-gate',
+      projectId: 'p-payments',
+      userId: 'u-ling',
+      role: 'lead',
+      reason: 'Electron smoke lead override for missing Knowledge Review.',
+      blockedReasonIds: decision.blockingReasons.map((reason) => reason.id),
+      policyVersion: decision.policyVersion,
+      provisional: false,
+    })
+  }, { runId: localRun.id, decision: clarifyGateDecision })
+  expect(localLeadOverride.status).toBe('accepted')
+  const overrideApproval = await first.page.evaluate(async (runId) => {
+    return window.aiDevFlowDesktop.approveGate({
+      runId,
+      nodeId: 'n-clarify-gate',
+      projectId: 'p-payments',
+      userId: 'u-ling',
+      userName: 'Ling',
+      role: 'lead',
+    })
+  }, localRun.id)
+  expect(overrideApproval.event.kind).toBe('approval')
+
+  await selectWorkflowNode(first.page, 'flow-node-n-design-gate', '架构 Gate')
   await first.page.getByRole('button', { name: /Agent Review/ }).click()
   await expect(first.page.getByTestId('toast')).toContainText('Knowledge Review 已归档', {
     timeout: 20_000,
@@ -206,6 +335,7 @@ try {
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Build redacted context')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('provider_reported')
   await first.page.getByRole('button', { name: /工作台/ }).click()
+  await selectWorkflowNode(first.page, 'flow-node-n-design-gate', '架构 Gate')
   await expect(first.page.getByTestId('node-inspector')).toContainText('Knowledge Review Agent')
   await expect(first.page.getByTestId('node-inspector')).toContainText('warning-only')
 
@@ -238,6 +368,23 @@ try {
   await first.page.getByRole('button', { name: /工作台/ }).click()
   await expect(first.page.getByTestId('node-inspector')).toContainText('Local Test Evidence Standard')
   await expect(first.page.getByTestId('node-inspector')).toContainText('satisfied')
+  await first.page.evaluate(async (runId) => {
+    const state = await window.aiDevFlowDesktop.loadState()
+    const run = state.runs.find((candidate) => candidate.id === runId)
+    if (!run) {
+      throw new Error(`Run not found for smoke sync: ${runId}`)
+    }
+    await window.aiDevFlowDesktop.uploadRunSummary({
+      kind: 'run',
+      runId: run.id,
+      projectId: run.projectId,
+      title: run.title,
+      status: run.status,
+      currentNodeId: run.currentNodeId,
+      branchName: run.branchName,
+      updatedAt: run.updatedAt,
+    })
+  }, localRun.id)
 
   const browser = await chromium.launch()
   try {
@@ -266,7 +413,14 @@ try {
   const second = await launchApp()
   await expect(second.page.locator('html')).toHaveAttribute('data-theme-preference', 'light')
   await expect(second.page.getByText('重构 GitHub webhook 重试策略')).toBeVisible()
-  await expect(second.page.getByTestId('node-inspector')).toContainText('approval')
+  const restoredOverrides = await second.page.evaluate(async (runId) => {
+    return window.aiDevFlowDesktop.listGateOverrides({ runId })
+  }, localRun.id)
+  expect(
+    restoredOverrides.some(
+      (override) => override.nodeId === 'n-clarify-gate' && override.status === 'accepted',
+    ),
+  ).toBe(true)
   await second.page.getByRole('button', { name: /^Agents$/ }).click()
   await expect(second.page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
   await expect(second.page.getByTestId('agent-workbench')).toContainText('completed')

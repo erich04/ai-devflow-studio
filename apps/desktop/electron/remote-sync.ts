@@ -8,6 +8,10 @@ import type {
   RemoteSyncUploadResult,
   RemoteTeamSnapshot,
   RemoteTestEvidenceSummary,
+  EffectiveEnforcementPolicy,
+  GateOverrideDecision,
+  OrganizationEnforcementPolicy,
+  ProjectEnforcementPolicyOverride,
   TeamMember,
   Project,
   TokenUsageRollup,
@@ -37,6 +41,12 @@ export type RemoteTeamOverviewResponse = {
   projectCost: TokenUsageRollup[]
   memberCost: TokenUsageRollup[]
   totalCost: string
+  enforcementPolicies?: {
+    organizationPolicy: OrganizationEnforcementPolicy
+    projectOverrides: ProjectEnforcementPolicyOverride[]
+    effectivePolicies: EffectiveEnforcementPolicy[]
+    gateOverrides: GateOverrideDecision[]
+  }
 }
 
 export type RemoteSyncClient = {
@@ -140,6 +150,7 @@ export function createRemoteSyncClient(
         projectCost: overview.projectCost,
         memberCost: overview.memberCost,
         totalCost: overview.totalCost,
+        ...(overview.enforcementPolicies ? { enforcementPolicies: overview.enforcementPolicies } : {}),
       }
     },
 

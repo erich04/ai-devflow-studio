@@ -653,13 +653,33 @@ export function App() {
     }
   }
 
-  function approveSelectedGate() {
+  async function approveSelectedGate() {
     if (!selectedRun || !selectedNode || !currentUser) {
       return
     }
 
     if (!canApproveGate(currentUser.role, selectedNode)) {
       setToast('当前角色无权通过这个 Gate')
+      return
+    }
+
+    if (desktopApi) {
+      try {
+        const result = await desktopApi.approveGate({
+          runId: selectedRun.id,
+          nodeId: selectedNode.id,
+          userId: currentUser.id,
+          userName: currentUser.name,
+          role: currentUser.role,
+        })
+        applyLocalExecutionState(result.state)
+        setToast('架构 Gate 已通过，Run 进入本地实现阶段')
+        void desktopApi
+          .uploadRunSummary(createRemoteRunSummary(result.run, 'approval'))
+          .catch(() => undefined)
+      } catch (error) {
+        setToast(error instanceof Error ? error.message : '保存 Gate 审批失败')
+      }
       return
     }
 
@@ -685,18 +705,6 @@ export function App() {
     setRuns((previousRuns) => previousRuns.map((run) => (run.id === selectedRun.id ? updatedRun : run)))
     setEvents((previousEvents) => mergeById(previousEvents, [approvalEvent]))
     setToast('架构 Gate 已通过，Run 进入本地实现阶段')
-
-    if (desktopApi) {
-      void Promise.all([
-        desktopApi.saveRun(updatedRun),
-        desktopApi.saveEvent(approvalEvent),
-      ]).catch((error: unknown) => {
-        setToast(error instanceof Error ? error.message : '保存 Gate 审批失败')
-      })
-      void desktopApi
-        .uploadRunSummary(createRemoteRunSummary(updatedRun, 'approval'))
-        .catch(() => undefined)
-    }
   }
 
   async function selectLocalProject() {

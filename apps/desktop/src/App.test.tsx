@@ -1,6 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mcpServers as fixtureMcpServers, runs as fixtureRuns, validateTestCommandSafety } from '@ai-devflow/shared'
+import {
+  createWarnOnlyDefaultPolicy,
+  mcpServers as fixtureMcpServers,
+  resolveEffectivePolicy,
+  runs as fixtureRuns,
+  validateTestCommandSafety,
+} from '@ai-devflow/shared'
 import { App } from './App'
 import type { DevFlowDesktopApi, RunProjectTestsInput } from './desktop-api'
 
@@ -41,6 +47,7 @@ afterEach(() => {
 })
 
 function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
+  const policy = createWarnOnlyDefaultPolicy()
   const api: DevFlowDesktopApi = {
     platform: 'test',
     loadState: vi.fn().mockResolvedValue({
@@ -166,8 +173,90 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         },
       }
     }),
+    loadEnforcementPolicy: vi.fn().mockResolvedValue({
+      projectId: fixtureRuns[0]!.projectId,
+      organizationPolicy: policy,
+      projectOverride: null,
+      effectivePolicy: resolveEffectivePolicy(policy, null),
+      version: policy.version,
+      updatedAt: policy.updatedAt,
+      syncedAt: policy.updatedAt,
+      source: 'built_in_default',
+    }),
+    evaluateGateEnforcement: vi.fn().mockResolvedValue({
+      status: 'pass',
+      blocksApproval: false,
+      blockingReasons: [],
+      warningReasons: [],
+      requiredActions: [],
+      canOverride: false,
+      overrideRoleRequired: 'lead',
+      policySource: 'built_in_default',
+      policyVersion: policy.version,
+      provisional: false,
+    }),
     createRun: vi.fn().mockImplementation(async (run) => run),
     saveRun: vi.fn().mockImplementation(async (run) => run),
+    approveGate: vi.fn().mockImplementation(async (input) => {
+      const timestamp = '2026-06-15T00:05:00.000Z'
+      const run = fixtureRuns[0]!
+      const updatedRun = {
+        ...run,
+        status: 'building' as const,
+        nodes: run.nodes.map((node) =>
+          node.id === input.nodeId ? { ...node, status: 'success' as const } : node,
+        ),
+        updatedAt: timestamp,
+      }
+      const event = {
+        id: 'event-approval-test',
+        runId: input.runId,
+        nodeId: input.nodeId,
+        sequence: 1,
+        kind: 'approval' as const,
+        message: `${input.userName} Gate approved`,
+        timestamp,
+      }
+
+      return {
+        run: updatedRun,
+        event,
+        state: {
+          projects: [],
+          runs: [updatedRun],
+          artifacts: [],
+          events: [event],
+          testEvidence: [],
+          settings: { themePreference: 'system' },
+          mcpServers: [],
+          agentReviews: [],
+          agentTraces: [],
+          agentTokenUsage: [],
+          codingRuns: [],
+          codingEvents: [],
+          codingPermissionRequests: [],
+          codingPermissionDecisions: [],
+          managedCodingWorkspaces: [],
+          dependencyBootstrapEvidence: [],
+          codingDiffArtifacts: [],
+        },
+      }
+    }),
+    saveGateOverride: vi.fn().mockImplementation(async (input) => ({
+      id: 'gate-override-test',
+      runId: input.runId,
+      nodeId: input.nodeId,
+      projectId: input.projectId,
+      userId: input.userId,
+      role: input.role,
+      reason: input.reason,
+      blockedReasonIds: input.blockedReasonIds,
+      policyVersion: input.policyVersion,
+      provisional: input.provisional === true,
+      status: input.provisional === true ? 'provisional' : 'accepted',
+      createdAt: '2026-06-15T00:05:00.000Z',
+    })),
+    listGateOverrides: vi.fn().mockResolvedValue([]),
     saveEvent: vi.fn().mockImplementation(async (event) => event),
     saveSettings: vi.fn().mockImplementation(async (settings) => ({
       themePreference: settings.themePreference ?? 'system',
@@ -198,6 +287,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         missingEvidence: ['Attach passing local test evidence before final approval.'],
         suggestedTests: ['Run the local test command and archive redacted evidence.'],
         knowledgeReferences: [],
+        policyFindings: [],
         confidence: 0.82,
         gateAdvisory: {
           id: 'gate-advisory-1',
@@ -498,16 +588,16 @@ describe('App', () => {
     expect(screen.queryByText('erich/payments-api')).not.toBeInTheDocument()
   })
 
-  it('persists gate approval as a run update and approval event', async () => {
+  it('persists gate approval through the desktop write-path guard', async () => {
     const api = installDesktopApi()
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
 
-    await waitFor(() => expect(api.saveRun).toHaveBeenCalled())
-    await waitFor(() => expect(api.saveEvent).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'approval',
-      message: expect.stringContaining('Gate 已通过'),
+    await waitFor(() => expect(api.approveGate).toHaveBeenCalledWith(expect.objectContaining({
+      runId: fixtureRuns[0]!.id,
+      nodeId: 'n-design-gate',
+      role: 'lead',
     })))
     await waitFor(() =>
       expect(api.uploadRunSummary).toHaveBeenCalledWith(expect.objectContaining({
@@ -527,8 +617,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
 
-    await waitFor(() => expect(api.saveRun).toHaveBeenCalled())
-    await waitFor(() => expect(api.saveEvent).toHaveBeenCalled())
+    await waitFor(() => expect(api.approveGate).toHaveBeenCalled())
     await waitFor(() => expect(api.uploadRunSummary).toHaveBeenCalled())
     expect(screen.getByTestId('toast')).toHaveTextContent('架构 Gate 已通过')
   })

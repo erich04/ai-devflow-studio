@@ -20,12 +20,14 @@ import type {
   LocalSettings,
   ManagedCodingWorkspace,
   McpServerDefinition,
+  GateOverrideDecision,
+  PolicySnapshot,
   ProviderCredentialMetadata,
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 4
+export const CURRENT_SCHEMA_VERSION = 5
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -81,6 +83,10 @@ export type LocalStore = {
   ): Promise<ProviderCredentialMetadata>
   listProviderCredentials(): Promise<ProviderCredentialMetadata[]>
   getProviderEncryptedSecret(providerId: string): Promise<string | null>
+  savePolicySnapshot(snapshot: PolicySnapshot): Promise<PolicySnapshot>
+  getPolicySnapshot(projectId: string): Promise<PolicySnapshot | null>
+  saveGateOverride(decision: GateOverrideDecision): Promise<GateOverrideDecision>
+  listGateOverrides(runId?: string): Promise<GateOverrideDecision[]>
   saveSettings(settings: Partial<LocalSettings>): Promise<LocalSettings>
   getSettings(): Promise<LocalSettings>
   saveMcpServers(servers: McpServerDefinition[]): Promise<McpServerDefinition[]>
@@ -228,6 +234,20 @@ function migrateSchema(db: Database) {
       json text not null,
       encrypted_secret text not null,
       updated_at text not null
+    );
+
+    create table if not exists policy_snapshots (
+      project_id text primary key,
+      json text not null,
+      synced_at text not null
+    );
+
+    create table if not exists gate_overrides (
+      id text primary key,
+      run_id text not null,
+      node_id text not null,
+      json text not null,
+      created_at text not null
     );
 
     create table if not exists local_settings (
@@ -761,6 +781,57 @@ class SqlJsLocalStore implements LocalStore {
     )
     const value = result[0]?.values[0]?.[0]
     return typeof value === 'string' ? value : null
+  }
+
+  async savePolicySnapshot(snapshot: PolicySnapshot): Promise<PolicySnapshot> {
+    this.db.run(
+      `
+      insert into policy_snapshots (project_id, json, synced_at)
+      values (?, ?, ?)
+      on conflict(project_id) do update set json = excluded.json, synced_at = excluded.synced_at
+      `,
+      [snapshot.projectId, JSON.stringify(snapshot), snapshot.syncedAt],
+    )
+    await this.persist()
+    return snapshot
+  }
+
+  async getPolicySnapshot(projectId: string): Promise<PolicySnapshot | null> {
+    const [snapshot] = selectJson<PolicySnapshot>(
+      this.db,
+      'select json from policy_snapshots where project_id = ?',
+      [projectId],
+    )
+
+    return snapshot ?? null
+  }
+
+  async saveGateOverride(decision: GateOverrideDecision): Promise<GateOverrideDecision> {
+    this.db.run(
+      `
+      insert into gate_overrides (id, run_id, node_id, json, created_at)
+      values (?, ?, ?, ?, ?)
+      on conflict(id) do update set json = excluded.json, created_at = excluded.created_at
+      `,
+      [decision.id, decision.runId, decision.nodeId, JSON.stringify(decision), decision.createdAt],
+    )
+    await this.persist()
+    return decision
+  }
+
+  async listGateOverrides(runId?: string): Promise<GateOverrideDecision[]> {
+    if (runId) {
+      return selectJson<GateOverrideDecision>(
+        this.db,
+        'select json from gate_overrides where run_id = ? order by created_at desc',
+        [runId],
+      )
+    }
+
+    return selectJson<GateOverrideDecision>(
+      this.db,
+      'select json from gate_overrides order by created_at desc',
+    )
   }
 
   async saveSettings(settings: Partial<LocalSettings>): Promise<LocalSettings> {

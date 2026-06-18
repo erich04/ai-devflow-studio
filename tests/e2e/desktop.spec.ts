@@ -67,8 +67,103 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
           : [],
         normalizedCommand: testCommand.trim().replace(/\s+/g, ' '),
       }),
+      loadEnforcementPolicy: async ({ projectId }: { projectId: string }) => ({
+        projectId,
+        organizationPolicy: null,
+        projectOverride: null,
+        effectivePolicy: null,
+        version: 1,
+        updatedAt: '2026-06-15T00:00:00.000Z',
+        syncedAt: '2026-06-15T00:00:00.000Z',
+        source: 'built_in_default',
+      }),
+      evaluateGateEnforcement: async () => ({
+        status: 'pass',
+        blocksApproval: false,
+        blockingReasons: [],
+        warningReasons: [],
+        requiredActions: [],
+        canOverride: false,
+        overrideRoleRequired: 'lead',
+        policySource: 'built_in_default',
+        policyVersion: 1,
+        provisional: false,
+      }),
       createRun: async (run: unknown) => run,
       saveRun: async (run: unknown) => run,
+      approveGate: async ({
+        runId,
+        nodeId,
+        userName,
+      }: {
+        runId: string
+        nodeId: string
+        userName: string
+      }) => {
+        const timestamp = '2026-06-15T00:01:00.000Z'
+        const run = {
+          id: runId,
+          title: '为 Payments API 增加 /health 端点',
+          request: 'Add health endpoint to Payments API.',
+          projectId: 'p-payments',
+          creatorId: 'u-erich',
+          status: 'building',
+          currentNodeId: nodeId,
+          branchName: 'ai/payments-health',
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          nodes: [
+            {
+              id: nodeId,
+              stage: 'design',
+              title: 'Architecture Gate',
+              subtitle: 'Lead review',
+              kind: 'gate',
+              status: 'success',
+              ownerId: 'u-wang',
+              requiredRole: 'lead',
+              retryCount: 0,
+              artifactIds: [],
+            },
+          ],
+          edges: [],
+        }
+        const event = {
+          id: 'event-approval-e2e',
+          runId,
+          nodeId,
+          sequence: 1,
+          kind: 'approval',
+          message: `${userName} Gate approved`,
+          timestamp,
+        }
+
+        return {
+          run,
+          event,
+          state: {
+            projects: [localProject],
+            runs: [run],
+            artifacts: [],
+            events: [event],
+            testEvidence: [],
+            settings: { themePreference: 'system' },
+            mcpServers: [],
+            agentReviews: [],
+            agentTraces: [],
+            agentTokenUsage: [],
+            codingRuns: [],
+            codingEvents: [],
+            codingPermissionRequests: [],
+            codingPermissionDecisions: [],
+            managedCodingWorkspaces: [],
+            dependencyBootstrapEvidence: [],
+            codingDiffArtifacts: [],
+          },
+        }
+      },
+      saveGateOverride: async (input: unknown) => input,
+      listGateOverrides: async () => [],
       saveEvent: async (event: unknown) => event,
       saveSettings: async (settings: { themePreference?: 'light' | 'dark' | 'system' }) => ({
         themePreference: settings.themePreference ?? 'system',
@@ -202,6 +297,7 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
           missingEvidence: ['Attach passing local test evidence before final approval.'],
           suggestedTests: ['Run the local test command and archive redacted evidence.'],
           knowledgeReferences: [],
+          policyFindings: [],
           confidence: 0.82,
           gateAdvisory: {
             id: 'gate-advisory-1',
