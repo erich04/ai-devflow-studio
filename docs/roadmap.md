@@ -54,6 +54,11 @@ Electron, API, and Postgres. The real opencode runtime is available through expl
 engine. Manual live signoff completed with opencode `1.17.5` and Volcengine Ark
 `double/ark-code-latest`, including a multi-step `bash -> edit -> bash -> bash` permission relay.
 
+v0.7 Configurable Gate Enforcement Policy core is implemented. DevFlow now has a shared policy
+resolver/evaluator, warn-only default policy, recommended enforcement preset, Agent Policy Findings,
+API/Postgres policy persistence, Web policy controls, Electron policy snapshot/override persistence,
+and an Electron Gate approval write path that re-checks `canApproveGateNow` in the main process.
+
 Current validation remains macOS-local for the full real Electron window path. Windows compatibility
 is preserved through static automation checks and Windows CI for typecheck/unit/audit; full Windows
 Electron smoke is still tracked as future compatibility expansion. See
@@ -200,17 +205,41 @@ Electron smoke is still tracked as future compatibility expansion. See
   boundaries.
 - Added ADR 0009 and v0.6 plan/research docs.
 
+### v0.7: Configurable Gate Enforcement Policy
+
+- Added `EnforcementAction`, organization policy floors, project override clamping, effective
+  policy source markers, protected Gate detection, and `canApproveGateNow`.
+- Added warn-only default policy so human Gate approval remains the out-of-box behavior.
+- Added Recommended Enforcement Preset for deterministic missing-review, testing-standard, and
+  API-contract blocking rules.
+- Added validator constraints so project overrides cannot define floors or hard-block behavior, and
+  probabilistic Agent findings can never hard-block.
+- Added Agent Policy Findings to Knowledge Review output and remote summary metadata.
+- Added Postgres schema v3 tables for enforcement policies, Gate override decisions, and Agent
+  policy findings.
+- Added API routes for policy load/save, enforcement evaluation, and Gate override.
+- Added Web Team Console policy panel and apply-recommended-preset action.
+- Added Electron SQLite schema v5 policy snapshot and Gate override persistence.
+- Added Electron preload IPC for policy load/evaluate/override and a main-process Gate approval
+  handler that re-checks policy before writing approval state.
+- Added ADR 0010.
+
 ## Planned Milestones
 
-### v0.7: Configurable Agent Knowledge Enforcement
+### v0.7.x: Enforcement UX and Reconciliation Hardening
 
-- Add project/team policy controls that can turn selected Gate Advisory categories from warnings
-  into blocking checks.
-- Let reviewers configure which Knowledge Governance Checks are advisory, required, or blocking.
-- Preserve the v0.5 default of human-controlled Gate approval unless policy explicitly enables
-  blocking.
-- Add stronger reviewer audit trails for policy decisions, overrides, and missing evidence.
-- Expand Agent Review to produce structured policy findings without becoming a coding Agent.
+- Add richer Desktop Inspector rendering for policy source, blocking reasons, hard-block remediation,
+  and provisional-vs-confirmed override state.
+- Refresh authoritative team policy before online Desktop approval.
+- Add rejected provisional override reconciliation UX and audit events.
+- Extend Postgres smoke and Electron smoke to cover policy cache, override, and direct approval
+  rejection paths.
+
+### v0.8: Policy-Aware Delivery Automation
+
+- Explore optional remediation planning and coding retry loops that remain human-approved.
+- Expand policy summaries for manager reporting and compliance review.
+- Evaluate MCP policy enforcement and tool-call telemetry once the MCP runtime layer is real.
 
 ## Deferred / Not Yet Started
 

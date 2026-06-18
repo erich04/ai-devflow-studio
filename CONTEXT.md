@@ -87,8 +87,40 @@ private local paths or raw command output.
 
 ## Gate Advisory
 
-A warning-only recommendation shown to Gate reviewers after an Agent Review. In v0.5 it does not
-disable or block the human approval button by default.
+A recommendation shown to Gate reviewers after an Agent Review. In v0.5 it is warning-only. From
+v0.7 onward, Gate Advisory can feed Gate Enforcement Policy, but approval is still warning-only by
+default unless a team explicitly enables blocking policy.
+
+## Gate Enforcement Policy
+
+The team-configurable rules that decide whether Gate approval should pass, warn, block, hard-block,
+or require a policy sync. Policy evaluation considers deterministic Knowledge Governance Checks and
+probabilistic Agent Policy Findings.
+
+## Policy Floor
+
+The organization-level minimum action for an enforcement rule. Project overrides can make a rule
+stricter but cannot weaken the organization floor.
+
+## Protected Gate
+
+A human decision node that can require enforcement. In the current model, protected gates are
+workflow nodes whose kind is `gate` or `acceptance`.
+
+## Agent Policy Finding
+
+A normalized finding emitted by the Knowledge Review Agent for policy evaluation. Agent findings are
+probabilistic; they may warn or block only by explicit policy and can never hard-block.
+
+## Gate Override Decision
+
+An auditable lead decision that allows a blocked Gate to proceed. Overrides require a reason, must
+not be performed by the Run creator or selected Node owner, and cannot override hard-blocks.
+
+## Policy Snapshot
+
+A cached enforcement policy bundle used by Desktop. Team projects use the last authoritative cached
+snapshot when offline; pure local projects use the built-in warn-only default.
 
 ## Provider Credential
 
