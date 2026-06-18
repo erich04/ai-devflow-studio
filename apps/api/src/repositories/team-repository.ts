@@ -9,6 +9,8 @@ import {
   runs,
   skills,
   tokenUsage,
+  createWarnOnlyDefaultPolicy,
+  resolveEffectivePolicy,
   type AgentEvent,
   type AgentProviderConfig,
   type AgentReviewExecutionResult,
@@ -16,9 +18,13 @@ import {
   type AgentTokenUsage,
   type AgentTrace,
   type Artifact,
+  type EffectiveEnforcementPolicy,
+  type GateOverrideDecision,
   type McpServerDefinition,
+  type OrganizationEnforcementPolicy,
   type Project,
   type ProviderCredentialMetadata,
+  type ProjectEnforcementPolicyOverride,
   type RemoteAgentReviewSummary,
   type RemoteCodingAgentSummary,
   type RemoteRunSummary,
@@ -60,6 +66,12 @@ export type TeamOverviewPayload = {
   agentTokenUsage: AgentTokenUsage[]
   agentProviders: AgentProviderConfig[]
   codingAgentSummaries: RemoteCodingAgentSummary[]
+  enforcementPolicies: {
+    organizationPolicy: OrganizationEnforcementPolicy
+    projectOverrides: ProjectEnforcementPolicyOverride[]
+    effectivePolicies: EffectiveEnforcementPolicy[]
+    gateOverrides: GateOverrideDecision[]
+  }
 }
 
 export type TeamRepositorySyncContext = Pick<TeamSession, 'organizationId' | 'userId'>
@@ -103,6 +115,26 @@ export type TeamRepository = {
     input: { runId?: string },
     context: TeamRepositorySyncContext,
   ): Promise<AgentReviewResult[]>
+  getEnforcementPolicy(
+    projectId: string,
+    context: TeamRepositorySyncContext,
+  ): Promise<{
+    organizationPolicy: OrganizationEnforcementPolicy
+    projectOverride: ProjectEnforcementPolicyOverride | null
+    effectivePolicy: EffectiveEnforcementPolicy
+  }>
+  saveEnforcementPolicy(
+    policy: OrganizationEnforcementPolicy,
+    context: TeamRepositorySyncContext,
+  ): Promise<OrganizationEnforcementPolicy>
+  saveGateOverride(
+    decision: GateOverrideDecision,
+    context: TeamRepositorySyncContext,
+  ): Promise<GateOverrideDecision>
+  listGateOverrides(
+    input: { runId?: string },
+    context: TeamRepositorySyncContext,
+  ): Promise<GateOverrideDecision[]>
 }
 
 export function createSeedTeamRepository(): TeamRepository {
@@ -115,6 +147,9 @@ export function createSeedTeamRepository(): TeamRepository {
   const agentTraces: AgentTrace[] = []
   const agentTokenUsage: AgentTokenUsage[] = []
   const codingAgentSummaries: RemoteCodingAgentSummary[] = []
+  let organizationPolicy = createWarnOnlyDefaultPolicy()
+  const projectOverrides: ProjectEnforcementPolicyOverride[] = []
+  const gateOverrides: GateOverrideDecision[] = []
 
   function upsertSyncedRun(run: WorkflowRun) {
     const index = syncedRuns.findIndex((candidate) => candidate.id === run.id)
@@ -188,6 +223,17 @@ export function createSeedTeamRepository(): TeamRepository {
         agentTokenUsage,
         agentProviders: agentProviderConfigs(),
         codingAgentSummaries,
+        enforcementPolicies: {
+          organizationPolicy,
+          projectOverrides,
+          effectivePolicies: projects.map((project) =>
+            resolveEffectivePolicy(
+              organizationPolicy,
+              projectOverrides.find((override) => override.projectId === project.id) ?? null,
+            ),
+          ),
+          gateOverrides,
+        },
       }
     },
 
@@ -264,6 +310,7 @@ export function createSeedTeamRepository(): TeamRepository {
         ),
         suggestedTests: [],
         knowledgeReferences: [],
+        policyFindings: [],
         confidence: summary.confidence,
         gateAdvisory: {
           id: `gate-advisory-${summary.id}`,
@@ -326,6 +373,29 @@ export function createSeedTeamRepository(): TeamRepository {
 
     async listAgentReviews(input) {
       return agentReviews.filter((review) => !input.runId || review.runId === input.runId)
+    },
+
+    async getEnforcementPolicy(projectId) {
+      const projectOverride = projectOverrides.find((override) => override.projectId === projectId) ?? null
+      return {
+        organizationPolicy,
+        projectOverride,
+        effectivePolicy: resolveEffectivePolicy(organizationPolicy, projectOverride),
+      }
+    },
+
+    async saveEnforcementPolicy(policy) {
+      organizationPolicy = policy
+      return organizationPolicy
+    },
+
+    async saveGateOverride(decision) {
+      upsertById(gateOverrides, decision)
+      return decision
+    },
+
+    async listGateOverrides(input) {
+      return gateOverrides.filter((decision) => !input.runId || decision.runId === input.runId)
     },
   }
 }

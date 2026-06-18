@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { TeamSession } from '@ai-devflow/shared'
+import {
+  createRecommendedEnforcementPreset,
+  createWarnOnlyDefaultPolicy,
+  resolveEffectivePolicy,
+  type GateOverrideDecision,
+  type TeamSession,
+} from '@ai-devflow/shared'
 import type { RunsBundle, TeamOverviewPayload, TeamRepository } from '../repositories/team-repository'
 import { resolveTeamRoute } from './team-routes'
 
@@ -197,7 +203,29 @@ function createRepository(): TeamRepository {
         updatedAt: '1970-01-01T00:00:00.000Z',
       },
     ],
+    enforcementPolicies: {
+      organizationPolicy: createWarnOnlyDefaultPolicy({
+        organizationId: 'org-demo',
+        updatedAt: '2026-06-16T00:00:00.000Z',
+      }),
+      projectOverrides: [],
+      effectivePolicies: [
+        resolveEffectivePolicy(
+          createWarnOnlyDefaultPolicy({
+            organizationId: 'org-demo',
+            updatedAt: '2026-06-16T00:00:00.000Z',
+          }),
+          null,
+        ),
+      ],
+      gateOverrides: [],
+    },
   }
+  const organizationPolicy = createWarnOnlyDefaultPolicy({
+    organizationId: 'org-demo',
+    updatedAt: '2026-06-16T00:00:00.000Z',
+  })
+  const gateOverrides: GateOverrideDecision[] = []
 
   return {
     getRunsBundle: vi.fn(async () => runsBundle),
@@ -225,6 +253,17 @@ function createRepository(): TeamRepository {
       message: 'coding agent summary accepted',
     })),
     listAgentProviders: vi.fn(async () => overview.agentProviders),
+    getEnforcementPolicy: vi.fn(async () => ({
+      organizationPolicy,
+      projectOverride: null,
+      effectivePolicy: resolveEffectivePolicy(organizationPolicy, null),
+    })),
+    saveEnforcementPolicy: vi.fn(async (policy) => policy),
+    saveGateOverride: vi.fn(async (decision) => {
+      gateOverrides.unshift(decision)
+      return decision
+    }),
+    listGateOverrides: vi.fn(async () => gateOverrides),
     saveAgentProviderCredential: vi.fn(async (metadata) => metadata),
     getAgentProviderCredential: vi.fn(async () => null),
     saveAgentReviewBundle: vi.fn(async (bundle) => ({
@@ -392,6 +431,81 @@ describe('team API route resolver', () => {
 
     expect(result?.status).toBe(200)
     expect(repository.listAgentReviews).toHaveBeenCalledWith({ runId: 'run-payments' }, memberSession)
+  })
+
+  it('reads the effective enforcement policy for a project', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('GET', '/api/enforcement/policy', repository, {
+      session: leadSession,
+      searchParams: new URLSearchParams('projectId=p-payments'),
+    })
+
+    expect(result?.status).toBe(200)
+    expect(result?.body).toMatchObject({
+      organizationPolicy: { name: 'Warn-only default enforcement policy' },
+      effectivePolicy: { rules: expect.any(Array) },
+    })
+    expect(repository.getEnforcementPolicy).toHaveBeenCalledWith('p-payments', leadSession)
+  })
+
+  it('saves organization enforcement policy for owners', async () => {
+    const repository = createRepository()
+    const policy = createRecommendedEnforcementPreset({
+      organizationId: 'org-demo',
+      updatedAt: '2026-06-16T00:00:00.000Z',
+    })
+
+    const result = await resolveTeamRoute('PUT', '/api/enforcement/policy', repository, {
+      session: ownerSession,
+      body: { organizationPolicy: policy },
+    })
+
+    expect(result?.status).toBe(200)
+    expect(repository.saveEnforcementPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Recommended enforcement preset' }),
+      ownerSession,
+    )
+  })
+
+  it('evaluates enforcement decisions through the shared evaluator', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('POST', '/api/enforcement/evaluate', repository, {
+      session: leadSession,
+      body: {
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        projectId: 'p-payments',
+      },
+    })
+
+    expect(result?.status).toBe(200)
+    expect(result?.body).toMatchObject({
+      status: 'warn',
+      blocksApproval: false,
+    })
+  })
+
+  it('rejects gate override for owners and conflicted leads', async () => {
+    const repository = createRepository()
+    const body = {
+      runId: 'run-payments',
+      nodeId: 'node-build',
+      projectId: 'p-payments',
+      reason: 'I reviewed the risk.',
+      blockedReasonIds: ['missing_agent_review:protected_gate:missing'],
+      policyVersion: 1,
+    }
+
+    await expect(resolveTeamRoute('POST', '/api/gates/override', repository, {
+      session: ownerSession,
+      body,
+    })).resolves.toMatchObject({ status: 403 })
+    await expect(resolveTeamRoute('POST', '/api/gates/override', repository, {
+      session: leadSession,
+      body,
+    })).resolves.toMatchObject({ status: 403 })
   })
 
   it('routes run summary sync requests through the repository', async () => {

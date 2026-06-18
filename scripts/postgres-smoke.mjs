@@ -5,11 +5,23 @@ const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const rootDir = fileURLToPath(new URL('..', import.meta.url))
 const apiUrl = 'http://127.0.0.1:4322'
 const databaseUrl = process.env.DEVFLOW_DATABASE_URL ?? process.env.DATABASE_URL
-const demoSessionHeaders = {
+const ownerSessionHeaders = {
   'x-devflow-organization-id': 'org-demo',
   'x-devflow-user-id': 'u-erich',
   'x-devflow-user-role': 'owner',
   'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
+}
+const memberSessionHeaders = {
+  'x-devflow-organization-id': 'org-demo',
+  'x-devflow-user-id': 'u-yu',
+  'x-devflow-user-role': 'member',
+  'x-devflow-project-roles': 'p-payments:member',
+}
+const leadSessionHeaders = {
+  'x-devflow-organization-id': 'org-demo',
+  'x-devflow-user-id': 'u-ling',
+  'x-devflow-user-role': 'lead',
+  'x-devflow-project-roles': 'p-payments:lead',
 }
 
 if (!databaseUrl) {
@@ -96,25 +108,54 @@ async function readJson(response, label) {
   return response.json()
 }
 
-async function postJson(pathname, body) {
+function jsonHeaders(sessionHeaders) {
+  return {
+    accept: 'application/json',
+    'content-type': 'application/json',
+    ...sessionHeaders,
+  }
+}
+
+async function postJson(pathname, body, sessionHeaders = ownerSessionHeaders) {
   return readJson(
     await fetch(`${apiUrl}${pathname}`, {
       method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-        ...demoSessionHeaders,
-      },
+      headers: jsonHeaders(sessionHeaders),
       body: JSON.stringify(body),
     }),
     pathname,
   )
 }
 
-async function fetchOverview(label = '/api/team/overview') {
+async function putJson(pathname, body, sessionHeaders = ownerSessionHeaders) {
+  return readJson(
+    await fetch(`${apiUrl}${pathname}`, {
+      method: 'PUT',
+      headers: jsonHeaders(sessionHeaders),
+      body: JSON.stringify({ organizationPolicy: body }),
+    }),
+    pathname,
+  )
+}
+
+async function expectPostRejected(pathname, body, sessionHeaders, expectedStatus, label) {
+  const response = await fetch(`${apiUrl}${pathname}`, {
+    method: 'POST',
+    headers: jsonHeaders(sessionHeaders),
+    body: JSON.stringify(body),
+  })
+  const text = await response.text()
+  expect(
+    response.status === expectedStatus,
+    `${label} expected ${expectedStatus}, received ${response.status}: ${text}`,
+  )
+  return text
+}
+
+async function fetchOverview(label = '/api/team/overview', sessionHeaders = ownerSessionHeaders) {
   return readJson(
     await fetch(`${apiUrl}/api/team/overview`, {
-      headers: { accept: 'application/json', ...demoSessionHeaders },
+      headers: { accept: 'application/json', ...sessionHeaders },
     }),
     label,
   )
@@ -143,6 +184,63 @@ function expectNoLocalOnlyFields(value, label) {
   for (const fragment of blockedFragments) {
     expect(!serialized.includes(fragment), `${label} leaked local-only fragment: ${fragment}`)
   }
+}
+
+function enforcementRule(target, category, statusOrSeverity, action, updatedAt, options = {}) {
+  return {
+    ruleKey: `${target}:${category}:${statusOrSeverity}`,
+    target,
+    category,
+    statusOrSeverity,
+    defaultAction: action,
+    floorAction: options.floorAction ?? 'ignore',
+    overridable: options.overridable ?? true,
+    ...(options.remediation ? { remediation: options.remediation } : {}),
+    updatedAt,
+  }
+}
+
+function createRecommendedEnforcementPolicy(version, updatedAt) {
+  return {
+    id: 'enforcement-policy-org-demo-recommended',
+    organizationId: 'org-demo',
+    name: 'Recommended enforcement preset',
+    version,
+    updatedAt,
+    rules: [
+      enforcementRule('missing_agent_review', 'protected_gate', 'missing', 'block', updatedAt, {
+        floorAction: 'block',
+        remediation: 'Run Knowledge Review Agent for this protected Gate.',
+      }),
+      enforcementRule('governance_check', 'testing_standard', 'needs_evidence', 'block', updatedAt, {
+        floorAction: 'block',
+        remediation: 'Attach passing test evidence for the affected Run.',
+      }),
+      enforcementRule('governance_check', 'testing_standard', 'violated', 'block', updatedAt, {
+        floorAction: 'block',
+        remediation: 'Fix the failing test evidence and rerun the configured test command.',
+      }),
+      enforcementRule('governance_check', 'api_contract', 'violated', 'block', updatedAt, {
+        floorAction: 'block',
+        remediation: 'Update the implementation or design artifact to satisfy the API contract.',
+      }),
+      enforcementRule('governance_check', 'review_checklist', 'needs_evidence', 'warn', updatedAt),
+      enforcementRule('agent_finding', 'missing_evidence', 'medium', 'warn', updatedAt),
+      enforcementRule('agent_finding', 'test_risk', 'high', 'warn', updatedAt),
+      enforcementRule('agent_finding', 'api_contract_risk', 'high', 'warn', updatedAt),
+      enforcementRule('agent_finding', 'security_risk', 'high', 'warn', updatedAt),
+      enforcementRule('agent_finding', 'review_gap', 'low', 'warn', updatedAt),
+    ],
+  }
+}
+
+function expectMissingReviewBlock(decision, label) {
+  expect(decision.status === 'blocked', `${label} should return blocked, received ${decision.status}`)
+  expect(decision.blocksApproval === true, `${label} should block approval.`)
+  expect(
+    decision.blockingReasons?.some((reason) => reason.target === 'missing_agent_review'),
+    `${label} did not include missing Agent Review as a blocking reason.`,
+  )
 }
 
 const suffix = Date.now()
@@ -180,6 +278,97 @@ try {
   expect(
     seededRun.nodes?.some((node) => node.id === seededRun.currentNodeId),
     'Seeded run current node was not available for backend Knowledge Review.',
+  )
+  const protectedGates = seededRun.nodes?.filter((node) => node.kind === 'gate' || node.kind === 'acceptance') ?? []
+  const compliantGate = protectedGates.find((node) => node.ownerId !== leadSessionHeaders['x-devflow-user-id'])
+  const conflictedLeadGate = protectedGates.find((node) => node.ownerId === leadSessionHeaders['x-devflow-user-id'])
+  expect(compliantGate?.kind === 'gate', 'Seeded run did not include the smoke protected Gate.')
+  expect(
+    seededRun.creatorId !== leadSessionHeaders['x-devflow-user-id'] &&
+      compliantGate.ownerId !== leadSessionHeaders['x-devflow-user-id'],
+    'Smoke compliant Gate must not be created or owned by the lead override actor.',
+  )
+  expect(
+    conflictedLeadGate?.ownerId === leadSessionHeaders['x-devflow-user-id'],
+    'Seeded run did not include a lead-owned Gate for conflict smoke coverage.',
+  )
+
+  expect(
+    initialOverview.enforcementPolicies?.organizationPolicy?.name === 'Warn-only default enforcement policy',
+    'Postgres overview did not start with the warn-only default enforcement policy.',
+  )
+  const warnOnlyDecision = await postJson('/api/enforcement/evaluate', {
+    runId: seededRun.id,
+    nodeId: compliantGate.id,
+    projectId: seededRun.projectId,
+  })
+  expect(
+    warnOnlyDecision.status === 'warn' && warnOnlyDecision.blocksApproval === false,
+    `Warn-only default should not block approval, received ${warnOnlyDecision.status}.`,
+  )
+
+  const policyV1UpdatedAt = new Date(Date.now() + 1_000).toISOString()
+  const policyV1 = createRecommendedEnforcementPolicy(1, policyV1UpdatedAt)
+  await putJson('/api/enforcement/policy', policyV1)
+
+  const blockedDecision = await postJson('/api/enforcement/evaluate', {
+    runId: seededRun.id,
+    nodeId: compliantGate.id,
+    projectId: seededRun.projectId,
+  })
+  expectMissingReviewBlock(blockedDecision, 'Recommended policy compliant Gate evaluation')
+  const overridePayload = {
+    runId: seededRun.id,
+    nodeId: compliantGate.id,
+    projectId: seededRun.projectId,
+    reason: 'Postgres smoke lead override for missing Knowledge Review.',
+    blockedReasonIds: blockedDecision.blockingReasons.map((reason) => reason.id),
+    policyVersion: blockedDecision.policyVersion,
+  }
+  await expectPostRejected('/api/gates/override', overridePayload, ownerSessionHeaders, 403, 'owner override')
+  await expectPostRejected('/api/gates/override', overridePayload, memberSessionHeaders, 403, 'member override')
+
+  const conflictedLeadDecision = await postJson('/api/enforcement/evaluate', {
+    runId: seededRun.id,
+    nodeId: conflictedLeadGate.id,
+    projectId: seededRun.projectId,
+  }, leadSessionHeaders)
+  expectMissingReviewBlock(conflictedLeadDecision, 'Recommended policy conflicted lead Gate evaluation')
+  await expectPostRejected(
+    '/api/gates/override',
+    {
+      ...overridePayload,
+      nodeId: conflictedLeadGate.id,
+      blockedReasonIds: conflictedLeadDecision.blockingReasons.map((reason) => reason.id),
+      policyVersion: conflictedLeadDecision.policyVersion,
+    },
+    leadSessionHeaders,
+    403,
+    'conflicted lead override',
+  )
+
+  const acceptedOverride = await postJson('/api/gates/override', overridePayload, leadSessionHeaders)
+  expect(acceptedOverride.status === 'accepted', 'Compliant lead override was not accepted.')
+  expect(acceptedOverride.userId === leadSessionHeaders['x-devflow-user-id'], 'Lead override actor was not persisted.')
+
+  const overriddenDecision = await postJson('/api/enforcement/evaluate', {
+    runId: seededRun.id,
+    nodeId: compliantGate.id,
+    projectId: seededRun.projectId,
+  }, leadSessionHeaders)
+  expect(
+    overriddenDecision.status === 'overridden' && overriddenDecision.blocksApproval === false,
+    `Accepted lead override should unblock Gate, received ${overriddenDecision.status}.`,
+  )
+
+  const policyV2 = createRecommendedEnforcementPolicy(2, new Date(Date.now() + 2_000).toISOString())
+  await putJson('/api/enforcement/policy', policyV2)
+  await expectPostRejected(
+    '/api/gates/override',
+    overridePayload,
+    leadSessionHeaders,
+    403,
+    'stale policy version override',
   )
 
   await postJson('/api/sync/run-summary', {
@@ -281,6 +470,31 @@ try {
         review.gateAdvisory?.blocksApproval === false,
     ),
     'Postgres overview did not include the synced Electron Agent Review summary.',
+  )
+  expect(
+    syncedOverview.enforcementPolicies?.organizationPolicy?.version === 2,
+    'Postgres overview did not include the latest saved enforcement policy version.',
+  )
+  expect(
+    syncedOverview.enforcementPolicies?.effectivePolicies?.some((policy) =>
+      policy.rules?.some(
+        (rule) =>
+          rule.ruleKey === 'missing_agent_review:protected_gate:missing' &&
+          rule.action === 'block' &&
+          rule.floorAction === 'block',
+      ),
+    ),
+    'Postgres overview did not include the blocking missing-review enforcement rule.',
+  )
+  expect(
+    syncedOverview.enforcementPolicies?.gateOverrides?.some(
+      (override) =>
+        override.runId === seededRun.id &&
+        override.nodeId === compliantGate.id &&
+        override.userId === leadSessionHeaders['x-devflow-user-id'] &&
+        override.status === 'accepted',
+    ),
+    'Postgres overview did not include accepted lead override audit.',
   )
   expectNoLocalOnlyFields(syncedOverview, 'synced overview')
 

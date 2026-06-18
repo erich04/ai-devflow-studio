@@ -1,12 +1,18 @@
 import {
   buildAgentReviewContext,
+  buildKnowledgeGovernanceChecks,
+  canOverrideBlockedGate,
   createAgentReviewArtifacts,
   createFakeAgentProvider,
   createOpenAiCompatibleAgentProvider,
+  evaluateGateEnforcement,
+  type GateOverrideDecision,
   formatUsd,
+  type OrganizationEnforcementPolicy,
   knowledgeChunks,
   knowledgeDocuments,
   runKnowledgeReviewAgent,
+  validateEnforcementPolicy,
   type ProviderCredentialMetadata,
   type RemoteAgentReviewSummary,
   type RemoteCodingAgentSummary,
@@ -46,6 +52,18 @@ type KnowledgeReviewInput = {
   nodeId: string
   projectId: string
   providerId?: string
+}
+
+type EnforcementEvaluateInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+}
+
+type GateOverrideInput = EnforcementEvaluateInput & {
+  reason: string
+  blockedReasonIds: string[]
+  policyVersion: number
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -106,6 +124,10 @@ function isRemoteAgentReviewSummary(value: unknown): value is RemoteAgentReviewS
     typeof value['summary'] === 'string' &&
     typeof value['riskCount'] === 'number' &&
     typeof value['missingEvidenceCount'] === 'number' &&
+    (value['policyFindingCount'] === undefined || typeof value['policyFindingCount'] === 'number') &&
+    (value['policyFindingCategories'] === undefined ||
+      (Array.isArray(value['policyFindingCategories']) &&
+        value['policyFindingCategories'].every((category) => typeof category === 'string'))) &&
     (value['advisoryLevel'] === 'info' ||
       value['advisoryLevel'] === 'warn' ||
       value['advisoryLevel'] === 'block') &&
@@ -245,6 +267,52 @@ function parseKnowledgeReviewInput(value: unknown): KnowledgeReviewInput {
   }
 }
 
+function parseEnforcementEvaluateInput(value: unknown): EnforcementEvaluateInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid enforcement evaluate payload')
+  }
+
+  return {
+    runId: readRequiredString(value, 'runId'),
+    nodeId: readRequiredString(value, 'nodeId'),
+    projectId: readRequiredString(value, 'projectId'),
+  }
+}
+
+function parseGateOverrideInput(value: unknown): GateOverrideInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid gate override payload')
+  }
+
+  const blockedReasonIds = value['blockedReasonIds']
+  const policyVersion = value['policyVersion']
+
+  if (!Array.isArray(blockedReasonIds) || blockedReasonIds.some((item) => typeof item !== 'string')) {
+    throw new Error('Invalid blockedReasonIds')
+  }
+
+  if (typeof policyVersion !== 'number') {
+    throw new Error('Invalid policyVersion')
+  }
+
+  return {
+    ...parseEnforcementEvaluateInput(value),
+    reason: readRequiredString(value, 'reason'),
+    blockedReasonIds,
+    policyVersion,
+  }
+}
+
+function parseOrganizationPolicyInput(value: unknown): OrganizationEnforcementPolicy {
+  if (!isRecord(value) || !isRecord(value['organizationPolicy'])) {
+    throw new Error('Invalid enforcement policy payload')
+  }
+
+  const policy = value['organizationPolicy'] as OrganizationEnforcementPolicy
+  validateEnforcementPolicy(policy)
+  return policy
+}
+
 function toTestEvidence(summary: RemoteTestEvidenceSummary): TestEvidence {
   return {
     ...summary,
@@ -319,6 +387,65 @@ function filterOverviewForSession(
   }
 }
 
+async function evaluateEnforcementForInput(
+  repository: TeamRepository,
+  session: TeamSession,
+  input: EnforcementEvaluateInput,
+) {
+  if (!canAccessProject(session, input.projectId)) {
+    throw new Error('Project access required')
+  }
+
+  const [bundle, overview, policyBundle, overrides] = await Promise.all([
+    repository.getRunsBundle(),
+    repository.getTeamOverview(),
+    repository.getEnforcementPolicy(input.projectId, session),
+    repository.listGateOverrides({ runId: input.runId }, session),
+  ])
+  const run = bundle.runs.find((candidate) => candidate.id === input.runId)
+  if (!run || run.projectId !== input.projectId || !canAccessProject(session, run.projectId)) {
+    throw new Error('Project access required')
+  }
+
+  const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
+  if (!node) {
+    throw new Error(`Run node not found: ${input.nodeId}`)
+  }
+
+  const governanceChecks = buildKnowledgeGovernanceChecks({
+    run,
+    node,
+    artifacts: bundle.artifacts.filter((artifact) => artifact.runId === run.id),
+    documents: knowledgeDocuments,
+    chunks: knowledgeChunks,
+    testEvidence: overview.testEvidenceSummaries
+      .filter((summary) => summary.runId === run.id)
+      .map(toTestEvidence),
+  })
+  const latestAgentReview = overview.agentReviews
+    .filter((review) => review.runId === run.id && review.nodeId === node.id)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null
+  const agentPolicyFindings = overview.agentReviews
+    .filter((review) => review.runId === run.id && review.nodeId === node.id)
+    .flatMap((review) => review.policyFindings)
+
+  return {
+    run,
+    node,
+    policyBundle,
+    decision: evaluateGateEnforcement({
+      run,
+      node,
+      effectivePolicy: policyBundle.effectivePolicy,
+      governanceChecks,
+      agentPolicyFindings,
+      latestAgentReview,
+      overrides,
+      policySource: 'remote_cache',
+    }),
+  }
+}
+
 export async function resolveTeamRoute(
   method: string,
   pathname: string,
@@ -366,6 +493,124 @@ export async function resolveTeamRoute(
     return {
       status: 200,
       body: { servers: await repository.getMcpServers() },
+    }
+  }
+
+  if (method === 'GET' && pathname === '/api/enforcement/policy') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    const projectId = options.searchParams?.get('projectId')
+    if (!projectId) {
+      return badRequest('Invalid projectId')
+    }
+
+    if (!canAccessProject(options.session, projectId)) {
+      return forbidden('Project access required')
+    }
+
+    return {
+      status: 200,
+      body: await repository.getEnforcementPolicy(projectId, options.session),
+    }
+  }
+
+  if (method === 'PUT' && pathname === '/api/enforcement/policy') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    if (options.session.role !== 'owner') {
+      return forbidden('Organization owner role required')
+    }
+
+    let policy: OrganizationEnforcementPolicy
+    try {
+      policy = parseOrganizationPolicyInput(options.body)
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : 'Invalid enforcement policy payload')
+    }
+
+    return {
+      status: 200,
+      body: await repository.saveEnforcementPolicy(policy, options.session),
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/enforcement/evaluate') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    let input: EnforcementEvaluateInput
+    try {
+      input = parseEnforcementEvaluateInput(options.body)
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : 'Invalid enforcement evaluate payload')
+    }
+
+    try {
+      const { decision } = await evaluateEnforcementForInput(repository, options.session, input)
+      return { status: 200, body: decision }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to evaluate enforcement'
+      return message.includes('access') ? forbidden(message) : badRequest(message)
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/gates/override') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    let input: GateOverrideInput
+    try {
+      input = parseGateOverrideInput(options.body)
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : 'Invalid gate override payload')
+    }
+
+    try {
+      const { run, node, decision } = await evaluateEnforcementForInput(repository, options.session, input)
+      if (decision.policyVersion !== input.policyVersion) {
+        return forbidden('Policy version is stale; re-evaluate before overriding')
+      }
+
+      if (!canOverrideBlockedGate({
+        userRole: options.session.role,
+        userId: options.session.userId,
+        run,
+        node,
+        enforcement: decision,
+        reason: input.reason,
+      })) {
+        return forbidden('Lead override is not allowed for this Gate')
+      }
+
+      const timestamp = new Date().toISOString()
+      const override: GateOverrideDecision = {
+        id: `gate-override-${input.runId}-${input.nodeId}-${timestamp}`,
+        runId: input.runId,
+        nodeId: input.nodeId,
+        projectId: input.projectId,
+        userId: options.session.userId,
+        role: options.session.role,
+        reason: input.reason,
+        blockedReasonIds: input.blockedReasonIds,
+        policyVersion: input.policyVersion,
+        provisional: false,
+        status: 'accepted',
+        createdAt: timestamp,
+      }
+
+      return {
+        status: 201,
+        body: await repository.saveGateOverride(override, options.session),
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to save gate override'
+      return message.includes('access') ? forbidden(message) : badRequest(message)
     }
   }
 

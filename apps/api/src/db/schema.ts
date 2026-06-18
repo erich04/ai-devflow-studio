@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 2
+export const TEAM_SCHEMA_VERSION = 3
 
 export const requiredTeamTableNames = [
   'schema_meta',
@@ -20,6 +20,9 @@ export const requiredTeamTableNames = [
   'agent_traces',
   'agent_token_usage',
   'coding_agent_summaries',
+  'enforcement_policies',
+  'gate_override_decisions',
+  'agent_policy_findings',
 ] as const
 
 export type TeamTableName = (typeof requiredTeamTableNames)[number]
@@ -285,6 +288,7 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('missing_evidence', 'jsonb'),
       column('suggested_tests', 'jsonb'),
       column('knowledge_references', 'jsonb'),
+      column('policy_findings', 'jsonb'),
       column('confidence', 'numeric(4,3)'),
       column('gate_advisory', 'jsonb'),
       column('created_at', 'timestamptz'),
@@ -340,6 +344,52 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('started_at', 'timestamptz'),
       column('completed_at', 'timestamptz', { nullable: true }),
       column('redacted', 'boolean'),
+    ],
+  },
+  {
+    name: 'enforcement_policies',
+    columns: [
+      column('id', 'text', { primaryKey: true }),
+      column('organization_id', 'text', { references: 'organizations.id' }),
+      column('project_id', 'text', { nullable: true, references: 'projects.id' }),
+      column('name', 'text'),
+      column('version', 'integer'),
+      column('policy', 'jsonb'),
+      column('updated_at', 'timestamptz'),
+    ],
+  },
+  {
+    name: 'gate_override_decisions',
+    columns: [
+      column('id', 'text', { primaryKey: true }),
+      column('organization_id', 'text', { references: 'organizations.id' }),
+      column('run_id', 'text', { references: 'workflow_runs.id' }),
+      column('node_id', 'text', { references: 'workflow_nodes.id' }),
+      column('project_id', 'text', { references: 'projects.id' }),
+      column('user_id', 'text', { references: 'users.id' }),
+      column('role', 'text'),
+      column('reason', 'text'),
+      column('blocked_reason_ids', 'jsonb'),
+      column('policy_version', 'integer'),
+      column('provisional', 'boolean'),
+      column('status', 'text'),
+      column('created_at', 'timestamptz'),
+    ],
+  },
+  {
+    name: 'agent_policy_findings',
+    columns: [
+      column('id', 'text', { primaryKey: true }),
+      column('organization_id', 'text', { references: 'organizations.id' }),
+      column('review_id', 'text', { references: 'agent_reviews.id' }),
+      column('run_id', 'text', { references: 'workflow_runs.id' }),
+      column('node_id', 'text', { references: 'workflow_nodes.id' }),
+      column('category', 'text'),
+      column('severity', 'text'),
+      column('summary', 'text'),
+      column('evidence_ids', 'jsonb'),
+      column('knowledge_reference_ids', 'jsonb'),
+      column('created_at', 'timestamptz'),
     ],
   },
 ]

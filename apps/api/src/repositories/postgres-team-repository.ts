@@ -28,6 +28,12 @@ import {
   type WorkflowEdge,
   type WorkflowNode,
   type WorkflowRun,
+  createWarnOnlyDefaultPolicy,
+  resolveEffectivePolicy,
+  type EffectiveEnforcementPolicy,
+  type GateOverrideDecision,
+  type OrganizationEnforcementPolicy,
+  type ProjectEnforcementPolicyOverride,
 } from '@ai-devflow/shared'
 import type { TeamDbClient } from '../db/client'
 import type {
@@ -190,6 +196,7 @@ type AgentReviewRow = {
   missing_evidence: unknown
   suggested_tests: unknown
   knowledge_references: unknown
+  policy_findings: unknown
   confidence: string | number
   gate_advisory: unknown
   created_at: TimestampValue
@@ -224,6 +231,30 @@ type CodingAgentSummaryRow = {
   started_at: TimestampValue
   completed_at: TimestampValue | null
   redacted: boolean
+}
+
+type EnforcementPolicyRow = {
+  id: string
+  project_id: string | null
+  name: string
+  version: number
+  policy: unknown
+  updated_at: TimestampValue
+}
+
+type GateOverrideDecisionRow = {
+  id: string
+  run_id: string
+  node_id: string
+  project_id: string
+  user_id: string
+  role: GateOverrideDecision['role']
+  reason: string
+  blocked_reason_ids: unknown
+  policy_version: number
+  provisional: boolean
+  status: GateOverrideDecision['status']
+  created_at: TimestampValue
 }
 
 function timestamp(value: TimestampValue): string {
@@ -434,8 +465,50 @@ function mapAgentReview(row: AgentReviewRow): AgentReviewResult {
     missingEvidence: readArray<string>(row.missing_evidence),
     suggestedTests: readArray<string>(row.suggested_tests),
     knowledgeReferences: readArray(row.knowledge_references),
+    policyFindings: readArray(row.policy_findings),
     confidence: Number(row.confidence),
     gateAdvisory: row.gate_advisory as AgentReviewResult['gateAdvisory'],
+    createdAt: timestamp(row.created_at),
+  }
+}
+
+function isOrganizationPolicy(value: unknown): value is OrganizationEnforcementPolicy {
+  return Boolean(value && typeof value === 'object' && 'id' in value && 'rules' in value)
+}
+
+function isProjectOverride(value: unknown): value is ProjectEnforcementPolicyOverride {
+  return Boolean(value && typeof value === 'object' && 'projectId' in value && 'rules' in value)
+}
+
+function mapOrganizationPolicy(row: EnforcementPolicyRow | undefined): OrganizationEnforcementPolicy {
+  if (row && isOrganizationPolicy(row.policy)) {
+    return row.policy
+  }
+
+  return createWarnOnlyDefaultPolicy()
+}
+
+function mapProjectOverride(row: EnforcementPolicyRow | undefined): ProjectEnforcementPolicyOverride | null {
+  if (row && isProjectOverride(row.policy)) {
+    return row.policy
+  }
+
+  return null
+}
+
+function mapGateOverride(row: GateOverrideDecisionRow): GateOverrideDecision {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    nodeId: row.node_id,
+    projectId: row.project_id,
+    userId: row.user_id,
+    role: row.role,
+    reason: row.reason,
+    blockedReasonIds: readArray<string>(row.blocked_reason_ids),
+    policyVersion: row.policy_version,
+    provisional: row.provisional,
+    status: row.status,
     createdAt: timestamp(row.created_at),
   }
 }
@@ -581,6 +654,8 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         agentTokenRows,
         providerRows,
         codingSummaryRows,
+        enforcementPolicyRows,
+        gateOverrideRows,
       ] = await Promise.all([
         db.query<ProjectRow>('SELECT * FROM projects ORDER BY name ASC'),
         db.query<UserRow>('SELECT * FROM users ORDER BY name ASC'),
@@ -598,8 +673,21 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         db.query<CodingAgentSummaryRow>(
           'SELECT * FROM coding_agent_summaries ORDER BY started_at DESC',
         ),
+        db.query<EnforcementPolicyRow>(
+          'SELECT * FROM enforcement_policies ORDER BY project_id NULLS FIRST, updated_at DESC',
+        ),
+        db.query<GateOverrideDecisionRow>(
+          'SELECT * FROM gate_override_decisions ORDER BY created_at DESC',
+        ),
       ])
       const tokenUsage = tokenRows.map(mapTokenUsage)
+      const organizationPolicy = mapOrganizationPolicy(
+        enforcementPolicyRows.find((row) => row.project_id === null),
+      )
+      const projectOverrides = enforcementPolicyRows
+        .filter((row) => row.project_id !== null)
+        .map(mapProjectOverride)
+        .filter((override): override is ProjectEnforcementPolicyOverride => Boolean(override))
 
       return {
         projects: projectRows.map(mapProject),
@@ -613,6 +701,17 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         agentTraces: agentTraceRows.map(mapAgentTrace),
         agentTokenUsage: agentTokenRows.map(mapAgentTokenUsage),
         codingAgentSummaries: codingSummaryRows.map(mapCodingAgentSummary),
+        enforcementPolicies: {
+          organizationPolicy,
+          projectOverrides,
+          effectivePolicies: projectRows.map((project) =>
+            resolveEffectivePolicy(
+              organizationPolicy,
+              projectOverrides.find((override) => override.projectId === project.id) ?? null,
+            ),
+          ),
+          gateOverrides: gateOverrideRows.map(mapGateOverride),
+        },
         agentProviders: [
           {
             id: 'fake-knowledge-review',
@@ -893,16 +992,18 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
             missing_evidence,
             suggested_tests,
             knowledge_references,
+            policy_findings,
             confidence,
             gate_advisory,
             created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, '[]'::jsonb, '[]'::jsonb, $14, $15::jsonb, $16)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, $14, $15::jsonb, $16)
           ON CONFLICT (id) DO UPDATE
           SET conclusion = excluded.conclusion,
               summary = excluded.summary,
               risks = excluded.risks,
               missing_evidence = excluded.missing_evidence,
+              policy_findings = excluded.policy_findings,
               confidence = excluded.confidence,
               gate_advisory = excluded.gate_advisory
         `,
@@ -1192,11 +1293,12 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
             missing_evidence,
             suggested_tests,
             knowledge_references,
+            policy_findings,
             confidence,
             gate_advisory,
             created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17::jsonb, $18)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18::jsonb, $19)
           ON CONFLICT (id) DO UPDATE
           SET conclusion = excluded.conclusion,
               summary = excluded.summary,
@@ -1204,6 +1306,7 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
               missing_evidence = excluded.missing_evidence,
               suggested_tests = excluded.suggested_tests,
               knowledge_references = excluded.knowledge_references,
+              policy_findings = excluded.policy_findings,
               confidence = excluded.confidence,
               gate_advisory = excluded.gate_advisory
         `,
@@ -1223,10 +1326,53 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
           JSON.stringify(bundle.review.missingEvidence),
           JSON.stringify(bundle.review.suggestedTests),
           JSON.stringify(bundle.review.knowledgeReferences),
+          JSON.stringify(bundle.review.policyFindings),
           bundle.review.confidence,
           JSON.stringify(bundle.review.gateAdvisory),
           bundle.review.createdAt,
         ],
+      )
+      await Promise.all(
+        bundle.review.policyFindings.map((finding) =>
+          db.query(
+            `
+              INSERT INTO agent_policy_findings (
+                id,
+                organization_id,
+                review_id,
+                run_id,
+                node_id,
+                category,
+                severity,
+                summary,
+                evidence_ids,
+                knowledge_reference_ids,
+                created_at
+              )
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11)
+              ON CONFLICT (id) DO UPDATE
+              SET category = excluded.category,
+                  severity = excluded.severity,
+                  summary = excluded.summary,
+                  evidence_ids = excluded.evidence_ids,
+                  knowledge_reference_ids = excluded.knowledge_reference_ids,
+                  created_at = excluded.created_at
+            `,
+            [
+              finding.id,
+              context.organizationId,
+              finding.reviewId,
+              finding.runId,
+              finding.nodeId,
+              finding.category,
+              finding.severity,
+              finding.summary,
+              JSON.stringify(finding.evidenceIds),
+              JSON.stringify(finding.knowledgeReferenceIds),
+              finding.createdAt,
+            ],
+          ),
+        ),
       )
       await db.query(
         `
@@ -1360,6 +1506,121 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
       )
 
       return rows.map(mapAgentReview)
+    },
+
+    async getEnforcementPolicy(projectId, context) {
+      const rows = await db.query<EnforcementPolicyRow>(
+        `
+          SELECT *
+          FROM enforcement_policies
+          WHERE organization_id = $1
+            AND (project_id IS NULL OR project_id = $2)
+          ORDER BY project_id NULLS FIRST, updated_at DESC
+        `,
+        [context.organizationId, projectId],
+      )
+      const organizationPolicy = mapOrganizationPolicy(rows.find((row) => row.project_id === null))
+      const projectOverride = mapProjectOverride(rows.find((row) => row.project_id === projectId))
+
+      return {
+        organizationPolicy,
+        projectOverride,
+        effectivePolicy: resolveEffectivePolicy(organizationPolicy, projectOverride),
+      }
+    },
+
+    async saveEnforcementPolicy(policy, context) {
+      await db.query(
+        `
+          INSERT INTO enforcement_policies (
+            id,
+            organization_id,
+            project_id,
+            name,
+            version,
+            policy,
+            updated_at
+          )
+          VALUES ($1, $2, NULL, $3, $4, $5::jsonb, $6)
+          ON CONFLICT (id) DO UPDATE
+          SET name = excluded.name,
+              version = excluded.version,
+              policy = excluded.policy,
+              updated_at = excluded.updated_at
+        `,
+        [
+          policy.id,
+          context.organizationId,
+          policy.name,
+          policy.version,
+          JSON.stringify(policy),
+          policy.updatedAt,
+        ],
+      )
+
+      return policy
+    },
+
+    async saveGateOverride(decision, context) {
+      await db.query(
+        `
+          INSERT INTO gate_override_decisions (
+            id,
+            organization_id,
+            run_id,
+            node_id,
+            project_id,
+            user_id,
+            role,
+            reason,
+            blocked_reason_ids,
+            policy_version,
+            provisional,
+            status,
+            created_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13)
+          ON CONFLICT (id) DO UPDATE
+          SET reason = excluded.reason,
+              blocked_reason_ids = excluded.blocked_reason_ids,
+              policy_version = excluded.policy_version,
+              provisional = excluded.provisional,
+              status = excluded.status,
+              created_at = excluded.created_at
+        `,
+        [
+          decision.id,
+          context.organizationId,
+          decision.runId,
+          decision.nodeId,
+          decision.projectId,
+          decision.userId,
+          decision.role,
+          decision.reason,
+          JSON.stringify(decision.blockedReasonIds),
+          decision.policyVersion,
+          decision.provisional,
+          decision.status,
+          decision.createdAt,
+        ],
+      )
+
+      return decision
+    },
+
+    async listGateOverrides(input, context) {
+      const rows = await db.query<GateOverrideDecisionRow>(
+        `
+          SELECT *
+          FROM gate_override_decisions
+          WHERE organization_id = $1
+            AND ($2::text IS NULL OR run_id = $2)
+          ORDER BY created_at DESC
+        `,
+        [context.organizationId, input.runId ?? null],
+      )
+
+      return rows.map(mapGateOverride)
     },
   }
 }

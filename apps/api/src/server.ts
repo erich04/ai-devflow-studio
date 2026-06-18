@@ -36,7 +36,7 @@ const server = createServer(async (request, response) => {
   if (request.method === 'OPTIONS') {
     response.writeHead(204, {
       'access-control-allow-origin': '*',
-      'access-control-allow-methods': 'GET,POST,OPTIONS',
+      'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
       'access-control-allow-headers':
         'content-type,x-devflow-organization-id,x-devflow-user-id,x-devflow-user-role,x-devflow-project-roles',
     })
@@ -54,7 +54,7 @@ const server = createServer(async (request, response) => {
   }
 
   let requestBody: unknown
-  if (request.method === 'POST') {
+  if (request.method === 'POST' || request.method === 'PUT') {
     try {
       requestBody = await readJsonBody(request)
     } catch {

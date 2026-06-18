@@ -208,6 +208,7 @@ CREATE TABLE IF NOT EXISTS agent_reviews (
   missing_evidence jsonb NOT NULL DEFAULT '[]'::jsonb,
   suggested_tests jsonb NOT NULL DEFAULT '[]'::jsonb,
   knowledge_references jsonb NOT NULL DEFAULT '[]'::jsonb,
+  policy_findings jsonb NOT NULL DEFAULT '[]'::jsonb,
   confidence numeric(4,3) NOT NULL DEFAULT 0,
   gate_advisory jsonb NOT NULL,
   created_at timestamptz NOT NULL
@@ -259,6 +260,46 @@ CREATE TABLE IF NOT EXISTS coding_agent_summaries (
   redacted boolean NOT NULL DEFAULT true
 );
 
+CREATE TABLE IF NOT EXISTS enforcement_policies (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  project_id text REFERENCES projects(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  version integer NOT NULL,
+  policy jsonb NOT NULL,
+  updated_at timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS gate_override_decisions (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  run_id text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  node_id text NOT NULL REFERENCES workflow_nodes(id) ON DELETE CASCADE,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  role text NOT NULL,
+  reason text NOT NULL,
+  blocked_reason_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+  policy_version integer NOT NULL,
+  provisional boolean NOT NULL DEFAULT false,
+  status text NOT NULL,
+  created_at timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_policy_findings (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  review_id text NOT NULL REFERENCES agent_reviews(id) ON DELETE CASCADE,
+  run_id text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  node_id text NOT NULL REFERENCES workflow_nodes(id) ON DELETE CASCADE,
+  category text NOT NULL,
+  severity text NOT NULL,
+  summary text NOT NULL,
+  evidence_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+  knowledge_reference_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+  created_at timestamptz NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_projects_organization_id ON projects(organization_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_project_id ON workflow_runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_nodes_run_id ON workflow_nodes(run_id);
@@ -269,9 +310,12 @@ CREATE INDEX IF NOT EXISTS idx_agent_reviews_run_id ON agent_reviews(run_id);
 CREATE INDEX IF NOT EXISTS idx_agent_traces_review_id ON agent_traces(review_id);
 CREATE INDEX IF NOT EXISTS idx_agent_token_usage_project_id ON agent_token_usage(project_id);
 CREATE INDEX IF NOT EXISTS idx_coding_agent_summaries_project_id ON coding_agent_summaries(project_id);
+CREATE INDEX IF NOT EXISTS idx_enforcement_policies_project_id ON enforcement_policies(project_id);
+CREATE INDEX IF NOT EXISTS idx_gate_override_decisions_run_id ON gate_override_decisions(run_id);
+CREATE INDEX IF NOT EXISTS idx_agent_policy_findings_review_id ON agent_policy_findings(review_id);
 
 INSERT INTO schema_meta (key, value)
-VALUES ('schema_version', '2')
+VALUES ('schema_version', '3')
 ON CONFLICT (key) DO UPDATE
 SET value = excluded.value,
     updated_at = now();
