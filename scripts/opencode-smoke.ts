@@ -111,7 +111,7 @@ async function main() {
     requestedBy: 'devflow-smoke',
     providerId: preflight.providerID,
     userInstruction:
-      'Create devflow-opencode-smoke.txt with a short success message. Use the edit tool directly; do not run bash, shell commands, package commands, or repository inspection.',
+      'First run pwd once to confirm the managed worktree, then create devflow-opencode-smoke.txt with a short success message. Keep the change minimal.',
     now,
     upstreamArtifacts: [],
     knowledgeReferences: [],
@@ -119,14 +119,30 @@ async function main() {
     gateDecisions: [],
     testEvidence: [],
   })
-  console.log(`opencode requested ${started.permissionRequest.permission}; approving once.`)
-  const completed = await engine.approvePermission({
-    codingRun: started.codingRun,
-    workspace,
-    project,
-    request: started.permissionRequest,
-    now: new Date().toISOString(),
-  })
+  let codingRun = started.codingRun
+  let permissionRequest = started.permissionRequest
+  let completed: Awaited<ReturnType<typeof engine.approvePermission>> | undefined
+  for (let approvalCount = 0; approvalCount < 5; approvalCount += 1) {
+    console.log(`opencode requested ${permissionRequest.permission}; approving once.`)
+    const result = await engine.approvePermission({
+      codingRun,
+      workspace,
+      project,
+      request: permissionRequest,
+      now: new Date().toISOString(),
+    })
+    if ('permissionRequest' in result) {
+      codingRun = result.codingRun
+      permissionRequest = result.permissionRequest
+      continue
+    }
+    completed = result
+    break
+  }
+
+  if (!completed) {
+    throw new Error('opencode smoke exceeded the permission approval limit.')
+  }
 
   if (!completed.diff.changedPaths.length) {
     throw new Error('opencode smoke did not produce a changed path.')

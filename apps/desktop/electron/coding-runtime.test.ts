@@ -321,6 +321,103 @@ describe('CodingRuntime', () => {
     )
   })
 
+  it('persists the next live permission request without finalizing the run', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const fakeEngine = createFakeCodingEngineAdapter()
+    const nextPermission: CodingPermissionRequest = {
+      id: 'permission-edit-2',
+      codingRunId: 'coding-run-1',
+      runId: 'run-1',
+      nodeId: 'node-build',
+      permission: 'edit',
+      title: 'opencode requested edit permission',
+      filePath: 'src/new-file.ts',
+      risk: 'warn',
+      reasons: ['opencode requested a second permission.'],
+      status: 'pending',
+      requestedAt: '2026-06-17T00:01:00.000Z',
+      expiresAt: '2026-06-17T00:02:00.000Z',
+    }
+    const engineWithNextPermission: CodingEngineAdapter = {
+      ...fakeEngine,
+      engine: 'opencode-http',
+      async approvePermission(input) {
+        return {
+          codingRun: {
+            ...input.codingRun,
+            engine: 'opencode-http',
+            status: 'waiting_permission',
+            summary: 'opencode is waiting for another DevFlow permission relay.',
+          },
+          events: [
+            {
+              id: 'coding-event-next-permission',
+              codingRunId: input.codingRun.id,
+              runId: input.codingRun.runId,
+              nodeId: input.codingRun.nodeId,
+              sequence: 3,
+              kind: 'permission',
+              message: 'opencode requested edit permission.',
+              timestamp: '2026-06-17T00:01:00.000Z',
+              metadata: { requestId: nextPermission.id },
+              redacted: true,
+            },
+          ],
+          permissionRequest: nextPermission,
+        }
+      },
+    }
+    const publisher = {
+      publishRunStatus: vi.fn(),
+      publishEvent: vi.fn(),
+      publishPermission: vi.fn(),
+    }
+    const runTestCommand = vi.fn()
+    const uploadCodingAgentSummary = vi.fn()
+    const runtime = createCodingRuntime({
+      store,
+      engine: engineWithNextPermission,
+      remoteSync: { uploadCodingAgentSummary },
+      publisher,
+      runTestCommand,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-1', 'decision-1'),
+      now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:01:00.000Z'),
+    })
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'openai',
+      userInstruction: 'Add the marker file.',
+    })
+
+    await runtime.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id,
+      codingRunId: started.codingRun.id,
+      decidedBy: 'user-1',
+      decision: 'approved',
+      comment: 'Approved first permission.',
+    })
+
+    expect(store.permissionRequests).toHaveLength(2)
+    expect(store.permissionRequests[0]!.status).toBe('approved')
+    expect(store.permissionRequests[1]).toEqual(nextPermission)
+    expect(store.codingRuns.at(-1)).toMatchObject({
+      status: 'waiting_permission',
+      summary: 'opencode is waiting for another DevFlow permission relay.',
+    })
+    expect(store.diffArtifacts).toHaveLength(0)
+    expect(runTestCommand).not.toHaveBeenCalled()
+    expect(uploadCodingAgentSummary).not.toHaveBeenCalled()
+    expect(publisher.publishPermission).toHaveBeenCalledWith(nextPermission)
+  })
+
   it('runs runtime-owned dependency bootstrap before tests when the engine does not return bootstrap evidence', async () => {
     const repo = await gitRepo()
     const store = new MemoryCodingStore({
@@ -333,6 +430,9 @@ describe('CodingRuntime', () => {
       engine: 'opencode-http',
       async approvePermission(input) {
         const completed = await fakeEngine.approvePermission(input)
+        if ('permissionRequest' in completed) {
+          throw new Error(`Expected completed fake result, got permission ${completed.permissionRequest.id}`)
+        }
         return {
           codingRun: {
             ...completed.codingRun,

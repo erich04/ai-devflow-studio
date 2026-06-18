@@ -43,10 +43,12 @@ export type OpencodeHttpCodingEngineConfig = {
 type OpencodeRuntimeSession = {
   baseUrl: string
   directory: string
+  handledPermissionIds: Set<string>
   messagePromise: Promise<
     | { ok: true }
     | { ok: false; error: unknown }
   >
+  nextEventSequence: number
   sessionId: string
 }
 
@@ -108,18 +110,20 @@ export function createOpencodeHttpCodingEngineAdapter(
         () => ({ ok: true as const }),
         (error: unknown) => ({ ok: false as const, error }),
       )
-      sessions.set(input.id, {
-        baseUrl: server.baseUrl,
-        directory: input.workspace.worktreePath,
-        messagePromise,
-        sessionId: session.id,
-      })
       const permission = await waitForPermission({
         baseUrl: server.baseUrl,
         pollMs: config.permissionPollMs ?? 1_000,
         sessionId: session.id,
         timeoutMs: config.permissionDiscoveryTimeoutMs ?? 60_000,
         ...fetcherOption(config.fetcher),
+      })
+      sessions.set(input.id, {
+        baseUrl: server.baseUrl,
+        directory: input.workspace.worktreePath,
+        handledPermissionIds: new Set([permission.id]),
+        messagePromise,
+        nextEventSequence: 3,
+        sessionId: session.id,
       })
 
       return createStartResult(input, brief.prompt, session.id, permission)
@@ -135,7 +139,22 @@ export function createOpencodeHttpCodingEngineAdapter(
         message: 'Approved by DevFlow.',
         ...fetcherOption(config.fetcher),
       })
-      const messageResult = await session.messagePromise
+      session.handledPermissionIds.add(input.request.id)
+      const continuation = await waitForNextPermissionOrMessage({
+        baseUrl: session.baseUrl,
+        handledPermissionIds: session.handledPermissionIds,
+        messagePromise: session.messagePromise,
+        pollMs: config.permissionPollMs ?? 1_000,
+        sessionId: session.sessionId,
+        ...fetcherOption(config.fetcher),
+      })
+      if (continuation.kind === 'permission') {
+        session.handledPermissionIds.add(continuation.permission.id)
+        const eventSequence = session.nextEventSequence
+        session.nextEventSequence += 1
+        return createContinuationResult(input.codingRun, input.now, continuation.permission, eventSequence)
+      }
+      const messageResult = continuation.result
       const diffSource = await readOpencodeDiffSource({
         baseUrl: session.baseUrl,
         sessionId: session.sessionId,
@@ -170,7 +189,7 @@ export function createOpencodeHttpCodingEngineAdapter(
           codingRunId: codingRun.id,
           runId: codingRun.runId,
           nodeId: codingRun.nodeId,
-          sequence: 3,
+          sequence: session.nextEventSequence,
           kind: 'diff',
           message: 'opencode completed and DevFlow captured a redacted worktree diff.',
           timestamp: input.now,
@@ -201,6 +220,53 @@ export function createOpencodeHttpCodingEngineAdapter(
       sessions.delete(input.codingRun.id)
     },
   }
+}
+
+async function waitForNextPermissionOrMessage(input: {
+  baseUrl: string
+  fetcher?: Fetcher
+  handledPermissionIds: Set<string>
+  messagePromise: OpencodeRuntimeSession['messagePromise']
+  pollMs: number
+  sessionId: string
+}): Promise<
+  | { kind: 'message'; result: Awaited<OpencodeRuntimeSession['messagePromise']> }
+  | { kind: 'permission'; permission: OpencodePermission }
+> {
+  const firstPermission = await findUnhandledPermission(input)
+  if (firstPermission) {
+    return { kind: 'permission', permission: firstPermission }
+  }
+
+  while (true) {
+    const result = await Promise.race([
+      input.messagePromise.then((messageResult) => ({ kind: 'message' as const, result: messageResult })),
+      new Promise<{ kind: 'tick' }>((resolve) => setTimeout(() => resolve({ kind: 'tick' }), input.pollMs)),
+    ])
+    if (result.kind === 'message') {
+      return result
+    }
+
+    const permission = await findUnhandledPermission(input)
+    if (permission) {
+      return { kind: 'permission', permission }
+    }
+  }
+}
+
+async function findUnhandledPermission(input: {
+  baseUrl: string
+  fetcher?: Fetcher
+  handledPermissionIds: Set<string>
+  sessionId: string
+}): Promise<OpencodePermission | undefined> {
+  const permissions = await listOpencodePermissions({
+    baseUrl: input.baseUrl,
+    ...fetcherOption(input.fetcher),
+  })
+  return permissions.find(
+    (candidate) => candidate.sessionID === input.sessionId && !input.handledPermissionIds.has(candidate.id),
+  )
 }
 
 async function readOpencodeDiffSource(input: {
@@ -326,6 +392,62 @@ function createStartResult(
     codingRun,
     events,
     permissionRequest,
+  }
+}
+
+function createContinuationResult(
+  codingRun: CodingAgentRun,
+  now: string,
+  permission: OpencodePermission,
+  sequence: number,
+) {
+  const continuedRun: CodingAgentRun = {
+    ...codingRun,
+    status: 'waiting_permission',
+    summary: 'opencode is waiting for another DevFlow permission relay.',
+  }
+  const event: CodingAgentEvent = {
+    id: `coding-event-${codingRun.id}-permission-${permission.id}`,
+    codingRunId: codingRun.id,
+    runId: codingRun.runId,
+    nodeId: codingRun.nodeId,
+    sequence,
+    kind: 'permission',
+    message: `opencode requested ${permission.permission} permission.`,
+    timestamp: now,
+    metadata: { requestId: permission.id },
+    redacted: true,
+  }
+
+  return {
+    codingRun: continuedRun,
+    events: [event],
+    permissionRequest: toCodingPermissionRequest(continuedRun, permission, now),
+  }
+}
+
+function toCodingPermissionRequest(
+  codingRun: CodingAgentRun,
+  permission: OpencodePermission,
+  now: string,
+): CodingPermissionRequest {
+  const filePath = metadataString(permission.metadata, 'filepath') ?? metadataString(permission.metadata, 'path')
+  const command = metadataString(permission.metadata, 'command')
+
+  return {
+    id: permission.id,
+    codingRunId: codingRun.id,
+    runId: codingRun.runId,
+    nodeId: codingRun.nodeId,
+    permission: normalizePermission(permission.permission),
+    title: `opencode requested ${permission.permission} permission`,
+    ...(filePath ? { filePath } : {}),
+    ...(command ? { command } : {}),
+    risk: 'warn',
+    reasons: ['opencode requested a tool permission through the managed adapter.'],
+    status: 'pending',
+    requestedAt: now,
+    expiresAt: new Date(Date.parse(now) + 60_000).toISOString(),
   }
 }
 

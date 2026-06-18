@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projects, runs, type LocalProject, type ManagedCodingWorkspace } from '@ai-devflow/shared'
+import type { CodingEngineApprovePermissionResult } from './coding-engine'
 import { createOpencodeHttpCodingEngineAdapter, type OpencodeHttpProcessManager } from './opencode-http-engine'
 import type { Fetcher } from './opencode-http-adapter'
 
@@ -49,6 +50,7 @@ describe('opencode HTTP coding engine', () => {
       {},
       [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
       true,
+      [],
       [
         {
           file: 'src/app.ts',
@@ -78,6 +80,7 @@ describe('opencode HTTP coding engine', () => {
       request: started.permissionRequest,
       now: '2026-06-17T00:00:01.000Z',
     })
+    const completedResult = expectCompletedResult(completed)
 
     expect(fetcher.urls).toContain('http://127.0.0.1:4097/permission/perm-1/reply')
     expect(fetcher.urls).toContain('http://127.0.0.1:4097/session/ses-1/diff?directory=%2Ftmp%2Fworktree')
@@ -88,10 +91,10 @@ describe('opencode HTTP coding engine', () => {
         message: 'Approved by DevFlow.',
       }),
     )
-    expect(completed.codingRun.status).toBe('completed')
-    expect(completed.diff.changedPaths).toEqual(['src/app.ts'])
-    expect(completed.diff.patch).not.toContain('sk-live-secret')
-    expect(completed.bootstrapEvidence).toBeUndefined()
+    expect(completedResult.codingRun.status).toBe('completed')
+    expect(completedResult.diff.changedPaths).toEqual(['src/app.ts'])
+    expect(completedResult.diff.patch).not.toContain('sk-live-secret')
+    expect(completedResult.bootstrapEvidence).toBeUndefined()
   })
 
   it('falls back to managed worktree diff capture when opencode returns no diff files', async () => {
@@ -101,44 +104,6 @@ describe('opencode HTTP coding engine', () => {
       [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'new-file.txt' } }],
       true,
       [],
-    ])
-    const engine = createOpencodeHttpCodingEngineAdapter({
-      binaryPath: 'opencode',
-      providerID: 'openai',
-      modelID: 'gpt-4.1-mini',
-      processManager: readyServer(),
-      fetcher,
-      captureWorktreeDiff: async () => ({
-        changedPaths: ['new-file.txt'],
-        patch: 'diff --git a/new-file.txt b/new-file.txt\n+hello\n',
-      }),
-      permissionPollMs: 1,
-      permissionDiscoveryTimeoutMs: 50,
-    })
-    const run = runs[0]!
-    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
-    const project = localProject(projects[0]!)
-    const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
-
-    const completed = await engine.approvePermission({
-      codingRun: started.codingRun,
-      workspace,
-      project,
-      request: started.permissionRequest,
-      now: '2026-06-17T00:00:01.000Z',
-    })
-
-    expect(completed.diff.changedPaths).toEqual(['new-file.txt'])
-    expect(completed.diff.patch).toContain('+hello')
-  })
-
-  it('uses managed worktree diff when the opencode message stream closes after applying changes', async () => {
-    const fetcher = sequenceFetcher([
-      { id: 'ses-1' },
-      new TypeError('fetch failed'),
-      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'new-file.txt' } }],
-      true,
       [],
     ])
     const engine = createOpencodeHttpCodingEngineAdapter({
@@ -167,9 +132,97 @@ describe('opencode HTTP coding engine', () => {
       request: started.permissionRequest,
       now: '2026-06-17T00:00:01.000Z',
     })
+    const completedResult = expectCompletedResult(completed)
 
-    expect(completed.codingRun.status).toBe('completed')
-    expect(completed.diff.changedPaths).toEqual(['new-file.txt'])
+    expect(completedResult.diff.changedPaths).toEqual(['new-file.txt'])
+    expect(completedResult.diff.patch).toContain('+hello')
+  })
+
+  it('uses managed worktree diff when the opencode message stream closes after applying changes', async () => {
+    const fetcher = sequenceFetcher([
+      { id: 'ses-1' },
+      new TypeError('fetch failed'),
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'new-file.txt' } }],
+      true,
+      [],
+      [],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      fetcher,
+      captureWorktreeDiff: async () => ({
+        changedPaths: ['new-file.txt'],
+        patch: 'diff --git a/new-file.txt b/new-file.txt\n+hello\n',
+      }),
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = await engine.start(startInput({ run, node, project, workspace }))
+
+    const completed = await engine.approvePermission({
+      codingRun: started.codingRun,
+      workspace,
+      project,
+      request: started.permissionRequest,
+      now: '2026-06-17T00:00:01.000Z',
+    })
+    const completedResult = expectCompletedResult(completed)
+
+    expect(completedResult.codingRun.status).toBe('completed')
+    expect(completedResult.diff.changedPaths).toEqual(['new-file.txt'])
+  })
+
+  it('returns the next opencode permission instead of completing when a second request appears', async () => {
+    const fetcher = sequenceFetcher([
+      { id: 'ses-1' },
+      {},
+      [{ id: 'perm-bash', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'pwd' } }],
+      true,
+      [{ id: 'perm-edit', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'new-file.txt' } }],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      fetcher,
+      captureWorktreeDiff: async () => ({
+        changedPaths: [],
+        patch: '',
+      }),
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = await engine.start(startInput({ run, node, project, workspace }))
+
+    const continued = await engine.approvePermission({
+      codingRun: started.codingRun,
+      workspace,
+      project,
+      request: started.permissionRequest,
+      now: '2026-06-17T00:00:01.000Z',
+    })
+
+    expect(continued).toMatchObject({
+      codingRun: { status: 'waiting_permission' },
+      permissionRequest: {
+        id: 'perm-edit',
+        permission: 'edit',
+        filePath: 'new-file.txt',
+        status: 'pending',
+      },
+    })
   })
 
   it('aborts the matching opencode session when cancelled', async () => {
@@ -199,6 +252,13 @@ describe('opencode HTTP coding engine', () => {
     expect(fetcher.urls).toContain('http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree')
   })
 })
+
+function expectCompletedResult(result: CodingEngineApprovePermissionResult) {
+  if ('permissionRequest' in result) {
+    throw new Error(`Expected completed result, got permission request ${result.permissionRequest.id}`)
+  }
+  return result
+}
 
 function readyServer(): OpencodeHttpProcessManager {
   return {

@@ -62,12 +62,22 @@ export type CodingEngineApprovePermissionInput = {
   now: string
 }
 
-export type CodingEngineApprovePermissionResult = {
+export type CodingEngineApprovePermissionCompletedResult = {
   codingRun: CodingAgentRun
   events: CodingAgentEvent[]
   diff: CodingDiffArtifact
   bootstrapEvidence?: DependencyBootstrapEvidence
 }
+
+export type CodingEngineApprovePermissionContinuedResult = {
+  codingRun: CodingAgentRun
+  events: CodingAgentEvent[]
+  permissionRequest: CodingPermissionRequest
+}
+
+export type CodingEngineApprovePermissionResult =
+  | CodingEngineApprovePermissionCompletedResult
+  | CodingEngineApprovePermissionContinuedResult
 
 export type CodingEngineCancelInput = {
   codingRun: CodingAgentRun

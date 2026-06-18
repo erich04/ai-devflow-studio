@@ -492,6 +492,12 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         project,
         now: timestamp,
       })
+      if ('permissionRequest' in completed) {
+        await saveCodingRun(completed.codingRun)
+        await saveEvents(completed.events)
+        await savePermissionRequest(completed.permissionRequest)
+        return updatedRequest
+      }
       await deps.store.saveCodingDiffArtifact(completed.diff)
       await saveEvents(completed.events)
       const bootstrapped = await runCodingBootstrap({

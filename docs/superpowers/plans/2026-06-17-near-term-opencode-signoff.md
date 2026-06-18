@@ -79,3 +79,6 @@ Expected: deterministic checks pass without opencode or provider keys.
   DEVFLOW_OPENCODE_PROVIDER_ID=double DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest
   corepack pnpm test:opencode-smoke` passed with
   `opencode smoke passed; changed paths: devflow-opencode-smoke.txt`.
+- 2026-06-17: Extended the live smoke and opencode HTTP engine to support multi-step permission
+  relay. The real smoke passed with `bash -> edit -> bash -> bash` permission approvals before
+  producing `devflow-opencode-smoke.txt`.

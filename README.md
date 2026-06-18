@@ -98,11 +98,11 @@ corepack pnpm test:opencode-smoke
 ```
 
 Expected live-smoke result: DevFlow starts `opencode serve`, creates a managed Git worktree, sends
-the DevFlow coding brief, relays one opencode permission request, captures a redacted diff, runs
+the DevFlow coding brief, relays opencode permission requests, captures a redacted diff, runs
 dependency bootstrap when needed, runs `npm test` in the worktree, and removes the temporary smoke
 repo afterward. The smoke output must not print the provider key. v0.6.1 live signoff has been
-verified with opencode `1.17.5` and Volcengine Ark `double/ark-code-latest`; multi-step live
-permission sequences such as `bash` before `edit` remain a v0.6.x hardening item.
+verified with opencode `1.17.5` and Volcengine Ark `double/ark-code-latest`, including a multi-step
+`bash -> edit -> bash -> bash` permission sequence.
 
 ## v0.5 Knowledge Review Agent Demo
 
