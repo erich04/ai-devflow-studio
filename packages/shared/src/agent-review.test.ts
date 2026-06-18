@@ -95,6 +95,14 @@ describe('runKnowledgeReviewAgent', () => {
       },
     })
     expect(result.review.knowledgeReferences.length).toBeGreaterThan(0)
+    expect(result.review.policyFindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: 'review_gap',
+          severity: 'low',
+        }),
+      ]),
+    )
     expect(result.trace.steps.map((step) => step.kind)).toEqual([
       'context',
       'retrieval',
@@ -104,6 +112,40 @@ describe('runKnowledgeReviewAgent', () => {
     expect(result.tokenUsage.source).toBe('provider_reported')
     expect(result.tokenUsage.inputTokens).toBeGreaterThan(0)
     expect(result.tokenUsage.costUsd).toBeGreaterThanOrEqual(0)
+  })
+
+  it('derives deterministic missing-evidence policy findings when evidence is absent', async () => {
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const result = await runKnowledgeReviewAgent({
+      request: {
+        id: 'review-request-missing-evidence',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+      },
+      context,
+      provider: createFakeAgentProvider(),
+      now: () => '2026-06-16T12:01:00.000Z',
+    })
+
+    expect(result.review.policyFindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: 'missing_evidence',
+          severity: 'medium',
+          summary: expect.stringContaining('passing local test evidence'),
+        }),
+      ]),
+    )
   })
 
   it('creates an Agent Review artifact and event without making gate advisory blocking', async () => {
@@ -132,6 +174,7 @@ describe('runKnowledgeReviewAgent', () => {
 
     expect(output.artifact.kind).toBe('agent_review')
     expect(output.artifact.redacted).toBe(true)
+    expect(output.artifact.content).toContain('Policy findings:')
     expect(output.event.kind).toBe('agent_review')
     expect(output.gateAdvisory.blocksApproval).toBe(false)
   })

@@ -74,6 +74,10 @@ export function createRemoteAgentReviewSummary(
     summary: review.summary,
     riskCount: review.risks.length,
     missingEvidenceCount: review.missingEvidence.length,
+    policyFindingCount: review.policyFindings.length,
+    policyFindingCategories: Array.from(
+      new Set(review.policyFindings.map((finding) => finding.category)),
+    ),
     advisoryLevel: review.gateAdvisory.level,
     blocksApproval: review.gateAdvisory.blocksApproval,
     confidence: review.confidence,

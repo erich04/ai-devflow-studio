@@ -220,6 +220,28 @@ export type GateAdvisory = {
   createdAt: string
 }
 
+export type AgentPolicyFindingCategory =
+  | 'missing_evidence'
+  | 'test_risk'
+  | 'api_contract_risk'
+  | 'security_risk'
+  | 'review_gap'
+
+export type AgentPolicyFindingSeverity = 'low' | 'medium' | 'high'
+
+export type AgentPolicyFinding = {
+  id: string
+  reviewId: string
+  runId: string
+  nodeId: string
+  category: AgentPolicyFindingCategory
+  severity: AgentPolicyFindingSeverity
+  summary: string
+  evidenceIds: string[]
+  knowledgeReferenceIds: string[]
+  createdAt: string
+}
+
 export type AgentReviewResult = {
   id: string
   requestId: string
@@ -235,6 +257,7 @@ export type AgentReviewResult = {
   missingEvidence: string[]
   suggestedTests: string[]
   knowledgeReferences: KnowledgeReference[]
+  policyFindings: AgentPolicyFinding[]
   confidence: number
   gateAdvisory: GateAdvisory
   createdAt: string
@@ -664,6 +687,12 @@ export type RemoteTeamSnapshot = {
   projectCost: import('./cost').TokenUsageRollup[]
   memberCost: import('./cost').TokenUsageRollup[]
   totalCost: string
+  enforcementPolicies?: {
+    organizationPolicy: import('./enforcement').OrganizationEnforcementPolicy
+    projectOverrides: import('./enforcement').ProjectEnforcementPolicyOverride[]
+    effectivePolicies: import('./enforcement').EffectiveEnforcementPolicy[]
+    gateOverrides: import('./enforcement').GateOverrideDecision[]
+  }
 }
 
 export type RemoteRunSummaryKind = 'run' | 'approval' | 'event'
@@ -705,6 +734,8 @@ export type RemoteAgentReviewSummary = {
   summary: string
   riskCount: number
   missingEvidenceCount: number
+  policyFindingCount?: number
+  policyFindingCategories?: AgentPolicyFindingCategory[]
   advisoryLevel: GateAdvisory['level']
   blocksApproval: boolean
   confidence: number

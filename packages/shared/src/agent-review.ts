@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  AgentPolicyFinding,
   AgentProviderUsage,
   AgentReviewArtifact,
   AgentReviewContext,
@@ -36,6 +37,12 @@ export type KnowledgeReviewProviderOutput = {
   suggestedTests: string[]
   confidence: number
   usage?: AgentProviderUsage
+  policyFindings?: Array<
+    Pick<AgentPolicyFinding, 'category' | 'severity' | 'summary'> & {
+      evidenceIds?: string[]
+      knowledgeReferenceIds?: string[]
+    }
+  >
 }
 
 export type AgentProvider = {
@@ -300,6 +307,99 @@ function createGateAdvisory(
   }
 }
 
+function createPolicyFinding(
+  reviewId: string,
+  request: AgentReviewRequest,
+  index: number,
+  input: Pick<AgentPolicyFinding, 'category' | 'severity' | 'summary'> & {
+    evidenceIds?: string[]
+    knowledgeReferenceIds?: string[]
+  },
+  createdAt: string,
+): AgentPolicyFinding {
+  return {
+    id: createId('agent-policy-finding', `${reviewId}-${index}-${input.category}-${input.severity}`),
+    reviewId,
+    runId: request.runId,
+    nodeId: request.nodeId,
+    category: input.category,
+    severity: input.severity,
+    summary: redactedSummary(input.summary),
+    evidenceIds: input.evidenceIds ?? [],
+    knowledgeReferenceIds: input.knowledgeReferenceIds ?? [],
+    createdAt,
+  }
+}
+
+function derivePolicyFindings(
+  reviewId: string,
+  request: AgentReviewRequest,
+  context: AgentReviewContext,
+  output: KnowledgeReviewProviderOutput,
+  createdAt: string,
+): AgentPolicyFinding[] {
+  const providerFindings = output.policyFindings ?? []
+  const derivedFindings: Array<
+    Pick<AgentPolicyFinding, 'category' | 'severity' | 'summary'> & {
+      evidenceIds?: string[]
+      knowledgeReferenceIds?: string[]
+    }
+  > = []
+
+  for (const missing of output.missingEvidence) {
+    derivedFindings.push({
+      category: 'missing_evidence',
+      severity: 'medium',
+      summary: missing,
+      knowledgeReferenceIds: context.knowledgeReferences.map((reference) => reference.id),
+    })
+  }
+
+  for (const evidence of context.testEvidence) {
+    if (evidence.status === 'failed' || evidence.status === 'timed_out') {
+      derivedFindings.push({
+        category: 'test_risk',
+        severity: 'high',
+        summary: `Test evidence ${evidence.id} is ${evidence.status}: ${evidence.summary}`,
+        evidenceIds: [evidence.id],
+      })
+    }
+  }
+
+  for (const risk of output.risks) {
+    if (risk.toLocaleLowerCase().includes('api')) {
+      derivedFindings.push({
+        category: 'api_contract_risk',
+        severity: 'high',
+        summary: risk,
+        knowledgeReferenceIds: context.knowledgeReferences.map((reference) => reference.id),
+      })
+    }
+  }
+
+  const allFindings = providerFindings.length > 0 ? providerFindings : derivedFindings
+
+  if (allFindings.length === 0) {
+    return [
+      createPolicyFinding(
+        reviewId,
+        request,
+        1,
+        {
+          category: 'review_gap',
+          severity: 'low',
+          summary: 'No blocking policy finding was produced by the review.',
+        },
+        createdAt,
+      ),
+    ]
+  }
+
+  return allFindings.map((finding, index) =>
+    createPolicyFinding(reviewId, request, index + 1, finding, createdAt),
+  )
+}
+
 export async function runKnowledgeReviewAgent({
   request,
   context,
@@ -312,6 +412,7 @@ export async function runKnowledgeReviewAgent({
   const providerOutput = await provider.reviewKnowledge({ request, context, prompt })
   const completion = JSON.stringify(providerOutput)
   const gateAdvisory = createGateAdvisory(reviewId, request, providerOutput, createdAt)
+  const policyFindings = derivePolicyFindings(reviewId, request, context, providerOutput, createdAt)
   const review: AgentReviewResult = {
     id: reviewId,
     requestId: request.id,
@@ -327,6 +428,7 @@ export async function runKnowledgeReviewAgent({
     missingEvidence: providerOutput.missingEvidence,
     suggestedTests: providerOutput.suggestedTests,
     knowledgeReferences: context.knowledgeReferences,
+    policyFindings,
     confidence: providerOutput.confidence,
     gateAdvisory,
     createdAt,
@@ -415,6 +517,11 @@ export function createAgentReviewArtifacts(result: AgentReviewExecutionResult): 
       '',
       'Suggested tests:',
       ...result.review.suggestedTests,
+      '',
+      'Policy findings:',
+      ...result.review.policyFindings.map((finding) => {
+        return `${finding.severity} ${finding.category}: ${finding.summary}`
+      }),
     ].join('\n'),
     redacted: true,
     updatedAt: result.review.createdAt,
