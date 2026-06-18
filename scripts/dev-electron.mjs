@@ -3,7 +3,15 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const desktopDir = path.join(rootDir, 'apps', 'desktop')
 const devServerUrl = 'http://127.0.0.1:5173'
+const electronBin = path.join(
+  desktopDir,
+  'node_modules',
+  '.bin',
+  process.platform === 'win32' ? 'electron.cmd' : 'electron',
+)
+const electronArgs = process.argv.slice(2)
 
 function spawnLogged(command, args, options = {}) {
   const child = spawn(command, args, {
@@ -70,7 +78,7 @@ process.on('exit', cleanup)
 
 await waitForServer(devServerUrl)
 
-const electron = spawnLogged('corepack', ['pnpm', '--filter', '@ai-devflow/desktop', 'electron'], {
+const electron = spawnLogged(electronBin, [...electronArgs, desktopDir], {
   env: {
     ...process.env,
     VITE_DEV_SERVER_URL: devServerUrl,
