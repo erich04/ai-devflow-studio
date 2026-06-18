@@ -43,15 +43,16 @@ Review, trace, token usage, artifact, and event data in SQLite. The API/Web path
 shared Agent Core against team state and persist the result through the team repository boundary.
 Gate Advisory remains warning-only by default.
 
-v0.6 opencode Coding Adapter is underway with the fake harness, runtime hardening slice, and
-env-gated real opencode HTTP runtime implemented. DevFlow can create a managed git worktree, start a
-Coding Agent Run from a build task node, assemble the coding brief from persisted DevFlow context,
-show and push permission relay updates, expire unanswered permission requests, archive a redacted
-Coding Diff Artifact, persist Dependency Bootstrap Evidence and worktree Test Evidence, and sync a
-redacted Coding Agent summary through Electron, API, and Postgres. The real opencode runtime is
-available through explicit `DEVFLOW_CODING_ENGINE=opencode-http` configuration and a manual
+v0.6 opencode Coding Adapter is implemented and signed off for the macOS local runtime path.
+DevFlow can create a managed git worktree, start a Coding Agent Run from a build task node,
+assemble the coding brief from persisted DevFlow context, show and push permission relay updates,
+expire unanswered permission requests, archive a redacted Coding Diff Artifact, persist Dependency
+Bootstrap Evidence and worktree Test Evidence, and sync a redacted Coding Agent summary through
+Electron, API, and Postgres. The real opencode runtime is available through explicit
+`DEVFLOW_CODING_ENGINE=opencode-http` configuration and a manual
 `corepack pnpm test:opencode-smoke` script; default verification remains deterministic on the fake
-engine.
+engine. Manual live signoff completed with opencode `1.17.5` and Volcengine Ark
+`double/ark-code-latest`, including a multi-step `bash -> edit -> bash -> bash` permission relay.
 
 Current validation remains macOS-local for the full real Electron window path. Windows compatibility
 is preserved through static automation checks and Windows CI for typecheck/unit/audit; full Windows
@@ -192,19 +193,14 @@ Electron smoke is still tracked as future compatibility expansion. See
   the fake harness, including managed `opencode serve` process lifecycle, runtime env injection,
   permission reply, abort, redacted diff capture, dependency bootstrap, and skipped-by-default
   `test:opencode-smoke`.
+- Signed off the real opencode runtime manually on macOS with opencode `1.17.5` and Volcengine Ark
+  `double/ark-code-latest`, including a multi-step `bash -> edit -> bash -> bash` permission relay
+  and worktree diff/test-evidence capture.
 - Added redacted `RemoteCodingAgentSummary` sync through Electron, API route, and Postgres overview
   boundaries.
 - Added ADR 0009 and v0.6 plan/research docs.
 
 ## Planned Milestones
-
-### v0.6.1: Real opencode Runtime Hardening
-
-- Manually sign off `corepack pnpm test:opencode-smoke` on a machine with opencode and provider
-  credentials configured.
-- Add Windows real-opencode smoke once the macOS manual smoke has stabilized.
-- Keep default `verify` deterministic with the fake harness until real opencode is stable enough for
-  release validation.
 
 ### v0.7: Configurable Agent Knowledge Enforcement
 
@@ -224,6 +220,8 @@ Electron smoke is still tracked as future compatibility expansion. See
 - Repository file watcher, in-app Markdown editor, and remote knowledge synchronization.
 - Electron packaging, macOS signing/notarization, Windows installer/signing, auto-update, and release
   distribution.
+- Windows real-opencode smoke for managed worktree path handling and dependency bootstrap once the
+  macOS manual runtime path is promoted from local signoff to release validation.
 - Full release/distribution CI beyond the current verify workflow.
 
 ## Knowledge Roadmap Notes
