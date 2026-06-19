@@ -279,6 +279,34 @@ async function runKnowledgeReviewViaDesktopApi(
   await page.getByRole('button', { name: /^Agents$/ }).click()
 }
 
+async function runCodingAgentViaDesktopApi(
+  page,
+  { runId, nodeId, projectId, runTitle, nodeTitle },
+) {
+  const codingRun = await page.evaluate(async (input) => {
+    const result = await window.aiDevFlowDesktop.runCodingAgent({
+      runId: input.runId,
+      nodeId: input.nodeId,
+      projectId: input.projectId,
+      requestedBy: 'u-erich',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Electron smoke should archive a fake implementation diff.',
+    })
+    if (result.codingRun.nodeId !== input.nodeId) {
+      throw new Error(`Coding run started for unexpected node: ${result.codingRun.nodeId}`)
+    }
+    return { id: result.codingRun.id, status: result.codingRun.status }
+  }, { runId, nodeId, projectId })
+
+  expect(codingRun.status).toBe('waiting_permission')
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.getByText(runTitle)).toBeVisible({ timeout: 20_000 })
+  await selectRunByTitle(page, runTitle)
+  await page.getByRole('button', { name: /工作台/ }).click()
+  await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
+  await page.getByRole('button', { name: /^Agents$/ }).click()
+}
+
 let vite
 let api
 let web
@@ -408,6 +436,14 @@ try {
   await expect(first.page.locator('.local-project-panel').getByText('electron-smoke-fixture')).toBeVisible()
   await expect(first.page.getByLabel('测试命令')).toHaveValue('npm test')
   await expect(first.page.getByText(/safe/i)).toBeVisible()
+  const localProjectId = await first.page.evaluate(async (repoPath) => {
+    const state = await window.aiDevFlowDesktop.loadState()
+    const project = state.projects.find((candidate) => candidate.path === repoPath)
+    if (!project) {
+      throw new Error(`Local project not found for smoke repo: ${repoPath}`)
+    }
+    return project.id
+  }, repoDir)
 
   await first.page.getByRole('button', { name: /Knowledge/ }).click()
   await expect(first.page.getByTestId('knowledge-view')).toContainText('Knowledge Governance')
@@ -520,10 +556,12 @@ try {
   await expect(first.page.getByTestId('node-inspector')).toContainText('Knowledge Review Agent')
   await expect(first.page.getByTestId('node-inspector')).toContainText('warning-only')
 
-  await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
-  await first.page.getByRole('button', { name: /^Coding Agent$/ }).click()
-  await expect(first.page.getByTestId('toast')).toContainText('Coding Agent 已请求权限', {
-    timeout: 20_000,
+  await runCodingAgentViaDesktopApi(first.page, {
+    runId: localRun.id,
+    nodeId: 'n-build',
+    projectId: localProjectId,
+    runTitle: '重构 GitHub webhook 重试策略',
+    nodeTitle: '本地实现',
   })
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Permission Relay')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Apply fake coding diff')
@@ -619,10 +657,30 @@ try {
   await expect(first.page.getByText(/blocked/i)).toBeVisible()
   await first.page.getByRole('button', { name: /保存测试命令/ }).click()
   await expect(first.page.getByTestId('toast')).toContainText('测试命令已阻断')
+  await first.page.evaluate(async () => {
+    await window.aiDevFlowDesktop.saveSettings({ themePreference: 'light' })
+  })
+  await expect
+    .poll(async () =>
+      first.page.evaluate(async () => {
+        return (await window.aiDevFlowDesktop.loadState()).settings.themePreference
+      }),
+    )
+    .toBe('light')
   await first.app.close()
 
   const second = await launchApp()
-  await expect(second.page.locator('html')).toHaveAttribute('data-theme-preference', 'light')
+  await expect
+    .poll(async () =>
+      second.page.evaluate(async () => {
+        return (await window.aiDevFlowDesktop.loadState()).settings.themePreference
+      }),
+      { timeout: 20_000 },
+    )
+    .toBe('light')
+  await expect(second.page.locator('html')).toHaveAttribute('data-theme-preference', 'light', {
+    timeout: 20_000,
+  })
   await expect(second.page.getByText('重构 GitHub webhook 重试策略')).toBeVisible()
   await selectRunByTitle(second.page, '重构 GitHub webhook 重试策略')
   await selectWorkflowNode(second.page, 'flow-node-n-design-gate', '架构 Gate')
