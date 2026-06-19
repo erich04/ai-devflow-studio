@@ -388,6 +388,16 @@ try {
   await first.page.getByLabel('Search runs and knowledge').fill('')
 
   await selectThemePreference(first.page, 'light')
+  await first.page.evaluate(async () => {
+    await window.aiDevFlowDesktop.saveSettings({ themePreference: 'light' })
+  })
+  await expect
+    .poll(async () =>
+      first.page.evaluate(async () => {
+        return (await window.aiDevFlowDesktop.loadState()).settings.themePreference
+      }),
+    )
+    .toBe('light')
 
   await first.page.getByRole('button', { name: /^MCP$/ }).click()
   await first.page.getByRole('button', { name: /Disable/ }).first().click()

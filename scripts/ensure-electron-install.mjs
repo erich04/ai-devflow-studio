@@ -75,19 +75,21 @@ async function downloadElectronArtifact() {
   const zipName = `electron-v${electronPackage.version}-${platform}-${arch}.zip`
   const expectedChecksum = checksums[zipName]
   const url = `https://github.com/electron/electron/releases/download/v${electronPackage.version}/${zipName}`
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new Error(`Unable to download ${zipName}: ${response.status} ${response.statusText}`)
+  const zipPath = path.join(os.tmpdir(), zipName)
+  const curl = spawnSync(
+    'curl',
+    ['--fail', '--location', '--retry', '3', '--output', zipPath, url],
+    { stdio: 'inherit' },
+  )
+  if (curl.status !== 0) {
+    throw new Error(`Unable to download ${zipName} with curl: ${curl.status ?? 'unknown status'}`)
   }
 
-  const zipBuffer = Buffer.from(await response.arrayBuffer())
+  const zipBuffer = readFileSync(zipPath)
   const actualChecksum = createHash('sha256').update(zipBuffer).digest('hex')
   if (expectedChecksum && actualChecksum !== expectedChecksum) {
     throw new Error(`Checksum mismatch for ${zipName}: expected ${expectedChecksum}, got ${actualChecksum}`)
   }
-
-  const zipPath = path.join(os.tmpdir(), zipName)
-  await writeFile(zipPath, zipBuffer)
 
   const distPath = path.join(electronDir, 'dist')
   await extract(zipPath, { dir: distPath })
