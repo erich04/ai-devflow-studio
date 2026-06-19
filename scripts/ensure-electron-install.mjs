@@ -1,8 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { existsSync, readFileSync, renameSync } from 'node:fs'
-import { rm, writeFile } from 'node:fs/promises'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -67,8 +66,7 @@ function runElectronInstall() {
   }
 }
 
-async function downloadElectronArtifact() {
-  const extract = requireFromElectron('extract-zip')
+function downloadElectronArtifact() {
   const checksums = requireFromElectron('./checksums.json')
   const platform = process.env.npm_config_platform || process.platform
   const arch = process.env.npm_config_arch || process.arch
@@ -92,8 +90,12 @@ async function downloadElectronArtifact() {
   }
 
   const distPath = path.join(electronDir, 'dist')
-  await extract(zipPath, { dir: distPath })
-  await rm(zipPath, { force: true })
+  mkdirSync(distPath, { recursive: true })
+  const unzip = spawnSync('unzip', ['-q', '-o', zipPath, '-d', distPath], { stdio: 'inherit' })
+  rmSync(zipPath, { force: true })
+  if (unzip.status !== 0) {
+    throw new Error(`Unable to extract ${zipName} with unzip: ${unzip.status ?? 'unknown status'}`)
+  }
 
   const srcTypeDefPath = path.join(distPath, 'electron.d.ts')
   const targetTypeDefPath = path.join(electronDir, 'electron.d.ts')
@@ -101,7 +103,7 @@ async function downloadElectronArtifact() {
     renameSync(srcTypeDefPath, targetTypeDefPath)
   }
 
-  await writeFile(path.join(electronDir, 'path.txt'), getPlatformPath())
+  writeFileSync(path.join(electronDir, 'path.txt'), getPlatformPath())
 }
 
 let inspection = inspectInstall()
@@ -122,7 +124,7 @@ if (!inspection.ok) {
 
   if (!inspection.ok) {
     console.log('Electron package install script did not produce a binary; downloading artifact directly...')
-    await downloadElectronArtifact()
+    downloadElectronArtifact()
     inspection = inspectInstall()
   }
 }
