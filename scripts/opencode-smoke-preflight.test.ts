@@ -40,4 +40,26 @@ describe('opencode smoke preflight', () => {
     expect(result.message).toContain('opencode smoke preflight passed')
     expect(result.message).not.toContain('sk-secret-value')
   })
+
+  it('describes a Volcengine Ark style custom provider profile without leaking the key value', () => {
+    const result = evaluateOpencodeSmokePreflight({
+      DEVFLOW_RUN_OPENCODE_SMOKE: '1',
+      DEVFLOW_OPENCODE_PROVIDER_ID: 'double',
+      DEVFLOW_OPENCODE_MODEL_ID: 'ark-code-latest',
+      DEVFLOW_OPENCODE_API_KEY_ENV: 'ANTHROPIC_AUTH_TOKEN',
+      DEVFLOW_OPENCODE_BIN: '/opt/homebrew/bin/opencode',
+      ANTHROPIC_AUTH_TOKEN: 'volcengine-secret',
+    })
+
+    expect(result).toMatchObject({
+      mode: 'ready',
+      providerID: 'double',
+      modelID: 'ark-code-latest',
+      apiKeyEnvName: 'ANTHROPIC_AUTH_TOKEN',
+      binaryPath: '/opt/homebrew/bin/opencode',
+    })
+    expect(result.message).toContain('double/ark-code-latest')
+    expect(result.message).toContain('ANTHROPIC_AUTH_TOKEN')
+    expect(result.message).not.toContain('volcengine-secret')
+  })
 })

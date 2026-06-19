@@ -59,6 +59,6 @@ export function evaluateOpencodeSmokePreflight(
     modelID,
     apiKeyEnvName,
     binaryPath,
-    message: `opencode smoke preflight passed for ${providerID}/${modelID} using ${binaryPath}.`,
+    message: `opencode smoke preflight passed for ${providerID}/${modelID} using ${binaryPath}; key env ${apiKeyEnvName}.`,
   }
 }
