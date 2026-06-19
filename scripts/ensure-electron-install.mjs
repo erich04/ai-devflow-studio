@@ -50,9 +50,12 @@ function inspectInstall() {
 
 function runElectronInstall() {
   const installScript = path.join(electronDir, 'install.js')
+  const installEnv = { ...process.env }
+  delete installEnv.ELECTRON_SKIP_BINARY_DOWNLOAD
+
   const result = spawnSync(process.execPath, [installScript], {
     cwd: electronDir,
-    env: process.env,
+    env: installEnv,
     stdio: 'inherit',
   })
 
