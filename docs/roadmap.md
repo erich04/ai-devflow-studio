@@ -269,13 +269,25 @@ Electron smoke is still tracked as future compatibility expansion. See
 
 ## Planned Milestones
 
-### v0.9: Runtime Expansion Candidates
+### v0.8.1: Release Signoff And Version Alignment
 
-- Deepen the real opencode adapter beyond local signoff, including longer-running streamed traces
-  and release-grade smoke coverage.
-- Evaluate MCP policy enforcement and tool-call telemetry once the MCP runtime layer is real.
-- Revisit RAG/vector retrieval only after the deterministic Knowledge Retrieval boundary remains
-  stable under v0.8 remediation usage.
+- Verify the current `main` release candidate with `corepack pnpm verify`, `corepack pnpm build`,
+  explicit Postgres smoke, and a manual v0.8 walkthrough before creating the release tag.
+- Preserve `v0.8.0` as the historical feature/user-guide tag, then align all first-party package
+  metadata to `0.8.1` and create the annotated `v0.8.1` tag after verification passes.
+- See `docs/plans/v0.8.1-release-signoff.md`.
+
+### v0.9: Real opencode Runtime + Observability + Demo Readiness
+
+- Re-confirm the real opencode runtime contract against the current local toolchain before changing
+  runtime code; update ADR 0009 or research notes if transport/provider behavior changed.
+- Deepen the real opencode adapter beyond local signoff, including streamed traces, permission relay,
+  cancel/timeout semantics, worktree cleanup, diff capture, and Test Evidence.
+- Make real-runtime behavior legible in Agents through observable tool calls, permission decisions,
+  diff/test evidence, and redacted summaries.
+- Close v0.9 with a 5-minute demo script and dual-path signoff: deterministic fake-engine `verify`
+  plus explicit real-opencode smoke.
+- See `docs/plans/v0.9-real-runtime-observability.md`.
 
 ## Deferred / Not Yet Started
 
