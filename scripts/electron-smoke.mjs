@@ -249,6 +249,12 @@ async function selectThemePreference(page, preference) {
   await expect(page.locator('html')).toHaveAttribute('data-theme-preference', preference)
 }
 
+async function runKnowledgeReviewFromUi(page) {
+  const reviewButton = page.getByRole('button', { name: /Agent Review|Run Knowledge Review/ }).first()
+  await expect(reviewButton).toBeVisible()
+  await reviewButton.click()
+}
+
 let vite
 let api
 let web
@@ -475,7 +481,7 @@ try {
   expect(rejectedOverrideStillBlocksApproval).toBe(true)
 
   await selectWorkflowNode(first.page, 'flow-node-n-design-gate', '架构 Gate')
-  await first.page.getByRole('button', { name: /Agent Review/ }).click()
+  await runKnowledgeReviewFromUi(first.page)
   await expect(first.page.getByTestId('toast')).toContainText('Knowledge Review 已归档', {
     timeout: 20_000,
   })
@@ -509,7 +515,7 @@ try {
   })
   await first.page.getByRole('button', { name: /工作台/ }).click()
   await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
-  await first.page.getByRole('button', { name: /Agent Review/ }).click()
+  await runKnowledgeReviewFromUi(first.page)
   await expect(first.page.getByTestId('toast')).toContainText('Knowledge Review 已归档', {
     timeout: 20_000,
   })
