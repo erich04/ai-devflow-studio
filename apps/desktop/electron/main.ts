@@ -734,7 +734,6 @@ function registerIpcHandlers() {
     } = await evaluateLocalGateEnforcement({
       runId: input.runId,
       nodeId: input.nodeId,
-      projectId: input.projectId,
     })
     const remediationPlan = buildRemediationPlan({
       run,
