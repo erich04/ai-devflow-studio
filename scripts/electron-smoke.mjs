@@ -342,6 +342,33 @@ async function startRetryAttemptViaDesktopApi(
   await page.getByRole('button', { name: /^Agents$/ }).click()
 }
 
+async function runProjectTestsViaDesktopApi(
+  page,
+  { runId, nodeId, projectId, runTitle },
+) {
+  const evidence = await page.evaluate(async (input) => {
+    const state = await window.aiDevFlowDesktop.loadState()
+    const run = state.runs.find((candidate) => candidate.id === input.runId)
+    if (!run) {
+      throw new Error(`Run not found for test execution: ${input.runId}`)
+    }
+    const result = await window.aiDevFlowDesktop.runProjectTests({
+      projectId: input.projectId,
+      runId: input.runId,
+      nodeId: input.nodeId,
+      run,
+    })
+    return { id: result.evidence.id, status: result.evidence.status, command: result.evidence.command }
+  }, { runId, nodeId, projectId })
+
+  expect(evidence.status).toBe('passed')
+  expect(evidence.command).toBe('npm test')
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.getByText(runTitle)).toBeVisible({ timeout: 20_000 })
+  await selectRunByTitle(page, runTitle)
+  await page.getByRole('button', { name: /^测试$/ }).click()
+}
+
 let vite
 let api
 let web
@@ -645,21 +672,30 @@ try {
   await expect(first.page.getByTestId('tests-view')).toContainText('npm test')
   await first.page.getByRole('button', { name: /工作台/ }).click()
 
-  await first.page.getByRole('button', { name: /执行测试/ }).click()
-  await expect(first.page.getByTestId('toast')).toContainText('测试通过，证据已归档', {
-    timeout: 20_000,
+  await runProjectTestsViaDesktopApi(first.page, {
+    runId: localRun.id,
+    nodeId: 'n-build',
+    projectId: localProjectId,
+    runTitle: '重构 GitHub webhook 重试策略',
   })
   await expect(first.page.getByTestId('tests-view')).toContainText('Local test evidence')
   await expect(first.page.getByTestId('tests-view')).toContainText('passed')
   await expect(first.page.getByTestId('tests-view')).toContainText('npm test')
   await first.page.getByRole('button', { name: /工作台/ }).click()
-  await expect(first.page.getByTestId('node-inspector')).toContainText('Local Test Evidence Standard')
-  await expect(first.page.getByTestId('node-inspector')).toContainText('satisfied')
+  await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
+  await expect(first.page.getByTestId('node-inspector')).toContainText('Local test evidence')
+  await expect(first.page.getByTestId('node-inspector')).toContainText('Status: passed')
   await first.page.evaluate(async (runId) => {
     const state = await window.aiDevFlowDesktop.loadState()
     const run = state.runs.find((candidate) => candidate.id === runId)
     if (!run) {
       throw new Error(`Run not found for smoke sync: ${runId}`)
+    }
+    const evidence = state.testEvidence
+      .filter((candidate) => candidate.runId === run.id && candidate.nodeId === 'n-build')
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+    if (!evidence) {
+      throw new Error(`Test evidence not found for smoke sync: ${runId}`)
     }
     await window.aiDevFlowDesktop.uploadRunSummary({
       kind: 'run',
@@ -670,6 +706,19 @@ try {
       currentNodeId: run.currentNodeId,
       branchName: run.branchName,
       updatedAt: run.updatedAt,
+    })
+    await window.aiDevFlowDesktop.uploadTestEvidenceSummary({
+      id: evidence.id,
+      runId: evidence.runId,
+      nodeId: evidence.nodeId,
+      projectId: run.projectId,
+      command: evidence.command,
+      status: evidence.status,
+      exitCode: evidence.exitCode,
+      durationMs: evidence.durationMs,
+      summary: evidence.summary,
+      redacted: true,
+      createdAt: evidence.createdAt,
     })
   }, localRun.id)
 
@@ -692,7 +741,7 @@ try {
 
   await first.page.getByRole('button', { name: /工作台/ }).click()
   await first.page.getByLabel('测试命令').fill(blockedCommand)
-  await expect(first.page.getByText(/blocked/i)).toBeVisible()
+  await expect(first.page.getByLabel('Local project').getByText(/^blocked$/i)).toBeVisible()
   await first.page.getByRole('button', { name: /保存测试命令/ }).click()
   await expect(first.page.getByTestId('toast')).toContainText('测试命令已阻断')
   await first.page.evaluate(async () => {
