@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import net from 'node:net'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -63,6 +64,36 @@ async function waitForServer(url) {
   }
 
   throw new Error(`Timed out waiting for ${url}`)
+}
+
+function isPortOpen(port) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: '127.0.0.1', port })
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once('error', () => {
+      socket.destroy()
+      resolve(false)
+    })
+  })
+}
+
+async function assertSmokePortsAvailable() {
+  const ports = [4310, 4311, 5173]
+  const occupied = []
+  for (const port of ports) {
+    if (await isPortOpen(port)) {
+      occupied.push(port)
+    }
+  }
+
+  if (occupied.length > 0) {
+    throw new Error(
+      `Electron smoke requires clean dev ports, but these are already listening: ${occupied.join(', ')}`,
+    )
+  }
 }
 
 async function launchApp() {
@@ -149,6 +180,38 @@ async function saveRecommendedEnforcementPolicy() {
   }
 }
 
+async function saveAgentFindingBlockingPolicy() {
+  const updatedAt = new Date().toISOString()
+  const policy = createRecommendedEnforcementPolicy(2, updatedAt)
+  policy.id = 'enforcement-policy-org-demo-agent-finding-block'
+  policy.name = 'Agent finding blocking smoke policy'
+  policy.rules = policy.rules.map((rule) =>
+    rule.ruleKey === 'agent_finding:review_gap:low'
+      ? {
+          ...rule,
+          defaultAction: 'block',
+          floorAction: 'block',
+          remediation: 'Address the Agent Review finding with a focused implementation retry.',
+          updatedAt,
+        }
+      : { ...rule, updatedAt },
+  )
+
+  const response = await fetch(`${apiServerUrl}/api/enforcement/policy`, {
+    method: 'PUT',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      ...demoSessionHeaders,
+    },
+    body: JSON.stringify({ organizationPolicy: policy }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Unable to save Electron smoke retry enforcement policy: ${response.status} ${await response.text()}`)
+  }
+}
+
 async function selectRunByTitle(page, title) {
   const runRow = page.locator('.run-row').filter({ hasText: title })
   await expect(runRow).toBeVisible()
@@ -180,6 +243,8 @@ let api
 let web
 
 try {
+  await assertSmokePortsAvailable()
+
   await mkdir(repoDir, { recursive: true })
   await writeFile(
     path.join(repoDir, 'package.json'),
@@ -417,6 +482,35 @@ try {
   await expect(first.page.getByTestId('agent-workbench')).toContainText('completed')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Test evidence passed')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('devflow-fake-change.txt')
+
+  await saveAgentFindingBlockingPolicy()
+  await first.page.evaluate(async () => {
+    await window.aiDevFlowDesktop.loadRemoteSnapshot({ organizationId: 'org-demo' })
+  })
+  await first.page.getByRole('button', { name: /工作台/ }).click()
+  await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
+  await first.page.getByRole('button', { name: /Agent Review/ }).click()
+  await expect(first.page.getByTestId('toast')).toContainText('Knowledge Review 已归档', {
+    timeout: 20_000,
+  })
+  await first.page.getByRole('button', { name: /工作台/ }).click()
+  await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
+  await expect(first.page.getByTestId('node-inspector')).toContainText('Remediation Plan')
+  await expect(first.page.getByTestId('node-inspector')).toContainText('Address Agent Review finding')
+  await first.page.getByRole('button', { name: /Retry Coding/ }).click()
+  await expect(first.page.getByTestId('toast')).toContainText('Remediation retry 已启动', {
+    timeout: 20_000,
+  })
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('Policy Retry Attempts')
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('started')
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('remediation-candidate')
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('Permission Relay')
+  await first.page.getByRole('button', { name: /Approve once/ }).click()
+  await expect(first.page.getByTestId('toast')).toContainText('Coding Agent 已完成 fake diff 归档', {
+    timeout: 30_000,
+  })
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('Test evidence passed')
+
   await first.page.getByRole('button', { name: /^测试$/ }).click()
   await expect(first.page.getByTestId('tests-view')).toContainText('Local test evidence')
   await expect(first.page.getByTestId('tests-view')).toContainText('npm test')

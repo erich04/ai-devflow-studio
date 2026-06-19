@@ -12,6 +12,8 @@ Use these files by responsibility:
 - `docs/plans/`: executable milestone plans that are checked against the current codebase before implementation.
 - `CONTEXT.md`: stable domain language and ubiquitous terms such as Run, Gate, Artifact, Skill, MCP Server, Knowledge Base, and Test Evidence.
 - `docs/adr/`: accepted architecture decisions and tradeoffs. ADRs explain why a direction was chosen; they do not track delivery progress.
+- `docs/engineering/`: operational engineering practice, test strategy, demo/smoke reproduction, and lessons learned from recurring failure modes.
+- `docs/knowledge/`: reviewable Markdown knowledge sources that DevFlow can index, including standards, rules, ADR summaries, and reusable checklists.
 - `docs/research/`: research notes, comparisons, and investigation artifacts. Research can inform roadmap decisions, but it is not the active plan.
 - `README.md`: project entrypoint, app/package map, and everyday commands.
 
@@ -262,6 +264,8 @@ Electron smoke is still tracked as future compatibility expansion. See
   blocking, override, remediation, retry, and evidence-gap counts.
 - Kept v0.8 within human-approved delivery automation: no auto-fix loop, no Gate bypass, no real MCP
   policy execution, and no HoneyAI bridge.
+- Signed off release-style validation on 2026-06-19: `corepack pnpm verify`, `corepack pnpm build`,
+  disposable-Postgres smoke, and Electron smoke with remediation retry through Test Evidence.
 
 ## Planned Milestones
 

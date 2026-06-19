@@ -1,0 +1,23 @@
+---
+title: opencode Runtime Signoff Checklist
+category: review_checklist
+ownerId: u-erich
+tags: opencode, coding-agent, smoke, provider
+summary: Real opencode runtime signoff must be explicit, env-gated, permission-audited, and secret-safe.
+---
+
+# opencode Runtime Signoff Checklist
+
+Use this checklist only when intentionally validating the real opencode coding adapter.
+
+- Keep the deterministic fake engine as the default daily verification path.
+- Confirm local opencode is installed and compatible with the adapter under test.
+- Set `DEVFLOW_RUN_OPENCODE_SMOKE=1` intentionally.
+- Set `DEVFLOW_CODING_ENGINE=opencode-http`.
+- Set the intended provider ID and model ID explicitly.
+- Set the provider API key through the configured env var, never inline in logs or documentation.
+- Run `corepack pnpm test:opencode-smoke`.
+- Confirm the smoke starts `opencode serve`, creates a managed worktree, relays permissions, captures a redacted diff, runs worktree tests, and cleans up temporary smoke state.
+- Confirm permission requests are human-visible and unanswered requests reject by default.
+- Confirm smoke output does not print provider secrets.
+- Do not add live opencode smoke to `corepack pnpm verify` until the project intentionally promotes it to release validation.
