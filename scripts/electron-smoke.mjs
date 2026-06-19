@@ -238,6 +238,17 @@ async function selectWorkflowNode(page, testId, expectedTitle) {
   }
 }
 
+async function selectThemePreference(page, preference) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if ((await page.locator('html').getAttribute('data-theme-preference')) === preference) {
+      return
+    }
+    await page.getByTestId('theme-toggle').click()
+  }
+
+  await expect(page.locator('html')).toHaveAttribute('data-theme-preference', preference)
+}
+
 let vite
 let api
 let web
@@ -376,8 +387,7 @@ try {
   await expect(first.page.getByTestId('knowledge-view')).toContainText(/kh-[a-f0-9]{8}/)
   await first.page.getByLabel('Search runs and knowledge').fill('')
 
-  await first.page.getByTestId('theme-toggle').click()
-  await expect(first.page.locator('html')).toHaveAttribute('data-theme-preference', 'light')
+  await selectThemePreference(first.page, 'light')
 
   await first.page.getByRole('button', { name: /^MCP$/ }).click()
   await first.page.getByRole('button', { name: /Disable/ }).first().click()

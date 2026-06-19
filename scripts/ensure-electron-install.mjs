@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { existsSync, readFileSync, renameSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
+import { rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -67,22 +68,30 @@ function runElectronInstall() {
 }
 
 async function downloadElectronArtifact() {
-  const { downloadArtifact } = requireFromElectron('@electron/get')
   const extract = requireFromElectron('extract-zip')
   const checksums = requireFromElectron('./checksums.json')
   const platform = process.env.npm_config_platform || process.platform
   const arch = process.env.npm_config_arch || process.arch
-  const zipPath = await downloadArtifact({
-    version: electronPackage.version,
-    artifactName: 'electron',
-    force: process.env.force_no_cache === 'true',
-    cacheRoot: process.env.electron_config_cache,
-    checksums,
-    platform,
-    arch,
-  })
+  const zipName = `electron-v${electronPackage.version}-${platform}-${arch}.zip`
+  const expectedChecksum = checksums[zipName]
+  const url = `https://github.com/electron/electron/releases/download/v${electronPackage.version}/${zipName}`
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Unable to download ${zipName}: ${response.status} ${response.statusText}`)
+  }
+
+  const zipBuffer = Buffer.from(await response.arrayBuffer())
+  const actualChecksum = createHash('sha256').update(zipBuffer).digest('hex')
+  if (expectedChecksum && actualChecksum !== expectedChecksum) {
+    throw new Error(`Checksum mismatch for ${zipName}: expected ${expectedChecksum}, got ${actualChecksum}`)
+  }
+
+  const zipPath = path.join(os.tmpdir(), zipName)
+  await writeFile(zipPath, zipBuffer)
+
   const distPath = path.join(electronDir, 'dist')
   await extract(zipPath, { dir: distPath })
+  await rm(zipPath, { force: true })
 
   const srcTypeDefPath = path.join(distPath, 'electron.d.ts')
   const targetTypeDefPath = path.join(electronDir, 'electron.d.ts')
