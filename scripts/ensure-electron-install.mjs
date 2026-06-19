@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,6 +11,7 @@ const desktopDir = path.join(rootDir, 'apps/desktop')
 const requireFromDesktop = createRequire(path.join(desktopDir, 'package.json'))
 const electronPackagePath = requireFromDesktop.resolve('electron/package.json')
 const electronDir = path.dirname(electronPackagePath)
+const requireFromElectron = createRequire(path.join(electronDir, 'install.js'))
 const electronPackage = JSON.parse(readFileSync(electronPackagePath, 'utf8'))
 
 function getPlatformPath() {
@@ -64,6 +66,33 @@ function runElectronInstall() {
   }
 }
 
+async function downloadElectronArtifact() {
+  const { downloadArtifact } = requireFromElectron('@electron/get')
+  const extract = requireFromElectron('extract-zip')
+  const checksums = requireFromElectron('./checksums.json')
+  const platform = process.env.npm_config_platform || process.platform
+  const arch = process.env.npm_config_arch || process.arch
+  const zipPath = await downloadArtifact({
+    version: electronPackage.version,
+    artifactName: 'electron',
+    force: process.env.force_no_cache === 'true',
+    cacheRoot: process.env.electron_config_cache,
+    checksums,
+    platform,
+    arch,
+  })
+  const distPath = path.join(electronDir, 'dist')
+  await extract(zipPath, { dir: distPath })
+
+  const srcTypeDefPath = path.join(distPath, 'electron.d.ts')
+  const targetTypeDefPath = path.join(electronDir, 'electron.d.ts')
+  if (existsSync(srcTypeDefPath)) {
+    renameSync(srcTypeDefPath, targetTypeDefPath)
+  }
+
+  await writeFile(path.join(electronDir, 'path.txt'), getPlatformPath())
+}
+
 let inspection = inspectInstall()
 
 if (!inspection.ok) {
@@ -79,6 +108,12 @@ if (!inspection.ok) {
   )
   runElectronInstall()
   inspection = inspectInstall()
+
+  if (!inspection.ok) {
+    console.log('Electron package install script did not produce a binary; downloading artifact directly...')
+    await downloadElectronArtifact()
+    inspection = inspectInstall()
+  }
 }
 
 if (!inspection.ok) {
