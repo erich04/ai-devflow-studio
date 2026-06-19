@@ -43,20 +43,31 @@ describe('inspectProjectDirectory', () => {
 
 describe('runLocalTestCommand', () => {
   it('adds common package-manager paths to the command environment', () => {
+    const basePath = ['/usr/bin', '/bin'].join(path.delimiter)
     const env = createLocalCommandEnv({
-      PATH: '/usr/bin:/bin',
+      PATH: basePath,
       HOME: '/Users/example',
+      APPDATA: 'C:\\Users\\example\\AppData\\Roaming',
+      LOCALAPPDATA: 'C:\\Users\\example\\AppData\\Local',
+      ProgramFiles: 'C:\\Program Files',
     })
 
-    expect(env.PATH?.split(path.delimiter)).toEqual([
-      '/usr/bin',
-      '/bin',
-      '/usr/local/bin',
-      '/opt/homebrew/bin',
-      '/Users/example/.local/bin',
-      '/Users/example/.local/share/pnpm',
-      '/Users/example/Library/pnpm',
-    ])
+    const expectedExtraPaths =
+      process.platform === 'win32'
+        ? [
+            'C:\\Users\\example\\AppData\\Roaming\\npm',
+            'C:\\Users\\example\\AppData\\Local\\pnpm',
+            'C:\\Program Files\\nodejs',
+          ]
+        : [
+            '/usr/local/bin',
+            '/opt/homebrew/bin',
+            '/Users/example/.local/bin',
+            '/Users/example/.local/share/pnpm',
+            '/Users/example/Library/pnpm',
+          ]
+
+    expect(env.PATH?.split(path.delimiter)).toEqual(['/usr/bin', '/bin', ...expectedExtraPaths])
   })
 
   it('runs the configured command in the project cwd and redacts secret output', async () => {

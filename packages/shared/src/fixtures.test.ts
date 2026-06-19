@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { knowledgeSources, projects, runs } from './fixtures'
 
+function normalizeLineEndings(value: string): string {
+  return value.replace(/\r\n/g, '\n')
+}
+
 describe('fixtures product narrative', () => {
   it('does not expose HoneyAI or opencode as active DevFlow product fixtures', () => {
     const serialized = JSON.stringify({ projects, runs })
@@ -17,7 +21,7 @@ describe('knowledge source fixtures', () => {
   it('mirror the Git Markdown knowledge source files', () => {
     for (const source of knowledgeSources) {
       const markdown = readFileSync(join(process.cwd(), source.sourcePath), 'utf8')
-      expect(source.markdown).toBe(markdown)
+      expect(normalizeLineEndings(source.markdown)).toBe(normalizeLineEndings(markdown))
     }
   })
 })
