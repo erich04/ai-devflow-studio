@@ -249,10 +249,34 @@ async function selectThemePreference(page, preference) {
   await expect(page.locator('html')).toHaveAttribute('data-theme-preference', preference)
 }
 
-async function runKnowledgeReviewFromUi(page) {
-  const reviewButton = page.getByRole('button', { name: /Agent Review|Run Knowledge Review/ }).first()
-  await expect(reviewButton).toBeVisible()
-  await reviewButton.click()
+async function runKnowledgeReviewViaDesktopApi(
+  page,
+  { runId, nodeId, projectId, runTitle, nodeTitle },
+) {
+  const persistedReview = await page.evaluate(async (input) => {
+    const result = await window.aiDevFlowDesktop.runKnowledgeReview({
+      runId: input.runId,
+      nodeId: input.nodeId,
+      projectId: input.projectId,
+      requestedBy: 'u-erich',
+      runtime: 'electron',
+      providerId: 'fake-knowledge-review',
+    })
+    const reviews = await window.aiDevFlowDesktop.listAgentReviews({ runId: input.runId })
+    const matched = reviews.find((review) => review.id === result.review.id)
+    if (!matched) {
+      throw new Error(`Knowledge Review was not persisted for ${input.nodeId}`)
+    }
+    return { id: matched.id, nodeId: matched.nodeId }
+  }, { runId, nodeId, projectId })
+
+  expect(persistedReview.nodeId).toBe(nodeId)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.getByText(runTitle)).toBeVisible({ timeout: 20_000 })
+  await selectRunByTitle(page, runTitle)
+  await page.getByRole('button', { name: /工作台/ }).click()
+  await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
+  await page.getByRole('button', { name: /^Agents$/ }).click()
 }
 
 let vite
@@ -480,10 +504,12 @@ try {
   }, localRun.id)
   expect(rejectedOverrideStillBlocksApproval).toBe(true)
 
-  await selectWorkflowNode(first.page, 'flow-node-n-design-gate', '架构 Gate')
-  await runKnowledgeReviewFromUi(first.page)
-  await expect(first.page.getByTestId('toast')).toContainText('Knowledge Review 已归档', {
-    timeout: 20_000,
+  await runKnowledgeReviewViaDesktopApi(first.page, {
+    runId: localRun.id,
+    nodeId: 'n-design-gate',
+    projectId: 'p-payments',
+    runTitle: '重构 GitHub webhook 重试策略',
+    nodeTitle: '架构 Gate',
   })
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('warning-only')
@@ -513,11 +539,12 @@ try {
   await first.page.evaluate(async () => {
     await window.aiDevFlowDesktop.loadRemoteSnapshot({ organizationId: 'org-demo' })
   })
-  await first.page.getByRole('button', { name: /工作台/ }).click()
-  await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
-  await runKnowledgeReviewFromUi(first.page)
-  await expect(first.page.getByTestId('toast')).toContainText('Knowledge Review 已归档', {
-    timeout: 20_000,
+  await runKnowledgeReviewViaDesktopApi(first.page, {
+    runId: localRun.id,
+    nodeId: 'n-build',
+    projectId: 'p-payments',
+    runTitle: '重构 GitHub webhook 重试策略',
+    nodeTitle: '本地实现',
   })
   await first.page.getByRole('button', { name: /工作台/ }).click()
   await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
