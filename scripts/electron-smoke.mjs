@@ -307,6 +307,41 @@ async function runCodingAgentViaDesktopApi(
   await page.getByRole('button', { name: /^Agents$/ }).click()
 }
 
+async function startRetryAttemptViaDesktopApi(
+  page,
+  { runId, nodeId, projectId, runTitle, nodeTitle },
+) {
+  const candidateId = `remediation-candidate-${runId}-${nodeId}-1`
+  const retryAttempt = await page.evaluate(async (input) => {
+    const result = await window.aiDevFlowDesktop.startRetryAttempt({
+      runId: input.runId,
+      nodeId: input.nodeId,
+      projectId: input.projectId,
+      requestedBy: 'u-erich',
+      providerId: 'fake-coding-engine',
+      candidateIds: [input.candidateId],
+      userInstruction: 'Electron smoke should retry coding from the remediation candidate.',
+    })
+    if (!result.retryAttempt.candidateIds.includes(input.candidateId)) {
+      throw new Error(`Retry attempt did not include candidate ${input.candidateId}`)
+    }
+    return {
+      id: result.retryAttempt.id,
+      status: result.retryAttempt.status,
+      codingRunId: result.retryAttempt.codingRunId,
+    }
+  }, { runId, nodeId, projectId, candidateId })
+
+  expect(retryAttempt.status).toBe('started')
+  expect(typeof retryAttempt.codingRunId).toBe('string')
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.getByText(runTitle)).toBeVisible({ timeout: 20_000 })
+  await selectRunByTitle(page, runTitle)
+  await page.getByRole('button', { name: /工作台/ }).click()
+  await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
+  await page.getByRole('button', { name: /^Agents$/ }).click()
+}
+
 let vite
 let api
 let web
@@ -588,9 +623,12 @@ try {
   await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
   await expect(first.page.getByTestId('node-inspector')).toContainText('Remediation Plan')
   await expect(first.page.getByTestId('node-inspector')).toContainText('Address Agent Review finding')
-  await first.page.getByRole('button', { name: /Retry Coding/ }).click()
-  await expect(first.page.getByTestId('toast')).toContainText('Remediation retry 已启动', {
-    timeout: 20_000,
+  await startRetryAttemptViaDesktopApi(first.page, {
+    runId: localRun.id,
+    nodeId: 'n-build',
+    projectId: localProjectId,
+    runTitle: '重构 GitHub webhook 重试策略',
+    nodeTitle: '本地实现',
   })
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Policy Retry Attempts')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('started')
