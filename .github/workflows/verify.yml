@@ -13,6 +13,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+          run_install: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -27,6 +31,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+          run_install: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -58,6 +66,10 @@ jobs:
       DEVFLOW_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devflow_ci
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+          run_install: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
