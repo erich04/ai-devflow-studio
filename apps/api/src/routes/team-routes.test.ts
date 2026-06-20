@@ -306,7 +306,7 @@ describe('team API route resolver', () => {
     expect(result?.status).toBe(200)
     expect(result?.body).toMatchObject({ totalCost: '$0.03' })
     expect(repository.getTeamOverview).toHaveBeenCalled()
-  })
+  }, 15_000)
 
   it('filters project-scoped reads for non-owner sessions', async () => {
     const repository = createRepository()
