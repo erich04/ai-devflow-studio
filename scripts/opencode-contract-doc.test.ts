@@ -8,6 +8,20 @@ const contractPath = join(
 )
 
 describe('opencode runtime contract refresh documentation', () => {
+  it('records the latest provider-safe status re-check without claiming live smoke', () => {
+    const markdown = readFileSync(contractPath, 'utf8')
+
+    expect(markdown).toContain('2026-06-20 re-check')
+    expect(markdown).toContain('corepack pnpm opencode:status')
+    expect(markdown).toContain('PR #3 head `ec878e5`')
+    expect(markdown).toContain('The local binary still reports `1.17.5`')
+    expect(markdown).toContain('live opencode smoke is disabled')
+    expect(markdown).toContain('provider profile is intentionally not configured')
+    expect(markdown).toContain('prevents accidental provider calls during `verify`')
+    expect(markdown).toContain('does not')
+    expect(markdown).toContain('claim a fresh live-provider smoke')
+  })
+
   it('documents the Volcengine Ark provider profile as an env-only template without secrets', () => {
     const markdown = readFileSync(contractPath, 'utf8')
 

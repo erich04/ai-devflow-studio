@@ -21,6 +21,15 @@ Current local finding:
 - `corepack pnpm opencode:status` is now the provider-safe way to re-check the local binary/version,
   default fake-engine posture, live-smoke gate, and provider profile state before any live smoke.
 
+2026-06-20 re-check:
+
+- `corepack pnpm opencode:status` passed on PR #3 head `ec878e5`.
+- The local binary still reports `1.17.5`.
+- The default verification posture remains fake-engine safe: live opencode smoke is disabled unless
+  `DEVFLOW_RUN_OPENCODE_SMOKE=1` is explicitly set.
+- The provider profile is intentionally not configured in the release-signoff shell. This is expected
+  unless running the live smoke and prevents accidental provider calls during `verify`.
+
 ## Existing Evidence
 
 The v0.6 near-term opencode signoff recorded:
