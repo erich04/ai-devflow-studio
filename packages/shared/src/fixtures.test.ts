@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import { knowledgeDocuments, knowledgeSources, projects, runs } from './fixtures'
 
 function normalizeLineEndings(value: string): string {
@@ -10,7 +10,7 @@ function normalizeLineEndings(value: string): string {
 function listMarkdownFiles(root: string): string[] {
   return readdirSync(root).flatMap((entry) => {
     const absolutePath = join(root, entry)
-    const relativePath = absolutePath.replace(`${process.cwd()}/`, '')
+    const relativePath = relative(process.cwd(), absolutePath).split(sep).join('/')
     if (statSync(absolutePath).isDirectory()) {
       return listMarkdownFiles(absolutePath)
     }
