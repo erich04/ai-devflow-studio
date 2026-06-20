@@ -35,6 +35,10 @@ describe('API session boundary', () => {
     expect(resolveRequestSession({}, { allowDemoFallback: false })).toBeNull()
   })
 
+  it('does not use demo fallback unless explicitly allowed', () => {
+    expect(resolveRequestSession({})).toBeNull()
+  })
+
   it('keeps owner, lead, and member gate roles ordered like workflow gates', () => {
     expect(canSatisfyRole('owner', 'lead')).toBe(true)
     expect(canSatisfyRole('lead', 'member')).toBe(true)
@@ -42,7 +46,7 @@ describe('API session boundary', () => {
   })
 
   it('uses organization owner as the demo fallback session', () => {
-    const session = resolveRequestSession({})
+    const session = resolveRequestSession({}, { allowDemoFallback: true })
 
     expect(session).toEqual(createDemoSession())
     expect(isDemoSession(session!)).toBe(true)

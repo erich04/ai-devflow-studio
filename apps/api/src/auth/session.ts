@@ -99,7 +99,7 @@ export function resolveRequestSession(
   headers: HeaderBag,
   options: ResolveRequestSessionOptions = {},
 ): TeamSession | null {
-  const allowDemoFallback = options.allowDemoFallback ?? true
+  const allowDemoFallback = options.allowDemoFallback ?? false
   const userId = readHeader(headers, 'x-devflow-user-id')
   const source = parseSessionSource(readHeader(headers, 'x-devflow-session-source'))
 
