@@ -1,5 +1,12 @@
 import type { IncomingHttpHeaders } from 'node:http'
-import type { ProjectMembership, RequiredGateRole, Role, TeamSession } from '@ai-devflow/shared'
+import type {
+  AuthenticatedSession,
+  DemoSession,
+  ProjectMembership,
+  RequiredGateRole,
+  Role,
+  TeamSession,
+} from '@ai-devflow/shared'
 
 const ROLE_RANK: Record<Role, number> = {
   member: 1,
@@ -10,6 +17,8 @@ const ROLE_RANK: Record<Role, number> = {
 export type ResolveRequestSessionOptions = {
   allowDemoFallback?: boolean
 }
+
+export type CreateAuthenticatedSessionInput = Omit<AuthenticatedSession, 'source'>
 
 type HeaderBag = IncomingHttpHeaders | Record<string, string | string[] | undefined>
 
@@ -47,13 +56,31 @@ function parseProjectMemberships(value: string | undefined, userId: string): Pro
     })
 }
 
-export function createDemoSession(): TeamSession {
+export function createDemoSession(): DemoSession {
   return {
+    source: 'demo',
     organizationId: 'org-demo',
     userId: 'u-erich',
     role: 'owner',
     projectMemberships: [],
   }
+}
+
+export function createAuthenticatedSession(
+  input: CreateAuthenticatedSessionInput,
+): AuthenticatedSession {
+  return {
+    source: 'authenticated',
+    ...input,
+  }
+}
+
+export function isDemoSession(session: TeamSession): session is DemoSession {
+  return session.source === 'demo'
+}
+
+export function isAuthenticatedSession(session: TeamSession): session is AuthenticatedSession {
+  return session.source === 'authenticated'
 }
 
 export function resolveRequestSession(
@@ -74,6 +101,7 @@ export function resolveRequestSession(
 
   try {
     return {
+      source: 'demo',
       organizationId: readHeader(headers, 'x-devflow-organization-id') ?? 'org-demo',
       userId,
       role,

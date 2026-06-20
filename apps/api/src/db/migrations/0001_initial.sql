@@ -18,11 +18,28 @@ CREATE TABLE IF NOT EXISTS users (
   id text PRIMARY KEY,
   organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   name text NOT NULL,
+  email text,
+  avatar_url text,
   role text NOT NULL CHECK (role IN ('owner', 'lead', 'member')),
   avatar_initials text NOT NULL,
   focus text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url text;
+
+CREATE TABLE IF NOT EXISTS auth_accounts (
+  id text PRIMARY KEY,
+  user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider text NOT NULL CHECK (provider IN ('github')),
+  provider_account_id text NOT NULL,
+  username text,
+  email text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (provider, provider_account_id)
 );
 
 CREATE TABLE IF NOT EXISTS projects (
@@ -301,6 +318,7 @@ CREATE TABLE IF NOT EXISTS agent_policy_findings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_projects_organization_id ON projects(organization_id);
+CREATE INDEX IF NOT EXISTS idx_auth_accounts_user_id ON auth_accounts(user_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_project_id ON workflow_runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_nodes_run_id ON workflow_nodes(run_id);
 CREATE INDEX IF NOT EXISTS idx_agent_events_run_id_sequence ON agent_events(run_id, sequence);
@@ -315,7 +333,7 @@ CREATE INDEX IF NOT EXISTS idx_gate_override_decisions_run_id ON gate_override_d
 CREATE INDEX IF NOT EXISTS idx_agent_policy_findings_review_id ON agent_policy_findings(review_id);
 
 INSERT INTO schema_meta (key, value)
-VALUES ('schema_version', '3')
+VALUES ('schema_version', '4')
 ON CONFLICT (key) DO UPDATE
 SET value = excluded.value,
     updated_at = now();

@@ -23,6 +23,7 @@ describe('DevFlow demo team seed', () => {
     await expect(seedDemoTeamData(db)).resolves.toEqual({
       organizations: 1,
       users: members.length,
+      authAccounts: members.length,
       projects: projects.length,
       projectMembers: projects.length * members.length,
       runs: runs.length,
@@ -37,6 +38,7 @@ describe('DevFlow demo team seed', () => {
 
     expect(db.queries[0]?.sql).toContain('INSERT INTO organizations')
     expect(db.queries[0]?.params).toEqual(['org-demo', 'DevFlow Demo Team', 'devflow-demo'])
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO auth_accounts'))).toBe(true)
     expect(db.queries.some((query) => query.sql.includes('INSERT INTO project_members'))).toBe(true)
     expect(db.queries.some((query) => query.sql.includes('INSERT INTO workflow_runs'))).toBe(true)
     expect(db.queries.some((query) => query.sql.includes('INSERT INTO test_evidence_summaries'))).toBe(false)

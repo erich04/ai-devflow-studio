@@ -10,23 +10,29 @@ import type { RunsBundle, TeamOverviewPayload, TeamRepository } from '../reposit
 import { resolveTeamRoute } from './team-routes'
 
 const ownerSession: TeamSession = {
+  source: 'authenticated',
   organizationId: 'org-demo',
   userId: 'u-erich',
   role: 'owner',
+  authAccountId: 'acct-erich',
   projectMemberships: [],
 }
 
 const memberSession: TeamSession = {
+  source: 'authenticated',
   organizationId: 'org-demo',
   userId: 'u-yu',
   role: 'member',
+  authAccountId: 'acct-yu',
   projectMemberships: [{ projectId: 'p-payments', userId: 'u-yu', role: 'member' }],
 }
 
 const leadSession: TeamSession = {
+  source: 'authenticated',
   organizationId: 'org-demo',
   userId: 'u-ling',
   role: 'lead',
+  authAccountId: 'acct-ling',
   projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
 }
 

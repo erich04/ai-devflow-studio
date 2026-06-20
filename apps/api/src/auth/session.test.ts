@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   canAccessProject,
+  createAuthenticatedSession,
   canSatisfyRole,
   canSyncProject,
   createDemoSession,
+  isAuthenticatedSession,
+  isDemoSession,
   resolveRequestSession,
 } from './session'
 
@@ -17,6 +20,7 @@ describe('API session boundary', () => {
     }, { allowDemoFallback: false })
 
     expect(session).toEqual({
+      source: 'demo',
       organizationId: 'org-demo',
       userId: 'u-ling',
       role: 'lead',
@@ -41,6 +45,8 @@ describe('API session boundary', () => {
     const session = resolveRequestSession({})
 
     expect(session).toEqual(createDemoSession())
+    expect(isDemoSession(session!)).toBe(true)
+    expect(isAuthenticatedSession(session!)).toBe(false)
     expect(canAccessProject(session!, 'p-payments')).toBe(true)
     expect(canSyncProject(session!, 'p-payments', 'owner')).toBe(true)
   })
@@ -57,5 +63,27 @@ describe('API session boundary', () => {
     expect(canAccessProject(session!, 'p-admin')).toBe(false)
     expect(canSyncProject(session!, 'p-payments', 'member')).toBe(true)
     expect(canSyncProject(session!, 'p-payments', 'lead')).toBe(false)
+  })
+
+  it('creates authenticated sessions separately from demo headers', () => {
+    const session = createAuthenticatedSession({
+      organizationId: 'org-demo',
+      userId: 'u-github-1',
+      role: 'lead',
+      authAccountId: 'acct-github-1',
+      projectMemberships: [{ projectId: 'p-payments', userId: 'u-github-1', role: 'lead' }],
+    })
+
+    expect(session).toEqual({
+      source: 'authenticated',
+      organizationId: 'org-demo',
+      userId: 'u-github-1',
+      role: 'lead',
+      authAccountId: 'acct-github-1',
+      projectMemberships: [{ projectId: 'p-payments', userId: 'u-github-1', role: 'lead' }],
+    })
+    expect(isAuthenticatedSession(session)).toBe(true)
+    expect(isDemoSession(session)).toBe(false)
+    expect(canSyncProject(session, 'p-payments', 'lead')).toBe(true)
   })
 })

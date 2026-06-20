@@ -69,18 +69,57 @@ export type Organization = {
   slug: string
 }
 
+export type AuthProvider = 'github'
+
+export type User = {
+  id: string
+  organizationId: string
+  name: string
+  role: Role
+  email?: string
+  avatarUrl?: string
+  avatarInitials: string
+  focus?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type AuthAccount = {
+  id: string
+  userId: string
+  provider: AuthProvider
+  providerAccountId: string
+  username?: string
+  email?: string
+  createdAt: string
+  updatedAt: string
+}
+
 export type ProjectMembership = {
   projectId: string
   userId: string
   role: Role
 }
 
-export type TeamSession = {
+export type TeamSessionSource = 'demo' | 'authenticated'
+
+export type BaseTeamSession = {
   organizationId: string
   userId: string
   role: Role
   projectMemberships: ProjectMembership[]
 }
+
+export type DemoSession = BaseTeamSession & {
+  source: 'demo'
+}
+
+export type AuthenticatedSession = BaseTeamSession & {
+  source: 'authenticated'
+  authAccountId: string
+}
+
+export type TeamSession = DemoSession | AuthenticatedSession
 
 export type WorkflowNode = {
   id: string
