@@ -238,6 +238,56 @@ class FakeTeamDbClient implements TeamDbClient {
   }
 }
 
+class EmptyBootstrapDbClient implements TeamDbClient {
+  readonly queries: Array<{ sql: string; params?: unknown[] }> = []
+
+  async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    this.queries.push(params === undefined ? { sql } : { sql, params })
+
+    if (sql.includes('FROM auth_accounts')) {
+      return [] as T[]
+    }
+
+    if (sql.includes('FROM organizations')) {
+      return [] as T[]
+    }
+
+    return [] as T[]
+  }
+
+  async close(): Promise<void> {
+    return undefined
+  }
+}
+
+class ExistingOrganizationNoAccountDbClient implements TeamDbClient {
+  readonly queries: Array<{ sql: string; params?: unknown[] }> = []
+
+  async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    this.queries.push(params === undefined ? { sql } : { sql, params })
+
+    if (sql.includes('FROM auth_accounts')) {
+      return [] as T[]
+    }
+
+    if (sql.includes('FROM organizations')) {
+      return [
+        {
+          id: 'org-existing',
+          name: 'Existing Team',
+          slug: 'existing-team',
+        },
+      ] as T[]
+    }
+
+    return [] as T[]
+  }
+
+  async close(): Promise<void> {
+    return undefined
+  }
+}
+
 describe('Postgres team repository', () => {
   it('maps workflow runs with nodes, edges, artifacts, and events', async () => {
     const db = new FakeTeamDbClient()
@@ -387,6 +437,65 @@ describe('Postgres team repository', () => {
     expect(db.queries[0]?.params).toEqual(['github', 'github:ling'])
     expect(db.queries[1]?.sql).toContain('FROM project_members')
     expect(db.queries[1]?.params).toEqual(['u-ling'])
+  })
+
+  it('bootstraps the first GitHub login as the default organization owner only when the deployment is empty', async () => {
+    const db = new EmptyBootstrapDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.resolveOrBootstrapGitHubIdentity({
+        providerAccountId: '123456',
+        username: 'erich04',
+        name: 'Erich',
+        email: 'erich@example.com',
+        avatarUrl: 'https://avatars.example/erich.png',
+      }),
+    ).resolves.toMatchObject({
+      status: 'created',
+      identity: {
+        user: {
+          id: 'u-github-123456',
+          organizationId: 'org-default',
+          name: 'Erich',
+          role: 'owner',
+          email: 'erich@example.com',
+          avatarUrl: 'https://avatars.example/erich.png',
+        },
+        authAccount: {
+          id: 'acct-github-123456',
+          userId: 'u-github-123456',
+          provider: 'github',
+          providerAccountId: '123456',
+          username: 'erich04',
+          email: 'erich@example.com',
+        },
+        projectMemberships: [],
+      },
+    })
+
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO organizations'))).toBe(true)
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO users'))).toBe(true)
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO auth_accounts'))).toBe(true)
+  })
+
+  it('does not silently make a later unknown GitHub login an owner when an organization already exists', async () => {
+    const db = new ExistingOrganizationNoAccountDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.resolveOrBootstrapGitHubIdentity({
+        providerAccountId: '999999',
+        username: 'new-person',
+        name: 'New Person',
+      }),
+    ).resolves.toEqual({
+      status: 'blocked',
+      reason: 'organization_exists',
+    })
+
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO users'))).toBe(false)
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO auth_accounts'))).toBe(false)
   })
 
   it('writes run summaries into workflow_runs with tenant context', async () => {

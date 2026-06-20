@@ -44,6 +44,8 @@ import type { TeamDbClient } from '../db/client'
 import type {
   AgentProviderCredentialRecord,
   AgentReviewBundle,
+  GitHubIdentityBootstrapResult,
+  GitHubIdentityProfile,
   RunsBundle,
   TeamOverviewPayload,
   TeamRepository,
@@ -95,6 +97,12 @@ type ProjectMembershipRow = {
   project_id: string
   user_id: string
   role: Role
+}
+
+type OrganizationRow = {
+  id: string
+  name: string
+  slug: string
 }
 
 type WorkflowRunRow = {
@@ -371,6 +379,33 @@ function mapProjectMembership(row: ProjectMembershipRow): ProjectMembership {
     userId: row.user_id,
     role: row.role,
   }
+}
+
+function safeIdSegment(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+
+  return normalized || 'unknown'
+}
+
+function initialsForName(name: string): string {
+  const parts = name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+
+  if (parts.length === 0) {
+    return 'U'
+  }
+
+  if (parts.length === 1) {
+    return parts[0]!.slice(0, 2).toUpperCase()
+  }
+
+  return `${parts[0]![0] ?? ''}${parts[1]![0] ?? ''}`.toUpperCase()
 }
 
 function mapArtifact(row: ArtifactRow): Artifact {
@@ -687,6 +722,172 @@ function mapEvidenceStatusToRunStatus(status: TestEvidenceStatus): RunStatus {
 }
 
 export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
+  async function loadAuthenticatedIdentity(input: {
+    provider: AuthProvider
+    providerAccountId: string
+  }): Promise<AuthenticatedIdentity | null> {
+    const [identityRow] = await db.query<AuthenticatedIdentityRow>(
+      `
+        SELECT
+          auth_accounts.id AS auth_account_id,
+          auth_accounts.user_id AS auth_account_user_id,
+          auth_accounts.provider,
+          auth_accounts.provider_account_id,
+          auth_accounts.username,
+          auth_accounts.email AS auth_account_email,
+          auth_accounts.created_at AS auth_account_created_at,
+          auth_accounts.updated_at AS auth_account_updated_at,
+          users.id AS user_id,
+          users.organization_id,
+          users.name,
+          users.role,
+          users.email,
+          users.avatar_url,
+          users.avatar_initials,
+          users.focus,
+          users.created_at AS user_created_at,
+          users.updated_at AS user_updated_at
+        FROM auth_accounts
+        JOIN users ON users.id = auth_accounts.user_id
+        WHERE auth_accounts.provider = $1
+          AND auth_accounts.provider_account_id = $2
+        LIMIT 1
+      `,
+      [input.provider, input.providerAccountId],
+    )
+
+    if (!identityRow) {
+      return null
+    }
+
+    const identity = mapAuthenticatedIdentityRow(identityRow)
+    const membershipRows = await db.query<ProjectMembershipRow>(
+      `
+        SELECT project_id, user_id, role
+        FROM project_members
+        WHERE user_id = $1
+        ORDER BY project_id ASC
+      `,
+      [identity.user.id],
+    )
+
+    return {
+      ...identity,
+      projectMemberships: membershipRows.map(mapProjectMembership),
+    }
+  }
+
+  async function createFirstGitHubOwner(
+    input: GitHubIdentityProfile,
+  ): Promise<GitHubIdentityBootstrapResult> {
+    const [existingOrganization] = await db.query<OrganizationRow>(
+      'SELECT id, name, slug FROM organizations ORDER BY created_at ASC LIMIT 1',
+    )
+
+    if (existingOrganization) {
+      return {
+        status: 'blocked',
+        reason: 'organization_exists',
+      }
+    }
+
+    const idSegment = safeIdSegment(input.providerAccountId)
+    const now = new Date().toISOString()
+    const organizationId = 'org-default'
+    const userId = `u-github-${idSegment}`
+    const accountId = `acct-github-${idSegment}`
+    const displayName = input.name.trim() || input.username?.trim() || 'GitHub User'
+
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, slug, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $4)
+      `,
+      [organizationId, 'Default Team', 'default', now],
+    )
+    await db.query(
+      `
+        INSERT INTO users (
+          id,
+          organization_id,
+          name,
+          email,
+          avatar_url,
+          role,
+          avatar_initials,
+          focus,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+      `,
+      [
+        userId,
+        organizationId,
+        displayName,
+        input.email ?? null,
+        input.avatarUrl ?? null,
+        'owner',
+        initialsForName(displayName),
+        'Team pilot owner',
+        now,
+      ],
+    )
+    await db.query(
+      `
+        INSERT INTO auth_accounts (
+          id,
+          user_id,
+          provider,
+          provider_account_id,
+          username,
+          email,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+      `,
+      [
+        accountId,
+        userId,
+        'github',
+        input.providerAccountId,
+        input.username ?? null,
+        input.email ?? null,
+        now,
+      ],
+    )
+
+    return {
+      status: 'created',
+      identity: {
+        user: {
+          id: userId,
+          organizationId,
+          name: displayName,
+          role: 'owner',
+          ...(input.email ? { email: input.email } : {}),
+          ...(input.avatarUrl ? { avatarUrl: input.avatarUrl } : {}),
+          avatarInitials: initialsForName(displayName),
+          focus: 'Team pilot owner',
+          createdAt: now,
+          updatedAt: now,
+        },
+        authAccount: {
+          id: accountId,
+          userId,
+          provider: 'github',
+          providerAccountId: input.providerAccountId,
+          ...(input.username ? { username: input.username } : {}),
+          ...(input.email ? { email: input.email } : {}),
+          createdAt: now,
+          updatedAt: now,
+        },
+        projectMemberships: [],
+      },
+    }
+  }
+
   async function loadRunsBundle(): Promise<RunsBundle> {
     const [runRows, nodeRows, edgeRows, artifactRows, eventRows] = await Promise.all([
       db.query<WorkflowRunRow>('SELECT * FROM workflow_runs ORDER BY updated_at DESC'),
@@ -719,55 +920,20 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
 
   return {
     async getAuthenticatedIdentity(input) {
-      const [identityRow] = await db.query<AuthenticatedIdentityRow>(
-        `
-          SELECT
-            auth_accounts.id AS auth_account_id,
-            auth_accounts.user_id AS auth_account_user_id,
-            auth_accounts.provider,
-            auth_accounts.provider_account_id,
-            auth_accounts.username,
-            auth_accounts.email AS auth_account_email,
-            auth_accounts.created_at AS auth_account_created_at,
-            auth_accounts.updated_at AS auth_account_updated_at,
-            users.id AS user_id,
-            users.organization_id,
-            users.name,
-            users.role,
-            users.email,
-            users.avatar_url,
-            users.avatar_initials,
-            users.focus,
-            users.created_at AS user_created_at,
-            users.updated_at AS user_updated_at
-          FROM auth_accounts
-          JOIN users ON users.id = auth_accounts.user_id
-          WHERE auth_accounts.provider = $1
-            AND auth_accounts.provider_account_id = $2
-          LIMIT 1
-        `,
-        [input.provider, input.providerAccountId],
-      )
+      return loadAuthenticatedIdentity(input)
+    },
 
-      if (!identityRow) {
-        return null
+    async resolveOrBootstrapGitHubIdentity(input) {
+      const existing = await loadAuthenticatedIdentity({
+        provider: 'github',
+        providerAccountId: input.providerAccountId,
+      })
+
+      if (existing) {
+        return { status: 'existing', identity: existing }
       }
 
-      const identity = mapAuthenticatedIdentityRow(identityRow)
-      const membershipRows = await db.query<ProjectMembershipRow>(
-        `
-          SELECT project_id, user_id, role
-          FROM project_members
-          WHERE user_id = $1
-          ORDER BY project_id ASC
-        `,
-        [identity.user.id],
-      )
-
-      return {
-        ...identity,
-        projectMemberships: membershipRows.map(mapProjectMembership),
-      }
+      return createFirstGitHubOwner(input)
     },
 
     async getRunsBundle() {

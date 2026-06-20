@@ -236,6 +236,10 @@ function createRepository(): TeamRepository {
 
   return {
     getAuthenticatedIdentity: vi.fn(async () => null),
+    resolveOrBootstrapGitHubIdentity: vi.fn(async () => ({
+      status: 'blocked',
+      reason: 'organization_exists',
+    } as const)),
     getRunsBundle: vi.fn(async () => runsBundle),
     getTeamOverview: vi.fn(async () => overview),
     getSkills: vi.fn(async () => []),

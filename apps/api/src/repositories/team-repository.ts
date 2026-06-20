@@ -84,11 +84,32 @@ export type TeamOverviewPayload = {
 
 export type TeamRepositorySyncContext = Pick<TeamSession, 'organizationId' | 'userId'>
 
+export type GitHubIdentityProfile = {
+  providerAccountId: string
+  username?: string
+  name: string
+  email?: string
+  avatarUrl?: string
+}
+
+export type GitHubIdentityBootstrapResult =
+  | {
+      status: 'existing' | 'created'
+      identity: AuthenticatedIdentity
+    }
+  | {
+      status: 'blocked'
+      reason: 'organization_exists'
+    }
+
 export type TeamRepository = {
   getAuthenticatedIdentity(input: {
     provider: AuthProvider
     providerAccountId: string
   }): Promise<AuthenticatedIdentity | null>
+  resolveOrBootstrapGitHubIdentity(
+    input: GitHubIdentityProfile,
+  ): Promise<GitHubIdentityBootstrapResult>
   getRunsBundle(): Promise<RunsBundle>
   getTeamOverview(): Promise<TeamOverviewPayload>
   getSkills(): Promise<SkillDefinition[]>
@@ -253,6 +274,22 @@ export function createSeedTeamRepository(): TeamRepository {
           userId: member.id,
           role: member.role,
         })),
+      }
+    },
+
+    async resolveOrBootstrapGitHubIdentity(input) {
+      const existing = await this.getAuthenticatedIdentity({
+        provider: 'github',
+        providerAccountId: input.providerAccountId,
+      })
+
+      if (existing) {
+        return { status: 'existing', identity: existing }
+      }
+
+      return {
+        status: 'blocked',
+        reason: 'organization_exists',
       }
     },
 
