@@ -267,15 +267,18 @@ Electron smoke is still tracked as future compatibility expansion. See
 - Signed off release-style validation on 2026-06-19: `corepack pnpm verify`, `corepack pnpm build`,
   disposable-Postgres smoke, and Electron smoke with remediation retry through Test Evidence.
 
-## Planned Milestones
-
 ### v0.8.1: Release Signoff And Version Alignment
 
-- Verify the current `main` release candidate with `corepack pnpm verify`, `corepack pnpm build`,
-  explicit Postgres smoke, and a manual v0.8 walkthrough before creating the release tag.
-- Preserve `v0.8.0` as the historical feature/user-guide tag, then align all first-party package
-  metadata to `0.8.1` and create the annotated `v0.8.1` tag after verification passes.
+- Made the repository public to unblock GitHub Actions for the release candidate and confirmed run
+  `27863202387` passed macOS verify, Windows compatibility, and Postgres integration.
+- Fixed the Windows-only knowledge fixture path normalization failure found by CI.
+- Aligned all first-party package metadata to `0.8.1` and created the annotated `v0.8.1` tag after
+  automated verification passed.
+- Preserved the final human walkthrough as a post-tag acceptance checklist, because Computer Use
+  could read the Electron UI but still could not reliably click through it in this environment.
 - See `docs/plans/v0.8.1-release-signoff.md`.
+
+## Planned Milestones
 
 ### v0.9: Real opencode Runtime + Observability + Demo Readiness
 

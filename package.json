@@ -1,6 +1,6 @@
 {
   "name": "ai-devflow-studio",
-  "version": "0.7.5",
+  "version": "0.8.1",
   "private": true,
   "description": "Team AI development workflow platform with an Electron developer client.",
   "packageManager": "pnpm@9.15.0",

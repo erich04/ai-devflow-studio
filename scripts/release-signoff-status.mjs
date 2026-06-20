@@ -98,7 +98,7 @@ export function evaluateReleaseSignoffSnapshot(snapshot) {
         packageState === 'ready'
           ? `All packages are ${snapshot.targetVersion}.`
           : packageState === 'pending'
-            ? `${preReleasePackages.length} package(s) remain at ${PRE_RELEASE_VERSION}; bump after walkthrough passes.`
+            ? `${preReleasePackages.length} package(s) remain at ${PRE_RELEASE_VERSION}; bump after automated verification passes.`
             : `Package metadata needs attention: ${[...missingPackages, ...unexpectedPackages].join(', ')}.`,
     },
     {
@@ -107,7 +107,7 @@ export function evaluateReleaseSignoffSnapshot(snapshot) {
       state: snapshot.releaseTagExists ? 'ready' : 'pending',
       detail: snapshot.releaseTagExists
         ? `v${snapshot.targetVersion} exists.`
-        : `Create v${snapshot.targetVersion} only after walkthrough and version bump.`,
+        : `Create v${snapshot.targetVersion} after automated verification and version bump; manual walkthrough remains tracked separately.`,
     },
     {
       id: 'working-tree',
