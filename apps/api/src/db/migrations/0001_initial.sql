@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS projects (
   id text PRIMARY KEY,
   organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   name text NOT NULL,
+  slug text NOT NULL,
+  description text NOT NULL,
   repository text NOT NULL,
   default_branch text NOT NULL,
   health text NOT NULL CHECK (health IN ('on_track', 'at_risk', 'blocked')),
@@ -54,6 +56,18 @@ CREATE TABLE IF NOT EXISTS projects (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS slug text;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS description text;
+UPDATE projects
+SET slug = lower(regexp_replace(name, '[^a-zA-Z0-9]+', '-', 'g'))
+WHERE slug IS NULL;
+UPDATE projects
+SET description = name
+WHERE description IS NULL;
+ALTER TABLE projects ALTER COLUMN slug SET NOT NULL;
+ALTER TABLE projects ALTER COLUMN description SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_organization_slug ON projects(organization_id, slug);
 
 CREATE TABLE IF NOT EXISTS project_members (
   project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -333,7 +347,7 @@ CREATE INDEX IF NOT EXISTS idx_gate_override_decisions_run_id ON gate_override_d
 CREATE INDEX IF NOT EXISTS idx_agent_policy_findings_review_id ON agent_policy_findings(review_id);
 
 INSERT INTO schema_meta (key, value)
-VALUES ('schema_version', '4')
+VALUES ('schema_version', '5')
 ON CONFLICT (key) DO UPDATE
 SET value = excluded.value,
     updated_at = now();

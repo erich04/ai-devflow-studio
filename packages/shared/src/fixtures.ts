@@ -24,6 +24,8 @@ export const projects: Project[] = [
   {
     id: 'p-payments',
     name: 'Payments API',
+    slug: 'payments-api',
+    description: 'API service for payment workflow delivery.',
     repository: 'erich/payments-api',
     defaultBranch: 'main',
     health: 'at_risk',
@@ -33,6 +35,8 @@ export const projects: Project[] = [
   {
     id: 'p-admin',
     name: 'Internal Admin Console',
+    slug: 'internal-admin-console',
+    description: 'Internal console for operational workflow visibility.',
     repository: 'erich/internal-admin-console',
     defaultBranch: 'main',
     health: 'on_track',

@@ -129,6 +129,8 @@ function createRepository(): TeamRepository {
       {
         id: 'p-payments',
         name: 'Payments API',
+        slug: 'payments-api',
+        description: 'Payment workflow service.',
         repository: 'erich/payments-api',
         defaultBranch: 'main',
         health: 'on_track',
@@ -138,6 +140,8 @@ function createRepository(): TeamRepository {
       {
         id: 'p-admin',
         name: 'Admin',
+        slug: 'admin',
+        description: 'Admin workflow console.',
         repository: 'erich/admin',
         defaultBranch: 'main',
         health: 'at_risk',
@@ -240,6 +244,17 @@ function createRepository(): TeamRepository {
       status: 'blocked',
       reason: 'organization_exists',
     } as const)),
+    createProject: vi.fn(async (input) => ({
+      id: `p-${input.slug}`,
+      name: input.name,
+      slug: input.slug,
+      description: input.description,
+      repository: input.repository,
+      defaultBranch: input.defaultBranch ?? 'main',
+      health: 'on_track' as const,
+      knowledgeBasePath: input.knowledgeBasePath ?? `docs/${input.slug}/`,
+      testCommand: input.testCommand ?? '',
+    })),
     getRunsBundle: vi.fn(async () => runsBundle),
     getTeamOverview: vi.fn(async () => overview),
     getSkills: vi.fn(async () => []),
@@ -311,6 +326,65 @@ describe('team API route resolver', () => {
     expect(result?.body).toMatchObject({ totalCost: '$0.03' })
     expect(repository.getTeamOverview).toHaveBeenCalled()
   }, 15_000)
+
+  it('allows an authenticated owner to create a minimal team project', async () => {
+    const repository = createRepository()
+    const result = await resolveTeamRoute('POST', '/api/team/projects', repository, {
+      session: ownerSession,
+      body: {
+        name: 'Agent Platform',
+        slug: 'agent-platform',
+        description: 'Pilot project for Agent platform delivery.',
+        repository: 'erich/agent-platform',
+      },
+    })
+
+    expect(result).toEqual({
+      status: 201,
+      body: {
+        id: 'p-agent-platform',
+        name: 'Agent Platform',
+        slug: 'agent-platform',
+        description: 'Pilot project for Agent platform delivery.',
+        repository: 'erich/agent-platform',
+        defaultBranch: 'main',
+        health: 'on_track',
+        knowledgeBasePath: 'docs/agent-platform/',
+        testCommand: '',
+      },
+    })
+    expect(repository.createProject).toHaveBeenCalledWith(
+      {
+        name: 'Agent Platform',
+        slug: 'agent-platform',
+        description: 'Pilot project for Agent platform delivery.',
+        repository: 'erich/agent-platform',
+      },
+      ownerSession,
+    )
+  })
+
+  it('rejects project creation for non-owner sessions', async () => {
+    const repository = createRepository()
+    const result = await resolveTeamRoute('POST', '/api/team/projects', repository, {
+      session: leadSession,
+      body: {
+        name: 'Agent Platform',
+        slug: 'agent-platform',
+        description: 'Pilot project for Agent platform delivery.',
+        repository: 'erich/agent-platform',
+      },
+    })
+
+    expect(result).toEqual({
+      status: 403,
+      body: {
+        error: 'forbidden',
+        message: 'Organization owner role required',
+      },
+    })
+    expect(repository.createProject).not.toHaveBeenCalled()
+  })
 
   it('filters project-scoped reads for non-owner sessions', async () => {
     const repository = createRepository()

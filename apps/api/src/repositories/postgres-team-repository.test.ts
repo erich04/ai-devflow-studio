@@ -13,6 +13,8 @@ class FakeTeamDbClient implements TeamDbClient {
         {
           id: 'p-payments',
           name: 'Payments API',
+          slug: 'payments-api',
+          description: 'Payment workflow service.',
           repository: 'erich/payments-api',
           default_branch: 'main',
           health: 'at_risk',
@@ -319,6 +321,8 @@ describe('Postgres team repository', () => {
 
     expect(overview.projects[0]).toMatchObject({
       id: 'p-payments',
+      slug: 'payments-api',
+      description: 'Payment workflow service.',
       defaultBranch: 'main',
       knowledgeBasePath: 'docs/payments/',
     })
@@ -496,6 +500,41 @@ describe('Postgres team repository', () => {
 
     expect(db.queries.some((query) => query.sql.includes('INSERT INTO users'))).toBe(false)
     expect(db.queries.some((query) => query.sql.includes('INSERT INTO auth_accounts'))).toBe(false)
+  })
+
+  it('creates a minimal team project and records the creator as project owner', async () => {
+    const db = new EmptyBootstrapDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.createProject(
+        {
+          name: 'Agent Platform',
+          slug: 'agent-platform',
+          description: 'Pilot project for Agent platform delivery.',
+          repository: 'erich/agent-platform',
+        },
+        { organizationId: 'org-default', userId: 'u-github-123456' },
+      ),
+    ).resolves.toEqual({
+      id: 'p-agent-platform',
+      name: 'Agent Platform',
+      slug: 'agent-platform',
+      description: 'Pilot project for Agent platform delivery.',
+      repository: 'erich/agent-platform',
+      defaultBranch: 'main',
+      health: 'on_track',
+      knowledgeBasePath: 'docs/agent-platform/',
+      testCommand: '',
+    })
+
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO projects'))).toBe(true)
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO project_members'))).toBe(true)
+    expect(db.queries.at(-1)?.params).toEqual([
+      'p-agent-platform',
+      'u-github-123456',
+      'owner',
+    ])
   })
 
   it('writes run summaries into workflow_runs with tenant context', async () => {

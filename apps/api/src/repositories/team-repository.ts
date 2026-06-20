@@ -102,6 +102,16 @@ export type GitHubIdentityBootstrapResult =
       reason: 'organization_exists'
     }
 
+export type TeamProjectCreateInput = {
+  name: string
+  slug: string
+  description: string
+  repository: string
+  defaultBranch?: string
+  knowledgeBasePath?: string
+  testCommand?: string
+}
+
 export type TeamRepository = {
   getAuthenticatedIdentity(input: {
     provider: AuthProvider
@@ -110,6 +120,10 @@ export type TeamRepository = {
   resolveOrBootstrapGitHubIdentity(
     input: GitHubIdentityProfile,
   ): Promise<GitHubIdentityBootstrapResult>
+  createProject(
+    input: TeamProjectCreateInput,
+    context: TeamRepositorySyncContext,
+  ): Promise<Project>
   getRunsBundle(): Promise<RunsBundle>
   getTeamOverview(): Promise<TeamOverviewPayload>
   getSkills(): Promise<SkillDefinition[]>
@@ -171,6 +185,7 @@ export type TeamRepository = {
 }
 
 export function createSeedTeamRepository(): TeamRepository {
+  const teamProjects = [...projects]
   const syncedRuns = [...runs]
   const syncedArtifacts = [...artifacts]
   const syncedEvents = [...events]
@@ -269,7 +284,7 @@ export function createSeedTeamRepository(): TeamRepository {
           createdAt: DEMO_IDENTITY_TIMESTAMP,
           updatedAt: DEMO_IDENTITY_TIMESTAMP,
         },
-        projectMemberships: projects.map((project) => ({
+        projectMemberships: teamProjects.map((project) => ({
           projectId: project.id,
           userId: member.id,
           role: member.role,
@@ -293,13 +308,29 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
 
+    async createProject(input, context) {
+      const project: Project = {
+        id: `p-${input.slug}`,
+        name: input.name,
+        slug: input.slug,
+        description: input.description,
+        repository: input.repository,
+        defaultBranch: input.defaultBranch ?? 'main',
+        health: 'on_track',
+        knowledgeBasePath: input.knowledgeBasePath ?? `docs/${input.slug}/`,
+        testCommand: input.testCommand ?? '',
+      }
+      upsertById(teamProjects, project)
+      return project
+    },
+
     async getRunsBundle() {
       return { runs: syncedRuns, artifacts: syncedArtifacts, events: syncedEvents }
     },
 
     async getTeamOverview() {
       return {
-        projects,
+        projects: teamProjects,
         members,
         runs: syncedRuns,
         projectCost: rollupTokenUsage(tokenUsage, 'projectId'),
@@ -312,7 +343,7 @@ export function createSeedTeamRepository(): TeamRepository {
         agentProviders: agentProviderConfigs(),
         codingAgentSummaries,
         policyAwareDeliverySummaries: buildPolicyAwareDeliverySummaries({
-          projectIds: projects.map((project) => project.id),
+          projectIds: teamProjects.map((project) => project.id),
           testEvidenceSummaries: syncedTestEvidenceSummaries,
           agentReviews,
           codingAgentSummaries,
@@ -322,7 +353,7 @@ export function createSeedTeamRepository(): TeamRepository {
         enforcementPolicies: {
           organizationPolicy,
           projectOverrides,
-          effectivePolicies: projects.map((project) =>
+          effectivePolicies: teamProjects.map((project) =>
             resolveEffectivePolicy(
               organizationPolicy,
               projectOverrides.find((override) => override.projectId === project.id) ?? null,

@@ -57,6 +57,8 @@ type TimestampValue = string | Date
 type ProjectRow = {
   id: string
   name: string
+  slug: string
+  description: string
   repository: string
   default_branch: string
   health: Project['health']
@@ -315,6 +317,8 @@ function mapProject(row: ProjectRow): Project {
   return {
     id: row.id,
     name: row.name,
+    slug: row.slug,
+    description: row.description,
     repository: row.repository,
     defaultBranch: row.default_branch,
     health: row.health,
@@ -934,6 +938,64 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
       }
 
       return createFirstGitHubOwner(input)
+    },
+
+    async createProject(input, context) {
+      const slug = safeIdSegment(input.slug)
+      const now = new Date().toISOString()
+      const project: Project = {
+        id: `p-${slug}`,
+        name: input.name,
+        slug,
+        description: input.description,
+        repository: input.repository,
+        defaultBranch: input.defaultBranch ?? 'main',
+        health: 'on_track',
+        knowledgeBasePath: input.knowledgeBasePath ?? `docs/${slug}/`,
+        testCommand: input.testCommand ?? '',
+      }
+
+      await db.query(
+        `
+          INSERT INTO projects (
+            id,
+            organization_id,
+            name,
+            slug,
+            description,
+            repository,
+            default_branch,
+            health,
+            knowledge_base_path,
+            test_command,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+        `,
+        [
+          project.id,
+          context.organizationId,
+          project.name,
+          project.slug,
+          project.description,
+          project.repository,
+          project.defaultBranch,
+          project.health,
+          project.knowledgeBasePath,
+          project.testCommand,
+          now,
+        ],
+      )
+      await db.query(
+        `
+          INSERT INTO project_members (project_id, user_id, role)
+          VALUES ($1, $2, $3)
+        `,
+        [project.id, context.userId, 'owner'],
+      )
+
+      return project
     },
 
     async getRunsBundle() {

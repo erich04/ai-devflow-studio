@@ -13,7 +13,7 @@ const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(4)
+    expect(TEAM_SCHEMA_VERSION).toBe(5)
     expect(requiredTeamTableNames).toEqual([
       'schema_meta',
       'organizations',
@@ -63,6 +63,14 @@ describe('team database schema', () => {
     )
     expect(projectMembers?.columns.map((column) => column.name)).toEqual(
       expect.arrayContaining(['project_id', 'user_id', 'role']),
+    )
+  })
+
+  it('defines project metadata for authenticated team project creation', () => {
+    const projects = teamTableDefinitions.find((table) => table.name === 'projects')
+
+    expect(projects?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['id', 'organization_id', 'name', 'slug', 'description', 'repository']),
     )
   })
 

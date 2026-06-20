@@ -48,6 +48,8 @@ export type RequiredGateRole = 'member' | 'lead' | 'owner'
 export type Project = {
   id: string
   name: string
+  slug: string
+  description: string
   repository: string
   defaultBranch: string
   health: 'on_track' | 'at_risk' | 'blocked'

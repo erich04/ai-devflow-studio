@@ -128,15 +128,19 @@ export async function seedDemoTeamData(db: TeamDbClient): Promise<SeedDemoResult
           id,
           organization_id,
           name,
+          slug,
+          description,
           repository,
           default_branch,
           health,
           knowledge_base_path,
           test_command
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (id) DO UPDATE
         SET name = excluded.name,
+            slug = excluded.slug,
+            description = excluded.description,
             repository = excluded.repository,
             default_branch = excluded.default_branch,
             health = excluded.health,
@@ -148,6 +152,8 @@ export async function seedDemoTeamData(db: TeamDbClient): Promise<SeedDemoResult
         project.id,
         DEMO_ORGANIZATION_ID,
         project.name,
+        project.slug,
+        project.description,
         project.repository,
         project.defaultBranch,
         project.health,

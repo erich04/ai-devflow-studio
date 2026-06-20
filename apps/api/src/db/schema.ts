@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 4
+export const TEAM_SCHEMA_VERSION = 5
 
 export const requiredTeamTableNames = [
   'schema_meta',
@@ -120,6 +120,8 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('id', 'text', { primaryKey: true }),
       column('organization_id', 'text', { references: 'organizations.id' }),
       column('name', 'text'),
+      column('slug', 'text'),
+      column('description', 'text'),
       column('repository', 'text'),
       column('default_branch', 'text'),
       column('health', 'text'),

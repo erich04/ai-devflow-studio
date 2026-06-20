@@ -66,6 +66,16 @@ type GateOverrideInput = EnforcementEvaluateInput & {
   policyVersion: number
 }
 
+type TeamProjectCreateInput = {
+  name: string
+  slug: string
+  description: string
+  repository: string
+  defaultBranch?: string
+  knowledgeBasePath?: string
+  testCommand?: string
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -303,6 +313,35 @@ function parseGateOverrideInput(value: unknown): GateOverrideInput {
   }
 }
 
+function parseTeamProjectCreateInput(value: unknown): TeamProjectCreateInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid project payload')
+  }
+
+  const slug = readRequiredString(value, 'slug')
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    throw new Error('Invalid slug')
+  }
+
+  const defaultBranch = value['defaultBranch']
+  const knowledgeBasePath = value['knowledgeBasePath']
+  const testCommand = value['testCommand']
+
+  return {
+    name: readRequiredString(value, 'name'),
+    slug,
+    description: readRequiredString(value, 'description'),
+    repository: readRequiredString(value, 'repository'),
+    ...(typeof defaultBranch === 'string' && defaultBranch.trim()
+      ? { defaultBranch: defaultBranch.trim() }
+      : {}),
+    ...(typeof knowledgeBasePath === 'string' && knowledgeBasePath.trim()
+      ? { knowledgeBasePath: knowledgeBasePath.trim() }
+      : {}),
+    ...(typeof testCommand === 'string' ? { testCommand: testCommand.trim() } : {}),
+  }
+}
+
 function parseOrganizationPolicyInput(value: unknown): OrganizationEnforcementPolicy {
   if (!isRecord(value) || !isRecord(value['organizationPolicy'])) {
     throw new Error('Invalid enforcement policy payload')
@@ -474,6 +513,28 @@ export async function resolveTeamRoute(
     return {
       status: 200,
       body: filterOverviewForSession(await repository.getTeamOverview(), options.session),
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/team/projects') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    if (options.session.role !== 'owner') {
+      return forbidden('Organization owner role required')
+    }
+
+    let input: TeamProjectCreateInput
+    try {
+      input = parseTeamProjectCreateInput(options.body)
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : 'Invalid project payload')
+    }
+
+    return {
+      status: 201,
+      body: await repository.createProject(input, options.session),
     }
   }
 
