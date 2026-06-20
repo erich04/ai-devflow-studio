@@ -122,6 +122,7 @@ async function main() {
   })
   let codingRun = started.codingRun
   let permissionRequest = started.permissionRequest
+  const codingEvents = [...started.events]
   let completed: Awaited<ReturnType<typeof engine.approvePermission>> | undefined
   for (let approvalCount = 0; approvalCount < 8; approvalCount += 1) {
     console.log(`opencode requested ${permissionRequest.permission}; approving once.`)
@@ -132,6 +133,7 @@ async function main() {
       request: permissionRequest,
       now: new Date().toISOString(),
     })
+    codingEvents.push(...result.events)
     if ('permissionRequest' in result) {
       codingRun = result.codingRun
       permissionRequest = result.permissionRequest
@@ -147,6 +149,21 @@ async function main() {
 
   if (!completed.diff.changedPaths.length) {
     throw new Error('opencode smoke did not produce a changed path.')
+  }
+  if (!codingEvents.some((event) => event.kind === 'tool_call')) {
+    throw new Error('opencode smoke did not record a tool_call coding event.')
+  }
+  if (!codingEvents.some((event) => event.kind === 'tool_result')) {
+    throw new Error('opencode smoke did not record a tool_result coding event.')
+  }
+  const metadataBlob = JSON.stringify(codingEvents.map((event) => event.metadata ?? {}))
+  for (const forbidden of ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'raw stdout', 'raw stderr']) {
+    if (metadataBlob.includes(forbidden)) {
+      throw new Error(`opencode smoke leaked forbidden metadata marker: ${forbidden}`)
+    }
+  }
+  if (metadataBlob.includes(workspace.worktreePath) || metadataBlob.includes(repoDir)) {
+    throw new Error('opencode smoke leaked an absolute workspace path in tool metadata.')
   }
 
   const bootstrap = await runDependencyBootstrap({

@@ -8,6 +8,7 @@ import {
   createTestEvidenceEvent,
   knowledgeChunks as defaultKnowledgeChunks,
   knowledgeDocuments as defaultKnowledgeDocuments,
+  redactSecrets,
   type AgentEvent,
   type Artifact,
   type CodingAgentEvent,
@@ -559,6 +560,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         decidedAt: timestamp,
       })
     }
+    return pendingRequests
   }
 
   async function timeOutCodingRun(codingRunId: string, summary: string) {
@@ -568,7 +570,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     }
     const timestamp = now()
     await deps.engine.cancel({ codingRun }).catch(() => undefined)
-    await expirePendingPermissions(codingRunId, timestamp, summary)
+    const expiredRequests = await expirePendingPermissions(codingRunId, timestamp, summary)
     const updated: CodingAgentRun = {
       ...codingRun,
       status: 'timed_out',
@@ -576,19 +578,34 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       completedAt: timestamp,
     }
     await cleanupWorkspaceForRun(updated, timestamp)
+    const toolResultEvents: CodingAgentEvent[] = []
+    let sequence = await nextSequence(updated.id)
+    for (const request of expiredRequests) {
+      toolResultEvents.push(
+        createRelayToolResultEvent({
+          codingRun: updated,
+          request,
+          timestamp,
+          sequence: sequence++,
+          decision: 'expired',
+          status: 'expired',
+          outputSummary: `DevFlow relay expired ${request.permission} permission; coding run timed out.`,
+        }),
+      )
+    }
     const event: CodingAgentEvent = {
       id: idGenerator('coding-event'),
       codingRunId: updated.id,
       runId: updated.runId,
       nodeId: updated.nodeId,
-      sequence: await nextSequence(updated.id),
+      sequence,
       kind: 'status',
       message: summary,
       timestamp,
       redacted: true,
     }
     await saveCodingRun(updated)
-    await saveEvents([event])
+    await saveEvents([...toolResultEvents, event])
   }
 
   async function replyCodingPermission(input: ReplyCodingPermissionRuntimeInput): Promise<CodingPermissionRequest> {
@@ -662,6 +679,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         .catch(() => undefined)
     } else {
       const terminalStatus = input.decision === 'expired' ? 'timed_out' : 'interrupted'
+      const sequence = await nextSequence(codingRun.id)
       const updatedRun: CodingAgentRun = {
         ...codingRun,
         status: terminalStatus,
@@ -676,7 +694,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         codingRunId: updatedRun.id,
         runId: updatedRun.runId,
         nodeId: updatedRun.nodeId,
-        sequence: await nextSequence(updatedRun.id),
+        sequence,
         kind: 'permission',
         message:
           input.decision === 'expired'
@@ -686,9 +704,21 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         metadata: { requestId: request.id },
         redacted: true,
       }
+      const toolResultEvent = createRelayToolResultEvent({
+        codingRun: updatedRun,
+        request,
+        timestamp,
+        sequence: sequence + 1,
+        decision: input.decision === 'expired' ? 'expired' : 'rejected',
+        status: input.decision === 'expired' ? 'expired' : 'rejected',
+        outputSummary:
+          input.decision === 'expired'
+            ? `DevFlow relay expired ${request.permission} permission; coding run timed out.`
+            : `DevFlow relay rejected ${request.permission} permission; coding run interrupted.`,
+      })
       await cleanupWorkspaceForRun(updatedRun, timestamp)
       await saveCodingRun(updatedRun)
-      await saveEvents([event])
+      await saveEvents([event, toolResultEvent])
     }
 
     return updatedRequest
@@ -866,5 +896,41 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       await deps.store.saveManagedCodingWorkspace(deleted)
       return deleted
     },
+  }
+}
+
+function createRelayToolResultEvent(input: {
+  codingRun: CodingAgentRun
+  request: CodingPermissionRequest
+  timestamp: string
+  sequence: number
+  decision: 'approved' | 'rejected' | 'expired'
+  status: 'completed' | 'continued' | 'rejected' | 'expired'
+  outputSummary: string
+}): CodingAgentEvent {
+  const command = input.request.command ? redactSecrets(input.request.command) : undefined
+  const output = redactSecrets(input.outputSummary)
+  return {
+    id: `coding-event-${input.codingRun.id}-tool-result-${input.request.id}`,
+    codingRunId: input.codingRun.id,
+    runId: input.codingRun.runId,
+    nodeId: input.codingRun.nodeId,
+    sequence: input.sequence,
+    kind: 'tool_result',
+    message: `DevFlow ${input.decision} ${input.request.permission} permission.`,
+    timestamp: input.timestamp,
+    metadata: {
+      source: input.request.command || input.request.filePath ? 'opencode_metadata' : 'inferred',
+      permissionRequestId: input.request.id,
+      permission: input.request.permission,
+      toolName: input.request.permission,
+      ...(command ? { commandSummary: command.value } : {}),
+      ...(input.request.filePath ? { filePath: input.request.filePath } : {}),
+      decision: input.decision,
+      status: input.status,
+      outputSummary: output.value,
+      redactionApplied: Boolean(command?.redacted || output.redacted),
+    },
+    redacted: true,
   }
 }

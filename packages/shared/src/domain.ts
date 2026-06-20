@@ -547,6 +547,7 @@ export type CodingAgentEventKind =
   | 'workspace'
   | 'permission'
   | 'tool_call'
+  | 'tool_result'
   | 'bootstrap'
   | 'diff'
   | 'test'

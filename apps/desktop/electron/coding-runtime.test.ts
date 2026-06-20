@@ -289,6 +289,19 @@ describe('CodingRuntime', () => {
       decidedBy: 'devflow-timeout',
     })
     expect(store.codingRuns.at(-1)?.status).toBe('timed_out')
+    expect(store.codingEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'tool_result',
+          metadata: expect.objectContaining({
+            permissionRequestId: store.permissionRequests[0]!.id,
+            decision: 'expired',
+            status: 'expired',
+            outputSummary: 'DevFlow relay expired edit permission; coding run timed out.',
+          }),
+        }),
+      ]),
+    )
   })
 
   it('times out an active coding run through the run timeout scheduler', async () => {
@@ -648,7 +661,19 @@ describe('CodingRuntime', () => {
 
     expect(request.status).toBe('rejected')
     expect(store.codingRuns.at(-1)?.status).toBe('interrupted')
-    expect(store.codingEvents.at(-1)?.kind).toBe('permission')
+    expect(store.codingEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'tool_result',
+          metadata: expect.objectContaining({
+            permissionRequestId: store.permissionRequests[0]!.id,
+            decision: 'rejected',
+            status: 'rejected',
+            outputSummary: 'DevFlow relay rejected edit permission; coding run interrupted.',
+          }),
+        }),
+      ]),
+    )
     expect(uploadCodingAgentSummary).not.toHaveBeenCalled()
   })
 

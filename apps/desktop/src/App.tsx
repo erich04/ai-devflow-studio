@@ -1957,6 +1957,7 @@ function AgentWorkbenchView({
         : cleanupStatus === 'active'
           ? 'Managed workspace is still available for inspection.'
           : 'No managed workspace attached.'
+  const toolTraceEvents = codingEvents.filter((event) => event.kind === 'tool_call' || event.kind === 'tool_result')
 
   return (
     <section className="page-grid" data-testid="agent-workbench">
@@ -2253,6 +2254,36 @@ function AgentWorkbenchView({
             </div>
           </>
         ) : null}
+        {toolTraceEvents.length > 0 ? (
+          <>
+            <strong>Tool / Skill Timeline</strong>
+            <div className="trace-list">
+              {toolTraceEvents.map((event) => {
+                const toolName = codingTraceMetadataString(event.metadata, 'toolName') ?? event.kind
+                const skillName = codingTraceMetadataString(event.metadata, 'skillName') ?? 'Unknown skill'
+                const source = codingTraceSourceLabel(codingTraceMetadataString(event.metadata, 'source'))
+                const summary =
+                  codingTraceMetadataString(event.metadata, 'outputSummary') ??
+                  codingTraceMetadataString(event.metadata, 'inputSummary') ??
+                  event.message
+                const commandSummary = codingTraceMetadataString(event.metadata, 'commandSummary')
+                const filePath = codingTraceMetadataString(event.metadata, 'filePath')
+                const redactionApplied = event.metadata?.redactionApplied === true
+                return (
+                  <div className="trace-step" key={event.id}>
+                    <span>{source}</span>
+                    <strong>{toolName}</strong>
+                    <p>{skillName}</p>
+                    <p>{summary}</p>
+                    {(commandSummary || filePath || redactionApplied) && (
+                      <p>{[commandSummary, filePath, redactionApplied ? 'Redacted' : undefined].filter(Boolean).join(' · ')}</p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        ) : null}
         {codingEvents.length > 0 ? (
           <div className="trace-list">
             {codingEvents.map((event) => (
@@ -2277,6 +2308,21 @@ function AgentWorkbenchView({
       </aside>
     </section>
   )
+}
+
+function codingTraceMetadataString(metadata: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = metadata?.[key]
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function codingTraceSourceLabel(source: string | undefined): string {
+  if (source === 'opencode_metadata') {
+    return 'opencode metadata'
+  }
+  if (source === 'opencode_event_stream') {
+    return 'opencode event stream'
+  }
+  return 'Inferred tool'
 }
 
 function codingRuntimeLabel(engine: CodingAgentRun['engine']): string {

@@ -1096,11 +1096,54 @@ describe('App', () => {
             redacted: true,
           },
           {
+            id: 'coding-event-tool-call',
+            codingRunId: 'coding-run-real',
+            runId: fixtureRuns[0]!.id,
+            nodeId: 'n-build',
+            sequence: 3,
+            kind: 'tool_call',
+            message: 'opencode requested bash via shell-runner.',
+            timestamp: '2026-06-20T10:21:01.000Z',
+            metadata: {
+              source: 'opencode_metadata',
+              permissionRequestId: 'permission-bash',
+              permission: 'bash',
+              toolName: 'bash',
+              skillName: 'shell-runner',
+              commandSummary: 'npm test',
+              inputSummary: 'bash: npm test',
+              redactionApplied: true,
+            },
+            redacted: true,
+          },
+          {
+            id: 'coding-event-tool-result',
+            codingRunId: 'coding-run-real',
+            runId: fixtureRuns[0]!.id,
+            nodeId: 'n-build',
+            sequence: 4,
+            kind: 'tool_result',
+            message: 'DevFlow approved opencode bash permission.',
+            timestamp: '2026-06-20T10:21:02.000Z',
+            metadata: {
+              source: 'opencode_metadata',
+              permissionRequestId: 'permission-bash',
+              permission: 'bash',
+              toolName: 'bash',
+              skillName: 'shell-runner',
+              decision: 'approved',
+              status: 'completed',
+              outputSummary: 'DevFlow relay approved bash permission; opencode completed after the tool action.',
+              redactionApplied: false,
+            },
+            redacted: true,
+          },
+          {
             id: 'coding-event-cleanup',
             codingRunId: 'coding-run-real',
             runId: fixtureRuns[0]!.id,
             nodeId: 'n-build',
-            sequence: 6,
+            sequence: 7,
             kind: 'cleanup',
             message: 'Managed coding workspace cleanup completed.',
             timestamp: '2026-06-20T10:25:00.000Z',
@@ -1187,6 +1230,12 @@ describe('App', () => {
     expect(workbench).toHaveTextContent('opencode smoke tests passed')
     expect(workbench).toHaveTextContent('Permission Timeline')
     expect(workbench).toHaveTextContent('approved')
+    expect(workbench).toHaveTextContent('Tool / Skill Timeline')
+    expect(workbench).toHaveTextContent('shell-runner')
+    expect(workbench).toHaveTextContent('bash')
+    expect(workbench).toHaveTextContent('opencode metadata')
+    expect(workbench).toHaveTextContent('Redacted')
+    expect(workbench).toHaveTextContent('DevFlow relay approved bash permission')
     expect(workbench).toHaveTextContent('devflow-opencode-smoke.txt')
     expect(workbench).not.toHaveTextContent('/tmp/devflow-opencode-smoke/worktrees/coding-run-real')
     expect(workbench).not.toHaveTextContent('/Users/erich/File/claude/10-showcase/ai-devflow-studio')
@@ -1270,6 +1319,7 @@ describe('App', () => {
     await screen.findByText('fixture-project')
 
     fireEvent.change(screen.getByLabelText('测试命令'), { target: { value: 'rm -rf /tmp/devflow' } })
+    await screen.findByText('Command contains destructive recursive removal.')
     fireEvent.click(screen.getByRole('button', { name: /保存测试命令/ }))
     await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('测试命令已阻断'))
     expect(api.saveProjectTestCommand).not.toHaveBeenCalled()

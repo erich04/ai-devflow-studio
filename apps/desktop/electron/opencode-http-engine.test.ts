@@ -44,6 +44,123 @@ describe('opencode HTTP coding engine', () => {
     expect(fetcher.bodies.join('\n')).toContain('DevFlow Coding Brief')
   })
 
+  it('records a redacted coding tool_call event from opencode permission metadata', async () => {
+    const fetcher = sequenceFetcher([
+      { id: 'ses-1' },
+      {},
+      [
+        {
+          id: 'perm-1',
+          sessionID: 'ses-1',
+          permission: 'bash',
+          metadata: {
+            skillName: 'shell-runner',
+            tool: 'bash',
+            command: 'ANTHROPIC_API_KEY=sk-ant-1234567890abcdefghijklmnop npm test',
+            filepath: '/tmp/worktree/src/app.ts',
+            stdout: 'raw output should not be stored',
+          },
+        },
+      ],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    const result = await engine.start(startInput({ run, node, project, workspace }))
+    const toolCall = result.events.find((event) => event.kind === 'tool_call')
+
+    expect(result.permissionRequest.filePath).toBe('src/app.ts')
+    expect(toolCall).toMatchObject({
+      message: 'opencode requested bash via bash.',
+      redacted: true,
+      metadata: {
+        source: 'opencode_metadata',
+        permissionRequestId: 'perm-1',
+        permission: 'bash',
+        toolName: 'bash',
+        skillName: 'shell-runner',
+        commandSummary: '[REDACTED:env_secret_assignment] npm test',
+        filePath: 'src/app.ts',
+        inputSummary: 'bash: [REDACTED:env_secret_assignment] npm test',
+        redactionApplied: true,
+      },
+    })
+    expect(JSON.stringify(toolCall?.metadata)).not.toContain('sk-ant')
+    expect(JSON.stringify(toolCall?.metadata)).not.toContain('/tmp/worktree')
+    expect(JSON.stringify(toolCall?.metadata)).not.toContain('raw output should not be stored')
+  })
+
+  it('marks tool_call metadata as inferred when opencode permission metadata is empty', async () => {
+    const fetcher = sequenceFetcher([
+      { id: 'ses-1' },
+      {},
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit' }],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    const result = await engine.start(startInput({ run, node, project, workspace }))
+    const toolCall = result.events.find((event) => event.kind === 'tool_call')
+
+    expect(toolCall?.metadata).toMatchObject({
+      source: 'inferred',
+      permissionRequestId: 'perm-1',
+      permission: 'edit',
+      toolName: 'edit',
+      inputSummary: 'edit permission requested',
+      redactionApplied: false,
+    })
+  })
+
+  it('normalizes relative metadata paths to portable separators', async () => {
+    const fetcher = sequenceFetcher([
+      { id: 'ses-1' },
+      {},
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src\\app.ts' } }],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    const result = await engine.start(startInput({ run, node, project, workspace }))
+    const toolCall = result.events.find((event) => event.kind === 'tool_call')
+
+    expect(result.permissionRequest.filePath).toBe('src/app.ts')
+    expect(toolCall?.metadata?.filePath).toBe('src/app.ts')
+  })
+
   it('surfaces provider errors while waiting for the first permission request', async () => {
     const fetcher = sequenceFetcher([
       { id: 'ses-1' },
@@ -120,6 +237,22 @@ describe('opencode HTTP coding engine', () => {
     expect(completedResult.diff.changedPaths).toEqual(['src/app.ts'])
     expect(completedResult.diff.patch).not.toContain('sk-live-secret')
     expect(completedResult.bootstrapEvidence).toBeUndefined()
+    expect(completedResult.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'tool_result',
+          message: 'DevFlow approved opencode edit permission.',
+          metadata: expect.objectContaining({
+            permissionRequestId: 'perm-1',
+            permission: 'edit',
+            decision: 'approved',
+            status: 'completed',
+            outputSummary: 'DevFlow relay approved edit permission; opencode completed after the tool action.',
+            redactionApplied: false,
+          }),
+        }),
+      ]),
+    )
   })
 
   it('falls back to managed worktree diff capture when opencode returns no diff files', async () => {
