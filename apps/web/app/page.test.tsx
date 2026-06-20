@@ -6,8 +6,19 @@ import { fetchTeamOverview } from './lib/devflow-api'
 import type { TeamOverviewResponse } from './lib/devflow-api'
 
 vi.mock('./lib/devflow-api', () => ({
+  createTeamProject: vi.fn(),
   fetchTeamOverview: vi.fn(),
+  resolveDevFlowApiBaseUrl: vi.fn(() => 'http://api.local'),
   runKnowledgeReview: vi.fn(),
+  saveEnforcementPolicy: vi.fn(),
+}))
+
+vi.mock('next/headers', () => ({
+  cookies: vi.fn(async () => ({
+    get: vi.fn((name: string) =>
+      name === 'devflow_session' ? { name: 'devflow_session', value: 'session-1' } : undefined,
+    ),
+  })),
 }))
 
 const mockedFetchTeamOverview = vi.mocked(fetchTeamOverview)
@@ -209,6 +220,11 @@ describe('web manager console page', () => {
     expect(screen.getByText('Knowledge review completed.')).toBeInTheDocument()
     expect(screen.getByText('No blocking knowledge gaps found.')).toBeInTheDocument()
     expect(screen.getByText('Gate Enforcement Policy')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Sign in with GitHub/ })).toHaveAttribute(
+      'href',
+      'http://api.local/api/auth/github/start',
+    )
+    expect(screen.getByRole('button', { name: /Create project/ })).toBeInTheDocument()
     expect(screen.getByText('Policy-Aware Delivery')).toBeInTheDocument()
     expect(screen.getByText(/2 warnings/)).toBeInTheDocument()
     expect(screen.getByText(/1 retry attempts/)).toBeInTheDocument()
@@ -216,7 +232,9 @@ describe('web manager console page', () => {
     expect(screen.getByRole('button', { name: /Apply recommended enforcement/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Run backend review/ })).toBeInTheDocument()
     expect(screen.getAllByText('$0.123')).toHaveLength(2)
-    expect(mockedFetchTeamOverview).toHaveBeenCalled()
+    expect(mockedFetchTeamOverview).toHaveBeenCalledWith({
+      cookieHeader: 'devflow_session=session-1',
+    })
   })
 
   it('renders an empty state when the API has no team projects yet', async () => {

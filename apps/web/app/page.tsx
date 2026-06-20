@@ -1,11 +1,20 @@
 import { Activity, Bot, CircleDollarSign, GitPullRequest, Users } from 'lucide-react'
+import { cookies } from 'next/headers'
 import { createRecommendedEnforcementPreset, formatUsd } from '@ai-devflow/shared'
 import {
+  createTeamProject,
   fetchTeamOverview,
+  resolveDevFlowApiBaseUrl,
   runKnowledgeReview,
   saveEnforcementPolicy,
   type TeamOverviewResponse,
 } from './lib/devflow-api'
+
+async function getDevFlowCookieHeader(): Promise<string | undefined> {
+  const cookieStore = await cookies()
+  const sessionCookie = cookieStore.get('devflow_session')?.value
+  return sessionCookie ? `devflow_session=${sessionCookie}` : undefined
+}
 
 async function runKnowledgeReviewAction(formData: FormData) {
   'use server'
@@ -19,22 +28,57 @@ async function runKnowledgeReviewAction(formData: FormData) {
     return
   }
 
-  await runKnowledgeReview({ runId, nodeId, projectId, providerId })
+  const cookieHeader = await getDevFlowCookieHeader()
+  await runKnowledgeReview({
+    runId,
+    nodeId,
+    projectId,
+    providerId,
+    ...(cookieHeader ? { cookieHeader } : {}),
+  })
 }
 
 async function applyRecommendedPolicyAction() {
   'use server'
 
+  const cookieHeader = await getDevFlowCookieHeader()
   await saveEnforcementPolicy({
     policy: createRecommendedEnforcementPreset({ updatedAt: new Date().toISOString() }),
+    ...(cookieHeader ? { cookieHeader } : {}),
+  })
+}
+
+async function createProjectAction(formData: FormData) {
+  'use server'
+
+  const name = String(formData.get('name') ?? '').trim()
+  const slug = String(formData.get('slug') ?? '').trim()
+  const description = String(formData.get('description') ?? '').trim()
+  const repository = String(formData.get('repository') ?? '').trim()
+
+  if (!name || !slug || !description || !repository) {
+    return
+  }
+
+  const cookieHeader = await getDevFlowCookieHeader()
+  await createTeamProject({
+    name,
+    slug,
+    description,
+    repository,
+    ...(cookieHeader ? { cookieHeader } : {}),
   })
 }
 
 export default async function Page() {
   let overview: TeamOverviewResponse
+  const apiBaseUrl = resolveDevFlowApiBaseUrl()
+  const cookieHeader = await getDevFlowCookieHeader()
 
   try {
-    overview = await fetchTeamOverview()
+    overview = await fetchTeamOverview({
+      ...(cookieHeader ? { cookieHeader } : {}),
+    })
   } catch (error) {
     return (
       <WebShell>
@@ -76,7 +120,12 @@ export default async function Page() {
             <span>Team Overview</span>
             <h1>项目交付健康</h1>
           </div>
-          <button>跟随系统</button>
+          <div className="web-header-actions">
+            <a className="button-link" href={`${apiBaseUrl}/api/auth/github/start`}>
+              Sign in with GitHub
+            </a>
+            <button>跟随系统</button>
+          </div>
         </header>
 
         <div className="kpis">
@@ -106,6 +155,25 @@ export default async function Page() {
             ) : (
               <EmptyState title="还没有团队项目" body="等待 API 同步团队项目后显示交付健康。" />
             )}
+            <form className="project-create-form" action={createProjectAction}>
+              <label>
+                Name
+                <input name="name" placeholder="Agent Platform" required />
+              </label>
+              <label>
+                Slug
+                <input name="slug" placeholder="agent-platform" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required />
+              </label>
+              <label>
+                Repository
+                <input name="repository" placeholder="erich/agent-platform" required />
+              </label>
+              <label>
+                Description
+                <textarea name="description" placeholder="Pilot project for team delivery." required />
+              </label>
+              <button type="submit">Create project</button>
+            </form>
           </div>
 
           <div className="web-panel" id="members">

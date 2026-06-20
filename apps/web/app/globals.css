@@ -33,6 +33,20 @@ button {
   font-weight: 700;
 }
 
+.button-link {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
 .web-shell {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
@@ -83,6 +97,13 @@ button {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 20px;
+}
+
+.web-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .web-header span,
@@ -164,6 +185,42 @@ button {
   gap: 14px;
   padding: 12px 0;
   border-bottom: 1px solid var(--border);
+}
+
+.project-create-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.project-create-form label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.project-create-form input,
+.project-create-form textarea {
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-transform: none;
+}
+
+.project-create-form textarea {
+  min-height: 68px;
+  resize: vertical;
 }
 
 .project-row,

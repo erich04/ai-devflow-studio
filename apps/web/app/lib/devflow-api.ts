@@ -42,6 +42,7 @@ export type TeamOverviewResponse = {
 
 export type FetchTeamOverviewOptions = {
   apiBaseUrl?: string
+  cookieHeader?: string
   fetcher?: typeof fetch
   sessionHeaders?: DevFlowSessionHeaders
 }
@@ -57,15 +58,25 @@ export function resolveDevFlowApiBaseUrl(
   return value.replace(/\/$/, '')
 }
 
+function createApiHeaders(
+  baseHeaders: Record<string, string>,
+  options: FetchTeamOverviewOptions,
+): Record<string, string> {
+  return {
+    ...baseHeaders,
+    ...(options.cookieHeader ? { cookie: options.cookieHeader } : {}),
+    ...(options.sessionHeaders ?? {}),
+  }
+}
+
 export async function fetchTeamOverview(
   options: FetchTeamOverviewOptions = {},
 ): Promise<TeamOverviewResponse> {
   const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
   const fetcher = options.fetcher ?? fetch
-  const sessionHeaders = options.sessionHeaders ?? {}
   const response = await fetcher(`${apiBaseUrl}/api/team/overview`, {
     cache: 'no-store',
-    headers: { accept: 'application/json', ...sessionHeaders },
+    headers: createApiHeaders({ accept: 'application/json' }, options),
   })
 
   if (!response.ok) {
@@ -87,15 +98,16 @@ export async function runKnowledgeReview(
 ): Promise<AgentReviewExecutionResult> {
   const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
   const fetcher = options.fetcher ?? fetch
-  const sessionHeaders = options.sessionHeaders ?? {}
   const response = await fetcher(`${apiBaseUrl}/api/agent/knowledge-review`, {
     method: 'POST',
     cache: 'no-store',
-    headers: {
-      accept: 'application/json',
-      'content-type': 'application/json',
-      ...sessionHeaders,
-    },
+    headers: createApiHeaders(
+      {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      options,
+    ),
     body: JSON.stringify({
       runId: options.runId,
       nodeId: options.nodeId,
@@ -120,15 +132,16 @@ export async function saveEnforcementPolicy(
 ): Promise<OrganizationEnforcementPolicy> {
   const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
   const fetcher = options.fetcher ?? fetch
-  const sessionHeaders = options.sessionHeaders ?? {}
   const response = await fetcher(`${apiBaseUrl}/api/enforcement/policy`, {
     method: 'PUT',
     cache: 'no-store',
-    headers: {
-      accept: 'application/json',
-      'content-type': 'application/json',
-      ...sessionHeaders,
-    },
+    headers: createApiHeaders(
+      {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      options,
+    ),
     body: JSON.stringify({ organizationPolicy: options.policy }),
   })
 
@@ -137,4 +150,39 @@ export async function saveEnforcementPolicy(
   }
 
   return response.json() as Promise<OrganizationEnforcementPolicy>
+}
+
+export type CreateTeamProjectOptions = FetchTeamOverviewOptions & {
+  name: string
+  slug: string
+  description: string
+  repository: string
+}
+
+export async function createTeamProject(options: CreateTeamProjectOptions): Promise<Project> {
+  const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
+  const fetcher = options.fetcher ?? fetch
+  const response = await fetcher(`${apiBaseUrl}/api/team/projects`, {
+    method: 'POST',
+    cache: 'no-store',
+    headers: createApiHeaders(
+      {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      options,
+    ),
+    body: JSON.stringify({
+      name: options.name,
+      slug: options.slug,
+      description: options.description,
+      repository: options.repository,
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`DevFlow API /api/team/projects failed with ${response.status}`)
+  }
+
+  return response.json() as Promise<Project>
 }

@@ -6,6 +6,7 @@ import {
 } from '@ai-devflow/shared'
 import {
   fetchTeamOverview,
+  createTeamProject,
   resolveDevFlowApiBaseUrl,
   runKnowledgeReview,
   saveEnforcementPolicy,
@@ -214,6 +215,55 @@ describe('DevFlow web API client', () => {
         'content-type': 'application/json',
       },
       body: JSON.stringify({ organizationPolicy }),
+    })
+  })
+
+  it('creates a minimal team project through the API boundary with forwarded cookies', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          id: 'p-agent-platform',
+          name: 'Agent Platform',
+          slug: 'agent-platform',
+          description: 'Pilot project.',
+          repository: 'erich/agent-platform',
+          defaultBranch: 'main',
+          health: 'on_track',
+          knowledgeBasePath: 'docs/agent-platform/',
+          testCommand: '',
+        }),
+        { status: 201 },
+      ),
+    )
+
+    await expect(
+      createTeamProject({
+        apiBaseUrl: 'http://api.local',
+        fetcher,
+        cookieHeader: 'devflow_session=session-1',
+        name: 'Agent Platform',
+        slug: 'agent-platform',
+        description: 'Pilot project.',
+        repository: 'erich/agent-platform',
+      }),
+    ).resolves.toMatchObject({
+      id: 'p-agent-platform',
+      slug: 'agent-platform',
+    })
+    expect(fetcher).toHaveBeenCalledWith('http://api.local/api/team/projects', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        cookie: 'devflow_session=session-1',
+      },
+      body: JSON.stringify({
+        name: 'Agent Platform',
+        slug: 'agent-platform',
+        description: 'Pilot project.',
+        repository: 'erich/agent-platform',
+      }),
     })
   })
 })
