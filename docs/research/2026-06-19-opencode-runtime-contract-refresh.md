@@ -52,6 +52,11 @@ Source: `apps/desktop/electron/coding-engine.ts`
 
 The fake engine must remain the default `corepack pnpm verify` path.
 
+The live smoke preflight now enforces the same boundary: setting `DEVFLOW_RUN_OPENCODE_SMOKE=1` is
+not enough by itself. The operator must also set `DEVFLOW_CODING_ENGINE=opencode-http`, otherwise
+`corepack pnpm test:opencode-smoke` exits before contacting a real provider. This prevents accidental
+live-provider runs while preserving fake-engine verification as the default.
+
 ### HTTP Transport
 
 Source: `apps/desktop/electron/opencode-http-adapter.ts`
@@ -155,4 +160,3 @@ Proceed from contract refresh to runtime hardening only when these are true:
 - Can session abort reliably stop a live run while a permission request is pending?
 - Does timeout cleanup always kill `opencode serve` and remove the managed worktree?
 - Which subset of real trace events should be promoted to the Agents UI in v0.9.3?
-

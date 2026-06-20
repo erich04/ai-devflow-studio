@@ -28,7 +28,12 @@ export function evaluateOpencodeSmokePreflight(
   }
 
   const apiKeyEnvName = env['DEVFLOW_OPENCODE_API_KEY_ENV'] ?? 'OPENAI_API_KEY'
-  const required = ['DEVFLOW_OPENCODE_PROVIDER_ID', 'DEVFLOW_OPENCODE_MODEL_ID', apiKeyEnvName]
+  const required = [
+    'DEVFLOW_CODING_ENGINE',
+    'DEVFLOW_OPENCODE_PROVIDER_ID',
+    'DEVFLOW_OPENCODE_MODEL_ID',
+    apiKeyEnvName,
+  ]
   const missing = required.filter((key) => !env[key])
 
   if (missing.length) {
@@ -45,6 +50,18 @@ export function evaluateOpencodeSmokePreflight(
         'DEVFLOW_OPENCODE_MODEL_ID=gpt-4.1-mini \\',
         `${apiKeyEnvName}="<redacted>" \\`,
         'corepack pnpm test:opencode-smoke',
+      ].join('\n'),
+    }
+  }
+
+  if (env['DEVFLOW_CODING_ENGINE'] !== 'opencode-http') {
+    return {
+      mode: 'blocked',
+      missing: ['DEVFLOW_CODING_ENGINE=opencode-http'],
+      message: [
+        'Real opencode smoke requires DEVFLOW_CODING_ENGINE=opencode-http.',
+        '',
+        'This keeps live-provider runs explicit while default verification stays on the fake engine.',
       ].join('\n'),
     }
   }
