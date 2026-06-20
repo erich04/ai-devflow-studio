@@ -293,6 +293,9 @@ Electron smoke is still tracked as future compatibility expansion. See
 - Made real-runtime behavior legible in Agents with runtime labeling, terminal state, permission
   timeline, changed paths, bootstrap/test evidence, and cleanup status without exposing raw
   worktree/source paths.
+- Added a v0.9.x Tool / Skill Timeline for real opencode runs by recording permission-backed
+  `tool_call` / `tool_result` coding events with redacted metadata. Missing opencode Skill metadata
+  is shown as inferred/unknown instead of fabricating internal Skill call-stack details.
 - Closed v0.9 with dual-path signoff: deterministic fake-engine `verify`, `build`,
   disposable-Postgres smoke, default no-cost opencode smoke skip, and explicit real-opencode smoke
   against the configured Volcengine provider. A post-release live smoke on 2026-06-20 also passed

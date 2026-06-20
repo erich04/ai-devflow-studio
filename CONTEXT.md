@@ -85,6 +85,12 @@ An auditable step record for an Agent Review, including context preparation, ret
 provider call, and artifact creation. Traces explain how the review was produced without exposing
 private local paths or raw command output.
 
+## Tool / Skill Trace
+
+A Coding Agent runtime timeline that summarizes permission-backed tool activity, the Skill metadata
+opencode exposes when available, DevFlow's permission relay decision, and redaction state. It explains
+what DevFlow observed; it does not claim to reconstruct opencode's private internal Skill call stack.
+
 ## Gate Advisory
 
 A recommendation shown to Gate reviewers after an Agent Review. In v0.5 it is warning-only. From

@@ -1,10 +1,12 @@
 import {
   buildCodingBrief,
+  redactSecrets,
   sanitizeCodingDiffArtifact,
   type CodingAgentEvent,
   type CodingAgentRun,
   type CodingPermissionRequest,
 } from '@ai-devflow/shared'
+import { isAbsolute, relative } from 'node:path'
 import type { CodingEngineAdapter, CodingEngineStartInput } from './coding-engine.js'
 import {
   createOpencodeSession,
@@ -125,7 +127,7 @@ export function createOpencodeHttpCodingEngineAdapter(
         directory: input.workspace.worktreePath,
         handledPermissionIds: new Set([permission.id]),
         messagePromise,
-        nextEventSequence: 3,
+        nextEventSequence: 4,
         sessionId: session.id,
       })
 
@@ -154,8 +156,15 @@ export function createOpencodeHttpCodingEngineAdapter(
       if (continuation.kind === 'permission') {
         session.handledPermissionIds.add(continuation.permission.id)
         const eventSequence = session.nextEventSequence
-        session.nextEventSequence += 1
-        return createContinuationResult(input.codingRun, input.now, continuation.permission, eventSequence)
+        session.nextEventSequence += 3
+        return createContinuationResult(
+          input.codingRun,
+          input.request,
+          input.now,
+          continuation.permission,
+          eventSequence,
+          session.directory,
+        )
       }
       const messageResult = continuation.result
       const diffSource = await readOpencodeDiffSource({
@@ -187,12 +196,20 @@ export function createOpencodeHttpCodingEngineAdapter(
         redacted: true,
       }
       const events: CodingAgentEvent[] = [
+        createToolResultEvent({
+          codingRun: input.codingRun,
+          request: input.request,
+          now: input.now,
+          sequence: session.nextEventSequence,
+          status: 'completed',
+          outputSummary: `DevFlow relay approved ${input.request.permission} permission; opencode completed after the tool action.`,
+        }),
         {
           id: `coding-event-${input.codingRun.id}-diff`,
           codingRunId: codingRun.id,
           runId: codingRun.runId,
           nodeId: codingRun.nodeId,
-          sequence: session.nextEventSequence,
+          sequence: session.nextEventSequence + 1,
           kind: 'diff',
           message: 'opencode completed and DevFlow captured a redacted worktree diff.',
           timestamp: input.now,
@@ -386,9 +403,17 @@ function createStartResult(
       metadata: { requestId: permission.id },
       redacted: true,
     },
+    createToolCallEvent({
+      codingRun,
+      permission,
+      worktreePath: input.workspace.worktreePath,
+      sequence: 3,
+      now: input.now,
+    }),
   ]
   const filePath = metadataString(permission.metadata, 'filepath') ?? metadataString(permission.metadata, 'path')
   const command = metadataString(permission.metadata, 'command')
+  const safePath = filePath ? safeRelativePath(filePath, input.workspace.worktreePath) : undefined
   const permissionRequest: CodingPermissionRequest = {
     id: permission.id,
     codingRunId: codingRun.id,
@@ -396,7 +421,7 @@ function createStartResult(
     nodeId: codingRun.nodeId,
     permission: normalizePermission(permission.permission),
     title: `opencode requested ${permission.permission} permission`,
-    ...(filePath ? { filePath } : {}),
+    ...(safePath ? { filePath: safePath } : {}),
     ...(command ? { command } : {}),
     risk: 'warn',
     reasons: ['opencode requested a tool permission through the managed adapter.'],
@@ -414,9 +439,11 @@ function createStartResult(
 
 function createContinuationResult(
   codingRun: CodingAgentRun,
+  approvedRequest: CodingPermissionRequest,
   now: string,
   permission: OpencodePermission,
   sequence: number,
+  worktreePath: string,
 ) {
   const continuedRun: CodingAgentRun = {
     ...codingRun,
@@ -438,8 +465,25 @@ function createContinuationResult(
 
   return {
     codingRun: continuedRun,
-    events: [event],
-    permissionRequest: toCodingPermissionRequest(continuedRun, permission, now),
+    events: [
+      createToolResultEvent({
+        codingRun,
+        request: approvedRequest,
+        now,
+        sequence,
+        status: 'continued',
+        outputSummary: `DevFlow relay approved ${approvedRequest.permission} permission; opencode requested another permission.`,
+      }),
+      event,
+      createToolCallEvent({
+        codingRun: continuedRun,
+        permission,
+        worktreePath,
+        sequence: sequence + 2,
+        now,
+      }),
+    ],
+    permissionRequest: toCodingPermissionRequest(continuedRun, permission, now, worktreePath),
   }
 }
 
@@ -447,9 +491,11 @@ function toCodingPermissionRequest(
   codingRun: CodingAgentRun,
   permission: OpencodePermission,
   now: string,
+  worktreePath: string,
 ): CodingPermissionRequest {
   const filePath = metadataString(permission.metadata, 'filepath') ?? metadataString(permission.metadata, 'path')
   const command = metadataString(permission.metadata, 'command')
+  const safePath = filePath ? safeRelativePath(filePath, worktreePath) : undefined
 
   return {
     id: permission.id,
@@ -458,7 +504,7 @@ function toCodingPermissionRequest(
     nodeId: codingRun.nodeId,
     permission: normalizePermission(permission.permission),
     title: `opencode requested ${permission.permission} permission`,
-    ...(filePath ? { filePath } : {}),
+    ...(safePath ? { filePath: safePath } : {}),
     ...(command ? { command } : {}),
     risk: 'warn',
     reasons: ['opencode requested a tool permission through the managed adapter.'],
@@ -471,6 +517,111 @@ function toCodingPermissionRequest(
 function metadataString(metadata: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = metadata?.[key]
   return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function createToolCallEvent(input: {
+  codingRun: CodingAgentRun
+  permission: OpencodePermission
+  worktreePath: string
+  sequence: number
+  now: string
+}): CodingAgentEvent {
+  const metadata = buildPermissionToolMetadata({
+    permissionId: input.permission.id,
+    permission: input.permission.permission,
+    metadata: input.permission.metadata,
+    worktreePath: input.worktreePath,
+  })
+  return {
+    id: `coding-event-${input.codingRun.id}-tool-call-${input.permission.id}`,
+    codingRunId: input.codingRun.id,
+    runId: input.codingRun.runId,
+    nodeId: input.codingRun.nodeId,
+    sequence: input.sequence,
+    kind: 'tool_call',
+    message: `opencode requested ${input.permission.permission} via ${metadata.toolName}.`,
+    timestamp: input.now,
+    metadata,
+    redacted: true,
+  }
+}
+
+function createToolResultEvent(input: {
+  codingRun: CodingAgentRun
+  request: CodingPermissionRequest
+  now: string
+  sequence: number
+  status: 'completed' | 'continued' | 'rejected' | 'expired'
+  outputSummary: string
+}): CodingAgentEvent {
+  const redactedOutput = redactSecrets(input.outputSummary)
+  return {
+    id: `coding-event-${input.codingRun.id}-tool-result-${input.request.id}`,
+    codingRunId: input.codingRun.id,
+    runId: input.codingRun.runId,
+    nodeId: input.codingRun.nodeId,
+    sequence: input.sequence,
+    kind: 'tool_result',
+    message: `DevFlow approved opencode ${input.request.permission} permission.`,
+    timestamp: input.now,
+    metadata: {
+      source: input.request.command || input.request.filePath ? 'opencode_metadata' : 'inferred',
+      permissionRequestId: input.request.id,
+      permission: input.request.permission,
+      toolName: input.request.permission,
+      ...(input.request.command ? { commandSummary: redactSecrets(input.request.command).value } : {}),
+      ...(input.request.filePath ? { filePath: input.request.filePath } : {}),
+      decision: input.status === 'expired' ? 'expired' : input.status === 'rejected' ? 'rejected' : 'approved',
+      status: input.status,
+      outputSummary: redactedOutput.value,
+      redactionApplied: redactedOutput.redacted || Boolean(input.request.command && redactSecrets(input.request.command).redacted),
+    },
+    redacted: true,
+  }
+}
+
+function buildPermissionToolMetadata(input: {
+  permissionId: string
+  permission: string
+  metadata: Record<string, unknown> | undefined
+  worktreePath: string
+}): Record<string, unknown> {
+  const skillName = metadataString(input.metadata, 'skillName') ?? metadataString(input.metadata, 'skill')
+  const toolName = metadataString(input.metadata, 'tool') ?? input.permission
+  const command = metadataString(input.metadata, 'command')
+  const rawPath = metadataString(input.metadata, 'filepath') ?? metadataString(input.metadata, 'path')
+  const safeCommand = command ? redactSecrets(command) : undefined
+  const safePath = rawPath ? safeRelativePath(rawPath, input.worktreePath) : undefined
+  const hasMetadata = Boolean(skillName || metadataString(input.metadata, 'tool') || command || rawPath)
+  const redactionApplied = Boolean(safeCommand?.redacted || (rawPath && rawPath !== safePath))
+  const commandSummary = safeCommand?.value
+  const inputSummary = commandSummary ? `${toolName}: ${commandSummary}` : `${input.permission} permission requested`
+
+  return {
+    source: hasMetadata ? 'opencode_metadata' : 'inferred',
+    permissionRequestId: input.permissionId,
+    permission: input.permission,
+    toolName,
+    ...(skillName ? { skillName } : {}),
+    ...(commandSummary ? { commandSummary } : {}),
+    ...(safePath ? { filePath: safePath } : {}),
+    inputSummary,
+    redactionApplied,
+  }
+}
+
+function safeRelativePath(value: string, worktreePath: string): string | undefined {
+  if (!isAbsolute(value)) {
+    return value
+  }
+  if (!worktreePath) {
+    return undefined
+  }
+  const relativePath = relative(worktreePath, value)
+  if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    return undefined
+  }
+  return relativePath
 }
 
 function normalizePermission(permission: string): CodingPermissionRequest['permission'] {
