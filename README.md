@@ -28,6 +28,7 @@ corepack pnpm test
 corepack pnpm test:postgres-smoke
 corepack pnpm test:agent-live
 corepack pnpm test:opencode-smoke
+corepack pnpm opencode:status
 corepack pnpm test:e2e
 corepack pnpm test:electron-smoke
 corepack pnpm release:status
@@ -67,6 +68,15 @@ run the worktree test command, and persist Test Evidence.
 
 The real opencode runtime is explicitly env-gated. It is not part of default `verify` because it
 depends on a local opencode installation and provider credentials.
+
+Check the local runtime contract without contacting a provider:
+
+```bash
+corepack pnpm opencode:status
+```
+
+This reports the local `opencode --version`, confirms live smoke is skipped by default, and shows
+whether the real provider profile is intentionally configured.
 
 Default safe check:
 

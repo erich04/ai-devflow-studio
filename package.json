@@ -18,6 +18,7 @@
     "test:postgres-smoke": "node scripts/postgres-smoke.mjs",
     "test:agent-live": "tsx scripts/agent-live-smoke.ts",
     "test:opencode-smoke": "tsx scripts/opencode-smoke.ts",
+    "opencode:status": "node scripts/opencode-runtime-status.mjs",
     "test:e2e": "node scripts/e2e.mjs",
     "test:electron-smoke": "node scripts/electron-smoke.mjs",
     "verify": "corepack pnpm typecheck && corepack pnpm test && corepack pnpm test:cross-platform && corepack pnpm test:e2e && corepack pnpm test:electron-smoke",

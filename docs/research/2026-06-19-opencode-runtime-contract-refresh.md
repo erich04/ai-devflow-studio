@@ -18,6 +18,8 @@ Current local finding:
 - `opencode --version` returns `1.17.5`.
 - This matches the v0.6 live signoff notes in
   `docs/superpowers/plans/2026-06-17-near-term-opencode-signoff.md`.
+- `corepack pnpm opencode:status` is now the provider-safe way to re-check the local binary/version,
+  default fake-engine posture, live-smoke gate, and provider profile state before any live smoke.
 
 ## Existing Evidence
 
@@ -56,6 +58,15 @@ The live smoke preflight now enforces the same boundary: setting `DEVFLOW_RUN_OP
 not enough by itself. The operator must also set `DEVFLOW_CODING_ENGINE=opencode-http`, otherwise
 `corepack pnpm test:opencode-smoke` exits before contacting a real provider. This prevents accidental
 live-provider runs while preserving fake-engine verification as the default.
+
+For a provider-safe contract status snapshot, run:
+
+```bash
+corepack pnpm opencode:status
+```
+
+This does not contact opencode's provider/model API; it only checks local binary/version and whether
+the live-smoke environment is intentionally configured.
 
 ### HTTP Transport
 
