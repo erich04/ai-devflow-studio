@@ -12,6 +12,7 @@ Use this checklist only when intentionally validating the real opencode coding a
 
 - Keep the deterministic fake engine as the default daily verification path.
 - Confirm local opencode is installed and compatible with the adapter under test.
+- Run `corepack pnpm opencode:status` before live smoke to confirm the local binary/version, default fake-engine posture, live-smoke gate, and provider profile state.
 - Set `DEVFLOW_RUN_OPENCODE_SMOKE=1` intentionally.
 - Set `DEVFLOW_CODING_ENGINE=opencode-http`.
 - Set the intended provider ID and model ID explicitly.

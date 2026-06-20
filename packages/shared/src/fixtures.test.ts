@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { knowledgeSources, projects, runs } from './fixtures'
+import { knowledgeDocuments, knowledgeSources, projects, runs } from './fixtures'
 
 function normalizeLineEndings(value: string): string {
   return value.replace(/\r\n/g, '\n')
@@ -23,5 +23,14 @@ describe('knowledge source fixtures', () => {
       const markdown = readFileSync(join(process.cwd(), source.sourcePath), 'utf8')
       expect(normalizeLineEndings(source.markdown)).toBe(normalizeLineEndings(markdown))
     }
+  })
+
+  it('includes the opencode runtime signoff checklist in the indexed knowledge documents', () => {
+    expect(knowledgeDocuments).toContainEqual(
+      expect.objectContaining({
+        sourcePath: 'docs/knowledge/checklists/opencode-runtime-signoff.md',
+        title: 'opencode Runtime Signoff Checklist',
+      }),
+    )
   })
 })
