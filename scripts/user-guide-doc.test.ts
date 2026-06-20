@@ -51,9 +51,12 @@ describe('v0.8 user guide documentation', () => {
     expect(markdown).toContain('corepack pnpm release:status')
     expect(markdown).toContain('corepack pnpm opencode:status')
     expect(markdown).toContain('DEVFLOW_DATABASE_URL=')
-    expect(markdown).toContain('236 个 unit tests')
+    expect(markdown).toContain('237 个 unit tests')
     expect(markdown).toContain('GitHub Actions')
     expect(markdown).toContain('billing/spending-limit')
+    expect(markdown).toContain('noWindowsAvailable')
+    expect(markdown).toContain('Computer Use 工具层')
+    expect(markdown).toContain('test:electron-smoke')
   })
 
   it('documents a human walkthrough checklist with concrete pass criteria', () => {

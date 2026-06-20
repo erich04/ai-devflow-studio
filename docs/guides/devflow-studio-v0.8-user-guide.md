@@ -253,7 +253,7 @@ DEVFLOW_DATABASE_URL=postgresql://erich@127.0.0.1:55437/devflow_v081_signoff cor
 
 其中：
 
-- `verify` 包含 typecheck、236 个 unit tests、cross-platform checks、3 个 browser E2E、Electron smoke。
+- `verify` 包含 typecheck、237 个 unit tests、cross-platform checks、3 个 browser E2E、Electron smoke。
 - `build` 覆盖 API、worker、desktop renderer/electron/preload、web。
 - `release:status` 检查 package version、release docs、git 工作树、tag 和人工 walkthrough 状态；在正式打 tag 前可用 `DEVFLOW_RELEASE_WALKTHROUGH=passed corepack pnpm release:status -- --strict` 做硬门禁。
 - `opencode:status` 不接触 provider，只检查本机 opencode binary、默认 fake-engine 姿态、live smoke gate 和 provider profile 配置状态。
