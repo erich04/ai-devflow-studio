@@ -1018,6 +1018,180 @@ describe('App', () => {
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Pushed permission event.')
   })
 
+  it('explains real opencode runtime evidence without exposing raw workspace paths', async () => {
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue({
+        projects: [localProject],
+        runs: fixtureRuns,
+        artifacts: [],
+        events: [],
+        testEvidence: [
+          {
+            id: 'evidence-opencode',
+            runId: fixtureRuns[0]!.id,
+            nodeId: 'n-build',
+            projectId: localProject.id,
+            command: 'npm test',
+            cwd: '/tmp/devflow-opencode-smoke/repo',
+            status: 'passed',
+            exitCode: 0,
+            durationMs: 1200,
+            stdout: 'opencode smoke tests passed',
+            stderr: '',
+            summary: 'opencode smoke tests passed',
+            redacted: true,
+            createdAt: '2026-06-20T10:24:00.000Z',
+          },
+        ],
+        settings: { themePreference: 'system' },
+        mcpServers: [],
+        agentReviews: [],
+        agentTraces: [],
+        agentTokenUsage: [],
+        codingRuns: [
+          {
+            id: 'coding-run-real',
+            runId: fixtureRuns[0]!.id,
+            nodeId: 'n-build',
+            projectId: localProject.id,
+            requestedBy: 'u-ling',
+            providerId: 'double',
+            engine: 'opencode-http',
+            status: 'completed',
+            managedWorkspaceId: 'workspace-real',
+            branchName: 'devflow/opencode-smoke',
+            userInstruction: 'Create a smoke marker.',
+            prompt: 'redacted prompt',
+            summary: 'opencode completed the managed coding run.',
+            changedPaths: ['devflow-opencode-smoke.txt'],
+            startedAt: '2026-06-20T10:20:00.000Z',
+            completedAt: '2026-06-20T10:24:00.000Z',
+            diffArtifactId: 'diff-opencode',
+            bootstrapEvidenceId: 'bootstrap-opencode',
+            testEvidenceId: 'evidence-opencode',
+            redacted: true,
+          },
+        ],
+        codingEvents: [
+          {
+            id: 'coding-event-brief',
+            codingRunId: 'coding-run-real',
+            runId: fixtureRuns[0]!.id,
+            nodeId: 'n-build',
+            sequence: 1,
+            kind: 'brief',
+            message: 'DevFlow coding brief sent to opencode HTTP session.',
+            timestamp: '2026-06-20T10:20:00.000Z',
+            redacted: true,
+          },
+          {
+            id: 'coding-event-permission',
+            codingRunId: 'coding-run-real',
+            runId: fixtureRuns[0]!.id,
+            nodeId: 'n-build',
+            sequence: 2,
+            kind: 'permission',
+            message: 'opencode requested bash permission.',
+            timestamp: '2026-06-20T10:21:00.000Z',
+            redacted: true,
+          },
+          {
+            id: 'coding-event-cleanup',
+            codingRunId: 'coding-run-real',
+            runId: fixtureRuns[0]!.id,
+            nodeId: 'n-build',
+            sequence: 6,
+            kind: 'cleanup',
+            message: 'Managed coding workspace cleanup completed.',
+            timestamp: '2026-06-20T10:25:00.000Z',
+            metadata: { cleanupStatus: 'deleted' },
+            redacted: true,
+          },
+        ],
+        codingPermissionRequests: [
+          {
+            id: 'permission-bash',
+            codingRunId: 'coding-run-real',
+            runId: fixtureRuns[0]!.id,
+            nodeId: 'n-build',
+            permission: 'bash',
+            title: 'opencode requested bash permission',
+            command: 'pwd',
+            risk: 'safe',
+            reasons: ['Confirm managed worktree.'],
+            status: 'approved',
+            requestedAt: '2026-06-20T10:21:00.000Z',
+            expiresAt: '2026-06-20T10:22:00.000Z',
+          },
+        ],
+        codingPermissionDecisions: [],
+        managedCodingWorkspaces: [
+          {
+            id: 'workspace-real',
+            projectId: localProject.id,
+            codingRunId: 'coding-run-real',
+            sourcePath: '/Users/erich/File/claude/10-showcase/ai-devflow-studio',
+            worktreePath: '/tmp/devflow-opencode-smoke/worktrees/coding-run-real',
+            branchName: 'devflow/opencode-smoke',
+            baseBranch: 'main',
+            createdAt: '2026-06-20T10:20:00.000Z',
+            deletedAt: '2026-06-20T10:25:00.000Z',
+            cleanupStatus: 'deleted',
+          },
+        ],
+        dependencyBootstrapEvidence: [
+          {
+            id: 'bootstrap-opencode',
+            codingRunId: 'coding-run-real',
+            runId: fixtureRuns[0]!.id,
+            nodeId: 'n-build',
+            projectId: localProject.id,
+            command: 'npm ci',
+            status: 'passed',
+            exitCode: 0,
+            durationMs: 100,
+            stdout: 'up to date',
+            stderr: '',
+            summary: 'Dependencies verified.',
+            dependencyHash: 'hash-real',
+            redacted: true,
+            createdAt: '2026-06-20T10:22:00.000Z',
+          },
+        ],
+        codingDiffArtifacts: [
+          {
+            id: 'diff-opencode',
+            runId: fixtureRuns[0]!.id,
+            nodeId: 'n-build',
+            projectId: localProject.id,
+            changedPaths: ['devflow-opencode-smoke.txt'],
+            patch: 'diff --git a/devflow-opencode-smoke.txt b/devflow-opencode-smoke.txt\n+success\n',
+            truncated: false,
+            redacted: true,
+            createdAt: '2026-06-20T10:24:00.000Z',
+          },
+        ],
+      }),
+    })
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /Agents/ }))
+
+    const workbench = await screen.findByTestId('agent-workbench')
+    expect(workbench).toHaveTextContent('real opencode')
+    expect(workbench).toHaveTextContent('Terminal state')
+    expect(workbench).toHaveTextContent('completed')
+    expect(workbench).toHaveTextContent('Cleanup')
+    expect(workbench).toHaveTextContent('deleted')
+    expect(workbench).toHaveTextContent('Test Evidence')
+    expect(workbench).toHaveTextContent('opencode smoke tests passed')
+    expect(workbench).toHaveTextContent('Permission Timeline')
+    expect(workbench).toHaveTextContent('approved')
+    expect(workbench).toHaveTextContent('devflow-opencode-smoke.txt')
+    expect(workbench).not.toHaveTextContent('/tmp/devflow-opencode-smoke/worktrees/coding-run-real')
+    expect(workbench).not.toHaveTextContent('/Users/erich/File/claude/10-showcase/ai-devflow-studio')
+  })
+
   it('selects a local project, saves an editable test command, and archives local test evidence', async () => {
     const api = installDesktopApi()
     render(<App />)

@@ -46,7 +46,12 @@ workflow semantics.
 - Worktree dependency installation must be explicit; `node_modules` is not assumed to exist in a git
   worktree.
 - Permission timeout defaults to reject.
-- Cancel marks the run interrupted and aborts the underlying session when a real engine is active.
+- Cancel marks the run `cancelled` and aborts the underlying session when a real engine is active.
+- Permission expiry or run wall-clock timeout marks the run `timed_out`, distinct from user cancel,
+  tool failure, and unexpected interruption.
+- Starting in v0.9, managed `opencode serve` processes are launched in a POSIX process group when
+  available and terminated with `SIGTERM` followed by `SIGKILL` fallback. Worktree/process cleanup is
+  recorded as redacted Coding Agent events.
 - Remote team sync receives only `RemoteCodingAgentSummary`, never raw patch, raw logs, prompt, cwd,
   provider secrets, or repo-external paths.
 

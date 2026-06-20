@@ -130,7 +130,7 @@ corepack pnpm dev:electron
 真实 opencode 演示：
 
 - 只有在 `opencode:status` 和 `test:opencode-smoke` 都通过后才展示。
-- 重点展示 real opencode permission relay、diff capture、worktree tests、cleanup。
+- 重点展示 real opencode permission relay、diff capture、worktree tests、terminal state、cleanup。
 
 ### 3:20 - 4:10 Runtime Observability
 
@@ -138,12 +138,16 @@ corepack pnpm dev:electron
 
 1. 打开 `Agents`。
 2. 找到 Coding Agent run / retry attempt。
-3. 展示事件、permission decision、diff、test evidence、token/cost source。
+3. 展示 runtime label、terminal state、permission timeline、diff、test evidence、cleanup status、
+   token/cost source。
 
 讲法：
 
 - v0.9 的目标是让 reviewer 能分辨 fake engine 和 real opencode 的证据来源。
 - 真实 runtime 必须可观察：工具调用、权限、取消/超时、diff、测试证据都要能解释。
+- `cancelled` 表示用户主动取消，`timed_out` 表示权限或运行超时，`cleanup` 事件说明
+  process/worktree cleanup 是否完成。
+- Agents 视图只展示 repo-relative changed paths，不展示 raw worktree/source path。
 - Observability 不是装饰 UI，而是信任边界。
 
 ### 4:10 - 4:45 Tests 与 Team Overview
@@ -192,3 +196,4 @@ v0.9 real runtime walkthrough：
 - `corepack pnpm test:opencode-smoke` 在显式 live env 下通过。
 - 演示者能讲清 fake-engine evidence 与 real opencode evidence 的区别。
 - Agents 页面能解释 permission relay、diff、test evidence、terminal state 和 redaction。
+- Agents 页面或 smoke output 能解释 cleanup state；成功路径应显示 managed worktree 已清理。

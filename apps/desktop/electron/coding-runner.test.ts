@@ -10,6 +10,7 @@ import {
   createManagedCodingWorkspace,
   captureWorktreeDiff,
   completeFakeCodingRun,
+  deleteManagedCodingWorkspace,
   findActiveCodingRun,
   isGitRepository,
 } from './coding-runner'
@@ -57,6 +58,26 @@ describe('coding worktree manager', () => {
 
     const { stdout } = await execFileAsync('git', ['-C', workspace.worktreePath, 'branch', '--show-current'])
     expect(stdout.trim()).toBe(workspace.branchName)
+  })
+
+  it('marks a managed worktree as deleted after removing it', async () => {
+    const repo = await gitRepo()
+    const worktreeRoot = await tempDir('devflow-worktrees-')
+    const workspace = await createManagedCodingWorkspace({
+      project: project(repo),
+      codingRunId: 'coding-run-1',
+      runId: 'run-1',
+      nodeId: 'node-build',
+      worktreeRoot,
+    })
+
+    const deleted = await deleteManagedCodingWorkspace(workspace)
+
+    expect(deleted).toMatchObject({
+      id: workspace.id,
+      cleanupStatus: 'deleted',
+    })
+    await expect(readFile(path.join(workspace.worktreePath, 'package.json'), 'utf8')).rejects.toThrow()
   })
 })
 

@@ -22,7 +22,7 @@ async function main() {
     createOpencodeHttpCodingEngineAdapter,
   } = await import('../apps/desktop/electron/opencode-http-engine.ts')
   const { createOpencodeProcessManager } = await import('../apps/desktop/electron/opencode-process.ts')
-  const { createManagedCodingWorkspace } = await import('../apps/desktop/electron/coding-runner.ts')
+  const { createManagedCodingWorkspace, deleteManagedCodingWorkspace } = await import('../apps/desktop/electron/coding-runner.ts')
   const { runDependencyBootstrap } = await import('../apps/desktop/electron/dependency-bootstrap-runner.ts')
   const { runLocalTestCommand } = await import('../apps/desktop/electron/test-runner.ts')
 
@@ -172,6 +172,10 @@ async function main() {
   }
 
   await processManager.stopAll()
+  const deletedWorkspace = await deleteManagedCodingWorkspace(workspace)
+  if (deletedWorkspace.cleanupStatus !== 'deleted') {
+    throw new Error(`Managed worktree cleanup did not complete: ${deletedWorkspace.cleanupStatus}`)
+  }
   console.log(`opencode smoke passed; changed paths: ${completed.diff.changedPaths.join(', ')}`)
   } finally {
     await rm(tempRoot, { recursive: true, force: true })

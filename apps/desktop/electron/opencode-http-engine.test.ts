@@ -44,6 +44,31 @@ describe('opencode HTTP coding engine', () => {
     expect(fetcher.bodies.join('\n')).toContain('DevFlow Coding Brief')
   })
 
+  it('surfaces provider errors while waiting for the first permission request', async () => {
+    const fetcher = sequenceFetcher([
+      { id: 'ses-1' },
+      new Error('provider subscription expired'),
+      [],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 100,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    await expect(engine.start(startInput({ run, node, project, workspace }))).rejects.toThrow(
+      'provider subscription expired',
+    )
+  })
+
   it('replies to approved permissions and captures a redacted opencode diff', async () => {
     const fetcher = sequenceFetcher([
       { id: 'ses-1' },

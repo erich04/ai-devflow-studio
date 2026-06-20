@@ -513,6 +513,7 @@ export type CodingAgentRunStatus =
   | 'testing'
   | 'completed'
   | 'failed'
+  | 'timed_out'
   | 'interrupted'
   | 'cancelled'
 
@@ -549,6 +550,7 @@ export type CodingAgentEventKind =
   | 'bootstrap'
   | 'diff'
   | 'test'
+  | 'cleanup'
   | 'error'
 
 export type CodingAgentEvent = {
@@ -603,6 +605,8 @@ export type ManagedCodingWorkspace = {
   baseBranch: string
   createdAt: string
   deletedAt?: string
+  cleanupStatus?: 'active' | 'deleted' | 'cleanup_failed'
+  cleanupError?: string | undefined
 }
 
 export type DependencyBootstrapStatus = 'required' | 'skipped' | 'needs_approval' | 'running' | 'passed' | 'failed' | 'timed_out'

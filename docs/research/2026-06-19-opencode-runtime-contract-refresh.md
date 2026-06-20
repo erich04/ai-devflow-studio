@@ -30,6 +30,21 @@ Current local finding:
 - The provider profile is intentionally not configured in the release-signoff shell. This is expected
   unless running the live smoke and prevents accidental provider calls during `verify`.
 
+2026-06-20 lifecycle hardening update:
+
+- The process seam now exposes `pid?: number` and launches `opencode serve` with POSIX
+  `detached: true` when available, enabling process-group termination.
+- The process manager now terminates the process group with `SIGTERM` followed by `SIGKILL`
+  fallback, and falls back to direct `child.kill()` when no pid is available or on unsupported
+  platforms.
+- Coding Agent terminal states now distinguish user cancel (`cancelled`) from permission/runtime
+  timeout (`timed_out`) and unexpected interruption (`interrupted`).
+- Managed workspace cleanup now records `active`, `deleted`, or `cleanup_failed` state and emits
+  redacted `cleanup` events. Cleanup failure does not overwrite the Coding Agent Run's business
+  terminal state.
+- The env-gated opencode smoke still requires live provider configuration for real execution, but
+  its successful path now asserts managed worktree cleanup.
+
 ## Existing Evidence
 
 The v0.6 near-term opencode signoff recorded:
@@ -125,6 +140,10 @@ v0.9.2 must prove the full lifecycle:
 - terminal state is distinct for cancel vs timeout vs normal completion
 - managed worktree and opencode server are cleaned up in all terminal paths
 
+Current code now has deterministic unit coverage for cancel and timeout terminal-state separation,
+process-group termination fallback, and managed worktree cleanup status. Live smoke still needs to
+reconfirm these behaviors against a configured provider/runtime.
+
 ### Diff And Evidence
 
 Current code can fetch opencode HTTP diff and has historical fallback behavior through managed
@@ -164,14 +183,25 @@ The desired DevFlow boundary remains:
 Use this as the starting point for the v0.9 live provider smoke. It records the shape of the known
 Volcengine Ark / custom provider profile without committing a key value or global opencode auth.
 
+2026-06-20 update: the working local opencode profile uses the OpenAI-compatible coding endpoint in
+`~/.config/opencode/opencode.json`:
+
+- provider ID: `double`
+- model ID: `ark-code-latest`
+- base URL: `https://ark.cn-beijing.volces.com/api/coding/v3`
+- provider package: `@ai-sdk/openai-compatible`
+
+The key value remains local-only and must not be copied into repository files. The live smoke
+preflight still requires an explicit environment variable so real-provider runs remain intentional.
+
 ```bash
 DEVFLOW_RUN_OPENCODE_SMOKE=1 \
 DEVFLOW_CODING_ENGINE=opencode-http \
 DEVFLOW_OPENCODE_BIN=/opt/homebrew/bin/opencode \
 DEVFLOW_OPENCODE_PROVIDER_ID=double \
 DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest \
-DEVFLOW_OPENCODE_API_KEY_ENV=ANTHROPIC_AUTH_TOKEN \
-ANTHROPIC_AUTH_TOKEN="<set in shell only; never commit>" \
+DEVFLOW_OPENCODE_API_KEY_ENV=ARK_API_KEY \
+ARK_API_KEY="<set in shell only; never commit>" \
 corepack pnpm test:opencode-smoke
 ```
 
@@ -179,12 +209,16 @@ Notes:
 
 - `double` is the current custom provider ID from the historical v0.6 signoff.
 - `ark-code-latest` is the model ID used in the historical v0.6 signoff.
-- `ANTHROPIC_AUTH_TOKEN` is an environment variable name, not a value. DevFlow should pass the
-  value only to the managed opencode runtime process.
-- If v0.9.1 proves that the OpenAI-compatible endpoint is the stable path, update this template and
-  the contract report before changing runtime code.
+- `ARK_API_KEY` is an environment variable name, not a value. The local opencode profile holds the
+  provider key; the env var is still required by DevFlow's smoke preflight as an explicit live-run
+  gate.
 - Do not write the provider key to project files, screenshots, smoke output, global opencode auth,
   PR descriptions, or team summaries.
+- 2026-06-20: `DEVFLOW_RUN_OPENCODE_SMOKE=1 DEVFLOW_CODING_ENGINE=opencode-http
+  DEVFLOW_OPENCODE_PROVIDER_ID=double DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest
+  DEVFLOW_OPENCODE_API_KEY_ENV=ARK_API_KEY corepack pnpm test:opencode-smoke` passed with
+  `bash -> edit -> bash -> bash` permission relay and
+  `opencode smoke passed; changed paths: devflow-opencode-smoke.txt`.
 
 ## v0.9.2 Go Criteria
 

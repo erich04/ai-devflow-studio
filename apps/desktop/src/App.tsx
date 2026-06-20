@@ -446,6 +446,9 @@ export function App() {
   const selectedBootstrapEvidence = latestCodingRun
     ? dependencyBootstrapEvidence.find((evidence) => evidence.id === latestCodingRun.bootstrapEvidenceId)
     : undefined
+  const selectedCodingTestEvidence = latestCodingRun
+    ? testEvidence.find((evidence) => evidence.id === latestCodingRun.testEvidenceId)
+    : undefined
   const gateEnforcement = useGateEnforcement({
     desktopApi,
     selectedRun,
@@ -1350,6 +1353,7 @@ export function App() {
             workspace={selectedManagedWorkspace}
             diff={selectedCodingDiff}
             bootstrapEvidence={selectedBootstrapEvidence}
+            testEvidence={selectedCodingTestEvidence}
           />
         )}
 
@@ -1907,6 +1911,7 @@ function AgentWorkbenchView({
   workspace,
   diff,
   bootstrapEvidence,
+  testEvidence,
 }: {
   providers: AgentProviderConfig[]
   selectedProviderId: string
@@ -1938,8 +1943,20 @@ function AgentWorkbenchView({
   workspace: ManagedCodingWorkspace | undefined
   diff: CodingDiffArtifact | undefined
   bootstrapEvidence: DependencyBootstrapEvidence | undefined
+  testEvidence: TestEvidence | undefined
 }) {
   const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) ?? providers[0]
+  const runtimeLabel = latestCodingRun ? codingRuntimeLabel(latestCodingRun.engine) : 'No runtime'
+  const terminalLabel = latestCodingRun ? codingTerminalLabel(latestCodingRun.status) : 'No terminal state'
+  const cleanupStatus = workspace?.cleanupStatus ?? (workspace?.deletedAt ? 'deleted' : workspace ? 'active' : 'none')
+  const cleanupSummary =
+    cleanupStatus === 'cleanup_failed'
+      ? workspace?.cleanupError ?? 'Manual cleanup required.'
+      : cleanupStatus === 'deleted'
+        ? 'Managed workspace removed after the run.'
+        : cleanupStatus === 'active'
+          ? 'Managed workspace is still available for inspection.'
+          : 'No managed workspace attached.'
 
   return (
     <section className="page-grid" data-testid="agent-workbench">
@@ -2056,8 +2073,16 @@ function AgentWorkbenchView({
               <strong>{latestCodingRun.branchName}</strong>
             </div>
             <div className="compact-row">
-              <span>Engine</span>
-              <strong>{latestCodingRun.engine}</strong>
+              <span>Runtime</span>
+              <strong>{runtimeLabel}</strong>
+            </div>
+            <div className="compact-row">
+              <span>Terminal state</span>
+              <strong>{terminalLabel}</strong>
+            </div>
+            <div className="compact-row">
+              <span>Provider</span>
+              <strong>{latestCodingRun.providerId}</strong>
             </div>
             <div className="compact-row">
               <span>Changed paths</span>
@@ -2067,8 +2092,31 @@ function AgentWorkbenchView({
               <span>Bootstrap</span>
               <strong>{bootstrapEvidence?.status ?? 'pending'}</strong>
             </div>
+            <div className="compact-row">
+              <span>Test Evidence</span>
+              <strong>{testEvidence?.status ?? 'pending'}</strong>
+            </div>
+            <div className="compact-row">
+              <span>Cleanup</span>
+              <strong>{cleanupStatus}</strong>
+            </div>
+            <p className="empty-note">{cleanupSummary}</p>
+            {testEvidence ? (
+              <p className="empty-note">{testEvidence.summary}</p>
+            ) : null}
             {workspace ? (
-              <code>{workspace.worktreePath}</code>
+              <div className="knowledge-reference-meta">
+                <span>workspace {workspace.cleanupStatus ?? 'active'}</span>
+                <span>base {workspace.baseBranch}</span>
+                <span>{workspace.branchName}</span>
+              </div>
+            ) : null}
+            {latestCodingRun.changedPaths.length > 0 ? (
+              <div className="knowledge-reference-meta">
+                {latestCodingRun.changedPaths.slice(0, 6).map((changedPath) => (
+                  <code key={changedPath}>{changedPath}</code>
+                ))}
+              </div>
             ) : null}
             {diff ? (
               <pre className="diff-preview">{diff.patch.slice(0, 1800)}</pre>
@@ -2191,6 +2239,20 @@ function AgentWorkbenchView({
         )}
 
         <strong>Coding Trace</strong>
+        {permissionRequests.length > 0 ? (
+          <>
+            <strong>Permission Timeline</strong>
+            <div className="trace-list">
+              {permissionRequests.map((request) => (
+                <div className="trace-step" key={request.id}>
+                  <span>{request.status}</span>
+                  <strong>{request.title}</strong>
+                  <p>{[request.permission, request.command, request.filePath].filter(Boolean).join(' · ')}</p>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : null}
         {codingEvents.length > 0 ? (
           <div className="trace-list">
             {codingEvents.map((event) => (
@@ -2215,6 +2277,29 @@ function AgentWorkbenchView({
       </aside>
     </section>
   )
+}
+
+function codingRuntimeLabel(engine: CodingAgentRun['engine']): string {
+  if (engine === 'opencode-http') {
+    return 'real opencode'
+  }
+  if (engine === 'opencode-acp') {
+    return 'real opencode ACP'
+  }
+  return 'deterministic fake engine'
+}
+
+function codingTerminalLabel(status: CodingAgentRun['status']): string {
+  if (
+    status === 'completed' ||
+    status === 'failed' ||
+    status === 'timed_out' ||
+    status === 'cancelled' ||
+    status === 'interrupted'
+  ) {
+    return status
+  }
+  return `in progress · ${status}`
 }
 
 function SkillView() {

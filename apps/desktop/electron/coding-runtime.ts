@@ -95,6 +95,11 @@ export type CodingRuntimePermissionTimeoutScheduler = (
   expire: () => Promise<void>,
 ) => void
 
+export type CodingRuntimeRunTimeoutScheduler = (
+  codingRun: CodingAgentRun,
+  expire: () => Promise<void>,
+) => void
+
 export type CodingRuntimeDependencyBootstrapRunner = (input: {
   codingRun: CodingAgentRun
   project: LocalProject
@@ -160,6 +165,7 @@ export type CodingRuntimeDeps = {
   runTestCommand?: CodingRuntimeTestCommandRunner
   runDependencyBootstrap?: CodingRuntimeDependencyBootstrapRunner
   schedulePermissionTimeout?: CodingRuntimePermissionTimeoutScheduler
+  scheduleRunTimeout?: CodingRuntimeRunTimeoutScheduler
   testTimeoutMs?: number
   worktreeRoot?: string
   idGenerator?: (prefix?: string) => string
@@ -193,6 +199,14 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   const knowledgeChunks = deps.knowledgeChunks ?? defaultKnowledgeChunks
   const createWorkspace = deps.createWorkspace ?? createManagedCodingWorkspace
   const deleteWorkspace = deps.deleteWorkspace ?? deleteManagedCodingWorkspace
+  const activeCodingStatuses = new Set<CodingAgentRun['status']>([
+    'queued',
+    'preparing',
+    'waiting_permission',
+    'bootstrapping',
+    'running',
+    'testing',
+  ])
 
   async function findProject(projectId: string): Promise<LocalProject> {
     const project = (await deps.store.listProjects()).find((candidate) => candidate.id === projectId)
@@ -478,6 +492,105 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       .at(-1)?.dependencyHash
   }
 
+  async function cleanupWorkspaceForRun(codingRun: CodingAgentRun, timestamp: string): Promise<void> {
+    let workspace: ManagedCodingWorkspace
+    try {
+      workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
+    } catch {
+      return
+    }
+
+    let cleaned: ManagedCodingWorkspace
+    try {
+      cleaned = await deleteWorkspace(workspace)
+    } catch (error) {
+      cleaned = {
+        ...workspace,
+        deletedAt: timestamp,
+        cleanupStatus: 'cleanup_failed',
+        cleanupError: cleanupErrorSummary(error),
+      }
+    }
+
+    await deps.store.saveManagedCodingWorkspace(cleaned)
+    const status = cleaned.cleanupStatus ?? (cleaned.deletedAt ? 'deleted' : 'active')
+    const event: CodingAgentEvent = {
+      id: idGenerator('coding-event'),
+      codingRunId: codingRun.id,
+      runId: codingRun.runId,
+      nodeId: codingRun.nodeId,
+      sequence: await nextSequence(codingRun.id),
+      kind: 'cleanup',
+      message:
+        status === 'deleted'
+          ? 'Managed coding workspace cleaned up.'
+          : 'Managed coding workspace cleanup failed; manual cleanup is required.',
+      timestamp,
+      metadata: {
+        workspaceId: cleaned.id,
+        cleanupStatus: status,
+        ...(cleaned.cleanupError ? { cleanupError: cleaned.cleanupError } : {}),
+      },
+      redacted: true,
+    }
+    await saveEvents([event])
+  }
+
+  function cleanupErrorSummary(error: unknown): string {
+    if (error instanceof Error && error.message.trim()) {
+      return error.message.slice(0, 500)
+    }
+    return 'Workspace cleanup failed.'
+  }
+
+  async function expirePendingPermissions(codingRunId: string, timestamp: string, comment: string) {
+    const pendingRequests = (await deps.store.listCodingPermissionRequests(codingRunId)).filter(
+      (request) => request.status === 'pending',
+    )
+    for (const request of pendingRequests) {
+      await savePermissionRequest({ ...request, status: 'expired' })
+      await deps.store.saveCodingPermissionDecision({
+        id: idGenerator('coding-permission-decision'),
+        requestId: request.id,
+        codingRunId,
+        decidedBy: 'devflow-timeout',
+        decision: 'expired',
+        comment,
+        decidedAt: timestamp,
+      })
+    }
+  }
+
+  async function timeOutCodingRun(codingRunId: string, summary: string) {
+    const codingRun = await findCodingRun(codingRunId)
+    if (!activeCodingStatuses.has(codingRun.status)) {
+      return
+    }
+    const timestamp = now()
+    await deps.engine.cancel({ codingRun }).catch(() => undefined)
+    await expirePendingPermissions(codingRunId, timestamp, summary)
+    const updated: CodingAgentRun = {
+      ...codingRun,
+      status: 'timed_out',
+      summary,
+      completedAt: timestamp,
+    }
+    await cleanupWorkspaceForRun(updated, timestamp)
+    const event: CodingAgentEvent = {
+      id: idGenerator('coding-event'),
+      codingRunId: updated.id,
+      runId: updated.runId,
+      nodeId: updated.nodeId,
+      sequence: await nextSequence(updated.id),
+      kind: 'status',
+      message: summary,
+      timestamp,
+      redacted: true,
+    }
+    await saveCodingRun(updated)
+    await saveEvents([event])
+  }
+
   async function replyCodingPermission(input: ReplyCodingPermissionRuntimeInput): Promise<CodingPermissionRequest> {
     const request = await findPermissionRequest(input)
     const timestamp = now()
@@ -548,10 +661,14 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         .uploadCodingAgentSummary(createRemoteCodingAgentSummary(tested.codingRun, completed.diff))
         .catch(() => undefined)
     } else {
+      const terminalStatus = input.decision === 'expired' ? 'timed_out' : 'interrupted'
       const updatedRun: CodingAgentRun = {
         ...codingRun,
-        status: 'interrupted',
-        summary: `Coding Agent permission ${input.decision}; run interrupted.`,
+        status: terminalStatus,
+        summary:
+          input.decision === 'expired'
+            ? 'Coding Agent permission expired; run timed out.'
+            : `Coding Agent permission ${input.decision}; run interrupted.`,
         completedAt: timestamp,
       }
       const event: CodingAgentEvent = {
@@ -561,11 +678,15 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         nodeId: updatedRun.nodeId,
         sequence: await nextSequence(updatedRun.id),
         kind: 'permission',
-        message: `Coding permission ${input.decision}; run interrupted.`,
+        message:
+          input.decision === 'expired'
+            ? 'Coding permission expired; run timed out.'
+            : `Coding permission ${input.decision}; run interrupted.`,
         timestamp,
         metadata: { requestId: request.id },
         redacted: true,
       }
+      await cleanupWorkspaceForRun(updatedRun, timestamp)
       await saveCodingRun(updatedRun)
       await saveEvents([event])
     }
@@ -620,6 +741,9 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       await saveCodingRun(bundle.codingRun)
       await saveEvents(bundle.events)
       await savePermissionRequest(bundle.permissionRequest)
+      deps.scheduleRunTimeout?.(bundle.codingRun, async () => {
+        await timeOutCodingRun(bundle.codingRun.id, 'Coding Agent run timed out.')
+      })
 
       return {
         codingRun: bundle.codingRun,
@@ -705,8 +829,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const timestamp = now()
       const updated: CodingAgentRun = {
         ...codingRun,
-        status: 'interrupted',
-        summary: 'Coding Agent run interrupted by user cancel.',
+        status: 'cancelled',
+        summary: 'Coding Agent run cancelled by user.',
         completedAt: timestamp,
       }
       const event: CodingAgentEvent = {
@@ -716,10 +840,11 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         nodeId: updated.nodeId,
         sequence: await nextSequence(updated.id),
         kind: 'status',
-        message: 'Coding Agent run interrupted by user cancel.',
+        message: 'Coding Agent run cancelled by user.',
         timestamp,
         redacted: true,
       }
+      await cleanupWorkspaceForRun(updated, timestamp)
       await saveCodingRun(updated)
       await saveEvents([event])
       return updated

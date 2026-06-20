@@ -78,10 +78,12 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_TEST_TIMEOUT_MS = 120_000
+const DEFAULT_CODING_RUN_TIMEOUT_MS = 10 * 60_000
 
 let storePromise: Promise<LocalStore> | undefined
 let remoteSyncClient: RemoteSyncClient | undefined
 const codingPermissionTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+const codingRunTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 const opencodeProcessManager = createOpencodeProcessManager()
 
 const DEFAULT_OPENAI_PROVIDER_ID = 'openai-default'
@@ -121,6 +123,19 @@ function scheduleCodingPermissionTimeout(requestId: string, expiresAt: string, e
   codingPermissionTimeouts.set(requestId, timer)
 }
 
+function scheduleCodingRunTimeout(codingRunId: string, expire: () => Promise<void>) {
+  const existing = codingRunTimeouts.get(codingRunId)
+  if (existing) {
+    clearTimeout(existing)
+  }
+
+  const timer = setTimeout(() => {
+    codingRunTimeouts.delete(codingRunId)
+    void expire().catch(() => undefined)
+  }, DEFAULT_CODING_RUN_TIMEOUT_MS)
+  codingRunTimeouts.set(codingRunId, timer)
+}
+
 async function createCodingRuntimeForRequest() {
   return createCodingRuntime({
     store: await getStore(),
@@ -142,6 +157,8 @@ async function createCodingRuntimeForRequest() {
     testTimeoutMs: DEFAULT_TEST_TIMEOUT_MS,
     schedulePermissionTimeout: (request, expire) =>
       scheduleCodingPermissionTimeout(request.id, request.expiresAt, expire),
+    scheduleRunTimeout: (codingRun, expire) =>
+      scheduleCodingRunTimeout(codingRun.id, expire),
     publisher: {
       publishRunStatus: (run) => broadcastToRenderers(ipcChannels.codingRunStatusUpdated, run),
       publishEvent: (event) => broadcastToRenderers(ipcChannels.codingEventAppended, event),

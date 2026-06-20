@@ -15,6 +15,7 @@ export type ManagedOpencodeChild = {
   exitCode: number | null
   kill(signal?: NodeJS.Signals | number): boolean
   killed: boolean
+  pid?: number | undefined
   once(event: 'exit', listener: () => void): unknown
 }
 
@@ -55,6 +56,7 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
       buildOpencodeServeArgs({ hostname: '127.0.0.1', port }),
       {
         env: input.env,
+        detached: process.platform !== 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     )
@@ -75,7 +77,9 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
   }
 
   async function stopAll() {
-    const shutdowns = Array.from(servers.values()).map((server) => stopChild(server.child, stopTimeoutMs))
+    const shutdowns = Array.from(servers.values()).map((server) =>
+      terminateProcessTree(server.child, { timeoutMs: stopTimeoutMs }),
+    )
     await Promise.all(shutdowns)
     servers.clear()
   }
@@ -83,7 +87,17 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
   return { ensure, stopAll }
 }
 
-async function stopChild(child: ManagedOpencodeChild, timeoutMs: number): Promise<void> {
+export type TerminateProcessTreeOptions = {
+  timeoutMs: number
+  forceTimeoutMs?: number
+  platform?: NodeJS.Platform
+  killProcess?: (pid: number, signal?: NodeJS.Signals | number) => boolean
+}
+
+export async function terminateProcessTree(
+  child: ManagedOpencodeChild,
+  options: TerminateProcessTreeOptions,
+): Promise<void> {
   if (child.exitCode !== null) {
     return
   }
@@ -91,16 +105,40 @@ async function stopChild(child: ManagedOpencodeChild, timeoutMs: number): Promis
   const exited = new Promise<void>((resolve) => {
     child.once('exit', () => resolve())
   })
-  child.kill()
+
+  const platform = options.platform ?? process.platform
+  const killProcess = options.killProcess ?? process.kill
+  const canKillProcessGroup = platform !== 'win32' && typeof child.pid === 'number'
+  let usedProcessGroup = false
+
+  if (canKillProcessGroup) {
+    try {
+      killProcess(-child.pid!, 'SIGTERM')
+      usedProcessGroup = true
+    } catch {
+      child.kill()
+    }
+  } else {
+    child.kill()
+  }
+
   const gracefulExit = await Promise.race([
     exited.then(() => true),
-    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), options.timeoutMs)),
   ])
   if (!gracefulExit && child.exitCode === null) {
-    child.kill('SIGKILL')
+    if (usedProcessGroup && typeof child.pid === 'number') {
+      try {
+        killProcess(-child.pid, 'SIGKILL')
+      } catch {
+        child.kill('SIGKILL')
+      }
+    } else {
+      child.kill('SIGKILL')
+    }
     await Promise.race([
       exited,
-      new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
+      new Promise<void>((resolve) => setTimeout(resolve, options.forceTimeoutMs ?? 1_000)),
     ])
   }
 }

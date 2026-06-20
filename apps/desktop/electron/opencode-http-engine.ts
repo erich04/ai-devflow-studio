@@ -114,6 +114,7 @@ export function createOpencodeHttpCodingEngineAdapter(
       )
       const permission = await waitForPermission({
         baseUrl: server.baseUrl,
+        messagePromise,
         pollMs: config.permissionPollMs ?? 1_000,
         sessionId: session.id,
         timeoutMs: config.permissionDiscoveryTimeoutMs ?? 60_000,
@@ -302,11 +303,18 @@ async function readOpencodeDiffSource(input: {
 async function waitForPermission(input: {
   baseUrl: string
   fetcher?: Fetcher
+  messagePromise: OpencodeRuntimeSession['messagePromise']
   pollMs: number
   sessionId: string
   timeoutMs: number
 }): Promise<OpencodePermission> {
   const expiresAt = Date.now() + input.timeoutMs
+  const messageFailure = input.messagePromise.then((result) => {
+    if (result.ok) {
+      return new Promise<never>(() => undefined)
+    }
+    return { kind: 'message-error' as const, error: result.error }
+  })
   while (Date.now() <= expiresAt) {
     const permissions = await listOpencodePermissions({
       baseUrl: input.baseUrl,
@@ -316,7 +324,14 @@ async function waitForPermission(input: {
     if (permission) {
       return permission
     }
-    await new Promise((resolve) => setTimeout(resolve, input.pollMs))
+    const waitMs = Math.max(0, Math.min(input.pollMs, expiresAt - Date.now()))
+    const next = await Promise.race([
+      messageFailure,
+      new Promise<{ kind: 'tick' }>((resolve) => setTimeout(() => resolve({ kind: 'tick' }), waitMs)),
+    ])
+    if (next.kind === 'message-error') {
+      throw next.error
+    }
   }
 
   throw new Error(`Timed out waiting for opencode permission request for session ${input.sessionId}`)

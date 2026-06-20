@@ -1,13 +1,13 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
-import { createOpencodeProcessManager } from './opencode-process'
+import { createOpencodeProcessManager, terminateProcessTree } from './opencode-process'
 
 describe('opencode process manager', () => {
   it('spawns opencode serve on localhost without unsafe flags', async () => {
-    const spawned: Array<{ command: string; args: string[] }> = []
+    const spawned: Array<{ command: string; args: string[]; options: unknown }> = []
     const manager = createOpencodeProcessManager({
-      spawnProcess: (command, args) => {
-        spawned.push({ command, args })
+      spawnProcess: (command, args, options) => {
+        spawned.push({ command, args, options })
         return fakeChild()
       },
       findPort: async () => 4097,
@@ -24,6 +24,9 @@ describe('opencode process manager', () => {
     expect(spawned[0]).toEqual({
       command: 'opencode',
       args: ['serve', '--hostname', '127.0.0.1', '--port', '4097'],
+      options: expect.objectContaining({
+        detached: process.platform !== 'win32',
+      }),
     })
     expect(spawned[0]?.args.join(' ')).not.toContain('dangerously-skip-permissions')
   })
@@ -83,9 +86,41 @@ describe('opencode process manager', () => {
     expect(child.kill).toHaveBeenCalledWith()
     expect(child.kill).toHaveBeenCalledWith('SIGKILL')
   })
+
+  it('terminates the opencode process group when a pid is available on POSIX', async () => {
+    const child = fakeChild({ pid: 1234 })
+    const killProcess = vi.fn(() => true)
+
+    const stopPromise = terminateProcessTree(child, {
+      platform: 'darwin',
+      timeoutMs: 10,
+      killProcess,
+    })
+    await Promise.resolve()
+    child.exitCode = 0
+    child.emit('exit')
+    await stopPromise
+
+    expect(killProcess).toHaveBeenCalledWith(-1234, 'SIGTERM')
+    expect(child.kill).not.toHaveBeenCalled()
+  })
+
+  it('falls back to child.kill when no pid is available', async () => {
+    const child = fakeChild({ pid: undefined, exitOnKill: true })
+    const killProcess = vi.fn(() => true)
+
+    await terminateProcessTree(child, {
+      platform: 'darwin',
+      timeoutMs: 10,
+      killProcess,
+    })
+
+    expect(killProcess).not.toHaveBeenCalled()
+    expect(child.kill).toHaveBeenCalledWith()
+  })
 })
 
-function fakeChild(options: { exitOnKill?: boolean } = {}) {
+function fakeChild(options: { exitOnKill?: boolean; pid?: number | undefined } = {}) {
   const child = Object.assign(new EventEmitter(), {
     exitCode: null as number | null,
     killed: false,
@@ -97,7 +132,7 @@ function fakeChild(options: { exitOnKill?: boolean } = {}) {
       }
       return true
     }),
-    pid: 123,
+    ...(options.pid === undefined ? {} : { pid: options.pid }),
     stderr: new EventEmitter(),
     stdout: new EventEmitter(),
   })

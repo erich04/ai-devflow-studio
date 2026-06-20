@@ -134,22 +134,51 @@ export async function createManagedCodingWorkspace(
     branchName,
     baseBranch,
     createdAt: new Date().toISOString(),
+    cleanupStatus: 'active',
   }
 }
 
 export async function deleteManagedCodingWorkspace(
   workspace: ManagedCodingWorkspace,
 ): Promise<ManagedCodingWorkspace> {
+  const deletedAt = new Date().toISOString()
   try {
     await execGit(workspace.sourcePath, ['worktree', 'remove', '--force', workspace.worktreePath])
-  } catch {
-    await rm(workspace.worktreePath, { recursive: true, force: true })
+    await execGit(workspace.sourcePath, ['worktree', 'prune'])
+    return {
+      ...workspace,
+      deletedAt,
+      cleanupStatus: 'deleted',
+      cleanupError: undefined,
+    }
+  } catch (worktreeError) {
+    try {
+      await rm(workspace.worktreePath, { recursive: true, force: true })
+      await execGit(workspace.sourcePath, ['worktree', 'prune'])
+      return {
+        ...workspace,
+        deletedAt,
+        cleanupStatus: 'deleted',
+        cleanupError: undefined,
+      }
+    } catch (fallbackError) {
+      return {
+        ...workspace,
+        deletedAt,
+        cleanupStatus: 'cleanup_failed',
+        cleanupError: cleanupErrorMessage(fallbackError, worktreeError),
+      }
+    }
   }
+}
 
-  return {
-    ...workspace,
-    deletedAt: new Date().toISOString(),
+function cleanupErrorMessage(error: unknown, cause?: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  if (!cause) {
+    return message
   }
+  const causeMessage = cause instanceof Error ? cause.message : String(cause)
+  return `${message}; initial worktree remove failed: ${causeMessage}`
 }
 
 export async function captureWorktreeDiff(input: {

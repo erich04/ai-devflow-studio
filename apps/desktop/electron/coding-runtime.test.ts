@@ -288,7 +288,54 @@ describe('CodingRuntime', () => {
       decision: 'expired',
       decidedBy: 'devflow-timeout',
     })
-    expect(store.codingRuns.at(-1)?.status).toBe('interrupted')
+    expect(store.codingRuns.at(-1)?.status).toBe('timed_out')
+  })
+
+  it('times out an active coding run through the run timeout scheduler', async () => {
+    const repo = await gitRepo()
+    const workspace = managedWorkspace({ sourcePath: repo, worktreePath: '/tmp/worktree' })
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+      workspaces: [workspace],
+    })
+    let expireRun: (() => Promise<void>) | undefined
+    const engine = createFakeCodingEngineAdapter()
+    const cancel = vi.spyOn(engine, 'cancel')
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      remoteSync: { uploadCodingAgentSummary: vi.fn() },
+      scheduleRunTimeout: (_codingRun, callback) => {
+        expireRun = callback
+      },
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      deleteWorkspace: async (input) => ({
+        ...input,
+        deletedAt: '2026-06-17T00:02:00.000Z',
+        cleanupStatus: 'deleted',
+      }),
+      idGenerator: fixedIds('coding-run-1', 'event-1', 'decision-1', 'event-2'),
+      now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:02:00.000Z'),
+    })
+
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Add the marker file.',
+    })
+    await expireRun?.()
+
+    expect(cancel).toHaveBeenCalledWith({ codingRun: started.codingRun })
+    expect(store.permissionRequests[0]).toMatchObject({ status: 'expired' })
+    expect(store.codingRuns.at(-1)).toMatchObject({
+      id: started.codingRun.id,
+      status: 'timed_out',
+    })
+    expect(store.codingEvents.map((event) => event.kind)).toContain('cleanup')
   })
 
   it('archives diff and bootstrap evidence and uploads a redacted summary after approval', async () => {
@@ -605,27 +652,38 @@ describe('CodingRuntime', () => {
     expect(uploadCodingAgentSummary).not.toHaveBeenCalled()
   })
 
-  it('cancels a running coding run and appends an interrupted status event', async () => {
+  it('cancels a running coding run, cleans up the worktree, and appends cleanup evidence', async () => {
+    const workspace = managedWorkspace()
     const store = new MemoryCodingStore({
       projects: [project('/tmp/repo')],
       runs: [buildRun()],
       codingRuns: [codingRun({ id: 'coding-run-1', status: 'waiting_permission' })],
+      workspaces: [workspace],
     })
+    const deleteWorkspace = vi.fn(async () => ({
+      ...workspace,
+      deletedAt: '2026-06-17T00:03:00.000Z',
+      cleanupStatus: 'deleted' as const,
+    }))
     const runtime = createCodingRuntime({
       store,
       engine: createFakeCodingEngineAdapter(),
       remoteSync: { uploadCodingAgentSummary: vi.fn() },
       idGenerator: fixedIds('event-1'),
       now: fixedNow('2026-06-17T00:03:00.000Z'),
+      deleteWorkspace,
     })
 
     const cancelled = await runtime.cancelCodingAgentRun({ codingRunId: 'coding-run-1' })
 
-    expect(cancelled.status).toBe('interrupted')
+    expect(cancelled.status).toBe('cancelled')
     expect(cancelled.completedAt).toBe('2026-06-17T00:03:00.000Z')
+    expect(deleteWorkspace).toHaveBeenCalledWith(workspace)
+    expect(store.workspaces.at(-1)).toMatchObject({ cleanupStatus: 'deleted' })
+    expect(store.codingEvents.map((event) => event.kind)).toContain('cleanup')
     expect(store.codingEvents.at(-1)).toMatchObject({
       kind: 'status',
-      message: 'Coding Agent run interrupted by user cancel.',
+      message: 'Coding Agent run cancelled by user.',
     })
   })
 })
@@ -638,6 +696,7 @@ type StoreSeed = {
   testEvidence?: TestEvidence[]
   codingRuns?: CodingAgentRun[]
   retryAttempts?: RetryAttempt[]
+  workspaces?: ManagedCodingWorkspace[]
 }
 
 class MemoryCodingStore {
@@ -646,7 +705,7 @@ class MemoryCodingStore {
   readonly artifacts: Artifact[]
   readonly events: AgentEvent[]
   readonly testEvidence: TestEvidence[]
-  readonly workspaces: ManagedCodingWorkspace[] = []
+  readonly workspaces: ManagedCodingWorkspace[]
   readonly codingRuns: CodingAgentRun[]
   readonly codingEvents: CodingAgentEvent[] = []
   readonly permissionRequests: CodingPermissionRequest[] = []
@@ -663,6 +722,7 @@ class MemoryCodingStore {
     this.testEvidence = seed.testEvidence ?? []
     this.codingRuns = seed.codingRuns ?? []
     this.retryAttempts = seed.retryAttempts ?? []
+    this.workspaces = seed.workspaces ?? []
   }
 
   async listProjects() {
@@ -924,6 +984,21 @@ function codingRun(overrides: Partial<CodingAgentRun> = {}): CodingAgentRun {
     changedPaths: [],
     startedAt: '2026-06-17T00:00:00.000Z',
     redacted: true,
+    ...overrides,
+  }
+}
+
+function managedWorkspace(overrides: Partial<ManagedCodingWorkspace> = {}): ManagedCodingWorkspace {
+  return {
+    id: 'workspace-1',
+    projectId: 'project-1',
+    codingRunId: 'coding-run-1',
+    sourcePath: '/tmp/repo',
+    worktreePath: '/tmp/worktree',
+    branchName: 'devflow/run-1-node-build-coding-run-1',
+    baseBranch: 'main',
+    createdAt: '2026-06-17T00:00:00.000Z',
+    cleanupStatus: 'active',
     ...overrides,
   }
 }

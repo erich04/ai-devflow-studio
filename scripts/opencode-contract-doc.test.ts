@@ -8,7 +8,7 @@ const contractPath = join(
 )
 
 describe('opencode runtime contract refresh documentation', () => {
-  it('records the latest provider-safe status re-check without claiming live smoke', () => {
+  it('records the latest provider-safe status re-check and current live smoke evidence', () => {
     const markdown = readFileSync(contractPath, 'utf8')
 
     expect(markdown).toContain('2026-06-20 re-check')
@@ -16,13 +16,11 @@ describe('opencode runtime contract refresh documentation', () => {
     expect(markdown).toContain('PR #3 head `ec878e5`')
     expect(markdown).toContain('The local binary still reports `1.17.5`')
     expect(markdown).toContain('live opencode smoke is disabled')
-    expect(markdown).toContain('provider profile is intentionally not configured')
     expect(markdown).toContain('prevents accidental provider calls during `verify`')
-    expect(markdown).toContain('does not')
-    expect(markdown).toContain('claim a fresh live-provider smoke')
+    expect(markdown).toContain('opencode smoke passed; changed paths: devflow-opencode-smoke.txt')
   })
 
-  it('documents the Volcengine Ark provider profile as an env-only template without secrets', () => {
+  it('documents the Volcengine Ark provider profile with a local config and explicit live gate', () => {
     const markdown = readFileSync(contractPath, 'utf8')
 
     expect(markdown).toContain('### Provider Profile Template (No Secrets)')
@@ -31,9 +29,10 @@ describe('opencode runtime contract refresh documentation', () => {
     expect(markdown).toContain('DEVFLOW_OPENCODE_BIN=/opt/homebrew/bin/opencode')
     expect(markdown).toContain('DEVFLOW_OPENCODE_PROVIDER_ID=double')
     expect(markdown).toContain('DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest')
-    expect(markdown).toContain('DEVFLOW_OPENCODE_API_KEY_ENV=ANTHROPIC_AUTH_TOKEN')
-    expect(markdown).toContain('ANTHROPIC_AUTH_TOKEN="<set in shell only; never commit>"')
-    expect(markdown).toContain('managed opencode runtime process')
+    expect(markdown).toContain('DEVFLOW_OPENCODE_API_KEY_ENV=ARK_API_KEY')
+    expect(markdown).toContain('ARK_API_KEY="<set in shell only; never commit>"')
+    expect(markdown).toContain('https://ark.cn-beijing.volces.com/api/coding/v3')
+    expect(markdown).toContain('@ai-sdk/openai-compatible')
     expect(markdown).toContain('Do not write the provider key')
 
     expect(markdown).not.toContain('volcengine-secret')
