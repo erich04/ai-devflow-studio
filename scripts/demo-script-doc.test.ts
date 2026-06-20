@@ -19,4 +19,20 @@ describe('v0.9 demo script documentation', () => {
     expect(markdown).toContain('Team Overview')
     expect(markdown).toContain('不要宣称')
   })
+
+  it('keeps the live opencode provider template aligned with the contract refresh note', () => {
+    const markdown = readFileSync(
+      join(process.cwd(), 'docs/guides/devflow-studio-v0.9-demo-script.md'),
+      'utf8',
+    )
+
+    expect(markdown).toContain('DEVFLOW_RUN_OPENCODE_SMOKE=1')
+    expect(markdown).toContain('DEVFLOW_CODING_ENGINE=opencode-http')
+    expect(markdown).toContain('DEVFLOW_OPENCODE_PROVIDER_ID=double')
+    expect(markdown).toContain('DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest')
+    expect(markdown).toContain('DEVFLOW_OPENCODE_API_KEY_ENV=ANTHROPIC_AUTH_TOKEN')
+    expect(markdown).toContain('ANTHROPIC_AUTH_TOKEN="<set in shell only; never commit>"')
+    expect(markdown).not.toContain('VOLCENGINE_ARK_API_KEY')
+    expect(markdown).not.toContain('volcengine-secret')
+  })
 })
