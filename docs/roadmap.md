@@ -278,19 +278,31 @@ Electron smoke is still tracked as future compatibility expansion. See
   could read the Electron UI but still could not reliably click through it in this environment.
 - See `docs/plans/v0.8.1-release-signoff.md`.
 
-## Planned Milestones
-
 ### v0.9: Real opencode Runtime + Observability + Demo Readiness
 
-- Re-confirm the real opencode runtime contract against the current local toolchain before changing
-  runtime code; update ADR 0009 or research notes if transport/provider behavior changed.
-- Deepen the real opencode adapter beyond local signoff, including streamed traces, permission relay,
-  cancel/timeout semantics, worktree cleanup, diff capture, and Test Evidence.
-- Make real-runtime behavior legible in Agents through observable tool calls, permission decisions,
-  diff/test evidence, and redacted summaries.
-- Close v0.9 with a 5-minute demo script and dual-path signoff: deterministic fake-engine `verify`
-  plus explicit real-opencode smoke.
+- Re-confirmed the real opencode runtime contract against local opencode `1.17.5` and documented the
+  Volcengine Ark OpenAI-compatible provider profile without committing secrets.
+- Hardened the real opencode adapter lifecycle: user cancel is `cancelled`, permission/run timeout is
+  `timed_out`, POSIX process groups are used when available, and worktree cleanup records
+  `deleted`/`cleanup_failed` instead of silently swallowing failures.
+- Made real-runtime behavior legible in Agents with runtime labeling, terminal state, permission
+  timeline, changed paths, bootstrap/test evidence, and cleanup status without exposing raw
+  worktree/source paths.
+- Closed v0.9 with dual-path signoff: deterministic fake-engine `verify`, `build`,
+  disposable-Postgres smoke, default no-cost opencode smoke skip, and explicit real-opencode smoke
+  against the configured Volcengine provider.
 - See `docs/plans/v0.9-real-runtime-observability.md`.
+
+## Planned Milestones
+
+### v1.0 Candidate: Portfolio Release Hardening
+
+- Turn the v0.9 real-runtime demo into a repeatable portfolio walkthrough with screenshots and a
+  short reviewer script.
+- Decide whether v1.0 should prioritize packaging/signing, MCP/Skill runtime management, team
+  accounts/deployment, or a public showcase page.
+- Keep real-opencode smoke explicit and provider-gated until there is a stable release environment
+  for paid model calls.
 
 ## Deferred / Not Yet Started
 

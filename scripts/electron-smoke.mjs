@@ -45,8 +45,27 @@ function spawnQuiet(command, args, env = {}) {
   return spawn(command, args, {
     cwd: rootDir,
     env: { ...process.env, ...env },
+    detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function fetchWithRetry(url, options, label) {
+  let lastError
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      return await fetch(url, options)
+    } catch (error) {
+      lastError = error
+      await delay(500)
+    }
+  }
+
+  throw new Error(`${label} failed after retries: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
 }
 
 async function waitForServer(url) {
@@ -60,7 +79,7 @@ async function waitForServer(url) {
       // keep waiting
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 1000))
+    await delay(1000)
   }
 
   throw new Error(`Timed out waiting for ${url}`)
@@ -78,6 +97,39 @@ function isPortOpen(port) {
       resolve(false)
     })
   })
+}
+
+async function stopSpawnedProcess(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    return
+  }
+
+  const kill = (signal) => {
+    if (process.platform !== 'win32' && child.pid) {
+      process.kill(-child.pid, signal)
+    } else {
+      child.kill(signal)
+    }
+  }
+
+  try {
+    kill('SIGTERM')
+  } catch {
+    child.kill('SIGTERM')
+  }
+
+  const exited = await Promise.race([
+    new Promise((resolve) => child.once('exit', resolve)),
+    delay(3_000).then(() => false),
+  ])
+
+  if (exited === false && child.exitCode === null && child.signalCode === null) {
+    try {
+      kill('SIGKILL')
+    } catch {
+      child.kill('SIGKILL')
+    }
+  }
 }
 
 async function assertSmokePortsAvailable() {
@@ -163,17 +215,21 @@ function createRecommendedEnforcementPolicy(version, updatedAt) {
 }
 
 async function saveRecommendedEnforcementPolicy() {
-  const response = await fetch(`${apiServerUrl}/api/enforcement/policy`, {
-    method: 'PUT',
-    headers: {
-      accept: 'application/json',
-      'content-type': 'application/json',
-      ...demoSessionHeaders,
+  const response = await fetchWithRetry(
+    `${apiServerUrl}/api/enforcement/policy`,
+    {
+      method: 'PUT',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        ...demoSessionHeaders,
+      },
+      body: JSON.stringify({
+        organizationPolicy: createRecommendedEnforcementPolicy(1, new Date().toISOString()),
+      }),
     },
-    body: JSON.stringify({
-      organizationPolicy: createRecommendedEnforcementPolicy(1, new Date().toISOString()),
-    }),
-  })
+    'save recommended enforcement policy',
+  )
 
   if (!response.ok) {
     throw new Error(`Unable to save Electron smoke enforcement policy: ${response.status} ${await response.text()}`)
@@ -197,15 +253,19 @@ async function saveAgentFindingBlockingPolicy() {
       : { ...rule, updatedAt },
   )
 
-  const response = await fetch(`${apiServerUrl}/api/enforcement/policy`, {
-    method: 'PUT',
-    headers: {
-      accept: 'application/json',
-      'content-type': 'application/json',
-      ...demoSessionHeaders,
+  const response = await fetchWithRetry(
+    `${apiServerUrl}/api/enforcement/policy`,
+    {
+      method: 'PUT',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        ...demoSessionHeaders,
+      },
+      body: JSON.stringify({ organizationPolicy: policy }),
     },
-    body: JSON.stringify({ organizationPolicy: policy }),
-  })
+    'save agent finding blocking policy',
+  )
 
   if (!response.ok) {
     throw new Error(`Unable to save Electron smoke retry enforcement policy: ${response.status} ${await response.text()}`)
@@ -792,8 +852,6 @@ try {
   await expect(second.page.getByTestId('tests-view')).toContainText('passed')
   await second.app.close()
 } finally {
-  vite?.kill('SIGTERM')
-  web?.kill('SIGTERM')
-  api?.kill('SIGTERM')
+  await Promise.all([stopSpawnedProcess(vite), stopSpawnedProcess(web), stopSpawnedProcess(api)])
   await rm(tempRoot, { recursive: true, force: true })
 }

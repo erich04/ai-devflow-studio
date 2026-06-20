@@ -31,6 +31,7 @@ async function main() {
   const repoDir = path.join(tempRoot, 'repo')
   const worktreeRoot = path.join(tempRoot, 'worktrees')
   const now = new Date().toISOString()
+  let processManager: ReturnType<typeof createOpencodeProcessManager> | undefined
   const setupRepository = async () => {
     await execFileAsync('git', ['init', repoDir])
     await execFileAsync('git', ['config', 'user.email', 'devflow@example.com'], { cwd: repoDir })
@@ -91,7 +92,7 @@ async function main() {
     nodeId: node.id,
     worktreeRoot,
   })
-  const processManager = createOpencodeProcessManager()
+  processManager = createOpencodeProcessManager()
   const engine = createOpencodeHttpCodingEngineAdapter({
     binaryPath: preflight.binaryPath,
     providerID: preflight.providerID,
@@ -122,7 +123,7 @@ async function main() {
   let codingRun = started.codingRun
   let permissionRequest = started.permissionRequest
   let completed: Awaited<ReturnType<typeof engine.approvePermission>> | undefined
-  for (let approvalCount = 0; approvalCount < 5; approvalCount += 1) {
+  for (let approvalCount = 0; approvalCount < 8; approvalCount += 1) {
     console.log(`opencode requested ${permissionRequest.permission}; approving once.`)
     const result = await engine.approvePermission({
       codingRun,
@@ -178,6 +179,7 @@ async function main() {
   }
   console.log(`opencode smoke passed; changed paths: ${completed.diff.changedPaths.join(', ')}`)
   } finally {
+    await processManager?.stopAll().catch(() => undefined)
     await rm(tempRoot, { recursive: true, force: true })
   }
 }
