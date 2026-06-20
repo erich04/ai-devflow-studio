@@ -16,6 +16,8 @@ export const packagePaths = [
 
 export const requiredDocPaths = [
   'docs/guides/devflow-studio-v0.8-user-guide.md',
+  'docs/guides/devflow-studio-v0.9-demo-script.md',
+  'docs/knowledge/checklists/v09-demo-readiness.md',
   'docs/plans/v0.8.1-release-signoff.md',
   'docs/plans/v0.9-real-runtime-observability.md',
   'docs/research/2026-06-19-opencode-runtime-contract-refresh.md',
