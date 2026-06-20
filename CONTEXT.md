@@ -91,6 +91,23 @@ A Coding Agent runtime timeline that summarizes permission-backed tool activity,
 opencode exposes when available, DevFlow's permission relay decision, and redaction state. It explains
 what DevFlow observed; it does not claim to reconstruct opencode's private internal Skill call stack.
 
+## Team Pilot Foundation
+
+The v1.0 product milestone where DevFlow moves from a local-first portfolio workstation to a
+self-hosted team pilot. The minimum proof is GitHub login, project creation, Desktop pairing,
+authenticated redacted sync, and Web visibility for a small team.
+
+## Authenticated Session
+
+A server-side API session resolved from a real user identity and project membership. It is distinct
+from the explicit Demo Session used by seed data, tests, and local walkthroughs.
+
+## Desktop Pairing
+
+The one-time flow that connects an Electron Desktop client to a team project. Web issues a short-lived
+pairing code, Desktop exchanges it for a scoped token, and subsequent sync uses that token instead of
+demo headers.
+
 ## Gate Advisory
 
 A recommendation shown to Gate reviewers after an Agent Review. In v0.5 it is warning-only. From
