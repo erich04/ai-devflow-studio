@@ -612,7 +612,7 @@ function buildPermissionToolMetadata(input: {
 
 function safeRelativePath(value: string, worktreePath: string): string | undefined {
   if (!isAbsolute(value)) {
-    return value
+    return toPortablePath(value)
   }
   if (!worktreePath) {
     return undefined
@@ -621,7 +621,11 @@ function safeRelativePath(value: string, worktreePath: string): string | undefin
   if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) {
     return undefined
   }
-  return relativePath
+  return toPortablePath(relativePath)
+}
+
+function toPortablePath(value: string): string {
+  return value.replace(/\\/g, '/')
 }
 
 function normalizePermission(permission: string): CodingPermissionRequest['permission'] {

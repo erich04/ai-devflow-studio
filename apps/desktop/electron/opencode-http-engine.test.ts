@@ -134,6 +134,33 @@ describe('opencode HTTP coding engine', () => {
     })
   })
 
+  it('normalizes relative metadata paths to portable separators', async () => {
+    const fetcher = sequenceFetcher([
+      { id: 'ses-1' },
+      {},
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src\\app.ts' } }],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    const result = await engine.start(startInput({ run, node, project, workspace }))
+    const toolCall = result.events.find((event) => event.kind === 'tool_call')
+
+    expect(result.permissionRequest.filePath).toBe('src/app.ts')
+    expect(toolCall?.metadata?.filePath).toBe('src/app.ts')
+  })
+
   it('surfaces provider errors while waiting for the first permission request', async () => {
     const fetcher = sequenceFetcher([
       { id: 'ses-1' },
