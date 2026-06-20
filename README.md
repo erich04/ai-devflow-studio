@@ -30,6 +30,7 @@ corepack pnpm test:agent-live
 corepack pnpm test:opencode-smoke
 corepack pnpm test:e2e
 corepack pnpm test:electron-smoke
+corepack pnpm release:status
 ```
 
 Use `corepack pnpm dev:desktop` for browser-only UI work. It cannot open local folders or execute
@@ -145,4 +146,23 @@ The first Playwright run in a fresh environment may need browser binaries:
 
 ```bash
 corepack pnpm exec playwright install
+```
+
+## v0.8.1 Release Status
+
+Before creating the `v0.8.1` release tag, run:
+
+```bash
+corepack pnpm release:status
+```
+
+This checks the local release-signoff prerequisites that are easy to forget: package metadata,
+required signoff docs, git cleanliness, tag presence, and whether the manual walkthrough has been
+marked complete. Pending items are expected before the final walkthrough and version bump; true
+inconsistencies are marked for attention.
+
+For a hard gate after the human walkthrough and package bump, run:
+
+```bash
+DEVFLOW_RELEASE_WALKTHROUGH=passed corepack pnpm release:status -- --strict
 ```

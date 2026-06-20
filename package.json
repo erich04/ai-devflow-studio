@@ -20,7 +20,8 @@
     "test:opencode-smoke": "tsx scripts/opencode-smoke.ts",
     "test:e2e": "node scripts/e2e.mjs",
     "test:electron-smoke": "node scripts/electron-smoke.mjs",
-    "verify": "corepack pnpm typecheck && corepack pnpm test && corepack pnpm test:cross-platform && corepack pnpm test:e2e && corepack pnpm test:electron-smoke"
+    "verify": "corepack pnpm typecheck && corepack pnpm test && corepack pnpm test:cross-platform && corepack pnpm test:e2e && corepack pnpm test:electron-smoke",
+    "release:status": "node scripts/release-signoff-status.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",
