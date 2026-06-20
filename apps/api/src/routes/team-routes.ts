@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import {
   buildAgentReviewContext,
   buildKnowledgeGovernanceChecks,
@@ -22,20 +23,29 @@ import {
   type TestEvidence,
 } from '@ai-devflow/shared'
 import { canAccessProject, canSyncProject } from '../auth/session'
+import type { GitHubOAuthClient } from '../auth/github-oauth'
 import {
   decryptAgentCredential,
   encryptAgentCredential,
   maskAgentCredential,
 } from '../agent-credentials'
 import type { RunsBundle, TeamOverviewPayload, TeamRepository } from '../repositories/team-repository'
+import { clearSessionCookie, createSessionCookie } from '../auth/session-cookie'
 
 export type ApiRouteResult = {
   status: number
+  headers?: Record<string, string | string[]>
   body: unknown
 }
 
 export type ResolveTeamRouteOptions = {
+  auth?: {
+    sessionSecret: string
+    createState?: () => string
+  }
   body?: unknown
+  cookies?: Record<string, string | undefined>
+  githubOAuth?: GitHubOAuthClient
   session?: TeamSession | null
   searchParams?: URLSearchParams
 }
@@ -392,6 +402,14 @@ function forbidden(message: string): ApiRouteResult {
   }
 }
 
+function createOAuthStateCookie(state: string): string {
+  return `devflow_oauth_state=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`
+}
+
+function clearOAuthStateCookie(): string {
+  return 'devflow_oauth_state=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'
+}
+
 function filterRunsBundleForSession(bundle: RunsBundle, session: TeamSession): RunsBundle {
   const runs = bundle.runs.filter((run) => canAccessProject(session, run.projectId))
   const runIds = new Set(runs.map((run) => run.id))
@@ -494,6 +512,72 @@ export async function resolveTeamRoute(
   repository: TeamRepository,
   options: ResolveTeamRouteOptions = {},
 ): Promise<ApiRouteResult | null> {
+  if (method === 'GET' && pathname === '/api/auth/github/start') {
+    if (!options.githubOAuth || !options.auth) {
+      return badRequest('GitHub OAuth is not configured')
+    }
+
+    const state = options.auth.createState?.() ?? randomUUID()
+    const redirectTo = options.githubOAuth.createAuthorizationUrl({ state })
+    return {
+      status: 302,
+      headers: {
+        location: redirectTo,
+        'set-cookie': createOAuthStateCookie(state),
+      },
+      body: { redirectTo },
+    }
+  }
+
+  if (method === 'GET' && pathname === '/api/auth/github/callback') {
+    if (!options.githubOAuth || !options.auth) {
+      return badRequest('GitHub OAuth is not configured')
+    }
+
+    const code = options.searchParams?.get('code')?.trim()
+    const state = options.searchParams?.get('state')?.trim()
+    if (!code || !state || options.cookies?.['devflow_oauth_state'] !== state) {
+      return badRequest('Invalid GitHub OAuth callback')
+    }
+
+    const profile = await options.githubOAuth.exchangeCodeForProfile({ code })
+    const result = await repository.resolveOrBootstrapGitHubIdentity(profile)
+    if (result.status === 'blocked') {
+      return forbidden('GitHub account is not linked to this organization')
+    }
+
+    const sessionCookie = createSessionCookie(
+      {
+        source: 'authenticated',
+        organizationId: result.identity.user.organizationId,
+        userId: result.identity.user.id,
+        role: result.identity.user.role,
+        authAccountId: result.identity.authAccount.id,
+        projectMemberships: result.identity.projectMemberships,
+      },
+      options.auth.sessionSecret,
+    )
+
+    return {
+      status: 302,
+      headers: {
+        location: '/',
+        'set-cookie': [sessionCookie, clearOAuthStateCookie()],
+      },
+      body: { redirectTo: '/' },
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/auth/logout') {
+    return {
+      status: 204,
+      headers: {
+        'set-cookie': clearSessionCookie(),
+      },
+      body: null,
+    }
+  }
+
   if (method === 'GET' && pathname === '/api/runs') {
     if (!options.session) {
       return unauthorized()

@@ -1,17 +1,36 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { resolveRequestSession } from './auth/session'
+import { createGitHubOAuthClient } from './auth/github-oauth'
+import {
+  parseCookieHeader,
+  resolveSessionCookie,
+  SESSION_COOKIE_NAME,
+} from './auth/session-cookie'
 import { createTeamRepositoryRuntime } from './repositories/repository-runtime'
 import { resolveTeamRoute } from './routes/team-routes'
 
 const port = Number(process.env['PORT'] ?? 4310)
+const sessionSecret = process.env['DEVFLOW_SESSION_SECRET'] ?? 'devflow-dev-session-secret'
 const repositoryRuntime = await createTeamRepositoryRuntime()
 const repository = repositoryRuntime.repository
+const githubOAuth = createGitHubOAuthClient.fromEnv()
 
-function sendJson(response: ServerResponse, status: number, body: unknown) {
+function sendJson(
+  response: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Record<string, string | string[]> = {},
+) {
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-origin': '*',
+    ...headers,
   })
+  if (status === 204) {
+    response.end()
+    return
+  }
+
   response.end(JSON.stringify(body, null, 2))
 }
 
@@ -38,7 +57,7 @@ const server = createServer(async (request, response) => {
       'access-control-allow-origin': '*',
       'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
       'access-control-allow-headers':
-        'content-type,x-devflow-session-source,x-devflow-organization-id,x-devflow-user-id,x-devflow-user-role,x-devflow-auth-account-id,x-devflow-project-roles',
+        'content-type,cookie,x-devflow-session-source,x-devflow-organization-id,x-devflow-user-id,x-devflow-user-role,x-devflow-auth-account-id,x-devflow-project-roles',
     })
     response.end()
     return
@@ -66,15 +85,24 @@ const server = createServer(async (request, response) => {
     }
   }
 
-  const session = resolveRequestSession(request.headers, {
-    allowDemoFallback: process.env['DEVFLOW_REQUIRE_AUTH'] !== 'true',
-  })
+  const cookies = parseCookieHeader(request.headers.cookie)
+  const session =
+    resolveSessionCookie(cookies[SESSION_COOKIE_NAME], sessionSecret) ??
+    resolveRequestSession(request.headers, {
+      allowDemoFallback: process.env['DEVFLOW_REQUIRE_AUTH'] !== 'true',
+    })
   let route
   try {
-    route = await resolveTeamRoute(request.method ?? 'GET', url.pathname, repository, {
+    const routeOptions = {
+      auth: { sessionSecret },
       body: requestBody,
+      cookies,
       session,
       searchParams: url.searchParams,
+      ...(githubOAuth ? { githubOAuth } : {}),
+    }
+    route = await resolveTeamRoute(request.method ?? 'GET', url.pathname, repository, {
+      ...routeOptions,
     })
   } catch (error) {
     sendJson(response, 500, {
@@ -85,7 +113,7 @@ const server = createServer(async (request, response) => {
   }
 
   if (route) {
-    sendJson(response, route.status, route.body)
+    sendJson(response, route.status, route.body, route.headers)
     return
   }
 

@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createWarnOnlyDefaultPolicy, resolveEffectivePolicy } from '@ai-devflow/shared'
+import {
+  createDemoTeamSessionHeaders,
+  createWarnOnlyDefaultPolicy,
+  resolveEffectivePolicy,
+} from '@ai-devflow/shared'
 import {
   fetchTeamOverview,
   resolveDevFlowApiBaseUrl,
@@ -26,7 +30,7 @@ describe('DevFlow web API client', () => {
     expect(resolveDevFlowApiBaseUrl({})).toBe('http://127.0.0.1:4310')
   })
 
-  it('fetches team overview from the API without importing fixtures', async () => {
+  it('fetches team overview from the API without demo session headers by default', async () => {
     const fetcher = vi.fn(async () =>
       new Response(
         JSON.stringify({
@@ -87,6 +91,43 @@ describe('DevFlow web API client', () => {
       cache: 'no-store',
       headers: {
         accept: 'application/json',
+      },
+    })
+  })
+
+  it('uses explicit session headers only when a caller opts into them', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          projects: [],
+          members: [],
+          runs: [],
+          projectCost: [],
+          memberCost: [],
+          totalCost: '$0.000',
+          testEvidenceSummaries: [],
+          codingAgentSummaries: [],
+          policyAwareDeliverySummaries: [],
+          agentReviews: [],
+          agentTraces: [],
+          agentTokenUsage: [],
+          agentProviders: [],
+          enforcementPolicies,
+        }),
+        { status: 200 },
+      ),
+    )
+
+    await fetchTeamOverview({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      sessionHeaders: createDemoTeamSessionHeaders(),
+    })
+
+    expect(fetcher).toHaveBeenCalledWith('http://api.local/api/team/overview', {
+      cache: 'no-store',
+      headers: {
+        accept: 'application/json',
         'x-devflow-organization-id': 'org-demo',
         'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
         'x-devflow-user-id': 'u-erich',
@@ -143,10 +184,6 @@ describe('DevFlow web API client', () => {
       headers: {
         accept: 'application/json',
         'content-type': 'application/json',
-        'x-devflow-organization-id': 'org-demo',
-        'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
-        'x-devflow-user-id': 'u-erich',
-        'x-devflow-user-role': 'owner',
       },
       body: JSON.stringify({
         runId: 'run-1',
@@ -175,10 +212,6 @@ describe('DevFlow web API client', () => {
       headers: {
         accept: 'application/json',
         'content-type': 'application/json',
-        'x-devflow-organization-id': 'org-demo',
-        'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
-        'x-devflow-user-id': 'u-erich',
-        'x-devflow-user-role': 'owner',
       },
       body: JSON.stringify({ organizationPolicy }),
     })

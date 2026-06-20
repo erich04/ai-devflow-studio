@@ -3,6 +3,7 @@ import {
   createRecommendedEnforcementPreset,
   createWarnOnlyDefaultPolicy,
   resolveEffectivePolicy,
+  type AuthenticatedIdentity,
   type GateOverrideDecision,
   type TeamSession,
 } from '@ai-devflow/shared'
@@ -34,6 +35,32 @@ const leadSession: TeamSession = {
   role: 'lead',
   authAccountId: 'acct-ling',
   projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
+}
+
+const githubIdentity: AuthenticatedIdentity = {
+  user: {
+    id: 'u-github-123456',
+    organizationId: 'org-default',
+    name: 'Erich',
+    role: 'owner',
+    email: 'erich@example.com',
+    avatarUrl: 'https://avatars.example/erich.png',
+    avatarInitials: 'ER',
+    focus: 'Team pilot owner',
+    createdAt: '2026-06-20T00:00:00.000Z',
+    updatedAt: '2026-06-20T00:00:00.000Z',
+  },
+  authAccount: {
+    id: 'acct-github-123456',
+    userId: 'u-github-123456',
+    provider: 'github',
+    providerAccountId: '123456',
+    username: 'erich04',
+    email: 'erich@example.com',
+    createdAt: '2026-06-20T00:00:00.000Z',
+    updatedAt: '2026-06-20T00:00:00.000Z',
+  },
+  projectMemberships: [],
 }
 
 function createRepository(): TeamRepository {
@@ -303,6 +330,84 @@ function createRepository(): TeamRepository {
 }
 
 describe('team API route resolver', () => {
+  it('starts GitHub OAuth by setting a state cookie and redirecting to GitHub', async () => {
+    const repository = createRepository()
+    const githubOAuth = {
+      createAuthorizationUrl: vi.fn((input: { state: string }) =>
+        `https://github.com/login/oauth/authorize?client_id=client-1&state=${input.state}`,
+      ),
+      exchangeCodeForProfile: vi.fn(),
+    }
+
+    const result = await resolveTeamRoute('GET', '/api/auth/github/start', repository, {
+      auth: {
+        sessionSecret: 'test-secret',
+        createState: () => 'state-1',
+      },
+      githubOAuth,
+    })
+
+    expect(result).toEqual({
+      status: 302,
+      headers: {
+        location: 'https://github.com/login/oauth/authorize?client_id=client-1&state=state-1',
+        'set-cookie': 'devflow_oauth_state=state-1; HttpOnly; SameSite=Lax; Path=/; Max-Age=600',
+      },
+      body: { redirectTo: 'https://github.com/login/oauth/authorize?client_id=client-1&state=state-1' },
+    })
+  })
+
+  it('completes GitHub OAuth callback by creating an authenticated session cookie', async () => {
+    const repository = createRepository()
+    vi.mocked(repository.resolveOrBootstrapGitHubIdentity).mockResolvedValueOnce({
+      status: 'created',
+      identity: githubIdentity,
+    })
+    const githubOAuth = {
+      createAuthorizationUrl: vi.fn(),
+      exchangeCodeForProfile: vi.fn(async () => ({
+        providerAccountId: '123456',
+        username: 'erich04',
+        name: 'Erich',
+        email: 'erich@example.com',
+        avatarUrl: 'https://avatars.example/erich.png',
+      })),
+    }
+
+    const result = await resolveTeamRoute('GET', '/api/auth/github/callback', repository, {
+      searchParams: new URLSearchParams('code=code-1&state=state-1'),
+      cookies: { devflow_oauth_state: 'state-1' },
+      auth: { sessionSecret: 'test-secret' },
+      githubOAuth,
+    })
+
+    expect(result?.status).toBe(302)
+    expect(result?.headers?.location).toBe('/')
+    expect(result?.headers?.['set-cookie']).toEqual([
+      expect.stringContaining('devflow_session='),
+      'devflow_oauth_state=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0',
+    ])
+    expect(repository.resolveOrBootstrapGitHubIdentity).toHaveBeenCalledWith({
+      providerAccountId: '123456',
+      username: 'erich04',
+      name: 'Erich',
+      email: 'erich@example.com',
+      avatarUrl: 'https://avatars.example/erich.png',
+    })
+  })
+
+  it('logs out by clearing the authenticated session cookie', async () => {
+    const repository = createRepository()
+
+    await expect(resolveTeamRoute('POST', '/api/auth/logout', repository)).resolves.toEqual({
+      status: 204,
+      headers: {
+        'set-cookie': 'devflow_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0',
+      },
+      body: null,
+    })
+  })
+
   it('routes workflow run requests through the repository', async () => {
     const repository = createRepository()
     const result = await resolveTeamRoute('GET', '/api/runs', repository, {

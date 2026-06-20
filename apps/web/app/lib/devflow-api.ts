@@ -17,7 +17,6 @@ import type {
   TokenUsageRollup,
   WorkflowRun,
 } from '@ai-devflow/shared'
-import { createDemoTeamSessionHeaders } from '@ai-devflow/shared'
 
 export type TeamOverviewResponse = {
   projects: Project[]
@@ -63,7 +62,7 @@ export async function fetchTeamOverview(
 ): Promise<TeamOverviewResponse> {
   const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
   const fetcher = options.fetcher ?? fetch
-  const sessionHeaders = options.sessionHeaders ?? createDemoTeamSessionHeaders()
+  const sessionHeaders = options.sessionHeaders ?? {}
   const response = await fetcher(`${apiBaseUrl}/api/team/overview`, {
     cache: 'no-store',
     headers: { accept: 'application/json', ...sessionHeaders },
@@ -88,7 +87,7 @@ export async function runKnowledgeReview(
 ): Promise<AgentReviewExecutionResult> {
   const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
   const fetcher = options.fetcher ?? fetch
-  const sessionHeaders = options.sessionHeaders ?? createDemoTeamSessionHeaders()
+  const sessionHeaders = options.sessionHeaders ?? {}
   const response = await fetcher(`${apiBaseUrl}/api/agent/knowledge-review`, {
     method: 'POST',
     cache: 'no-store',
@@ -121,7 +120,7 @@ export async function saveEnforcementPolicy(
 ): Promise<OrganizationEnforcementPolicy> {
   const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
   const fetcher = options.fetcher ?? fetch
-  const sessionHeaders = options.sessionHeaders ?? createDemoTeamSessionHeaders()
+  const sessionHeaders = options.sessionHeaders ?? {}
   const response = await fetcher(`${apiBaseUrl}/api/enforcement/policy`, {
     method: 'PUT',
     cache: 'no-store',
