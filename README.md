@@ -17,6 +17,13 @@ token cost visible.
 
 Long-term roadmap: [`docs/roadmap.md`](docs/roadmap.md).
 
+Demo guides:
+
+- v0.8 user guide and full workflow validation:
+  [`docs/guides/devflow-studio-v0.8-user-guide.md`](docs/guides/devflow-studio-v0.8-user-guide.md)
+- v0.9 real runtime / observability demo script:
+  [`docs/guides/devflow-studio-v0.9-demo-script.md`](docs/guides/devflow-studio-v0.9-demo-script.md)
+
 ## Core Commands
 
 ```bash

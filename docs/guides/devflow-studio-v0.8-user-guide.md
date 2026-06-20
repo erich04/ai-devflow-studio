@@ -253,7 +253,7 @@ DEVFLOW_DATABASE_URL=postgresql://erich@127.0.0.1:55436/devflow_ci_fix corepack 
 
 其中：
 
-- `verify` 包含 typecheck、227 个 unit tests、cross-platform checks、3 个 browser E2E、Electron smoke。
+- `verify` 包含 typecheck、228 个 unit tests、cross-platform checks、3 个 browser E2E、Electron smoke。
 - `build` 覆盖 API、worker、desktop renderer/electron/preload、web。
 - `release:status` 检查 package version、release docs、git 工作树、tag 和人工 walkthrough 状态；在正式打 tag 前可用 `DEVFLOW_RELEASE_WALKTHROUGH=passed corepack pnpm release:status -- --strict` 做硬门禁。
 - `opencode:status` 不接触 provider，只检查本机 opencode binary、默认 fake-engine 姿态、live smoke gate 和 provider profile 配置状态。
@@ -271,6 +271,7 @@ DEVFLOW_DATABASE_URL=postgresql://erich@127.0.0.1:55436/devflow_ci_fix corepack 
 
 真实 opencode 修复能力不属于 v0.8.1 验收范围；它是 v0.9 `Real opencode Runtime + Observability + Demo Readiness` 的主线。
 当前可先用 `corepack pnpm opencode:status` 复查 v0.9.1 的本机 runtime contract：`opencode --version`、默认 fake-engine verify 姿态、live-smoke gate，以及 provider profile 是否已显式配置。
+v0.9 的 5 分钟演示线见 [`devflow-studio-v0.9-demo-script.md`](./devflow-studio-v0.9-demo-script.md)。
 
 ## 当前边界
 
