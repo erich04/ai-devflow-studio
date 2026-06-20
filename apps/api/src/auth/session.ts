@@ -36,6 +36,18 @@ function parseRole(value: string | undefined): Role | null {
   return null
 }
 
+function parseSessionSource(value: string | undefined): TeamSession['source'] | null {
+  if (value === undefined || value === 'demo') {
+    return 'demo'
+  }
+
+  if (value === 'authenticated') {
+    return 'authenticated'
+  }
+
+  return null
+}
+
 function parseProjectMemberships(value: string | undefined, userId: string): ProjectMembership[] {
   if (!value) {
     return []
@@ -89,6 +101,11 @@ export function resolveRequestSession(
 ): TeamSession | null {
   const allowDemoFallback = options.allowDemoFallback ?? true
   const userId = readHeader(headers, 'x-devflow-user-id')
+  const source = parseSessionSource(readHeader(headers, 'x-devflow-session-source'))
+
+  if (!source) {
+    return null
+  }
 
   if (!userId) {
     return allowDemoFallback ? createDemoSession() : null
@@ -100,15 +117,33 @@ export function resolveRequestSession(
   }
 
   try {
+    const organizationId = readHeader(headers, 'x-devflow-organization-id') ?? 'org-demo'
+    const projectMemberships = parseProjectMemberships(
+      readHeader(headers, 'x-devflow-project-roles'),
+      userId,
+    )
+
+    if (source === 'authenticated') {
+      const authAccountId = readHeader(headers, 'x-devflow-auth-account-id')
+      if (!authAccountId) {
+        return null
+      }
+
+      return createAuthenticatedSession({
+        organizationId,
+        userId,
+        role,
+        authAccountId,
+        projectMemberships,
+      })
+    }
+
     return {
       source: 'demo',
-      organizationId: readHeader(headers, 'x-devflow-organization-id') ?? 'org-demo',
+      organizationId,
       userId,
       role,
-      projectMemberships: parseProjectMemberships(
-        readHeader(headers, 'x-devflow-project-roles'),
-        userId,
-      ),
+      projectMemberships,
     }
   } catch {
     return null

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TestEvidence, WorkflowRun } from './domain'
 import {
+  createAuthenticatedTeamSessionHeaders,
   createDemoTeamSessionHeaders,
   createRemoteTestEvidenceSummary,
   createRemoteRunSummary,
@@ -45,6 +46,26 @@ describe('remote sync helpers', () => {
       'x-devflow-user-id': 'u-erich',
       'x-devflow-user-role': 'owner',
       'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
+    })
+  })
+
+  it('creates authenticated team session headers for paired clients', () => {
+    expect(createAuthenticatedTeamSessionHeaders({
+      organizationId: 'org-demo',
+      userId: 'u-github-1',
+      role: 'lead',
+      authAccountId: 'acct-github-1',
+      projectRoles: [
+        { projectId: 'p-payments', role: 'lead' },
+        { projectId: 'p-admin', role: 'member' },
+      ],
+    })).toEqual({
+      'x-devflow-session-source': 'authenticated',
+      'x-devflow-organization-id': 'org-demo',
+      'x-devflow-user-id': 'u-github-1',
+      'x-devflow-user-role': 'lead',
+      'x-devflow-auth-account-id': 'acct-github-1',
+      'x-devflow-project-roles': 'p-payments:lead,p-admin:member',
     })
   })
 

@@ -86,4 +86,35 @@ describe('API session boundary', () => {
     expect(isDemoSession(session)).toBe(false)
     expect(canSyncProject(session, 'p-payments', 'lead')).toBe(true)
   })
+
+  it('parses authenticated request sessions only when an auth account id is present', () => {
+    const session = resolveRequestSession({
+      'x-devflow-session-source': 'authenticated',
+      'x-devflow-organization-id': 'org-demo',
+      'x-devflow-user-id': 'u-github-1',
+      'x-devflow-user-role': 'lead',
+      'x-devflow-auth-account-id': 'acct-github-1',
+      'x-devflow-project-roles': 'p-payments:lead',
+    }, { allowDemoFallback: false })
+
+    expect(session).toEqual({
+      source: 'authenticated',
+      organizationId: 'org-demo',
+      userId: 'u-github-1',
+      role: 'lead',
+      authAccountId: 'acct-github-1',
+      projectMemberships: [{ projectId: 'p-payments', userId: 'u-github-1', role: 'lead' }],
+    })
+    expect(isAuthenticatedSession(session!)).toBe(true)
+  })
+
+  it('rejects authenticated request sessions that omit the auth account id', () => {
+    expect(resolveRequestSession({
+      'x-devflow-session-source': 'authenticated',
+      'x-devflow-organization-id': 'org-demo',
+      'x-devflow-user-id': 'u-github-1',
+      'x-devflow-user-role': 'lead',
+      'x-devflow-project-roles': 'p-payments:lead',
+    }, { allowDemoFallback: false })).toBeNull()
+  })
 })

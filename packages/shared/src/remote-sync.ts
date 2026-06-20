@@ -10,10 +10,23 @@ import type {
 } from './domain'
 
 export type DevFlowSessionHeaders = {
+  'x-devflow-session-source'?: 'demo' | 'authenticated'
   'x-devflow-organization-id': string
   'x-devflow-user-id': string
   'x-devflow-user-role': Role
+  'x-devflow-auth-account-id'?: string
   'x-devflow-project-roles': string
+}
+
+export type CreateAuthenticatedTeamSessionHeadersInput = {
+  organizationId: string
+  userId: string
+  role: Role
+  authAccountId: string
+  projectRoles: Array<{
+    projectId: string
+    role: Role
+  }>
 }
 
 export function createDemoTeamSessionHeaders(): DevFlowSessionHeaders {
@@ -22,6 +35,21 @@ export function createDemoTeamSessionHeaders(): DevFlowSessionHeaders {
     'x-devflow-user-id': 'u-erich',
     'x-devflow-user-role': 'owner',
     'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
+  }
+}
+
+export function createAuthenticatedTeamSessionHeaders(
+  input: CreateAuthenticatedTeamSessionHeadersInput,
+): DevFlowSessionHeaders {
+  return {
+    'x-devflow-session-source': 'authenticated',
+    'x-devflow-organization-id': input.organizationId,
+    'x-devflow-user-id': input.userId,
+    'x-devflow-user-role': input.role,
+    'x-devflow-auth-account-id': input.authAccountId,
+    'x-devflow-project-roles': input.projectRoles
+      .map((membership) => `${membership.projectId}:${membership.role}`)
+      .join(','),
   }
 }
 

@@ -38,7 +38,7 @@ const server = createServer(async (request, response) => {
       'access-control-allow-origin': '*',
       'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
       'access-control-allow-headers':
-        'content-type,x-devflow-organization-id,x-devflow-user-id,x-devflow-user-role,x-devflow-project-roles',
+        'content-type,x-devflow-session-source,x-devflow-organization-id,x-devflow-user-id,x-devflow-user-role,x-devflow-auth-account-id,x-devflow-project-roles',
     })
     response.end()
     return
