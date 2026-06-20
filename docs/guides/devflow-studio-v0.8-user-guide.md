@@ -253,7 +253,7 @@ DEVFLOW_DATABASE_URL=postgresql://erich@127.0.0.1:55436/devflow_ci_fix corepack 
 
 其中：
 
-- `verify` 包含 typecheck、232 个 unit tests、cross-platform checks、3 个 browser E2E、Electron smoke。
+- `verify` 包含 typecheck、233 个 unit tests、cross-platform checks、3 个 browser E2E、Electron smoke。
 - `build` 覆盖 API、worker、desktop renderer/electron/preload、web。
 - `release:status` 检查 package version、release docs、git 工作树、tag 和人工 walkthrough 状态；在正式打 tag 前可用 `DEVFLOW_RELEASE_WALKTHROUGH=passed corepack pnpm release:status -- --strict` 做硬门禁。
 - `opencode:status` 不接触 provider，只检查本机 opencode binary、默认 fake-engine 姿态、live smoke gate 和 provider profile 配置状态。
@@ -268,6 +268,23 @@ DEVFLOW_DATABASE_URL=postgresql://erich@127.0.0.1:55436/devflow_ci_fix corepack 
 - Build/Coding 节点选择
 - 测试页面 evidence
 - Web Team Console 的 redacted policy/remediation/retry summaries
+
+### 人工 walkthrough 具体核对表
+
+人工 walkthrough 的目标不是重新替代自动化测试，而是确认真实用户能按界面理解整条
+v0.8 policy-aware delivery 路径。建议边操作边截图或录屏，最后再运行一次
+`DEVFLOW_RELEASE_WALKTHROUGH=passed corepack pnpm release:status -- --strict`。
+
+| 步骤 | 入口 | 操作 | 通过标准 |
+|---|---|---|---|
+| 1 | Electron App | 运行 `corepack pnpm dev:electron`，确认窗口标题和左侧导航 | 看到 `AI DevFlow Studio`，且不是 Electron default app |
+| 2 | 工作台 | 选中当前 Run，再点击 `架构 Gate` | Inspector 显示 Gate Enforcement、policy source、blocking reason |
+| 3 | Inspector | 查看 Remediation Plan | 至少能看到补 evidence / Agent Review / Retry Coding 相关建议 |
+| 4 | Inspector | 点击 `Agent Review` | Agents 页面能看到 review artifact、trace、token/cost、advisory |
+| 5 | 工作台 Build 节点 | 选中 `本地实现`，触发 `Retry Coding` 或 Coding Agent 路径 | 能看到 permission relay、diff、Test Evidence 或对应 fake-engine 证据 |
+| 6 | 测试页面 | 打开 `测试` 页面 | 最新 evidence 显示 command、exit code、duration、redaction 状态 |
+| 7 | Team Overview | 打开 Team Overview / Web Console | 管理者视图显示 redacted policy/remediation/retry summary，不暴露 cwd、raw logs、prompt、patch、secret |
+| 8 | Release Gate | 运行 `corepack pnpm release:status` | 只剩 package bump、tag、manual walkthrough 等预期 release pending 项 |
 
 真实 opencode 修复能力不属于 v0.8.1 验收范围；它是 v0.9 `Real opencode Runtime + Observability + Demo Readiness` 的主线。
 当前可先用 `corepack pnpm opencode:status` 复查 v0.9.1 的本机 runtime contract：`opencode --version`、默认 fake-engine verify 姿态、live-smoke gate，以及 provider profile 是否已显式配置。
