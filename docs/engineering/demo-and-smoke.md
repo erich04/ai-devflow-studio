@@ -49,3 +49,14 @@ corepack pnpm test:postgres-smoke
 ```
 
 The Postgres smoke must cover migration, seed, policy save/read, enforcement evaluation, owner/member/conflicted-lead override rejection, accepted lead override, stale policy rejection, approval sync bypass rejection, and overview redaction.
+
+The smoke runner also starts the API service and must stop it deterministically before the script
+exits. If CI appears to hang after `Postgres integration smoke passed.`, inspect the API service
+shutdown path before changing product code.
+
+## GitHub Actions Notes
+
+If PR checks fail in 1-3 seconds with empty job steps, inspect the check-run annotations before
+debugging code. GitHub may report account billing or spending-limit failures at the runner layer; in
+that case no workflow step ran, and local `verify` / explicit smoke evidence remains the technical
+signal until billing is fixed and the checks are rerun.
