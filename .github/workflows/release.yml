@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  postgres-integration:
+    name: Postgres integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: devflow_release
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d devflow_release"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DEVFLOW_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devflow_release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm test:postgres-smoke
+
+  release-artifacts:
+    name: Build release artifacts
+    runs-on: macos-latest
+    needs: postgres-integration
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: node scripts/ensure-electron-install.mjs
+      - run: corepack pnpm exec playwright install chromium
+      - run: corepack pnpm verify
+      - run: corepack pnpm build
+
+      - name: Prepare release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          VERSION="${GITHUB_REF_NAME:-manual-${GITHUB_RUN_NUMBER}}"
+          {
+            echo "AI DevFlow Studio ${VERSION}"
+            echo "Commit: ${GITHUB_SHA}"
+            echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo "Artifacts:"
+            echo "- desktop-renderer: apps/desktop/dist"
+            echo "- desktop-electron: apps/desktop/dist-electron"
+            echo "- web-next-build: apps/web/.next"
+            echo "- api-build: apps/api/dist"
+            echo "- worker-build: apps/worker/dist"
+          } > release-artifacts/manifest.txt
+          tar -czf "release-artifacts/ai-devflow-studio-${VERSION}-desktop-renderer.tar.gz" -C apps/desktop dist
+          tar -czf "release-artifacts/ai-devflow-studio-${VERSION}-desktop-electron.tar.gz" -C apps/desktop dist-electron
+          tar -czf "release-artifacts/ai-devflow-studio-${VERSION}-web-next-build.tar.gz" -C apps/web .next
+          tar -czf "release-artifacts/ai-devflow-studio-${VERSION}-api-build.tar.gz" -C apps/api dist
+          tar -czf "release-artifacts/ai-devflow-studio-${VERSION}-worker-build.tar.gz" -C apps/worker dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-devflow-studio-release-artifacts
+          path: release-artifacts/*
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if ! gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release create "${TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "AI DevFlow Studio ${TAG}" \
+              --notes "Automated release artifact bundle for ${TAG}. Real opencode provider smoke remains an explicit local signoff path and is not run in CI."
+          fi
+          gh release upload "${TAG}" release-artifacts/* --repo "${GITHUB_REPOSITORY}" --clobber

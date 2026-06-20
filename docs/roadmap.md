@@ -56,6 +56,11 @@ Electron, API, and Postgres. The real opencode runtime is available through expl
 engine. Manual live signoff completed with opencode `1.17.5` and Volcengine Ark
 `double/ark-code-latest`, including a multi-step `bash -> edit -> bash -> bash` permission relay.
 
+GitHub Actions now includes a release-artifact workflow for explicit `v*` tags and manual dispatch.
+It verifies the repository, builds the first-party app outputs, uploads release artifacts, and
+creates or updates GitHub Releases for tags. Production deployment, signed installers, and
+auto-update remain deferred release-engineering work.
+
 v0.7 Configurable Gate Enforcement Policy core is implemented. DevFlow now has a shared policy
 resolver/evaluator, warn-only default policy, recommended enforcement preset, Agent Policy Findings,
 API/Postgres policy persistence, Web policy controls, Electron policy snapshot/override persistence,
