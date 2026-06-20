@@ -150,6 +150,33 @@ The desired DevFlow boundary remains:
 - no provider secret is written to global opencode auth from DevFlow
 - logs and smoke output must not print key values
 
+### Provider Profile Template (No Secrets)
+
+Use this as the starting point for the v0.9 live provider smoke. It records the shape of the known
+Volcengine Ark / custom provider profile without committing a key value or global opencode auth.
+
+```bash
+DEVFLOW_RUN_OPENCODE_SMOKE=1 \
+DEVFLOW_CODING_ENGINE=opencode-http \
+DEVFLOW_OPENCODE_BIN=/opt/homebrew/bin/opencode \
+DEVFLOW_OPENCODE_PROVIDER_ID=double \
+DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest \
+DEVFLOW_OPENCODE_API_KEY_ENV=ANTHROPIC_AUTH_TOKEN \
+ANTHROPIC_AUTH_TOKEN="<set in shell only; never commit>" \
+corepack pnpm test:opencode-smoke
+```
+
+Notes:
+
+- `double` is the current custom provider ID from the historical v0.6 signoff.
+- `ark-code-latest` is the model ID used in the historical v0.6 signoff.
+- `ANTHROPIC_AUTH_TOKEN` is an environment variable name, not a value. DevFlow should pass the
+  value only to the managed opencode runtime process.
+- If v0.9.1 proves that the OpenAI-compatible endpoint is the stable path, update this template and
+  the contract report before changing runtime code.
+- Do not write the provider key to project files, screenshots, smoke output, global opencode auth,
+  PR descriptions, or team summaries.
+
 ## v0.9.2 Go Criteria
 
 Proceed from contract refresh to runtime hardening only when these are true:
