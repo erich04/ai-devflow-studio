@@ -10,11 +10,15 @@ import {
   type AgentTrace,
   type Artifact,
   type ArtifactKind,
+  type AuthAccount,
+  type AuthProvider,
+  type AuthenticatedIdentity,
   type McpServerDefinition,
   type NodeKind,
   type NodeStage,
   type NodeStatus,
   type Project,
+  type ProjectMembership,
   type ProviderCredentialMetadata,
   type RemoteCodingAgentSummary,
   type RemoteTestEvidenceSummary,
@@ -64,6 +68,33 @@ type UserRow = {
   role: Role
   avatar_initials: string
   focus: string
+}
+
+type AuthenticatedIdentityRow = {
+  auth_account_id: string
+  auth_account_user_id: string
+  provider: AuthProvider
+  provider_account_id: string
+  username: string | null
+  auth_account_email: string | null
+  auth_account_created_at: TimestampValue
+  auth_account_updated_at: TimestampValue
+  user_id: string
+  organization_id: string
+  name: string
+  role: Role
+  email: string | null
+  avatar_url: string | null
+  avatar_initials: string
+  focus: string | null
+  user_created_at: TimestampValue
+  user_updated_at: TimestampValue
+}
+
+type ProjectMembershipRow = {
+  project_id: string
+  user_id: string
+  role: Role
 }
 
 type WorkflowRunRow = {
@@ -291,6 +322,54 @@ function mapMember(row: UserRow): TeamMember {
     role: row.role,
     avatarInitials: row.avatar_initials,
     focus: row.focus,
+  }
+}
+
+function mapAuthenticatedIdentityRow(
+  row: AuthenticatedIdentityRow,
+): Pick<AuthenticatedIdentity, 'user' | 'authAccount'> {
+  const user: AuthenticatedIdentity['user'] = {
+    id: row.user_id,
+    organizationId: row.organization_id,
+    name: row.name,
+    role: row.role,
+    avatarInitials: row.avatar_initials,
+    createdAt: timestamp(row.user_created_at),
+    updatedAt: timestamp(row.user_updated_at),
+  }
+  if (row.email) {
+    user.email = row.email
+  }
+  if (row.avatar_url) {
+    user.avatarUrl = row.avatar_url
+  }
+  if (row.focus) {
+    user.focus = row.focus
+  }
+
+  const authAccount: AuthAccount = {
+    id: row.auth_account_id,
+    userId: row.auth_account_user_id,
+    provider: row.provider,
+    providerAccountId: row.provider_account_id,
+    createdAt: timestamp(row.auth_account_created_at),
+    updatedAt: timestamp(row.auth_account_updated_at),
+  }
+  if (row.username) {
+    authAccount.username = row.username
+  }
+  if (row.auth_account_email) {
+    authAccount.email = row.auth_account_email
+  }
+
+  return { user, authAccount }
+}
+
+function mapProjectMembership(row: ProjectMembershipRow): ProjectMembership {
+  return {
+    projectId: row.project_id,
+    userId: row.user_id,
+    role: row.role,
   }
 }
 
@@ -639,6 +718,58 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
   }
 
   return {
+    async getAuthenticatedIdentity(input) {
+      const [identityRow] = await db.query<AuthenticatedIdentityRow>(
+        `
+          SELECT
+            auth_accounts.id AS auth_account_id,
+            auth_accounts.user_id AS auth_account_user_id,
+            auth_accounts.provider,
+            auth_accounts.provider_account_id,
+            auth_accounts.username,
+            auth_accounts.email AS auth_account_email,
+            auth_accounts.created_at AS auth_account_created_at,
+            auth_accounts.updated_at AS auth_account_updated_at,
+            users.id AS user_id,
+            users.organization_id,
+            users.name,
+            users.role,
+            users.email,
+            users.avatar_url,
+            users.avatar_initials,
+            users.focus,
+            users.created_at AS user_created_at,
+            users.updated_at AS user_updated_at
+          FROM auth_accounts
+          JOIN users ON users.id = auth_accounts.user_id
+          WHERE auth_accounts.provider = $1
+            AND auth_accounts.provider_account_id = $2
+          LIMIT 1
+        `,
+        [input.provider, input.providerAccountId],
+      )
+
+      if (!identityRow) {
+        return null
+      }
+
+      const identity = mapAuthenticatedIdentityRow(identityRow)
+      const membershipRows = await db.query<ProjectMembershipRow>(
+        `
+          SELECT project_id, user_id, role
+          FROM project_members
+          WHERE user_id = $1
+          ORDER BY project_id ASC
+        `,
+        [identity.user.id],
+      )
+
+      return {
+        ...identity,
+        projectMemberships: membershipRows.map(mapProjectMembership),
+      }
+    },
+
     async getRunsBundle() {
       return loadRunsBundle()
     },

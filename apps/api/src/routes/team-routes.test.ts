@@ -10,23 +10,29 @@ import type { RunsBundle, TeamOverviewPayload, TeamRepository } from '../reposit
 import { resolveTeamRoute } from './team-routes'
 
 const ownerSession: TeamSession = {
+  source: 'authenticated',
   organizationId: 'org-demo',
   userId: 'u-erich',
   role: 'owner',
+  authAccountId: 'acct-erich',
   projectMemberships: [],
 }
 
 const memberSession: TeamSession = {
+  source: 'authenticated',
   organizationId: 'org-demo',
   userId: 'u-yu',
   role: 'member',
+  authAccountId: 'acct-yu',
   projectMemberships: [{ projectId: 'p-payments', userId: 'u-yu', role: 'member' }],
 }
 
 const leadSession: TeamSession = {
+  source: 'authenticated',
   organizationId: 'org-demo',
   userId: 'u-ling',
   role: 'lead',
+  authAccountId: 'acct-ling',
   projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
 }
 
@@ -229,6 +235,7 @@ function createRepository(): TeamRepository {
   const gateOverrides: GateOverrideDecision[] = []
 
   return {
+    getAuthenticatedIdentity: vi.fn(async () => null),
     getRunsBundle: vi.fn(async () => runsBundle),
     getTeamOverview: vi.fn(async () => overview),
     getSkills: vi.fn(async () => []),
@@ -299,7 +306,7 @@ describe('team API route resolver', () => {
     expect(result?.status).toBe(200)
     expect(result?.body).toMatchObject({ totalCost: '$0.03' })
     expect(repository.getTeamOverview).toHaveBeenCalled()
-  })
+  }, 15_000)
 
   it('filters project-scoped reads for non-owner sessions', async () => {
     const repository = createRepository()

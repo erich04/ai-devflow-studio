@@ -33,6 +33,42 @@ describe('seed team repository', () => {
     expect(bundle.events.every((event) => event.runId === 'run-health-001')).toBe(true)
   })
 
+  it('resolves demo auth accounts to an authenticated identity projection', async () => {
+    const repository = createSeedTeamRepository()
+
+    await expect(
+      repository.getAuthenticatedIdentity({
+        provider: 'github',
+        providerAccountId: 'demo:u-ling',
+      }),
+    ).resolves.toMatchObject({
+      user: {
+        id: 'u-ling',
+        organizationId: 'org-demo',
+        name: 'Ling',
+        role: 'lead',
+      },
+      authAccount: {
+        id: 'acct-demo-u-ling',
+        userId: 'u-ling',
+        provider: 'github',
+        providerAccountId: 'demo:u-ling',
+        username: 'u-ling',
+      },
+      projectMemberships: [
+        { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+        { projectId: 'p-admin', userId: 'u-ling', role: 'lead' },
+      ],
+    })
+
+    await expect(
+      repository.getAuthenticatedIdentity({
+        provider: 'github',
+        providerAccountId: 'demo:missing',
+      }),
+    ).resolves.toBeNull()
+  })
+
   it('makes accepted remote sync summaries visible to team overview readers', async () => {
     const repository = createSeedTeamRepository()
 

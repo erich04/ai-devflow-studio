@@ -19,6 +19,8 @@ import {
   type AgentTokenUsage,
   type AgentTrace,
   type Artifact,
+  type AuthProvider,
+  type AuthenticatedIdentity,
   type EffectiveEnforcementPolicy,
   type GateOverrideDecision,
   type McpServerDefinition,
@@ -38,6 +40,9 @@ import {
   type TokenUsageRollup,
   type WorkflowRun,
 } from '@ai-devflow/shared'
+
+const DEMO_ORGANIZATION_ID = 'org-demo'
+const DEMO_IDENTITY_TIMESTAMP = new Date(0).toISOString()
 
 export type RunsBundle = {
   runs: WorkflowRun[]
@@ -80,6 +85,10 @@ export type TeamOverviewPayload = {
 export type TeamRepositorySyncContext = Pick<TeamSession, 'organizationId' | 'userId'>
 
 export type TeamRepository = {
+  getAuthenticatedIdentity(input: {
+    provider: AuthProvider
+    providerAccountId: string
+  }): Promise<AuthenticatedIdentity | null>
   getRunsBundle(): Promise<RunsBundle>
   getTeamOverview(): Promise<TeamOverviewPayload>
   getSkills(): Promise<SkillDefinition[]>
@@ -208,6 +217,45 @@ export function createSeedTeamRepository(): TeamRepository {
   }
 
   return {
+    async getAuthenticatedIdentity(input) {
+      if (input.provider !== 'github' || !input.providerAccountId.startsWith('demo:')) {
+        return null
+      }
+
+      const memberId = input.providerAccountId.slice('demo:'.length)
+      const member = members.find((candidate) => candidate.id === memberId)
+      if (!member) {
+        return null
+      }
+
+      return {
+        user: {
+          id: member.id,
+          organizationId: DEMO_ORGANIZATION_ID,
+          name: member.name,
+          role: member.role,
+          avatarInitials: member.avatarInitials,
+          focus: member.focus,
+          createdAt: DEMO_IDENTITY_TIMESTAMP,
+          updatedAt: DEMO_IDENTITY_TIMESTAMP,
+        },
+        authAccount: {
+          id: `acct-demo-${member.id}`,
+          userId: member.id,
+          provider: 'github',
+          providerAccountId: input.providerAccountId,
+          username: member.id,
+          createdAt: DEMO_IDENTITY_TIMESTAMP,
+          updatedAt: DEMO_IDENTITY_TIMESTAMP,
+        },
+        projectMemberships: projects.map((project) => ({
+          projectId: project.id,
+          userId: member.id,
+          role: member.role,
+        })),
+      }
+    },
+
     async getRunsBundle() {
       return { runs: syncedRuns, artifacts: syncedArtifacts, events: syncedEvents }
     },

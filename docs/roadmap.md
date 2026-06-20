@@ -305,26 +305,37 @@ Electron smoke is still tracked as future compatibility expansion. See
 
 ## Planned Milestones
 
-### v1.0 Candidate: Portfolio Release Hardening
+### v1.0: Team Pilot Foundation
 
-- Turn the v0.9 real-runtime demo into a repeatable portfolio walkthrough with screenshots and a
-  short reviewer script.
-- Add real opencode token/cost telemetry for the Doubao-backed runtime: preserve fake-engine
-  `verify` as cost-free, capture provider-reported usage when available, otherwise store a clearly
-  labeled estimate, and sync only redacted cost summaries to the team side.
-- Decide whether v1.0 should prioritize packaging/signing, MCP/Skill runtime management, team
-  accounts/deployment, or a public showcase page.
-- Keep real-opencode smoke explicit and provider-gated until there is a stable release environment
-  for paid model calls.
+- Reframe v1.0 from portfolio packaging to a minimum self-hosted team pilot: a small team can log
+  in, create a project, pair Desktop, sync redacted local workflow summaries, and view them in Web.
+- Build v1.0 in serial slices so identity, OAuth, Desktop pairing, and deployment each have their
+  own signoff instead of becoming one oversized milestone.
+- Extend the existing `organizations` / `users` / `projects` / `project_members` foundation rather
+  than creating a parallel membership model. Keep `TeamMember` as a UI projection, not a source of
+  identity truth.
+- Preserve v0.9's verification discipline: fake engine in default CI/`verify`, real opencode and
+  paid provider calls only in explicit smoke/signoff paths.
+- See `docs/plans/v1.0-team-pilot-foundation.md`.
+
+### v1.1 Candidate: Runtime Cost + Budget Guard
+
+- Add project/run/user/provider cost summaries for the real opencode provider path while keeping
+  fake-engine verification cost-free.
+- Introduce project-level budget thresholds and require lead approval before continuing real
+  provider runs that exceed configured limits.
+- Sync only redacted cost summaries to the team side.
 
 ## Deferred / Not Yet Started
 
 - HoneyAI adapter or execution-engine bridge.
 - Multi-agent orchestration.
-- Real MCP process management, permissions audit, and tool-call telemetry.
+- Real MCP process management, permissions audit, and tool-call telemetry beyond the current
+  opencode permission-backed Tool / Skill Timeline.
 - Repository file watcher, in-app Markdown editor, and remote knowledge synchronization.
 - Electron packaging, macOS signing/notarization, Windows installer/signing, auto-update, and release
   distribution.
+- Public SaaS onboarding, billing, hosted multi-tenancy, and managed credentials.
 - Windows real-opencode smoke for managed worktree path handling and dependency bootstrap once the
   macOS manual runtime path is promoted from local signoff to release validation.
 - Full release/distribution CI beyond the current verify workflow.

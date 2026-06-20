@@ -78,6 +78,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_TEST_TIMEOUT_MS = 120_000
+const INITIAL_THEME = parseInitialTheme(process.env['DEVFLOW_INITIAL_THEME'])
 const DEFAULT_CODING_RUN_TIMEOUT_MS = 10 * 60_000
 
 let storePromise: Promise<LocalStore> | undefined
@@ -888,13 +889,24 @@ function registerIpcHandlers() {
 }
 
 function createWindow() {
+  if (INITIAL_THEME) {
+    nativeTheme.themeSource = INITIAL_THEME
+  }
+  const initialBackgroundColor =
+    INITIAL_THEME === 'dark'
+      ? '#101214'
+      : INITIAL_THEME === 'light'
+        ? '#f7f8fa'
+        : nativeTheme.shouldUseDarkColors
+          ? '#101214'
+          : '#f7f8fa'
   const window = new BrowserWindow({
     width: 1440,
     height: 920,
     minWidth: 1180,
     minHeight: 760,
     title: 'AI DevFlow Studio',
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#101214' : '#f7f8fa',
+    backgroundColor: initialBackgroundColor,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -910,6 +922,13 @@ function createWindow() {
   } else {
     void window.loadFile(path.join(__dirname, '../dist/index.html'))
   }
+}
+
+function parseInitialTheme(value: string | undefined): 'system' | 'light' | 'dark' | undefined {
+  if (value === 'system' || value === 'light' || value === 'dark') {
+    return value
+  }
+  return undefined
 }
 
 app.whenReady().then(() => {

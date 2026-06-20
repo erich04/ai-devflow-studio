@@ -156,6 +156,7 @@ async function launchApp() {
       ...process.env,
       DEVFLOW_USER_DATA_DIR: userDataDir,
       DEVFLOW_API_BASE_URL: apiServerUrl,
+      DEVFLOW_INITIAL_THEME: 'dark',
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
       VITE_DEV_SERVER_URL: devServerUrl,
     },
@@ -307,6 +308,20 @@ async function selectThemePreference(page, preference) {
   }
 
   await expect(page.locator('html')).toHaveAttribute('data-theme-preference', preference)
+}
+
+async function persistThemePreference(page, preference) {
+  await selectThemePreference(page, preference)
+  await page.evaluate(async (themePreference) => {
+    await window.aiDevFlowDesktop.saveSettings({ themePreference })
+  }, preference)
+  await expect
+    .poll(async () =>
+      page.evaluate(async () => {
+        return (await window.aiDevFlowDesktop.loadState()).settings.themePreference
+      }),
+    )
+    .toBe(preference)
 }
 
 async function runKnowledgeReviewViaDesktopApi(
@@ -480,6 +495,7 @@ try {
   await saveRecommendedEnforcementPolicy()
 
   const first = await launchApp()
+  await persistThemePreference(first.page, 'dark')
   await first.app.evaluate(({ dialog }, selectedPath) => {
     dialog.showOpenDialog = async () => ({
       canceled: false,
@@ -575,17 +591,8 @@ try {
   await expect(first.page.getByTestId('knowledge-view')).toContainText(/kh-[a-f0-9]{8}/)
   await first.page.getByLabel('Search runs and knowledge').fill('')
 
-  await selectThemePreference(first.page, 'light')
-  await first.page.evaluate(async () => {
-    await window.aiDevFlowDesktop.saveSettings({ themePreference: 'light' })
-  })
-  await expect
-    .poll(async () =>
-      first.page.evaluate(async () => {
-        return (await window.aiDevFlowDesktop.loadState()).settings.themePreference
-      }),
-    )
-    .toBe('light')
+  await persistThemePreference(first.page, 'light')
+  await persistThemePreference(first.page, 'dark')
 
   await first.page.getByRole('button', { name: /^MCP$/ }).click()
   await first.page.getByRole('button', { name: /Disable/ }).first().click()
@@ -804,16 +811,7 @@ try {
   await expect(first.page.getByLabel('Local project').getByText(/^blocked$/i)).toBeVisible()
   await first.page.getByRole('button', { name: /保存测试命令/ }).click()
   await expect(first.page.getByTestId('toast')).toContainText('测试命令已阻断')
-  await first.page.evaluate(async () => {
-    await window.aiDevFlowDesktop.saveSettings({ themePreference: 'light' })
-  })
-  await expect
-    .poll(async () =>
-      first.page.evaluate(async () => {
-        return (await window.aiDevFlowDesktop.loadState()).settings.themePreference
-      }),
-    )
-    .toBe('light')
+  await persistThemePreference(first.page, 'dark')
   await first.app.close()
 
   const second = await launchApp()
@@ -824,8 +822,8 @@ try {
       }),
       { timeout: 20_000 },
     )
-    .toBe('light')
-  await expect(second.page.locator('html')).toHaveAttribute('data-theme-preference', 'light', {
+    .toBe('dark')
+  await expect(second.page.locator('html')).toHaveAttribute('data-theme-preference', 'dark', {
     timeout: 20_000,
   })
   await expect(second.page.getByText('重构 GitHub webhook 重试策略')).toBeVisible()

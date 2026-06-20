@@ -1,5 +1,12 @@
 import type { IncomingHttpHeaders } from 'node:http'
-import type { ProjectMembership, RequiredGateRole, Role, TeamSession } from '@ai-devflow/shared'
+import type {
+  AuthenticatedSession,
+  DemoSession,
+  ProjectMembership,
+  RequiredGateRole,
+  Role,
+  TeamSession,
+} from '@ai-devflow/shared'
 
 const ROLE_RANK: Record<Role, number> = {
   member: 1,
@@ -10,6 +17,8 @@ const ROLE_RANK: Record<Role, number> = {
 export type ResolveRequestSessionOptions = {
   allowDemoFallback?: boolean
 }
+
+export type CreateAuthenticatedSessionInput = Omit<AuthenticatedSession, 'source'>
 
 type HeaderBag = IncomingHttpHeaders | Record<string, string | string[] | undefined>
 
@@ -22,6 +31,18 @@ function readHeader(headers: HeaderBag, key: string): string | undefined {
 function parseRole(value: string | undefined): Role | null {
   if (value === 'owner' || value === 'lead' || value === 'member') {
     return value
+  }
+
+  return null
+}
+
+function parseSessionSource(value: string | undefined): TeamSession['source'] | null {
+  if (value === undefined || value === 'demo') {
+    return 'demo'
+  }
+
+  if (value === 'authenticated') {
+    return 'authenticated'
   }
 
   return null
@@ -47,8 +68,9 @@ function parseProjectMemberships(value: string | undefined, userId: string): Pro
     })
 }
 
-export function createDemoSession(): TeamSession {
+export function createDemoSession(): DemoSession {
   return {
+    source: 'demo',
     organizationId: 'org-demo',
     userId: 'u-erich',
     role: 'owner',
@@ -56,12 +78,34 @@ export function createDemoSession(): TeamSession {
   }
 }
 
+export function createAuthenticatedSession(
+  input: CreateAuthenticatedSessionInput,
+): AuthenticatedSession {
+  return {
+    source: 'authenticated',
+    ...input,
+  }
+}
+
+export function isDemoSession(session: TeamSession): session is DemoSession {
+  return session.source === 'demo'
+}
+
+export function isAuthenticatedSession(session: TeamSession): session is AuthenticatedSession {
+  return session.source === 'authenticated'
+}
+
 export function resolveRequestSession(
   headers: HeaderBag,
   options: ResolveRequestSessionOptions = {},
 ): TeamSession | null {
-  const allowDemoFallback = options.allowDemoFallback ?? true
+  const allowDemoFallback = options.allowDemoFallback ?? false
   const userId = readHeader(headers, 'x-devflow-user-id')
+  const source = parseSessionSource(readHeader(headers, 'x-devflow-session-source'))
+
+  if (!source) {
+    return null
+  }
 
   if (!userId) {
     return allowDemoFallback ? createDemoSession() : null
@@ -73,14 +117,33 @@ export function resolveRequestSession(
   }
 
   try {
+    const organizationId = readHeader(headers, 'x-devflow-organization-id') ?? 'org-demo'
+    const projectMemberships = parseProjectMemberships(
+      readHeader(headers, 'x-devflow-project-roles'),
+      userId,
+    )
+
+    if (source === 'authenticated') {
+      const authAccountId = readHeader(headers, 'x-devflow-auth-account-id')
+      if (!authAccountId) {
+        return null
+      }
+
+      return createAuthenticatedSession({
+        organizationId,
+        userId,
+        role,
+        authAccountId,
+        projectMemberships,
+      })
+    }
+
     return {
-      organizationId: readHeader(headers, 'x-devflow-organization-id') ?? 'org-demo',
+      source: 'demo',
+      organizationId,
       userId,
       role,
-      projectMemberships: parseProjectMemberships(
-        readHeader(headers, 'x-devflow-project-roles'),
-        userId,
-      ),
+      projectMemberships,
     }
   } catch {
     return null

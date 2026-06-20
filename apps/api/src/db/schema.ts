@@ -1,9 +1,10 @@
-export const TEAM_SCHEMA_VERSION = 3
+export const TEAM_SCHEMA_VERSION = 4
 
 export const requiredTeamTableNames = [
   'schema_meta',
   'organizations',
   'users',
+  'auth_accounts',
   'projects',
   'project_members',
   'workflow_runs',
@@ -91,9 +92,24 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('id', 'text', { primaryKey: true }),
       column('organization_id', 'text', { references: 'organizations.id' }),
       column('name', 'text'),
+      column('email', 'text', { nullable: true }),
+      column('avatar_url', 'text', { nullable: true }),
       column('role', 'text'),
       column('avatar_initials', 'text'),
       column('focus', 'text'),
+      column('created_at', 'timestamptz'),
+      column('updated_at', 'timestamptz'),
+    ],
+  },
+  {
+    name: 'auth_accounts',
+    columns: [
+      column('id', 'text', { primaryKey: true }),
+      column('user_id', 'text', { references: 'users.id' }),
+      column('provider', 'text'),
+      column('provider_account_id', 'text'),
+      column('username', 'text', { nullable: true }),
+      column('email', 'text', { nullable: true }),
       column('created_at', 'timestamptz'),
       column('updated_at', 'timestamptz'),
     ],

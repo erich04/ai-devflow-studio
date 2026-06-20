@@ -12,12 +12,13 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
-  it('defines the v0.3 team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(3)
+  it('defines the team source-of-truth tables', () => {
+    expect(TEAM_SCHEMA_VERSION).toBe(4)
     expect(requiredTeamTableNames).toEqual([
       'schema_meta',
       'organizations',
       'users',
+      'auth_accounts',
       'projects',
       'project_members',
       'workflow_runs',
@@ -40,6 +41,29 @@ describe('team database schema', () => {
     ])
 
     expect(teamTableDefinitions.map((table) => table.name)).toEqual(requiredTeamTableNames)
+  })
+
+  it('defines identity tables without replacing project_members', () => {
+    const users = teamTableDefinitions.find((table) => table.name === 'users')
+    const authAccounts = teamTableDefinitions.find((table) => table.name === 'auth_accounts')
+    const projectMembers = teamTableDefinitions.find((table) => table.name === 'project_members')
+
+    expect(users?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['id', 'organization_id', 'name', 'email', 'avatar_url', 'role']),
+    )
+    expect(authAccounts?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        'id',
+        'user_id',
+        'provider',
+        'provider_account_id',
+        'username',
+        'email',
+      ]),
+    )
+    expect(projectMembers?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['project_id', 'user_id', 'role']),
+    )
   })
 
   it('keeps remote workflow state separate from private local execution details', () => {

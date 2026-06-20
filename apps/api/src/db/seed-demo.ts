@@ -21,6 +21,7 @@ const DEMO_ORGANIZATION_SLUG = 'devflow-demo'
 export type SeedDemoResult = {
   organizations: number
   users: number
+  authAccounts: number
   projects: number
   projectMembers: number
   runs: number
@@ -46,6 +47,7 @@ export async function seedDemoTeamData(db: TeamDbClient): Promise<SeedDemoResult
   const result: SeedDemoResult = {
     organizations: 0,
     users: 0,
+    authAccounts: 0,
     projects: 0,
     projectMembers: 0,
     runs: 0,
@@ -74,10 +76,12 @@ export async function seedDemoTeamData(db: TeamDbClient): Promise<SeedDemoResult
   for (const member of members) {
     await db.query(
       `
-        INSERT INTO users (id, organization_id, name, role, avatar_initials, focus)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO users (id, organization_id, name, email, avatar_url, role, avatar_initials, focus)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (id) DO UPDATE
         SET name = excluded.name,
+            email = excluded.email,
+            avatar_url = excluded.avatar_url,
             role = excluded.role,
             avatar_initials = excluded.avatar_initials,
             focus = excluded.focus,
@@ -87,12 +91,34 @@ export async function seedDemoTeamData(db: TeamDbClient): Promise<SeedDemoResult
         member.id,
         DEMO_ORGANIZATION_ID,
         member.name,
+        null,
+        null,
         member.role,
         member.avatarInitials,
         member.focus,
       ],
     )
     result.users += 1
+
+    await db.query(
+      `
+        INSERT INTO auth_accounts (id, user_id, provider, provider_account_id, username, email)
+        VALUES ($1, $2, 'github', $3, $4, $5)
+        ON CONFLICT (provider, provider_account_id) DO UPDATE
+        SET user_id = excluded.user_id,
+            username = excluded.username,
+            email = excluded.email,
+            updated_at = now()
+      `,
+      [
+        `acct-demo-${member.id}`,
+        member.id,
+        `demo:${member.id}`,
+        member.id,
+        null,
+      ],
+    )
+    result.authAccounts += 1
   }
 
   for (const project of projects) {
