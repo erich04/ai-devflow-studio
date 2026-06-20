@@ -405,6 +405,115 @@ Pull requests should link design, test evidence, reviewer decisions, and rollout
 `,
   },
   {
+    sourcePath: 'docs/knowledge/checklists/electron-demo-readiness.md',
+    updatedAt: '2026-06-20T08:00:00.000Z',
+    markdown: `---
+title: Electron Demo Readiness Checklist
+category: review_checklist
+ownerId: u-erich
+tags: electron, demo, smoke, local
+summary: Electron demos should prove the real DevFlow app path, expected renderer port, preload boundary, and local persistence path.
+---
+
+# Electron Demo Readiness Checklist
+
+Before using the desktop app for a demo or signoff, confirm the real Electron path is active.
+
+- Start the app with \`corepack pnpm dev:electron\`.
+- Confirm the window title is \`AI DevFlow Studio\` or \`ai-devflow-studio\`.
+- Confirm Electron launched \`apps/desktop\`, not \`default_app.asar\`.
+- Confirm the intended desktop renderer is listening on \`127.0.0.1:5173\`.
+- Clear stale DevFlow listeners on \`5173\` before trusting a demo run.
+- Open the Workbench and select a Gate node to confirm Inspector state is live.
+- Use \`corepack pnpm test:electron-smoke\` for automated signoff of preload, main process, SQLite, and local execution behavior.
+- Treat port conflicts or a default Electron welcome page as environment failures that must be fixed before signoff.
+`,
+  },
+  {
+    sourcePath: 'docs/knowledge/checklists/postgres-smoke-readiness.md',
+    updatedAt: '2026-06-20T08:00:00.000Z',
+    markdown: `---
+title: Postgres Smoke Readiness Checklist
+category: review_checklist
+ownerId: u-erich
+tags: postgres, api, smoke, policy
+summary: Postgres smoke should run against an explicit clean database and cover migration, policy, override, sync, and redacted overview behavior.
+---
+
+# Postgres Smoke Readiness Checklist
+
+Use this checklist when API, repository, migration, policy, override, sync, or manager summary code
+changes.
+
+- Set \`DEVFLOW_DATABASE_URL\` explicitly before running Postgres smoke.
+- Prefer a disposable clean database for release-style signoff.
+- Run the migration/setup path before smoke if the database is new.
+- Verify seeded team data can be read through the API repository boundary.
+- Verify policy save/read and enforcement evaluation behavior.
+- Verify override rejection for owner, member, and conflicted lead cases.
+- Verify accepted lead override audit behavior.
+- Verify stale policy version rejection.
+- Verify approval-like sync summaries are rejected as a Gate enforcement bypass.
+- Verify overview responses remain redacted and do not expose local paths, raw logs, prompts, patches, or secrets.
+- Remember that \`corepack pnpm verify\` intentionally excludes Postgres smoke.
+`,
+  },
+  {
+    sourcePath: 'docs/knowledge/checklists/opencode-runtime-signoff.md',
+    updatedAt: '2026-06-20T08:00:00.000Z',
+    markdown: `---
+title: opencode Runtime Signoff Checklist
+category: review_checklist
+ownerId: u-erich
+tags: opencode, coding-agent, smoke, provider
+summary: Real opencode runtime signoff must be explicit, env-gated, permission-audited, and secret-safe.
+---
+
+# opencode Runtime Signoff Checklist
+
+Use this checklist only when intentionally validating the real opencode coding adapter.
+
+- Keep the deterministic fake engine as the default daily verification path.
+- Confirm local opencode is installed and compatible with the adapter under test.
+- Run \`corepack pnpm opencode:status\` before live smoke to confirm the local binary/version, default fake-engine posture, live-smoke gate, and provider profile state.
+- Set \`DEVFLOW_RUN_OPENCODE_SMOKE=1\` intentionally.
+- Set \`DEVFLOW_CODING_ENGINE=opencode-http\`.
+- Set the intended provider ID and model ID explicitly.
+- Set the provider API key through the configured env var, never inline in logs or documentation.
+- Run \`corepack pnpm test:opencode-smoke\`.
+- Confirm the smoke starts \`opencode serve\`, creates a managed worktree, relays permissions, captures a redacted diff, runs worktree tests, and cleans up temporary smoke state.
+- Confirm permission requests are human-visible and unanswered requests reject by default.
+- Confirm smoke output does not print provider secrets.
+- Do not add live opencode smoke to \`corepack pnpm verify\` until the project intentionally promotes it to release validation.
+`,
+  },
+  {
+    sourcePath: 'docs/knowledge/checklists/v09-demo-readiness.md',
+    updatedAt: '2026-06-20T08:00:00.000Z',
+    markdown: `---
+title: v0.9 Demo Readiness Checklist
+category: review_checklist
+ownerId: u-erich
+tags: demo, opencode, observability, policy-aware-delivery
+summary: v0.9 demos should prove policy-aware delivery, runtime observability, and honest real-opencode boundaries.
+---
+
+# v0.9 Demo Readiness Checklist
+
+Use this checklist before presenting the v0.9 real runtime and observability story.
+
+- Start from the v0.8 user guide and the v0.9 demo script.
+- Run \`corepack pnpm release:status\` and confirm only intentional release-pending items remain.
+- Run \`corepack pnpm opencode:status\` and confirm local opencode version, fake-by-default posture, live-smoke gate, and provider profile state.
+- Keep \`corepack pnpm verify\` on the deterministic fake engine.
+- If claiming real opencode behavior, run \`corepack pnpm test:opencode-smoke\` with explicit live env vars first.
+- Demonstrate Gate Enforcement, Remediation Plan, Knowledge Review, Retry Coding, Tests, and Team Overview in one coherent flow.
+- Show which evidence came from fake engine versus real opencode.
+- Confirm provider secrets, cwd, raw prompts, raw traces, raw logs, and patches are not shown in team summaries.
+- Do not claim automatic repair, MCP runtime enforcement, RAG, packaging, Windows Electron smoke, or default real-opencode verification.
+`,
+  },
+  {
     sourcePath: 'docs/knowledge/adr/gate-governance.md',
     updatedAt: '2026-06-16T08:00:00.000Z',
     markdown: `---

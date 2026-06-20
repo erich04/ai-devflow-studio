@@ -1,5 +1,8 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
+import { fileURLToPath } from 'node:url'
+
+const sharedSrcPath = fileURLToPath(new URL('./packages/shared/src', import.meta.url))
 
 export default defineConfig({
   plugins: [react()],
@@ -15,7 +18,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@ai-devflow/shared': '/Users/erich/File/claude/10-showcase/ai-devflow-studio/packages/shared/src',
+      '@ai-devflow/shared': sharedSrcPath,
     },
   },
 })

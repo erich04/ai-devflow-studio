@@ -1,6 +1,6 @@
 {
   "name": "ai-devflow-studio",
-  "version": "0.7.5",
+  "version": "0.8.1",
   "private": true,
   "description": "Team AI development workflow platform with an Electron developer client.",
   "packageManager": "pnpm@9.15.0",
@@ -18,9 +18,11 @@
     "test:postgres-smoke": "node scripts/postgres-smoke.mjs",
     "test:agent-live": "tsx scripts/agent-live-smoke.ts",
     "test:opencode-smoke": "tsx scripts/opencode-smoke.ts",
+    "opencode:status": "node scripts/opencode-runtime-status.mjs",
     "test:e2e": "node scripts/e2e.mjs",
     "test:electron-smoke": "node scripts/electron-smoke.mjs",
-    "verify": "corepack pnpm typecheck && corepack pnpm test && corepack pnpm test:cross-platform && corepack pnpm test:e2e && corepack pnpm test:electron-smoke"
+    "verify": "corepack pnpm typecheck && corepack pnpm test && corepack pnpm test:cross-platform && corepack pnpm test:e2e && corepack pnpm test:electron-smoke",
+    "release:status": "node scripts/release-signoff-status.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",

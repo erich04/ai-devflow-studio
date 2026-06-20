@@ -1096,12 +1096,13 @@ describe('App', () => {
     await screen.findByText('fixture-project')
 
     fireEvent.change(screen.getByLabelText('测试命令'), { target: { value: 'rm -rf /tmp/devflow' } })
-    await screen.findByText(/blocked/i)
-
     fireEvent.click(screen.getByRole('button', { name: /保存测试命令/ }))
+    await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('测试命令已阻断'))
+    expect(api.saveProjectTestCommand).not.toHaveBeenCalled()
+
     fireEvent.click(screen.getByRole('button', { name: /执行测试/ }))
+    await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('测试命令已阻断'))
 
     expect(api.runProjectTests).not.toHaveBeenCalled()
-    expect(screen.getByTestId('toast')).toHaveTextContent('测试命令已阻断')
   })
 })

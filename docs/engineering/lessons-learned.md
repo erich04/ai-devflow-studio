@@ -83,6 +83,8 @@ Use this shape:
   - provider ID, model ID, and provider API key env name are set intentionally.
   - Smoke output does not print provider secrets.
 - **Fix**:
+  - Treat the smoke preflight as the contract gate: without `DEVFLOW_CODING_ENGINE=opencode-http`,
+    the live smoke must exit before contacting a provider.
   - Run `corepack pnpm test:opencode-smoke` only when provider credentials and local opencode are
     intentionally available.
   - Keep the fake engine as the deterministic default path for daily verification.

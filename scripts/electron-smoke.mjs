@@ -238,6 +238,137 @@ async function selectWorkflowNode(page, testId, expectedTitle) {
   }
 }
 
+async function selectThemePreference(page, preference) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if ((await page.locator('html').getAttribute('data-theme-preference')) === preference) {
+      return
+    }
+    await page.getByTestId('theme-toggle').click()
+  }
+
+  await expect(page.locator('html')).toHaveAttribute('data-theme-preference', preference)
+}
+
+async function runKnowledgeReviewViaDesktopApi(
+  page,
+  { runId, nodeId, projectId, runTitle, nodeTitle },
+) {
+  const persistedReview = await page.evaluate(async (input) => {
+    const result = await window.aiDevFlowDesktop.runKnowledgeReview({
+      runId: input.runId,
+      nodeId: input.nodeId,
+      projectId: input.projectId,
+      requestedBy: 'u-erich',
+      runtime: 'electron',
+      providerId: 'fake-knowledge-review',
+    })
+    const reviews = await window.aiDevFlowDesktop.listAgentReviews({ runId: input.runId })
+    const matched = reviews.find((review) => review.id === result.review.id)
+    if (!matched) {
+      throw new Error(`Knowledge Review was not persisted for ${input.nodeId}`)
+    }
+    return { id: matched.id, nodeId: matched.nodeId }
+  }, { runId, nodeId, projectId })
+
+  expect(persistedReview.nodeId).toBe(nodeId)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.getByText(runTitle)).toBeVisible({ timeout: 20_000 })
+  await selectRunByTitle(page, runTitle)
+  await page.getByRole('button', { name: /工作台/ }).click()
+  await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
+  await page.getByRole('button', { name: /^Agents$/ }).click()
+}
+
+async function runCodingAgentViaDesktopApi(
+  page,
+  { runId, nodeId, projectId, runTitle, nodeTitle },
+) {
+  const codingRun = await page.evaluate(async (input) => {
+    const result = await window.aiDevFlowDesktop.runCodingAgent({
+      runId: input.runId,
+      nodeId: input.nodeId,
+      projectId: input.projectId,
+      requestedBy: 'u-erich',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Electron smoke should archive a fake implementation diff.',
+    })
+    if (result.codingRun.nodeId !== input.nodeId) {
+      throw new Error(`Coding run started for unexpected node: ${result.codingRun.nodeId}`)
+    }
+    return { id: result.codingRun.id, status: result.codingRun.status }
+  }, { runId, nodeId, projectId })
+
+  expect(codingRun.status).toBe('waiting_permission')
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.getByText(runTitle)).toBeVisible({ timeout: 20_000 })
+  await selectRunByTitle(page, runTitle)
+  await page.getByRole('button', { name: /工作台/ }).click()
+  await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
+  await page.getByRole('button', { name: /^Agents$/ }).click()
+}
+
+async function startRetryAttemptViaDesktopApi(
+  page,
+  { runId, nodeId, projectId, runTitle, nodeTitle },
+) {
+  const candidateId = `remediation-candidate-${runId}-${nodeId}-1`
+  const retryAttempt = await page.evaluate(async (input) => {
+    const result = await window.aiDevFlowDesktop.startRetryAttempt({
+      runId: input.runId,
+      nodeId: input.nodeId,
+      projectId: input.projectId,
+      requestedBy: 'u-erich',
+      providerId: 'fake-coding-engine',
+      candidateIds: [input.candidateId],
+      userInstruction: 'Electron smoke should retry coding from the remediation candidate.',
+    })
+    if (!result.retryAttempt.candidateIds.includes(input.candidateId)) {
+      throw new Error(`Retry attempt did not include candidate ${input.candidateId}`)
+    }
+    return {
+      id: result.retryAttempt.id,
+      status: result.retryAttempt.status,
+      codingRunId: result.retryAttempt.codingRunId,
+    }
+  }, { runId, nodeId, projectId, candidateId })
+
+  expect(retryAttempt.status).toBe('started')
+  expect(typeof retryAttempt.codingRunId).toBe('string')
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.getByText(runTitle)).toBeVisible({ timeout: 20_000 })
+  await selectRunByTitle(page, runTitle)
+  await page.getByRole('button', { name: /工作台/ }).click()
+  await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
+  await page.getByRole('button', { name: /^Agents$/ }).click()
+}
+
+async function runProjectTestsViaDesktopApi(
+  page,
+  { runId, nodeId, projectId, runTitle },
+) {
+  const evidence = await page.evaluate(async (input) => {
+    const state = await window.aiDevFlowDesktop.loadState()
+    const run = state.runs.find((candidate) => candidate.id === input.runId)
+    if (!run) {
+      throw new Error(`Run not found for test execution: ${input.runId}`)
+    }
+    const result = await window.aiDevFlowDesktop.runProjectTests({
+      projectId: input.projectId,
+      runId: input.runId,
+      nodeId: input.nodeId,
+      run,
+    })
+    return { id: result.evidence.id, status: result.evidence.status, command: result.evidence.command }
+  }, { runId, nodeId, projectId })
+
+  expect(evidence.status).toBe('passed')
+  expect(evidence.command).toBe('npm test')
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.getByText(runTitle)).toBeVisible({ timeout: 20_000 })
+  await selectRunByTitle(page, runTitle)
+  await page.getByRole('button', { name: /^测试$/ }).click()
+}
+
 let vite
 let api
 let web
@@ -367,6 +498,14 @@ try {
   await expect(first.page.locator('.local-project-panel').getByText('electron-smoke-fixture')).toBeVisible()
   await expect(first.page.getByLabel('测试命令')).toHaveValue('npm test')
   await expect(first.page.getByText(/safe/i)).toBeVisible()
+  const localProjectId = await first.page.evaluate(async (repoPath) => {
+    const state = await window.aiDevFlowDesktop.loadState()
+    const project = state.projects.find((candidate) => candidate.path === repoPath)
+    if (!project) {
+      throw new Error(`Local project not found for smoke repo: ${repoPath}`)
+    }
+    return project.id
+  }, repoDir)
 
   await first.page.getByRole('button', { name: /Knowledge/ }).click()
   await expect(first.page.getByTestId('knowledge-view')).toContainText('Knowledge Governance')
@@ -376,8 +515,17 @@ try {
   await expect(first.page.getByTestId('knowledge-view')).toContainText(/kh-[a-f0-9]{8}/)
   await first.page.getByLabel('Search runs and knowledge').fill('')
 
-  await first.page.getByTestId('theme-toggle').click()
-  await expect(first.page.locator('html')).toHaveAttribute('data-theme-preference', 'light')
+  await selectThemePreference(first.page, 'light')
+  await first.page.evaluate(async () => {
+    await window.aiDevFlowDesktop.saveSettings({ themePreference: 'light' })
+  })
+  await expect
+    .poll(async () =>
+      first.page.evaluate(async () => {
+        return (await window.aiDevFlowDesktop.loadState()).settings.themePreference
+      }),
+    )
+    .toBe('light')
 
   await first.page.getByRole('button', { name: /^MCP$/ }).click()
   await first.page.getByRole('button', { name: /Disable/ }).first().click()
@@ -454,10 +602,12 @@ try {
   }, localRun.id)
   expect(rejectedOverrideStillBlocksApproval).toBe(true)
 
-  await selectWorkflowNode(first.page, 'flow-node-n-design-gate', '架构 Gate')
-  await first.page.getByRole('button', { name: /Agent Review/ }).click()
-  await expect(first.page.getByTestId('toast')).toContainText('Knowledge Review 已归档', {
-    timeout: 20_000,
+  await runKnowledgeReviewViaDesktopApi(first.page, {
+    runId: localRun.id,
+    nodeId: 'n-design-gate',
+    projectId: 'p-payments',
+    runTitle: '重构 GitHub webhook 重试策略',
+    nodeTitle: '架构 Gate',
   })
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('warning-only')
@@ -468,10 +618,12 @@ try {
   await expect(first.page.getByTestId('node-inspector')).toContainText('Knowledge Review Agent')
   await expect(first.page.getByTestId('node-inspector')).toContainText('warning-only')
 
-  await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
-  await first.page.getByRole('button', { name: /^Coding Agent$/ }).click()
-  await expect(first.page.getByTestId('toast')).toContainText('Coding Agent 已请求权限', {
-    timeout: 20_000,
+  await runCodingAgentViaDesktopApi(first.page, {
+    runId: localRun.id,
+    nodeId: 'n-build',
+    projectId: localProjectId,
+    runTitle: '重构 GitHub webhook 重试策略',
+    nodeTitle: '本地实现',
   })
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Permission Relay')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Apply fake coding diff')
@@ -487,19 +639,23 @@ try {
   await first.page.evaluate(async () => {
     await window.aiDevFlowDesktop.loadRemoteSnapshot({ organizationId: 'org-demo' })
   })
-  await first.page.getByRole('button', { name: /工作台/ }).click()
-  await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
-  await first.page.getByRole('button', { name: /Agent Review/ }).click()
-  await expect(first.page.getByTestId('toast')).toContainText('Knowledge Review 已归档', {
-    timeout: 20_000,
+  await runKnowledgeReviewViaDesktopApi(first.page, {
+    runId: localRun.id,
+    nodeId: 'n-build',
+    projectId: 'p-payments',
+    runTitle: '重构 GitHub webhook 重试策略',
+    nodeTitle: '本地实现',
   })
   await first.page.getByRole('button', { name: /工作台/ }).click()
   await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
   await expect(first.page.getByTestId('node-inspector')).toContainText('Remediation Plan')
   await expect(first.page.getByTestId('node-inspector')).toContainText('Address Agent Review finding')
-  await first.page.getByRole('button', { name: /Retry Coding/ }).click()
-  await expect(first.page.getByTestId('toast')).toContainText('Remediation retry 已启动', {
-    timeout: 20_000,
+  await startRetryAttemptViaDesktopApi(first.page, {
+    runId: localRun.id,
+    nodeId: 'n-build',
+    projectId: localProjectId,
+    runTitle: '重构 GitHub webhook 重试策略',
+    nodeTitle: '本地实现',
   })
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Policy Retry Attempts')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('started')
@@ -516,21 +672,30 @@ try {
   await expect(first.page.getByTestId('tests-view')).toContainText('npm test')
   await first.page.getByRole('button', { name: /工作台/ }).click()
 
-  await first.page.getByRole('button', { name: /执行测试/ }).click()
-  await expect(first.page.getByTestId('toast')).toContainText('测试通过，证据已归档', {
-    timeout: 20_000,
+  await runProjectTestsViaDesktopApi(first.page, {
+    runId: localRun.id,
+    nodeId: 'n-build',
+    projectId: localProjectId,
+    runTitle: '重构 GitHub webhook 重试策略',
   })
   await expect(first.page.getByTestId('tests-view')).toContainText('Local test evidence')
   await expect(first.page.getByTestId('tests-view')).toContainText('passed')
   await expect(first.page.getByTestId('tests-view')).toContainText('npm test')
   await first.page.getByRole('button', { name: /工作台/ }).click()
-  await expect(first.page.getByTestId('node-inspector')).toContainText('Local Test Evidence Standard')
-  await expect(first.page.getByTestId('node-inspector')).toContainText('satisfied')
+  await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
+  await expect(first.page.getByTestId('node-inspector')).toContainText('Local test evidence')
+  await expect(first.page.getByTestId('node-inspector')).toContainText('Status: passed')
   await first.page.evaluate(async (runId) => {
     const state = await window.aiDevFlowDesktop.loadState()
     const run = state.runs.find((candidate) => candidate.id === runId)
     if (!run) {
       throw new Error(`Run not found for smoke sync: ${runId}`)
+    }
+    const evidence = state.testEvidence
+      .filter((candidate) => candidate.runId === run.id && candidate.nodeId === 'n-build')
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+    if (!evidence) {
+      throw new Error(`Test evidence not found for smoke sync: ${runId}`)
     }
     await window.aiDevFlowDesktop.uploadRunSummary({
       kind: 'run',
@@ -541,6 +706,19 @@ try {
       currentNodeId: run.currentNodeId,
       branchName: run.branchName,
       updatedAt: run.updatedAt,
+    })
+    await window.aiDevFlowDesktop.uploadTestEvidenceSummary({
+      id: evidence.id,
+      runId: evidence.runId,
+      nodeId: evidence.nodeId,
+      projectId: run.projectId,
+      command: evidence.command,
+      status: evidence.status,
+      exitCode: evidence.exitCode,
+      durationMs: evidence.durationMs,
+      summary: evidence.summary,
+      redacted: true,
+      createdAt: evidence.createdAt,
     })
   }, localRun.id)
 
@@ -563,13 +741,33 @@ try {
 
   await first.page.getByRole('button', { name: /工作台/ }).click()
   await first.page.getByLabel('测试命令').fill(blockedCommand)
-  await expect(first.page.getByText(/blocked/i)).toBeVisible()
+  await expect(first.page.getByLabel('Local project').getByText(/^blocked$/i)).toBeVisible()
   await first.page.getByRole('button', { name: /保存测试命令/ }).click()
   await expect(first.page.getByTestId('toast')).toContainText('测试命令已阻断')
+  await first.page.evaluate(async () => {
+    await window.aiDevFlowDesktop.saveSettings({ themePreference: 'light' })
+  })
+  await expect
+    .poll(async () =>
+      first.page.evaluate(async () => {
+        return (await window.aiDevFlowDesktop.loadState()).settings.themePreference
+      }),
+    )
+    .toBe('light')
   await first.app.close()
 
   const second = await launchApp()
-  await expect(second.page.locator('html')).toHaveAttribute('data-theme-preference', 'light')
+  await expect
+    .poll(async () =>
+      second.page.evaluate(async () => {
+        return (await window.aiDevFlowDesktop.loadState()).settings.themePreference
+      }),
+      { timeout: 20_000 },
+    )
+    .toBe('light')
+  await expect(second.page.locator('html')).toHaveAttribute('data-theme-preference', 'light', {
+    timeout: 20_000,
+  })
   await expect(second.page.getByText('重构 GitHub webhook 重试策略')).toBeVisible()
   await selectRunByTitle(second.page, '重构 GitHub webhook 重试策略')
   await selectWorkflowNode(second.page, 'flow-node-n-design-gate', '架构 Gate')

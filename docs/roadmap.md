@@ -267,15 +267,30 @@ Electron smoke is still tracked as future compatibility expansion. See
 - Signed off release-style validation on 2026-06-19: `corepack pnpm verify`, `corepack pnpm build`,
   disposable-Postgres smoke, and Electron smoke with remediation retry through Test Evidence.
 
+### v0.8.1: Release Signoff And Version Alignment
+
+- Made the repository public to unblock GitHub Actions for the release candidate and confirmed run
+  `27863202387` passed macOS verify, Windows compatibility, and Postgres integration.
+- Fixed the Windows-only knowledge fixture path normalization failure found by CI.
+- Aligned all first-party package metadata to `0.8.1` and created the annotated `v0.8.1` tag after
+  automated verification passed.
+- Preserved the final human walkthrough as a post-tag acceptance checklist, because Computer Use
+  could read the Electron UI but still could not reliably click through it in this environment.
+- See `docs/plans/v0.8.1-release-signoff.md`.
+
 ## Planned Milestones
 
-### v0.9: Runtime Expansion Candidates
+### v0.9: Real opencode Runtime + Observability + Demo Readiness
 
-- Deepen the real opencode adapter beyond local signoff, including longer-running streamed traces
-  and release-grade smoke coverage.
-- Evaluate MCP policy enforcement and tool-call telemetry once the MCP runtime layer is real.
-- Revisit RAG/vector retrieval only after the deterministic Knowledge Retrieval boundary remains
-  stable under v0.8 remediation usage.
+- Re-confirm the real opencode runtime contract against the current local toolchain before changing
+  runtime code; update ADR 0009 or research notes if transport/provider behavior changed.
+- Deepen the real opencode adapter beyond local signoff, including streamed traces, permission relay,
+  cancel/timeout semantics, worktree cleanup, diff capture, and Test Evidence.
+- Make real-runtime behavior legible in Agents through observable tool calls, permission decisions,
+  diff/test evidence, and redacted summaries.
+- Close v0.9 with a 5-minute demo script and dual-path signoff: deterministic fake-engine `verify`
+  plus explicit real-opencode smoke.
+- See `docs/plans/v0.9-real-runtime-observability.md`.
 
 ## Deferred / Not Yet Started
 

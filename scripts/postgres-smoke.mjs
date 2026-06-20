@@ -50,6 +50,7 @@ function spawnService(name, args, env = {}) {
   const child = spawn(corepack, args, {
     cwd: rootDir,
     env: { ...process.env, ...env },
+    detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
@@ -74,6 +75,27 @@ function spawnService(name, args, env = {}) {
   return child
 }
 
+function sendServiceSignal(child, signal) {
+  if (!child?.pid) {
+    return
+  }
+
+  try {
+    if (process.platform !== 'win32') {
+      process.kill(-child.pid, signal)
+      return
+    }
+  } catch {
+    // Fall back to signaling the wrapper process below.
+  }
+
+  try {
+    child.kill(signal)
+  } catch {
+    // The process may already be gone.
+  }
+}
+
 async function waitForServer(url) {
   for (let attempt = 0; attempt < 90; attempt += 1) {
     try {
@@ -91,13 +113,33 @@ async function waitForServer(url) {
   throw new Error(`Timed out waiting for ${url}`)
 }
 
-function stop(child) {
-  if (!child || child.killed) {
+async function stop(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
     return
   }
 
   child.devflowStopping = true
-  child.kill('SIGTERM')
+  await new Promise((resolve) => {
+    let settled = false
+    let forceTimer
+    let finalTimer
+    const finish = () => {
+      if (settled) {
+        return
+      }
+      settled = true
+      clearTimeout(forceTimer)
+      clearTimeout(finalTimer)
+      resolve()
+    }
+
+    child.once('exit', finish)
+    sendServiceSignal(child, 'SIGTERM')
+    forceTimer = setTimeout(() => {
+      sendServiceSignal(child, 'SIGKILL')
+    }, 3_000)
+    finalTimer = setTimeout(finish, 8_000)
+  })
 }
 
 async function readJson(response, label) {
@@ -517,5 +559,5 @@ try {
 
   console.log('Postgres integration smoke passed.')
 } finally {
-  stop(api)
+  await stop(api)
 }
