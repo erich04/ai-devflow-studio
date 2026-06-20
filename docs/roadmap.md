@@ -316,9 +316,9 @@ Electron smoke is still tracked as future compatibility expansion. See
   identity truth.
 - Preserve v0.9's verification discipline: fake engine in default CI/`verify`, real opencode and
   paid provider calls only in explicit smoke/signoff paths.
-- Current execution status: Phase 0 cleanup and v1.0a Identity Foundation are complete and merged.
-  v1.0b GitHub OAuth + Minimal Team Project is the active slice; v1.0c Desktop Pairing and v1.0d
-  Docker Deployment remain blocked until v1.0b signs off.
+- Current execution status: Phase 0 cleanup, v1.0a Identity Foundation, and v1.0b GitHub OAuth +
+  Minimal Team Project are complete. v1.0c Desktop Pairing is the next serial slice; v1.0d Docker
+  Deployment remains blocked until v1.0c signs off.
 - See `docs/plans/v1.0-team-pilot-foundation.md`.
 
 ### v1.1 Candidate: Runtime Cost + Budget Guard
