@@ -35,5 +35,6 @@ describe('v0.9 real runtime observability plan', () => {
     expect(markdown).toContain('Windows Electron smoke')
     expect(markdown).toContain('HoneyAI bridge')
     expect(markdown).toContain('The demo script is not deferred to v1.0')
+    expect(markdown).toContain('real opencode token/cost telemetry')
   })
 })

@@ -295,7 +295,9 @@ Electron smoke is still tracked as future compatibility expansion. See
   worktree/source paths.
 - Closed v0.9 with dual-path signoff: deterministic fake-engine `verify`, `build`,
   disposable-Postgres smoke, default no-cost opencode smoke skip, and explicit real-opencode smoke
-  against the configured Volcengine provider.
+  against the configured Volcengine provider. A post-release live smoke on 2026-06-20 also passed
+  against provider `double` / model `ark-code-latest` in about 1m38s with `bash -> edit -> bash`
+  permission relay, fixture test evidence, and managed worktree cleanup.
 - See `docs/plans/v0.9-real-runtime-observability.md`.
 
 ## Planned Milestones
@@ -304,6 +306,9 @@ Electron smoke is still tracked as future compatibility expansion. See
 
 - Turn the v0.9 real-runtime demo into a repeatable portfolio walkthrough with screenshots and a
   short reviewer script.
+- Add real opencode token/cost telemetry for the Doubao-backed runtime: preserve fake-engine
+  `verify` as cost-free, capture provider-reported usage when available, otherwise store a clearly
+  labeled estimate, and sync only redacted cost summaries to the team side.
 - Decide whether v1.0 should prioritize packaging/signing, MCP/Skill runtime management, team
   accounts/deployment, or a public showcase page.
 - Keep real-opencode smoke explicit and provider-gated until there is a stable release environment

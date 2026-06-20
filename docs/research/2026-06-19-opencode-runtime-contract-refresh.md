@@ -219,6 +219,12 @@ Notes:
   DEVFLOW_OPENCODE_API_KEY_ENV=ARK_API_KEY corepack pnpm test:opencode-smoke` passed with
   `bash -> edit -> bash -> bash` permission relay and
   `opencode smoke passed; changed paths: devflow-opencode-smoke.txt`.
+- 2026-06-20 v0.9.0 post-release live smoke: re-ran the real provider path against the local
+  Volcengine Ark profile using provider `double`, model `ark-code-latest`, and key env
+  `ANTHROPIC_AUTH_TOKEN` sourced from the local opencode config without printing the key. The run
+  took about 1m38s, relayed `bash -> edit -> bash`, produced
+  `opencode smoke passed; changed paths: devflow-opencode-smoke.txt`, ran the fixture test evidence,
+  and completed managed worktree cleanup.
 
 ## v0.9.2 Go Criteria
 

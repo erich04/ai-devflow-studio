@@ -18,6 +18,8 @@ describe('opencode runtime contract refresh documentation', () => {
     expect(markdown).toContain('live opencode smoke is disabled')
     expect(markdown).toContain('prevents accidental provider calls during `verify`')
     expect(markdown).toContain('opencode smoke passed; changed paths: devflow-opencode-smoke.txt')
+    expect(markdown).toContain('v0.9.0 post-release live smoke')
+    expect(markdown).toContain('about 1m38s')
   })
 
   it('documents the Volcengine Ark provider profile with a local config and explicit live gate', () => {
