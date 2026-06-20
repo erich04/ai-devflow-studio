@@ -183,3 +183,19 @@ For a hard gate after the human walkthrough and package bump, run:
 ```bash
 DEVFLOW_RELEASE_WALKTHROUGH=passed corepack pnpm release:status -- --strict
 ```
+
+## GitHub Actions Release Workflow
+
+`.github/workflows/verify.yml` is the default quality gate for pushes and pull requests. It runs
+macOS verification, Windows compatibility checks, and Postgres integration smoke tests.
+
+`.github/workflows/release.yml` is intentionally narrower and only runs for explicit releases:
+
+- manual `workflow_dispatch`
+- pushed tags matching `v*`
+
+The release workflow verifies the repository, builds the desktop/web/API/worker outputs, uploads a
+single `ai-devflow-studio-release-artifacts` workflow artifact, and creates or updates a GitHub
+Release for tag-triggered runs. It does not deploy a production web/API service, publish npm
+packages, run paid real-opencode provider smoke, or produce signed Electron installers yet. Those
+remain future release-engineering work.
