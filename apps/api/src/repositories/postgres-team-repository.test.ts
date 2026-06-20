@@ -22,6 +22,38 @@ class FakeTeamDbClient implements TeamDbClient {
       ] as T[]
     }
 
+    if (sql.includes('FROM auth_accounts')) {
+      return [
+        {
+          auth_account_id: 'acct-github-ling',
+          auth_account_user_id: 'u-ling',
+          provider: 'github',
+          provider_account_id: 'github:ling',
+          username: 'ling-gh',
+          auth_account_email: 'ling@example.com',
+          auth_account_created_at: '2026-06-16T09:00:00.000Z',
+          auth_account_updated_at: '2026-06-16T09:05:00.000Z',
+          user_id: 'u-ling',
+          organization_id: 'org-demo',
+          name: 'Ling',
+          role: 'lead',
+          email: 'ling@example.com',
+          avatar_url: 'https://avatars.example/ling.png',
+          avatar_initials: 'LG',
+          focus: 'Architecture',
+          user_created_at: '2026-06-16T08:00:00.000Z',
+          user_updated_at: '2026-06-16T08:05:00.000Z',
+        },
+      ] as T[]
+    }
+
+    if (sql.includes('FROM project_members')) {
+      return [
+        { project_id: 'p-payments', user_id: 'u-ling', role: 'lead' },
+        { project_id: 'p-admin', user_id: 'u-ling', role: 'member' },
+      ] as T[]
+    }
+
     if (sql.includes('FROM users')) {
       return [
         {
@@ -311,6 +343,50 @@ describe('Postgres team repository', () => {
         lastAuditEvent: 'Query PR checks.',
       },
     ])
+  })
+
+  it('resolves authenticated identity from auth_accounts and existing project_members', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.getAuthenticatedIdentity({
+        provider: 'github',
+        providerAccountId: 'github:ling',
+      }),
+    ).resolves.toEqual({
+      user: {
+        id: 'u-ling',
+        organizationId: 'org-demo',
+        name: 'Ling',
+        role: 'lead',
+        email: 'ling@example.com',
+        avatarUrl: 'https://avatars.example/ling.png',
+        avatarInitials: 'LG',
+        focus: 'Architecture',
+        createdAt: '2026-06-16T08:00:00.000Z',
+        updatedAt: '2026-06-16T08:05:00.000Z',
+      },
+      authAccount: {
+        id: 'acct-github-ling',
+        userId: 'u-ling',
+        provider: 'github',
+        providerAccountId: 'github:ling',
+        username: 'ling-gh',
+        email: 'ling@example.com',
+        createdAt: '2026-06-16T09:00:00.000Z',
+        updatedAt: '2026-06-16T09:05:00.000Z',
+      },
+      projectMemberships: [
+        { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+        { projectId: 'p-admin', userId: 'u-ling', role: 'member' },
+      ],
+    })
+
+    expect(db.queries[0]?.sql).toContain('FROM auth_accounts')
+    expect(db.queries[0]?.params).toEqual(['github', 'github:ling'])
+    expect(db.queries[1]?.sql).toContain('FROM project_members')
+    expect(db.queries[1]?.params).toEqual(['u-ling'])
   })
 
   it('writes run summaries into workflow_runs with tenant context', async () => {

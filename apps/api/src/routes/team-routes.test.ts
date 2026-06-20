@@ -235,6 +235,7 @@ function createRepository(): TeamRepository {
   const gateOverrides: GateOverrideDecision[] = []
 
   return {
+    getAuthenticatedIdentity: vi.fn(async () => null),
     getRunsBundle: vi.fn(async () => runsBundle),
     getTeamOverview: vi.fn(async () => overview),
     getSkills: vi.fn(async () => []),

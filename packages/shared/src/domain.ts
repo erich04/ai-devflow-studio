@@ -101,6 +101,12 @@ export type ProjectMembership = {
   role: Role
 }
 
+export type AuthenticatedIdentity = {
+  user: User
+  authAccount: AuthAccount
+  projectMemberships: ProjectMembership[]
+}
+
 export type TeamSessionSource = 'demo' | 'authenticated'
 
 export type BaseTeamSession = {
