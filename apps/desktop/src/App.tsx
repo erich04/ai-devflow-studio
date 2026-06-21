@@ -328,6 +328,7 @@ export function App() {
   const [codingDiffArtifacts, setCodingDiffArtifacts] = useState<CodingDiffArtifact[]>([])
   const [retryAttempts, setRetryAttempts] = useState<RetryAttempt[]>([])
   const [providerKeyDraft, setProviderKeyDraft] = useState('')
+  const [runtimeBudgetApprovalId, setRuntimeBudgetApprovalId] = useState('')
   const [isRunningAgentReview, setIsRunningAgentReview] = useState(false)
   const [isStartingCodingAgent, setIsStartingCodingAgent] = useState(false)
   const [isNewRunOpen, setIsNewRunOpen] = useState(false)
@@ -996,6 +997,7 @@ export function App() {
         requestedBy: currentUser.id,
         providerId: 'fake-coding-engine',
         userInstruction: `Implement ${selectedNode.title} with the existing DevFlow context.`,
+        ...(runtimeBudgetApprovalId.trim() ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() } : {}),
       })
       applyLocalExecutionState(result.state)
       setSelectedRunId(result.codingRun.runId)
@@ -1392,6 +1394,8 @@ export function App() {
             onOpenCodingWorktree={openCodingWorktree}
             onDeleteCodingWorktree={deleteCodingWorktree}
             isStartingCodingAgent={isStartingCodingAgent}
+            runtimeBudgetApprovalId={runtimeBudgetApprovalId}
+            onRuntimeBudgetApprovalIdChange={setRuntimeBudgetApprovalId}
             codingRuns={selectedCodingRuns}
             retryAttempts={selectedRetryAttempts}
             latestCodingRun={latestCodingRun}
@@ -1950,6 +1954,8 @@ function AgentWorkbenchView({
   onOpenCodingWorktree,
   onDeleteCodingWorktree,
   isStartingCodingAgent,
+  runtimeBudgetApprovalId,
+  onRuntimeBudgetApprovalIdChange,
   codingRuns,
   retryAttempts,
   latestCodingRun,
@@ -1982,6 +1988,8 @@ function AgentWorkbenchView({
   onOpenCodingWorktree: () => void
   onDeleteCodingWorktree: () => void
   isStartingCodingAgent: boolean
+  runtimeBudgetApprovalId: string
+  onRuntimeBudgetApprovalIdChange: (value: string) => void
   codingRuns: CodingAgentRun[]
   retryAttempts: RetryAttempt[]
   latestCodingRun: CodingAgentRun | undefined
@@ -1997,6 +2005,7 @@ function AgentWorkbenchView({
   const runtimeLabel = latestCodingRun ? codingRuntimeLabel(latestCodingRun.engine) : 'No runtime'
   const terminalLabel = latestCodingRun ? codingTerminalLabel(latestCodingRun.status) : 'No terminal state'
   const cleanupStatus = workspace?.cleanupStatus ?? (workspace?.deletedAt ? 'deleted' : workspace ? 'active' : 'none')
+  const budgetDecision = latestCodingRun?.budgetDecision
   const cleanupSummary =
     cleanupStatus === 'cleanup_failed'
       ? workspace?.cleanupError ?? 'Manual cleanup required.'
@@ -2145,6 +2154,42 @@ function AgentWorkbenchView({
               <span>Test Evidence</span>
               <strong>{testEvidence?.status ?? 'pending'}</strong>
             </div>
+            {budgetDecision ? (
+              <div className="agent-advisory agent-advisory--warn">
+                <span>Runtime Budget</span>
+                <strong>{budgetDecision.status}</strong>
+                <p>{budgetDecision.reason}</p>
+                <div className="knowledge-reference-meta">
+                  <span>projected {formatUsd(budgetDecision.projectedCostUsd)}</span>
+                  <span>current {formatUsd(budgetDecision.currentSpendUsd)}</span>
+                  {typeof budgetDecision.limitUsd === 'number' ? (
+                    <span>limit {formatUsd(budgetDecision.limitUsd)}</span>
+                  ) : null}
+                  {budgetDecision.approvalId ? <code>{budgetDecision.approvalId}</code> : null}
+                </div>
+                {budgetDecision.status === 'requires_lead_approval' ? (
+                  <div className="runtime-budget-retry">
+                    <label>
+                      Runtime budget approval ID
+                      <input
+                        aria-label="Runtime budget approval ID"
+                        placeholder="runtime-budget-approval-..."
+                        value={runtimeBudgetApprovalId}
+                        onChange={(event) => onRuntimeBudgetApprovalIdChange(event.target.value)}
+                      />
+                    </label>
+                    <button
+                      className="primary-button"
+                      disabled={!runtimeBudgetApprovalId.trim() || isStartingCodingAgent}
+                      onClick={onRunCodingAgent}
+                    >
+                      <Code2 size={16} />
+                      Retry with approval
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             <div className="compact-row">
               <span>Cleanup</span>
               <strong>{cleanupStatus}</strong>

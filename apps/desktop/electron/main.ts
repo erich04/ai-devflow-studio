@@ -188,7 +188,7 @@ async function createCodingRuntimeForRequest() {
 }
 
 function createRuntimeBudgetGuard(remoteSync: RemoteSyncClient): CodingRuntimeBudgetGuard {
-  return async ({ estimatedCost, project }) => {
+  return async ({ estimatedCost, project, approvalId }) => {
     if (estimatedCost.costUsd <= 0) {
       return {
         status: 'disabled',
@@ -203,6 +203,7 @@ function createRuntimeBudgetGuard(remoteSync: RemoteSyncClient): CodingRuntimeBu
       return await remoteSync.evaluateRuntimeBudget({
         projectId: project.id,
         projectedCostUsd: estimatedCost.costUsd,
+        ...(approvalId ? { approvalId } : {}),
       })
     } catch {
       return {

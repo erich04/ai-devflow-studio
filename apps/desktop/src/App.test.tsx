@@ -1272,6 +1272,95 @@ describe('App', () => {
     expect(workbench).not.toHaveTextContent('/Users/erich/File/claude/10-showcase/ai-devflow-studio')
   })
 
+  it('shows runtime budget approval retry controls for blocked coding runs', async () => {
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue({
+        projects: [localProject],
+        runs: [{ ...fixtureRuns[0]!, currentNodeId: 'n-build' }],
+        artifacts: [],
+        events: [],
+        testEvidence: [],
+        settings: { themePreference: 'system' },
+        mcpServers: [],
+        agentReviews: [],
+        agentTraces: [],
+        agentTokenUsage: [],
+        codingRuns: [
+          {
+            id: 'coding-run-budget-blocked',
+            runId: fixtureRuns[0]!.id,
+            nodeId: 'n-build',
+            projectId: localProject.id,
+            requestedBy: 'u-ling',
+            providerId: 'double',
+            engine: 'opencode-http',
+            status: 'failed',
+            managedWorkspaceId: 'workspace-budget',
+            branchName: 'devflow/budget-blocked',
+            userInstruction: 'Retry with an approved runtime budget.',
+            prompt: 'redacted prompt',
+            summary: 'Runtime budget requires lead approval before calling opencode-http.',
+            changedPaths: [],
+            startedAt: '2026-06-21T00:00:00.000Z',
+            completedAt: '2026-06-21T00:00:00.000Z',
+            runtimeCostSummary: {
+              engine: 'opencode-http',
+              providerId: 'double',
+              model: 'ark-code-latest',
+              inputTokens: 8000,
+              outputTokens: 2000,
+              cacheReadTokens: 0,
+              costUsd: 0.42,
+              source: 'estimated',
+              timestamp: '2026-06-21T00:00:00.000Z',
+            },
+            budgetDecision: {
+              status: 'requires_lead_approval',
+              blocksRun: true,
+              currentSpendUsd: 0.19,
+              projectedCostUsd: 0.42,
+              limitUsd: 0.2,
+              approvalRequiredRole: 'lead',
+              reason: 'Project runtime budget would be exceeded; lead approval is required before calling the real provider.',
+            },
+            redacted: true,
+          },
+        ],
+        codingEvents: [],
+        codingPermissionRequests: [],
+        codingPermissionDecisions: [],
+        managedCodingWorkspaces: [
+          {
+            id: 'workspace-budget',
+            projectId: localProject.id,
+            codingRunId: 'coding-run-budget-blocked',
+            sourcePath: '/tmp/fixture-project',
+            worktreePath: '/tmp/devflow-budget/worktree',
+            branchName: 'devflow/budget-blocked',
+            baseBranch: 'main',
+            createdAt: '2026-06-21T00:00:00.000Z',
+            cleanupStatus: 'deleted',
+            deletedAt: '2026-06-21T00:01:00.000Z',
+          },
+        ],
+        dependencyBootstrapEvidence: [],
+        codingDiffArtifacts: [],
+        retryAttempts: [],
+      }),
+    })
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /Agents/ }))
+
+    const workbench = await screen.findByTestId('agent-workbench')
+    expect(workbench).toHaveTextContent('Runtime Budget')
+    expect(workbench).toHaveTextContent('requires_lead_approval')
+    expect(workbench).toHaveTextContent('projected $0.42')
+    expect(workbench).toHaveTextContent('limit $0.20')
+    expect(screen.getByLabelText('Runtime budget approval ID')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Retry with approval/ })).toBeDisabled()
+  })
+
   it('selects a local project, saves an editable test command, and archives local test evidence', async () => {
     const api = installDesktopApi()
     render(<App />)
@@ -1349,7 +1438,9 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
     await screen.findByText('fixture-project')
 
-    fireEvent.change(screen.getByLabelText('测试命令'), { target: { value: 'rm -rf /tmp/devflow' } })
+    const commandInput = screen.getByLabelText('测试命令')
+    await waitFor(() => expect(commandInput).toHaveValue('pnpm test'))
+    fireEvent.change(commandInput, { target: { value: 'rm -rf /tmp/devflow' } })
     await screen.findByText('Command contains destructive recursive removal.')
     fireEvent.click(screen.getByRole('button', { name: /保存测试命令/ }))
     await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('测试命令已阻断'))

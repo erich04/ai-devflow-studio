@@ -111,6 +111,7 @@ export type RunCodingAgentInput = {
   requestedBy: string
   providerId: string
   userInstruction: string
+  runtimeBudgetApprovalId?: string
 }
 
 export type RunCodingAgentResult = {

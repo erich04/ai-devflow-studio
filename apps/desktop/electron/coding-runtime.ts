@@ -115,6 +115,7 @@ export type CodingRuntimeBudgetGuard = (input: {
   node: WorkflowNode
   requestedBy: string
   estimatedCost: CodingRuntimeCostSummary
+  approvalId?: string
 }) => Promise<BudgetGuardDecision>
 
 export type CodingRuntimeDependencyBootstrapRunner = (input: {
@@ -132,6 +133,7 @@ export type RunCodingAgentRuntimeInput = {
   requestedBy: string
   providerId: string
   userInstruction: string
+  runtimeBudgetApprovalId?: string
   remediationPlan?: RemediationPlan
   retryAttempt?: RetryAttempt
 }
@@ -803,6 +805,9 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             node,
             requestedBy: input.requestedBy,
             estimatedCost,
+            ...(input.runtimeBudgetApprovalId?.trim()
+              ? { approvalId: input.runtimeBudgetApprovalId.trim() }
+              : {}),
           })
         : {
             status: 'disabled',

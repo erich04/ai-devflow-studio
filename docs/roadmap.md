@@ -361,13 +361,27 @@ Electron smoke is still tracked as future compatibility expansion. See
 - Included redacted coding runtime cost summaries in team cost rollups and remote coding summaries.
 - See `docs/plans/v1.1-runtime-cost-budget-guard.md`.
 
+### v1.2: Runtime Cost UX + Budget Administration
+
+- Added Web Team Console controls for viewing and saving runtime budget policies.
+- Added Web Team Console budget approval creation and approval listing.
+- Added Desktop Coding Agent budget decision trace details for projected/current/limit cost,
+  decision reason, and approval id.
+- Added explicit Desktop "Retry with approval" flow for runs blocked by
+  `requires_lead_approval`.
+- Preserved the v1.1 safety boundary: Desktop passes an approval id, while the team API/runtime
+  boundary resolves that id to a complete approval record before budget evaluation.
+- Kept paid real-provider validation out of default CI; release-only real opencode smoke remains
+  documented as an explicit signoff step.
+- See `docs/plans/v1.2-runtime-cost-ux-budget-administration.md`.
+
 ## Planned Milestones
 
-### v1.2 Candidate: Runtime Cost UX + Budget Administration
+### v1.3 Candidate: Runtime Operations Hardening
 
-- Add Web UI for runtime budget policy editing and budget approval creation.
-- Show budget decisions and approval status in Desktop Coding Agent trace.
-- Add release-signoff examples for real opencode provider cost consumption.
+- Add self-hosted operations hardening after the cost UX closes: backup/restore guidance,
+  token-revocation UX, and selected auth/pairing negative-path smoke coverage.
+- Keep release-only real opencode provider smoke as the paid-runtime signoff gate.
 
 ## Deferred / Not Yet Started
 

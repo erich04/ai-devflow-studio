@@ -2,12 +2,14 @@ import { Activity, Bot, CircleDollarSign, GitPullRequest, Users } from 'lucide-r
 import { cookies } from 'next/headers'
 import { createRecommendedEnforcementPreset, formatUsd } from '@ai-devflow/shared'
 import {
+  createRuntimeBudgetApproval,
   createTeamProject,
   fetchTeamOverview,
   resolveDevFlowApiBaseUrl,
   resolveDevFlowPublicApiBaseUrl,
   runKnowledgeReview,
   saveEnforcementPolicy,
+  saveRuntimeBudgetPolicy,
   type TeamOverviewResponse,
 } from './lib/devflow-api'
 import { PairingCodePanel } from './PairingCodePanel'
@@ -72,6 +74,56 @@ async function createProjectAction(formData: FormData) {
   })
 }
 
+async function saveRuntimeBudgetPolicyAction(formData: FormData) {
+  'use server'
+
+  const projectId = String(formData.get('projectId') ?? '').trim()
+  const monthlyLimitUsd = Number(formData.get('monthlyLimitUsd') ?? 0)
+  const warningThresholdUsd = Number(formData.get('warningThresholdUsd') ?? 0)
+  const enabled = formData.get('enabled') === 'on'
+
+  if (!projectId || !Number.isFinite(monthlyLimitUsd) || !Number.isFinite(warningThresholdUsd)) {
+    return
+  }
+
+  const cookieHeader = await getDevFlowCookieHeader()
+  await saveRuntimeBudgetPolicy({
+    projectId,
+    enabled,
+    monthlyLimitUsd,
+    warningThresholdUsd,
+    ...(cookieHeader ? { cookieHeader } : {}),
+  })
+}
+
+async function createRuntimeBudgetApprovalAction(formData: FormData) {
+  'use server'
+
+  const projectId = String(formData.get('projectId') ?? '').trim()
+  const requestedBy = String(formData.get('requestedBy') ?? '').trim()
+  const providerId = String(formData.get('providerId') ?? '').trim()
+  const reason = String(formData.get('reason') ?? '').trim()
+  const maxAdditionalCostUsd = Number(formData.get('maxAdditionalCostUsd') ?? 0)
+  const expiresAt =
+    String(formData.get('expiresAt') ?? '').trim() ||
+    new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+
+  if (!projectId || !requestedBy || !providerId || !reason || !Number.isFinite(maxAdditionalCostUsd)) {
+    return
+  }
+
+  const cookieHeader = await getDevFlowCookieHeader()
+  await createRuntimeBudgetApproval({
+    projectId,
+    requestedBy,
+    providerId,
+    maxAdditionalCostUsd,
+    reason,
+    expiresAt,
+    ...(cookieHeader ? { cookieHeader } : {}),
+  })
+}
+
 export default async function Page() {
   let overview: TeamOverviewResponse
   const apiBaseUrl = resolveDevFlowPublicApiBaseUrl()
@@ -113,6 +165,16 @@ export default async function Page() {
     (sum, policy) => sum + policy.rules.filter((rule) => rule.source === 'project_clamped').length,
     0,
   )
+  const selectedBudgetProject = overview.projects[0]
+  const selectedBudgetPolicy = selectedBudgetProject
+    ? overview.runtimeBudgetPolicies.find((policy) => policy.projectId === selectedBudgetProject.id)
+    : undefined
+  const selectedBudgetApprovals = selectedBudgetProject
+    ? overview.runtimeBudgetApprovals.filter((approval) => approval.projectId === selectedBudgetProject.id)
+    : []
+  const selectedBudgetSpend = selectedBudgetProject
+    ? overview.projectCost.find((rollup) => rollup.key === selectedBudgetProject.id)?.costUsd ?? 0
+    : 0
 
   return (
     <WebShell>
@@ -212,6 +274,108 @@ export default async function Page() {
               ))
             ) : (
               <EmptyState title="暂无成本数据" body="同步 Token usage 后会显示项目成本。" />
+            )}
+          </div>
+
+          <div className="web-panel web-panel--wide" id="runtime-budget">
+            <div className="panel-title">
+              <span>Runtime Budget</span>
+              <strong>{selectedBudgetProject?.name ?? 'no project selected'}</strong>
+            </div>
+            {selectedBudgetProject ? (
+              <div className="agent-console">
+                <article className="agent-review-row">
+                  <div>
+                    <strong>{selectedBudgetPolicy?.enabled ? 'Budget enabled' : 'Budget disabled'}</strong>
+                    <div className="knowledge-reference-meta">
+                      <span>monthly {formatUsd(selectedBudgetPolicy?.monthlyLimitUsd ?? 0)}</span>
+                      <span>warning {formatUsd(selectedBudgetPolicy?.warningThresholdUsd ?? 0)}</span>
+                      <span>spend {formatUsd(selectedBudgetSpend)}</span>
+                    </div>
+                  </div>
+                  <span>{selectedBudgetPolicy?.updatedAt ?? 'not configured'}</span>
+                </article>
+
+                <form className="project-create-form" action={saveRuntimeBudgetPolicyAction}>
+                  <input type="hidden" name="projectId" value={selectedBudgetProject.id} />
+                  <label>
+                    Enabled
+                    <input
+                      aria-label="Enable runtime budget"
+                      defaultChecked={selectedBudgetPolicy?.enabled ?? false}
+                      name="enabled"
+                      type="checkbox"
+                    />
+                  </label>
+                  <label>
+                    Monthly limit USD
+                    <input
+                      min="0"
+                      name="monthlyLimitUsd"
+                      step="0.001"
+                      type="number"
+                      defaultValue={selectedBudgetPolicy?.monthlyLimitUsd ?? 0.2}
+                    />
+                  </label>
+                  <label>
+                    Warning threshold USD
+                    <input
+                      min="0"
+                      name="warningThresholdUsd"
+                      step="0.001"
+                      type="number"
+                      defaultValue={selectedBudgetPolicy?.warningThresholdUsd ?? 0.1}
+                    />
+                  </label>
+                  <button type="submit">Save budget policy</button>
+                </form>
+
+                <div>
+                  <strong>Budget Approvals</strong>
+                  {selectedBudgetApprovals.length > 0 ? (
+                    selectedBudgetApprovals.map((approval) => (
+                      <article className="agent-review-row" key={approval.id}>
+                        <div>
+                          <strong>{approval.id}</strong>
+                          <p>{approval.reason}</p>
+                        </div>
+                        <span>
+                          {approval.status} · {formatUsd(approval.maxAdditionalCostUsd)}
+                        </span>
+                      </article>
+                    ))
+                  ) : (
+                    <EmptyState title="暂无预算批准" body="Lead 创建 approval 后可用于 Desktop 重试真实 runtime。" />
+                  )}
+                </div>
+
+                <form className="project-create-form" action={createRuntimeBudgetApprovalAction}>
+                  <input type="hidden" name="projectId" value={selectedBudgetProject.id} />
+                  <label>
+                    Requested by
+                    <input name="requestedBy" placeholder="u-erich" required />
+                  </label>
+                  <label>
+                    Provider
+                    <input name="providerId" placeholder="double" required />
+                  </label>
+                  <label>
+                    Max additional cost USD
+                    <input min="0.001" name="maxAdditionalCostUsd" step="0.001" type="number" required />
+                  </label>
+                  <label>
+                    Expires at
+                    <input name="expiresAt" placeholder="2026-06-22T00:00:00.000Z" />
+                  </label>
+                  <label>
+                    Reason
+                    <textarea name="reason" placeholder="Release smoke with real provider." required />
+                  </label>
+                  <button type="submit">Create approval</button>
+                </form>
+              </div>
+            ) : (
+              <EmptyState title="暂无项目预算" body="创建团队项目后可配置真实 runtime 预算。" />
             )}
           </div>
 
@@ -388,6 +552,7 @@ function WebShell({ children }: { children: React.ReactNode }) {
           <a href="#projects">Projects</a>
           <a href="#members">Members</a>
           <a href="#cost">Token Cost</a>
+          <a href="#runtime-budget">Budget</a>
           <a href="#runs">Runs</a>
           <a href="#policy">Policy</a>
           <a href="#policy-delivery">Delivery</a>

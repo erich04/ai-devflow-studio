@@ -284,6 +284,26 @@ describe('IPC contract parsers', () => {
       userInstruction: 'Keep changes minimal.',
     })
 
+    expect(
+      parseRunCodingAgentInput({
+        runId: 'run-1',
+        nodeId: 'node-build',
+        projectId: 'project-1',
+        requestedBy: 'user-1',
+        providerId: 'opencode-http',
+        userInstruction: 'Use the approved runtime budget.',
+        runtimeBudgetApprovalId: ' runtime-budget-approval-1 ',
+      }),
+    ).toEqual({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'opencode-http',
+      userInstruction: 'Use the approved runtime budget.',
+      runtimeBudgetApprovalId: 'runtime-budget-approval-1',
+    })
+
     expect(() =>
       parseRunCodingAgentInput({
         runId: 'run-1',

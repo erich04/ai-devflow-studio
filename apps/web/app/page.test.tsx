@@ -199,6 +199,31 @@ const overview: TeamOverviewResponse = {
     effectivePolicies: [resolveEffectivePolicy(organizationPolicy, null)],
     gateOverrides: [],
   },
+  runtimeBudgetPolicies: [
+    {
+      projectId: 'p-remote',
+      enabled: true,
+      monthlyLimitUsd: 0.2,
+      warningThresholdUsd: 0.1,
+      currency: 'USD',
+      updatedAt: '2026-06-21T00:00:00.000Z',
+    },
+  ],
+  runtimeBudgetApprovals: [
+    {
+      id: 'runtime-budget-approval-p-remote-1',
+      projectId: 'p-remote',
+      requestedBy: 'u-remote',
+      approvedBy: 'u-lead',
+      role: 'lead',
+      providerId: 'double',
+      maxAdditionalCostUsd: 0.25,
+      reason: 'Release smoke with real provider.',
+      status: 'approved',
+      createdAt: '2026-06-21T00:00:00.000Z',
+      expiresAt: '2026-06-22T00:00:00.000Z',
+    },
+  ],
 }
 
 afterEach(() => {
@@ -234,6 +259,13 @@ describe('web manager console page', () => {
     expect(screen.getByRole('button', { name: /Apply recommended enforcement/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Run backend review/ })).toBeInTheDocument()
     expect(screen.getAllByText('$0.123')).toHaveLength(2)
+    expect(screen.getByText('Runtime Budget')).toBeInTheDocument()
+    expect(screen.getByText('Budget enabled')).toBeInTheDocument()
+    expect(screen.getByText('monthly $0.20')).toBeInTheDocument()
+    expect(screen.getByText('warning $0.10')).toBeInTheDocument()
+    expect(screen.getByText('Budget Approvals')).toBeInTheDocument()
+    expect(screen.getByText('runtime-budget-approval-p-remote-1')).toBeInTheDocument()
+    expect(screen.getByText('Release smoke with real provider.')).toBeInTheDocument()
     expect(mockedFetchTeamOverview).toHaveBeenCalledWith({
       cookieHeader: 'devflow_session=session-1',
     })
@@ -260,6 +292,8 @@ describe('web manager console page', () => {
         effectivePolicies: [],
         gateOverrides: [],
       },
+      runtimeBudgetPolicies: [],
+      runtimeBudgetApprovals: [],
     })
 
     render(await Page())

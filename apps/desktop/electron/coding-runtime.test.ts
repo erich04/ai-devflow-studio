@@ -145,6 +145,85 @@ describe('CodingRuntime', () => {
     expect(store.codingEvents.some((event) => event.kind === 'error' && event.message.includes('budget'))).toBe(true)
   })
 
+  it('passes runtime budget approval ids to the guard before starting the real engine', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createSpyCodingEngine('opencode-http')
+    vi.mocked(engine.start).mockResolvedValueOnce({
+      codingRun: codingRun({
+        id: 'coding-run-approved-budget',
+        projectId: 'project-1',
+        providerId: 'double',
+        engine: 'opencode-http',
+        status: 'waiting_permission',
+        budgetDecision: {
+          status: 'approved_over_budget',
+          blocksRun: false,
+          currentSpendUsd: 0.95,
+          projectedCostUsd: 0.2,
+          limitUsd: 1,
+          approvalId: 'runtime-budget-approval-project-1',
+          reason: 'Lead approval allows this runtime run to continue beyond the project budget.',
+        },
+      }),
+      events: [],
+      permissionRequest: {
+        id: 'permission-approved-budget',
+        codingRunId: 'coding-run-approved-budget',
+        runId: 'run-1',
+        nodeId: 'node-build',
+        permission: 'bash',
+        title: 'opencode requested bash permission',
+        command: 'npm test',
+        risk: 'warn',
+        reasons: ['opencode requested shell access.'],
+        status: 'pending',
+        requestedAt: '2026-06-21T00:00:00.000Z',
+        expiresAt: '2026-06-21T00:01:00.000Z',
+      },
+    })
+    const budgetGuard = vi.fn(async () => ({
+      status: 'approved_over_budget',
+      blocksRun: false,
+      currentSpendUsd: 0.95,
+      projectedCostUsd: 0.2,
+      limitUsd: 1,
+      approvalId: 'runtime-budget-approval-project-1',
+      reason: 'Lead approval allows this runtime run to continue beyond the project budget.',
+    } satisfies BudgetGuardDecision))
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      remoteSync: { uploadCodingAgentSummary: vi.fn() },
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-approved-budget'),
+      now: fixedNow('2026-06-21T00:00:00.000Z'),
+      budgetGuard,
+    })
+
+    const result = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'double',
+      runtimeBudgetApprovalId: 'runtime-budget-approval-project-1',
+      userInstruction: 'Use the real runtime after lead approval.',
+    })
+
+    expect(budgetGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: 'runtime-budget-approval-project-1',
+      }),
+    )
+    expect(engine.start).toHaveBeenCalledOnce()
+    expect(result.codingRun.budgetDecision?.status).toBe('approved_over_budget')
+    expect(result.codingRun.budgetDecision?.approvalId).toBe('runtime-budget-approval-project-1')
+  })
+
   it('rejects coding runs from nodes that are not build task nodes', async () => {
     const repo = await gitRepo()
     const store = new MemoryCodingStore({

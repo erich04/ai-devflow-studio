@@ -394,5 +394,16 @@ describe('Electron remote sync client', () => {
     expect(String(calls[0]?.init?.body)).not.toContain('cwd')
     expect(String(calls[0]?.init?.body)).not.toContain('stdout')
     expect(String(calls[0]?.init?.body)).not.toContain('stderr')
+
+    await client.evaluateRuntimeBudget({
+      projectId: 'p-remote',
+      projectedCostUsd: 0.006,
+      approvalId: 'runtime-budget-approval-1',
+    })
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({
+      projectId: 'p-remote',
+      projectedCostUsd: 0.006,
+      approvalId: 'runtime-budget-approval-1',
+    })
   })
 })

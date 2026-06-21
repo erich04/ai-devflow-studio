@@ -169,6 +169,7 @@ export type RunCodingAgentInput = {
   requestedBy: string
   providerId: string
   userInstruction: string
+  runtimeBudgetApprovalId?: string
 }
 
 export type RunCodingAgentResult = {
@@ -698,6 +699,7 @@ export function parseRunCodingAgentInput(value: unknown): RunCodingAgentInput {
   if ('prompt' in value) {
     throw new Error('Invalid coding agent run payload: renderer must not send prompt')
   }
+  const runtimeBudgetApprovalId = value['runtimeBudgetApprovalId']
 
   return {
     runId: readRequiredString(value, 'runId'),
@@ -706,6 +708,9 @@ export function parseRunCodingAgentInput(value: unknown): RunCodingAgentInput {
     requestedBy: readRequiredString(value, 'requestedBy'),
     providerId: readRequiredString(value, 'providerId'),
     userInstruction: readRequiredString(value, 'userInstruction'),
+    ...(typeof runtimeBudgetApprovalId === 'string' && runtimeBudgetApprovalId.trim()
+      ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
+      : {}),
   }
 }
 

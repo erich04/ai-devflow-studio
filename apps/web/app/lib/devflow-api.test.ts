@@ -8,9 +8,12 @@ import {
   fetchTeamOverview,
   createDesktopPairingCode,
   createTeamProject,
+  createRuntimeBudgetApproval,
   resolveDevFlowPublicApiBaseUrl,
   resolveDevFlowApiBaseUrl,
+  loadRuntimeBudgetPolicy,
   runKnowledgeReview,
+  saveRuntimeBudgetPolicy,
   saveEnforcementPolicy,
 } from './devflow-api'
 
@@ -230,6 +233,112 @@ describe('DevFlow web API client', () => {
         'content-type': 'application/json',
       },
       body: JSON.stringify({ organizationPolicy }),
+    })
+  })
+
+  it('loads and saves runtime budget policy through the API boundary', async () => {
+    const policy = {
+      projectId: 'p-payments',
+      enabled: true,
+      monthlyLimitUsd: 0.25,
+      warningThresholdUsd: 0.1,
+      currency: 'USD' as const,
+      updatedAt: '2026-06-21T00:00:00.000Z',
+    }
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ policy }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(policy), { status: 200 }))
+
+    await expect(
+      loadRuntimeBudgetPolicy({
+        apiBaseUrl: 'http://api.local',
+        fetcher,
+        projectId: 'p-payments',
+        cookieHeader: 'devflow_session=session-1',
+      }),
+    ).resolves.toEqual(policy)
+    await expect(
+      saveRuntimeBudgetPolicy({
+        apiBaseUrl: 'http://api.local',
+        fetcher,
+        projectId: 'p-payments',
+        enabled: true,
+        monthlyLimitUsd: 0.25,
+        warningThresholdUsd: 0.1,
+        cookieHeader: 'devflow_session=session-1',
+      }),
+    ).resolves.toEqual(policy)
+
+    expect(fetcher).toHaveBeenNthCalledWith(1, 'http://api.local/api/runtime/budget-policy?projectId=p-payments', {
+      cache: 'no-store',
+      headers: {
+        accept: 'application/json',
+        cookie: 'devflow_session=session-1',
+      },
+    })
+    expect(fetcher).toHaveBeenNthCalledWith(2, 'http://api.local/api/runtime/budget-policy', {
+      method: 'PUT',
+      cache: 'no-store',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        cookie: 'devflow_session=session-1',
+      },
+      body: JSON.stringify({
+        projectId: 'p-payments',
+        enabled: true,
+        monthlyLimitUsd: 0.25,
+        warningThresholdUsd: 0.1,
+      }),
+    })
+  })
+
+  it('creates runtime budget approvals through the API boundary', async () => {
+    const approval = {
+      id: 'runtime-budget-approval-p-payments-1',
+      projectId: 'p-payments',
+      providerId: 'double',
+      requestedBy: 'u-yu',
+      approvedBy: 'u-ling',
+      role: 'lead' as const,
+      maxAdditionalCostUsd: 0.2,
+      reason: 'Approve one real provider retry.',
+      status: 'approved' as const,
+      createdAt: '2026-06-21T00:00:00.000Z',
+      expiresAt: '2026-06-22T00:00:00.000Z',
+    }
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(approval), { status: 201 }))
+
+    await expect(
+      createRuntimeBudgetApproval({
+        apiBaseUrl: 'http://api.local',
+        fetcher,
+        projectId: 'p-payments',
+        providerId: 'double',
+        requestedBy: 'u-yu',
+        maxAdditionalCostUsd: 0.2,
+        reason: 'Approve one real provider retry.',
+        expiresAt: '2026-06-22T00:00:00.000Z',
+        cookieHeader: 'devflow_session=session-1',
+      }),
+    ).resolves.toEqual(approval)
+    expect(fetcher).toHaveBeenCalledWith('http://api.local/api/runtime/budget-approvals', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        cookie: 'devflow_session=session-1',
+      },
+      body: JSON.stringify({
+        projectId: 'p-payments',
+        providerId: 'double',
+        requestedBy: 'u-yu',
+        maxAdditionalCostUsd: 0.2,
+        reason: 'Approve one real provider retry.',
+        expiresAt: '2026-06-22T00:00:00.000Z',
+      }),
     })
   })
 
