@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-devflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devflow}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-devflow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - devflow-postgres-data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+    command: >
+      sh -lc "corepack pnpm --filter @ai-devflow/api db:setup &&
+              corepack pnpm --filter @ai-devflow/api start"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DEVFLOW_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-devflow}@postgres:5432/${POSTGRES_DB:-devflow}
+      DEVFLOW_REQUIRE_AUTH: ${DEVFLOW_REQUIRE_AUTH:-false}
+      DEVFLOW_SESSION_SECRET: ${DEVFLOW_SESSION_SECRET:-replace-this-devflow-session-secret}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GITHUB_OAUTH_REDIRECT_URI: ${GITHUB_OAUTH_REDIRECT_URI:-http://127.0.0.1:${DEVFLOW_API_PORT:-4310}/api/auth/github/callback}
+      HOST: 0.0.0.0
+      PORT: 4310
+    ports:
+      - "${DEVFLOW_API_PORT:-4310}:4310"
+
+  web:
+    build:
+      context: .
+    command: corepack pnpm --filter @ai-devflow/web exec next start -H 0.0.0.0 -p 4311
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      DEVFLOW_INTERNAL_API_BASE_URL: http://api:4310
+      NEXT_PUBLIC_DEVFLOW_API_URL: http://127.0.0.1:${DEVFLOW_API_PORT:-4310}
+    ports:
+      - "${DEVFLOW_WEB_PORT:-4311}:4311"
+
+volumes:
+  devflow-postgres-data:

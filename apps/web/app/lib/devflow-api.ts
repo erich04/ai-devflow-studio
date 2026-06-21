@@ -52,8 +52,20 @@ export function resolveDevFlowApiBaseUrl(
   env: Record<string, string | undefined> = process.env,
 ): string {
   const value =
+    env['DEVFLOW_INTERNAL_API_BASE_URL'] ??
     env['DEVFLOW_API_BASE_URL'] ??
     env['NEXT_PUBLIC_DEVFLOW_API_URL'] ??
+    'http://127.0.0.1:4310'
+
+  return value.replace(/\/$/, '')
+}
+
+export function resolveDevFlowPublicApiBaseUrl(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const value =
+    env['NEXT_PUBLIC_DEVFLOW_API_URL'] ??
+    env['DEVFLOW_API_BASE_URL'] ??
     'http://127.0.0.1:4310'
 
   return value.replace(/\/$/, '')

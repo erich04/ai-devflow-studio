@@ -1,0 +1,12 @@
+.git
+.github
+.next
+**/.next
+**/dist
+**/dist-electron
+**/node_modules
+coverage
+*.log
+.env
+.env.*
+!.env.example

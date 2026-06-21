@@ -9,6 +9,7 @@ vi.mock('./lib/devflow-api', () => ({
   createTeamProject: vi.fn(),
   fetchTeamOverview: vi.fn(),
   resolveDevFlowApiBaseUrl: vi.fn(() => 'http://api.local'),
+  resolveDevFlowPublicApiBaseUrl: vi.fn(() => 'http://api.local'),
   runKnowledgeReview: vi.fn(),
   saveEnforcementPolicy: vi.fn(),
 }))

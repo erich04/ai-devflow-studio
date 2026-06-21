@@ -5,6 +5,7 @@ import {
   createTeamProject,
   fetchTeamOverview,
   resolveDevFlowApiBaseUrl,
+  resolveDevFlowPublicApiBaseUrl,
   runKnowledgeReview,
   saveEnforcementPolicy,
   type TeamOverviewResponse,
@@ -73,7 +74,7 @@ async function createProjectAction(formData: FormData) {
 
 export default async function Page() {
   let overview: TeamOverviewResponse
-  const apiBaseUrl = resolveDevFlowApiBaseUrl()
+  const apiBaseUrl = resolveDevFlowPublicApiBaseUrl()
   const cookieHeader = await getDevFlowCookieHeader()
 
   try {

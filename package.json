@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "test:cross-platform": "node scripts/check-cross-platform.mjs",
     "test:postgres-smoke": "node scripts/postgres-smoke.mjs",
+    "test:docker-smoke": "node scripts/docker-smoke.mjs",
     "test:agent-live": "tsx scripts/agent-live-smoke.ts",
     "test:opencode-smoke": "tsx scripts/opencode-smoke.ts",
     "opencode:status": "node scripts/opencode-runtime-status.mjs",
