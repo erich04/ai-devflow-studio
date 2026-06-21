@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { resolveRequestSession } from './auth/session'
+import { readBearerToken, resolveRequestSession } from './auth/session'
 import { createGitHubOAuthClient } from './auth/github-oauth'
 import {
   parseCookieHeader,
@@ -57,7 +57,7 @@ const server = createServer(async (request, response) => {
       'access-control-allow-origin': '*',
       'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
       'access-control-allow-headers':
-        'content-type,cookie,x-devflow-session-source,x-devflow-organization-id,x-devflow-user-id,x-devflow-user-role,x-devflow-auth-account-id,x-devflow-project-roles',
+        'authorization,content-type,cookie,x-devflow-session-source,x-devflow-organization-id,x-devflow-user-id,x-devflow-user-role,x-devflow-auth-account-id,x-devflow-project-roles',
     })
     response.end()
     return
@@ -86,11 +86,14 @@ const server = createServer(async (request, response) => {
   }
 
   const cookies = parseCookieHeader(request.headers.cookie)
+  const bearerToken = readBearerToken(request.headers)
   const session =
-    resolveSessionCookie(cookies[SESSION_COOKIE_NAME], sessionSecret) ??
-    resolveRequestSession(request.headers, {
-      allowDemoFallback: process.env['DEVFLOW_REQUIRE_AUTH'] !== 'true',
-    })
+    (bearerToken
+      ? await repository.resolveDesktopTokenSession(bearerToken)
+      : resolveSessionCookie(cookies[SESSION_COOKIE_NAME], sessionSecret) ??
+        resolveRequestSession(request.headers, {
+          allowDemoFallback: process.env['DEVFLOW_REQUIRE_AUTH'] !== 'true',
+        }))
   let route
   try {
     const routeOptions = {

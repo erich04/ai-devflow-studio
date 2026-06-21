@@ -129,6 +129,31 @@ export type AuthenticatedSession = BaseTeamSession & {
 
 export type TeamSession = DemoSession | AuthenticatedSession
 
+export type DesktopPairingCode = {
+  id: string
+  organizationId: string
+  projectId: string
+  createdByUserId: string
+  code: string
+  expiresAt: string
+  createdAt: string
+  attemptsRemaining: number
+}
+
+export type DesktopPairingExchangeResult = {
+  token: string
+  tokenId: string
+  organizationId: string
+  projectId: string
+  userId: string
+  role: Role
+  authAccountId: string
+  projectMemberships: ProjectMembership[]
+  createdAt: string
+}
+
+export type DesktopPairingCredential = Omit<DesktopPairingExchangeResult, 'token'>
+
 export type WorkflowNode = {
   id: string
   stage: NodeStage
@@ -727,6 +752,7 @@ export type LocalExecutionState = {
   dependencyBootstrapEvidence: DependencyBootstrapEvidence[]
   codingDiffArtifacts: CodingDiffArtifact[]
   retryAttempts?: import('./remediation').RetryAttempt[]
+  desktopPairingCredential?: DesktopPairingCredential | null
   settings: LocalSettings
   mcpServers: McpServerDefinition[]
 }

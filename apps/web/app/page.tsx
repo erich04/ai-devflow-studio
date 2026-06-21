@@ -9,6 +9,7 @@ import {
   saveEnforcementPolicy,
   type TeamOverviewResponse,
 } from './lib/devflow-api'
+import { PairingCodePanel } from './PairingCodePanel'
 
 async function getDevFlowCookieHeader(): Promise<string | undefined> {
   const cookieStore = await cookies()
@@ -148,6 +149,7 @@ export default async function Page() {
                   <div>
                     <strong>{project.name}</strong>
                     <p>{project.repository}</p>
+                    <PairingCodePanel projectId={project.id} />
                   </div>
                   <span>{project.health}</span>
                 </article>

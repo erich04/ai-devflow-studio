@@ -7,6 +7,7 @@ import {
   createDemoSession,
   isAuthenticatedSession,
   isDemoSession,
+  readBearerToken,
   resolveRequestSession,
 } from './session'
 
@@ -120,5 +121,16 @@ describe('API session boundary', () => {
       'x-devflow-user-role': 'lead',
       'x-devflow-project-roles': 'p-payments:lead',
     }, { allowDemoFallback: false })).toBeNull()
+  })
+
+  it('reads bearer tokens for paired Desktop clients without accepting other schemes', () => {
+    expect(readBearerToken({ authorization: 'Bearer desktop-token-1.secret' })).toBe(
+      'desktop-token-1.secret',
+    )
+    expect(readBearerToken({ authorization: 'bearer desktop-token-2.secret' })).toBe(
+      'desktop-token-2.secret',
+    )
+    expect(readBearerToken({ authorization: 'Basic abc123' })).toBeNull()
+    expect(readBearerToken({ authorization: 'Bearer   ' })).toBeNull()
   })
 })

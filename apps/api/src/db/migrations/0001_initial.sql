@@ -77,6 +77,29 @@ CREATE TABLE IF NOT EXISTS project_members (
   PRIMARY KEY (project_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS desktop_pairing_codes (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_by_user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash text NOT NULL,
+  expires_at timestamptz NOT NULL,
+  consumed_at timestamptz,
+  failed_attempts integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS desktop_tokens (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  last_used_at timestamptz,
+  revoked_at timestamptz
+);
+
 CREATE TABLE IF NOT EXISTS workflow_runs (
   id text PRIMARY KEY,
   organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -333,6 +356,9 @@ CREATE TABLE IF NOT EXISTS agent_policy_findings (
 
 CREATE INDEX IF NOT EXISTS idx_projects_organization_id ON projects(organization_id);
 CREATE INDEX IF NOT EXISTS idx_auth_accounts_user_id ON auth_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_desktop_pairing_codes_project_id ON desktop_pairing_codes(project_id);
+CREATE INDEX IF NOT EXISTS idx_desktop_tokens_project_id ON desktop_tokens(project_id);
+CREATE INDEX IF NOT EXISTS idx_desktop_tokens_user_id ON desktop_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_project_id ON workflow_runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_nodes_run_id ON workflow_nodes(run_id);
 CREATE INDEX IF NOT EXISTS idx_agent_events_run_id_sequence ON agent_events(run_id, sequence);
@@ -347,7 +373,7 @@ CREATE INDEX IF NOT EXISTS idx_gate_override_decisions_run_id ON gate_override_d
 CREATE INDEX IF NOT EXISTS idx_agent_policy_findings_review_id ON agent_policy_findings(review_id);
 
 INSERT INTO schema_meta (key, value)
-VALUES ('schema_version', '5')
+VALUES ('schema_version', '6')
 ON CONFLICT (key) DO UPDATE
 SET value = excluded.value,
     updated_at = now();

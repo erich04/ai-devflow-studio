@@ -95,6 +95,19 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       syncedAt: '2026-06-16T00:00:00.000Z',
       message: 'coding agent summary accepted',
     }),
+    loadDesktopPairing: vi.fn().mockResolvedValue(null),
+    pairDesktop: vi.fn().mockResolvedValue({
+      credential: {
+        tokenId: 'desktop-token-1',
+        organizationId: 'org-demo',
+        projectId: 'p-payments',
+        userId: 'u-ling',
+        role: 'lead',
+        authAccountId: 'acct-ling',
+        projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
+        createdAt: '2026-06-20T00:00:00.000Z',
+      },
+    }),
     selectLocalProject: vi.fn().mockResolvedValue(localProject),
     saveProjectTestCommand: vi.fn().mockImplementation(async ({ testCommand }) => ({
       ...localProject,
@@ -640,6 +653,24 @@ describe('App', () => {
     expect(screen.getAllByText('$0.250').length).toBeGreaterThan(0)
     expect(screen.getByText('Remote Lead')).toBeInTheDocument()
     expect(screen.queryByText('erich/payments-api')).not.toBeInTheDocument()
+  })
+
+  it('pairs the desktop client with a team project through the desktop API', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText('Desktop pairing code'), {
+      target: { value: 'pair-p-payments.copy-once-secret' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Pair' }))
+
+    await waitFor(() =>
+      expect(api.pairDesktop).toHaveBeenCalledWith({
+        code: 'pair-p-payments.copy-once-secret',
+      }),
+    )
+    expect(screen.getByText('Paired p-payments')).toBeInTheDocument()
+    expect(screen.getByTestId('toast')).toHaveTextContent('已配对团队项目 p-payments')
   })
 
   it('persists gate approval through the desktop write-path guard', async () => {

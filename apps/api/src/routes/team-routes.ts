@@ -86,6 +86,10 @@ type TeamProjectCreateInput = {
   testCommand?: string
 }
 
+type DesktopPairingExchangeInput = {
+  code: string
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -349,6 +353,16 @@ function parseTeamProjectCreateInput(value: unknown): TeamProjectCreateInput {
       ? { knowledgeBasePath: knowledgeBasePath.trim() }
       : {}),
     ...(typeof testCommand === 'string' ? { testCommand: testCommand.trim() } : {}),
+  }
+}
+
+function parseDesktopPairingExchangeInput(value: unknown): DesktopPairingExchangeInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid desktop pairing payload')
+  }
+
+  return {
+    code: readRequiredString(value, 'code'),
   }
 }
 
@@ -619,6 +633,48 @@ export async function resolveTeamRoute(
     return {
       status: 201,
       body: await repository.createProject(input, options.session),
+    }
+  }
+
+  const projectPairingMatch = pathname.match(/^\/api\/team\/projects\/([^/]+)\/pairing-codes$/)
+  if (method === 'POST' && projectPairingMatch) {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    const projectId = decodeURIComponent(projectPairingMatch[1] ?? '')
+    if (!projectId) {
+      return badRequest('Invalid projectId')
+    }
+
+    if (!canSyncProject(options.session, projectId, 'lead')) {
+      return forbidden('Project role lead required')
+    }
+
+    return {
+      status: 201,
+      body: await repository.createDesktopPairingCode({ projectId }, options.session),
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/desktop/pairing/exchange') {
+    let input: DesktopPairingExchangeInput
+    try {
+      input = parseDesktopPairingExchangeInput(options.body)
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : 'Invalid desktop pairing payload')
+    }
+
+    try {
+      return {
+        status: 201,
+        body: await repository.exchangeDesktopPairingCode(input),
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to exchange desktop pairing code'
+      return message.includes('expired') || message.includes('invalid')
+        ? unauthorized()
+        : badRequest(message)
     }
   }
 

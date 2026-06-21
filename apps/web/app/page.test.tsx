@@ -225,6 +225,7 @@ describe('web manager console page', () => {
       'http://api.local/api/auth/github/start',
     )
     expect(screen.getByRole('button', { name: /Create project/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Create desktop pairing code/ })).toBeInTheDocument()
     expect(screen.getByText('Policy-Aware Delivery')).toBeInTheDocument()
     expect(screen.getByText(/2 warnings/)).toBeInTheDocument()
     expect(screen.getByText(/1 retry attempts/)).toBeInTheDocument()

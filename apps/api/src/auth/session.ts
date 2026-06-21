@@ -150,6 +150,17 @@ export function resolveRequestSession(
   }
 }
 
+export function readBearerToken(headers: HeaderBag): string | null {
+  const authorization = readHeader(headers, 'authorization')
+  if (!authorization) {
+    return null
+  }
+
+  const match = authorization.match(/^bearer\s+(.+)$/i)
+  const token = match?.[1]?.trim()
+  return token || null
+}
+
 export function canSatisfyRole(role: Role, requiredRole: RequiredGateRole): boolean {
   return ROLE_RANK[role] >= ROLE_RANK[requiredRole]
 }

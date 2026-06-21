@@ -1,3 +1,4 @@
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import {
   formatUsd,
   buildPolicyAwareDeliverySummaries,
@@ -13,6 +14,7 @@ import {
   type AuthAccount,
   type AuthProvider,
   type AuthenticatedIdentity,
+  type DesktopPairingCode,
   type McpServerDefinition,
   type NodeKind,
   type NodeStage,
@@ -28,6 +30,7 @@ import {
   type RunStatus,
   type SkillDefinition,
   type TeamMember,
+  type TeamSession,
   type TokenUsage,
   type TokenUsageSource,
   type WorkflowEdge,
@@ -299,6 +302,29 @@ type GateOverrideDecisionRow = {
   created_at: TimestampValue
 }
 
+type DesktopPairingCodeRow = {
+  id: string
+  organization_id: string
+  project_id: string
+  created_by_user_id: string
+  code_hash: string
+  expires_at: TimestampValue
+  consumed_at: TimestampValue | null
+  failed_attempts: number
+  created_at: TimestampValue
+}
+
+type DesktopTokenSessionRow = {
+  token_id: string
+  organization_id: string
+  project_id: string
+  user_id: string
+  token_hash: string
+  revoked_at: TimestampValue | null
+  role: Role
+  auth_account_id: string
+}
+
 function timestamp(value: TimestampValue): string {
   return value instanceof Date ? value.toISOString() : value
 }
@@ -393,6 +419,26 @@ function safeIdSegment(value: string): string {
     .replace(/^-+|-+$/g, '')
 
   return normalized || 'unknown'
+}
+
+function randomSecret(bytes = 24): string {
+  return randomBytes(bytes).toString('base64url')
+}
+
+function hashSecret(secret: string): string {
+  return createHash('sha256').update(secret).digest('hex')
+}
+
+function parseCopyOnceSecret(value: string): { id: string; secret: string } | null {
+  const separatorIndex = value.indexOf('.')
+  if (separatorIndex <= 0 || separatorIndex === value.length - 1) {
+    return null
+  }
+
+  return {
+    id: value.slice(0, separatorIndex),
+    secret: value.slice(separatorIndex + 1),
+  }
 }
 
 function initialsForName(name: string): string {
@@ -922,6 +968,64 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
     return { runs, artifacts, events }
   }
 
+  async function resolveDesktopTokenSessionFromToken(token: string): Promise<TeamSession | null> {
+    const parsed = parseCopyOnceSecret(token)
+    if (!parsed) {
+      return null
+    }
+
+    const [tokenRow] = await db.query<DesktopTokenSessionRow>(
+      `
+        SELECT
+          desktop_tokens.id AS token_id,
+          desktop_tokens.organization_id,
+          desktop_tokens.project_id,
+          desktop_tokens.user_id,
+          desktop_tokens.token_hash,
+          desktop_tokens.revoked_at,
+          users.role,
+          auth_accounts.id AS auth_account_id
+        FROM desktop_tokens
+        JOIN users ON users.id = desktop_tokens.user_id
+        JOIN auth_accounts ON auth_accounts.user_id = users.id
+        WHERE desktop_tokens.id = $1
+        LIMIT 1
+      `,
+      [parsed.id],
+    )
+
+    if (!tokenRow || tokenRow.revoked_at || tokenRow.token_hash !== hashSecret(parsed.secret)) {
+      return null
+    }
+
+    const membershipRows = await db.query<ProjectMembershipRow>(
+      `
+        SELECT project_id, user_id, role
+        FROM project_members
+        WHERE user_id = $1
+        ORDER BY project_id ASC
+      `,
+      [tokenRow.user_id],
+    )
+    await db.query(
+      `
+        UPDATE desktop_tokens
+        SET last_used_at = $2
+        WHERE id = $1
+      `,
+      [tokenRow.token_id, new Date().toISOString()],
+    )
+
+    return {
+      source: 'authenticated',
+      organizationId: tokenRow.organization_id,
+      userId: tokenRow.user_id,
+      role: tokenRow.role,
+      authAccountId: tokenRow.auth_account_id,
+      projectMemberships: membershipRows.map(mapProjectMembership),
+    }
+  }
+
   return {
     async getAuthenticatedIdentity(input) {
       return loadAuthenticatedIdentity(input)
@@ -996,6 +1100,145 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
       )
 
       return project
+    },
+
+    async createDesktopPairingCode(input, context): Promise<DesktopPairingCode> {
+      const id = `desktop-pairing-${randomUUID()}`
+      const secret = randomSecret()
+      const createdAt = new Date().toISOString()
+      const expiresAt = new Date(Date.parse(createdAt) + 10 * 60 * 1000).toISOString()
+
+      await db.query(
+        `
+          INSERT INTO desktop_pairing_codes (
+            id,
+            organization_id,
+            project_id,
+            created_by_user_id,
+            code_hash,
+            expires_at,
+            failed_attempts,
+            created_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `,
+        [
+          id,
+          context.organizationId,
+          input.projectId,
+          context.userId,
+          hashSecret(secret),
+          expiresAt,
+          0,
+          createdAt,
+        ],
+      )
+
+      return {
+        id,
+        organizationId: context.organizationId,
+        projectId: input.projectId,
+        createdByUserId: context.userId,
+        code: `${id}.${secret}`,
+        expiresAt,
+        createdAt,
+        attemptsRemaining: 5,
+      }
+    },
+
+    async exchangeDesktopPairingCode(input) {
+      const parsed = parseCopyOnceSecret(input.code)
+      if (!parsed) {
+        throw new Error('invalid desktop pairing code')
+      }
+
+      const [pairing] = await db.query<DesktopPairingCodeRow>(
+        `
+          SELECT *
+          FROM desktop_pairing_codes
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [parsed.id],
+      )
+      if (!pairing) {
+        throw new Error('invalid desktop pairing code')
+      }
+
+      if (pairing.consumed_at || pairing.failed_attempts >= 5) {
+        throw new Error('invalid desktop pairing code')
+      }
+
+      if (Date.parse(timestamp(pairing.expires_at)) <= Date.now()) {
+        throw new Error('expired desktop pairing code')
+      }
+
+      if (pairing.code_hash !== hashSecret(parsed.secret)) {
+        await db.query(
+          `
+            UPDATE desktop_pairing_codes
+            SET failed_attempts = failed_attempts + 1
+            WHERE id = $1
+          `,
+          [pairing.id],
+        )
+        throw new Error('invalid desktop pairing code')
+      }
+
+      const tokenId = `desktop-token-${randomUUID()}`
+      const tokenSecret = randomSecret(32)
+      const token = `${tokenId}.${tokenSecret}`
+      const createdAt = new Date().toISOString()
+      await db.query(
+        `
+          INSERT INTO desktop_tokens (
+            id,
+            organization_id,
+            project_id,
+            user_id,
+            token_hash,
+            created_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `,
+        [
+          tokenId,
+          pairing.organization_id,
+          pairing.project_id,
+          pairing.created_by_user_id,
+          hashSecret(tokenSecret),
+          createdAt,
+        ],
+      )
+      await db.query(
+        `
+          UPDATE desktop_pairing_codes
+          SET consumed_at = $2
+          WHERE id = $1
+        `,
+        [pairing.id, createdAt],
+      )
+
+      const session = await resolveDesktopTokenSessionFromToken(token)
+      if (!session || session.source !== 'authenticated') {
+        throw new Error('unable to create desktop session')
+      }
+
+      return {
+        token,
+        tokenId,
+        organizationId: session.organizationId,
+        projectId: pairing.project_id,
+        userId: session.userId,
+        role: session.role,
+        authAccountId: session.authAccountId,
+        projectMemberships: session.projectMemberships,
+        createdAt,
+      }
+    },
+
+    async resolveDesktopTokenSession(token): Promise<TeamSession | null> {
+      return resolveDesktopTokenSessionFromToken(token)
     },
 
     async getRunsBundle() {

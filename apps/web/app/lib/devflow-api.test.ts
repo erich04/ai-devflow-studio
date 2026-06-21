@@ -6,6 +6,7 @@ import {
 } from '@ai-devflow/shared'
 import {
   fetchTeamOverview,
+  createDesktopPairingCode,
   createTeamProject,
   resolveDevFlowApiBaseUrl,
   runKnowledgeReview,
@@ -264,6 +265,45 @@ describe('DevFlow web API client', () => {
         description: 'Pilot project.',
         repository: 'erich/agent-platform',
       }),
+    })
+  })
+
+  it('creates a copy-once desktop pairing code through the API boundary', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          id: 'pair-p-agent-platform',
+          organizationId: 'org-demo',
+          projectId: 'p-agent-platform',
+          createdByUserId: 'u-ling',
+          code: 'pair-p-agent-platform.copy-once-secret',
+          expiresAt: '2026-06-20T00:10:00.000Z',
+          createdAt: '2026-06-20T00:00:00.000Z',
+          attemptsRemaining: 5,
+        }),
+        { status: 201 },
+      ),
+    )
+
+    await expect(
+      createDesktopPairingCode({
+        apiBaseUrl: 'http://api.local',
+        fetcher,
+        cookieHeader: 'devflow_session=session-1',
+        projectId: 'p-agent-platform',
+      }),
+    ).resolves.toMatchObject({
+      projectId: 'p-agent-platform',
+      code: 'pair-p-agent-platform.copy-once-secret',
+    })
+    expect(fetcher).toHaveBeenCalledWith('http://api.local/api/team/projects/p-agent-platform/pairing-codes', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        cookie: 'devflow_session=session-1',
+      },
     })
   })
 })

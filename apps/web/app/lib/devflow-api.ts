@@ -1,5 +1,6 @@
 import type {
   DevFlowSessionHeaders,
+  DesktopPairingCode,
   AgentProviderConfig,
   AgentReviewExecutionResult,
   AgentReviewResult,
@@ -185,4 +186,32 @@ export async function createTeamProject(options: CreateTeamProjectOptions): Prom
   }
 
   return response.json() as Promise<Project>
+}
+
+export type CreateDesktopPairingCodeOptions = FetchTeamOverviewOptions & {
+  projectId: string
+}
+
+export async function createDesktopPairingCode(
+  options: CreateDesktopPairingCodeOptions,
+): Promise<DesktopPairingCode> {
+  const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
+  const fetcher = options.fetcher ?? fetch
+  const response = await fetcher(`${apiBaseUrl}/api/team/projects/${options.projectId}/pairing-codes`, {
+    method: 'POST',
+    cache: 'no-store',
+    headers: createApiHeaders(
+      {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      options,
+    ),
+  })
+
+  if (!response.ok) {
+    throw new Error(`DevFlow API /api/team/projects/:projectId/pairing-codes failed with ${response.status}`)
+  }
+
+  return response.json() as Promise<DesktopPairingCode>
 }

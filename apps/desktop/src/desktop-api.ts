@@ -8,6 +8,7 @@ import type {
   CodingAgentEvent,
   CodingPermissionDecision,
   CodingPermissionRequest,
+  DesktopPairingCredential,
   GateEnforcementDecision,
   GateOverrideDecision,
   LocalExecutionState,
@@ -135,9 +136,19 @@ export type LoadRemoteSnapshotInput = {
   organizationId?: string
 }
 
+export type PairDesktopInput = {
+  code: string
+}
+
+export type PairDesktopResult = {
+  credential: DesktopPairingCredential
+}
+
 export type DevFlowDesktopApi = {
   platform: string
   loadState: () => Promise<LocalExecutionState>
+  loadDesktopPairing: () => Promise<DesktopPairingCredential | null>
+  pairDesktop: (input: PairDesktopInput) => Promise<PairDesktopResult>
   loadRemoteSnapshot: (input?: LoadRemoteSnapshotInput) => Promise<RemoteTeamSnapshot>
   uploadRunSummary: (summary: RemoteRunSummary) => Promise<RemoteSyncUploadResult>
   uploadTestEvidenceSummary: (

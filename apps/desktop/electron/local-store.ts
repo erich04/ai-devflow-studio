@@ -15,6 +15,7 @@ import type {
   CodingPermissionDecision,
   CodingPermissionRequest,
   DependencyBootstrapEvidence,
+  DesktopPairingCredential,
   LocalExecutionState,
   LocalProject,
   LocalSettings,
@@ -28,7 +29,7 @@ import type {
   WorkflowRun,
 } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 6
+export const CURRENT_SCHEMA_VERSION = 7
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -84,6 +85,12 @@ export type LocalStore = {
   ): Promise<ProviderCredentialMetadata>
   listProviderCredentials(): Promise<ProviderCredentialMetadata[]>
   getProviderEncryptedSecret(providerId: string): Promise<string | null>
+  saveDesktopPairingCredential(
+    credential: DesktopPairingCredential,
+    encryptedToken: string,
+  ): Promise<DesktopPairingCredential>
+  getDesktopPairingCredential(): Promise<DesktopPairingCredential | null>
+  getDesktopPairingEncryptedToken(): Promise<string | null>
   savePolicySnapshot(snapshot: PolicySnapshot): Promise<PolicySnapshot>
   getPolicySnapshot(projectId: string): Promise<PolicySnapshot | null>
   saveGateOverride(decision: GateOverrideDecision): Promise<GateOverrideDecision>
@@ -236,6 +243,13 @@ function migrateSchema(db: Database) {
       provider_id text primary key,
       json text not null,
       encrypted_secret text not null,
+      updated_at text not null
+    );
+
+    create table if not exists desktop_pairing_credentials (
+      id text primary key,
+      json text not null,
+      encrypted_token text not null,
       updated_at text not null
     );
 
@@ -794,6 +808,46 @@ class SqlJsLocalStore implements LocalStore {
     return typeof value === 'string' ? value : null
   }
 
+  async saveDesktopPairingCredential(
+    credential: DesktopPairingCredential,
+    encryptedToken: string,
+  ): Promise<DesktopPairingCredential> {
+    this.db.run(
+      `
+      insert into desktop_pairing_credentials (id, json, encrypted_token, updated_at)
+      values (?, ?, ?, ?)
+      on conflict(id) do update set
+        json = excluded.json,
+        encrypted_token = excluded.encrypted_token,
+        updated_at = excluded.updated_at
+      `,
+      [
+        'default',
+        JSON.stringify(credential),
+        encryptedToken,
+        credential.createdAt,
+      ],
+    )
+    await this.persist()
+    return credential
+  }
+
+  async getDesktopPairingCredential(): Promise<DesktopPairingCredential | null> {
+    const [credential] = selectJson<DesktopPairingCredential>(
+      this.db,
+      "select json from desktop_pairing_credentials where id = 'default'",
+    )
+    return credential ?? null
+  }
+
+  async getDesktopPairingEncryptedToken(): Promise<string | null> {
+    const result = this.db.exec(
+      "select encrypted_token from desktop_pairing_credentials where id = 'default'",
+    )
+    const value = result[0]?.values[0]?.[0]
+    return typeof value === 'string' ? value : null
+  }
+
   async savePolicySnapshot(snapshot: PolicySnapshot): Promise<PolicySnapshot> {
     this.db.run(
       `
@@ -943,6 +997,7 @@ class SqlJsLocalStore implements LocalStore {
       dependencyBootstrapEvidence,
       codingDiffArtifacts,
       retryAttempts,
+      desktopPairingCredential,
       settings,
       mcpServers,
     ] = await Promise.all([
@@ -962,6 +1017,7 @@ class SqlJsLocalStore implements LocalStore {
       this.listDependencyBootstrapEvidence(),
       this.listCodingDiffArtifacts(),
       this.listRetryAttempts(),
+      this.getDesktopPairingCredential(),
       this.getSettings(),
       this.listMcpServers(),
     ])
@@ -983,6 +1039,7 @@ class SqlJsLocalStore implements LocalStore {
       dependencyBootstrapEvidence,
       codingDiffArtifacts,
       retryAttempts,
+      desktopPairingCredential,
       settings,
       mcpServers,
     }

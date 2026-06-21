@@ -10,6 +10,8 @@ function onIpcPayload<T>(channel: string, listener: (payload: T) => void) {
 const desktopApi: DevFlowDesktopApi = {
   platform: process.platform,
   loadState: () => ipcRenderer.invoke(ipcChannels.loadState),
+  loadDesktopPairing: () => ipcRenderer.invoke(ipcChannels.loadDesktopPairing),
+  pairDesktop: (input) => ipcRenderer.invoke(ipcChannels.pairDesktop, input),
   loadRemoteSnapshot: (input) => ipcRenderer.invoke(ipcChannels.loadRemoteSnapshot, input),
   uploadRunSummary: (summary) => ipcRenderer.invoke(ipcChannels.uploadRunSummary, summary),
   uploadTestEvidenceSummary: (summary) =>

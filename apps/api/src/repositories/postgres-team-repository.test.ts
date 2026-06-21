@@ -56,6 +56,21 @@ class FakeTeamDbClient implements TeamDbClient {
       ] as T[]
     }
 
+    if (sql.includes('FROM desktop_tokens')) {
+      return [
+        {
+          token_id: 'desktop-token-p-payments',
+          organization_id: 'org-demo',
+          project_id: 'p-payments',
+          user_id: 'u-ling',
+          token_hash: 'cd577fe2561ebff23505db0bb006300c7cdecbd46bc0e03c449afafaca2c25bf',
+          revoked_at: null,
+          role: 'lead',
+          auth_account_id: 'acct-github-ling',
+        },
+      ] as T[]
+    }
+
     if (sql.includes('FROM users')) {
       return [
         {
@@ -535,6 +550,44 @@ describe('Postgres team repository', () => {
       'u-github-123456',
       'owner',
     ])
+  })
+
+  it('creates desktop pairing codes without storing the copy-once code plaintext', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    const result = await repository.createDesktopPairingCode(
+      { projectId: 'p-payments' },
+      { organizationId: 'org-demo', userId: 'u-ling' },
+    )
+
+    expect(result).toMatchObject({
+      organizationId: 'org-demo',
+      projectId: 'p-payments',
+      createdByUserId: 'u-ling',
+      attemptsRemaining: 5,
+    })
+    expect(result.code).toContain('.')
+    const write = db.queries.find((query) => query.sql.includes('INSERT INTO desktop_pairing_codes'))
+    expect(write?.params).toHaveLength(8)
+    expect(write?.params).not.toContain(result.code)
+    expect(write?.params).not.toContain(result.code.split('.')[1])
+  })
+
+  it('resolves desktop bearer tokens as authenticated project-scoped sessions', async () => {
+    const repository = createPostgresTeamRepository(new FakeTeamDbClient())
+
+    await expect(repository.resolveDesktopTokenSession('desktop-token-p-payments.demo-secret')).resolves.toEqual({
+      source: 'authenticated',
+      organizationId: 'org-demo',
+      userId: 'u-ling',
+      role: 'lead',
+      authAccountId: 'acct-github-ling',
+      projectMemberships: [
+        { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+        { projectId: 'p-admin', userId: 'u-ling', role: 'member' },
+      ],
+    })
   })
 
   it('writes run summaries into workflow_runs with tenant context', async () => {
