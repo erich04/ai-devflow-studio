@@ -23,6 +23,8 @@ Demo guides:
   [`docs/guides/devflow-studio-v0.8-user-guide.md`](docs/guides/devflow-studio-v0.8-user-guide.md)
 - v0.9 real runtime / observability demo script:
   [`docs/guides/devflow-studio-v0.9-demo-script.md`](docs/guides/devflow-studio-v0.9-demo-script.md)
+- Self-hosted team pilot guide:
+  [`docs/guides/devflow-studio-self-hosted-pilot.md`](docs/guides/devflow-studio-self-hosted-pilot.md)
 
 ## Core Commands
 
@@ -33,6 +35,7 @@ corepack pnpm dev:electron
 corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm test:postgres-smoke
+corepack pnpm test:docker-smoke
 corepack pnpm test:agent-live
 corepack pnpm test:opencode-smoke
 corepack pnpm opencode:status
@@ -62,6 +65,11 @@ corepack pnpm dev:api
 Use `corepack pnpm test:postgres-smoke` with the same database URL to verify migration, seed,
 Postgres-backed API reads, explicit demo session headers with `DEVFLOW_REQUIRE_AUTH=true`, and
 redacted sync write-through.
+
+For the minimum self-hosted team pilot, copy `.env.example`, run `docker compose up --build`, and
+open the Web console at `http://127.0.0.1:4311`. Run `corepack pnpm test:docker-smoke` to verify the
+containerized API/Web/Postgres stack, Desktop pairing-token exchange, bearer-token sync, and
+redacted team overview path. Docker smoke is explicit and is not part of default `verify`.
 
 Use `corepack pnpm build && corepack pnpm --filter @ai-devflow/desktop electron` to run the built
 desktop app against `apps/desktop/dist/index.html` without the Vite dev server.

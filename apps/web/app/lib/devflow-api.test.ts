@@ -8,6 +8,7 @@ import {
   fetchTeamOverview,
   createDesktopPairingCode,
   createTeamProject,
+  resolveDevFlowPublicApiBaseUrl,
   resolveDevFlowApiBaseUrl,
   runKnowledgeReview,
   saveEnforcementPolicy,
@@ -23,6 +24,9 @@ const enforcementPolicies = {
 
 describe('DevFlow web API client', () => {
   it('resolves the API base URL from server or public env', () => {
+    expect(resolveDevFlowApiBaseUrl({ DEVFLOW_INTERNAL_API_BASE_URL: 'http://api:4310' })).toBe(
+      'http://api:4310',
+    )
     expect(resolveDevFlowApiBaseUrl({ DEVFLOW_API_BASE_URL: 'http://api.internal:4310' })).toBe(
       'http://api.internal:4310',
     )
@@ -30,6 +34,16 @@ describe('DevFlow web API client', () => {
       'http://public-api:4310',
     )
     expect(resolveDevFlowApiBaseUrl({})).toBe('http://127.0.0.1:4310')
+  })
+
+  it('resolves the browser-facing API base URL separately from the container-internal URL', () => {
+    expect(resolveDevFlowPublicApiBaseUrl({
+      DEVFLOW_INTERNAL_API_BASE_URL: 'http://api:4310',
+      NEXT_PUBLIC_DEVFLOW_API_URL: 'http://127.0.0.1:4310',
+    })).toBe('http://127.0.0.1:4310')
+    expect(resolveDevFlowPublicApiBaseUrl({ DEVFLOW_API_BASE_URL: 'http://api.internal:4310' })).toBe(
+      'http://api.internal:4310',
+    )
   })
 
   it('fetches team overview from the API without demo session headers by default', async () => {

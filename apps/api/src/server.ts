@@ -6,10 +6,11 @@ import {
   resolveSessionCookie,
   SESSION_COOKIE_NAME,
 } from './auth/session-cookie'
+import { resolveServerListenConfig } from './server-config'
 import { createTeamRepositoryRuntime } from './repositories/repository-runtime'
 import { resolveTeamRoute } from './routes/team-routes'
 
-const port = Number(process.env['PORT'] ?? 4310)
+const { host, port } = resolveServerListenConfig()
 const sessionSecret = process.env['DEVFLOW_SESSION_SECRET'] ?? 'devflow-dev-session-secret'
 const repositoryRuntime = await createTeamRepositoryRuntime()
 const repository = repositoryRuntime.repository
@@ -126,8 +127,8 @@ const server = createServer(async (request, response) => {
   })
 })
 
-server.listen(port, '127.0.0.1', () => {
-  console.log(`AI DevFlow API listening on http://127.0.0.1:${port}`)
+server.listen(port, host, () => {
+  console.log(`AI DevFlow API listening on http://${host}:${port}`)
 })
 
 process.once('SIGTERM', () => {
