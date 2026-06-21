@@ -303,23 +303,26 @@ Electron smoke is still tracked as future compatibility expansion. See
   permission relay, fixture test evidence, and managed worktree cleanup.
 - See `docs/plans/v0.9-real-runtime-observability.md`.
 
-## Planned Milestones
-
 ### v1.0: Team Pilot Foundation
 
-- Reframe v1.0 from portfolio packaging to a minimum self-hosted team pilot: a small team can log
+- Reframed v1.0 from portfolio packaging to a minimum self-hosted team pilot: a small team can log
   in, create a project, pair Desktop, sync redacted local workflow summaries, and view them in Web.
-- Build v1.0 in serial slices so identity, OAuth, Desktop pairing, and deployment each have their
-  own signoff instead of becoming one oversized milestone.
-- Extend the existing `organizations` / `users` / `projects` / `project_members` foundation rather
-  than creating a parallel membership model. Keep `TeamMember` as a UI projection, not a source of
-  identity truth.
-- Preserve v0.9's verification discipline: fake engine in default CI/`verify`, real opencode and
+- Completed v1.0a Identity Foundation by formalizing `User`, `AuthAccount`, authenticated sessions,
+  and identity-backed team projections without creating a parallel membership source.
+- Completed v1.0b GitHub OAuth + Minimal Team Project with first-user organization-owner bootstrap,
+  session-cookie handling, logout, and owner-only project creation.
+- Completed v1.0c Desktop Pairing + Authenticated Sync with one-time pairing codes, scoped Desktop
+  bearer tokens, credential-boundary storage, and redacted bearer-token sync.
+- Completed v1.0d Self-Hosted Minimum Deployment with Docker Compose for API/Web/Postgres,
+  `.env.example`, a self-hosted pilot guide, and CI Docker smoke coverage.
+- Preserved v0.9's verification discipline: fake engine in default CI/`verify`, real opencode and
   paid provider calls only in explicit smoke/signoff paths.
-- Current execution status: Phase 0 cleanup, v1.0a Identity Foundation, v1.0b GitHub OAuth +
-  Minimal Team Project, v1.0c Desktop Pairing + Authenticated Sync, and v1.0d Self-Hosted Minimum
-  Deployment are merged to `main`.
-- See `docs/plans/v1.0-team-pilot-foundation.md`.
+- Signed off v1.0.0 with local deterministic verification plus GitHub Actions coverage for Docker
+  smoke, Postgres integration, Windows compatibility, and macOS verify.
+- See `docs/plans/v1.0-team-pilot-foundation.md` and
+  `docs/plans/v1.0-release-signoff.md`.
+
+## Planned Milestones
 
 ### v1.1 Candidate: Runtime Cost + Budget Guard
 

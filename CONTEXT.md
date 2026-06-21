@@ -118,6 +118,13 @@ The one-time flow that connects an Electron Desktop client to a team project. We
 pairing code, Desktop exchanges it for a scoped token, and subsequent sync uses that token instead of
 demo headers.
 
+## Self-Hosted Pilot
+
+The minimum deployable v1.0 stack for a small team: Web, API, and Postgres running through Docker
+Compose with explicit configuration, migration/seed setup, Desktop pairing, and authenticated
+redacted sync. It proves team connectivity without claiming public SaaS readiness, managed hosting,
+automatic HTTPS, or production release packaging.
+
 ## Gate Advisory
 
 A recommendation shown to Gate reviewers after an Agent Review. In v0.5 it is warning-only. From
