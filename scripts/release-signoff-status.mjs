@@ -21,6 +21,7 @@ export const requiredDocPaths = [
   'docs/plans/v1.0-release-signoff.md',
   'docs/plans/v1.1-runtime-cost-budget-guard.md',
   'docs/plans/v1.1-release-signoff.md',
+  'docs/plans/v1.2-runtime-cost-ux-budget-administration.md',
   'docs/plans/v0.9-real-runtime-observability.md',
 ]
 

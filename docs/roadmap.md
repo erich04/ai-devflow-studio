@@ -371,8 +371,10 @@ Electron smoke is still tracked as future compatibility expansion. See
   `requires_lead_approval`.
 - Preserved the v1.1 safety boundary: Desktop passes an approval id, while the team API/runtime
   boundary resolves that id to a complete approval record before budget evaluation.
-- Kept paid real-provider validation out of default CI; release-only real opencode smoke remains
-  documented as an explicit signoff step.
+- Kept paid real-provider validation out of default CI. The 2026-06-21 v1.2 signoff ran the
+  release-only real opencode smoke against the local Volcengine/Doubao profile and confirmed
+  `opencode smoke passed; changed paths: devflow-opencode-smoke.txt` after adding command metadata
+  path redaction for tool traces.
 - See `docs/plans/v1.2-runtime-cost-ux-budget-administration.md`.
 
 ## Planned Milestones

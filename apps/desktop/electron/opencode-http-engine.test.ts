@@ -101,6 +101,54 @@ describe('opencode HTTP coding engine', () => {
     expect(JSON.stringify(toolCall?.metadata)).not.toContain('raw output should not be stored')
   })
 
+  it('redacts local absolute paths embedded in opencode tool command metadata', async () => {
+    const fetcher = sequenceFetcher([
+      { id: 'ses-1' },
+      {},
+      [
+        {
+          id: 'perm-1',
+          sessionID: 'ses-1',
+          permission: 'bash',
+          metadata: {
+            tool: 'bash',
+            command: 'cd /tmp/worktree && cat /tmp/worktree/package.json && ls /tmp/repo',
+          },
+        },
+      ],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    const result = await engine.start(startInput({ run, node, project, workspace }))
+    const toolCall = result.events.find((event) => event.kind === 'tool_call')
+    const metadataBlob = JSON.stringify(toolCall?.metadata)
+
+    expect(metadataBlob).not.toContain('/tmp/worktree')
+    expect(metadataBlob).not.toContain('/tmp/repo')
+    expect(toolCall?.metadata).toMatchObject({
+      commandSummary:
+        'cd [REDACTED:worktree_path] && cat [REDACTED:worktree_path]/package.json && ls [REDACTED:project_path]',
+      inputSummary:
+        'bash: cd [REDACTED:worktree_path] && cat [REDACTED:worktree_path]/package.json && ls [REDACTED:project_path]',
+      redactionApplied: true,
+    })
+    expect(result.permissionRequest.command).toBe(
+      'cd [REDACTED:worktree_path] && cat [REDACTED:worktree_path]/package.json && ls [REDACTED:project_path]',
+    )
+  })
+
   it('marks tool_call metadata as inferred when opencode permission metadata is empty', async () => {
     const fetcher = sequenceFetcher([
       { id: 'ses-1' },

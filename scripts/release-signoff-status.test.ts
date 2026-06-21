@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import {
   collectReleaseSignoffSnapshot,
   evaluateReleaseSignoffSnapshot,
@@ -17,10 +18,12 @@ type ReleaseSignoffSnapshot = {
   manualWalkthroughPassed: boolean
 }
 
+const currentRootVersion = JSON.parse(readFileSync('package.json', 'utf8')).version
+
 function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSignoffSnapshot {
   return {
-    targetVersion: '1.1.0',
-    packageVersions: Object.fromEntries(packagePaths.map((path) => [path, '1.1.0'])),
+    targetVersion: currentRootVersion,
+    packageVersions: Object.fromEntries(packagePaths.map((path) => [path, currentRootVersion])),
     requiredDocs: Object.fromEntries(requiredDocPaths.map((path) => [path, true])),
     workingTreeClean: true,
     currentBranch: 'devflow-v0.8.1-release-v0.9-planning',
@@ -34,8 +37,8 @@ describe('release signoff status', () => {
   it('derives the target release version from root package metadata', () => {
     const snapshot = collectReleaseSignoffSnapshot()
 
-    expect(snapshot.targetVersion).toBe('1.1.0')
-    expect(snapshot.packageVersions['package.json']).toBe('1.1.0')
+    expect(snapshot.targetVersion).toBe(currentRootVersion)
+    expect(snapshot.packageVersions['package.json']).toBe(currentRootVersion)
   })
 
   it('requires current release docs plus runtime planning docs', () => {
@@ -48,6 +51,7 @@ describe('release signoff status', () => {
         'docs/plans/v1.0-release-signoff.md',
         'docs/plans/v1.1-runtime-cost-budget-guard.md',
         'docs/plans/v1.1-release-signoff.md',
+        'docs/plans/v1.2-runtime-cost-ux-budget-administration.md',
         'docs/plans/v0.9-real-runtime-observability.md',
       ]),
     )
@@ -86,7 +90,7 @@ describe('release signoff status', () => {
     const items = evaluateReleaseSignoffSnapshot(
       snapshot({
         packageVersions: {
-          ...Object.fromEntries(packagePaths.map((path) => [path, '1.1.0'])),
+          ...Object.fromEntries(packagePaths.map((path) => [path, currentRootVersion])),
           'apps/web/package.json': '0.9.0',
         },
         requiredDocs: {

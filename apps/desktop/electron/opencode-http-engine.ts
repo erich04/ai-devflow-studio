@@ -51,6 +51,7 @@ type OpencodeRuntimeSession = {
     | { ok: false; error: unknown }
   >
   nextEventSequence: number
+  projectPath: string
   sessionId: string
 }
 
@@ -129,6 +130,7 @@ export function createOpencodeHttpCodingEngineAdapter(
         handledPermissionIds: new Set([permission.id]),
         messagePromise,
         nextEventSequence: 4,
+        projectPath: input.project.path,
         sessionId: session.id,
       })
 
@@ -165,6 +167,7 @@ export function createOpencodeHttpCodingEngineAdapter(
           continuation.permission,
           eventSequence,
           session.directory,
+          session.projectPath,
         )
       }
       const messageResult = continuation.result
@@ -408,6 +411,7 @@ function createStartResult(
       codingRun,
       permission,
       worktreePath: input.workspace.worktreePath,
+      projectPath: input.project.path,
       sequence: 3,
       now: input.now,
     }),
@@ -415,6 +419,12 @@ function createStartResult(
   const filePath = metadataString(permission.metadata, 'filepath') ?? metadataString(permission.metadata, 'path')
   const command = metadataString(permission.metadata, 'command')
   const safePath = filePath ? safeRelativePath(filePath, input.workspace.worktreePath) : undefined
+  const safeCommand = command
+    ? redactToolText(command, [
+        { label: 'worktree_path', value: input.workspace.worktreePath },
+        { label: 'project_path', value: input.project.path },
+      ])
+    : undefined
   const permissionRequest: CodingPermissionRequest = {
     id: permission.id,
     codingRunId: codingRun.id,
@@ -423,7 +433,7 @@ function createStartResult(
     permission: normalizePermission(permission.permission),
     title: `opencode requested ${permission.permission} permission`,
     ...(safePath ? { filePath: safePath } : {}),
-    ...(command ? { command } : {}),
+    ...(safeCommand ? { command: safeCommand.value } : {}),
     risk: 'warn',
     reasons: ['opencode requested a tool permission through the managed adapter.'],
     status: 'pending',
@@ -445,6 +455,7 @@ function createContinuationResult(
   permission: OpencodePermission,
   sequence: number,
   worktreePath: string,
+  projectPath: string,
 ) {
   const continuedRun: CodingAgentRun = {
     ...codingRun,
@@ -480,11 +491,12 @@ function createContinuationResult(
         codingRun: continuedRun,
         permission,
         worktreePath,
+        projectPath,
         sequence: sequence + 2,
         now,
       }),
     ],
-    permissionRequest: toCodingPermissionRequest(continuedRun, permission, now, worktreePath),
+    permissionRequest: toCodingPermissionRequest(continuedRun, permission, now, worktreePath, projectPath),
   }
 }
 
@@ -493,10 +505,17 @@ function toCodingPermissionRequest(
   permission: OpencodePermission,
   now: string,
   worktreePath: string,
+  projectPath: string,
 ): CodingPermissionRequest {
   const filePath = metadataString(permission.metadata, 'filepath') ?? metadataString(permission.metadata, 'path')
   const command = metadataString(permission.metadata, 'command')
   const safePath = filePath ? safeRelativePath(filePath, worktreePath) : undefined
+  const safeCommand = command
+    ? redactToolText(command, [
+        { label: 'worktree_path', value: worktreePath },
+        { label: 'project_path', value: projectPath },
+      ])
+    : undefined
 
   return {
     id: permission.id,
@@ -506,7 +525,7 @@ function toCodingPermissionRequest(
     permission: normalizePermission(permission.permission),
     title: `opencode requested ${permission.permission} permission`,
     ...(safePath ? { filePath: safePath } : {}),
-    ...(command ? { command } : {}),
+    ...(safeCommand ? { command: safeCommand.value } : {}),
     risk: 'warn',
     reasons: ['opencode requested a tool permission through the managed adapter.'],
     status: 'pending',
@@ -524,6 +543,7 @@ function createToolCallEvent(input: {
   codingRun: CodingAgentRun
   permission: OpencodePermission
   worktreePath: string
+  projectPath: string
   sequence: number
   now: string
 }): CodingAgentEvent {
@@ -532,6 +552,7 @@ function createToolCallEvent(input: {
     permission: input.permission.permission,
     metadata: input.permission.metadata,
     worktreePath: input.worktreePath,
+    projectPath: input.projectPath,
   })
   return {
     id: `coding-event-${input.codingRun.id}-tool-call-${input.permission.id}`,
@@ -586,12 +607,18 @@ function buildPermissionToolMetadata(input: {
   permission: string
   metadata: Record<string, unknown> | undefined
   worktreePath: string
+  projectPath: string
 }): Record<string, unknown> {
   const skillName = metadataString(input.metadata, 'skillName') ?? metadataString(input.metadata, 'skill')
   const toolName = metadataString(input.metadata, 'tool') ?? input.permission
   const command = metadataString(input.metadata, 'command')
   const rawPath = metadataString(input.metadata, 'filepath') ?? metadataString(input.metadata, 'path')
-  const safeCommand = command ? redactSecrets(command) : undefined
+  const safeCommand = command
+    ? redactToolText(command, [
+        { label: 'worktree_path', value: input.worktreePath },
+        { label: 'project_path', value: input.projectPath },
+      ])
+    : undefined
   const safePath = rawPath ? safeRelativePath(rawPath, input.worktreePath) : undefined
   const hasMetadata = Boolean(skillName || metadataString(input.metadata, 'tool') || command || rawPath)
   const redactionApplied = Boolean(safeCommand?.redacted || (rawPath && rawPath !== safePath))
@@ -627,6 +654,35 @@ function safeRelativePath(value: string, worktreePath: string): string | undefin
 
 function toPortablePath(value: string): string {
   return value.replace(/\\/g, '/')
+}
+
+function redactToolText(
+  value: string,
+  localPaths: Array<{ label: string; value: string | undefined }>,
+): { value: string; redacted: boolean } {
+  const secretRedaction = redactSecrets(value)
+  let output = secretRedaction.value
+  let redacted = secretRedaction.redacted
+  const patterns = localPaths
+    .filter((item): item is { label: string; value: string } => Boolean(item.value))
+    .flatMap((item) => {
+      const portable = toPortablePath(item.value)
+      return [
+        { label: item.label, value: item.value },
+        ...(portable !== item.value ? [{ label: item.label, value: portable }] : []),
+      ]
+    })
+    .sort((left, right) => right.value.length - left.value.length)
+
+  for (const pattern of patterns) {
+    if (!output.includes(pattern.value)) {
+      continue
+    }
+    output = output.split(pattern.value).join(`[REDACTED:${pattern.label}]`)
+    redacted = true
+  }
+
+  return { value: output, redacted }
 }
 
 function normalizePermission(permission: string): CodingPermissionRequest['permission'] {
