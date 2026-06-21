@@ -21,4 +21,7 @@ Use this checklist only when intentionally validating the real opencode coding a
 - Confirm the smoke starts `opencode serve`, creates a managed worktree, relays permissions, captures a redacted diff, runs worktree tests, and cleans up temporary smoke state.
 - Confirm permission requests are human-visible and unanswered requests reject by default.
 - Confirm smoke output does not print provider secrets.
-- Do not add live opencode smoke to `corepack pnpm verify` until the project intentionally promotes it to release validation.
+- Keep live opencode smoke out of `corepack pnpm verify` and default CI.
+- For every future product release, run the live provider smoke once before the release tag and record
+  the evidence in the release signoff note. Use `docs/plans/release-only-real-opencode-smoke.md` as
+  the required evidence template.

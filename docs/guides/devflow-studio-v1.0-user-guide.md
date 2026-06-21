@@ -331,6 +331,10 @@ corepack pnpm test:docker-smoke
 
 这条路径会产生真实模型调用，只有你明确要验证真实 runtime 时再跑。
 
+从下一次产品 release 开始，这条路径也是 release-only signoff gate：默认 CI 仍不跑真实
+provider，但创建 release tag 前必须跑一次真实 `opencode` + 豆包/Volcengine smoke，并把结果记录到
+release signoff。证据模板见 `docs/plans/release-only-real-opencode-smoke.md`。
+
 先做无成本状态检查：
 
 ```bash

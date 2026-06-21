@@ -41,4 +41,30 @@ describe('opencode runtime contract refresh documentation', () => {
     expect(markdown).not.toContain('e8fa6ce2-6bb2-406f-b003-e695e04311a5')
     expect(markdown).not.toContain('6363516a-2de2-4d35-8d6e-b99f6c2f15f2')
   })
+
+  it('documents the release-only real provider smoke gate', () => {
+    const checklist = readFileSync(
+      join(process.cwd(), 'docs/knowledge/checklists/opencode-runtime-signoff.md'),
+      'utf8',
+    )
+    const releaseGate = readFileSync(
+      join(process.cwd(), 'docs/plans/release-only-real-opencode-smoke.md'),
+      'utf8',
+    )
+
+    expect(checklist).toContain('Keep live opencode smoke out of `corepack pnpm verify`')
+    expect(checklist).toContain('For every future product release')
+    expect(checklist).toContain('docs/plans/release-only-real-opencode-smoke.md')
+
+    expect(releaseGate).toContain('Every future DevFlow Studio product release')
+    expect(releaseGate).toContain('DEVFLOW_RUN_OPENCODE_SMOKE=1')
+    expect(releaseGate).toContain('DEVFLOW_CODING_ENGINE=opencode-http')
+    expect(releaseGate).toContain('DEVFLOW_OPENCODE_PROVIDER_ID=double')
+    expect(releaseGate).toContain('DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest')
+    expect(releaseGate).toContain('ANTHROPIC_AUTH_TOKEN="<set in shell only; never commit>"')
+    expect(releaseGate).toContain('Required Evidence To Record')
+    expect(releaseGate).toContain('managed worktree deleted or cleanup_failed')
+    expect(releaseGate).not.toContain('e8fa6ce2-6bb2-406f-b003-e695e04311a5')
+    expect(releaseGate).not.toContain('6363516a-2de2-4d35-8d6e-b99f6c2f15f2')
+  })
 })

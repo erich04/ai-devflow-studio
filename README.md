@@ -169,6 +169,12 @@ corepack pnpm test:agent-live
 Optional live provider smoke is not part of `corepack pnpm verify`; it should be run manually when
 you explicitly want to spend provider quota and validate the live request/usage mapping path.
 
+For release signoff, the real opencode provider smoke is stricter: starting with the next product
+release, run one live `opencode` smoke against the configured Doubao/Volcengine provider before
+creating the release tag, and record the result with
+[`docs/plans/release-only-real-opencode-smoke.md`](docs/plans/release-only-real-opencode-smoke.md).
+This release-only gate must stay outside default CI and must never print provider secrets.
+
 The first Playwright run in a fresh environment may need browser binaries:
 
 ```bash
@@ -207,5 +213,6 @@ macOS verification, Windows compatibility checks, and Postgres integration smoke
 The release workflow verifies the repository, builds the desktop/web/API/worker outputs, uploads a
 single `ai-devflow-studio-release-artifacts` workflow artifact, and creates or updates a GitHub
 Release for tag-triggered runs. It does not deploy a production web/API service, publish npm
-packages, run paid real-opencode provider smoke, or produce signed Electron installers yet. Those
-remain future release-engineering work.
+packages, run paid real-opencode provider smoke, or produce signed Electron installers yet. The paid
+real-opencode provider smoke is a manual release-only signoff gate documented in
+`docs/plans/release-only-real-opencode-smoke.md`.

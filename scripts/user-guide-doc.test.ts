@@ -122,6 +122,8 @@ describe('v1.0 hands-on user guide documentation', () => {
     expect(markdown).toContain('corepack pnpm test:postgres-smoke')
     expect(markdown).toContain('corepack pnpm opencode:status')
     expect(markdown).toContain('DEVFLOW_RUN_OPENCODE_SMOKE=1')
+    expect(markdown).toContain('release-only signoff gate')
+    expect(markdown).toContain('docs/plans/release-only-real-opencode-smoke.md')
     expect(markdown).toContain('ark-code-latest')
     expect(markdown).toContain('豆包/Volcengine')
   })
