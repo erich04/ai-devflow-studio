@@ -1,7 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  advanceWorkflowAfterGateApproval,
   createRecommendedEnforcementPreset,
+  createWorkflowRunFromRequest,
   createWarnOnlyDefaultPolicy,
   mcpServers as fixtureMcpServers,
   resolveEffectivePolicy,
@@ -209,19 +211,22 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       policyVersion: policy.version,
       provisional: false,
     }),
-    createRun: vi.fn().mockImplementation(async (run) => run),
+    createRun: vi.fn().mockImplementation(async (input) =>
+      createWorkflowRunFromRequest({
+        ...input,
+        runId: 'run-created-from-request',
+        now: '2026-06-21T16:00:00.000Z',
+      }).run,
+    ),
     saveRun: vi.fn().mockImplementation(async (run) => run),
     approveGate: vi.fn().mockImplementation(async (input) => {
       const timestamp = '2026-06-15T00:05:00.000Z'
       const run = fixtureRuns[0]!
-      const updatedRun = {
-        ...run,
-        status: 'building' as const,
-        nodes: run.nodes.map((node) =>
-          node.id === input.nodeId ? { ...node, status: 'success' as const } : node,
-        ),
-        updatedAt: timestamp,
-      }
+      const { run: updatedRun } = advanceWorkflowAfterGateApproval({
+        run,
+        approvedNodeId: input.nodeId,
+        now: timestamp,
+      })
       const event = {
         id: 'event-approval-test',
         runId: input.runId,
@@ -256,6 +261,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         },
       }
     }),
+    saveArtifact: vi.fn().mockImplementation(async (artifact) => artifact),
     saveGateOverride: vi.fn().mockImplementation(async (input) => ({
       id: 'gate-override-test',
       runId: input.runId,
@@ -526,7 +532,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
 
-    expect(screen.getByTestId('toast')).toHaveTextContent('架构 Gate 已通过')
+    expect(screen.getByTestId('toast')).toHaveTextContent('Gate 已通过，流程已推进')
   })
 
   it('creates a new run from the modal', () => {
@@ -535,7 +541,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
     fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
 
-    expect(screen.getByText('重构 GitHub webhook 重试策略')).toBeInTheDocument()
+    expect(screen.getAllByText('重构 GitHub webhook 重试策略').length).toBeGreaterThan(0)
     expect(screen.getByTestId('toast')).toHaveTextContent('新 Run 已创建')
   })
 
@@ -550,9 +556,31 @@ describe('App', () => {
     await waitFor(() => expect(api.createRun).toHaveBeenCalled())
     expect(api.createRun).toHaveBeenCalledWith(expect.objectContaining({
       title: '重构 GitHub webhook 重试策略',
-      status: 'clarifying',
+      request: '请先澄清 webhook retry 的失败边界，再设计实现方案。',
+      projectId: 'p-payments',
+      creatorId: 'u-ling',
     }))
-    expect(screen.getByText('重构 GitHub webhook 重试策略')).toBeInTheDocument()
+    expect(screen.getAllByText('重构 GitHub webhook 重试策略').length).toBeGreaterThan(0)
+  })
+
+  it('generates PR draft and acceptance bundle artifacts from the inspector', async () => {
+    render(<App />)
+
+    fireEvent.click(screen.getByTestId('flow-node-n-pr'))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /生成 PR Draft/ }))
+    })
+
+    expect(await screen.findByText(/PR Draft:/)).toBeInTheDocument()
+    expect(screen.getByText(/Pending PR creation/)).not.toBeNull()
+
+    fireEvent.click(screen.getByTestId('flow-node-n-accept'))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /生成验收证据包/ }))
+    })
+
+    expect(await screen.findByText(/Acceptance Bundle:/)).toBeInTheDocument()
+    expect(screen.getByText(/PR Draft:/)).toBeInTheDocument()
   })
 
   it('uses local runs without mixing fixture artifacts and events when SQLite has runs', async () => {

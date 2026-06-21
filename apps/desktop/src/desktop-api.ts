@@ -3,6 +3,7 @@ import type {
   AgentProviderConfig,
   AgentReviewResult,
   AgentReviewExecutionResult,
+  Artifact,
   CommandSafetyResult,
   CodingAgentRun,
   CodingAgentEvent,
@@ -28,6 +29,7 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
+import type { CreateRunInput } from '../electron/ipc-contract'
 
 export type SaveProjectTestCommandInput = {
   projectId: string
@@ -162,8 +164,9 @@ export type DevFlowDesktopApi = {
   runProjectTests: (input: RunProjectTestsInput) => Promise<RunProjectTestsResult>
   loadEnforcementPolicy: (input: LoadEnforcementPolicyInput) => Promise<PolicySnapshot>
   evaluateGateEnforcement: (input: EvaluateGateEnforcementInput) => Promise<GateEnforcementDecision>
-  createRun: (run: WorkflowRun) => Promise<WorkflowRun>
+  createRun: (input: CreateRunInput) => Promise<WorkflowRun>
   saveRun: (run: WorkflowRun) => Promise<WorkflowRun>
+  saveArtifact: (artifact: Artifact) => Promise<Artifact>
   approveGate: (input: ApproveGateInput) => Promise<ApproveGateResult>
   saveGateOverride: (input: SaveGateOverrideInput) => Promise<GateOverrideDecision>
   listGateOverrides: (input?: { runId?: string }) => Promise<GateOverrideDecision[]>

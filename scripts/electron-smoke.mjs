@@ -280,6 +280,26 @@ async function selectRunByTitle(page, title) {
   await expect(runRow).toHaveClass(/is-selected/)
 }
 
+function resolveWorkflowNodes(run) {
+  const findNode = (stage, kind) => run.nodes.find((node) => node.stage === stage && node.kind === kind)
+  const nodes = {
+    clarifyGate: findNode('clarify', 'gate'),
+    designGate: findNode('design', 'gate'),
+    build: findNode('build', 'task'),
+    test: findNode('test', 'test'),
+    pr: findNode('pr', 'pr'),
+    accept: findNode('accept', 'acceptance'),
+  }
+
+  for (const [label, node] of Object.entries(nodes)) {
+    if (!node) {
+      throw new Error(`Electron smoke could not resolve ${label} node for Run ${run.id}`)
+    }
+  }
+
+  return nodes
+}
+
 async function selectWorkflowNode(page, testId, expectedTitle) {
   const node = page.getByTestId(testId)
   const inspector = page.getByTestId('node-inspector')
@@ -515,7 +535,7 @@ try {
     if (!run) {
       throw new Error('Electron smoke could not find the seeded team Run.')
     }
-    await window.aiDevFlowDesktop.createRun(run)
+    await window.aiDevFlowDesktop.saveRun(run)
     return run
   })
 
@@ -601,7 +621,7 @@ try {
   await first.page.getByRole('button', { name: /工作台/ }).click()
   await first.page.getByRole('button', { name: /新建 Run/ }).click()
   await first.page.getByRole('button', { name: /创建并开始澄清/ }).click()
-  await expect(first.page.getByText('重构 GitHub webhook 重试策略')).toBeVisible()
+  await expect(first.page.locator('.run-list').getByText('重构 GitHub webhook 重试策略')).toBeVisible()
   await selectRunByTitle(first.page, '重构 GitHub webhook 重试策略')
 
   const localRun = await first.page.evaluate(async () => {
@@ -612,21 +632,22 @@ try {
     return localRuns[0]
   })
   expect(localRun?.id, 'Electron smoke local Run was not persisted before Gate approval.').toBeTruthy()
-  const clarifyGateDecision = await first.page.evaluate(async (runId) => {
+  const localNodes = resolveWorkflowNodes(localRun)
+  const clarifyGateDecision = await first.page.evaluate(async ({ runId, nodeId }) => {
     return window.aiDevFlowDesktop.evaluateGateEnforcement({
       runId,
-      nodeId: 'n-clarify-gate',
+      nodeId,
       projectId: 'p-payments',
     })
-  }, localRun.id)
+  }, { runId: localRun.id, nodeId: localNodes.clarifyGate.id })
   expect(clarifyGateDecision.status).toBe('blocked')
   expect(clarifyGateDecision.blocksApproval).toBe(true)
   expect(clarifyGateDecision.blockingReasons.some((reason) => reason.target === 'missing_agent_review')).toBe(true)
-  const directApproveRejected = await first.page.evaluate(async (runId) => {
+  const directApproveRejected = await first.page.evaluate(async ({ runId, nodeId }) => {
     try {
       await window.aiDevFlowDesktop.approveGate({
         runId,
-        nodeId: 'n-clarify-gate',
+        nodeId,
         projectId: 'p-payments',
         userId: 'u-erich',
         userName: 'Erich',
@@ -636,61 +657,66 @@ try {
     } catch (error) {
       return error instanceof Error && error.message.includes('override_required')
     }
-  }, localRun.id)
+  }, { runId: localRun.id, nodeId: localNodes.clarifyGate.id })
   expect(directApproveRejected).toBe(true)
-  const localLeadOverride = await first.page.evaluate(async ({ runId, decision }) => {
-    return window.aiDevFlowDesktop.saveGateOverride({
-      runId,
-      nodeId: 'n-clarify-gate',
-      projectId: 'p-payments',
-      userId: 'u-ling',
-      role: 'lead',
-      reason: 'Electron smoke rejected local override for missing Knowledge Review.',
-      blockedReasonIds: decision.blockingReasons.map((reason) => reason.id),
-      policyVersion: decision.policyVersion,
-      provisional: false,
-    })
-  }, { runId: localRun.id, decision: clarifyGateDecision })
-  expect(localLeadOverride.status).toBe('rejected')
-  const rejectedOverrideStillBlocksApproval = await first.page.evaluate(async (runId) => {
+  const localLeadOverrideRejected = await first.page.evaluate(async ({ runId, nodeId, decision }) => {
+    try {
+      await window.aiDevFlowDesktop.saveGateOverride({
+        runId,
+        nodeId,
+        projectId: 'p-payments',
+        userId: 'u-ling',
+        role: 'lead',
+        reason: 'Electron smoke rejected local override for missing Knowledge Review.',
+        blockedReasonIds: decision.blockingReasons.map((reason) => reason.id),
+        policyVersion: decision.policyVersion,
+        provisional: false,
+      })
+      return false
+    } catch (error) {
+      return error instanceof Error && error.message.includes('Lead override is not allowed')
+    }
+  }, { runId: localRun.id, nodeId: localNodes.clarifyGate.id, decision: clarifyGateDecision })
+  expect(localLeadOverrideRejected).toBe(true)
+  const rejectedOverrideStillBlocksApproval = await first.page.evaluate(async ({ runId, nodeId }) => {
     try {
       await window.aiDevFlowDesktop.approveGate({
         runId,
-        nodeId: 'n-clarify-gate',
+        nodeId,
         projectId: 'p-payments',
         userId: 'u-ling',
         userName: 'Ling',
         role: 'lead',
       })
-      return false
+      return { rejected: false, message: '' }
     } catch (error) {
-      return error instanceof Error && error.message.includes('blocked')
+      return { rejected: true, message: error instanceof Error ? error.message : String(error) }
     }
-  }, localRun.id)
-  expect(rejectedOverrideStillBlocksApproval).toBe(true)
+  }, { runId: localRun.id, nodeId: localNodes.clarifyGate.id })
+  expect(rejectedOverrideStillBlocksApproval.rejected).toBe(true)
 
   await runKnowledgeReviewViaDesktopApi(first.page, {
     runId: localRun.id,
-    nodeId: 'n-design-gate',
+    nodeId: localNodes.designGate.id,
     projectId: 'p-payments',
     runTitle: '重构 GitHub webhook 重试策略',
-    nodeTitle: '架构 Gate',
+    nodeTitle: localNodes.designGate.title,
   })
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('warning-only')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Build redacted context')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('provider_reported')
   await first.page.getByRole('button', { name: /工作台/ }).click()
-  await selectWorkflowNode(first.page, 'flow-node-n-design-gate', '架构 Gate')
+  await selectWorkflowNode(first.page, `flow-node-${localNodes.designGate.id}`, localNodes.designGate.title)
   await expect(first.page.getByTestId('node-inspector')).toContainText('Knowledge Review Agent')
   await expect(first.page.getByTestId('node-inspector')).toContainText('warning-only')
 
   await runCodingAgentViaDesktopApi(first.page, {
     runId: localRun.id,
-    nodeId: 'n-build',
+    nodeId: localNodes.build.id,
     projectId: localProjectId,
     runTitle: '重构 GitHub webhook 重试策略',
-    nodeTitle: '本地实现',
+    nodeTitle: localNodes.build.title,
   })
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Permission Relay')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Apply fake coding diff')
@@ -708,21 +734,21 @@ try {
   })
   await runKnowledgeReviewViaDesktopApi(first.page, {
     runId: localRun.id,
-    nodeId: 'n-build',
+    nodeId: localNodes.build.id,
     projectId: 'p-payments',
     runTitle: '重构 GitHub webhook 重试策略',
-    nodeTitle: '本地实现',
+    nodeTitle: localNodes.build.title,
   })
   await first.page.getByRole('button', { name: /工作台/ }).click()
-  await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
+  await selectWorkflowNode(first.page, `flow-node-${localNodes.build.id}`, localNodes.build.title)
   await expect(first.page.getByTestId('node-inspector')).toContainText('Remediation Plan')
   await expect(first.page.getByTestId('node-inspector')).toContainText('Address Agent Review finding')
   await startRetryAttemptViaDesktopApi(first.page, {
     runId: localRun.id,
-    nodeId: 'n-build',
+    nodeId: localNodes.build.id,
     projectId: localProjectId,
     runTitle: '重构 GitHub webhook 重试策略',
-    nodeTitle: '本地实现',
+    nodeTitle: localNodes.build.title,
   })
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Policy Retry Attempts')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('started')
@@ -741,7 +767,7 @@ try {
 
   await runProjectTestsViaDesktopApi(first.page, {
     runId: localRun.id,
-    nodeId: 'n-build',
+    nodeId: localNodes.build.id,
     projectId: localProjectId,
     runTitle: '重构 GitHub webhook 重试策略',
   })
@@ -749,17 +775,17 @@ try {
   await expect(first.page.getByTestId('tests-view')).toContainText('passed')
   await expect(first.page.getByTestId('tests-view')).toContainText('npm test')
   await first.page.getByRole('button', { name: /工作台/ }).click()
-  await selectWorkflowNode(first.page, 'flow-node-n-build', '本地实现')
+  await selectWorkflowNode(first.page, `flow-node-${localNodes.build.id}`, localNodes.build.title)
   await expect(first.page.getByTestId('node-inspector')).toContainText('Local test evidence')
   await expect(first.page.getByTestId('node-inspector')).toContainText('Status: passed')
-  await first.page.evaluate(async (runId) => {
+  await first.page.evaluate(async ({ runId, nodeId }) => {
     const state = await window.aiDevFlowDesktop.loadState()
     const run = state.runs.find((candidate) => candidate.id === runId)
     if (!run) {
       throw new Error(`Run not found for smoke sync: ${runId}`)
     }
     const evidence = state.testEvidence
-      .filter((candidate) => candidate.runId === run.id && candidate.nodeId === 'n-build')
+      .filter((candidate) => candidate.runId === run.id && candidate.nodeId === nodeId)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
     if (!evidence) {
       throw new Error(`Test evidence not found for smoke sync: ${runId}`)
@@ -785,9 +811,9 @@ try {
       durationMs: evidence.durationMs,
       summary: evidence.summary,
       redacted: true,
-      createdAt: evidence.createdAt,
-    })
-  }, localRun.id)
+        createdAt: evidence.createdAt,
+      })
+  }, { runId: localRun.id, nodeId: localNodes.build.id })
 
   const browser = await chromium.launch()
   try {
@@ -828,15 +854,15 @@ try {
   })
   await expect(second.page.getByText('重构 GitHub webhook 重试策略')).toBeVisible()
   await selectRunByTitle(second.page, '重构 GitHub webhook 重试策略')
-  await selectWorkflowNode(second.page, 'flow-node-n-design-gate', '架构 Gate')
+  await selectWorkflowNode(second.page, `flow-node-${localNodes.designGate.id}`, localNodes.designGate.title)
   const restoredOverrides = await second.page.evaluate(async (runId) => {
     return window.aiDevFlowDesktop.listGateOverrides({ runId })
   }, localRun.id)
   expect(
     restoredOverrides.some(
-      (override) => override.nodeId === 'n-clarify-gate' && override.status === 'rejected',
+      (override) => override.nodeId === localNodes.clarifyGate.id && override.status === 'accepted',
     ),
-  ).toBe(true)
+  ).toBe(false)
   await second.page.getByRole('button', { name: /^Agents$/ }).click()
   await expect(second.page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
   await expect(second.page.getByTestId('agent-workbench')).toContainText('completed')

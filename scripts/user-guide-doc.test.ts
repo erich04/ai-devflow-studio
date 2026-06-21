@@ -8,6 +8,8 @@ const v1UserGuidePath = join(process.cwd(), 'docs/guides/devflow-studio-v1.0-use
 const v1UserGuideDir = dirname(v1UserGuidePath)
 const v12WalkthroughPath = join(process.cwd(), 'docs/guides/devflow-studio-v1.2-walkthrough.md')
 const v12WalkthroughDir = dirname(v12WalkthroughPath)
+const v13WalkthroughPath = join(process.cwd(), 'docs/guides/devflow-studio-v1.3-walkthrough.md')
+const v13WalkthroughDir = dirname(v13WalkthroughPath)
 
 function readUserGuide(): string {
   return readFileSync(userGuidePath, 'utf8')
@@ -19,6 +21,10 @@ function readV1UserGuide(): string {
 
 function readV12Walkthrough(): string {
   return readFileSync(v12WalkthroughPath, 'utf8')
+}
+
+function readV13Walkthrough(): string {
+  return readFileSync(v13WalkthroughPath, 'utf8')
 }
 
 function extractImagePaths(markdown: string): string[] {
@@ -197,6 +203,54 @@ describe('v1.2 walkthrough documentation', () => {
     expect(markdown).toContain('不应泄露本地绝对路径、raw stdout/stderr 或 secret')
     expect(markdown).toContain('当前不能保证还原 opencode 内部私有 Skill 调用栈')
     expect(markdown).toContain('不要说真实 opencode 是默认 CI/verify 路径')
+    expect(markdown).toContain('不要说 MCP 真执行 / MCP policy enforcement 已完成')
+  })
+})
+
+describe('v1.3 delivery walkthrough documentation', () => {
+  it('keeps referenced screenshots available on disk', () => {
+    const markdown = readV13Walkthrough()
+    const imagePaths = extractImagePaths(markdown)
+
+    expect(imagePaths.length).toBeGreaterThanOrEqual(5)
+    expect(imagePaths).toEqual(
+      expect.arrayContaining([
+        './screenshots/14-electron-current-userdata-workbench.png',
+        './screenshots/01-workbench-gate-enforcement.png',
+        './screenshots/09-coding-node.png',
+        './screenshots/05-tests-evidence.png',
+        './screenshots/08-team-overview.png',
+      ]),
+    )
+
+    for (const imagePath of imagePaths) {
+      expect(existsSync(join(v13WalkthroughDir, imagePath))).toBe(true)
+    }
+  })
+
+  it('documents the request-to-delivery workflow path', () => {
+    const markdown = readV13Walkthrough()
+
+    expect(markdown).toContain('v1.3 delivery-flow candidate')
+    expect(markdown).toContain('从真实用户需求创建 Workflow Run')
+    expect(markdown).toContain('clarify -> design -> build -> test -> pr -> accept')
+    expect(markdown).toContain('Raw request')
+    expect(markdown).toContain('选择 Clarification Gate')
+    expect(markdown).toContain('生成 PR Draft')
+    expect(markdown).toContain('生成验收证据包')
+    expect(markdown).toContain('Acceptance Bundle')
+    expect(markdown).toContain('Run completed')
+    expect(markdown).toContain('DEVFLOW_RUN_OPENCODE_SMOKE=1')
+  })
+
+  it('documents v1.3 delivery boundaries', () => {
+    const markdown = readV13Walkthrough()
+
+    expect(markdown).toContain('当前 v1.3 只生成 PR handoff artifact，不创建真实 GitHub PR')
+    expect(markdown).toContain('不包含 raw patch body')
+    expect(markdown).toContain('不泄露 provider key')
+    expect(markdown).toContain('不要说 v1.3 已创建真实 GitHub PR')
+    expect(markdown).toContain('不要说系统会自动 push、merge 或自动通过 Gate')
     expect(markdown).toContain('不要说 MCP 真执行 / MCP policy enforcement 已完成')
   })
 })

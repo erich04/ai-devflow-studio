@@ -2,6 +2,7 @@ import type {
   AgentEvent,
   AgentProviderConfig,
   AgentReviewExecutionResult,
+  Artifact,
   CommandSafetyResult,
   CodingAgentEvent,
   CodingAgentRun,
@@ -29,6 +30,14 @@ import type {
   WorkflowRun,
 } from '@ai-devflow/shared'
 
+export type CreateRunInput = {
+  title: string
+  request: string
+  projectId: string
+  creatorId: string
+  branchName: string
+}
+
 export const ipcChannels = {
   loadState: 'devflow:local-state:load',
   selectProject: 'devflow:local-project:select',
@@ -39,6 +48,7 @@ export const ipcChannels = {
   evaluateGateEnforcement: 'devflow:enforcement:gate:evaluate',
   createRun: 'devflow:run:create',
   saveRun: 'devflow:run:save',
+  saveArtifact: 'devflow:artifact:save',
   approveGate: 'devflow:gate:approve',
   saveGateOverride: 'devflow:gate:override:save',
   listGateOverrides: 'devflow:gate:overrides:list',
@@ -245,8 +255,9 @@ export type DevFlowDesktopApi = {
   runProjectTests: (input: RunProjectTestsInput) => Promise<RunProjectTestsResult>
   loadEnforcementPolicy: (input: LoadEnforcementPolicyInput) => Promise<PolicySnapshot>
   evaluateGateEnforcement: (input: EvaluateGateEnforcementInput) => Promise<GateEnforcementDecision>
-  createRun: (run: WorkflowRun) => Promise<WorkflowRun>
+  createRun: (input: CreateRunInput) => Promise<WorkflowRun>
   saveRun: (run: WorkflowRun) => Promise<WorkflowRun>
+  saveArtifact: (artifact: Artifact) => Promise<Artifact>
   approveGate: (input: ApproveGateInput) => Promise<ApproveGateResult>
   saveGateOverride: (input: SaveGateOverrideInput) => Promise<GateOverrideDecision>
   listGateOverrides: (input?: ListGateOverridesInput) => Promise<GateOverrideDecision[]>
@@ -304,6 +315,21 @@ function isAgentEvent(value: unknown): value is AgentEvent {
     typeof value['kind'] === 'string' &&
     typeof value['message'] === 'string' &&
     typeof value['timestamp'] === 'string'
+  )
+}
+
+function isArtifact(value: unknown): value is Artifact {
+  return (
+    isRecord(value) &&
+    typeof value['id'] === 'string' &&
+    typeof value['runId'] === 'string' &&
+    typeof value['nodeId'] === 'string' &&
+    typeof value['kind'] === 'string' &&
+    typeof value['title'] === 'string' &&
+    typeof value['summary'] === 'string' &&
+    typeof value['content'] === 'string' &&
+    typeof value['redacted'] === 'boolean' &&
+    typeof value['updatedAt'] === 'string'
   )
 }
 
@@ -519,6 +545,28 @@ export function parseSaveRunInput(value: unknown): WorkflowRun {
   }
 
   return value
+}
+
+export function parseSaveArtifactInput(value: unknown): Artifact {
+  if (!isArtifact(value)) {
+    throw new Error('Invalid artifact')
+  }
+
+  return value
+}
+
+export function parseCreateRunInput(value: unknown): CreateRunInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid create run payload')
+  }
+
+  return {
+    title: readRequiredString(value, 'title'),
+    request: readRequiredString(value, 'request'),
+    projectId: readRequiredString(value, 'projectId'),
+    creatorId: readRequiredString(value, 'creatorId'),
+    branchName: readRequiredString(value, 'branchName'),
+  }
 }
 
 export function parseApproveGateInput(value: unknown): ApproveGateInput {

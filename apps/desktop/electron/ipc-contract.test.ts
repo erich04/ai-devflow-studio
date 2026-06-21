@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type {
   AgentEvent,
+  Artifact,
   McpServerDefinition,
   RemoteCodingAgentSummary,
   RemoteRunSummary,
@@ -11,6 +12,7 @@ import {
   parseAgentEventInput,
   parseAgentProviderCredentialInput,
   parseCancelCodingAgentRunInput,
+  parseCreateRunInput,
   parsePairDesktopInput,
   parseMcpServersInput,
   parseOpenManagedWorktreeInput,
@@ -22,6 +24,7 @@ import {
   parseRemoteSnapshotInput,
   parseRemoteTestEvidenceSummaryInput,
   parseRunProjectTestsInput,
+  parseSaveArtifactInput,
   parseSaveRunInput,
   parseSaveProjectTestCommandInput,
   parseSettingsInput,
@@ -51,6 +54,18 @@ const event: AgentEvent = {
   kind: 'approval',
   message: 'Gate approved',
   timestamp: '2026-06-15T00:01:00.000Z',
+}
+
+const artifact: Artifact = {
+  id: 'artifact-pr-1',
+  runId: 'run-1',
+  nodeId: 'node-pr',
+  kind: 'pr',
+  title: 'PR draft',
+  summary: 'Draft summary',
+  content: 'Draft content',
+  redacted: true,
+  updatedAt: '2026-06-15T00:01:00.000Z',
 }
 
 const mcpServer: McpServerDefinition = {
@@ -142,6 +157,35 @@ describe('IPC contract parsers', () => {
     ).toEqual({ projectId: 'project-1', runId: 'run-1', nodeId: 'node-test', run })
   })
 
+  it('accepts a request-based create run payload', () => {
+    expect(
+      parseCreateRunInput({
+        title: 'Fix webhook retry',
+        request: 'Clarify retry boundaries and implement the fix.',
+        projectId: 'p-payments',
+        creatorId: 'u-wang',
+        branchName: 'ai/webhook-retry',
+      }),
+    ).toEqual({
+      title: 'Fix webhook retry',
+      request: 'Clarify retry boundaries and implement the fix.',
+      projectId: 'p-payments',
+      creatorId: 'u-wang',
+      branchName: 'ai/webhook-retry',
+    })
+  })
+
+  it('rejects create run payloads without a raw request', () => {
+    expect(() =>
+      parseCreateRunInput({
+        title: 'Fix webhook retry',
+        projectId: 'p-payments',
+        creatorId: 'u-wang',
+        branchName: 'ai/webhook-retry',
+      }),
+    ).toThrow(/request/)
+  })
+
   it('rejects a run project tests payload whose runId does not match the run snapshot', () => {
     expect(() =>
       parseRunProjectTestsInput({
@@ -155,6 +199,7 @@ describe('IPC contract parsers', () => {
 
   it('accepts valid save run, event, settings, and MCP payloads', () => {
     expect(parseSaveRunInput(run)).toEqual(run)
+    expect(parseSaveArtifactInput(artifact)).toEqual(artifact)
     expect(parseAgentEventInput(event)).toEqual(event)
     expect(parseSettingsInput({ themePreference: 'dark' })).toEqual({ themePreference: 'dark' })
     expect(parseMcpServersInput([mcpServer])).toEqual([mcpServer])

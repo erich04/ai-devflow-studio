@@ -93,7 +93,13 @@ import {
   type WorkflowNode,
   type WorkflowRun,
 } from '@ai-devflow/shared'
-import { canApproveGate, nextStatusAfterApproval } from '@ai-devflow/shared'
+import {
+  advanceWorkflowAfterGateApproval,
+  canApproveGate,
+  createAcceptanceEvidenceBundleArtifact,
+  createPrDraftArtifact,
+  createWorkflowRunFromRequest,
+} from '@ai-devflow/shared'
 import { getDesktopApi } from './desktop-api'
 import { GateEnforcementPanel } from './GateEnforcementPanel'
 import { useGateEnforcement } from './useGateEnforcement'
@@ -237,6 +243,15 @@ function normalizeQuery(value: string) {
   return value.trim().toLocaleLowerCase()
 }
 
+function slugifyBranchName(value: string) {
+  return value
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+}
+
 function matchesQuery(query: string, values: Array<string | undefined | null>): boolean {
   if (!query) {
     return true
@@ -288,6 +303,18 @@ function createRunningRun(run: WorkflowRun, nodeId: string): WorkflowRun {
   }
 }
 
+function appendArtifactToNode(run: WorkflowRun, nodeId: string, artifactId: string): WorkflowRun {
+  return {
+    ...run,
+    updatedAt: new Date().toISOString(),
+    nodes: run.nodes.map((node) =>
+      node.id === nodeId && !node.artifactIds.includes(artifactId)
+        ? { ...node, artifactIds: [...node.artifactIds, artifactId] }
+        : node,
+    ),
+  }
+}
+
 export function App() {
   const desktopApi = useMemo(() => getDesktopApi(), [])
   const [themePreference, setThemePreference] = useThemePreference()
@@ -333,6 +360,7 @@ export function App() {
   const [isStartingCodingAgent, setIsStartingCodingAgent] = useState(false)
   const [isNewRunOpen, setIsNewRunOpen] = useState(false)
   const [draftTitle, setDraftTitle] = useState('重构 GitHub webhook 重试策略')
+  const [draftRequest, setDraftRequest] = useState('请先澄清 webhook retry 的失败边界，再设计实现方案。')
   const [searchQuery, setSearchQuery] = useState('')
   const [toast, setToast] = useState(desktopApi ? '本地执行代理已连接' : '浏览器预览模式')
 
@@ -752,14 +780,11 @@ export function App() {
     }
 
     const timestamp = new Date().toISOString()
-    const updatedRun: WorkflowRun = {
-      ...selectedRun,
-      status: 'building',
-      nodes: selectedRun.nodes.map((node) =>
-        node.id === selectedNode.id ? nextStatusAfterApproval(node) : node,
-      ),
-      updatedAt: timestamp,
-    }
+    const { run: updatedRun } = advanceWorkflowAfterGateApproval({
+      run: selectedRun,
+      approvedNodeId: selectedNode.id,
+      now: timestamp,
+    })
     const approvalEvent: AgentEvent = {
       id: `event-approval-${timestamp}`,
       runId: selectedRun.id,
@@ -772,7 +797,7 @@ export function App() {
 
     setRuns((previousRuns) => previousRuns.map((run) => (run.id === selectedRun.id ? updatedRun : run)))
     setEvents((previousEvents) => mergeById(previousEvents, [approvalEvent]))
-    setToast('架构 Gate 已通过，Run 进入本地实现阶段')
+    setToast('Gate 已通过，流程已推进')
   }
 
   async function selectLocalProject() {
@@ -1113,41 +1138,138 @@ export function App() {
   }
 
   async function createRun() {
-    const newRun: WorkflowRun = {
-      ...fixtureRuns[0]!,
-      id: `run-${Date.now()}`,
+    const createInput = {
       title: draftTitle,
-      request: '请先澄清 webhook retry 的失败边界，再设计实现方案。',
-      status: 'clarifying',
-      currentNodeId: 'n-clarify',
-      branchName: 'ai/webhook-retry',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      nodes: fixtureRuns[0]!.nodes.map((node, index) => ({
-        ...node,
-        status: index === 0 ? 'running' : 'pending',
-      })),
+      request: draftRequest,
+      projectId: selectedRun?.projectId ?? teamProjects[0]?.id ?? 'p-payments',
+      creatorId: currentUser?.id ?? 'u-wang',
+      branchName: `ai/${slugifyBranchName(draftTitle) || 'new-run'}`,
     }
 
-    setRuns((previousRuns) => [newRun, ...previousRuns])
-    setSelectedRunId(newRun.id)
-    setSelectedNodeId(newRun.currentNodeId)
     setIsNewRunOpen(false)
     setToast('新 Run 已创建，正在进行方案澄清')
+
+    if (desktopApi) {
+      try {
+        const persistedRun = await desktopApi.createRun(createInput)
+        const nextState = await desktopApi.loadState()
+        applyLocalExecutionState(nextState)
+        setRuns((previousRuns) =>
+          previousRuns.some((run) => run.id === persistedRun.id)
+            ? previousRuns.map((run) => (run.id === persistedRun.id ? persistedRun : run))
+            : [persistedRun, ...previousRuns],
+        )
+        setSelectedRunId(persistedRun.id)
+        setSelectedNodeId(persistedRun.currentNodeId)
+        setDataOrigin('local')
+        resetTeamSnapshot()
+      } catch (error) {
+        setToast(error instanceof Error ? error.message : '保存新 Run 失败')
+      }
+      return
+    }
+
+    const created = createWorkflowRunFromRequest({
+      ...createInput,
+      runId: `run-${Date.now()}`,
+      now: new Date().toISOString(),
+    })
+    setRuns((previousRuns) => [created.run, ...previousRuns])
+    setArtifacts((previousArtifacts) => mergeById(previousArtifacts, created.artifacts))
+    setEvents((previousEvents) => mergeById(previousEvents, created.events))
+    setSelectedRunId(created.run.id)
+    setSelectedNodeId(created.run.currentNodeId)
+  }
+
+  async function persistDeliveryArtifact(nextRun: WorkflowRun, artifact: Artifact, message: string) {
+    const timestamp = artifact.updatedAt
+    const event: AgentEvent = {
+      id: `event-${artifact.id}`,
+      runId: artifact.runId,
+      nodeId: artifact.nodeId,
+      sequence: events.filter((candidate) => candidate.runId === artifact.runId).length + 1,
+      kind: 'thinking',
+      message,
+      timestamp,
+    }
+
+    setRuns((previousRuns) => previousRuns.map((run) => (run.id === nextRun.id ? nextRun : run)))
+    setArtifacts((previousArtifacts) => mergeById(previousArtifacts, [artifact]))
+    setEvents((previousEvents) => mergeById(previousEvents, [event]))
 
     if (!desktopApi) {
       return
     }
 
+    await desktopApi.saveRun(nextRun)
+    await desktopApi.saveArtifact(artifact)
+    await desktopApi.saveEvent(event)
+  }
+
+  async function generatePrDraft() {
+    if (!selectedRun) {
+      return
+    }
+
+    const project = teamProjects.find((candidate) => candidate.id === selectedRun.projectId) ?? teamProjects[0]
+    if (!project) {
+      setToast('当前 Run 缺少项目仓库映射，无法生成 PR Draft')
+      return
+    }
+
+    const timestamp = new Date().toISOString()
+    const artifact = createPrDraftArtifact({
+      run: selectedRun,
+      project: {
+        repository: project.repository,
+        defaultBranch: project.defaultBranch,
+      },
+      artifacts: artifacts.filter((candidate) => candidate.runId === selectedRun.id),
+      codingDiffs: codingDiffArtifacts.filter((candidate) => candidate.runId === selectedRun.id),
+      testEvidence: testEvidence.filter((candidate) => candidate.runId === selectedRun.id),
+      agentReviewSummaries: agentReviews
+        .filter((review) => review.runId === selectedRun.id)
+        .map((review) => review.summary),
+      now: timestamp,
+      ...(gateEnforcement.decision ? { enforcement: gateEnforcement.decision } : {}),
+      ...(latestCodingRun?.budgetDecision ? { budgetDecision: latestCodingRun.budgetDecision } : {}),
+    })
+    const nextRun = appendArtifactToNode(selectedRun, artifact.nodeId, artifact.id)
+
     try {
-      const persistedRun = await desktopApi.createRun(newRun)
-      setRuns((previousRuns) => previousRuns.map((run) => (run.id === newRun.id ? persistedRun : run)))
-      setSelectedRunId(persistedRun.id)
-      setSelectedNodeId(persistedRun.currentNodeId)
-      setDataOrigin('local')
-      resetTeamSnapshot()
+      await persistDeliveryArtifact(nextRun, artifact, 'PR draft artifact generated from delivery evidence.')
+      setToast('PR Draft 已生成')
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '保存新 Run 失败')
+      setToast(error instanceof Error ? error.message : '保存 PR Draft 失败')
+    }
+  }
+
+  async function generateAcceptanceBundle() {
+    if (!selectedRun) {
+      return
+    }
+
+    const timestamp = new Date().toISOString()
+    const runArtifacts = artifacts.filter((candidate) => candidate.runId === selectedRun.id)
+    const artifact = createAcceptanceEvidenceBundleArtifact({
+      run: selectedRun,
+      artifacts: runArtifacts,
+      codingDiffs: codingDiffArtifacts.filter((candidate) => candidate.runId === selectedRun.id),
+      testEvidence: testEvidence.filter((candidate) => candidate.runId === selectedRun.id),
+      agentReviewSummaries: agentReviews
+        .filter((review) => review.runId === selectedRun.id)
+        .map((review) => review.summary),
+      now: timestamp,
+      ...(gateEnforcement.decision ? { enforcement: gateEnforcement.decision } : {}),
+      ...(latestCodingRun?.budgetDecision ? { budgetDecision: latestCodingRun.budgetDecision } : {}),
+    })
+    const nextRun = appendArtifactToNode(selectedRun, artifact.nodeId, artifact.id)
+
+    try {
+      await persistDeliveryArtifact(nextRun, artifact, 'Acceptance evidence bundle generated from delivery evidence.')
+      setToast('验收证据包已生成')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '保存验收证据包失败')
     }
   }
 
@@ -1344,6 +1466,8 @@ export function App() {
               onRunTests={executeTestPlan}
               onRunKnowledgeReview={runKnowledgeReview}
               onRunCodingAgent={runCodingAgent}
+              onCreatePrDraft={generatePrDraft}
+              onCreateAcceptanceBundle={generateAcceptanceBundle}
               isRunningTests={isRunningTests}
               isRunningAgentReview={isRunningAgentReview}
               isStartingCodingAgent={isStartingCodingAgent}
@@ -1435,7 +1559,7 @@ export function App() {
             </label>
             <label>
               一句话需求
-              <textarea defaultValue="请先澄清 webhook retry 的失败边界，再设计实现方案。" />
+              <textarea value={draftRequest} onChange={(event) => setDraftRequest(event.target.value)} />
             </label>
             <div className="modal-actions">
               <button className="ghost-button" onClick={() => setIsNewRunOpen(false)}>
@@ -1594,6 +1718,8 @@ function Inspector({
   onRunTests,
   onRunKnowledgeReview,
   onRunCodingAgent,
+  onCreatePrDraft,
+  onCreateAcceptanceBundle,
   isRunningTests,
   isRunningAgentReview,
   isStartingCodingAgent,
@@ -1617,6 +1743,8 @@ function Inspector({
   onRunTests: () => void
   onRunKnowledgeReview: () => void
   onRunCodingAgent: () => void
+  onCreatePrDraft: () => void
+  onCreateAcceptanceBundle: () => void
   isRunningTests: boolean
   isRunningAgentReview: boolean
   isStartingCodingAgent: boolean
@@ -1718,6 +1846,18 @@ function Inspector({
           <button className="ghost-button" disabled={isStartingCodingAgent} onClick={onRunCodingAgent}>
             <Code2 size={16} />
             {isStartingCodingAgent ? '启动中' : 'Coding Agent'}
+          </button>
+        )}
+        {selectedNode.kind === 'pr' && (
+          <button className="ghost-button" onClick={onCreatePrDraft}>
+            <GitPullRequest size={16} />
+            生成 PR Draft
+          </button>
+        )}
+        {selectedNode.kind === 'acceptance' && (
+          <button className="ghost-button" onClick={onCreateAcceptanceBundle}>
+            <ClipboardCheck size={16} />
+            生成验收证据包
           </button>
         )}
         <button className="ghost-button" disabled={isRunningTests} onClick={onRunTests}>

@@ -32,17 +32,17 @@ The v1.x line should stay anchored to that team-pilot product shape:
   token revoke/rotation, backup/restore guidance, and later multi-Desktop concurrency checks.
 - **v1.1 Runtime Cost + Budget Guard** adds project/run/user/provider cost summaries and lead
   approval before real provider usage exceeds configured budget thresholds.
-- **v1.2-v1.5** should deepen the self-hosted pilot only after the identity, sync, runtime, and cost
-  boundaries stay reliable: member administration, GitHub delivery integration, MCP runtime
-  governance, and release engineering are candidates.
+- **v1.3-v1.6** should complete the request-to-delivery workflow before broad operations or platform
+  expansion: request intake, workflow advancement, PR draft handoff, acceptance evidence, GitHub
+  delivery integration, runtime operations, and light collaboration hardening.
 - **v2.0** is the earliest reasonable point to revisit managed/public SaaS, billing, hosted
   multi-tenancy, and managed credentials.
 
 Keep these out of the near-term path unless a later roadmap explicitly promotes them: public SaaS,
 billing, enterprise SSO, automatic cloud deployment, signed installers, auto-update, HoneyAI bridge,
-multi-agent orchestration, and full RAG/vector retrieval. The **Next concrete action** after v1.0 is
-a short v1.0.x maintenance slice: keep release signoff tooling current, lock the most important
-auth/pairing negative paths, then move into v1.1 cost and budget controls.
+multi-agent orchestration, real MCP execution, and full RAG/vector retrieval. The **Next concrete action**
+after v1.2 is v1.3 Delivery Flow Completion: make the six-stage workflow advance from a raw request
+through PR draft and acceptance evidence before adding broader operations hardening.
 
 ## Current Status
 
@@ -379,11 +379,40 @@ Electron smoke is still tracked as future compatibility expansion. See
 
 ## Planned Milestones
 
-### v1.3 Candidate: Runtime Operations Hardening
+### v1.3 Candidate: Delivery Flow Completion
 
-- Add self-hosted operations hardening after the cost UX closes: backup/restore guidance,
-  token-revocation UX, and selected auth/pairing negative-path smoke coverage.
+- Create workflow runs from real user requests instead of cloning seed runs. The shared creator
+  should produce a raw-request artifact, a six-stage node template, edges, and the first agent event.
+- Replace hard-coded Gate approval status changes with a shared workflow advancement helper that
+  moves `currentNodeId` across `workflow_edges` and maps the Run status to the next stage.
+- Add PR draft handoff artifacts that summarize changed paths, test evidence, policy status, budget
+  state, Agent Review, and a safe GitHub compare URL when a project repository mapping is available.
+- Add acceptance evidence bundle artifacts that connect the original request, PR draft, diff, tests,
+  policy, budget, and review evidence before final signoff.
+- Keep real GitHub PR creation out of v1.3. The PR stage creates a human-readable handoff artifact;
+  v1.4 can turn that draft into a GitHub API integration.
+
+### v1.4 Candidate: GitHub Delivery Integration
+
+- Add project-to-repository delivery settings and use the v1.3 PR draft artifact as the source for
+  GitHub compare/PR creation.
+- Decide GitHub App vs scoped user token before implementation, and keep credentials inside the
+  existing team/Desktop credential boundary.
+- Do not silently push or merge. Human approval remains required for branch publication and PR
+  creation.
+
+### v1.5 Candidate: Runtime Operations Hardening
+
+- Add self-hosted operations hardening after the delivery flow closes: backup/restore guidance,
+  token-revocation UX, selected auth/pairing negative-path smoke coverage, and cleanup/recovery
+  notes for self-hosted pilots.
 - Keep release-only real opencode provider smoke as the paid-runtime signoff gate.
+
+### v1.6 Candidate: Collaboration Hardening
+
+- Add small-team collaboration checks after the single-user delivery loop is coherent: 2-3 Desktop
+  clients, basic conflict visibility, audit review, and member administration improvements.
+- Do not treat 10-person concurrency as a v1.3/v1.4 requirement.
 
 ## Deferred / Not Yet Started
 
@@ -391,6 +420,8 @@ Electron smoke is still tracked as future compatibility expansion. See
 - Multi-agent orchestration.
 - Real MCP process management, permissions audit, and tool-call telemetry beyond the current
   opencode permission-backed Tool / Skill Timeline.
+- MCP policy enforcement and Skill/MCP runtime execution.
+- RAG/vector retrieval provider integration.
 - Repository file watcher, in-app Markdown editor, and remote knowledge synchronization.
 - Electron packaging, macOS signing/notarization, Windows installer/signing, auto-update, and release
   distribution.

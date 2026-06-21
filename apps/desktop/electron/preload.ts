@@ -28,6 +28,7 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.evaluateGateEnforcement, input),
   createRun: (run) => ipcRenderer.invoke(ipcChannels.createRun, run),
   saveRun: (run) => ipcRenderer.invoke(ipcChannels.saveRun, run),
+  saveArtifact: (artifact) => ipcRenderer.invoke(ipcChannels.saveArtifact, artifact),
   approveGate: (input) => ipcRenderer.invoke(ipcChannels.approveGate, input),
   saveGateOverride: (input) => ipcRenderer.invoke(ipcChannels.saveGateOverride, input),
   listGateOverrides: (input) => ipcRenderer.invoke(ipcChannels.listGateOverrides, input),

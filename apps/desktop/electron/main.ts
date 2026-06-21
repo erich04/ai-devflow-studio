@@ -13,13 +13,14 @@ import {
   createAgentReviewArtifacts,
   createFakeAgentProvider,
   createOpenAiCompatibleAgentProvider,
+  createWorkflowRunFromRequest,
   createRemoteAgentReviewSummary,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
+  advanceWorkflowAfterGateApproval,
   knowledgeChunks,
   knowledgeDocuments,
   evaluateGateEnforcement,
-  nextStatusAfterApproval,
   redactSecrets,
   resolveEffectivePolicy,
   runKnowledgeReviewAgent,
@@ -46,6 +47,7 @@ import {
   parseOpenManagedWorktreeInput,
   parseAgentProviderCredentialInput,
   parsePairDesktopInput,
+  parseCreateRunInput,
   parseListAgentReviewsInput,
   parseReplyCodingPermissionInput,
   parseRemoteCodingAgentSummaryInput,
@@ -60,6 +62,7 @@ import {
   parseListGateOverridesInput,
   parseLoadEnforcementPolicyInput,
   parseSaveGateOverrideInput,
+  parseSaveArtifactInput,
   parseSaveRunInput,
   parseSaveProjectTestCommandInput,
   parseStartRetryAttemptInput,
@@ -674,10 +677,21 @@ function registerIpcHandlers() {
   })
 
   ipcMain.handle(ipcChannels.createRun, async (_, payload: unknown) => {
-    const run = parseSaveRunInput(payload)
+    const input = parseCreateRunInput(payload)
+    const created = createWorkflowRunFromRequest({
+      ...input,
+      runId: `run-${randomUUID()}`,
+      now: new Date().toISOString(),
+    })
     const store = await getStore()
-    await store.saveRun(run)
-    return run
+    await store.saveRun(created.run)
+    for (const artifact of created.artifacts) {
+      await store.saveArtifact(artifact)
+    }
+    for (const event of created.events) {
+      await store.saveEvent(event)
+    }
+    return created.run
   })
 
   ipcMain.handle(ipcChannels.saveRun, async (_, payload: unknown) => {
@@ -685,6 +699,13 @@ function registerIpcHandlers() {
     const store = await getStore()
     await store.saveRun(run)
     return run
+  })
+
+  ipcMain.handle(ipcChannels.saveArtifact, async (_, payload: unknown) => {
+    const artifact = parseSaveArtifactInput(payload)
+    const store = await getStore()
+    await store.saveArtifact(artifact)
+    return artifact
   })
 
   ipcMain.handle(ipcChannels.approveGate, async (_, payload: unknown) => {
@@ -712,14 +733,11 @@ function registerIpcHandlers() {
 
     const timestamp = new Date().toISOString()
     const existingEvents = await store.listEvents(run.id)
-    const updatedRun = {
-      ...run,
-      status: 'building' as const,
-      nodes: run.nodes.map((candidate) =>
-        candidate.id === node.id ? nextStatusAfterApproval(candidate) : candidate,
-      ),
-      updatedAt: timestamp,
-    }
+    const { run: updatedRun } = advanceWorkflowAfterGateApproval({
+      run,
+      approvedNodeId: node.id,
+      now: timestamp,
+    })
     const event: AgentEvent = {
       id: `event-approval-${randomUUID()}`,
       runId: run.id,
