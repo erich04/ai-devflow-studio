@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  collectReleaseSignoffSnapshot,
   evaluateReleaseSignoffSnapshot,
   formatReleaseSignoffItems,
   packagePaths,
@@ -18,8 +19,8 @@ type ReleaseSignoffSnapshot = {
 
 function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSignoffSnapshot {
   return {
-    targetVersion: '0.8.1',
-    packageVersions: Object.fromEntries(packagePaths.map((path) => [path, '0.7.5'])),
+    targetVersion: '1.0.0',
+    packageVersions: Object.fromEntries(packagePaths.map((path) => [path, '1.0.0'])),
     requiredDocs: Object.fromEntries(requiredDocPaths.map((path) => [path, true])),
     workingTreeClean: true,
     currentBranch: 'devflow-v0.8.1-release-v0.9-planning',
@@ -30,26 +31,33 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
 }
 
 describe('release signoff status', () => {
-  it('requires the v0.8 guide, v0.9 demo script, and v0.9 runtime planning docs', () => {
+  it('derives the target release version from root package metadata', () => {
+    const snapshot = collectReleaseSignoffSnapshot()
+
+    expect(snapshot.targetVersion).toBe('1.0.0')
+    expect(snapshot.packageVersions['package.json']).toBe('1.0.0')
+  })
+
+  it('requires current release docs plus runtime planning docs', () => {
     expect(requiredDocPaths).toEqual(
       expect.arrayContaining([
-        'docs/guides/devflow-studio-v0.8-user-guide.md',
+        'docs/guides/devflow-studio-v1.0-user-guide.md',
+        'docs/guides/devflow-studio-self-hosted-pilot.md',
         'docs/guides/devflow-studio-v0.9-demo-script.md',
-        'docs/knowledge/checklists/v09-demo-readiness.md',
-        'docs/plans/v0.8.1-release-signoff.md',
+        'docs/plans/v1.0-team-pilot-foundation.md',
+        'docs/plans/v1.0-release-signoff.md',
         'docs/plans/v0.9-real-runtime-observability.md',
-        'docs/research/2026-06-19-opencode-runtime-contract-refresh.md',
       ]),
     )
   })
 
-  it('treats the current pre-release package version as pending, not failed', () => {
+  it('marks current package metadata ready when every package matches the derived release version', () => {
     const items = evaluateReleaseSignoffSnapshot(snapshot())
 
     expect(items).toContainEqual(
       expect.objectContaining({
         id: 'package-versions',
-        state: 'pending',
+        state: 'ready',
       }),
     )
     expect(items).toContainEqual(
@@ -64,7 +72,6 @@ describe('release signoff status', () => {
   it('marks release state ready after version bump, tag, and walkthrough', () => {
     const items = evaluateReleaseSignoffSnapshot(
       snapshot({
-        packageVersions: Object.fromEntries(packagePaths.map((path) => [path, '0.8.1'])),
         releaseTagExists: true,
         manualWalkthroughPassed: true,
       }),
@@ -77,12 +84,12 @@ describe('release signoff status', () => {
     const items = evaluateReleaseSignoffSnapshot(
       snapshot({
         packageVersions: {
-          ...Object.fromEntries(packagePaths.map((path) => [path, '0.7.5'])),
-          'apps/web/package.json': '0.8.0',
+          ...Object.fromEntries(packagePaths.map((path) => [path, '1.0.0'])),
+          'apps/web/package.json': '0.9.0',
         },
         requiredDocs: {
           ...Object.fromEntries(requiredDocPaths.map((path) => [path, true])),
-          'docs/plans/v0.9-real-runtime-observability.md': false,
+          'docs/plans/v1.0-release-signoff.md': false,
         },
       }),
     )
@@ -105,7 +112,7 @@ describe('release signoff status', () => {
     const output = formatReleaseSignoffItems(evaluateReleaseSignoffSnapshot(snapshot()))
 
     expect(output).toContain('OK Working tree')
-    expect(output).toContain('.. Package metadata')
+    expect(output).toContain('OK Package metadata')
     expect(output).toContain('.. Manual walkthrough')
   })
 })

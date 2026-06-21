@@ -396,12 +396,12 @@ function badRequest(message: string): ApiRouteResult {
   }
 }
 
-function unauthorized(): ApiRouteResult {
+function unauthorized(message = 'Authentication required'): ApiRouteResult {
   return {
     status: 401,
     body: {
       error: 'unauthorized',
-      message: 'Authentication required',
+      message,
     },
   }
 }
@@ -673,7 +673,7 @@ export async function resolveTeamRoute(
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to exchange desktop pairing code'
       return message.includes('expired') || message.includes('invalid')
-        ? unauthorized()
+        ? unauthorized('Desktop pairing code is invalid or expired. Reconnect DevFlow Studio.')
         : badRequest(message)
     }
   }

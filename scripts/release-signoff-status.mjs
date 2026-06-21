@@ -2,8 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
-const TARGET_VERSION = '0.8.1'
-const PRE_RELEASE_VERSION = '0.7.5'
+const rootPackagePath = 'package.json'
 
 export const packagePaths = [
   'package.json',
@@ -15,12 +14,12 @@ export const packagePaths = [
 ]
 
 export const requiredDocPaths = [
-  'docs/guides/devflow-studio-v0.8-user-guide.md',
+  'docs/guides/devflow-studio-v1.0-user-guide.md',
+  'docs/guides/devflow-studio-self-hosted-pilot.md',
   'docs/guides/devflow-studio-v0.9-demo-script.md',
-  'docs/knowledge/checklists/v09-demo-readiness.md',
-  'docs/plans/v0.8.1-release-signoff.md',
+  'docs/plans/v1.0-team-pilot-foundation.md',
+  'docs/plans/v1.0-release-signoff.md',
   'docs/plans/v0.9-real-runtime-observability.md',
-  'docs/research/2026-06-19-opencode-runtime-contract-refresh.md',
 ]
 
 function runGit(args) {
@@ -37,7 +36,13 @@ function readPackageVersion(path) {
   return parsed.version ?? null
 }
 
+function resolveTargetVersion(env = process.env) {
+  const envVersion = env.DEVFLOW_RELEASE_TARGET_VERSION?.trim()
+  return envVersion || readPackageVersion(rootPackagePath)
+}
+
 export function collectReleaseSignoffSnapshot(env = process.env) {
+  const targetVersion = resolveTargetVersion(env)
   const packageVersions = Object.fromEntries(
     packagePaths.map((path) => [path, readPackageVersion(path)]),
   )
@@ -47,13 +52,15 @@ export function collectReleaseSignoffSnapshot(env = process.env) {
 
   let releaseTagExists = false
   try {
-    releaseTagExists = runGit(['tag', '--list', `v${TARGET_VERSION}`]) === `v${TARGET_VERSION}`
+    releaseTagExists =
+      typeof targetVersion === 'string' &&
+      runGit(['tag', '--list', `v${targetVersion}`]) === `v${targetVersion}`
   } catch {
     releaseTagExists = false
   }
 
   return {
-    targetVersion: TARGET_VERSION,
+    targetVersion,
     packageVersions,
     requiredDocs,
     workingTreeClean: status.length === 0,
@@ -71,19 +78,16 @@ export function evaluateReleaseSignoffSnapshot(snapshot) {
   const targetPackages = Object.entries(snapshot.packageVersions)
     .filter(([, version]) => version === snapshot.targetVersion)
     .map(([path]) => path)
-  const preReleasePackages = Object.entries(snapshot.packageVersions)
-    .filter(([, version]) => version === PRE_RELEASE_VERSION)
-    .map(([path]) => path)
   const unexpectedPackages = Object.entries(snapshot.packageVersions)
-    .filter(([, version]) => version !== snapshot.targetVersion && version !== PRE_RELEASE_VERSION)
+    .filter(([, version]) => version !== snapshot.targetVersion)
     .map(([path, version]) => `${path}=${version ?? 'missing'}`)
 
   const packageState =
-    missingPackages.length > 0 || unexpectedPackages.length > 0
+    snapshot.targetVersion === null || missingPackages.length > 0 || unexpectedPackages.length > 0
       ? 'attention'
       : targetPackages.length === versions.length
         ? 'ready'
-        : 'pending'
+        : 'attention'
 
   const missingDocs = Object.entries(snapshot.requiredDocs)
     .filter(([, exists]) => !exists)
@@ -97,9 +101,7 @@ export function evaluateReleaseSignoffSnapshot(snapshot) {
       detail:
         packageState === 'ready'
           ? `All packages are ${snapshot.targetVersion}.`
-          : packageState === 'pending'
-            ? `${preReleasePackages.length} package(s) remain at ${PRE_RELEASE_VERSION}; bump after automated verification passes.`
-            : `Package metadata needs attention: ${[...missingPackages, ...unexpectedPackages].join(', ')}.`,
+          : `Package metadata needs attention: ${[...missingPackages, ...unexpectedPackages].join(', ') || 'target version is missing'}.`,
     },
     {
       id: 'release-tag',
@@ -107,7 +109,7 @@ export function evaluateReleaseSignoffSnapshot(snapshot) {
       state: snapshot.releaseTagExists ? 'ready' : 'pending',
       detail: snapshot.releaseTagExists
         ? `v${snapshot.targetVersion} exists.`
-        : `Create v${snapshot.targetVersion} after automated verification and version bump; manual walkthrough remains tracked separately.`,
+        : `Create v${snapshot.targetVersion} after automated verification; manual walkthrough remains tracked separately.`,
     },
     {
       id: 'working-tree',
@@ -129,7 +131,7 @@ export function evaluateReleaseSignoffSnapshot(snapshot) {
       state: snapshot.manualWalkthroughPassed ? 'ready' : 'pending',
       detail: snapshot.manualWalkthroughPassed
         ? 'Marked passed by DEVFLOW_RELEASE_WALKTHROUGH=passed.'
-        : 'Pending human walkthrough against the v0.8 user guide.',
+        : 'Pending human walkthrough against the v1.0 user guide.',
     },
   ]
 }

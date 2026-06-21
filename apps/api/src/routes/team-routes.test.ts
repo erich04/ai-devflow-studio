@@ -592,6 +592,44 @@ describe('team API route resolver', () => {
     })
   })
 
+  it('rejects invalid desktop pairing codes with a reconnect-safe message', async () => {
+    const repository = createRepository()
+    vi.mocked(repository.exchangeDesktopPairingCode).mockRejectedValueOnce(
+      new Error('invalid desktop pairing code'),
+    )
+
+    const result = await resolveTeamRoute('POST', '/api/desktop/pairing/exchange', repository, {
+      body: { code: 'pair-p-payments.wrong-secret' },
+    })
+
+    expect(result).toEqual({
+      status: 401,
+      body: {
+        error: 'unauthorized',
+        message: 'Desktop pairing code is invalid or expired. Reconnect DevFlow Studio.',
+      },
+    })
+  })
+
+  it('rejects expired desktop pairing codes with the same reconnect-safe message', async () => {
+    const repository = createRepository()
+    vi.mocked(repository.exchangeDesktopPairingCode).mockRejectedValueOnce(
+      new Error('expired desktop pairing code'),
+    )
+
+    const result = await resolveTeamRoute('POST', '/api/desktop/pairing/exchange', repository, {
+      body: { code: 'pair-p-payments.copy-once-secret' },
+    })
+
+    expect(result).toEqual({
+      status: 401,
+      body: {
+        error: 'unauthorized',
+        message: 'Desktop pairing code is invalid or expired. Reconnect DevFlow Studio.',
+      },
+    })
+  })
+
   it('filters project-scoped reads for non-owner sessions', async () => {
     const repository = createRepository()
 

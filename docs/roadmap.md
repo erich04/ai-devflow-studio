@@ -17,6 +17,33 @@ Use these files by responsibility:
 - `docs/research/`: research notes, comparisons, and investigation artifacts. Research can inform roadmap decisions, but it is not the active plan.
 - `README.md`: project entrypoint, app/package map, and everyday commands.
 
+## Product North Star
+
+DevFlow Studio's product direction is a **small-team self-hosted AI DevFlow workbench**: a team can
+run its own API/Web/Postgres stack, connect local Electron clients, let developers use real local
+Agent runtimes, and give leads a governed, auditable view of evidence, policy, cost, and delivery
+state without uploading raw repository content or provider secrets.
+
+The v1.x line should stay anchored to that team-pilot product shape:
+
+- **v1.0** proved the minimum team pilot foundation: authenticated Web, Desktop pairing,
+  redacted sync, and Docker Compose.
+- **v1.0.x** hardens the team connection layer: pairing/token negative paths, audit entries,
+  token revoke/rotation, backup/restore guidance, and later multi-Desktop concurrency checks.
+- **v1.1 Runtime Cost + Budget Guard** adds project/run/user/provider cost summaries and lead
+  approval before real provider usage exceeds configured budget thresholds.
+- **v1.2-v1.5** should deepen the self-hosted pilot only after the identity, sync, runtime, and cost
+  boundaries stay reliable: member administration, GitHub delivery integration, MCP runtime
+  governance, and release engineering are candidates.
+- **v2.0** is the earliest reasonable point to revisit managed/public SaaS, billing, hosted
+  multi-tenancy, and managed credentials.
+
+Keep these out of the near-term path unless a later roadmap explicitly promotes them: public SaaS,
+billing, enterprise SSO, automatic cloud deployment, signed installers, auto-update, HoneyAI bridge,
+multi-agent orchestration, and full RAG/vector retrieval. The **Next concrete action** after v1.0 is
+a short v1.0.x maintenance slice: keep release signoff tooling current, lock the most important
+auth/pairing negative paths, then move into v1.1 cost and budget controls.
+
 ## Current Status
 
 AI DevFlow Studio is currently an Electron-first team developer workbench with a workflow canvas,
