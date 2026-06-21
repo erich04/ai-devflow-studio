@@ -228,6 +228,46 @@ export type AgentTokenUsage = TokenUsage & {
   source: TokenUsageSource
 }
 
+export type CodingRuntimeCostSummary = TokenUsage & {
+  providerId: string
+  source: TokenUsageSource
+  redacted: true
+}
+
+export type RuntimeBudgetPolicy = {
+  projectId: string
+  enabled: boolean
+  monthlyLimitUsd: number
+  warningThresholdUsd: number
+  currency: 'USD'
+  updatedAt: string
+}
+
+export type RuntimeBudgetApproval = {
+  id: string
+  projectId: string
+  requestedBy: string
+  approvedBy: string
+  role: Role
+  providerId: string
+  maxAdditionalCostUsd: number
+  reason: string
+  status: 'approved' | 'rejected' | 'expired'
+  createdAt: string
+  expiresAt: string
+}
+
+export type BudgetGuardDecision = {
+  status: 'allowed' | 'warning' | 'requires_lead_approval' | 'approved_over_budget' | 'disabled'
+  blocksRun: boolean
+  currentSpendUsd: number
+  projectedCostUsd: number
+  limitUsd?: number
+  approvalRequiredRole?: 'lead'
+  approvalId?: string
+  reason: string
+}
+
 export type AgentProviderKind = 'openai-compatible' | 'fake'
 
 export type AgentProviderConfig = {
@@ -607,6 +647,8 @@ export type CodingAgentRun = {
   startedAt: string
   completedAt?: string
   tokenUsageId?: string
+  runtimeCostSummary?: CodingRuntimeCostSummary
+  budgetDecision?: BudgetGuardDecision
   diffArtifactId?: string
   bootstrapEvidenceId?: string
   testEvidenceId?: string
@@ -837,6 +879,8 @@ export type RemoteCodingAgentSummary = {
   changedPaths: string[]
   startedAt: string
   completedAt?: string
+  costSummary?: CodingRuntimeCostSummary
+  budgetDecision?: BudgetGuardDecision
   redacted: boolean
 }
 

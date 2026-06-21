@@ -2,15 +2,19 @@ import { randomUUID } from 'node:crypto'
 import {
   buildKnowledgeGovernanceChecks,
   buildKnowledgeReferences,
+  buildCodingBrief,
   canRunCodingAgentOnNode,
   createRemoteCodingAgentSummary,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
+  estimateCodingRuntimeCost,
   knowledgeChunks as defaultKnowledgeChunks,
   knowledgeDocuments as defaultKnowledgeDocuments,
   redactSecrets,
   type AgentEvent,
   type Artifact,
+  type BudgetGuardDecision,
+  type CodingRuntimeCostSummary,
   type CodingAgentEvent,
   type CodingAgentRun,
   type CodingPermissionDecision,
@@ -101,6 +105,18 @@ export type CodingRuntimeRunTimeoutScheduler = (
   expire: () => Promise<void>,
 ) => void
 
+export type CodingRuntimeBudgetGuard = (input: {
+  codingRunId: string
+  engine: CodingAgentRun['engine']
+  providerId: string
+  model: string
+  project: LocalProject
+  run: WorkflowRun
+  node: WorkflowNode
+  requestedBy: string
+  estimatedCost: CodingRuntimeCostSummary
+}) => Promise<BudgetGuardDecision>
+
 export type CodingRuntimeDependencyBootstrapRunner = (input: {
   codingRun: CodingAgentRun
   project: LocalProject
@@ -167,6 +183,7 @@ export type CodingRuntimeDeps = {
   runDependencyBootstrap?: CodingRuntimeDependencyBootstrapRunner
   schedulePermissionTimeout?: CodingRuntimePermissionTimeoutScheduler
   scheduleRunTimeout?: CodingRuntimeRunTimeoutScheduler
+  budgetGuard?: CodingRuntimeBudgetGuard
   testTimeoutMs?: number
   worktreeRoot?: string
   idGenerator?: (prefix?: string) => string
@@ -752,6 +769,98 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         nodeId: node.id,
         ...(deps.worktreeRoot ? { worktreeRoot: deps.worktreeRoot } : {}),
       })
+      const model = deps.engine.modelId ?? input.providerId
+      const preliminaryBrief = buildCodingBrief({
+        run,
+        node,
+        project,
+        ...briefContext,
+        userInstruction: input.userInstruction,
+        worktreePath: workspace.worktreePath,
+        branchName: workspace.branchName,
+        ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
+        ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
+      })
+      const estimatedCost = estimateCodingRuntimeCost({
+        engine: deps.engine.engine,
+        providerId: input.providerId,
+        model,
+        prompt: preliminaryBrief.prompt,
+        runId: run.id,
+        nodeId: node.id,
+        projectId: project.id,
+        userId: input.requestedBy,
+        timestamp: now(),
+      })
+      const budgetDecision = deps.budgetGuard
+        ? await deps.budgetGuard({
+            codingRunId,
+            engine: deps.engine.engine,
+            providerId: input.providerId,
+            model,
+            project,
+            run,
+            node,
+            requestedBy: input.requestedBy,
+            estimatedCost,
+          })
+        : {
+            status: 'disabled',
+            blocksRun: false,
+            currentSpendUsd: 0,
+            projectedCostUsd: estimatedCost.costUsd,
+            reason: 'Runtime budget guard is not configured for this local project.',
+          } satisfies BudgetGuardDecision
+
+      if (budgetDecision.blocksRun) {
+        const timestamp = now()
+        const blockedRun: CodingAgentRun = {
+          id: codingRunId,
+          runId: run.id,
+          nodeId: node.id,
+          projectId: project.id,
+          requestedBy: input.requestedBy,
+          providerId: input.providerId,
+          engine: deps.engine.engine,
+          status: 'failed',
+          managedWorkspaceId: workspace.id,
+          branchName: workspace.branchName,
+          userInstruction: input.userInstruction.trim(),
+          prompt: preliminaryBrief.prompt,
+          summary: `Runtime budget requires lead approval before calling ${deps.engine.engine}. ${budgetDecision.reason}`,
+          changedPaths: [],
+          startedAt: timestamp,
+          completedAt: timestamp,
+          runtimeCostSummary: estimatedCost,
+          budgetDecision,
+          redacted: true,
+        }
+        const event: CodingAgentEvent = {
+          id: idGenerator('coding-event'),
+          codingRunId: blockedRun.id,
+          runId: blockedRun.runId,
+          nodeId: blockedRun.nodeId,
+          sequence: 1,
+          kind: 'error',
+          message: blockedRun.summary,
+          timestamp,
+          metadata: {
+            budgetStatus: budgetDecision.status,
+            projectedCostUsd: budgetDecision.projectedCostUsd,
+            limitUsd: budgetDecision.limitUsd,
+            approvalRequiredRole: budgetDecision.approvalRequiredRole,
+          },
+          redacted: true,
+        }
+        await deps.store.saveManagedCodingWorkspace(workspace)
+        await saveCodingRun(blockedRun)
+        await saveEvents([event])
+        await cleanupWorkspaceForRun(blockedRun, timestamp)
+        return {
+          codingRun: blockedRun,
+          state: await deps.store.loadState(),
+        }
+      }
       const bundle = await deps.engine.start({
         id: codingRunId,
         run,
@@ -766,6 +875,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
         ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
       })
+      bundle.codingRun.runtimeCostSummary = estimatedCost
+      bundle.codingRun.budgetDecision = budgetDecision
 
       await deps.store.saveManagedCodingWorkspace(workspace)
       await saveCodingRun(bundle.codingRun)

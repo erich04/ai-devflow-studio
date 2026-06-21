@@ -243,6 +243,8 @@ export function createRemoteCodingAgentSummary(
     changedPaths,
     startedAt: run.startedAt,
     ...(run.completedAt ? { completedAt: run.completedAt } : {}),
+    ...(run.runtimeCostSummary ? { costSummary: run.runtimeCostSummary } : {}),
+    ...(run.budgetDecision ? { budgetDecision: run.budgetDecision } : {}),
     redacted: true,
   }
 }

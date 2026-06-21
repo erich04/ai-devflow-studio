@@ -349,15 +349,25 @@ Electron smoke is still tracked as future compatibility expansion. See
 - See `docs/plans/v1.0-team-pilot-foundation.md` and
   `docs/plans/v1.0-release-signoff.md`.
 
+### v1.1: Runtime Cost + Budget Guard
+
+- Added project/run/user/provider cost summaries for the real opencode provider path while keeping
+  fake-engine verification cost-free.
+- Introduced project-level budget thresholds and lead approvals for real provider runs that exceed
+  configured limits.
+- Wired Electron Coding Runtime to estimate cost before provider invocation and call the team budget
+  evaluator before starting paid provider work.
+- Persisted runtime budget policies, approvals, and redacted coding cost summaries in Postgres.
+- Included redacted coding runtime cost summaries in team cost rollups and remote coding summaries.
+- See `docs/plans/v1.1-runtime-cost-budget-guard.md`.
+
 ## Planned Milestones
 
-### v1.1 Candidate: Runtime Cost + Budget Guard
+### v1.2 Candidate: Runtime Cost UX + Budget Administration
 
-- Add project/run/user/provider cost summaries for the real opencode provider path while keeping
-  fake-engine verification cost-free.
-- Introduce project-level budget thresholds and require lead approval before continuing real
-  provider runs that exceed configured limits.
-- Sync only redacted cost summaries to the team side.
+- Add Web UI for runtime budget policy editing and budget approval creation.
+- Show budget decisions and approval status in Desktop Coding Agent trace.
+- Add release-signoff examples for real opencode provider cost consumption.
 
 ## Deferred / Not Yet Started
 

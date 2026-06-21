@@ -28,6 +28,7 @@ import {
   type GateOverrideDecision,
   type LocalProject,
   type PolicySnapshot,
+  type BudgetGuardDecision,
   type ProviderCredentialMetadata,
   type RemoteTeamSnapshot,
   type TestEvidence,
@@ -69,7 +70,7 @@ import {
 import { createRemoteSyncClient, type RemoteSyncClient } from './remote-sync.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
 import { createCodingEngineAdapterFromEnv } from './coding-engine.js'
-import { createCodingRuntime } from './coding-runtime.js'
+import { createCodingRuntime, type CodingRuntimeBudgetGuard } from './coding-runtime.js'
 import { createOpencodeProcessManager } from './opencode-process.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 import {
@@ -153,10 +154,12 @@ function scheduleCodingRunTimeout(codingRunId: string, expire: () => Promise<voi
 }
 
 async function createCodingRuntimeForRequest() {
+  const remoteSync = await getRemoteSyncClient()
   return createCodingRuntime({
     store: await getStore(),
     engine: createCodingEngineAdapterFromEnv(process.env),
-    remoteSync: await getRemoteSyncClient(),
+    remoteSync,
+    budgetGuard: createRuntimeBudgetGuard(remoteSync),
     runTestCommand: runLocalTestCommand,
     runDependencyBootstrap: ({ codingRun, project, workspace, previousDependencyHash, timestamp }) =>
       runDependencyBootstrap({
@@ -182,6 +185,35 @@ async function createCodingRuntimeForRequest() {
     },
     idGenerator: (prefix = 'id') => `${prefix}-${randomUUID()}`,
   })
+}
+
+function createRuntimeBudgetGuard(remoteSync: RemoteSyncClient): CodingRuntimeBudgetGuard {
+  return async ({ estimatedCost, project }) => {
+    if (estimatedCost.costUsd <= 0) {
+      return {
+        status: 'disabled',
+        blocksRun: false,
+        currentSpendUsd: 0,
+        projectedCostUsd: estimatedCost.costUsd,
+        reason: 'Runtime budget guard is skipped for cost-free local or fake provider runs.',
+      } satisfies BudgetGuardDecision
+    }
+
+    try {
+      return await remoteSync.evaluateRuntimeBudget({
+        projectId: project.id,
+        projectedCostUsd: estimatedCost.costUsd,
+      })
+    } catch {
+      return {
+        status: 'disabled',
+        blocksRun: false,
+        currentSpendUsd: 0,
+        projectedCostUsd: estimatedCost.costUsd,
+        reason: 'Runtime budget guard is unavailable; no team budget decision was applied.',
+      } satisfies BudgetGuardDecision
+    }
+  }
 }
 
 function maskCredential(secret: string): string {

@@ -89,6 +89,7 @@ export type CodingEngineCancelInput = {
 
 export type CodingEngineAdapter = {
   engine: CodingAgentEngine
+  modelId?: string
   ensure(input: CodingEngineEnsureInput): Promise<CodingEngineEnsureResult>
   start(input: CodingEngineStartInput): Promise<CodingEngineStartResult>
   approvePermission(input: CodingEngineApprovePermissionInput): Promise<CodingEngineApprovePermissionResult>
@@ -145,6 +146,7 @@ export function buildOpencodeRuntimeEnv(input: {
 export function createFakeCodingEngineAdapter(): CodingEngineAdapter {
   return {
     engine: 'fake',
+    modelId: 'fake',
 
     async ensure(input) {
       return {

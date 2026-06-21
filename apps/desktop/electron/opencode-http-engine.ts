@@ -62,6 +62,7 @@ export function createOpencodeHttpCodingEngineAdapter(
 
   return {
     engine: 'opencode-http',
+    modelId: config.modelID,
 
     async ensure(input) {
       await processManager.ensure({

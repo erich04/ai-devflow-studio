@@ -7,6 +7,7 @@ import {
   createFakeAgentProvider,
   createOpenAiCompatibleAgentProvider,
   evaluateGateEnforcement,
+  evaluateRuntimeBudgetGuard,
   type GateOverrideDecision,
   formatUsd,
   type OrganizationEnforcementPolicy,
@@ -17,6 +18,8 @@ import {
   type ProviderCredentialMetadata,
   type RemoteAgentReviewSummary,
   type RemoteCodingAgentSummary,
+  type RuntimeBudgetApproval,
+  type RuntimeBudgetPolicy,
   type RemoteRunSummary,
   type RemoteTestEvidenceSummary,
   type TeamSession,
@@ -74,6 +77,28 @@ type GateOverrideInput = EnforcementEvaluateInput & {
   reason: string
   blockedReasonIds: string[]
   policyVersion: number
+}
+
+type RuntimeBudgetPolicyInput = {
+  projectId: string
+  enabled: boolean
+  monthlyLimitUsd: number
+  warningThresholdUsd: number
+}
+
+type RuntimeBudgetEvaluateInput = {
+  projectId: string
+  projectedCostUsd: number
+  approvalId?: string
+}
+
+type RuntimeBudgetApprovalInput = {
+  projectId: string
+  providerId: string
+  requestedBy: string
+  maxAdditionalCostUsd: number
+  reason: string
+  expiresAt: string
 }
 
 type TeamProjectCreateInput = {
@@ -175,6 +200,61 @@ function hasLocalOnlyCodingField(value: Record<string, unknown>): boolean {
   )
 }
 
+function isTokenUsageProvider(value: unknown): boolean {
+  return value === 'openai' || value === 'anthropic' || value === 'dashscope' || value === 'local'
+}
+
+function isTokenUsageSource(value: unknown): boolean {
+  return value === 'provider_reported' || value === 'estimated'
+}
+
+function isRemoteCodingCostSummary(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    !hasLocalOnlyCodingField(value) &&
+    typeof value['id'] === 'string' &&
+    typeof value['runId'] === 'string' &&
+    typeof value['nodeId'] === 'string' &&
+    typeof value['userId'] === 'string' &&
+    typeof value['projectId'] === 'string' &&
+    isTokenUsageProvider(value['provider']) &&
+    typeof value['providerId'] === 'string' &&
+    typeof value['model'] === 'string' &&
+    typeof value['inputTokens'] === 'number' &&
+    typeof value['outputTokens'] === 'number' &&
+    typeof value['cacheReadTokens'] === 'number' &&
+    typeof value['costUsd'] === 'number' &&
+    typeof value['timestamp'] === 'string' &&
+    isTokenUsageSource(value['source']) &&
+    value['redacted'] === true
+  )
+}
+
+function isBudgetGuardStatus(value: unknown): boolean {
+  return (
+    value === 'allowed' ||
+    value === 'warning' ||
+    value === 'requires_lead_approval' ||
+    value === 'approved_over_budget' ||
+    value === 'disabled'
+  )
+}
+
+function isRemoteBudgetDecision(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isBudgetGuardStatus(value['status']) &&
+    typeof value['blocksRun'] === 'boolean' &&
+    typeof value['currentSpendUsd'] === 'number' &&
+    typeof value['projectedCostUsd'] === 'number' &&
+    (value['limitUsd'] === undefined || typeof value['limitUsd'] === 'number') &&
+    (value['approvalRequiredRole'] === undefined || value['approvalRequiredRole'] === 'lead') &&
+    (value['approvalId'] === undefined || typeof value['approvalId'] === 'string') &&
+    typeof value['reason'] === 'string' &&
+    !hasLocalOnlyCodingField(value)
+  )
+}
+
 function isRepoRelativePath(value: unknown): value is string {
   if (typeof value !== 'string') {
     return false
@@ -208,6 +288,8 @@ function isRemoteCodingAgentSummary(value: unknown): value is RemoteCodingAgentS
     value['changedPaths'].every(isRepoRelativePath) &&
     typeof value['startedAt'] === 'string' &&
     (value['completedAt'] === undefined || typeof value['completedAt'] === 'string') &&
+    (value['costSummary'] === undefined || isRemoteCodingCostSummary(value['costSummary'])) &&
+    (value['budgetDecision'] === undefined || isRemoteBudgetDecision(value['budgetDecision'])) &&
     value['redacted'] === true
   )
 }
@@ -259,6 +341,15 @@ function readRequiredString(value: Record<string, unknown>, key: string): string
   }
 
   return raw.trim()
+}
+
+function readRequiredNumber(value: Record<string, unknown>, key: string): number {
+  const raw = value[key]
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    throw new Error(`Invalid ${key}`)
+  }
+
+  return raw
 }
 
 function parseProviderCredential(value: unknown): AgentProviderCredentialInput {
@@ -324,6 +415,57 @@ function parseGateOverrideInput(value: unknown): GateOverrideInput {
     reason: readRequiredString(value, 'reason'),
     blockedReasonIds,
     policyVersion,
+  }
+}
+
+function parseRuntimeBudgetPolicyInput(value: unknown): RuntimeBudgetPolicyInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid runtime budget policy payload')
+  }
+  const enabled = value['enabled']
+  if (typeof enabled !== 'boolean') {
+    throw new Error('Invalid enabled')
+  }
+  const monthlyLimitUsd = readRequiredNumber(value, 'monthlyLimitUsd')
+  const warningThresholdUsd = readRequiredNumber(value, 'warningThresholdUsd')
+  if (monthlyLimitUsd < 0 || warningThresholdUsd < 0 || warningThresholdUsd > monthlyLimitUsd) {
+    throw new Error('Invalid runtime budget thresholds')
+  }
+  return {
+    projectId: readRequiredString(value, 'projectId'),
+    enabled,
+    monthlyLimitUsd,
+    warningThresholdUsd,
+  }
+}
+
+function parseRuntimeBudgetEvaluateInput(value: unknown): RuntimeBudgetEvaluateInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid runtime budget evaluate payload')
+  }
+  const approvalId = value['approvalId']
+  return {
+    projectId: readRequiredString(value, 'projectId'),
+    projectedCostUsd: readRequiredNumber(value, 'projectedCostUsd'),
+    ...(typeof approvalId === 'string' && approvalId.trim() ? { approvalId: approvalId.trim() } : {}),
+  }
+}
+
+function parseRuntimeBudgetApprovalInput(value: unknown): RuntimeBudgetApprovalInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid runtime budget approval payload')
+  }
+  const maxAdditionalCostUsd = readRequiredNumber(value, 'maxAdditionalCostUsd')
+  if (maxAdditionalCostUsd <= 0) {
+    throw new Error('Invalid maxAdditionalCostUsd')
+  }
+  return {
+    projectId: readRequiredString(value, 'projectId'),
+    providerId: readRequiredString(value, 'providerId'),
+    requestedBy: readRequiredString(value, 'requestedBy'),
+    maxAdditionalCostUsd,
+    reason: readRequiredString(value, 'reason'),
+    expiresAt: readRequiredString(value, 'expiresAt'),
   }
 }
 
@@ -815,6 +957,124 @@ export async function resolveTeamRoute(
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to save gate override'
       return message.includes('access') ? forbidden(message) : badRequest(message)
+    }
+  }
+
+  if (method === 'GET' && pathname === '/api/runtime/budget-policy') {
+    if (!options.session) {
+      return unauthorized()
+    }
+    const projectId = options.searchParams?.get('projectId') ?? ''
+    if (!projectId) {
+      return badRequest('Invalid projectId')
+    }
+    if (!canAccessProject(options.session, projectId)) {
+      return forbidden('Project access required')
+    }
+
+    return {
+      status: 200,
+      body: {
+        policy: await repository.getRuntimeBudgetPolicy(projectId, options.session),
+      },
+    }
+  }
+
+  if (method === 'PUT' && pathname === '/api/runtime/budget-policy') {
+    if (!options.session) {
+      return unauthorized()
+    }
+    let input: RuntimeBudgetPolicyInput
+    try {
+      input = parseRuntimeBudgetPolicyInput(options.body)
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : 'Invalid runtime budget policy payload')
+    }
+    if (!canSyncProject(options.session, input.projectId, 'lead')) {
+      return forbidden('Project role lead required')
+    }
+    const policy: RuntimeBudgetPolicy = {
+      projectId: input.projectId,
+      enabled: input.enabled,
+      monthlyLimitUsd: input.monthlyLimitUsd,
+      warningThresholdUsd: input.warningThresholdUsd,
+      currency: 'USD',
+      updatedAt: new Date().toISOString(),
+    }
+
+    return {
+      status: 200,
+      body: await repository.saveRuntimeBudgetPolicy(policy, options.session),
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/runtime/budget/evaluate') {
+    if (!options.session) {
+      return unauthorized()
+    }
+    let input: RuntimeBudgetEvaluateInput
+    try {
+      input = parseRuntimeBudgetEvaluateInput(options.body)
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : 'Invalid runtime budget evaluate payload')
+    }
+    if (!canAccessProject(options.session, input.projectId)) {
+      return forbidden('Project access required')
+    }
+    const [overview, policy, approvals] = await Promise.all([
+      repository.getTeamOverview(),
+      repository.getRuntimeBudgetPolicy(input.projectId, options.session),
+      repository.listRuntimeBudgetApprovals({ projectId: input.projectId }, options.session),
+    ])
+    const currentSpendUsd =
+      overview.projectCost.find((rollup) => rollup.key === input.projectId)?.costUsd ?? 0
+    const approval = input.approvalId
+      ? approvals.find((candidate) => candidate.id === input.approvalId) ?? null
+      : null
+
+    return {
+      status: 200,
+      body: evaluateRuntimeBudgetGuard({
+        policy,
+        currentSpendUsd,
+        projectedCostUsd: input.projectedCostUsd,
+        requestedBy: options.session.userId,
+        approval,
+        now: new Date().toISOString(),
+      }),
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/runtime/budget-approvals') {
+    if (!options.session) {
+      return unauthorized()
+    }
+    let input: RuntimeBudgetApprovalInput
+    try {
+      input = parseRuntimeBudgetApprovalInput(options.body)
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : 'Invalid runtime budget approval payload')
+    }
+    if (!canSyncProject(options.session, input.projectId, 'lead')) {
+      return forbidden('Project role lead required')
+    }
+    const approval: RuntimeBudgetApproval = {
+      id: `runtime-budget-approval-${input.projectId}-${Date.now()}`,
+      projectId: input.projectId,
+      requestedBy: input.requestedBy,
+      approvedBy: options.session.userId,
+      role: options.session.role,
+      providerId: input.providerId,
+      maxAdditionalCostUsd: input.maxAdditionalCostUsd,
+      reason: input.reason,
+      status: 'approved',
+      createdAt: new Date().toISOString(),
+      expiresAt: input.expiresAt,
+    }
+
+    return {
+      status: 201,
+      body: await repository.saveRuntimeBudgetApproval(approval, options.session),
     }
   }
 

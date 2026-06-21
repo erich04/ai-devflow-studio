@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
   AgentEvent,
   Artifact,
+  BudgetGuardDecision,
   CodingAgentEvent,
   CodingAgentRun,
   CodingDiffArtifact,
@@ -93,6 +94,55 @@ describe('CodingRuntime', () => {
       }),
     ).rejects.toThrow(/already active/)
     expect(store.workspaces).toHaveLength(0)
+  })
+
+  it('blocks real provider coding runs before engine start when project budget requires lead approval', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createSpyCodingEngine('opencode-http')
+    const budgetGuard = vi.fn(async () => ({
+      status: 'requires_lead_approval',
+      blocksRun: true,
+      currentSpendUsd: 0.95,
+      projectedCostUsd: 0.2,
+      limitUsd: 1,
+      approvalRequiredRole: 'lead',
+      reason: 'Project runtime budget would be exceeded.',
+    } satisfies BudgetGuardDecision))
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      remoteSync: { uploadCodingAgentSummary: vi.fn() },
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-budget'),
+      now: fixedNow('2026-06-20T00:00:00.000Z'),
+      budgetGuard,
+    })
+
+    const result = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'double',
+      userInstruction: 'Use the real runtime.',
+    })
+
+    expect(engine.start).not.toHaveBeenCalled()
+    expect(budgetGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        engine: 'opencode-http',
+        providerId: 'double',
+        requestedBy: 'user-1',
+        estimatedCost: expect.objectContaining({ costUsd: expect.any(Number), redacted: true }),
+      }),
+    )
+    expect(result.codingRun.status).toBe('failed')
+    expect(result.codingRun.summary).toContain('Runtime budget requires lead approval')
+    expect(store.codingEvents.some((event) => event.kind === 'error' && event.message.includes('budget'))).toBe(true)
   })
 
   it('rejects coding runs from nodes that are not build task nodes', async () => {
@@ -879,6 +929,25 @@ function upsert<T extends { id: string }>(items: T[], item: T) {
     items[index] = item
   } else {
     items.push(item)
+  }
+}
+
+function createSpyCodingEngine(engine: CodingAgentRun['engine']): CodingEngineAdapter {
+  return {
+    engine,
+    modelId: engine === 'fake' ? 'fake' : 'ark-code-latest',
+    ensure: vi.fn(async (input) => ({
+      projectId: input.project.id,
+      engine,
+      status: 'ready' as const,
+    })),
+    start: vi.fn(async () => {
+      throw new Error('engine.start should not be called in this test')
+    }),
+    approvePermission: vi.fn(async () => {
+      throw new Error('approvePermission should not be called in this test')
+    }),
+    cancel: vi.fn(async () => undefined),
   }
 }
 
