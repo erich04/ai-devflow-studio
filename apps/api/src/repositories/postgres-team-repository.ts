@@ -3,6 +3,7 @@ import {
   formatUsd,
   buildPolicyAwareDeliverySummaries,
   rollupTokenUsage,
+  runtimeCostSummaryToTokenUsage,
   type AgentEvent,
   type AgentEventKind,
   type AgentProviderConfig,
@@ -23,6 +24,8 @@ import {
   type ProjectMembership,
   type ProviderCredentialMetadata,
   type RemoteCodingAgentSummary,
+  type RuntimeBudgetApproval,
+  type RuntimeBudgetPolicy,
   type RemoteTestEvidenceSummary,
   type RequiredGateRole,
   type Role,
@@ -275,6 +278,13 @@ type CodingAgentSummaryRow = {
   changed_paths: unknown
   started_at: TimestampValue
   completed_at: TimestampValue | null
+  cost_provider: NonNullable<RemoteCodingAgentSummary['costSummary']>['provider'] | null
+  cost_model: string | null
+  cost_input_tokens: number | null
+  cost_output_tokens: number | null
+  cost_cache_read_tokens: number | null
+  cost_usd: string | number | null
+  cost_source: NonNullable<RemoteCodingAgentSummary['costSummary']>['source'] | null
   redacted: boolean
 }
 
@@ -300,6 +310,29 @@ type GateOverrideDecisionRow = {
   provisional: boolean
   status: GateOverrideDecision['status']
   created_at: TimestampValue
+}
+
+type RuntimeBudgetPolicyRow = {
+  project_id: string
+  enabled: boolean
+  monthly_limit_usd: string | number
+  warning_threshold_usd: string | number
+  currency: 'USD'
+  updated_at: TimestampValue
+}
+
+type RuntimeBudgetApprovalRow = {
+  id: string
+  project_id: string
+  requested_by: string
+  approved_by: string
+  role: RuntimeBudgetApproval['role']
+  provider_id: string
+  max_additional_cost_usd: string | number
+  reason: string
+  status: RuntimeBudgetApproval['status']
+  created_at: TimestampValue
+  expires_at: TimestampValue
 }
 
 type DesktopPairingCodeRow = {
@@ -678,6 +711,33 @@ function mapGateOverride(row: GateOverrideDecisionRow): GateOverrideDecision {
   }
 }
 
+function mapRuntimeBudgetPolicy(row: RuntimeBudgetPolicyRow): RuntimeBudgetPolicy {
+  return {
+    projectId: row.project_id,
+    enabled: row.enabled,
+    monthlyLimitUsd: Number(row.monthly_limit_usd),
+    warningThresholdUsd: Number(row.warning_threshold_usd),
+    currency: row.currency,
+    updatedAt: timestamp(row.updated_at),
+  }
+}
+
+function mapRuntimeBudgetApproval(row: RuntimeBudgetApprovalRow): RuntimeBudgetApproval {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    requestedBy: row.requested_by,
+    approvedBy: row.approved_by,
+    role: row.role,
+    providerId: row.provider_id,
+    maxAdditionalCostUsd: Number(row.max_additional_cost_usd),
+    reason: row.reason,
+    status: row.status,
+    createdAt: timestamp(row.created_at),
+    expiresAt: timestamp(row.expires_at),
+  }
+}
+
 function mapAgentTrace(row: AgentTraceRow): AgentTrace {
   return {
     id: row.id,
@@ -702,7 +762,7 @@ function mapCodingAgentSummary(row: CodingAgentSummaryRow): RemoteCodingAgentSum
     ? row.changed_paths.filter((value): value is string => typeof value === 'string')
     : []
 
-  return {
+  const summary: RemoteCodingAgentSummary = {
     id: row.id,
     runId: row.run_id,
     nodeId: row.node_id,
@@ -718,6 +778,28 @@ function mapCodingAgentSummary(row: CodingAgentSummaryRow): RemoteCodingAgentSum
     ...(row.completed_at ? { completedAt: timestamp(row.completed_at) } : {}),
     redacted: row.redacted,
   }
+
+  if (row.cost_provider && row.cost_model && row.cost_source) {
+    summary.costSummary = {
+      id: `coding-runtime-cost-${row.run_id}-${row.node_id}`,
+      runId: row.run_id,
+      nodeId: row.node_id,
+      userId: row.requested_by,
+      projectId: row.project_id,
+      provider: row.cost_provider,
+      providerId: row.provider_id,
+      model: row.cost_model,
+      inputTokens: Number(row.cost_input_tokens ?? 0),
+      outputTokens: Number(row.cost_output_tokens ?? 0),
+      cacheReadTokens: Number(row.cost_cache_read_tokens ?? 0),
+      costUsd: Number(row.cost_usd ?? 0),
+      timestamp: timestamp(row.completed_at ?? row.started_at),
+      source: row.cost_source,
+      redacted: true,
+    }
+  }
+
+  return summary
 }
 
 function mapSkill(row: SkillRow): SkillDefinition {
@@ -1259,6 +1341,8 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         codingSummaryRows,
         enforcementPolicyRows,
         gateOverrideRows,
+        runtimeBudgetPolicyRows,
+        runtimeBudgetApprovalRows,
       ] = await Promise.all([
         db.query<ProjectRow>('SELECT * FROM projects ORDER BY name ASC'),
         db.query<UserRow>('SELECT * FROM users ORDER BY name ASC'),
@@ -1282,6 +1366,12 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         db.query<GateOverrideDecisionRow>(
           'SELECT * FROM gate_override_decisions ORDER BY created_at DESC',
         ),
+        db.query<RuntimeBudgetPolicyRow>(
+          'SELECT * FROM runtime_budget_policies ORDER BY updated_at DESC',
+        ),
+        db.query<RuntimeBudgetApprovalRow>(
+          'SELECT * FROM runtime_budget_approvals ORDER BY created_at DESC',
+        ),
       ])
       const tokenUsage = tokenRows.map(mapTokenUsage)
       const organizationPolicy = mapOrganizationPolicy(
@@ -1295,15 +1385,22 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
       const testEvidenceSummaries = evidenceRows.map(mapTestEvidenceSummary)
       const agentReviews = agentReviewRows.map(mapAgentReview)
       const codingAgentSummaries = codingSummaryRows.map(mapCodingAgentSummary)
+      const codingTokenUsage = codingAgentSummaries
+        .map((summary) => summary.costSummary)
+        .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
+        .map(runtimeCostSummaryToTokenUsage)
+      const allTokenUsage = [...tokenUsage, ...codingTokenUsage]
       const gateOverrides = gateOverrideRows.map(mapGateOverride)
+      const runtimeBudgetPolicies = runtimeBudgetPolicyRows.map(mapRuntimeBudgetPolicy)
+      const runtimeBudgetApprovals = runtimeBudgetApprovalRows.map(mapRuntimeBudgetApproval)
 
       return {
         projects: projectRows.map(mapProject),
         members: memberRows.map(mapMember),
         runs: runsBundle.runs,
-        projectCost: rollupTokenUsage(tokenUsage, 'projectId'),
-        memberCost: rollupTokenUsage(tokenUsage, 'userId'),
-        totalCost: formatUsd(tokenUsage.reduce((sum, row) => sum + row.costUsd, 0)),
+        projectCost: rollupTokenUsage(allTokenUsage, 'projectId'),
+        memberCost: rollupTokenUsage(allTokenUsage, 'userId'),
+        totalCost: formatUsd(allTokenUsage.reduce((sum, row) => sum + row.costUsd, 0)),
         testEvidenceSummaries,
         agentReviews,
         agentTraces: agentTraceRows.map(mapAgentTrace),
@@ -1328,6 +1425,8 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
           ),
           gateOverrides,
         },
+        runtimeBudgetPolicies,
+        runtimeBudgetApprovals,
         agentProviders: [
           {
             id: 'fake-knowledge-review',
@@ -1719,9 +1818,16 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
             changed_paths,
             started_at,
             completed_at,
+            cost_provider,
+            cost_model,
+            cost_input_tokens,
+            cost_output_tokens,
+            cost_cache_read_tokens,
+            cost_usd,
+            cost_source,
             redacted
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
           ON CONFLICT (id) DO UPDATE
           SET node_id = excluded.node_id,
               project_id = excluded.project_id,
@@ -1734,6 +1840,13 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
               changed_paths = excluded.changed_paths,
               started_at = excluded.started_at,
               completed_at = excluded.completed_at,
+              cost_provider = excluded.cost_provider,
+              cost_model = excluded.cost_model,
+              cost_input_tokens = excluded.cost_input_tokens,
+              cost_output_tokens = excluded.cost_output_tokens,
+              cost_cache_read_tokens = excluded.cost_cache_read_tokens,
+              cost_usd = excluded.cost_usd,
+              cost_source = excluded.cost_source,
               redacted = excluded.redacted
         `,
         [
@@ -1751,6 +1864,13 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
           JSON.stringify(summary.changedPaths),
           summary.startedAt,
           summary.completedAt ?? null,
+          summary.costSummary?.provider ?? null,
+          summary.costSummary?.model ?? null,
+          summary.costSummary?.inputTokens ?? null,
+          summary.costSummary?.outputTokens ?? null,
+          summary.costSummary?.cacheReadTokens ?? null,
+          summary.costSummary?.costUsd ?? null,
+          summary.costSummary?.source ?? null,
           summary.redacted,
         ],
       )
@@ -2237,6 +2357,113 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
       )
 
       return rows.map(mapGateOverride)
+    },
+
+    async getRuntimeBudgetPolicy(projectId, context) {
+      const rows = await db.query<RuntimeBudgetPolicyRow>(
+        `
+          SELECT *
+          FROM runtime_budget_policies
+          WHERE organization_id = $1
+            AND project_id = $2
+          LIMIT 1
+        `,
+        [context.organizationId, projectId],
+      )
+
+      return rows[0] ? mapRuntimeBudgetPolicy(rows[0]) : null
+    },
+
+    async saveRuntimeBudgetPolicy(policy, context) {
+      await db.query(
+        `
+          INSERT INTO runtime_budget_policies (
+            project_id,
+            organization_id,
+            enabled,
+            monthly_limit_usd,
+            warning_threshold_usd,
+            currency,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT (project_id) DO UPDATE
+          SET enabled = excluded.enabled,
+              monthly_limit_usd = excluded.monthly_limit_usd,
+              warning_threshold_usd = excluded.warning_threshold_usd,
+              currency = excluded.currency,
+              updated_at = excluded.updated_at
+        `,
+        [
+          policy.projectId,
+          context.organizationId,
+          policy.enabled,
+          policy.monthlyLimitUsd,
+          policy.warningThresholdUsd,
+          policy.currency,
+          policy.updatedAt,
+        ],
+      )
+
+      return policy
+    },
+
+    async saveRuntimeBudgetApproval(approval, context) {
+      await db.query(
+        `
+          INSERT INTO runtime_budget_approvals (
+            id,
+            organization_id,
+            project_id,
+            requested_by,
+            approved_by,
+            role,
+            provider_id,
+            max_additional_cost_usd,
+            reason,
+            status,
+            created_at,
+            expires_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          ON CONFLICT (id) DO UPDATE
+          SET max_additional_cost_usd = excluded.max_additional_cost_usd,
+              reason = excluded.reason,
+              status = excluded.status,
+              expires_at = excluded.expires_at
+        `,
+        [
+          approval.id,
+          context.organizationId,
+          approval.projectId,
+          approval.requestedBy,
+          approval.approvedBy,
+          approval.role,
+          approval.providerId,
+          approval.maxAdditionalCostUsd,
+          approval.reason,
+          approval.status,
+          approval.createdAt,
+          approval.expiresAt,
+        ],
+      )
+
+      return approval
+    },
+
+    async listRuntimeBudgetApprovals(input, context) {
+      const rows = await db.query<RuntimeBudgetApprovalRow>(
+        `
+          SELECT *
+          FROM runtime_budget_approvals
+          WHERE organization_id = $1
+            AND ($2::text IS NULL OR project_id = $2)
+          ORDER BY created_at DESC
+        `,
+        [context.organizationId, input.projectId ?? null],
+      )
+
+      return rows.map(mapRuntimeBudgetApproval)
     },
   }
 }

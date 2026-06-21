@@ -6,6 +6,7 @@ import {
   members,
   projects,
   rollupTokenUsage,
+  runtimeCostSummaryToTokenUsage,
   runs,
   skills,
   tokenUsage,
@@ -32,6 +33,8 @@ import {
   type ProjectEnforcementPolicyOverride,
   type RemoteAgentReviewSummary,
   type RemoteCodingAgentSummary,
+  type RuntimeBudgetApproval,
+  type RuntimeBudgetPolicy,
   type PolicyAwareDeliverySummary,
   type RemoteRunSummary,
   type RemoteSyncUploadResult,
@@ -82,6 +85,8 @@ export type TeamOverviewPayload = {
     effectivePolicies: EffectiveEnforcementPolicy[]
     gateOverrides: GateOverrideDecision[]
   }
+  runtimeBudgetPolicies: RuntimeBudgetPolicy[]
+  runtimeBudgetApprovals: RuntimeBudgetApproval[]
 }
 
 export type TeamRepositorySyncContext = Pick<TeamSession, 'organizationId' | 'userId'>
@@ -190,6 +195,22 @@ export type TeamRepository = {
     input: { runId?: string },
     context: TeamRepositorySyncContext,
   ): Promise<GateOverrideDecision[]>
+  getRuntimeBudgetPolicy(
+    projectId: string,
+    context: TeamRepositorySyncContext,
+  ): Promise<RuntimeBudgetPolicy | null>
+  saveRuntimeBudgetPolicy(
+    policy: RuntimeBudgetPolicy,
+    context: TeamRepositorySyncContext,
+  ): Promise<RuntimeBudgetPolicy>
+  saveRuntimeBudgetApproval(
+    approval: RuntimeBudgetApproval,
+    context: TeamRepositorySyncContext,
+  ): Promise<RuntimeBudgetApproval>
+  listRuntimeBudgetApprovals(
+    input: { projectId?: string },
+    context: TeamRepositorySyncContext,
+  ): Promise<RuntimeBudgetApproval[]>
 }
 
 export function createSeedTeamRepository(): TeamRepository {
@@ -206,6 +227,8 @@ export function createSeedTeamRepository(): TeamRepository {
   let organizationPolicy = createWarnOnlyDefaultPolicy()
   const projectOverrides: ProjectEnforcementPolicyOverride[] = []
   const gateOverrides: GateOverrideDecision[] = []
+  const runtimeBudgetPolicies: RuntimeBudgetPolicy[] = []
+  const runtimeBudgetApprovals: RuntimeBudgetApproval[] = []
 
   function upsertSyncedRun(run: WorkflowRun) {
     const index = syncedRuns.findIndex((candidate) => candidate.id === run.id)
@@ -380,13 +403,19 @@ export function createSeedTeamRepository(): TeamRepository {
     },
 
     async getTeamOverview() {
+      const codingTokenUsage = codingAgentSummaries
+        .map((summary) => summary.costSummary)
+        .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
+        .map(runtimeCostSummaryToTokenUsage)
+      const allTokenUsage = [...tokenUsage, ...codingTokenUsage]
+
       return {
         projects: teamProjects,
         members,
         runs: syncedRuns,
-        projectCost: rollupTokenUsage(tokenUsage, 'projectId'),
-        memberCost: rollupTokenUsage(tokenUsage, 'userId'),
-        totalCost: formatUsd(tokenUsage.reduce((sum, row) => sum + row.costUsd, 0)),
+        projectCost: rollupTokenUsage(allTokenUsage, 'projectId'),
+        memberCost: rollupTokenUsage(allTokenUsage, 'userId'),
+        totalCost: formatUsd(allTokenUsage.reduce((sum, row) => sum + row.costUsd, 0)),
         testEvidenceSummaries: syncedTestEvidenceSummaries,
         agentReviews,
         agentTraces,
@@ -412,6 +441,8 @@ export function createSeedTeamRepository(): TeamRepository {
           ),
           gateOverrides,
         },
+        runtimeBudgetPolicies,
+        runtimeBudgetApprovals,
       }
     },
 
@@ -574,6 +605,29 @@ export function createSeedTeamRepository(): TeamRepository {
 
     async listGateOverrides(input) {
       return gateOverrides.filter((decision) => !input.runId || decision.runId === input.runId)
+    },
+
+    async getRuntimeBudgetPolicy(projectId) {
+      return runtimeBudgetPolicies.find((policy) => policy.projectId === projectId) ?? null
+    },
+
+    async saveRuntimeBudgetPolicy(policy) {
+      const index = runtimeBudgetPolicies.findIndex((candidate) => candidate.projectId === policy.projectId)
+      if (index >= 0) {
+        runtimeBudgetPolicies[index] = policy
+      } else {
+        runtimeBudgetPolicies.unshift(policy)
+      }
+      return policy
+    },
+
+    async saveRuntimeBudgetApproval(approval) {
+      upsertById(runtimeBudgetApprovals, approval)
+      return approval
+    },
+
+    async listRuntimeBudgetApprovals(input) {
+      return runtimeBudgetApprovals.filter((approval) => !input.projectId || approval.projectId === input.projectId)
     },
   }
 }

@@ -227,6 +227,23 @@ coding workspace. The team backend receives only a redacted summary, not the raw
 
 The measured model usage for a Run, Node, member, project, or model provider.
 
+## Runtime Cost Summary
+
+A redacted cost summary for a Coding Agent runtime run. It records provider, model, estimated or
+provider-reported token usage, cost, and source, without storing raw prompts, cwd, stdout/stderr,
+patch bodies, or provider secrets.
+
+## Runtime Budget Guard
+
+The pre-provider-call policy check that compares projected Coding Agent runtime cost against a team
+project budget. It can allow, warn, require lead approval, or accept an existing lead approval before
+the real provider is invoked.
+
+## Runtime Budget Approval
+
+An auditable lead approval that permits a specific requester to run real provider work beyond the
+configured project budget for a bounded cost and time window.
+
 ## Local Project
 
 A repository directory selected on a developer's machine for local execution. It carries local-only

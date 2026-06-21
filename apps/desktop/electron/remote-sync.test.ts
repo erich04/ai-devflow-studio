@@ -350,4 +350,49 @@ describe('Electron remote sync client', () => {
       policyVersion: gateOverride.policyVersion,
     })
   })
+
+  it('evaluates runtime budget through the team API without sending local-only context', async () => {
+    const decision = {
+      status: 'requires_lead_approval',
+      blocksRun: true,
+      currentSpendUsd: 0.019,
+      projectedCostUsd: 0.004,
+      limitUsd: 0.02,
+      approvalRequiredRole: 'lead',
+      reason: 'Project runtime budget would be exceeded.',
+    }
+    const calls: Array<{ url: string; init: RequestInit | undefined }> = []
+    const fetcher = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      calls.push({ url: String(input), init })
+      return new Response(JSON.stringify(decision), { status: 200 })
+    })
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'devflow_desktop_token_123',
+    })
+
+    await expect(
+      client.evaluateRuntimeBudget({
+        projectId: 'p-remote',
+        projectedCostUsd: 0.004,
+      }),
+    ).resolves.toEqual(decision)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.url).toBe('http://api.local/api/runtime/budget/evaluate')
+    expect(calls[0]?.init?.headers).toEqual({
+      accept: 'application/json',
+      authorization: 'Bearer devflow_desktop_token_123',
+      'content-type': 'application/json',
+    })
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      projectId: 'p-remote',
+      projectedCostUsd: 0.004,
+    })
+    expect(String(calls[0]?.init?.body)).not.toContain('prompt')
+    expect(String(calls[0]?.init?.body)).not.toContain('cwd')
+    expect(String(calls[0]?.init?.body)).not.toContain('stdout')
+    expect(String(calls[0]?.init?.body)).not.toContain('stderr')
+  })
 })

@@ -3,6 +3,7 @@ import type {
   Artifact,
   DevFlowSessionHeaders,
   DesktopPairingExchangeResult,
+  BudgetGuardDecision,
   RemoteAgentReviewSummary,
   RemoteCodingAgentSummary,
   RemoteRunSummary,
@@ -59,6 +60,7 @@ export type RemoteSyncClient = {
   uploadAgentReviewSummary(summary: RemoteAgentReviewSummary): Promise<RemoteSyncUploadResult>
   uploadCodingAgentSummary(summary: RemoteCodingAgentSummary): Promise<RemoteSyncUploadResult>
   saveGateOverride(input: RemoteGateOverrideInput): Promise<GateOverrideDecision>
+  evaluateRuntimeBudget(input: RemoteRuntimeBudgetEvaluateInput): Promise<BudgetGuardDecision>
 }
 
 export type RemoteGateOverrideInput = {
@@ -70,6 +72,12 @@ export type RemoteGateOverrideInput = {
   reason: string
   blockedReasonIds: string[]
   policyVersion: number
+}
+
+export type RemoteRuntimeBudgetEvaluateInput = {
+  projectId: string
+  projectedCostUsd: number
+  approvalId?: string
 }
 
 export function resolveRemoteApiBaseUrl(
@@ -272,6 +280,20 @@ export function createRemoteSyncClient(
         hasAuthToken(authToken)
           ? tokenPostHeaders(authToken)
           : jsonPostHeaders(headersForGateOverride(sessionHeaders, input)),
+      )
+    },
+
+    async evaluateRuntimeBudget(input) {
+      return postJson<BudgetGuardDecision>(
+        fetcher,
+        buildUrl(apiBaseUrl, '/api/runtime/budget/evaluate'),
+        {
+          projectId: input.projectId,
+          projectedCostUsd: input.projectedCostUsd,
+          ...(input.approvalId ? { approvalId: input.approvalId } : {}),
+        },
+        '/api/runtime/budget/evaluate',
+        hasAuthToken(authToken) ? tokenPostHeaders(authToken) : jsonPostHeaders(sessionHeaders),
       )
     },
   }

@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 6
+export const TEAM_SCHEMA_VERSION = 7
 
 export const requiredTeamTableNames = [
   'schema_meta',
@@ -25,6 +25,8 @@ export const requiredTeamTableNames = [
   'coding_agent_summaries',
   'enforcement_policies',
   'gate_override_decisions',
+  'runtime_budget_policies',
+  'runtime_budget_approvals',
   'agent_policy_findings',
 ] as const
 
@@ -390,6 +392,13 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('changed_paths', 'jsonb'),
       column('started_at', 'timestamptz'),
       column('completed_at', 'timestamptz', { nullable: true }),
+      column('cost_provider', 'text', { nullable: true }),
+      column('cost_model', 'text', { nullable: true }),
+      column('cost_input_tokens', 'integer', { nullable: true }),
+      column('cost_output_tokens', 'integer', { nullable: true }),
+      column('cost_cache_read_tokens', 'integer', { nullable: true }),
+      column('cost_usd', 'numeric(12,6)', { nullable: true }),
+      column('cost_source', 'text', { nullable: true }),
       column('redacted', 'boolean'),
     ],
   },
@@ -421,6 +430,35 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('provisional', 'boolean'),
       column('status', 'text'),
       column('created_at', 'timestamptz'),
+    ],
+  },
+  {
+    name: 'runtime_budget_policies',
+    columns: [
+      column('project_id', 'text', { primaryKey: true, references: 'projects.id' }),
+      column('organization_id', 'text', { references: 'organizations.id' }),
+      column('enabled', 'boolean'),
+      column('monthly_limit_usd', 'numeric(12,6)'),
+      column('warning_threshold_usd', 'numeric(12,6)'),
+      column('currency', 'text'),
+      column('updated_at', 'timestamptz'),
+    ],
+  },
+  {
+    name: 'runtime_budget_approvals',
+    columns: [
+      column('id', 'text', { primaryKey: true }),
+      column('organization_id', 'text', { references: 'organizations.id' }),
+      column('project_id', 'text', { references: 'projects.id' }),
+      column('requested_by', 'text', { references: 'users.id' }),
+      column('approved_by', 'text', { references: 'users.id' }),
+      column('role', 'text'),
+      column('provider_id', 'text'),
+      column('max_additional_cost_usd', 'numeric(12,6)'),
+      column('reason', 'text'),
+      column('status', 'text'),
+      column('created_at', 'timestamptz'),
+      column('expires_at', 'timestamptz'),
     ],
   },
   {

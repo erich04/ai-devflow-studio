@@ -311,6 +311,13 @@ CREATE TABLE IF NOT EXISTS coding_agent_summaries (
   changed_paths jsonb NOT NULL DEFAULT '[]'::jsonb,
   started_at timestamptz NOT NULL,
   completed_at timestamptz,
+  cost_provider text CHECK (cost_provider IS NULL OR cost_provider IN ('openai', 'anthropic', 'dashscope', 'local')),
+  cost_model text,
+  cost_input_tokens integer,
+  cost_output_tokens integer,
+  cost_cache_read_tokens integer,
+  cost_usd numeric(12,6),
+  cost_source text CHECK (cost_source IS NULL OR cost_source IN ('provider_reported', 'estimated')),
   redacted boolean NOT NULL DEFAULT true
 );
 
@@ -338,6 +345,31 @@ CREATE TABLE IF NOT EXISTS gate_override_decisions (
   provisional boolean NOT NULL DEFAULT false,
   status text NOT NULL,
   created_at timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS runtime_budget_policies (
+  project_id text PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  enabled boolean NOT NULL DEFAULT false,
+  monthly_limit_usd numeric(12,6) NOT NULL DEFAULT 0,
+  warning_threshold_usd numeric(12,6) NOT NULL DEFAULT 0,
+  currency text NOT NULL DEFAULT 'USD',
+  updated_at timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS runtime_budget_approvals (
+  id text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  requested_by text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  approved_by text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  role text NOT NULL CHECK (role IN ('owner', 'lead', 'member')),
+  provider_id text NOT NULL,
+  max_additional_cost_usd numeric(12,6) NOT NULL,
+  reason text NOT NULL,
+  status text NOT NULL CHECK (status IN ('approved', 'rejected', 'expired')),
+  created_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS agent_policy_findings (
@@ -373,7 +405,7 @@ CREATE INDEX IF NOT EXISTS idx_gate_override_decisions_run_id ON gate_override_d
 CREATE INDEX IF NOT EXISTS idx_agent_policy_findings_review_id ON agent_policy_findings(review_id);
 
 INSERT INTO schema_meta (key, value)
-VALUES ('schema_version', '6')
+VALUES ('schema_version', '7')
 ON CONFLICT (key) DO UPDATE
 SET value = excluded.value,
     updated_at = now();

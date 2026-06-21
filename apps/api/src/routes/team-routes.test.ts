@@ -258,12 +258,16 @@ function createRepository(): TeamRepository {
       ],
       gateOverrides: [],
     },
+    runtimeBudgetPolicies: [],
+    runtimeBudgetApprovals: [],
   }
   const organizationPolicy = createWarnOnlyDefaultPolicy({
     organizationId: 'org-demo',
     updatedAt: '2026-06-16T00:00:00.000Z',
   })
   const gateOverrides: GateOverrideDecision[] = []
+  const runtimeBudgetPolicies = overview.runtimeBudgetPolicies
+  const runtimeBudgetApprovals = overview.runtimeBudgetApprovals
 
   return {
     getAuthenticatedIdentity: vi.fn(async () => null),
@@ -340,6 +344,25 @@ function createRepository(): TeamRepository {
       return decision
     }),
     listGateOverrides: vi.fn(async () => gateOverrides),
+    getRuntimeBudgetPolicy: vi.fn(async (projectId) =>
+      runtimeBudgetPolicies.find((policy) => policy.projectId === projectId) ?? null,
+    ),
+    saveRuntimeBudgetPolicy: vi.fn(async (policy) => {
+      const index = runtimeBudgetPolicies.findIndex((candidate) => candidate.projectId === policy.projectId)
+      if (index >= 0) {
+        runtimeBudgetPolicies[index] = policy
+      } else {
+        runtimeBudgetPolicies.unshift(policy)
+      }
+      return policy
+    }),
+    saveRuntimeBudgetApproval: vi.fn(async (approval) => {
+      runtimeBudgetApprovals.unshift(approval)
+      return approval
+    }),
+    listRuntimeBudgetApprovals: vi.fn(async (input) =>
+      runtimeBudgetApprovals.filter((approval) => !input.projectId || approval.projectId === input.projectId),
+    ),
     saveAgentProviderCredential: vi.fn(async (metadata) => metadata),
     getAgentProviderCredential: vi.fn(async () => null),
     saveAgentReviewBundle: vi.fn(async (bundle) => ({
@@ -817,6 +840,61 @@ describe('team API route resolver', () => {
     })
   })
 
+  it('evaluates runtime budget guard and accepts lead budget approvals', async () => {
+    const repository = createRepository()
+
+    const policyResult = await resolveTeamRoute('PUT', '/api/runtime/budget-policy', repository, {
+      body: {
+        projectId: 'p-payments',
+        enabled: true,
+        monthlyLimitUsd: 0.02,
+        warningThresholdUsd: 0.01,
+      },
+      session: leadSession,
+    })
+    expect(policyResult?.status).toBe(200)
+
+    const blocked = await resolveTeamRoute('POST', '/api/runtime/budget/evaluate', repository, {
+      body: {
+        projectId: 'p-payments',
+        projectedCostUsd: 0.02,
+      },
+      session: memberSession,
+    })
+    expect(blocked?.body).toMatchObject({
+      status: 'requires_lead_approval',
+      blocksRun: true,
+    })
+
+    const approval = await resolveTeamRoute('POST', '/api/runtime/budget-approvals', repository, {
+      body: {
+        projectId: 'p-payments',
+        providerId: 'double',
+        requestedBy: 'u-yu',
+        maxAdditionalCostUsd: 0.05,
+        reason: 'Release smoke with real provider is approved.',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      },
+      session: leadSession,
+    })
+    expect(approval?.status).toBe(201)
+    const approvalId = (approval?.body as { id: string }).id
+
+    const allowed = await resolveTeamRoute('POST', '/api/runtime/budget/evaluate', repository, {
+      body: {
+        projectId: 'p-payments',
+        projectedCostUsd: 0.02,
+        approvalId,
+      },
+      session: memberSession,
+    })
+    expect(allowed?.body).toMatchObject({
+      status: 'approved_over_budget',
+      blocksRun: false,
+      approvalId,
+    })
+  })
+
   it('rejects gate override for owners and conflicted leads', async () => {
     const repository = createRepository()
     const body = {
@@ -1023,6 +1101,23 @@ describe('team API route resolver', () => {
       changedPaths: ['src/export.ts'],
       startedAt: '2026-06-16T00:07:00.000Z',
       completedAt: '2026-06-16T00:09:00.000Z',
+      costSummary: {
+        id: 'coding-runtime-cost-run-payments-node-build',
+        provider: 'openai' as const,
+        providerId: 'double',
+        model: 'ark-code-latest',
+        inputTokens: 120,
+        outputTokens: 80,
+        cacheReadTokens: 0,
+        costUsd: 0.018,
+        source: 'estimated' as const,
+        redacted: true,
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        projectId: 'p-payments',
+        userId: 'u-ling',
+        timestamp: '2026-06-16T00:09:00.000Z',
+      },
       redacted: true,
     }
 
@@ -1063,6 +1158,56 @@ describe('team API route resolver', () => {
       body: {
         error: 'bad_request',
         message: 'Remote coding agent summary contains local-only fields',
+      },
+    })
+    expect(repository.uploadCodingAgentSummary).not.toHaveBeenCalled()
+  })
+
+  it('rejects coding cost summaries that carry raw prompt text', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('POST', '/api/sync/coding-agent-summary', repository, {
+      body: {
+        id: 'coding-run-1',
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        projectId: 'p-payments',
+        requestedBy: 'u-ling',
+        providerId: 'double',
+        engine: 'opencode-http',
+        status: 'completed',
+        branchName: 'devflow/run-payments-node-build',
+        summary: 'Should be rejected.',
+        changedPaths: ['src/export.ts'],
+        startedAt: '2026-06-16T00:07:00.000Z',
+        redacted: true,
+        costSummary: {
+          id: 'coding-runtime-cost-run-payments-node-build',
+          provider: 'openai',
+          providerId: 'double',
+          model: 'ark-code-latest',
+          inputTokens: 120,
+          outputTokens: 80,
+          cacheReadTokens: 0,
+          costUsd: 0.018,
+          source: 'estimated',
+          redacted: true,
+          runId: 'run-payments',
+          nodeId: 'node-build',
+          projectId: 'p-payments',
+          userId: 'u-ling',
+          timestamp: '2026-06-16T00:09:00.000Z',
+          prompt: 'raw prompt must stay local',
+        },
+      },
+      session: memberSession,
+    })
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: 'bad_request',
+        message: 'Invalid remote coding agent summary payload',
       },
     })
     expect(repository.uploadCodingAgentSummary).not.toHaveBeenCalled()
