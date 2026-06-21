@@ -118,6 +118,9 @@ export type CodingRuntimeBudgetGuard = (input: {
   approvalId?: string
 }) => Promise<BudgetGuardDecision>
 
+const FAKE_CODING_MARKER_TEST_COMMAND =
+  'node -e "require(\'node:fs\').accessSync(\'devflow-fake-change.txt\'); console.log(\'Fake coding marker verified\')"'
+
 export type CodingRuntimeDependencyBootstrapRunner = (input: {
   codingRun: CodingAgentRun
   project: LocalProject
@@ -378,7 +381,10 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     workspace: ManagedCodingWorkspace
     timestamp: string
   }): Promise<{ codingRun: CodingAgentRun; evidence?: TestEvidence }> {
-    const command = input.project.testCommand.trim()
+    const command =
+      input.codingRun.engine === 'fake'
+        ? FAKE_CODING_MARKER_TEST_COMMAND
+        : input.project.testCommand.trim()
     if (!deps.runTestCommand || !command) {
       return { codingRun: input.codingRun }
     }

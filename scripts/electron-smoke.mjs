@@ -736,7 +736,7 @@ try {
 
   await first.page.getByRole('button', { name: /^测试$/ }).click()
   await expect(first.page.getByTestId('tests-view')).toContainText('Local test evidence')
-  await expect(first.page.getByTestId('tests-view')).toContainText('npm test')
+  await expect(first.page.getByTestId('tests-view')).toContainText('devflow-fake-change.txt')
   await first.page.getByRole('button', { name: /工作台/ }).click()
 
   await runProjectTestsViaDesktopApi(first.page, {

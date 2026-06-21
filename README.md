@@ -19,6 +19,9 @@ Long-term roadmap: [`docs/roadmap.md`](docs/roadmap.md).
 
 Demo guides:
 
+- v1.2 current hands-on walkthrough:
+  [`docs/guides/devflow-studio-v1.2-walkthrough.md`](docs/guides/devflow-studio-v1.2-walkthrough.md)
+
 - v1.0 hands-on user guide:
   [`docs/guides/devflow-studio-v1.0-user-guide.md`](docs/guides/devflow-studio-v1.0-user-guide.md)
 - v0.8 historical user guide and workflow validation:

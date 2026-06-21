@@ -6,6 +6,8 @@ const userGuidePath = join(process.cwd(), 'docs/guides/devflow-studio-v0.8-user-
 const userGuideDir = dirname(userGuidePath)
 const v1UserGuidePath = join(process.cwd(), 'docs/guides/devflow-studio-v1.0-user-guide.md')
 const v1UserGuideDir = dirname(v1UserGuidePath)
+const v12WalkthroughPath = join(process.cwd(), 'docs/guides/devflow-studio-v1.2-walkthrough.md')
+const v12WalkthroughDir = dirname(v12WalkthroughPath)
 
 function readUserGuide(): string {
   return readFileSync(userGuidePath, 'utf8')
@@ -13,6 +15,10 @@ function readUserGuide(): string {
 
 function readV1UserGuide(): string {
   return readFileSync(v1UserGuidePath, 'utf8')
+}
+
+function readV12Walkthrough(): string {
+  return readFileSync(v12WalkthroughPath, 'utf8')
 }
 
 function extractImagePaths(markdown: string): string[] {
@@ -139,5 +145,58 @@ describe('v1.0 hands-on user guide documentation', () => {
     expect(markdown).toContain('Electron installer、签名、公证、自动更新')
     expect(markdown).toContain('多 Desktop 并发 hardening')
     expect(markdown).toContain('Windows Electron full smoke')
+  })
+})
+
+describe('v1.2 walkthrough documentation', () => {
+  it('keeps referenced screenshots available on disk', () => {
+    const markdown = readV12Walkthrough()
+    const imagePaths = extractImagePaths(markdown)
+
+    expect(imagePaths.length).toBeGreaterThanOrEqual(6)
+    expect(imagePaths).toEqual(
+      expect.arrayContaining([
+        './screenshots/14-electron-current-userdata-workbench.png',
+        './screenshots/01-workbench-gate-enforcement.png',
+        './screenshots/12-electron-knowledge.png',
+        './screenshots/04-agent-workbench.png',
+        './screenshots/09-coding-node.png',
+        './screenshots/08-team-overview.png',
+        './screenshots/11-electron-team-overview.png',
+      ]),
+    )
+
+    for (const imagePath of imagePaths) {
+      expect(existsSync(join(v12WalkthroughDir, imagePath))).toBe(true)
+    }
+  })
+
+  it('documents the current v1.2 manual walkthrough path', () => {
+    const markdown = readV12Walkthrough()
+
+    expect(markdown).toContain('v1.2.0')
+    expect(markdown).toContain('corepack pnpm dev:electron')
+    expect(markdown).toContain('Gate Enforcement')
+    expect(markdown).toContain('Knowledge Review Agent')
+    expect(markdown).toContain('Tool / Skill Timeline')
+    expect(markdown).toContain('Runtime Budget')
+    expect(markdown).toContain('Budget Approval')
+    expect(markdown).toContain('Retry with approval')
+    expect(markdown).toContain('Create desktop pairing code')
+    expect(markdown).toContain('DEVFLOW_RUN_OPENCODE_SMOKE=1')
+    expect(markdown).toContain('ark-code-latest')
+    expect(markdown).toContain('豆包/Volcengine')
+    expect(markdown).toContain('DEVFLOW_RELEASE_WALKTHROUGH=passed corepack pnpm release:status -- --strict')
+  })
+
+  it('documents safety boundaries for costs, secrets, and opencode skill visibility', () => {
+    const markdown = readV12Walkthrough()
+
+    expect(markdown).toContain('默认 walkthrough 不花模型钱')
+    expect(markdown).toContain('真实 `opencode` + 豆包/Volcengine smoke 会产生真实模型调用')
+    expect(markdown).toContain('不应泄露本地绝对路径、raw stdout/stderr 或 secret')
+    expect(markdown).toContain('当前不能保证还原 opencode 内部私有 Skill 调用栈')
+    expect(markdown).toContain('不要说真实 opencode 是默认 CI/verify 路径')
+    expect(markdown).toContain('不要说 MCP 真执行 / MCP policy enforcement 已完成')
   })
 })

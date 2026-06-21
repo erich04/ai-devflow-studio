@@ -532,12 +532,12 @@ describe('CodingRuntime', () => {
     expect(store.bootstrapEvidence).toHaveLength(1)
     expect(store.diffArtifacts[0]?.changedPaths).toEqual(['devflow-fake-change.txt'])
     expect(runTestCommand).toHaveBeenCalledWith({
-      command: 'npm test',
+      command: expect.stringContaining('devflow-fake-change.txt'),
       cwd: store.workspaces[0]!.worktreePath,
       timeoutMs: 120_000,
     })
     expect(store.testEvidence[0]).toMatchObject({
-      command: 'npm test',
+      command: expect.stringContaining('devflow-fake-change.txt'),
       cwd: store.workspaces[0]!.worktreePath,
       status: 'passed',
       summary: 'Coding worktree tests passed.',
@@ -749,6 +749,11 @@ describe('CodingRuntime', () => {
       command: 'npm ci',
     })
     expect(runTestCommand).toHaveBeenCalled()
+    expect(runTestCommand).toHaveBeenCalledWith({
+      command: 'npm test',
+      cwd: store.workspaces[0]!.worktreePath,
+      timeoutMs: 120_000,
+    })
     expect(store.codingRuns.at(-1)).toMatchObject({
       status: 'completed',
       bootstrapEvidenceId: 'bootstrap-runtime-1',
