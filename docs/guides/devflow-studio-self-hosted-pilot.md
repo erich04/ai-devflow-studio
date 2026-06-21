@@ -85,6 +85,9 @@ Use `down -v` only when you want to remove the pilot Postgres data volume.
 
 ## Current Boundaries
 
+- The API container runs `tsx src/server.ts` in this pilot stack so workspace TypeScript packages
+  resolve consistently. A slimmer runtime image with prebuilt shared package artifacts is a future
+  release-engineering task.
 - No automatic HTTPS.
 - No Kubernetes.
 - No token rotation or revoke UI.

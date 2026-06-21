@@ -11,6 +11,7 @@ describe('self-hosted Docker deployment files', () => {
     expect(compose).toContain('DEVFLOW_DATABASE_URL')
     expect(compose).toContain('DEVFLOW_INTERNAL_API_BASE_URL')
     expect(compose).toContain('NEXT_PUBLIC_DEVFLOW_API_URL')
+    expect(compose).toContain('tsx src/server.ts')
   })
 
   it('documents required self-hosted environment variables without secrets', () => {
