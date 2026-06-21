@@ -169,6 +169,35 @@ async function postJson(pathname, body, sessionHeaders = ownerSessionHeaders) {
   )
 }
 
+async function postJsonWithoutSession(pathname, body) {
+  return readJson(
+    await fetch(`${apiUrl}${pathname}`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }),
+    pathname,
+  )
+}
+
+async function postJsonWithBearer(pathname, body, token) {
+  return readJson(
+    await fetch(`${apiUrl}${pathname}`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }),
+    pathname,
+  )
+}
+
 async function putJson(pathname, body, sessionHeaders = ownerSessionHeaders) {
   return readJson(
     await fetch(`${apiUrl}${pathname}`, {
@@ -287,6 +316,7 @@ function expectMissingReviewBlock(decision, label) {
 
 const suffix = Date.now()
 const runId = `run-postgres-smoke-${suffix}`
+const pairedRunId = `run-postgres-paired-smoke-${suffix}`
 const evidenceId = `evidence-postgres-smoke-${suffix}`
 const remoteReviewId = `agent-review-postgres-smoke-${suffix}`
 const timestamp = new Date().toISOString()
@@ -339,6 +369,43 @@ try {
     initialOverview.enforcementPolicies?.organizationPolicy?.name === 'Warn-only default enforcement policy',
     'Postgres overview did not start with the warn-only default enforcement policy.',
   )
+
+  const pairingCode = await postJson('/api/team/projects/p-payments/pairing-codes', {}, leadSessionHeaders)
+  expect(pairingCode.projectId === 'p-payments', 'Desktop pairing code was not scoped to the Payments project.')
+  expect(
+    typeof pairingCode.code === 'string' && pairingCode.code.includes('.'),
+    'Desktop pairing code was not returned as a copy-once secret.',
+  )
+  expect(pairingCode.attemptsRemaining === 5, 'Desktop pairing code did not expose the expected attempt budget.')
+  const desktopPairing = await postJsonWithoutSession('/api/desktop/pairing/exchange', {
+    code: pairingCode.code,
+  })
+  expect(desktopPairing.token?.includes('.'), 'Desktop pairing exchange did not return a copy-once bearer token.')
+  expect(desktopPairing.projectId === 'p-payments', 'Desktop bearer token was not scoped to the Payments project.')
+  expect(desktopPairing.userId === leadSessionHeaders['x-devflow-user-id'], 'Desktop token user did not match the pairing lead.')
+  await postJsonWithBearer(
+    '/api/sync/run-summary',
+    {
+      kind: 'run',
+      runId: pairedRunId,
+      projectId: 'p-payments',
+      title: 'Postgres paired desktop synced run',
+      status: 'testing',
+      currentNodeId: 'n-test',
+      branchName: 'ai/postgres-paired-smoke',
+      updatedAt: timestamp,
+    },
+    desktopPairing.token,
+  )
+  const pairedOverview = await fetchOverview('/api/team/overview after desktop pairing', leadSessionHeaders)
+  expect(
+    pairedOverview.runs?.some((run) => run.id === pairedRunId && run.status === 'testing'),
+    'Postgres overview did not include the Desktop bearer-token synced run.',
+  )
+  const serializedPairedOverview = JSON.stringify(pairedOverview)
+  expect(!serializedPairedOverview.includes(pairingCode.code), 'Team overview leaked the copy-once pairing code.')
+  expect(!serializedPairedOverview.includes(desktopPairing.token), 'Team overview leaked the Desktop bearer token.')
+
   const warnOnlyDecision = await postJson('/api/enforcement/evaluate', {
     runId: seededRun.id,
     nodeId: compliantGate.id,

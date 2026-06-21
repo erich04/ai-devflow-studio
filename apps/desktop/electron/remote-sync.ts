@@ -2,6 +2,7 @@ import type {
   AgentEvent,
   Artifact,
   DevFlowSessionHeaders,
+  DesktopPairingExchangeResult,
   RemoteAgentReviewSummary,
   RemoteCodingAgentSummary,
   RemoteRunSummary,
@@ -25,6 +26,7 @@ type Fetcher = typeof fetch
 export type RemoteSyncClientOptions = {
   apiBaseUrl?: string
   fetcher?: Fetcher
+  authToken?: string
   sessionHeaders?: DevFlowSessionHeaders
 }
 
@@ -50,6 +52,7 @@ export type RemoteTeamOverviewResponse = {
 }
 
 export type RemoteSyncClient = {
+  exchangeDesktopPairingCode(input: { code: string }): Promise<DesktopPairingExchangeResult>
   loadRemoteSnapshot(input?: LoadRemoteSnapshotInput): Promise<RemoteTeamSnapshot>
   uploadRunSummary(summary: RemoteRunSummary): Promise<RemoteSyncUploadResult>
   uploadTestEvidenceSummary(summary: RemoteTestEvidenceSummary): Promise<RemoteSyncUploadResult>
@@ -97,6 +100,18 @@ function jsonPostHeaders(sessionHeaders: DevFlowSessionHeaders): Record<string, 
   return { ...jsonGetHeaders(sessionHeaders), 'content-type': 'application/json' }
 }
 
+function tokenGetHeaders(authToken: string): Record<string, string> {
+  return { accept: 'application/json', authorization: `Bearer ${authToken}` }
+}
+
+function tokenPostHeaders(authToken: string): Record<string, string> {
+  return { ...tokenGetHeaders(authToken), 'content-type': 'application/json' }
+}
+
+function hasAuthToken(authToken: string | undefined): authToken is string {
+  return typeof authToken === 'string' && authToken.trim().length > 0
+}
+
 function headersForGateOverride(
   sessionHeaders: DevFlowSessionHeaders,
   input: RemoteGateOverrideInput,
@@ -142,11 +157,11 @@ async function postJson<T>(
   url: string,
   body: unknown,
   path: string,
-  sessionHeaders: DevFlowSessionHeaders,
+  headers: Record<string, string>,
 ): Promise<T> {
   const response = await fetcher(url, {
     method: 'POST',
-    headers: jsonPostHeaders(sessionHeaders),
+    headers,
     body: JSON.stringify(body),
   })
 
@@ -158,19 +173,33 @@ export function createRemoteSyncClient(
 ): RemoteSyncClient {
   const apiBaseUrl = options.apiBaseUrl ?? resolveRemoteApiBaseUrl()
   const fetcher = options.fetcher ?? fetch
+  const authToken = options.authToken?.trim()
   const sessionHeaders = options.sessionHeaders ?? createDemoTeamSessionHeaders()
 
   return {
+    async exchangeDesktopPairingCode(input) {
+      return postJson<DesktopPairingExchangeResult>(
+        fetcher,
+        buildUrl(apiBaseUrl, '/api/desktop/pairing/exchange'),
+        input,
+        '/api/desktop/pairing/exchange',
+        { accept: 'application/json', 'content-type': 'application/json' },
+      )
+    },
+
     async loadRemoteSnapshot(input) {
       const overviewPath = '/api/team/overview'
       const runsPath = '/api/runs'
       const snapshotHeaders = headersForSnapshotRequest(sessionHeaders, input)
+      const headers = hasAuthToken(authToken)
+        ? tokenGetHeaders(authToken)
+        : jsonGetHeaders(snapshotHeaders)
       const [overview, runsBundle] = await Promise.all([
         fetcher(buildUrl(apiBaseUrl, overviewPath, input), {
-          headers: jsonGetHeaders(snapshotHeaders),
+          headers,
         }).then((response) => readJson<RemoteTeamOverviewResponse>(response, overviewPath)),
         fetcher(buildUrl(apiBaseUrl, runsPath, input), {
-          headers: jsonGetHeaders(snapshotHeaders),
+          headers,
         }).then((response) => readJson<RemoteRunsBundleResponse>(response, runsPath)),
       ])
 
@@ -193,7 +222,7 @@ export function createRemoteSyncClient(
         buildUrl(apiBaseUrl, '/api/sync/run-summary'),
         summary,
         '/api/sync/run-summary',
-        sessionHeaders,
+        hasAuthToken(authToken) ? tokenPostHeaders(authToken) : jsonPostHeaders(sessionHeaders),
       )
     },
 
@@ -203,7 +232,7 @@ export function createRemoteSyncClient(
         buildUrl(apiBaseUrl, '/api/sync/test-evidence-summary'),
         summary,
         '/api/sync/test-evidence-summary',
-        sessionHeaders,
+        hasAuthToken(authToken) ? tokenPostHeaders(authToken) : jsonPostHeaders(sessionHeaders),
       )
     },
 
@@ -213,7 +242,7 @@ export function createRemoteSyncClient(
         buildUrl(apiBaseUrl, '/api/sync/agent-review-summary'),
         summary,
         '/api/sync/agent-review-summary',
-        sessionHeaders,
+        hasAuthToken(authToken) ? tokenPostHeaders(authToken) : jsonPostHeaders(sessionHeaders),
       )
     },
 
@@ -223,7 +252,7 @@ export function createRemoteSyncClient(
         buildUrl(apiBaseUrl, '/api/sync/coding-agent-summary'),
         summary,
         '/api/sync/coding-agent-summary',
-        sessionHeaders,
+        hasAuthToken(authToken) ? tokenPostHeaders(authToken) : jsonPostHeaders(sessionHeaders),
       )
     },
 
@@ -240,7 +269,9 @@ export function createRemoteSyncClient(
           policyVersion: input.policyVersion,
         },
         '/api/gates/override',
-        headersForGateOverride(sessionHeaders, input),
+        hasAuthToken(authToken)
+          ? tokenPostHeaders(authToken)
+          : jsonPostHeaders(headersForGateOverride(sessionHeaders, input)),
       )
     },
   }

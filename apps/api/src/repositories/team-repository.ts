@@ -21,6 +21,8 @@ import {
   type Artifact,
   type AuthProvider,
   type AuthenticatedIdentity,
+  type DesktopPairingCode,
+  type DesktopPairingExchangeResult,
   type EffectiveEnforcementPolicy,
   type GateOverrideDecision,
   type McpServerDefinition,
@@ -124,6 +126,12 @@ export type TeamRepository = {
     input: TeamProjectCreateInput,
     context: TeamRepositorySyncContext,
   ): Promise<Project>
+  createDesktopPairingCode(
+    input: { projectId: string },
+    context: TeamRepositorySyncContext,
+  ): Promise<DesktopPairingCode>
+  exchangeDesktopPairingCode(input: { code: string }): Promise<DesktopPairingExchangeResult>
+  resolveDesktopTokenSession(token: string): Promise<TeamSession | null>
   getRunsBundle(): Promise<RunsBundle>
   getTeamOverview(): Promise<TeamOverviewPayload>
   getSkills(): Promise<SkillDefinition[]>
@@ -322,6 +330,49 @@ export function createSeedTeamRepository(): TeamRepository {
       }
       upsertById(teamProjects, project)
       return project
+    },
+    async createDesktopPairingCode(input, context) {
+      const createdAt = new Date(0).toISOString()
+      return {
+        id: `desktop-pairing-${input.projectId}`,
+        organizationId: context.organizationId,
+        projectId: input.projectId,
+        createdByUserId: context.userId,
+        code: `desktop-pairing-${input.projectId}.demo-secret`,
+        expiresAt: new Date(10 * 60 * 1000).toISOString(),
+        createdAt,
+        attemptsRemaining: 5,
+      }
+    },
+    async exchangeDesktopPairingCode(input) {
+      const projectId = input.code.split('.')[0]?.replace('desktop-pairing-', '') || 'p-payments'
+      const createdAt = new Date(0).toISOString()
+      return {
+        token: `devflow-desktop-token-${projectId}`,
+        tokenId: `desktop-token-${projectId}`,
+        organizationId: DEMO_ORGANIZATION_ID,
+        projectId,
+        userId: 'u-erich',
+        role: 'owner',
+        authAccountId: 'acct-demo-erich',
+        projectMemberships: [{ projectId, userId: 'u-erich', role: 'owner' }],
+        createdAt,
+      }
+    },
+    async resolveDesktopTokenSession(token) {
+      if (!token.startsWith('devflow-desktop-token-')) {
+        return null
+      }
+
+      const projectId = token.replace('devflow-desktop-token-', '')
+      return {
+        source: 'authenticated',
+        organizationId: DEMO_ORGANIZATION_ID,
+        userId: 'u-erich',
+        role: 'owner',
+        authAccountId: 'acct-demo-erich',
+        projectMemberships: [{ projectId, userId: 'u-erich', role: 'owner' }],
+      }
     },
 
     async getRunsBundle() {

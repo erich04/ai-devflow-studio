@@ -13,12 +13,14 @@ const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(5)
+    expect(TEAM_SCHEMA_VERSION).toBe(6)
     expect(requiredTeamTableNames).toEqual([
       'schema_meta',
       'organizations',
       'users',
       'auth_accounts',
+      'desktop_pairing_codes',
+      'desktop_tokens',
       'projects',
       'project_members',
       'workflow_runs',
@@ -41,6 +43,42 @@ describe('team database schema', () => {
     ])
 
     expect(teamTableDefinitions.map((table) => table.name)).toEqual(requiredTeamTableNames)
+  })
+
+  it('defines desktop pairing tables without storing copy-once codes or tokens in plaintext', () => {
+    const pairingCodes = teamTableDefinitions.find((table) => table.name === 'desktop_pairing_codes')
+    const desktopTokens = teamTableDefinitions.find((table) => table.name === 'desktop_tokens')
+
+    expect(pairingCodes?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        'id',
+        'organization_id',
+        'project_id',
+        'created_by_user_id',
+        'code_hash',
+        'expires_at',
+        'consumed_at',
+        'failed_attempts',
+      ]),
+    )
+    expect(pairingCodes?.columns.map((column) => column.name)).not.toEqual(
+      expect.arrayContaining(['code', 'secret']),
+    )
+    expect(desktopTokens?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        'id',
+        'organization_id',
+        'project_id',
+        'user_id',
+        'token_hash',
+        'created_at',
+        'last_used_at',
+        'revoked_at',
+      ]),
+    )
+    expect(desktopTokens?.columns.map((column) => column.name)).not.toEqual(
+      expect.arrayContaining(['token', 'secret']),
+    )
   })
 
   it('defines identity tables without replacing project_members', () => {

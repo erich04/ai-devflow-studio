@@ -33,7 +33,7 @@ import {
   Users,
   Workflow,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   canRunCodingAgentOnNode,
   validateTestCommandSafety,
@@ -74,6 +74,7 @@ import {
   type CommandSafetyResult,
   type DataOrigin,
   type DependencyBootstrapEvidence,
+  type DesktopPairingCredential,
   type GateEnforcementDecision,
   type GateOverrideDecision,
   type LocalExecutionState,
@@ -309,6 +310,9 @@ export function App() {
   const [commandSafety, setCommandSafety] = useState<CommandSafetyResult | null>(null)
   const [isRunningTests, setIsRunningTests] = useState(false)
   const [isSyncingRemote, setIsSyncingRemote] = useState(false)
+  const [desktopPairing, setDesktopPairing] = useState<DesktopPairingCredential | null>(null)
+  const [pairingCodeDraft, setPairingCodeDraft] = useState('')
+  const [isPairingDesktop, setIsPairingDesktop] = useState(false)
   const [mcpServers, setMcpServers] = useState<McpServerDefinition[]>(fixtureMcpServers)
   const [agentProviders, setAgentProviders] = useState<AgentProviderConfig[]>([fakeAgentProvider])
   const [selectedAgentProviderId, setSelectedAgentProviderId] = useState(fakeAgentProvider.id)
@@ -517,6 +521,7 @@ export function App() {
     setDependencyBootstrapEvidence(state.dependencyBootstrapEvidence)
     setCodingDiffArtifacts(state.codingDiffArtifacts)
     setRetryAttempts(state.retryAttempts ?? [])
+    setDesktopPairing(state.desktopPairingCredential ?? null)
     if (state.mcpServers.length > 0) {
       setMcpServers(state.mcpServers)
     }
@@ -646,7 +651,9 @@ export function App() {
     setToast('正在同步团队远端状态...')
 
     try {
-      const snapshot = await desktopApi.loadRemoteSnapshot({ organizationId: 'org-demo' })
+      const snapshot = await desktopApi.loadRemoteSnapshot({
+        organizationId: desktopPairing?.organizationId ?? 'org-demo',
+      })
       const nextRun = snapshot.runs[0]
 
       setRuns(snapshot.runs.length > 0 ? snapshot.runs : fixtureRuns)
@@ -681,6 +688,35 @@ export function App() {
       setToast(error instanceof Error ? error.message : '同步团队远端状态失败')
     } finally {
       setIsSyncingRemote(false)
+    }
+  }
+
+  async function pairDesktopWithTeam(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!desktopApi) {
+      setToast('请在 Electron 应用中配对团队项目')
+      return
+    }
+
+    const code = pairingCodeDraft.trim()
+    if (!code) {
+      setToast('请输入 Web Team Console 生成的 Desktop pairing code')
+      return
+    }
+
+    setIsPairingDesktop(true)
+    setToast('正在配对团队项目...')
+
+    try {
+      const result = await desktopApi.pairDesktop({ code })
+      setDesktopPairing(result.credential)
+      setPairingCodeDraft('')
+      setToast(`已配对团队项目 ${result.credential.projectId}`)
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Desktop 配对失败')
+    } finally {
+      setIsPairingDesktop(false)
     }
   }
 
@@ -1189,6 +1225,18 @@ export function App() {
 
           <div className="topbar-actions">
             <ThemeToggle value={themePreference} onChange={changeThemePreference} />
+            <form className="desktop-pairing-form" onSubmit={pairDesktopWithTeam}>
+              <span>{desktopPairing ? `Paired ${desktopPairing.projectId}` : 'Unpaired'}</span>
+              <input
+                aria-label="Desktop pairing code"
+                placeholder="Pairing code"
+                value={pairingCodeDraft}
+                onChange={(event) => setPairingCodeDraft(event.target.value)}
+              />
+              <button type="submit" className="ghost-button" disabled={isPairingDesktop}>
+                {isPairingDesktop ? '配对中' : 'Pair'}
+              </button>
+            </form>
             <button className="ghost-button" onClick={syncRemoteTeamState} disabled={isSyncingRemote}>
               <RefreshCw size={16} />
               {isSyncingRemote ? '同步中' : '同步团队'}

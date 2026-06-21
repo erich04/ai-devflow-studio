@@ -239,6 +239,33 @@ button {
   font-size: 13px;
 }
 
+.pairing-code-panel {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  max-width: 100%;
+}
+
+.pairing-code-panel button {
+  width: fit-content;
+}
+
+.pairing-code-panel code {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  padding: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.pairing-code-panel small {
+  color: var(--muted);
+}
+
 .member-row {
   grid-template-columns: 36px minmax(0, 1fr) auto;
 }

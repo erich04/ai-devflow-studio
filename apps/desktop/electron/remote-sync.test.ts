@@ -141,7 +141,7 @@ describe('Electron remote sync client', () => {
   })
 
   it('loads a remote team snapshot by combining overview and run bundle API responses', async () => {
-    const fetcher = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+    const fetcher = vi.fn(async (input: Parameters<typeof fetch>[0], _init?: Parameters<typeof fetch>[1]) => {
       const url = String(input)
       if (url.includes('/api/team/overview')) {
         return new Response(JSON.stringify(overview), { status: 200 })
@@ -174,6 +174,93 @@ describe('Electron remote sync client', () => {
         'x-devflow-user-id': 'u-erich',
         'x-devflow-user-role': 'owner',
       },
+    })
+  })
+
+  it('uses a bearer token instead of demo session headers when an authenticated desktop token is configured', async () => {
+    const fetcher = vi.fn(async (input: Parameters<typeof fetch>[0], _init?: Parameters<typeof fetch>[1]) => {
+      const url = String(input)
+      if (url.includes('/api/team/overview')) {
+        return new Response(JSON.stringify(overview), { status: 200 })
+      }
+
+      return new Response(JSON.stringify(runsBundle), { status: 200 })
+    })
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'devflow_desktop_token_123',
+    })
+
+    await client.loadRemoteSnapshot({ organizationId: 'org-1' })
+
+    const headers = fetcher.mock.calls.map(([, init]) => init?.headers)
+    expect(headers).toEqual([
+      {
+        accept: 'application/json',
+        authorization: 'Bearer devflow_desktop_token_123',
+      },
+      {
+        accept: 'application/json',
+        authorization: 'Bearer devflow_desktop_token_123',
+      },
+    ])
+    expect(JSON.stringify(headers)).not.toContain('x-devflow-user-id')
+    expect(JSON.stringify(headers)).not.toContain('x-devflow-user-role')
+    expect(JSON.stringify(headers)).not.toContain('x-devflow-project-roles')
+  })
+
+  it('does not fall back to demo headers when an authenticated desktop token is rejected', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(JSON.stringify({ message: 'Desktop pairing expired. Reconnect DevFlow Studio.' }), {
+        status: 401,
+      }),
+    )
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'expired_desktop_token',
+    })
+
+    await expect(client.uploadRunSummary(runSummary)).rejects.toThrow(
+      'Desktop pairing expired. Reconnect DevFlow Studio.',
+    )
+    expect(fetcher).toHaveBeenCalledWith('http://api.local/api/sync/run-summary', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        authorization: 'Bearer expired_desktop_token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(runSummary),
+    })
+  })
+
+  it('exchanges a desktop pairing code without sending demo session headers', async () => {
+    const exchangeResult = {
+      token: 'devflow-desktop-token-copy-once',
+      tokenId: 'desktop-token-1',
+      organizationId: 'org-demo',
+      projectId: 'p-payments',
+      userId: 'u-ling',
+      role: 'lead',
+      authAccountId: 'acct-ling',
+      projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
+      createdAt: '2026-06-20T00:00:00.000Z',
+    }
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(exchangeResult), { status: 201 }))
+    const client = createRemoteSyncClient({ apiBaseUrl: 'http://api.local', fetcher })
+
+    await expect(client.exchangeDesktopPairingCode({ code: 'pair.code-secret' })).resolves.toEqual(
+      exchangeResult,
+    )
+    expect(fetcher).toHaveBeenCalledWith('http://api.local/api/desktop/pairing/exchange', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ code: 'pair.code-secret' }),
     })
   })
 

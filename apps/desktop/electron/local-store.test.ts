@@ -20,6 +20,7 @@ import type {
   CodingPermissionDecision,
   CodingPermissionRequest,
   DependencyBootstrapEvidence,
+  DesktopPairingCredential,
   GateAdvisory,
   LocalProject,
   McpServerDefinition,
@@ -249,6 +250,17 @@ const agentTokenUsage: AgentTokenUsage = {
   source: 'provider_reported',
 }
 
+const desktopPairingCredential: DesktopPairingCredential = {
+  tokenId: 'desktop-token-1',
+  organizationId: 'org-demo',
+  projectId: 'p-payments',
+  userId: 'u-ling',
+  role: 'lead',
+  authAccountId: 'acct-ling',
+  projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
+  createdAt: '2026-06-20T00:00:00.000Z',
+}
+
 const codingRun: CodingAgentRun = {
   id: 'coding-run-1',
   runId: 'run-1',
@@ -396,25 +408,25 @@ const retryAttempt: RetryAttempt = {
 }
 
 describe('createLocalStore', () => {
-  it('initializes schema version 6 and keeps it stable across reopen', async () => {
+  it('initializes schema version 7 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(6)
+    expect(await first.getSchemaVersion()).toBe(7)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(6)
+    expect(await second.getSchemaVersion()).toBe(7)
     second.close()
   })
 
-  it('migrates an existing v1 database to v6 without losing local projects or runs', async () => {
+  it('migrates an existing v1 database to v7 without losing local projects or runs', async () => {
     const dbPath = await tempDbPath()
     await writeLegacyV1Database(dbPath)
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(6)
+    expect(await store.getSchemaVersion()).toBe(7)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -535,6 +547,25 @@ describe('createLocalStore', () => {
     expect(await second.listProviderCredentials()).toEqual([metadata])
     expect(await second.getProviderEncryptedSecret('openai-default')).toBe('encrypted-secret-value')
     expect(JSON.stringify(await second.listProviderCredentials())).not.toContain('encrypted-secret-value')
+    second.close()
+  })
+
+  it('persists desktop pairing metadata separately from the encrypted bearer token', async () => {
+    const dbPath = await tempDbPath()
+
+    const first = await createLocalStore({ dbPath })
+    await first.saveDesktopPairingCredential(
+      desktopPairingCredential,
+      'encrypted-desktop-token-value',
+    )
+    first.close()
+
+    const second = await createLocalStore({ dbPath })
+    expect(await second.getDesktopPairingCredential()).toEqual(desktopPairingCredential)
+    expect(await second.getDesktopPairingEncryptedToken()).toBe('encrypted-desktop-token-value')
+    expect(JSON.stringify(await second.getDesktopPairingCredential())).not.toContain(
+      'encrypted-desktop-token-value',
+    )
     second.close()
   })
 

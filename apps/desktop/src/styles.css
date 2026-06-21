@@ -248,6 +248,35 @@ button:disabled {
   margin-left: auto;
 }
 
+.desktop-pairing-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 360px;
+}
+
+.desktop-pairing-form span {
+  max-width: 96px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-pairing-form input {
+  width: 140px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 0 10px;
+}
+
 .primary-button,
 .ghost-button,
 .theme-toggle {

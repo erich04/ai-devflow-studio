@@ -282,6 +282,28 @@ function createRepository(): TeamRepository {
       knowledgeBasePath: input.knowledgeBasePath ?? `docs/${input.slug}/`,
       testCommand: input.testCommand ?? '',
     })),
+    createDesktopPairingCode: vi.fn(async (input, context) => ({
+      id: `pair-${input.projectId}`,
+      organizationId: context.organizationId,
+      projectId: input.projectId,
+      createdByUserId: context.userId,
+      code: `pair-${input.projectId}.copy-once-secret`,
+      expiresAt: '2026-06-20T00:10:00.000Z',
+      createdAt: '2026-06-20T00:00:00.000Z',
+      attemptsRemaining: 5,
+    })),
+    exchangeDesktopPairingCode: vi.fn(async () => ({
+      token: 'devflow-desktop-token-copy-once',
+      tokenId: 'desktop-token-1',
+      organizationId: 'org-demo',
+      projectId: 'p-payments',
+      userId: 'u-ling',
+      role: 'lead' as const,
+      authAccountId: 'acct-ling',
+      projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' as const }],
+      createdAt: '2026-06-20T00:00:00.000Z',
+    })),
+    resolveDesktopTokenSession: vi.fn(async () => null),
     getRunsBundle: vi.fn(async () => runsBundle),
     getTeamOverview: vi.fn(async () => overview),
     getSkills: vi.fn(async () => []),
@@ -489,6 +511,85 @@ describe('team API route resolver', () => {
       },
     })
     expect(repository.createProject).not.toHaveBeenCalled()
+  })
+
+  it('creates a desktop pairing code for a project lead', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/team/projects/p-payments/pairing-codes',
+      repository,
+      {
+        session: leadSession,
+      },
+    )
+
+    expect(result).toEqual({
+      status: 201,
+      body: {
+        id: 'pair-p-payments',
+        organizationId: 'org-demo',
+        projectId: 'p-payments',
+        createdByUserId: 'u-ling',
+        code: 'pair-p-payments.copy-once-secret',
+        expiresAt: '2026-06-20T00:10:00.000Z',
+        createdAt: '2026-06-20T00:00:00.000Z',
+        attemptsRemaining: 5,
+      },
+    })
+    expect(repository.createDesktopPairingCode).toHaveBeenCalledWith(
+      { projectId: 'p-payments' },
+      leadSession,
+    )
+  })
+
+  it('rejects desktop pairing code creation without lead access to the project', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/team/projects/p-admin/pairing-codes',
+      repository,
+      {
+        session: memberSession,
+      },
+    )
+
+    expect(result).toEqual({
+      status: 403,
+      body: {
+        error: 'forbidden',
+        message: 'Project role lead required',
+      },
+    })
+    expect(repository.createDesktopPairingCode).not.toHaveBeenCalled()
+  })
+
+  it('exchanges a desktop pairing code for a copy-once bearer token', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('POST', '/api/desktop/pairing/exchange', repository, {
+      body: { code: 'pair-p-payments.copy-once-secret' },
+    })
+
+    expect(result).toEqual({
+      status: 201,
+      body: {
+        token: 'devflow-desktop-token-copy-once',
+        tokenId: 'desktop-token-1',
+        organizationId: 'org-demo',
+        projectId: 'p-payments',
+        userId: 'u-ling',
+        role: 'lead',
+        authAccountId: 'acct-ling',
+        projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
+        createdAt: '2026-06-20T00:00:00.000Z',
+      },
+    })
+    expect(repository.exchangeDesktopPairingCode).toHaveBeenCalledWith({
+      code: 'pair-p-payments.copy-once-secret',
+    })
   })
 
   it('filters project-scoped reads for non-owner sessions', async () => {

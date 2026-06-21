@@ -44,6 +44,7 @@ import {
   parseMcpServersInput,
   parseOpenManagedWorktreeInput,
   parseAgentProviderCredentialInput,
+  parsePairDesktopInput,
   parseListAgentReviewsInput,
   parseReplyCodingPermissionInput,
   parseRemoteCodingAgentSummaryInput,
@@ -83,6 +84,7 @@ const DEFAULT_CODING_RUN_TIMEOUT_MS = 10 * 60_000
 
 let storePromise: Promise<LocalStore> | undefined
 let remoteSyncClient: RemoteSyncClient | undefined
+let remoteSyncClientKey: string | undefined
 const codingPermissionTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 const codingRunTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 const opencodeProcessManager = createOpencodeProcessManager()
@@ -99,9 +101,22 @@ function getStore() {
   return storePromise
 }
 
-function getRemoteSyncClient() {
-  remoteSyncClient ??= createRemoteSyncClient()
+async function getRemoteSyncClient() {
+  const store = await getStore()
+  const encryptedToken = await store.getDesktopPairingEncryptedToken()
+  const authToken = encryptedToken ? decryptCredential(encryptedToken) : undefined
+  const nextKey = authToken ? `token:${authToken}` : 'demo'
+  if (!remoteSyncClient || remoteSyncClientKey !== nextKey) {
+    remoteSyncClient = createRemoteSyncClient(authToken ? { authToken } : {})
+    remoteSyncClientKey = nextKey
+  }
+
   return remoteSyncClient
+}
+
+function resetRemoteSyncClient() {
+  remoteSyncClient = undefined
+  remoteSyncClientKey = undefined
 }
 
 function broadcastToRenderers(channel: string, payload: unknown) {
@@ -141,7 +156,7 @@ async function createCodingRuntimeForRequest() {
   return createCodingRuntime({
     store: await getStore(),
     engine: createCodingEngineAdapterFromEnv(process.env),
-    remoteSync: getRemoteSyncClient(),
+    remoteSync: await getRemoteSyncClient(),
     runTestCommand: runLocalTestCommand,
     runDependencyBootstrap: ({ codingRun, project, workspace, previousDependencyHash, timestamp }) =>
       runDependencyBootstrap({
@@ -275,7 +290,7 @@ async function refreshRemotePolicySnapshotForProject(projectId: string): Promise
   }
 
   try {
-    const snapshot = await getRemoteSyncClient().loadRemoteSnapshot({ organizationId: 'org-demo' })
+    const snapshot = await (await getRemoteSyncClient()).loadRemoteSnapshot({ organizationId: 'org-demo' })
     await cacheRemotePolicySnapshots(snapshot)
   } catch {
     // Keep the last authoritative cache if the team API is offline.
@@ -371,7 +386,7 @@ async function settleGateOverrideWithTeamApi(
   }
 
   try {
-    const confirmed = await getRemoteSyncClient().saveGateOverride({
+    const confirmed = await (await getRemoteSyncClient()).saveGateOverride({
       runId: override.runId,
       nodeId: override.nodeId,
       projectId: override.projectId,
@@ -426,26 +441,41 @@ function registerIpcHandlers() {
     return store.loadState()
   })
 
+  ipcMain.handle(ipcChannels.loadDesktopPairing, async () => {
+    const store = await getStore()
+    return store.getDesktopPairingCredential()
+  })
+
+  ipcMain.handle(ipcChannels.pairDesktop, async (_, payload: unknown) => {
+    const input = parsePairDesktopInput(payload)
+    const exchangeResult = await createRemoteSyncClient().exchangeDesktopPairingCode(input)
+    const { token, ...credential } = exchangeResult
+    const store = await getStore()
+    await store.saveDesktopPairingCredential(credential, encryptCredential(token))
+    resetRemoteSyncClient()
+    return { credential }
+  })
+
   ipcMain.handle(ipcChannels.loadRemoteSnapshot, async (_, payload: unknown) => {
     const input = parseRemoteSnapshotInput(payload)
-    const snapshot = await getRemoteSyncClient().loadRemoteSnapshot(input)
+    const snapshot = await (await getRemoteSyncClient()).loadRemoteSnapshot(input)
     await cacheRemotePolicySnapshots(snapshot)
     return snapshot
   })
 
   ipcMain.handle(ipcChannels.uploadRunSummary, async (_, payload: unknown) => {
     const summary = parseRemoteRunSummaryInput(payload)
-    return getRemoteSyncClient().uploadRunSummary(summary)
+    return (await getRemoteSyncClient()).uploadRunSummary(summary)
   })
 
   ipcMain.handle(ipcChannels.uploadTestEvidenceSummary, async (_, payload: unknown) => {
     const summary = parseRemoteTestEvidenceSummaryInput(payload)
-    return getRemoteSyncClient().uploadTestEvidenceSummary(summary)
+    return (await getRemoteSyncClient()).uploadTestEvidenceSummary(summary)
   })
 
   ipcMain.handle(ipcChannels.uploadCodingAgentSummary, async (_, payload: unknown) => {
     const summary = parseRemoteCodingAgentSummaryInput(payload)
-    return getRemoteSyncClient().uploadCodingAgentSummary(summary)
+    return (await getRemoteSyncClient()).uploadCodingAgentSummary(summary)
   })
 
   ipcMain.handle(ipcChannels.selectProject, async () => {
@@ -878,7 +908,7 @@ function registerIpcHandlers() {
     await store.saveAgentTrace(result.trace)
     await store.saveAgentTokenUsage(result.tokenUsage)
     void getRemoteSyncClient()
-      .uploadAgentReviewSummary(createRemoteAgentReviewSummary(result.review))
+      .then((client) => client.uploadAgentReviewSummary(createRemoteAgentReviewSummary(result.review)))
       .catch(() => undefined)
 
     return {

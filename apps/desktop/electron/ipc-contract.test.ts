@@ -11,6 +11,7 @@ import {
   parseAgentEventInput,
   parseAgentProviderCredentialInput,
   parseCancelCodingAgentRunInput,
+  parsePairDesktopInput,
   parseMcpServersInput,
   parseOpenManagedWorktreeInput,
   parseReplyCodingPermissionInput,
@@ -238,6 +239,13 @@ describe('IPC contract parsers', () => {
       requestedBy: 'u-ling',
       runtime: 'electron',
     })
+  })
+
+  it('accepts desktop pairing codes and rejects empty pairing payloads', () => {
+    expect(parsePairDesktopInput({ code: 'pair-id.copy-once-secret' })).toEqual({
+      code: 'pair-id.copy-once-secret',
+    })
+    expect(() => parsePairDesktopInput({ code: ' ' })).toThrow(/code/)
   })
 
   it('rejects empty provider credentials and malformed knowledge review payloads', () => {

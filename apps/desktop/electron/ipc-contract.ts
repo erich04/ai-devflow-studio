@@ -7,6 +7,7 @@ import type {
   CodingAgentRun,
   CodingPermissionDecision,
   CodingPermissionRequest,
+  DesktopPairingCredential,
   GateEnforcementDecision,
   GateOverrideDecision,
   LocalExecutionState,
@@ -45,6 +46,8 @@ export const ipcChannels = {
   saveSettings: 'devflow:settings:save',
   saveMcpServers: 'devflow:mcp-servers:save',
   loadRemoteSnapshot: 'devflow:remote:snapshot:load',
+  loadDesktopPairing: 'devflow:desktop-pairing:load',
+  pairDesktop: 'devflow:desktop-pairing:pair',
   uploadRunSummary: 'devflow:remote:run-summary:upload',
   uploadTestEvidenceSummary: 'devflow:remote:test-evidence-summary:upload',
   listAgentProviders: 'devflow:agent:providers:list',
@@ -217,9 +220,19 @@ export type LoadRemoteSnapshotInput = {
   organizationId?: string
 }
 
+export type PairDesktopInput = {
+  code: string
+}
+
+export type PairDesktopResult = {
+  credential: DesktopPairingCredential
+}
+
 export type DevFlowDesktopApi = {
   platform: string
   loadState: () => Promise<LocalExecutionState>
+  loadDesktopPairing: () => Promise<DesktopPairingCredential | null>
+  pairDesktop: (input: PairDesktopInput) => Promise<PairDesktopResult>
   loadRemoteSnapshot: (input?: LoadRemoteSnapshotInput) => Promise<RemoteTeamSnapshot>
   uploadRunSummary: (summary: RemoteRunSummary) => Promise<RemoteSyncUploadResult>
   uploadTestEvidenceSummary: (
@@ -621,6 +634,16 @@ export function parseAgentProviderCredentialInput(value: unknown): AgentProvider
     apiKey,
     model,
     ...(typeof baseUrl === 'string' && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
+  }
+}
+
+export function parsePairDesktopInput(value: unknown): PairDesktopInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid desktop pairing payload')
+  }
+
+  return {
+    code: readRequiredString(value, 'code'),
   }
 }
 
