@@ -19,6 +19,9 @@ Long-term roadmap: [`docs/roadmap.md`](docs/roadmap.md).
 
 Demo guides:
 
+- Full feature walkthrough:
+  [`docs/guides/devflow-studio-full-feature-walkthrough.md`](docs/guides/devflow-studio-full-feature-walkthrough.md)
+
 - v1.3 current hands-on walkthrough:
   [`docs/guides/devflow-studio-v1.3-walkthrough.md`](docs/guides/devflow-studio-v1.3-walkthrough.md)
 

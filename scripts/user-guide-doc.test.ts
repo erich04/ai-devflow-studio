@@ -10,6 +10,8 @@ const v12WalkthroughPath = join(process.cwd(), 'docs/guides/devflow-studio-v1.2-
 const v12WalkthroughDir = dirname(v12WalkthroughPath)
 const v13WalkthroughPath = join(process.cwd(), 'docs/guides/devflow-studio-v1.3-walkthrough.md')
 const v13WalkthroughDir = dirname(v13WalkthroughPath)
+const fullFeatureWalkthroughPath = join(process.cwd(), 'docs/guides/devflow-studio-full-feature-walkthrough.md')
+const fullFeatureWalkthroughDir = dirname(fullFeatureWalkthroughPath)
 
 function readUserGuide(): string {
   return readFileSync(userGuidePath, 'utf8')
@@ -25,6 +27,10 @@ function readV12Walkthrough(): string {
 
 function readV13Walkthrough(): string {
   return readFileSync(v13WalkthroughPath, 'utf8')
+}
+
+function readFullFeatureWalkthrough(): string {
+  return readFileSync(fullFeatureWalkthroughPath, 'utf8')
 }
 
 function extractImagePaths(markdown: string): string[] {
@@ -252,5 +258,73 @@ describe('v1.3 delivery walkthrough documentation', () => {
     expect(markdown).toContain('不要说 v1.3 已创建真实 GitHub PR')
     expect(markdown).toContain('不要说系统会自动 push、merge 或自动通过 Gate')
     expect(markdown).toContain('不要说 MCP 真执行 / MCP policy enforcement 已完成')
+  })
+})
+
+describe('full feature walkthrough documentation', () => {
+  it('keeps referenced screenshots available on disk', () => {
+    const markdown = readFullFeatureWalkthrough()
+    const imagePaths = extractImagePaths(markdown)
+
+    expect(imagePaths.length).toBeGreaterThanOrEqual(7)
+    expect(imagePaths).toEqual(
+      expect.arrayContaining([
+        './screenshots/14-electron-current-userdata-workbench.png',
+        './screenshots/01-workbench-gate-enforcement.png',
+        './screenshots/12-electron-knowledge.png',
+        './screenshots/04-agent-workbench.png',
+        './screenshots/09-coding-node.png',
+        './screenshots/05-tests-evidence.png',
+        './screenshots/11-electron-team-overview.png',
+        './screenshots/08-team-overview.png',
+        './screenshots/07-mcp-management.png',
+      ]),
+    )
+
+    for (const imagePath of imagePaths) {
+      expect(existsSync(join(fullFeatureWalkthroughDir, imagePath))).toBe(true)
+    }
+  })
+
+  it('documents the full current product surface by module', () => {
+    const markdown = readFullFeatureWalkthrough()
+
+    expect(markdown).toContain('DevFlow Studio 全量基础功能体验指南')
+    expect(markdown).toContain('工作台')
+    expect(markdown).toContain('Team Overview')
+    expect(markdown).toContain('Knowledge')
+    expect(markdown).toContain('Agents')
+    expect(markdown).toContain('Skills')
+    expect(markdown).toContain('MCP')
+    expect(markdown).toContain('测试')
+    expect(markdown).toContain('Runtime Budget')
+    expect(markdown).toContain('Desktop Pairing')
+    expect(markdown).toContain('Tool / Skill Timeline')
+    expect(markdown).toContain('PR Draft')
+    expect(markdown).toContain('Acceptance Bundle')
+    expect(markdown).toContain('Remediation Retry')
+  })
+
+  it('documents executable commands and safety boundaries for a no-cost walkthrough', () => {
+    const markdown = readFullFeatureWalkthrough()
+
+    expect(markdown).toContain('corepack pnpm dev:api')
+    expect(markdown).toContain('corepack pnpm dev:web')
+    expect(markdown).toContain('corepack pnpm dev:electron')
+    expect(markdown).toContain('默认路径不调用真实付费模型')
+    expect(markdown).toContain('DEVFLOW_RUN_OPENCODE_SMOKE=1')
+    expect(markdown).toContain('ark-code-latest')
+    expect(markdown).toContain('豆包/Volcengine')
+    expect(markdown).toContain('不保存 raw stdout/stderr')
+    expect(markdown).toContain('不创建真实 GitHub PR')
+    expect(markdown).toContain('不要说 MCP 真执行 / MCP policy enforcement 已完成')
+    expect(markdown).toContain('不要说 Windows Electron full smoke 已完成')
+  })
+
+  it('is linked from the README demo guide list', () => {
+    const readme = readFileSync(join(process.cwd(), 'README.md'), 'utf8')
+
+    expect(readme).toContain('Full feature walkthrough')
+    expect(readme).toContain('docs/guides/devflow-studio-full-feature-walkthrough.md')
   })
 })
