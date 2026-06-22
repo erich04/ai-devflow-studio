@@ -97,7 +97,7 @@ corepack pnpm dev:electron
 
 ### 4. Gate Enforcement 与 Remediation Plan
 
-选中 protected Gate，例如架构 Gate 或验收 Gate。Inspector 里会出现 `Gate Enforcement`。
+选中 protected Gate，例如方案评审 Gate 或验收 Gate。Inspector 里会出现 `Gate Enforcement`。
 
 你要重点看：
 

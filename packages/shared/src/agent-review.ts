@@ -107,8 +107,114 @@ function readableReferenceList(context: AgentReviewContext): string {
     .join(', ')
 }
 
-function redactedSummary(value: string): string {
-  return redactSecrets(value).value
+function redactedSummaryResult(value: unknown): ReturnType<typeof redactSecrets> {
+  return redactSecrets(providerValueToString(value))
+}
+
+function redactedSummary(value: unknown): string {
+  return redactedSummaryResult(value).value
+}
+
+function redactProviderErrorBody(value: string): string {
+  return redactSecrets(value)
+    .value.replace(
+      /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/giu,
+      '[REDACTED:provider_token]',
+    )
+    .slice(0, 800)
+}
+
+async function buildProviderFailureMessage(response: Response): Promise<string> {
+  const body = await response.text().catch(() => '')
+  const redactedBody = redactProviderErrorBody(body).trim()
+  return redactedBody
+    ? `Agent provider failed with ${response.status}: ${redactedBody}`
+    : `Agent provider failed with ${response.status}`
+}
+
+function parseProviderJson(raw: string): Partial<KnowledgeReviewProviderOutput> {
+  try {
+    return JSON.parse(raw) as Partial<KnowledgeReviewProviderOutput>
+  } catch {
+    const start = raw.indexOf('{')
+    const end = raw.lastIndexOf('}')
+    if (start === -1 || end === -1 || end <= start) {
+      throw new Error('Agent provider returned invalid JSON review output')
+    }
+    return JSON.parse(raw.slice(start, end + 1)) as Partial<KnowledgeReviewProviderOutput>
+  }
+}
+
+const policyFindingCategories = new Set<AgentPolicyFinding['category']>([
+  'missing_evidence',
+  'test_risk',
+  'api_contract_risk',
+  'security_risk',
+  'review_gap',
+])
+
+const policyFindingSeverities = new Set<AgentPolicyFinding['severity']>(['low', 'medium', 'high'])
+
+function providerValueToString(value: unknown, fallback = ''): string {
+  if (typeof value === 'string') {
+    return value
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (value === null || value === undefined) {
+    return fallback
+  }
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return fallback
+  }
+}
+
+function providerValueToStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value
+    .map((item) => providerValueToString(item).trim())
+    .filter((item) => item.length > 0)
+}
+
+function normalizeProviderPolicyFindings(
+  value: unknown,
+): KnowledgeReviewProviderOutput['policyFindings'] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined
+  }
+
+  const findings = value
+    .map((item) => {
+      if (!item || typeof item !== 'object') {
+        return undefined
+      }
+      const record = item as Record<string, unknown>
+      const category = providerValueToString(record.category)
+      const severity = providerValueToString(record.severity)
+      const summary = providerValueToString(record.summary).trim()
+      if (!summary) {
+        return undefined
+      }
+      return {
+        category: policyFindingCategories.has(category as AgentPolicyFinding['category'])
+          ? (category as AgentPolicyFinding['category'])
+          : 'review_gap',
+        severity: policyFindingSeverities.has(severity as AgentPolicyFinding['severity'])
+          ? (severity as AgentPolicyFinding['severity'])
+          : 'medium',
+        summary,
+        evidenceIds: providerValueToStringList(record.evidenceIds),
+        knowledgeReferenceIds: providerValueToStringList(record.knowledgeReferenceIds),
+      }
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+
+  return findings.length > 0 ? findings : undefined
 }
 
 function toProviderName(providerId: string): AgentTokenUsage['provider'] {
@@ -164,14 +270,18 @@ export function buildAgentReviewContext({
       kind: node.kind,
       status: node.status,
     },
-    artifacts: selectedArtifacts.map((artifact) => ({
-      id: artifact.id,
-      kind: artifact.kind,
-      title: artifact.title,
-      summary: redactedSummary(artifact.summary),
-      content: redactedSummary(artifact.content),
-      redacted: artifact.redacted || redactSecrets(`${artifact.summary}\n${artifact.content}`).redacted,
-    })),
+    artifacts: selectedArtifacts.map((artifact) => {
+      const summary = redactedSummaryResult(artifact.summary)
+      const content = redactedSummaryResult(artifact.content)
+      return {
+        id: artifact.id,
+        kind: artifact.kind,
+        title: artifact.title,
+        summary: summary.value,
+        content: content.value,
+        redacted: artifact.redacted || summary.redacted || content.redacted,
+      }
+    }),
     testEvidence: testEvidence
       .filter((evidence) => evidence.runId === run.id)
       .map((evidence) => ({
@@ -568,12 +678,11 @@ export function createOpenAiCompatibleAgentProvider({
         body: JSON.stringify({
           model,
           temperature: 0.2,
-          response_format: { type: 'json_object' },
           messages: [
             {
               role: 'system',
               content:
-                'Return JSON with conclusion, summary, risks, missingEvidence, suggestedTests, confidence.',
+                'Return only valid JSON with conclusion, summary, risks, missingEvidence, suggestedTests, confidence. Do not wrap it in Markdown.',
             },
             { role: 'user', content: prompt },
           ],
@@ -581,7 +690,7 @@ export function createOpenAiCompatibleAgentProvider({
       })
 
       if (!response.ok) {
-        throw new Error(`Agent provider failed with ${response.status}`)
+        throw new Error(await buildProviderFailureMessage(response))
       }
 
       const body = (await response.json()) as {
@@ -592,7 +701,7 @@ export function createOpenAiCompatibleAgentProvider({
       if (!raw) {
         throw new Error('Agent provider returned empty review output')
       }
-      const parsed = JSON.parse(raw) as Partial<KnowledgeReviewProviderOutput>
+      const parsed = parseProviderJson(raw)
       const usage = body.usage
         ? {
             ...(typeof body.usage.prompt_tokens === 'number' ? { inputTokens: body.usage.prompt_tokens } : {}),
@@ -603,14 +712,19 @@ export function createOpenAiCompatibleAgentProvider({
           }
         : undefined
 
+      const conclusion = providerValueToString(parsed.conclusion, 'Knowledge review completed.')
+      const summary = providerValueToString(parsed.summary, conclusion || 'Knowledge review completed.')
+      const policyFindings = normalizeProviderPolicyFindings(parsed.policyFindings)
+
       return {
         model,
-        conclusion: parsed.conclusion ?? 'Knowledge review completed.',
-        summary: parsed.summary ?? parsed.conclusion ?? 'Knowledge review completed.',
-        risks: Array.isArray(parsed.risks) ? parsed.risks : [],
-        missingEvidence: Array.isArray(parsed.missingEvidence) ? parsed.missingEvidence : [],
-        suggestedTests: Array.isArray(parsed.suggestedTests) ? parsed.suggestedTests : [],
+        conclusion,
+        summary,
+        risks: providerValueToStringList(parsed.risks),
+        missingEvidence: providerValueToStringList(parsed.missingEvidence),
+        suggestedTests: providerValueToStringList(parsed.suggestedTests),
         confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
+        ...(policyFindings ? { policyFindings } : {}),
         ...(usage ? { usage } : {}),
       }
     },

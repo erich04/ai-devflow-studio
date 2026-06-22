@@ -624,7 +624,7 @@ try {
   await expect(first.page.locator('.run-list').getByText('重构 GitHub webhook 重试策略')).toBeVisible()
   await selectRunByTitle(first.page, '重构 GitHub webhook 重试策略')
 
-  const localRun = await first.page.evaluate(async () => {
+  let localRun = await first.page.evaluate(async () => {
     const state = await window.aiDevFlowDesktop.loadState()
     const localRuns = state.runs
       .filter((run) => run.title === '重构 GitHub webhook 重试策略')
@@ -632,6 +632,29 @@ try {
     return localRuns[0]
   })
   expect(localRun?.id, 'Electron smoke local Run was not persisted before Gate approval.').toBeTruthy()
+  const clarifyAgent = localRun.nodes.find((node) => node.stage === 'clarify' && node.kind === 'agent')
+  expect(clarifyAgent?.id, 'Electron smoke local Run does not have a clarify agent.').toBeTruthy()
+  const completedClarify = await first.page.evaluate(async ({ runId, nodeId }) => {
+    const result = await window.aiDevFlowDesktop.completeWorkflowAgentNode({
+      runId,
+      nodeId,
+      userId: 'u-erich',
+      userName: 'Erich',
+    })
+    const state = await window.aiDevFlowDesktop.loadState()
+    return {
+      run: result.run,
+      artifact: result.artifact,
+      event: result.event,
+      persistedArtifact: state.artifacts.find((artifact) => artifact.id === result.artifact.id),
+    }
+  }, { runId: localRun.id, nodeId: clarifyAgent.id })
+  expect(completedClarify.run.currentNodeId).toContain('clarify-gate')
+  expect(completedClarify.artifact.kind).toBe('clarification')
+  expect(completedClarify.artifact.content).toContain('Acceptance Criteria')
+  expect(completedClarify.event.kind).toBe('thinking')
+  expect(completedClarify.persistedArtifact?.id).toBe(completedClarify.artifact.id)
+  localRun = completedClarify.run
   const localNodes = resolveWorkflowNodes(localRun)
   const clarifyGateDecision = await first.page.evaluate(async ({ runId, nodeId }) => {
     return window.aiDevFlowDesktop.evaluateGateEnforcement({

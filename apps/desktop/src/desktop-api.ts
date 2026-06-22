@@ -64,6 +64,20 @@ export type ApproveGateResult = {
   state: LocalExecutionState
 }
 
+export type CompleteWorkflowAgentNodeInput = {
+  runId: string
+  nodeId: string
+  userId: string
+  userName: string
+}
+
+export type CompleteWorkflowAgentNodeResult = {
+  run: WorkflowRun
+  artifact: Artifact
+  event: AgentEvent
+  state: LocalExecutionState
+}
+
 export type LoadEnforcementPolicyInput = {
   projectId: string
 }
@@ -165,6 +179,7 @@ export type DevFlowDesktopApi = {
   loadEnforcementPolicy: (input: LoadEnforcementPolicyInput) => Promise<PolicySnapshot>
   evaluateGateEnforcement: (input: EvaluateGateEnforcementInput) => Promise<GateEnforcementDecision>
   createRun: (input: CreateRunInput) => Promise<WorkflowRun>
+  completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   saveRun: (run: WorkflowRun) => Promise<WorkflowRun>
   saveArtifact: (artifact: Artifact) => Promise<Artifact>
   approveGate: (input: ApproveGateInput) => Promise<ApproveGateResult>

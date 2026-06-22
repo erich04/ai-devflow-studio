@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   advanceWorkflowAfterGateApproval,
+  completeWorkflowAgentNode,
   createAcceptanceEvidenceBundleArtifact,
   createPrDraftArtifact,
   createWorkflowRunFromRequest,
@@ -218,6 +219,137 @@ describe('delivery artifacts', () => {
     expect(artifact.content).toContain('Policy: warn')
     expect(artifact.content).toContain('Budget: warning')
     expect(artifact.content).toContain('Agent Review: No blocking risks.')
+  })
+})
+
+describe('completeWorkflowAgentNode', () => {
+  const created = createWorkflowRunFromRequest({
+    runId: 'run-stage-completion',
+    title: 'Add unified search',
+    request: 'Let the top search box return Run, Artifact, and Knowledge results for markdown queries.',
+    projectId: 'p-payments',
+    creatorId: 'u-wang',
+    branchName: 'ai/unified-search',
+    now: '2026-06-21T16:00:00.000Z',
+  })
+
+  it('updates the clarification placeholder and advances the current agent to the clarification gate', () => {
+    const result = completeWorkflowAgentNode({
+      run: created.run,
+      nodeId: 'run-stage-completion-clarify',
+      artifacts: created.artifacts,
+      existingEvents: created.events,
+      actorName: 'Ling',
+      now: '2026-06-21T16:05:00.000Z',
+    })
+
+    expect(result.run.currentNodeId).toBe('run-stage-completion-clarify-gate')
+    expect(result.run.status).toBe('paused_at_gate')
+    expect(result.run.nodes.find((node) => node.id === 'run-stage-completion-clarify')?.status).toBe('success')
+    expect(result.run.nodes.find((node) => node.id === 'run-stage-completion-clarify-gate')?.status).toBe('running')
+    expect(result.artifact).toMatchObject({
+      id: 'artifact-run-stage-completion-clarification-placeholder',
+      runId: 'run-stage-completion',
+      nodeId: 'run-stage-completion-clarify',
+      kind: 'clarification',
+      title: '需求澄清结果',
+      redacted: false,
+    })
+    expect(result.artifacts.filter((artifact) => artifact.kind === 'clarification')).toHaveLength(1)
+    expect(result.artifact.content).toContain('Let the top search box return Run, Artifact, and Knowledge results')
+    expect(result.artifact.content).toContain('Acceptance Criteria')
+    expect(result.event).toMatchObject({
+      runId: 'run-stage-completion',
+      nodeId: 'run-stage-completion-clarify',
+      sequence: 2,
+      kind: 'thinking',
+      message: 'Ling generated 需求澄清结果 and advanced to 需求确认 Gate.',
+    })
+  })
+
+  it('creates a missing design placeholder and advances design to the design gate', () => {
+    const run = {
+      ...created.run,
+      status: 'designing' as const,
+      currentNodeId: 'run-stage-completion-design',
+      nodes: created.run.nodes.map((node) => {
+        if (node.id === 'run-stage-completion-clarify') return { ...node, status: 'success' as const }
+        if (node.id === 'run-stage-completion-clarify-gate') return { ...node, status: 'success' as const }
+        if (node.id === 'run-stage-completion-design') return { ...node, status: 'running' as const }
+        return node
+      }),
+    }
+
+    const result = completeWorkflowAgentNode({
+      run,
+      nodeId: 'run-stage-completion-design',
+      artifacts: created.artifacts,
+      existingEvents: created.events,
+      actorName: 'Ling',
+      now: '2026-06-21T16:10:00.000Z',
+    })
+
+    expect(result.run.currentNodeId).toBe('run-stage-completion-design-gate')
+    expect(result.run.status).toBe('paused_at_gate')
+    expect(result.run.nodes.find((node) => node.id === 'run-stage-completion-design')?.status).toBe('success')
+    expect(result.run.nodes.find((node) => node.id === 'run-stage-completion-design-gate')?.status).toBe('running')
+    expect(result.artifact).toMatchObject({
+      id: 'artifact-run-stage-completion-design-placeholder',
+      runId: 'run-stage-completion',
+      nodeId: 'run-stage-completion-design',
+      kind: 'design',
+      title: '方案设计',
+      redacted: true,
+    })
+    expect(result.artifacts.find((artifact) => artifact.id === 'artifact-run-stage-completion-design-placeholder')).toBeTruthy()
+    expect(result.artifact.content).toContain('Implementation Approach')
+    expect(result.artifact.content).toContain('Testing Strategy')
+  })
+
+  it('rejects completion for non-current or non-agent nodes', () => {
+    expect(() =>
+      completeWorkflowAgentNode({
+        run: created.run,
+        nodeId: 'run-stage-completion-design',
+        artifacts: created.artifacts,
+        existingEvents: created.events,
+        actorName: 'Ling',
+        now: '2026-06-21T16:05:00.000Z',
+      }),
+    ).toThrow('Only the current workflow node can be completed')
+
+    expect(() =>
+      completeWorkflowAgentNode({
+        run: { ...created.run, currentNodeId: 'run-stage-completion-clarify-gate' },
+        nodeId: 'run-stage-completion-clarify-gate',
+        artifacts: created.artifacts,
+        existingEvents: created.events,
+        actorName: 'Ling',
+        now: '2026-06-21T16:05:00.000Z',
+      }),
+    ).toThrow('Only workflow agent nodes can be completed')
+  })
+
+  it('rejects already completed upstream agent nodes after the run advanced to a gate', () => {
+    const completed = completeWorkflowAgentNode({
+      run: created.run,
+      nodeId: 'run-stage-completion-clarify',
+      artifacts: created.artifacts,
+      existingEvents: created.events,
+      actorName: 'Ling',
+      now: '2026-06-21T16:05:00.000Z',
+    })
+
+    expect(() =>
+      completeWorkflowAgentNode({
+        run: completed.run,
+        nodeId: 'run-stage-completion-clarify',
+        artifacts: completed.artifacts,
+        existingEvents: [...created.events, completed.event],
+        actorName: 'Ling',
+        now: '2026-06-21T16:06:00.000Z',
+      }),
+    ).toThrow('Only the current workflow node can be completed')
   })
 })
 

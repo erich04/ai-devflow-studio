@@ -69,12 +69,12 @@ corepack pnpm dev:electron
 
 - Run 列表出现新标题。
 - 新 Run 的状态是 `clarifying`。
-- 画布出现六个阶段：方案澄清、方案设计、开发实现、测试证据、PR 交付、业务验收。
+- 画布出现六个阶段：需求澄清、方案设计、开发实现、测试证据、PR 交付、业务验收。
 - 澄清节点 Inspector 中出现 `Raw request` artifact，内容是你输入的需求。
 
 ## 3. Gate 推进
 
-选择 Clarification Gate，点击 `通过 Gate`。
+选择需求确认 Gate，点击 `通过 Gate`。
 
 通过标准：
 
@@ -83,7 +83,7 @@ corepack pnpm dev:electron
 - toast 显示 Gate 已通过或流程已推进。
 - 不应出现旧行为：所有 Gate approval 都把 Run 强行改成 `building`。
 
-继续选择 Design Gate，点击 `通过 Gate`。
+继续选择方案评审 Gate，点击 `通过 Gate`。
 
 通过标准：
 
@@ -211,7 +211,7 @@ corepack pnpm test:opencode-smoke
 | Release status | Terminal | `corepack pnpm release:status` | package/tag/docs/git state 正常；manual walkthrough 可 pending |
 | Desktop launch | Terminal | `corepack pnpm dev:electron` | 打开 AI DevFlow Studio，不是 default app |
 | Request intake | Workbench | 新建 Run 并输入需求 | 创建 raw_request artifact；Run 从 `clarifying` 开始 |
-| Workflow advance | Gate Inspector | 通过 Clarify / Design Gate | `currentNodeId` 推进；Run status 对应下一阶段 |
+| Workflow advance | Gate Inspector | 通过需求确认 / 方案评审 Gate | `currentNodeId` 推进；Run status 对应下一阶段 |
 | Coding | Build task | 点击 Coding Agent 并 approve permission | managed worktree + diff + test evidence |
 | PR Draft | PR node | 点击 `生成 PR Draft` | PR draft artifact 出现，含 diff/test/policy/budget/review 摘要 |
 | Acceptance Bundle | Acceptance node | 点击 `生成验收证据包` | Acceptance bundle artifact 出现，引用 PR draft 和证据 |
@@ -227,4 +227,3 @@ corepack pnpm test:opencode-smoke
 - 不要说 MCP 真执行 / MCP policy enforcement 已完成。
 - 不要说 RAG/vector retrieval 已接入。
 - 不要说 Windows Electron full smoke 已完成。
-

@@ -42,6 +42,10 @@ export function GateEnforcementPanel({
   isStartingRetry = false,
   onSaveOverride,
   onStartRetry,
+  pairingState = 'unpaired',
+  onSyncTeam,
+  onRunKnowledgeReview,
+  isCurrentNodeAgent = false,
 }: {
   policySnapshot: PolicySnapshot | null
   decision: GateEnforcementDecision | null
@@ -52,6 +56,10 @@ export function GateEnforcementPanel({
   isStartingRetry?: boolean
   onSaveOverride: (reason: string, provisional: boolean) => void
   onStartRetry?: (candidateId: string) => void
+  pairingState?: 'unpaired' | 'paired' | 'sync_failed'
+  onSyncTeam?: () => void
+  onRunKnowledgeReview?: () => void
+  isCurrentNodeAgent?: boolean
 }) {
   const [overrideReason, setOverrideReason] = useState('Reviewed blocking reason and approved a temporary exception.')
   const activeOverride = overrides.find((override) =>
@@ -61,6 +69,10 @@ export function GateEnforcementPanel({
     decision?.status === 'blocked' &&
     decision.canOverride &&
     canSaveOverride
+  const hasMissingAgentReview = Boolean(
+    decision?.blockingReasons.some((reason) => reason.target === 'missing_agent_review') ||
+      decision?.warningReasons.some((reason) => reason.target === 'missing_agent_review'),
+  )
 
   return (
     <div className="agent-advisory-list">
@@ -79,7 +91,33 @@ export function GateEnforcementPanel({
             {policySnapshot?.syncedAt ? <span>synced {policySnapshot.syncedAt}</span> : null}
           </div>
           {decision.status === 'blocked_policy_unavailable' ? (
-            <p>Team enforcement policy is unavailable. Sync policy before approving this Gate.</p>
+            <div className="enforcement-cta" data-testid="policy-unavailable-cta">
+              <p>
+                {pairingState === 'unpaired'
+                  ? 'Team enforcement policy is unavailable. Pair this Desktop with the team project, then sync policy before approving this Gate.'
+                  : 'Team enforcement policy is unavailable. Sync team policy before approving this Gate.'}
+              </p>
+              {pairingState === 'paired' && onSyncTeam ? (
+                <button className="ghost-button" onClick={onSyncTeam}>
+                  同步团队
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          {hasMissingAgentReview ? (
+            <div className="enforcement-cta" data-testid="missing-agent-review-cta">
+              <p>Gate 前置证据不足。先运行 Agent Review，再重新评估 Gate。</p>
+              {onRunKnowledgeReview ? (
+                <button className="ghost-button" onClick={onRunKnowledgeReview}>
+                  运行 Agent Review
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          {isCurrentNodeAgent ? (
+            <div className="enforcement-cta" data-testid="agent-node-not-completed-cta">
+              <p>流程还没到 Gate。先生成当前 Agent 阶段产物，再进入对应 Gate。</p>
+            </div>
           ) : null}
           {[...decision.blockingReasons, ...decision.warningReasons].map((reason) => (
             <div className="enforcement-reason" key={reason.id}>

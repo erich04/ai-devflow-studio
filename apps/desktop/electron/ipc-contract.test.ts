@@ -13,6 +13,7 @@ import {
   parseAgentProviderCredentialInput,
   parseCancelCodingAgentRunInput,
   parseCreateRunInput,
+  parseCompleteWorkflowAgentNodeInput,
   parsePairDesktopInput,
   parseMcpServersInput,
   parseOpenManagedWorktreeInput,
@@ -175,6 +176,37 @@ describe('IPC contract parsers', () => {
     })
   })
 
+  it('accepts a workflow agent node completion payload', () => {
+    expect(
+      parseCompleteWorkflowAgentNodeInput({
+        runId: 'run-1',
+        nodeId: 'run-1-clarify',
+        userId: 'u-ling',
+        userName: 'Ling',
+      }),
+    ).toEqual({
+      runId: 'run-1',
+      nodeId: 'run-1-clarify',
+      userId: 'u-ling',
+      userName: 'Ling',
+    })
+  })
+
+  it('rejects workflow agent node completion payloads with renderer-supplied artifacts', () => {
+    expect(() =>
+      parseCompleteWorkflowAgentNodeInput({
+        runId: 'run-1',
+        nodeId: 'run-1-clarify',
+        userId: 'u-ling',
+        userName: 'Ling',
+        artifact: {
+          id: 'artifact-forged',
+          content: 'forged',
+        },
+      }),
+    ).toThrow(/artifact/)
+  })
+
   it('rejects create run payloads without a raw request', () => {
     expect(() =>
       parseCreateRunInput({
@@ -259,14 +291,16 @@ describe('IPC contract parsers', () => {
   it('accepts provider credential and knowledge review payloads', () => {
     expect(
       parseAgentProviderCredentialInput({
-        providerId: 'openai-default',
+        providerId: 'doubao-review',
         apiKey: 'sk-test-secret',
-        model: 'gpt-4.1-mini',
+        model: 'ark-code-latest',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
       }),
     ).toEqual({
-      providerId: 'openai-default',
+      providerId: 'doubao-review',
       apiKey: 'sk-test-secret',
-      model: 'gpt-4.1-mini',
+      model: 'ark-code-latest',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
     })
 
     expect(

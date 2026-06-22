@@ -124,8 +124,8 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
             {
               id: nodeIds.clarify,
               stage: 'clarify',
-              title: 'Clarify request',
-              subtitle: 'Capture acceptance criteria and non-goals',
+              title: '需求澄清',
+              subtitle: '补齐验收口径与非目标',
               kind: 'agent',
               status: 'running',
               ownerId: input.creatorId,
@@ -135,8 +135,8 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
             {
               id: nodeIds.clarifyGate,
               stage: 'clarify',
-              title: 'Clarification Gate',
-              subtitle: 'Confirm the request is ready for design',
+              title: '需求确认 Gate',
+              subtitle: '确认需求已准备进入方案设计',
               kind: 'gate',
               status: 'pending',
               ownerId: input.creatorId,
@@ -147,8 +147,8 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
             {
               id: nodeIds.design,
               stage: 'design',
-              title: 'Design solution',
-              subtitle: 'Define implementation and test strategy',
+              title: '方案设计',
+              subtitle: '定义实现方案与测试策略',
               kind: 'agent',
               status: 'pending',
               ownerId: input.creatorId,
@@ -158,8 +158,8 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
             {
               id: nodeIds.designGate,
               stage: 'design',
-              title: 'Design Gate',
-              subtitle: 'Approve architecture before implementation',
+              title: '方案评审 Gate',
+              subtitle: '审批方案后进入实现',
               kind: 'gate',
               status: 'pending',
               ownerId: input.creatorId,
@@ -214,6 +214,97 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
             },
           ],
           edges: [],
+        }
+      },
+      completeWorkflowAgentNode: async (input: {
+        runId: string
+        nodeId: string
+        userName: string
+      }) => {
+        const timestamp = '2026-06-21T16:05:00.000Z'
+        const clarifyGateId = `${input.runId}-clarify-gate`
+        const artifact = {
+          id: `artifact-${input.runId}-clarification-placeholder`,
+          runId: input.runId,
+          nodeId: input.nodeId,
+          kind: 'clarification',
+          title: '需求澄清结果',
+          summary: 'Clarified scope for the requested change.',
+          content: '# 需求澄清结果\n\n## Acceptance Criteria\n- The request is ready for 方案评审 Gate review.',
+          redacted: false,
+          updatedAt: timestamp,
+        }
+        const event = {
+          id: `event-${artifact.id}`,
+          runId: input.runId,
+          nodeId: input.nodeId,
+          sequence: 2,
+          kind: 'thinking',
+          message: `${input.userName} generated 需求澄清结果 and advanced to 需求确认 Gate.`,
+          timestamp,
+        }
+        const run = {
+          id: input.runId,
+          title: '重构 GitHub webhook 重试策略',
+          request: '请先澄清 webhook retry 的失败边界，再设计实现方案。',
+          projectId: 'p-payments',
+          creatorId: 'u-ling',
+          status: 'paused_at_gate',
+          currentNodeId: clarifyGateId,
+          branchName: 'ai/webhook-retry',
+          createdAt: '2026-06-21T16:00:00.000Z',
+          updatedAt: timestamp,
+          nodes: [
+            {
+              id: input.nodeId,
+              stage: 'clarify',
+              title: '需求澄清',
+              subtitle: '补齐验收口径与非目标',
+              kind: 'agent',
+              status: 'success',
+              ownerId: 'u-ling',
+              retryCount: 0,
+              artifactIds: [artifact.id],
+            },
+            {
+              id: clarifyGateId,
+              stage: 'clarify',
+              title: '需求确认 Gate',
+              subtitle: '确认需求已准备进入方案设计',
+              kind: 'gate',
+              status: 'running',
+              ownerId: 'u-ling',
+              requiredRole: 'member',
+              retryCount: 0,
+              artifactIds: [artifact.id],
+            },
+          ],
+          edges: [],
+        }
+
+        return {
+          run,
+          artifact,
+          event,
+          state: {
+            projects: [localProject],
+            runs: [run],
+            artifacts: [artifact],
+            events: [event],
+            testEvidence: [],
+            settings: { themePreference: 'system' },
+            mcpServers: [],
+            agentReviews: [],
+            agentTraces: [],
+            agentTokenUsage: [],
+            codingRuns: [],
+            codingEvents: [],
+            codingPermissionRequests: [],
+            codingPermissionDecisions: [],
+            managedCodingWorkspaces: [],
+            dependencyBootstrapEvidence: [],
+            codingDiffArtifacts: [],
+          },
         }
       },
       saveRun: async (run: unknown) => run,
@@ -634,13 +725,13 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page).toHaveTitle(/AI DevFlow Studio/)
     await expect(page.getByText('开发者工作台')).toBeVisible()
     await expect(page.getByTestId('workflow-canvas')).toBeVisible()
-    await expect(page.getByTestId('node-inspector')).toContainText('架构 Gate')
+    await expect(page.getByTestId('node-inspector')).toContainText('方案评审 Gate')
 
     await page.getByTestId('theme-toggle').click()
     await expect(page.locator('html')).toHaveAttribute('data-theme-preference', 'light')
 
     await page.getByRole('button', { name: /通过 Gate/ }).click()
-    await expect(page.getByTestId('toast')).toContainText('架构 Gate 已通过')
+    await expect(page.getByTestId('toast')).toContainText('方案评审 Gate 已通过')
 
     await page.getByRole('button', { name: /新建 Run/ }).click()
     await expect(page.getByRole('dialog', { name: /Create new run/ })).toBeVisible()

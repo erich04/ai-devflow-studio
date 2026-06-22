@@ -78,15 +78,13 @@ test.describe('AI DevFlow web team console', () => {
 
     await page.goto(webUrl)
 
-    await expect(page.getByText('Recent Runs')).toBeVisible()
+    await expect(page.getByText('Evidence Chain').first()).toBeVisible()
+    await expect(page.getByText('Human Gate').first()).toBeVisible()
     await expect(page.getByText('Test Evidence')).toBeVisible()
-    await expect(page.getByText('Knowledge Review Agent')).toBeVisible()
     await expect(page.getByText(runTitle)).toBeVisible()
     await expect(page.getByText(evidenceSummary)).toBeVisible()
-    await expect(page.getByText(reviewConclusion)).toBeVisible()
     await expect(page.locator('body')).toContainText(reviewSummary)
     await expect(page.locator('body')).toContainText('warning-only')
-    await expect(page.getByText('Latest review cost')).toBeVisible()
     await expect(page.getByText('pnpm test -- --run').first()).toBeVisible()
     await expect(page.locator('body')).not.toContainText('stdout')
     await expect(page.locator('body')).not.toContainText('stderr')

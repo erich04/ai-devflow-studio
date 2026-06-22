@@ -47,6 +47,7 @@ export const ipcChannels = {
   loadEnforcementPolicy: 'devflow:enforcement:policy:load',
   evaluateGateEnforcement: 'devflow:enforcement:gate:evaluate',
   createRun: 'devflow:run:create',
+  completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   saveRun: 'devflow:run:save',
   saveArtifact: 'devflow:artifact:save',
   approveGate: 'devflow:gate:approve',
@@ -108,6 +109,20 @@ export type ApproveGateInput = {
 
 export type ApproveGateResult = {
   run: WorkflowRun
+  event: AgentEvent
+  state: LocalExecutionState
+}
+
+export type CompleteWorkflowAgentNodeInput = {
+  runId: string
+  nodeId: string
+  userId: string
+  userName: string
+}
+
+export type CompleteWorkflowAgentNodeResult = {
+  run: WorkflowRun
+  artifact: Artifact
   event: AgentEvent
   state: LocalExecutionState
 }
@@ -256,6 +271,7 @@ export type DevFlowDesktopApi = {
   loadEnforcementPolicy: (input: LoadEnforcementPolicyInput) => Promise<PolicySnapshot>
   evaluateGateEnforcement: (input: EvaluateGateEnforcementInput) => Promise<GateEnforcementDecision>
   createRun: (input: CreateRunInput) => Promise<WorkflowRun>
+  completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   saveRun: (run: WorkflowRun) => Promise<WorkflowRun>
   saveArtifact: (artifact: Artifact) => Promise<Artifact>
   approveGate: (input: ApproveGateInput) => Promise<ApproveGateResult>
@@ -566,6 +582,22 @@ export function parseCreateRunInput(value: unknown): CreateRunInput {
     projectId: readRequiredString(value, 'projectId'),
     creatorId: readRequiredString(value, 'creatorId'),
     branchName: readRequiredString(value, 'branchName'),
+  }
+}
+
+export function parseCompleteWorkflowAgentNodeInput(value: unknown): CompleteWorkflowAgentNodeInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid complete workflow agent node payload')
+  }
+  if ('artifact' in value || 'artifacts' in value || 'event' in value || 'run' in value) {
+    throw new Error('Invalid complete workflow agent node payload: artifact/run/event fields are not accepted')
+  }
+
+  return {
+    runId: readRequiredString(value, 'runId'),
+    nodeId: readRequiredString(value, 'nodeId'),
+    userId: readRequiredString(value, 'userId'),
+    userName: readRequiredString(value, 'userName'),
   }
 }
 

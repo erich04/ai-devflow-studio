@@ -119,6 +119,20 @@ corepack pnpm dev:electron
 
 入口：Workbench Inspector 的 `Agent Review` 或左侧 `Agents`
 
+默认路径使用 `Deterministic Fake Provider`，不花模型钱。它适合本地 walkthrough 和 CI，但不代表真实模型审查。
+
+如果要让 DevFlow Review Agent 调用豆包/Volcengine Ark：
+
+1. 打开左侧 `Agents`。
+2. 在 `Review Model Credential` 中确认：
+   - Provider ID：`doubao-review`
+   - Base URL：`https://ark.cn-beijing.volces.com/api/coding/v3`
+   - Model：`ark-code-latest`
+3. 输入 API Key，点击 `Save Credential`。
+4. 在 `Review Model Provider` 下拉框选择保存后的 live provider，再运行 `Run Knowledge Review`。
+
+边界说明：豆包/Volcengine 只提供 OpenAI-compatible 模型 API；DevFlow 自己负责组装 review prompt、检索 Knowledge、运行治理检查，并解析结构化 review。Knowledge Review Agent 不由 `opencode` 执行；`opencode` 只用于 Coding Agent。
+
 要体验：
 
 - 选中一个 Gate 或 Build 节点。
@@ -129,6 +143,7 @@ corepack pnpm dev:electron
 通过标准：
 
 - Knowledge Review 生成可审计结果和 artifact。
+- Provider 显示能区分 fake/no-cost 与 live/may spend tokens。
 - Agent finding 默认不会 hard-block。
 - Gate Advisory 是否阻断由 policy evaluation 决定，不由 Agent core 直接决定。
 
@@ -312,6 +327,17 @@ corepack pnpm dev:electron
 ## 14. Release-only 真实 opencode + 豆包/Volcengine
 
 这一步会产生真实模型调用，不属于默认体验。
+
+Knowledge Review 的真实模型 smoke 走 OpenAI-compatible provider：
+
+```bash
+DEVFLOW_AGENT_OPENAI_API_KEY=... \
+DEVFLOW_AGENT_OPENAI_BASE_URL=https://ark.cn-beijing.volces.com/api/coding/v3 \
+DEVFLOW_AGENT_OPENAI_MODEL=ark-code-latest \
+corepack pnpm test:agent-live
+```
+
+这条 smoke 验证 DevFlow Review Agent 能用真实豆包/Volcengine 模型返回结构化 review。它不验证 `opencode`。
 
 先检查本机 runtime：
 

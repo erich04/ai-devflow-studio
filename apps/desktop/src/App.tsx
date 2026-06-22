@@ -85,6 +85,7 @@ import {
   type ManagedCodingWorkspace,
   type PolicySnapshot,
   type Project,
+  type ProviderCredentialMetadata,
   type RemediationPlan,
   type RetryAttempt,
   type TeamMember,
@@ -96,6 +97,7 @@ import {
 import {
   advanceWorkflowAfterGateApproval,
   canApproveGate,
+  completeWorkflowAgentNode,
   createAcceptanceEvidenceBundleArtifact,
   createPrDraftArtifact,
   createWorkflowRunFromRequest,
@@ -104,10 +106,15 @@ import { getDesktopApi } from './desktop-api'
 import { GateEnforcementPanel } from './GateEnforcementPanel'
 import { useGateEnforcement } from './useGateEnforcement'
 
+export function getToastDisplayDurationMs(message: string): number {
+  const characterCount = message.trim().length
+  return Math.max(8000, characterCount * 120)
+}
+
 type ViewId = 'workbench' | 'team' | 'knowledge' | 'agents' | 'skills' | 'mcp' | 'tests'
 
 const stageLabels: Record<NodeStage, string> = {
-  clarify: '方案澄清',
+  clarify: '需求澄清',
   design: '方案设计',
   build: '开发实现',
   test: '测试证据',
@@ -143,6 +150,51 @@ const fakeAgentProvider: AgentProviderConfig = {
   model: 'fake',
   enabled: true,
   updatedAt: new Date(0).toISOString(),
+}
+
+const legacyNodeTitleLabels: Record<string, string> = {
+  '方案澄清': '需求澄清',
+  '澄清 Gate': '需求确认 Gate',
+  '架构 Gate': '方案评审 Gate',
+  'Clarify request': '需求澄清',
+  'Clarification Gate': '需求确认 Gate',
+  'Design solution': '方案设计',
+  'Design Gate': '方案评审 Gate',
+}
+
+const legacyNodeSubtitleLabels: Record<string, string> = {
+  'Capture acceptance criteria and non-goals': '补齐验收口径与非目标',
+  'Confirm the request is ready for design': '确认需求已准备进入方案设计',
+  'Define implementation and test strategy': '定义实现方案与测试策略',
+  'Approve architecture before implementation': '审批方案后进入实现',
+  'Lead 审批后进入实现': 'Lead 审批方案后进入实现',
+}
+
+function displayNodeTitle(node: WorkflowNode): string {
+  return legacyNodeTitleLabels[node.title] ?? node.title
+}
+
+function displayNodeSubtitle(node: WorkflowNode): string {
+  return legacyNodeSubtitleLabels[node.subtitle] ?? node.subtitle
+}
+
+const defaultReviewProviderDraft = {
+  providerId: 'doubao-review',
+  baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
+  model: 'ark-code-latest',
+}
+
+function reviewProviderFromMetadata(metadata: ProviderCredentialMetadata): AgentProviderConfig {
+  return {
+    id: metadata.providerId,
+    name: metadata.providerId,
+    kind: 'openai-compatible',
+    ...(metadata.baseUrl ? { baseUrl: metadata.baseUrl } : {}),
+    model: metadata.model,
+    enabled: true,
+    maskedCredential: metadata.maskedCredential,
+    updatedAt: metadata.updatedAt,
+  }
 }
 
 function useThemePreference() {
@@ -190,8 +242,8 @@ function AppNode({ data, selected }: NodeProps<Node<{ workflowNode: WorkflowNode
         <span className="flow-node__stage">{stageLabels[workflowNode.stage]}</span>
         <span className="flow-node__status">{statusLabel}</span>
       </div>
-      <strong>{workflowNode.title}</strong>
-      <p>{workflowNode.subtitle}</p>
+      <strong>{displayNodeTitle(workflowNode)}</strong>
+      <p>{displayNodeSubtitle(workflowNode)}</p>
       <div className="flow-node__meta">
         <span>{workflowNode.kind}</span>
         <span>{workflowNode.retryCount} retries</span>
@@ -278,7 +330,15 @@ function runMatchesQuery(
     run.request,
     run.branchName,
     run.status,
-    ...run.nodes.flatMap((node) => [node.title, node.subtitle, node.kind, node.stage, node.status]),
+    ...run.nodes.flatMap((node) => [
+      node.title,
+      displayNodeTitle(node),
+      node.subtitle,
+      displayNodeSubtitle(node),
+      node.kind,
+      node.stage,
+      node.status,
+    ]),
     ...runArtifacts.flatMap((artifact) => [
       artifact.title,
       artifact.summary,
@@ -335,6 +395,7 @@ export function App() {
   const [selectedLocalProjectId, setSelectedLocalProjectId] = useState('')
   const [testCommandDraft, setTestCommandDraft] = useState('')
   const [commandSafety, setCommandSafety] = useState<CommandSafetyResult | null>(null)
+  const [isSavingTestCommand, setIsSavingTestCommand] = useState(false)
   const [isRunningTests, setIsRunningTests] = useState(false)
   const [isSyncingRemote, setIsSyncingRemote] = useState(false)
   const [desktopPairing, setDesktopPairing] = useState<DesktopPairingCredential | null>(null)
@@ -354,6 +415,9 @@ export function App() {
   const [dependencyBootstrapEvidence, setDependencyBootstrapEvidence] = useState<DependencyBootstrapEvidence[]>([])
   const [codingDiffArtifacts, setCodingDiffArtifacts] = useState<CodingDiffArtifact[]>([])
   const [retryAttempts, setRetryAttempts] = useState<RetryAttempt[]>([])
+  const [providerIdDraft, setProviderIdDraft] = useState(defaultReviewProviderDraft.providerId)
+  const [providerBaseUrlDraft, setProviderBaseUrlDraft] = useState(defaultReviewProviderDraft.baseUrl)
+  const [providerModelDraft, setProviderModelDraft] = useState(defaultReviewProviderDraft.model)
   const [providerKeyDraft, setProviderKeyDraft] = useState('')
   const [runtimeBudgetApprovalId, setRuntimeBudgetApprovalId] = useState('')
   const [isRunningAgentReview, setIsRunningAgentReview] = useState(false)
@@ -372,6 +436,9 @@ export function App() {
   const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0]
   const selectedNode =
     selectedRun?.nodes.find((node) => node.id === selectedNodeId) ?? selectedRun?.nodes[0]
+  const isSelectedCurrentNode = Boolean(
+    selectedRun && selectedNode && selectedRun.currentNodeId === selectedNode.id,
+  )
   const selectedArtifacts = artifacts
     .filter((artifact) => selectedNode?.artifactIds.includes(artifact.id))
     .filter((artifact) =>
@@ -390,6 +457,11 @@ export function App() {
   )
   const selectedLocalProject =
     localProjects.find((project) => project.id === selectedLocalProjectId) ?? localProjects[0]
+  const isTestCommandDirty = Boolean(
+    selectedLocalProject &&
+      testCommandDraft.trim() &&
+      testCommandDraft.trim() !== selectedLocalProject.testCommand.trim(),
+  )
   const currentUser = teamMembers.find((member) => member.id === 'u-ling') ?? teamMembers[1]
   const flow = useMemo(() => (selectedRun ? buildFlow(selectedRun) : { nodes: [], edges: [] }), [selectedRun])
   const knowledgeReferences = useMemo(
@@ -555,6 +627,20 @@ export function App() {
       setMcpServers(state.mcpServers)
     }
   }
+
+  useEffect(() => {
+    if (!toast) {
+      return undefined
+    }
+
+    const timeout = window.setTimeout(() => {
+      setToast('')
+    }, getToastDisplayDurationMs(toast))
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [toast])
 
   useEffect(() => {
     if (!desktopApi) {
@@ -769,7 +855,7 @@ export function App() {
           role: currentUser.role,
         })
         applyLocalExecutionState(result.state)
-        setToast('架构 Gate 已通过，Run 进入本地实现阶段')
+        setToast(`${displayNodeTitle(selectedNode)} 已通过，Run 进入本地实现阶段`)
         void desktopApi
           .uploadRunSummary(createRemoteRunSummary(result.run, 'run'))
           .catch(() => undefined)
@@ -791,13 +877,73 @@ export function App() {
       nodeId: selectedNode.id,
       sequence: events.filter((event) => event.runId === selectedRun.id).length + 1,
       kind: 'approval',
-      message: `${currentUser.name} Gate 已通过：${selectedNode.title}`,
+      message: `${currentUser.name} Gate 已通过：${displayNodeTitle(selectedNode)}`,
       timestamp,
     }
 
     setRuns((previousRuns) => previousRuns.map((run) => (run.id === selectedRun.id ? updatedRun : run)))
     setEvents((previousEvents) => mergeById(previousEvents, [approvalEvent]))
     setToast('Gate 已通过，流程已推进')
+  }
+
+  async function completeSelectedWorkflowAgentNode() {
+    if (!selectedRun || !selectedNode || !currentUser) {
+      return
+    }
+    if (selectedNode.kind !== 'agent') {
+      setToast('只有 Agent 节点可以生成阶段产物')
+      return
+    }
+    if (selectedRun.currentNodeId !== selectedNode.id) {
+      setToast('只能完成当前运行中的 Agent 节点')
+      return
+    }
+
+    const successToast =
+      selectedNode.stage === 'clarify'
+        ? '需求澄清已生成，进入需求确认 Gate'
+        : '设计方案已生成，进入方案评审 Gate'
+
+    if (desktopApi) {
+      try {
+        const result = await desktopApi.completeWorkflowAgentNode({
+          runId: selectedRun.id,
+          nodeId: selectedNode.id,
+          userId: currentUser.id,
+          userName: currentUser.name,
+        })
+        applyLocalExecutionState(result.state)
+        setSelectedRunId(result.run.id)
+        setSelectedNodeId(result.run.currentNodeId)
+        setActiveView('workbench')
+        setToast(successToast)
+      } catch (error) {
+        setToast(error instanceof Error ? error.message : '生成阶段产物失败')
+      }
+      return
+    }
+
+    try {
+      const completed = completeWorkflowAgentNode({
+        run: selectedRun,
+        nodeId: selectedNode.id,
+        artifacts: artifacts.filter((artifact) => artifact.runId === selectedRun.id),
+        existingEvents: events.filter((event) => event.runId === selectedRun.id),
+        actorName: currentUser.name,
+        now: new Date().toISOString(),
+      })
+
+      setRuns((previousRuns) =>
+        previousRuns.map((run) => (run.id === completed.run.id ? completed.run : run)),
+      )
+      setArtifacts((previousArtifacts) => mergeById(previousArtifacts, completed.artifacts))
+      setEvents((previousEvents) => mergeById(previousEvents, [completed.event]))
+      setSelectedRunId(completed.run.id)
+      setSelectedNodeId(completed.run.currentNodeId)
+      setToast(successToast)
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '生成阶段产物失败')
+    }
   }
 
   async function selectLocalProject() {
@@ -827,8 +973,13 @@ export function App() {
       setToast('请先选择本地仓库')
       return
     }
+    if (!isTestCommandDirty) {
+      setToast('测试命令已是最新')
+      return
+    }
 
     try {
+      setIsSavingTestCommand(true)
       const localSafety = validateTestCommandSafety(testCommandDraft)
       const safety =
         commandSafety?.normalizedCommand === localSafety.normalizedCommand
@@ -849,6 +1000,8 @@ export function App() {
       setToast(safety.level === 'warn' ? '测试命令已保存，运行前请确认风险提示' : '测试命令已保存')
     } catch (error) {
       setToast(error instanceof Error ? error.message : '保存测试命令失败')
+    } finally {
+      setIsSavingTestCommand(false)
     }
   }
 
@@ -933,29 +1086,41 @@ export function App() {
 
   async function saveAgentProviderCredential() {
     if (!desktopApi) {
-      setToast('请在 Electron 应用中保存 Provider Credential')
+      setToast('请在 Electron 应用中保存 Review Model Credential')
       return
     }
 
+    const providerId = providerIdDraft.trim()
+    const baseUrl = providerBaseUrlDraft.trim()
+    const model = providerModelDraft.trim()
+
     if (!providerKeyDraft.trim()) {
-      setToast('请输入 Provider API Key')
+      setToast('请输入 Review Model API Key')
+      return
+    }
+    if (!providerId) {
+      setToast('请输入 Review Model Provider ID')
+      return
+    }
+    if (!model) {
+      setToast('请输入 Review Model')
       return
     }
 
     try {
       const metadata = await desktopApi.saveAgentProviderCredential({
-        providerId: 'openai-default',
+        providerId,
         apiKey: providerKeyDraft,
-        model: 'gpt-4.1-mini',
-        baseUrl: 'https://api.openai.com/v1',
+        model,
+        ...(baseUrl ? { baseUrl } : {}),
       })
       const providers = await desktopApi.listAgentProviders()
-      setAgentProviders(providers.length > 0 ? providers : [fakeAgentProvider])
+      setAgentProviders(mergeById(providers.length > 0 ? providers : [fakeAgentProvider], [reviewProviderFromMetadata(metadata)]))
       setSelectedAgentProviderId(metadata.providerId)
       setProviderKeyDraft('')
-      setToast(`Provider credential saved: ${metadata.maskedCredential}`)
+      setToast(`Review model credential saved: ${metadata.maskedCredential}`)
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '保存 Provider Credential 失败')
+      setToast(error instanceof Error ? error.message : '保存 Review Model Credential 失败')
     }
   }
 
@@ -1021,7 +1186,7 @@ export function App() {
         projectId: selectedLocalProject.id,
         requestedBy: currentUser.id,
         providerId: 'fake-coding-engine',
-        userInstruction: `Implement ${selectedNode.title} with the existing DevFlow context.`,
+        userInstruction: `Implement ${displayNodeTitle(selectedNode)} with the existing DevFlow context.`,
         ...(runtimeBudgetApprovalId.trim() ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() } : {}),
       })
       applyLocalExecutionState(result.state)
@@ -1147,7 +1312,7 @@ export function App() {
     }
 
     setIsNewRunOpen(false)
-    setToast('新 Run 已创建，正在进行方案澄清')
+    setToast('新 Run 已创建，正在进行需求澄清')
 
     if (desktopApi) {
       try {
@@ -1384,8 +1549,19 @@ export function App() {
           <Metric label="Pending Gates" value="2" icon={<ClipboardCheck />} />
           <Metric label="Token Cost" value={teamTotalCost} icon={<CircleDollarSign />} />
           <Metric label="Tests Today" value="18 / 20" icon={<TestTube2 />} />
-          <span className="toast" data-testid="toast">{toast}</span>
         </section>
+
+        {toast && (
+          <div
+            className="toast toast--floating"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            data-testid="toast"
+          >
+            {toast}
+          </div>
+        )}
 
         {activeView === 'workbench' && selectedRun && (
           <section className="workbench-layout">
@@ -1398,6 +1574,8 @@ export function App() {
                 onSaveCommand={saveTestCommand}
                 desktopConnected={Boolean(desktopApi)}
                 commandSafety={commandSafety}
+                isCommandDirty={isTestCommandDirty}
+                isSavingCommand={isSavingTestCommand}
               />
               <div className="section-heading">
                 <span>Runs</span>
@@ -1447,7 +1625,9 @@ export function App() {
             </div>
 
             <Inspector
+              selectedRun={selectedRun}
               selectedNode={selectedNode}
+              isSelectedCurrentNode={isSelectedCurrentNode}
               artifacts={selectedArtifacts}
               events={selectedEvents}
               governanceChecks={selectedGovernanceChecks}
@@ -1461,8 +1641,11 @@ export function App() {
               canApprove={gateEnforcement.canApprove}
               canSaveOverride={gateEnforcement.canSaveOverride}
               onApprove={approveSelectedGate}
+              onCompleteAgentNode={completeSelectedWorkflowAgentNode}
               onSaveGateOverride={gateEnforcement.saveOverride}
               onStartRemediationRetry={startRemediationRetry}
+              pairingState={desktopPairing ? 'paired' : 'unpaired'}
+              onSyncTeam={syncRemoteTeamState}
               onRunTests={executeTestPlan}
               onRunKnowledgeReview={runKnowledgeReview}
               onRunCodingAgent={runCodingAgent}
@@ -1500,6 +1683,12 @@ export function App() {
             providers={agentProviders}
             selectedProviderId={selectedAgentProviderId}
             onProviderChange={setSelectedAgentProviderId}
+            providerIdDraft={providerIdDraft}
+            onProviderIdDraftChange={setProviderIdDraft}
+            providerBaseUrlDraft={providerBaseUrlDraft}
+            onProviderBaseUrlDraftChange={setProviderBaseUrlDraft}
+            providerModelDraft={providerModelDraft}
+            onProviderModelDraftChange={setProviderModelDraft}
             providerKeyDraft={providerKeyDraft}
             onProviderKeyDraftChange={setProviderKeyDraft}
             onSaveProviderCredential={saveAgentProviderCredential}
@@ -1636,6 +1825,8 @@ function LocalProjectPanel({
   onSaveCommand,
   desktopConnected,
   commandSafety,
+  isCommandDirty,
+  isSavingCommand,
 }: {
   project: LocalProject | undefined
   commandDraft: string
@@ -1644,7 +1835,15 @@ function LocalProjectPanel({
   onSaveCommand: () => void
   desktopConnected: boolean
   commandSafety: CommandSafetyResult | null
+  isCommandDirty: boolean
+  isSavingCommand: boolean
 }) {
+  const saveLabel = isSavingCommand
+    ? '保存中...'
+    : project && commandDraft.trim() && !isCommandDirty
+      ? '已保存'
+      : '保存测试命令'
+
   return (
     <section className="local-project-panel" aria-label="Local project">
       <div className="section-heading">
@@ -1690,16 +1889,22 @@ function LocalProjectPanel({
           ))}
         </div>
       )}
-      <button className="primary-button" disabled={!project || !commandDraft.trim()} onClick={onSaveCommand}>
+      <button
+        className="primary-button"
+        disabled={!project || !commandDraft.trim() || !isCommandDirty || isSavingCommand}
+        onClick={onSaveCommand}
+      >
         <Save size={16} />
-        保存测试命令
+        {saveLabel}
       </button>
     </section>
   )
 }
 
 function Inspector({
+  selectedRun,
   selectedNode,
+  isSelectedCurrentNode,
   artifacts,
   events,
   governanceChecks,
@@ -1713,8 +1918,11 @@ function Inspector({
   canApprove,
   canSaveOverride,
   onApprove,
+  onCompleteAgentNode,
   onSaveGateOverride,
   onStartRemediationRetry,
+  pairingState,
+  onSyncTeam,
   onRunTests,
   onRunKnowledgeReview,
   onRunCodingAgent,
@@ -1724,7 +1932,9 @@ function Inspector({
   isRunningAgentReview,
   isStartingCodingAgent,
 }: {
+  selectedRun: WorkflowRun | undefined
   selectedNode: WorkflowNode | undefined
+  isSelectedCurrentNode: boolean
   artifacts: Artifact[]
   events: AgentEvent[]
   governanceChecks: KnowledgeGovernanceCheck[]
@@ -1738,8 +1948,11 @@ function Inspector({
   canApprove: boolean
   canSaveOverride: boolean
   onApprove: () => void
+  onCompleteAgentNode: () => void
   onSaveGateOverride: (reason: string, provisional: boolean) => void
   onStartRemediationRetry: (candidateId: string) => void
+  pairingState: 'unpaired' | 'paired' | 'sync_failed'
+  onSyncTeam: () => void
   onRunTests: () => void
   onRunKnowledgeReview: () => void
   onRunCodingAgent: () => void
@@ -1757,11 +1970,11 @@ function Inspector({
     <aside className="inspector" data-testid="node-inspector">
       <div className="section-heading">
         <span>Selected Node</span>
-        <strong>{selectedNode.title}</strong>
+        <strong>{displayNodeTitle(selectedNode)}</strong>
       </div>
       <div className="node-summary">
         <span>{stageLabels[selectedNode.stage]}</span>
-        <p>{selectedNode.subtitle}</p>
+        <p>{displayNodeSubtitle(selectedNode)}</p>
       </div>
 
       <GateEnforcementPanel
@@ -1774,6 +1987,15 @@ function Inspector({
         isStartingRetry={isStartingCodingAgent}
         onSaveOverride={onSaveGateOverride}
         onStartRetry={onStartRemediationRetry}
+        pairingState={pairingState}
+        onSyncTeam={onSyncTeam}
+        onRunKnowledgeReview={onRunKnowledgeReview}
+        isCurrentNodeAgent={Boolean(
+          selectedRun &&
+            selectedNode.kind === 'agent' &&
+            selectedRun.currentNodeId === selectedNode.id &&
+            selectedNode.status !== 'success',
+        )}
       />
 
       <div className="governance-list">
@@ -1834,6 +2056,26 @@ function Inspector({
       </div>
 
       <div className="inspector-actions">
+        {selectedNode.kind === 'agent' && selectedNode.stage === 'clarify' && isSelectedCurrentNode ? (
+          <button
+            className="primary-button"
+            data-testid="complete-clarify-agent"
+            onClick={onCompleteAgentNode}
+          >
+            <Bot size={16} />
+            生成需求澄清
+          </button>
+        ) : null}
+        {selectedNode.kind === 'agent' && selectedNode.stage === 'design' && isSelectedCurrentNode ? (
+          <button
+            className="primary-button"
+            data-testid="complete-design-agent"
+            onClick={onCompleteAgentNode}
+          >
+            <Bot size={16} />
+            生成设计方案
+          </button>
+        ) : null}
         <button className="primary-button" disabled={!canApprove} onClick={onApprove}>
           <CheckCircle2 size={16} />
           通过 Gate
@@ -2076,6 +2318,12 @@ function AgentWorkbenchView({
   providers,
   selectedProviderId,
   onProviderChange,
+  providerIdDraft,
+  onProviderIdDraftChange,
+  providerBaseUrlDraft,
+  onProviderBaseUrlDraftChange,
+  providerModelDraft,
+  onProviderModelDraftChange,
   providerKeyDraft,
   onProviderKeyDraftChange,
   onSaveProviderCredential,
@@ -2110,6 +2358,12 @@ function AgentWorkbenchView({
   providers: AgentProviderConfig[]
   selectedProviderId: string
   onProviderChange: (providerId: string) => void
+  providerIdDraft: string
+  onProviderIdDraftChange: (value: string) => void
+  providerBaseUrlDraft: string
+  onProviderBaseUrlDraftChange: (value: string) => void
+  providerModelDraft: string
+  onProviderModelDraftChange: (value: string) => void
   providerKeyDraft: string
   onProviderKeyDraftChange: (value: string) => void
   onSaveProviderCredential: () => void
@@ -2142,6 +2396,10 @@ function AgentWorkbenchView({
   testEvidence: TestEvidence | undefined
 }) {
   const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) ?? providers[0]
+  const selectedProviderMode =
+    selectedProvider?.kind === 'fake'
+      ? 'Deterministic fake · no model cost'
+      : 'Live OpenAI-compatible · may spend provider tokens'
   const runtimeLabel = latestCodingRun ? codingRuntimeLabel(latestCodingRun.engine) : 'No runtime'
   const terminalLabel = latestCodingRun ? codingTerminalLabel(latestCodingRun.status) : 'No terminal state'
   const cleanupStatus = workspace?.cleanupStatus ?? (workspace?.deletedAt ? 'deleted' : workspace ? 'active' : 'none')
@@ -2171,9 +2429,9 @@ function AgentWorkbenchView({
             <p>{selectedRun?.title ?? 'No selected run'}</p>
           </div>
           <label>
-            Agent Provider
+            Review Model Provider
             <select
-              aria-label="Agent Provider"
+              aria-label="Review Model Provider"
               value={selectedProviderId}
               onChange={(event) => onProviderChange(event.target.value)}
             >
@@ -2184,6 +2442,9 @@ function AgentWorkbenchView({
               ))}
             </select>
           </label>
+          <div className="provider-mode-pill" data-testid="review-provider-mode">
+            {selectedProviderMode}
+          </div>
           <button className="primary-button" disabled={!selectedRun || !selectedNode || isRunning} onClick={onRunKnowledgeReview}>
             <Bot size={16} />
             {isRunning ? 'Review running' : 'Run Knowledge Review'}
@@ -2192,14 +2453,41 @@ function AgentWorkbenchView({
 
         <article className="agent-provider-card">
           <div className="section-heading">
-            <span>Provider Credential</span>
-            <strong>OpenAI-compatible</strong>
+            <span>Review Model Credential</span>
+            <strong>OpenAI-compatible / Volcengine Ark</strong>
           </div>
-          <p>系统只保存 masked metadata 到 UI；明文 key 不会回读到 renderer。</p>
+          <p>DevFlow Review Agent 会组装 review prompt 并调用这里配置的模型；明文 key 不会回读到 renderer。</p>
+          <label>
+            Provider ID
+            <input
+              aria-label="Review Provider ID"
+              value={providerIdDraft}
+              placeholder="doubao-review"
+              onChange={(event) => onProviderIdDraftChange(event.target.value)}
+            />
+          </label>
+          <label>
+            Base URL
+            <input
+              aria-label="Review Provider Base URL"
+              value={providerBaseUrlDraft}
+              placeholder="https://ark.cn-beijing.volces.com/api/coding/v3"
+              onChange={(event) => onProviderBaseUrlDraftChange(event.target.value)}
+            />
+          </label>
+          <label>
+            Model
+            <input
+              aria-label="Review Provider Model"
+              value={providerModelDraft}
+              placeholder="ark-code-latest"
+              onChange={(event) => onProviderModelDraftChange(event.target.value)}
+            />
+          </label>
           <label>
             API Key
             <input
-              aria-label="Provider API Key"
+              aria-label="Review Provider API Key"
               type="password"
               value={providerKeyDraft}
               placeholder="sk-..."

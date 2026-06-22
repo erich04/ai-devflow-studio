@@ -27,6 +27,8 @@ const desktopApi: DevFlowDesktopApi = {
   evaluateGateEnforcement: (input) =>
     ipcRenderer.invoke(ipcChannels.evaluateGateEnforcement, input),
   createRun: (run) => ipcRenderer.invoke(ipcChannels.createRun, run),
+  completeWorkflowAgentNode: (input) =>
+    ipcRenderer.invoke(ipcChannels.completeWorkflowAgentNode, input),
   saveRun: (run) => ipcRenderer.invoke(ipcChannels.saveRun, run),
   saveArtifact: (artifact) => ipcRenderer.invoke(ipcChannels.saveArtifact, artifact),
   approveGate: (input) => ipcRenderer.invoke(ipcChannels.approveGate, input),

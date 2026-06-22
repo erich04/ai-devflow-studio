@@ -13,6 +13,7 @@ import {
   createAgentReviewArtifacts,
   createFakeAgentProvider,
   createOpenAiCompatibleAgentProvider,
+  completeWorkflowAgentNode,
   createWorkflowRunFromRequest,
   createRemoteAgentReviewSummary,
   createTestEvidenceArtifact,
@@ -48,6 +49,7 @@ import {
   parseAgentProviderCredentialInput,
   parsePairDesktopInput,
   parseCreateRunInput,
+  parseCompleteWorkflowAgentNodeInput,
   parseListAgentReviewsInput,
   parseReplyCodingPermissionInput,
   parseRemoteCodingAgentSummaryInput,
@@ -692,6 +694,38 @@ function registerIpcHandlers() {
       await store.saveEvent(event)
     }
     return created.run
+  })
+
+  ipcMain.handle(ipcChannels.completeWorkflowAgentNode, async (_, payload: unknown) => {
+    const input = parseCompleteWorkflowAgentNodeInput(payload)
+    const store = await getStore()
+    const run = (await store.listRuns()).find((candidate) => candidate.id === input.runId)
+    if (!run) {
+      throw new Error(`Run not found: ${input.runId}`)
+    }
+    const [artifacts, events] = await Promise.all([
+      store.listArtifacts(run.id),
+      store.listEvents(run.id),
+    ])
+    const completed = completeWorkflowAgentNode({
+      run,
+      nodeId: input.nodeId,
+      artifacts,
+      existingEvents: events,
+      actorName: input.userName,
+      now: new Date().toISOString(),
+    })
+
+    await store.saveRun(completed.run)
+    await store.saveArtifact(completed.artifact)
+    await store.saveEvent(completed.event)
+
+    return {
+      run: completed.run,
+      artifact: completed.artifact,
+      event: completed.event,
+      state: await store.loadState(),
+    }
   })
 
   ipcMain.handle(ipcChannels.saveRun, async (_, payload: unknown) => {

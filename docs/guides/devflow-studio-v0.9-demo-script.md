@@ -63,7 +63,7 @@ corepack pnpm dev:electron
 操作：
 
 1. 进入 `工作台`。
-2. 选中 `架构 Gate` 或任意 protected Gate。
+2. 选中 `方案评审 Gate` 或任意 protected Gate。
 3. 展示 Inspector 里的 Gate Enforcement 状态。
 
 讲法：

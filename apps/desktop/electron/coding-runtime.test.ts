@@ -299,7 +299,7 @@ describe('CodingRuntime', () => {
     expect(result.codingRun.prompt).toContain('Health endpoint design')
     expect(result.codingRun.prompt).toContain('knowledge-doc-api-health')
     expect(result.codingRun.prompt).toContain('Gate Decisions')
-    expect(result.codingRun.prompt).toContain('approved by devflow: Lead Gate 已通过：架构 Gate')
+    expect(result.codingRun.prompt).toContain('approved by devflow: Lead Gate 已通过：方案评审 Gate')
     expect(result.codingRun.prompt).toContain('Existing Test Evidence')
     expect(result.codingRun.prompt).toContain('npm test [passed]: Existing local tests passed.')
   })
@@ -1087,7 +1087,7 @@ function approvalEvent(): AgentEvent {
     nodeId: 'node-design-gate',
     sequence: 1,
     kind: 'approval',
-    message: 'Lead Gate 已通过：架构 Gate',
+    message: 'Lead Gate 已通过：方案评审 Gate',
     timestamp: '2026-06-17T00:00:00.000Z',
   }
 }

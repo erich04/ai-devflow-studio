@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   advanceWorkflowAfterGateApproval,
+  completeWorkflowAgentNode,
   createRecommendedEnforcementPreset,
   createWorkflowRunFromRequest,
   createWarnOnlyDefaultPolicy,
@@ -10,7 +11,7 @@ import {
   runs as fixtureRuns,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
-import { App } from './App'
+import { App, getToastDisplayDurationMs } from './App'
 import type { DevFlowDesktopApi, RunProjectTestsInput } from './desktop-api'
 
 const localProject = {
@@ -218,6 +219,50 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         now: '2026-06-21T16:00:00.000Z',
       }).run,
     ),
+    completeWorkflowAgentNode: vi.fn().mockImplementation(async (input) => {
+      const created = createWorkflowRunFromRequest({
+        runId: 'run-created-from-request',
+        title: '重构 GitHub webhook 重试策略',
+        request: '请先澄清 webhook retry 的失败边界，再设计实现方案。',
+        projectId: 'p-payments',
+        creatorId: 'u-ling',
+        branchName: 'ai/webhook-retry',
+        now: '2026-06-21T16:00:00.000Z',
+      })
+      const completed = completeWorkflowAgentNode({
+        run: created.run,
+        nodeId: input.nodeId,
+        artifacts: created.artifacts,
+        existingEvents: created.events,
+        actorName: input.userName,
+        now: '2026-06-21T16:05:00.000Z',
+      })
+
+      return {
+        run: completed.run,
+        artifact: completed.artifact,
+        event: completed.event,
+        state: {
+          projects: [],
+          runs: [completed.run],
+          artifacts: completed.artifacts,
+          events: [...created.events, completed.event],
+          testEvidence: [],
+          settings: { themePreference: 'system' },
+          mcpServers: [],
+          agentReviews: [],
+          agentTraces: [],
+          agentTokenUsage: [],
+          codingRuns: [],
+          codingEvents: [],
+          codingPermissionRequests: [],
+          codingPermissionDecisions: [],
+          managedCodingWorkspaces: [],
+          dependencyBootstrapEvidence: [],
+          codingDiffArtifacts: [],
+        },
+      }
+    }),
     saveRun: vi.fn().mockImplementation(async (run) => run),
     approveGate: vi.fn().mockImplementation(async (input) => {
       const timestamp = '2026-06-15T00:05:00.000Z'
@@ -284,10 +329,10 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     saveMcpServers: vi.fn().mockImplementation(async (servers) => servers),
     listAgentProviders: vi.fn().mockResolvedValue([agentProvider]),
     saveAgentProviderCredential: vi.fn().mockResolvedValue({
-      providerId: 'openai-default',
-      model: 'gpt-4.1-mini',
-      baseUrl: 'https://api.openai.com/v1',
-      maskedCredential: 'sk-...test',
+      providerId: 'doubao-review',
+      model: 'ark-code-latest',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
+      maskedCredential: 'e8...test',
       updatedAt: '2026-06-15T00:03:00.000Z',
     }),
     runKnowledgeReview: vi.fn().mockImplementation(async (input) => {
@@ -517,6 +562,27 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
 }
 
 describe('App', () => {
+  it('keeps toast messages visible for at least 8 seconds and longer for long text', () => {
+    expect(getToastDisplayDurationMs('测试命令已保存')).toBe(8000)
+    expect(
+      getToastDisplayDurationMs(
+        'Team enforcement policy is unavailable. Sync policy before approving this Gate.',
+      ),
+    ).toBeGreaterThan(8000)
+  })
+
+  it('renders app feedback as a floating toast status', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+
+    const toast = screen.getByRole('status')
+
+    expect(toast).toHaveClass('toast--floating')
+    expect(toast).toHaveAttribute('aria-live', 'polite')
+  })
+
   it('toggles theme preference through the topbar control', () => {
     render(<App />)
 
@@ -561,6 +627,41 @@ describe('App', () => {
       creatorId: 'u-ling',
     }))
     expect(screen.getAllByText('重构 GitHub webhook 重试策略').length).toBeGreaterThan(0)
+  })
+
+  it('completes the current clarify agent through the desktop write path', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
+    fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
+
+    const completeButton = await screen.findByTestId('complete-clarify-agent')
+    fireEvent.click(completeButton)
+
+    await waitFor(() =>
+      expect(api.completeWorkflowAgentNode).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-created-from-request',
+        nodeId: 'run-created-from-request-clarify',
+        userId: 'u-ling',
+        userName: 'Ling',
+      })),
+    )
+    expect(await screen.findByText('需求澄清结果')).toBeInTheDocument()
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('需求确认 Gate')
+    expect(screen.getByTestId('toast')).toHaveTextContent('需求澄清已生成，进入需求确认 Gate')
+  })
+
+  it('completes the current clarify agent in the browser fallback path', async () => {
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
+    fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
+    fireEvent.click(await screen.findByTestId('complete-clarify-agent'))
+
+    expect(await screen.findByText('需求澄清结果')).toBeInTheDocument()
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('需求确认 Gate')
   })
 
   it('generates PR draft and acceptance bundle artifacts from the inspector', async () => {
@@ -732,7 +833,7 @@ describe('App', () => {
 
     await waitFor(() => expect(api.approveGate).toHaveBeenCalled())
     await waitFor(() => expect(api.uploadRunSummary).toHaveBeenCalled())
-    expect(screen.getByTestId('toast')).toHaveTextContent('架构 Gate 已通过')
+    expect(screen.getByTestId('toast')).toHaveTextContent('方案评审 Gate 已通过')
   })
 
   it('shows blocking enforcement details and keeps non-approval actions available', async () => {
@@ -792,9 +893,53 @@ describe('App', () => {
     expect(inspector).toHaveTextContent('policy v1')
     expect(inspector).toHaveTextContent('Knowledge Review Agent has not reviewed this protected Gate.')
     expect(inspector).toHaveTextContent('Run Knowledge Review Agent for this protected Gate.')
+    expect(screen.getByTestId('missing-agent-review-cta')).toHaveTextContent('Gate 前置证据不足')
+    expect(screen.getByRole('button', { name: /运行 Agent Review/ })).not.toBeDisabled()
     expect(screen.getByRole('button', { name: /通过 Gate/ })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /Agent Review/ })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Agent Review' })).not.toBeDisabled()
     expect(screen.getByRole('button', { name: /执行测试/ })).not.toBeDisabled()
+  })
+
+  it('explains unavailable team policy without hiding the local agent completion action', async () => {
+    installDesktopApi({
+      evaluateGateEnforcement: vi.fn().mockResolvedValue({
+        status: 'blocked_policy_unavailable',
+        blocksApproval: true,
+        blockingReasons: [
+          {
+            id: 'policy-unavailable',
+            target: 'governance_check',
+            ruleKey: 'policy-unavailable',
+            action: 'block',
+            summary: 'Team enforcement policy is unavailable.',
+          },
+        ],
+        warningReasons: [],
+        requiredActions: ['Sync team policy before approving this Gate.'],
+        canOverride: false,
+        overrideRoleRequired: 'lead',
+        policySource: 'unavailable',
+        policyVersion: 0,
+        provisional: false,
+      }),
+      loadEnforcementPolicy: vi.fn().mockResolvedValue({
+        projectId: fixtureRuns[0]!.projectId,
+        organizationPolicy: createWarnOnlyDefaultPolicy(),
+        projectOverride: null,
+        effectivePolicy: null,
+        version: 0,
+        updatedAt: '2026-06-18T00:00:00.000Z',
+        syncedAt: '2026-06-18T00:00:00.000Z',
+        source: 'unavailable',
+      }),
+    })
+
+    render(<App />)
+
+    const inspector = await screen.findByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('blocked_policy_unavailable')
+    expect(screen.getByTestId('policy-unavailable-cta')).toHaveTextContent('Pair this Desktop')
+    expect(screen.getByRole('button', { name: /通过 Gate/ })).toBeDisabled()
   })
 
   it('shows provisional overrides distinctly from confirmed overrides', async () => {
@@ -977,6 +1122,71 @@ describe('App', () => {
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('warning-only')
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Build redacted context')
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('estimated')
+  })
+
+  it('saves a custom Review Model Provider credential for Doubao-compatible review', async () => {
+    const liveProvider = {
+      id: 'doubao-review',
+      name: 'doubao-review',
+      kind: 'openai-compatible' as const,
+      model: 'ark-code-latest',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
+      enabled: true,
+      maskedCredential: 'e8...test',
+      updatedAt: '2026-06-15T00:03:00.000Z',
+    }
+    const listAgentProviders = vi
+      .fn()
+      .mockResolvedValueOnce([agentProvider])
+      .mockResolvedValueOnce([agentProvider, liveProvider])
+    const saveAgentProviderCredential = vi.fn().mockResolvedValue({
+      providerId: 'doubao-review',
+      model: 'ark-code-latest',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
+      maskedCredential: 'e8...test',
+      updatedAt: '2026-06-15T00:03:00.000Z',
+    })
+    const api = installDesktopApi({ listAgentProviders, saveAgentProviderCredential })
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+
+    expect(await screen.findByLabelText('Review Model Provider')).toBeInTheDocument()
+    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('Deterministic fake')
+    expect(screen.getByLabelText('Review Provider ID')).toHaveValue('doubao-review')
+    expect(screen.getByLabelText('Review Provider Base URL')).toHaveValue(
+      'https://ark.cn-beijing.volces.com/api/coding/v3',
+    )
+    expect(screen.getByLabelText('Review Provider Model')).toHaveValue('ark-code-latest')
+
+    fireEvent.change(screen.getByLabelText('Review Provider API Key'), {
+      target: { value: 'e8fa6ce2-test-key' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Save Credential/ }))
+
+    await waitFor(() =>
+      expect(saveAgentProviderCredential).toHaveBeenCalledWith({
+        providerId: 'doubao-review',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
+        model: 'ark-code-latest',
+        apiKey: 'e8fa6ce2-test-key',
+      }),
+    )
+    await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalledTimes(2))
+    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('Live OpenAI-compatible')
+    expect(screen.getByText('Review model credential saved: e8...test')).toBeInTheDocument()
+  })
+
+  it('requires an API key before saving a Review Model Provider credential', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    await screen.findByLabelText('Review Model Provider')
+    fireEvent.click(screen.getByRole('button', { name: /Save Credential/ }))
+
+    expect(api.saveAgentProviderCredential).not.toHaveBeenCalled()
+    expect(screen.getByText('请输入 Review Model API Key')).toBeInTheDocument()
   })
 
   it('subscribes to coding push updates and merges pushed state into the Agents view', async () => {
@@ -1440,6 +1650,48 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /工作台/ }))
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Local Test Evidence Standard')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('satisfied')
+  })
+
+  it('shows explicit save states for the local test command', async () => {
+    let resolveSave: (() => void) | undefined
+    const api = installDesktopApi({
+      saveProjectTestCommand: vi.fn(
+        ({ testCommand }) =>
+          new Promise<typeof localProject>((resolve) => {
+            resolveSave = () =>
+              resolve({
+                ...localProject,
+                testCommand,
+                updatedAt: '2026-06-15T00:01:00.000Z',
+              })
+          }),
+      ),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
+    await screen.findByText('fixture-project')
+
+    expect(screen.getByRole('button', { name: /已保存/ })).toBeDisabled()
+
+    const commandInput = screen.getByLabelText('测试命令')
+    await act(async () => {
+      fireEvent.change(commandInput, { target: { value: 'pnpm test -- --run' } })
+    })
+
+    const saveButton = screen.getByRole('button', { name: /保存测试命令/ })
+    expect(saveButton).toBeEnabled()
+
+    fireEvent.click(saveButton)
+
+    expect(screen.getByRole('button', { name: /保存中/ })).toBeDisabled()
+    await act(async () => {
+      resolveSave?.()
+    })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /已保存/ })).toBeDisabled())
   })
 
   it('keeps local test evidence visible when remote evidence sync fails', async () => {

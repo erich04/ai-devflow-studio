@@ -68,7 +68,7 @@ corepack pnpm dev:electron
 
 ## 2. Workbench 与 Gate Enforcement
 
-进入 `Workbench`，选择一个 protected Gate，例如架构 Gate 或验收 Gate。
+进入 `Workbench`，选择一个 protected Gate，例如方案评审 Gate 或验收 Gate。
 
 ![Workbench Gate Enforcement](./screenshots/01-workbench-gate-enforcement.png)
 

@@ -230,7 +230,7 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe('web manager console page', () => {
+describe('web product shell page', () => {
   it('renders team overview data loaded from the API client', async () => {
     mockedFetchTeamOverview.mockResolvedValue(overview)
 
@@ -239,33 +239,29 @@ describe('web manager console page', () => {
     expect(screen.getAllByText('Remote API').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('erich/remote-api')).toBeInTheDocument()
     expect(screen.getByText('Remote Lead')).toBeInTheDocument()
-    expect(screen.getByText('RL')).toBeInTheDocument()
     expect(screen.getByText('Remote run')).toBeInTheDocument()
+    expect(screen.getByText('Ship from API data.')).toBeInTheDocument()
+    expect(screen.getAllByText('Evidence Chain').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Human Gate').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('旧壳备份')).toBeInTheDocument()
+    expect(screen.getAllByText('Architecture Gate').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('Lead review')).toBeInTheDocument()
     expect(screen.getByText('Remote tests passed.')).toBeInTheDocument()
     expect(screen.getByText('pnpm test')).toBeInTheDocument()
-    expect(screen.getByText('Knowledge review completed.')).toBeInTheDocument()
+    expect(screen.getByText('Coding Agent completed with redacted changed paths.')).toBeInTheDocument()
     expect(screen.getByText('No blocking knowledge gaps found.')).toBeInTheDocument()
-    expect(screen.getByText('Gate Enforcement Policy')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Sign in with GitHub/ })).toHaveAttribute(
       'href',
       'http://api.local/api/auth/github/start',
     )
-    expect(screen.getByRole('button', { name: /Create project/ })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Create desktop pairing code/ })).toBeInTheDocument()
-    expect(screen.getByText('Policy-Aware Delivery')).toBeInTheDocument()
-    expect(screen.getByText(/2 warnings/)).toBeInTheDocument()
-    expect(screen.getByText(/1 retry attempts/)).toBeInTheDocument()
-    expect(screen.getByText('Warn-only default')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /备份壳/ })).toHaveAttribute('href', '/legacy-shell')
+    expect(screen.getByText(/1 blocking · 2 warnings/)).toBeInTheDocument()
+    expect(screen.getByText(/1 retries · 1 overrides/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Apply recommended enforcement/ })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Run backend review/ })).toBeInTheDocument()
-    expect(screen.getAllByText('$0.123')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: /触发后端审查/ })).toBeInTheDocument()
+    expect(screen.getByText('Budget Used')).toBeInTheDocument()
     expect(screen.getByText('Runtime Budget')).toBeInTheDocument()
-    expect(screen.getByText('Budget enabled')).toBeInTheDocument()
-    expect(screen.getByText('monthly $0.20')).toBeInTheDocument()
-    expect(screen.getByText('warning $0.10')).toBeInTheDocument()
-    expect(screen.getByText('Budget Approvals')).toBeInTheDocument()
-    expect(screen.getByText('runtime-budget-approval-p-remote-1')).toBeInTheDocument()
-    expect(screen.getByText('Release smoke with real provider.')).toBeInTheDocument()
+    expect(screen.getByText('$0.123 / $0.20')).toBeInTheDocument()
     expect(mockedFetchTeamOverview).toHaveBeenCalledWith({
       cookieHeader: 'devflow_session=session-1',
     })
@@ -298,8 +294,11 @@ describe('web manager console page', () => {
 
     render(await Page())
 
-    expect(screen.getByText('还没有团队项目')).toBeInTheDocument()
-    expect(screen.getByText('等待 API 同步团队项目后显示交付健康。')).toBeInTheDocument()
+    expect(screen.getByText('等待第一条真实工作请求')).toBeInTheDocument()
+    expect(screen.getByText('没有真实 Run')).toBeInTheDocument()
+    expect(
+      screen.getByText('连接 Desktop 或 API 创建工作请求后，这里会显示从澄清、设计、编码、测试到 PR 的证据链。'),
+    ).toBeInTheDocument()
   })
 
   it('renders an error state when the API cannot be reached', async () => {

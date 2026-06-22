@@ -1,18 +1,41 @@
-import { Activity, Bot, CircleDollarSign, GitPullRequest, Users } from 'lucide-react'
-import { cookies } from 'next/headers'
-import { createRecommendedEnforcementPreset, formatUsd } from '@ai-devflow/shared'
 import {
-  createRuntimeBudgetApproval,
-  createTeamProject,
+  AlertTriangle,
+  ArrowRight,
+  Bot,
+  CheckCircle2,
+  CircleDot,
+  ClipboardCheck,
+  Code2,
+  Database,
+  FileText,
+  Gauge,
+  Github,
+  GitBranch,
+  Play,
+  ShieldCheck,
+  Sparkles,
+  TestTube2,
+  TimerReset,
+  XCircle,
+} from 'lucide-react'
+import { cookies } from 'next/headers'
+import type { CSSProperties, ReactNode } from 'react'
+import {
+  createRecommendedEnforcementPreset,
+  formatUsd,
+  type NodeStatus,
+  type WorkflowNode,
+  type WorkflowRun,
+} from '@ai-devflow/shared'
+import {
   fetchTeamOverview,
-  resolveDevFlowApiBaseUrl,
   resolveDevFlowPublicApiBaseUrl,
   runKnowledgeReview,
   saveEnforcementPolicy,
-  saveRuntimeBudgetPolicy,
   type TeamOverviewResponse,
 } from './lib/devflow-api'
-import { PairingCodePanel } from './PairingCodePanel'
+
+type StatusTone = 'done' | 'run' | 'gate' | 'warn' | 'idle' | 'fail'
 
 async function getDevFlowCookieHeader(): Promise<string | undefined> {
   const cookieStore = await cookies()
@@ -28,9 +51,7 @@ async function runKnowledgeReviewAction(formData: FormData) {
   const projectId = String(formData.get('projectId') ?? '')
   const providerId = String(formData.get('providerId') ?? 'fake-knowledge-review')
 
-  if (!runId || !nodeId || !projectId) {
-    return
-  }
+  if (!runId || !nodeId || !projectId) return
 
   const cookieHeader = await getDevFlowCookieHeader()
   await runKnowledgeReview({
@@ -52,535 +73,480 @@ async function applyRecommendedPolicyAction() {
   })
 }
 
-async function createProjectAction(formData: FormData) {
-  'use server'
-
-  const name = String(formData.get('name') ?? '').trim()
-  const slug = String(formData.get('slug') ?? '').trim()
-  const description = String(formData.get('description') ?? '').trim()
-  const repository = String(formData.get('repository') ?? '').trim()
-
-  if (!name || !slug || !description || !repository) {
-    return
-  }
-
-  const cookieHeader = await getDevFlowCookieHeader()
-  await createTeamProject({
-    name,
-    slug,
-    description,
-    repository,
-    ...(cookieHeader ? { cookieHeader } : {}),
-  })
-}
-
-async function saveRuntimeBudgetPolicyAction(formData: FormData) {
-  'use server'
-
-  const projectId = String(formData.get('projectId') ?? '').trim()
-  const monthlyLimitUsd = Number(formData.get('monthlyLimitUsd') ?? 0)
-  const warningThresholdUsd = Number(formData.get('warningThresholdUsd') ?? 0)
-  const enabled = formData.get('enabled') === 'on'
-
-  if (!projectId || !Number.isFinite(monthlyLimitUsd) || !Number.isFinite(warningThresholdUsd)) {
-    return
-  }
-
-  const cookieHeader = await getDevFlowCookieHeader()
-  await saveRuntimeBudgetPolicy({
-    projectId,
-    enabled,
-    monthlyLimitUsd,
-    warningThresholdUsd,
-    ...(cookieHeader ? { cookieHeader } : {}),
-  })
-}
-
-async function createRuntimeBudgetApprovalAction(formData: FormData) {
-  'use server'
-
-  const projectId = String(formData.get('projectId') ?? '').trim()
-  const requestedBy = String(formData.get('requestedBy') ?? '').trim()
-  const providerId = String(formData.get('providerId') ?? '').trim()
-  const reason = String(formData.get('reason') ?? '').trim()
-  const maxAdditionalCostUsd = Number(formData.get('maxAdditionalCostUsd') ?? 0)
-  const expiresAt =
-    String(formData.get('expiresAt') ?? '').trim() ||
-    new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-
-  if (!projectId || !requestedBy || !providerId || !reason || !Number.isFinite(maxAdditionalCostUsd)) {
-    return
-  }
-
-  const cookieHeader = await getDevFlowCookieHeader()
-  await createRuntimeBudgetApproval({
-    projectId,
-    requestedBy,
-    providerId,
-    maxAdditionalCostUsd,
-    reason,
-    expiresAt,
-    ...(cookieHeader ? { cookieHeader } : {}),
-  })
-}
-
 export default async function Page() {
-  let overview: TeamOverviewResponse
   const apiBaseUrl = resolveDevFlowPublicApiBaseUrl()
   const cookieHeader = await getDevFlowCookieHeader()
 
+  let overview: TeamOverviewResponse
   try {
     overview = await fetchTeamOverview({
       ...(cookieHeader ? { cookieHeader } : {}),
     })
   } catch (error) {
-    return (
-      <WebShell>
-        <section className="web-panel web-panel--wide">
-          <div className="panel-title">
-            <span>Team Overview</span>
-            <strong>团队数据暂时不可用</strong>
-          </div>
-          <p>{error instanceof Error ? error.message : '无法连接 DevFlow API'}</p>
-        </section>
-      </WebShell>
-    )
+    return <ErrorShell message={error instanceof Error ? error.message : '无法连接 DevFlow API'} />
   }
 
-  const hasProjects = overview.projects.length > 0
-  const hasMembers = overview.members.length > 0
-  const hasProjectCost = overview.projectCost.length > 0
-  const hasRuns = overview.runs.length > 0
-  const hasEvidence = overview.testEvidenceSummaries.length > 0
-  const hasAgentReviews = overview.agentReviews.length > 0
-  const hasPolicyAwareDelivery = overview.policyAwareDeliverySummaries.length > 0
-  const reviewTarget = overview.runs
-    .map((run) => ({ run, node: run.nodes.find((node) => node.kind === 'gate') ?? run.nodes[0] }))
-    .find((target) => target.node)
-  const latestReview = overview.agentReviews[0]
-  const latestUsage = overview.agentTokenUsage[0]
-  const organizationPolicy = overview.enforcementPolicies.organizationPolicy
-  const blockingRuleCount = organizationPolicy.rules.filter((rule) => rule.defaultAction === 'block').length
-  const clampedRuleCount = overview.enforcementPolicies.effectivePolicies.reduce(
-    (sum, policy) => sum + policy.rules.filter((rule) => rule.source === 'project_clamped').length,
-    0,
-  )
-  const selectedBudgetProject = overview.projects[0]
-  const selectedBudgetPolicy = selectedBudgetProject
-    ? overview.runtimeBudgetPolicies.find((policy) => policy.projectId === selectedBudgetProject.id)
+  const activeRun = selectActiveRun(overview.runs)
+  const activeProject = activeRun
+    ? overview.projects.find((project) => project.id === activeRun.projectId)
+    : overview.projects[0]
+  const activeMember = activeRun
+    ? overview.members.find((member) => member.id === activeRun.creatorId)
+    : overview.members[0]
+  const currentNode = activeRun?.nodes.find((node) => node.id === activeRun.currentNodeId)
+  const gateNode = activeRun ? selectGateNode(activeRun, currentNode) : undefined
+  const gateReview =
+    overview.agentReviews.find((review) => review.runId === activeRun?.id && review.nodeId === gateNode?.id) ??
+    overview.agentReviews[0]
+  const currentEvidence = activeRun
+    ? overview.testEvidenceSummaries.filter((item) => item.runId === activeRun.id)
+    : overview.testEvidenceSummaries
+  const currentCodingRuns = activeRun
+    ? overview.codingAgentSummaries.filter((item) => item.runId === activeRun.id)
+    : overview.codingAgentSummaries
+  const policySummary = activeProject
+    ? overview.policyAwareDeliverySummaries.find((item) => item.projectId === activeProject.id)
+    : overview.policyAwareDeliverySummaries[0]
+  const budgetPolicy = activeProject
+    ? overview.runtimeBudgetPolicies.find((item) => item.projectId === activeProject.id)
     : undefined
-  const selectedBudgetApprovals = selectedBudgetProject
-    ? overview.runtimeBudgetApprovals.filter((approval) => approval.projectId === selectedBudgetProject.id)
-    : []
-  const selectedBudgetSpend = selectedBudgetProject
-    ? overview.projectCost.find((rollup) => rollup.key === selectedBudgetProject.id)?.costUsd ?? 0
+  const projectSpend = activeProject
+    ? overview.projectCost.find((rollup) => rollup.key === activeProject.id)?.costUsd ?? 0
     : 0
+  const budgetPercent =
+    budgetPolicy?.monthlyLimitUsd != null && budgetPolicy.monthlyLimitUsd > 0
+      ? Math.min(Math.round((projectSpend / budgetPolicy.monthlyLimitUsd) * 100), 999)
+      : 0
+  const activeRunCount = overview.runs.filter((run) => !['completed', 'failed', 'cancelled'].includes(run.status)).length
+  const gateCount = overview.runs.filter((run) => run.status === 'paused_at_gate').length
+  const evidenceCount =
+    overview.testEvidenceSummaries.length + overview.agentReviews.length + overview.codingAgentSummaries.length
+  const progress = activeRun ? calculateProgress(activeRun.nodes) : 0
 
   return (
-    <WebShell>
-      <section className="web-main" id="overview">
-        <header className="web-header">
+    <main className="studio-shell">
+      <aside className="studio-rail" aria-label="AI DevFlow navigation">
+        <div className="studio-brand">
+          <span aria-hidden="true">
+            <Sparkles size={19} />
+          </span>
           <div>
-            <span>Team Overview</span>
-            <h1>项目交付健康</h1>
+            <strong>AI DevFlow</strong>
+            <small>Studio</small>
           </div>
-          <div className="web-header-actions">
-            <a className="button-link" href={`${apiBaseUrl}/api/auth/github/start`}>
+        </div>
+
+        <a className="studio-primary-action" href="#work-request">
+          <Play size={15} />
+          新建工作请求
+        </a>
+
+        <nav className="studio-nav">
+          <a href="#evidence-chain">
+            <CircleDot size={16} />
+            Evidence Chain
+          </a>
+          <a href="#human-gate">
+            <ShieldCheck size={16} />
+            Human Gate
+          </a>
+          <a href="#agents">
+            <Bot size={16} />
+            Agents
+          </a>
+          <a href="#runtime">
+            <Gauge size={16} />
+            Runtime
+          </a>
+          <a href="/legacy-shell">
+            <FileText size={16} />
+            旧壳备份
+          </a>
+        </nav>
+
+        <div className="studio-rail-footer">
+          <span>{activeProject?.name ?? 'No project'}</span>
+          <strong>{activeMember?.name ?? 'Waiting for sync'}</strong>
+        </div>
+      </aside>
+
+      <section className="studio-workspace">
+        <header className="studio-topbar">
+          <div>
+            <div className="studio-run-kicker">
+              <span>{activeRun ? shortRunId(activeRun.id) : 'NO RUN SELECTED'}</span>
+              <StatusPill tone={activeRun ? statusTone(activeRun.status) : 'idle'}>
+                {activeRun ? runStatusLabel(activeRun.status) : '等待真实数据'}
+              </StatusPill>
+            </div>
+            <h1>{activeRun?.title ?? '把 Agent 执行、证据链和人评 Gate 收束到一个产品路径'}</h1>
+            <p>
+              {activeRun?.request ??
+                '当前没有团队 run。新壳保留真实 API 接入，同时用明确的空状态解释下一步该创建工作请求。'}
+            </p>
+          </div>
+          <div className="studio-top-actions">
+            <a className="studio-secondary-link" href={`${apiBaseUrl}/api/auth/github/start`}>
+              <Github size={16} />
               Sign in with GitHub
             </a>
-            <button>跟随系统</button>
+            <a className="studio-secondary-link" href="/legacy-shell">
+              备份壳
+            </a>
           </div>
         </header>
 
-        <div className="kpis">
-          <Kpi icon={<Activity />} label="Active Runs" value={String(overview.runs.length)} />
-          <Kpi icon={<GitPullRequest />} label="Pending PR" value="1" />
-          <Kpi icon={<Users />} label="Members" value={String(overview.members.length)} />
-          <Kpi icon={<CircleDollarSign />} label="Cost" value={overview.totalCost} />
-          <Kpi icon={<Bot />} label="Agent Reviews" value={String(overview.agentReviews.length)} />
-        </div>
+        <section className="studio-metrics" aria-label="Delivery metrics">
+          <MetricCard label="Active Runs" value={String(activeRunCount)} detail={`${gateCount} awaiting gate`} />
+          <MetricCard label="Evidence Items" value={String(evidenceCount)} detail="tests · reviews · coding runs" />
+          <MetricCard label="Budget Used" value={`${budgetPercent}%`} detail={budgetPolicy ? formatUsd(projectSpend) : 'not configured'} />
+          <MetricCard
+            label="Policy Signals"
+            value={String((policySummary?.warningCount ?? 0) + (policySummary?.blockedCount ?? 0))}
+            detail={`${policySummary?.remainingEvidenceGapCount ?? 0} evidence gaps`}
+          />
+        </section>
 
-        <section className="web-grid">
-          <div className="web-panel" id="projects">
-            <div className="panel-title">
-              <span>Projects</span>
-              <strong>交付状态</strong>
-            </div>
-            {hasProjects ? (
-              overview.projects.map((project) => (
-                <article className="project-row" key={project.id}>
-                  <div>
-                    <strong>{project.name}</strong>
-                    <p>{project.repository}</p>
-                    <PairingCodePanel projectId={project.id} />
-                  </div>
-                  <span>{project.health}</span>
-                </article>
-              ))
-            ) : (
-              <EmptyState title="还没有团队项目" body="等待 API 同步团队项目后显示交付健康。" />
-            )}
-            <form className="project-create-form" action={createProjectAction}>
-              <label>
-                Name
-                <input name="name" placeholder="Agent Platform" required />
-              </label>
-              <label>
-                Slug
-                <input name="slug" placeholder="agent-platform" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required />
-              </label>
-              <label>
-                Repository
-                <input name="repository" placeholder="erich/agent-platform" required />
-              </label>
-              <label>
-                Description
-                <textarea name="description" placeholder="Pilot project for team delivery." required />
-              </label>
-              <button type="submit">Create project</button>
-            </form>
-          </div>
-
-          <div className="web-panel" id="members">
-            <div className="panel-title">
-              <span>Members</span>
-              <strong>成员负载</strong>
-            </div>
-            {hasMembers ? (
-              overview.members.map((member) => (
-                <article className="member-row" key={member.id}>
-                  <div>{member.avatarInitials}</div>
-                  <strong>{member.name}</strong>
-                  <span>{member.role}</span>
-                </article>
-              ))
-            ) : (
-              <EmptyState title="暂无成员数据" body="等待 API 同步成员与角色边界。" />
-            )}
-          </div>
-
-          <div className="web-panel web-panel--wide" id="cost">
-            <div className="panel-title">
-              <span>Token Cost</span>
-              <strong>项目成本</strong>
-            </div>
-            {hasProjectCost ? (
-              overview.projectCost.map((rollup) => (
-                <article className="cost-row" key={rollup.key}>
-                  <span>{rollup.key}</span>
-                  <progress value={rollup.costUsd} max={0.2} />
-                  <strong>{formatUsd(rollup.costUsd)}</strong>
-                </article>
-              ))
-            ) : (
-              <EmptyState title="暂无成本数据" body="同步 Token usage 后会显示项目成本。" />
-            )}
-          </div>
-
-          <div className="web-panel web-panel--wide" id="runtime-budget">
-            <div className="panel-title">
-              <span>Runtime Budget</span>
-              <strong>{selectedBudgetProject?.name ?? 'no project selected'}</strong>
-            </div>
-            {selectedBudgetProject ? (
-              <div className="agent-console">
-                <article className="agent-review-row">
-                  <div>
-                    <strong>{selectedBudgetPolicy?.enabled ? 'Budget enabled' : 'Budget disabled'}</strong>
-                    <div className="knowledge-reference-meta">
-                      <span>monthly {formatUsd(selectedBudgetPolicy?.monthlyLimitUsd ?? 0)}</span>
-                      <span>warning {formatUsd(selectedBudgetPolicy?.warningThresholdUsd ?? 0)}</span>
-                      <span>spend {formatUsd(selectedBudgetSpend)}</span>
-                    </div>
-                  </div>
-                  <span>{selectedBudgetPolicy?.updatedAt ?? 'not configured'}</span>
-                </article>
-
-                <form className="project-create-form" action={saveRuntimeBudgetPolicyAction}>
-                  <input type="hidden" name="projectId" value={selectedBudgetProject.id} />
-                  <label>
-                    Enabled
-                    <input
-                      aria-label="Enable runtime budget"
-                      defaultChecked={selectedBudgetPolicy?.enabled ?? false}
-                      name="enabled"
-                      type="checkbox"
-                    />
-                  </label>
-                  <label>
-                    Monthly limit USD
-                    <input
-                      min="0"
-                      name="monthlyLimitUsd"
-                      step="0.001"
-                      type="number"
-                      defaultValue={selectedBudgetPolicy?.monthlyLimitUsd ?? 0.2}
-                    />
-                  </label>
-                  <label>
-                    Warning threshold USD
-                    <input
-                      min="0"
-                      name="warningThresholdUsd"
-                      step="0.001"
-                      type="number"
-                      defaultValue={selectedBudgetPolicy?.warningThresholdUsd ?? 0.1}
-                    />
-                  </label>
-                  <button type="submit">Save budget policy</button>
-                </form>
-
-                <div>
-                  <strong>Budget Approvals</strong>
-                  {selectedBudgetApprovals.length > 0 ? (
-                    selectedBudgetApprovals.map((approval) => (
-                      <article className="agent-review-row" key={approval.id}>
-                        <div>
-                          <strong>{approval.id}</strong>
-                          <p>{approval.reason}</p>
-                        </div>
-                        <span>
-                          {approval.status} · {formatUsd(approval.maxAdditionalCostUsd)}
-                        </span>
-                      </article>
-                    ))
-                  ) : (
-                    <EmptyState title="暂无预算批准" body="Lead 创建 approval 后可用于 Desktop 重试真实 runtime。" />
-                  )}
-                </div>
-
-                <form className="project-create-form" action={createRuntimeBudgetApprovalAction}>
-                  <input type="hidden" name="projectId" value={selectedBudgetProject.id} />
-                  <label>
-                    Requested by
-                    <input name="requestedBy" placeholder="u-erich" required />
-                  </label>
-                  <label>
-                    Provider
-                    <input name="providerId" placeholder="double" required />
-                  </label>
-                  <label>
-                    Max additional cost USD
-                    <input min="0.001" name="maxAdditionalCostUsd" step="0.001" type="number" required />
-                  </label>
-                  <label>
-                    Expires at
-                    <input name="expiresAt" placeholder="2026-06-22T00:00:00.000Z" />
-                  </label>
-                  <label>
-                    Reason
-                    <textarea name="reason" placeholder="Release smoke with real provider." required />
-                  </label>
-                  <button type="submit">Create approval</button>
-                </form>
-              </div>
-            ) : (
-              <EmptyState title="暂无项目预算" body="创建团队项目后可配置真实 runtime 预算。" />
-            )}
-          </div>
-
-          <div className="web-panel" id="runs">
-            <div className="panel-title">
-              <span>Recent Runs</span>
-              <strong>团队同步</strong>
-            </div>
-            {hasRuns ? (
-              overview.runs.slice(0, 5).map((run) => (
-                <article className="run-row" key={run.id}>
-                  <div>
-                    <strong>{run.title}</strong>
-                    <p>{run.branchName}</p>
-                  </div>
-                  <span>{run.status}</span>
-                </article>
-              ))
-            ) : (
-              <EmptyState title="暂无同步 Run" body="Electron 同步 Run 后会显示团队级状态。" />
-            )}
-          </div>
-
-          <div className="web-panel web-panel--wide" id="policy">
-            <div className="panel-title">
-              <span>Gate Enforcement Policy</span>
-              <strong>{organizationPolicy.name}</strong>
-            </div>
-            <div className="agent-console">
-              <article className="agent-review-row">
-                <div>
-                  <strong>{blockingRuleCount > 0 ? 'Recommended enforcement active' : 'Warn-only default'}</strong>
-                  <p>
-                    {blockingRuleCount > 0
-                      ? `${blockingRuleCount} deterministic rules can block protected Gate approval.`
-                      : 'No rules block approval until the team explicitly applies enforcement.'}
-                  </p>
-                </div>
-                <span>v{organizationPolicy.version}</span>
-              </article>
-              <article className="agent-review-row">
-                <div>
-                  <strong>Policy floor</strong>
-                  <p>{clampedRuleCount} project choices currently clamped by organization floor.</p>
-                </div>
-                <span>{organizationPolicy.updatedAt}</span>
-              </article>
-              <form action={applyRecommendedPolicyAction}>
-                <button type="submit">
-                  <GitPullRequest size={16} />
-                  Apply recommended enforcement
-                </button>
-              </form>
-            </div>
-          </div>
-
-          <div className="web-panel web-panel--wide" id="policy-delivery">
-            <div className="panel-title">
-              <span>Policy-Aware Delivery</span>
-              <strong>remediation summary</strong>
-            </div>
-            {hasPolicyAwareDelivery ? (
-              <div className="agent-console">
-                {overview.policyAwareDeliverySummaries.map((summary) => {
-                  const project = overview.projects.find((item) => item.id === summary.projectId)
-                  return (
-                    <article className="agent-review-row" key={summary.projectId}>
-                      <div>
-                        <strong>{project?.name ?? summary.projectId}</strong>
-                        <p>
-                          {summary.warningCount} warnings · {summary.blockedCount} blocking signals ·{' '}
-                          {summary.overrideCount} overrides
-                        </p>
-                      </div>
-                      <span>{summary.retryAttemptCount} retry attempts</span>
-                    </article>
-                  )
-                })}
-              </div>
-            ) : (
-              <EmptyState title="暂无策略交付摘要" body="同步 Agent Review、override 或 Coding retry 后会显示 remediation 汇总。" />
-            )}
-          </div>
-
-          <div className="web-panel" id="evidence">
-            <div className="panel-title">
-              <span>Test Evidence</span>
-              <strong>测试证据</strong>
-            </div>
-            {hasEvidence ? (
-              overview.testEvidenceSummaries.slice(0, 5).map((evidence) => (
-                <article className="evidence-row" key={evidence.id}>
-                  <div>
-                    <strong>{evidence.summary}</strong>
-                    <p>{evidence.command}</p>
-                  </div>
-                  <span>{evidence.status}</span>
-                </article>
-              ))
-            ) : (
-              <EmptyState title="暂无测试证据" body="Electron 上传脱敏测试摘要后会显示在这里。" />
-            )}
-          </div>
-
-          <div className="web-panel web-panel--wide" id="agent-review">
-            <div className="panel-title">
-              <span>Knowledge Review Agent</span>
-              <strong>后端 Agent 审查</strong>
-            </div>
-            <div className="agent-console">
+        <section className="studio-grid">
+          <section className="studio-chain-panel" id="evidence-chain">
+            <div className="studio-section-heading">
               <div>
-                <strong>Provider</strong>
-                {overview.agentProviders.map((provider) => (
-                  <article className="agent-provider-row" key={provider.id}>
-                    <span>{provider.name}</span>
-                    <code>{provider.maskedCredential ?? provider.model}</code>
-                  </article>
+                <span>Evidence Chain</span>
+                <h2>{activeRun ? '当前工作请求证据链' : '等待第一条真实工作请求'}</h2>
+              </div>
+              <div className="studio-progress">
+                <span>{progress}%</span>
+                <div>
+                  <i style={{ width: `${progress}%` }} />
+                </div>
+              </div>
+            </div>
+
+            {activeRun ? (
+              <div className="studio-chain-list">
+                {activeRun.nodes.map((node) => (
+                  <EvidenceStep
+                    key={node.id}
+                    node={node}
+                    current={node.id === activeRun.currentNodeId}
+                    evidenceCount={evidenceCountForNode(overview, activeRun, node)}
+                  />
                 ))}
               </div>
-              <form action={runKnowledgeReviewAction}>
-                <input type="hidden" name="runId" value={reviewTarget?.run.id ?? ''} />
-                <input type="hidden" name="nodeId" value={reviewTarget?.node?.id ?? ''} />
-                <input type="hidden" name="projectId" value={reviewTarget?.run.projectId ?? ''} />
-                <input type="hidden" name="providerId" value="fake-knowledge-review" />
-                <button type="submit" disabled={!reviewTarget}>
-                  <Bot size={16} />
-                  Run backend review
-                </button>
-              </form>
+            ) : (
+              <EmptyProductState
+                title="没有真实 Run"
+                body="连接 Desktop 或 API 创建工作请求后，这里会显示从澄清、设计、编码、测试到 PR 的证据链。"
+              />
+            )}
+          </section>
+
+          <aside className="studio-gate-panel" id="human-gate">
+            <div className="studio-section-heading compact">
               <div>
-                <strong>Latest advisory</strong>
-                {latestReview ? (
-                  <article className="agent-review-row">
-                    <span>{latestReview.gateAdvisory.level}</span>
-                    <p>{latestReview.gateAdvisory.summary}</p>
-                    <small>{latestReview.gateAdvisory.blocksApproval ? 'blocking' : 'warning-only'}</small>
-                  </article>
-                ) : (
-                  <EmptyState title="暂无 Agent Review" body="触发后端审查后会显示 advisory、trace 与成本。" />
-                )}
+                <span>Human Gate</span>
+                <h2>{gateNode?.title ?? '暂无待审 Gate'}</h2>
               </div>
+              <StatusPill tone={gateNode ? nodeTone(gateNode.status) : 'idle'}>
+                {gateNode ? nodeStatusLabel(gateNode.status) : 'idle'}
+              </StatusPill>
             </div>
-            {hasAgentReviews ? (
-              overview.agentReviews.slice(0, 5).map((review) => (
-                <article className="agent-review-row" key={review.id}>
-                  <div>
-                    <strong>{review.conclusion}</strong>
-                    <p>{review.summary}</p>
-                  </div>
-                  <span>{review.runtime}</span>
-                </article>
+
+            <dl className="studio-gate-facts">
+              <div>
+                <dt>项目</dt>
+                <dd>{activeProject?.repository ?? '等待项目同步'}</dd>
+              </div>
+              <div>
+                <dt>分支</dt>
+                <dd>{activeRun?.branchName ?? '暂无分支'}</dd>
+              </div>
+              <div>
+                <dt>审批角色</dt>
+                <dd>{gateNode?.requiredRole ?? 'lead / owner'}</dd>
+              </div>
+            </dl>
+
+            <div className="studio-advisory">
+              <strong>{gateReview?.gateAdvisory.summary ?? '没有阻断性知识缺口。'}</strong>
+              <p>
+                {gateReview
+                  ? `${gateReview.policyFindings.length} policy findings · ${gateReview.missingEvidence.length} missing evidence`
+                  : '触发后端审查后，这里会显示模型、知识引用、缺失证据和建议测试。'}
+              </p>
+            </div>
+
+            <form className="studio-gate-action" action={runKnowledgeReviewAction}>
+              <input type="hidden" name="runId" value={activeRun?.id ?? ''} />
+              <input type="hidden" name="nodeId" value={gateNode?.id ?? currentNode?.id ?? ''} />
+              <input type="hidden" name="projectId" value={activeRun?.projectId ?? activeProject?.id ?? ''} />
+              <input type="hidden" name="providerId" value="fake-knowledge-review" />
+              <button type="submit" disabled={!activeRun || !gateNode}>
+                <Bot size={16} />
+                触发后端审查
+              </button>
+            </form>
+
+            <div className="studio-gate-buttons">
+              <button type="button" disabled={!gateNode}>
+                <CheckCircle2 size={16} />
+                批准并继续
+              </button>
+              <button type="button" disabled={!gateNode}>
+                <XCircle size={16} />
+                驳回
+              </button>
+            </div>
+          </aside>
+        </section>
+
+        <section className="studio-support-grid">
+      <SupportPanel id="agents" icon={<Bot size={17} />} title="Active Agents" action="查看 Agents">
+            {currentCodingRuns.length > 0 ? (
+              currentCodingRuns.slice(0, 4).map((run) => (
+                <CompactRow key={run.id} title={run.providerId} meta={run.summary} value={run.status} />
               ))
-            ) : null}
-            <div className="agent-cost-row">
-              <span>Latest review cost</span>
-              <strong>{latestUsage ? formatUsd(latestUsage.costUsd) : '$0.000'}</strong>
-              <span>{latestUsage?.source ?? 'none'}</span>
+            ) : (
+              <CompactRow title="Planner / Code / Test" meta="等待 Desktop 同步真实 coding agent 运行" value="idle" />
+            )}
+          </SupportPanel>
+
+          <SupportPanel id="tests" icon={<TestTube2 size={17} />} title="Test Evidence" action="查看测试报告">
+            {currentEvidence.length > 0 ? (
+              currentEvidence.slice(0, 4).map((item) => (
+                <CompactRow key={item.id} title={item.summary} meta={item.command} value={item.status} />
+              ))
+            ) : (
+              <CompactRow title="暂无测试证据" meta="运行测试后会显示命令、状态和脱敏摘要" value="empty" />
+            )}
+          </SupportPanel>
+
+          <SupportPanel id="runtime" icon={<Gauge size={17} />} title="Runtime Budget" action="预算详情">
+            <div className="studio-budget-ring" style={{ '--budget-percent': `${Math.min(budgetPercent, 100)}%` } as CSSProperties}>
+              <strong>{budgetPercent}%</strong>
+              <span>{budgetPolicy ? `${formatUsd(projectSpend)} / ${formatUsd(budgetPolicy.monthlyLimitUsd)}` : 'not configured'}</span>
             </div>
-          </div>
+          </SupportPanel>
+
+          <SupportPanel id="policy" icon={<AlertTriangle size={17} />} title="Policy / Warnings" action="应用推荐策略">
+            <CompactRow
+              title={policySummary ? `${policySummary.blockedCount} blocking · ${policySummary.warningCount} warnings` : 'Warn-only default'}
+              meta={`${policySummary?.retryAttemptCount ?? 0} retries · ${policySummary?.overrideCount ?? 0} overrides`}
+              value={`${overview.enforcementPolicies.organizationPolicy.version}`}
+            />
+            <form action={applyRecommendedPolicyAction}>
+              <button type="submit" className="studio-small-button">
+                Apply recommended enforcement
+              </button>
+            </form>
+          </SupportPanel>
         </section>
       </section>
-    </WebShell>
-  )
-}
-
-function WebShell({ children }: { children: React.ReactNode }) {
-  return (
-    <main className="web-shell">
-      <aside className="web-sidebar">
-        <strong>AI DevFlow</strong>
-        <span>Team Console</span>
-        <nav>
-          <a href="#overview">Overview</a>
-          <a href="#projects">Projects</a>
-          <a href="#members">Members</a>
-          <a href="#cost">Token Cost</a>
-          <a href="#runtime-budget">Budget</a>
-          <a href="#runs">Runs</a>
-          <a href="#policy">Policy</a>
-          <a href="#policy-delivery">Delivery</a>
-          <a href="#evidence">Evidence</a>
-          <a href="#agent-review">Agent Review</a>
-        </nav>
-      </aside>
-
-      {children}
     </main>
   )
 }
 
-function Kpi({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function ErrorShell({ message }: { message: string }) {
   return (
-    <article className="kpi">
-      {icon}
+    <main className="studio-shell studio-shell--error">
+      <section className="studio-error-panel">
+        <AlertTriangle size={28} />
+        <span>DevFlow API</span>
+        <h1>团队数据暂时不可用</h1>
+        <p>{message}</p>
+        <a href="/legacy-shell">打开旧壳备份</a>
+      </section>
+    </main>
+  )
+}
+
+function MetricCard({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <article className="studio-metric-card">
       <span>{label}</span>
       <strong>{value}</strong>
+      <small>{detail}</small>
     </article>
   )
 }
 
-function EmptyState({ title, body }: { title: string; body: string }) {
+function EvidenceStep({
+  node,
+  current,
+  evidenceCount,
+}: {
+  node: WorkflowNode
+  current: boolean
+  evidenceCount: number
+}) {
   return (
-    <div className="empty-state">
+    <article className={`studio-evidence-step is-${nodeTone(node.status)} ${current ? 'is-current' : ''}`}>
+      <div className="studio-step-marker">{nodeIcon(node)}</div>
+      <div className="studio-step-body">
+        <div className="studio-step-head">
+          <span>{node.stage}</span>
+          <StatusPill tone={nodeTone(node.status)}>{nodeStatusLabel(node.status)}</StatusPill>
+        </div>
+        <h3>{node.title}</h3>
+        <p>{node.subtitle}</p>
+        <div className="studio-step-meta">
+          <span>owner: {node.ownerId}</span>
+          <span>retry: {node.retryCount}</span>
+          <span>evidence: {evidenceCount}</span>
+        </div>
+      </div>
+      <code>{node.id}</code>
+    </article>
+  )
+}
+
+function SupportPanel({
+  id,
+  icon,
+  title,
+  action,
+  children,
+}: {
+  id: string
+  icon: ReactNode
+  title: string
+  action: string
+  children: ReactNode
+}) {
+  return (
+    <section className="studio-support-panel" id={id}>
+      <header>
+        <span>
+          {icon}
+          {title}
+        </span>
+        <a href={`#${id}`}>
+          {action}
+          <ArrowRight size={14} />
+        </a>
+      </header>
+      <div className="studio-support-body">{children}</div>
+    </section>
+  )
+}
+
+function CompactRow({ title, meta, value }: { title: string; meta: string; value: string }) {
+  return (
+    <article className="studio-compact-row">
+      <div>
+        <strong>{title}</strong>
+        <p>{meta}</p>
+      </div>
+      <span>{value}</span>
+    </article>
+  )
+}
+
+function EmptyProductState({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="studio-empty-state" id="work-request">
+      <Database size={24} />
       <strong>{title}</strong>
       <p>{body}</p>
     </div>
   )
+}
+
+function StatusPill({ tone, children }: { tone: StatusTone; children: ReactNode }) {
+  return <span className={`studio-status-pill is-${tone}`}>{children}</span>
+}
+
+function selectActiveRun(runs: WorkflowRun[]) {
+  const activeStatuses = new Set<WorkflowRun['status']>([
+    'paused_at_gate',
+    'building',
+    'testing',
+    'designing',
+    'clarifying',
+    'created',
+  ])
+  const byLatestUpdate = (left: WorkflowRun, right: WorkflowRun) =>
+    Date.parse(right.updatedAt) - Date.parse(left.updatedAt)
+  const activeRuns = runs.filter((run) => activeStatuses.has(run.status)).sort(byLatestUpdate)
+
+  return activeRuns[0] ?? [...runs].sort(byLatestUpdate)[0]
+}
+
+function selectGateNode(run: WorkflowRun, currentNode?: WorkflowNode) {
+  if (currentNode?.kind === 'gate') return currentNode
+  return run.nodes.find((node) => node.kind === 'gate' && node.status === 'blocked') ?? run.nodes.find((node) => node.kind === 'gate')
+}
+
+function calculateProgress(nodes: WorkflowNode[]) {
+  if (nodes.length === 0) return 0
+  const complete = nodes.filter((node) => node.status === 'success' || node.status === 'skipped').length
+  return Math.round((complete / nodes.length) * 100)
+}
+
+function evidenceCountForNode(overview: TeamOverviewResponse, run: WorkflowRun, node: WorkflowNode) {
+  return (
+    overview.testEvidenceSummaries.filter((item) => item.runId === run.id && item.nodeId === node.id).length +
+    overview.agentReviews.filter((item) => item.runId === run.id && item.nodeId === node.id).length +
+    overview.codingAgentSummaries.filter((item) => item.runId === run.id && item.nodeId === node.id).length +
+    node.artifactIds.length
+  )
+}
+
+function shortRunId(id: string) {
+  return `RUN-${id.slice(0, 8).toUpperCase()}`
+}
+
+function runStatusLabel(status: WorkflowRun['status']) {
+  const labels: Record<WorkflowRun['status'], string> = {
+    created: '已创建',
+    clarifying: '澄清中',
+    designing: '设计中',
+    building: '执行中',
+    testing: '测试中',
+    paused_at_gate: '等待人评',
+    completed: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
+  }
+  return labels[status]
+}
+
+function nodeStatusLabel(status: NodeStatus) {
+  const labels: Record<NodeStatus, string> = {
+    pending: 'pending',
+    running: 'running',
+    blocked: 'awaiting',
+    success: 'done',
+    failed: 'failed',
+    skipped: 'skipped',
+  }
+  return labels[status]
+}
+
+function statusTone(status: WorkflowRun['status']): StatusTone {
+  if (status === 'paused_at_gate') return 'gate'
+  if (status === 'completed') return 'done'
+  if (status === 'failed' || status === 'cancelled') return 'fail'
+  if (status === 'created') return 'idle'
+  return 'run'
+}
+
+function nodeTone(status: NodeStatus): StatusTone {
+  if (status === 'success' || status === 'skipped') return 'done'
+  if (status === 'running') return 'run'
+  if (status === 'blocked') return 'gate'
+  if (status === 'failed') return 'fail'
+  return 'idle'
+}
+
+function nodeIcon(node: WorkflowNode) {
+  if (node.status === 'success') return <CheckCircle2 size={18} />
+  if (node.status === 'failed') return <XCircle size={18} />
+  if (node.kind === 'gate') return <ShieldCheck size={18} />
+  if (node.kind === 'test') return <TestTube2 size={18} />
+  if (node.kind === 'task') return <Code2 size={18} />
+  if (node.kind === 'pr') return <GitBranch size={18} />
+  if (node.kind === 'acceptance') return <ClipboardCheck size={18} />
+  if (node.status === 'running') return <TimerReset size={18} />
+  return <CircleDot size={18} />
 }

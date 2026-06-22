@@ -40,6 +40,23 @@ export type WorkflowAdvanceResult = {
   nextNode?: WorkflowNode
 }
 
+export type WorkflowAgentStageCompletionInput = {
+  run: WorkflowRun
+  nodeId: string
+  artifacts: Artifact[]
+  existingEvents: AgentEvent[]
+  actorName: string
+  now: string
+}
+
+export type WorkflowAgentStageCompletionResult = {
+  run: WorkflowRun
+  artifact: Artifact
+  artifacts: Artifact[]
+  event: AgentEvent
+  nextNode: WorkflowNode
+}
+
 export type DeliveryProjectReference = {
   repository: string
   defaultBranch: string
@@ -91,8 +108,8 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
     {
       id: nodeIds.clarify,
       stage: 'clarify',
-      title: 'Clarify request',
-      subtitle: 'Capture acceptance criteria and non-goals',
+      title: '需求澄清',
+      subtitle: '补齐验收口径与非目标',
       kind: 'agent',
       status: 'running',
       ownerId: input.creatorId,
@@ -102,8 +119,8 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
     {
       id: nodeIds.clarifyGate,
       stage: 'clarify',
-      title: 'Clarification Gate',
-      subtitle: 'Confirm the request is ready for design',
+      title: '需求确认 Gate',
+      subtitle: '确认需求已准备进入方案设计',
       kind: 'gate',
       status: 'pending',
       ownerId: input.creatorId,
@@ -114,8 +131,8 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
     {
       id: nodeIds.design,
       stage: 'design',
-      title: 'Design solution',
-      subtitle: 'Define implementation and test strategy',
+      title: '方案设计',
+      subtitle: '定义实现方案与测试策略',
       kind: 'agent',
       status: 'pending',
       ownerId: input.creatorId,
@@ -125,8 +142,8 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
     {
       id: nodeIds.designGate,
       stage: 'design',
-      title: 'Design Gate',
-      subtitle: 'Approve architecture before implementation',
+      title: '方案评审 Gate',
+      subtitle: '审批方案后进入实现',
       kind: 'gate',
       status: 'pending',
       ownerId: input.creatorId,
@@ -252,16 +269,102 @@ export function advanceWorkflowAfterGateApproval(input: AdvanceWorkflowAfterGate
     return { run: input.run, advanced: false }
   }
 
+  const advanced = advanceWorkflowAlongEdge({
+    run: input.run,
+    fromNodeId: approvedNode.id,
+    fromStatus: nextStatusAfterApproval(approvedNode).status,
+    now: input.now,
+    terminalStatus: runStatusAfterTerminalApproval(approvedNode),
+  })
+
+  return {
+    run: advanced.run,
+    advanced: Boolean(advanced.nextNode),
+    ...(advanced.nextNode ? { nextNode: advanced.nextNode } : {}),
+  }
+}
+
+export function completeWorkflowAgentNode(input: WorkflowAgentStageCompletionInput): WorkflowAgentStageCompletionResult {
+  if (input.run.currentNodeId !== input.nodeId) {
+    throw new Error('Only the current workflow node can be completed')
+  }
+
+  const node = input.run.nodes.find((candidate) => candidate.id === input.nodeId)
+  if (!node) {
+    throw new Error(`Run node not found: ${input.nodeId}`)
+  }
+  if (node.kind !== 'agent') {
+    throw new Error('Only workflow agent nodes can be completed')
+  }
+  if (node.status === 'success') {
+    throw new Error('Workflow agent node is already completed')
+  }
+  if (node.stage !== 'clarify' && node.stage !== 'design') {
+    throw new Error(`Workflow agent stage is not supported: ${node.stage}`)
+  }
+
+  const advanced = advanceWorkflowAlongEdge({
+    run: input.run,
+    fromNodeId: node.id,
+    fromStatus: 'success',
+    now: input.now,
+    nextStatusOverride: 'paused_at_gate',
+  })
+  if (!advanced.nextNode || (advanced.nextNode.kind !== 'gate' && advanced.nextNode.kind !== 'acceptance')) {
+    throw new Error('Workflow agent node does not lead to a Gate')
+  }
+
+  const artifact = buildAgentStageArtifact({
+    run: input.run,
+    node,
+    artifacts: input.artifacts,
+    now: input.now,
+  })
+  const artifacts = upsertArtifact(input.artifacts, artifact)
+  const event: AgentEvent = {
+    id: `event-${artifact.id}`,
+    runId: input.run.id,
+    nodeId: node.id,
+    sequence: nextEventSequence(input.existingEvents, input.run.id),
+    kind: 'thinking',
+    message: `${input.actorName} generated ${artifact.title} and advanced to ${advanced.nextNode.title}.`,
+    timestamp: input.now,
+  }
+
+  return {
+    run: advanced.run,
+    artifact,
+    artifacts,
+    event,
+    nextNode: advanced.nextNode,
+  }
+}
+
+type AdvanceWorkflowAlongEdgeInput = {
+  run: WorkflowRun
+  fromNodeId: string
+  fromStatus: WorkflowNode['status']
+  now: string
+  terminalStatus?: RunStatus
+  nextStatusOverride?: RunStatus
+}
+
+function advanceWorkflowAlongEdge(input: AdvanceWorkflowAlongEdgeInput): WorkflowAdvanceResult {
+  const fromNode = input.run.nodes.find((node) => node.id === input.fromNodeId)
+  if (!fromNode) {
+    return { run: input.run, advanced: false }
+  }
+
   const outgoingEdge = input.run.edges.find((edge) =>
-    edge.source === approvedNode.id && (edge.kind === 'normal' || edge.kind === 'gate')
+    edge.source === fromNode.id && (edge.kind === 'normal' || edge.kind === 'gate')
   )
   const nextNode = outgoingEdge
     ? input.run.nodes.find((node) => node.id === outgoingEdge.target)
     : undefined
 
   const updatedNodes = input.run.nodes.map((node) => {
-    if (node.id === approvedNode.id) {
-      return nextStatusAfterApproval(node)
+    if (node.id === fromNode.id) {
+      return { ...node, status: input.fromStatus }
     }
     if (nextNode && node.id === nextNode.id && node.status === 'pending') {
       return { ...node, status: 'running' as const }
@@ -272,7 +375,7 @@ export function advanceWorkflowAfterGateApproval(input: AdvanceWorkflowAfterGate
   const run: WorkflowRun = {
     ...input.run,
     currentNodeId: nextNode?.id ?? input.run.currentNodeId,
-    status: nextNode ? runStatusForNode(nextNode) : runStatusAfterTerminalApproval(approvedNode),
+    status: nextNode ? (input.nextStatusOverride ?? runStatusForNode(nextNode)) : (input.terminalStatus ?? input.run.status),
     nodes: updatedNodes,
     updatedAt: input.now,
   }
@@ -282,6 +385,92 @@ export function advanceWorkflowAfterGateApproval(input: AdvanceWorkflowAfterGate
     advanced: Boolean(nextNode),
     ...(nextNode ? { nextNode: { ...nextNode, status: 'running' } } : {}),
   }
+}
+
+function buildAgentStageArtifact(input: {
+  run: WorkflowRun
+  node: WorkflowNode
+  artifacts: Artifact[]
+  now: string
+}): Artifact {
+  if (input.node.stage === 'clarify') {
+    const artifactId = `artifact-${input.run.id}-clarification-placeholder`
+    const rawRequest = input.artifacts.find((artifact) => artifact.kind === 'raw_request')
+    const request = rawRequest?.content || input.run.request
+    return {
+      id: artifactId,
+      runId: input.run.id,
+      nodeId: input.node.id,
+      kind: 'clarification',
+      title: '需求澄清结果',
+      summary: `Clarified scope for ${input.run.title}`,
+      content: [
+        `# 需求澄清结果: ${input.run.title}`,
+        '',
+        '## Raw Request',
+        request,
+        '',
+        '## Goals',
+        `- Deliver the requested change for ${input.run.title}.`,
+        '- Keep the implementation auditable through DevFlow artifacts and events.',
+        '',
+        '## Acceptance Criteria',
+        '- The requested behavior is represented by design, implementation, test, PR, and acceptance evidence.',
+        '- Any Gate blockers are resolved through Agent Review, policy sync, or lead override as applicable.',
+        '',
+        '## Non-goals',
+        '- Do not bypass Gate Enforcement or team policy.',
+        '- Do not change unrelated project behavior.',
+        '',
+        '## Open Questions',
+        '- 如果需求仍有歧义，在方案评审 Gate 前确认边界场景。',
+      ].join('\n'),
+      redacted: false,
+      updatedAt: input.now,
+    }
+  }
+
+  const clarification = input.artifacts.find((artifact) => artifact.kind === 'clarification')
+  return {
+    id: `artifact-${input.run.id}-design-placeholder`,
+    runId: input.run.id,
+    nodeId: input.node.id,
+    kind: 'design',
+    title: '方案设计',
+    summary: `Implementation and test strategy for ${input.run.title}`,
+    content: [
+      `# 方案设计: ${input.run.title}`,
+      '',
+      '## Inputs',
+      `Request: ${input.run.request}`,
+      `Clarification: ${clarification?.summary ?? 'No clarification artifact linked.'}`,
+      '',
+      '## Implementation Approach',
+      '- Make the smallest scoped change that satisfies the request.',
+      '- Preserve existing DevFlow safety boundaries, including Gate Enforcement and redacted evidence.',
+      '',
+      '## Testing Strategy',
+      '- Add or update focused unit tests for deterministic behavior.',
+      '- Run the configured project test command and archive Test Evidence.',
+      '',
+      '## Delivery Checklist',
+      '- Coding diff captured.',
+      '- Test evidence archived.',
+      '- PR draft generated from diff, policy, review, and budget evidence.',
+    ].join('\n'),
+    redacted: true,
+    updatedAt: input.now,
+  }
+}
+
+function upsertArtifact(artifacts: Artifact[], artifact: Artifact): Artifact[] {
+  return artifacts.some((candidate) => candidate.id === artifact.id)
+    ? artifacts.map((candidate) => candidate.id === artifact.id ? artifact : candidate)
+    : [...artifacts, artifact]
+}
+
+function nextEventSequence(events: AgentEvent[], runId: string): number {
+  return events.filter((event) => event.runId === runId).length + 1
 }
 
 export function createPrDraftArtifact(input: CreatePrDraftArtifactInput): Artifact {

@@ -61,7 +61,7 @@ export const runs: WorkflowRun[] = [
       {
         id: 'n-clarify',
         stage: 'clarify',
-        title: '方案澄清',
+        title: '需求澄清',
         subtitle: '补齐验收口径与非目标',
         kind: 'agent',
         status: 'success',
@@ -73,7 +73,7 @@ export const runs: WorkflowRun[] = [
       {
         id: 'n-clarify-gate',
         stage: 'clarify',
-        title: '澄清 Gate',
+        title: '需求确认 Gate',
         subtitle: 'Member 确认需求表达',
         kind: 'gate',
         status: 'success',
@@ -97,8 +97,8 @@ export const runs: WorkflowRun[] = [
       {
         id: 'n-design-gate',
         stage: 'design',
-        title: '架构 Gate',
-        subtitle: 'Lead 审批后进入实现',
+        title: '方案评审 Gate',
+        subtitle: 'Lead 审批方案后进入实现',
         kind: 'gate',
         status: 'blocked',
         ownerId: 'u-ling',
@@ -170,7 +170,7 @@ export const artifacts: Artifact[] = [
     runId: 'run-health-001',
     nodeId: 'n-clarify',
     kind: 'clarification',
-    title: '澄清结果',
+    title: '需求澄清结果',
     summary: '明确 health endpoint 返回 db、redis、runtime 三类状态，不做鉴权改造。',
     content: '目标：新增 GET /health。非目标：不改现有 auth middleware。验收：db/redis 不可用时返回 degraded。',
     redacted: false,
@@ -289,7 +289,7 @@ export const events: AgentEvent[] = [
     nodeId: 'n-design-gate',
     sequence: 3,
     kind: 'approval',
-    message: '等待 Lead 审批架构 Gate。',
+    message: '等待 Lead 审批方案评审 Gate。',
     timestamp: '2026-06-15T15:01:00.000Z',
   },
 ]
