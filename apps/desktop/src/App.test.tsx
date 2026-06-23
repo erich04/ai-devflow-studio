@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   advanceWorkflowAfterGateApproval,
@@ -12,6 +13,8 @@ import {
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import { App, getToastDisplayDurationMs } from './App'
+import { useDesktopActions } from './app/useDesktopActions'
+import type { DesktopWorkspaceSetters, DesktopWorkspaceState } from './app/useDesktopWorkspace'
 import type { DevFlowDesktopApi, RunProjectTestsInput } from './desktop-api'
 
 const localProject = {
@@ -561,6 +564,150 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
   return api
 }
 
+function DeliveryActionHarness({ api }: { api: DevFlowDesktopApi }) {
+  const [runs, setRuns] = useState([fixtureRuns[0]!])
+  const [artifacts, setArtifacts] = useState([])
+  const [events, setEvents] = useState([])
+  const [, setToast] = useState('')
+  const actions = useDesktopActions({
+    desktopApi: api,
+    state: {
+      artifacts,
+      events,
+      testEvidence: [],
+      teamProjects: [{
+        id: 'p-payments',
+        name: 'Payments API',
+        repository: 'erich/payments-api',
+        defaultBranch: 'main',
+      }],
+      testCommandDraft: '',
+      commandSafety: null,
+      desktopPairing: null,
+      pairingCodeDraft: '',
+      mcpServers: [],
+      selectedAgentProviderId: 'fake-knowledge-review',
+      providerIdDraft: '',
+      providerBaseUrlDraft: '',
+      providerModelDraft: '',
+      providerKeyDraft: '',
+      runtimeBudgetApprovalId: '',
+      draftTitle: '',
+      draftRequest: '',
+      codingDiffArtifacts: [],
+      agentReviews: [],
+    } as unknown as DesktopWorkspaceState,
+    setters: {
+      setRuns,
+      setArtifacts,
+      setEvents,
+      setToast,
+    } as unknown as DesktopWorkspaceSetters,
+    derived: {
+      selectedLocalProject: undefined,
+      isTestCommandDirty: false,
+    },
+    selectedRun: runs[0],
+    selectedNode: undefined,
+    currentUser: undefined,
+    pendingCodingPermission: undefined,
+    latestCodingRun: undefined,
+    selectedManagedWorkspace: undefined,
+    gateEnforcementDecision: null,
+    applyLocalExecutionState: vi.fn(),
+  })
+
+  return (
+    <button
+      onClick={async () => {
+        await actions.generatePrDraft()
+        await actions.generateAcceptanceBundle()
+      }}
+    >
+      Generate delivery artifacts in one tick
+    </button>
+  )
+}
+
+function GateApprovalFallbackHarness() {
+  const selectedRun = fixtureRuns[0]!
+  const selectedNode = selectedRun.nodes.find((node) => node.id === selectedRun.currentNodeId)!
+  const [runs, setRuns] = useState([selectedRun])
+  const [events, setEvents] = useState([{
+    id: 'event-existing',
+    runId: selectedRun.id,
+    nodeId: selectedNode.id,
+    sequence: 7,
+    kind: 'thinking' as const,
+    message: 'Existing event.',
+    timestamp: '2026-06-15T00:00:00.000Z',
+  }])
+  const [, setToast] = useState('')
+  const actions = useDesktopActions({
+    desktopApi: null,
+    state: {
+      artifacts: [],
+      events,
+      testEvidence: [],
+      teamProjects: [],
+      testCommandDraft: '',
+      commandSafety: null,
+      desktopPairing: null,
+      pairingCodeDraft: '',
+      mcpServers: [],
+      selectedAgentProviderId: 'fake-knowledge-review',
+      providerIdDraft: '',
+      providerBaseUrlDraft: '',
+      providerModelDraft: '',
+      providerKeyDraft: '',
+      runtimeBudgetApprovalId: '',
+      draftTitle: '',
+      draftRequest: '',
+      codingDiffArtifacts: [],
+      agentReviews: [],
+    } as unknown as DesktopWorkspaceState,
+    setters: {
+      setRuns,
+      setEvents,
+      setToast,
+    } as unknown as DesktopWorkspaceSetters,
+    derived: {
+      selectedLocalProject: undefined,
+      isTestCommandDirty: false,
+    },
+    selectedRun: runs[0],
+    selectedNode,
+    currentUser: {
+      id: 'u-ling',
+      name: 'Ling',
+      role: 'lead',
+      avatarInitials: 'L',
+      focus: 'Delivery',
+    },
+    pendingCodingPermission: undefined,
+    latestCodingRun: undefined,
+    selectedManagedWorkspace: undefined,
+    gateEnforcementDecision: null,
+    applyLocalExecutionState: vi.fn(),
+  })
+
+  return (
+    <>
+      <button
+        onClick={async () => {
+          vi.setSystemTime(new Date('2026-06-15T00:00:01.000Z'))
+          await actions.approveSelectedGate()
+          vi.setSystemTime(new Date('2026-06-15T00:00:02.000Z'))
+          await actions.approveSelectedGate()
+        }}
+      >
+        Approve twice
+      </button>
+      <output data-testid="event-sequences">{events.map((event) => event.sequence).join(',')}</output>
+    </>
+  )
+}
+
 describe('App', () => {
   it('keeps toast messages visible for at least 8 seconds and longer for long text', () => {
     expect(getToastDisplayDurationMs('测试命令已保存')).toBe(8000)
@@ -611,9 +758,9 @@ describe('App', () => {
     expect(screen.getByTestId('toast')).toHaveTextContent('新 Run 已创建')
   })
 
-  it('persists a newly created run through the desktop API', async () => {
+  it('persists a newly created run through the desktop API and keeps it selected first', async () => {
     const api = installDesktopApi()
-    render(<App />)
+    const { container } = render(<App />)
 
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
@@ -627,6 +774,11 @@ describe('App', () => {
       creatorId: 'u-ling',
     }))
     expect(screen.getAllByText('重构 GitHub webhook 重试策略').length).toBeGreaterThan(0)
+    await waitFor(() => {
+      const runRows = Array.from(container.querySelectorAll('.run-row'))
+      expect(runRows[0]).toHaveTextContent('重构 GitHub webhook 重试策略')
+      expect(runRows[0]).toHaveClass('is-selected')
+    })
   })
 
   it('completes the current clarify agent through the desktop write path', async () => {
@@ -650,6 +802,7 @@ describe('App', () => {
     )
     expect(await screen.findByText('需求澄清结果')).toBeInTheDocument()
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('需求确认 Gate')
+    expect(screen.getByTestId('workflow-canvas')).toBeInTheDocument()
     expect(screen.getByTestId('toast')).toHaveTextContent('需求澄清已生成，进入需求确认 Gate')
   })
 
@@ -682,6 +835,33 @@ describe('App', () => {
 
     expect(await screen.findByText(/Acceptance Bundle:/)).toBeInTheDocument()
     expect(screen.getByText(/PR Draft:/)).toBeInTheDocument()
+  })
+
+  it('persists increasing delivery event sequences when delivery actions run before a rerender', async () => {
+    const api = installDesktopApi()
+    render(<DeliveryActionHarness api={api} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Generate delivery artifacts in one tick/ }))
+    })
+
+    await waitFor(() => expect(api.saveEvent).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(api.saveEvent).mock.calls.map(([event]) => event.sequence)).toEqual([1, 2])
+  })
+
+  it('increments browser fallback gate approval event sequences from the latest events', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<GateApprovalFallbackHarness />)
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /Approve twice/ }))
+      })
+
+      expect(screen.getByTestId('event-sequences')).toHaveTextContent('7,8,9')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('uses local runs without mixing fixture artifacts and events when SQLite has runs', async () => {
