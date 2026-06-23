@@ -19,4 +19,4 @@ The product is not a chat surface. It is a workflow and evidence system for smal
 - [`surfaces.md`](./surfaces.md): Desktop, Web, API, and Shared Core responsibilities.
 - [`evidence-and-trust.md`](./evidence-and-trust.md): Evidence Chain rules, redaction, and trust boundaries.
 - [`states-and-refactor-anchors.md`](./states-and-refactor-anchors.md): Product states, UI refactor anchors, near-term gaps, and out-of-scope items.
-
+- [`ui-design-rationale.md`](./ui-design-rationale.md): OpenDesign-derived UI information architecture, Workflow Board model, Inspector behavior, and module boundaries.
