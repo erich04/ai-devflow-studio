@@ -2,9 +2,9 @@
 
 This folder stores visual references that should inform DevFlow Studio UI work without becoming runtime source code.
 
-## Airbnb-III Workbench Reference
+## Airbnb-III Prototype References
 
-![Airbnb-III workbench reference](./airbnb-iii-workbench-reference.png)
+These screenshots capture the OpenDesign `Airbnb-III` prototype states that should guide the React/Electron UI port.
 
 Source:
 
@@ -13,7 +13,43 @@ Source:
 - Source artifact: `index.html`
 - Captured: 2026-06-23
 
-Use this screenshot as the primary visual reference for the upcoming Electron frontend refactor.
+Reference set:
+
+- [Workbench](./airbnb-iii-workbench-reference.png): main delivery flow with Local Project + Runs, Workflow Board, and Inspector.
+- [Team Policy](./airbnb-iii-team-policy-reference.png): Team Overview policy settings, budget guard, and desktop snapshot read path.
+- [Knowledge](./airbnb-iii-knowledge-reference.png): Git Markdown index and lightweight knowledge graph.
+- [Agents](./airbnb-iii-agents-reference.png): Knowledge Review Agent and Coding Agent execution console.
+- [Skills](./airbnb-iii-skills-reference.png): team capability catalog.
+- [MCP](./airbnb-iii-mcp-reference.png): local connector table and permission boundary.
+- [Tests](./airbnb-iii-tests-reference.png): local test execution and Test Evidence list.
+
+### Workbench
+
+![Airbnb-III workbench reference](./airbnb-iii-workbench-reference.png)
+
+### Team Policy
+
+![Airbnb-III team policy reference](./airbnb-iii-team-policy-reference.png)
+
+### Knowledge
+
+![Airbnb-III knowledge reference](./airbnb-iii-knowledge-reference.png)
+
+### Agents
+
+![Airbnb-III agents reference](./airbnb-iii-agents-reference.png)
+
+### Skills
+
+![Airbnb-III skills reference](./airbnb-iii-skills-reference.png)
+
+### MCP
+
+![Airbnb-III MCP reference](./airbnb-iii-mcp-reference.png)
+
+### Tests
+
+![Airbnb-III tests reference](./airbnb-iii-tests-reference.png)
 
 Preserve these product decisions when porting the prototype into React:
 
