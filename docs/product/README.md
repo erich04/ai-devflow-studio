@@ -22,4 +22,5 @@ Use this folder to answer product questions:
 ## Documents
 
 - [`product-definition.md`](./product-definition.md): Product positioning, users, core workflow, feature modules, boundaries, and current product status.
-
+- [`details/`](./details/README.md): Indexed product details for UX and implementation decisions, split by user jobs, object model, workflow, surfaces, evidence, and UI refactor anchors.
+- [`prd/`](./prd/README.md): Product Requirements Documents for the current product baseline and future scoped product changes.
