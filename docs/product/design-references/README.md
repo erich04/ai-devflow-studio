@@ -11,6 +11,7 @@ Source:
 - OpenDesign project: `Airbnb-III`
 - OpenDesign project id: `a2407ed0-1392-42b1-81ac-eda3bf593560`
 - Source artifact: `index.html`
+- Original implementation archive: [Airbnb-III.zip](./opendesign/Airbnb-III.zip)
 - Captured: 2026-06-23
 
 Reference set:
