@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -13,6 +13,7 @@ import {
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import { App, getToastDisplayDurationMs } from './App'
+import { buildWorkflowBoard } from './app/desktop-view-model'
 import { useDesktopActions } from './app/useDesktopActions'
 import type { DesktopWorkspaceSetters, DesktopWorkspaceState } from './app/useDesktopWorkspace'
 import type { DevFlowDesktopApi, RunProjectTestsInput } from './desktop-api'
@@ -740,6 +741,28 @@ describe('App', () => {
     expect(button).toHaveTextContent('浅色')
   })
 
+  it('labels browser preview, seed knowledge, and fake providers as fallback sources', () => {
+    render(<App />)
+
+    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('browser preview')
+    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('fixture fallback')
+
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('fake provider fallback')
+
+    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('shared knowledge index')
+  })
+
+  it('labels Electron preview as seed fallback when no persisted runs exist', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('seed fallback')
+    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('fixture fallback')
+  })
+
   it('approves the selected lead gate and updates the toast', () => {
     render(<App />)
 
@@ -894,11 +917,86 @@ describe('App', () => {
     render(<App />)
 
     await screen.findByText('本地持久化 Run')
+    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('local SQLite')
+    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('local persisted')
     expect(screen.queryByText('为 Payments API 增加 /health 端点')).not.toBeInTheDocument()
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('healthService.check()')
   })
 
-  it('loads remote team state through the desktop sync boundary without local evidence', async () => {
+  it('explains board provenance, folded attachments, and inspector status states', () => {
+    render(<App />)
+
+    const board = screen.getByTestId('workflow-canvas')
+    expect(board).toHaveTextContent('Run template')
+    expect(board).toHaveTextContent('Team policy 插入')
+    expect(board).toHaveTextContent('Local runtime 结果')
+    expect(board).toHaveTextContent('折叠输出节点')
+    expect(board).toHaveTextContent('ART')
+    expect(board).toHaveTextContent('EVD')
+    expect(board).toHaveTextContent('TRC')
+    expect(board).toHaveTextContent('阻断 Gate 没过时，不能算完成交付')
+    const railSegments = Array.from(board.querySelectorAll('.flow-rail span'))
+    expect(railSegments.map((segment) => Array.from(segment.classList).find((className) => className.startsWith('is-')))).toEqual([
+      'is-passed',
+      'is-blocked',
+      'is-waiting',
+      'is-waiting',
+      'is-waiting',
+      'is-waiting',
+    ])
+    const stageProgressSegments = Array.from(board.querySelectorAll('.stage-progress'))
+    expect(stageProgressSegments.map((segment) => Array.from(segment.classList).find((className) => className.startsWith('stage-progress--')))).toEqual([
+      'stage-progress--passed',
+      'stage-progress--blocked',
+      'stage-progress--waiting',
+      'stage-progress--waiting',
+      'stage-progress--waiting',
+      'stage-progress--waiting',
+    ])
+    expect(stageProgressSegments.some((segment) => segment.classList.contains('stage-progress--design'))).toBe(false)
+
+    const inspector = screen.getByTestId('node-inspector')
+    expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('Policy snapshot')
+    expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('Knowledge Review')
+    expect(inspector).toHaveTextContent('Gate 会根据 Team policy、review、evidence、role、budget 写路径重新计算')
+  })
+
+  it('derives workflow stage color from the visible cards in each stage', () => {
+    const board = buildWorkflowBoard(fixtureRuns[0]!)
+
+    expect(board.map((stage) => stage.completionState)).toEqual([
+      'passed',
+      'blocked',
+      'waiting',
+      'waiting',
+      'waiting',
+      'waiting',
+    ])
+
+    const advancedRun = {
+      ...fixtureRuns[0]!,
+      currentNodeId: 'n-test',
+      nodes: fixtureRuns[0]!.nodes.map((node) =>
+        node.id === 'n-design-gate'
+          ? { ...node, status: 'success' as const }
+          : node.id === 'n-test'
+            ? { ...node, status: 'running' as const }
+            : node,
+      ),
+    }
+    const advancedBoard = buildWorkflowBoard(advancedRun)
+
+    expect(advancedBoard.map((stage) => stage.completionState)).toEqual([
+      'passed',
+      'passed',
+      'waiting',
+      'current',
+      'waiting',
+      'waiting',
+    ])
+  })
+
+  it('loads remote team state without hiding local runs', async () => {
     const api = installDesktopApi({
       loadRemoteSnapshot: vi.fn().mockResolvedValue({
         projects: [
@@ -954,6 +1052,12 @@ describe('App', () => {
 
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalledWith({ organizationId: 'org-demo' }))
     expect(await screen.findByText('远端同步 Run')).toBeInTheDocument()
+    expect(screen.getAllByText('为 Payments API 增加 /health 端点').length).toBeGreaterThan(0)
+    expect(screen.getByText(/Run Sources/)).toHaveTextContent('1 local · 1 remote')
+    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('remote snapshot + local merge')
+    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('real IPC/API')
+    expect(screen.getByText('remote')).toBeInTheDocument()
+    expect(screen.getAllByText('local').length).toBeGreaterThan(0)
     expect(screen.getByTestId('toast')).toHaveTextContent('团队远端状态已同步')
 
     fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
@@ -1253,11 +1357,13 @@ describe('App', () => {
       target: { value: 'health endpoint' },
     })
 
-    expect(screen.getByText('为 Payments API 增加 /health 端点')).toBeInTheDocument()
+    expect(screen.getByTestId('search-results')).toHaveTextContent('为 Payments API 增加 /health 端点')
+    expect(screen.getAllByText('为 Payments API 增加 /health 端点').length).toBeGreaterThan(0)
 
     fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
       target: { value: 'nothing matches this' },
     })
+    expect(screen.getByTestId('search-results')).toHaveTextContent('没有匹配结果')
     expect(screen.getByText('没有匹配的 Run')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /Knowledge/ }))
@@ -1285,12 +1391,75 @@ describe('App', () => {
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('art-design')
   })
 
-  it('runs Knowledge Review Agent from the inspector and shows trace and advisory', async () => {
+  it('opens Knowledge from an inspector reference and returns to the selected inspector', () => {
+    render(<App />)
+
+    fireEvent.click(screen.getAllByRole('button', { name: /查看引用来源/ })[0]!)
+
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('来自 Workbench Inspector')
+    expect(screen.getByTestId('focused-knowledge-document')).toHaveTextContent('API Health Endpoint Standard')
+    expect(screen.getByTestId('focused-knowledge-reference')).toHaveTextContent('lexical')
+
+    fireEvent.click(screen.getByRole('button', { name: /返回当前 Inspector/ }))
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Governance')
+  })
+
+  it('opens Tests from the inspector and preserves the return target', () => {
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /执行测试/ }))
+
+    expect(screen.getByTestId('tests-view')).toHaveTextContent('来自 Workbench Inspector')
+    expect(screen.getByTestId('tests-view')).toHaveTextContent('执行本地测试并生成 Test Evidence')
+
+    fireEvent.click(screen.getByRole('button', { name: /返回当前 Inspector/ }))
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('方案评审 Gate')
+  })
+
+  it('opens a knowledge search result instead of treating search as a passive filter only', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
+      target: { value: 'API Health Endpoint Standard' },
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: /API Health Endpoint Standard/ })[0]!)
+
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Git Markdown Index')
+    expect(screen.getByTestId('focused-knowledge-document')).toHaveTextContent('API Health Endpoint Standard')
+  })
+
+  it('deep-links Artifact and Event search results back into the inspector', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
+      target: { value: 'healthService.check' },
+    })
+    fireEvent.click(within(screen.getByTestId('search-results')).getByRole('button', { name: /方案设计/ }))
+
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('方案设计')
+    expect(screen.getByTestId('focused-artifact')).toHaveTextContent('healthService.check')
+
+    fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
+      target: { value: 'degraded 状态定义' },
+    })
+    fireEvent.click(within(screen.getByTestId('search-results')).getByRole('button', { name: /thinking/ }))
+
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('需求澄清')
+    expect(screen.getByTestId('focused-event')).toHaveTextContent('degraded 状态定义')
+  })
+
+  it('opens Agents from the inspector, runs Knowledge Review, and returns to the current inspector', async () => {
     const api = installDesktopApi()
     render(<App />)
 
     await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: /Agent Review/ }))
+
+    expect(await screen.findByTestId('agent-workbench')).toHaveTextContent('来自 Workbench Inspector')
+    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('运行 Knowledge Review 并补齐 Gate Advisory')
+    expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run Knowledge Review/ }))
 
     await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
       runId: fixtureRuns[0]!.id,
@@ -1298,10 +1467,14 @@ describe('App', () => {
       runtime: 'electron',
       providerId: 'fake-knowledge-review',
     })))
-    expect(await screen.findByTestId('agent-workbench')).toHaveTextContent('Knowledge Review Agent')
+    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Knowledge Review Agent')
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('warning-only')
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Build redacted context')
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('estimated')
+
+    fireEvent.click(screen.getByRole('button', { name: /返回当前 Inspector/ }))
+    expect(await screen.findByTestId('node-inspector')).toHaveTextContent('Knowledge Review Agent')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('warning-only')
   })
 
   it('saves a custom Review Model Provider credential for Doubao-compatible review', async () => {
@@ -1332,7 +1505,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
 
     expect(await screen.findByLabelText('Review Model Provider')).toBeInTheDocument()
-    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('Deterministic fake')
+    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('fake provider fallback')
     expect(screen.getByLabelText('Review Provider ID')).toHaveValue('doubao-review')
     expect(screen.getByLabelText('Review Provider Base URL')).toHaveValue(
       'https://ark.cn-beijing.volces.com/api/coding/v3',
@@ -1353,7 +1526,7 @@ describe('App', () => {
       }),
     )
     await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalledTimes(2))
-    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('Live OpenAI-compatible')
+    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('stored provider metadata')
     expect(screen.getByText('Review model credential saved: e8...test')).toBeInTheDocument()
   })
 
@@ -1787,6 +1960,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
     await screen.findByText('fixture-project')
+    fireEvent.click(screen.getByRole('button', { name: '测试' }))
 
     const commandInput = screen.getByLabelText('测试命令')
     await waitFor(() => expect(commandInput).toHaveValue('pnpm test'))
@@ -1853,6 +2027,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
     await screen.findByText('fixture-project')
+    fireEvent.click(screen.getByRole('button', { name: '测试' }))
 
     expect(screen.getByRole('button', { name: /已保存/ })).toBeDisabled()
 
@@ -1882,6 +2057,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
     await screen.findByText('fixture-project')
+    fireEvent.click(screen.getByRole('button', { name: '测试' }))
 
     fireEvent.click(screen.getByRole('button', { name: /执行测试/ }))
 
@@ -1897,6 +2073,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
     await screen.findByText('fixture-project')
+    fireEvent.click(screen.getByRole('button', { name: '测试' }))
 
     const commandInput = screen.getByLabelText('测试命令')
     await waitFor(() => expect(commandInput).toHaveValue('pnpm test'))

@@ -72,6 +72,8 @@ export function useDesktopActions(input: {
     artifacts,
     events,
     testEvidence,
+    runs,
+    selectedRunId,
     teamProjects,
     testCommandDraft,
     commandSafety,
@@ -94,6 +96,7 @@ export function useDesktopActions(input: {
     setDataOrigin,
     setActiveView,
     setRuns,
+    setRemoteRunIds,
     setSelectedRunId,
     setSelectedNodeId,
     setArtifacts,
@@ -181,22 +184,18 @@ export function useDesktopActions(input: {
       const snapshot = await desktopApi.loadRemoteSnapshot({
         organizationId: desktopPairing?.organizationId ?? 'org-demo',
       })
-      const nextRun = snapshot.runs[0]
+      const remoteRuns = snapshot.runs.length > 0 ? snapshot.runs : fixtureRuns
+      const nextRuns = mergeById(runs, remoteRuns)
+      const nextRun =
+        nextRuns.find((run) => run.id === selectedRunId) ??
+        snapshot.runs[0] ??
+        nextRuns[0]
 
-      setRuns(snapshot.runs.length > 0 ? snapshot.runs : fixtureRuns)
-      setArtifacts(snapshot.artifacts)
-      setEvents(snapshot.events)
-      setTestEvidence([])
-      setAgentReviews([])
-      setAgentTraces([])
-      setAgentTokenUsage([])
-      setCodingRuns([])
-      setCodingEvents([])
-      setCodingPermissionRequests([])
-      setCodingPermissionDecisions([])
-      setManagedCodingWorkspaces([])
-      setDependencyBootstrapEvidence([])
-      setCodingDiffArtifacts([])
+      setRuns(nextRuns)
+      setRemoteRunIds(snapshot.runs.map((run) => run.id))
+      setArtifacts((previousArtifacts) => mergeById(previousArtifacts, snapshot.artifacts))
+      setEvents((previousEvents) => mergeById(previousEvents, snapshot.events))
+      setTestEvidence(testEvidence)
       setTeamProjects(snapshot.projects.length > 0 ? snapshot.projects : projects)
       setTeamMembers(snapshot.members.length > 0 ? snapshot.members : members)
       setTeamProjectCost(snapshot.projectCost)
@@ -210,7 +209,7 @@ export function useDesktopActions(input: {
         setActiveView('workbench')
       }
 
-      setToast('团队远端状态已同步')
+      setToast('团队远端状态已同步，本地 Run 已保留并重新评估 Gate')
     } catch (error) {
       setToast(error instanceof Error ? error.message : '同步团队远端状态失败')
     } finally {

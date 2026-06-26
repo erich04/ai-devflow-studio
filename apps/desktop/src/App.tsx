@@ -1,17 +1,7 @@
 import {
-  Background,
-  BackgroundVariant,
-  Controls,
-  ReactFlow,
-} from '@xyflow/react'
-import {
-  Activity,
   BookOpen,
   Bot,
-  ChevronRight,
-  CircleDollarSign,
   ClipboardCheck,
-  Code2,
   Network,
   Plus,
   RefreshCw,
@@ -30,41 +20,36 @@ import {
 } from '@ai-devflow/shared'
 import { useGateEnforcement } from './useGateEnforcement'
 import {
-  buildFlow,
+  buildSearchResults,
+  buildKnowledgeDataSource,
+  buildRuntimeDataSource,
   defaultReviewProviderDraft,
+  getBoardNodeKind,
+  inspectorTabsByKind,
   normalizeQuery,
   reviewProviderFromMetadata,
   runMatchesQuery,
-  seedMemberRollups,
-  seedProjectRollups,
-  seedTotalCost,
-  stageLabels,
-  type ViewId,
+  type SearchResultItem,
   matchesQuery,
 } from './app/desktop-view-model'
 import { useDesktopActions } from './app/useDesktopActions'
 import { useDesktopWorkspace } from './app/useDesktopWorkspace'
 import {
   AgentWorkbenchView,
-  AppNode,
   Inspector,
   KnowledgeView,
   LocalProjectPanel,
   McpView,
-  Metric,
   NavButton,
   SkillView,
   TeamOverview,
   TestsView,
   ThemeToggle,
+  WorkflowBoard,
 } from './views/DesktopViews'
 
 export { getToastDisplayDurationMs } from './app/desktop-view-model'
 
-
-const nodeTypes = {
-  appNode: AppNode,
-}
 
 export function App() {
   const workspace = useDesktopWorkspace({
@@ -75,8 +60,10 @@ export function App() {
   const {
     themePreference,
     dataOrigin,
+    hasLoadedLocalState,
     activeView,
     runs,
+    remoteRunIds,
     selectedRunId,
     selectedNodeId,
     artifacts,
@@ -120,6 +107,7 @@ export function App() {
     draftTitle,
     draftRequest,
     searchQuery,
+    supportContext,
     toast,
   } = workspace.state
   const {
@@ -172,6 +160,7 @@ export function App() {
     setDraftTitle,
     setDraftRequest,
     setSearchQuery,
+    setSupportContext,
     setToast,
   } = workspace.setters
   const { selectedLocalProject, isTestCommandDirty } = workspace.derived
@@ -204,7 +193,6 @@ export function App() {
       matchesQuery(normalizedSearchQuery, [event.kind, event.message]),
   )
   const currentUser = teamMembers.find((member) => member.id === 'u-ling') ?? teamMembers[1]
-  const flow = useMemo(() => (selectedRun ? buildFlow(selectedRun) : { nodes: [], edges: [] }), [selectedRun])
   const knowledgeReferences = useMemo(
     () =>
       selectedRun
@@ -231,6 +219,18 @@ export function App() {
           })
         : [],
     [artifacts, selectedNode, selectedRun, testEvidence],
+  )
+  const searchResults = useMemo(
+    () =>
+      buildSearchResults({
+        query: normalizedSearchQuery,
+        runs,
+        artifacts,
+        events,
+        knowledgeDocuments,
+        knowledgeReferences,
+      }),
+    [artifacts, events, knowledgeReferences, normalizedSearchQuery, runs],
   )
   const selectedAgentReviews = useMemo(
     () =>
@@ -295,6 +295,28 @@ export function App() {
   const selectedCodingTestEvidence = latestCodingRun
     ? testEvidence.find((evidence) => evidence.id === latestCodingRun.testEvidenceId)
     : undefined
+  const remoteRunIdSet = useMemo(() => new Set(remoteRunIds), [remoteRunIds])
+  const remoteRunCount = runs.filter((run) => remoteRunIdSet.has(run.id)).length
+  const localRunCount = runs.length - remoteRunCount
+  const runtimeDataSource = useMemo(
+    () =>
+      buildRuntimeDataSource({
+        desktopConnected: Boolean(desktopApi),
+        hasLoadedLocalState,
+        dataOrigin,
+        localRunCount,
+        remoteRunCount,
+      }),
+    [dataOrigin, desktopApi, hasLoadedLocalState, localRunCount, remoteRunCount],
+  )
+  const knowledgeDataSource = useMemo(
+    () =>
+      buildKnowledgeDataSource({
+        desktopConnected: Boolean(desktopApi),
+        dataOrigin,
+      }),
+    [dataOrigin, desktopApi],
+  )
   const gateEnforcement = useGateEnforcement({
     desktopApi,
     selectedRun,
@@ -345,20 +367,151 @@ export function App() {
     applyLocalExecutionState,
   })
 
+  function selectRunNode(runId: string | undefined, nodeId: string | undefined) {
+    const run = runs.find((candidate) => candidate.id === runId) ?? selectedRun
+    if (!run) {
+      return
+    }
+
+    setSelectedRunId(run.id)
+    setSelectedNodeId(
+      run.nodes.some((node) => node.id === nodeId)
+        ? nodeId!
+        : run.currentNodeId,
+    )
+  }
+
+  function openSupportContext(
+    focusTarget: 'knowledge-review' | 'local-tests' | 'coding-agent',
+    label: string,
+  ) {
+    if (!selectedRun || !selectedNode) {
+      return
+    }
+
+    setSupportContext({
+      runId: selectedRun.id,
+      nodeId: selectedNode.id,
+      sourceView: activeView,
+      returnView: 'workbench',
+      focusTarget,
+      label,
+      createdAt: new Date().toISOString(),
+    })
+    setActiveView(focusTarget === 'local-tests' ? 'tests' : 'agents')
+  }
+
+  function openKnowledgeReference(referenceId: string, documentId?: string) {
+    const reference = knowledgeReferences.find((candidate) => candidate.id === referenceId)
+    const nextRunId = reference?.runId ?? selectedRun?.id
+    const nextNodeId = reference?.nodeId ?? selectedNode?.id
+    if (!nextRunId || !nextNodeId) {
+      return
+    }
+
+    selectRunNode(nextRunId, nextNodeId)
+    setSupportContext({
+      runId: nextRunId,
+      nodeId: nextNodeId,
+      sourceView: activeView,
+      returnView: 'workbench',
+      focusTarget: 'knowledge-reference',
+      label: 'Knowledge Governance 引用来源',
+      referenceId,
+      documentId: documentId ?? reference?.documentId,
+      createdAt: new Date().toISOString(),
+    })
+    setSearchQuery('')
+    setActiveView('knowledge')
+  }
+
+  function returnToInspector() {
+    if (supportContext) {
+      selectRunNode(supportContext.runId, supportContext.nodeId)
+      setSupportContext(null)
+    }
+    setActiveView('workbench')
+  }
+
+  function selectSearchResult(result: SearchResultItem) {
+    if (result.type === 'knowledge') {
+      const runId = result.runId ?? selectedRun?.id
+      const nodeId = result.nodeId ?? selectedNode?.id
+      if (runId && nodeId) {
+        selectRunNode(runId, nodeId)
+        setSupportContext({
+          runId,
+          nodeId,
+          sourceView: activeView,
+          returnView: 'workbench',
+          focusTarget: 'knowledge-reference',
+          label: 'Search result · Knowledge',
+          referenceId: result.referenceId,
+          documentId: result.documentId,
+          createdAt: new Date().toISOString(),
+        })
+      }
+      setActiveView('knowledge')
+      return
+    }
+
+    if (result.type === 'artifact' || result.type === 'event') {
+      const run = runs.find((candidate) => candidate.id === result.runId) ?? selectedRun
+      const node =
+        run?.nodes.find((candidate) => candidate.id === result.nodeId) ??
+        run?.nodes.find((candidate) => candidate.id === run.currentNodeId)
+      if (run && node) {
+        const visualKind = getBoardNodeKind(node)
+        const tabs = inspectorTabsByKind[visualKind]
+        const artifactTab = tabs.includes('产物') ? '产物' : tabs.includes('Artifacts') ? 'Artifacts' : 'Evidence'
+        const eventTab = tabs.includes('Trace') ? 'Trace' : tabs.includes('Handoff') ? 'Handoff' : '状态'
+        setSelectedRunId(run.id)
+        setSelectedNodeId(node.id)
+        setSupportContext({
+          runId: run.id,
+          nodeId: node.id,
+          sourceView: activeView,
+          returnView: 'workbench',
+          focusTarget: result.type,
+          label: result.type === 'artifact' ? 'Search result · Artifact' : 'Search result · Event',
+          artifactId: result.artifactId,
+          eventId: result.eventId,
+          inspectorTab: result.type === 'artifact' ? artifactTab : eventTab,
+          createdAt: new Date().toISOString(),
+        })
+      }
+      setSearchQuery('')
+      setActiveView('workbench')
+      return
+    }
+
+    selectRunNode(result.runId, result.nodeId)
+    setSupportContext(null)
+    setActiveView('workbench')
+  }
+
+  const policyStatus = gateEnforcement.isLoading
+    ? 'loading'
+    : gateEnforcement.decision?.status ?? 'not loaded'
+  const policyTone =
+    policyStatus === 'pass' || policyStatus === 'overridden'
+      ? 'good'
+      : policyStatus === 'warn'
+        ? 'warn'
+        : policyStatus === 'not loaded'
+          ? 'soft'
+          : 'bad'
+  const policySource = gateEnforcement.policySnapshot?.source ?? gateEnforcement.decision?.policySource ?? 'unavailable'
+  const policyVersion = gateEnforcement.policySnapshot?.version ?? gateEnforcement.decision?.policyVersion
+
   return (
     <div className="app-shell" data-origin={dataOrigin}>
-      <aside className="sidebar" aria-label="Primary navigation">
-        <div className="brand">
-          <div className="brand__mark">AI</div>
-          <div>
-            <strong>DevFlow</strong>
-            <span>Studio</span>
-          </div>
-        </div>
+      <aside className="sidebar rail" aria-label="Primary navigation">
+        <div className="brand mark" aria-label="DevFlow Studio">DF</div>
 
         <nav className="nav-list">
           <NavButton active={activeView === 'workbench'} icon={<Workflow />} label="工作台" onClick={() => setActiveView('workbench')} />
-          <NavButton active={activeView === 'team'} icon={<Users />} label="Team Overview" onClick={() => setActiveView('team')} />
+          <NavButton active={activeView === 'team'} ariaLabel="Team Overview" icon={<Users />} label="Team" onClick={() => setActiveView('team')} />
           <NavButton active={activeView === 'knowledge'} icon={<BookOpen />} label="Knowledge" onClick={() => setActiveView('knowledge')} />
           <NavButton active={activeView === 'agents'} icon={<Bot />} label="Agents" onClick={() => setActiveView('agents')} />
           <NavButton active={activeView === 'skills'} icon={<ShieldCheck />} label="Skills" onClick={() => setActiveView('skills')} />
@@ -366,36 +519,59 @@ export function App() {
           <NavButton active={activeView === 'tests'} icon={<TestTube2 />} label="测试" onClick={() => setActiveView('tests')} />
         </nav>
 
-        <div className="sidebar-card">
-          <span>Local Agent</span>
-          <strong>Electron runner</strong>
-          <p>本机仓库、终端与 MCP 调用由 Electron 执行代理接管。</p>
-        </div>
       </aside>
 
-      <main className="workspace">
+      <main className="workspace main-shell">
         <header className="topbar">
           <div className="project-switcher" aria-label="Project selector">
-            <Code2 size={17} />
-            <div>
-              <span>Project</span>
-              <strong>
+            <div className="project-line">
+              <span className="project-label">Team Project</span>
+              <strong className="project-value">
                 {teamProjects.find((project) => project.id === selectedRun?.projectId)?.name ??
                   selectedRun?.projectId ??
                   'No project'}
               </strong>
+              <span className="pill accent">lead</span>
             </div>
-            <ChevronRight size={16} />
+            <div className="project-line">
+              <span className="project-label">Local Project</span>
+              <strong className="project-value project-value--local">
+                {selectedLocalProject?.path ?? '~/File/claude/10-showcase/ai-devflow-studio'}
+              </strong>
+            </div>
           </div>
 
-          <div className="search-box">
+          <div className="search-wrap">
+            <div className="search-box">
             <Search size={16} />
             <input
               aria-label="Search runs and knowledge"
-              placeholder="Search runs, artifacts, knowledge..."
+              placeholder="搜索当前加载的 Run / Artifact / Knowledge / Event"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
             />
+            </div>
+            <span className="search-scope">不搜索本地文件系统</span>
+            {normalizedSearchQuery ? (
+              <div className="search-results" data-testid="search-results">
+                {searchResults.length === 0 ? (
+                  <p className="empty-note">没有匹配结果</p>
+                ) : (
+                  searchResults.map((result) => (
+                    <button
+                      className="search-result-row"
+                      key={result.id}
+                      type="button"
+                      onClick={() => selectSearchResult(result)}
+                    >
+                      <span>{result.type}</span>
+                      <strong>{result.title}</strong>
+                      <small>{result.subtitle}</small>
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : null}
           </div>
 
           <div className="topbar-actions">
@@ -418,7 +594,7 @@ export function App() {
             </button>
             <button className="ghost-button" onClick={redactPreview} aria-label="Test redaction">
               <ShieldCheck size={16} />
-              Redaction
+              Redaction 开
             </button>
             <button className="primary-button" onClick={() => setIsNewRunOpen(true)}>
               <Plus size={16} />
@@ -431,10 +607,19 @@ export function App() {
         </header>
 
         <section className="status-strip" aria-live="polite">
-          <Metric label="Active Runs" value={String(runs.length)} icon={<Activity />} />
-          <Metric label="Pending Gates" value="2" icon={<ClipboardCheck />} />
-          <Metric label="Token Cost" value={teamTotalCost} icon={<CircleDollarSign />} />
-          <Metric label="Tests Today" value="18 / 20" icon={<TestTube2 />} />
+          <span className="stat stat--source" data-testid="runtime-source-badge" title={runtimeDataSource.detail}>
+            数据源 <strong className={`pill ${runtimeDataSource.tone}`}>{runtimeDataSource.label}</strong>
+            <em>{runtimeDataSource.status}</em>
+          </span>
+          <span className="stat">Active Runs <strong>{runs.length}</strong></span>
+          <span className="stat">Run Sources <strong>{localRunCount} local · {remoteRunCount} remote</strong></span>
+          <span className="stat">Pending Gates <strong>4</strong></span>
+          <span className="stat">Token Cost <strong>{teamTotalCost}</strong></span>
+          <span className="stat">Tests Today <strong>18</strong></span>
+          <span className="stat">同步状态 <strong>local + {policySource}</strong></span>
+          <span className="stat">Policy Snapshot <strong>{policyVersion ? `v${policyVersion}` : 'not loaded'}</strong></span>
+          <span className="stat">策略状态 <strong className={`pill ${policyTone}`}>{policyStatus}</strong></span>
+          <span className="stat">预算风险 <strong className="pill warn">over budget approval</strong></span>
         </section>
 
         {toast && (
@@ -482,33 +667,22 @@ export function App() {
                     <strong>{run.title}</strong>
                     <span>{run.branchName}</span>
                     <em>{run.status}</em>
+                    <span className={`pill ${remoteRunIdSet.has(run.id) ? 'accent' : dataOrigin === 'seed' ? 'soft' : 'good'}`}>
+                      {remoteRunIdSet.has(run.id) ? 'remote' : dataOrigin === 'seed' ? 'seed' : 'local'}
+                    </span>
                   </button>
                 ))
               )}
             </div>
 
-            <div className="canvas-panel" data-testid="workflow-canvas">
-              <div className="lane-header">
-                {Object.entries(stageLabels).map(([stage, label]) => (
-                  <span key={stage}>{label}</span>
-                ))}
-              </div>
-              <ReactFlow
-                nodes={flow.nodes}
-                edges={flow.edges}
-                nodeTypes={nodeTypes}
-                defaultViewport={{ x: 22, y: 92, zoom: 0.82 }}
-                minZoom={0.55}
-                maxZoom={1.15}
-                nodesDraggable={false}
-                nodesConnectable={false}
-                elementsSelectable
-                onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-              >
-                <Background variant={BackgroundVariant.Dots} gap={22} size={1} />
-                <Controls />
-              </ReactFlow>
-            </div>
+            <WorkflowBoard
+              run={selectedRun}
+              artifacts={artifacts}
+              events={events}
+              testEvidence={testEvidence}
+              selectedNodeId={selectedNode?.id}
+              onSelectNode={setSelectedNodeId}
+            />
 
             <Inspector
               selectedRun={selectedRun}
@@ -519,6 +693,7 @@ export function App() {
               governanceChecks={selectedGovernanceChecks}
               references={knowledgeReferences}
               latestAgentReview={latestAgentReview}
+              supportContext={supportContext}
               policySnapshot={gateEnforcement.policySnapshot}
               gateEnforcementDecision={gateEnforcement.decision}
               gateOverrides={gateEnforcement.overrides.filter((override) => override.nodeId === selectedNode?.id)}
@@ -532,8 +707,9 @@ export function App() {
               onStartRemediationRetry={startRemediationRetry}
               pairingState={desktopPairing ? 'paired' : 'unpaired'}
               onSyncTeam={syncRemoteTeamState}
-              onRunTests={executeTestPlan}
-              onRunKnowledgeReview={runKnowledgeReview}
+              onOpenTests={() => openSupportContext('local-tests', '执行本地测试并生成 Test Evidence')}
+              onOpenKnowledgeReview={() => openSupportContext('knowledge-review', '运行 Knowledge Review 并补齐 Gate Advisory')}
+              onOpenKnowledgeReference={openKnowledgeReference}
               onRunCodingAgent={runCodingAgent}
               onCreatePrDraft={generatePrDraft}
               onCreateAcceptanceBundle={generateAcceptanceBundle}
@@ -552,6 +728,11 @@ export function App() {
             memberRollups={teamMemberCost}
             totalCost={teamTotalCost}
             dataOrigin={dataOrigin}
+            runtimeDataSource={runtimeDataSource}
+            selectedRun={selectedRun}
+            policySnapshot={gateEnforcement.policySnapshot}
+            gateEnforcementDecision={gateEnforcement.decision}
+            isLoadingGateEnforcement={gateEnforcement.isLoading}
           />
         )}
 
@@ -561,6 +742,19 @@ export function App() {
             documents={knowledgeDocuments}
             references={knowledgeReferences}
             selectedRun={selectedRun}
+            supportContext={supportContext}
+            focusedDocumentId={
+              supportContext?.focusTarget === 'knowledge-reference'
+                ? supportContext.documentId
+                : undefined
+            }
+            focusedReferenceId={
+              supportContext?.focusTarget === 'knowledge-reference'
+                ? supportContext.referenceId
+                : undefined
+            }
+            dataSource={knowledgeDataSource}
+            onReturnToInspector={returnToInspector}
           />
         )}
 
@@ -605,6 +799,8 @@ export function App() {
             diff={selectedCodingDiff}
             bootstrapEvidence={selectedBootstrapEvidence}
             testEvidence={selectedCodingTestEvidence}
+            supportContext={supportContext}
+            onReturnToInspector={returnToInspector}
           />
         )}
 
@@ -617,7 +813,22 @@ export function App() {
         )}
 
         {activeView === 'tests' && (
-          <TestsView evidence={testEvidence} onRunTests={executeTestPlan} isRunningTests={isRunningTests} />
+          <TestsView
+            evidence={testEvidence}
+            onRunTests={executeTestPlan}
+            isRunningTests={isRunningTests}
+            commandDraft={testCommandDraft}
+            onCommandDraftChange={setTestCommandDraft}
+            onSaveCommand={saveTestCommand}
+            project={selectedLocalProject}
+            commandSafety={commandSafety}
+            isCommandDirty={isTestCommandDirty}
+            isSavingCommand={isSavingTestCommand}
+            supportContext={supportContext}
+            selectedRun={selectedRun}
+            selectedNode={selectedNode}
+            onReturnToInspector={returnToInspector}
+          />
         )}
       </main>
 

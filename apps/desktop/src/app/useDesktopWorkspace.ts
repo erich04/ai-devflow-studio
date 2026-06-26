@@ -43,6 +43,7 @@ import {
   seedMemberRollups,
   seedProjectRollups,
   seedTotalCost,
+  type SupportContext,
 } from './desktop-view-model'
 
 function useThemePreference() {
@@ -73,8 +74,10 @@ function useThemePreference() {
 export type DesktopWorkspaceState = {
   themePreference: ThemePreference
   dataOrigin: DataOrigin
+  hasLoadedLocalState: boolean
   activeView: 'workbench' | 'team' | 'knowledge' | 'agents' | 'skills' | 'mcp' | 'tests'
   runs: WorkflowRun[]
+  remoteRunIds: string[]
   selectedRunId: string
   selectedNodeId: string
   artifacts: Artifact[]
@@ -120,6 +123,7 @@ export type DesktopWorkspaceState = {
   draftTitle: string
   draftRequest: string
   searchQuery: string
+  supportContext: SupportContext | null
   toast: string
 }
 
@@ -128,6 +132,7 @@ export type DesktopWorkspaceSetters = {
   setDataOrigin: (value: DataOrigin) => void
   setActiveView: (value: DesktopWorkspaceState['activeView']) => void
   setRuns: Dispatch<SetStateAction<WorkflowRun[]>>
+  setRemoteRunIds: Dispatch<SetStateAction<string[]>>
   setSelectedRunId: Dispatch<SetStateAction<string>>
   setSelectedNodeId: Dispatch<SetStateAction<string>>
   setArtifacts: Dispatch<SetStateAction<Artifact[]>>
@@ -173,6 +178,7 @@ export type DesktopWorkspaceSetters = {
   setDraftTitle: Dispatch<SetStateAction<string>>
   setDraftRequest: Dispatch<SetStateAction<string>>
   setSearchQuery: Dispatch<SetStateAction<string>>
+  setSupportContext: Dispatch<SetStateAction<SupportContext | null>>
   setToast: Dispatch<SetStateAction<string>>
 }
 
@@ -193,8 +199,10 @@ export function useDesktopWorkspace(input: {
   const desktopApi = useMemo(() => getDesktopApi(), [])
   const [themePreference, setThemePreference] = useThemePreference()
   const [dataOrigin, setDataOrigin] = useState<DataOrigin>('seed')
+  const [hasLoadedLocalState, setHasLoadedLocalState] = useState(!desktopApi)
   const [activeView, setActiveView] = useState<DesktopWorkspaceState['activeView']>('workbench')
   const [runs, setRuns] = useState<WorkflowRun[]>(fixtureRuns)
+  const [remoteRunIds, setRemoteRunIds] = useState<string[]>([])
   const [selectedRunId, setSelectedRunId] = useState(fixtureRuns[0]?.id ?? '')
   const [selectedNodeId, setSelectedNodeId] = useState(fixtureRuns[0]?.currentNodeId ?? '')
   const [artifacts, setArtifacts] = useState<Artifact[]>(fixtureArtifacts)
@@ -240,6 +248,7 @@ export function useDesktopWorkspace(input: {
   const [draftTitle, setDraftTitle] = useState('重构 GitHub webhook 重试策略')
   const [draftRequest, setDraftRequest] = useState('请先澄清 webhook retry 的失败边界，再设计实现方案。')
   const [searchQuery, setSearchQuery] = useState('')
+  const [supportContext, setSupportContext] = useState<SupportContext | null>(null)
   const [toast, setToast] = useState(desktopApi ? '本地执行代理已连接' : '浏览器预览模式')
 
   const selectedLocalProject =
@@ -261,6 +270,7 @@ export function useDesktopWorkspace(input: {
   function applyLocalExecutionState(state: LocalExecutionState) {
     setLocalProjects(state.projects)
     setThemePreference(state.settings.themePreference)
+    setHasLoadedLocalState(true)
     if (state.projects[0] && !selectedLocalProjectId) {
       setSelectedLocalProjectId(state.projects[0].id)
     }
@@ -272,6 +282,7 @@ export function useDesktopWorkspace(input: {
       const nextRun = state.runs.find((run) => run.id === nextRunId) ?? state.runs[0]!
 
       setRuns(state.runs)
+      setRemoteRunIds([])
       setSelectedRunId(nextRunId)
       setSelectedNodeId((current) => {
         return nextRun.nodes.some((node) => node.id === current) ? current : nextRun.currentNodeId
@@ -282,6 +293,7 @@ export function useDesktopWorkspace(input: {
       resetTeamSnapshot()
     } else {
       setRuns(fixtureRuns)
+      setRemoteRunIds([])
       setSelectedRunId((current) => fixtureRuns.some((run) => run.id === current) ? current : fixtureRuns[0]!.id)
       setSelectedNodeId((current) => {
         const run = fixtureRuns.find((candidate) => candidate.id === selectedRunId) ?? fixtureRuns[0]
@@ -364,6 +376,7 @@ export function useDesktopWorkspace(input: {
         applyLocalExecutionState(state)
       })
       .catch((error: unknown) => {
+        setHasLoadedLocalState(true)
         setToast(error instanceof Error ? error.message : '加载本地状态失败')
       })
 
@@ -431,8 +444,10 @@ export function useDesktopWorkspace(input: {
   const state: DesktopWorkspaceState = {
     themePreference,
     dataOrigin,
+    hasLoadedLocalState,
     activeView,
     runs,
+    remoteRunIds,
     selectedRunId,
     selectedNodeId,
     artifacts,
@@ -478,6 +493,7 @@ export function useDesktopWorkspace(input: {
     draftTitle,
     draftRequest,
     searchQuery,
+    supportContext,
     toast,
   }
 
@@ -486,6 +502,7 @@ export function useDesktopWorkspace(input: {
     setDataOrigin,
     setActiveView,
     setRuns,
+    setRemoteRunIds,
     setSelectedRunId,
     setSelectedNodeId,
     setArtifacts,
@@ -531,6 +548,7 @@ export function useDesktopWorkspace(input: {
     setDraftTitle,
     setDraftRequest,
     setSearchQuery,
+    setSupportContext,
     setToast,
   }
 
