@@ -11,12 +11,13 @@ import {
   Users,
   Workflow,
 } from 'lucide-react'
-import { useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   buildKnowledgeGovernanceChecks,
   buildKnowledgeReferences,
-  knowledgeChunks,
-  knowledgeDocuments,
+  type KnowledgeChunk,
+  type KnowledgeDocument,
+  type ProjectGitStatus,
 } from '@ai-devflow/shared'
 import { useGateEnforcement } from './useGateEnforcement'
 import {
@@ -24,14 +25,14 @@ import {
   buildKnowledgeDataSource,
   buildRuntimeDataSource,
   defaultReviewProviderDraft,
-  getBoardNodeKind,
-  inspectorTabsByKind,
+  getRunStatusLabel,
   normalizeQuery,
   reviewProviderFromMetadata,
   runMatchesQuery,
   type SearchResultItem,
   matchesQuery,
 } from './app/desktop-view-model'
+import { resolveInspectorTabForSearchResult } from './app/node-inspector-view-model'
 import { useDesktopActions } from './app/useDesktopActions'
 import { useDesktopWorkspace } from './app/useDesktopWorkspace'
 import {
@@ -50,6 +51,8 @@ import {
 
 export { getToastDisplayDurationMs } from './app/desktop-view-model'
 
+const projectKnowledgeDocuments: KnowledgeDocument[] = []
+const projectKnowledgeChunks: KnowledgeChunk[] = []
 
 export function App() {
   const workspace = useDesktopWorkspace({
@@ -164,19 +167,136 @@ export function App() {
     setToast,
   } = workspace.setters
   const { selectedLocalProject, isTestCommandDirty } = workspace.derived
+  const [projectGitStatus, setProjectGitStatus] = useState<ProjectGitStatus | null>(null)
+  const [isRefreshingGitStatus, setIsRefreshingGitStatus] = useState(false)
+
+  const refreshProjectGitStatus = useCallback(async () => {
+    if (!desktopApi || !selectedLocalProject) {
+      setProjectGitStatus(null)
+      return
+    }
+
+    try {
+      setIsRefreshingGitStatus(true)
+      const status = await Promise.resolve(
+        desktopApi.getProjectGitStatus?.({ projectId: selectedLocalProject.id }),
+      )
+      if (!status) {
+        throw new Error('git status unavailable')
+      }
+      setProjectGitStatus(status)
+    } catch {
+      setProjectGitStatus({
+        projectId: selectedLocalProject.id,
+        status: 'unavailable',
+        message: 'git status unavailable',
+        refreshedAt: new Date().toISOString(),
+      })
+    } finally {
+      setIsRefreshingGitStatus(false)
+    }
+  }, [desktopApi, selectedLocalProject])
+
+  useEffect(() => {
+    if (!desktopApi || !selectedLocalProject) {
+      setProjectGitStatus(null)
+      return
+    }
+
+    let disposed = false
+    setProjectGitStatus(null)
+
+    const loadGitStatus = typeof desktopApi.watchProjectGitStatus === 'function'
+      ? desktopApi.watchProjectGitStatus
+      : desktopApi.getProjectGitStatus
+
+    Promise.resolve(loadGitStatus?.({ projectId: selectedLocalProject.id }))
+      .then((status) => {
+        if (!disposed && status) {
+          setProjectGitStatus(status)
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          setProjectGitStatus({
+            projectId: selectedLocalProject.id,
+            status: 'unavailable',
+            message: 'git status unavailable',
+            refreshedAt: new Date().toISOString(),
+          })
+        }
+      })
+
+    const unsubscribe = desktopApi.onProjectGitStatusUpdated?.((status) => {
+      if (!disposed && status.projectId === selectedLocalProject.id) {
+        setProjectGitStatus(status)
+      }
+    }) ?? (() => {})
+
+    const refreshOnFocus = () => {
+      void refreshProjectGitStatus()
+    }
+    window.addEventListener('focus', refreshOnFocus)
+    document.addEventListener('visibilitychange', refreshOnFocus)
+
+    return () => {
+      disposed = true
+      unsubscribe()
+      window.removeEventListener('focus', refreshOnFocus)
+      document.removeEventListener('visibilitychange', refreshOnFocus)
+      void desktopApi.unwatchProjectGitStatus?.({ projectId: selectedLocalProject.id })
+    }
+  }, [desktopApi, refreshProjectGitStatus, selectedLocalProject])
 
   const normalizedSearchQuery = normalizeQuery(searchQuery)
-  const visibleRuns = useMemo(
-    () => runs.filter((run) => runMatchesQuery(run, artifacts, events, normalizedSearchQuery)),
-    [artifacts, events, normalizedSearchQuery, runs],
+  const scopedRuns = useMemo(
+    () =>
+      selectedLocalProject
+        ? runs.filter((run) => run.projectId === selectedLocalProject.id)
+        : runs,
+    [runs, selectedLocalProject],
   )
-  const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0]
+  const scopedRunIdSet = useMemo(() => new Set(scopedRuns.map((run) => run.id)), [scopedRuns])
+  const scopedArtifacts = useMemo(
+    () => artifacts.filter((artifact) => scopedRunIdSet.has(artifact.runId)),
+    [artifacts, scopedRunIdSet],
+  )
+  const scopedEvents = useMemo(
+    () => events.filter((event) => scopedRunIdSet.has(event.runId)),
+    [events, scopedRunIdSet],
+  )
+  const scopedTestEvidence = useMemo(
+    () => testEvidence.filter((evidence) => scopedRunIdSet.has(evidence.runId)),
+    [scopedRunIdSet, testEvidence],
+  )
+  const visibleRuns = useMemo(
+    () => scopedRuns.filter((run) => runMatchesQuery(run, scopedArtifacts, scopedEvents, normalizedSearchQuery)),
+    [normalizedSearchQuery, scopedArtifacts, scopedEvents, scopedRuns],
+  )
+  const selectedRun = scopedRuns.find((run) => run.id === selectedRunId) ?? scopedRuns[0]
   const selectedNode =
     selectedRun?.nodes.find((node) => node.id === selectedNodeId) ?? selectedRun?.nodes[0]
+  const selectedTeamProject = teamProjects.find((project) => project.id === selectedRun?.projectId)
+  const selectedRunUsesLocalProject = Boolean(
+    selectedRun?.projectId && selectedRun.projectId === selectedLocalProject?.id,
+  )
+  const teamProjectLabel =
+    selectedLocalProject
+      ? selectedRunUsesLocalProject
+        ? `本地项目：${selectedLocalProject.name}`
+        : '未绑定 Team Project'
+      : selectedTeamProject?.name ?? '未绑定 Team Project'
+  const teamProjectSource = selectedLocalProject
+    ? selectedRunUsesLocalProject
+      ? 'local run'
+      : 'not bound'
+    : selectedTeamProject
+      ? 'remote snapshot'
+      : 'not bound'
   const isSelectedCurrentNode = Boolean(
     selectedRun && selectedNode && selectedRun.currentNodeId === selectedNode.id,
   )
-  const selectedArtifacts = artifacts
+  const selectedArtifacts = scopedArtifacts
     .filter((artifact) => selectedNode?.artifactIds.includes(artifact.id))
     .filter((artifact) =>
       matchesQuery(normalizedSearchQuery, [
@@ -186,25 +306,47 @@ export function App() {
         artifact.kind,
       ]),
     )
-  const selectedEvents = events.filter(
+  const selectedEvents = scopedEvents.filter(
     (event) =>
       event.runId === selectedRun?.id &&
       (!selectedNode || event.nodeId === selectedNode.id) &&
       matchesQuery(normalizedSearchQuery, [event.kind, event.message]),
   )
-  const currentUser = teamMembers.find((member) => member.id === 'u-ling') ?? teamMembers[1]
+  const pairedUser = desktopPairing
+    ? {
+        id: desktopPairing.userId,
+        name: desktopPairing.userId,
+        role: desktopPairing.role,
+        avatarInitials: desktopPairing.userId.slice(0, 2).toUpperCase(),
+        focus: 'Paired desktop',
+      }
+    : undefined
+  const runCreatorUser = selectedRun?.creatorId
+    ? {
+        id: selectedRun.creatorId,
+        name: selectedRun.creatorId,
+        role: 'owner' as const,
+        avatarInitials: selectedRun.creatorId.slice(0, 2).toUpperCase(),
+        focus: 'Local run',
+      }
+    : undefined
+  const currentUser =
+    teamMembers.find((member) => member.id === desktopPairing?.userId || member.id === selectedRun?.creatorId) ??
+    teamMembers[0] ??
+    pairedUser ??
+    runCreatorUser
   const knowledgeReferences = useMemo(
     () =>
       selectedRun
         ? buildKnowledgeReferences({
             run: selectedRun,
-            artifacts,
-            documents: knowledgeDocuments,
-            chunks: knowledgeChunks,
-            testEvidence,
+            artifacts: scopedArtifacts,
+            documents: projectKnowledgeDocuments,
+            chunks: projectKnowledgeChunks,
+            testEvidence: scopedTestEvidence,
           })
         : [],
-    [artifacts, selectedRun, testEvidence],
+    [scopedArtifacts, scopedTestEvidence, selectedRun],
   )
   const selectedGovernanceChecks = useMemo(
     () =>
@@ -212,25 +354,25 @@ export function App() {
         ? buildKnowledgeGovernanceChecks({
             run: selectedRun,
             node: selectedNode,
-            artifacts,
-            documents: knowledgeDocuments,
-            chunks: knowledgeChunks,
-            testEvidence,
+            artifacts: scopedArtifacts,
+            documents: projectKnowledgeDocuments,
+            chunks: projectKnowledgeChunks,
+            testEvidence: scopedTestEvidence,
           })
         : [],
-    [artifacts, selectedNode, selectedRun, testEvidence],
+    [scopedArtifacts, scopedTestEvidence, selectedNode, selectedRun],
   )
   const searchResults = useMemo(
     () =>
       buildSearchResults({
         query: normalizedSearchQuery,
-        runs,
-        artifacts,
-        events,
-        knowledgeDocuments,
+        runs: scopedRuns,
+        artifacts: scopedArtifacts,
+        events: scopedEvents,
+        knowledgeDocuments: projectKnowledgeDocuments,
         knowledgeReferences,
       }),
-    [artifacts, events, knowledgeReferences, normalizedSearchQuery, runs],
+    [knowledgeReferences, normalizedSearchQuery, scopedArtifacts, scopedEvents, scopedRuns],
   )
   const selectedAgentReviews = useMemo(
     () =>
@@ -293,11 +435,25 @@ export function App() {
     ? dependencyBootstrapEvidence.find((evidence) => evidence.id === latestCodingRun.bootstrapEvidenceId)
     : undefined
   const selectedCodingTestEvidence = latestCodingRun
-    ? testEvidence.find((evidence) => evidence.id === latestCodingRun.testEvidenceId)
+    ? scopedTestEvidence.find((evidence) => evidence.id === latestCodingRun.testEvidenceId)
     : undefined
   const remoteRunIdSet = useMemo(() => new Set(remoteRunIds), [remoteRunIds])
-  const remoteRunCount = runs.filter((run) => remoteRunIdSet.has(run.id)).length
-  const localRunCount = runs.length - remoteRunCount
+  const remoteRunCount = scopedRuns.filter((run) => remoteRunIdSet.has(run.id)).length
+  const localRunCount = scopedRuns.length - remoteRunCount
+  const pendingGateCount = scopedRuns.reduce(
+    (count, run) =>
+      count + run.nodes.filter((node) => node.kind === 'gate' && node.status === 'blocked').length,
+    0,
+  )
+  const today = new Date().toISOString().slice(0, 10)
+  const testsTodayCount = scopedTestEvidence.filter((evidence) => evidence.createdAt.slice(0, 10) === today).length
+  const budgetStatus = latestCodingRun?.budgetDecision?.status ?? (runtimeBudgetApprovalId ? 'approval entered' : 'not loaded')
+  const budgetTone =
+    budgetStatus === 'allowed' || budgetStatus === 'approved_over_budget'
+      ? 'good'
+      : budgetStatus === 'warning' || budgetStatus === 'requires_lead_approval' || budgetStatus === 'approval entered'
+        ? 'warn'
+        : 'soft'
   const runtimeDataSource = useMemo(
     () =>
       buildRuntimeDataSource({
@@ -319,6 +475,7 @@ export function App() {
   )
   const gateEnforcement = useGateEnforcement({
     desktopApi,
+    isEnabled: dataOrigin !== 'seed',
     selectedRun,
     selectedNode,
     currentUser,
@@ -368,7 +525,7 @@ export function App() {
   })
 
   function selectRunNode(runId: string | undefined, nodeId: string | undefined) {
-    const run = runs.find((candidate) => candidate.id === runId) ?? selectedRun
+    const run = scopedRuns.find((candidate) => candidate.id === runId) ?? selectedRun
     if (!run) {
       return
     }
@@ -456,15 +613,11 @@ export function App() {
     }
 
     if (result.type === 'artifact' || result.type === 'event') {
-      const run = runs.find((candidate) => candidate.id === result.runId) ?? selectedRun
+      const run = scopedRuns.find((candidate) => candidate.id === result.runId) ?? selectedRun
       const node =
         run?.nodes.find((candidate) => candidate.id === result.nodeId) ??
         run?.nodes.find((candidate) => candidate.id === run.currentNodeId)
       if (run && node) {
-        const visualKind = getBoardNodeKind(node)
-        const tabs = inspectorTabsByKind[visualKind]
-        const artifactTab = tabs.includes('产物') ? '产物' : tabs.includes('Artifacts') ? 'Artifacts' : 'Evidence'
-        const eventTab = tabs.includes('Trace') ? 'Trace' : tabs.includes('Handoff') ? 'Handoff' : '状态'
         setSelectedRunId(run.id)
         setSelectedNodeId(node.id)
         setSupportContext({
@@ -476,7 +629,7 @@ export function App() {
           label: result.type === 'artifact' ? 'Search result · Artifact' : 'Search result · Event',
           artifactId: result.artifactId,
           eventId: result.eventId,
-          inspectorTab: result.type === 'artifact' ? artifactTab : eventTab,
+          inspectorTab: resolveInspectorTabForSearchResult(node, result.type),
           createdAt: new Date().toISOString(),
         })
       }
@@ -526,17 +679,15 @@ export function App() {
           <div className="project-switcher" aria-label="Project selector">
             <div className="project-line">
               <span className="project-label">Team Project</span>
-              <strong className="project-value">
-                {teamProjects.find((project) => project.id === selectedRun?.projectId)?.name ??
-                  selectedRun?.projectId ??
-                  'No project'}
-              </strong>
-              <span className="pill accent">lead</span>
+              {teamProjectSource !== 'not bound' ? (
+                <strong className="project-value">{teamProjectLabel}</strong>
+              ) : null}
+              <span className={`pill ${selectedTeamProject ? 'accent' : 'soft'}`}>{teamProjectSource}</span>
             </div>
             <div className="project-line">
               <span className="project-label">Local Project</span>
               <strong className="project-value project-value--local">
-                {selectedLocalProject?.path ?? '~/File/claude/10-showcase/ai-devflow-studio'}
+                {selectedLocalProject?.path ?? '未选择本地仓库'}
               </strong>
             </div>
           </div>
@@ -577,7 +728,7 @@ export function App() {
           <div className="topbar-actions">
             <ThemeToggle value={themePreference} onChange={changeThemePreference} />
             <form className="desktop-pairing-form" onSubmit={pairDesktopWithTeam}>
-              <span>{desktopPairing ? `Paired ${desktopPairing.projectId}` : 'Unpaired'}</span>
+              <span>{desktopPairing ? 'Paired account' : 'Unpaired'}</span>
               <input
                 aria-label="Desktop pairing code"
                 placeholder="Pairing code"
@@ -600,8 +751,8 @@ export function App() {
               <Plus size={16} />
               新建 Run
             </button>
-            <div className="avatar" aria-label={`Current user ${currentUser?.name}`}>
-              {currentUser?.avatarInitials}
+            <div className="avatar" aria-label={currentUser ? `Current user ${currentUser.name}` : 'No current team user'}>
+              {currentUser?.avatarInitials ?? '--'}
             </div>
           </div>
         </header>
@@ -611,15 +762,15 @@ export function App() {
             数据源 <strong className={`pill ${runtimeDataSource.tone}`}>{runtimeDataSource.label}</strong>
             <em>{runtimeDataSource.status}</em>
           </span>
-          <span className="stat">Active Runs <strong>{runs.length}</strong></span>
+          <span className="stat">Active Runs <strong>{scopedRuns.length}</strong></span>
           <span className="stat">Run Sources <strong>{localRunCount} local · {remoteRunCount} remote</strong></span>
-          <span className="stat">Pending Gates <strong>4</strong></span>
+          <span className="stat">Pending Gates <strong>{pendingGateCount}</strong></span>
           <span className="stat">Token Cost <strong>{teamTotalCost}</strong></span>
-          <span className="stat">Tests Today <strong>18</strong></span>
+          <span className="stat">Tests Today <strong>{testsTodayCount}</strong></span>
           <span className="stat">同步状态 <strong>local + {policySource}</strong></span>
           <span className="stat">Policy Snapshot <strong>{policyVersion ? `v${policyVersion}` : 'not loaded'}</strong></span>
           <span className="stat">策略状态 <strong className={`pill ${policyTone}`}>{policyStatus}</strong></span>
-          <span className="stat">预算风险 <strong className="pill warn">over budget approval</strong></span>
+          <span className="stat">预算状态 <strong className={`pill ${budgetTone}`}>{budgetStatus}</strong></span>
         </section>
 
         {toast && (
@@ -634,19 +785,18 @@ export function App() {
           </div>
         )}
 
-        {activeView === 'workbench' && selectedRun && (
+        {activeView === 'workbench' && (
           <section className="workbench-layout">
             <div className="run-list">
               <LocalProjectPanel
                 project={selectedLocalProject}
-                commandDraft={testCommandDraft}
-                onCommandDraftChange={setTestCommandDraft}
+                teamProjectLabel={teamProjectLabel}
+                teamProjectSource={teamProjectSource}
+                gitStatus={projectGitStatus}
+                isRefreshingGitStatus={isRefreshingGitStatus}
+                onRefreshGitStatus={refreshProjectGitStatus}
                 onSelectProject={selectLocalProject}
-                onSaveCommand={saveTestCommand}
                 desktopConnected={Boolean(desktopApi)}
-                commandSafety={commandSafety}
-                isCommandDirty={isTestCommandDirty}
-                isSavingCommand={isSavingTestCommand}
               />
               <div className="section-heading">
                 <span>Runs</span>
@@ -658,7 +808,7 @@ export function App() {
                 visibleRuns.map((run) => (
                   <button
                     key={run.id}
-                    className={`run-row ${run.id === selectedRun.id ? 'is-selected' : ''}`}
+                    className={`run-row ${run.id === selectedRun?.id ? 'is-selected' : ''}`}
                     onClick={() => {
                       setSelectedRunId(run.id)
                       setSelectedNodeId(run.currentNodeId)
@@ -666,57 +816,83 @@ export function App() {
                   >
                     <strong>{run.title}</strong>
                     <span>{run.branchName}</span>
-                    <em>{run.status}</em>
+                    <em>{getRunStatusLabel(run.status)}</em>
                     <span className={`pill ${remoteRunIdSet.has(run.id) ? 'accent' : dataOrigin === 'seed' ? 'soft' : 'good'}`}>
-                      {remoteRunIdSet.has(run.id) ? 'remote' : dataOrigin === 'seed' ? 'seed' : 'local'}
+                      {remoteRunIdSet.has(run.id) ? 'remote' : dataOrigin === 'seed' ? 'preview' : 'local'}
                     </span>
                   </button>
                 ))
               )}
             </div>
 
-            <WorkflowBoard
-              run={selectedRun}
-              artifacts={artifacts}
-              events={events}
-              testEvidence={testEvidence}
-              selectedNodeId={selectedNode?.id}
-              onSelectNode={setSelectedNodeId}
-            />
+            {selectedRun ? (
+              <>
+                <WorkflowBoard
+                  run={selectedRun}
+                  artifacts={scopedArtifacts}
+                  events={scopedEvents}
+                  testEvidence={scopedTestEvidence}
+                  selectedNodeId={selectedNode?.id}
+                  onSelectNode={setSelectedNodeId}
+                />
 
-            <Inspector
-              selectedRun={selectedRun}
-              selectedNode={selectedNode}
-              isSelectedCurrentNode={isSelectedCurrentNode}
-              artifacts={selectedArtifacts}
-              events={selectedEvents}
-              governanceChecks={selectedGovernanceChecks}
-              references={knowledgeReferences}
-              latestAgentReview={latestAgentReview}
-              supportContext={supportContext}
-              policySnapshot={gateEnforcement.policySnapshot}
-              gateEnforcementDecision={gateEnforcement.decision}
-              gateOverrides={gateEnforcement.overrides.filter((override) => override.nodeId === selectedNode?.id)}
-              remediationPlan={gateEnforcement.remediationPlan}
-              isLoadingGateEnforcement={gateEnforcement.isLoading}
-              canApprove={gateEnforcement.canApprove}
-              canSaveOverride={gateEnforcement.canSaveOverride}
-              onApprove={approveSelectedGate}
-              onCompleteAgentNode={completeSelectedWorkflowAgentNode}
-              onSaveGateOverride={gateEnforcement.saveOverride}
-              onStartRemediationRetry={startRemediationRetry}
-              pairingState={desktopPairing ? 'paired' : 'unpaired'}
-              onSyncTeam={syncRemoteTeamState}
-              onOpenTests={() => openSupportContext('local-tests', '执行本地测试并生成 Test Evidence')}
-              onOpenKnowledgeReview={() => openSupportContext('knowledge-review', '运行 Knowledge Review 并补齐 Gate Advisory')}
-              onOpenKnowledgeReference={openKnowledgeReference}
-              onRunCodingAgent={runCodingAgent}
-              onCreatePrDraft={generatePrDraft}
-              onCreateAcceptanceBundle={generateAcceptanceBundle}
-              isRunningTests={isRunningTests}
-              isRunningAgentReview={isRunningAgentReview}
-              isStartingCodingAgent={isStartingCodingAgent}
-            />
+                <Inspector
+                  selectedRun={selectedRun}
+                  selectedNode={selectedNode}
+                  isSelectedCurrentNode={isSelectedCurrentNode}
+                  artifacts={selectedArtifacts}
+                  events={selectedEvents}
+                  governanceChecks={selectedGovernanceChecks}
+                  references={knowledgeReferences}
+                  latestAgentReview={latestAgentReview}
+                  supportContext={supportContext}
+                  policySnapshot={gateEnforcement.policySnapshot}
+                  gateEnforcementDecision={gateEnforcement.decision}
+                  gateOverrides={gateEnforcement.overrides.filter((override) => override.nodeId === selectedNode?.id)}
+                  remediationPlan={gateEnforcement.remediationPlan}
+                  isLoadingGateEnforcement={gateEnforcement.isLoading}
+                  canApprove={gateEnforcement.canApprove}
+                  canSaveOverride={gateEnforcement.canSaveOverride}
+                  onApprove={approveSelectedGate}
+                  onCompleteAgentNode={completeSelectedWorkflowAgentNode}
+                  onSaveGateOverride={gateEnforcement.saveOverride}
+                  onStartRemediationRetry={startRemediationRetry}
+                  pairingState={desktopPairing ? 'paired' : 'unpaired'}
+                  onSyncTeam={syncRemoteTeamState}
+                  onOpenTests={() => openSupportContext('local-tests', '执行本地测试并生成 Test Evidence')}
+                  onOpenKnowledgeReview={() => openSupportContext('knowledge-review', '运行 Knowledge Review 并补齐 Gate Advisory')}
+                  onOpenKnowledgeReference={openKnowledgeReference}
+                  onRunCodingAgent={runCodingAgent}
+                  onCreatePrDraft={generatePrDraft}
+                  onCreateAcceptanceBundle={generateAcceptanceBundle}
+                  isRunningTests={isRunningTests}
+                  isRunningAgentReview={isRunningAgentReview}
+                  isStartingCodingAgent={isStartingCodingAgent}
+                />
+              </>
+            ) : (
+              <>
+                <section className="canvas-panel workflow-panel empty-workbench" data-testid="workflow-empty-state">
+                  <div className="panel-head workflow-head">
+                    <div>
+                      <span className="panel-title">Workflow Board</span>
+                      <span className="meta">暂无 Run</span>
+                    </div>
+                    <span className="pill soft">no run loaded</span>
+                  </div>
+                  <p className="empty-note">
+                    当前本地仓库没有已保存的 Run。创建 Run 或同步团队后，这里才会展示真实工作流。
+                  </p>
+                </section>
+                <aside className="inspector" data-testid="node-inspector-empty">
+                  <div className="panel-head panel-head--compact">
+                    <span className="panel-title">Inspector</span>
+                    <span className="pill soft">empty</span>
+                  </div>
+                  <p className="empty-note">选择真实 Run 后显示节点、证据、Gate 和 Review。</p>
+                </aside>
+              </>
+            )}
           </section>
         )}
 
@@ -739,7 +915,7 @@ export function App() {
         {activeView === 'knowledge' && (
           <KnowledgeView
             query={normalizedSearchQuery}
-            documents={knowledgeDocuments}
+            documents={projectKnowledgeDocuments}
             references={knowledgeReferences}
             selectedRun={selectedRun}
             supportContext={supportContext}
@@ -814,7 +990,7 @@ export function App() {
 
         {activeView === 'tests' && (
           <TestsView
-            evidence={testEvidence}
+            evidence={scopedTestEvidence}
             onRunTests={executeTestPlan}
             isRunningTests={isRunningTests}
             commandDraft={testCommandDraft}

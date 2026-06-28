@@ -115,8 +115,10 @@ export function AgentWorkbenchView({
   const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) ?? providers[0]
   const providerDataSource = buildAgentProviderDataSource(selectedProvider)
   const selectedProviderMode =
-    selectedProvider?.kind === 'fake'
-      ? `${providerDataSource.label} · deterministic fake · no model cost`
+    !selectedProvider
+      ? `${providerDataSource.label} · save a provider credential before running live review`
+      : selectedProvider.kind === 'fake'
+      ? `${providerDataSource.label} · deterministic dev adapter · no model cost`
       : `${providerDataSource.label} · live OpenAI-compatible · may spend provider tokens`
   const runtimeLabel = latestCodingRun ? codingRuntimeLabel(latestCodingRun.engine) : 'No runtime'
   const terminalLabel = latestCodingRun ? codingTerminalLabel(latestCodingRun.status) : 'No terminal state'
@@ -173,13 +175,14 @@ export function AgentWorkbenchView({
                   {provider.name} · {provider.model}
                 </option>
               ))}
+              {providers.length === 0 ? <option value="">No saved provider</option> : null}
             </select>
           </label>
           <div className="provider-mode-pill" data-testid="review-provider-mode">
             <strong>{providerDataSource.status}</strong>
             <span>{selectedProviderMode}</span>
           </div>
-          <button className="primary-button" disabled={!selectedRun || !selectedNode || isRunning} onClick={onRunKnowledgeReview}>
+          <button className="primary-button" disabled={!selectedRun || !selectedNode || !selectedProvider || isRunning} onClick={onRunKnowledgeReview}>
             <Bot size={16} />
             {isRunning ? 'Review running' : 'Run Knowledge Review'}
           </button>

@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto'
+import { execFile } from 'node:child_process'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage, shell } from 'electron'
+import { watch, type FSWatcher } from 'node:fs'
 import path from 'node:path'
+import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import {
   applyTestEvidenceToRun,
@@ -30,6 +33,7 @@ import {
   type GateOverrideDecision,
   type LocalProject,
   type PolicySnapshot,
+  type ProjectGitStatus,
   type BudgetGuardDecision,
   type ProviderCredentialMetadata,
   type RemoteTeamSnapshot,
@@ -48,6 +52,7 @@ import {
   parseOpenManagedWorktreeInput,
   parseAgentProviderCredentialInput,
   parsePairDesktopInput,
+  parseProjectGitStatusInput,
   parseCreateRunInput,
   parseCompleteWorkflowAgentNodeInput,
   parseListAgentReviewsInput,
@@ -87,12 +92,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_TEST_TIMEOUT_MS = 120_000
 const INITIAL_THEME = parseInitialTheme(process.env['DEVFLOW_INITIAL_THEME'])
 const DEFAULT_CODING_RUN_TIMEOUT_MS = 10 * 60_000
+const execFileAsync = promisify(execFile)
 
 let storePromise: Promise<LocalStore> | undefined
 let remoteSyncClient: RemoteSyncClient | undefined
 let remoteSyncClientKey: string | undefined
 const codingPermissionTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 const codingRunTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+const gitStatusWatchers = new Map<
+  number,
+  {
+    projectId: string
+    watcher?: FSWatcher
+    debounce?: ReturnType<typeof setTimeout>
+  }
+>()
 const opencodeProcessManager = createOpencodeProcessManager()
 
 const DEFAULT_OPENAI_PROVIDER_ID = 'openai-default'
@@ -285,6 +299,119 @@ async function findProject(projectId: string): Promise<LocalProject> {
   }
 
   return project
+}
+
+async function runGit(project: LocalProject, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync('git', ['-C', project.path, ...args], {
+    timeout: 5000,
+    windowsHide: true,
+  })
+  return String(stdout).trim()
+}
+
+async function readProjectGitStatus(project: LocalProject): Promise<ProjectGitStatus> {
+  const refreshedAt = new Date().toISOString()
+
+  try {
+    const isWorkTree = await runGit(project, ['rev-parse', '--is-inside-work-tree'])
+    if (isWorkTree !== 'true') {
+      return {
+        projectId: project.id,
+        status: 'not_git',
+        message: 'not a git repo',
+        refreshedAt,
+      }
+    }
+  } catch {
+    return {
+      projectId: project.id,
+      status: 'not_git',
+      message: 'not a git repo',
+      refreshedAt,
+    }
+  }
+
+  try {
+    const headPathRaw = await runGit(project, ['rev-parse', '--git-path', 'HEAD'])
+    const headPath = path.isAbsolute(headPathRaw) ? headPathRaw : path.resolve(project.path, headPathRaw)
+
+    try {
+      const branch = await runGit(project, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
+      return {
+        projectId: project.id,
+        status: 'branch',
+        branch,
+        refreshedAt,
+        headPath,
+      }
+    } catch {
+      const shortSha = await runGit(project, ['rev-parse', '--short', 'HEAD']).catch(() => 'unknown')
+      return {
+        projectId: project.id,
+        status: 'detached',
+        shortSha,
+        refreshedAt,
+        headPath,
+      }
+    }
+  } catch (error) {
+    return {
+      projectId: project.id,
+      status: 'unavailable',
+      message: error instanceof Error ? error.message : 'git status unavailable',
+      refreshedAt,
+    }
+  }
+}
+
+function clearProjectGitStatusWatcher(webContentsId: number): void {
+  const current = gitStatusWatchers.get(webContentsId)
+  if (!current) {
+    return
+  }
+
+  if (current.debounce) {
+    clearTimeout(current.debounce)
+  }
+  current.watcher?.close()
+  gitStatusWatchers.delete(webContentsId)
+}
+
+async function watchProjectGitStatus(
+  window: Electron.WebContents,
+  project: LocalProject,
+): Promise<ProjectGitStatus> {
+  clearProjectGitStatusWatcher(window.id)
+  const status = await readProjectGitStatus(project)
+  const watcherState: {
+    projectId: string
+    watcher?: FSWatcher
+    debounce?: ReturnType<typeof setTimeout>
+  } = { projectId: project.id }
+
+  if ('headPath' in status && status.headPath) {
+    const sendLatestStatus = () => {
+      if (watcherState.debounce) {
+        clearTimeout(watcherState.debounce)
+      }
+
+      watcherState.debounce = setTimeout(async () => {
+        const latest = await readProjectGitStatus(project)
+        if (!window.isDestroyed()) {
+          window.send(ipcChannels.projectGitStatusUpdated, latest)
+        }
+      }, 100)
+    }
+
+    watcherState.watcher = watch(status.headPath, { persistent: false }, sendLatestStatus)
+    watcherState.watcher.on('error', () => {
+      clearProjectGitStatusWatcher(window.id)
+    })
+  }
+
+  gitStatusWatchers.set(window.id, watcherState)
+  window.once('destroyed', () => clearProjectGitStatusWatcher(window.id))
+  return status
 }
 
 async function loadPolicySnapshotForProject(projectId: string): Promise<PolicySnapshot> {
@@ -541,6 +668,26 @@ function registerIpcHandlers() {
 
     await store.upsertProject(project)
     return project
+  })
+
+  ipcMain.handle(ipcChannels.getProjectGitStatus, async (_, payload: unknown) => {
+    const input = parseProjectGitStatusInput(payload)
+    const project = await findProject(input.projectId)
+    return readProjectGitStatus(project)
+  })
+
+  ipcMain.handle(ipcChannels.watchProjectGitStatus, async (event, payload: unknown) => {
+    const input = parseProjectGitStatusInput(payload)
+    const project = await findProject(input.projectId)
+    return watchProjectGitStatus(event.sender, project)
+  })
+
+  ipcMain.handle(ipcChannels.unwatchProjectGitStatus, async (event, payload: unknown) => {
+    const input = parseProjectGitStatusInput(payload)
+    const current = gitStatusWatchers.get(event.sender.id)
+    if (current?.projectId === input.projectId) {
+      clearProjectGitStatusWatcher(event.sender.id)
+    }
   })
 
   ipcMain.handle(ipcChannels.saveProjectTestCommand, async (_, payload: unknown) => {

@@ -38,6 +38,7 @@ export type GateEnforcementState = {
 
 export function useGateEnforcement(input: {
   desktopApi: DevFlowDesktopApi | null
+  isEnabled?: boolean
   selectedRun: WorkflowRun | undefined
   selectedNode: WorkflowNode | undefined
   currentUser: TeamMember | undefined
@@ -50,6 +51,7 @@ export function useGateEnforcement(input: {
 }): GateEnforcementState {
   const {
     desktopApi,
+    isEnabled = true,
     selectedRun,
     selectedNode,
     currentUser,
@@ -66,7 +68,7 @@ export function useGateEnforcement(input: {
   const [isLoading, setIsLoading] = useState(false)
 
   useEffect(() => {
-    if (!desktopApi || !selectedRun || !selectedNode) {
+    if (!isEnabled || !desktopApi || !selectedRun || !selectedNode) {
       setPolicySnapshot(null)
       setDecision(null)
       setOverrides([])
@@ -115,6 +117,7 @@ export function useGateEnforcement(input: {
   }, [
     artifacts.length,
     desktopApi,
+    isEnabled,
     selectedNode?.id,
     selectedRun?.id,
     selectedRun?.projectId,

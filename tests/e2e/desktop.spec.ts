@@ -223,8 +223,19 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
       }) => {
         const timestamp = '2026-06-21T16:05:00.000Z'
         const clarifyGateId = `${input.runId}-clarify-gate`
+        const rawRequestArtifact = {
+          id: `artifact-${input.runId}-raw-request`,
+          runId: input.runId,
+          nodeId: input.nodeId,
+          kind: 'raw_request',
+          title: 'Raw request',
+          summary: '重构 GitHub webhook 重试策略',
+          content: '请先澄清 webhook retry 的失败边界，再设计实现方案。',
+          redacted: false,
+          updatedAt: '2026-06-21T16:00:00.000Z',
+        }
         const artifact = {
-          id: `artifact-${input.runId}-clarification-placeholder`,
+          id: `artifact-${input.runId}-clarification`,
           runId: input.runId,
           nodeId: input.nodeId,
           kind: 'clarification',
@@ -264,7 +275,7 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
               status: 'success',
               ownerId: 'u-ling',
               retryCount: 0,
-              artifactIds: [artifact.id],
+              artifactIds: [rawRequestArtifact.id, artifact.id],
             },
             {
               id: clarifyGateId,
@@ -289,7 +300,7 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
           state: {
             projects: [localProject],
             runs: [run],
-            artifacts: [artifact],
+            artifacts: [rawRequestArtifact, artifact],
             events: [event],
             testEvidence: [],
             settings: { themePreference: 'system' },

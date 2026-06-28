@@ -16,6 +16,7 @@ The product is not a chat surface. It is a workflow and evidence system for smal
 - [`user-jobs.md`](./user-jobs.md): Primary users and jobs-to-be-done.
 - [`object-model.md`](./object-model.md): Product objects and stable domain concepts.
 - [`workflow.md`](./workflow.md): Request-to-delivery workflow detail.
+- [`workflow-node-semantics.md`](./workflow-node-semantics.md): Node-specific product semantics, Board summaries, Gate decisions, and Inspector focus.
 - [`surfaces.md`](./surfaces.md): Desktop, Web, API, and Shared Core responsibilities.
 - [`evidence-and-trust.md`](./evidence-and-trust.md): Evidence Chain rules, redaction, and trust boundaries.
 - [`states-and-refactor-anchors.md`](./states-and-refactor-anchors.md): Product states, UI refactor anchors, near-term gaps, and out-of-scope items.

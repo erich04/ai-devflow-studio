@@ -1687,6 +1687,57 @@ body {
   min-width: 0;
 }
 
+.branch-row {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.branch-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.branch-status {
+  display: block;
+  min-width: 0;
+}
+
+.branch-name {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.branch-refresh-button {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.branch-refresh-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.branch-refresh-button:focus-visible {
+  outline: 0;
+  box-shadow: var(--focus-ring);
+}
+
 .meta {
   color: var(--text-muted);
   font-size: 13px;
@@ -1762,6 +1813,7 @@ code {
   --workflow-passed: #36b65f;
   --workflow-blocked: #a61b14;
   --workflow-current: #c77900;
+  --workflow-waiting: #ddd;
 }
 
 .workflow-head .meta {
@@ -1802,7 +1854,7 @@ code {
 .flow-rail span {
   height: 9px;
   border-radius: 999px;
-  background: #ddd;
+  background: var(--workflow-waiting);
 }
 
 .flow-rail span.is-passed {
@@ -1914,7 +1966,7 @@ code {
 .stage-progress {
   height: 2px;
   border-radius: 999px;
-  background: #ddd;
+  background: var(--workflow-waiting);
 }
 
 .stage-progress--passed {
@@ -2516,6 +2568,182 @@ code {
 
 .evidence-row--passed {
   border-color: rgb(20 150 53 / 30%);
+}
+
+:root[data-theme='dark'] {
+  --bg: #0f1216;
+  --surface: #171b21;
+  --surface-2: #20262e;
+  --surface-3: #2a323c;
+  --text: #f3f7fb;
+  --text-muted: #b8c2cf;
+  --text-faint: #8f9baa;
+  --border: #34404c;
+  --canvas: #11161c;
+  --accent: #2dd4bf;
+  --accent-2: #5eead4;
+  --accent-soft: #2f6f69;
+  --accent-tint: #112f2d;
+  --green: #5ee28b;
+  --amber: #f6bd41;
+  --rose: #fb7185;
+  --danger: #ff8a80;
+  --cyan: #38d9f5;
+  --blue: #7fb5ff;
+  --violet: #b69cff;
+  --shadow: 0 18px 46px rgb(0 0 0 / 38%);
+}
+
+:root[data-theme='dark'] .brand.mark,
+:root[data-theme='dark'] .primary-button {
+  color: #071313;
+}
+
+:root[data-theme='dark'] .nav-button {
+  color: var(--text-faint);
+}
+
+:root[data-theme='dark'] .nav-button.is-active {
+  border-color: var(--accent-soft);
+  background: var(--accent-tint);
+  color: var(--text);
+}
+
+:root[data-theme='dark'] .desktop-pairing-form span,
+:root[data-theme='dark'] .search-box,
+:root[data-theme='dark'] .pill,
+:root[data-theme='dark'] .health {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+:root[data-theme='dark'] .pill.good,
+:root[data-theme='dark'] .health--on_track {
+  border-color: color-mix(in srgb, var(--green) 52%, var(--border));
+  background: color-mix(in srgb, var(--green) 16%, var(--surface));
+  color: var(--green);
+}
+
+:root[data-theme='dark'] .pill.warn,
+:root[data-theme='dark'] .health--at_risk {
+  border-color: color-mix(in srgb, var(--amber) 54%, var(--border));
+  background: color-mix(in srgb, var(--amber) 15%, var(--surface));
+  color: var(--amber);
+}
+
+:root[data-theme='dark'] .pill.bad,
+:root[data-theme='dark'] .health--blocked {
+  border-color: color-mix(in srgb, var(--danger) 52%, var(--border));
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
+  color: var(--danger);
+}
+
+:root[data-theme='dark'] .pill.accent,
+:root[data-theme='dark'] .artifact-chip.is-filled,
+:root[data-theme='dark'] .support-context-banner,
+:root[data-theme='dark'] .knowledge-doc-card.is-focused,
+:root[data-theme='dark'] .reference-row.is-focused,
+:root[data-theme='dark'] .search-result-row:hover,
+:root[data-theme='dark'] .search-result-row:focus-visible {
+  border-color: var(--accent-soft);
+  background: var(--accent-tint);
+  color: var(--accent-2);
+}
+
+:root[data-theme='dark'] .pill.soft,
+:root[data-theme='dark'] .artifact-chip,
+:root[data-theme='dark'] .handoff-counts span,
+:root[data-theme='dark'] .policy-row.header {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+:root[data-theme='dark'] .mini-card.soft,
+:root[data-theme='dark'] .next-action,
+:root[data-theme='dark'] .policy-callout {
+  border-color: color-mix(in srgb, var(--rose) 38%, var(--border));
+  background: color-mix(in srgb, var(--rose) 10%, var(--surface));
+  color: var(--text);
+}
+
+:root[data-theme='dark'] .run-row.is-selected,
+:root[data-theme='dark'] .artifact-card.is-focused,
+:root[data-theme='dark'] .event-row.is-focused {
+  border-color: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--text);
+  box-shadow: 0 0 0 3px rgb(45 212 191 / 12%);
+}
+
+:root[data-theme='dark'] .workflow-context,
+:root[data-theme='dark'] .stage-provenance,
+:root[data-theme='dark'] .stage-provenance--waiting {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+:root[data-theme='dark'] .workflow-panel {
+  --workflow-passed: #5ee28b;
+  --workflow-blocked: #ff8a80;
+  --workflow-current: #f6bd41;
+  --workflow-waiting: #3a4653;
+}
+
+:root[data-theme='dark'] .flow-current-card--passed,
+:root[data-theme='dark'] .stage-provenance--passed,
+:root[data-theme='dark'] .workflow-card--good {
+  border-color: color-mix(in srgb, var(--workflow-passed) 52%, var(--border));
+  background: color-mix(in srgb, var(--workflow-passed) 12%, var(--surface));
+}
+
+:root[data-theme='dark'] .flow-current-card--blocked,
+:root[data-theme='dark'] .stage-provenance--blocked {
+  border-color: color-mix(in srgb, var(--workflow-blocked) 52%, var(--border));
+  background: color-mix(in srgb, var(--workflow-blocked) 12%, var(--surface));
+}
+
+:root[data-theme='dark'] .stage-provenance--current {
+  border-color: color-mix(in srgb, var(--workflow-current) 52%, var(--border));
+  background: color-mix(in srgb, var(--workflow-current) 12%, var(--surface));
+}
+
+:root[data-theme='dark'] .flow-current-card,
+:root[data-theme='dark'] .sequence-note,
+:root[data-theme='dark'] .semantic-chip,
+:root[data-theme='dark'] .graph-node,
+:root[data-theme='dark'] .status-row,
+:root[data-theme='dark'] .gate-requirement-row {
+  background: var(--surface);
+  color: var(--text);
+}
+
+:root[data-theme='dark'] .stage-heading span {
+  color: var(--text-faint);
+}
+
+:root[data-theme='dark'] .tab.active,
+:root[data-theme='dark'] .avatar {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+:root[data-theme='dark'] .graph {
+  background:
+    radial-gradient(circle at 25% 30%, rgb(45 212 191 / 18%) 0 42px, transparent 43px),
+    radial-gradient(circle at 70% 26%, rgb(94 226 139 / 14%) 0 42px, transparent 43px),
+    radial-gradient(circle at 58% 66%, rgb(246 189 65 / 14%) 0 42px, transparent 43px),
+    var(--surface-2);
+}
+
+:root[data-theme='dark'] .evidence-row--failed,
+:root[data-theme='dark'] .evidence-row--timed_out {
+  border-color: color-mix(in srgb, var(--danger) 46%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+}
+
+:root[data-theme='dark'] .evidence-row--passed {
+  border-color: color-mix(in srgb, var(--green) 46%, var(--border));
+  background: color-mix(in srgb, var(--green) 8%, var(--surface));
 }
 
 .modal {

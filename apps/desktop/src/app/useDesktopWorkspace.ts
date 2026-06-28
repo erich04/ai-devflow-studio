@@ -1,12 +1,7 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import {
-  artifacts as fixtureArtifacts,
-  events as fixtureEvents,
-  mcpServers as fixtureMcpServers,
-  members,
+  normalizeWorkflowRunProgress,
   parseThemePreference,
-  projects,
-  runs as fixtureRuns,
   validateTestCommandSafety,
   type AgentEvent,
   type AgentProviderConfig,
@@ -37,12 +32,8 @@ import {
 } from '@ai-devflow/shared'
 import { getDesktopApi, type DevFlowDesktopApi } from '../desktop-api'
 import {
-  fakeAgentProvider,
   getToastDisplayDurationMs,
   mergeById,
-  seedMemberRollups,
-  seedProjectRollups,
-  seedTotalCost,
   type SupportContext,
 } from './desktop-view-model'
 
@@ -201,19 +192,19 @@ export function useDesktopWorkspace(input: {
   const [dataOrigin, setDataOrigin] = useState<DataOrigin>('seed')
   const [hasLoadedLocalState, setHasLoadedLocalState] = useState(!desktopApi)
   const [activeView, setActiveView] = useState<DesktopWorkspaceState['activeView']>('workbench')
-  const [runs, setRuns] = useState<WorkflowRun[]>(fixtureRuns)
+  const [runs, setRuns] = useState<WorkflowRun[]>([])
   const [remoteRunIds, setRemoteRunIds] = useState<string[]>([])
-  const [selectedRunId, setSelectedRunId] = useState(fixtureRuns[0]?.id ?? '')
-  const [selectedNodeId, setSelectedNodeId] = useState(fixtureRuns[0]?.currentNodeId ?? '')
-  const [artifacts, setArtifacts] = useState<Artifact[]>(fixtureArtifacts)
-  const [events, setEvents] = useState<AgentEvent[]>(fixtureEvents)
+  const [selectedRunId, setSelectedRunId] = useState('')
+  const [selectedNodeId, setSelectedNodeId] = useState('')
+  const [artifacts, setArtifacts] = useState<Artifact[]>([])
+  const [events, setEvents] = useState<AgentEvent[]>([])
   const [testEvidence, setTestEvidence] = useState<TestEvidence[]>([])
   const [localProjects, setLocalProjects] = useState<LocalProject[]>([])
-  const [teamProjects, setTeamProjects] = useState<Project[]>(projects)
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>(members)
-  const [teamProjectCost, setTeamProjectCost] = useState<TokenUsageRollup[]>(seedProjectRollups)
-  const [teamMemberCost, setTeamMemberCost] = useState<TokenUsageRollup[]>(seedMemberRollups)
-  const [teamTotalCost, setTeamTotalCost] = useState(seedTotalCost)
+  const [teamProjects, setTeamProjects] = useState<Project[]>([])
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
+  const [teamProjectCost, setTeamProjectCost] = useState<TokenUsageRollup[]>([])
+  const [teamMemberCost, setTeamMemberCost] = useState<TokenUsageRollup[]>([])
+  const [teamTotalCost, setTeamTotalCost] = useState('$0.00')
   const [selectedLocalProjectId, setSelectedLocalProjectId] = useState('')
   const [testCommandDraft, setTestCommandDraft] = useState('')
   const [commandSafety, setCommandSafety] = useState<CommandSafetyResult | null>(null)
@@ -223,9 +214,9 @@ export function useDesktopWorkspace(input: {
   const [desktopPairing, setDesktopPairing] = useState<DesktopPairingCredential | null>(null)
   const [pairingCodeDraft, setPairingCodeDraft] = useState('')
   const [isPairingDesktop, setIsPairingDesktop] = useState(false)
-  const [mcpServers, setMcpServers] = useState<McpServerDefinition[]>(fixtureMcpServers)
-  const [agentProviders, setAgentProviders] = useState<AgentProviderConfig[]>([fakeAgentProvider])
-  const [selectedAgentProviderId, setSelectedAgentProviderId] = useState(fakeAgentProvider.id)
+  const [mcpServers, setMcpServers] = useState<McpServerDefinition[]>([])
+  const [agentProviders, setAgentProviders] = useState<AgentProviderConfig[]>([])
+  const [selectedAgentProviderId, setSelectedAgentProviderId] = useState('')
   const [agentReviews, setAgentReviews] = useState<AgentReviewResult[]>([])
   const [agentTraces, setAgentTraces] = useState<AgentTrace[]>([])
   const [agentTokenUsage, setAgentTokenUsage] = useState<AgentTokenUsage[]>([])
@@ -245,8 +236,8 @@ export function useDesktopWorkspace(input: {
   const [isRunningAgentReview, setIsRunningAgentReview] = useState(false)
   const [isStartingCodingAgent, setIsStartingCodingAgent] = useState(false)
   const [isNewRunOpen, setIsNewRunOpen] = useState(false)
-  const [draftTitle, setDraftTitle] = useState('重构 GitHub webhook 重试策略')
-  const [draftRequest, setDraftRequest] = useState('请先澄清 webhook retry 的失败边界，再设计实现方案。')
+  const [draftTitle, setDraftTitle] = useState('')
+  const [draftRequest, setDraftRequest] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [supportContext, setSupportContext] = useState<SupportContext | null>(null)
   const [toast, setToast] = useState(desktopApi ? '本地执行代理已连接' : '浏览器预览模式')
@@ -260,11 +251,11 @@ export function useDesktopWorkspace(input: {
   )
 
   function resetTeamSnapshot() {
-    setTeamProjects(projects)
-    setTeamMembers(members)
-    setTeamProjectCost(seedProjectRollups)
-    setTeamMemberCost(seedMemberRollups)
-    setTeamTotalCost(seedTotalCost)
+    setTeamProjects([])
+    setTeamMembers([])
+    setTeamProjectCost([])
+    setTeamMemberCost([])
+    setTeamTotalCost('$0.00')
   }
 
   function applyLocalExecutionState(state: LocalExecutionState) {
@@ -275,13 +266,15 @@ export function useDesktopWorkspace(input: {
       setSelectedLocalProjectId(state.projects[0].id)
     }
 
-    if (state.runs.length > 0) {
-      const nextRunId = state.runs.some((run) => run.id === selectedRunId)
-        ? selectedRunId
-        : state.runs[0]!.id
-      const nextRun = state.runs.find((run) => run.id === nextRunId) ?? state.runs[0]!
+    const normalizedRuns = state.runs.map(normalizeWorkflowRunProgress)
 
-      setRuns(state.runs)
+    if (normalizedRuns.length > 0) {
+      const nextRunId = normalizedRuns.some((run) => run.id === selectedRunId)
+        ? selectedRunId
+        : normalizedRuns[0]!.id
+      const nextRun = normalizedRuns.find((run) => run.id === nextRunId) ?? normalizedRuns[0]!
+
+      setRuns(normalizedRuns)
       setRemoteRunIds([])
       setSelectedRunId(nextRunId)
       setSelectedNodeId((current) => {
@@ -292,16 +285,13 @@ export function useDesktopWorkspace(input: {
       setDataOrigin('local')
       resetTeamSnapshot()
     } else {
-      setRuns(fixtureRuns)
+      setRuns([])
       setRemoteRunIds([])
-      setSelectedRunId((current) => fixtureRuns.some((run) => run.id === current) ? current : fixtureRuns[0]!.id)
-      setSelectedNodeId((current) => {
-        const run = fixtureRuns.find((candidate) => candidate.id === selectedRunId) ?? fixtureRuns[0]
-        return run?.nodes.some((node) => node.id === current) ? current : (run?.currentNodeId ?? current)
-      })
-      setArtifacts(fixtureArtifacts)
-      setEvents(fixtureEvents)
-      setDataOrigin('seed')
+      setSelectedRunId('')
+      setSelectedNodeId('')
+      setArtifacts([])
+      setEvents([])
+      setDataOrigin('local')
       resetTeamSnapshot()
     }
 
@@ -383,13 +373,13 @@ export function useDesktopWorkspace(input: {
     desktopApi
       .listAgentProviders()
       .then((providers) => {
-        if (disposed || providers.length === 0) {
+        if (disposed) {
           return
         }
 
         setAgentProviders(providers)
         setSelectedAgentProviderId((current) =>
-          providers.some((provider) => provider.id === current) ? current : providers[0]!.id,
+          providers.some((provider) => provider.id === current) ? current : (providers[0]?.id ?? ''),
         )
       })
       .catch((error: unknown) => {

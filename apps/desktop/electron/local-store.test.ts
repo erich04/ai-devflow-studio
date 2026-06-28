@@ -1,10 +1,11 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { createRequire } from 'node:module'
 import { afterEach, describe, expect, it } from 'vitest'
 import initSqlJs from 'sql.js'
 import {
+  createWorkflowRunFromRequest,
   createWarnOnlyDefaultPolicy,
   resolveEffectivePolicy,
 } from '@ai-devflow/shared'
@@ -408,30 +409,38 @@ const retryAttempt: RetryAttempt = {
 }
 
 describe('createLocalStore', () => {
-  it('initializes schema version 7 and keeps it stable across reopen', async () => {
+  it('initializes schema version 8 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(7)
+    expect(await first.getSchemaVersion()).toBe(8)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(7)
+    expect(await second.getSchemaVersion()).toBe(8)
     second.close()
   })
 
-  it('migrates an existing v1 database to v7 without losing local projects or runs', async () => {
+  it('migrates an existing v1 database to v8 without losing local projects or runs', async () => {
     const dbPath = await tempDbPath()
     await writeLegacyV1Database(dbPath)
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(7)
+    expect(await store.getSchemaVersion()).toBe(8)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
     expect(await store.listMcpServers()).toEqual([])
     store.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const db = new SQL.Database(await readFile(dbPath))
+    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('8')
+    expect(db.exec("select name from sqlite_master where type = 'table' and name = 'workflow_nodes'")[0]?.values[0]?.[0]).toBe('workflow_nodes')
+    db.close()
   })
 
   it('throws a clear error when an existing database file is corrupted', async () => {
@@ -459,6 +468,95 @@ describe('createLocalStore', () => {
     expect(await second.listEvents('run-1')).toEqual([event])
     expect(await second.listTestEvidence('run-1')).toEqual([evidence])
     second.close()
+  })
+
+  it('persists workflow nodes and edges in relational tables instead of embedding them in run json', async () => {
+    const dbPath = await tempDbPath()
+    const created = createWorkflowRunFromRequest({
+      runId: 'run-relational',
+      title: 'Relational workflow nodes',
+      request: 'Persist nodes separately from the run envelope.',
+      projectId: 'project-1',
+      creatorId: 'user-1',
+      branchName: 'ai/relational-nodes',
+      now: '2026-06-15T00:00:00.000Z',
+    })
+
+    const first = await createLocalStore({ dbPath })
+    await first.saveRun(created.run)
+    first.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const db = new SQL.Database(await readFile(dbPath))
+    const embeddedShape = db.exec(`
+      select
+        json_type(json, '$.nodes') as nodes_json_type,
+        json_type(json, '$.edges') as edges_json_type
+      from workflow_runs
+      where id = 'run-relational'
+    `)[0]?.values[0]
+    const nodeRows = db.exec(`
+      select id, run_id, stage, kind, status, position
+      from workflow_nodes
+      where run_id = 'run-relational'
+      order by position asc
+    `)[0]?.values
+    const edgeCount = db.exec(`
+      select count(*)
+      from workflow_edges
+      where run_id = 'run-relational'
+    `)[0]?.values[0]?.[0]
+    db.close()
+
+    expect(embeddedShape).toEqual([null, null])
+    expect(nodeRows).toHaveLength(created.run.nodes.length)
+    expect(nodeRows?.[0]).toEqual(['run-relational-clarify', 'run-relational', 'clarify', 'agent', 'running', 0])
+    expect(edgeCount).toBe(created.run.edges.length)
+
+    const second = await createLocalStore({ dbPath })
+    expect(await second.listRuns()).toEqual([created.run])
+    second.close()
+  })
+
+  it('normalizes stale completed runs that still have a running build node', async () => {
+    const dbPath = await tempDbPath()
+    const created = createWorkflowRunFromRequest({
+      runId: 'run-stale-build',
+      title: 'Stale build state',
+      request: 'The run should still be shown as building.',
+      projectId: 'project-1',
+      creatorId: 'user-1',
+      branchName: 'ai/stale-build',
+      now: '2026-06-15T00:00:00.000Z',
+    })
+    const staleRun: WorkflowRun = {
+      ...created.run,
+      status: 'completed',
+      currentNodeId: 'run-stale-build-test',
+      nodes: created.run.nodes.map((node) => {
+        if (node.stage === 'clarify' || node.stage === 'design') return { ...node, status: 'success' as const }
+        if (node.id === 'run-stale-build-build') return { ...node, status: 'running' as const }
+        if (node.id === 'run-stale-build-test') return { ...node, status: 'success' as const }
+        if (node.id === 'run-stale-build-accept') return { ...node, status: 'success' as const }
+        return node
+      }),
+    }
+
+    const store = await createLocalStore({ dbPath })
+    await store.saveRun(staleRun)
+
+    const [loaded] = await store.listRuns()
+    expect(loaded).toMatchObject({
+      status: 'building',
+      currentNodeId: 'run-stale-build-build',
+    })
+    expect(loaded?.nodes.find((node) => node.id === 'run-stale-build-build')?.status).toBe('running')
+    expect(loaded?.nodes.find((node) => node.id === 'run-stale-build-test')?.status).toBe('pending')
+    expect(loaded?.nodes.find((node) => node.id === 'run-stale-build-pr')?.status).toBe('pending')
+    expect(loaded?.nodes.find((node) => node.id === 'run-stale-build-accept')?.status).toBe('pending')
+    store.close()
   })
 
   it('persists local settings and MCP server state across reopen', async () => {

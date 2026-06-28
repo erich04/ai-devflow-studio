@@ -1,6 +1,5 @@
 import { ArrowLeft, Play, Save } from 'lucide-react'
 import {
-  skills as fixtureSkills,
   type CommandSafetyResult,
   type LocalProject,
   type McpServerDefinition,
@@ -21,15 +20,7 @@ export function SkillView() {
         <span className="pill soft">Skills 不能绕过 Gate / policy / evidence requirements</span>
       </div>
       <div className="panel-body page-grid three">
-        {fixtureSkills.map((skill) => (
-          <article className="mini-card" key={skill.id}>
-            <div className="row">
-              <strong>{skill.name}</strong>
-              <span className={`pill ${skill.enabled ? 'good' : 'soft'}`}>{skill.enabled ? 'enabled' : 'disabled'}</span>
-            </div>
-            <p className="meta">stage: {skill.stage} · {skill.description}</p>
-          </article>
-        ))}
+        <p className="empty-note">未加载真实团队 Skills。同步团队配置后再显示能力目录。</p>
       </div>
     </section>
   )
@@ -61,7 +52,13 @@ export function McpView({
             </tr>
           </thead>
           <tbody>
-            {servers.map((server) => (
+            {servers.length === 0 ? (
+              <tr>
+                <td colSpan={6}>
+                  <p className="empty-note">未加载本地 MCP 连接器。</p>
+                </td>
+              </tr>
+            ) : servers.map((server) => (
               <tr key={server.id}>
                 <td><strong>{server.name}</strong></td>
                 <td className="mono">{server.command}</td>
@@ -113,6 +110,10 @@ export function TestsView({
   selectedNode: WorkflowNode | undefined
   onReturnToInspector: () => void
 }) {
+  const passedEvidenceCount = evidence.filter((item) => item.status === 'passed').length
+  const failedEvidenceCount = evidence.filter((item) => item.status === 'failed').length
+  const timedOutEvidenceCount = evidence.filter((item) => item.status === 'timed_out').length
+
   return (
     <section className="page-grid" data-testid="tests-view">
       <div className="page-main">
@@ -150,7 +151,7 @@ export function TestsView({
               aria-label="测试命令"
               className="input mono"
               value={commandDraft}
-              placeholder="例如 pnpm verify --filter @devflow/desktop"
+              placeholder="例如 npm test"
               onChange={(event) => onCommandDraftChange(event.target.value)}
             />
           </label>
@@ -208,20 +209,20 @@ export function TestsView({
           <strong>{evidence.length}</strong>
         </div>
         <div className="compact-row">
-          <span>Unit</span>
-          <strong>12 passed</strong>
+          <span>Passed</span>
+          <strong>{passedEvidenceCount}</strong>
         </div>
         <div className="compact-row">
-          <span>Smoke</span>
-          <strong>3 passed</strong>
+          <span>Failed</span>
+          <strong>{failedEvidenceCount}</strong>
         </div>
         <div className="compact-row">
-          <span>Failed / timeout / skipped</span>
-          <strong>saved as Evidence</strong>
+          <span>Timed out</span>
+          <strong>{timedOutEvidenceCount}</strong>
         </div>
         <div className="compact-row">
           <span>Coverage</span>
-          <strong>86%</strong>
+          <strong>not loaded</strong>
         </div>
       </aside>
     </section>

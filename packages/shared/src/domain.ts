@@ -595,6 +595,34 @@ export type LocalProject = {
   updatedAt: string
 }
 
+export type ProjectGitStatus =
+  | {
+      projectId: string
+      status: 'branch'
+      branch: string
+      refreshedAt: string
+      headPath?: string
+    }
+  | {
+      projectId: string
+      status: 'detached'
+      shortSha: string
+      refreshedAt: string
+      headPath?: string
+    }
+  | {
+      projectId: string
+      status: 'not_git'
+      message: string
+      refreshedAt: string
+    }
+  | {
+      projectId: string
+      status: 'unavailable'
+      message: string
+      refreshedAt: string
+    }
+
 export type TestEvidenceStatus = 'running' | 'passed' | 'failed' | 'timed_out'
 
 export type TestEvidence = {

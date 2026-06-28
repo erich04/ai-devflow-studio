@@ -1,8 +1,5 @@
 import type { Edge, Node } from '@xyflow/react'
 import {
-  formatUsd,
-  rollupTokenUsage,
-  tokenUsage,
   type AgentEvent,
   type AgentProviderConfig,
   type Artifact,
@@ -11,13 +8,48 @@ import {
   type KnowledgeDocument,
   type KnowledgeReference,
   type NodeStage,
-  type GateEnforcementDecision,
-  type PolicySnapshot,
   type ProviderCredentialMetadata,
+  type RunStatus,
   type TestEvidence,
   type WorkflowNode,
   type WorkflowRun,
 } from '@ai-devflow/shared'
+import {
+  displayNodeSubtitle,
+  displayNodeTitle,
+  getBoardNodeKind,
+  getNodeStatusLabel,
+  getNodeStatusTone,
+  stageLabels,
+  type BoardNodeKind,
+  type StatusTone,
+} from './node-inspector-view-model'
+
+export {
+  buildGateRequirementMatrix,
+  buildNodeInspectorViewModel,
+  buildStatusDescriptors,
+  displayNodeSubtitle,
+  displayNodeTitle,
+  getBoardNodeKind,
+  getNodeStatusLabel,
+  getNodeStatusTone,
+  inspectorTabPlansByKind,
+  inspectorTabsByKind,
+  resolveInspectorTabForSearchResult,
+  stageLabels,
+  type BoardNodeKind,
+  type GateRequirementRow,
+  type InspectorAction,
+  type InspectorActionDisabledReason,
+  type InspectorActionId,
+  type InspectorNextAction,
+  type InspectorSectionId,
+  type InspectorTabPlan,
+  type NodeInspectorViewModel,
+  type StatusDescriptor,
+  type StatusTone,
+} from './node-inspector-view-model'
 
 export type ViewId = 'workbench' | 'team' | 'knowledge' | 'agents' | 'skills' | 'mcp' | 'tests'
 
@@ -57,15 +89,6 @@ export type SearchResultItem = {
   referenceId?: string | undefined
 }
 
-export const stageLabels: Record<NodeStage, string> = {
-  clarify: '需求澄清',
-  design: '方案设计',
-  build: '开发实现',
-  test: '测试证据',
-  pr: 'PR 交付',
-  accept: '业务验收',
-}
-
 export const stageX: Record<NodeStage, number> = {
   clarify: 0,
   design: 230,
@@ -86,14 +109,28 @@ export const stageTone: Record<NodeStage, string> = {
 
 export const stageOrder: NodeStage[] = ['clarify', 'design', 'build', 'test', 'pr', 'accept']
 
-export type BoardNodeKind = 'Task' | 'Gate' | 'Review' | 'Delivery'
+export const runStatusLabels: Record<RunStatus, string> = {
+  created: '已创建',
+  clarifying: '需求澄清中',
+  designing: '方案设计中',
+  building: '开发实现中',
+  testing: '测试证据中',
+  paused_at_gate: '等待 Gate',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+}
+
+export function getRunStatusLabel(status: RunStatus): string {
+  return runStatusLabels[status]
+}
 
 export type BoardCardProvenance = 'template' | 'policy' | 'runtime' | 'folded-output'
 
 export type StageCompletionState = 'passed' | 'current' | 'blocked' | 'waiting'
 
 export type BoardAttachmentChip = {
-  kind: 'ART' | 'EVD' | 'TRC'
+  kind: 'artifact' | 'evidence' | 'trace'
   label: string
   count: number
 }
@@ -102,7 +139,7 @@ export type WorkflowBoardCard = {
   node: WorkflowNode
   visualKind: BoardNodeKind
   statusLabel: string
-  statusTone: 'good' | 'warn' | 'bad' | 'soft' | 'neutral'
+  statusTone: StatusTone
   provenance: BoardCardProvenance
   provenanceLabel: string
   attachmentChips: BoardAttachmentChip[]
@@ -118,20 +155,10 @@ export type WorkflowBoardStage = {
   cards: WorkflowBoardCard[]
 }
 
-export type StatusDescriptor = {
-  id: string
-  label: string
-  state: 'default' | 'loading' | 'empty' | 'blocked' | 'failed' | 'success' | 'policy unavailable' | 'missing agent review' | 'over budget approval'
-  tone: 'good' | 'warn' | 'bad' | 'soft' | 'neutral'
-  summary: string
-  nextAction: string
-  impact: string
-}
-
 export type BackendReadinessStatus =
   | 'real IPC/API'
   | 'local persisted'
-  | 'fixture fallback'
+  | 'development adapter'
   | 'desktop-only adapter'
   | 'missing contract'
 
@@ -151,9 +178,9 @@ export function buildRuntimeDataSource(input: {
 }): FieldDataSource {
   if (!input.desktopConnected) {
     return {
-      status: 'fixture fallback',
+      status: 'missing contract',
       label: 'browser preview',
-      detail: 'Vite/browser preview cannot read Electron IPC or local SQLite, so it shows seed runs only.',
+      detail: 'Browser preview cannot read Electron IPC or local SQLite, so project data stays empty until the app runs in Electron.',
       tone: 'warn',
     }
   }
@@ -162,12 +189,21 @@ export function buildRuntimeDataSource(input: {
     return {
       status: 'real IPC/API',
       label: 'loading local IPC',
-      detail: 'Electron renderer is waiting for loadState() before replacing seed UI state.',
+      detail: 'Electron renderer is waiting for loadState() before showing local SQLite state.',
       tone: 'warn',
     }
   }
 
   if (input.dataOrigin === 'local') {
+    if (input.localRunCount === 0) {
+      return {
+        status: 'local persisted',
+        label: 'local SQLite empty',
+        detail: 'Electron loadState() returned no persisted runs, so no Run data is shown.',
+        tone: 'soft',
+      }
+    }
+
     return {
       status: 'local persisted',
       label: 'local SQLite',
@@ -195,9 +231,9 @@ export function buildRuntimeDataSource(input: {
   }
 
   return {
-    status: 'fixture fallback',
-    label: 'seed fallback',
-    detail: 'Electron loadState() returned no persisted runs; seed runs remain visible until a local Run exists.',
+    status: 'missing contract',
+    label: 'not loaded',
+    detail: 'No runtime data source is currently loaded.',
     tone: 'soft',
   }
 }
@@ -208,27 +244,36 @@ export function buildKnowledgeDataSource(input: {
 }): FieldDataSource {
   if (!input.desktopConnected || input.dataOrigin === 'seed') {
     return {
-      status: 'fixture fallback',
-      label: 'shared knowledge index',
-      detail: 'Knowledge uses bundled shared documents and Run references in browser/seed preview.',
+      status: 'missing contract',
+      label: 'not indexed',
+      detail: 'No real repository knowledge index is loaded in this view.',
       tone: 'soft',
     }
   }
 
   return {
-    status: 'desktop-only adapter',
-    label: 'shared index adapter',
-    detail: 'Current Electron path builds knowledge references from shared docs; arbitrary repo source query is a future contract.',
+    status: 'missing contract',
+    label: 'not indexed',
+    detail: 'Current Electron path has not indexed the selected local repository yet.',
     tone: 'warn',
   }
 }
 
 export function buildAgentProviderDataSource(provider: AgentProviderConfig | undefined): FieldDataSource {
-  if (!provider || provider.kind === 'fake') {
+  if (!provider) {
     return {
-      status: 'fixture fallback',
-      label: 'fake provider fallback',
-      detail: 'No persisted live provider is selected; review runs are deterministic and spend no provider tokens.',
+      status: 'missing contract',
+      label: 'not configured',
+      detail: 'No persisted review provider is selected.',
+      tone: 'soft',
+    }
+  }
+
+  if (provider.kind === 'fake') {
+    return {
+      status: 'development adapter',
+      label: 'development provider',
+      detail: 'A persisted development provider is selected; review runs are deterministic and spend no provider tokens.',
       tone: 'warn',
     }
   }
@@ -239,53 +284,6 @@ export function buildAgentProviderDataSource(provider: AgentProviderConfig | und
     detail: 'Provider credential metadata came from Electron local credential storage; the raw key stays outside renderer.',
     tone: 'good',
   }
-}
-
-export const inspectorTabsByKind: Record<BoardNodeKind, string[]> = {
-  Task: ['状态', '产物', 'Trace', 'Gate影响'],
-  Gate: ['状态', 'Gate条件', 'Evidence', 'Remediation'],
-  Review: ['状态', 'Knowledge Review', '引用来源', 'Evidence'],
-  Delivery: ['状态', 'Artifacts', 'Evidence', 'Handoff'],
-}
-
-export function getBoardNodeKind(node: WorkflowNode): BoardNodeKind {
-  if (node.kind === 'gate') {
-    return 'Gate'
-  }
-  if (node.kind === 'pr' || node.kind === 'acceptance') {
-    return 'Delivery'
-  }
-  if (node.kind === 'agent' && node.stage === 'design') {
-    return 'Review'
-  }
-  return 'Task'
-}
-
-export function getNodeStatusTone(status: WorkflowNode['status']): WorkflowBoardCard['statusTone'] {
-  if (status === 'success') {
-    return 'good'
-  }
-  if (status === 'blocked' || status === 'failed') {
-    return 'bad'
-  }
-  if (status === 'running') {
-    return 'warn'
-  }
-  if (status === 'skipped') {
-    return 'soft'
-  }
-  return 'neutral'
-}
-
-export function getNodeStatusLabel(status: WorkflowNode['status']): string {
-  return {
-    pending: 'waiting',
-    running: 'ready',
-    blocked: 'blocked',
-    success: 'success',
-    failed: 'failed',
-    skipped: 'skipped',
-  }[status]
 }
 
 function provenanceForNode(node: WorkflowNode, visualKind: BoardNodeKind): BoardCardProvenance {
@@ -319,9 +317,9 @@ function buildAttachmentChips(input: {
   const nodeEvidence = input.testEvidence.filter((evidence) => evidence.nodeId === input.node.id)
 
   return [
-    { kind: 'ART', label: nodeArtifacts.length > 0 ? `${nodeArtifacts.length} artifact` : '0 artifact', count: nodeArtifacts.length },
-    { kind: 'EVD', label: nodeEvidence.length > 0 ? `${nodeEvidence.length} evidence` : '0 evidence', count: nodeEvidence.length },
-    { kind: 'TRC', label: nodeEvents.length > 0 ? `${nodeEvents.length} trace` : '0 trace', count: nodeEvents.length },
+    { kind: 'artifact', label: '产物', count: nodeArtifacts.length },
+    { kind: 'evidence', label: '证据', count: nodeEvidence.length },
+    { kind: 'trace', label: '轨迹', count: nodeEvents.length },
   ]
 }
 
@@ -421,19 +419,6 @@ export function currentRunPhaseCopy(run: WorkflowRun): string {
   return `当前卡点: ${stageLabels[currentNode.stage]} · ${displayNodeTitle(currentNode)}。`
 }
 
-export const seedProjectRollups = rollupTokenUsage(tokenUsage, 'projectId')
-export const seedMemberRollups = rollupTokenUsage(tokenUsage, 'userId')
-export const seedTotalCost = formatUsd(tokenUsage.reduce((sum, row) => sum + row.costUsd, 0))
-
-export const fakeAgentProvider: AgentProviderConfig = {
-  id: 'fake-knowledge-review',
-  name: 'Deterministic Fake Provider',
-  kind: 'fake',
-  model: 'fake',
-  enabled: true,
-  updatedAt: new Date(0).toISOString(),
-}
-
 export const defaultReviewProviderDraft = {
   providerId: 'doubao-review',
   baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
@@ -443,32 +428,6 @@ export const defaultReviewProviderDraft = {
 export function getToastDisplayDurationMs(message: string): number {
   const characterCount = message.trim().length
   return Math.max(8000, characterCount * 120)
-}
-
-const legacyNodeTitleLabels: Record<string, string> = {
-  '方案澄清': '需求澄清',
-  '澄清 Gate': '需求确认 Gate',
-  '架构 Gate': '方案评审 Gate',
-  'Clarify request': '需求澄清',
-  'Clarification Gate': '需求确认 Gate',
-  'Design solution': '方案设计',
-  'Design Gate': '方案评审 Gate',
-}
-
-const legacyNodeSubtitleLabels: Record<string, string> = {
-  'Capture acceptance criteria and non-goals': '补齐验收口径与非目标',
-  'Confirm the request is ready for design': '确认需求已准备进入方案设计',
-  'Define implementation and test strategy': '定义实现方案与测试策略',
-  'Approve architecture before implementation': '审批方案后进入实现',
-  'Lead 审批后进入实现': 'Lead 审批方案后进入实现',
-}
-
-export function displayNodeTitle(node: WorkflowNode): string {
-  return legacyNodeTitleLabels[node.title] ?? node.title
-}
-
-export function displayNodeSubtitle(node: WorkflowNode): string {
-  return legacyNodeSubtitleLabels[node.subtitle] ?? node.subtitle
 }
 
 export function reviewProviderFromMetadata(metadata: ProviderCredentialMetadata): AgentProviderConfig {
@@ -564,6 +523,7 @@ export function runMatchesQuery(
     run.request,
     run.branchName,
     run.status,
+    getRunStatusLabel(run.status),
     ...run.nodes.flatMap((node) => [
       node.title,
       displayNodeTitle(node),
@@ -599,12 +559,12 @@ export function buildSearchResults(input: {
   const results: SearchResultItem[] = []
 
   for (const run of input.runs) {
-    if (matchesQuery(query, [run.title, run.request, run.branchName, run.status])) {
+    if (matchesQuery(query, [run.title, run.request, run.branchName, run.status, getRunStatusLabel(run.status)])) {
       results.push({
         id: `run:${run.id}`,
         type: 'run',
         title: run.title,
-        subtitle: `${run.status} · ${run.branchName}`,
+        subtitle: `${getRunStatusLabel(run.status)} · ${run.branchName}`,
         runId: run.id,
         nodeId: run.currentNodeId,
       })
@@ -689,113 +649,27 @@ export function buildSearchResults(input: {
   return results.slice(0, 12)
 }
 
-export function buildStatusDescriptors(input: {
-  node: WorkflowNode
-  visualKind: BoardNodeKind
-  artifacts: Artifact[]
-  events: AgentEvent[]
-  latestAgentReview?: { gateAdvisory: { blocksApproval: boolean } } | undefined
-  policySnapshot: PolicySnapshot | null
-  gateEnforcementDecision: GateEnforcementDecision | null
-  isLoadingGateEnforcement: boolean
-}): StatusDescriptor[] {
-  const descriptors: StatusDescriptor[] = []
-  const decision = input.gateEnforcementDecision
-
-  descriptors.push({
-    id: 'node-status',
-    label: 'Node status',
-    state: input.node.status === 'success' ? 'success' : input.node.status === 'failed' ? 'failed' : input.node.status === 'blocked' ? 'blocked' : 'default',
-    tone: getNodeStatusTone(input.node.status),
-    summary: `${displayNodeTitle(input.node)} 当前为 ${getNodeStatusLabel(input.node.status)}。`,
-    nextAction: input.node.status === 'blocked' ? '查看阻断条件并补齐 Evidence。' : '按当前节点类型推进下一步。',
-    impact: `${stageLabels[input.node.stage]} · ${input.visualKind}`,
-  })
-
-  descriptors.push({
-    id: 'policy-snapshot',
-    label: 'Policy snapshot',
-    state: input.isLoadingGateEnforcement
-      ? 'loading'
-      : decision?.status === 'blocked_policy_unavailable'
-        ? 'policy unavailable'
-        : input.policySnapshot
-          ? 'success'
-          : 'empty',
-    tone: input.isLoadingGateEnforcement
-      ? 'warn'
-      : decision?.status === 'blocked_policy_unavailable'
-        ? 'bad'
-        : input.policySnapshot
-          ? 'good'
-          : 'soft',
-    summary: input.policySnapshot
-      ? `${input.policySnapshot.source} v${input.policySnapshot.version} · synced ${input.policySnapshot.syncedAt}`
-      : '当前环境尚未加载 Team policy snapshot。',
-    nextAction: input.policySnapshot ? '使用该 snapshot 解释 Gate 条件。' : '先同步团队策略，再重新评估 Gate。',
-    impact: 'Team policy / Gate enforcement',
-  })
-
-  if (decision?.blockingReasons.some((reason) => reason.target === 'missing_agent_review')) {
-    descriptors.push({
-      id: 'missing-agent-review',
-      label: 'Knowledge Review',
-      state: 'missing agent review',
-      tone: 'bad',
-      summary: 'Gate 缺少 Knowledge Review 结果。',
-      nextAction: '从 Inspector 跳到 Agents 运行 Knowledge Review。',
-      impact: 'Gate Advisory / Review Evidence',
-    })
-  } else {
-    descriptors.push({
-      id: 'knowledge-review',
-      label: 'Knowledge Review',
-      state: input.latestAgentReview ? 'success' : 'empty',
-      tone: input.latestAgentReview ? 'good' : 'soft',
-      summary: input.latestAgentReview ? '已有 Knowledge Review advisory。' : '还没有当前节点的 Knowledge Review。',
-      nextAction: input.latestAgentReview ? '在 Inspector 中核对 advisory。' : '需要时从 Inspector 进入 Agents。',
-      impact: 'Review input for Gate',
-    })
-  }
-
-  descriptors.push({
-    id: 'test-evidence',
-    label: 'Test Evidence',
-    state: input.artifacts.some((artifact) => artifact.kind === 'test_report') ? 'success' : 'empty',
-    tone: input.artifacts.some((artifact) => artifact.kind === 'test_report') ? 'good' : 'soft',
-    summary: input.artifacts.some((artifact) => artifact.kind === 'test_report')
-      ? '当前节点已有测试报告 Artifact。'
-      : '当前节点尚未归档 Test Evidence。',
-    nextAction: '从 Inspector 进入 Tests 执行或查看证据。',
-    impact: 'Testing Gate / Evidence rollup',
-  })
-
-  descriptors.push({
-    id: 'budget',
-    label: 'Budget guard',
-    state: input.node.stage === 'build' ? 'over budget approval' : 'default',
-    tone: input.node.stage === 'build' ? 'warn' : 'soft',
-    summary: input.node.stage === 'build'
-      ? '真实 runtime 可能需要 lead approval 后才能继续。'
-      : '当前节点没有活跃 runtime budget 请求。',
-    nextAction: input.node.stage === 'build' ? '在 Agents 中填写 approval id 后重试。' : '无需预算动作。',
-    impact: 'Coding Agent runtime',
-  })
-
-  return descriptors
-}
-
 export function createRunningRun(run: WorkflowRun, nodeId: string): WorkflowRun {
   const timestamp = new Date().toISOString()
+  const targetIndex = run.nodes.findIndex((node) => node.id === nodeId)
 
   return {
     ...run,
     status: 'testing',
     currentNodeId: nodeId,
     updatedAt: timestamp,
-    nodes: run.nodes.map((node) =>
-      node.id === nodeId ? { ...node, status: 'running' as const } : node,
-    ),
+    nodes: run.nodes.map((node, index) => {
+      if (node.id === nodeId) {
+        return { ...node, status: 'running' as const }
+      }
+      if (targetIndex >= 0 && index < targetIndex && node.status === 'running') {
+        return { ...node, status: 'success' as const }
+      }
+      if (targetIndex >= 0 && index > targetIndex && node.status !== 'pending') {
+        return { ...node, status: 'pending' as const }
+      }
+      return node
+    }),
   }
 }
 
@@ -836,7 +710,7 @@ export function codingRuntimeLabel(engine: CodingAgentRun['engine']): string {
   if (engine === 'opencode-acp') {
     return 'real opencode ACP'
   }
-  return 'deterministic fake engine'
+  return 'development adapter'
 }
 
 export function codingTerminalLabel(status: CodingAgentRun['status']): string {

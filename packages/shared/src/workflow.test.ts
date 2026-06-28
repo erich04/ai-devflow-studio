@@ -5,6 +5,7 @@ import {
   createAcceptanceEvidenceBundleArtifact,
   createPrDraftArtifact,
   createWorkflowRunFromRequest,
+  normalizeWorkflowRunProgress,
 } from './workflow'
 import type { BudgetGuardDecision, CodingDiffArtifact, TestEvidence } from './domain'
 import type { GateEnforcementDecision } from './enforcement'
@@ -58,12 +59,19 @@ describe('createWorkflowRunFromRequest', () => {
         kind: 'raw_request',
         content: 'Clarify webhook retry failure boundaries, design the change, implement it, and archive evidence.',
       }),
-      expect.objectContaining({
-        id: 'artifact-run-webhook-retry-clarification-placeholder',
-        kind: 'clarification',
-        nodeId: 'run-webhook-retry-clarify',
-      }),
     ])
+    expect(created.run.nodes.map((node) => [node.id, node.artifactIds])).toEqual([
+      ['run-webhook-retry-clarify', ['artifact-run-webhook-retry-raw-request']],
+      ['run-webhook-retry-clarify-gate', []],
+      ['run-webhook-retry-design', []],
+      ['run-webhook-retry-design-gate', []],
+      ['run-webhook-retry-build', []],
+      ['run-webhook-retry-test', []],
+      ['run-webhook-retry-pr', []],
+      ['run-webhook-retry-accept', []],
+    ])
+    const persistedArtifactIds = new Set(created.artifacts.map((artifact) => artifact.id))
+    expect(created.run.nodes.flatMap((node) => node.artifactIds).every((id) => persistedArtifactIds.has(id))).toBe(true)
     expect(created.events).toEqual([
       expect.objectContaining({
         runId: 'run-webhook-retry',
@@ -233,7 +241,7 @@ describe('completeWorkflowAgentNode', () => {
     now: '2026-06-21T16:00:00.000Z',
   })
 
-  it('updates the clarification placeholder and advances the current agent to the clarification gate', () => {
+  it('creates clarification output and links it to the clarify node and gate', () => {
     const result = completeWorkflowAgentNode({
       run: created.run,
       nodeId: 'run-stage-completion-clarify',
@@ -248,7 +256,7 @@ describe('completeWorkflowAgentNode', () => {
     expect(result.run.nodes.find((node) => node.id === 'run-stage-completion-clarify')?.status).toBe('success')
     expect(result.run.nodes.find((node) => node.id === 'run-stage-completion-clarify-gate')?.status).toBe('running')
     expect(result.artifact).toMatchObject({
-      id: 'artifact-run-stage-completion-clarification-placeholder',
+      id: 'artifact-run-stage-completion-clarification',
       runId: 'run-stage-completion',
       nodeId: 'run-stage-completion-clarify',
       kind: 'clarification',
@@ -256,6 +264,13 @@ describe('completeWorkflowAgentNode', () => {
       redacted: false,
     })
     expect(result.artifacts.filter((artifact) => artifact.kind === 'clarification')).toHaveLength(1)
+    expect(result.run.nodes.find((node) => node.id === 'run-stage-completion-clarify')?.artifactIds).toEqual([
+      'artifact-run-stage-completion-raw-request',
+      'artifact-run-stage-completion-clarification',
+    ])
+    expect(result.run.nodes.find((node) => node.id === 'run-stage-completion-clarify-gate')?.artifactIds).toEqual([
+      'artifact-run-stage-completion-clarification',
+    ])
     expect(result.artifact.content).toContain('Let the top search box return Run, Artifact, and Knowledge results')
     expect(result.artifact.content).toContain('Acceptance Criteria')
     expect(result.event).toMatchObject({
@@ -267,7 +282,7 @@ describe('completeWorkflowAgentNode', () => {
     })
   })
 
-  it('creates a missing design placeholder and advances design to the design gate', () => {
+  it('creates design output and links it to the design node and gate', () => {
     const run = {
       ...created.run,
       status: 'designing' as const,
@@ -294,14 +309,20 @@ describe('completeWorkflowAgentNode', () => {
     expect(result.run.nodes.find((node) => node.id === 'run-stage-completion-design')?.status).toBe('success')
     expect(result.run.nodes.find((node) => node.id === 'run-stage-completion-design-gate')?.status).toBe('running')
     expect(result.artifact).toMatchObject({
-      id: 'artifact-run-stage-completion-design-placeholder',
+      id: 'artifact-run-stage-completion-design',
       runId: 'run-stage-completion',
       nodeId: 'run-stage-completion-design',
       kind: 'design',
       title: '方案设计',
       redacted: true,
     })
-    expect(result.artifacts.find((artifact) => artifact.id === 'artifact-run-stage-completion-design-placeholder')).toBeTruthy()
+    expect(result.artifacts.find((artifact) => artifact.id === 'artifact-run-stage-completion-design')).toBeTruthy()
+    expect(result.run.nodes.find((node) => node.id === 'run-stage-completion-design')?.artifactIds).toEqual([
+      'artifact-run-stage-completion-design',
+    ])
+    expect(result.run.nodes.find((node) => node.id === 'run-stage-completion-design-gate')?.artifactIds).toEqual([
+      'artifact-run-stage-completion-design',
+    ])
     expect(result.artifact.content).toContain('Implementation Approach')
     expect(result.artifact.content).toContain('Testing Strategy')
   })
@@ -423,5 +444,49 @@ describe('advanceWorkflowAfterGateApproval', () => {
     expect(result.run.currentNodeId).toBe('run-advance-accept')
     expect(result.run.status).toBe('completed')
     expect(result.run.nodes.find((node) => node.id === 'run-advance-accept')?.status).toBe('success')
+  })
+})
+
+describe('normalizeWorkflowRunProgress', () => {
+  it('repairs completed runs that still have an active build node by treating development as current', () => {
+    const created = createWorkflowRunFromRequest({
+      runId: 'run-inconsistent',
+      title: 'Repair current build state',
+      request: 'A stale local run says completed but still has a running build node.',
+      projectId: 'p-payments',
+      creatorId: 'u-wang',
+      branchName: 'ai/repair-progress',
+      now: '2026-06-21T16:00:00.000Z',
+    })
+    const inconsistentRun = {
+      ...created.run,
+      status: 'completed' as const,
+      currentNodeId: 'run-inconsistent-test',
+      nodes: created.run.nodes.map((node) => {
+        if (node.id === 'run-inconsistent-clarify') return { ...node, status: 'success' as const }
+        if (node.id === 'run-inconsistent-clarify-gate') return { ...node, status: 'success' as const }
+        if (node.id === 'run-inconsistent-design') return { ...node, status: 'success' as const }
+        if (node.id === 'run-inconsistent-design-gate') return { ...node, status: 'success' as const }
+        if (node.id === 'run-inconsistent-build') return { ...node, status: 'running' as const }
+        if (node.id === 'run-inconsistent-test') return { ...node, status: 'success' as const }
+        if (node.id === 'run-inconsistent-accept') return { ...node, status: 'success' as const }
+        return node
+      }),
+    }
+
+    const repaired = normalizeWorkflowRunProgress(inconsistentRun)
+
+    expect(repaired.status).toBe('building')
+    expect(repaired.currentNodeId).toBe('run-inconsistent-build')
+    expect(repaired.nodes.map((node) => [node.id, node.status])).toEqual([
+      ['run-inconsistent-clarify', 'success'],
+      ['run-inconsistent-clarify-gate', 'success'],
+      ['run-inconsistent-design', 'success'],
+      ['run-inconsistent-design-gate', 'success'],
+      ['run-inconsistent-build', 'running'],
+      ['run-inconsistent-test', 'pending'],
+      ['run-inconsistent-pr', 'pending'],
+      ['run-inconsistent-accept', 'pending'],
+    ])
   })
 })

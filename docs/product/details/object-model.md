@@ -33,10 +33,17 @@ A unit inside a Run. Current product stages are:
 
 Node kinds are `agent`, `gate`, `task`, `test`, `pr`, and `acceptance`.
 
+Nodes are the main flow objects. Artifacts, Evidence, Trace, and Decisions are related resources
+attached to a Run or Node, not separate Board nodes. Node-specific UI semantics are defined in
+[`workflow-node-semantics.md`](./workflow-node-semantics.md).
+
 ## Gate
 
 A human decision point. Gate approval must be enforced in write paths, not only through disabled UI.
 Protected Gates are nodes whose kind is `gate` or `acceptance`.
+
+A Gate can produce a durable report or approval record, but the user-facing concept should be a
+Decision, conclusion, approval, block, or override rather than a generic Artifact.
 
 ## Artifact
 
@@ -48,6 +55,16 @@ raw request, clarification, design, coding diff, PR draft, and acceptance eviden
 Any durable proof that supports a Gate or delivery decision. Evidence includes artifacts, test
 evidence, Knowledge Review results, policy decisions, budget decisions, runtime trace, permission
 decisions, and redacted team summaries.
+
+## Trace
+
+A time-ordered execution or audit history explaining how a result was produced. Trace includes Agent
+events, tool calls, permission relay, runtime steps, and cleanup events.
+
+## Decision
+
+A formal outcome that changes whether the Run may continue. Decisions include Gate approval,
+blocking decisions, override acceptance or rejection, and budget approval.
 
 ## Agent Review
 
@@ -70,4 +87,3 @@ hard-block, override, or policy-sync states.
 
 Runtime cost controls for model/provider usage. Budget decisions should explain whether work is
 allowed, warned, or blocked before expensive provider usage proceeds.
-

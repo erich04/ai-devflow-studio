@@ -18,6 +18,7 @@ import type {
   ManagedCodingWorkspace,
   McpServerDefinition,
   PolicySnapshot,
+  ProjectGitStatus,
   ProviderCredentialMetadata,
   RemoteCodingAgentSummary,
   RemoteRunSummary,
@@ -34,6 +35,10 @@ import type { CreateRunInput } from '../electron/ipc-contract'
 export type SaveProjectTestCommandInput = {
   projectId: string
   testCommand: string
+}
+
+export type ProjectGitStatusInput = {
+  projectId: string
 }
 
 export type ValidateTestCommandInput = SaveProjectTestCommandInput
@@ -173,6 +178,9 @@ export type DevFlowDesktopApi = {
   ) => Promise<RemoteSyncUploadResult>
   uploadCodingAgentSummary: (summary: RemoteCodingAgentSummary) => Promise<RemoteSyncUploadResult>
   selectLocalProject: () => Promise<LocalProject | null>
+  getProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
+  watchProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
+  unwatchProjectGitStatus: (input: ProjectGitStatusInput) => Promise<void>
   saveProjectTestCommand: (input: SaveProjectTestCommandInput) => Promise<LocalProject>
   validateTestCommand: (input: ValidateTestCommandInput) => Promise<CommandSafetyResult>
   runProjectTests: (input: RunProjectTestsInput) => Promise<RunProjectTestsResult>
@@ -210,6 +218,7 @@ export type DevFlowDesktopApi = {
   onCodingRunStatusUpdated: (listener: (run: CodingAgentRun) => void) => () => void
   onCodingEventAppended: (listener: (event: CodingAgentEvent) => void) => () => void
   onCodingPermissionUpdated: (listener: (request: CodingPermissionRequest) => void) => () => void
+  onProjectGitStatusUpdated: (listener: (status: ProjectGitStatus) => void) => () => void
 }
 
 declare global {

@@ -19,6 +19,9 @@ const desktopApi: DevFlowDesktopApi = {
   uploadCodingAgentSummary: (summary) =>
     ipcRenderer.invoke(ipcChannels.uploadCodingAgentSummary, summary),
   selectLocalProject: () => ipcRenderer.invoke(ipcChannels.selectProject),
+  getProjectGitStatus: (input) => ipcRenderer.invoke(ipcChannels.getProjectGitStatus, input),
+  watchProjectGitStatus: (input) => ipcRenderer.invoke(ipcChannels.watchProjectGitStatus, input),
+  unwatchProjectGitStatus: (input) => ipcRenderer.invoke(ipcChannels.unwatchProjectGitStatus, input),
   saveProjectTestCommand: (input) =>
     ipcRenderer.invoke(ipcChannels.saveProjectTestCommand, input),
   validateTestCommand: (input) => ipcRenderer.invoke(ipcChannels.validateTestCommand, input),
@@ -57,6 +60,8 @@ const desktopApi: DevFlowDesktopApi = {
     onIpcPayload(ipcChannels.codingEventAppended, listener),
   onCodingPermissionUpdated: (listener) =>
     onIpcPayload(ipcChannels.codingPermissionUpdated, listener),
+  onProjectGitStatusUpdated: (listener) =>
+    onIpcPayload(ipcChannels.projectGitStatusUpdated, listener),
 }
 
 contextBridge.exposeInMainWorld('aiDevFlowDesktop', desktopApi)

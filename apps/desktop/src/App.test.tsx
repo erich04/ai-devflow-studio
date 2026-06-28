@@ -3,13 +3,16 @@ import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   advanceWorkflowAfterGateApproval,
+  artifacts as fixtureArtifacts,
   completeWorkflowAgentNode,
   createRecommendedEnforcementPreset,
   createWorkflowRunFromRequest,
   createWarnOnlyDefaultPolicy,
+  events as fixtureEvents,
   mcpServers as fixtureMcpServers,
   resolveEffectivePolicy,
   runs as fixtureRuns,
+  type DesktopPairingCredential,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import { App, getToastDisplayDurationMs } from './App'
@@ -19,7 +22,7 @@ import type { DesktopWorkspaceSetters, DesktopWorkspaceState } from './app/useDe
 import type { DevFlowDesktopApi, RunProjectTestsInput } from './desktop-api'
 
 const localProject = {
-  id: 'local-project-1',
+  id: fixtureRuns[0]!.projectId,
   name: 'fixture-project',
   path: '/tmp/fixture-project',
   packageManager: 'pnpm' as const,
@@ -27,6 +30,17 @@ const localProject = {
   testCommand: 'pnpm test',
   createdAt: '2026-06-15T00:00:00.000Z',
   updatedAt: '2026-06-15T00:00:00.000Z',
+}
+
+const aiFdcProject = {
+  id: 'local-1367832b7a57',
+  name: 'ai-fdc',
+  path: '/Users/erich/File/claude/10-showcase/ai-fdc',
+  packageManager: 'pnpm' as const,
+  detectedTestCommand: '',
+  testCommand: '',
+  createdAt: '2026-06-27T00:00:00.000Z',
+  updatedAt: '2026-06-27T00:00:00.000Z',
 }
 
 const remoteRun = {
@@ -46,6 +60,50 @@ const agentProvider = {
   updatedAt: '1970-01-01T00:00:00.000Z',
 }
 
+const fixturePairingCredential: DesktopPairingCredential = {
+  tokenId: 'desktop-token-1',
+  organizationId: 'org-demo',
+  projectId: fixtureRuns[0]!.projectId,
+  userId: 'u-ling',
+  role: 'lead',
+  authAccountId: 'acct-ling',
+  projectMemberships: [{ projectId: fixtureRuns[0]!.projectId, userId: 'u-ling', role: 'lead' }],
+  createdAt: '2026-06-20T00:00:00.000Z',
+}
+
+function desktopState(
+  overrides: Partial<Awaited<ReturnType<DevFlowDesktopApi['loadState']>>> = {},
+): Awaited<ReturnType<DevFlowDesktopApi['loadState']>> {
+  return {
+    projects: [],
+    runs: [],
+    artifacts: [],
+    events: [],
+    testEvidence: [],
+    settings: { themePreference: 'system' },
+    mcpServers: [],
+    agentReviews: [],
+    agentTraces: [],
+    agentTokenUsage: [],
+    codingRuns: [],
+    codingEvents: [],
+    codingPermissionRequests: [],
+    codingPermissionDecisions: [],
+    managedCodingWorkspaces: [],
+    dependencyBootstrapEvidence: [],
+    codingDiffArtifacts: [],
+    ...overrides,
+  }
+}
+
+function persistedFixtureRunState() {
+  return desktopState({
+    projects: [localProject],
+    runs: [fixtureRuns[0]!],
+    desktopPairingCredential: fixturePairingCredential,
+  })
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
   window.localStorage.clear()
@@ -58,25 +116,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
   const policy = createWarnOnlyDefaultPolicy()
   const api: DevFlowDesktopApi = {
     platform: 'test',
-    loadState: vi.fn().mockResolvedValue({
-      projects: [],
-      runs: [],
-      artifacts: [],
-      events: [],
-      testEvidence: [],
-      settings: { themePreference: 'system' },
-      mcpServers: [],
-      agentReviews: [],
-      agentTraces: [],
-      agentTokenUsage: [],
-      codingRuns: [],
-      codingEvents: [],
-      codingPermissionRequests: [],
-      codingPermissionDecisions: [],
-      managedCodingWorkspaces: [],
-      dependencyBootstrapEvidence: [],
-      codingDiffArtifacts: [],
-    }),
+    loadState: vi.fn().mockResolvedValue(persistedFixtureRunState()),
     loadRemoteSnapshot: vi.fn().mockResolvedValue({
       projects: [],
       members: [],
@@ -116,6 +156,19 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       },
     }),
     selectLocalProject: vi.fn().mockResolvedValue(localProject),
+    getProjectGitStatus: vi.fn().mockResolvedValue({
+      projectId: localProject.id,
+      status: 'branch',
+      branch: 'codex/local-context',
+      refreshedAt: '2026-06-15T00:00:00.000Z',
+    }),
+    watchProjectGitStatus: vi.fn().mockResolvedValue({
+      projectId: localProject.id,
+      status: 'branch',
+      branch: 'codex/local-context',
+      refreshedAt: '2026-06-15T00:00:00.000Z',
+    }),
+    unwatchProjectGitStatus: vi.fn().mockResolvedValue(undefined),
     saveProjectTestCommand: vi.fn().mockImplementation(async ({ testCommand }) => ({
       ...localProject,
       testCommand,
@@ -554,6 +607,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     onCodingRunStatusUpdated: vi.fn(() => vi.fn()),
     onCodingEventAppended: vi.fn(() => vi.fn()),
     onCodingPermissionUpdated: vi.fn(() => vi.fn()),
+    onProjectGitStatusUpdated: vi.fn(() => vi.fn()),
     ...overrides,
   }
 
@@ -563,6 +617,11 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
   })
 
   return api
+}
+
+function fillNewRunForm(title = '本地真实 Run', request = '请基于当前本地项目创建一个真实交付 Run。') {
+  fireEvent.change(screen.getByLabelText('标题'), { target: { value: title } })
+  fireEvent.change(screen.getByLabelText('一句话需求'), { target: { value: request } })
 }
 
 function DeliveryActionHarness({ api }: { api: DevFlowDesktopApi }) {
@@ -741,43 +800,95 @@ describe('App', () => {
     expect(button).toHaveTextContent('浅色')
   })
 
-  it('labels browser preview, seed knowledge, and fake providers as fallback sources', () => {
+  it('labels browser preview, unloaded knowledge, and missing providers as empty sources', () => {
     render(<App />)
 
     expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('browser preview')
-    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('fixture fallback')
+    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('missing contract')
+    expect(screen.getByTestId('workflow-empty-state')).toHaveTextContent('暂无 Run')
 
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('fake provider fallback')
+    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('not configured')
 
     fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
-    expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('shared knowledge index')
+    expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('not indexed')
   })
 
-  it('labels Electron preview as seed fallback when no persisted runs exist', async () => {
+  it('labels Electron local state as empty when no persisted runs exist', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState()),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('local SQLite empty'))
+    expect(screen.getByTestId('workflow-empty-state')).toHaveTextContent('暂无 Run')
+
+    const localProjectPanel = screen.getByLabelText('Local project')
+    expect(within(localProjectPanel).getByText('未选择仓库')).toBeInTheDocument()
+    expect(within(localProjectPanel).getByText('not selected')).toBeInTheDocument()
+    expect(within(localProjectPanel).queryByText('Team Project 归属')).not.toBeInTheDocument()
+    expect(within(localProjectPanel).queryByText('Branch')).not.toBeInTheDocument()
+  })
+
+  it('does not show a stale run project id as the selected local repository team ownership', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [aiFdcProject],
+        runs: [{ ...fixtureRuns[0]!, projectId: 'p-payments' }],
+      })),
+      watchProjectGitStatus: vi.fn().mockResolvedValue({
+        projectId: aiFdcProject.id,
+        status: 'branch',
+        branch: 'main',
+        refreshedAt: '2026-06-27T00:00:00.000Z',
+      }),
+      getProjectGitStatus: vi.fn().mockResolvedValue({
+        projectId: aiFdcProject.id,
+        status: 'branch',
+        branch: 'main',
+        refreshedAt: '2026-06-27T00:00:00.000Z',
+      }),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+
+    const localProjectPanel = screen.getByLabelText('Local project')
+    expect(within(localProjectPanel).getByText('ai-fdc')).toBeInTheDocument()
+    expect(within(localProjectPanel).queryByText('connected')).not.toBeInTheDocument()
+    expect(within(localProjectPanel).queryByText('not selected')).not.toBeInTheDocument()
+    expect(within(localProjectPanel).queryByText('未绑定 Team Project')).not.toBeInTheDocument()
+    expect(within(localProjectPanel).getByText('not bound')).toBeInTheDocument()
+    expect(await within(localProjectPanel).findByText('main')).toBeInTheDocument()
+    const refreshBranchButton = within(localProjectPanel).getByRole('button', { name: '刷新 Git 分支' })
+    expect(refreshBranchButton).toBeInTheDocument()
+    fireEvent.click(refreshBranchButton)
+    await waitFor(() => expect(api.getProjectGitStatus).toHaveBeenCalledWith({ projectId: aiFdcProject.id }))
+    expect(within(localProjectPanel).queryByText('Command safety')).not.toBeInTheDocument()
+    expect(within(localProjectPanel).queryByText('Test command 来源')).not.toBeInTheDocument()
+    expect(within(localProjectPanel).queryByText('p-payments')).not.toBeInTheDocument()
+  })
+
+  it('approves the selected lead gate and updates the toast', async () => {
     const api = installDesktopApi()
     render(<App />)
 
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
-    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('seed fallback')
-    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('fixture fallback')
-  })
-
-  it('approves the selected lead gate and updates the toast', () => {
-    render(<App />)
-
+    await waitFor(() => expect(screen.getByRole('button', { name: /通过 Gate/ })).not.toBeDisabled())
     fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
 
-    expect(screen.getByTestId('toast')).toHaveTextContent('Gate 已通过，流程已推进')
+    await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('方案评审 Gate 已通过，Run 进入本地实现阶段'))
   })
 
   it('creates a new run from the modal', () => {
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
+    fillNewRunForm()
     fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
 
-    expect(screen.getAllByText('重构 GitHub webhook 重试策略').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('本地真实 Run').length).toBeGreaterThan(0)
     expect(screen.getByTestId('toast')).toHaveTextContent('新 Run 已创建')
   })
 
@@ -787,19 +898,20 @@ describe('App', () => {
 
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
+    fillNewRunForm()
     fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
 
     await waitFor(() => expect(api.createRun).toHaveBeenCalled())
     expect(api.createRun).toHaveBeenCalledWith(expect.objectContaining({
-      title: '重构 GitHub webhook 重试策略',
-      request: '请先澄清 webhook retry 的失败边界，再设计实现方案。',
-      projectId: 'p-payments',
+      title: '本地真实 Run',
+      request: '请基于当前本地项目创建一个真实交付 Run。',
+      projectId: localProject.id,
       creatorId: 'u-ling',
     }))
-    expect(screen.getAllByText('重构 GitHub webhook 重试策略').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('本地真实 Run').length).toBeGreaterThan(0)
     await waitFor(() => {
       const runRows = Array.from(container.querySelectorAll('.run-row'))
-      expect(runRows[0]).toHaveTextContent('重构 GitHub webhook 重试策略')
+      expect(runRows[0]).toHaveTextContent('本地真实 Run')
       expect(runRows[0]).toHaveClass('is-selected')
     })
   })
@@ -810,6 +922,7 @@ describe('App', () => {
 
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
+    fillNewRunForm()
     fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
 
     const completeButton = await screen.findByTestId('complete-clarify-agent')
@@ -820,7 +933,7 @@ describe('App', () => {
         runId: 'run-created-from-request',
         nodeId: 'run-created-from-request-clarify',
         userId: 'u-ling',
-        userName: 'Ling',
+        userName: 'u-ling',
       })),
     )
     expect(await screen.findByText('需求澄清结果')).toBeInTheDocument()
@@ -833,6 +946,7 @@ describe('App', () => {
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
+    fillNewRunForm()
     fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
     fireEvent.click(await screen.findByTestId('complete-clarify-agent'))
 
@@ -841,15 +955,40 @@ describe('App', () => {
   })
 
   it('generates PR draft and acceptance bundle artifacts from the inspector', async () => {
+    const api = installDesktopApi({
+      loadRemoteSnapshot: vi.fn().mockResolvedValue({
+        projects: [{
+          id: fixtureRuns[0]!.projectId,
+          name: 'Fixture Project',
+          slug: 'fixture-project',
+          description: 'Project used by this test.',
+          repository: 'erich/fixture-project',
+          defaultBranch: 'main',
+          health: 'on_track',
+          knowledgeBasePath: 'docs/',
+          testCommand: 'pnpm test',
+        }],
+        members: [],
+        runs: [],
+        artifacts: [],
+        events: [],
+        projectCost: [],
+        memberCost: [],
+        totalCost: '$0.00',
+      }),
+    })
     render(<App />)
 
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /生成 PR Draft/ }))
     })
 
     expect(await screen.findByText(/PR Draft:/)).toBeInTheDocument()
-    expect(screen.getByText(/Pending PR creation/)).not.toBeNull()
+    expect(screen.getByText(/Compare:/)).not.toBeNull()
 
     fireEvent.click(screen.getByTestId('flow-node-n-accept'))
     await act(async () => {
@@ -923,17 +1062,19 @@ describe('App', () => {
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('healthService.check()')
   })
 
-  it('explains board provenance, folded attachments, and inspector status states', () => {
+  it('explains board provenance, folded attachments, and inspector status states', async () => {
+    const api = installDesktopApi()
     render(<App />)
 
-    const board = screen.getByTestId('workflow-canvas')
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    const board = await screen.findByTestId('workflow-canvas')
     expect(board).toHaveTextContent('Run template')
     expect(board).toHaveTextContent('Team policy 插入')
     expect(board).toHaveTextContent('Local runtime 结果')
     expect(board).toHaveTextContent('折叠输出节点')
-    expect(board).toHaveTextContent('ART')
-    expect(board).toHaveTextContent('EVD')
-    expect(board).toHaveTextContent('TRC')
+    expect(board).toHaveTextContent('产物')
+    expect(board).toHaveTextContent('证据')
+    expect(board).toHaveTextContent('轨迹')
     expect(board).toHaveTextContent('阻断 Gate 没过时，不能算完成交付')
     const railSegments = Array.from(board.querySelectorAll('.flow-rail span'))
     expect(railSegments.map((segment) => Array.from(segment.classList).find((className) => className.startsWith('is-')))).toEqual([
@@ -996,7 +1137,7 @@ describe('App', () => {
     ])
   })
 
-  it('loads remote team state without hiding local runs', async () => {
+  it('loads remote team state without mixing other project runs into the selected local project', async () => {
     const api = installDesktopApi({
       loadRemoteSnapshot: vi.fn().mockResolvedValue({
         projects: [
@@ -1051,12 +1192,11 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
 
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalledWith({ organizationId: 'org-demo' }))
-    expect(await screen.findByText('远端同步 Run')).toBeInTheDocument()
     expect(screen.getAllByText('为 Payments API 增加 /health 端点').length).toBeGreaterThan(0)
-    expect(screen.getByText(/Run Sources/)).toHaveTextContent('1 local · 1 remote')
+    expect(screen.queryByText('远端同步 Run')).not.toBeInTheDocument()
+    expect(screen.getByText(/Run Sources/)).toHaveTextContent('1 local · 0 remote')
     expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('remote snapshot + local merge')
     expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('real IPC/API')
-    expect(screen.getByText('remote')).toBeInTheDocument()
     expect(screen.getAllByText('local').length).toBeGreaterThan(0)
     expect(screen.getByTestId('toast')).toHaveTextContent('团队远端状态已同步')
 
@@ -1082,7 +1222,7 @@ describe('App', () => {
         code: 'pair-p-payments.copy-once-secret',
       }),
     )
-    expect(screen.getByText('Paired p-payments')).toBeInTheDocument()
+    expect(screen.getByText('Paired account')).toBeInTheDocument()
     expect(screen.getByTestId('toast')).toHaveTextContent('已配对团队项目 p-payments')
   })
 
@@ -1090,6 +1230,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
 
     await waitFor(() => expect(api.approveGate).toHaveBeenCalledWith(expect.objectContaining({
@@ -1113,6 +1254,7 @@ describe('App', () => {
     })
     render(<App />)
 
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
 
     await waitFor(() => expect(api.approveGate).toHaveBeenCalled())
@@ -1126,6 +1268,7 @@ describe('App', () => {
     })
     const effectivePolicy = resolveEffectivePolicy(recommended, null)
     const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(persistedFixtureRunState()),
       loadEnforcementPolicy: vi.fn().mockResolvedValue({
         projectId: fixtureRuns[0]!.projectId,
         organizationPolicy: recommended,
@@ -1186,6 +1329,7 @@ describe('App', () => {
 
   it('explains unavailable team policy without hiding the local agent completion action', async () => {
     installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(persistedFixtureRunState()),
       evaluateGateEnforcement: vi.fn().mockResolvedValue({
         status: 'blocked_policy_unavailable',
         blocksApproval: true,
@@ -1221,13 +1365,14 @@ describe('App', () => {
     render(<App />)
 
     const inspector = await screen.findByTestId('node-inspector')
-    expect(inspector).toHaveTextContent('blocked_policy_unavailable')
-    expect(screen.getByTestId('policy-unavailable-cta')).toHaveTextContent('Pair this Desktop')
+    await waitFor(() => expect(inspector).toHaveTextContent('blocked_policy_unavailable'))
+    expect(screen.getByTestId('policy-unavailable-cta')).toHaveTextContent('同步团队')
     expect(screen.getByRole('button', { name: /通过 Gate/ })).toBeDisabled()
   })
 
   it('shows provisional overrides distinctly from confirmed overrides', async () => {
     const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(persistedFixtureRunState()),
       evaluateGateEnforcement: vi.fn().mockResolvedValue({
         status: 'overridden',
         blocksApproval: false,
@@ -1279,6 +1424,7 @@ describe('App', () => {
 
   it('shows rejected provisional overrides as blocked and actionable', async () => {
     const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(persistedFixtureRunState()),
       evaluateGateEnforcement: vi.fn().mockResolvedValue({
         status: 'blocked',
         blocksApproval: true,
@@ -1330,9 +1476,17 @@ describe('App', () => {
   })
 
   it('persists theme and MCP local preferences through the desktop API', async () => {
-    const api = installDesktopApi()
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [fixtureRuns[0]!],
+        mcpServers: fixtureMcpServers,
+        desktopPairingCredential: fixturePairingCredential,
+      })),
+    })
     render(<App />)
 
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     fireEvent.click(screen.getByTestId('theme-toggle'))
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith({ themePreference: 'light' }))
 
@@ -1351,8 +1505,10 @@ describe('App', () => {
   })
 
   it('filters runs and knowledge with the search box and shows empty states', async () => {
+    const api = installDesktopApi()
     render(<App />)
 
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
       target: { value: 'health endpoint' },
     })
@@ -1370,43 +1526,38 @@ describe('App', () => {
     expect(screen.getByText('没有匹配的知识节点')).toBeInTheDocument()
   })
 
-  it('shows v0.4 knowledge governance documents and selected-node checks', () => {
+  it('shows empty knowledge governance until the selected repository is indexed', async () => {
+    const api = installDesktopApi()
     render(<App />)
 
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Governance')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('API Health Endpoint Standard')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Local Test Evidence Standard')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('lexical')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent(/score \d+/)
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('API Health Endpoint Standard')
+    expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('API Health Endpoint Standard')
 
     fireEvent.click(screen.getByRole('button', { name: /Knowledge/ }))
 
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Knowledge Governance')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Git Markdown Index')
-    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('docs/knowledge/standards/api-health.md')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('not indexed')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Run references')
-    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('lexical')
-    expect(screen.getByTestId('knowledge-view')).toHaveTextContent(/kh-[a-f0-9]{8}/)
-    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('art-design')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('没有匹配的知识文档')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('没有匹配的知识节点')
   })
 
-  it('opens Knowledge from an inspector reference and returns to the selected inspector', () => {
+  it('does not show inspector knowledge-reference actions before repository indexing', async () => {
+    const api = installDesktopApi()
     render(<App />)
 
-    fireEvent.click(screen.getAllByRole('button', { name: /查看引用来源/ })[0]!)
-
-    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('来自 Workbench Inspector')
-    expect(screen.getByTestId('focused-knowledge-document')).toHaveTextContent('API Health Endpoint Standard')
-    expect(screen.getByTestId('focused-knowledge-reference')).toHaveTextContent('lexical')
-
-    fireEvent.click(screen.getByRole('button', { name: /返回当前 Inspector/ }))
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Governance')
+    expect(screen.queryByRole('button', { name: /查看引用来源/ })).not.toBeInTheDocument()
   })
 
-  it('opens Tests from the inspector and preserves the return target', () => {
+  it('opens Tests from the inspector and preserves the return target', async () => {
+    const api = installDesktopApi()
     render(<App />)
 
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: /执行测试/ }))
 
     expect(screen.getByTestId('tests-view')).toHaveTextContent('来自 Workbench Inspector')
@@ -1416,21 +1567,31 @@ describe('App', () => {
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('方案评审 Gate')
   })
 
-  it('opens a knowledge search result instead of treating search as a passive filter only', () => {
+  it('does not return bundled knowledge search results before repository indexing', async () => {
+    const api = installDesktopApi()
     render(<App />)
 
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
       target: { value: 'API Health Endpoint Standard' },
     })
-    fireEvent.click(screen.getAllByRole('button', { name: /API Health Endpoint Standard/ })[0]!)
 
-    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Git Markdown Index')
-    expect(screen.getByTestId('focused-knowledge-document')).toHaveTextContent('API Health Endpoint Standard')
+    expect(screen.getByTestId('search-results')).toHaveTextContent('没有匹配结果')
   })
 
-  it('deep-links Artifact and Event search results back into the inspector', () => {
+  it('deep-links Artifact and Event search results back into the inspector', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [fixtureRuns[0]!],
+        artifacts: fixtureArtifacts,
+        events: fixtureEvents,
+        desktopPairingCredential: fixturePairingCredential,
+      })),
+    })
     render(<App />)
 
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
       target: { value: 'healthService.check' },
     })
@@ -1505,7 +1666,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
 
     expect(await screen.findByLabelText('Review Model Provider')).toBeInTheDocument()
-    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('fake provider fallback')
+    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('development provider')
     expect(screen.getByLabelText('Review Provider ID')).toHaveValue('doubao-review')
     expect(screen.getByLabelText('Review Provider Base URL')).toHaveValue(
       'https://ark.cn-beijing.volces.com/api/coding/v3',
@@ -1972,7 +2133,7 @@ describe('App', () => {
 
     await waitFor(() =>
       expect(api.saveProjectTestCommand).toHaveBeenCalledWith({
-        projectId: 'local-project-1',
+        projectId: localProject.id,
         testCommand: 'pnpm test -- --run',
       }),
     )
@@ -2002,8 +2163,8 @@ describe('App', () => {
     expect(screen.getByTestId('toast')).toHaveTextContent('测试通过，证据已归档')
 
     fireEvent.click(screen.getByRole('button', { name: /工作台/ }))
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Local Test Evidence Standard')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('satisfied')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Local test evidence')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('当前节点没有关联的知识治理检查。')
   })
 
   it('shows explicit save states for the local test command', async () => {

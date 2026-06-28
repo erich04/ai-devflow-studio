@@ -8,13 +8,10 @@ import {
   GitPullRequest,
   Play,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import type * as React from 'react'
 import {
-  canRunCodingAgentOnNode,
   formatUsd,
-  knowledgeEntities,
-  knowledgeRelations,
   type AgentEvent,
   type AgentReviewResult,
   type Artifact,
@@ -35,13 +32,10 @@ import {
 } from '@ai-devflow/shared'
 import { GateEnforcementPanel } from '../GateEnforcementPanel'
 import {
-  buildStatusDescriptors,
   buildWorkflowBoard,
   currentRunPhaseCopy,
   displayNodeSubtitle,
   displayNodeTitle,
-  getBoardNodeKind,
-  inspectorTabsByKind,
   matchesQuery,
   stageOrder,
   stageLabels,
@@ -49,6 +43,13 @@ import {
   type FieldDataSource,
   type SupportContext,
 } from '../app/desktop-view-model'
+import {
+  buildNodeInspectorViewModel,
+  type InspectorAction,
+  type InspectorActionDisabledReason,
+  type InspectorActionId,
+  type InspectorSectionId,
+} from '../app/node-inspector-view-model'
 
 export { AgentWorkbenchView } from './AgentWorkbenchView'
 export { LocalProjectPanel, Metric, NavButton, ThemeToggle } from './ShellControls'
@@ -124,7 +125,7 @@ export function WorkflowBoard({
       </div>
       <div className="workflow-context">
         <strong>
-          这个 Run 是后端 API 修改：Gate 当前卡在 Team policy snapshot、Knowledge Review 和 Test Evidence。
+          当前 Run 的阶段、Gate、Review 和 Evidence 状态来自已加载的本地或远端记录。
         </strong>
         <div className="flow-progress" aria-label="Run 流程进度">
           <div className="sequence-note">
@@ -181,7 +182,7 @@ export function WorkflowBoard({
                   <div className="artifact-chip-row">
                     {card.attachmentChips.map((chip) => (
                       <span className={`artifact-chip ${chip.count > 0 ? 'is-filled' : ''}`} key={chip.kind}>
-                        <strong>{chip.kind}</strong> {chip.label}
+                        <strong>{chip.label}</strong> {chip.count}
                       </span>
                     ))}
                   </div>
@@ -280,9 +281,18 @@ export function Inspector({
     return <aside className="inspector">请选择一个节点</aside>
   }
 
-  const visualKind = getBoardNodeKind(selectedNode)
-  const tabs = inspectorTabsByKind[visualKind]
-  const activeTab = tabs.includes(requestedTab) ? requestedTab : tabs[0]
+  const viewModel = buildNodeInspectorViewModel({
+    node: selectedNode,
+    requestedTab,
+    isSelectedCurrentNode,
+    artifacts,
+    events,
+    latestAgentReview,
+    policySnapshot,
+    gateEnforcementDecision,
+    isLoadingGateEnforcement,
+    canApprove,
+  })
   const focusedArtifactId =
     supportContext?.focusTarget === 'artifact' &&
     supportContext.runId === selectedRun?.id &&
@@ -295,83 +305,83 @@ export function Inspector({
     supportContext.nodeId === selectedNode.id
       ? supportContext.eventId
       : undefined
-  const statusDescriptors = buildStatusDescriptors({
-    node: selectedNode,
-    visualKind,
-    artifacts,
-    events,
-    latestAgentReview,
-    policySnapshot,
-    gateEnforcementDecision,
-    isLoadingGateEnforcement,
-  })
-  const hasTestArtifact = artifacts.some((artifact) => artifact.kind === 'test_report')
-  const gateRequirementRows = [
-    {
-      label: 'Policy snapshot',
-      state: isLoadingGateEnforcement
-        ? 'loading'
-        : policySnapshot
-          ? `v${policySnapshot.version}`
-          : gateEnforcementDecision?.status === 'blocked_policy_unavailable'
-            ? 'unavailable'
-            : 'not loaded',
-      tone: policySnapshot ? 'good' : isLoadingGateEnforcement ? 'warn' : 'bad',
-      summary: policySnapshot
-        ? `${policySnapshot.source} · synced ${policySnapshot.syncedAt}`
-        : 'Team policy snapshot 未加载时，Gate 写路径保持 hard-block。',
-    },
-    {
-      label: 'Role permission',
-      state: canApprove ? 'allowed' : 'lead required',
-      tone: canApprove ? 'good' : 'warn',
-      summary: canApprove ? '当前用户可执行 Gate approval。' : '当前用户无法直接 approve，需要 lead/reviewer 权限。',
-    },
-    {
-      label: 'Knowledge Review',
-      state: latestAgentReview ? 'ready' : 'missing',
-      tone: latestAgentReview ? 'good' : 'bad',
-      summary: latestAgentReview
-        ? latestAgentReview.gateAdvisory.summary
-        : '需要从 Agents 运行 review，生成 Gate Advisory 与引用来源。',
-    },
-    {
-      label: 'Test Evidence',
-      state: hasTestArtifact ? 'saved' : 'missing',
-      tone: hasTestArtifact ? 'good' : 'warn',
-      summary: hasTestArtifact ? '测试报告已归档为 Artifact。' : '需要从 Tests 保存 command/status/exit/duration 摘要。',
-    },
-    {
-      label: 'Budget',
-      state: selectedNode.stage === 'build' ? 'approval guarded' : 'not active',
-      tone: selectedNode.stage === 'build' ? 'warn' : 'soft',
-      summary: selectedNode.stage === 'build'
-        ? '真实 runtime 超预算时必须等 lead approval id。'
-        : '当前节点没有活跃 runtime budget 请求。',
-    },
-    {
-      label: 'Required Artifact',
-      state: artifacts.length > 0 ? `${artifacts.length} linked` : 'missing',
-      tone: artifacts.length > 0 ? 'good' : 'soft',
-      summary: artifacts.length > 0
-        ? 'Artifact 作为 Gate / Delivery 的证据附件展示。'
-        : '当前节点还没有可交付 Artifact。',
-    },
-  ]
-  const nextActionTitle =
-    selectedNode.status === 'blocked'
-      ? selectedNode.kind === 'gate'
-        ? '补齐设计假设、同步团队策略并运行 Knowledge Review'
-        : '补齐当前节点阻断证据'
-      : selectedNode.kind === 'pr'
-        ? '生成 PR Draft 并核对 Evidence chain'
-        : selectedNode.kind === 'acceptance'
-          ? '汇总 Acceptance Bundle'
-          : '推进当前 Run 的下一步'
-  const nextActionCopy =
-    selectedNode.kind === 'gate'
-      ? 'Gate 会根据 Team policy、review、evidence、role、budget 写路径重新计算，不能只靠 UI 状态通过。'
-      : '当前节点的 Artifact、Evidence 与 Trace 会在完成后回写到 Workbench Inspector。'
+  const isCurrentNodeAgent = Boolean(
+    selectedRun &&
+      selectedNode.kind === 'agent' &&
+      selectedRun.currentNodeId === selectedNode.id &&
+      selectedNode.status !== 'success',
+  )
+  const actionHandlers: Record<InspectorActionId, () => void> = {
+    openKnowledgeReview: onOpenKnowledgeReview,
+    openTests: onOpenTests,
+    completeAgent: onCompleteAgentNode,
+    approveGate: onApprove,
+    runCodingAgent: onRunCodingAgent,
+    createPrDraft: onCreatePrDraft,
+    createAcceptanceBundle: onCreateAcceptanceBundle,
+  }
+  const isDisabledReasonActive = (reason: InspectorActionDisabledReason) => {
+    return {
+      running_agent_review: isRunningAgentReview,
+      running_tests: isRunningTests,
+      requires_current_node: !isSelectedCurrentNode,
+      gate_permission_missing: !canApprove,
+      starting_coding_agent: isStartingCodingAgent,
+    }[reason]
+  }
+  const isActionDisabled = (action: InspectorAction) =>
+    action.disabledReasons.some((reason) => isDisabledReasonActive(reason))
+  const actionLabel = (action: InspectorAction) => {
+    if (action.id === 'openKnowledgeReview' && isRunningAgentReview) {
+      return '审查中'
+    }
+    if (action.id === 'openTests' && isRunningTests) {
+      return '测试中'
+    }
+    if (action.id === 'runCodingAgent' && isStartingCodingAgent) {
+      return '启动中'
+    }
+    return action.label
+  }
+  const actionAriaLabel = (action: InspectorAction) => {
+    if (action.id === 'openKnowledgeReview') {
+      return 'Agent Review'
+    }
+    if (action.id === 'openTests') {
+      return '执行测试'
+    }
+    return undefined
+  }
+  const renderActionIcon = (actionId: InspectorActionId) => {
+    switch (actionId) {
+      case 'openKnowledgeReview':
+      case 'completeAgent':
+        return <Bot size={16} />
+      case 'openTests':
+        return <Play size={16} />
+      case 'approveGate':
+        return <CheckCircle2 size={16} />
+      case 'runCodingAgent':
+        return <Code2 size={16} />
+      case 'createPrDraft':
+        return <GitPullRequest size={16} />
+      case 'createAcceptanceBundle':
+        return <ClipboardCheck size={16} />
+    }
+  }
+  const renderActionButton = (action: InspectorAction) => (
+    <button
+      className={`${action.variant}-button`}
+      data-testid={action.testId}
+      aria-label={actionAriaLabel(action)}
+      disabled={isActionDisabled(action)}
+      key={action.id}
+      onClick={actionHandlers[action.id]}
+    >
+      {renderActionIcon(action.id)}
+      {actionLabel(action)}
+    </button>
+  )
 
   const renderGovernance = () => (
     <div className="governance-list">
@@ -465,7 +475,7 @@ export function Inspector({
   const renderStatusMatrix = () => (
     <div className="status-matrix" data-testid="inspector-status-matrix">
       <span className="panel-label">状态矩阵</span>
-      {statusDescriptors.map((descriptor) => (
+      {viewModel.statusDescriptors.map((descriptor) => (
         <article className={`status-row status-row--${descriptor.tone}`} key={descriptor.id}>
           <div>
             <strong>{descriptor.label}</strong>
@@ -484,7 +494,7 @@ export function Inspector({
   const renderGateRequirementMatrix = () => (
     <div className="gate-requirement-matrix" data-testid="gate-requirement-matrix">
       <span className="panel-label">Gate 条件拆解</span>
-      {gateRequirementRows.map((row) => (
+      {viewModel.gateRequirementRows.map((row) => (
         <div className="gate-requirement-row" key={row.label}>
           <strong>{row.label}</strong>
           <span className={`pill ${row.tone}`}>{row.state}</span>
@@ -541,168 +551,83 @@ export function Inspector({
     </div>
   )
 
+  const renderNodeSummary = () => (
+    <div className="node-summary mini-card">
+      <span>{viewModel.header.stageLabel}</span>
+      <strong>{viewModel.header.visualKind}</strong>
+      <p>{viewModel.header.subtitle}</p>
+    </div>
+  )
+
+  const renderGateEnforcementPanel = () => (
+    <GateEnforcementPanel
+      policySnapshot={policySnapshot}
+      decision={gateEnforcementDecision}
+      overrides={gateOverrides}
+      remediationPlan={remediationPlan}
+      isLoading={isLoadingGateEnforcement}
+      canSaveOverride={canSaveOverride}
+      isStartingRetry={isStartingCodingAgent}
+      onSaveOverride={onSaveGateOverride}
+      onStartRetry={onStartRemediationRetry}
+      pairingState={pairingState}
+      onSyncTeam={onSyncTeam}
+      onRunKnowledgeReview={onOpenKnowledgeReview}
+      isCurrentNodeAgent={isCurrentNodeAgent}
+    />
+  )
+
+  const sectionRenderers: Record<InspectorSectionId, () => React.ReactNode> = {
+    statusMatrix: renderStatusMatrix,
+    nodeSummary: renderNodeSummary,
+    gateRequirementMatrix: renderGateRequirementMatrix,
+    gateEnforcementPanel: renderGateEnforcementPanel,
+    governance: renderGovernance,
+    agentReview: renderAgentReview,
+    artifacts: renderArtifacts,
+    trace: renderTrace,
+    deliveryHandoff: renderDeliveryHandoff,
+  }
+
   return (
     <aside className="inspector" data-testid="node-inspector">
       <div className="panel-head panel-head--compact">
-        <span className="panel-title">{displayNodeTitle(selectedNode)}</span>
-        <span className={`pill ${selectedNode.status === 'blocked' ? 'bad' : selectedNode.status === 'success' ? 'good' : 'warn'}`}>
-          {selectedNode.status}
+        <span className="panel-title">{viewModel.header.title}</span>
+        <span className={`pill ${viewModel.header.statusTone}`}>
+          {viewModel.header.statusLabel}
         </span>
       </div>
       <div className="next-action">
         <p className="section-title">Next best action</p>
-        <h3>{nextActionTitle}</h3>
-        <p className="meta">{nextActionCopy}</p>
+        <h3>{viewModel.nextAction.title}</h3>
+        <p className="meta">{viewModel.nextAction.copy}</p>
         <div className="row inspector-next-actions">
-          <button
-            className="primary-button"
-            aria-label="Agent Review"
-            disabled={isRunningAgentReview}
-            onClick={onOpenKnowledgeReview}
-          >
-            <Bot size={16} />
-            {isRunningAgentReview ? '审查中' : '去 Agents 运行 Review'}
-          </button>
-          <button className="ghost-button" aria-label="执行测试" disabled={isRunningTests} onClick={onOpenTests}>
-            <Play size={16} />
-            {isRunningTests ? '测试中' : '去 Tests 执行本地测试'}
-          </button>
+          {viewModel.nextAction.recommendedActionIds.map((actionId) =>
+            renderActionButton(viewModel.actionCatalog[actionId]),
+          )}
         </div>
       </div>
-      <div className="tabbar" role="tablist" aria-label={`${visualKind} inspector tabs`}>
-        {tabs.map((tab) => (
+      <div className="tabbar" role="tablist" aria-label={`${viewModel.visualKind} inspector tabs`}>
+        {viewModel.tabs.map((tab) => (
           <button
-            key={tab}
-            className={`tab ${tab === activeTab ? 'active' : ''}`}
+            key={tab.tabId}
+            className={`tab ${tab.tabId === viewModel.activeTab.tabId ? 'active' : ''}`}
             type="button"
             role="tab"
-            aria-selected={tab === activeTab}
-            onClick={() => setRequestedTab(tab)}
+            aria-selected={tab.tabId === viewModel.activeTab.tabId}
+            onClick={() => setRequestedTab(tab.tabId)}
           >
-            {tab}
+            {tab.label}
           </button>
         ))}
       </div>
       <div className="inspector-scroll">
-        {activeTab === '状态' ? (
-          <>
-            {renderStatusMatrix()}
-            <div className="node-summary mini-card">
-              <span>{stageLabels[selectedNode.stage]}</span>
-              <strong>{visualKind}</strong>
-              <p>{displayNodeSubtitle(selectedNode)}</p>
-            </div>
-            <GateEnforcementPanel
-              policySnapshot={policySnapshot}
-              decision={gateEnforcementDecision}
-              overrides={gateOverrides}
-              remediationPlan={remediationPlan}
-              isLoading={isLoadingGateEnforcement}
-              canSaveOverride={canSaveOverride}
-              isStartingRetry={isStartingCodingAgent}
-              onSaveOverride={onSaveGateOverride}
-              onStartRetry={onStartRemediationRetry}
-              pairingState={pairingState}
-              onSyncTeam={onSyncTeam}
-              onRunKnowledgeReview={onOpenKnowledgeReview}
-              isCurrentNodeAgent={Boolean(
-                selectedRun &&
-                  selectedNode.kind === 'agent' &&
-                  selectedRun.currentNodeId === selectedNode.id &&
-                  selectedNode.status !== 'success',
-              )}
-            />
-            {renderGovernance()}
-            {renderAgentReview()}
-            {renderArtifacts()}
-          </>
-        ) : null}
-        {activeTab === 'Gate条件' || activeTab === 'Gate影响' || activeTab === 'Remediation' ? (
-          <>
-            {renderGateRequirementMatrix()}
-            <GateEnforcementPanel
-              policySnapshot={policySnapshot}
-              decision={gateEnforcementDecision}
-              overrides={gateOverrides}
-              remediationPlan={remediationPlan}
-              isLoading={isLoadingGateEnforcement}
-              canSaveOverride={canSaveOverride}
-              isStartingRetry={isStartingCodingAgent}
-              onSaveOverride={onSaveGateOverride}
-              onStartRetry={onStartRemediationRetry}
-              pairingState={pairingState}
-              onSyncTeam={onSyncTeam}
-              onRunKnowledgeReview={onOpenKnowledgeReview}
-              isCurrentNodeAgent={Boolean(
-                selectedRun &&
-                  selectedNode.kind === 'agent' &&
-                  selectedRun.currentNodeId === selectedNode.id &&
-                  selectedNode.status !== 'success',
-              )}
-            />
-            {renderGovernance()}
-          </>
-        ) : null}
-        {activeTab === '产物' || activeTab === 'Artifacts' ? renderArtifacts() : null}
-        {activeTab === 'Evidence' || activeTab === '引用来源' ? (
-          <>
-            {renderGovernance()}
-            {renderArtifacts()}
-            {renderAgentReview()}
-          </>
-        ) : null}
-        {activeTab === 'Knowledge Review' ? renderAgentReview() : null}
-        {activeTab === 'Trace' ? renderTrace() : null}
-        {activeTab === 'Handoff' ? (
-          <>
-            {renderDeliveryHandoff()}
-            {renderTrace()}
-          </>
-        ) : null}
+        {viewModel.activeTab.sections.map((sectionId) => (
+          <Fragment key={sectionId}>{sectionRenderers[sectionId]()}</Fragment>
+        ))}
 
         <div className="inspector-actions">
-          {selectedNode.kind === 'agent' && selectedNode.stage === 'clarify' && isSelectedCurrentNode ? (
-            <button
-              className="primary-button"
-              data-testid="complete-clarify-agent"
-              onClick={onCompleteAgentNode}
-            >
-              <Bot size={16} />
-              生成需求澄清
-            </button>
-          ) : null}
-          {selectedNode.kind === 'agent' && selectedNode.stage === 'design' && isSelectedCurrentNode ? (
-            <button
-              className="primary-button"
-              data-testid="complete-design-agent"
-              onClick={onCompleteAgentNode}
-            >
-              <Bot size={16} />
-              生成设计方案
-            </button>
-          ) : null}
-          <button className="primary-button" disabled={!canApprove} onClick={onApprove}>
-            <CheckCircle2 size={16} />
-            通过 Gate
-          </button>
-          {canRunCodingAgentOnNode(selectedNode) && (
-            <button className="ghost-button" disabled={isStartingCodingAgent} onClick={onRunCodingAgent}>
-              <Code2 size={16} />
-              {isStartingCodingAgent ? '启动中' : 'Coding Agent'}
-            </button>
-          )}
-          {selectedNode.kind === 'pr' && (
-            <button className="ghost-button" onClick={onCreatePrDraft}>
-              <GitPullRequest size={16} />
-              生成 PR Draft
-            </button>
-          )}
-          {selectedNode.kind === 'acceptance' && (
-            <button className="ghost-button" onClick={onCreateAcceptanceBundle}>
-              <ClipboardCheck size={16} />
-              生成验收证据包
-            </button>
-          )}
+          {viewModel.actions.map((action) => renderActionButton(action))}
         </div>
       </div>
     </aside>
@@ -734,8 +659,12 @@ export function TeamOverview({
   gateEnforcementDecision: GateEnforcementDecision | null
   isLoadingGateEnforcement: boolean
 }) {
-  const memberSummary = members.map((member) => `${member.name} ${member.role}`).join(' · ')
+  const memberSummary = members.length > 0
+    ? members.map((member) => `${member.name} ${member.role}`).join(' · ')
+    : '未加载团队成员'
   const projectCostById = new Map(projectRollups.map((rollup) => [rollup.key, rollup]))
+  const selectedProject = projects.find((project) => project.id === selectedRun?.projectId)
+  const selectedProjectLabel = selectedProject?.name ?? '未选择 Team Project'
   const memberTokens = memberRollups.reduce((sum, rollup) => sum + rollup.totalTokens, 0)
   const snapshotSource = policySnapshot?.source ?? gateEnforcementDecision?.policySource ?? 'unavailable'
   const snapshotVersion = policySnapshot?.version ?? gateEnforcementDecision?.policyVersion
@@ -782,8 +711,15 @@ export function TeamOverview({
               </tr>
             </thead>
             <tbody>
-              {projects.map((project) => {
+              {projects.length === 0 ? (
+                <tr>
+                  <td colSpan={10}>
+                    <p className="empty-note">未加载 Team Project。同步团队后才会展示远端项目、成员、策略和成本摘要。</p>
+                  </td>
+                </tr>
+              ) : projects.map((project) => {
                 const rollup = projectCostById.get(project.id)
+                const isSelectedProject = project.id === selectedRun?.projectId
 
                 return (
                   <tr key={project.id}>
@@ -791,27 +727,29 @@ export function TeamOverview({
                     <td className="mono">{project.repository}</td>
                     <td><span className={`pill ${project.health === 'on_track' ? 'good' : project.health === 'blocked' ? 'bad' : 'warn'}`}>{project.health}</span></td>
                     <td className="mono">{project.testCommand}</td>
-                    <td>{project.id === 'p-payments' ? '为 Payments API 增加 /health 端点' : '优化空搜索结果提示文案'}</td>
+                    <td>{isSelectedProject ? selectedRun?.title ?? '暂无 Run' : '暂无当前 Run'}</td>
                     <td>
-                      <span className={`pill ${project.id === selectedRun?.projectId ? snapshotTone : project.health === 'blocked' ? 'bad' : 'good'}`}>
-                        {project.id === selectedRun?.projectId ? snapshotStatus : project.health === 'blocked' ? 'blocked' : 'passed'}
+                      <span className={`pill ${isSelectedProject ? snapshotTone : 'soft'}`}>
+                        {isSelectedProject ? snapshotStatus : 'not loaded'}
                       </span>
                     </td>
                     <td>
-                      {project.id === selectedRun?.projectId
+                      {isSelectedProject
                         ? `${gateEnforcementDecision?.blockingReasons.length ?? 0} block · ${gateEnforcementDecision?.warningReasons.length ?? 0} warn · ${gateEnforcementDecision?.requiredActions.length ?? 0} actions`
-                        : 'policy ok · tests passed · review warn'}
+                        : '无当前 Gate 数据'}
                     </td>
                     <td>{memberSummary}</td>
                     <td>{rollup ? `${rollup.totalTokens.toLocaleString()} · ${formatUsd(rollup.costUsd)}` : `0 · ${totalCost}`}</td>
-                    <td><span className="pill accent">{project.id === selectedRun?.projectId ? snapshotSource : 'seed'}</span></td>
+                    <td><span className={`pill ${isSelectedProject ? 'accent' : 'soft'}`}>{isSelectedProject ? snapshotSource : dataOrigin}</span></td>
                   </tr>
                 )
               })}
             </tbody>
           </table>
           <div className="member-roster" aria-label="Team members">
-            {members.map((member) => (
+            {members.length === 0 ? (
+              <span className="pill soft">未加载团队成员</span>
+            ) : members.map((member) => (
               <span className="pill soft" key={member.id}>{member.name}</span>
             ))}
           </div>
@@ -827,23 +765,35 @@ export function TeamOverview({
           <div className="panel-body stack">
             <div className="policy-callout">
               <div className="row">
-                <strong>策略归属：Team Project · Payments API</strong>
+                <strong>策略归属：Team Project · {selectedProjectLabel}</strong>
                 <span className="pill warn">不是 Local Project 配置</span>
               </div>
               <p className="meta">这里定义 Gate policy、角色权限、预算和必需 Evidence。Workbench、Inspector、Agents、Tests 只读取 policy snapshot 并解释阻断原因，不能在 Run 内临时改规则。</p>
             </div>
-            <div className="policy-matrix" aria-label="Gate policy matrix">
-              <div className="policy-row header"><span>Stage / Gate</span><span>Review</span><span>Evidence</span><span>Approver</span></div>
-              <div className="policy-row"><strong>方案评审 Gate</strong><span className="pill warn">required</span><span className="pill warn">brief</span><span>lead</span></div>
-              <div className="policy-row"><strong>开发实现 Gate</strong><span className="pill soft">advisory</span><span className="pill warn">diff + trace</span><span>lead</span></div>
-              <div className="policy-row"><strong>测试证据 Gate</strong><span className="pill soft">optional</span><span className="pill warn">passing / failed saved</span><span>reviewer</span></div>
-              <div className="policy-row"><strong>PR Delivery Gate</strong><span className="pill warn">required</span><span className="pill warn">PR draft + tests</span><span>lead</span></div>
-              <div className="policy-row"><strong>业务验收 Gate</strong><span className="pill soft">manual</span><span className="pill warn">accept bundle</span><span>owner</span></div>
-            </div>
+            {policySnapshot?.effectivePolicy?.rules.length ? (
+              <div className="policy-matrix" aria-label="Gate policy matrix">
+                <div className="policy-row header"><span>Rule</span><span>Target</span><span>Action</span><span>Source</span></div>
+                {policySnapshot.effectivePolicy.rules.map((rule) => (
+                  <div className="policy-row" key={rule.ruleKey}>
+                    <strong>{rule.ruleKey}</strong>
+                    <span>{rule.target}</span>
+                    <span className={`pill ${rule.action === 'block' ? 'warn' : rule.action === 'warn' ? 'soft' : 'good'}`}>
+                      {rule.action}
+                    </span>
+                    <span>{rule.source}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="empty-note">未加载 Team policy 规则。</p>
+            )}
             <div className="mini-card">
               <p className="section-title">Budget Guard</p>
-              <div className="row"><strong>真实 runtime 启动前审批</strong><span className="pill warn">over budget approval</span></div>
-              <p className="meta">单 Run soft limit $4.00；超过时 Coding Agent 只能等待 lead approval，不能靠 Workbench UI 直接绕过。</p>
+              <div className="row">
+                <strong>{policySnapshot ? '远端预算策略已加载' : '预算策略未加载'}</strong>
+                <span className={`pill ${policySnapshot ? 'good' : 'soft'}`}>{policySnapshot ? snapshotSource : 'not loaded'}</span>
+              </div>
+              <p className="meta">没有 Team policy snapshot 时，Workbench 不展示预算结论。</p>
             </div>
             <button className="primary-button">保存 Team Policy 草稿</button>
           </div>
@@ -866,7 +816,7 @@ export function TeamOverview({
               </div>
               <div className="policy-source-row">
                 <strong>Selected Run</strong>
-                <span>{selectedRun?.title ?? 'No selected Run'} · {selectedRun?.projectId ?? 'no project'}</span>
+                <span>{selectedRun?.title ?? 'No selected Run'} · {selectedProject?.name ?? '未绑定 Team Project'}</span>
                 <span className="pill soft">{snapshotVersion ? `policy v${snapshotVersion}` : 'not loaded'}</span>
               </div>
               <div className="policy-source-row"><strong>Used by</strong><span>Workbench Inspector · Agents Gate Advisory · Tests Evidence rollup</span><span className="pill soft">read only</span></div>
@@ -931,16 +881,8 @@ export function KnowledgeView({
       ]),
     )
     .sort((left, right) => Number(right.id === focusedDocumentId) - Number(left.id === focusedDocumentId))
-  const visibleEntities = knowledgeEntities.filter((entity) =>
-    matchesQuery(query, [entity.label, entity.kind, entity.sourcePath]),
-  )
-  const visibleEntityIds = new Set(visibleEntities.map((entity) => entity.id))
-  const visibleRelations = knowledgeRelations.filter((relation) =>
-    !query ||
-    visibleEntityIds.has(relation.source) ||
-    visibleEntityIds.has(relation.target) ||
-    matchesQuery(query, [relation.label, relation.source, relation.target]),
-  )
+  const visibleEntities: Array<{ id: string; label: string; kind: string }> = []
+  const visibleRelations: Array<{ id: string; source: string; label: string; target: string }> = []
 
   return (
     <section className="page-grid" data-testid="knowledge-view">

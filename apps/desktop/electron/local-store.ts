@@ -3,33 +3,35 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import initSqlJs, { type Database, type SqlJsStatic, type SqlValue } from 'sql.js'
-import type {
-  AgentEvent,
-  AgentReviewResult,
-  AgentTrace,
-  AgentTokenUsage,
-  Artifact,
-  CodingAgentEvent,
-  CodingAgentRun,
-  CodingDiffArtifact,
-  CodingPermissionDecision,
-  CodingPermissionRequest,
-  DependencyBootstrapEvidence,
-  DesktopPairingCredential,
-  LocalExecutionState,
-  LocalProject,
-  LocalSettings,
-  ManagedCodingWorkspace,
-  McpServerDefinition,
-  GateOverrideDecision,
-  PolicySnapshot,
-  ProviderCredentialMetadata,
-  RetryAttempt,
-  TestEvidence,
-  WorkflowRun,
+import {
+  normalizeWorkflowRunProgress,
+  type AgentEvent,
+  type AgentReviewResult,
+  type AgentTrace,
+  type AgentTokenUsage,
+  type Artifact,
+  type CodingAgentEvent,
+  type CodingAgentRun,
+  type CodingDiffArtifact,
+  type CodingPermissionDecision,
+  type CodingPermissionRequest,
+  type DependencyBootstrapEvidence,
+  type DesktopPairingCredential,
+  type LocalExecutionState,
+  type LocalProject,
+  type LocalSettings,
+  type ManagedCodingWorkspace,
+  type McpServerDefinition,
+  type GateOverrideDecision,
+  type PolicySnapshot,
+  type ProviderCredentialMetadata,
+  type RetryAttempt,
+  type TestEvidence,
+  type WorkflowEdge,
+  type WorkflowNode,
+  type WorkflowRun,
 } from '@ai-devflow/shared'
-
-export const CURRENT_SCHEMA_VERSION = 7
+export const CURRENT_SCHEMA_VERSION = 8
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -126,6 +128,42 @@ function migrateSchema(db: Database) {
       created_at text not null,
       updated_at text not null
     );
+
+    create table if not exists workflow_nodes (
+      id text primary key,
+      run_id text not null references workflow_runs(id) on delete cascade,
+      stage text not null,
+      title text not null,
+      subtitle text not null,
+      kind text not null,
+      status text not null,
+      owner_id text not null,
+      required_role text,
+      retry_count integer not null default 0,
+      token_usage_id text,
+      artifact_ids text not null default '[]',
+      position integer not null default 0,
+      json text not null,
+      created_at text not null,
+      updated_at text not null
+    );
+
+    create table if not exists workflow_edges (
+      id text primary key,
+      run_id text not null references workflow_runs(id) on delete cascade,
+      source_node_id text not null,
+      target_node_id text not null,
+      kind text not null,
+      position integer not null default 0,
+      json text not null,
+      created_at text not null
+    );
+
+    create index if not exists idx_workflow_nodes_run_id_position
+      on workflow_nodes(run_id, position);
+
+    create index if not exists idx_workflow_edges_run_id_position
+      on workflow_edges(run_id, position);
 
     create table if not exists artifacts (
       id text primary key,
@@ -295,6 +333,8 @@ function migrateSchema(db: Database) {
     values ('settings', '${JSON.stringify(DEFAULT_LOCAL_SETTINGS)}', datetime('now'))
     on conflict(key) do nothing;
   `)
+
+  migrateWorkflowRunsIntoRelationalTables(db)
 }
 
 function readSchemaVersion(db: Database): number {
@@ -323,6 +363,165 @@ function selectJson<T>(db: Database, sql: string, params: SqlValue[] = []): T[] 
   return parseJsonRows<T>(first.values)
 }
 
+type StoredWorkflowRunJson = Omit<WorkflowRun, 'nodes' | 'edges'> & {
+  nodes?: WorkflowNode[]
+  edges?: WorkflowEdge[]
+}
+
+function workflowRunEnvelope(run: WorkflowRun): Omit<WorkflowRun, 'nodes' | 'edges'> {
+  const { nodes: _nodes, edges: _edges, ...envelope } = run
+  return envelope
+}
+
+function writeWorkflowRunEnvelope(db: Database, run: WorkflowRun): void {
+  const envelope = workflowRunEnvelope(run)
+  db.run(
+    `
+    insert into workflow_runs (id, json, created_at, updated_at)
+    values (?, ?, ?, ?)
+    on conflict(id) do update set json = excluded.json, updated_at = excluded.updated_at
+    `,
+    [run.id, JSON.stringify(envelope), run.createdAt, run.updatedAt],
+  )
+}
+
+function replaceWorkflowNodes(db: Database, run: WorkflowRun): void {
+  db.run('delete from workflow_nodes where run_id = ?', [run.id])
+  for (const [position, node] of run.nodes.entries()) {
+    db.run(
+      `
+      insert into workflow_nodes (
+        id,
+        run_id,
+        stage,
+        title,
+        subtitle,
+        kind,
+        status,
+        owner_id,
+        required_role,
+        retry_count,
+        token_usage_id,
+        artifact_ids,
+        position,
+        json,
+        created_at,
+        updated_at
+      )
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        node.id,
+        run.id,
+        node.stage,
+        node.title,
+        node.subtitle,
+        node.kind,
+        node.status,
+        node.ownerId,
+        node.requiredRole ?? null,
+        node.retryCount,
+        node.tokenUsageId ?? null,
+        JSON.stringify(node.artifactIds),
+        position,
+        JSON.stringify(node),
+        run.createdAt,
+        run.updatedAt,
+      ],
+    )
+  }
+}
+
+function replaceWorkflowEdges(db: Database, run: WorkflowRun): void {
+  db.run('delete from workflow_edges where run_id = ?', [run.id])
+  for (const [position, edge] of run.edges.entries()) {
+    db.run(
+      `
+      insert into workflow_edges (
+        id,
+        run_id,
+        source_node_id,
+        target_node_id,
+        kind,
+        position,
+        json,
+        created_at
+      )
+      values (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        edge.id,
+        run.id,
+        edge.source,
+        edge.target,
+        edge.kind,
+        position,
+        JSON.stringify(edge),
+        run.createdAt,
+      ],
+    )
+  }
+}
+
+function selectWorkflowNodeRows(db: Database): Array<{ runId: string; node: WorkflowNode }> {
+  const result = db.exec('select run_id, json from workflow_nodes order by run_id asc, position asc')
+  const first = result[0]
+  if (!first) {
+    return []
+  }
+
+  return first.values.map((row) => ({
+    runId: String(row[0]),
+    node: JSON.parse(String(row[1])) as WorkflowNode,
+  }))
+}
+
+function selectWorkflowEdgeRows(db: Database): Array<{ runId: string; edge: WorkflowEdge }> {
+  const result = db.exec('select run_id, json from workflow_edges order by run_id asc, position asc')
+  const first = result[0]
+  if (!first) {
+    return []
+  }
+
+  return first.values.map((row) => ({
+    runId: String(row[0]),
+    edge: JSON.parse(String(row[1])) as WorkflowEdge,
+  }))
+}
+
+function groupRowsByRunId<T>(rows: Array<{ runId: string } & T>): Map<string, T[]> {
+  const grouped = new Map<string, T[]>()
+  for (const row of rows) {
+    const existing = grouped.get(row.runId) ?? []
+    const { runId: _runId, ...value } = row
+    grouped.set(row.runId, [...existing, value as T])
+  }
+  return grouped
+}
+
+function migrateWorkflowRunsIntoRelationalTables(db: Database): void {
+  const storedRuns = selectJson<StoredWorkflowRunJson>(
+    db,
+    'select json from workflow_runs order by updated_at desc, created_at desc',
+  )
+  for (const storedRun of storedRuns) {
+    const runNodes = storedRun.nodes ?? []
+    const runEdges = storedRun.edges ?? []
+    if (runNodes.length === 0 && runEdges.length === 0) {
+      continue
+    }
+
+    const run = normalizeWorkflowRunProgress({
+      ...storedRun,
+      nodes: runNodes,
+      edges: runEdges,
+    })
+    writeWorkflowRunEnvelope(db, run)
+    replaceWorkflowNodes(db, run)
+    replaceWorkflowEdges(db, run)
+  }
+}
+
 class SqlJsLocalStore implements LocalStore {
   constructor(
     private readonly db: Database,
@@ -349,21 +548,37 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveRun(run: WorkflowRun): Promise<void> {
-    this.db.run(
-      `
-      insert into workflow_runs (id, json, created_at, updated_at)
-      values (?, ?, ?, ?)
-      on conflict(id) do update set json = excluded.json, updated_at = excluded.updated_at
-      `,
-      [run.id, JSON.stringify(run), run.createdAt, run.updatedAt],
-    )
+    const normalizedRun = normalizeWorkflowRunProgress(run)
+    this.db.run('begin transaction')
+    try {
+      writeWorkflowRunEnvelope(this.db, normalizedRun)
+      this.db.run('delete from workflow_edges where run_id = ?', [normalizedRun.id])
+      replaceWorkflowNodes(this.db, normalizedRun)
+      replaceWorkflowEdges(this.db, normalizedRun)
+      this.db.run('commit')
+    } catch (error) {
+      this.db.run('rollback')
+      throw error
+    }
     await this.persist()
   }
 
   async listRuns(): Promise<WorkflowRun[]> {
-    return selectJson<WorkflowRun>(
+    const storedRuns = selectJson<StoredWorkflowRunJson>(
       this.db,
       'select json from workflow_runs order by updated_at desc, created_at desc',
+    )
+    const nodesByRun = groupRowsByRunId(selectWorkflowNodeRows(this.db)).entries()
+    const edgesByRun = groupRowsByRunId(selectWorkflowEdgeRows(this.db)).entries()
+    const nodeMap = new Map(Array.from(nodesByRun).map(([runId, rows]) => [runId, rows.map((row) => row.node)]))
+    const edgeMap = new Map(Array.from(edgesByRun).map(([runId, rows]) => [runId, rows.map((row) => row.edge)]))
+
+    return storedRuns.map((storedRun) =>
+      normalizeWorkflowRunProgress({
+        ...storedRun,
+        nodes: nodeMap.get(storedRun.id) ?? storedRun.nodes ?? [],
+        edges: edgeMap.get(storedRun.id) ?? storedRun.edges ?? [],
+      }),
     )
   }
 
@@ -1050,8 +1265,7 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   private async persist(): Promise<void> {
-    await mkdir(path.dirname(this.dbPath), { recursive: true })
-    await writeFile(this.dbPath, Buffer.from(this.db.export()))
+    await persistDatabase(this.db, this.dbPath)
   }
 }
 
@@ -1064,6 +1278,7 @@ export async function createLocalStore(options: LocalStoreOptions): Promise<Loca
       : new SQL.Database()
 
     migrateSchema(db)
+    await persistDatabase(db, options.dbPath)
 
     return new SqlJsLocalStore(db, options.dbPath)
   } catch (error) {
@@ -1072,4 +1287,9 @@ export async function createLocalStore(options: LocalStoreOptions): Promise<Loca
       `DevFlow local database is unreadable at ${options.dbPath}. Back up or remove this file to rebuild local state. Cause: ${message}`,
     )
   }
+}
+
+async function persistDatabase(db: Database, dbPath: string): Promise<void> {
+  await mkdir(path.dirname(dbPath), { recursive: true })
+  await writeFile(dbPath, Buffer.from(db.export()))
 }

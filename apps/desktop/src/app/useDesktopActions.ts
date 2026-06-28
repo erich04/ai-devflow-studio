@@ -9,10 +9,8 @@ import {
   createRemoteRunSummary,
   createRemoteTestEvidenceSummary,
   createWorkflowRunFromRequest,
-  members,
-  projects,
+  normalizeWorkflowRunProgress,
   redactSecrets,
-  runs as fixtureRuns,
   validateTestCommandSafety,
   type Artifact,
   type AgentEvent,
@@ -29,7 +27,6 @@ import {
   appendArtifactToNode,
   createRunningRun,
   displayNodeTitle,
-  fakeAgentProvider,
   mergeById,
   nextEventSequence,
   reviewProviderFromMetadata,
@@ -184,11 +181,11 @@ export function useDesktopActions(input: {
       const snapshot = await desktopApi.loadRemoteSnapshot({
         organizationId: desktopPairing?.organizationId ?? 'org-demo',
       })
-      const remoteRuns = snapshot.runs.length > 0 ? snapshot.runs : fixtureRuns
-      const nextRuns = mergeById(runs, remoteRuns)
+      const remoteRuns = snapshot.runs.map(normalizeWorkflowRunProgress)
+      const nextRuns = mergeById(runs.map(normalizeWorkflowRunProgress), remoteRuns)
       const nextRun =
         nextRuns.find((run) => run.id === selectedRunId) ??
-        snapshot.runs[0] ??
+        remoteRuns[0] ??
         nextRuns[0]
 
       setRuns(nextRuns)
@@ -196,12 +193,16 @@ export function useDesktopActions(input: {
       setArtifacts((previousArtifacts) => mergeById(previousArtifacts, snapshot.artifacts))
       setEvents((previousEvents) => mergeById(previousEvents, snapshot.events))
       setTestEvidence(testEvidence)
-      setTeamProjects(snapshot.projects.length > 0 ? snapshot.projects : projects)
-      setTeamMembers(snapshot.members.length > 0 ? snapshot.members : members)
+      setTeamProjects(snapshot.projects)
+      setTeamMembers(snapshot.members)
       setTeamProjectCost(snapshot.projectCost)
       setTeamMemberCost(snapshot.memberCost)
-      setTeamTotalCost(snapshot.totalCost)
-      setDataOrigin(snapshot.runs.length > 0 ? 'remote' : 'seed')
+      setTeamTotalCost(snapshot.totalCost || '$0.00')
+      setDataOrigin(
+        snapshot.runs.length > 0 || snapshot.projects.length > 0 || snapshot.members.length > 0
+          ? 'remote'
+          : 'local',
+      )
 
       if (nextRun) {
         setSelectedRunId(nextRun.id)
@@ -525,7 +526,7 @@ export function useDesktopActions(input: {
         ...(baseUrl ? { baseUrl } : {}),
       })
       const providers = await desktopApi.listAgentProviders()
-      setAgentProviders(mergeById(providers.length > 0 ? providers : [fakeAgentProvider], [reviewProviderFromMetadata(metadata)]))
+      setAgentProviders(mergeById(providers, [reviewProviderFromMetadata(metadata)]))
       setSelectedAgentProviderId(metadata.providerId)
       setProviderKeyDraft('')
       setToast(`Review model credential saved: ${metadata.maskedCredential}`)
@@ -586,7 +587,7 @@ export function useDesktopActions(input: {
     }
 
     setIsStartingCodingAgent(true)
-    setToast('正在创建 managed worktree 并启动 fake Coding Agent...')
+    setToast('正在创建 managed worktree 并启动 Coding Agent...')
 
     try {
       await desktopApi.ensureCodingEngine({ projectId: selectedLocalProject.id })
@@ -665,7 +666,7 @@ export function useDesktopActions(input: {
         comment: decision === 'approved' ? 'Approved from DevFlow Agent Workbench.' : 'Rejected from DevFlow Agent Workbench.',
       })
       applyLocalExecutionState(await desktopApi.loadState())
-      setToast(decision === 'approved' ? 'Coding Agent 已完成 fake diff 归档' : 'Coding Agent 权限已拒绝')
+      setToast(decision === 'approved' ? 'Coding Agent 已完成 diff 归档' : 'Coding Agent 权限已拒绝')
     } catch (error) {
       setToast(error instanceof Error ? error.message : '权限回复失败')
     }
@@ -713,12 +714,22 @@ export function useDesktopActions(input: {
   }
 
   async function createRun() {
+    const title = draftTitle.trim()
+    const request = draftRequest.trim()
+    if (!title || !request) {
+      setToast('请输入真实 Run 标题和需求描述')
+      return
+    }
+
     const createInput = {
-      title: draftTitle,
-      request: draftRequest,
-      projectId: selectedRun?.projectId ?? teamProjects[0]?.id ?? 'p-payments',
-      creatorId: currentUser?.id ?? 'u-wang',
-      branchName: `ai/${slugifyBranchName(draftTitle) || 'new-run'}`,
+      title,
+      request,
+      projectId:
+        selectedLocalProject?.id ??
+        teamProjects[0]?.id ??
+        'local-unassigned',
+      creatorId: currentUser?.id ?? 'local-user',
+      branchName: `ai/${slugifyBranchName(title) || 'new-run'}`,
     }
 
     setIsNewRunOpen(false)

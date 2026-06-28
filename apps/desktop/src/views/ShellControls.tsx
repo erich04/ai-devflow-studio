@@ -1,9 +1,9 @@
-import { FolderOpen, Moon, Sun } from 'lucide-react'
+import { FolderOpen, Moon, RefreshCw, Sun } from 'lucide-react'
 import type * as React from 'react'
 import type {
-  CommandSafetyResult,
   LocalProject,
   ThemePreference,
+  ProjectGitStatus,
 } from '@ai-devflow/shared'
 
 export function NavButton({
@@ -62,22 +62,25 @@ export function Metric({ label, value, icon }: { label: string; value: string; i
 
 export function LocalProjectPanel({
   project,
-  commandDraft,
+  teamProjectLabel,
+  teamProjectSource,
+  gitStatus,
+  isRefreshingGitStatus,
+  onRefreshGitStatus,
   onSelectProject,
   desktopConnected,
-  commandSafety,
-  isSavingCommand,
 }: {
   project: LocalProject | undefined
-  commandDraft: string
-  onCommandDraftChange: (value: string) => void
+  teamProjectLabel: string
+  teamProjectSource: string
+  gitStatus: ProjectGitStatus | null
+  isRefreshingGitStatus: boolean
+  onRefreshGitStatus: () => void
   onSelectProject: () => void
-  onSaveCommand: () => void
   desktopConnected: boolean
-  commandSafety: CommandSafetyResult | null
-  isCommandDirty: boolean
-  isSavingCommand: boolean
 }) {
+  const branchLabel = getBranchLabel(project, gitStatus)
+
   return (
     <section className="local-project-panel" aria-label="Local project">
       <div className="panel-head panel-head--compact">
@@ -88,7 +91,7 @@ export function LocalProjectPanel({
         <p className="section-title">本地仓库</p>
         <div className="row">
           <strong>{project?.name ?? '未选择仓库'}</strong>
-          <span className={`pill ${project ? 'good' : 'warn'}`}>{project ? 'connected' : 'not selected'}</span>
+          {!project ? <span className="pill warn">not selected</span> : null}
         </div>
         <p className="meta mono">
           {project?.path ??
@@ -96,21 +99,32 @@ export function LocalProjectPanel({
               ? '选择本地仓库后，DevFlow 会识别执行边界。'
               : '浏览器预览模式无法打开本地目录。')}
         </p>
-        <div className="row">
-          <span className="meta">Team Project 归属</span>
-          <strong>Payments API</strong>
-        </div>
-        <div className="row">
-          <span className="meta">Command safety</span>
-          <span className={`pill ${commandSafety?.level === 'safe' ? 'good' : commandSafety ? 'warn' : 'soft'}`}>
-            {commandSafety?.level === 'safe' ? 'package script' : commandSafety?.level ?? 'pending'}
-          </span>
-        </div>
-        <div className="row">
-          <span className="meta">Test command 来源</span>
-          <span className="pill soft">{isSavingCommand ? 'saving' : 'Local Project config'}</span>
-        </div>
-        <p className="meta mono">{commandSafety?.normalizedCommand || commandDraft || 'pnpm verify --filter @devflow/desktop'}</p>
+        {project ? (
+          <>
+            <div className="row">
+              <span className="meta">Team Project 归属</span>
+              {teamProjectSource !== 'not bound' ? <strong>{teamProjectLabel}</strong> : null}
+              <span className="pill soft">{teamProjectSource}</span>
+            </div>
+            <div className="row branch-row">
+              <div className="branch-row-head">
+                <span className="meta">Branch</span>
+                <button
+                  aria-label="刷新 Git 分支"
+                  className="branch-refresh-button"
+                  disabled={isRefreshingGitStatus}
+                  onClick={onRefreshGitStatus}
+                  type="button"
+                >
+                  <RefreshCw size={15} />
+                </button>
+              </div>
+              <div className="branch-status">
+                <strong className="branch-name mono">{branchLabel}</strong>
+              </div>
+            </div>
+          </>
+        ) : null}
         <button className="ghost-button local-project-select" onClick={onSelectProject}>
           <FolderOpen size={16} />
           选择本地仓库
@@ -118,4 +132,24 @@ export function LocalProjectPanel({
       </div>
     </section>
   )
+}
+
+function getBranchLabel(project: LocalProject | undefined, gitStatus: ProjectGitStatus | null): string {
+  if (!project) {
+    return 'not selected'
+  }
+  if (!gitStatus || gitStatus.projectId !== project.id) {
+    return 'loading'
+  }
+
+  if (gitStatus.status === 'branch') {
+    return gitStatus.branch
+  }
+  if (gitStatus.status === 'detached') {
+    return `detached · ${gitStatus.shortSha}`
+  }
+  if (gitStatus.status === 'not_git') {
+    return 'not a git repo'
+  }
+  return 'unavailable'
 }

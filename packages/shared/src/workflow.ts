@@ -97,12 +97,6 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
     accept: `${input.runId}-accept`,
   }
   const rawRequestArtifactId = `artifact-${input.runId}-raw-request`
-  const clarificationArtifactId = `artifact-${input.runId}-clarification-placeholder`
-  const designArtifactId = `artifact-${input.runId}-design-placeholder`
-  const diffArtifactId = `artifact-${input.runId}-diff-placeholder`
-  const testArtifactId = `artifact-${input.runId}-test-placeholder`
-  const prArtifactId = `artifact-${input.runId}-pr-placeholder`
-  const acceptanceArtifactId = `artifact-${input.runId}-acceptance-placeholder`
 
   const nodes: WorkflowNode[] = [
     {
@@ -114,7 +108,7 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
       status: 'running',
       ownerId: input.creatorId,
       retryCount: 0,
-      artifactIds: [rawRequestArtifactId, clarificationArtifactId],
+      artifactIds: [rawRequestArtifactId],
     },
     {
       id: nodeIds.clarifyGate,
@@ -126,7 +120,7 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
       ownerId: input.creatorId,
       requiredRole: 'member',
       retryCount: 0,
-      artifactIds: [clarificationArtifactId],
+      artifactIds: [],
     },
     {
       id: nodeIds.design,
@@ -137,7 +131,7 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
       status: 'pending',
       ownerId: input.creatorId,
       retryCount: 0,
-      artifactIds: [designArtifactId],
+      artifactIds: [],
     },
     {
       id: nodeIds.designGate,
@@ -149,7 +143,7 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
       ownerId: input.creatorId,
       requiredRole: 'lead',
       retryCount: 0,
-      artifactIds: [designArtifactId],
+      artifactIds: [],
     },
     {
       id: nodeIds.build,
@@ -160,7 +154,7 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
       status: 'pending',
       ownerId: input.creatorId,
       retryCount: 0,
-      artifactIds: [diffArtifactId],
+      artifactIds: [],
     },
     {
       id: nodeIds.test,
@@ -171,7 +165,7 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
       status: 'pending',
       ownerId: input.creatorId,
       retryCount: 0,
-      artifactIds: [testArtifactId],
+      artifactIds: [],
     },
     {
       id: nodeIds.pr,
@@ -182,7 +176,7 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
       status: 'pending',
       ownerId: input.creatorId,
       retryCount: 0,
-      artifactIds: [prArtifactId],
+      artifactIds: [],
     },
     {
       id: nodeIds.accept,
@@ -194,7 +188,7 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
       ownerId: input.creatorId,
       requiredRole: 'lead',
       retryCount: 0,
-      artifactIds: [acceptanceArtifactId],
+      artifactIds: [],
     },
   ]
 
@@ -232,17 +226,6 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
       title: 'Raw request',
       summary: input.title,
       content: input.request,
-      redacted: false,
-      updatedAt: input.now,
-    },
-    {
-      id: clarificationArtifactId,
-      runId: input.runId,
-      nodeId: nodeIds.clarify,
-      kind: 'clarification',
-      title: 'Clarification placeholder',
-      summary: 'Pending clarification output.',
-      content: 'Pending clarification output.',
       redacted: false,
       updatedAt: input.now,
     },
@@ -320,6 +303,8 @@ export function completeWorkflowAgentNode(input: WorkflowAgentStageCompletionInp
     artifacts: input.artifacts,
     now: input.now,
   })
+  const run = linkArtifactToNodes(advanced.run, artifact.id, [node.id, advanced.nextNode.id])
+  const nextNode = run.nodes.find((candidate) => candidate.id === advanced.nextNode!.id) ?? advanced.nextNode
   const artifacts = upsertArtifact(input.artifacts, artifact)
   const event: AgentEvent = {
     id: `event-${artifact.id}`,
@@ -332,11 +317,50 @@ export function completeWorkflowAgentNode(input: WorkflowAgentStageCompletionInp
   }
 
   return {
-    run: advanced.run,
+    run,
     artifact,
     artifacts,
     event,
-    nextNode: advanced.nextNode,
+    nextNode,
+  }
+}
+
+export function normalizeWorkflowRunProgress(run: WorkflowRun): WorkflowRun {
+  const currentRunningNode = run.nodes.find((node) => node.id === run.currentNodeId && node.status === 'running')
+  const activeNode = currentRunningNode ?? run.nodes.find((node) => node.status === 'running')
+  if (!activeNode) {
+    return run
+  }
+
+  const activeIndex = run.nodes.findIndex((node) => node.id === activeNode.id)
+  const status = runStatusForNode(activeNode)
+  let changed = run.currentNodeId !== activeNode.id || run.status !== status
+  const nodes = run.nodes.map((node, index) => {
+    if (node.id === activeNode.id) {
+      if (node.status === 'running') {
+        return node
+      }
+      changed = true
+      return { ...node, status: 'running' as const }
+    }
+
+    if (activeIndex >= 0 && index > activeIndex && node.status !== 'pending') {
+      changed = true
+      return { ...node, status: 'pending' as const }
+    }
+
+    return node
+  })
+
+  if (!changed) {
+    return run
+  }
+
+  return {
+    ...run,
+    status,
+    currentNodeId: activeNode.id,
+    nodes,
   }
 }
 
@@ -394,11 +418,10 @@ function buildAgentStageArtifact(input: {
   now: string
 }): Artifact {
   if (input.node.stage === 'clarify') {
-    const artifactId = `artifact-${input.run.id}-clarification-placeholder`
     const rawRequest = input.artifacts.find((artifact) => artifact.kind === 'raw_request')
     const request = rawRequest?.content || input.run.request
     return {
-      id: artifactId,
+      id: `artifact-${input.run.id}-clarification`,
       runId: input.run.id,
       nodeId: input.node.id,
       kind: 'clarification',
@@ -432,7 +455,7 @@ function buildAgentStageArtifact(input: {
 
   const clarification = input.artifacts.find((artifact) => artifact.kind === 'clarification')
   return {
-    id: `artifact-${input.run.id}-design-placeholder`,
+    id: `artifact-${input.run.id}-design`,
     runId: input.run.id,
     nodeId: input.node.id,
     kind: 'design',
@@ -460,6 +483,18 @@ function buildAgentStageArtifact(input: {
     ].join('\n'),
     redacted: true,
     updatedAt: input.now,
+  }
+}
+
+function linkArtifactToNodes(run: WorkflowRun, artifactId: string, nodeIds: string[]): WorkflowRun {
+  const targetNodeIds = new Set(nodeIds)
+  return {
+    ...run,
+    nodes: run.nodes.map((node) =>
+      targetNodeIds.has(node.id) && !node.artifactIds.includes(artifactId)
+        ? { ...node, artifactIds: [...node.artifactIds, artifactId] }
+        : node,
+    ),
   }
 }
 

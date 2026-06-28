@@ -17,6 +17,7 @@ import type {
   ManagedCodingWorkspace,
   McpServerDefinition,
   PolicySnapshot,
+  ProjectGitStatus,
   ProviderCredentialMetadata,
   RemoteCodingAgentSummary,
   RemoteRunSummary,
@@ -41,6 +42,9 @@ export type CreateRunInput = {
 export const ipcChannels = {
   loadState: 'devflow:local-state:load',
   selectProject: 'devflow:local-project:select',
+  getProjectGitStatus: 'devflow:local-project:git-status:get',
+  watchProjectGitStatus: 'devflow:local-project:git-status:watch',
+  unwatchProjectGitStatus: 'devflow:local-project:git-status:unwatch',
   saveProjectTestCommand: 'devflow:local-project:save-test-command',
   validateTestCommand: 'devflow:local-project:validate-test-command',
   runProjectTests: 'devflow:local-tests:run',
@@ -78,11 +82,16 @@ export const ipcChannels = {
   codingRunStatusUpdated: 'devflow:coding:push:status',
   codingEventAppended: 'devflow:coding:push:event',
   codingPermissionUpdated: 'devflow:coding:push:permission',
+  projectGitStatusUpdated: 'devflow:local-project:git-status:updated',
 } as const
 
 export type SaveProjectTestCommandInput = {
   projectId: string
   testCommand: string
+}
+
+export type ProjectGitStatusInput = {
+  projectId: string
 }
 
 export type ValidateTestCommandInput = SaveProjectTestCommandInput
@@ -265,6 +274,9 @@ export type DevFlowDesktopApi = {
     summary: RemoteTestEvidenceSummary,
   ) => Promise<RemoteSyncUploadResult>
   selectLocalProject: () => Promise<LocalProject | null>
+  getProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
+  watchProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
+  unwatchProjectGitStatus: (input: ProjectGitStatusInput) => Promise<void>
   saveProjectTestCommand: (input: SaveProjectTestCommandInput) => Promise<LocalProject>
   validateTestCommand: (input: ValidateTestCommandInput) => Promise<CommandSafetyResult>
   runProjectTests: (input: RunProjectTestsInput) => Promise<RunProjectTestsResult>
@@ -297,6 +309,7 @@ export type DevFlowDesktopApi = {
   onCodingRunStatusUpdated: (listener: (run: CodingAgentRun) => void) => () => void
   onCodingEventAppended: (listener: (event: CodingAgentEvent) => void) => () => void
   onCodingPermissionUpdated: (listener: (request: CodingPermissionRequest) => void) => () => void
+  onProjectGitStatusUpdated: (listener: (status: ProjectGitStatus) => void) => () => void
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -466,6 +479,16 @@ export function parseSaveProjectTestCommandInput(value: unknown): SaveProjectTes
   return {
     projectId: readRequiredString(value, 'projectId'),
     testCommand: readRequiredString(value, 'testCommand'),
+  }
+}
+
+export function parseProjectGitStatusInput(value: unknown): ProjectGitStatusInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid project git status payload')
+  }
+
+  return {
+    projectId: readRequiredString(value, 'projectId'),
   }
 }
 
