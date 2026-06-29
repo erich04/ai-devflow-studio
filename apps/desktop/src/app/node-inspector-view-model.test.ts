@@ -33,45 +33,86 @@ function viewModelFor(node: WorkflowNode, overrides: Partial<Parameters<typeof b
 
 describe('node inspector view model', () => {
   it('keeps clarify agents in Task inspector tabs and exposes the clarify action', () => {
-    const node = findNode((candidate) => candidate.kind === 'agent' && candidate.stage === 'clarify')
+    const node: WorkflowNode = {
+      ...findNode((candidate) => candidate.kind === 'agent' && candidate.stage === 'clarify'),
+      status: 'running',
+    }
     const viewModel = viewModelFor(node)
 
     expect(viewModel.visualKind).toBe('Task')
     expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', '产物', 'Trace', 'Gate影响'])
-    expect(viewModel.activeTab.sections).toEqual([
-      'statusMatrix',
-      'nodeSummary',
-      'gateEnforcementPanel',
-      'governance',
-      'agentReview',
-      'artifacts',
+    expect(viewModel.activeTab.sections).toEqual(['statusMatrix', 'nodeSummary'])
+    expect(viewModel.tabs.find((tab) => tab.label === 'Gate影响')?.sections).toEqual(['gateImpactSummary'])
+    expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
+      'node-status',
+      'raw-request',
+      'clarification-artifact',
+      'trace',
     ])
-    expect(viewModel.actions.map((action) => action.id)).toEqual(['completeAgent', 'approveGate'])
-    expect(viewModel.actions[0]).toMatchObject({
+    expect(viewModel.statusDescriptors.map((descriptor) => descriptor.label)).not.toContain('Policy snapshot')
+    expect(viewModel.statusDescriptors.map((descriptor) => descriptor.label)).not.toContain('Knowledge Review')
+    expect(viewModel.statusDescriptors.map((descriptor) => descriptor.label)).not.toContain('Budget guard')
+    expect(viewModel.nextAction).toMatchObject({
+      title: '生成需求澄清',
+      primaryActionId: 'completeAgent',
+      secondaryActionIds: [],
+    })
+    expect(viewModel.actionCatalog.completeAgent).toMatchObject({
       label: '生成需求澄清',
       testId: 'complete-clarify-agent',
     })
+    expect(viewModel.actions.map((action) => action.id)).not.toContain('approveGate')
   })
 
   it('maps design agents to Review tabs and falls back from invalid requested tabs', () => {
-    const node = findNode((candidate) => candidate.kind === 'agent' && candidate.stage === 'design')
+    const node: WorkflowNode = {
+      ...findNode((candidate) => candidate.kind === 'agent' && candidate.stage === 'design'),
+      status: 'running',
+    }
     const viewModel = viewModelFor(node, { requestedTab: 'Trace' })
 
     expect(viewModel.visualKind).toBe('Review')
     expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', 'Knowledge Review', '引用来源', 'Evidence'])
     expect(viewModel.activeTab.label).toBe('状态')
-    expect(viewModel.actions[0]).toMatchObject({
+    expect(viewModel.activeTab.sections).toEqual(['statusMatrix', 'nodeSummary'])
+    expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
+      'node-status',
+      'design-artifact',
+      'knowledge-review',
+      'trace',
+    ])
+    expect(viewModel.nextAction).toMatchObject({
+      title: '生成设计方案',
+      primaryActionId: 'completeAgent',
+      secondaryActionIds: [],
+    })
+    expect(viewModel.actionCatalog.completeAgent).toMatchObject({
       label: '生成设计方案',
       testId: 'complete-design-agent',
     })
   })
 
   it('maps gates to Gate tabs and provides gate requirement rows', () => {
-    const node = findNode((candidate) => candidate.kind === 'gate')
+    const node = findNode((candidate) => candidate.id === run.currentNodeId && candidate.kind === 'gate')
     const viewModel = viewModelFor(node, { requestedTab: 'Gate条件' })
 
     expect(viewModel.visualKind).toBe('Gate')
     expect(viewModel.activeTab.sections).toEqual(['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'])
+    expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
+      'gate-decision',
+      'policy-snapshot',
+      'approval-permission',
+      'knowledge-review',
+      'test-evidence',
+      'required-artifact',
+    ])
+    expect(viewModel.nextAction).toMatchObject({
+      title: '通过 Gate',
+      primaryActionId: 'approveGate',
+      secondaryActionIds: ['openKnowledgeReview', 'openTests'],
+    })
+    expect(viewModel.nextAction.copy).toContain('Gate 条件拆解')
+    expect(viewModel.actions.map((action) => action.id)).toEqual([])
     expect(viewModel.gateRequirementRows.map((row) => row.label)).toEqual([
       'Policy snapshot',
       'Role permission',
@@ -82,19 +123,70 @@ describe('node inspector view model', () => {
     ])
   })
 
-  it('maps delivery nodes to handoff tabs and delivery actions', () => {
+  it('maps build, test, PR, and acceptance nodes to their true primary actions', () => {
+    const buildNode = findNode((candidate) => candidate.kind === 'task' && candidate.stage === 'build')
+    const testNode = findNode((candidate) => candidate.kind === 'test')
     const prNode = findNode((candidate) => candidate.kind === 'pr')
     const acceptanceNode = findNode((candidate) => candidate.kind === 'acceptance')
+
+    expect(viewModelFor(buildNode).nextAction.primaryActionId).toBe('runCodingAgent')
+    expect(viewModelFor(testNode).nextAction.primaryActionId).toBe('openTests')
+    expect(viewModelFor(prNode).nextAction.primaryActionId).toBe('createPrDraft')
+    expect(viewModelFor(acceptanceNode, { artifacts: [] }).nextAction.primaryActionId).toBe('createAcceptanceBundle')
+    expect(viewModelFor(acceptanceNode).nextAction.primaryActionId).toBe('approveGate')
+    expect(viewModelFor(buildNode).statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
+      'node-status',
+      'coding-diff',
+      'trace',
+      'budget',
+    ])
+    expect(viewModelFor(testNode).statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
+      'node-status',
+      'test-evidence',
+      'test-report',
+      'trace',
+    ])
+    expect(viewModelFor(prNode).statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
+      'node-status',
+      'pr-draft',
+      'test-evidence',
+      'handoff-evidence',
+    ])
+    expect(viewModelFor(acceptanceNode).statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
+      'node-status',
+      'acceptance-bundle',
+      'test-evidence',
+      'gate-decision',
+    ])
 
     expect(viewModelFor(prNode, { requestedTab: 'Handoff' })).toMatchObject({
       visualKind: 'Delivery',
       activeTab: { label: 'Handoff', sections: ['deliveryHandoff', 'trace'] },
     })
-    expect(viewModelFor(prNode).actions.map((action) => action.id)).toEqual(['approveGate', 'createPrDraft'])
-    expect(viewModelFor(acceptanceNode).actions.map((action) => action.id)).toEqual([
-      'approveGate',
-      'createAcceptanceBundle',
-    ])
+    expect(viewModelFor(buildNode).activeTab.sections).not.toContain('gateEnforcementPanel')
+    expect(viewModelFor(testNode).activeTab.sections).not.toContain('gateEnforcementPanel')
+    expect(viewModelFor(prNode).activeTab.sections).not.toContain('gateEnforcementPanel')
+    expect(viewModelFor(buildNode).actions.map((action) => action.id)).not.toContain('approveGate')
+    expect(viewModelFor(testNode).actions.map((action) => action.id)).not.toContain('approveGate')
+    expect(viewModelFor(prNode).actions.map((action) => action.id)).not.toContain('approveGate')
+  })
+
+  it('does not expose a primary action for non-current or completed nodes', () => {
+    const buildNode = findNode((candidate) => candidate.kind === 'task' && candidate.stage === 'build')
+    const clarifyNode = findNode((candidate) => candidate.kind === 'agent' && candidate.stage === 'clarify')
+    const waitingAction = viewModelFor(buildNode, { isSelectedCurrentNode: false }).nextAction
+    const completedAction = viewModelFor(clarifyNode).nextAction
+
+    expect(waitingAction).toMatchObject({
+      title: '等待上游节点',
+      secondaryActionIds: [],
+    })
+    expect(waitingAction.primaryActionId).toBeUndefined()
+    expect(completedAction).toMatchObject({
+      title: '查看已完成证据',
+      secondaryActionIds: [],
+    })
+    expect(completedAction.primaryActionId).toBeUndefined()
   })
 
   it('resolves artifact and event search results to inspector tabs', () => {

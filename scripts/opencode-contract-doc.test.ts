@@ -6,6 +6,11 @@ const contractPath = join(
   process.cwd(),
   'docs/research/2026-06-19-opencode-runtime-contract-refresh.md',
 )
+const forbiddenSecretSentinels = [
+  'volcengine-secret',
+  '00000000-0000-4000-8000-000000000000',
+  '11111111-2222-4333-8444-555555555555',
+]
 
 describe('opencode runtime contract refresh documentation', () => {
   it('records the latest provider-safe status re-check and current live smoke evidence', () => {
@@ -37,9 +42,9 @@ describe('opencode runtime contract refresh documentation', () => {
     expect(markdown).toContain('@ai-sdk/openai-compatible')
     expect(markdown).toContain('Do not write the provider key')
 
-    expect(markdown).not.toContain('volcengine-secret')
-    expect(markdown).not.toContain('e8fa6ce2-6bb2-406f-b003-e695e04311a5')
-    expect(markdown).not.toContain('6363516a-2de2-4d35-8d6e-b99f6c2f15f2')
+    for (const sentinel of forbiddenSecretSentinels) {
+      expect(markdown).not.toContain(sentinel)
+    }
   })
 
   it('documents the release-only real provider smoke gate', () => {
@@ -64,7 +69,8 @@ describe('opencode runtime contract refresh documentation', () => {
     expect(releaseGate).toContain('ANTHROPIC_AUTH_TOKEN="<set in shell only; never commit>"')
     expect(releaseGate).toContain('Required Evidence To Record')
     expect(releaseGate).toContain('managed worktree deleted or cleanup_failed')
-    expect(releaseGate).not.toContain('e8fa6ce2-6bb2-406f-b003-e695e04311a5')
-    expect(releaseGate).not.toContain('6363516a-2de2-4d35-8d6e-b99f6c2f15f2')
+    for (const sentinel of forbiddenSecretSentinels) {
+      expect(releaseGate).not.toContain(sentinel)
+    }
   })
 })

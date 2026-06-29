@@ -473,9 +473,10 @@ export function App() {
       }),
     [dataOrigin, desktopApi],
   )
+  const isSelectedNodeGateLike = selectedNode?.kind === 'gate' || selectedNode?.kind === 'acceptance'
   const gateEnforcement = useGateEnforcement({
     desktopApi,
-    isEnabled: dataOrigin !== 'seed',
+    isEnabled: dataOrigin !== 'seed' && isSelectedNodeGateLike,
     selectedRun,
     selectedNode,
     currentUser,

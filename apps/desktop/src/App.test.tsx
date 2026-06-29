@@ -104,6 +104,35 @@ function persistedFixtureRunState() {
   })
 }
 
+function fixtureRunAtCurrentNode(nodeId: string) {
+  const activeIndex = fixtureRuns[0]!.nodes.findIndex((node) => node.id === nodeId)
+
+  return {
+    ...fixtureRuns[0]!,
+    currentNodeId: nodeId,
+    nodes: fixtureRuns[0]!.nodes.map((node, index) => {
+      if (index < activeIndex) {
+        return { ...node, status: 'success' as const }
+      }
+      if (node.id === nodeId) {
+        return { ...node, status: node.kind === 'gate' ? node.status : 'running' as const }
+      }
+      if (index > activeIndex) {
+        return { ...node, status: 'pending' as const }
+      }
+      return node
+    }),
+  }
+}
+
+function localStateAtCurrentNode(nodeId: string) {
+  return desktopState({
+    projects: [localProject],
+    runs: [fixtureRunAtCurrentNode(nodeId)],
+    desktopPairingCredential: fixturePairingCredential,
+  })
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
   window.localStorage.clear()
@@ -925,7 +954,9 @@ describe('App', () => {
     fillNewRunForm()
     fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
 
-    const completeButton = await screen.findByTestId('complete-clarify-agent')
+    const inspector = await screen.findByTestId('node-inspector')
+    const completeButton = within(inspector).getByRole('button', { name: /生成需求澄清/ })
+    expect(completeButton).toBe(await screen.findByTestId('complete-clarify-agent'))
     fireEvent.click(completeButton)
 
     await waitFor(() =>
@@ -934,6 +965,7 @@ describe('App', () => {
         nodeId: 'run-created-from-request-clarify',
         userId: 'u-ling',
         userName: 'u-ling',
+        providerId: 'fake-knowledge-review',
       })),
     )
     expect(await screen.findByText('需求澄清结果')).toBeInTheDocument()
@@ -987,6 +1019,7 @@ describe('App', () => {
       fireEvent.click(screen.getByRole('button', { name: /生成 PR Draft/ }))
     })
 
+    fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /Artifacts/ }))
     expect(await screen.findByText(/PR Draft:/)).toBeInTheDocument()
     expect(screen.getByText(/Compare:/)).not.toBeNull()
 
@@ -995,8 +1028,120 @@ describe('App', () => {
       fireEvent.click(screen.getByRole('button', { name: /生成验收证据包/ }))
     })
 
+    fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /Artifacts/ }))
     expect(await screen.findByText(/Acceptance Bundle:/)).toBeInTheDocument()
     expect(screen.getByText(/PR Draft:/)).toBeInTheDocument()
+  })
+
+  it('routes the current build node primary CTA to the coding agent handler', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-build')),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    const inspector = screen.getByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('启动 Coding Agent')
+    expect(inspector).not.toHaveTextContent('Gate Enforcement')
+    expect(api.loadEnforcementPolicy).not.toHaveBeenCalled()
+    expect(api.evaluateGateEnforcement).not.toHaveBeenCalled()
+    fireEvent.click(within(inspector).getByRole('button', { name: /Coding Agent/ }))
+
+    await waitFor(() =>
+      expect(api.runCodingAgent).toHaveBeenCalledWith(expect.objectContaining({
+        runId: fixtureRuns[0]!.id,
+        nodeId: 'n-build',
+        projectId: localProject.id,
+      })),
+    )
+  })
+
+  it('routes the current test node primary CTA to Tests', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-test')),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    const inspector = screen.getByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('执行本地测试')
+    expect(inspector).not.toHaveTextContent('Gate Enforcement')
+    expect(api.loadEnforcementPolicy).not.toHaveBeenCalled()
+    expect(api.evaluateGateEnforcement).not.toHaveBeenCalled()
+    fireEvent.click(within(inspector).getByRole('button', { name: /执行测试/ }))
+
+    expect(screen.getByTestId('tests-view')).toHaveTextContent('来自 Workbench Inspector')
+  })
+
+  it('routes the current PR node primary CTA to PR draft generation', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-pr')),
+      loadRemoteSnapshot: vi.fn().mockResolvedValue({
+        projects: [{
+          id: fixtureRuns[0]!.projectId,
+          name: 'Fixture Project',
+          slug: 'fixture-project',
+          description: 'Project used by this test.',
+          repository: 'erich/fixture-project',
+          defaultBranch: 'main',
+          health: 'on_track',
+          knowledgeBasePath: 'docs/',
+          testCommand: 'pnpm test',
+        }],
+        members: [],
+        runs: [],
+        artifacts: [],
+        events: [],
+        projectCost: [],
+        memberCost: [],
+        totalCost: '$0.00',
+      }),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
+    const inspector = screen.getByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('生成 PR Draft')
+    await act(async () => {
+      fireEvent.click(within(inspector).getByRole('button', { name: /生成 PR Draft/ }))
+    })
+
+    fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /Artifacts/ }))
+    expect(await screen.findByText(/PR Draft:/)).toBeInTheDocument()
+    expect(api.saveArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'pr',
+      nodeId: 'n-pr',
+    }))
+  })
+
+  it('routes the current acceptance node primary CTA to acceptance bundle generation', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-accept')),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(api.evaluateGateEnforcement).toHaveBeenCalledWith({
+        runId: fixtureRuns[0]!.id,
+        nodeId: 'n-accept',
+        projectId: fixtureRuns[0]!.projectId,
+      }),
+    )
+    const inspector = screen.getByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('生成验收证据包')
+    await act(async () => {
+      fireEvent.click(within(inspector).getByRole('button', { name: /生成验收证据包/ }))
+    })
+
+    fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /Artifacts/ }))
+    expect(await screen.findByText(/Acceptance Bundle:/)).toBeInTheDocument()
+    expect(api.saveArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'acceptance',
+      nodeId: 'n-accept',
+    }))
   })
 
   it('persists increasing delivery event sequences when delivery actions run before a rerender', async () => {
@@ -1099,7 +1244,8 @@ describe('App', () => {
     const inspector = screen.getByTestId('node-inspector')
     expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('Policy snapshot')
     expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('Knowledge Review')
-    expect(inspector).toHaveTextContent('Gate 会根据 Team policy、review、evidence、role、budget 写路径重新计算')
+    expect(inspector).toHaveTextContent('Next best action')
+    expect(inspector).toHaveTextContent('通过 Gate')
   })
 
   it('derives workflow stage color from the visible cards in each stage', () => {
@@ -1231,7 +1377,10 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
+    const inspector = screen.getByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('Next best action')
+    expect(within(inspector).getByRole('button', { name: /通过 Gate/ })).toBeEnabled()
+    fireEvent.click(within(inspector).getByRole('button', { name: /通过 Gate/ }))
 
     await waitFor(() => expect(api.approveGate).toHaveBeenCalledWith(expect.objectContaining({
       runId: fixtureRuns[0]!.id,
@@ -2142,11 +2291,11 @@ describe('App', () => {
     await waitFor(() => expect(api.runProjectTests).toHaveBeenCalled())
     await waitFor(() =>
       expect(api.uploadTestEvidenceSummary).toHaveBeenCalledWith({
-      id: 'evidence-1',
-      runId: fixtureRuns[0]!.id,
-      nodeId: 'n-test',
-      projectId: fixtureRuns[0]!.projectId,
-      command: 'pnpm test -- --run',
+        id: 'evidence-1',
+        runId: fixtureRuns[0]!.id,
+        nodeId: 'n-test',
+        projectId: fixtureRuns[0]!.projectId,
+        command: 'pnpm test -- --run',
         status: 'passed',
         exitCode: 0,
         durationMs: 900,
@@ -2163,8 +2312,12 @@ describe('App', () => {
     expect(screen.getByTestId('toast')).toHaveTextContent('测试通过，证据已归档')
 
     fireEvent.click(screen.getByRole('button', { name: /工作台/ }))
+    const inspector = screen.getByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('测试报告已归档')
+    expect(inspector).toHaveTextContent('当前节点已有测试报告 Artifact。')
+    expect(inspector).not.toHaveTextContent('Gate Enforcement')
+    fireEvent.click(within(inspector).getByRole('tab', { name: /Test Evidence/ }))
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Local test evidence')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('当前节点没有关联的知识治理检查。')
   })
 
   it('shows explicit save states for the local test command', async () => {

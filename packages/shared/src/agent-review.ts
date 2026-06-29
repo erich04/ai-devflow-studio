@@ -45,11 +45,49 @@ export type KnowledgeReviewProviderOutput = {
   >
 }
 
+export type WorkflowArtifactProviderRequest = {
+  id: string
+  runId: string
+  nodeId: string
+  projectId: string
+  requestedBy: string
+  runtime: AgentReviewRuntime
+  stage: 'clarify' | 'design'
+  providerId?: string
+}
+
+export type WorkflowArtifactProviderContext = {
+  run: Pick<WorkflowRun, 'id' | 'title' | 'request' | 'projectId' | 'status' | 'branchName'>
+  node: Pick<WorkflowNode, 'id' | 'stage' | 'title' | 'subtitle' | 'kind' | 'status'>
+  artifacts: Array<Pick<Artifact, 'id' | 'kind' | 'title' | 'summary' | 'content' | 'redacted'>>
+}
+
+export type WorkflowArtifactProviderInput = {
+  request: WorkflowArtifactProviderRequest
+  context: WorkflowArtifactProviderContext
+  prompt: string
+}
+
+export type WorkflowArtifactProviderOutput = {
+  model: string
+  title?: string
+  summary: string
+  content?: string
+  goals: string[]
+  acceptanceCriteria: string[]
+  nonGoals: string[]
+  openQuestions: string[]
+  assumptions?: string[]
+  risks?: string[]
+  usage?: AgentProviderUsage
+}
+
 export type AgentProvider = {
   id: string
   name: string
   model: string
   reviewKnowledge: (input: KnowledgeReviewProviderInput) => Promise<KnowledgeReviewProviderOutput>
+  generateWorkflowArtifact?: (input: WorkflowArtifactProviderInput) => Promise<WorkflowArtifactProviderOutput>
 }
 
 export type BuildAgentReviewContextInput = {
@@ -132,16 +170,16 @@ async function buildProviderFailureMessage(response: Response): Promise<string> 
     : `Agent provider failed with ${response.status}`
 }
 
-function parseProviderJson(raw: string): Partial<KnowledgeReviewProviderOutput> {
+function parseProviderJson<T>(raw: string, outputKind: string): Partial<T> {
   try {
-    return JSON.parse(raw) as Partial<KnowledgeReviewProviderOutput>
+    return JSON.parse(raw) as Partial<T>
   } catch {
     const start = raw.indexOf('{')
     const end = raw.lastIndexOf('}')
     if (start === -1 || end === -1 || end <= start) {
-      throw new Error('Agent provider returned invalid JSON review output')
+      throw new Error(`Agent provider returned invalid JSON ${outputKind} output`)
     }
-    return JSON.parse(raw.slice(start, end + 1)) as Partial<KnowledgeReviewProviderOutput>
+    return JSON.parse(raw.slice(start, end + 1)) as Partial<T>
   }
 }
 
@@ -346,6 +384,50 @@ export function createFakeAgentProvider(): AgentProvider {
         usage: {
           inputTokens: estimateTokens(input.prompt),
           outputTokens: 72,
+          cacheReadTokens: 0,
+        },
+      }
+    },
+    async generateWorkflowArtifact(input) {
+      const isClarify = input.request.stage === 'clarify'
+      const upstreamClarification = input.context.artifacts.find((artifact) => artifact.kind === 'clarification')
+      const summary = isClarify
+        ? `Template clarification for ${input.context.run.title}.`
+        : `Template design for ${input.context.run.title}.`
+
+      return {
+        model: 'fake',
+        title: isClarify ? '需求澄清结果' : '方案设计',
+        summary,
+        goals: isClarify
+          ? [
+              `Clarify the requested change for ${input.context.run.title}.`,
+              'Keep the result auditable through DevFlow artifacts and events.',
+            ]
+          : [
+              `Design the smallest implementation that satisfies ${input.context.run.title}.`,
+              'Preserve Gate Enforcement, redaction, and evidence boundaries.',
+            ],
+        acceptanceCriteria: isClarify
+          ? [
+              'The requested behavior is represented by design, implementation, test, PR, and acceptance evidence.',
+              'Any Gate blockers are resolved through review, policy sync, or lead override as applicable.',
+            ]
+          : [
+              'Implementation diff is captured from the approved design.',
+              'Local tests produce redacted Test Evidence before PR handoff.',
+            ],
+        nonGoals: isClarify
+          ? ['Do not bypass Gate Enforcement or team policy.', 'Do not change unrelated project behavior.']
+          : ['Do not widen scope beyond the clarified request.', 'Do not skip test evidence collection.'],
+        openQuestions: isClarify
+          ? ['如果需求仍有歧义，在方案评审 Gate 前确认边界场景。']
+          : [upstreamClarification ? '确认澄清产物中的开放问题是否已经关闭。' : '先补齐需求澄清产物。'],
+        assumptions: upstreamClarification ? [`Uses clarification artifact ${upstreamClarification.id}.`] : [],
+        risks: [],
+        usage: {
+          inputTokens: estimateTokens(input.prompt),
+          outputTokens: 96,
           cacheReadTokens: 0,
         },
       }
@@ -701,7 +783,7 @@ export function createOpenAiCompatibleAgentProvider({
       if (!raw) {
         throw new Error('Agent provider returned empty review output')
       }
-      const parsed = parseProviderJson(raw)
+      const parsed = parseProviderJson<KnowledgeReviewProviderOutput>(raw, 'review')
       const usage = body.usage
         ? {
             ...(typeof body.usage.prompt_tokens === 'number' ? { inputTokens: body.usage.prompt_tokens } : {}),
@@ -725,6 +807,67 @@ export function createOpenAiCompatibleAgentProvider({
         suggestedTests: providerValueToStringList(parsed.suggestedTests),
         confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
         ...(policyFindings ? { policyFindings } : {}),
+        ...(usage ? { usage } : {}),
+      }
+    },
+    async generateWorkflowArtifact({ request, prompt }) {
+      const response = await fetcher(`${baseUrl.replace(/\/$/u, '')}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0.2,
+          messages: [
+            {
+              role: 'system',
+              content:
+                'Return only valid JSON with title, summary, goals, acceptanceCriteria, nonGoals, openQuestions, assumptions, risks. Do not wrap it in Markdown.',
+            },
+            { role: 'user', content: prompt },
+          ],
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(await buildProviderFailureMessage(response))
+      }
+
+      const body = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>
+        usage?: { prompt_tokens?: number; completion_tokens?: number; cached_tokens?: number }
+      }
+      const raw = body.choices?.[0]?.message?.content
+      if (!raw) {
+        throw new Error('Agent provider returned empty workflow artifact output')
+      }
+      const parsed = parseProviderJson<WorkflowArtifactProviderOutput>(raw, 'workflow artifact')
+      const usage = body.usage
+        ? {
+            ...(typeof body.usage.prompt_tokens === 'number' ? { inputTokens: body.usage.prompt_tokens } : {}),
+            ...(typeof body.usage.completion_tokens === 'number'
+              ? { outputTokens: body.usage.completion_tokens }
+              : {}),
+            ...(typeof body.usage.cached_tokens === 'number' ? { cacheReadTokens: body.usage.cached_tokens } : {}),
+          }
+        : undefined
+
+      const title = providerValueToString(parsed.title, request.stage === 'clarify' ? '需求澄清结果' : '方案设计')
+      const summary = providerValueToString(parsed.summary, title)
+
+      return {
+        model,
+        title,
+        summary,
+        content: providerValueToString(parsed.content),
+        goals: providerValueToStringList(parsed.goals),
+        acceptanceCriteria: providerValueToStringList(parsed.acceptanceCriteria),
+        nonGoals: providerValueToStringList(parsed.nonGoals),
+        openQuestions: providerValueToStringList(parsed.openQuestions),
+        assumptions: providerValueToStringList(parsed.assumptions),
+        risks: providerValueToStringList(parsed.risks),
         ...(usage ? { usage } : {}),
       }
     },

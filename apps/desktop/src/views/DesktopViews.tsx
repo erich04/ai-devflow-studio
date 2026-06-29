@@ -119,14 +119,9 @@ export function WorkflowBoard({
         <div>
           <span className="panel-title">Workflow Board</span>
           <span className="meta">当前 Run: {run.title}</span>
-          <span className="meta">六阶段 delivery flow，节点选择会刷新右侧 Inspector</span>
         </div>
-        <span className="pill warn">Gate 受 policy / review / evidence / role / budget 共同控制</span>
       </div>
       <div className="workflow-context">
-        <strong>
-          当前 Run 的阶段、Gate、Review 和 Evidence 状态来自已加载的本地或远端记录。
-        </strong>
         <div className="flow-progress" aria-label="Run 流程进度">
           <div className="sequence-note">
             <strong>阶段主序列</strong>
@@ -369,9 +364,9 @@ export function Inspector({
         return <ClipboardCheck size={16} />
     }
   }
-  const renderActionButton = (action: InspectorAction) => (
+  const renderActionButton = (action: InspectorAction, variant: InspectorAction['variant'] = action.variant) => (
     <button
-      className={`${action.variant}-button`}
+      className={`${variant}-button`}
       data-testid={action.testId}
       aria-label={actionAriaLabel(action)}
       disabled={isActionDisabled(action)}
@@ -382,6 +377,12 @@ export function Inspector({
       {actionLabel(action)}
     </button>
   )
+  const primaryNextAction = viewModel.nextAction.primaryActionId
+    ? viewModel.actionCatalog[viewModel.nextAction.primaryActionId]
+    : undefined
+  const secondaryNextActions = viewModel.nextAction.secondaryActionIds
+    .filter((actionId) => actionId !== viewModel.nextAction.primaryActionId)
+    .map((actionId) => viewModel.actionCatalog[actionId])
 
   const renderGovernance = () => (
     <div className="governance-list">
@@ -559,6 +560,23 @@ export function Inspector({
     </div>
   )
 
+  const renderGateImpactSummary = () => (
+    <div className="gate-impact-summary" data-testid="gate-impact-summary">
+      <span className="panel-label">Gate 影响</span>
+      <article className="mini-card">
+        <div className="compact-row">
+          <strong>后续 Gate</strong>
+          <span className="pill soft">not active</span>
+        </div>
+        <p className="meta">
+          {selectedNode?.kind === 'agent'
+            ? '当前节点还不是 Gate。先完成当前 Agent 产物，进入对应 Gate 后再查看 policy、review、evidence 和审批条件。'
+            : '当前节点还不是 Gate。Gate 条件会在对应 Gate 节点中展开。'}
+        </p>
+      </article>
+    </div>
+  )
+
   const renderGateEnforcementPanel = () => (
     <GateEnforcementPanel
       policySnapshot={policySnapshot}
@@ -580,6 +598,7 @@ export function Inspector({
   const sectionRenderers: Record<InspectorSectionId, () => React.ReactNode> = {
     statusMatrix: renderStatusMatrix,
     nodeSummary: renderNodeSummary,
+    gateImpactSummary: renderGateImpactSummary,
     gateRequirementMatrix: renderGateRequirementMatrix,
     gateEnforcementPanel: renderGateEnforcementPanel,
     governance: renderGovernance,
@@ -601,11 +620,16 @@ export function Inspector({
         <p className="section-title">Next best action</p>
         <h3>{viewModel.nextAction.title}</h3>
         <p className="meta">{viewModel.nextAction.copy}</p>
-        <div className="row inspector-next-actions">
-          {viewModel.nextAction.recommendedActionIds.map((actionId) =>
-            renderActionButton(viewModel.actionCatalog[actionId]),
-          )}
-        </div>
+        {primaryNextAction || secondaryNextActions.length ? (
+          <div className="inspector-next-actions">
+            {primaryNextAction ? renderActionButton(primaryNextAction, 'primary') : null}
+            {secondaryNextActions.length ? (
+              <div className="row inspector-secondary-actions">
+                {secondaryNextActions.map((action) => renderActionButton(action, 'ghost'))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       <div className="tabbar" role="tablist" aria-label={`${viewModel.visualKind} inspector tabs`}>
         {viewModel.tabs.map((tab) => (
@@ -626,9 +650,14 @@ export function Inspector({
           <Fragment key={sectionId}>{sectionRenderers[sectionId]()}</Fragment>
         ))}
 
-        <div className="inspector-actions">
-          {viewModel.actions.map((action) => renderActionButton(action))}
-        </div>
+        {viewModel.actions.length ? (
+          <div className="inspector-more-actions">
+            <span className="panel-label">更多动作</span>
+            <div className="inspector-actions">
+              {viewModel.actions.map((action) => renderActionButton(action, 'ghost'))}
+            </div>
+          </div>
+        ) : null}
       </div>
     </aside>
   )

@@ -322,6 +322,7 @@ export function useDesktopActions(input: {
           nodeId: selectedNode.id,
           userId: currentUser.id,
           userName: currentUser.name,
+          providerId: selectedAgentProviderId || 'fake-knowledge-review',
         })
         applyLocalExecutionState(result.state)
         setSelectedRunId(result.run.id)

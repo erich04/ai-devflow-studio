@@ -28,7 +28,9 @@ import {
   redactSecrets,
   resolveEffectivePolicy,
   runKnowledgeReviewAgent,
+  runWorkflowStageAgent,
   type AgentEvent,
+  type AgentProvider,
   type AgentProviderConfig,
   type GateOverrideDecision,
   type LocalProject,
@@ -289,6 +291,27 @@ async function listAgentProviderConfigs(): Promise<AgentProviderConfig[]> {
     },
     ...credentials.map(providerConfigFromCredential),
   ]
+}
+
+async function resolveAgentProvider(store: LocalStore, providerId: string): Promise<AgentProvider> {
+  if (providerId === 'fake-knowledge-review') {
+    return createFakeAgentProvider()
+  }
+
+  const credentials = await store.listProviderCredentials()
+  const metadata = credentials.find((candidate) => candidate.providerId === providerId)
+  const encryptedSecret = await store.getProviderEncryptedSecret(providerId)
+  if (!metadata || !encryptedSecret) {
+    throw new Error(`Agent provider credential not found: ${providerId}`)
+  }
+
+  return createOpenAiCompatibleAgentProvider({
+    id: metadata.providerId,
+    name: metadata.providerId === DEFAULT_OPENAI_PROVIDER_ID ? 'OpenAI Compatible' : metadata.providerId,
+    model: metadata.model || DEFAULT_OPENAI_MODEL,
+    baseUrl: metadata.baseUrl || DEFAULT_OPENAI_BASE_URL,
+    apiKey: decryptCredential(encryptedSecret),
+  })
 }
 
 async function findProject(projectId: string): Promise<LocalProject> {
@@ -850,27 +873,48 @@ function registerIpcHandlers() {
     if (!run) {
       throw new Error(`Run not found: ${input.runId}`)
     }
+    const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
+    if (!node) {
+      throw new Error(`Run node not found: ${input.nodeId}`)
+    }
     const [artifacts, events] = await Promise.all([
       store.listArtifacts(run.id),
       store.listEvents(run.id),
     ])
+    const providerId = input.providerId ?? 'fake-knowledge-review'
+    const provider = await resolveAgentProvider(store, providerId)
+    const completedAt = new Date().toISOString()
+    const generated = await runWorkflowStageAgent({
+      run,
+      node,
+      artifacts,
+      provider,
+      requestedBy: input.userId,
+      runtime: 'electron',
+      now: () => completedAt,
+    })
     const completed = completeWorkflowAgentNode({
       run,
       nodeId: input.nodeId,
       artifacts,
+      generatedArtifact: generated.artifact,
       existingEvents: events,
       actorName: input.userName,
-      now: new Date().toISOString(),
+      now: completedAt,
     })
+    const event: AgentEvent = {
+      ...completed.event,
+      message: `${completed.event.message} Source: ${generated.source === 'model' ? 'model generated' : 'fake/template'} · ${generated.providerId} · ${generated.model}.`,
+    }
 
     await store.saveRun(completed.run)
     await store.saveArtifact(completed.artifact)
-    await store.saveEvent(completed.event)
+    await store.saveEvent(event)
 
     return {
       run: completed.run,
       artifact: completed.artifact,
-      event: completed.event,
+      event,
       state: await store.loadState(),
     }
   })
@@ -1091,29 +1135,7 @@ function registerIpcHandlers() {
       knowledgeChunks,
     })
     const providerId = input.providerId ?? 'fake-knowledge-review'
-    const provider =
-      providerId === 'fake-knowledge-review'
-        ? createFakeAgentProvider()
-        : (() => {
-            return undefined
-          })()
-    let resolvedProvider = provider
-
-    if (!resolvedProvider) {
-      const credentials = await store.listProviderCredentials()
-      const metadata = credentials.find((candidate) => candidate.providerId === providerId)
-      const encryptedSecret = await store.getProviderEncryptedSecret(providerId)
-      if (!metadata || !encryptedSecret) {
-        throw new Error(`Agent provider credential not found: ${providerId}`)
-      }
-      resolvedProvider = createOpenAiCompatibleAgentProvider({
-        id: metadata.providerId,
-        name: 'OpenAI Compatible',
-        model: metadata.model || DEFAULT_OPENAI_MODEL,
-        baseUrl: metadata.baseUrl || DEFAULT_OPENAI_BASE_URL,
-        apiKey: decryptCredential(encryptedSecret),
-      })
-    }
+    const resolvedProvider = await resolveAgentProvider(store, providerId)
 
     const result = await runKnowledgeReviewAgent({
       request: {

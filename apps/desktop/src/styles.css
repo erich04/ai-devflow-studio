@@ -662,6 +662,20 @@ button:disabled {
   line-height: 1.55;
 }
 
+.inspector-next-actions,
+.inspector-more-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.inspector-secondary-actions {
+  align-items: stretch;
+}
+
+.inspector-secondary-actions > button {
+  flex: 1 1 0;
+}
+
 .inspector-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

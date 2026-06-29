@@ -74,6 +74,7 @@ export type CompleteWorkflowAgentNodeInput = {
   nodeId: string
   userId: string
   userName: string
+  providerId?: string
 }
 
 export type CompleteWorkflowAgentNodeResult = {

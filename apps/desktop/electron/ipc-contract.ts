@@ -127,6 +127,7 @@ export type CompleteWorkflowAgentNodeInput = {
   nodeId: string
   userId: string
   userName: string
+  providerId?: string
 }
 
 export type CompleteWorkflowAgentNodeResult = {
@@ -621,6 +622,9 @@ export function parseCompleteWorkflowAgentNodeInput(value: unknown): CompleteWor
     nodeId: readRequiredString(value, 'nodeId'),
     userId: readRequiredString(value, 'userId'),
     userName: readRequiredString(value, 'userName'),
+    ...(typeof value['providerId'] === 'string' && value['providerId'].trim()
+      ? { providerId: value['providerId'].trim() }
+      : {}),
   }
 }
 

@@ -333,6 +333,80 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     expect(output.summary).toBe('wrapped')
   })
 
+  it('generates workflow artifacts with the OpenAI-compatible chat endpoint', async () => {
+    let requestBody: Record<string, unknown> | undefined
+    const provider = createOpenAiCompatibleAgentProvider({
+      id: 'doubao-review',
+      model: 'ark-code-latest',
+      apiKey: 'secret-key',
+      baseUrl: 'https://ark.example.com/api/coding/v3',
+      fetcher: async (_, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    title: '需求澄清结果',
+                    summary: 'live clarification',
+                    goals: ['clarify scope'],
+                    acceptanceCriteria: ['approval criteria captured'],
+                    nonGoals: ['no unrelated changes'],
+                    openQuestions: ['confirm copy tone'],
+                    assumptions: ['local only'],
+                    risks: [],
+                  }),
+                },
+              },
+            ],
+            usage: { prompt_tokens: 20, completion_tokens: 10 },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      },
+    })
+
+    const output = await provider.generateWorkflowArtifact?.({
+      request: {
+        id: 'workflow-request-1',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+        stage: 'clarify',
+        providerId: 'doubao-review',
+      },
+      context: {
+        run: {
+          id: run.id,
+          title: run.title,
+          request: run.request,
+          projectId: run.projectId,
+          status: run.status,
+          branchName: run.branchName,
+        },
+        node,
+        artifacts,
+      },
+      prompt: 'Return a clarification artifact.',
+    })
+
+    expect(requestBody).toMatchObject({
+      model: 'ark-code-latest',
+      temperature: 0.2,
+    })
+    expect(requestBody).not.toHaveProperty('response_format')
+    expect(JSON.stringify(requestBody)).toContain('Return only valid JSON with title')
+    expect(output).toMatchObject({
+      model: 'ark-code-latest',
+      summary: 'live clarification',
+      goals: ['clarify scope'],
+      usage: { inputTokens: 20, outputTokens: 10 },
+    })
+  })
+
   it('normalizes non-string provider fields before downstream redaction and findings', async () => {
     const provider = createOpenAiCompatibleAgentProvider({
       model: 'ark-code-latest',

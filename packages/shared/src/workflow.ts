@@ -44,6 +44,7 @@ export type WorkflowAgentStageCompletionInput = {
   run: WorkflowRun
   nodeId: string
   artifacts: Artifact[]
+  generatedArtifact?: Artifact
   existingEvents: AgentEvent[]
   actorName: string
   now: string
@@ -297,12 +298,21 @@ export function completeWorkflowAgentNode(input: WorkflowAgentStageCompletionInp
     throw new Error('Workflow agent node does not lead to a Gate')
   }
 
-  const artifact = buildAgentStageArtifact({
+  const artifact = input.generatedArtifact ?? buildAgentStageArtifact({
     run: input.run,
     node,
     artifacts: input.artifacts,
     now: input.now,
   })
+  if (artifact.runId !== input.run.id || artifact.nodeId !== node.id) {
+    throw new Error('Generated workflow artifact does not belong to the completed node')
+  }
+  if (
+    (node.stage === 'clarify' && artifact.kind !== 'clarification') ||
+    (node.stage === 'design' && artifact.kind !== 'design')
+  ) {
+    throw new Error(`Generated workflow artifact kind does not match node stage: ${artifact.kind}`)
+  }
   const run = linkArtifactToNodes(advanced.run, artifact.id, [node.id, advanced.nextNode.id])
   const nextNode = run.nodes.find((candidate) => candidate.id === advanced.nextNode!.id) ?? advanced.nextNode
   const artifacts = upsertArtifact(input.artifacts, artifact)

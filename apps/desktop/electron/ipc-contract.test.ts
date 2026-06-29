@@ -183,12 +183,14 @@ describe('IPC contract parsers', () => {
         nodeId: 'run-1-clarify',
         userId: 'u-ling',
         userName: 'Ling',
+        providerId: 'doubao-review',
       }),
     ).toEqual({
       runId: 'run-1',
       nodeId: 'run-1-clarify',
       userId: 'u-ling',
       userName: 'Ling',
+      providerId: 'doubao-review',
     })
   })
 
