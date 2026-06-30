@@ -1,4 +1,4 @@
-import { ArrowLeft, Bot, CheckCircle2, Code2, FolderOpen, Save } from 'lucide-react'
+import { ArrowLeft, Bot, CheckCircle2, Code2, FolderOpen, Save, Settings2, TestTube2 } from 'lucide-react'
 import {
   formatUsd,
   type AgentProviderConfig,
@@ -18,14 +18,11 @@ import {
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import {
-  buildAgentProviderDataSource,
-  codingRuntimeLabel,
-  codingTerminalLabel,
-  codingTraceMetadataString,
-  codingTraceSourceLabel,
-  displayNodeTitle,
-  type SupportContext,
-} from '../app/desktop-view-model'
+  buildAgentConsoleViewModel,
+  type AgentConsoleAction,
+  type AgentConsoleEvidenceGroup,
+} from '../app/agent-console-view-model'
+import { codingRuntimeLabel, codingTerminalLabel, type SupportContext } from '../app/desktop-view-model'
 
 export function AgentWorkbenchView({
   providers,
@@ -54,6 +51,7 @@ export function AgentWorkbenchView({
   onCancelCodingRun,
   onOpenCodingWorktree,
   onDeleteCodingWorktree,
+  onOpenTests,
   isStartingCodingAgent,
   runtimeBudgetApprovalId,
   onRuntimeBudgetApprovalIdChange,
@@ -96,6 +94,7 @@ export function AgentWorkbenchView({
   onCancelCodingRun: () => void
   onOpenCodingWorktree: () => void
   onDeleteCodingWorktree: () => void
+  onOpenTests: () => void
   isStartingCodingAgent: boolean
   runtimeBudgetApprovalId: string
   onRuntimeBudgetApprovalIdChange: (value: string) => void
@@ -112,18 +111,30 @@ export function AgentWorkbenchView({
   supportContext: SupportContext | null
   onReturnToInspector: () => void
 }) {
-  const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) ?? providers[0]
-  const providerDataSource = buildAgentProviderDataSource(selectedProvider)
-  const selectedProviderMode =
-    !selectedProvider
-      ? `${providerDataSource.label} · save a provider credential before running live review`
-      : selectedProvider.kind === 'fake'
-      ? `${providerDataSource.label} · deterministic dev adapter · no model cost`
-      : `${providerDataSource.label} · live OpenAI-compatible · may spend provider tokens`
-  const runtimeLabel = latestCodingRun ? codingRuntimeLabel(latestCodingRun.engine) : 'No runtime'
-  const terminalLabel = latestCodingRun ? codingTerminalLabel(latestCodingRun.status) : 'No terminal state'
+  const viewModel = buildAgentConsoleViewModel({
+    providers,
+    selectedProviderId,
+    selectedRun,
+    selectedNode,
+    reviews,
+    selectedReviews,
+    latestReview,
+    latestTrace,
+    latestUsage,
+    isRunningReview: isRunning,
+    isStartingCodingAgent,
+    codingRuns,
+    retryAttempts,
+    latestCodingRun,
+    codingEvents,
+    pendingCodingPermission,
+    permissionRequests,
+    workspace,
+    diff,
+    bootstrapEvidence,
+    testEvidence,
+  })
   const cleanupStatus = workspace?.cleanupStatus ?? (workspace?.deletedAt ? 'deleted' : workspace ? 'active' : 'none')
-  const budgetDecision = latestCodingRun?.budgetDecision
   const cleanupSummary =
     cleanupStatus === 'cleanup_failed'
       ? workspace?.cleanupError ?? 'Manual cleanup required.'
@@ -132,22 +143,48 @@ export function AgentWorkbenchView({
         : cleanupStatus === 'active'
           ? 'Managed workspace is still available for inspection.'
           : 'No managed workspace attached.'
-  const toolTraceEvents = codingEvents.filter((event) => event.kind === 'tool_call' || event.kind === 'tool_result')
+  const budgetDecision = latestCodingRun?.budgetDecision
+
+  function runPrimaryAction(action: AgentConsoleAction) {
+    if (action.disabled) {
+      return
+    }
+
+    if (action.id === 'run-review') {
+      onRunKnowledgeReview()
+      return
+    }
+
+    if (action.id === 'run-coding') {
+      onRunCodingAgent()
+      return
+    }
+
+    if (action.id === 'go-tests') {
+      onOpenTests()
+      return
+    }
+
+    if (action.id === 'return-workbench') {
+      onReturnToInspector()
+    }
+  }
 
   return (
-    <section className="page-grid" data-testid="agent-workbench">
-      <div className="page-main">
+    <section className="agent-console" data-testid="agent-workbench">
+      <div className="agent-console-main">
         <div className="section-heading">
           <span>Agent Workbench</span>
-          <strong>Knowledge Review Agent</strong>
+          <strong>{viewModel.title}</strong>
         </div>
+
         {supportContext && (supportContext.focusTarget === 'knowledge-review' || supportContext.focusTarget === 'coding-agent') ? (
           <div className="support-context-banner" data-testid="support-context-banner">
             <div>
               <span className="panel-label">来自 Workbench Inspector</span>
               <strong>{supportContext.label}</strong>
               <p>
-                当前目标：{selectedRun?.title ?? supportContext.runId} · {selectedNode ? displayNodeTitle(selectedNode) : supportContext.nodeId}
+                当前目标：{viewModel.currentTarget.runTitle} · {viewModel.currentTarget.nodeTitle}
               </p>
             </div>
             <button className="ghost-button" type="button" onClick={onReturnToInspector}>
@@ -157,167 +194,111 @@ export function AgentWorkbenchView({
           </div>
         ) : null}
 
-        <article className="agent-run-card">
-          <div>
-            <span className="panel-label">Current Review Target</span>
-            <strong>{selectedNode?.title ?? 'No selected node'}</strong>
-            <p>{selectedRun?.title ?? 'No selected run'}</p>
-          </div>
-          <label>
-            Review Model Provider
-            <select
-              aria-label="Review Model Provider"
-              value={selectedProviderId}
-              onChange={(event) => onProviderChange(event.target.value)}
-            >
-              {providers.map((provider) => (
-                <option key={provider.id} value={provider.id}>
-                  {provider.name} · {provider.model}
-                </option>
-              ))}
-              {providers.length === 0 ? <option value="">No saved provider</option> : null}
-            </select>
-          </label>
-          <div className="provider-mode-pill" data-testid="review-provider-mode">
-            <strong>{providerDataSource.status}</strong>
-            <span>{selectedProviderMode}</span>
-          </div>
-          <button className="primary-button" disabled={!selectedRun || !selectedNode || !selectedProvider || isRunning} onClick={onRunKnowledgeReview}>
-            <Bot size={16} />
-            {isRunning ? 'Review running' : 'Run Knowledge Review'}
-          </button>
-        </article>
-
-        <article className="agent-provider-card">
-          <div className="section-heading">
-            <span>Review Model Credential</span>
-            <strong>OpenAI-compatible / Volcengine Ark</strong>
-          </div>
-          <p>DevFlow Review Agent 会组装 review prompt 并调用这里配置的模型；明文 key 不会回读到 renderer。</p>
-          <label>
-            Provider ID
-            <input
-              aria-label="Review Provider ID"
-              value={providerIdDraft}
-              placeholder="doubao-review"
-              onChange={(event) => onProviderIdDraftChange(event.target.value)}
-            />
-          </label>
-          <label>
-            Base URL
-            <input
-              aria-label="Review Provider Base URL"
-              value={providerBaseUrlDraft}
-              placeholder="https://ark.cn-beijing.volces.com/api/coding/v3"
-              onChange={(event) => onProviderBaseUrlDraftChange(event.target.value)}
-            />
-          </label>
-          <label>
-            Model
-            <input
-              aria-label="Review Provider Model"
-              value={providerModelDraft}
-              placeholder="ark-code-latest"
-              onChange={(event) => onProviderModelDraftChange(event.target.value)}
-            />
-          </label>
-          <label>
-            API Key
-            <input
-              aria-label="Review Provider API Key"
-              type="password"
-              value={providerKeyDraft}
-              placeholder="sk-..."
-              onChange={(event) => onProviderKeyDraftChange(event.target.value)}
-            />
-          </label>
-          <button className="ghost-button" onClick={onSaveProviderCredential}>
-            <Save size={16} />
-            Save Credential
-          </button>
-        </article>
-
-        <article className="agent-run-card" data-testid="coding-agent-panel">
-          <div>
-            <span className="panel-label">Coding Agent Adapter</span>
-            <strong>{latestCodingRun ? latestCodingRun.status : 'No coding run yet'}</strong>
-            <p>{latestCodingRun?.summary ?? 'DevFlow 会组装上下文、创建 worktree、转发权限并归档 diff。'}</p>
-          </div>
-          <button
-            className="primary-button"
-            disabled={!selectedRun || !selectedNode || isStartingCodingAgent}
-            onClick={onRunCodingAgent}
-          >
-            <Code2 size={16} />
-            {isStartingCodingAgent ? 'Starting Coding Agent' : 'Run Coding Agent'}
-          </button>
-        </article>
-
-        <article className="agent-run-card">
-          <div>
-            <span className="panel-label">Policy Retry Attempts</span>
-            <strong>{retryAttempts.length}</strong>
-            <p>Human-approved retries launched from remediation candidates.</p>
-          </div>
-          {retryAttempts.slice(0, 3).map((attempt) => (
-            <div className="compact-row" key={attempt.id}>
-              <code>{attempt.status}</code>
-              <span>{attempt.candidateIds.join(', ')}</span>
-            </div>
-          ))}
-        </article>
-
-        {pendingCodingPermission ? (
-          <article className="agent-advisory agent-advisory--warn">
-            <span>Permission Relay</span>
-            <strong>{pendingCodingPermission.title}</strong>
-            <p>{pendingCodingPermission.reasons.join(' ')}</p>
+        <article className={`agent-current-task agent-current-task--${viewModel.primaryAction.tone}`} data-testid="agent-current-task">
+          <div className="agent-current-task__body">
+            <span className="panel-label">Current Task</span>
+            <strong>{viewModel.currentTarget.nodeTitle}</strong>
+            <p>{viewModel.currentTarget.runTitle}</p>
             <div className="knowledge-reference-meta">
-              <span>{pendingCodingPermission.permission}</span>
-              <span>{pendingCodingPermission.risk}</span>
-              {pendingCodingPermission.filePath ? <code>{pendingCodingPermission.filePath}</code> : null}
+              <span>{viewModel.currentTarget.stageLabel}</span>
+              <span>{viewModel.currentTarget.nodeKind}</span>
+              <span>{viewModel.currentTarget.nodeStatus}</span>
             </div>
-            <div className="inspector-actions">
-              <button className="primary-button" onClick={() => onReplyCodingPermission('approved')}>
-                <CheckCircle2 size={16} />
-                Approve once
-              </button>
-              <button className="ghost-button" onClick={() => onReplyCodingPermission('rejected')}>
-                Reject
-              </button>
-            </div>
-          </article>
-        ) : null}
+          </div>
+          <div className={`agent-current-task__advisory pill ${toneClass(viewModel.advisory.tone)}`}>
+            <span>{viewModel.advisory.label}</span>
+            <strong>{viewModel.advisory.detail}</strong>
+          </div>
+          <p className="agent-current-task__summary">{viewModel.advisory.summary}</p>
+          <div className="agent-current-task__action">
+            {viewModel.pendingPermission ? (
+              <div className="permission-action-panel">
+                <span className="panel-label">Permission Relay</span>
+                <strong>{viewModel.pendingPermission.title}</strong>
+                <p>{viewModel.pendingPermission.reasons.join(' ')}</p>
+                <div className="knowledge-reference-meta">
+                  <span>{viewModel.pendingPermission.permission}</span>
+                  <span>{viewModel.pendingPermission.risk}</span>
+                  {viewModel.pendingPermission.filePath ? <code>{viewModel.pendingPermission.filePath}</code> : null}
+                </div>
+                <div className="inspector-actions">
+                  <button className="primary-button" onClick={() => onReplyCodingPermission('approved')}>
+                    <CheckCircle2 size={16} />
+                    Approve once
+                  </button>
+                  <button className="ghost-button" onClick={() => onReplyCodingPermission('rejected')}>
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <button
+                  className="primary-button"
+                  disabled={viewModel.primaryAction.disabled}
+                  onClick={() => runPrimaryAction(viewModel.primaryAction)}
+                >
+                  {primaryActionIcon(viewModel.primaryAction.id)}
+                  {viewModel.primaryAction.label}
+                </button>
+                <p>{viewModel.primaryAction.disabledReason ?? viewModel.primaryAction.summary}</p>
+              </>
+            )}
+          </div>
+        </article>
+
+        <section className="agent-path-grid" aria-label="Agent execution paths">
+          {viewModel.pathStatuses.map((section) => (
+            <article className={`agent-path-card agent-path-card--${section.emphasis}`} key={section.id}>
+              <div>
+                <span className="panel-label">{section.label}</span>
+                <strong>{section.title}</strong>
+                <p>{section.summary}</p>
+              </div>
+              <div className="agent-fact-grid">
+                {section.facts.map((fact) => (
+                  <div className="compact-row" key={fact.label}>
+                    <span>{fact.label}</span>
+                    <strong>{fact.value}</strong>
+                  </div>
+                ))}
+              </div>
+              {section.disabledReason ? <p className="empty-note">{section.disabledReason}</p> : null}
+            </article>
+          ))}
+        </section>
 
         {latestCodingRun ? (
-          <article className="agent-provider-card">
+          <article className="agent-evidence-card">
             <div className="section-heading">
               <span>Coding Run Evidence</span>
               <strong>{latestCodingRun.branchName}</strong>
             </div>
-            <div className="compact-row">
-              <span>Runtime</span>
-              <strong>{runtimeLabel}</strong>
-            </div>
-            <div className="compact-row">
-              <span>Terminal state</span>
-              <strong>{terminalLabel}</strong>
-            </div>
-            <div className="compact-row">
-              <span>Provider</span>
-              <strong>{latestCodingRun.providerId}</strong>
-            </div>
-            <div className="compact-row">
-              <span>Changed paths</span>
-              <strong>{latestCodingRun.changedPaths.length}</strong>
-            </div>
-            <div className="compact-row">
-              <span>Bootstrap</span>
-              <strong>{bootstrapEvidence?.status ?? 'pending'}</strong>
-            </div>
-            <div className="compact-row">
-              <span>Test Evidence</span>
-              <strong>{testEvidence?.status ?? 'pending'}</strong>
+            <div className="agent-fact-grid agent-fact-grid--three">
+              <div className="compact-row">
+                <span>Runtime</span>
+                <strong>{codingRuntimeLabel(latestCodingRun.engine)}</strong>
+              </div>
+              <div className="compact-row">
+                <span>Terminal state</span>
+                <strong>{codingTerminalLabel(latestCodingRun.status)}</strong>
+              </div>
+              <div className="compact-row">
+                <span>Provider</span>
+                <strong>{latestCodingRun.providerId}</strong>
+              </div>
+              <div className="compact-row">
+                <span>Changed paths</span>
+                <strong>{latestCodingRun.changedPaths.length}</strong>
+              </div>
+              <div className="compact-row">
+                <span>Bootstrap</span>
+                <strong>{bootstrapEvidence?.status ?? 'pending'}</strong>
+              </div>
+              <div className="compact-row">
+                <span>Test Evidence</span>
+                <strong>{testEvidence?.status ?? 'pending'}</strong>
+              </div>
             </div>
             {budgetDecision ? (
               <div className="agent-advisory agent-advisory--warn">
@@ -360,9 +341,7 @@ export function AgentWorkbenchView({
               <strong>{cleanupStatus}</strong>
             </div>
             <p className="empty-note">{cleanupSummary}</p>
-            {testEvidence ? (
-              <p className="empty-note">{testEvidence.summary}</p>
-            ) : null}
+            {testEvidence ? <p className="empty-note">{testEvidence.summary}</p> : null}
             {workspace ? (
               <div className="knowledge-reference-meta">
                 <span>workspace {workspace.cleanupStatus ?? 'active'}</span>
@@ -397,177 +376,191 @@ export function AgentWorkbenchView({
           </article>
         ) : null}
 
-        <div className="section-heading section-heading--inline">
-          <span>Review History</span>
-          <strong>当前节点审查记录</strong>
-        </div>
-        <div className="agent-review-list">
-          {selectedReviews.length === 0 ? (
-            <p className="empty-note">还没有 Knowledge Review。选择节点后运行一次审查。</p>
+        <section className="agent-console-section" aria-label="Evidence and Trace">
+          <div className="section-heading section-heading--inline">
+            <span>Evidence & Trace</span>
+            <strong>当前节点执行证据</strong>
+          </div>
+          {viewModel.evidenceGroups.length === 0 ? (
+            <article className="agent-evidence-card">
+              <p className="empty-note">运行 Agent 后会在这里按 Review、Coding、Permission、Diff、Test Evidence 和 Cost 分组。</p>
+            </article>
           ) : (
-            selectedReviews.map((review) => (
-              <article className="agent-review-card" key={review.id}>
-                <div>
-                  <span className="panel-label">{review.runtime}</span>
-                  <strong>{review.conclusion}</strong>
-                  <p>{review.summary}</p>
-                </div>
-                <div className="knowledge-reference-meta">
-                  <span>{review.providerId}</span>
-                  <span>{review.model}</span>
-                  <span>{review.gateAdvisory.level}</span>
-                  <span>{Math.round(review.confidence * 100)}%</span>
-                </div>
-                {review.risks.length > 0 && (
-                  <ul>
-                    {review.risks.map((risk) => (
-                      <li key={risk}>{risk}</li>
-                    ))}
-                  </ul>
-                )}
-                {review.missingEvidence.length > 0 && (
-                  <ul>
-                    {review.missingEvidence.map((gap) => (
-                      <li key={gap}>{gap}</li>
-                    ))}
-                  </ul>
-                )}
-              </article>
-            ))
-          )}
-        </div>
-      </div>
-
-      <aside className="page-side">
-        <strong>Provider Status</strong>
-        {providers.map((provider) => (
-          <div className="provider-row" key={provider.id}>
-            <div>
-              <strong>{provider.name}</strong>
-              <span>{provider.kind}</span>
-            </div>
-            <code>{provider.maskedCredential ?? provider.model}</code>
-          </div>
-        ))}
-        <div className="compact-row">
-          <span>Provider source</span>
-          <strong>{providerDataSource.label}</strong>
-        </div>
-        <strong>Selected Runtime</strong>
-        <div className="compact-row">
-          <span>Provider</span>
-          <strong>{selectedProvider?.id ?? 'none'}</strong>
-        </div>
-        <div className="compact-row">
-          <span>Total reviews</span>
-          <strong>{reviews.length}</strong>
-        </div>
-        <div className="compact-row">
-          <span>Latest cost</span>
-          <strong>{latestUsage ? formatUsd(latestUsage.costUsd) : '$0.000'}</strong>
-        </div>
-        <div className="compact-row">
-          <span>Usage source</span>
-          <strong>{latestUsage?.source ?? 'none'}</strong>
-        </div>
-
-        <strong>Gate Advisory</strong>
-        {latestReview ? (
-          <article className={`agent-advisory agent-advisory--${latestReview.gateAdvisory.level}`}>
-            <span>{latestReview.gateAdvisory.level}</span>
-            <p>{latestReview.gateAdvisory.summary}</p>
-            <small>{latestReview.gateAdvisory.blocksApproval ? 'blocking' : 'warning-only'}</small>
-            <div className="compact-row">
-              <span>Blocks approval</span>
-              <strong>{latestReview.gateAdvisory.blocksApproval ? 'yes' : 'no'}</strong>
-            </div>
-          </article>
-        ) : (
-          <p className="empty-note">暂无 advisory。</p>
-        )}
-
-        <strong>Trace</strong>
-        {latestTrace ? (
-          <div className="trace-list">
-            {latestTrace.steps.map((step) => (
-              <div className="trace-step" key={step.id}>
-                <span>{step.kind}</span>
-                <strong>{step.label}</strong>
-                <p>{step.summary}</p>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="empty-note">运行 Agent 后会显示 context、retrieval、provider_call、artifact trace。</p>
-        )}
-
-        <strong>Coding Trace</strong>
-        {permissionRequests.length > 0 ? (
-          <>
-            <strong>Permission Timeline</strong>
-            <div className="trace-list">
-              {permissionRequests.map((request) => (
-                <div className="trace-step" key={request.id}>
-                  <span>{request.status}</span>
-                  <strong>{request.title}</strong>
-                  <p>{[request.permission, request.command, request.filePath].filter(Boolean).join(' · ')}</p>
-                </div>
+            <div className="agent-evidence-grid">
+              {viewModel.evidenceGroups.map((group) => (
+                <EvidenceGroupCard group={group} key={group.id} />
               ))}
             </div>
-          </>
-        ) : null}
-        {toolTraceEvents.length > 0 ? (
-          <>
-            <strong>Tool / Skill Timeline</strong>
-            <div className="trace-list">
-              {toolTraceEvents.map((event) => {
-                const toolName = codingTraceMetadataString(event.metadata, 'toolName') ?? event.kind
-                const skillName = codingTraceMetadataString(event.metadata, 'skillName') ?? 'Unknown skill'
-                const source = codingTraceSourceLabel(codingTraceMetadataString(event.metadata, 'source'))
-                const summary =
-                  codingTraceMetadataString(event.metadata, 'outputSummary') ??
-                  codingTraceMetadataString(event.metadata, 'inputSummary') ??
-                  event.message
-                const commandSummary = codingTraceMetadataString(event.metadata, 'commandSummary')
-                const filePath = codingTraceMetadataString(event.metadata, 'filePath')
-                const redactionApplied = event.metadata?.redactionApplied === true
-                return (
-                  <div className="trace-step" key={event.id}>
-                    <span>{source}</span>
-                    <strong>{toolName}</strong>
-                    <p>{skillName}</p>
-                    <p>{summary}</p>
-                    {(commandSummary || filePath || redactionApplied) && (
-                      <p>{[commandSummary, filePath, redactionApplied ? 'Redacted' : undefined].filter(Boolean).join(' · ')}</p>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </>
-        ) : null}
-        {codingEvents.length > 0 ? (
-          <div className="trace-list">
-            {codingEvents.map((event) => (
-              <div className="trace-step" key={event.id}>
-                <span>{event.kind}</span>
-                <strong>{event.message}</strong>
-                <p>{event.timestamp}</p>
+          )}
+        </section>
+
+        <details className="runtime-settings" open={!viewModel.runtimeSettings.selectedProvider}>
+          <summary>
+            <span>
+              <Settings2 size={16} />
+              Runtime Settings
+            </span>
+            <strong>{viewModel.runtimeSettings.summary}</strong>
+          </summary>
+          <div className="runtime-settings__body">
+            <article className="agent-evidence-card">
+              <div className="section-heading">
+                <span>Selected Review Provider</span>
+                <strong>{viewModel.runtimeSettings.providerDataSource.status}</strong>
               </div>
-            ))}
+              <p data-testid="review-provider-mode">
+                <strong>{viewModel.runtimeSettings.providerDataSource.label}</strong>
+                {' '}
+                {viewModel.runtimeSettings.providerMode}
+              </p>
+              {viewModel.runtimeSettings.selectedProvider ? (
+                <div className="provider-row">
+                  <div>
+                    <strong>{viewModel.runtimeSettings.selectedProvider.name}</strong>
+                    <span>{viewModel.runtimeSettings.selectedProvider.kind}</span>
+                  </div>
+                  <code>
+                    {viewModel.runtimeSettings.selectedProvider.maskedCredential ??
+                      viewModel.runtimeSettings.selectedProvider.model}
+                  </code>
+                </div>
+              ) : (
+                <p className="empty-note">当前没有选中的 Review Provider。请在右侧新增并保存一个 provider。</p>
+              )}
+              {providers.length > 0 ? (
+                <label className="runtime-provider-picker">
+                  Use saved provider
+                  <select
+                    aria-label="Saved Review Provider"
+                    value={selectedProviderId}
+                    onChange={(event) => onProviderChange(event.target.value)}
+                  >
+                    {providers.map((provider) => (
+                      <option key={provider.id} value={provider.id}>
+                        {provider.name} · {provider.model}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <div className="agent-fact-grid">
+                {viewModel.runtimeSettings.fields.map((field) => (
+                  <div className="compact-row" key={field.label}>
+                    <span>{field.label}</span>
+                    <strong>{field.value}</strong>
+                  </div>
+                ))}
+              </div>
+            </article>
+
+            <article className="agent-evidence-card runtime-settings-form">
+              <div className="section-heading">
+                <span>Add Review Provider</span>
+                <strong>OpenAI-compatible credential</strong>
+              </div>
+              <p>新增后会自动设为当前 Review Provider；明文 key 只保存在 Electron 本地安全存储，不会回读到 renderer。</p>
+              <label>
+                Provider ID
+                <input
+                  aria-label="Review Provider ID"
+                  value={providerIdDraft}
+                  placeholder="doubao-review"
+                  onChange={(event) => onProviderIdDraftChange(event.target.value)}
+                />
+              </label>
+              <label>
+                Base URL
+                <input
+                  aria-label="Review Provider Base URL"
+                  value={providerBaseUrlDraft}
+                  placeholder="https://ark.cn-beijing.volces.com/api/coding/v3"
+                  onChange={(event) => onProviderBaseUrlDraftChange(event.target.value)}
+                />
+              </label>
+              <label>
+                Model
+                <input
+                  aria-label="Review Provider Model"
+                  value={providerModelDraft}
+                  placeholder="ark-code-latest"
+                  onChange={(event) => onProviderModelDraftChange(event.target.value)}
+                />
+              </label>
+              <label>
+                API Key
+                <input
+                  aria-label="Review Provider API Key"
+                  type="password"
+                  value={providerKeyDraft}
+                  placeholder="sk-..."
+                  onChange={(event) => onProviderKeyDraftChange(event.target.value)}
+                />
+              </label>
+              <button className="ghost-button" onClick={onSaveProviderCredential}>
+                <Save size={16} />
+                Save and Use Provider
+              </button>
+            </article>
           </div>
-        ) : (
-          <p className="empty-note">运行 Coding Agent 后会显示 brief、permission、diff、bootstrap trace。</p>
-        )}
-        <div className="compact-row">
-          <span>Coding runs</span>
-          <strong>{codingRuns.length}</strong>
-        </div>
-        <div className="compact-row">
-          <span>Permission requests</span>
-          <strong>{permissionRequests.length}</strong>
-        </div>
-      </aside>
+        </details>
+      </div>
     </section>
   )
+}
+
+function EvidenceGroupCard({ group }: { group: AgentConsoleEvidenceGroup }) {
+  return (
+    <article className={`agent-evidence-card agent-evidence-card--${group.tone}`}>
+      <div className="section-heading">
+        <span>{group.title}</span>
+        <strong>{group.items.length}</strong>
+      </div>
+      <p>{group.summary}</p>
+      <div className="trace-list">
+        {group.items.map((item) => (
+          <div className={group.id === 'diff' ? 'trace-step trace-step--diff' : 'trace-step'} key={item.id}>
+            <span>{item.eyebrow}</span>
+            <strong>{item.title}</strong>
+            <p>{item.body}</p>
+            {item.meta.length > 0 ? (
+              <div className="knowledge-reference-meta">
+                {item.meta.map((meta) => (
+                  <span key={meta}>{meta}</span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </article>
+  )
+}
+
+function primaryActionIcon(actionId: AgentConsoleAction['id']) {
+  if (actionId === 'run-review') {
+    return <Bot size={16} />
+  }
+  if (actionId === 'run-coding') {
+    return <Code2 size={16} />
+  }
+  if (actionId === 'go-tests') {
+    return <TestTube2 size={16} />
+  }
+  return <ArrowLeft size={16} />
+}
+
+function toneClass(tone: AgentConsoleAction['tone']): string {
+  if (tone === 'bad') {
+    return 'bad'
+  }
+  if (tone === 'warn') {
+    return 'warn'
+  }
+  if (tone === 'good') {
+    return 'good'
+  }
+  if (tone === 'accent') {
+    return 'accent'
+  }
+  return 'soft'
 }

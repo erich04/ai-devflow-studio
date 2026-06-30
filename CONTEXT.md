@@ -5,6 +5,11 @@
 A single AI-assisted delivery attempt that starts from a task request and moves through clarification,
 design, build, test, pull request, and acceptance.
 
+## Delivery Workflow
+
+The six-stage flow for a Run: requirement clarification, solution design, implementation, test
+evidence, pull request handoff, and business acceptance.
+
 ## Node
 
 An execution or review unit inside a Run. Nodes can represent agent work, human gates, tests, pull
@@ -12,12 +17,34 @@ request creation, or acceptance steps.
 
 ## Gate
 
-A human decision point that controls whether a Run can move into the next risky stage.
+A human decision point that checks whether the current stage has enough evidence to move into the
+next risky stage.
+
+## Clarification Gate
+
+The Gate that reviews whether requirement clarification is complete enough to proceed into solution
+design.
+
+## Solution Review Gate
+
+The Gate that reviews whether the solution design is complete enough to proceed into implementation.
 
 ## Artifact
 
 A durable piece of evidence produced by a Run or Node, such as a requirement note, design document,
 code diff, test report, log, or pull request summary.
+
+## Requirement Decomposition Artifact
+
+A reviewable artifact produced when a user story or requirement is decomposed into domain language,
+technical references, assumptions, and follow-up work. It must pass a Gate before it can be treated
+as reusable team knowledge.
+
+## PR Delivery Package
+
+A handoff artifact that summarizes the original request, solution design, changed paths, test
+evidence, policy state, and review summary so the work can become a pull request later.
+_Avoid_: automatic merge, automatic repository upload.
 
 ## Skill
 
@@ -33,6 +60,53 @@ developer configuration.
 
 The team-maintained Git and Markdown source of reusable standards, templates, decisions, examples,
 project context, and glossary.
+
+## Knowledge Repository
+
+A Git-managed knowledge repository that links one Team Knowledge Foundation to multiple code
+repositories through standards, domain terms, relationships, and source references.
+_Avoid_: code repository manager.
+
+## Code Repository
+
+A source code repository linked from a Knowledge Repository. It remains the implementation source,
+while reusable understanding extracted from it becomes Repository-Derived Knowledge.
+
+## Repository-Derived Knowledge
+
+Reviewable system or business knowledge summarized from one or more linked Code Repositories and
+stored in the Knowledge Repository for later retrieval, review, and Gate evidence.
+
+## Candidate Knowledge
+
+Repository-Derived Knowledge that has been extracted or summarized but has not yet passed review.
+It can inform analysis, but it should not be treated as authoritative Gate evidence.
+
+## Confirmed Knowledge
+
+Repository-Derived Knowledge that has passed review and can be used as an authoritative reference
+for requirement clarification, solution design, Knowledge Review, and Gate decisions.
+
+## System Knowledge
+
+Repository-Derived Knowledge that explains technical structure, system boundaries, services,
+interfaces, data models, dependencies, or implementation constraints.
+
+## Business Knowledge
+
+Repository-Derived Knowledge that explains business terms, rules, user flows, domain assumptions, or
+relationships between business concepts.
+
+## Team Knowledge Foundation
+
+The shared knowledge layer that grounds AI-assisted delivery with team standards, domain language,
+retrievable references, and relationship context. In Chinese presentation material, use `团队知识底座`.
+_Avoid_: realtime library, knowledge frequency.
+
+## Knowledge Domain
+
+A domain-oriented view inside the Team Knowledge Foundation, such as frontend, backend, or database
+knowledge. Domains organize reusable knowledge without splitting it into isolated knowledge bases.
 
 ## Knowledge Source File
 
@@ -78,6 +152,11 @@ the standards that apply to it. v0.4 displays these checks; later versions can e
 A durable review report produced by the Knowledge Review Agent. It summarizes risks, missing
 evidence, suggested tests, referenced knowledge, model confidence, and the Gate Advisory produced
 for a selected Run/Node.
+
+## Knowledge Review Agent
+
+The DevFlow-owned review agent that evaluates a requirement or workflow node against team knowledge,
+evidence, and policy context. It reviews delivery readiness; it does not write code.
 
 ## Agent Trace
 
@@ -202,6 +281,17 @@ capture, tests, and team-safe summaries. In the current workflow model, Coding A
 only from build-stage task nodes. The fake engine is the deterministic default for automated
 verification; the real opencode HTTP engine is env-gated and manually smoke-tested until it is stable
 enough to become the default coding engine.
+
+## External Coding Engine
+
+An external agent runtime such as opencode or OpenCode that performs code-writing work behind a
+Coding Agent Adapter. DevFlow uses this external capability instead of implementing its own coding
+agent core.
+
+## Coding Agent
+
+The code-writing execution path that changes source code through a managed Coding Agent Adapter,
+permission relay, and worktree. It implements approved work; it does not replace Knowledge Review.
 
 ## Managed Coding Workspace
 

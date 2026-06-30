@@ -54,6 +54,7 @@ export type LocalStore = {
   upsertProject(project: LocalProject): Promise<void>
   listProjects(): Promise<LocalProject[]>
   saveRun(run: WorkflowRun): Promise<void>
+  deleteRun(runId: string): Promise<void>
   listRuns(): Promise<WorkflowRun[]>
   saveArtifact(artifact: Artifact): Promise<void>
   listArtifacts(runId?: string): Promise<Artifact[]>
@@ -363,6 +364,25 @@ function selectJson<T>(db: Database, sql: string, params: SqlValue[] = []): T[] 
   return parseJsonRows<T>(first.values)
 }
 
+function selectStringColumn(db: Database, sql: string, params: SqlValue[] = []): string[] {
+  const result = db.exec(sql, params)
+  const first = result[0]
+  if (!first) {
+    return []
+  }
+
+  return first.values.map((row) => String(row[0]))
+}
+
+function deleteWhereIn(db: Database, table: string, column: string, values: string[]): void {
+  if (values.length === 0) {
+    return
+  }
+
+  const placeholders = values.map(() => '?').join(', ')
+  db.run(`delete from ${table} where ${column} in (${placeholders})`, values)
+}
+
 type StoredWorkflowRunJson = Omit<WorkflowRun, 'nodes' | 'edges'> & {
   nodes?: WorkflowNode[]
   edges?: WorkflowEdge[]
@@ -560,6 +580,53 @@ class SqlJsLocalStore implements LocalStore {
       this.db.run('rollback')
       throw error
     }
+    await this.persist()
+  }
+
+  async deleteRun(runId: string): Promise<void> {
+    const trimmedRunId = runId.trim()
+    if (!trimmedRunId) {
+      throw new Error('Invalid runId')
+    }
+
+    this.db.run('begin transaction')
+    try {
+      const codingRunIds = selectStringColumn(
+        this.db,
+        'select id from coding_agent_runs where run_id = ? order by id asc',
+        [trimmedRunId],
+      )
+      const permissionRequestIds = selectStringColumn(
+        this.db,
+        'select id from coding_permission_requests where run_id = ? order by id asc',
+        [trimmedRunId],
+      )
+
+      deleteWhereIn(this.db, 'coding_permission_decisions', 'coding_run_id', codingRunIds)
+      deleteWhereIn(this.db, 'coding_permission_decisions', 'request_id', permissionRequestIds)
+      this.db.run('delete from coding_permission_requests where run_id = ?', [trimmedRunId])
+      this.db.run('delete from dependency_bootstrap_evidence where run_id = ?', [trimmedRunId])
+      deleteWhereIn(this.db, 'managed_coding_workspaces', 'coding_run_id', codingRunIds)
+      this.db.run('delete from coding_agent_events where run_id = ?', [trimmedRunId])
+      this.db.run('delete from coding_diff_artifacts where run_id = ?', [trimmedRunId])
+      this.db.run('delete from retry_attempts where run_id = ?', [trimmedRunId])
+      this.db.run('delete from gate_overrides where run_id = ?', [trimmedRunId])
+      this.db.run('delete from coding_agent_runs where run_id = ?', [trimmedRunId])
+      this.db.run('delete from agent_traces where run_id = ?', [trimmedRunId])
+      this.db.run('delete from agent_reviews where run_id = ?', [trimmedRunId])
+      this.db.run('delete from agent_token_usage where run_id = ?', [trimmedRunId])
+      this.db.run('delete from test_evidence where run_id = ?', [trimmedRunId])
+      this.db.run('delete from artifacts where run_id = ?', [trimmedRunId])
+      this.db.run('delete from agent_events where run_id = ?', [trimmedRunId])
+      this.db.run('delete from workflow_edges where run_id = ?', [trimmedRunId])
+      this.db.run('delete from workflow_nodes where run_id = ?', [trimmedRunId])
+      this.db.run('delete from workflow_runs where id = ?', [trimmedRunId])
+      this.db.run('commit')
+    } catch (error) {
+      this.db.run('rollback')
+      throw error
+    }
+
     await this.persist()
   }
 

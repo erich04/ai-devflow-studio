@@ -13,6 +13,7 @@ import {
   parseAgentProviderCredentialInput,
   parseCancelCodingAgentRunInput,
   parseCreateRunInput,
+  parseDeleteRunInput,
   parseCompleteWorkflowAgentNodeInput,
   parsePairDesktopInput,
   parseMcpServersInput,
@@ -422,5 +423,12 @@ describe('IPC contract parsers', () => {
     expect(parseOpenManagedWorktreeInput({ workspaceId: 'workspace-1' })).toEqual({
       workspaceId: 'workspace-1',
     })
+
+    expect(parseDeleteRunInput({ runId: ' run-1 ', deleteRemote: true })).toEqual({
+      runId: 'run-1',
+      deleteRemote: true,
+    })
+    expect(() => parseDeleteRunInput({ runId: ' ' })).toThrow(/runId/)
+    expect(() => parseDeleteRunInput({ runId: 'run-1', deleteRemote: 'yes' })).toThrow(/deleteRemote/)
   })
 })

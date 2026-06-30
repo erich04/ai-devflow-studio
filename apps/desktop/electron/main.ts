@@ -14,7 +14,6 @@ import {
   canApproveGateNow,
   canOverrideBlockedGate,
   createAgentReviewArtifacts,
-  createFakeAgentProvider,
   createOpenAiCompatibleAgentProvider,
   completeWorkflowAgentNode,
   createWorkflowRunFromRequest,
@@ -22,6 +21,7 @@ import {
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   advanceWorkflowAfterGateApproval,
+  isActiveCodingAgentRunStatus,
   knowledgeChunks,
   knowledgeDocuments,
   evaluateGateEnforcement,
@@ -47,6 +47,7 @@ import {
   ipcChannels,
   parseAgentEventInput,
   parseCancelCodingAgentRunInput,
+  parseDeleteRunInput,
   parseDeleteManagedWorktreeInput,
   parseEnsureCodingEngineInput,
   parseListCodingAgentRunsInput,
@@ -83,6 +84,7 @@ import { createRemoteSyncClient, type RemoteSyncClient } from './remote-sync.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
 import { createCodingEngineAdapterFromEnv } from './coding-engine.js'
 import { createCodingRuntime, type CodingRuntimeBudgetGuard } from './coding-runtime.js'
+import { deleteManagedCodingWorkspace as removeManagedCodingWorkspaceDirectory } from './coding-runner.js'
 import { createOpencodeProcessManager } from './opencode-process.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 import {
@@ -144,6 +146,37 @@ function resetRemoteSyncClient() {
 function broadcastToRenderers(channel: string, payload: unknown) {
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send(channel, payload)
+  }
+}
+
+async function assertNoActiveCodingAgentForRun(store: LocalStore, runId: string) {
+  const codingRuns = await store.listCodingAgentRuns(runId)
+  const activeRun = codingRuns.find((run) => isActiveCodingAgentRunStatus(run.status))
+  if (activeRun) {
+    throw new Error('这个 Run 还有运行中的 Coding Agent，请先取消 Coding Agent 后再删除 Run')
+  }
+}
+
+async function cleanupManagedWorktreesForRun(store: LocalStore, runId: string) {
+  const codingRuns = await store.listCodingAgentRuns(runId)
+  const codingRunIds = new Set(codingRuns.map((run) => run.id))
+  if (codingRunIds.size === 0) {
+    return
+  }
+
+  const workspaces = (await store.listManagedCodingWorkspaces()).filter(
+    (workspace) => codingRunIds.has(workspace.codingRunId) && workspace.cleanupStatus !== 'deleted',
+  )
+
+  for (const workspace of workspaces) {
+    const result = await removeManagedCodingWorkspaceDirectory(workspace)
+    if (result.cleanupStatus === 'cleanup_failed') {
+      throw new Error(
+        result.cleanupError
+          ? `Managed worktree 清理失败：${result.cleanupError}`
+          : 'Managed worktree 清理失败',
+      )
+    }
   }
 }
 
@@ -280,24 +313,12 @@ async function listAgentProviderConfigs(): Promise<AgentProviderConfig[]> {
   const store = await getStore()
   const credentials = await store.listProviderCredentials()
 
-  return [
-    {
-      id: 'fake-knowledge-review',
-      name: 'Deterministic Fake Provider',
-      kind: 'fake',
-      model: 'fake',
-      enabled: true,
-      updatedAt: new Date(0).toISOString(),
-    },
-    ...credentials.map(providerConfigFromCredential),
-  ]
+  return credentials
+    .filter((metadata) => metadata.providerId !== 'fake-knowledge-review')
+    .map(providerConfigFromCredential)
 }
 
 async function resolveAgentProvider(store: LocalStore, providerId: string): Promise<AgentProvider> {
-  if (providerId === 'fake-knowledge-review') {
-    return createFakeAgentProvider()
-  }
-
   const credentials = await store.listProviderCredentials()
   const metadata = credentials.find((candidate) => candidate.providerId === providerId)
   const encryptedSecret = await store.getProviderEncryptedSecret(providerId)
@@ -866,6 +887,32 @@ function registerIpcHandlers() {
     return created.run
   })
 
+  ipcMain.handle(ipcChannels.deleteRun, async (_, payload: unknown) => {
+    const input = parseDeleteRunInput(payload)
+    const store = await getStore()
+    const localRun = (await store.listRuns()).find((candidate) => candidate.id === input.runId)
+
+    if (!localRun && !input.deleteRemote) {
+      throw new Error(`Run not found: ${input.runId}`)
+    }
+
+    await assertNoActiveCodingAgentForRun(store, input.runId)
+
+    const remote = input.deleteRemote
+      ? await (await getRemoteSyncClient()).deleteRun({ runId: input.runId })
+      : undefined
+
+    if (localRun) {
+      await cleanupManagedWorktreesForRun(store, input.runId)
+      await store.deleteRun(input.runId)
+    }
+
+    return {
+      ...(remote ? { remote } : {}),
+      state: await store.loadState(),
+    }
+  })
+
   ipcMain.handle(ipcChannels.completeWorkflowAgentNode, async (_, payload: unknown) => {
     const input = parseCompleteWorkflowAgentNodeInput(payload)
     const store = await getStore()
@@ -881,7 +928,10 @@ function registerIpcHandlers() {
       store.listArtifacts(run.id),
       store.listEvents(run.id),
     ])
-    const providerId = input.providerId ?? 'fake-knowledge-review'
+    const providerId = input.providerId
+    if (!providerId) {
+      throw new Error('Review provider is not configured. Save Provider ID, Base URL, Model, and API Key before running this agent.')
+    }
     const provider = await resolveAgentProvider(store, providerId)
     const completedAt = new Date().toISOString()
     const generated = await runWorkflowStageAgent({
@@ -1134,7 +1184,10 @@ function registerIpcHandlers() {
       knowledgeDocuments,
       knowledgeChunks,
     })
-    const providerId = input.providerId ?? 'fake-knowledge-review'
+    const providerId = input.providerId
+    if (!providerId) {
+      throw new Error('Review provider is not configured. Save Provider ID, Base URL, Model, and API Key before running Knowledge Review.')
+    }
     const resolvedProvider = await resolveAgentProvider(store, providerId)
 
     const result = await runKnowledgeReviewAgent({

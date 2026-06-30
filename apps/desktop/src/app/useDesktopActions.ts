@@ -316,13 +316,17 @@ export function useDesktopActions(input: {
         : '设计方案已生成，进入方案评审 Gate'
 
     if (desktopApi) {
+      if (!selectedAgentProviderId) {
+        setToast('请先在 Agents 的 Runtime Settings 配置 Review Provider：Provider ID、Base URL、Model 和 API Key')
+        return
+      }
       try {
         const result = await desktopApi.completeWorkflowAgentNode({
           runId: selectedRun.id,
           nodeId: selectedNode.id,
           userId: currentUser.id,
           userName: currentUser.name,
-          providerId: selectedAgentProviderId || 'fake-knowledge-review',
+          providerId: selectedAgentProviderId,
         })
         applyLocalExecutionState(result.state)
         setSelectedRunId(result.run.id)
@@ -507,15 +511,15 @@ export function useDesktopActions(input: {
     const model = providerModelDraft.trim()
 
     if (!providerKeyDraft.trim()) {
-      setToast('请输入 Review Model API Key')
+      setToast('请输入 API Key')
       return
     }
     if (!providerId) {
-      setToast('请输入 Review Model Provider ID')
+      setToast('请输入 Provider ID')
       return
     }
     if (!model) {
-      setToast('请输入 Review Model')
+      setToast('请输入 Model')
       return
     }
 
@@ -530,9 +534,9 @@ export function useDesktopActions(input: {
       setAgentProviders(mergeById(providers, [reviewProviderFromMetadata(metadata)]))
       setSelectedAgentProviderId(metadata.providerId)
       setProviderKeyDraft('')
-      setToast(`Review model credential saved: ${metadata.maskedCredential}`)
+      setToast(`Review provider saved and selected: ${metadata.maskedCredential}`)
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '保存 Review Model Credential 失败')
+      setToast(error instanceof Error ? error.message : '保存 Review Provider 失败')
     }
   }
 
@@ -543,6 +547,10 @@ export function useDesktopActions(input: {
 
     if (!desktopApi) {
       setToast('请在 Electron 应用中运行 Knowledge Review Agent')
+      return
+    }
+    if (!selectedAgentProviderId) {
+      setToast('请先在 Runtime Settings 配置 Review Provider：Provider ID、Base URL、Model 和 API Key')
       return
     }
 
@@ -766,6 +774,26 @@ export function useDesktopActions(input: {
     setSelectedNodeId(created.run.currentNodeId)
   }
 
+  async function deleteRun(targetRun: WorkflowRun, options: { deleteRemote: boolean }): Promise<boolean> {
+    if (!desktopApi) {
+      setToast('请在 Electron 应用中删除 Run')
+      return false
+    }
+
+    try {
+      const result = await desktopApi.deleteRun({
+        runId: targetRun.id,
+        deleteRemote: options.deleteRemote,
+      })
+      applyLocalExecutionState(result.state)
+      setToast(options.deleteRemote ? 'Run 已删除，远端和本地状态已刷新' : '本地 Run 已删除')
+      return true
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '删除 Run 失败')
+      return false
+    }
+  }
+
   async function persistDeliveryArtifact(nextRun: WorkflowRun, artifact: Artifact, message: string) {
     const timestamp = artifact.updatedAt
     const event: Omit<AgentEvent, 'sequence'> = {
@@ -896,6 +924,7 @@ export function useDesktopActions(input: {
     openCodingWorktree,
     deleteCodingWorktree,
     createRun,
+    deleteRun,
     generatePrDraft,
     generateAcceptanceBundle,
     toggleMcp,

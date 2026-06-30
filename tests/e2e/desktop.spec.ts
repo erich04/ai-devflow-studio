@@ -479,12 +479,14 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
       },
       listAgentProviders: async () => [
         {
-          id: 'fake-knowledge-review',
-          name: 'Deterministic Fake Provider',
-          kind: 'fake',
-          model: 'fake',
+          id: 'doubao-review',
+          name: 'doubao-review',
+          kind: 'openai-compatible',
+          model: 'ark-code-latest',
+          baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
           enabled: true,
-          updatedAt: '1970-01-01T00:00:00.000Z',
+          maskedCredential: 'e8...test',
+          updatedAt: '2026-06-15T00:03:00.000Z',
         },
       ],
       saveAgentProviderCredential: async () => ({
@@ -518,8 +520,8 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
           nodeId,
           projectId,
           runtime,
-          providerId: providerId ?? 'fake-knowledge-review',
-          model: 'fake',
+          providerId: providerId ?? 'doubao-review',
+          model: 'ark-code-latest',
           conclusion: 'Knowledge review completed for this node.',
           summary: 'Reviewed knowledge references and generated warning-only advisory.',
           risks: ['Gate requires reviewer evidence before approval.'],
@@ -573,6 +575,32 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
           timestamp: createdAt,
           source: 'estimated',
         }
+        const reviewedRun = {
+          id: runId,
+          title: '重构 GitHub webhook 重试策略',
+          request: '请先澄清 webhook retry 的失败边界，再设计实现方案。',
+          projectId,
+          creatorId: 'u-ling',
+          status: 'clarifying',
+          currentNodeId: nodeId,
+          branchName: 'ai/webhook-retry',
+          createdAt: '2026-06-21T16:00:00.000Z',
+          updatedAt: createdAt,
+          nodes: [
+            {
+              id: nodeId,
+              stage: 'clarify',
+              title: '需求澄清',
+              subtitle: '补齐验收口径与非目标',
+              kind: 'agent',
+              status: 'running',
+              ownerId: 'u-ling',
+              retryCount: 0,
+              artifactIds: [],
+            },
+          ],
+          edges: [],
+        }
 
         return {
           review,
@@ -580,7 +608,7 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
           tokenUsage,
           state: {
             projects: [localProject],
-            runs: [],
+            runs: [reviewedRun],
             artifacts: [],
             events: [],
             testEvidence: [],
@@ -728,32 +756,34 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
   })
 }
 
+async function createFixtureRun(page: import('@playwright/test').Page) {
+  await page.getByRole('button', { name: /新建 Run/ }).click()
+  const dialog = page.getByRole('dialog', { name: /Create new run/ })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('标题').fill('重构 GitHub webhook 重试策略')
+  await dialog.getByLabel('一句话需求').fill('请先澄清 webhook retry 的失败边界，再设计实现方案。')
+  await dialog.getByRole('button', { name: /创建并开始澄清/ }).click()
+  await expect(page.locator('.run-list').getByText('重构 GitHub webhook 重试策略', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('toast')).toContainText('新 Run 已创建')
+  await expect(page.getByTestId('workflow-canvas')).toContainText('需求澄清')
+  await expect(page.getByTestId('node-inspector')).toContainText('需求澄清')
+}
+
 test.describe('AI DevFlow desktop workbench', () => {
   test('loads the workbench and supports core developer interactions', async ({ page }) => {
     await installDesktopApi(page)
     await page.goto('/')
 
     await expect(page).toHaveTitle(/AI DevFlow Studio/)
-    await expect(page.getByTestId('runtime-source-badge')).toContainText('seed fallback')
-    await expect(page.getByTestId('runtime-source-badge')).toContainText('fixture fallback')
+    await expect(page.getByTestId('runtime-source-badge')).toContainText('local SQLite empty')
     await expect(page.getByText('开发者工作台')).toBeVisible()
-    await expect(page.getByTestId('workflow-canvas')).toBeVisible()
-    await expect(page.getByTestId('workflow-canvas')).toContainText('Team policy 插入')
-    await expect(page.getByTestId('workflow-canvas')).toContainText('ART')
-    await expect(page.getByTestId('inspector-status-matrix')).toContainText('Policy snapshot')
-    await expect(page.getByTestId('node-inspector')).toContainText('方案评审 Gate')
+    await expect(page.getByTestId('workflow-empty-state')).toContainText('暂无 Run')
+    await expect(page.getByTestId('node-inspector-empty')).toContainText('选择真实 Run')
 
     await page.getByTestId('theme-toggle').click()
     await expect(page.locator('html')).toHaveAttribute('data-theme-preference', 'light')
 
-    await page.getByRole('button', { name: /通过 Gate/ }).click()
-    await expect(page.getByTestId('toast')).toContainText('方案评审 Gate 已通过')
-
-    await page.getByRole('button', { name: /新建 Run/ }).click()
-    await expect(page.getByRole('dialog', { name: /Create new run/ })).toBeVisible()
-    await page.getByRole('button', { name: /创建并开始澄清/ }).click()
-    await expect(page.locator('.run-list').getByText('重构 GitHub webhook 重试策略', { exact: true })).toBeVisible()
-    await expect(page.getByTestId('toast')).toContainText('新 Run 已创建')
+    await createFixtureRun(page)
 
     await page.getByRole('button', { name: /选择本地仓库/ }).click()
     await expect(page.locator('.local-project-panel').getByText('fixture-project', { exact: true })).toBeVisible()
@@ -762,93 +792,62 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.getByRole('button', { name: /保存测试命令/ }).click()
     await expect(page.getByTestId('toast')).toContainText('测试命令已保存')
 
+    await expect(page.getByTestId('tests-view')).toContainText('测试计划与证据')
+    await expect(page.getByTestId('tests-view')).toContainText('pnpm test -- --run')
     await page.getByRole('button', { name: /工作台/ }).click()
-    await page.getByRole('button', { name: /执行测试/ }).click()
-    await expect(page.getByTestId('tests-view')).toContainText('来自 Workbench Inspector')
-    await expect(page.getByTestId('tests-view')).toContainText('执行本地测试并生成 Test Evidence')
-    await page.getByRole('button', { name: /返回当前 Inspector/ }).click()
-    await expect(page.getByTestId('node-inspector')).toBeVisible()
 
     await page.getByLabel('Search runs and knowledge').fill('nothing matches this')
     await expect(page.getByTestId('search-results')).toContainText('没有匹配结果')
     await expect(page.getByText('没有匹配的 Run')).toBeVisible()
-    await page.getByLabel('Search runs and knowledge').fill('health endpoint')
-    await expect(page.getByTestId('search-results')).toContainText('API Health Endpoint Standard')
-    await expect(page.locator('.run-list').getByText('为 Payments API 增加 /health 端点', { exact: true })).toBeVisible()
-
-    await page.getByLabel('Search runs and knowledge').fill('healthService.check')
-    await page.getByTestId('search-results').getByRole('button', { name: /方案设计/ }).click()
-    await expect(page.getByTestId('focused-artifact')).toContainText('healthService.check')
-
-    await page.getByLabel('Search runs and knowledge').fill('degraded 状态定义')
-    await page.getByTestId('search-results').getByRole('button', { name: /thinking/ }).click()
-    await expect(page.getByTestId('focused-event')).toContainText('degraded 状态定义')
+    await page.getByLabel('Search runs and knowledge').fill('重构 GitHub')
+    await expect(page.getByTestId('search-results')).toContainText('重构 GitHub webhook 重试策略')
+    await expect(page.locator('.run-list').getByText('重构 GitHub webhook 重试策略', { exact: true })).toBeVisible()
   })
 
   test('supports manager, knowledge, skill, MCP, and test views', async ({ page }) => {
     await installDesktopApi(page)
     await page.goto('/')
+    await createFixtureRun(page)
 
-    await page.getByRole('button', { name: /Agent Review/ }).click()
-    await expect(page.getByTestId('agent-workbench')).toContainText('来自 Workbench Inspector')
-    await expect(page.getByTestId('agent-workbench')).toContainText('运行 Knowledge Review 并补齐 Gate Advisory')
+    await page.getByRole('button', { name: /^Agents$/ }).click()
+    await expect(page.getByTestId('agent-workbench')).toContainText('Agent 执行台')
+    await expect(page.getByTestId('agent-workbench')).toContainText('doubao-review')
+    await expect(page.getByRole('button', { name: /Run Knowledge Review/ })).toBeEnabled()
     await page.getByRole('button', { name: /Run Knowledge Review/ }).click()
     await expect(page.getByTestId('toast')).toContainText('Knowledge Review 已归档')
     await expect(page.getByTestId('agent-workbench')).toContainText('warning-only')
     await expect(page.getByTestId('agent-workbench')).toContainText('Build redacted context')
-    await page.getByRole('button', { name: /返回当前 Inspector/ }).click()
-    await expect(page.getByTestId('node-inspector')).toContainText('Knowledge Review Agent')
-
-    await page.getByRole('button', { name: /查看引用来源/ }).first().click()
-    await expect(page.getByTestId('knowledge-view')).toContainText('来自 Workbench Inspector')
-    await expect(page.getByTestId('focused-knowledge-document')).toContainText('API Health Endpoint Standard')
-    await page.getByRole('button', { name: /返回当前 Inspector/ }).click()
-    await expect(page.getByTestId('node-inspector')).toContainText('Knowledge Governance')
 
     await page.getByLabel('Search runs and knowledge').fill('missing knowledge node')
     await page.getByRole('button', { name: /Team Overview/ }).click()
     await expect(page.getByTestId('team-overview')).toContainText('项目交付健康')
-    await expect(page.getByTestId('team-overview').getByText('Payments API', { exact: true }).first()).toBeVisible()
+    await expect(page.getByTestId('team-overview')).toContainText('未加载 Team Project')
 
     await page.getByRole('button', { name: /Knowledge/ }).click()
     await expect(page.getByTestId('knowledge-view')).toContainText('Knowledge Governance')
-    await expect(page.getByTestId('knowledge-view')).toContainText('Git Markdown Index')
-    await expect(page.getByTestId('knowledge-view')).toContainText('轻量知识图谱')
+    await expect(page.getByTestId('knowledge-view')).toContainText('没有匹配的知识文档')
     await expect(page.getByText('没有匹配的知识节点')).toBeVisible()
-    await page.getByLabel('Search runs and knowledge').fill('')
-    await expect(page.getByTestId('knowledge-view')).toContainText('API Health Endpoint Standard')
-    await expect(page.getByTestId('knowledge-view')).toContainText('docs/knowledge/standards/api-health.md')
-    await expect(page.getByTestId('knowledge-view')).toContainText('Run references')
-    await expect(page.getByTestId('knowledge-view')).toContainText('artifact')
-    await expect(page.getByTestId('knowledge-view')).toContainText('lexical')
-    await expect(page.getByTestId('knowledge-view')).toContainText(/kh-[a-f0-9]{8}/)
-    await page.getByLabel('Search runs and knowledge').fill('API Health Endpoint Standard')
-    await page.getByTestId('search-results').getByRole('button', { name: /API Health Endpoint Standard/ }).first().click()
-    await expect(page.getByTestId('focused-knowledge-document')).toContainText('API Health Endpoint Standard')
     await page.getByLabel('Search runs and knowledge').fill('')
 
     await page.getByRole('button', { name: /^Agents$/ }).click()
     await expect(page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
-    await expect(page.getByTestId('agent-workbench')).toContainText('Deterministic Fake Provider')
+    await expect(page.getByTestId('agent-workbench')).toContainText('doubao-review')
     await expect(page.getByTestId('agent-workbench')).toContainText('warning-only')
     await expect(page.getByTestId('agent-workbench')).toContainText('Build redacted context')
 
     await page.getByRole('button', { name: /^Skills$/ }).click()
     await expect(page.getByTestId('skill-view')).toContainText('团队能力目录')
-    await expect(page.getByText('方案评审')).toBeVisible()
+    await expect(page.getByTestId('skill-view')).toContainText('未加载真实团队 Skills')
 
     await page.getByRole('button', { name: /^MCP$/ }).click()
     await expect(page.getByTestId('mcp-view')).toContainText('本机工具连接器')
-    await page.getByRole('button', { name: /Disable/ }).first().click()
-    await expect(page.getByRole('button', { name: /Enable/ }).first()).toBeVisible()
+    await expect(page.getByTestId('mcp-view')).toContainText('未加载本地 MCP 连接器')
 
     await page.getByRole('button', { name: /^测试$/ }).click()
     await expect(page.getByTestId('tests-view')).toContainText('测试计划与证据')
     await page.getByRole('button', { name: /执行测试/ }).click()
     await expect(page.getByTestId('toast')).toContainText('测试通过，证据已归档')
     await expect(page.getByTestId('tests-view')).toContainText('Local test evidence')
-    await page.getByRole('button', { name: /工作台/ }).click()
-    await expect(page.getByTestId('node-inspector')).toContainText('Local Test Evidence Standard')
-    await expect(page.getByTestId('node-inspector')).toContainText('satisfied')
+    await expect(page.getByTestId('tests-view')).toContainText('passed')
   })
 })

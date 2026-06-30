@@ -52,12 +52,14 @@ const remoteRun = {
 }
 
 const agentProvider = {
-  id: 'fake-knowledge-review',
-  name: 'Deterministic Fake Provider',
-  kind: 'fake' as const,
-  model: 'fake',
+  id: 'doubao-review',
+  name: 'doubao-review',
+  kind: 'openai-compatible' as const,
+  model: 'ark-code-latest',
+  baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
   enabled: true,
-  updatedAt: '1970-01-01T00:00:00.000Z',
+  maskedCredential: 'e8...test',
+  updatedAt: '2026-06-15T00:03:00.000Z',
 }
 
 const fixturePairingCredential: DesktopPairingCredential = {
@@ -305,6 +307,28 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         now: '2026-06-21T16:00:00.000Z',
       }).run,
     ),
+    deleteRun: vi.fn().mockResolvedValue({
+      state: {
+        projects: [localProject],
+        runs: [],
+        artifacts: [],
+        events: [],
+        testEvidence: [],
+        settings: { themePreference: 'system' },
+        mcpServers: [],
+        agentReviews: [],
+        agentTraces: [],
+        agentTokenUsage: [],
+        codingRuns: [],
+        codingEvents: [],
+        codingPermissionRequests: [],
+        codingPermissionDecisions: [],
+        managedCodingWorkspaces: [],
+        dependencyBootstrapEvidence: [],
+        codingDiffArtifacts: [],
+        retryAttempts: [],
+      },
+    }),
     completeWorkflowAgentNode: vi.fn().mockImplementation(async (input) => {
       const created = createWorkflowRunFromRequest({
         runId: 'run-created-from-request',
@@ -430,7 +454,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         nodeId: input.nodeId,
         projectId: input.projectId,
         runtime: input.runtime,
-        providerId: input.providerId ?? 'fake-knowledge-review',
+        providerId: input.providerId ?? agentProvider.id,
         model: 'fake',
         conclusion: 'Knowledge review completed for the selected gate.',
         summary: 'Reviewed knowledge references and found one advisory.',
@@ -675,7 +699,7 @@ function DeliveryActionHarness({ api }: { api: DevFlowDesktopApi }) {
       desktopPairing: null,
       pairingCodeDraft: '',
       mcpServers: [],
-      selectedAgentProviderId: 'fake-knowledge-review',
+      selectedAgentProviderId: agentProvider.id,
       providerIdDraft: '',
       providerBaseUrlDraft: '',
       providerModelDraft: '',
@@ -744,7 +768,7 @@ function GateApprovalFallbackHarness() {
       desktopPairing: null,
       pairingCodeDraft: '',
       mcpServers: [],
-      selectedAgentProviderId: 'fake-knowledge-review',
+      selectedAgentProviderId: agentProvider.id,
       providerIdDraft: '',
       providerBaseUrlDraft: '',
       providerModelDraft: '',
@@ -837,7 +861,7 @@ describe('App', () => {
     expect(screen.getByTestId('workflow-empty-state')).toHaveTextContent('暂无 Run')
 
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('not configured')
+    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('no selected provider')
 
     fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
     expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('not indexed')
@@ -856,7 +880,7 @@ describe('App', () => {
     const localProjectPanel = screen.getByLabelText('Local project')
     expect(within(localProjectPanel).getByText('未选择仓库')).toBeInTheDocument()
     expect(within(localProjectPanel).getByText('not selected')).toBeInTheDocument()
-    expect(within(localProjectPanel).queryByText('Team Project 归属')).not.toBeInTheDocument()
+    expect(within(localProjectPanel).queryByText('Team Project')).not.toBeInTheDocument()
     expect(within(localProjectPanel).queryByText('Branch')).not.toBeInTheDocument()
   })
 
@@ -888,7 +912,7 @@ describe('App', () => {
     expect(within(localProjectPanel).queryByText('connected')).not.toBeInTheDocument()
     expect(within(localProjectPanel).queryByText('not selected')).not.toBeInTheDocument()
     expect(within(localProjectPanel).queryByText('未绑定 Team Project')).not.toBeInTheDocument()
-    expect(within(localProjectPanel).getByText('not bound')).toBeInTheDocument()
+    expect(within(localProjectPanel).getByText('未绑定')).toBeInTheDocument()
     expect(await within(localProjectPanel).findByText('main')).toBeInTheDocument()
     const refreshBranchButton = within(localProjectPanel).getByRole('button', { name: '刷新 Git 分支' })
     expect(refreshBranchButton).toBeInTheDocument()
@@ -945,6 +969,25 @@ describe('App', () => {
     })
   })
 
+  it('deletes a local run from the row menu after confirmation', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: `${fixtureRuns[0]!.title} actions` }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /删除本地 Run/ }))
+    expect(screen.getByRole('dialog', { name: 'Delete run' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '删除本地 Run' }))
+
+    await waitFor(() =>
+      expect(api.deleteRun).toHaveBeenCalledWith({
+        runId: fixtureRuns[0]!.id,
+        deleteRemote: false,
+      }),
+    )
+  })
+
   it('completes the current clarify agent through the desktop write path', async () => {
     const api = installDesktopApi()
     render(<App />)
@@ -965,7 +1008,7 @@ describe('App', () => {
         nodeId: 'run-created-from-request-clarify',
         userId: 'u-ling',
         userName: 'u-ling',
-        providerId: 'fake-knowledge-review',
+        providerId: agentProvider.id,
       })),
     )
     expect(await screen.findByText('需求澄清结果')).toBeInTheDocument()
@@ -1775,7 +1818,7 @@ describe('App', () => {
       runId: fixtureRuns[0]!.id,
       nodeId: fixtureRuns[0]!.currentNodeId,
       runtime: 'electron',
-      providerId: 'fake-knowledge-review',
+      providerId: agentProvider.id,
     })))
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Knowledge Review Agent')
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('warning-only')
@@ -1814,18 +1857,23 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
 
-    expect(await screen.findByLabelText('Review Model Provider')).toBeInTheDocument()
-    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('development provider')
-    expect(screen.getByLabelText('Review Provider ID')).toHaveValue('doubao-review')
-    expect(screen.getByLabelText('Review Provider Base URL')).toHaveValue(
-      'https://ark.cn-beijing.volces.com/api/coding/v3',
-    )
-    expect(screen.getByLabelText('Review Provider Model')).toHaveValue('ark-code-latest')
+    expect(await screen.findByText('Add Review Provider')).toBeInTheDocument()
+    expect(screen.getByLabelText('Saved Review Provider')).toBeInTheDocument()
+    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('stored provider metadata')
+    fireEvent.change(screen.getByLabelText('Review Provider ID'), {
+      target: { value: 'doubao-review' },
+    })
+    fireEvent.change(screen.getByLabelText('Review Provider Base URL'), {
+      target: { value: 'https://ark.cn-beijing.volces.com/api/coding/v3' },
+    })
+    fireEvent.change(screen.getByLabelText('Review Provider Model'), {
+      target: { value: 'ark-code-latest' },
+    })
 
     fireEvent.change(screen.getByLabelText('Review Provider API Key'), {
       target: { value: 'e8fa6ce2-test-key' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /Save Credential/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Save and Use Provider/ }))
 
     await waitFor(() =>
       expect(saveAgentProviderCredential).toHaveBeenCalledWith({
@@ -1837,7 +1885,7 @@ describe('App', () => {
     )
     await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalledTimes(2))
     expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('stored provider metadata')
-    expect(screen.getByText('Review model credential saved: e8...test')).toBeInTheDocument()
+    expect(screen.getByText('Review provider saved and selected: e8...test')).toBeInTheDocument()
   })
 
   it('requires an API key before saving a Review Model Provider credential', async () => {
@@ -1845,11 +1893,11 @@ describe('App', () => {
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    await screen.findByLabelText('Review Model Provider')
-    fireEvent.click(screen.getByRole('button', { name: /Save Credential/ }))
+    await screen.findByText('Add Review Provider')
+    fireEvent.click(screen.getByRole('button', { name: /Save and Use Provider/ }))
 
     expect(api.saveAgentProviderCredential).not.toHaveBeenCalled()
-    expect(screen.getByText('请输入 Review Model API Key')).toBeInTheDocument()
+    expect(screen.getByText('请输入 API Key')).toBeInTheDocument()
   })
 
   it('subscribes to coding push updates and merges pushed state into the Agents view', async () => {

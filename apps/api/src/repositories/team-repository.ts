@@ -33,6 +33,7 @@ import {
   type ProjectEnforcementPolicyOverride,
   type RemoteAgentReviewSummary,
   type RemoteCodingAgentSummary,
+  type RemoteRunDeleteResult,
   type RuntimeBudgetApproval,
   type RuntimeBudgetPolicy,
   type PolicyAwareDeliverySummary,
@@ -145,6 +146,7 @@ export type TeamRepository = {
     summary: RemoteRunSummary,
     context: TeamRepositorySyncContext,
   ): Promise<RemoteSyncUploadResult>
+  deleteRun(runId: string, context: TeamRepositorySyncContext): Promise<RemoteRunDeleteResult>
   uploadTestEvidenceSummary(
     summary: RemoteTestEvidenceSummary,
     context: TeamRepositorySyncContext,
@@ -216,6 +218,7 @@ export type TeamRepository = {
 export function createSeedTeamRepository(): TeamRepository {
   const teamProjects = [...projects]
   const syncedRuns = [...runs]
+  const seedRunIds = new Set(runs.map((run) => run.id))
   const syncedArtifacts = [...artifacts]
   const syncedEvents = [...events]
   const syncedTestEvidenceSummaries: RemoteTestEvidenceSummary[] = []
@@ -281,6 +284,14 @@ export function createSeedTeamRepository(): TeamRepository {
     }
 
     items.unshift(item)
+  }
+
+  function removeWhere<T>(items: T[], predicate: (item: T) => boolean) {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      if (predicate(items[index]!)) {
+        items.splice(index, 1)
+      }
+    }
   }
 
   return {
@@ -487,6 +498,41 @@ export function createSeedTeamRepository(): TeamRepository {
         accepted: true,
         syncedAt: new Date().toISOString(),
         message: 'run summary accepted by seed repository',
+      }
+    },
+
+    async deleteRun(runId) {
+      if (seedRunIds.has(runId)) {
+        return {
+          deleted: false,
+          deletedAt: new Date().toISOString(),
+          message: 'Seed/preview runs cannot be deleted',
+        }
+      }
+
+      const existing = syncedRuns.find((run) => run.id === runId)
+      if (!existing) {
+        return {
+          deleted: false,
+          deletedAt: new Date().toISOString(),
+          message: 'run not found',
+        }
+      }
+
+      removeWhere(syncedRuns, (run) => run.id === runId)
+      removeWhere(syncedArtifacts, (artifact) => artifact.runId === runId)
+      removeWhere(syncedEvents, (event) => event.runId === runId)
+      removeWhere(syncedTestEvidenceSummaries, (summary) => summary.runId === runId)
+      removeWhere(agentReviews, (review) => review.runId === runId)
+      removeWhere(agentTraces, (trace) => trace.runId === runId)
+      removeWhere(agentTokenUsage, (usage) => usage.runId === runId)
+      removeWhere(codingAgentSummaries, (summary) => summary.runId === runId)
+      removeWhere(gateOverrides, (override) => override.runId === runId)
+
+      return {
+        deleted: true,
+        deletedAt: new Date().toISOString(),
+        message: 'run deleted by seed repository',
       }
     },
 

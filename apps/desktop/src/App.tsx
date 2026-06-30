@@ -3,11 +3,13 @@ import {
   Bot,
   ClipboardCheck,
   Network,
+  MoreHorizontal,
   Plus,
   RefreshCw,
   Search,
   ShieldCheck,
   TestTube2,
+  Trash2,
   Users,
   Workflow,
 } from 'lucide-react'
@@ -15,9 +17,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   buildKnowledgeGovernanceChecks,
   buildKnowledgeReferences,
+  isActiveCodingAgentRunStatus,
   type KnowledgeChunk,
   type KnowledgeDocument,
   type ProjectGitStatus,
+  type WorkflowRun,
 } from '@ai-devflow/shared'
 import { useGateEnforcement } from './useGateEnforcement'
 import {
@@ -169,6 +173,12 @@ export function App() {
   const { selectedLocalProject, isTestCommandDirty } = workspace.derived
   const [projectGitStatus, setProjectGitStatus] = useState<ProjectGitStatus | null>(null)
   const [isRefreshingGitStatus, setIsRefreshingGitStatus] = useState(false)
+  const [openRunMenuId, setOpenRunMenuId] = useState<string | null>(null)
+  const [deleteRunTarget, setDeleteRunTarget] = useState<{
+    run: WorkflowRun
+    deleteRemote: boolean
+  } | null>(null)
+  const [isDeletingRun, setIsDeletingRun] = useState(false)
 
   const refreshProjectGitStatus = useCallback(async () => {
     if (!desktopApi || !selectedLocalProject) {
@@ -277,22 +287,9 @@ export function App() {
   const selectedNode =
     selectedRun?.nodes.find((node) => node.id === selectedNodeId) ?? selectedRun?.nodes[0]
   const selectedTeamProject = teamProjects.find((project) => project.id === selectedRun?.projectId)
-  const selectedRunUsesLocalProject = Boolean(
-    selectedRun?.projectId && selectedRun.projectId === selectedLocalProject?.id,
-  )
-  const teamProjectLabel =
-    selectedLocalProject
-      ? selectedRunUsesLocalProject
-        ? `本地项目：${selectedLocalProject.name}`
-        : '未绑定 Team Project'
-      : selectedTeamProject?.name ?? '未绑定 Team Project'
-  const teamProjectSource = selectedLocalProject
-    ? selectedRunUsesLocalProject
-      ? 'local run'
-      : 'not bound'
-    : selectedTeamProject
-      ? 'remote snapshot'
-      : 'not bound'
+  const teamProjectLabel = selectedTeamProject?.name ?? ''
+  const teamProjectSource = selectedTeamProject ? 'remote snapshot' : 'not bound'
+  const teamProjectSourceLabel = teamProjectSource === 'not bound' ? '未绑定' : teamProjectSource
   const isSelectedCurrentNode = Boolean(
     selectedRun && selectedNode && selectedRun.currentNodeId === selectedNode.id,
   )
@@ -440,6 +437,15 @@ export function App() {
   const remoteRunIdSet = useMemo(() => new Set(remoteRunIds), [remoteRunIds])
   const remoteRunCount = scopedRuns.filter((run) => remoteRunIdSet.has(run.id)).length
   const localRunCount = scopedRuns.length - remoteRunCount
+  const activeCodingRunIdSet = useMemo(
+    () =>
+      new Set(
+        codingRuns
+          .filter((run) => isActiveCodingAgentRunStatus(run.status))
+          .map((run) => run.runId),
+      ),
+    [codingRuns],
+  )
   const pendingGateCount = scopedRuns.reduce(
     (count, run) =>
       count + run.nodes.filter((node) => node.kind === 'gate' && node.status === 'blocked').length,
@@ -506,6 +512,7 @@ export function App() {
     openCodingWorktree,
     deleteCodingWorktree,
     createRun,
+    deleteRun,
     generatePrDraft,
     generateAcceptanceBundle,
     toggleMcp,
@@ -524,6 +531,23 @@ export function App() {
     gateEnforcementDecision: gateEnforcement.decision,
     applyLocalExecutionState,
   })
+
+  async function confirmDeleteRun() {
+    if (!deleteRunTarget) {
+      return
+    }
+
+    setIsDeletingRun(true)
+    const deleted = await deleteRun(deleteRunTarget.run, {
+      deleteRemote: deleteRunTarget.deleteRemote,
+    })
+    setIsDeletingRun(false)
+
+    if (deleted) {
+      setDeleteRunTarget(null)
+      setOpenRunMenuId(null)
+    }
+  }
 
   function selectRunNode(runId: string | undefined, nodeId: string | undefined) {
     const run = scopedRuns.find((candidate) => candidate.id === runId) ?? selectedRun
@@ -680,10 +704,8 @@ export function App() {
           <div className="project-switcher" aria-label="Project selector">
             <div className="project-line">
               <span className="project-label">Team Project</span>
-              {teamProjectSource !== 'not bound' ? (
-                <strong className="project-value">{teamProjectLabel}</strong>
-              ) : null}
-              <span className={`pill ${selectedTeamProject ? 'accent' : 'soft'}`}>{teamProjectSource}</span>
+              {selectedTeamProject ? <strong className="project-value">{teamProjectLabel}</strong> : null}
+              <span className={`pill ${selectedTeamProject ? 'accent' : 'soft'}`}>{teamProjectSourceLabel}</span>
             </div>
             <div className="project-line">
               <span className="project-label">Local Project</span>
@@ -806,23 +828,78 @@ export function App() {
               {visibleRuns.length === 0 ? (
                 <p className="empty-note">没有匹配的 Run</p>
               ) : (
-                visibleRuns.map((run) => (
-                  <button
-                    key={run.id}
-                    className={`run-row ${run.id === selectedRun?.id ? 'is-selected' : ''}`}
-                    onClick={() => {
-                      setSelectedRunId(run.id)
-                      setSelectedNodeId(run.currentNodeId)
-                    }}
-                  >
-                    <strong>{run.title}</strong>
-                    <span>{run.branchName}</span>
-                    <em>{getRunStatusLabel(run.status)}</em>
-                    <span className={`pill ${remoteRunIdSet.has(run.id) ? 'accent' : dataOrigin === 'seed' ? 'soft' : 'good'}`}>
-                      {remoteRunIdSet.has(run.id) ? 'remote' : dataOrigin === 'seed' ? 'preview' : 'local'}
-                    </span>
-                  </button>
-                ))
+                visibleRuns.map((run) => {
+                  const isRemoteRun = remoteRunIdSet.has(run.id)
+                  const isPreviewRun = dataOrigin === 'seed'
+                  const isDeleteDisabled = !desktopApi || activeCodingRunIdSet.has(run.id)
+                  const deleteDisabledReason = !desktopApi
+                    ? '请在 Electron 应用中删除 Run'
+                    : activeCodingRunIdSet.has(run.id)
+                      ? '请先取消 Coding Agent'
+                      : ''
+                  const deleteLabel = isRemoteRun ? '删除 Run...' : '删除本地 Run...'
+
+                  return (
+                    <div
+                      key={run.id}
+                      className={`run-row ${run.id === selectedRun?.id ? 'is-selected' : ''}`}
+                    >
+                      <button
+                        className="run-row-main"
+                        title={run.title}
+                        onClick={() => {
+                          setSelectedRunId(run.id)
+                          setSelectedNodeId(run.currentNodeId)
+                          setOpenRunMenuId(null)
+                        }}
+                      >
+                        <strong>{run.title}</strong>
+                        <span>{run.branchName}</span>
+                        <em>{getRunStatusLabel(run.status)}</em>
+                        <span className={`pill ${isRemoteRun ? 'accent' : isPreviewRun ? 'soft' : 'good'}`}>
+                          {isRemoteRun ? 'remote' : isPreviewRun ? 'preview' : 'local'}
+                        </span>
+                      </button>
+                      {!isPreviewRun && (
+                        <div className="run-row-actions">
+                          <button
+                            className="run-menu-trigger"
+                            aria-label={`${run.title} actions`}
+                            aria-haspopup="menu"
+                            aria-expanded={openRunMenuId === run.id}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setOpenRunMenuId((current) => (current === run.id ? null : run.id))
+                            }}
+                          >
+                            <MoreHorizontal aria-hidden="true" />
+                          </button>
+                          {openRunMenuId === run.id && (
+                            <div className="run-row-menu" role="menu">
+                              <button
+                                role="menuitem"
+                                disabled={isDeleteDisabled}
+                                title={deleteDisabledReason || deleteLabel}
+                                onClick={() => {
+                                  if (isDeleteDisabled) {
+                                    return
+                                  }
+                                  setDeleteRunTarget({ run, deleteRemote: isRemoteRun })
+                                }}
+                              >
+                                <Trash2 aria-hidden="true" />
+                                {deleteLabel}
+                              </button>
+                              {deleteDisabledReason && (
+                                <span className="run-row-menu-note">{deleteDisabledReason}</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
               )}
             </div>
 
@@ -963,6 +1040,7 @@ export function App() {
             onCancelCodingRun={cancelCodingRun}
             onOpenCodingWorktree={openCodingWorktree}
             onDeleteCodingWorktree={deleteCodingWorktree}
+            onOpenTests={() => setActiveView('tests')}
             isStartingCodingAgent={isStartingCodingAgent}
             runtimeBudgetApprovalId={runtimeBudgetApprovalId}
             onRuntimeBudgetApprovalIdChange={setRuntimeBudgetApprovalId}
@@ -1030,6 +1108,46 @@ export function App() {
               </button>
               <button className="primary-button" onClick={createRun}>
                 创建并开始澄清
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {deleteRunTarget && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal delete-run-modal" role="dialog" aria-modal="true" aria-label="Delete run">
+            <div className="delete-run-header">
+              <span>{deleteRunTarget.deleteRemote ? '删除远端和本地 Run' : '删除本地 Run'}</span>
+              <h2>确认删除这个 Run？</h2>
+            </div>
+            <div className="delete-run-target">
+              <span>将删除的 Run</span>
+              <strong title={deleteRunTarget.run.title}>{deleteRunTarget.run.title}</strong>
+              <code>{deleteRunTarget.run.branchName}</code>
+            </div>
+            <div className="delete-run-copy">
+              <p className="modal-copy modal-copy--danger">
+                删除后，这个 Run 的交付记录、产物、Trace、Review、测试证据、Coding Agent 记录和临时工作区都会从本机移除。
+              </p>
+              <p className="modal-copy modal-copy--safe-boundary">
+                不会删除本地仓库、Local Project 绑定、模型 Provider Credential 或项目级 Policy Snapshot。
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="ghost-button"
+                disabled={isDeletingRun}
+                onClick={() => setDeleteRunTarget(null)}
+              >
+                取消
+              </button>
+              <button className="danger-button" disabled={isDeletingRun} onClick={confirmDeleteRun}>
+                {isDeletingRun
+                  ? '正在删除...'
+                  : deleteRunTarget.deleteRemote
+                    ? '删除 Run'
+                    : '删除本地 Run'}
               </button>
             </div>
           </section>

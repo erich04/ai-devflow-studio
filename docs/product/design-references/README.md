@@ -2,6 +2,11 @@
 
 This folder stores visual references that should inform DevFlow Studio UI work without becoming runtime source code.
 
+## Style References
+
+- [Apple-inspired Keynote visual style](./apple-inspired-keynote-style.md): Content-first, restrained, high-precision visual direction and reusable prompt templates for premium technical presentation/design exploration.
+- [AI DevFlow Studio keynote decisions](./ai-devflow-studio-keynote-decisions.md): Confirmed narrative, terminology, deck structure, visual boundaries, and screenshot usage for DevFlow Studio keynote work.
+
 ## Airbnb-III Prototype References
 
 These screenshots capture the OpenDesign `Airbnb-III` prototype states that should guide the React/Electron UI port.

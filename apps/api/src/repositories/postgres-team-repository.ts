@@ -1453,6 +1453,50 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
       return rows.map(mapMcpServer)
     },
 
+    async deleteRun(runId, context: TeamRepositorySyncContext) {
+      const [run] = await db.query<{ id: string; data_origin: string }>(
+        `
+          SELECT id, data_origin
+          FROM workflow_runs
+          WHERE id = $1
+            AND organization_id = $2
+          LIMIT 1
+        `,
+        [runId, context.organizationId],
+      )
+
+      if (!run) {
+        return {
+          deleted: false,
+          deletedAt: new Date().toISOString(),
+          message: 'run not found',
+        }
+      }
+
+      if (run.data_origin === 'seed') {
+        return {
+          deleted: false,
+          deletedAt: new Date().toISOString(),
+          message: 'Seed/preview runs cannot be deleted',
+        }
+      }
+
+      await db.query(
+        `
+          DELETE FROM workflow_runs
+          WHERE id = $1
+            AND organization_id = $2
+        `,
+        [runId, context.organizationId],
+      )
+
+      return {
+        deleted: true,
+        deletedAt: new Date().toISOString(),
+        message: 'run deleted',
+      }
+    },
+
     async uploadRunSummary(summary, context: TeamRepositorySyncContext) {
       await db.query(
         `

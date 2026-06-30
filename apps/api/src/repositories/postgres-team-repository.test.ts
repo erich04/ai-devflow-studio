@@ -630,6 +630,20 @@ describe('Postgres team repository', () => {
     ])
   })
 
+  it('deletes workflow runs by tenant and relies on database cascade', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    const result = await repository.deleteRun('run-remote-1', {
+      organizationId: 'org-demo',
+      userId: 'u-ling',
+    })
+
+    const deleteQuery = db.queries.find((query) => query.sql.includes('DELETE FROM workflow_runs'))
+    expect(result).toMatchObject({ deleted: true })
+    expect(deleteQuery?.params).toEqual(['run-remote-1', 'org-demo'])
+  })
+
   it('writes test evidence summaries after ensuring a minimal run and test node', async () => {
     const db = new FakeTeamDbClient()
     const repository = createPostgresTeamRepository(db)

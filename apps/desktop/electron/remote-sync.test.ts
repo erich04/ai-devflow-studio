@@ -314,6 +314,28 @@ describe('Electron remote sync client', () => {
     expect(JSON.stringify(uploadedBodies[3])).not.toContain('cwd')
   })
 
+  it('treats remote run deletion not found as success-equivalent', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(JSON.stringify({ message: 'Run not found' }), { status: 404 }),
+    )
+    const client = createRemoteSyncClient({ apiBaseUrl: 'http://api.local', fetcher })
+
+    await expect(client.deleteRun({ runId: 'run-missing' })).resolves.toMatchObject({
+      deleted: false,
+      message: 'remote run not found',
+    })
+    expect(fetcher).toHaveBeenCalledWith('http://api.local/api/runs/run-missing', {
+      method: 'DELETE',
+      headers: {
+        accept: 'application/json',
+        'x-devflow-organization-id': 'org-demo',
+        'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
+        'x-devflow-user-id': 'u-erich',
+        'x-devflow-user-role': 'owner',
+      },
+    })
+  })
+
   it('submits Gate overrides through the enforcement API using the override actor session', async () => {
     const calls: Array<{ url: string; init: RequestInit | undefined }> = []
     const fetcher = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {

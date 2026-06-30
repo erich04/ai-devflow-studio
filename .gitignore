@@ -6,6 +6,7 @@ out
 coverage
 test-results
 playwright-report
+outputs
 .tmp
 .cursor
 .DS_Store

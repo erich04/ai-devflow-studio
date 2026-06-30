@@ -80,6 +80,7 @@ export function LocalProjectPanel({
   desktopConnected: boolean
 }) {
   const branchLabel = getBranchLabel(project, gitStatus)
+  const teamProjectSourceLabel = teamProjectSource === 'not bound' ? '未绑定' : teamProjectSource
 
   return (
     <section className="local-project-panel" aria-label="Local project">
@@ -102,9 +103,11 @@ export function LocalProjectPanel({
         {project ? (
           <>
             <div className="row">
-              <span className="meta">Team Project 归属</span>
+              <span className="meta">Team Project</span>
               {teamProjectSource !== 'not bound' ? <strong>{teamProjectLabel}</strong> : null}
-              <span className="pill soft">{teamProjectSource}</span>
+              <span className={`pill ${teamProjectSource === 'not bound' ? 'soft' : 'accent'}`}>
+                {teamProjectSourceLabel}
+              </span>
             </div>
             <div className="row branch-row">
               <div className="branch-row-head">

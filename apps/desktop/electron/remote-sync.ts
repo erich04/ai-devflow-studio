@@ -6,6 +6,7 @@ import type {
   BudgetGuardDecision,
   RemoteAgentReviewSummary,
   RemoteCodingAgentSummary,
+  RemoteRunDeleteResult,
   RemoteRunSummary,
   RemoteSyncUploadResult,
   RemoteTeamSnapshot,
@@ -56,6 +57,7 @@ export type RemoteSyncClient = {
   exchangeDesktopPairingCode(input: { code: string }): Promise<DesktopPairingExchangeResult>
   loadRemoteSnapshot(input?: LoadRemoteSnapshotInput): Promise<RemoteTeamSnapshot>
   uploadRunSummary(summary: RemoteRunSummary): Promise<RemoteSyncUploadResult>
+  deleteRun(input: { runId: string }): Promise<RemoteRunDeleteResult>
   uploadTestEvidenceSummary(summary: RemoteTestEvidenceSummary): Promise<RemoteSyncUploadResult>
   uploadAgentReviewSummary(summary: RemoteAgentReviewSummary): Promise<RemoteSyncUploadResult>
   uploadCodingAgentSummary(summary: RemoteCodingAgentSummary): Promise<RemoteSyncUploadResult>
@@ -232,6 +234,24 @@ export function createRemoteSyncClient(
         '/api/sync/run-summary',
         hasAuthToken(authToken) ? tokenPostHeaders(authToken) : jsonPostHeaders(sessionHeaders),
       )
+    },
+
+    async deleteRun(input) {
+      const path = `/api/runs/${encodeURIComponent(input.runId)}`
+      const response = await fetcher(buildUrl(apiBaseUrl, path), {
+        method: 'DELETE',
+        headers: hasAuthToken(authToken) ? tokenGetHeaders(authToken) : jsonGetHeaders(sessionHeaders),
+      })
+
+      if (response.status === 404) {
+        return {
+          deleted: false,
+          deletedAt: new Date().toISOString(),
+          message: 'remote run not found',
+        }
+      }
+
+      return readJson<RemoteRunDeleteResult>(response, path)
     },
 
     async uploadTestEvidenceSummary(summary) {

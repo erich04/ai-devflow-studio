@@ -20,6 +20,7 @@ import type {
   ProjectGitStatus,
   ProviderCredentialMetadata,
   RemoteCodingAgentSummary,
+  RemoteRunDeleteResult,
   RemoteRunSummary,
   RemoteSyncUploadResult,
   RemoteTeamSnapshot,
@@ -39,6 +40,16 @@ export type CreateRunInput = {
   branchName: string
 }
 
+export type DeleteRunInput = {
+  runId: string
+  deleteRemote: boolean
+}
+
+export type DeleteRunResult = {
+  state: LocalExecutionState
+  remote?: RemoteRunDeleteResult
+}
+
 export const ipcChannels = {
   loadState: 'devflow:local-state:load',
   selectProject: 'devflow:local-project:select',
@@ -51,6 +62,7 @@ export const ipcChannels = {
   loadEnforcementPolicy: 'devflow:enforcement:policy:load',
   evaluateGateEnforcement: 'devflow:enforcement:gate:evaluate',
   createRun: 'devflow:run:create',
+  deleteRun: 'devflow:run:delete',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   saveRun: 'devflow:run:save',
   saveArtifact: 'devflow:artifact:save',
@@ -284,6 +296,7 @@ export type DevFlowDesktopApi = {
   loadEnforcementPolicy: (input: LoadEnforcementPolicyInput) => Promise<PolicySnapshot>
   evaluateGateEnforcement: (input: EvaluateGateEnforcementInput) => Promise<GateEnforcementDecision>
   createRun: (input: CreateRunInput) => Promise<WorkflowRun>
+  deleteRun: (input: DeleteRunInput) => Promise<DeleteRunResult>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   saveRun: (run: WorkflowRun) => Promise<WorkflowRun>
   saveArtifact: (artifact: Artifact) => Promise<Artifact>
@@ -606,6 +619,22 @@ export function parseCreateRunInput(value: unknown): CreateRunInput {
     projectId: readRequiredString(value, 'projectId'),
     creatorId: readRequiredString(value, 'creatorId'),
     branchName: readRequiredString(value, 'branchName'),
+  }
+}
+
+export function parseDeleteRunInput(value: unknown): DeleteRunInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid delete run payload')
+  }
+
+  const deleteRemote = value['deleteRemote']
+  if (deleteRemote !== undefined && typeof deleteRemote !== 'boolean') {
+    throw new Error('Invalid deleteRemote')
+  }
+
+  return {
+    runId: readRequiredString(value, 'runId'),
+    deleteRemote: deleteRemote === true,
   }
 }
 

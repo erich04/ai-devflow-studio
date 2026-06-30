@@ -20,6 +20,18 @@ import { redactSecrets } from './redaction'
 
 export const MAX_DIFF_CHARS = 50_000
 export const MAX_REMOTE_CHANGED_PATHS = 50
+export const activeCodingAgentRunStatuses: readonly CodingAgentRun['status'][] = [
+  'queued',
+  'preparing',
+  'waiting_permission',
+  'bootstrapping',
+  'running',
+  'testing',
+]
+
+export function isActiveCodingAgentRunStatus(status: CodingAgentRun['status']): boolean {
+  return activeCodingAgentRunStatuses.includes(status)
+}
 
 export type CodingBriefInput = {
   run: WorkflowRun

@@ -30,7 +30,7 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
-import type { CreateRunInput } from '../electron/ipc-contract'
+import type { CreateRunInput, DeleteRunInput, DeleteRunResult } from '../electron/ipc-contract'
 
 export type SaveProjectTestCommandInput = {
   projectId: string
@@ -188,6 +188,7 @@ export type DevFlowDesktopApi = {
   loadEnforcementPolicy: (input: LoadEnforcementPolicyInput) => Promise<PolicySnapshot>
   evaluateGateEnforcement: (input: EvaluateGateEnforcementInput) => Promise<GateEnforcementDecision>
   createRun: (input: CreateRunInput) => Promise<WorkflowRun>
+  deleteRun: (input: DeleteRunInput) => Promise<DeleteRunResult>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   saveRun: (run: WorkflowRun) => Promise<WorkflowRun>
   saveArtifact: (artifact: Artifact) => Promise<Artifact>

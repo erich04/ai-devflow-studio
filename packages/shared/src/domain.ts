@@ -918,6 +918,12 @@ export type RemoteSyncUploadResult = {
   message: string
 }
 
+export type RemoteRunDeleteResult = {
+  deleted: boolean
+  deletedAt: string
+  message: string
+}
+
 export type CommandRiskLevel = 'safe' | 'warn' | 'blocked'
 
 export type CommandSafetyResult = {

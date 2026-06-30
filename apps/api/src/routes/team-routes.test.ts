@@ -317,6 +317,11 @@ function createRepository(): TeamRepository {
       syncedAt: '2026-06-16T00:00:00.000Z',
       message: 'run summary accepted',
     })),
+    deleteRun: vi.fn(async () => ({
+      deleted: true,
+      deletedAt: '2026-06-16T00:02:00.000Z',
+      message: 'run deleted',
+    })),
     uploadTestEvidenceSummary: vi.fn(async () => ({
       accepted: true,
       syncedAt: '2026-06-16T00:00:00.000Z',
@@ -464,6 +469,77 @@ describe('team API route resolver', () => {
       runs: [{ id: 'run-payments' }, { id: 'run-admin' }],
     })
     expect(repository.getRunsBundle).toHaveBeenCalled()
+  })
+
+  it('allows owners and leads to delete project runs', async () => {
+    for (const session of [ownerSession, leadSession]) {
+      const repository = createRepository()
+      const result = await resolveTeamRoute('DELETE', '/api/runs/run-payments', repository, {
+        session,
+      })
+
+      expect(result?.status).toBe(200)
+      expect(result?.body).toMatchObject({ deleted: true })
+      expect(repository.deleteRun).toHaveBeenCalledWith('run-payments', session)
+    }
+  })
+
+  it('rejects run deletion for project members and inaccessible projects', async () => {
+    const memberRepository = createRepository()
+    const memberResult = await resolveTeamRoute('DELETE', '/api/runs/run-payments', memberRepository, {
+      session: memberSession,
+    })
+    expect(memberResult).toEqual({
+      status: 403,
+      body: {
+        error: 'forbidden',
+        message: 'Project role lead required',
+      },
+    })
+    expect(memberRepository.deleteRun).not.toHaveBeenCalled()
+
+    const inaccessibleRepository = createRepository()
+    const inaccessibleResult = await resolveTeamRoute('DELETE', '/api/runs/run-admin', inaccessibleRepository, {
+      session: memberSession,
+    })
+    expect(inaccessibleResult).toEqual({
+      status: 403,
+      body: {
+        error: 'forbidden',
+        message: 'Project access required',
+      },
+    })
+    expect(inaccessibleRepository.deleteRun).not.toHaveBeenCalled()
+  })
+
+  it('returns not found or conflict when a remote run cannot be deleted', async () => {
+    const missingRepository = createRepository()
+    await expect(resolveTeamRoute('DELETE', '/api/runs/missing-run', missingRepository, {
+      session: ownerSession,
+    })).resolves.toEqual({
+      status: 404,
+      body: {
+        error: 'not_found',
+        message: 'Run not found: missing-run',
+      },
+    })
+    expect(missingRepository.deleteRun).not.toHaveBeenCalled()
+
+    const seedRepository = createRepository()
+    vi.mocked(seedRepository.deleteRun).mockResolvedValueOnce({
+      deleted: false,
+      deletedAt: '2026-06-16T00:02:00.000Z',
+      message: 'Seed/preview runs cannot be deleted',
+    })
+    await expect(resolveTeamRoute('DELETE', '/api/runs/run-payments', seedRepository, {
+      session: ownerSession,
+    })).resolves.toEqual({
+      status: 409,
+      body: {
+        error: 'conflict',
+        message: 'Seed/preview runs cannot be deleted',
+      },
+    })
   })
 
   it('routes manager overview requests through the repository', async () => {

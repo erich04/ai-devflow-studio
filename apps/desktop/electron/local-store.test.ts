@@ -699,4 +699,74 @@ describe('createLocalStore', () => {
     })
     second.close()
   })
+
+  it('hard deletes run-scoped records while preserving other runs and project metadata', async () => {
+    const dbPath = await tempDbPath()
+    const otherRun: WorkflowRun = {
+      ...run,
+      id: 'run-2',
+      title: 'Other run',
+      branchName: 'ai/other-run',
+      updatedAt: '2026-06-15T00:10:00.000Z',
+    }
+    const otherArtifact: Artifact = {
+      ...artifact,
+      id: 'artifact-other',
+      runId: 'run-2',
+      updatedAt: '2026-06-15T00:10:00.000Z',
+    }
+    const providerMetadata = {
+      providerId: 'provider-delete-run',
+      model: 'fake',
+      maskedCredential: 'sk-...test',
+      updatedAt: '2026-06-15T00:06:00.000Z',
+    }
+
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(run)
+    await store.saveRun(otherRun)
+    await store.saveArtifact(artifact)
+    await store.saveArtifact(otherArtifact)
+    await store.saveEvent(event)
+    await store.saveTestEvidence(evidence)
+    await store.saveAgentReview(agentReview)
+    await store.saveAgentTrace(agentTrace)
+    await store.saveAgentTokenUsage(agentTokenUsage)
+    await store.saveCodingAgentRun(codingRun)
+    await store.saveCodingAgentEvent(codingEvent)
+    await store.saveCodingPermissionRequest(permissionRequest)
+    await store.saveCodingPermissionDecision(permissionDecision)
+    await store.saveManagedCodingWorkspace(workspace)
+    await store.saveDependencyBootstrapEvidence(bootstrapEvidence)
+    await store.saveCodingDiffArtifact(codingDiff)
+    await store.saveGateOverride(gateOverride)
+    await store.saveRetryAttempt(retryAttempt)
+    await store.savePolicySnapshot(policySnapshot)
+    await store.saveProviderCredential(providerMetadata, 'encrypted-provider-secret')
+
+    await store.deleteRun('run-1')
+
+    expect(await store.listRuns()).toEqual([otherRun])
+    expect(await store.listArtifacts('run-1')).toEqual([])
+    expect(await store.listArtifacts('run-2')).toEqual([otherArtifact])
+    expect(await store.listEvents('run-1')).toEqual([])
+    expect(await store.listTestEvidence('run-1')).toEqual([])
+    expect(await store.listAgentReviews('run-1')).toEqual([])
+    expect(await store.listAgentTraces('run-1')).toEqual([])
+    expect(await store.listAgentTokenUsage('run-1')).toEqual([])
+    expect(await store.listCodingAgentRuns('run-1')).toEqual([])
+    expect(await store.listCodingAgentEvents('coding-run-1')).toEqual([])
+    expect(await store.listCodingPermissionRequests('coding-run-1')).toEqual([])
+    expect(await store.listCodingPermissionDecisions('coding-run-1')).toEqual([])
+    expect(await store.listManagedCodingWorkspaces('project-1')).toEqual([])
+    expect(await store.listDependencyBootstrapEvidence('coding-run-1')).toEqual([])
+    expect(await store.listCodingDiffArtifacts('run-1')).toEqual([])
+    expect(await store.listGateOverrides('run-1')).toEqual([])
+    expect(await store.listRetryAttempts('run-1')).toEqual([])
+    expect(await store.listProjects()).toEqual([project])
+    expect(await store.getPolicySnapshot('project-1')).toEqual(policySnapshot)
+    expect(await store.listProviderCredentials()).toEqual([providerMetadata])
+    store.close()
+  })
 })

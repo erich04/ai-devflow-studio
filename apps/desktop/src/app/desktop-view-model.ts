@@ -164,6 +164,7 @@ export type BackendReadinessStatus =
   | 'development adapter'
   | 'desktop-only adapter'
   | 'missing contract'
+  | 'not configured'
 
 export type FieldDataSource = {
   status: BackendReadinessStatus
@@ -265,9 +266,9 @@ export function buildKnowledgeDataSource(input: {
 export function buildAgentProviderDataSource(provider: AgentProviderConfig | undefined): FieldDataSource {
   if (!provider) {
     return {
-      status: 'missing contract',
-      label: 'not configured',
-      detail: 'No persisted review provider is selected.',
+      status: 'not configured',
+      label: 'no selected provider',
+      detail: 'No Review Provider is selected for Knowledge Review.',
       tone: 'soft',
     }
   }
@@ -423,9 +424,9 @@ export function currentRunPhaseCopy(run: WorkflowRun): string {
 }
 
 export const defaultReviewProviderDraft = {
-  providerId: 'doubao-review',
-  baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
-  model: 'ark-code-latest',
+  providerId: '',
+  baseUrl: '',
+  model: '',
 }
 
 export function getToastDisplayDurationMs(message: string): number {

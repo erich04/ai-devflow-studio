@@ -6,6 +6,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import {
   buildCodingBrief,
+  isActiveCodingAgentRunStatus,
   sanitizeCodingDiffArtifact,
   type Artifact,
   type CodingBrief,
@@ -28,15 +29,6 @@ import {
 } from '@ai-devflow/shared'
 
 const execFileAsync = promisify(execFile)
-
-const ACTIVE_CODING_STATUSES = new Set<CodingAgentRun['status']>([
-  'queued',
-  'preparing',
-  'waiting_permission',
-  'bootstrapping',
-  'running',
-  'testing',
-])
 
 export type CreateManagedCodingWorkspaceInput = {
   project: LocalProject
@@ -97,7 +89,7 @@ export function findActiveCodingRun(
   runs: CodingAgentRun[],
   projectId: string,
 ): CodingAgentRun | undefined {
-  return runs.find((run) => run.projectId === projectId && ACTIVE_CODING_STATUSES.has(run.status))
+  return runs.find((run) => run.projectId === projectId && isActiveCodingAgentRunStatus(run.status))
 }
 
 export async function isGitRepository(repositoryPath: string): Promise<boolean> {

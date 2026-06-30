@@ -558,6 +558,26 @@ function forbidden(message: string): ApiRouteResult {
   }
 }
 
+function notFound(message: string): ApiRouteResult {
+  return {
+    status: 404,
+    body: {
+      error: 'not_found',
+      message,
+    },
+  }
+}
+
+function conflict(message: string): ApiRouteResult {
+  return {
+    status: 409,
+    body: {
+      error: 'conflict',
+      message,
+    },
+  }
+}
+
 function createOAuthStateCookie(state: string): string {
   return `devflow_oauth_state=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`
 }
@@ -742,6 +762,42 @@ export async function resolveTeamRoute(
     return {
       status: 200,
       body: filterRunsBundleForSession(await repository.getRunsBundle(), options.session),
+    }
+  }
+
+  if (method === 'DELETE' && pathname.startsWith('/api/runs/')) {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    const rawRunId = pathname.slice('/api/runs/'.length)
+    const runId = decodeURIComponent(rawRunId).trim()
+    if (!runId) {
+      return badRequest('Invalid runId')
+    }
+
+    const bundle = await repository.getRunsBundle()
+    const run = bundle.runs.find((candidate) => candidate.id === runId)
+    if (!run) {
+      return notFound(`Run not found: ${runId}`)
+    }
+
+    if (!canAccessProject(options.session, run.projectId)) {
+      return forbidden('Project access required')
+    }
+
+    if (!canSyncProject(options.session, run.projectId, 'lead')) {
+      return forbidden('Project role lead required')
+    }
+
+    const result = await repository.deleteRun(runId, options.session)
+    if (!result.deleted) {
+      return conflict(result.message)
+    }
+
+    return {
+      status: 200,
+      body: result,
     }
   }
 
