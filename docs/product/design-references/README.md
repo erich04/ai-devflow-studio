@@ -6,6 +6,7 @@ This folder stores visual references that should inform DevFlow Studio UI work w
 
 - [Apple-inspired Keynote visual style](./apple-inspired-keynote-style.md): Content-first, restrained, high-precision visual direction and reusable prompt templates for premium technical presentation/design exploration.
 - [AI DevFlow Studio keynote decisions](./ai-devflow-studio-keynote-decisions.md): Confirmed narrative, terminology, deck structure, visual boundaries, and screenshot usage for DevFlow Studio keynote work.
+- [AI DevFlow Studio text-first comic keynote](./ai-devflow-studio-textfirst-comic-keynote.pdf): Exported 9-page deck reference for concise narrative structure and presentation pacing.
 
 ## Airbnb-III Prototype References
 
