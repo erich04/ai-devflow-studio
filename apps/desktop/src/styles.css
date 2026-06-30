@@ -267,11 +267,12 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: 360px;
+  flex: 0 0 auto;
+  max-width: 390px;
 }
 
 .desktop-pairing-form span {
-  max-width: 96px;
+  max-width: 92px;
   overflow: hidden;
   color: var(--text-muted);
   font-size: 12px;
@@ -281,7 +282,7 @@ button:disabled {
 }
 
 .desktop-pairing-form input {
-  width: 140px;
+  width: 150px;
   min-height: 36px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1514,7 +1515,7 @@ body {
 
 .desktop-pairing-form input,
 .desktop-pairing-form button {
-  display: none;
+  display: inline-flex;
 }
 
 .desktop-pairing-form span {
@@ -2874,8 +2875,12 @@ code {
     gap: 6px;
   }
 
-  .desktop-pairing-form {
-    display: none;
+  .desktop-pairing-form input {
+    width: 128px;
+  }
+
+  .desktop-pairing-form span {
+    max-width: 74px;
   }
 
   .topbar-actions .ghost-button,

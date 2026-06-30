@@ -1361,14 +1361,14 @@ describe('App', () => {
     fireEvent.change(screen.getByLabelText('Desktop pairing code'), {
       target: { value: 'pair-p-payments.copy-once-secret' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Pair' }))
+    fireEvent.click(screen.getByRole('button', { name: '绑定' }))
 
     await waitFor(() =>
       expect(api.pairDesktop).toHaveBeenCalledWith({
         code: 'pair-p-payments.copy-once-secret',
       }),
     )
-    expect(screen.getByText('Paired account')).toBeInTheDocument()
+    expect(screen.getByText('已配对 Team')).toBeInTheDocument()
     expect(screen.getByTestId('toast')).toHaveTextContent('已配对团队项目 p-payments')
   })
 

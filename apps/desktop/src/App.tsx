@@ -729,15 +729,15 @@ export function App() {
           <div className="topbar-actions">
             <ThemeToggle value={themePreference} onChange={changeThemePreference} />
             <form className="desktop-pairing-form" onSubmit={pairDesktopWithTeam}>
-              <span>{desktopPairing ? 'Paired account' : 'Unpaired'}</span>
+              <span>{desktopPairing ? '已配对 Team' : '未配对 Team'}</span>
               <input
                 aria-label="Desktop pairing code"
-                placeholder="Pairing code"
+                placeholder="输入 pairing code"
                 value={pairingCodeDraft}
                 onChange={(event) => setPairingCodeDraft(event.target.value)}
               />
               <button type="submit" className="ghost-button" disabled={isPairingDesktop}>
-                {isPairingDesktop ? '配对中' : 'Pair'}
+                {isPairingDesktop ? '配对中' : '绑定'}
               </button>
             </form>
             <button className="ghost-button" onClick={syncRemoteTeamState} disabled={isSyncingRemote}>
