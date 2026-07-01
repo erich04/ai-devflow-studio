@@ -32,6 +32,14 @@ export type InspectorActionId =
   | 'createPrDraft'
   | 'createAcceptanceBundle'
 
+export type PendingInspectorActionId = InspectorActionId | 'saveGateOverride'
+
+export type PendingInspectorAction = {
+  actionId: PendingInspectorActionId
+  runId: string
+  nodeId: string
+}
+
 export type InspectorActionDisabledReason =
   | 'running_agent_review'
   | 'running_tests'
@@ -119,6 +127,16 @@ export const stageLabels: Record<NodeStage, string> = {
   accept: '业务验收',
 }
 
+const GATE_STAGES_WITHOUT_LOCAL_TEST_CTA: ReadonlySet<NodeStage> = new Set(['clarify', 'design'])
+
+function isEarlyReviewGate(node: WorkflowNode): boolean {
+  return node.kind === 'gate' && GATE_STAGES_WITHOUT_LOCAL_TEST_CTA.has(node.stage)
+}
+
+function shouldOfferLocalTestCtaForGate(node: WorkflowNode): boolean {
+  return node.kind === 'gate' && !isEarlyReviewGate(node)
+}
+
 export function getInspectorNodeType(node: WorkflowNode): InspectorNodeType {
   if (node.kind === 'agent' && node.stage === 'clarify') {
     return 'clarification'
@@ -146,31 +164,31 @@ export function getInspectorNodeType(node: WorkflowNode): InspectorNodeType {
 
 export const inspectorTabPlansByNodeType: Record<InspectorNodeType, InspectorTabPlan[]> = {
   clarification: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix', 'nodeSummary'] },
+    { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
     { tabId: '产物', label: '产物', sections: ['artifacts'] },
     { tabId: 'Trace', label: 'Trace', sections: ['trace'] },
     { tabId: 'Gate影响', label: 'Gate影响', sections: ['gateImpactSummary'] },
   ],
   designReview: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix', 'nodeSummary'] },
+    { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
     { tabId: 'Knowledge Review', label: 'Knowledge Review', sections: ['agentReview'] },
     { tabId: '引用来源', label: '引用来源', sections: ['governance', 'artifacts', 'agentReview'] },
     { tabId: 'Evidence', label: 'Evidence', sections: ['governance', 'artifacts', 'agentReview'] },
   ],
   gate: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix', 'nodeSummary', 'gateEnforcementPanel', 'governance', 'agentReview', 'artifacts'] },
+    { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
     { tabId: 'Gate条件', label: 'Gate条件', sections: ['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'] },
     { tabId: 'Evidence', label: 'Evidence', sections: ['governance', 'artifacts', 'agentReview'] },
     { tabId: 'Remediation', label: 'Remediation', sections: ['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'] },
   ],
   build: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix', 'nodeSummary'] },
+    { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
     { tabId: '产物', label: '产物', sections: ['artifacts'] },
     { tabId: 'Trace', label: 'Trace', sections: ['trace'] },
     { tabId: 'Gate影响', label: 'Gate影响', sections: ['gateImpactSummary'] },
   ],
   test: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix', 'nodeSummary'] },
+    { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
     { tabId: 'Test Evidence', label: 'Test Evidence', sections: ['artifacts'] },
     { tabId: 'Trace', label: 'Trace', sections: ['trace'] },
   ],
@@ -187,7 +205,7 @@ export const inspectorTabPlansByNodeType: Record<InspectorNodeType, InspectorTab
     { tabId: 'Final Gate', label: 'Final Gate', sections: ['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'] },
   ],
   task: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix', 'nodeSummary'] },
+    { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
     { tabId: '产物', label: '产物', sections: ['artifacts'] },
     { tabId: 'Trace', label: 'Trace', sections: ['trace'] },
   ],
@@ -307,6 +325,7 @@ export function buildStatusDescriptors(input: {
   canApprove: boolean
 }): StatusDescriptor[] {
   const nodeType = getInspectorNodeType(input.node)
+  const earlyReviewGate = isEarlyReviewGate(input.node)
   const artifactForKind = (kind: Artifact['kind']) => input.artifacts.find((artifact) => artifact.kind === kind)
   const hasArtifactKind = (kind: Artifact['kind']) => Boolean(artifactForKind(kind))
   const artifactProvenance = (artifact: Artifact | undefined) => {
@@ -484,14 +503,17 @@ export function buildStatusDescriptors(input: {
   }
 
   if (nodeType === 'gate') {
-    return [
+    const descriptors = [
       gateDecisionStatus(),
       policyStatus(),
       approvalStatus(),
       reviewStatus(true),
-      testEvidenceStatus(true),
-      requiredArtifactStatus(),
     ]
+    if (!earlyReviewGate) {
+      descriptors.push(testEvidenceStatus(true))
+    }
+    descriptors.push(requiredArtifactStatus())
+    return descriptors
   }
 
   if (nodeType === 'build') {
@@ -543,8 +565,9 @@ export function buildGateRequirementMatrix(input: {
   canApprove: boolean
 }): GateRequirementRow[] {
   const hasTestArtifact = input.artifacts.some((artifact) => artifact.kind === 'test_report')
+  const earlyReviewGate = isEarlyReviewGate(input.node)
 
-  return [
+  const rows: GateRequirementRow[] = [
     {
       label: 'Policy snapshot',
       state: input.isLoadingGateEnforcement
@@ -573,12 +596,18 @@ export function buildGateRequirementMatrix(input: {
         ? input.latestAgentReview.gateAdvisory.summary
         : '需要从 Agents 运行 review，生成 Gate Advisory 与引用来源。',
     },
-    {
+  ]
+
+  if (!earlyReviewGate) {
+    rows.push({
       label: 'Test Evidence',
       state: hasTestArtifact ? 'saved' : 'missing',
       tone: hasTestArtifact ? 'good' : 'warn',
       summary: hasTestArtifact ? '测试报告已归档为 Artifact。' : '需要从 Tests 保存 command/status/exit/duration 摘要。',
-    },
+    })
+  }
+
+  rows.push(
     {
       label: 'Budget',
       state: input.node.stage === 'build' ? 'approval guarded' : 'not active',
@@ -595,7 +624,9 @@ export function buildGateRequirementMatrix(input: {
         ? 'Artifact 作为 Gate / Delivery 的证据附件展示。'
         : '当前节点还没有可交付 Artifact。',
     },
-  ]
+  )
+
+  return rows
 }
 
 function buildActionCatalog(node: WorkflowNode): Record<InspectorActionId, InspectorAction> {
@@ -655,6 +686,7 @@ function hasAcceptanceArtifact(artifacts: Artifact[]): boolean {
 }
 
 function buildGateSecondaryActionIds(input: {
+  node: WorkflowNode
   artifacts: Artifact[]
   latestAgentReview: AgentReviewResult | undefined
 }): InspectorActionId[] {
@@ -663,7 +695,7 @@ function buildGateSecondaryActionIds(input: {
   if (!input.latestAgentReview) {
     actionIds.push('openKnowledgeReview')
   }
-  if (!hasTestArtifact(input.artifacts)) {
+  if (shouldOfferLocalTestCtaForGate(input.node) && !hasTestArtifact(input.artifacts)) {
     actionIds.push('openTests')
   }
 
@@ -714,11 +746,16 @@ function buildNextAction(input: {
   }
 
   if (node.kind === 'gate') {
+    const isEarlyGate = isEarlyReviewGate(node)
     return {
       title: '通过 Gate',
       copy: input.canApprove
-        ? '确认 Gate 条件、Review、Tests 和 Evidence 后，通过当前 Gate 进入下一节点。'
-        : '当前 Gate 还不能通过，请查看 Gate 条件拆解并补齐角色、Review、Tests 或 policy 条件。',
+        ? isEarlyGate
+          ? '确认 Gate 条件、Review 和 Evidence 后，通过当前 Gate 进入下一节点。'
+          : '确认 Gate 条件、Review、Tests 和 Evidence 后，通过当前 Gate 进入下一节点。'
+        : isEarlyGate
+          ? '当前 Gate 还不能通过，请查看 Gate 条件拆解并补齐角色、Review、Evidence 或 policy 条件。'
+          : '当前 Gate 还不能通过，请查看 Gate 条件拆解并补齐角色、Review、Tests 或 policy 条件。',
       primaryActionId: 'approveGate',
       secondaryActionIds: buildGateSecondaryActionIds(input),
     }

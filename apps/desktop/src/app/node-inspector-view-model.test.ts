@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { artifacts as fixtureArtifacts, runs as fixtureRuns, type WorkflowNode } from '@ai-devflow/shared'
+import type { WorkflowNode } from '@ai-devflow/shared'
+import { artifacts as fixtureArtifacts, runs as fixtureRuns } from '@ai-devflow/shared/fixtures'
 import {
   buildNodeInspectorViewModel,
   resolveInspectorTabForSearchResult,
@@ -41,7 +42,7 @@ describe('node inspector view model', () => {
 
     expect(viewModel.visualKind).toBe('Task')
     expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', '产物', 'Trace', 'Gate影响'])
-    expect(viewModel.activeTab.sections).toEqual(['statusMatrix', 'nodeSummary'])
+    expect(viewModel.activeTab.sections).toEqual(['statusMatrix'])
     expect(viewModel.tabs.find((tab) => tab.label === 'Gate影响')?.sections).toEqual(['gateImpactSummary'])
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
       'node-status',
@@ -74,7 +75,7 @@ describe('node inspector view model', () => {
     expect(viewModel.visualKind).toBe('Review')
     expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', 'Knowledge Review', '引用来源', 'Evidence'])
     expect(viewModel.activeTab.label).toBe('状态')
-    expect(viewModel.activeTab.sections).toEqual(['statusMatrix', 'nodeSummary'])
+    expect(viewModel.activeTab.sections).toEqual(['statusMatrix'])
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
       'node-status',
       'design-artifact',
@@ -92,7 +93,63 @@ describe('node inspector view model', () => {
     })
   })
 
-  it('maps gates to Gate tabs and provides gate requirement rows', () => {
+  it('hides local test actions and requirements on clarify gates', () => {
+    const node: WorkflowNode = {
+      ...findNode((candidate) => candidate.kind === 'gate' && candidate.stage === 'clarify'),
+      status: 'running',
+    }
+    const viewModel = viewModelFor(node, { requestedTab: 'Gate条件', canApprove: true })
+
+    expect(viewModel.visualKind).toBe('Gate')
+    expect(viewModel.activeTab.sections).toEqual(['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'])
+    expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
+      'gate-decision',
+      'policy-snapshot',
+      'approval-permission',
+      'knowledge-review',
+      'required-artifact',
+    ])
+    expect(viewModel.nextAction).toMatchObject({
+      title: '通过 Gate',
+      primaryActionId: 'approveGate',
+      secondaryActionIds: ['openKnowledgeReview'],
+    })
+    expect(viewModel.nextAction.copy).not.toContain('Tests')
+    expect(viewModel.actions.map((action) => action.id)).toEqual([])
+    expect(viewModel.gateRequirementRows.map((row) => row.label)).toEqual([
+      'Policy snapshot',
+      'Role permission',
+      'Knowledge Review',
+      'Budget',
+      'Required Artifact',
+    ])
+  })
+
+  it('keeps gate status focused on readiness without duplicate node summary details', () => {
+    const node: WorkflowNode = {
+      ...findNode((candidate) => candidate.kind === 'gate' && candidate.stage === 'clarify'),
+      status: 'running',
+    }
+    const viewModel = viewModelFor(node, { canApprove: true })
+
+    expect(viewModel.visualKind).toBe('Gate')
+    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', 'Gate条件', 'Evidence', 'Remediation'])
+    expect(viewModel.activeTab.sections).toEqual(['statusMatrix'])
+    expect(viewModel.activeTab.sections).not.toContain('nodeSummary')
+    expect(viewModel.activeTab.sections).not.toContain('gateEnforcementPanel')
+    expect(viewModel.activeTab.sections).not.toContain('governance')
+    expect(viewModel.activeTab.sections).not.toContain('agentReview')
+    expect(viewModel.activeTab.sections).not.toContain('artifacts')
+    expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
+      'gate-decision',
+      'policy-snapshot',
+      'approval-permission',
+      'knowledge-review',
+      'required-artifact',
+    ])
+  })
+
+  it('hides local test actions and requirements on design gates', () => {
     const node = findNode((candidate) => candidate.id === run.currentNodeId && candidate.kind === 'gate')
     const viewModel = viewModelFor(node, { requestedTab: 'Gate条件' })
 
@@ -103,24 +160,45 @@ describe('node inspector view model', () => {
       'policy-snapshot',
       'approval-permission',
       'knowledge-review',
-      'test-evidence',
       'required-artifact',
     ])
     expect(viewModel.nextAction).toMatchObject({
       title: '通过 Gate',
       primaryActionId: 'approveGate',
-      secondaryActionIds: ['openKnowledgeReview', 'openTests'],
+      secondaryActionIds: ['openKnowledgeReview'],
     })
     expect(viewModel.nextAction.copy).toContain('Gate 条件拆解')
+    expect(viewModel.nextAction.copy).not.toContain('Tests')
     expect(viewModel.actions.map((action) => action.id)).toEqual([])
     expect(viewModel.gateRequirementRows.map((row) => row.label)).toEqual([
       'Policy snapshot',
       'Role permission',
       'Knowledge Review',
-      'Test Evidence',
       'Budget',
       'Required Artifact',
     ])
+  })
+
+  it('keeps local test actions and requirements for later gate stages', () => {
+    const designGate = findNode((candidate) => candidate.kind === 'gate' && candidate.stage === 'design')
+    const testGate: WorkflowNode = {
+      ...designGate,
+      id: 'synthetic-test-gate',
+      stage: 'test',
+      title: '测试证据 Gate',
+      subtitle: '确认测试证据后继续交付',
+      artifactIds: [],
+    }
+    const viewModel = viewModelFor(testGate, { requestedTab: 'Gate条件', canApprove: true })
+
+    expect(viewModel.nextAction).toMatchObject({
+      title: '通过 Gate',
+      primaryActionId: 'approveGate',
+      secondaryActionIds: ['openKnowledgeReview', 'openTests'],
+    })
+    expect(viewModel.nextAction.copy).toContain('Tests')
+    expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toContain('test-evidence')
+    expect(viewModel.gateRequirementRows.map((row) => row.label)).toContain('Test Evidence')
   })
 
   it('maps build, test, PR, and acceptance nodes to their true primary actions', () => {
