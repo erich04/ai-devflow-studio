@@ -148,7 +148,6 @@ const actionRank: Record<EnforcementAction, number> = {
   block: 2,
 }
 
-const DEFAULT_ORGANIZATION_ID = 'org-demo'
 const DEFAULT_UPDATED_AT = '2026-06-17T00:00:00.000Z'
 
 function maxAction(first: EnforcementAction, second: EnforcementAction): EnforcementAction {
@@ -206,9 +205,9 @@ function rule(
 }
 
 export function createWarnOnlyDefaultPolicy(
-  input: { organizationId?: string; updatedAt?: string } = {},
+  input: { organizationId: string; updatedAt?: string },
 ): OrganizationEnforcementPolicy {
-  const organizationId = input.organizationId ?? DEFAULT_ORGANIZATION_ID
+  const organizationId = input.organizationId
   const updatedAt = input.updatedAt ?? DEFAULT_UPDATED_AT
 
   return {
@@ -233,9 +232,9 @@ export function createWarnOnlyDefaultPolicy(
 }
 
 export function createRecommendedEnforcementPreset(
-  input: { organizationId?: string; updatedAt?: string } = {},
+  input: { organizationId: string; updatedAt?: string },
 ): OrganizationEnforcementPolicy {
-  const organizationId = input.organizationId ?? DEFAULT_ORGANIZATION_ID
+  const organizationId = input.organizationId
   const updatedAt = input.updatedAt ?? DEFAULT_UPDATED_AT
 
   return {

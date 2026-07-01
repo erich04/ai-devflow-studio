@@ -5,14 +5,17 @@ import {
   canOverrideBlockedGate,
   createAgentReviewArtifacts,
   createFakeAgentProvider,
+  createWarnOnlyDefaultPolicy,
   createOpenAiCompatibleAgentProvider,
   evaluateGateEnforcement,
   evaluateRuntimeBudgetGuard,
   type GateOverrideDecision,
   formatUsd,
+  type KnowledgeChunk,
+  type KnowledgeDocument,
   type OrganizationEnforcementPolicy,
-  knowledgeChunks,
-  knowledgeDocuments,
+  resolveDevFlowRuntimeFlags,
+  resolveEffectivePolicy,
   runKnowledgeReviewAgent,
   validateEnforcementPolicy,
   type ProviderCredentialMetadata,
@@ -34,6 +37,15 @@ import {
 } from '../agent-credentials'
 import type { RunsBundle, TeamOverviewPayload, TeamRepository } from '../repositories/team-repository'
 import { clearSessionCookie, createSessionCookie } from '../auth/session-cookie'
+
+const defaultKnowledgeDocuments: KnowledgeDocument[] = []
+const defaultKnowledgeChunks: KnowledgeChunk[] = []
+
+function isFakeRuntimeEnabled(): boolean {
+  return resolveDevFlowRuntimeFlags({
+    DEVFLOW_ENABLE_FAKE_RUNTIME: process.env.DEVFLOW_ENABLE_FAKE_RUNTIME,
+  }).fakeRuntimeEnabled
+}
 
 export type ApiRouteResult = {
   status: number
@@ -604,6 +616,13 @@ function filterOverviewForSession(
   const projects = overview.projects.filter((project) => canAccessProject(session, project.id))
   const projectIds = new Set(projects.map((project) => project.id))
   const projectCost = overview.projectCost.filter((rollup) => projectIds.has(rollup.key))
+  const organizationPolicy =
+    overview.enforcementPolicies.organizationPolicy.organizationId === session.organizationId
+      ? overview.enforcementPolicies.organizationPolicy
+      : createWarnOnlyDefaultPolicy({ organizationId: session.organizationId })
+  const projectOverrides = overview.enforcementPolicies.projectOverrides.filter((override) =>
+    projectIds.has(override.projectId),
+  )
 
   return {
     ...overview,
@@ -620,6 +639,19 @@ function filterOverviewForSession(
     policyAwareDeliverySummaries: overview.policyAwareDeliverySummaries.filter((summary) =>
       projectIds.has(summary.projectId),
     ),
+    enforcementPolicies: {
+      organizationPolicy,
+      projectOverrides,
+      effectivePolicies: projects.map((project) =>
+        resolveEffectivePolicy(
+          organizationPolicy,
+          projectOverrides.find((override) => override.projectId === project.id) ?? null,
+        ),
+      ),
+      gateOverrides: overview.enforcementPolicies.gateOverrides.filter((override) =>
+        projectIds.has(override.projectId),
+      ),
+    },
   }
 }
 
@@ -652,8 +684,8 @@ async function evaluateEnforcementForInput(
     run,
     node,
     artifacts: bundle.artifacts.filter((artifact) => artifact.runId === run.id),
-    documents: knowledgeDocuments,
-    chunks: knowledgeChunks,
+    documents: defaultKnowledgeDocuments,
+    chunks: defaultKnowledgeChunks,
     testEvidence: overview.testEvidenceSummaries
       .filter((summary) => summary.runId === run.id)
       .map(toTestEvidence),
@@ -932,6 +964,10 @@ export async function resolveTeamRoute(
       policy = parseOrganizationPolicyInput(options.body)
     } catch (error) {
       return badRequest(error instanceof Error ? error.message : 'Invalid enforcement policy payload')
+    }
+
+    if (policy.organizationId !== options.session.organizationId) {
+      return forbidden('Organization policy must match the authenticated organization')
     }
 
     return {
@@ -1225,24 +1261,36 @@ export async function resolveTeamRoute(
       return badRequest(`Run node not found: ${input.nodeId}`)
     }
 
-    const providerId = input.providerId ?? 'fake-knowledge-review'
-    const provider =
-      providerId === 'fake-knowledge-review'
-        ? createFakeAgentProvider()
-        : await (async () => {
-            const credential = await repository.getAgentProviderCredential(providerId, options.session!)
-            if (!credential) {
-              throw new Error(`Agent provider credential not found: ${providerId}`)
-            }
+    const providerId = input.providerId?.trim()
+    if (!providerId) {
+      return badRequest('Review provider is not configured. Save a provider credential before running Knowledge Review.')
+    }
 
-            return createOpenAiCompatibleAgentProvider({
-              id: credential.metadata.providerId,
-              name: 'OpenAI Compatible',
-              model: credential.metadata.model,
-              ...(credential.metadata.baseUrl ? { baseUrl: credential.metadata.baseUrl } : {}),
-              apiKey: decryptAgentCredential(credential.encryptedSecret),
-            })
-          })()
+    const provider = providerId === 'fake-knowledge-review'
+      ? (() => {
+          if (!isFakeRuntimeEnabled()) {
+            return null
+          }
+
+          return createFakeAgentProvider()
+        })()
+      : await (async () => {
+          const credential = await repository.getAgentProviderCredential(providerId, options.session!)
+          if (!credential) {
+            throw new Error(`Agent provider credential not found: ${providerId}`)
+          }
+
+          return createOpenAiCompatibleAgentProvider({
+            id: credential.metadata.providerId,
+            name: 'OpenAI Compatible',
+            model: credential.metadata.model,
+            ...(credential.metadata.baseUrl ? { baseUrl: credential.metadata.baseUrl } : {}),
+            apiKey: decryptAgentCredential(credential.encryptedSecret),
+          })
+        })()
+    if (!provider) {
+      return badRequest('Fake Knowledge Review requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.')
+    }
     const context = buildAgentReviewContext({
       run,
       node,
@@ -1250,8 +1298,8 @@ export async function resolveTeamRoute(
       testEvidence: overview.testEvidenceSummaries
         .filter((summary) => summary.runId === run.id)
         .map(toTestEvidence),
-      knowledgeDocuments,
-      knowledgeChunks,
+      knowledgeDocuments: defaultKnowledgeDocuments,
+      knowledgeChunks: defaultKnowledgeChunks,
     })
     const result = await runKnowledgeReviewAgent({
       request: {

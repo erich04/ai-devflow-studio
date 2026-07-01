@@ -46,6 +46,8 @@ export function GateEnforcementPanel({
   onSyncTeam,
   onRunKnowledgeReview,
   isCurrentNodeAgent = false,
+  isSavingOverride = false,
+  isInspectorWriteBlocked = false,
 }: {
   policySnapshot: PolicySnapshot | null
   decision: GateEnforcementDecision | null
@@ -60,6 +62,8 @@ export function GateEnforcementPanel({
   onSyncTeam?: () => void
   onRunKnowledgeReview?: () => void
   isCurrentNodeAgent?: boolean
+  isSavingOverride?: boolean
+  isInspectorWriteBlocked?: boolean
 }) {
   const [overrideReason, setOverrideReason] = useState('Reviewed blocking reason and approved a temporary exception.')
   const activeOverride = overrides.find((override) =>
@@ -69,6 +73,7 @@ export function GateEnforcementPanel({
     decision?.status === 'blocked' &&
     decision.canOverride &&
     canSaveOverride
+  const isOverrideSaveDisabled = !overrideReason.trim() || isSavingOverride || isInspectorWriteBlocked
   const hasMissingAgentReview = Boolean(
     decision?.blockingReasons.some((reason) => reason.target === 'missing_agent_review') ||
       decision?.warningReasons.some((reason) => reason.target === 'missing_agent_review'),
@@ -159,7 +164,8 @@ export function GateEnforcementPanel({
                     <button
                       className="ghost-button"
                       data-testid={`retry-coding-${candidate.id}`}
-                      disabled={isStartingRetry}
+                      disabled={isStartingRetry || isInspectorWriteBlocked}
+                      title={isInspectorWriteBlocked && !isStartingRetry ? '其他 Inspector 操作正在进行中' : undefined}
                       onClick={() => onStartRetry(candidate.id)}
                     >
                       {isStartingRetry ? 'Starting retry...' : 'Retry Coding'}
@@ -180,10 +186,12 @@ export function GateEnforcementPanel({
               </label>
               <button
                 className="ghost-button"
-                disabled={!overrideReason.trim()}
+                aria-busy={isSavingOverride || undefined}
+                disabled={isOverrideSaveDisabled}
+                title={isInspectorWriteBlocked && !isSavingOverride ? '其他 Inspector 操作正在进行中' : undefined}
                 onClick={() => onSaveOverride(overrideReason, false)}
               >
-                Save lead override
+                {isSavingOverride ? '保存中' : 'Save lead override'}
               </button>
             </div>
           ) : null}

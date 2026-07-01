@@ -1,15 +1,7 @@
 import {
-  artifacts,
-  events,
   formatUsd,
-  mcpServers,
-  members,
-  projects,
   rollupTokenUsage,
   runtimeCostSummaryToTokenUsage,
-  runs,
-  skills,
-  tokenUsage,
   buildPolicyAwareDeliverySummaries,
   createWarnOnlyDefaultPolicy,
   resolveEffectivePolicy,
@@ -46,6 +38,16 @@ import {
   type TokenUsageRollup,
   type WorkflowRun,
 } from '@ai-devflow/shared'
+import {
+  artifacts,
+  events,
+  mcpServers,
+  members,
+  projects,
+  runs,
+  skills,
+  tokenUsage,
+} from '@ai-devflow/shared/fixtures'
 
 const DEMO_ORGANIZATION_ID = 'org-demo'
 const DEMO_IDENTITY_TIMESTAMP = new Date(0).toISOString()
@@ -227,11 +229,13 @@ export function createSeedTeamRepository(): TeamRepository {
   const agentTraces: AgentTrace[] = []
   const agentTokenUsage: AgentTokenUsage[] = []
   const codingAgentSummaries: RemoteCodingAgentSummary[] = []
-  let organizationPolicy = createWarnOnlyDefaultPolicy()
+  let organizationPolicy = createWarnOnlyDefaultPolicy({ organizationId: DEMO_ORGANIZATION_ID })
   const projectOverrides: ProjectEnforcementPolicyOverride[] = []
   const gateOverrides: GateOverrideDecision[] = []
   const runtimeBudgetPolicies: RuntimeBudgetPolicy[] = []
   const runtimeBudgetApprovals: RuntimeBudgetApproval[] = []
+  const desktopPairingCodes = new Map<string, Omit<DesktopPairingExchangeResult, 'token' | 'tokenId'>>()
+  const desktopTokenSessions = new Map<string, TeamSession>()
 
   function upsertSyncedRun(run: WorkflowRun) {
     const index = syncedRuns.findIndex((candidate) => candidate.id === run.id)
@@ -367,12 +371,29 @@ export function createSeedTeamRepository(): TeamRepository {
     },
     async createDesktopPairingCode(input, context) {
       const createdAt = new Date(0).toISOString()
+      const sessionContext = context as TeamRepositorySyncContext & Partial<TeamSession>
+      const role = sessionContext.role ?? 'owner'
+      const authAccountId =
+        'authAccountId' in sessionContext && typeof sessionContext.authAccountId === 'string'
+          ? sessionContext.authAccountId
+          : `acct-demo-${context.userId}`
+      const projectMemberships = sessionContext.projectMemberships ?? [{ projectId: input.projectId, userId: context.userId, role }]
+      const code = `desktop-pairing-${input.projectId}.demo-secret`
+      desktopPairingCodes.set(code, {
+        organizationId: context.organizationId,
+        projectId: input.projectId,
+        userId: context.userId,
+        role,
+        authAccountId,
+        projectMemberships,
+        createdAt,
+      })
       return {
         id: `desktop-pairing-${input.projectId}`,
         organizationId: context.organizationId,
         projectId: input.projectId,
         createdByUserId: context.userId,
-        code: `desktop-pairing-${input.projectId}.demo-secret`,
+        code,
         expiresAt: new Date(10 * 60 * 1000).toISOString(),
         createdAt,
         attemptsRemaining: 5,
@@ -381,21 +402,38 @@ export function createSeedTeamRepository(): TeamRepository {
     async exchangeDesktopPairingCode(input) {
       const projectId = input.code.split('.')[0]?.replace('desktop-pairing-', '') || 'p-payments'
       const createdAt = new Date(0).toISOString()
-      return {
-        token: `devflow-desktop-token-${projectId}`,
-        tokenId: `desktop-token-${projectId}`,
+      const stored = desktopPairingCodes.get(input.code) ?? {
         organizationId: DEMO_ORGANIZATION_ID,
         projectId,
         userId: 'u-erich',
-        role: 'owner',
+        role: 'owner' as const,
         authAccountId: 'acct-demo-erich',
-        projectMemberships: [{ projectId, userId: 'u-erich', role: 'owner' }],
+        projectMemberships: [{ projectId, userId: 'u-erich', role: 'owner' as const }],
         createdAt,
+      }
+      const token = `devflow-desktop-token-${projectId}`
+      desktopTokenSessions.set(token, {
+        source: 'authenticated',
+        organizationId: stored.organizationId,
+        userId: stored.userId,
+        role: stored.role,
+        authAccountId: stored.authAccountId,
+        projectMemberships: stored.projectMemberships,
+      })
+      return {
+        token,
+        tokenId: `desktop-token-${projectId}`,
+        ...stored,
       }
     },
     async resolveDesktopTokenSession(token) {
       if (!token.startsWith('devflow-desktop-token-')) {
         return null
+      }
+
+      const stored = desktopTokenSessions.get(token)
+      if (stored) {
+        return stored
       }
 
       const projectId = token.replace('devflow-desktop-token-', '')

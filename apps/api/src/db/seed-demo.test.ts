@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { artifacts, events, mcpServers, members, projects, runs, skills, tokenUsage } from '@ai-devflow/shared'
+import { artifacts, events, mcpServers, members, projects, runs, skills, tokenUsage } from '@ai-devflow/shared/fixtures'
 import type { TeamDbClient } from './client'
 import { seedDemoTeamData } from './seed-demo'
 

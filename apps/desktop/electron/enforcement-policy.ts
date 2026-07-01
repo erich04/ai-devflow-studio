@@ -16,7 +16,10 @@ function isLocalProjectId(projectId: string): boolean {
 }
 
 export function createBuiltInPolicySnapshot(projectId: string, timestamp = new Date().toISOString()): PolicySnapshot {
-  const organizationPolicy = createWarnOnlyDefaultPolicy({ updatedAt: timestamp })
+  const organizationPolicy = createWarnOnlyDefaultPolicy({
+    organizationId: `local-policy-${projectId}`,
+    updatedAt: timestamp,
+  })
   const effectivePolicy = resolveEffectivePolicy(organizationPolicy, null)
 
   return {

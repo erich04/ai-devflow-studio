@@ -14,10 +14,6 @@ const ROLE_RANK: Record<Role, number> = {
   owner: 3,
 }
 
-export type ResolveRequestSessionOptions = {
-  allowDemoFallback?: boolean
-}
-
 export type CreateAuthenticatedSessionInput = Omit<AuthenticatedSession, 'source'>
 
 type HeaderBag = IncomingHttpHeaders | Record<string, string | string[] | undefined>
@@ -37,7 +33,7 @@ function parseRole(value: string | undefined): Role | null {
 }
 
 function parseSessionSource(value: string | undefined): TeamSession['source'] | null {
-  if (value === undefined || value === 'demo') {
+  if (value === 'demo') {
     return 'demo'
   }
 
@@ -95,11 +91,7 @@ export function isAuthenticatedSession(session: TeamSession): session is Authent
   return session.source === 'authenticated'
 }
 
-export function resolveRequestSession(
-  headers: HeaderBag,
-  options: ResolveRequestSessionOptions = {},
-): TeamSession | null {
-  const allowDemoFallback = options.allowDemoFallback ?? false
+export function resolveRequestSession(headers: HeaderBag): TeamSession | null {
   const userId = readHeader(headers, 'x-devflow-user-id')
   const source = parseSessionSource(readHeader(headers, 'x-devflow-session-source'))
 
@@ -108,7 +100,7 @@ export function resolveRequestSession(
   }
 
   if (!userId) {
-    return allowDemoFallback ? createDemoSession() : null
+    return null
   }
 
   const role = parseRole(readHeader(headers, 'x-devflow-user-role'))
@@ -117,7 +109,11 @@ export function resolveRequestSession(
   }
 
   try {
-    const organizationId = readHeader(headers, 'x-devflow-organization-id') ?? 'org-demo'
+    const organizationId = readHeader(headers, 'x-devflow-organization-id')
+    if (!organizationId) {
+      return null
+    }
+
     const projectMemberships = parseProjectMemberships(
       readHeader(headers, 'x-devflow-project-roles'),
       userId,

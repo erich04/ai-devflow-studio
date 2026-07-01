@@ -268,7 +268,7 @@ export function buildAgentProviderDataSource(provider: AgentProviderConfig | und
     return {
       status: 'not configured',
       label: 'no selected provider',
-      detail: 'No Review Provider is selected for Knowledge Review.',
+      detail: 'No Agent Provider is selected for Knowledge Review.',
       tone: 'soft',
     }
   }

@@ -49,6 +49,7 @@ import {
   type InspectorActionDisabledReason,
   type InspectorActionId,
   type InspectorSectionId,
+  type PendingInspectorAction,
 } from '../app/node-inspector-view-model'
 
 export { AgentWorkbenchView } from './AgentWorkbenchView'
@@ -223,6 +224,7 @@ export function Inspector({
   isRunningTests,
   isRunningAgentReview,
   isStartingCodingAgent,
+  pendingInspectorAction,
 }: {
   selectedRun: WorkflowRun | undefined
   selectedNode: WorkflowNode | undefined
@@ -255,6 +257,7 @@ export function Inspector({
   isRunningTests: boolean
   isRunningAgentReview: boolean
   isStartingCodingAgent: boolean
+  pendingInspectorAction: PendingInspectorAction | null
 }) {
   const [requestedTab, setRequestedTab] = useState('状态')
 
@@ -315,6 +318,25 @@ export function Inspector({
     createPrDraft: onCreatePrDraft,
     createAcceptanceBundle: onCreateAcceptanceBundle,
   }
+  const writeActionIds = new Set<InspectorActionId>([
+    'completeAgent',
+    'approveGate',
+    'runCodingAgent',
+    'createPrDraft',
+    'createAcceptanceBundle',
+  ])
+  const hasPendingInspectorAction = Boolean(pendingInspectorAction)
+  const pendingMatchesSelectedNode = Boolean(
+    pendingInspectorAction &&
+      selectedRun &&
+      pendingInspectorAction.runId === selectedRun.id &&
+      pendingInspectorAction.nodeId === selectedNode.id,
+  )
+  const hasInspectorWriteLock =
+    hasPendingInspectorAction ||
+    isRunningAgentReview ||
+    isStartingCodingAgent ||
+    isRunningTests
   const isDisabledReasonActive = (reason: InspectorActionDisabledReason) => {
     return {
       running_agent_review: isRunningAgentReview,
@@ -324,9 +346,24 @@ export function Inspector({
       starting_coding_agent: isStartingCodingAgent,
     }[reason]
   }
+  const isActionWriteLocked = (action: InspectorAction) => writeActionIds.has(action.id) && hasInspectorWriteLock
   const isActionDisabled = (action: InspectorAction) =>
-    action.disabledReasons.some((reason) => isDisabledReasonActive(reason))
+    action.disabledReasons.some((reason) => isDisabledReasonActive(reason)) || isActionWriteLocked(action)
+  const actionTitle = (action: InspectorAction) => {
+    if (isActionWriteLocked(action) && !action.disabledReasons.some((reason) => isDisabledReasonActive(reason))) {
+      return pendingMatchesSelectedNode ? '当前节点操作正在进行中' : '其他 Inspector 操作正在进行中'
+    }
+    return undefined
+  }
   const actionLabel = (action: InspectorAction) => {
+    if (pendingMatchesSelectedNode && pendingInspectorAction?.actionId === action.id) {
+      if (action.id === 'approveGate') {
+        return '审批中'
+      }
+      if (action.id === 'completeAgent' || action.id === 'createPrDraft' || action.id === 'createAcceptanceBundle') {
+        return '生成中'
+      }
+    }
     if (action.id === 'openKnowledgeReview' && isRunningAgentReview) {
       return '审查中'
     }
@@ -369,8 +406,10 @@ export function Inspector({
       className={`${variant}-button`}
       data-testid={action.testId}
       aria-label={actionAriaLabel(action)}
+      aria-busy={pendingMatchesSelectedNode && pendingInspectorAction?.actionId === action.id ? true : undefined}
       disabled={isActionDisabled(action)}
       key={action.id}
+      title={actionTitle(action)}
       onClick={actionHandlers[action.id]}
     >
       {renderActionIcon(action.id)}
@@ -592,6 +631,8 @@ export function Inspector({
       onSyncTeam={onSyncTeam}
       onRunKnowledgeReview={onOpenKnowledgeReview}
       isCurrentNodeAgent={isCurrentNodeAgent}
+      isSavingOverride={pendingMatchesSelectedNode && pendingInspectorAction?.actionId === 'saveGateOverride'}
+      isInspectorWriteBlocked={hasInspectorWriteLock}
     />
   )
 

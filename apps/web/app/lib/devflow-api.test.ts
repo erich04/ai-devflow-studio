@@ -17,7 +17,7 @@ import {
   saveEnforcementPolicy,
 } from './devflow-api'
 
-const organizationPolicy = createWarnOnlyDefaultPolicy()
+const organizationPolicy = createWarnOnlyDefaultPolicy({ organizationId: 'org-demo' })
 const enforcementPolicies = {
   organizationPolicy,
   projectOverrides: [],
@@ -147,6 +147,7 @@ describe('DevFlow web API client', () => {
       cache: 'no-store',
       headers: {
         accept: 'application/json',
+        'x-devflow-session-source': 'demo',
         'x-devflow-organization-id': 'org-demo',
         'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
         'x-devflow-user-id': 'u-erich',
@@ -208,9 +209,59 @@ describe('DevFlow web API client', () => {
         runId: 'run-1',
         nodeId: 'node-1',
         projectId: 'p-payments',
-        providerId: 'fake-knowledge-review',
       }),
     })
+  })
+
+  it('passes an explicit Knowledge Review provider through the API boundary', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(JSON.stringify({
+        review: {
+          id: 'agent-review-1',
+          requestId: 'agent-request-1',
+          runId: 'run-1',
+          nodeId: 'node-1',
+          runtime: 'api',
+          providerId: 'review-provider-1',
+          model: 'model',
+          conclusion: 'warning',
+          summary: 'summary',
+          risks: [],
+          missingEvidence: [],
+          suggestedTests: [],
+          knowledgeReferences: [],
+          policyFindings: [],
+          confidence: 0.8,
+          gateAdvisory: {
+            level: 'warning',
+            summary: 'summary',
+            blocksApproval: false,
+            requiredActions: [],
+          },
+          createdAt: '2026-06-18T00:00:00.000Z',
+        },
+        trace: { id: 'trace-1' },
+        tokenUsage: { id: 'token-1' },
+      }), { status: 200 }),
+    )
+
+    await runKnowledgeReview({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      runId: 'run-1',
+      nodeId: 'node-1',
+      projectId: 'p-payments',
+      providerId: 'review-provider-1',
+    })
+
+    expect(fetcher).toHaveBeenCalledWith('http://api.local/api/agent/knowledge-review', expect.objectContaining({
+      body: JSON.stringify({
+        runId: 'run-1',
+        nodeId: 'node-1',
+        projectId: 'p-payments',
+        providerId: 'review-provider-1',
+      }),
+    }))
   })
 
   it('saves enforcement policy through the API boundary', async () => {

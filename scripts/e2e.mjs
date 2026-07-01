@@ -130,6 +130,9 @@ try {
     url: `${apiUrl}/health`,
     port: 4310,
     args: ['pnpm', '--filter', '@ai-devflow/api', 'dev'],
+    env: {
+      DEVFLOW_ENABLE_DEMO_DATA: 'true',
+    },
   })
   desktop = await ensureService({
     name: 'desktop',
@@ -147,6 +150,9 @@ try {
       '5173',
       '--strictPort',
     ],
+    env: {
+      DEVFLOW_ENABLE_DEMO_DATA: 'true',
+    },
   })
   web = await ensureService({
     name: 'web',
@@ -154,12 +160,14 @@ try {
     port: 4311,
     args: ['pnpm', '--filter', '@ai-devflow/web', 'dev'],
     env: {
+      DEVFLOW_ENABLE_DEMO_DATA: 'true',
       DEVFLOW_API_BASE_URL: apiUrl,
       NEXT_PUBLIC_DEVFLOW_API_URL: apiUrl,
     },
   })
 
   await run(corepack, ['pnpm', 'exec', 'playwright', 'test'], {
+    DEVFLOW_ENABLE_DEMO_DATA: 'true',
     PLAYWRIGHT_SKIP_WEBSERVER: '1',
     DEVFLOW_API_BASE_URL: apiUrl,
     NEXT_PUBLIC_DEVFLOW_API_URL: apiUrl,

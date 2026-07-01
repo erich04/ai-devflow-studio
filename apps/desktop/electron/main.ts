@@ -22,8 +22,6 @@ import {
   createTestEvidenceEvent,
   advanceWorkflowAfterGateApproval,
   isActiveCodingAgentRunStatus,
-  knowledgeChunks,
-  knowledgeDocuments,
   evaluateGateEnforcement,
   redactSecrets,
   resolveEffectivePolicy,
@@ -33,6 +31,8 @@ import {
   type AgentProvider,
   type AgentProviderConfig,
   type GateOverrideDecision,
+  type KnowledgeChunk,
+  type KnowledgeDocument,
   type LocalProject,
   type PolicySnapshot,
   type ProjectGitStatus,
@@ -40,6 +40,8 @@ import {
   type ProviderCredentialMetadata,
   type RemoteTeamSnapshot,
   type TestEvidence,
+  createDemoTeamSessionHeaders,
+  resolveDevFlowRuntimeFlags,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import { createLocalStore, type LocalStore } from './local-store.js'
@@ -96,6 +98,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_TEST_TIMEOUT_MS = 120_000
 const INITIAL_THEME = parseInitialTheme(process.env['DEVFLOW_INITIAL_THEME'])
 const DEFAULT_CODING_RUN_TIMEOUT_MS = 10 * 60_000
+const runtimeFlags = resolveDevFlowRuntimeFlags(process.env)
+const defaultKnowledgeDocuments: KnowledgeDocument[] = []
+const defaultKnowledgeChunks: KnowledgeChunk[] = []
 const execFileAsync = promisify(execFile)
 
 let storePromise: Promise<LocalStore> | undefined
@@ -129,9 +134,15 @@ async function getRemoteSyncClient() {
   const store = await getStore()
   const encryptedToken = await store.getDesktopPairingEncryptedToken()
   const authToken = encryptedToken ? decryptCredential(encryptedToken) : undefined
-  const nextKey = authToken ? `token:${authToken}` : 'demo'
+  const nextKey = authToken ? `token:${authToken}` : runtimeFlags.demoDataEnabled ? 'demo' : 'unauthenticated'
   if (!remoteSyncClient || remoteSyncClientKey !== nextKey) {
-    remoteSyncClient = createRemoteSyncClient(authToken ? { authToken } : {})
+    remoteSyncClient = createRemoteSyncClient(
+      authToken
+        ? { authToken }
+        : runtimeFlags.demoDataEnabled
+          ? { sessionHeaders: createDemoTeamSessionHeaders() }
+          : {},
+    )
     remoteSyncClientKey = nextKey
   }
 
@@ -499,7 +510,15 @@ async function refreshRemotePolicySnapshotForProject(projectId: string): Promise
   }
 
   try {
-    const snapshot = await (await getRemoteSyncClient()).loadRemoteSnapshot({ organizationId: 'org-demo' })
+    const store = await getStore()
+    const pairing = await store.getDesktopPairingCredential()
+    if (!pairing) {
+      return
+    }
+
+    const snapshot = await (await getRemoteSyncClient()).loadRemoteSnapshot({
+      organizationId: pairing.organizationId,
+    })
     await cacheRemotePolicySnapshots(snapshot)
   } catch {
     // Keep the last authoritative cache if the team API is offline.
@@ -534,16 +553,16 @@ async function evaluateLocalGateEnforcement(
   const knowledgeReferences = buildKnowledgeReferences({
     run,
     artifacts,
-    documents: knowledgeDocuments,
-    chunks: knowledgeChunks,
+    documents: defaultKnowledgeDocuments,
+    chunks: defaultKnowledgeChunks,
     testEvidence,
   })
   const governanceChecks = buildKnowledgeGovernanceChecks({
     run,
     node,
     artifacts,
-    documents: knowledgeDocuments,
-    chunks: knowledgeChunks,
+    documents: defaultKnowledgeDocuments,
+    chunks: defaultKnowledgeChunks,
     testEvidence,
   })
   const latestAgentReview =
@@ -930,7 +949,7 @@ function registerIpcHandlers() {
     ])
     const providerId = input.providerId
     if (!providerId) {
-      throw new Error('Review provider is not configured. Save Provider ID, Base URL, Model, and API Key before running this agent.')
+      throw new Error('Agent provider is not configured. Save Provider ID, Base URL, Model, and API Key before running this agent.')
     }
     const provider = await resolveAgentProvider(store, providerId)
     const completedAt = new Date().toISOString()
@@ -1181,12 +1200,12 @@ function registerIpcHandlers() {
       node,
       artifacts,
       testEvidence,
-      knowledgeDocuments,
-      knowledgeChunks,
+      knowledgeDocuments: defaultKnowledgeDocuments,
+      knowledgeChunks: defaultKnowledgeChunks,
     })
     const providerId = input.providerId
     if (!providerId) {
-      throw new Error('Review provider is not configured. Save Provider ID, Base URL, Model, and API Key before running Knowledge Review.')
+      throw new Error('Agent provider is not configured. Save Provider ID, Base URL, Model, and API Key before running Knowledge Review.')
     }
     const resolvedProvider = await resolveAgentProvider(store, providerId)
 

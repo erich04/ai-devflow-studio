@@ -6,18 +6,21 @@ const rootDir = fileURLToPath(new URL('..', import.meta.url))
 const apiUrl = 'http://127.0.0.1:4322'
 const databaseUrl = process.env.DEVFLOW_DATABASE_URL ?? process.env.DATABASE_URL
 const ownerSessionHeaders = {
+  'x-devflow-session-source': 'demo',
   'x-devflow-organization-id': 'org-demo',
   'x-devflow-user-id': 'u-erich',
   'x-devflow-user-role': 'owner',
   'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
 }
 const memberSessionHeaders = {
+  'x-devflow-session-source': 'demo',
   'x-devflow-organization-id': 'org-demo',
   'x-devflow-user-id': 'u-yu',
   'x-devflow-user-role': 'member',
   'x-devflow-project-roles': 'p-payments:member',
 }
 const leadSessionHeaders = {
+  'x-devflow-session-source': 'demo',
   'x-devflow-organization-id': 'org-demo',
   'x-devflow-user-id': 'u-ling',
   'x-devflow-user-role': 'lead',
@@ -326,9 +329,14 @@ try {
   await run(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'db:setup'], {
     DEVFLOW_DATABASE_URL: databaseUrl,
   })
+  await run(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'db:seed'], {
+    DEVFLOW_DATABASE_URL: databaseUrl,
+    DEVFLOW_ENABLE_DEMO_DATA: 'true',
+  })
 
   api = spawnService('api-postgres', ['pnpm', '--filter', '@ai-devflow/api', 'dev'], {
     DEVFLOW_DATABASE_URL: databaseUrl,
+    DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
     DEVFLOW_REQUIRE_AUTH: 'true',
     PORT: '4322',
   })

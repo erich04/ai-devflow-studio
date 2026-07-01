@@ -25,10 +25,12 @@ import {
   stageLabels,
   type FieldDataSource,
 } from './desktop-view-model'
+import type { PendingInspectorAction } from './node-inspector-view-model'
 
 export type AgentConsoleTone = 'good' | 'warn' | 'bad' | 'soft' | 'accent' | 'neutral'
 
 export type AgentConsolePrimaryActionId =
+  | 'complete-agent-node'
   | 'run-review'
   | 'run-coding'
   | 'go-tests'
@@ -116,6 +118,8 @@ export type BuildAgentConsoleViewModelInput = {
   latestUsage: AgentTokenUsage | undefined
   isRunningReview: boolean
   isStartingCodingAgent: boolean
+  isRunningTests: boolean
+  pendingInspectorAction: PendingInspectorAction | null
   codingRuns: CodingAgentRun[]
   retryAttempts: RetryAttempt[]
   latestCodingRun: CodingAgentRun | undefined
@@ -138,6 +142,8 @@ export function buildAgentConsoleViewModel(input: BuildAgentConsoleViewModelInpu
     selectedNode: input.selectedNode,
     isRunningReview: input.isRunningReview,
     isStartingCodingAgent: input.isStartingCodingAgent,
+    isRunningTests: input.isRunningTests,
+    pendingInspectorAction: input.pendingInspectorAction,
     pendingCodingPermission: input.pendingCodingPermission,
   })
   const advisory = buildAdvisorySummary(input.latestReview, input.selectedNode, input.pendingCodingPermission)
@@ -162,7 +168,7 @@ export function buildAgentConsoleViewModel(input: BuildAgentConsoleViewModelInpu
     evidenceGroups: buildEvidenceGroups(input),
     reviewHistoryCount: input.selectedReviews.length,
     runtimeSettings: {
-      summary: selectedProvider ? `Review provider: ${selectedProvider.id}` : 'No Review Provider selected',
+      summary: selectedProvider ? `Agent provider: ${selectedProvider.id}` : 'No Agent Provider selected',
       providerDataSource,
       selectedProvider,
       providerMode: buildProviderModeLabel(selectedProvider, providerDataSource),
@@ -192,6 +198,8 @@ function buildPrimaryAction(input: {
   selectedNode: WorkflowNode | undefined
   isRunningReview: boolean
   isStartingCodingAgent: boolean
+  isRunningTests: boolean
+  pendingInspectorAction: PendingInspectorAction | null
   pendingCodingPermission: CodingPermissionRequest | undefined
 }): AgentConsoleAction {
   if (input.pendingCodingPermission) {
@@ -224,34 +232,98 @@ function buildPrimaryAction(input: {
     }
   }
 
+  const pendingMatchesSelectedNode = Boolean(
+    input.pendingInspectorAction &&
+      input.selectedRun &&
+      input.pendingInspectorAction.runId === input.selectedRun.id &&
+      input.pendingInspectorAction.nodeId === input.selectedNode.id,
+  )
+  const hasInspectorWriteLock =
+    Boolean(input.pendingInspectorAction) ||
+    input.isRunningReview ||
+    input.isStartingCodingAgent ||
+    input.isRunningTests
+  const writeLockReason = pendingMatchesSelectedNode
+    ? '当前节点操作正在进行中。'
+    : '其他 Inspector 操作正在进行中。'
+
   if (isBuildTask(input.selectedNode)) {
+    const isBlockedByWriteLock = hasInspectorWriteLock && !input.isStartingCodingAgent
     return {
       id: 'run-coding',
       label: input.isStartingCodingAgent ? 'Starting Coding Agent' : 'Run Coding Agent',
       summary: '通过 managed worktree 执行代码修改、权限转发、diff 和测试证据归档。',
       tone: 'accent',
-      disabled: input.isStartingCodingAgent,
-      ...(input.isStartingCodingAgent ? { disabledReason: 'Coding Agent is starting.' } : {}),
+      disabled: input.isStartingCodingAgent || isBlockedByWriteLock,
+      ...(input.isStartingCodingAgent
+        ? { disabledReason: 'Coding Agent is starting.' }
+        : isBlockedByWriteLock
+          ? { disabledReason: writeLockReason }
+          : {}),
     }
   }
 
   const providerMissing = !input.selectedProvider
+  if (isWorkflowAgentTask(input.selectedNode)) {
+    const isCompletingCurrentAgent =
+      pendingMatchesSelectedNode && input.pendingInspectorAction?.actionId === 'completeAgent'
+    const isBlockedByWriteLock = hasInspectorWriteLock && !isCompletingCurrentAgent
+    const disabledReason = providerMissing
+      ? '请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。'
+      : isCompletingCurrentAgent
+        ? '阶段产物正在生成。'
+        : isBlockedByWriteLock
+          ? writeLockReason
+          : undefined
+
+    return {
+      id: 'complete-agent-node',
+      label: isCompletingCurrentAgent
+        ? '生成中'
+        : input.selectedNode.stage === 'design'
+          ? '生成设计方案'
+          : '生成需求澄清',
+      summary: input.selectedNode.stage === 'design'
+        ? '运行当前设计 Agent，产出方案、测试策略和进入方案评审 Gate 的依据。'
+        : '运行当前澄清 Agent，补齐验收口径、非目标和后续 Gate 所需证据。',
+      tone: providerMissing ? 'warn' : 'accent',
+      disabled: providerMissing || isCompletingCurrentAgent || isBlockedByWriteLock,
+      ...(disabledReason ? { disabledReason } : {}),
+    }
+  }
+
+  if (input.selectedNode.kind === 'pr' || input.selectedNode.kind === 'acceptance') {
+    return {
+      id: 'return-workbench',
+      label: 'Return to Workbench',
+      summary: 'PR 交付和业务验收动作请回到 Workbench 当前 Inspector 执行。',
+      tone: 'soft',
+      disabled: false,
+    }
+  }
+
   return {
     id: 'run-review',
     label: input.isRunningReview ? 'Review running' : 'Run Knowledge Review',
     summary: '生成当前节点的 Review Evidence、Gate Advisory、引用和 trace。',
     tone: providerMissing ? 'warn' : 'accent',
-    disabled: providerMissing || input.isRunningReview,
+    disabled: providerMissing || input.isRunningReview || Boolean(input.pendingInspectorAction),
     ...(providerMissing
-      ? { disabledReason: '请先配置真实 Review Provider：Provider ID、Base URL、Model 和 API Key。' }
+      ? { disabledReason: '请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。' }
       : input.isRunningReview
         ? { disabledReason: 'Knowledge Review is already running.' }
+        : input.pendingInspectorAction
+          ? { disabledReason: writeLockReason }
         : {}),
   }
 }
 
 function isBuildTask(node: WorkflowNode): boolean {
   return node.stage === 'build' && node.kind === 'task'
+}
+
+function isWorkflowAgentTask(node: WorkflowNode): boolean {
+  return node.kind === 'agent' && (node.stage === 'clarify' || node.stage === 'design')
 }
 
 function buildAdvisorySummary(
@@ -289,7 +361,7 @@ function buildAdvisorySummary(
 
   return {
     label: 'No review yet',
-    summary: '运行 Agent 后会在这里显示最新判断。',
+    summary: '当前节点还没有 Review advisory。',
     tone: 'soft',
     detail: 'No advisory',
   }
@@ -322,7 +394,7 @@ function buildPathStatuses(input: {
         { label: 'Provider', value: input.selectedProvider?.id ?? 'none' },
         { label: 'Current node reviews', value: String(input.selectedReviews.length) },
       ],
-      ...(!input.selectedProvider ? { disabledReason: '请先配置真实 Review Provider：Provider ID、Base URL、Model 和 API Key。' } : {}),
+      ...(!input.selectedProvider ? { disabledReason: '请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。' } : {}),
     },
     {
       id: 'coding',

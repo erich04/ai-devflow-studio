@@ -72,6 +72,7 @@ describe('loadPolicySnapshotForProject', () => {
     const snapshot = await loadPolicySnapshotForProject(store, localProject.id)
 
     expect(snapshot.source).toBe('built_in_default')
+    expect(snapshot.organizationPolicy?.organizationId).toBe(`local-policy-${localProject.id}`)
     expect(snapshot.effectivePolicy?.rules.every((rule) => rule.action !== 'block')).toBe(true)
   })
 })

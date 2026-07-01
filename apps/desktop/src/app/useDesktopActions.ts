@@ -33,6 +33,7 @@ import {
   slugifyBranchName,
 } from './desktop-view-model'
 import type { DesktopWorkspaceSetters, DesktopWorkspaceState } from './useDesktopWorkspace'
+import type { PendingInspectorAction, PendingInspectorActionId } from './node-inspector-view-model'
 
 export function useDesktopActions(input: {
   desktopApi: DevFlowDesktopApi | null
@@ -87,6 +88,10 @@ export function useDesktopActions(input: {
     draftRequest,
     codingDiffArtifacts,
     agentReviews,
+    pendingInspectorAction,
+    isRunningAgentReview,
+    isStartingCodingAgent,
+    isRunningTests,
   } = state
   const {
     setThemePreference,
@@ -132,6 +137,7 @@ export function useDesktopActions(input: {
     setRuntimeBudgetApprovalId,
     setIsRunningAgentReview,
     setIsStartingCodingAgent,
+    setPendingInspectorAction,
     setIsNewRunOpen,
     setToast,
   } = setters
@@ -157,6 +163,47 @@ export function useDesktopActions(input: {
     return sequencedEvent
   }
 
+  function samePendingInspectorAction(
+    current: PendingInspectorAction | null,
+    expected: PendingInspectorAction,
+  ): boolean {
+    return Boolean(
+      current &&
+        current.actionId === expected.actionId &&
+        current.runId === expected.runId &&
+        current.nodeId === expected.nodeId,
+    )
+  }
+
+  function startPendingInspectorAction(
+    actionId: PendingInspectorActionId,
+    run: WorkflowRun,
+    node: WorkflowNode,
+    message: string,
+  ): PendingInspectorAction {
+    const pending: PendingInspectorAction = { actionId, runId: run.id, nodeId: node.id }
+    setPendingInspectorAction(pending)
+    setToast(message)
+    return pending
+  }
+
+  function clearPendingInspectorAction(pending: PendingInspectorAction) {
+    setPendingInspectorAction((current) => (samePendingInspectorAction(current, pending) ? null : current))
+  }
+
+  function hasInspectorWriteInFlight(): boolean {
+    return Boolean(pendingInspectorAction) || isRunningAgentReview || isStartingCodingAgent || isRunningTests
+  }
+
+  function blockIfInspectorWriteInFlight(): boolean {
+    if (!hasInspectorWriteInFlight()) {
+      return false
+    }
+
+    setToast('其他 Inspector 操作正在进行中，请稍后再试')
+    return true
+  }
+
   function changeThemePreference(nextPreference: ThemePreference) {
     setThemePreference(nextPreference)
     if (!desktopApi) {
@@ -174,12 +221,17 @@ export function useDesktopActions(input: {
       return
     }
 
+    if (!desktopPairing?.organizationId) {
+      setToast('请先 Pair Team Project 后再同步团队远端状态')
+      return
+    }
+
     setIsSyncingRemote(true)
     setToast('正在同步团队远端状态...')
 
     try {
       const snapshot = await desktopApi.loadRemoteSnapshot({
-        organizationId: desktopPairing?.organizationId ?? 'org-demo',
+        organizationId: desktopPairing.organizationId,
       })
       const remoteRuns = snapshot.runs.map(normalizeWorkflowRunProgress)
       const nextRuns = mergeById(runs.map(normalizeWorkflowRunProgress), remoteRuns)
@@ -257,6 +309,12 @@ export function useDesktopActions(input: {
       return
     }
 
+    if (blockIfInspectorWriteInFlight()) {
+      return
+    }
+
+    const pending = startPendingInspectorAction('approveGate', selectedRun, selectedNode, '正在通过 Gate...')
+
     if (desktopApi) {
       try {
         const result = await desktopApi.approveGate({
@@ -273,28 +331,36 @@ export function useDesktopActions(input: {
           .catch(() => undefined)
       } catch (error) {
         setToast(error instanceof Error ? error.message : '保存 Gate 审批失败')
+      } finally {
+        clearPendingInspectorAction(pending)
       }
       return
     }
 
-    const timestamp = new Date().toISOString()
-    const { run: updatedRun } = advanceWorkflowAfterGateApproval({
-      run: selectedRun,
-      approvedNodeId: selectedNode.id,
-      now: timestamp,
-    })
-    const approvalEvent: Omit<AgentEvent, 'sequence'> = {
-      id: `event-approval-${timestamp}`,
-      runId: selectedRun.id,
-      nodeId: selectedNode.id,
-      kind: 'approval',
-      message: `${currentUser.name} Gate 已通过：${displayNodeTitle(selectedNode)}`,
-      timestamp,
-    }
+    try {
+      const timestamp = new Date().toISOString()
+      const { run: updatedRun } = advanceWorkflowAfterGateApproval({
+        run: selectedRun,
+        approvedNodeId: selectedNode.id,
+        now: timestamp,
+      })
+      const approvalEvent: Omit<AgentEvent, 'sequence'> = {
+        id: `event-approval-${timestamp}`,
+        runId: selectedRun.id,
+        nodeId: selectedNode.id,
+        kind: 'approval',
+        message: `${currentUser.name} Gate 已通过：${displayNodeTitle(selectedNode)}`,
+        timestamp,
+      }
 
-    setRuns((previousRuns) => previousRuns.map((run) => (run.id === selectedRun.id ? updatedRun : run)))
-    appendSequencedEvent(approvalEvent)
-    setToast('Gate 已通过，流程已推进')
+      setRuns((previousRuns) => previousRuns.map((run) => (run.id === selectedRun.id ? updatedRun : run)))
+      appendSequencedEvent(approvalEvent)
+      setToast('Gate 已通过，流程已推进')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Gate 审批失败')
+    } finally {
+      clearPendingInspectorAction(pending)
+    }
   }
 
   async function completeSelectedWorkflowAgentNode() {
@@ -317,9 +383,18 @@ export function useDesktopActions(input: {
 
     if (desktopApi) {
       if (!selectedAgentProviderId) {
-        setToast('请先在 Agents 的 Runtime Settings 配置 Review Provider：Provider ID、Base URL、Model 和 API Key')
+        setToast('请先在 Agents 的 Runtime Settings 配置 Agent Provider：Provider ID、Base URL、Model 和 API Key')
         return
       }
+      if (blockIfInspectorWriteInFlight()) {
+        return
+      }
+      const pending = startPendingInspectorAction(
+        'completeAgent',
+        selectedRun,
+        selectedNode,
+        selectedNode.stage === 'clarify' ? '正在生成需求澄清...' : '正在生成设计方案...',
+      )
       try {
         const result = await desktopApi.completeWorkflowAgentNode({
           runId: selectedRun.id,
@@ -335,10 +410,21 @@ export function useDesktopActions(input: {
         setToast(successToast)
       } catch (error) {
         setToast(error instanceof Error ? error.message : '生成阶段产物失败')
+      } finally {
+        clearPendingInspectorAction(pending)
       }
       return
     }
 
+    if (blockIfInspectorWriteInFlight()) {
+      return
+    }
+    const pending = startPendingInspectorAction(
+      'completeAgent',
+      selectedRun,
+      selectedNode,
+      selectedNode.stage === 'clarify' ? '正在生成需求澄清...' : '正在生成设计方案...',
+    )
     try {
       const completed = completeWorkflowAgentNode({
         run: selectedRun,
@@ -359,6 +445,8 @@ export function useDesktopActions(input: {
       setToast(successToast)
     } catch (error) {
       setToast(error instanceof Error ? error.message : '生成阶段产物失败')
+    } finally {
+      clearPendingInspectorAction(pending)
     }
   }
 
@@ -534,9 +622,9 @@ export function useDesktopActions(input: {
       setAgentProviders(mergeById(providers, [reviewProviderFromMetadata(metadata)]))
       setSelectedAgentProviderId(metadata.providerId)
       setProviderKeyDraft('')
-      setToast(`Review provider saved and selected: ${metadata.maskedCredential}`)
+      setToast(`Agent provider saved and selected: ${metadata.maskedCredential}`)
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '保存 Review Provider 失败')
+      setToast(error instanceof Error ? error.message : '保存 Agent Provider 失败')
     }
   }
 
@@ -550,7 +638,7 @@ export function useDesktopActions(input: {
       return
     }
     if (!selectedAgentProviderId) {
-      setToast('请先在 Runtime Settings 配置 Review Provider：Provider ID、Base URL、Model 和 API Key')
+      setToast('请先在 Runtime Settings 配置 Agent Provider：Provider ID、Base URL、Model 和 API Key')
       return
     }
 
@@ -582,6 +670,9 @@ export function useDesktopActions(input: {
     if (!selectedRun || !selectedNode || !currentUser) {
       return
     }
+    if (blockIfInspectorWriteInFlight()) {
+      return
+    }
     if (!desktopApi) {
       setToast('请在 Electron 应用中运行 Coding Agent')
       return
@@ -605,7 +696,7 @@ export function useDesktopActions(input: {
         nodeId: selectedNode.id,
         projectId: selectedLocalProject.id,
         requestedBy: currentUser.id,
-        providerId: 'fake-coding-engine',
+        providerId: 'opencode-http',
         userInstruction: `Implement ${displayNodeTitle(selectedNode)} with the existing DevFlow context.`,
         ...(runtimeBudgetApprovalId.trim() ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() } : {}),
       })
@@ -623,6 +714,9 @@ export function useDesktopActions(input: {
 
   async function startRemediationRetry(candidateId: string) {
     if (!selectedRun || !selectedNode || !currentUser) {
+      return
+    }
+    if (blockIfInspectorWriteInFlight()) {
       return
     }
     if (!desktopApi) {
@@ -644,7 +738,7 @@ export function useDesktopActions(input: {
         nodeId: selectedNode.id,
         projectId: selectedLocalProject.id,
         requestedBy: currentUser.id,
-        providerId: 'fake-coding-engine',
+        providerId: 'opencode-http',
         candidateIds: [candidateId],
         userInstruction: 'Apply the selected remediation candidate with the smallest safe change.',
       })
@@ -828,6 +922,14 @@ export function useDesktopActions(input: {
       setToast('当前 Run 缺少项目仓库映射，无法生成 PR Draft')
       return
     }
+    const node = selectedRun.nodes.find((candidate) => candidate.kind === 'pr') ?? selectedNode
+    if (!node) {
+      return
+    }
+    if (blockIfInspectorWriteInFlight()) {
+      return
+    }
+    const pending = startPendingInspectorAction('createPrDraft', selectedRun, node, '正在生成 PR Draft...')
 
     const timestamp = new Date().toISOString()
     const artifact = createPrDraftArtifact({
@@ -853,6 +955,8 @@ export function useDesktopActions(input: {
       setToast('PR Draft 已生成')
     } catch (error) {
       setToast(error instanceof Error ? error.message : '保存 PR Draft 失败')
+    } finally {
+      clearPendingInspectorAction(pending)
     }
   }
 
@@ -860,6 +964,14 @@ export function useDesktopActions(input: {
     if (!selectedRun) {
       return
     }
+    const node = selectedRun.nodes.find((candidate) => candidate.kind === 'acceptance') ?? selectedNode
+    if (!node) {
+      return
+    }
+    if (blockIfInspectorWriteInFlight()) {
+      return
+    }
+    const pending = startPendingInspectorAction('createAcceptanceBundle', selectedRun, node, '正在生成验收证据包...')
 
     const timestamp = new Date().toISOString()
     const runArtifacts = artifacts.filter((candidate) => candidate.runId === selectedRun.id)
@@ -882,6 +994,8 @@ export function useDesktopActions(input: {
       setToast('验收证据包已生成')
     } catch (error) {
       setToast(error instanceof Error ? error.message : '保存验收证据包失败')
+    } finally {
+      clearPendingInspectorAction(pending)
     }
   }
 

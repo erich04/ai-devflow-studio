@@ -31,6 +31,7 @@ export type CreateAuthenticatedTeamSessionHeadersInput = {
 
 export function createDemoTeamSessionHeaders(): DevFlowSessionHeaders {
   return {
+    'x-devflow-session-source': 'demo',
     'x-devflow-organization-id': 'org-demo',
     'x-devflow-user-id': 'u-erich',
     'x-devflow-user-role': 'owner',

@@ -297,7 +297,8 @@ describe('CodingRuntime', () => {
     })
 
     expect(result.codingRun.prompt).toContain('Health endpoint design')
-    expect(result.codingRun.prompt).toContain('knowledge-doc-api-health')
+    expect(result.codingRun.prompt).toContain('No knowledge references are attached.')
+    expect(result.codingRun.prompt).not.toContain('knowledge-doc-api-health')
     expect(result.codingRun.prompt).toContain('Gate Decisions')
     expect(result.codingRun.prompt).toContain('approved by devflow: Lead Gate 已通过：方案评审 Gate')
     expect(result.codingRun.prompt).toContain('Existing Test Evidence')

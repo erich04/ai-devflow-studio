@@ -388,6 +388,22 @@ describe('Postgres team repository', () => {
     ])
   })
 
+  it('only exposes the fake agent provider when fake runtime is enabled', async () => {
+    await expect(createPostgresTeamRepository(new FakeTeamDbClient()).listAgentProviders({
+      organizationId: 'org-demo',
+      userId: 'u-ling',
+    })).resolves.toEqual([])
+
+    await expect(createPostgresTeamRepository(new FakeTeamDbClient(), {
+      fakeRuntimeEnabled: true,
+    }).listAgentProviders({
+      organizationId: 'org-demo',
+      userId: 'u-ling',
+    })).resolves.toEqual([
+      expect.objectContaining({ id: 'fake-knowledge-review', kind: 'fake' }),
+    ])
+  })
+
   it('maps skills and MCP server definitions from team tables', async () => {
     const repository = createPostgresTeamRepository(new FakeTeamDbClient())
 

@@ -17,7 +17,7 @@ services:
     build:
       context: .
     command: >
-      sh -lc "corepack pnpm --filter @ai-devflow/api db:setup &&
+      sh -lc "corepack pnpm --filter @ai-devflow/api db:migrate &&
               corepack pnpm --filter @ai-devflow/api exec tsx src/server.ts"
     depends_on:
       postgres:

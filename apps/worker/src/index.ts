@@ -1,6 +1,6 @@
-import { rollupTokenUsage, tokenUsage } from '@ai-devflow/shared'
+import { rollupTokenUsage, type TokenUsage } from '@ai-devflow/shared'
 
-export function runCostRollupJob() {
+export function runCostRollupJob(tokenUsage: TokenUsage[] = []) {
   return {
     projectCost: rollupTokenUsage(tokenUsage, 'projectId'),
     memberCost: rollupTokenUsage(tokenUsage, 'userId'),

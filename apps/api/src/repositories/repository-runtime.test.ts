@@ -14,11 +14,20 @@ function createFakeDb(): TeamDbClient {
 }
 
 describe('team repository runtime', () => {
-  it('uses the seed repository when no database URL is configured', async () => {
+  it('fails fast when no database URL is configured and demo data is disabled', async () => {
+    await expect(createTeamRepositoryRuntime({
+      env: {},
+      logger: { info: vi.fn() },
+    })).rejects.toThrow(
+      'Set DEVFLOW_DATABASE_URL or DATABASE_URL before starting the DevFlow API',
+    )
+  })
+
+  it('uses the seed repository only when demo data is explicitly enabled', async () => {
     const logger = { info: vi.fn() }
 
     const runtime = await createTeamRepositoryRuntime({
-      env: {},
+      env: { DEVFLOW_ENABLE_DEMO_DATA: 'true' },
       logger,
     })
 

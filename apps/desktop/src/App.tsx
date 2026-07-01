@@ -116,6 +116,7 @@ export function App() {
     searchQuery,
     supportContext,
     toast,
+    pendingInspectorAction,
   } = workspace.state
   const {
     setThemePreference,
@@ -169,6 +170,7 @@ export function App() {
     setSearchQuery,
     setSupportContext,
     setToast,
+    setPendingInspectorAction,
   } = workspace.setters
   const { selectedLocalProject, isTestCommandDirty } = workspace.derived
   const [projectGitStatus, setProjectGitStatus] = useState<ProjectGitStatus | null>(null)
@@ -491,6 +493,8 @@ export function App() {
     testEvidence,
     governanceChecks: selectedGovernanceChecks,
     knowledgeReferences,
+    pendingInspectorAction,
+    setPendingInspectorAction,
     onToast: setToast,
   })
 
@@ -946,6 +950,7 @@ export function App() {
                   isRunningTests={isRunningTests}
                   isRunningAgentReview={isRunningAgentReview}
                   isStartingCodingAgent={isStartingCodingAgent}
+                  pendingInspectorAction={pendingInspectorAction}
                 />
               </>
             ) : (
@@ -1026,8 +1031,11 @@ export function App() {
             providerKeyDraft={providerKeyDraft}
             onProviderKeyDraftChange={setProviderKeyDraft}
             onSaveProviderCredential={saveAgentProviderCredential}
+            onCompleteAgentNode={completeSelectedWorkflowAgentNode}
             onRunKnowledgeReview={runKnowledgeReview}
             isRunning={isRunningAgentReview}
+            isRunningTests={isRunningTests}
+            pendingInspectorAction={pendingInspectorAction}
             selectedRun={selectedRun}
             selectedNode={selectedNode}
             reviews={agentReviews}

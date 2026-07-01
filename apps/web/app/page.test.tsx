@@ -23,7 +23,7 @@ vi.mock('next/headers', () => ({
 }))
 
 const mockedFetchTeamOverview = vi.mocked(fetchTeamOverview)
-const organizationPolicy = createWarnOnlyDefaultPolicy()
+const organizationPolicy = createWarnOnlyDefaultPolicy({ organizationId: 'org-demo' })
 
 const overview: TeamOverviewResponse = {
   projects: [

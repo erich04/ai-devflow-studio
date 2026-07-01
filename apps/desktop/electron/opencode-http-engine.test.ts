@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { projects, runs, type LocalProject, type ManagedCodingWorkspace } from '@ai-devflow/shared'
+import type { LocalProject, ManagedCodingWorkspace } from '@ai-devflow/shared'
+import { projects, runs } from '@ai-devflow/shared/fixtures'
 import type { CodingEngineApprovePermissionResult } from './coding-engine'
 import { createOpencodeHttpCodingEngineAdapter, type OpencodeHttpProcessManager } from './opencode-http-engine'
 import type { Fetcher } from './opencode-http-adapter'

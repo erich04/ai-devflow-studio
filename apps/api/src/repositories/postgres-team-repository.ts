@@ -683,7 +683,7 @@ function mapOrganizationPolicy(row: EnforcementPolicyRow | undefined): Organizat
     return row.policy
   }
 
-  return createWarnOnlyDefaultPolicy()
+  return createWarnOnlyDefaultPolicy({ organizationId: 'org-empty' })
 }
 
 function mapProjectOverride(row: EnforcementPolicyRow | undefined): ProjectEnforcementPolicyOverride | null {
@@ -853,7 +853,29 @@ function mapEvidenceStatusToRunStatus(status: TestEvidenceStatus): RunStatus {
   return 'failed'
 }
 
-export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
+export type PostgresTeamRepositoryOptions = {
+  fakeRuntimeEnabled?: boolean
+}
+
+function fakeAgentProviderConfigs(enabled: boolean | undefined): AgentProviderConfig[] {
+  return enabled
+    ? [
+        {
+          id: 'fake-knowledge-review',
+          name: 'Deterministic Fake Provider',
+          kind: 'fake',
+          model: 'fake',
+          enabled: true,
+          updatedAt: new Date(0).toISOString(),
+        },
+      ]
+    : []
+}
+
+export function createPostgresTeamRepository(
+  db: TeamDbClient,
+  options: PostgresTeamRepositoryOptions = {},
+): TeamRepository {
   async function loadAuthenticatedIdentity(input: {
     provider: AuthProvider
     providerAccountId: string
@@ -1428,14 +1450,7 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
         runtimeBudgetPolicies,
         runtimeBudgetApprovals,
         agentProviders: [
-          {
-            id: 'fake-knowledge-review',
-            name: 'Deterministic Fake Provider',
-            kind: 'fake',
-            model: 'fake',
-            enabled: true,
-            updatedAt: new Date(0).toISOString(),
-          },
+          ...fakeAgentProviderConfigs(options.fakeRuntimeEnabled),
           ...providerRows.map(mapProviderConfig),
         ],
       }
@@ -1932,14 +1947,7 @@ export function createPostgresTeamRepository(db: TeamDbClient): TeamRepository {
       )
 
       return [
-        {
-          id: 'fake-knowledge-review',
-          name: 'Deterministic Fake Provider',
-          kind: 'fake',
-          model: 'fake',
-          enabled: true,
-          updatedAt: new Date(0).toISOString(),
-        },
+        ...fakeAgentProviderConfigs(options.fakeRuntimeEnabled),
         ...rows.map(mapProviderConfig),
       ]
     },

@@ -20,10 +20,17 @@ const repoDir = path.join(tempRoot, 'fixture-repo')
 const userDataDir = path.join(tempRoot, 'user-data')
 const blockedCommand = 'powershell Remove-Item -Recurse -Force C:\\devflow'
 const demoSessionHeaders = {
+  'x-devflow-session-source': 'demo',
   'x-devflow-organization-id': 'org-demo',
   'x-devflow-user-id': 'u-erich',
   'x-devflow-user-role': 'owner',
   'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
+}
+const leadSessionHeaders = {
+  ...demoSessionHeaders,
+  'x-devflow-user-id': 'u-ling',
+  'x-devflow-user-role': 'lead',
+  'x-devflow-project-roles': 'p-payments:lead',
 }
 
 function run(command, args, options = {}) {
@@ -248,6 +255,8 @@ async function launchApp() {
       ...process.env,
       DEVFLOW_USER_DATA_DIR: userDataDir,
       DEVFLOW_API_BASE_URL: apiServerUrl,
+      DEVFLOW_CODING_ENGINE: 'fake',
+      DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
       DEVFLOW_INITIAL_THEME: 'dark',
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
       VITE_DEV_SERVER_URL: devServerUrl,
@@ -371,7 +380,7 @@ async function saveAgentFindingBlockingPolicy() {
       headers: {
         accept: 'application/json',
         'content-type': 'application/json',
-        ...demoSessionHeaders,
+        ...leadSessionHeaders,
       },
       body: JSON.stringify({ organizationPolicy: policy }),
     },
@@ -381,6 +390,33 @@ async function saveAgentFindingBlockingPolicy() {
   if (!response.ok) {
     throw new Error(`Unable to save Electron smoke retry enforcement policy: ${response.status} ${await response.text()}`)
   }
+}
+
+async function createSmokePairingCode() {
+  const response = await fetchWithRetry(
+    `${apiServerUrl}/api/team/projects/p-payments/pairing-codes`,
+    {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        ...leadSessionHeaders,
+      },
+      body: JSON.stringify({}),
+    },
+    'create desktop pairing code',
+  )
+
+  if (!response.ok) {
+    throw new Error(`Unable to create Electron smoke pairing code: ${response.status} ${await response.text()}`)
+  }
+
+  const body = await response.json()
+  if (typeof body.code !== 'string' || !body.code.includes('.')) {
+    throw new Error('Electron smoke pairing code was not returned as a copy-once secret.')
+  }
+
+  return body.code
 }
 
 async function selectRunByTitle(page, title) {
@@ -607,8 +643,11 @@ try {
 
   await run(corepack, ['pnpm', '--filter', '@ai-devflow/desktop', 'build'])
 
-  api = spawnQuiet(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'dev'])
+  api = spawnQuiet(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'dev'], {
+    DEVFLOW_ENABLE_DEMO_DATA: 'true',
+  })
   web = spawnQuiet(corepack, ['pnpm', '--filter', '@ai-devflow/web', 'dev'], {
+    DEVFLOW_ENABLE_DEMO_DATA: 'true',
     DEVFLOW_API_BASE_URL: apiServerUrl,
     NEXT_PUBLIC_DEVFLOW_API_URL: apiServerUrl,
   })
@@ -630,8 +669,12 @@ try {
     waitForServer(devServerUrl),
   ])
   await saveRecommendedEnforcementPolicy()
+  const pairingCode = await createSmokePairingCode()
 
   const first = await launchApp()
+  await first.page.evaluate(async (code) => {
+    await window.aiDevFlowDesktop.pairDesktop({ code })
+  }, pairingCode)
   await saveSmokeReviewProvider(first.page, reviewProviderMock.baseUrl)
   await persistThemePreference(first.page, 'dark')
   await first.app.evaluate(({ dialog }, selectedPath) => {
@@ -648,7 +691,7 @@ try {
   }))
   expect(security).toEqual({ hasApi: true, hasRequire: false, hasProcess: false })
   const remoteSeedRun = await first.page.evaluate(async () => {
-    const snapshot = await window.aiDevFlowDesktop.loadRemoteSnapshot({ organizationId: 'org-demo' })
+    const snapshot = await window.aiDevFlowDesktop.loadRemoteSnapshot()
     const run = snapshot.runs.find((candidate) => candidate.id === 'run-health-001')
     if (!run) {
       throw new Error('Electron smoke could not find the seeded team Run.')
@@ -695,6 +738,9 @@ try {
       provisional: false,
     })
   }, { runId: remoteSeedRun.id, decision: seededGateDecision })
+  if (confirmedTeamOverride.status !== 'accepted') {
+    throw new Error(`Electron smoke team override was not accepted: ${JSON.stringify(confirmedTeamOverride)}`)
+  }
   expect(confirmedTeamOverride.status).toBe('accepted')
   const confirmedTeamApproval = await first.page.evaluate(async (runId) => {
     return window.aiDevFlowDesktop.approveGate({

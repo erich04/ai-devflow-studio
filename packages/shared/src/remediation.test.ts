@@ -344,7 +344,7 @@ function decisionFor(input: {
   return evaluateGateEnforcement({
     run,
     node: gate,
-    effectivePolicy: resolveEffectivePolicy(createRecommendedEnforcementPreset(), null),
+    effectivePolicy: resolveEffectivePolicy(createRecommendedEnforcementPreset({ organizationId: 'org-demo' }), null),
     governanceChecks: input.governanceChecks,
     agentPolicyFindings: input.agentPolicyFindings,
     latestAgentReview: input.latestAgentReview,
@@ -354,7 +354,7 @@ function decisionFor(input: {
 }
 
 function createHardBlockPolicy(): OrganizationEnforcementPolicy {
-  const policy = createRecommendedEnforcementPreset()
+  const policy = createRecommendedEnforcementPreset({ organizationId: 'org-demo' })
   return {
     ...policy,
     rules: policy.rules.map((rule) =>

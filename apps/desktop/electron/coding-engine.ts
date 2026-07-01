@@ -17,6 +17,7 @@ import type {
   WorkflowNode,
   WorkflowRun,
 } from '@ai-devflow/shared'
+import { resolveDevFlowCodingEngineSelection } from '@ai-devflow/shared'
 import {
   completeFakeCodingRun,
   createFakeCodingRunBundle,
@@ -88,7 +89,7 @@ export type CodingEngineCancelInput = {
 }
 
 export type CodingEngineAdapter = {
-  engine: CodingAgentEngine
+  engine: CodingAgentEngine | 'not-configured'
   modelId?: string
   ensure(input: CodingEngineEnsureInput): Promise<CodingEngineEnsureResult>
   start(input: CodingEngineStartInput): Promise<CodingEngineStartResult>
@@ -100,6 +101,7 @@ export type CodingEngineSelectionEnv = Partial<
   Pick<
     NodeJS.ProcessEnv,
     | 'DEVFLOW_CODING_ENGINE'
+    | 'DEVFLOW_ENABLE_FAKE_RUNTIME'
     | 'DEVFLOW_OPENCODE_BIN'
     | 'DEVFLOW_OPENCODE_PROVIDER_ID'
     | 'DEVFLOW_OPENCODE_MODEL_ID'
@@ -110,11 +112,14 @@ export type CodingEngineSelectionEnv = Partial<
 export function createCodingEngineAdapterFromEnv(
   env: CodingEngineSelectionEnv = process.env,
 ): CodingEngineAdapter {
-  const engine = env.DEVFLOW_CODING_ENGINE ?? 'fake'
-  if (engine === 'fake') {
+  const selection = resolveDevFlowCodingEngineSelection(env)
+  if (!selection.engine) {
+    return createUnconfiguredCodingEngineAdapter()
+  }
+  if (selection.engine === 'fake') {
     return createFakeCodingEngineAdapter()
   }
-  if (engine === 'opencode-http') {
+  if (selection.engine === 'opencode-http') {
     const apiKeyEnvName = env.DEVFLOW_OPENCODE_API_KEY_ENV ?? 'OPENAI_API_KEY'
     return createOpencodeHttpCodingEngineAdapter({
       binaryPath: env.DEVFLOW_OPENCODE_BIN ?? 'opencode',
@@ -129,7 +134,8 @@ export function createCodingEngineAdapterFromEnv(
     })
   }
 
-  throw new Error(`Unsupported Coding Agent engine: ${engine}`)
+  const unsupported: never = selection
+  throw new Error(`Unsupported Coding Agent engine: ${String(unsupported)}`)
 }
 
 export function buildOpencodeRuntimeEnv(input: {
@@ -192,6 +198,34 @@ export function createFakeCodingEngineAdapter(): CodingEngineAdapter {
         project: input.project,
         now: input.now,
       })
+    },
+
+    async cancel() {
+      return undefined
+    },
+  }
+}
+
+export function createUnconfiguredCodingEngineAdapter(): CodingEngineAdapter {
+  function error(): Error {
+    return new Error(
+      'Coding Agent engine is not configured. Set DEVFLOW_CODING_ENGINE=opencode-http, or set DEVFLOW_CODING_ENGINE=fake with DEVFLOW_ENABLE_FAKE_RUNTIME=true for demo/test runs.',
+    )
+  }
+
+  return {
+    engine: 'not-configured',
+
+    async ensure() {
+      throw error()
+    },
+
+    async start() {
+      throw error()
+    },
+
+    async approvePermission() {
+      throw error()
     },
 
     async cancel() {

@@ -92,9 +92,7 @@ const server = createServer(async (request, response) => {
     (bearerToken
       ? await repository.resolveDesktopTokenSession(bearerToken)
       : resolveSessionCookie(cookies[SESSION_COOKIE_NAME], sessionSecret) ??
-        resolveRequestSession(request.headers, {
-          allowDemoFallback: process.env['DEVFLOW_REQUIRE_AUTH'] !== 'true',
-        }))
+        resolveRequestSession(request.headers))
   let route
   try {
     const routeOptions = {

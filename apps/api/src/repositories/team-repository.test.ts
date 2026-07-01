@@ -69,6 +69,30 @@ describe('seed team repository', () => {
     ).resolves.toBeNull()
   })
 
+  it('keeps the seed desktop pairing token scoped to the pairing creator role', async () => {
+    const repository = createSeedTeamRepository()
+    const leadContext = {
+      source: 'authenticated' as const,
+      organizationId: 'org-demo',
+      userId: 'u-ling',
+      role: 'lead' as const,
+      authAccountId: 'acct-demo-u-ling',
+      projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' as const }],
+    }
+    const pairing = await repository.createDesktopPairingCode(
+      { projectId: 'p-payments' },
+      leadContext,
+    )
+
+    const exchange = await repository.exchangeDesktopPairingCode({ code: pairing.code })
+
+    await expect(repository.resolveDesktopTokenSession(exchange.token)).resolves.toMatchObject({
+      userId: 'u-ling',
+      role: 'lead',
+      projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
+    })
+  })
+
   it('makes accepted remote sync summaries visible to team overview readers', async () => {
     const repository = createSeedTeamRepository()
 

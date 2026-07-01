@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test'
 const apiUrl = 'http://127.0.0.1:4310'
 const webUrl = 'http://127.0.0.1:4311'
 const teamHeaders = {
+  'x-devflow-session-source': 'demo',
   'x-devflow-organization-id': 'org-demo',
   'x-devflow-user-id': 'u-ling',
   'x-devflow-user-role': 'lead',

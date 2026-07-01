@@ -69,7 +69,7 @@ describe('isProtectedGate', () => {
 
 describe('resolveEffectivePolicy', () => {
   it('keeps warn-only default non-blocking', () => {
-    const policy = resolveEffectivePolicy(createWarnOnlyDefaultPolicy(), null)
+    const policy = resolveEffectivePolicy(createWarnOnlyDefaultPolicy({ organizationId: 'org-demo' }), null)
 
     expect(policy.rules.every((rule) => rule.action !== 'block')).toBe(true)
   })
@@ -190,7 +190,7 @@ describe('evaluateGateEnforcement', () => {
     const decision = evaluateGateEnforcement({
       run,
       node: gate,
-      effectivePolicy: resolveEffectivePolicy(createWarnOnlyDefaultPolicy(), null),
+      effectivePolicy: resolveEffectivePolicy(createWarnOnlyDefaultPolicy({ organizationId: 'org-demo' }), null),
       governanceChecks: [testingGap, apiViolation],
       agentPolicyFindings: [highFinding],
       latestAgentReview: null,
@@ -206,7 +206,7 @@ describe('evaluateGateEnforcement', () => {
     const decision = evaluateGateEnforcement({
       run,
       node: gate,
-      effectivePolicy: resolveEffectivePolicy(createRecommendedEnforcementPreset(), null),
+      effectivePolicy: resolveEffectivePolicy(createRecommendedEnforcementPreset({ organizationId: 'org-demo' }), null),
       governanceChecks: [],
       agentPolicyFindings: [],
       latestAgentReview: null,
@@ -220,7 +220,7 @@ describe('evaluateGateEnforcement', () => {
   })
 
   it('never hard-blocks agent findings even when explicitly configured to block', () => {
-    const orgPolicy = createWarnOnlyDefaultPolicy()
+    const orgPolicy = createWarnOnlyDefaultPolicy({ organizationId: 'org-demo' })
     const projectOverride: ProjectEnforcementPolicyOverride = {
       id: 'project-policy-agent-block',
       organizationId: orgPolicy.organizationId,
@@ -273,7 +273,7 @@ describe('canApproveGateNow', () => {
     const enforcement = evaluateGateEnforcement({
       run,
       node: gate,
-      effectivePolicy: resolveEffectivePolicy(createRecommendedEnforcementPreset(), null),
+      effectivePolicy: resolveEffectivePolicy(createRecommendedEnforcementPreset({ organizationId: 'org-demo' }), null),
       governanceChecks: [],
       agentPolicyFindings: [],
       latestAgentReview: null,
@@ -289,7 +289,7 @@ describe('canApproveGateNow', () => {
     const enforcement = evaluateGateEnforcement({
       run,
       node: gate,
-      effectivePolicy: resolveEffectivePolicy(createRecommendedEnforcementPreset(), null),
+      effectivePolicy: resolveEffectivePolicy(createRecommendedEnforcementPreset({ organizationId: 'org-demo' }), null),
       governanceChecks: [],
       agentPolicyFindings: [],
       latestAgentReview: null,
@@ -325,7 +325,7 @@ describe('canApproveGateNow', () => {
     const enforcement = evaluateGateEnforcement({
       run,
       node: gate,
-      effectivePolicy: resolveEffectivePolicy(createRecommendedEnforcementPreset(), null),
+      effectivePolicy: resolveEffectivePolicy(createRecommendedEnforcementPreset({ organizationId: 'org-demo' }), null),
       governanceChecks: [],
       agentPolicyFindings: [],
       latestAgentReview: null,

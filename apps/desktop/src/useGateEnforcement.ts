@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import {
   buildRemediationPlan,
   canApproveGate,
@@ -16,6 +16,7 @@ import {
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from './desktop-api'
+import type { PendingInspectorAction } from './app/node-inspector-view-model'
 
 function mergeById<T extends { id: string }>(current: T[], incoming: T[]) {
   const map = new Map(current.map((item) => [item.id, item]))
@@ -47,6 +48,8 @@ export function useGateEnforcement(input: {
   testEvidence: TestEvidence[]
   governanceChecks: KnowledgeGovernanceCheck[]
   knowledgeReferences: KnowledgeReference[]
+  pendingInspectorAction: PendingInspectorAction | null
+  setPendingInspectorAction: Dispatch<SetStateAction<PendingInspectorAction | null>>
   onToast: (message: string) => void
 }): GateEnforcementState {
   const {
@@ -60,6 +63,8 @@ export function useGateEnforcement(input: {
     testEvidence,
     governanceChecks,
     knowledgeReferences,
+    pendingInspectorAction,
+    setPendingInspectorAction,
     onToast,
   } = input
   const [policySnapshot, setPolicySnapshot] = useState<PolicySnapshot | null>(null)
@@ -131,6 +136,19 @@ export function useGateEnforcement(input: {
       return
     }
 
+    if (pendingInspectorAction) {
+      onToast('其他 Inspector 操作正在进行中，请稍后再试')
+      return
+    }
+
+    const pending: PendingInspectorAction = {
+      actionId: 'saveGateOverride',
+      runId: selectedRun.id,
+      nodeId: selectedNode.id,
+    }
+    setPendingInspectorAction(pending)
+    onToast('正在保存 Gate Override...')
+
     try {
       const override = await desktopApi.saveGateOverride({
         runId: selectedRun.id,
@@ -157,6 +175,15 @@ export function useGateEnforcement(input: {
       }
     } catch (error) {
       onToast(error instanceof Error ? error.message : '保存 Gate override 失败')
+    } finally {
+      setPendingInspectorAction((current) =>
+        current &&
+        current.actionId === pending.actionId &&
+        current.runId === pending.runId &&
+        current.nodeId === pending.nodeId
+          ? null
+          : current,
+      )
     }
   }
 

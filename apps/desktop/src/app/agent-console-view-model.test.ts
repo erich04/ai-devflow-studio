@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  runs as fixtureRuns,
   type AgentProviderConfig,
   type AgentReviewResult,
   type AgentTokenUsage,
@@ -12,6 +11,7 @@ import {
   type TestEvidence,
   type WorkflowRun,
 } from '@ai-devflow/shared'
+import { runs as fixtureRuns } from '@ai-devflow/shared/fixtures'
 import { buildAgentConsoleViewModel, type BuildAgentConsoleViewModelInput } from './agent-console-view-model'
 
 const provider: AgentProviderConfig = {
@@ -48,6 +48,8 @@ function baseInput(overrides: Partial<BuildAgentConsoleViewModelInput> = {}): Bu
     latestUsage: undefined,
     isRunningReview: false,
     isStartingCodingAgent: false,
+    isRunningTests: false,
+    pendingInspectorAction: null,
     codingRuns: [],
     retryAttempts: [],
     latestCodingRun: undefined,
@@ -125,6 +127,67 @@ describe('agent console view model', () => {
     expect(viewModel.pathStatuses.find((section) => section.id === 'review')?.emphasis).toBe('primary')
   })
 
+  it('uses the workflow stage agent as the primary action for clarify nodes', () => {
+    const run = runWithCurrentNode('n-clarify')
+    const viewModel = buildAgentConsoleViewModel(baseInput({
+      selectedRun: run,
+      selectedNode: nodeFrom(run, 'n-clarify'),
+    }))
+
+    expect(viewModel.primaryAction.id).toBe('complete-agent-node')
+    expect(viewModel.primaryAction.label).toBe('生成需求澄清')
+    expect(viewModel.primaryAction.summary).toContain('运行当前澄清 Agent')
+    expect(viewModel.pathStatuses.find((section) => section.id === 'review')?.emphasis).toBe('secondary')
+  })
+
+  it('shows generating only when the pending workflow agent action matches the selected node', () => {
+    const run = runWithCurrentNode('n-clarify')
+    const viewModel = buildAgentConsoleViewModel(baseInput({
+      selectedRun: run,
+      selectedNode: nodeFrom(run, 'n-clarify'),
+      pendingInspectorAction: {
+        actionId: 'completeAgent',
+        runId: run.id,
+        nodeId: 'n-clarify',
+      },
+    }))
+
+    expect(viewModel.primaryAction.id).toBe('complete-agent-node')
+    expect(viewModel.primaryAction.label).toBe('生成中')
+    expect(viewModel.primaryAction.disabled).toBe(true)
+    expect(viewModel.primaryAction.disabledReason).toBe('阶段产物正在生成。')
+  })
+
+  it('does not inherit a loading label from another pending node but still locks writes', () => {
+    const run = runWithCurrentNode('n-clarify')
+    const viewModel = buildAgentConsoleViewModel(baseInput({
+      selectedRun: run,
+      selectedNode: nodeFrom(run, 'n-clarify'),
+      pendingInspectorAction: {
+        actionId: 'completeAgent',
+        runId: run.id,
+        nodeId: 'n-design',
+      },
+    }))
+
+    expect(viewModel.primaryAction.id).toBe('complete-agent-node')
+    expect(viewModel.primaryAction.label).toBe('生成需求澄清')
+    expect(viewModel.primaryAction.disabled).toBe(true)
+    expect(viewModel.primaryAction.disabledReason).toBe('其他 Inspector 操作正在进行中。')
+  })
+
+  it('uses the workflow stage agent as the primary action for design nodes', () => {
+    const run = runWithCurrentNode('n-design')
+    const viewModel = buildAgentConsoleViewModel(baseInput({
+      selectedRun: run,
+      selectedNode: nodeFrom(run, 'n-design'),
+    }))
+
+    expect(viewModel.primaryAction.id).toBe('complete-agent-node')
+    expect(viewModel.primaryAction.label).toBe('生成设计方案')
+    expect(viewModel.primaryAction.summary).toContain('运行当前设计 Agent')
+  })
+
   it('uses Coding Agent as the primary action for build task nodes', () => {
     const run = runWithCurrentNode('n-build')
     const viewModel = buildAgentConsoleViewModel(baseInput({
@@ -135,6 +198,17 @@ describe('agent console view model', () => {
     expect(viewModel.primaryAction.id).toBe('run-coding')
     expect(viewModel.primaryAction.label).toBe('Run Coding Agent')
     expect(viewModel.pathStatuses.find((section) => section.id === 'coding')?.emphasis).toBe('primary')
+  })
+
+  it('keeps Tests as the primary action for test nodes', () => {
+    const run = runWithCurrentNode('n-test')
+    const viewModel = buildAgentConsoleViewModel(baseInput({
+      selectedRun: run,
+      selectedNode: nodeFrom(run, 'n-test'),
+    }))
+
+    expect(viewModel.primaryAction.id).toBe('go-tests')
+    expect(viewModel.primaryAction.label).toBe('Go to Tests')
   })
 
   it('promotes pending permission to the current task', () => {
@@ -185,7 +259,38 @@ describe('agent console view model', () => {
 
     expect(viewModel.primaryAction.id).toBe('run-review')
     expect(viewModel.primaryAction.disabled).toBe(true)
-    expect(viewModel.primaryAction.disabledReason).toBe('请先配置真实 Review Provider：Provider ID、Base URL、Model 和 API Key。')
+    expect(viewModel.primaryAction.disabledReason).toBe('请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。')
+  })
+
+  it('keeps workflow agent actions disabled with Agent Provider copy when provider is missing', () => {
+    const run = runWithCurrentNode('n-clarify')
+    const viewModel = buildAgentConsoleViewModel(baseInput({
+      providers: [],
+      selectedProviderId: '',
+      selectedRun: run,
+      selectedNode: nodeFrom(run, 'n-clarify'),
+    }))
+
+    expect(viewModel.primaryAction.id).toBe('complete-agent-node')
+    expect(viewModel.primaryAction.label).toBe('生成需求澄清')
+    expect(viewModel.primaryAction.disabled).toBe(true)
+    expect(viewModel.primaryAction.disabledReason).toBe('请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。')
+  })
+
+  it('does not fall back to Knowledge Review for PR and acceptance nodes', () => {
+    const prRun = runWithCurrentNode('n-pr')
+    const prViewModel = buildAgentConsoleViewModel(baseInput({
+      selectedRun: prRun,
+      selectedNode: nodeFrom(prRun, 'n-pr'),
+    }))
+    const acceptanceRun = runWithCurrentNode('n-accept')
+    const acceptanceViewModel = buildAgentConsoleViewModel(baseInput({
+      selectedRun: acceptanceRun,
+      selectedNode: nodeFrom(acceptanceRun, 'n-accept'),
+    }))
+
+    expect(prViewModel.primaryAction.id).toBe('return-workbench')
+    expect(acceptanceViewModel.primaryAction.id).toBe('return-workbench')
   })
 
   it('groups review, coding, permission, diff, test evidence, and cost outputs', () => {

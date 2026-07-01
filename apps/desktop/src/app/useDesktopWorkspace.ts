@@ -36,6 +36,7 @@ import {
   mergeById,
   type SupportContext,
 } from './desktop-view-model'
+import type { PendingInspectorAction } from './node-inspector-view-model'
 
 function useThemePreference() {
   const [preference, setPreference] = useState<ThemePreference>(() =>
@@ -110,6 +111,7 @@ export type DesktopWorkspaceState = {
   runtimeBudgetApprovalId: string
   isRunningAgentReview: boolean
   isStartingCodingAgent: boolean
+  pendingInspectorAction: PendingInspectorAction | null
   isNewRunOpen: boolean
   draftTitle: string
   draftRequest: string
@@ -165,6 +167,7 @@ export type DesktopWorkspaceSetters = {
   setRuntimeBudgetApprovalId: Dispatch<SetStateAction<string>>
   setIsRunningAgentReview: Dispatch<SetStateAction<boolean>>
   setIsStartingCodingAgent: Dispatch<SetStateAction<boolean>>
+  setPendingInspectorAction: Dispatch<SetStateAction<PendingInspectorAction | null>>
   setIsNewRunOpen: Dispatch<SetStateAction<boolean>>
   setDraftTitle: Dispatch<SetStateAction<string>>
   setDraftRequest: Dispatch<SetStateAction<string>>
@@ -235,6 +238,7 @@ export function useDesktopWorkspace(input: {
   const [runtimeBudgetApprovalId, setRuntimeBudgetApprovalId] = useState('')
   const [isRunningAgentReview, setIsRunningAgentReview] = useState(false)
   const [isStartingCodingAgent, setIsStartingCodingAgent] = useState(false)
+  const [pendingInspectorAction, setPendingInspectorAction] = useState<PendingInspectorAction | null>(null)
   const [isNewRunOpen, setIsNewRunOpen] = useState(false)
   const [draftTitle, setDraftTitle] = useState('')
   const [draftRequest, setDraftRequest] = useState('')
@@ -479,6 +483,7 @@ export function useDesktopWorkspace(input: {
     runtimeBudgetApprovalId,
     isRunningAgentReview,
     isStartingCodingAgent,
+    pendingInspectorAction,
     isNewRunOpen,
     draftTitle,
     draftRequest,
@@ -534,6 +539,7 @@ export function useDesktopWorkspace(input: {
     setRuntimeBudgetApprovalId,
     setIsRunningAgentReview,
     setIsStartingCodingAgent,
+    setPendingInspectorAction,
     setIsNewRunOpen,
     setDraftTitle,
     setDraftRequest,

@@ -10,11 +10,20 @@ const composeEnv = {
   ...process.env,
   DEVFLOW_API_PORT: String(apiPort),
   DEVFLOW_WEB_PORT: String(webPort),
+  DEVFLOW_ENABLE_DEMO_DATA: 'true',
   DEVFLOW_REQUIRE_AUTH: 'false',
   DEVFLOW_SESSION_SECRET: 'docker-smoke-session-secret',
   POSTGRES_DB: 'devflow',
   POSTGRES_PASSWORD: 'devflow',
   POSTGRES_USER: 'postgres',
+}
+
+const demoSessionHeaders = {
+  'x-devflow-session-source': 'demo',
+  'x-devflow-organization-id': 'org-demo',
+  'x-devflow-user-id': 'u-erich',
+  'x-devflow-user-role': 'owner',
+  'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
 }
 
 function runDocker(args, options = {}) {
@@ -66,10 +75,10 @@ async function findOpenPort() {
   })
 }
 
-async function waitForJson(url, label) {
+async function waitForJson(url, label, headers = {}) {
   for (let attempt = 0; attempt < 90; attempt += 1) {
     try {
-      const response = await fetch(url, { headers: { accept: 'application/json' } })
+      const response = await fetch(url, { headers: { accept: 'application/json', ...headers } })
       if (response.ok) {
         return response.json()
       }
@@ -129,10 +138,11 @@ try {
   const webUrl = `http://127.0.0.1:${webPort}`
   const health = await waitForJson(`${apiUrl}/health`, 'API health')
   expect(health.status === 'ok', 'API health did not return ok.')
+  await runDocker(['compose', '-p', projectName, 'exec', '-T', 'api', 'corepack', 'pnpm', '--filter', '@ai-devflow/api', 'db:seed'])
   const webHtml = await waitForText(webUrl, 'Web console')
   expect(webHtml.includes('AI DevFlow') || webHtml.includes('__next'), 'Web console did not render.')
 
-  const pairingCode = await postJson(`${apiUrl}/api/team/projects/p-payments/pairing-codes`, {})
+  const pairingCode = await postJson(`${apiUrl}/api/team/projects/p-payments/pairing-codes`, {}, demoSessionHeaders)
   expect(pairingCode.code?.includes('.'), 'Docker smoke did not create a copy-once pairing code.')
   const desktopPairing = await postJson(`${apiUrl}/api/desktop/pairing/exchange`, {
     code: pairingCode.code,
@@ -154,7 +164,7 @@ try {
     },
     { authorization: `Bearer ${desktopPairing.token}` },
   )
-  const overview = await waitForJson(`${apiUrl}/api/team/overview`, 'Team overview')
+  const overview = await waitForJson(`${apiUrl}/api/team/overview`, 'Team overview', demoSessionHeaders)
   expect(
     overview.runs?.some((run) => run.id === runId),
     'Docker smoke overview did not include the bearer-token synced run.',

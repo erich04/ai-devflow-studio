@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type {
+  DevFlowSessionHeaders,
   RemoteAgentReviewSummary,
   RemoteCodingAgentSummary,
   GateOverrideDecision,
@@ -132,6 +133,15 @@ const gateOverride: GateOverrideDecision = {
   createdAt: '2026-06-16T00:13:00.000Z',
 }
 
+const authenticatedSessionHeaders: DevFlowSessionHeaders = {
+  'x-devflow-session-source': 'authenticated',
+  'x-devflow-organization-id': 'org-1',
+  'x-devflow-user-id': 'u-remote',
+  'x-devflow-user-role': 'lead',
+  'x-devflow-auth-account-id': 'acct-remote',
+  'x-devflow-project-roles': 'p-remote:lead',
+}
+
 describe('Electron remote sync client', () => {
   it('resolves remote API base URL from env with a local default', () => {
     expect(resolveRemoteApiBaseUrl({ DEVFLOW_API_BASE_URL: 'http://team-api:4310/' })).toBe(
@@ -149,7 +159,11 @@ describe('Electron remote sync client', () => {
 
       return new Response(JSON.stringify(runsBundle), { status: 200 })
     })
-    const client = createRemoteSyncClient({ apiBaseUrl: 'http://api.local', fetcher })
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      sessionHeaders: authenticatedSessionHeaders,
+    })
 
     await expect(client.loadRemoteSnapshot({ organizationId: 'org-1' })).resolves.toEqual({
       ...overview,
@@ -161,20 +175,40 @@ describe('Electron remote sync client', () => {
       headers: {
         accept: 'application/json',
         'x-devflow-organization-id': 'org-1',
-        'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
-        'x-devflow-user-id': 'u-erich',
-        'x-devflow-user-role': 'owner',
+        'x-devflow-session-source': 'authenticated',
+        'x-devflow-project-roles': 'p-remote:lead',
+        'x-devflow-user-id': 'u-remote',
+        'x-devflow-user-role': 'lead',
+        'x-devflow-auth-account-id': 'acct-remote',
       },
     })
     expect(fetcher).toHaveBeenCalledWith('http://api.local/api/runs?organizationId=org-1', {
       headers: {
         accept: 'application/json',
         'x-devflow-organization-id': 'org-1',
-        'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
-        'x-devflow-user-id': 'u-erich',
-        'x-devflow-user-role': 'owner',
+        'x-devflow-session-source': 'authenticated',
+        'x-devflow-project-roles': 'p-remote:lead',
+        'x-devflow-user-id': 'u-remote',
+        'x-devflow-user-role': 'lead',
+        'x-devflow-auth-account-id': 'acct-remote',
       },
     })
+  })
+
+  it('does not send remote requests when no paired token or explicit session headers exist', async () => {
+    const fetcher = vi.fn()
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+    })
+
+    await expect(client.loadRemoteSnapshot()).rejects.toThrow(
+      'Pair DevFlow Studio with a Team Project before syncing remote team state.',
+    )
+    await expect(client.uploadRunSummary(runSummary)).rejects.toThrow(
+      'Pair DevFlow Studio with a Team Project before syncing remote team state.',
+    )
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   it('uses a bearer token instead of demo session headers when an authenticated desktop token is configured', async () => {
@@ -249,7 +283,11 @@ describe('Electron remote sync client', () => {
       createdAt: '2026-06-20T00:00:00.000Z',
     }
     const fetcher = vi.fn(async () => new Response(JSON.stringify(exchangeResult), { status: 201 }))
-    const client = createRemoteSyncClient({ apiBaseUrl: 'http://api.local', fetcher })
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      sessionHeaders: authenticatedSessionHeaders,
+    })
 
     await expect(client.exchangeDesktopPairingCode({ code: 'pair.code-secret' })).resolves.toEqual(
       exchangeResult,
@@ -279,7 +317,11 @@ describe('Electron remote sync client', () => {
       )
       )
     })
-    const client = createRemoteSyncClient({ apiBaseUrl: 'http://api.local', fetcher })
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      sessionHeaders: authenticatedSessionHeaders,
+    })
 
     await expect(client.uploadRunSummary(runSummary)).resolves.toMatchObject({ accepted: true })
     await expect(client.uploadTestEvidenceSummary(evidenceSummary)).resolves.toMatchObject({
@@ -297,10 +339,12 @@ describe('Electron remote sync client', () => {
     expect(uploadedBodies[2]).toEqual(agentReviewSummary)
     expect(uploadedBodies[3]).toEqual(codingAgentSummary)
     expect(calls[0]?.init?.headers).toMatchObject({
-      'x-devflow-organization-id': 'org-demo',
-      'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
-      'x-devflow-user-id': 'u-erich',
-      'x-devflow-user-role': 'owner',
+      'x-devflow-organization-id': 'org-1',
+      'x-devflow-session-source': 'authenticated',
+      'x-devflow-project-roles': 'p-remote:lead',
+      'x-devflow-user-id': 'u-remote',
+      'x-devflow-user-role': 'lead',
+      'x-devflow-auth-account-id': 'acct-remote',
     })
     expect(JSON.stringify(uploadedBodies[1])).not.toContain('stdout')
     expect(JSON.stringify(uploadedBodies[1])).not.toContain('stderr')
@@ -318,7 +362,11 @@ describe('Electron remote sync client', () => {
     const fetcher = vi.fn(async () =>
       new Response(JSON.stringify({ message: 'Run not found' }), { status: 404 }),
     )
-    const client = createRemoteSyncClient({ apiBaseUrl: 'http://api.local', fetcher })
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'devflow_desktop_token_123',
+    })
 
     await expect(client.deleteRun({ runId: 'run-missing' })).resolves.toMatchObject({
       deleted: false,
@@ -328,10 +376,7 @@ describe('Electron remote sync client', () => {
       method: 'DELETE',
       headers: {
         accept: 'application/json',
-        'x-devflow-organization-id': 'org-demo',
-        'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
-        'x-devflow-user-id': 'u-erich',
-        'x-devflow-user-role': 'owner',
+        authorization: 'Bearer devflow_desktop_token_123',
       },
     })
   })
@@ -342,7 +387,11 @@ describe('Electron remote sync client', () => {
       calls.push({ url: String(input), init })
       return new Response(JSON.stringify(gateOverride), { status: 201 })
     })
-    const client = createRemoteSyncClient({ apiBaseUrl: 'http://api.local', fetcher })
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      sessionHeaders: authenticatedSessionHeaders,
+    })
 
     await expect(client.saveGateOverride({
       runId: gateOverride.runId,
@@ -358,10 +407,12 @@ describe('Electron remote sync client', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]?.url).toBe('http://api.local/api/gates/override')
     expect(calls[0]?.init?.headers).toMatchObject({
-      'x-devflow-organization-id': 'org-demo',
+      'x-devflow-organization-id': 'org-1',
+      'x-devflow-session-source': 'authenticated',
       'x-devflow-project-roles': 'p-remote:lead',
       'x-devflow-user-id': 'u-remote',
       'x-devflow-user-role': 'lead',
+      'x-devflow-auth-account-id': 'acct-remote',
     })
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
       runId: gateOverride.runId,

@@ -6,6 +6,8 @@ It is designed for small engineering teams that want AI to move work from clarif
 implementation, tests, and pull request, while keeping human gates, team knowledge, MCP tools, and
 token cost visible.
 
+Research basis: [`../../20-agent-lab/ai-devflow-workflow-research/`](../../20-agent-lab/ai-devflow-workflow-research/).
+
 ## Product Shape
 
 - `apps/desktop`: Electron developer client and local execution workbench.
@@ -45,6 +47,8 @@ corepack pnpm dev:desktop
 corepack pnpm dev:electron
 corepack pnpm typecheck
 corepack pnpm test
+corepack pnpm verify
+corepack pnpm verify:demo
 corepack pnpm test:postgres-smoke
 corepack pnpm test:docker-smoke
 corepack pnpm test:agent-live
@@ -62,20 +66,29 @@ Use `corepack pnpm dev:electron` for the real local demo. It builds the Electron
 starts the Vite renderer at `http://127.0.0.1:5173`, and launches Electron with local repository
 selection, controlled IPC, command safety checks, and SQLite persistence enabled.
 
-The API uses seed data by default for local demos. Set `DEVFLOW_DATABASE_URL` or `DATABASE_URL`
-before `corepack pnpm dev:api` to run it against Postgres; uploaded Electron Run/Test Evidence
-summaries are written as redacted team records.
+The API defaults to a real empty system. Set `DEVFLOW_DATABASE_URL` or `DATABASE_URL` before
+`corepack pnpm dev:api`; without a database the API fails fast unless
+`DEVFLOW_ENABLE_DEMO_DATA=true` is set explicitly. Demo seed data and fake runtime providers are
+separate switches: use `DEVFLOW_ENABLE_DEMO_DATA=true` for bundled demo data, and
+`DEVFLOW_ENABLE_FAKE_RUNTIME=true` only when a deterministic fake Coding Agent or Knowledge Review
+provider is intended.
 
 For a local Postgres demo, set the database URL and run:
 
 ```bash
 corepack pnpm --filter @ai-devflow/api db:setup
+DEVFLOW_ENABLE_DEMO_DATA=true corepack pnpm --filter @ai-devflow/api db:seed
 corepack pnpm dev:api
 ```
 
-Use `corepack pnpm test:postgres-smoke` with the same database URL to verify migration, seed,
-Postgres-backed API reads, explicit demo session headers with `DEVFLOW_REQUIRE_AUTH=true`, and
-redacted sync write-through.
+Use `corepack pnpm --filter @ai-devflow/api db:cleanup-demo` to dry-run removal of bundled demo
+seed data from Postgres. The cleanup refuses mixed `org-demo` data and only deletes after
+`--confirm org-demo`.
+
+Use `corepack pnpm verify` for the default no-demo quality gate. Use `corepack pnpm verify:demo`
+when you intentionally want the demo e2e and Electron smoke flows. Use
+`corepack pnpm test:postgres-smoke` with the same database URL to verify migration, seed,
+Postgres-backed API reads, explicit demo session headers, and redacted sync write-through.
 
 For the minimum self-hosted team pilot, copy `.env.example`, run `docker compose up --build`, and
 open the Web console at `http://127.0.0.1:4311`. Run `corepack pnpm test:docker-smoke` to verify the
@@ -87,10 +100,12 @@ desktop app against `apps/desktop/dist/index.html` without the Vite dev server.
 
 ## v0.6.1 Coding Agent / opencode Signoff
 
-The default Coding Agent path is deterministic and uses the fake engine. It is covered by
-`corepack pnpm verify`, including the real Electron smoke flow: select a local Git repo, start the
-Coding Agent from the build task node, approve the permission relay request, archive a redacted diff,
-run the worktree test command, and persist Test Evidence.
+The default Coding Agent path is not configured until a real engine is selected. Set
+`DEVFLOW_CODING_ENGINE=opencode-http` for the local opencode runtime, or set both
+`DEVFLOW_CODING_ENGINE=fake` and `DEVFLOW_ENABLE_FAKE_RUNTIME=true` for deterministic demo/test
+flows. The real Electron smoke flow is covered by `corepack pnpm verify:demo`: select a local Git
+repo, start the Coding Agent from the build task node, approve the permission relay request, archive
+a redacted diff, run the worktree test command, and persist Test Evidence.
 
 The real opencode runtime is explicitly env-gated. It is not part of default `verify` because it
 depends on a local opencode installation and provider credentials.

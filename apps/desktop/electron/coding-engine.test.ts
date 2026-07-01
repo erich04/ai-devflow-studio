@@ -2,8 +2,32 @@ import { describe, expect, it } from 'vitest'
 import { buildOpencodeRuntimeEnv, createCodingEngineAdapterFromEnv } from './coding-engine'
 
 describe('coding engine selection', () => {
-  it('uses the deterministic fake engine by default', () => {
+  it('uses an unconfigured engine by default', async () => {
     const engine = createCodingEngineAdapterFromEnv({})
+
+    expect(engine.engine).toBe('not-configured')
+    await expect(engine.ensure({
+      project: {
+        id: 'local-1',
+        name: 'Local project',
+        path: '/tmp/local-project',
+        packageManager: 'pnpm',
+        testCommand: 'pnpm test',
+        createdAt: '2026-06-30T00:00:00.000Z',
+        updatedAt: '2026-06-30T00:00:00.000Z',
+      },
+    })).rejects.toThrow('Coding Agent engine is not configured.')
+  })
+
+  it('selects the fake engine only when fake runtime is explicitly enabled', () => {
+    expect(() =>
+      createCodingEngineAdapterFromEnv({ DEVFLOW_CODING_ENGINE: 'fake' }),
+    ).toThrow('DEVFLOW_CODING_ENGINE=fake requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.')
+
+    const engine = createCodingEngineAdapterFromEnv({
+      DEVFLOW_CODING_ENGINE: 'fake',
+      DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
+    })
 
     expect(engine.engine).toBe('fake')
   })

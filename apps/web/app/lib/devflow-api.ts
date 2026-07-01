@@ -129,7 +129,7 @@ export async function runKnowledgeReview(
       runId: options.runId,
       nodeId: options.nodeId,
       projectId: options.projectId,
-      providerId: options.providerId ?? 'fake-knowledge-review',
+      providerId: options.providerId,
     }),
   })
 

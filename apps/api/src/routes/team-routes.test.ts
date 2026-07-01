@@ -37,6 +37,20 @@ const leadSession: TeamSession = {
   projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
 }
 
+async function withFakeRuntime<T>(callback: () => Promise<T>): Promise<T> {
+  const previous = process.env['DEVFLOW_ENABLE_FAKE_RUNTIME']
+  process.env['DEVFLOW_ENABLE_FAKE_RUNTIME'] = 'true'
+  try {
+    return await callback()
+  } finally {
+    if (previous === undefined) {
+      delete process.env['DEVFLOW_ENABLE_FAKE_RUNTIME']
+    } else {
+      process.env['DEVFLOW_ENABLE_FAKE_RUNTIME'] = previous
+    }
+  }
+}
+
 const githubIdentity: AuthenticatedIdentity = {
   user: {
     id: 'u-github-123456',
@@ -553,6 +567,29 @@ describe('team API route resolver', () => {
     expect(repository.getTeamOverview).toHaveBeenCalled()
   }, 15_000)
 
+  it('normalizes overview enforcement policy to the authenticated organization', async () => {
+    const repository = createRepository()
+    const otherOrganizationLead: TeamSession = {
+      ...leadSession,
+      organizationId: 'org-real',
+    }
+
+    const result = await resolveTeamRoute('GET', '/api/team/overview', repository, {
+      session: otherOrganizationLead,
+    })
+
+    expect(result?.status).toBe(200)
+    expect(result?.body).toMatchObject({
+      enforcementPolicies: {
+        organizationPolicy: {
+          organizationId: 'org-real',
+          name: 'Warn-only default enforcement policy',
+        },
+      },
+    })
+    expect(JSON.stringify(result?.body)).not.toContain('enforcement-policy-org-demo-warn-only')
+  })
+
   it('allows an authenticated owner to create a minimal team project', async () => {
     const repository = createRepository()
     const result = await resolveTeamRoute('POST', '/api/team/projects', repository, {
@@ -811,15 +848,17 @@ describe('team API route resolver', () => {
   it('runs backend Knowledge Review with the deterministic fake provider', async () => {
     const repository = createRepository()
 
-    const result = await resolveTeamRoute('POST', '/api/agent/knowledge-review', repository, {
-      session: memberSession,
-      body: {
-        runId: 'run-payments',
-        nodeId: 'node-build',
-        projectId: 'p-payments',
-        providerId: 'fake-knowledge-review',
-      },
-    })
+    const result = await withFakeRuntime(() =>
+      resolveTeamRoute('POST', '/api/agent/knowledge-review', repository, {
+        session: memberSession,
+        body: {
+          runId: 'run-payments',
+          nodeId: 'node-build',
+          projectId: 'p-payments',
+          providerId: 'fake-knowledge-review',
+        },
+      }),
+    )
 
     expect(result?.status).toBe(201)
     expect(result?.body).toMatchObject({
@@ -848,6 +887,28 @@ describe('team API route resolver', () => {
       }),
       memberSession,
     )
+  })
+
+  it('rejects fake Knowledge Review unless fake runtime is explicitly enabled', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('POST', '/api/agent/knowledge-review', repository, {
+      session: memberSession,
+      body: {
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        projectId: 'p-payments',
+        providerId: 'fake-knowledge-review',
+      },
+    })
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: 'bad_request',
+        message: 'Fake Knowledge Review requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.',
+      },
+    })
   })
 
   it('lists agent reviews with the runId query filter', async () => {
@@ -895,6 +956,28 @@ describe('team API route resolver', () => {
       expect.objectContaining({ name: 'Recommended enforcement preset' }),
       ownerSession,
     )
+  })
+
+  it('rejects organization enforcement policies for a different organization', async () => {
+    const repository = createRepository()
+    const policy = createRecommendedEnforcementPreset({
+      organizationId: 'org-other',
+      updatedAt: '2026-06-16T00:00:00.000Z',
+    })
+
+    const result = await resolveTeamRoute('PUT', '/api/enforcement/policy', repository, {
+      session: ownerSession,
+      body: { organizationPolicy: policy },
+    })
+
+    expect(result).toEqual({
+      status: 403,
+      body: {
+        error: 'forbidden',
+        message: 'Organization policy must match the authenticated organization',
+      },
+    })
+    expect(repository.saveEnforcementPolicy).not.toHaveBeenCalled()
   })
 
   it('evaluates enforcement decisions through the shared evaluator', async () => {

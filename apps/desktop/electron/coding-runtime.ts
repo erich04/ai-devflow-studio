@@ -8,8 +8,6 @@ import {
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   estimateCodingRuntimeCost,
-  knowledgeChunks as defaultKnowledgeChunks,
-  knowledgeDocuments as defaultKnowledgeDocuments,
   redactSecrets,
   type AgentEvent,
   type Artifact,
@@ -42,6 +40,9 @@ import {
   findActiveCodingRun,
 } from './coding-runner.js'
 import type { CodingEngineAdapter } from './coding-engine.js'
+
+const defaultKnowledgeDocuments: KnowledgeDocument[] = []
+const defaultKnowledgeChunks: KnowledgeChunk[] = []
 
 export type CodingRuntimeStore = {
   listProjects(): Promise<LocalProject[]>
@@ -766,6 +767,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         throw new Error(`Coding Agent run already active for this project: ${active.id}`)
       }
 
+      const ensuredEngine = await deps.engine.ensure({ project })
       const run = await findRun(input.runId)
       const node = findNode(run, input.nodeId)
       const codingRunId = idGenerator('coding-run')
@@ -790,7 +792,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
       })
       const estimatedCost = estimateCodingRuntimeCost({
-        engine: deps.engine.engine,
+        engine: ensuredEngine.engine,
         providerId: input.providerId,
         model,
         prompt: preliminaryBrief.prompt,
@@ -803,7 +805,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const budgetDecision = deps.budgetGuard
         ? await deps.budgetGuard({
             codingRunId,
-            engine: deps.engine.engine,
+            engine: ensuredEngine.engine,
             providerId: input.providerId,
             model,
             project,
@@ -832,13 +834,13 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           projectId: project.id,
           requestedBy: input.requestedBy,
           providerId: input.providerId,
-          engine: deps.engine.engine,
+          engine: ensuredEngine.engine,
           status: 'failed',
           managedWorkspaceId: workspace.id,
           branchName: workspace.branchName,
           userInstruction: input.userInstruction.trim(),
           prompt: preliminaryBrief.prompt,
-          summary: `Runtime budget requires lead approval before calling ${deps.engine.engine}. ${budgetDecision.reason}`,
+          summary: `Runtime budget requires lead approval before calling ${ensuredEngine.engine}. ${budgetDecision.reason}`,
           changedPaths: [],
           startedAt: timestamp,
           completedAt: timestamp,

@@ -26,7 +26,7 @@ async function runKnowledgeReviewAction(formData: FormData) {
   const runId = String(formData.get('runId') ?? '')
   const nodeId = String(formData.get('nodeId') ?? '')
   const projectId = String(formData.get('projectId') ?? '')
-  const providerId = String(formData.get('providerId') ?? 'fake-knowledge-review')
+  const providerId = String(formData.get('providerId') ?? '').trim()
 
   if (!runId || !nodeId || !projectId) {
     return
@@ -42,12 +42,18 @@ async function runKnowledgeReviewAction(formData: FormData) {
   })
 }
 
-async function applyRecommendedPolicyAction() {
+async function applyRecommendedPolicyAction(formData: FormData) {
   'use server'
+
+  const organizationId = String(formData.get('organizationId') ?? '').trim()
+  if (!organizationId) return
 
   const cookieHeader = await getDevFlowCookieHeader()
   await saveEnforcementPolicy({
-    policy: createRecommendedEnforcementPreset({ updatedAt: new Date().toISOString() }),
+    policy: createRecommendedEnforcementPreset({
+      organizationId,
+      updatedAt: new Date().toISOString(),
+    }),
     ...(cookieHeader ? { cookieHeader } : {}),
   })
 }
@@ -157,6 +163,7 @@ export default async function Page() {
   const reviewTarget = overview.runs
     .map((run) => ({ run, node: run.nodes.find((node) => node.kind === 'gate') ?? run.nodes[0] }))
     .find((target) => target.node)
+  const knowledgeReviewProviderId = overview.agentProviders[0]?.id ?? ''
   const latestReview = overview.agentReviews[0]
   const latestUsage = overview.agentTokenUsage[0]
   const organizationPolicy = overview.enforcementPolicies.organizationPolicy
@@ -424,6 +431,7 @@ export default async function Page() {
                 <span>{organizationPolicy.updatedAt}</span>
               </article>
               <form action={applyRecommendedPolicyAction}>
+                <input type="hidden" name="organizationId" value={organizationPolicy.organizationId} />
                 <button type="submit">
                   <GitPullRequest size={16} />
                   Apply recommended enforcement
@@ -499,7 +507,7 @@ export default async function Page() {
                 <input type="hidden" name="runId" value={reviewTarget?.run.id ?? ''} />
                 <input type="hidden" name="nodeId" value={reviewTarget?.node?.id ?? ''} />
                 <input type="hidden" name="projectId" value={reviewTarget?.run.projectId ?? ''} />
-                <input type="hidden" name="providerId" value="fake-knowledge-review" />
+                <input type="hidden" name="providerId" value={knowledgeReviewProviderId} />
                 <button type="submit" disabled={!reviewTarget}>
                   <Bot size={16} />
                   Run backend review

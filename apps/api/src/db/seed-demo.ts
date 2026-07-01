@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { resolveDevFlowRuntimeFlags } from '@ai-devflow/shared'
 import {
   artifacts,
   events,
@@ -9,7 +10,7 @@ import {
   runs,
   skills,
   tokenUsage,
-} from '@ai-devflow/shared'
+} from '@ai-devflow/shared/fixtures'
 import { resolveTeamDbConfig } from './client'
 import { createPostgresPoolClient } from './postgres-client'
 import type { TeamDbClient } from './client'
@@ -452,6 +453,11 @@ export async function seedDemoTeamData(db: TeamDbClient): Promise<SeedDemoResult
 }
 
 async function main() {
+  const flags = resolveDevFlowRuntimeFlags(process.env)
+  if (!flags.demoDataEnabled) {
+    throw new Error('Set DEVFLOW_ENABLE_DEMO_DATA=true before running db:seed.')
+  }
+
   const config = resolveTeamDbConfig()
   if (!config) {
     throw new Error('Set DEVFLOW_DATABASE_URL or DATABASE_URL before running db:seed.')

@@ -14,11 +14,12 @@ import {
 describe('API session boundary', () => {
   it('parses a demo request session from explicit headers', () => {
     const session = resolveRequestSession({
+      'x-devflow-session-source': 'demo',
       'x-devflow-organization-id': 'org-demo',
       'x-devflow-user-id': 'u-ling',
       'x-devflow-user-role': 'lead',
       'x-devflow-project-roles': 'p-payments:lead,p-admin:member',
-    }, { allowDemoFallback: false })
+    })
 
     expect(session).toEqual({
       source: 'demo',
@@ -33,7 +34,7 @@ describe('API session boundary', () => {
   })
 
   it('returns null when auth headers are missing and demo fallback is disabled', () => {
-    expect(resolveRequestSession({}, { allowDemoFallback: false })).toBeNull()
+    expect(resolveRequestSession({})).toBeNull()
   })
 
   it('does not use demo fallback unless explicitly allowed', () => {
@@ -46,23 +47,29 @@ describe('API session boundary', () => {
     expect(canSatisfyRole('member', 'lead')).toBe(false)
   })
 
-  it('uses organization owner as the demo fallback session', () => {
-    const session = resolveRequestSession({}, { allowDemoFallback: true })
+  it('does not create a demo fallback session for unauthenticated requests', () => {
+    const session = resolveRequestSession({})
 
-    expect(session).toEqual(createDemoSession())
-    expect(isDemoSession(session!)).toBe(true)
-    expect(isAuthenticatedSession(session!)).toBe(false)
-    expect(canAccessProject(session!, 'p-payments')).toBe(true)
-    expect(canSyncProject(session!, 'p-payments', 'owner')).toBe(true)
+    expect(session).toBeNull()
+  })
+
+  it('keeps explicit demo sessions available for demo and test callers', () => {
+    const session = createDemoSession()
+
+    expect(isDemoSession(session)).toBe(true)
+    expect(isAuthenticatedSession(session)).toBe(false)
+    expect(canAccessProject(session, 'p-payments')).toBe(true)
+    expect(canSyncProject(session, 'p-payments', 'owner')).toBe(true)
   })
 
   it('limits non-owner access to explicit project memberships', () => {
     const session = resolveRequestSession({
+      'x-devflow-session-source': 'demo',
       'x-devflow-organization-id': 'org-demo',
       'x-devflow-user-id': 'u-yu',
       'x-devflow-user-role': 'member',
       'x-devflow-project-roles': 'p-payments:member',
-    }, { allowDemoFallback: false })
+    })
 
     expect(canAccessProject(session!, 'p-payments')).toBe(true)
     expect(canAccessProject(session!, 'p-admin')).toBe(false)
@@ -100,7 +107,7 @@ describe('API session boundary', () => {
       'x-devflow-user-role': 'lead',
       'x-devflow-auth-account-id': 'acct-github-1',
       'x-devflow-project-roles': 'p-payments:lead',
-    }, { allowDemoFallback: false })
+    })
 
     expect(session).toEqual({
       source: 'authenticated',
@@ -120,7 +127,7 @@ describe('API session boundary', () => {
       'x-devflow-user-id': 'u-github-1',
       'x-devflow-user-role': 'lead',
       'x-devflow-project-roles': 'p-payments:lead',
-    }, { allowDemoFallback: false })).toBeNull()
+    })).toBeNull()
   })
 
   it('reads bearer tokens for paired Desktop clients without accepting other schemes', () => {

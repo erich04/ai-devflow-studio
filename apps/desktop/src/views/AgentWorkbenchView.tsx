@@ -23,6 +23,7 @@ import {
   type AgentConsoleEvidenceGroup,
 } from '../app/agent-console-view-model'
 import { codingRuntimeLabel, codingTerminalLabel, type SupportContext } from '../app/desktop-view-model'
+import type { PendingInspectorAction } from '../app/node-inspector-view-model'
 
 export function AgentWorkbenchView({
   providers,
@@ -37,8 +38,11 @@ export function AgentWorkbenchView({
   providerKeyDraft,
   onProviderKeyDraftChange,
   onSaveProviderCredential,
+  onCompleteAgentNode,
   onRunKnowledgeReview,
   isRunning,
+  isRunningTests,
+  pendingInspectorAction,
   selectedRun,
   selectedNode,
   reviews,
@@ -80,8 +84,11 @@ export function AgentWorkbenchView({
   providerKeyDraft: string
   onProviderKeyDraftChange: (value: string) => void
   onSaveProviderCredential: () => void
+  onCompleteAgentNode: () => void
   onRunKnowledgeReview: () => void
   isRunning: boolean
+  isRunningTests: boolean
+  pendingInspectorAction: PendingInspectorAction | null
   selectedRun: WorkflowRun | undefined
   selectedNode: WorkflowNode | undefined
   reviews: AgentReviewResult[]
@@ -123,6 +130,8 @@ export function AgentWorkbenchView({
     latestUsage,
     isRunningReview: isRunning,
     isStartingCodingAgent,
+    isRunningTests,
+    pendingInspectorAction,
     codingRuns,
     retryAttempts,
     latestCodingRun,
@@ -152,6 +161,11 @@ export function AgentWorkbenchView({
 
     if (action.id === 'run-review') {
       onRunKnowledgeReview()
+      return
+    }
+
+    if (action.id === 'complete-agent-node') {
+      onCompleteAgentNode()
       return
     }
 
@@ -233,11 +247,13 @@ export function AgentWorkbenchView({
               </div>
             ) : (
               <>
-                <button
-                  className="primary-button"
-                  disabled={viewModel.primaryAction.disabled}
-                  onClick={() => runPrimaryAction(viewModel.primaryAction)}
-                >
+              <button
+                className="primary-button"
+                disabled={viewModel.primaryAction.disabled}
+                aria-busy={viewModel.primaryAction.label === '生成中' || undefined}
+                title={viewModel.primaryAction.disabledReason}
+                onClick={() => runPrimaryAction(viewModel.primaryAction)}
+              >
                   {primaryActionIcon(viewModel.primaryAction.id)}
                   {viewModel.primaryAction.label}
                 </button>
@@ -405,7 +421,7 @@ export function AgentWorkbenchView({
           <div className="runtime-settings__body">
             <article className="agent-evidence-card">
               <div className="section-heading">
-                <span>Selected Review Provider</span>
+                <span>Selected Agent Provider</span>
                 <strong>{viewModel.runtimeSettings.providerDataSource.status}</strong>
               </div>
               <p data-testid="review-provider-mode">
@@ -425,13 +441,13 @@ export function AgentWorkbenchView({
                   </code>
                 </div>
               ) : (
-                <p className="empty-note">当前没有选中的 Review Provider。请在右侧新增并保存一个 provider。</p>
+                <p className="empty-note">当前没有选中的 Agent Provider。请在右侧新增并保存一个 provider。</p>
               )}
               {providers.length > 0 ? (
                 <label className="runtime-provider-picker">
                   Use saved provider
                   <select
-                    aria-label="Saved Review Provider"
+                    aria-label="Saved Agent Provider"
                     value={selectedProviderId}
                     onChange={(event) => onProviderChange(event.target.value)}
                   >
@@ -455,14 +471,14 @@ export function AgentWorkbenchView({
 
             <article className="agent-evidence-card runtime-settings-form">
               <div className="section-heading">
-                <span>Add Review Provider</span>
+                <span>Add Agent Provider</span>
                 <strong>OpenAI-compatible credential</strong>
               </div>
-              <p>新增后会自动设为当前 Review Provider；明文 key 只保存在 Electron 本地安全存储，不会回读到 renderer。</p>
+              <p>新增后会自动设为当前 Agent Provider；明文 key 只保存在 Electron 本地安全存储，不会回读到 renderer。</p>
               <label>
                 Provider ID
                 <input
-                  aria-label="Review Provider ID"
+                  aria-label="Agent Provider ID"
                   value={providerIdDraft}
                   placeholder="doubao-review"
                   onChange={(event) => onProviderIdDraftChange(event.target.value)}
@@ -471,7 +487,7 @@ export function AgentWorkbenchView({
               <label>
                 Base URL
                 <input
-                  aria-label="Review Provider Base URL"
+                  aria-label="Agent Provider Base URL"
                   value={providerBaseUrlDraft}
                   placeholder="https://ark.cn-beijing.volces.com/api/coding/v3"
                   onChange={(event) => onProviderBaseUrlDraftChange(event.target.value)}
@@ -480,7 +496,7 @@ export function AgentWorkbenchView({
               <label>
                 Model
                 <input
-                  aria-label="Review Provider Model"
+                  aria-label="Agent Provider Model"
                   value={providerModelDraft}
                   placeholder="ark-code-latest"
                   onChange={(event) => onProviderModelDraftChange(event.target.value)}
@@ -489,7 +505,7 @@ export function AgentWorkbenchView({
               <label>
                 API Key
                 <input
-                  aria-label="Review Provider API Key"
+                  aria-label="Agent Provider API Key"
                   type="password"
                   value={providerKeyDraft}
                   placeholder="sk-..."
@@ -537,7 +553,7 @@ function EvidenceGroupCard({ group }: { group: AgentConsoleEvidenceGroup }) {
 }
 
 function primaryActionIcon(actionId: AgentConsoleAction['id']) {
-  if (actionId === 'run-review') {
+  if (actionId === 'run-review' || actionId === 'complete-agent-node') {
     return <Bot size={16} />
   }
   if (actionId === 'run-coding') {

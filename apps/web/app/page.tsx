@@ -21,8 +21,11 @@ import {
 import { cookies } from 'next/headers'
 import type { CSSProperties, ReactNode } from 'react'
 import {
+  createDemoTeamSessionHeaders,
   createRecommendedEnforcementPreset,
   formatUsd,
+  resolveDevFlowRuntimeFlags,
+  type DevFlowSessionHeaders,
   type NodeStatus,
   type WorkflowNode,
   type WorkflowRun,
@@ -43,44 +46,64 @@ async function getDevFlowCookieHeader(): Promise<string | undefined> {
   return sessionCookie ? `devflow_session=${sessionCookie}` : undefined
 }
 
+function getDemoSessionHeadersIfEnabled(): DevFlowSessionHeaders | undefined {
+  return resolveDevFlowRuntimeFlags({
+    DEVFLOW_ENABLE_DEMO_DATA: process.env.DEVFLOW_ENABLE_DEMO_DATA,
+  }).demoDataEnabled
+    ? createDemoTeamSessionHeaders()
+    : undefined
+}
+
 async function runKnowledgeReviewAction(formData: FormData) {
   'use server'
 
   const runId = String(formData.get('runId') ?? '')
   const nodeId = String(formData.get('nodeId') ?? '')
   const projectId = String(formData.get('projectId') ?? '')
-  const providerId = String(formData.get('providerId') ?? 'fake-knowledge-review')
+  const providerId = String(formData.get('providerId') ?? '').trim()
 
   if (!runId || !nodeId || !projectId) return
 
   const cookieHeader = await getDevFlowCookieHeader()
+  const sessionHeaders = cookieHeader ? undefined : getDemoSessionHeadersIfEnabled()
   await runKnowledgeReview({
     runId,
     nodeId,
     projectId,
     providerId,
     ...(cookieHeader ? { cookieHeader } : {}),
+    ...(sessionHeaders ? { sessionHeaders } : {}),
   })
 }
 
-async function applyRecommendedPolicyAction() {
+async function applyRecommendedPolicyAction(formData: FormData) {
   'use server'
 
+  const organizationId = String(formData.get('organizationId') ?? '').trim()
+  if (!organizationId) return
+
   const cookieHeader = await getDevFlowCookieHeader()
+  const sessionHeaders = cookieHeader ? undefined : getDemoSessionHeadersIfEnabled()
   await saveEnforcementPolicy({
-    policy: createRecommendedEnforcementPreset({ updatedAt: new Date().toISOString() }),
+    policy: createRecommendedEnforcementPreset({
+      organizationId,
+      updatedAt: new Date().toISOString(),
+    }),
     ...(cookieHeader ? { cookieHeader } : {}),
+    ...(sessionHeaders ? { sessionHeaders } : {}),
   })
 }
 
 export default async function Page() {
   const apiBaseUrl = resolveDevFlowPublicApiBaseUrl()
   const cookieHeader = await getDevFlowCookieHeader()
+  const sessionHeaders = cookieHeader ? undefined : getDemoSessionHeadersIfEnabled()
 
   let overview: TeamOverviewResponse
   try {
     overview = await fetchTeamOverview({
       ...(cookieHeader ? { cookieHeader } : {}),
+      ...(sessionHeaders ? { sessionHeaders } : {}),
     })
   } catch (error) {
     return <ErrorShell message={error instanceof Error ? error.message : '无法连接 DevFlow API'} />
@@ -104,6 +127,7 @@ export default async function Page() {
   const currentCodingRuns = activeRun
     ? overview.codingAgentSummaries.filter((item) => item.runId === activeRun.id)
     : overview.codingAgentSummaries
+  const knowledgeReviewProviderId = overview.agentProviders[0]?.id ?? ''
   const policySummary = activeProject
     ? overview.policyAwareDeliverySummaries.find((item) => item.projectId === activeProject.id)
     : overview.policyAwareDeliverySummaries[0]
@@ -280,7 +304,7 @@ export default async function Page() {
               <input type="hidden" name="runId" value={activeRun?.id ?? ''} />
               <input type="hidden" name="nodeId" value={gateNode?.id ?? currentNode?.id ?? ''} />
               <input type="hidden" name="projectId" value={activeRun?.projectId ?? activeProject?.id ?? ''} />
-              <input type="hidden" name="providerId" value="fake-knowledge-review" />
+              <input type="hidden" name="providerId" value={knowledgeReviewProviderId} />
               <button type="submit" disabled={!activeRun || !gateNode}>
                 <Bot size={16} />
                 触发后端审查
@@ -335,6 +359,11 @@ export default async function Page() {
               value={`${overview.enforcementPolicies.organizationPolicy.version}`}
             />
             <form action={applyRecommendedPolicyAction}>
+              <input
+                type="hidden"
+                name="organizationId"
+                value={overview.enforcementPolicies.organizationPolicy.organizationId}
+              />
               <button type="submit" className="studio-small-button">
                 Apply recommended enforcement
               </button>

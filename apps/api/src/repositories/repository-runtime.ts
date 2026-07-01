@@ -4,6 +4,7 @@ import {
   type TeamDbClient,
   type TeamDbConfig,
 } from '../db/client'
+import { resolveDevFlowRuntimeFlags } from '@ai-devflow/shared'
 import { createPostgresPoolClient } from '../db/postgres-client'
 import { createPostgresTeamRepository } from './postgres-team-repository'
 import { createSeedTeamRepository, type TeamRepository } from './team-repository'
@@ -28,8 +29,15 @@ export async function createTeamRepositoryRuntime(
   const env = options.env ?? process.env
   const logger = options.logger ?? console
   const config = resolveTeamDbConfig(env)
+  const flags = resolveDevFlowRuntimeFlags(env)
 
   if (!config) {
+    if (!flags.demoDataEnabled) {
+      throw new Error(
+        'Set DEVFLOW_DATABASE_URL or DATABASE_URL before starting the DevFlow API, or explicitly set DEVFLOW_ENABLE_DEMO_DATA=true to use the seed repository.',
+      )
+    }
+
     logger.info('AI DevFlow API using seed team repository.')
     return {
       source: 'seed',
@@ -50,7 +58,9 @@ export async function createTeamRepositoryRuntime(
 
   return {
     source: 'postgres',
-    repository: createPostgresTeamRepository(db),
+    repository: createPostgresTeamRepository(db, {
+      fakeRuntimeEnabled: flags.fakeRuntimeEnabled,
+    }),
     async close() {
       await db.close()
     },

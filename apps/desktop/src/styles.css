@@ -306,6 +306,11 @@ button:disabled {
   border-radius: 8px;
   font-size: 13px;
   font-weight: 700;
+  transition:
+    transform 120ms ease,
+    filter 120ms ease,
+    box-shadow 120ms ease,
+    opacity 120ms ease;
 }
 
 .primary-button {
@@ -332,6 +337,13 @@ button:disabled {
 .danger-button:disabled {
   cursor: not-allowed;
   opacity: 0.58;
+}
+
+.primary-button:active:not(:disabled),
+.ghost-button:active:not(:disabled),
+.danger-button:active:not(:disabled) {
+  transform: translateY(1px) scale(0.98);
+  filter: brightness(0.96);
 }
 
 .primary-button:focus-visible,
@@ -1282,18 +1294,25 @@ button:disabled {
   line-height: 1.5;
 }
 
-.agent-current-task__advisory {
+.agent-current-task__advisory.pill {
   justify-self: end;
-  max-width: 280px;
+  width: fit-content;
+  max-width: min(360px, 100%);
   height: auto;
   white-space: normal;
-}
-
-.agent-current-task__advisory {
   display: grid;
   gap: 4px;
   justify-items: start;
   line-height: 1.2;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.agent-current-task__advisory.pill span,
+.agent-current-task__advisory.pill strong {
+  min-width: 0;
+  line-height: 1.25;
+  white-space: normal;
 }
 
 .agent-current-task__summary {
