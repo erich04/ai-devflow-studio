@@ -98,6 +98,65 @@ redacted team overview path. Docker smoke is explicit and is not part of default
 Use `corepack pnpm build && corepack pnpm --filter @ai-devflow/desktop electron` to run the built
 desktop app against `apps/desktop/dist/index.html` without the Vite dev server.
 
+## Windows ZIP Smoke
+
+Use this path when a Windows machine cannot reliably `git clone` from GitHub. Download the `main`
+branch ZIP from GitHub, unzip it to a short local path such as `C:\dev\ai-devflow-studio`, and run
+the app from that folder.
+
+Recommended Windows environment:
+
+- Windows 11. Windows 10 is best-effort.
+- Node.js 24.
+- PowerShell.
+- Git for Windows if you want to validate Git-backed local project behavior.
+
+From the unzipped project folder:
+
+```powershell
+corepack enable
+corepack pnpm install --frozen-lockfile
+corepack pnpm verify
+corepack pnpm dev:electron
+```
+
+`dev:electron` builds the Electron main/preload bundle, starts Vite on
+`http://127.0.0.1:5173`, and opens the real Electron desktop app with local folder selection,
+controlled IPC, command safety checks, and SQLite persistence.
+
+Important ZIP boundary: GitHub ZIP downloads do not include a `.git` directory. That is fine for
+running AI DevFlow Studio itself, but if you select the unzipped `ai-devflow-studio` folder as the
+local project inside the app, Branch will show `not a git repo` and Git-backed features such as
+branch refresh, branch watchers, managed coding worktrees, and Git diff capture will be limited.
+
+For a fuller Windows validation, start AI DevFlow Studio from the ZIP folder, then use the in-app
+`选择本地仓库` picker to select another real local Git repository on the Windows machine. That repo
+can be any small project with a committed `main` branch and a test script. The expected first-pass
+checks are:
+
+- the local project card shows `selected`;
+- the project path is the Windows path you selected;
+- Branch shows the selected repo's current branch, and the refresh button updates after switching
+  branches externally;
+- creating a Run uses the selected repo instead of demo fixture data;
+- running tests uses the detected package script when the selected repo has one.
+
+If you specifically want to use the unzipped AI DevFlow Studio folder as the selected local project,
+initialize a local Git repository in that folder first:
+
+```powershell
+git init
+git checkout -b main
+git add .
+git commit -m "local windows smoke"
+```
+
+The current Windows support level is source/development validation. The project has Windows
+compatibility checks in CI for typecheck, unit tests, and static cross-platform audits, but it does
+not yet ship a signed Windows installer or claim completed Windows Electron full-smoke signoff.
+Record any Windows failure with the exact command, terminal output, and whether the app source came
+from ZIP, `git clone`, or `git bundle`.
+
 ## v0.6.1 Coding Agent / opencode Signoff
 
 The default Coding Agent path is not configured until a real engine is selected. Set
