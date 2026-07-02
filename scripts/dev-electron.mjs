@@ -5,6 +5,7 @@ import path from 'node:path'
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const desktopDir = path.join(rootDir, 'apps', 'desktop')
 const devServerUrl = 'http://127.0.0.1:5173'
+const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const electronBin = path.join(
   desktopDir,
   'node_modules',
@@ -53,9 +54,9 @@ async function waitForServer(url) {
   throw new Error(`Timed out waiting for ${url}`)
 }
 
-await run('corepack', ['pnpm', '--filter', '@ai-devflow/desktop', 'build:electron'])
+await run(corepack, ['pnpm', '--filter', '@ai-devflow/desktop', 'build:electron'])
 
-const vite = spawnLogged('corepack', [
+const vite = spawnLogged(corepack, [
   'pnpm',
   '--filter',
   '@ai-devflow/desktop',
