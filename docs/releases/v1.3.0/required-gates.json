@@ -1,0 +1,15 @@
+{
+  "targetVersion": "1.3.0",
+  "candidateSha": "b4d0b3b317d594a05bdc6c90433e776ea578a671",
+  "status": "passed",
+  "gates": {
+    "verify": "passed",
+    "windows-compatibility": "passed",
+    "e2e": "passed",
+    "electron-smoke": "passed",
+    "postgres-smoke": "passed",
+    "docker-smoke": "passed",
+    "build": "passed",
+    "build-output-smoke": "passed"
+  }
+}

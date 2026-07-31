@@ -1,0 +1,18 @@
+{
+  "targetVersion": "1.3.0",
+  "candidateSha": "b4d0b3b317d594a05bdc6c90433e776ea578a671",
+  "status": "passed",
+  "recordedAt": "2026-07-31T17:25:10Z",
+  "opencodeVersion": "1.18.10",
+  "provider": "double",
+  "model": "ark-code-latest",
+  "keyEnvName": "ANTHROPIC_AUTH_TOKEN",
+  "duration": "40s",
+  "permissionRelay": "external_directory -> bash -> external_directory -> edit -> external_directory -> bash -> external_directory -> bash",
+  "diffEvidence": [
+    "devflow-opencode-smoke.txt"
+  ],
+  "testEvidence": "passed",
+  "cleanup": "passed",
+  "redactionCheck": "passed"
+}
