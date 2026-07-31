@@ -128,6 +128,10 @@ them from canonical local state (including the current workflow Node), while the
 re-apply redaction before team-visible persistence. Unsigned identity headers are disabled by default;
 networked Team writes use a signed session Cookie or paired Desktop Bearer Token.
 
+Only the canonical Run Summary advances remote status/current Node. Dependent IDs remain bound to
+their original organization/project/Run/Node, and an independent Lead override evaluates the
+creator-owned Run without republishing it under the reviewer's identity.
+
 Test, Review, and Coding summaries use a bounded child-first sync contract: only an explicit missing
 canonical Run causes one latest-Run upload and one child retry. Durable outbox/backoff and visible
 retry operations are intentionally part of v1.4, while v1.3 keeps the committed local state authoritative.

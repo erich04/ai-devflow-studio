@@ -41,7 +41,7 @@
 | Provider credential | `saveAgentProviderCredential`；renderer 只拿 masked metadata | `real IPC/API` + `local persisted` | 不让 raw key 回读 renderer。 |
 | Knowledge Review trace | `AgentTrace[]` | `local persisted` | 已可回写当前 Run/Node。 |
 | Token usage | `AgentTokenUsage[]` | `local persisted` | 保留 provider-reported/estimated source。 |
-| Coding Agent run | `runCodingAgent` / subscriptions | `real IPC/API` + `local persisted` | 继续接 permission relay、tool timeline、diff preview；Team summary 的 structured metadata、model/cost、budget/reason 使用严格白名单并递归净化 secret/path，未知嵌套键丢弃。 |
+| Coding Agent run | `runCodingAgent` / subscriptions | `real IPC/API` + `local persisted` | 继续接 permission relay、tool timeline、diff preview；Team summary 分别对白名单 structured metadata、model/cost、budget/reason 投影，净化允许字符串中的 secret/path，并丢弃未知嵌套键。 |
 | Permission relay | `CodingPermissionRequest[]` + decisions | `real IPC/API` + `local persisted` | 已有 IPC；继续补真实 UI 状态。 |
 | Diff preview | `CodingDiffArtifact[]` | `local persisted` | 已可展示。 |
 
@@ -71,8 +71,10 @@
 | Team projects/members/cost | `loadRemoteSnapshot`；无远端时 seed fallback | `real IPC/API` + `fixture fallback` | 同步后显示 snapshot 与 merge 摘要。 |
 | Policy snapshot source/version | `loadEnforcementPolicy` / `policy_snapshots` | `real IPC/API` + `local persisted` | 继续展示 source/version/syncedAt。 |
 | Gate re-evaluation summary | `evaluateGateEnforcement` decision | `real IPC/API` | 当前只针对 selected Run/Node；批量历史需要新合同。 |
-| Canonical Run/Test sync | Electron main 从 LocalStore 读取 Run/current Node/TestEvidence 后生成白名单 summary | `real IPC/API` | Renderer 不暴露 Run/Test/Coding summary 上传；Test/Review/Coding child-first，只有服务端明确返回 canonical-missing 时才上传一次最新 Run 并重试一次 child。Run summary 独占 status/current Node 推进；child ID 固定绑定 organization/project/Run/Node，冲突返回 409。Team ingest 只保存再次净化后的 read model；durable outbox/backoff 留到 v1.4。 |
-| Gate override sync | main 提交 identifier/reason-only override；remote snapshot 回灌 accepted audit | `real IPC/API` + `local persisted` | 独立 Lead 不重传 creator-owned Run。API 规范化 Postgres node namespace、重算 exact blocker/policy，并按目标项目 membership role 与职责分离校验；accepted override 仍只能由同一合格 actor 用于审批。 |
+| Canonical Run sync | Electron main 从 LocalStore 读取 Run/current Node 后生成白名单 summary | `real IPC/API` | Renderer 无上传接口；只有原 authenticated sync creator 可更新。Run Summary 独占 status/current Node 推进，并收敛旧 active Node；child summary 不推进或合成 Run。 |
+| Dependent summary sync | canonical local Test/Review/Coding 对象生成 child summary | `real IPC/API` | Child-first；只有明确 canonical-missing 才上传一次最新 Run 并重试一次。ID 固定绑定 organization/project/Run/Node，重绑定返回 409；迟到 child 不激活旧 Node。durable outbox/backoff 留到 v1.4。 |
+| Remote policy findings | redacted Agent Review `policyFindings` | `real IPC/API` + `local persisted` | 保留重建 exact blocker ID 所需的最小明细；count-only payload 被拒绝，本地 evidence/reference ID 与敏感文本不进入 Team read model。 |
+| Gate override sync | main 提交 identifier/reason-only override；remote snapshot 回灌 accepted audit | `real IPC/API` + `local persisted` | 独立 Lead 不重传 creator-owned Run。API 规范化 Postgres node namespace、重算 exact blocker/policy；持久化 audit 恢复 namespaced FK，同 scope 幂等更新保持该命名空间。 |
 | Snapshot history | 当前只有 latest snapshot | `missing contract` | 后续单独设计历史查询合同。 |
 
 ## Browser Preview Boundary
@@ -87,3 +89,4 @@ Team API 默认不接受未签名 `x-devflow-*` 身份头，CORS 也不放行这
 - Policy snapshot history：查询历史 snapshot、每次 sync 的 Gate re-evaluation 记录。
 - TestEvidence `skipped`：需要 shared schema、API summary、local store、UI 状态一起变更。
 - Batch Gate re-evaluation：Team 页对多个 Run/Node 的统一 rollup。
+- Durable sync outbox/backoff：持久化待发送操作、失败原因与显式重试/恢复状态。

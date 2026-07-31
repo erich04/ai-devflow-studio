@@ -269,8 +269,16 @@ Review、Policy 和 Budget。Local Project 必须已经 Pair 到明确的 Team P
 - Test/Review/Coding Evidence 采用 child-first 上传；只有服务端明确返回 canonical-missing
   时，Electron main 才上传一次最新 canonical Run 并重试该 child 一次。跨项目、stale、
   作用域冲突或重试后仍无 canonical Run 的写入被拒绝。
+- Child summary ID 只能在原 organization/project/Run/Node scope 内幂等更新；尝试重绑定到
+  另一个 Node、Run 或 Project 时返回 409，原记录保持不变。
+- 只有 canonical Run Summary 可以推进远端 status/current Node。迟到的 Test/Review/Coding
+  child 不得重新激活或阻断非当前 Node，远端最多保留一个 active current Node。
 - 独立 Lead 的 Gate override 不重传 creator-owned Run；服务端以当前 canonical Node、exact
-  blocker set、policy version、成员角色和职责分离重新判定。
+  blocker set、policy version、成员角色和职责分离重新判定。Postgres node namespace 在求值时
+  规范化，在 accepted audit 的 foreign key 中恢复并保持幂等。
+- Remote Agent Review 必须携带重建 exact blocker ID 所需的最小 redacted finding；count-only
+  payload 被拒绝。Coding structured metadata、cost/model 与 budget/reason 不得保留未知键、
+  secret 或本地绝对路径。
 - 合并远端快照时，本地同 id Run/Artifact/Event 保持权威，remote summary 只补充
   remote-only 数据。
 - 关闭并重启 Electron 后，Desktop 仍能读取同一 Local ↔ Team Project 绑定并再次同步。

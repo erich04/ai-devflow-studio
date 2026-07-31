@@ -1,7 +1,7 @@
 # DevFlow Studio Current Product PRD
 
 Status: Current product baseline  
-Last updated: 2026-06-22
+Last updated: 2026-07-31
 
 ## Source Documents
 
@@ -176,6 +176,12 @@ preserving the evidence needed for human review.
   persistence, pairing, and redacted sync ingestion.
 - Unsigned identity headers are off by default and rejected for browser origins; networked Team writes
   use signed session Cookies or paired Desktop Bearer Tokens.
+- Only a canonical Run Summary can advance remote Run status/current Node. Prior active Nodes settle,
+  and delayed Test/Review/Coding summaries cannot reactivate a non-current Node.
+- Remote child IDs remain bound to their original organization/project/Run/Node and canonical sync
+  creator. Rebinding is rejected rather than treated as an upsert.
+- An independent Lead evaluates an override against the existing creator-owned canonical Run and
+  never republishes that Run under the reviewer's identity.
 - The deployment target is a self-hosted small-team pilot with Desktop, Web, API, Postgres, and
   Docker Compose.
 
@@ -232,6 +238,8 @@ preserving the evidence needed for human review.
 - A developer can start Coding Agent work from the intended build-stage task.
 - Permission relay, runtime trace, diff summary, and cleanup state are visible for Coding Agent work.
 - Team-visible sync excludes raw local paths, prompts, stdout, stderr, patches, and secrets.
+- Remote Run state has one active current Node; dependent summary IDs cannot be rebound or used to
+  advance, synthesize, or reactivate a Run.
 - A reviewer can inspect Knowledge Review, policy, test, budget, and evidence state before approval.
 - A lead can approve, reject, or override Gates only through guarded paths.
 - Web Team Console can show redacted project and Run delivery health.
