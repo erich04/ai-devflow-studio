@@ -33,6 +33,14 @@ describe('self-hosted Docker deployment files', () => {
     expect(pkg.scripts['verify']).not.toContain('test:docker-smoke')
   })
 
+  it('forwards the explicit demo-data flag into the API container', () => {
+    const compose = readFileSync('docker-compose.yml', 'utf8')
+
+    expect(compose).toContain(
+      'DEVFLOW_ENABLE_DEMO_DATA: ${DEVFLOW_ENABLE_DEMO_DATA:-false}',
+    )
+  })
+
   it('runs Docker smoke from the GitHub verify workflow', () => {
     const workflow = readFileSync('.github/workflows/verify.yml', 'utf8')
 

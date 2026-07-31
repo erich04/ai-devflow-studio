@@ -16,7 +16,7 @@ import type {
 } from './domain'
 import type { RemediationPlan, RetryAttempt } from './remediation'
 import { detectPackageManager } from './local-execution'
-import { redactSecrets } from './redaction'
+import { redactSecrets, redactSensitiveText } from './redaction'
 
 export const MAX_DIFF_CHARS = 50_000
 export const MAX_REMOTE_CHANGED_PATHS = 50
@@ -241,7 +241,7 @@ export function createRemoteCodingAgentSummary(
 ): RemoteCodingAgentSummary {
   const changedPaths = (diff?.changedPaths ?? run.changedPaths).filter(isRepoRelativePath).slice(0, MAX_REMOTE_CHANGED_PATHS)
 
-  return {
+  return redactRemoteCodingAgentSummaryForSync({
     id: run.id,
     runId: run.runId,
     nodeId: run.nodeId,
@@ -251,12 +251,80 @@ export function createRemoteCodingAgentSummary(
     engine: run.engine,
     status: run.status,
     branchName: run.branchName,
-    summary: redactSecrets(run.summary).value,
+    summary: run.summary,
     changedPaths,
     startedAt: run.startedAt,
     ...(run.completedAt ? { completedAt: run.completedAt } : {}),
     ...(run.runtimeCostSummary ? { costSummary: run.runtimeCostSummary } : {}),
     ...(run.budgetDecision ? { budgetDecision: run.budgetDecision } : {}),
+    redacted: true,
+  })
+}
+
+function redactRemoteCodingCostSummaryForSync(
+  summary: NonNullable<RemoteCodingAgentSummary['costSummary']>,
+): NonNullable<RemoteCodingAgentSummary['costSummary']> {
+  return {
+    id: summary.id,
+    runId: summary.runId,
+    nodeId: summary.nodeId,
+    userId: summary.userId,
+    projectId: summary.projectId,
+    provider: summary.provider,
+    providerId: summary.providerId,
+    model: redactSensitiveText(summary.model).value,
+    inputTokens: summary.inputTokens,
+    outputTokens: summary.outputTokens,
+    cacheReadTokens: summary.cacheReadTokens,
+    costUsd: summary.costUsd,
+    timestamp: summary.timestamp,
+    source: summary.source,
+    redacted: true,
+  }
+}
+
+function redactRemoteBudgetDecisionForSync(
+  decision: NonNullable<RemoteCodingAgentSummary['budgetDecision']>,
+): NonNullable<RemoteCodingAgentSummary['budgetDecision']> {
+  return {
+    status: decision.status,
+    blocksRun: decision.blocksRun,
+    currentSpendUsd: decision.currentSpendUsd,
+    projectedCostUsd: decision.projectedCostUsd,
+    ...(decision.limitUsd !== undefined ? { limitUsd: decision.limitUsd } : {}),
+    ...(decision.approvalRequiredRole !== undefined
+      ? { approvalRequiredRole: decision.approvalRequiredRole }
+      : {}),
+    ...(decision.approvalId !== undefined ? { approvalId: decision.approvalId } : {}),
+    reason: redactSensitiveText(decision.reason).value,
+  }
+}
+
+export function redactRemoteCodingAgentSummaryForSync(
+  summary: RemoteCodingAgentSummary,
+): RemoteCodingAgentSummary {
+  return {
+    id: summary.id,
+    runId: summary.runId,
+    nodeId: summary.nodeId,
+    projectId: summary.projectId,
+    requestedBy: summary.requestedBy,
+    providerId: summary.providerId,
+    engine: summary.engine,
+    status: summary.status,
+    branchName: redactSensitiveText(summary.branchName).value,
+    summary: redactSensitiveText(summary.summary).value,
+    changedPaths: summary.changedPaths
+      .filter(isRepoRelativePath)
+      .slice(0, MAX_REMOTE_CHANGED_PATHS),
+    startedAt: summary.startedAt,
+    ...(summary.completedAt ? { completedAt: summary.completedAt } : {}),
+    ...(summary.costSummary
+      ? { costSummary: redactRemoteCodingCostSummaryForSync(summary.costSummary) }
+      : {}),
+    ...(summary.budgetDecision
+      ? { budgetDecision: redactRemoteBudgetDecisionForSync(summary.budgetDecision) }
+      : {}),
     redacted: true,
   }
 }

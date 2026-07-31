@@ -68,7 +68,7 @@ preserving the evidence needed for human review.
    understand what happened during a Coding Agent Run.
 10. As a developer, I want to run a configured test command, so that DevFlow captures durable Test
     Evidence.
-11. As a developer, I want failed, timed-out, skipped, and passed tests to be explicit, so that I know
+11. As a developer, I want failed, timed-out, and passed tests to be explicit, so that I know
     whether the Run can proceed.
 12. As a developer, I want DevFlow to create a PR draft artifact, so that delivery handoff is based
     on request, design, diff, test, policy, budget, and review evidence.
@@ -102,8 +102,8 @@ preserving the evidence needed for human review.
     so that I do not confuse fixtures with real work.
 27. As a reviewer, I want the active Run to show current stage, blockers, warnings, next action, and
     evidence status, so that I can decide what to do next quickly.
-28. As a developer, I want browser-preview behavior and Electron behavior to share workflow rules, so
-    that tests do not validate a different product than the desktop app.
+28. As a developer, I want browser preview to avoid a second workflow engine and fail closed for
+    execution actions, so that only the Electron main-process runtime can advance trusted state.
 29. As a lead, I want redacted Agent Review and Coding Agent summaries in the team view, so that local
     execution is visible without exposing raw data.
 30. As a small team, I want a self-hosted deployment path, so that we can validate DevFlow without
@@ -133,6 +133,15 @@ preserving the evidence needed for human review.
 - Team-visible data must be redacted before sync.
 - Raw local paths, prompts, stdout, stderr, patch bodies, provider secrets, API keys, tokens, and
   external-directory details must not sync by default.
+- Renderer code cannot submit Run/Test/Coding summaries directly; Electron main derives remote
+  summaries from canonical LocalStore state, and API/Repository ingestion reapplies redaction.
+- Test/Review/Coding summaries are child-first and scope-immutable. Only an explicit missing
+  canonical Run may trigger one latest-Run upload and one child retry; durable outbox/backoff is a
+  v1.4 reliability concern rather than a hidden v1.3 renderer retry loop.
+- Team-bound structured metadata, model/cost, and budget/reason objects use strict allowlist
+  projection; allowed values are still path/secret-redacted and unknown nested keys are discarded.
+- Opening an upgraded local database permanently normalizes legacy Test Evidence, derived/orphaned
+  Test Reports, Test Result Events, and Coding Agent event metadata before they can be rendered again.
 
 ### Gate Enforcement And Governance
 
@@ -140,8 +149,14 @@ preserving the evidence needed for human review.
 - Approval and override decisions must be checked in write paths.
 - Gate Enforcement Policy can warn, block, hard-block, require policy sync, or allow approval.
 - Overrides must be auditable and cannot bypass hard-block rules.
+- An accepted override is bound to the exact current blocker-ID set and policy version; changed
+  blockers require a new decision.
+- An accepted override cannot be reused by another actor: approval rechecks the current project-lead
+  actor, exact Run/Node, and creator/node-owner separation of duties.
 - Knowledge Governance Checks and Agent Policy Findings inform Gate decisions but do not replace
   human review.
+- A remote Agent Review must carry the minimal redacted policy-finding details needed to reconstruct
+  exact blocker IDs; a count without those findings is not sufficient Gate evidence.
 
 ### Agent Runtime Boundaries
 
@@ -159,6 +174,8 @@ preserving the evidence needed for human review.
   Agent Review summaries, Test Evidence, policy state, budget state, and Desktop pairing.
 - API backend owns authenticated team state, project membership, policy persistence, budget
   persistence, pairing, and redacted sync ingestion.
+- Unsigned identity headers are off by default and rejected for browser origins; networked Team writes
+  use signed session Cookies or paired Desktop Bearer Tokens.
 - The deployment target is a self-hosted small-team pilot with Desktop, Web, API, Postgres, and
   Docker Compose.
 
@@ -233,6 +250,7 @@ preserving the evidence needed for human review.
 - Hosted multi-tenancy.
 - Automatic cloud deployment.
 - Signed installer distribution and auto-update.
+- A first-class `TestEvidence.skipped` state; it requires a future shared/API/store/UI contract.
 - Replacing GitHub, CI, or issue trackers.
 - Uploading raw local logs, prompts, patches, paths, or secrets.
 - Real MCP process execution and MCP policy enforcement.

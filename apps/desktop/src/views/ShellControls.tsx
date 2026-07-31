@@ -72,7 +72,7 @@ export function LocalProjectPanel({
 }: {
   project: LocalProject | undefined
   teamProjectLabel: string
-  teamProjectSource: string
+  teamProjectSource: 'unbound' | 'bound_unsynced' | 'bound_synced'
   gitStatus: ProjectGitStatus | null
   isRefreshingGitStatus: boolean
   onRefreshGitStatus: () => void
@@ -80,7 +80,11 @@ export function LocalProjectPanel({
   desktopConnected: boolean
 }) {
   const branchLabel = getBranchLabel(project, gitStatus)
-  const teamProjectSourceLabel = teamProjectSource === 'not bound' ? '未绑定' : teamProjectSource
+  const teamProjectSourceLabel = {
+    unbound: '未绑定',
+    bound_unsynced: '已绑定 · 待同步',
+    bound_synced: '已绑定 · 已同步',
+  }[teamProjectSource]
 
   return (
     <section className="local-project-panel" aria-label="Local project">
@@ -104,8 +108,8 @@ export function LocalProjectPanel({
           <>
             <div className="row">
               <span className="meta">Team Project</span>
-              {teamProjectSource !== 'not bound' ? <strong>{teamProjectLabel}</strong> : null}
-              <span className={`pill ${teamProjectSource === 'not bound' ? 'soft' : 'accent'}`}>
+              {teamProjectSource !== 'unbound' ? <strong>{teamProjectLabel}</strong> : null}
+              <span className={`pill ${teamProjectSource === 'unbound' ? 'soft' : 'accent'}`}>
                 {teamProjectSourceLabel}
               </span>
             </div>

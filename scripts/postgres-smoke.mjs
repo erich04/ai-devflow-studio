@@ -26,6 +26,13 @@ const leadSessionHeaders = {
   'x-devflow-user-role': 'lead',
   'x-devflow-project-roles': 'p-payments:lead',
 }
+const independentLeadSessionHeaders = {
+  'x-devflow-session-source': 'demo',
+  'x-devflow-organization-id': 'org-demo',
+  'x-devflow-user-id': 'u-erich',
+  'x-devflow-user-role': 'owner',
+  'x-devflow-project-roles': 'p-payments:lead',
+}
 
 if (!databaseUrl) {
   throw new Error('Set DEVFLOW_DATABASE_URL or DATABASE_URL before running test:postgres-smoke.')
@@ -323,6 +330,9 @@ const pairedRunId = `run-postgres-paired-smoke-${suffix}`
 const evidenceId = `evidence-postgres-smoke-${suffix}`
 const remoteReviewId = `agent-review-postgres-smoke-${suffix}`
 const timestamp = new Date().toISOString()
+const pairedTamperTimestamp = new Date(Date.now() + 250).toISOString()
+const pairedGateTimestamp = new Date(Date.now() + 500).toISOString()
+const completedTimestamp = new Date(Date.now() + 1_000).toISOString()
 let api
 
 try {
@@ -338,6 +348,7 @@ try {
     DEVFLOW_DATABASE_URL: databaseUrl,
     DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
     DEVFLOW_REQUIRE_AUTH: 'true',
+    DEV_AUTH_ENABLED: 'true',
     PORT: '4322',
   })
   await waitForServer(`${apiUrl}/health`)
@@ -400,6 +411,7 @@ try {
       title: 'Postgres paired desktop synced run',
       status: 'testing',
       currentNodeId: 'n-test',
+      currentNode: { id: 'n-test', stage: 'test', kind: 'test', status: 'running' },
       branchName: 'ai/postgres-paired-smoke',
       updatedAt: timestamp,
     },
@@ -413,6 +425,29 @@ try {
   const serializedPairedOverview = JSON.stringify(pairedOverview)
   expect(!serializedPairedOverview.includes(pairingCode.code), 'Team overview leaked the copy-once pairing code.')
   expect(!serializedPairedOverview.includes(desktopPairing.token), 'Team overview leaked the Desktop bearer token.')
+  await expectPostRejected(
+    '/api/sync/run-summary',
+    {
+      kind: 'run',
+      runId: pairedRunId,
+      projectId: 'p-payments',
+      title: 'Cross-user overwrite attempt',
+      status: 'completed',
+      currentNodeId: 'n-acceptance',
+      currentNode: {
+        id: 'n-acceptance',
+        stage: 'accept',
+        kind: 'acceptance',
+        status: 'success',
+        requiredRole: 'lead',
+      },
+      branchName: 'ai/postgres-paired-smoke',
+      updatedAt: pairedTamperTimestamp,
+    },
+    memberSessionHeaders,
+    409,
+    'cross-user canonical Run overwrite',
+  )
 
   const warnOnlyDecision = await postJson('/api/enforcement/evaluate', {
     runId: seededRun.id,
@@ -427,6 +462,61 @@ try {
   const policyV1UpdatedAt = new Date(Date.now() + 1_000).toISOString()
   const policyV1 = createRecommendedEnforcementPolicy(1, policyV1UpdatedAt)
   await putJson('/api/enforcement/policy', policyV1)
+
+  await postJsonWithBearer(
+    '/api/sync/run-summary',
+    {
+      kind: 'run',
+      runId: pairedRunId,
+      projectId: 'p-payments',
+      title: 'Postgres paired desktop synced run',
+      status: 'paused_at_gate',
+      currentNodeId: 'n-design-gate',
+      currentNode: {
+        id: 'n-design-gate',
+        stage: 'design',
+        kind: 'gate',
+        status: 'blocked',
+        requiredRole: 'lead',
+      },
+      branchName: 'ai/postgres-paired-smoke',
+      updatedAt: pairedGateTimestamp,
+    },
+    desktopPairing.token,
+  )
+  const pairedBlockedDecision = await postJson('/api/enforcement/evaluate', {
+    runId: pairedRunId,
+    nodeId: 'n-design-gate',
+    projectId: 'p-payments',
+  }, independentLeadSessionHeaders)
+  expectMissingReviewBlock(
+    pairedBlockedDecision,
+    'Desktop-synced Postgres Gate evaluation',
+  )
+  const pairedAcceptedOverride = await postJson('/api/gates/override', {
+    runId: pairedRunId,
+    nodeId: 'n-design-gate',
+    projectId: 'p-payments',
+    reason: 'Independent project lead reviewed the Desktop-synced Gate.',
+    blockedReasonIds: pairedBlockedDecision.blockingReasons.map((reason) => reason.id),
+    policyVersion: pairedBlockedDecision.policyVersion,
+  }, independentLeadSessionHeaders)
+  expect(
+    pairedAcceptedOverride.status === 'accepted' &&
+      pairedAcceptedOverride.nodeId === 'n-design-gate' &&
+      pairedAcceptedOverride.userId === independentLeadSessionHeaders['x-devflow-user-id'],
+    'Desktop-synced Postgres Gate override did not preserve the canonical local node identity.',
+  )
+  const pairedOverriddenDecision = await postJson('/api/enforcement/evaluate', {
+    runId: pairedRunId,
+    nodeId: 'n-design-gate',
+    projectId: 'p-payments',
+  }, independentLeadSessionHeaders)
+  expect(
+    pairedOverriddenDecision.status === 'overridden' &&
+      pairedOverriddenDecision.blocksApproval === false,
+    `Desktop-synced accepted override should unblock Gate, received ${pairedOverriddenDecision.status}.`,
+  )
 
   const blockedDecision = await postJson('/api/enforcement/evaluate', {
     runId: seededRun.id,
@@ -497,6 +587,13 @@ try {
       title: 'Postgres smoke approval bypass attempt',
       status: 'building',
       currentNodeId: 'n-design-gate',
+      currentNode: {
+        id: 'n-design-gate',
+        stage: 'design',
+        kind: 'gate',
+        status: 'blocked',
+        requiredRole: 'lead',
+      },
       branchName: 'ai/postgres-smoke',
       updatedAt: timestamp,
     },
@@ -512,6 +609,7 @@ try {
     title: 'Postgres smoke synced run',
     status: 'testing',
     currentNodeId: 'n-test',
+    currentNode: { id: 'n-test', stage: 'test', kind: 'test', status: 'running' },
     branchName: 'ai/postgres-smoke',
     updatedAt: timestamp,
   })
@@ -527,6 +625,36 @@ try {
     summary: 'Postgres smoke tests passed.',
     redacted: true,
     createdAt: timestamp,
+  })
+
+  const testingOverview = await fetchOverview('/api/team/overview after test evidence sync')
+  expect(
+    testingOverview.runs?.some((run) => run.id === runId && run.status === 'testing'),
+    'Test evidence must not advance the canonical Postgres workflow run.',
+  )
+  expect(
+    testingOverview.testEvidenceSummaries?.some(
+      (evidence) => evidence.id === evidenceId && evidence.redacted === true,
+    ),
+    'Postgres overview did not include the synced redacted test evidence summary.',
+  )
+
+  await postJson('/api/sync/run-summary', {
+    kind: 'run',
+    runId,
+    projectId: 'p-payments',
+    title: 'Postgres smoke synced run',
+    status: 'completed',
+    currentNodeId: 'n-acceptance',
+    currentNode: {
+      id: 'n-acceptance',
+      stage: 'accept',
+      kind: 'acceptance',
+      status: 'success',
+      requiredRole: 'lead',
+    },
+    branchName: 'ai/postgres-smoke',
+    updatedAt: completedTimestamp,
   })
 
   const backendReview = await postJson('/api/agent/knowledge-review', {
@@ -629,6 +757,16 @@ try {
         override.status === 'accepted',
     ),
     'Postgres overview did not include accepted lead override audit.',
+  )
+  expect(
+    syncedOverview.enforcementPolicies?.gateOverrides?.some(
+      (override) =>
+        override.runId === pairedRunId &&
+        override.nodeId === `${pairedRunId}:n-design-gate` &&
+        override.userId === independentLeadSessionHeaders['x-devflow-user-id'] &&
+        override.status === 'accepted',
+    ),
+    'Postgres overview did not include the Desktop-synced Gate override audit.',
   )
   expectNoLocalOnlyFields(syncedOverview, 'synced overview')
 

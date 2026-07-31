@@ -68,8 +68,6 @@ export type RemoteGateOverrideInput = {
   runId: string
   nodeId: string
   projectId: string
-  userId: string
-  role: GateOverrideDecision['role']
   reason: string
   blockedReasonIds: string[]
   policyVersion: number
@@ -155,18 +153,6 @@ function requirePostHeaders(input: {
   }
 
   return jsonPostHeaders(requireSessionHeaders(input.sessionHeaders))
-}
-
-function headersForGateOverride(
-  sessionHeaders: DevFlowSessionHeaders,
-  input: RemoteGateOverrideInput,
-): DevFlowSessionHeaders {
-  return {
-    ...sessionHeaders,
-    'x-devflow-user-id': input.userId,
-    'x-devflow-user-role': input.role,
-    'x-devflow-project-roles': `${input.projectId}:${input.role}`,
-  }
 }
 
 function headersForSnapshotRequest(
@@ -331,9 +317,7 @@ export function createRemoteSyncClient(
           policyVersion: input.policyVersion,
         },
         '/api/gates/override',
-        hasAuthToken(authToken)
-          ? tokenPostHeaders(authToken)
-          : jsonPostHeaders(headersForGateOverride(requireSessionHeaders(sessionHeaders), input)),
+        requirePostHeaders({ authToken, sessionHeaders }),
       )
     },
 

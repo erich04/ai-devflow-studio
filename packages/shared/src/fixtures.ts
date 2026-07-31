@@ -629,10 +629,10 @@ Gate 不只是按钮审批。它会综合：
 但界面信息架构还需要整理。现在的问题主要不是“能力不存在”，而是“能力堆在一起后，用户不知道每一步该如何理解和操作”。
 
 涉及的核心代码位置：
-- [App.tsx](/Users/erich/File/claude/10-showcase/ai-devflow-studio/apps/desktop/src/App.tsx)
-- [workflow.ts](/Users/erich/File/claude/10-showcase/ai-devflow-studio/packages/shared/src/workflow.ts)
-- [main.ts](/Users/erich/File/claude/10-showcase/ai-devflow-studio/apps/desktop/electron/main.ts)
-- [desktop-api.ts](/Users/erich/File/claude/10-showcase/ai-devflow-studio/apps/desktop/src/desktop-api.ts)
+- [App.tsx](../../../apps/desktop/src/App.tsx)
+- [workflow.ts](../../../packages/shared/src/workflow.ts)
+- [main.ts](../../../apps/desktop/electron/main.ts)
+- [desktop-api.ts](../../../apps/desktop/src/desktop-api.ts)
 \`\`\`
 
 **Result / notes**:

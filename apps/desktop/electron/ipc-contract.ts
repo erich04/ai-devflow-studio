@@ -19,16 +19,11 @@ import type {
   PolicySnapshot,
   ProjectGitStatus,
   ProviderCredentialMetadata,
-  RemoteCodingAgentSummary,
   RemoteRunDeleteResult,
-  RemoteRunSummary,
-  RemoteSyncUploadResult,
   RemoteTeamSnapshot,
-  RemoteTestEvidenceSummary,
   RetryAttempt,
   TestEvidence,
   AgentReviewRuntime,
-  Role,
   WorkflowRun,
 } from '@ai-devflow/shared'
 
@@ -64,19 +59,16 @@ export const ipcChannels = {
   createRun: 'devflow:run:create',
   deleteRun: 'devflow:run:delete',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
-  saveRun: 'devflow:run:save',
-  saveArtifact: 'devflow:artifact:save',
+  createPrDraft: 'devflow:pr-draft:create',
+  createAcceptanceBundle: 'devflow:acceptance-bundle:create',
   approveGate: 'devflow:gate:approve',
   saveGateOverride: 'devflow:gate:override:save',
   listGateOverrides: 'devflow:gate:overrides:list',
-  saveEvent: 'devflow:event:save',
   saveSettings: 'devflow:settings:save',
   saveMcpServers: 'devflow:mcp-servers:save',
   loadRemoteSnapshot: 'devflow:remote:snapshot:load',
   loadDesktopPairing: 'devflow:desktop-pairing:load',
   pairDesktop: 'devflow:desktop-pairing:pair',
-  uploadRunSummary: 'devflow:remote:run-summary:upload',
-  uploadTestEvidenceSummary: 'devflow:remote:test-evidence-summary:upload',
   listAgentProviders: 'devflow:agent:providers:list',
   saveAgentProviderCredential: 'devflow:agent:provider-credential:save',
   runKnowledgeReview: 'devflow:agent:knowledge-review:run',
@@ -90,7 +82,6 @@ export const ipcChannels = {
   listCodingAgentRuns: 'devflow:coding:runs:list',
   openManagedWorktree: 'devflow:coding:worktree:open',
   deleteManagedWorktree: 'devflow:coding:worktree:delete',
-  uploadCodingAgentSummary: 'devflow:remote:coding-agent-summary:upload',
   codingRunStatusUpdated: 'devflow:coding:push:status',
   codingEventAppended: 'devflow:coding:push:event',
   codingPermissionUpdated: 'devflow:coding:push:permission',
@@ -112,7 +103,6 @@ export type RunProjectTestsInput = {
   projectId: string
   runId: string
   nodeId: string
-  run: WorkflowRun
 }
 
 export type RunProjectTestsResult = {
@@ -123,9 +113,6 @@ export type RunProjectTestsResult = {
 export type ApproveGateInput = {
   runId: string
   nodeId: string
-  userId: string
-  userName: string
-  role: Role
 }
 
 export type ApproveGateResult = {
@@ -149,6 +136,25 @@ export type CompleteWorkflowAgentNodeResult = {
   state: LocalExecutionState
 }
 
+export type CreatePrDraftInput = {
+  runId: string
+  nodeId: string
+}
+
+export type CreatePrDraftResult = {
+  run: WorkflowRun
+  artifact: Artifact
+  event: AgentEvent
+  state: LocalExecutionState
+}
+
+export type CreateAcceptanceBundleInput = {
+  runId: string
+  nodeId: string
+}
+
+export type CreateAcceptanceBundleResult = CreatePrDraftResult
+
 export type LoadEnforcementPolicyInput = {
   projectId: string
 }
@@ -162,13 +168,7 @@ export type EvaluateGateEnforcementInput = {
 export type SaveGateOverrideInput = {
   runId: string
   nodeId: string
-  projectId: string
-  userId: string
-  role: Role
   reason: string
-  blockedReasonIds: string[]
-  policyVersion: number
-  provisional?: boolean
 }
 
 export type ListGateOverridesInput = {
@@ -270,6 +270,7 @@ export type LoadRemoteSnapshotInput = {
 
 export type PairDesktopInput = {
   code: string
+  localProjectId: string
 }
 
 export type PairDesktopResult = {
@@ -282,10 +283,6 @@ export type DevFlowDesktopApi = {
   loadDesktopPairing: () => Promise<DesktopPairingCredential | null>
   pairDesktop: (input: PairDesktopInput) => Promise<PairDesktopResult>
   loadRemoteSnapshot: (input?: LoadRemoteSnapshotInput) => Promise<RemoteTeamSnapshot>
-  uploadRunSummary: (summary: RemoteRunSummary) => Promise<RemoteSyncUploadResult>
-  uploadTestEvidenceSummary: (
-    summary: RemoteTestEvidenceSummary,
-  ) => Promise<RemoteSyncUploadResult>
   selectLocalProject: () => Promise<LocalProject | null>
   getProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
   watchProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
@@ -298,12 +295,13 @@ export type DevFlowDesktopApi = {
   createRun: (input: CreateRunInput) => Promise<WorkflowRun>
   deleteRun: (input: DeleteRunInput) => Promise<DeleteRunResult>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
-  saveRun: (run: WorkflowRun) => Promise<WorkflowRun>
-  saveArtifact: (artifact: Artifact) => Promise<Artifact>
+  createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
+  createAcceptanceBundle: (
+    input: CreateAcceptanceBundleInput,
+  ) => Promise<CreateAcceptanceBundleResult>
   approveGate: (input: ApproveGateInput) => Promise<ApproveGateResult>
   saveGateOverride: (input: SaveGateOverrideInput) => Promise<GateOverrideDecision>
   listGateOverrides: (input?: ListGateOverridesInput) => Promise<GateOverrideDecision[]>
-  saveEvent: (event: AgentEvent) => Promise<AgentEvent>
   saveSettings: (settings: Partial<LocalSettings>) => Promise<LocalSettings>
   saveMcpServers: (servers: McpServerDefinition[]) => Promise<McpServerDefinition[]>
   listAgentProviders: () => Promise<AgentProviderConfig[]>
@@ -319,7 +317,6 @@ export type DevFlowDesktopApi = {
   listCodingAgentRuns: (input?: ListCodingAgentRunsInput) => Promise<CodingAgentRun[]>
   openManagedWorktree: (input: OpenManagedWorktreeInput) => Promise<ManagedCodingWorkspace>
   deleteManagedWorktree: (input: DeleteManagedWorktreeInput) => Promise<ManagedCodingWorkspace>
-  uploadCodingAgentSummary: (summary: RemoteCodingAgentSummary) => Promise<RemoteSyncUploadResult>
   onCodingRunStatusUpdated: (listener: (run: CodingAgentRun) => void) => () => void
   onCodingEventAppended: (listener: (event: CodingAgentEvent) => void) => () => void
   onCodingPermissionUpdated: (listener: (request: CodingPermissionRequest) => void) => () => void
@@ -339,41 +336,16 @@ function readRequiredString(value: Record<string, unknown>, key: string): string
   return raw.trim()
 }
 
-function isWorkflowRun(value: unknown): value is WorkflowRun {
-  return (
-    isRecord(value) &&
-    typeof value['id'] === 'string' &&
-    typeof value['title'] === 'string' &&
-    Array.isArray(value['nodes']) &&
-    Array.isArray(value['edges'])
-  )
-}
-
-function isAgentEvent(value: unknown): value is AgentEvent {
-  return (
-    isRecord(value) &&
-    typeof value['id'] === 'string' &&
-    typeof value['runId'] === 'string' &&
-    typeof value['sequence'] === 'number' &&
-    typeof value['kind'] === 'string' &&
-    typeof value['message'] === 'string' &&
-    typeof value['timestamp'] === 'string'
-  )
-}
-
-function isArtifact(value: unknown): value is Artifact {
-  return (
-    isRecord(value) &&
-    typeof value['id'] === 'string' &&
-    typeof value['runId'] === 'string' &&
-    typeof value['nodeId'] === 'string' &&
-    typeof value['kind'] === 'string' &&
-    typeof value['title'] === 'string' &&
-    typeof value['summary'] === 'string' &&
-    typeof value['content'] === 'string' &&
-    typeof value['redacted'] === 'boolean' &&
-    typeof value['updatedAt'] === 'string'
-  )
+function rejectUnexpectedFields(
+  value: Record<string, unknown>,
+  allowedFields: readonly string[],
+  payloadName: string,
+): void {
+  const allowed = new Set(allowedFields)
+  const unexpected = Object.keys(value).find((key) => !allowed.has(key))
+  if (unexpected) {
+    throw new Error(`Invalid ${payloadName}: unexpected field ${unexpected}`)
+  }
 }
 
 function isThemePreference(value: unknown): value is LocalSettings['themePreference'] {
@@ -392,96 +364,6 @@ function isMcpServer(value: unknown): value is McpServerDefinition {
       value['permission'] === 'shell') &&
     typeof value['enabledLocally'] === 'boolean' &&
     typeof value['lastAuditEvent'] === 'string'
-  )
-}
-
-function hasLocalOnlyEvidenceField(value: Record<string, unknown>): boolean {
-  return 'cwd' in value || 'stdout' in value || 'stderr' in value
-}
-
-function isRemoteRunSummary(value: unknown): value is RemoteRunSummary {
-  return (
-    isRecord(value) &&
-    (value['kind'] === 'run' || value['kind'] === 'approval' || value['kind'] === 'event') &&
-    typeof value['runId'] === 'string' &&
-    typeof value['projectId'] === 'string' &&
-    typeof value['title'] === 'string' &&
-    typeof value['status'] === 'string' &&
-    typeof value['currentNodeId'] === 'string' &&
-    typeof value['branchName'] === 'string' &&
-    typeof value['updatedAt'] === 'string'
-  )
-}
-
-function isRemoteTestEvidenceStatus(value: unknown): value is RemoteTestEvidenceSummary['status'] {
-  return value === 'running' || value === 'passed' || value === 'failed' || value === 'timed_out'
-}
-
-function isRemoteTestEvidenceSummary(value: unknown): value is RemoteTestEvidenceSummary {
-  return (
-    isRecord(value) &&
-    !hasLocalOnlyEvidenceField(value) &&
-    typeof value['id'] === 'string' &&
-    typeof value['runId'] === 'string' &&
-    typeof value['nodeId'] === 'string' &&
-    typeof value['projectId'] === 'string' &&
-    typeof value['command'] === 'string' &&
-    isRemoteTestEvidenceStatus(value['status']) &&
-    (typeof value['exitCode'] === 'number' || value['exitCode'] === null) &&
-    typeof value['durationMs'] === 'number' &&
-    typeof value['summary'] === 'string' &&
-    typeof value['redacted'] === 'boolean' &&
-    typeof value['createdAt'] === 'string'
-  )
-}
-
-function hasLocalOnlyCodingField(value: Record<string, unknown>): boolean {
-  return (
-    'cwd' in value ||
-    'stdout' in value ||
-    'stderr' in value ||
-    'prompt' in value ||
-    'patch' in value ||
-    'rawTrace' in value ||
-    'providerSecret' in value ||
-    'secret' in value
-  )
-}
-
-function isRepoRelativePath(value: unknown): value is string {
-  if (typeof value !== 'string') {
-    return false
-  }
-  const normalized = value.replace(/\\/g, '/').trim()
-  return (
-    normalized.length > 0 &&
-    !normalized.startsWith('/') &&
-    !normalized.startsWith('../') &&
-    !normalized.includes('/../') &&
-    !/^[A-Za-z]:\//.test(normalized)
-  )
-}
-
-function isRemoteCodingAgentSummary(value: unknown): value is RemoteCodingAgentSummary {
-  return (
-    isRecord(value) &&
-    !hasLocalOnlyCodingField(value) &&
-    typeof value['id'] === 'string' &&
-    typeof value['runId'] === 'string' &&
-    typeof value['nodeId'] === 'string' &&
-    typeof value['projectId'] === 'string' &&
-    typeof value['requestedBy'] === 'string' &&
-    typeof value['providerId'] === 'string' &&
-    (value['engine'] === 'fake' || value['engine'] === 'opencode-http' || value['engine'] === 'opencode-acp') &&
-    typeof value['status'] === 'string' &&
-    typeof value['branchName'] === 'string' &&
-    typeof value['summary'] === 'string' &&
-    Array.isArray(value['changedPaths']) &&
-    value['changedPaths'].length <= 50 &&
-    value['changedPaths'].every(isRepoRelativePath) &&
-    typeof value['startedAt'] === 'string' &&
-    (value['completedAt'] === undefined || typeof value['completedAt'] === 'string') &&
-    value['redacted'] === true
   )
 }
 
@@ -514,21 +396,17 @@ export function parseRunProjectTestsInput(value: unknown): RunProjectTestsInput 
   if (!isRecord(value)) {
     throw new Error('Invalid run project tests payload')
   }
+  rejectUnexpectedFields(
+    value,
+    ['projectId', 'runId', 'nodeId'],
+    'run project tests payload',
+  )
 
-  const projectId = readRequiredString(value, 'projectId')
-  const runId = readRequiredString(value, 'runId')
-  const nodeId = readRequiredString(value, 'nodeId')
-  const run = value['run']
-
-  if (!isWorkflowRun(run)) {
-    throw new Error('Invalid run')
+  return {
+    projectId: readRequiredString(value, 'projectId'),
+    runId: readRequiredString(value, 'runId'),
+    nodeId: readRequiredString(value, 'nodeId'),
   }
-
-  if (run.id !== runId) {
-    throw new Error('Invalid runId: payload does not match run snapshot')
-  }
-
-  return { projectId, runId, nodeId, run }
 }
 
 export function parseLoadEnforcementPolicyInput(value: unknown): LoadEnforcementPolicyInput {
@@ -555,29 +433,13 @@ export function parseSaveGateOverrideInput(value: unknown): SaveGateOverrideInpu
   if (!isRecord(value)) {
     throw new Error('Invalid save gate override payload')
   }
-  const role = value['role']
-  if (role !== 'member' && role !== 'lead' && role !== 'owner') {
-    throw new Error('Invalid role')
-  }
-  const blockedReasonIds = value['blockedReasonIds']
-  if (!Array.isArray(blockedReasonIds) || !blockedReasonIds.every((item) => typeof item === 'string')) {
-    throw new Error('Invalid blockedReasonIds')
-  }
-  const policyVersion = value['policyVersion']
-  if (typeof policyVersion !== 'number' || !Number.isInteger(policyVersion)) {
-    throw new Error('Invalid policyVersion')
-  }
+
+  rejectUnexpectedFields(value, ['runId', 'nodeId', 'reason'], 'save gate override payload')
 
   return {
     runId: readRequiredString(value, 'runId'),
     nodeId: readRequiredString(value, 'nodeId'),
-    projectId: readRequiredString(value, 'projectId'),
-    userId: readRequiredString(value, 'userId'),
-    role,
     reason: readRequiredString(value, 'reason'),
-    blockedReasonIds,
-    policyVersion,
-    provisional: value['provisional'] === true,
   }
 }
 
@@ -590,22 +452,6 @@ export function parseListGateOverridesInput(value: unknown): ListGateOverridesIn
   }
   const runId = value['runId']
   return typeof runId === 'string' && runId.trim() ? { runId: runId.trim() } : {}
-}
-
-export function parseSaveRunInput(value: unknown): WorkflowRun {
-  if (!isWorkflowRun(value)) {
-    throw new Error('Invalid run')
-  }
-
-  return value
-}
-
-export function parseSaveArtifactInput(value: unknown): Artifact {
-  if (!isArtifact(value)) {
-    throw new Error('Invalid artifact')
-  }
-
-  return value
 }
 
 export function parseCreateRunInput(value: unknown): CreateRunInput {
@@ -657,31 +503,45 @@ export function parseCompleteWorkflowAgentNodeInput(value: unknown): CompleteWor
   }
 }
 
+function parseDeliveryArtifactCommandInput(
+  value: unknown,
+  payloadName: string,
+): CreatePrDraftInput {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid ${payloadName}`)
+  }
+  rejectUnexpectedFields(value, ['runId', 'nodeId'], payloadName)
+
+  return {
+    runId: readRequiredString(value, 'runId'),
+    nodeId: readRequiredString(value, 'nodeId'),
+  }
+}
+
+export function parseCreatePrDraftInput(value: unknown): CreatePrDraftInput {
+  return parseDeliveryArtifactCommandInput(value, 'create PR draft payload')
+}
+
+export function parseCreateAcceptanceBundleInput(
+  value: unknown,
+): CreateAcceptanceBundleInput {
+  return parseDeliveryArtifactCommandInput(
+    value,
+    'create acceptance bundle payload',
+  )
+}
+
 export function parseApproveGateInput(value: unknown): ApproveGateInput {
   if (!isRecord(value)) {
     throw new Error('Invalid approve gate payload')
   }
 
-  const role = value['role']
-  if (role !== 'member' && role !== 'lead' && role !== 'owner') {
-    throw new Error('Invalid role')
-  }
+  rejectUnexpectedFields(value, ['runId', 'nodeId'], 'approve gate payload')
 
   return {
     runId: readRequiredString(value, 'runId'),
     nodeId: readRequiredString(value, 'nodeId'),
-    userId: readRequiredString(value, 'userId'),
-    userName: readRequiredString(value, 'userName'),
-    role,
   }
-}
-
-export function parseAgentEventInput(value: unknown): AgentEvent {
-  if (!isAgentEvent(value)) {
-    throw new Error('Invalid event')
-  }
-
-  return value
 }
 
 export function parseSettingsInput(value: unknown): Partial<LocalSettings> {
@@ -724,38 +584,6 @@ export function parseRemoteSnapshotInput(value: unknown): LoadRemoteSnapshotInpu
   return organizationId ? { organizationId: organizationId.trim() } : {}
 }
 
-export function parseRemoteRunSummaryInput(value: unknown): RemoteRunSummary {
-  if (!isRemoteRunSummary(value)) {
-    throw new Error('Invalid remote run summary payload')
-  }
-
-  return value
-}
-
-export function parseRemoteTestEvidenceSummaryInput(value: unknown): RemoteTestEvidenceSummary {
-  if (isRecord(value) && hasLocalOnlyEvidenceField(value)) {
-    throw new Error('Remote test evidence summary contains local-only fields')
-  }
-
-  if (!isRemoteTestEvidenceSummary(value)) {
-    throw new Error('Invalid remote test evidence summary payload')
-  }
-
-  return value
-}
-
-export function parseRemoteCodingAgentSummaryInput(value: unknown): RemoteCodingAgentSummary {
-  if (isRecord(value) && hasLocalOnlyCodingField(value)) {
-    throw new Error('Remote coding agent summary contains local-only fields')
-  }
-
-  if (!isRemoteCodingAgentSummary(value)) {
-    throw new Error('Invalid remote coding agent summary payload')
-  }
-
-  return value
-}
-
 export function parseAgentProviderCredentialInput(value: unknown): AgentProviderCredentialInput {
   if (!isRecord(value)) {
     throw new Error('Invalid agent provider credential payload')
@@ -781,6 +609,7 @@ export function parsePairDesktopInput(value: unknown): PairDesktopInput {
 
   return {
     code: readRequiredString(value, 'code'),
+    localProjectId: readRequiredString(value, 'localProjectId'),
   }
 }
 

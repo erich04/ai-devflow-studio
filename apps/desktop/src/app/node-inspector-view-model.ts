@@ -46,6 +46,7 @@ export type InspectorActionDisabledReason =
   | 'requires_current_node'
   | 'gate_permission_missing'
   | 'starting_coding_agent'
+  | 'team_project_binding_missing'
 
 export type InspectorAction = {
   id: InspectorActionId
@@ -629,7 +630,10 @@ export function buildGateRequirementMatrix(input: {
   return rows
 }
 
-function buildActionCatalog(node: WorkflowNode): Record<InspectorActionId, InspectorAction> {
+function buildActionCatalog(
+  node: WorkflowNode,
+  hasTeamProjectBinding: boolean,
+): Record<InspectorActionId, InspectorAction> {
   return {
     openKnowledgeReview: {
       id: 'openKnowledgeReview',
@@ -666,7 +670,7 @@ function buildActionCatalog(node: WorkflowNode): Record<InspectorActionId, Inspe
       id: 'createPrDraft',
       label: '生成 PR Draft',
       variant: 'ghost',
-      disabledReasons: [],
+      disabledReasons: hasTeamProjectBinding ? [] : ['team_project_binding_missing'],
     },
     createAcceptanceBundle: {
       id: 'createAcceptanceBundle',
@@ -708,6 +712,7 @@ function buildNextAction(input: {
   artifacts: Artifact[]
   latestAgentReview: AgentReviewResult | undefined
   canApprove: boolean
+  hasTeamProjectBinding: boolean
 }): InspectorNextAction {
   const { node } = input
 
@@ -782,7 +787,9 @@ function buildNextAction(input: {
   if (node.kind === 'pr') {
     return {
       title: '生成 PR Draft',
-      copy: '汇总当前 Run 的产物和证据，生成可检查的 PR 草稿。',
+      copy: input.hasTeamProjectBinding
+        ? '汇总当前 Run 的产物和证据，生成可检查的 PR 草稿。'
+        : '先绑定当前 Local Project 与 Team Project，再生成带有正确仓库归属的 PR Draft。',
       primaryActionId: 'createPrDraft',
       secondaryActionIds: [],
     }
@@ -826,12 +833,13 @@ export function buildNodeInspectorViewModel(input: {
   gateEnforcementDecision: GateEnforcementDecision | null
   isLoadingGateEnforcement: boolean
   canApprove: boolean
+  hasTeamProjectBinding: boolean
 }): NodeInspectorViewModel {
   const visualKind = getBoardNodeKind(input.node)
   const nodeType = getInspectorNodeType(input.node)
   const tabs = inspectorTabPlansByNodeType[nodeType]
   const activeTab = tabs.find((tab) => tab.tabId === input.requestedTab || tab.label === input.requestedTab) ?? tabs[0]!
-  const actionCatalog = buildActionCatalog(input.node)
+  const actionCatalog = buildActionCatalog(input.node, input.hasTeamProjectBinding)
   const nextAction = buildNextAction(input)
   const actionIds: InspectorActionId[] = []
   const addAction = (actionId: InspectorActionId) => {

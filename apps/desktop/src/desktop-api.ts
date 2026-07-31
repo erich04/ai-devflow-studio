@@ -20,13 +20,8 @@ import type {
   PolicySnapshot,
   ProjectGitStatus,
   ProviderCredentialMetadata,
-  RemoteCodingAgentSummary,
-  RemoteRunSummary,
-  RemoteSyncUploadResult,
   RemoteTeamSnapshot,
-  RemoteTestEvidenceSummary,
   RetryAttempt,
-  Role,
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
@@ -47,7 +42,6 @@ export type RunProjectTestsInput = {
   projectId: string
   runId: string
   nodeId: string
-  run: WorkflowRun
 }
 
 export type RunProjectTestsResult = {
@@ -58,9 +52,6 @@ export type RunProjectTestsResult = {
 export type ApproveGateInput = {
   runId: string
   nodeId: string
-  userId: string
-  userName: string
-  role: Role
 }
 
 export type ApproveGateResult = {
@@ -84,6 +75,25 @@ export type CompleteWorkflowAgentNodeResult = {
   state: LocalExecutionState
 }
 
+export type CreatePrDraftInput = {
+  runId: string
+  nodeId: string
+}
+
+export type CreatePrDraftResult = {
+  run: WorkflowRun
+  artifact: Artifact
+  event: AgentEvent
+  state: LocalExecutionState
+}
+
+export type CreateAcceptanceBundleInput = {
+  runId: string
+  nodeId: string
+}
+
+export type CreateAcceptanceBundleResult = CreatePrDraftResult
+
 export type LoadEnforcementPolicyInput = {
   projectId: string
 }
@@ -97,13 +107,7 @@ export type EvaluateGateEnforcementInput = {
 export type SaveGateOverrideInput = {
   runId: string
   nodeId: string
-  projectId: string
-  userId: string
-  role: Role
   reason: string
-  blockedReasonIds: string[]
-  policyVersion: number
-  provisional?: boolean
 }
 
 export type AgentProviderCredentialInput = {
@@ -161,6 +165,7 @@ export type LoadRemoteSnapshotInput = {
 
 export type PairDesktopInput = {
   code: string
+  localProjectId: string
 }
 
 export type PairDesktopResult = {
@@ -173,11 +178,6 @@ export type DevFlowDesktopApi = {
   loadDesktopPairing: () => Promise<DesktopPairingCredential | null>
   pairDesktop: (input: PairDesktopInput) => Promise<PairDesktopResult>
   loadRemoteSnapshot: (input?: LoadRemoteSnapshotInput) => Promise<RemoteTeamSnapshot>
-  uploadRunSummary: (summary: RemoteRunSummary) => Promise<RemoteSyncUploadResult>
-  uploadTestEvidenceSummary: (
-    summary: RemoteTestEvidenceSummary,
-  ) => Promise<RemoteSyncUploadResult>
-  uploadCodingAgentSummary: (summary: RemoteCodingAgentSummary) => Promise<RemoteSyncUploadResult>
   selectLocalProject: () => Promise<LocalProject | null>
   getProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
   watchProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
@@ -190,12 +190,13 @@ export type DevFlowDesktopApi = {
   createRun: (input: CreateRunInput) => Promise<WorkflowRun>
   deleteRun: (input: DeleteRunInput) => Promise<DeleteRunResult>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
-  saveRun: (run: WorkflowRun) => Promise<WorkflowRun>
-  saveArtifact: (artifact: Artifact) => Promise<Artifact>
+  createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
+  createAcceptanceBundle: (
+    input: CreateAcceptanceBundleInput,
+  ) => Promise<CreateAcceptanceBundleResult>
   approveGate: (input: ApproveGateInput) => Promise<ApproveGateResult>
   saveGateOverride: (input: SaveGateOverrideInput) => Promise<GateOverrideDecision>
   listGateOverrides: (input?: { runId?: string }) => Promise<GateOverrideDecision[]>
-  saveEvent: (event: AgentEvent) => Promise<AgentEvent>
   saveSettings: (settings: Partial<LocalSettings>) => Promise<LocalSettings>
   saveMcpServers: (servers: McpServerDefinition[]) => Promise<McpServerDefinition[]>
   listAgentProviders: () => Promise<AgentProviderConfig[]>

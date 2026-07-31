@@ -152,7 +152,9 @@ export type DesktopPairingExchangeResult = {
   createdAt: string
 }
 
-export type DesktopPairingCredential = Omit<DesktopPairingExchangeResult, 'token'>
+export type DesktopPairingCredential = Omit<DesktopPairingExchangeResult, 'token'> & {
+  localProjectId?: string
+}
 
 export type WorkflowNode = {
   id: string
@@ -847,6 +849,11 @@ export type RemoteTeamSnapshot = {
 
 export type RemoteRunSummaryKind = 'run' | 'approval' | 'event'
 
+export type RemoteRunNodeSummary = Pick<
+  WorkflowNode,
+  'id' | 'stage' | 'kind' | 'status' | 'requiredRole'
+>
+
 export type RemoteRunSummary = {
   kind: RemoteRunSummaryKind
   runId: string
@@ -854,6 +861,7 @@ export type RemoteRunSummary = {
   title: string
   status: RunStatus
   currentNodeId: string
+  currentNode: RemoteRunNodeSummary
   branchName: string
   updatedAt: string
 }
@@ -872,6 +880,11 @@ export type RemoteTestEvidenceSummary = {
   createdAt: string
 }
 
+export type RemoteAgentPolicyFindingSummary = Pick<
+  AgentPolicyFinding,
+  'id' | 'reviewId' | 'runId' | 'nodeId' | 'category' | 'severity' | 'summary' | 'createdAt'
+>
+
 export type RemoteAgentReviewSummary = {
   id: string
   runId: string
@@ -886,6 +899,7 @@ export type RemoteAgentReviewSummary = {
   missingEvidenceCount: number
   policyFindingCount?: number
   policyFindingCategories?: AgentPolicyFindingCategory[]
+  policyFindings?: RemoteAgentPolicyFindingSummary[]
   advisoryLevel: GateAdvisory['level']
   blocksApproval: boolean
   confidence: number

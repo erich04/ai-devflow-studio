@@ -1,6 +1,6 @@
 {
   "name": "ai-devflow-studio",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "description": "Team AI development workflow platform with an Electron developer client.",
   "packageManager": "pnpm@9.15.0",
@@ -17,6 +17,7 @@
     "test:cross-platform": "node scripts/check-cross-platform.mjs",
     "test:postgres-smoke": "node scripts/postgres-smoke.mjs",
     "test:docker-smoke": "node scripts/docker-smoke.mjs",
+    "test:build-output-smoke": "node scripts/build-output-smoke.mjs",
     "test:agent-live": "tsx scripts/agent-live-smoke.ts",
     "test:opencode-smoke": "tsx scripts/opencode-smoke.ts",
     "opencode:status": "node scripts/opencode-runtime-status.mjs",

@@ -481,6 +481,35 @@ export function mergeById<T extends { id: string }>(base: T[], incoming: T[]): T
   return Array.from(map.values())
 }
 
+function appendRemoteOnly<T extends { id: string }>(local: T[], remote: T[]): T[] {
+  const localIds = new Set(local.map((item) => item.id))
+  return [...local, ...remote.filter((item) => !localIds.has(item.id))]
+}
+
+export function mergeLocalAndRemoteSnapshot(input: {
+  localRuns: WorkflowRun[]
+  remoteRuns: WorkflowRun[]
+  localArtifacts: Artifact[]
+  remoteArtifacts: Artifact[]
+  localEvents: AgentEvent[]
+  remoteEvents: AgentEvent[]
+}): {
+  runs: WorkflowRun[]
+  artifacts: Artifact[]
+  events: AgentEvent[]
+  remoteRunIds: string[]
+} {
+  const localRunIds = new Set(input.localRuns.map((run) => run.id))
+  const remoteOnlyRuns = input.remoteRuns.filter((run) => !localRunIds.has(run.id))
+
+  return {
+    runs: [...input.localRuns, ...remoteOnlyRuns],
+    artifacts: appendRemoteOnly(input.localArtifacts, input.remoteArtifacts),
+    events: appendRemoteOnly(input.localEvents, input.remoteEvents),
+    remoteRunIds: remoteOnlyRuns.map((run) => run.id),
+  }
+}
+
 export function nextEventSequence(events: AgentEvent[], runId: string): number {
   return (
     events

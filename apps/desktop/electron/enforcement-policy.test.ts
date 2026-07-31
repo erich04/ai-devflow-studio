@@ -3,10 +3,16 @@ import {
   createRecommendedEnforcementPreset,
   resolveEffectivePolicy,
   type GateOverrideDecision,
+  type DesktopPairingCredential,
   type LocalProject,
   type PolicySnapshot,
+  type WorkflowRun,
 } from '@ai-devflow/shared'
-import { resolveLocalGateOverrideSettlement, loadPolicySnapshotForProject } from './enforcement-policy'
+import {
+  resolveLocalGateOverrideSettlement,
+  loadPolicySnapshotForProject,
+  selectRemoteGateOverridesForLocalStore,
+} from './enforcement-policy'
 
 const localProject: LocalProject = {
   id: 'local-abc123',
@@ -130,5 +136,88 @@ describe('resolveLocalGateOverrideSettlement', () => {
       status: 'rejected',
       reason: 'Policy version is stale; re-evaluate before overriding',
     })
+  })
+})
+
+describe('selectRemoteGateOverridesForLocalStore', () => {
+  const pairing: DesktopPairingCredential = {
+    tokenId: 'desktop-token-1',
+    organizationId: 'org-demo',
+    projectId: 'p-payments',
+    localProjectId: localProject.id,
+    userId: 'u-review-lead',
+    role: 'lead',
+    authAccountId: 'acct-review-lead',
+    projectMemberships: [
+      { projectId: 'p-payments', userId: 'u-review-lead', role: 'lead' },
+    ],
+    createdAt: '2026-06-18T00:00:00.000Z',
+  }
+  const run: WorkflowRun = {
+    id: 'run-1',
+    title: 'Remote override sync',
+    request: 'Sync an accepted Team override.',
+    projectId: localProject.id,
+    creatorId: 'u-author',
+    status: 'paused_at_gate',
+    currentNodeId: 'n-gate',
+    branchName: 'ai/remote-override',
+    createdAt: '2026-06-18T00:00:00.000Z',
+    updatedAt: '2026-06-18T00:01:00.000Z',
+    nodes: [{
+      id: 'n-gate',
+      stage: 'design',
+      title: 'Design Gate',
+      subtitle: 'Review the design.',
+      kind: 'gate',
+      status: 'blocked',
+      ownerId: 'u-author',
+      requiredRole: 'lead',
+      retryCount: 0,
+      artifactIds: [],
+    }],
+    edges: [],
+  }
+  const remoteOverride: GateOverrideDecision = {
+    ...localOverride,
+    id: 'gate-override-team',
+    nodeId: 'run-1:n-gate',
+    projectId: 'p-payments',
+    userId: 'u-review-lead',
+    provisional: false,
+    status: 'accepted',
+  }
+
+  it('maps an accepted Team override back to the paired local Run and node IDs', () => {
+    expect(selectRemoteGateOverridesForLocalStore({
+      remoteOverrides: [remoteOverride],
+      existingOverrides: [],
+      localRuns: [run],
+      pairing,
+    })).toEqual([{
+      ...remoteOverride,
+      nodeId: 'n-gate',
+      projectId: localProject.id,
+    }])
+  })
+
+  it('skips unpaired, provisional, unknown-node, and equivalent local overrides', () => {
+    const equivalent = {
+      ...remoteOverride,
+      id: 'gate-override-local-copy',
+      nodeId: 'n-gate',
+      projectId: localProject.id,
+    }
+    expect(selectRemoteGateOverridesForLocalStore({
+      remoteOverrides: [
+        remoteOverride,
+        { ...remoteOverride, id: 'provisional', status: 'provisional', provisional: true },
+        { ...remoteOverride, id: 'unknown-node', nodeId: 'run-1:n-other' },
+        { ...remoteOverride, id: 'wrong-project', projectId: 'p-admin' },
+      ],
+      existingOverrides: [equivalent],
+      localRuns: [run],
+      pairing,
+    })).toEqual([])
   })
 })

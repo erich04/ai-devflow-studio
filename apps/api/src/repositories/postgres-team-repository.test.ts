@@ -4,9 +4,77 @@ import { createPostgresTeamRepository } from './postgres-team-repository'
 
 class FakeTeamDbClient implements TeamDbClient {
   readonly queries: Array<{ sql: string; params?: unknown[] }> = []
+  readonly acceptedChildSummaryWrites = new Map<string, unknown[]>()
+  private readonly childSummaryScopes = new Map<string, string>()
+
+  constructor(
+    private readonly canonicalRunExists = true,
+    private readonly runSummaryAccepted = true,
+    private readonly desktopUserRole: 'owner' | 'lead' | 'member' = 'lead',
+  ) {}
+
+  private acceptScopedChildSummaryWrite(
+    table: string,
+    id: unknown,
+    scope: string,
+    params: unknown[],
+  ): boolean {
+    const key = `${table}:${String(id)}`
+    const existingScope = this.childSummaryScopes.get(key)
+    if (existingScope && existingScope !== scope) {
+      return false
+    }
+
+    this.childSummaryScopes.set(key, scope)
+    this.acceptedChildSummaryWrites.set(key, [...params])
+    return true
+  }
 
   async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
     this.queries.push(params === undefined ? { sql } : { sql, params })
+
+    if (sql.includes('INSERT INTO test_evidence_summaries')) {
+      const values = params ?? []
+      const accepted = this.acceptScopedChildSummaryWrite(
+        'test_evidence_summaries',
+        values[0],
+        `${String(values[11])}:${String(values[1])}:${String(values[2])}:${String(values[3])}`,
+        values,
+      )
+      return (accepted ? [{ id: values[0] }] : []) as T[]
+    }
+
+    if (sql.includes('INSERT INTO agent_reviews')) {
+      const values = params ?? []
+      const accepted = this.acceptScopedChildSummaryWrite(
+        'agent_reviews',
+        values[0],
+        `${String(values[1])}:${String(values[3])}:${String(values[4])}:${String(values[5])}`,
+        values,
+      )
+      return (accepted ? [{ id: values[0] }] : []) as T[]
+    }
+
+    if (sql.includes('INSERT INTO coding_agent_summaries')) {
+      const values = params ?? []
+      const accepted = this.acceptScopedChildSummaryWrite(
+        'coding_agent_summaries',
+        values[0],
+        `${String(values[1])}:${String(values[2])}:${String(values[3])}:${String(values[4])}`,
+        values,
+      )
+      return (accepted ? [{ id: values[0] }] : []) as T[]
+    }
+
+    if (sql.includes('INSERT INTO workflow_runs')) {
+      return (this.runSummaryAccepted ? [{ id: params?.[0] }] : []) as T[]
+    }
+
+    if (sql.includes('SELECT id') && sql.includes('FROM workflow_runs')) {
+      return (this.canonicalRunExists
+        ? [{ id: 'run-remote-1', current_node_id: `${String(params?.[0])}:n-current` }]
+        : []) as T[]
+    }
 
     if (sql.includes('FROM projects')) {
       return [
@@ -50,6 +118,15 @@ class FakeTeamDbClient implements TeamDbClient {
     }
 
     if (sql.includes('FROM project_members')) {
+      if (params?.length === 2) {
+        return [
+          {
+            project_id: params[1],
+            user_id: 'u-ling',
+            role: this.desktopUserRole,
+          },
+        ] as T[]
+      }
       return [
         { project_id: 'p-payments', user_id: 'u-ling', role: 'lead' },
         { project_id: 'p-admin', user_id: 'u-ling', role: 'member' },
@@ -65,7 +142,7 @@ class FakeTeamDbClient implements TeamDbClient {
           user_id: 'u-ling',
           token_hash: 'cd577fe2561ebff23505db0bb006300c7cdecbd46bc0e03c449afafaca2c25bf',
           revoked_at: null,
-          role: 'lead',
+          role: this.desktopUserRole,
           auth_account_id: 'acct-github-ling',
         },
       ] as T[]
@@ -255,6 +332,133 @@ class FakeTeamDbClient implements TeamDbClient {
   }
 }
 
+class NamespacedMixedOriginDbClient extends FakeTeamDbClient {
+  override async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    if (sql.includes('FROM workflow_runs') && !sql.includes('SELECT id')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [
+        {
+          id: 'run-health-001',
+          title: 'Seeded health endpoint',
+          request: 'Ship the seeded health endpoint.',
+          project_id: 'p-payments',
+          creator_id: 'u-ling',
+          status: 'paused_at_gate',
+          current_node_id: 'run-health-001:n-clarify-gate',
+          branch_name: 'ai/seeded-health-endpoint',
+          pull_request_url: null,
+          data_origin: 'seed',
+          created_at: '2026-06-16T09:00:00.000Z',
+          updated_at: '2026-06-16T09:15:00.000Z',
+        },
+        {
+          id: 'run-remote-1',
+          title: 'Remote health endpoint',
+          request: 'Add team-visible health endpoint evidence.',
+          project_id: 'p-payments',
+          creator_id: 'u-ling',
+          status: 'paused_at_gate',
+          current_node_id: 'run-remote-1:n-design-gate',
+          branch_name: 'ai/health-endpoint',
+          pull_request_url: null,
+          data_origin: 'remote',
+          created_at: '2026-06-16T10:00:00.000Z',
+          updated_at: '2026-06-16T10:15:00.000Z',
+        },
+      ] as T[]
+    }
+
+    if (sql.includes('FROM workflow_nodes')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [
+        {
+          id: 'run-health-001:n-clarify-gate',
+          run_id: 'run-health-001',
+          stage: 'clarify',
+          title: 'Clarify Gate',
+          subtitle: 'Lead approval before design',
+          kind: 'gate',
+          status: 'blocked',
+          owner_id: 'u-ling',
+          required_role: 'lead',
+          retry_count: 0,
+          token_usage_id: null,
+          position: 0,
+        },
+        {
+          id: 'run-remote-1:n-design-gate',
+          run_id: 'run-remote-1',
+          stage: 'design',
+          title: 'Architecture Gate',
+          subtitle: 'Lead approval before implementation',
+          kind: 'gate',
+          status: 'blocked',
+          owner_id: 'u-ling',
+          required_role: 'lead',
+          retry_count: 0,
+          token_usage_id: null,
+          position: 0,
+        },
+      ] as T[]
+    }
+
+    if (sql.includes('FROM workflow_edges')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [
+        {
+          id: 'run-health-001:edge-clarify-design',
+          run_id: 'run-health-001',
+          source_node_id: 'run-health-001:n-clarify-gate',
+          target_node_id: 'run-health-001:n-design',
+          kind: 'gate',
+        },
+        {
+          id: 'run-remote-1:edge-design-build',
+          run_id: 'run-remote-1',
+          source_node_id: 'run-remote-1:n-design-gate',
+          target_node_id: 'run-remote-1:n-build',
+          kind: 'gate',
+        },
+      ] as T[]
+    }
+
+    if (sql.includes('FROM artifacts')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [
+        {
+          id: 'run-health-001:art-clarify',
+          run_id: 'run-health-001',
+          node_id: 'run-health-001:n-clarify-gate',
+          kind: 'spec',
+          title: 'Seeded clarification',
+          summary: 'Seeded clarification artifact.',
+          content: 'Seeded clarification content.',
+          redacted: false,
+          updated_at: '2026-06-16T09:14:00.000Z',
+        },
+        {
+          id: 'run-remote-1:art-design',
+          run_id: 'run-remote-1',
+          node_id: 'run-remote-1:n-design-gate',
+          kind: 'design',
+          title: 'Remote design summary',
+          summary: 'Remote design artifact summary.',
+          content: 'Redacted remote artifact content.',
+          redacted: true,
+          updated_at: '2026-06-16T10:14:00.000Z',
+        },
+      ] as T[]
+    }
+
+    if (sql.includes('FROM agent_events')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [] as T[]
+    }
+
+    return super.query<T>(sql, params)
+  }
+}
+
 class EmptyBootstrapDbClient implements TeamDbClient {
   readonly queries: Array<{ sql: string; params?: unknown[] }> = []
 
@@ -327,6 +531,41 @@ describe('Postgres team repository', () => {
     })
     expect(bundle.artifacts[0]).toMatchObject({ id: 'art-design', redacted: true })
     expect(bundle.events[0]).toMatchObject({ id: 'ev-approval', kind: 'approval' })
+  })
+
+  it('preserves globally namespaced workflow IDs across seeded and remote Postgres runs', async () => {
+    const repository = createPostgresTeamRepository(new NamespacedMixedOriginDbClient())
+
+    const bundle = await repository.getRunsBundle()
+
+    expect(bundle.runs).toEqual([
+      expect.objectContaining({
+        id: 'run-health-001',
+        currentNodeId: 'run-health-001:n-clarify-gate',
+        nodes: [expect.objectContaining({ id: 'run-health-001:n-clarify-gate' })],
+        edges: [
+          expect.objectContaining({
+            source: 'run-health-001:n-clarify-gate',
+            target: 'run-health-001:n-design',
+          }),
+        ],
+      }),
+      expect.objectContaining({
+        id: 'run-remote-1',
+        currentNodeId: 'run-remote-1:n-design-gate',
+        nodes: [expect.objectContaining({ id: 'run-remote-1:n-design-gate' })],
+        edges: [
+          expect.objectContaining({
+            source: 'run-remote-1:n-design-gate',
+            target: 'run-remote-1:n-build',
+          }),
+        ],
+      }),
+    ])
+    expect(bundle.artifacts.map((artifact) => artifact.nodeId)).toEqual([
+      'run-health-001:n-clarify-gate',
+      'run-remote-1:n-design-gate',
+    ])
   })
 
   it('builds team overview and cost rollups from Postgres rows', async () => {
@@ -591,7 +830,8 @@ describe('Postgres team repository', () => {
   })
 
   it('resolves desktop bearer tokens as authenticated project-scoped sessions', async () => {
-    const repository = createPostgresTeamRepository(new FakeTeamDbClient())
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
 
     await expect(repository.resolveDesktopTokenSession('desktop-token-p-payments.demo-secret')).resolves.toEqual({
       source: 'authenticated',
@@ -601,7 +841,25 @@ describe('Postgres team repository', () => {
       authAccountId: 'acct-github-ling',
       projectMemberships: [
         { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
-        { projectId: 'p-admin', userId: 'u-ling', role: 'member' },
+      ],
+    })
+
+    const membershipQuery = db.queries.find((query) =>
+      query.sql.includes('FROM project_members'),
+    )
+    expect(membershipQuery?.sql).toContain('project_id = $2')
+    expect(membershipQuery?.params).toEqual(['u-ling', 'p-payments'])
+  })
+
+  it('downgrades organization owners to project-lead authority for desktop bearer tokens', async () => {
+    const repository = createPostgresTeamRepository(new FakeTeamDbClient(true, true, 'owner'))
+
+    await expect(
+      repository.resolveDesktopTokenSession('desktop-token-p-payments.demo-secret'),
+    ).resolves.toMatchObject({
+      role: 'lead',
+      projectMemberships: [
+        { projectId: 'p-payments', userId: 'u-ling', role: 'owner' },
       ],
     })
   })
@@ -619,6 +877,7 @@ describe('Postgres team repository', () => {
           title: 'Synced approval',
           status: 'building',
           currentNodeId: 'n-build',
+          currentNode: { id: 'n-build', stage: 'build', kind: 'task', status: 'running' },
           branchName: 'ai/synced-approval',
           updatedAt: '2026-06-16T12:00:00.000Z',
         },
@@ -629,9 +888,17 @@ describe('Postgres team repository', () => {
       message: 'run summary written to Postgres repository',
     })
 
-    const write = db.queries.at(-1)
+    const write = db.queries.find((query) => query.sql.includes('INSERT INTO workflow_runs'))
     expect(write?.sql).toContain('INSERT INTO workflow_runs')
     expect(write?.sql).toContain('ON CONFLICT (id) DO UPDATE')
+    const updateClause = write?.sql.split('SET')[1]?.split('WHERE')[0]
+    expect(updateClause).not.toContain('project_id = excluded.project_id')
+    expect(write?.sql).toContain('workflow_runs.organization_id = excluded.organization_id')
+    expect(write?.sql).toContain('workflow_runs.project_id = excluded.project_id')
+    expect(write?.sql).toContain('workflow_runs.creator_id = excluded.creator_id')
+    expect(write?.sql).toContain("workflow_runs.data_origin = 'remote'")
+    expect(write?.sql).toContain('workflow_runs.updated_at <= excluded.updated_at')
+    expect(write?.sql).toContain('RETURNING id')
     expect(write?.params).toEqual([
       'run-synced',
       'org-demo',
@@ -644,6 +911,104 @@ describe('Postgres team repository', () => {
       'ai/synced-approval',
       '2026-06-16T12:00:00.000Z',
     ])
+    const nodeWrite = db.queries.find((query) => query.sql.includes('INSERT INTO workflow_nodes'))
+    expect(nodeWrite?.params).toEqual([
+      'run-synced:n-build',
+      'run-synced',
+      'build',
+      'Synced build node',
+      'Canonical current node from DevFlow Electron.',
+      'task',
+      'running',
+      'u-ling',
+      null,
+      400,
+      '2026-06-16T12:00:00.000Z',
+    ])
+  })
+
+  it('converges non-current active nodes after accepting a newer canonical summary', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await repository.uploadRunSummary(
+      {
+        kind: 'run',
+        runId: 'run-synced',
+        projectId: 'p-payments',
+        title: 'Advanced canonical Run',
+        status: 'testing',
+        currentNodeId: 'n-test',
+        currentNode: { id: 'n-test', stage: 'test', kind: 'test', status: 'running' },
+        branchName: 'ai/advanced-run',
+        updatedAt: '2026-06-16T12:10:00.000Z',
+      },
+      { organizationId: 'org-demo', userId: 'u-ling' },
+    )
+
+    const convergenceWrite = db.queries.find(
+      (query) =>
+        query.sql.includes('UPDATE workflow_nodes') &&
+        query.sql.includes("status IN ('running', 'blocked')"),
+    )
+    expect(convergenceWrite?.sql).toContain("SET status = 'success'")
+    expect(convergenceWrite?.sql).toContain('id <> $2')
+    expect(convergenceWrite?.params).toEqual([
+      'run-synced',
+      'run-synced:n-test',
+      '2026-06-16T12:10:00.000Z',
+    ])
+  })
+
+  it('redacts Run title and branch name again before writing them to Postgres', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await repository.uploadRunSummary(
+      {
+        kind: 'run',
+        runId: 'run-hostile-metadata',
+        projectId: 'p-payments',
+        title: 'Build from /Users/Alice/private/repo API_TOKEN=title-secret',
+        status: 'building',
+        currentNodeId: 'n-build',
+        currentNode: { id: 'n-build', stage: 'build', kind: 'task', status: 'running' },
+        branchName: 'C:\\Users\\Alice\\private\\branch API_TOKEN=branch-secret',
+        updatedAt: '2026-06-16T12:10:00.000Z',
+      },
+      { organizationId: 'org-demo', userId: 'u-ling' },
+    )
+
+    const runWrite = db.queries.find((query) => query.sql.includes('INSERT INTO workflow_runs'))
+    expect(JSON.stringify(runWrite?.params)).not.toContain('title-secret')
+    expect(JSON.stringify(runWrite?.params)).not.toContain('branch-secret')
+    expect(JSON.stringify(runWrite?.params)).not.toContain('/Users/Alice')
+    expect(JSON.stringify(runWrite?.params)).not.toMatch(/C:[\\/]Users[\\/]Alice/)
+  })
+
+  it('rejects colliding or stale run summaries before node ownership can be rewritten', async () => {
+    const db = new FakeTeamDbClient(true, false)
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.uploadRunSummary(
+        {
+          kind: 'run',
+          runId: 'run-colliding',
+          projectId: 'p-payments',
+          title: 'Colliding summary',
+          status: 'building',
+          currentNodeId: 'n-build',
+          currentNode: { id: 'n-build', stage: 'build', kind: 'task', status: 'running' },
+          branchName: 'ai/colliding-summary',
+          updatedAt: '2026-06-16T12:00:00.000Z',
+        },
+        { organizationId: 'org-demo', userId: 'u-ling' },
+      ),
+    ).rejects.toThrow('Remote Run Summary conflicts with canonical ownership or is stale')
+
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO workflow_nodes'))).toBe(false)
+    expect(db.queries.some((query) => query.sql.includes('UPDATE workflow_nodes'))).toBe(false)
   })
 
   it('deletes workflow runs by tenant and relies on database cascade', async () => {
@@ -660,7 +1025,7 @@ describe('Postgres team repository', () => {
     expect(deleteQuery?.params).toEqual(['run-remote-1', 'org-demo'])
   })
 
-  it('writes test evidence summaries after ensuring a minimal run and test node', async () => {
+  it('writes test evidence without advancing or synthesizing the canonical workflow run', async () => {
     const db = new FakeTeamDbClient()
     const repository = createPostgresTeamRepository(db)
 
@@ -686,31 +1051,22 @@ describe('Postgres team repository', () => {
       message: 'test evidence summary written to Postgres repository',
     })
 
-    const writes = db.queries.slice(-3)
-    expect(writes[0]?.sql).toContain('INSERT INTO workflow_runs')
-    expect(writes[0]?.params).toEqual([
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO workflow_runs'))).toBe(false)
+    expect(db.queries.some((query) => query.sql.includes('FROM workflow_runs'))).toBe(true)
+    const canonicalRunQuery = db.queries.find((query) =>
+      query.sql.includes('SELECT id') && query.sql.includes('FROM workflow_runs'),
+    )
+    expect(canonicalRunQuery?.sql).toContain('creator_id = $4')
+    expect(canonicalRunQuery?.params).toEqual([
       'run-synced',
       'org-demo',
       'p-payments',
       'u-ling',
-      'Synced test evidence',
-      'Redacted test evidence summary synced from DevFlow Electron.',
-      'completed',
-      'run-synced:n-test',
-      'sync/run-synced',
-      '2026-06-16T12:05:00.000Z',
     ])
-    expect(writes[1]?.sql).toContain('INSERT INTO workflow_nodes')
-    expect(writes[1]?.params).toEqual([
-      'run-synced:n-test',
-      'run-synced',
-      'pnpm test',
-      'success',
-      'u-ling',
-      '2026-06-16T12:05:00.000Z',
-    ])
-    expect(writes[2]?.sql).toContain('INSERT INTO test_evidence_summaries')
-    expect(writes[2]?.params).toEqual([
+
+    const write = db.queries.at(-1)
+    expect(write?.sql).toContain('INSERT INTO test_evidence_summaries')
+    expect(write?.params).toEqual([
       'evidence-synced',
       'run-synced',
       'run-synced:n-test',
@@ -722,6 +1078,457 @@ describe('Postgres team repository', () => {
       'Tests passed in 1.2s.',
       true,
       '2026-06-16T12:05:00.000Z',
+      'org-demo',
+    ])
+  })
+
+  it('redacts allowed Test Evidence fields again before writing them to Postgres', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await repository.uploadTestEvidenceSummary(
+      {
+        id: 'evidence-hostile-fields',
+        runId: 'run-synced',
+        nodeId: 'n-test',
+        projectId: 'p-payments',
+        command: 'node C:\\Users\\Alice\\repo\\test.js API_TOKEN=command-secret',
+        status: 'failed',
+        exitCode: 1,
+        durationMs: 10,
+        summary: 'failed at file:///C:/Users/Alice/repo/test.js GH_TOKEN=summary-secret',
+        redacted: false,
+        createdAt: '2026-06-16T12:05:00.000Z',
+        rawOutput: '/Users/Alice/repo API_TOKEN=unknown-field-secret',
+      } as Parameters<typeof repository.uploadTestEvidenceSummary>[0],
+      { organizationId: 'org-demo', userId: 'u-ling' },
+    )
+
+    const write = db.queries.at(-1)
+    expect(write?.sql).toContain('INSERT INTO test_evidence_summaries')
+    expect(write?.params?.[9]).toBe(true)
+    expect(JSON.stringify(write?.params)).not.toMatch(/C:[\\/]Users[\\/]Alice/)
+    expect(JSON.stringify(write?.params)).not.toContain('command-secret')
+    expect(JSON.stringify(write?.params)).not.toContain('summary-secret')
+    expect(JSON.stringify(write?.params)).not.toContain('unknown-field-secret')
+  })
+
+  it('rejects evidence sync before the canonical Run Summary exists', async () => {
+    const db = new FakeTeamDbClient(false)
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.uploadTestEvidenceSummary(
+        {
+          id: 'evidence-orphaned',
+          runId: 'run-missing',
+          nodeId: 'n-test',
+          projectId: 'p-payments',
+          command: 'pnpm test',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1234,
+          summary: 'Tests passed, but no canonical Run exists.',
+          redacted: true,
+          createdAt: '2026-06-16T12:05:00.000Z',
+        },
+        { organizationId: 'org-demo', userId: 'u-ling' },
+      ),
+    ).rejects.toThrow('Canonical Run Summary is required before evidence sync')
+
+    expect(db.queries).toHaveLength(1)
+    expect(db.queries[0]?.sql).toContain('FROM workflow_runs')
+  })
+
+  it('writes agent review evidence without changing the canonical workflow position', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.uploadAgentReviewSummary(
+        {
+          id: 'review-synced',
+          runId: 'run-synced',
+          nodeId: 'n-design-gate',
+          projectId: 'p-payments',
+          runtime: 'electron',
+          providerId: 'fake-knowledge-review',
+          model: 'fake',
+          conclusion: 'Review complete.',
+          summary: 'The design is ready for its policy decision.',
+          riskCount: 0,
+          missingEvidenceCount: 0,
+          policyFindingCount: 0,
+          policyFindingCategories: [],
+          advisoryLevel: 'info',
+          blocksApproval: false,
+          confidence: 0.9,
+          redacted: true,
+          createdAt: '2026-06-16T12:06:00.000Z',
+        },
+        { organizationId: 'org-demo', userId: 'u-ling' },
+      ),
+    ).resolves.toMatchObject({
+      accepted: true,
+      message: 'agent review summary written to Postgres repository',
+    })
+
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO workflow_runs'))).toBe(false)
+    expect(db.queries.some((query) => query.sql.includes('FROM workflow_runs'))).toBe(true)
+    expect(db.queries.at(-1)?.sql).toContain('INSERT INTO agent_reviews')
+  })
+
+  it('persists synced agent policy findings for canonical enforcement evaluation', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await repository.uploadAgentReviewSummary(
+      {
+        id: 'review-policy-finding',
+        runId: 'run-synced',
+        nodeId: 'n-design-gate',
+        projectId: 'p-payments',
+        runtime: 'electron',
+        providerId: 'fake-knowledge-review',
+        model: 'fake',
+        conclusion: 'Security review completed.',
+        summary: 'A security finding needs a policy decision.',
+        riskCount: 1,
+        missingEvidenceCount: 0,
+        policyFindingCount: 1,
+        policyFindingCategories: ['security_risk'],
+        policyFindings: [
+          {
+            id: 'finding-security-policy',
+            reviewId: 'review-policy-finding',
+            runId: 'run-synced',
+            nodeId: 'n-design-gate',
+            category: 'security_risk',
+            severity: 'high',
+            summary: 'Authentication boundary is incomplete.',
+            createdAt: '2026-07-31T12:00:00.000Z',
+          },
+        ],
+        advisoryLevel: 'block',
+        blocksApproval: true,
+        confidence: 0.95,
+        redacted: true,
+        createdAt: '2026-07-31T12:00:00.000Z',
+      },
+      { organizationId: 'org-demo', userId: 'u-ling' },
+    )
+
+    const write = db.queries.at(-1)
+    const serializedFindings = write?.params?.find(
+      (value) => typeof value === 'string' && value.includes('finding-security-policy'),
+    )
+    expect(serializedFindings).toBeTypeOf('string')
+    expect(JSON.parse(serializedFindings as string)).toEqual([
+      {
+        id: 'finding-security-policy',
+        reviewId: 'review-policy-finding',
+        runId: 'run-synced',
+        nodeId: 'run-synced:n-design-gate',
+        category: 'security_risk',
+        severity: 'high',
+        summary: 'Authentication boundary is incomplete.',
+        createdAt: '2026-07-31T12:00:00.000Z',
+        evidenceIds: [],
+        knowledgeReferenceIds: [],
+      },
+    ])
+  })
+
+  it('rejects child summary ID rebinding while allowing same-scope idempotent updates', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+    const victimContext = { organizationId: 'org-demo', userId: 'u-ling' }
+    const attackerContext = { organizationId: 'org-demo', userId: 'u-attacker' }
+    const evidence = {
+      id: 'evidence-victim',
+      runId: 'run-victim',
+      nodeId: 'n-test',
+      projectId: 'p-payments',
+      command: 'pnpm test',
+      status: 'passed' as const,
+      exitCode: 0,
+      durationMs: 100,
+      summary: 'Victim tests passed.',
+      redacted: true,
+      createdAt: '2026-07-31T12:00:00.000Z',
+    }
+    const review: Parameters<typeof repository.uploadAgentReviewSummary>[0] = {
+      id: 'review-victim',
+      runId: 'run-victim',
+      nodeId: 'n-design-gate',
+      projectId: 'p-payments',
+      runtime: 'electron' as const,
+      providerId: 'fake-knowledge-review',
+      model: 'fake',
+      conclusion: 'Victim review completed.',
+      summary: 'Victim policy finding remains blocking.',
+      riskCount: 1,
+      missingEvidenceCount: 0,
+      policyFindingCount: 1,
+      policyFindingCategories: ['security_risk'],
+      policyFindings: [
+        {
+          id: 'finding-victim',
+          reviewId: 'review-victim',
+          runId: 'run-victim',
+          nodeId: 'n-design-gate',
+          category: 'security_risk' as const,
+          severity: 'high' as const,
+          summary: 'Victim authentication boundary is incomplete.',
+          createdAt: '2026-07-31T12:00:00.000Z',
+        },
+      ],
+      advisoryLevel: 'block' as const,
+      blocksApproval: true,
+      confidence: 0.95,
+      redacted: true,
+      createdAt: '2026-07-31T12:00:00.000Z',
+    }
+    const coding = {
+      id: 'coding-victim',
+      runId: 'run-victim',
+      nodeId: 'n-build',
+      projectId: 'p-payments',
+      requestedBy: 'u-ling',
+      providerId: 'fake-coding-engine',
+      engine: 'fake' as const,
+      status: 'completed' as const,
+      branchName: 'devflow/run-victim-n-build',
+      summary: 'Victim coding completed.',
+      changedPaths: ['src/victim.ts'],
+      startedAt: '2026-07-31T12:00:00.000Z',
+      completedAt: '2026-07-31T12:01:00.000Z',
+      redacted: true,
+    }
+
+    await expect(repository.uploadTestEvidenceSummary(evidence, victimContext)).resolves.toMatchObject({
+      accepted: true,
+    })
+    await expect(repository.uploadAgentReviewSummary(review, victimContext)).resolves.toMatchObject({
+      accepted: true,
+    })
+    await expect(repository.uploadCodingAgentSummary(coding, victimContext)).resolves.toMatchObject({
+      accepted: true,
+    })
+    await expect(
+      repository.uploadTestEvidenceSummary(
+        { ...evidence, summary: 'Victim tests passed again.' },
+        victimContext,
+      ),
+    ).resolves.toMatchObject({ accepted: true })
+    await expect(
+      repository.uploadAgentReviewSummary(
+        { ...review, summary: 'Victim policy finding remains after retry.' },
+        victimContext,
+      ),
+    ).resolves.toMatchObject({ accepted: true })
+    await expect(
+      repository.uploadCodingAgentSummary(
+        { ...coding, summary: 'Victim coding retry completed.' },
+        victimContext,
+      ),
+    ).resolves.toMatchObject({ accepted: true })
+
+    await expect(
+      repository.uploadTestEvidenceSummary(
+        { ...evidence, nodeId: 'n-other-test' },
+        victimContext,
+      ),
+    ).rejects.toThrow('conflicts with canonical scope')
+    await expect(
+      repository.uploadAgentReviewSummary(
+        { ...review, nodeId: 'n-other-design-gate' },
+        victimContext,
+      ),
+    ).rejects.toThrow('conflicts with canonical scope')
+    await expect(
+      repository.uploadCodingAgentSummary(
+        { ...coding, nodeId: 'n-other-build' },
+        victimContext,
+      ),
+    ).rejects.toThrow('conflicts with canonical scope')
+
+    await expect(
+      repository.uploadTestEvidenceSummary(
+        { ...evidence, runId: 'run-attacker', projectId: 'p-admin', summary: 'Rebound.' },
+        attackerContext,
+      ),
+    ).rejects.toThrow('conflicts with canonical scope')
+    await expect(
+      repository.uploadAgentReviewSummary(
+        {
+          ...review,
+          runId: 'run-attacker',
+          nodeId: 'n-attacker-gate',
+          projectId: 'p-admin',
+          conclusion: 'Attacker overwrite.',
+          summary: 'Attacker clears victim findings.',
+          policyFindingCount: 0,
+          policyFindingCategories: [],
+          policyFindings: [],
+        },
+        attackerContext,
+      ),
+    ).rejects.toThrow('conflicts with canonical scope')
+    await expect(
+      repository.uploadCodingAgentSummary(
+        {
+          ...coding,
+          runId: 'run-attacker',
+          nodeId: 'n-attacker-build',
+          projectId: 'p-admin',
+          summary: 'Attacker overwrite.',
+        },
+        attackerContext,
+      ),
+    ).rejects.toThrow('conflicts with canonical scope')
+
+    const evidenceWrite = db.queries.find((query) =>
+      query.sql.includes('INSERT INTO test_evidence_summaries'),
+    )
+    const reviewWrite = db.queries.find((query) => query.sql.includes('INSERT INTO agent_reviews'))
+    const codingWrite = db.queries.find((query) =>
+      query.sql.includes('INSERT INTO coding_agent_summaries'),
+    )
+    expect(evidenceWrite?.sql).toContain(
+      'test_evidence_summaries.run_id = excluded.run_id',
+    )
+    expect(evidenceWrite?.sql).toContain(
+      'test_evidence_summaries.project_id = excluded.project_id',
+    )
+    expect(evidenceWrite?.sql).toContain('test_evidence_summaries.node_id = excluded.node_id')
+    expect(evidenceWrite?.sql).toContain('RETURNING id')
+    expect(reviewWrite?.sql).toContain('agent_reviews.organization_id = excluded.organization_id')
+    expect(reviewWrite?.sql).toContain('agent_reviews.run_id = excluded.run_id')
+    expect(reviewWrite?.sql).toContain('agent_reviews.node_id = excluded.node_id')
+    expect(reviewWrite?.sql).toContain('agent_reviews.project_id = excluded.project_id')
+    expect(reviewWrite?.sql).toContain('RETURNING id')
+    expect(codingWrite?.sql).toContain(
+      'coding_agent_summaries.organization_id = excluded.organization_id',
+    )
+    expect(codingWrite?.sql).toContain('coding_agent_summaries.run_id = excluded.run_id')
+    expect(codingWrite?.sql).toContain('coding_agent_summaries.node_id = excluded.node_id')
+    expect(codingWrite?.sql).toContain('coding_agent_summaries.project_id = excluded.project_id')
+    expect(codingWrite?.sql).toContain('RETURNING id')
+    const persistedReview = db.acceptedChildSummaryWrites.get('agent_reviews:review-victim')
+    expect(JSON.stringify(persistedReview)).toContain('finding-victim')
+    expect(JSON.stringify(persistedReview)).not.toContain('Attacker clears victim findings')
+  })
+
+  it('does not materialize stale child summaries as additional active workflow nodes', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+    const context = { organizationId: 'org-demo', userId: 'u-ling' }
+    const evidence = {
+      runId: 'run-synced',
+      projectId: 'p-payments',
+      command: 'pnpm test',
+      status: 'running' as const,
+      exitCode: null,
+      durationMs: 100,
+      summary: 'Tests are running.',
+      redacted: true,
+      createdAt: '2026-07-31T12:00:00.000Z',
+    }
+    const review = {
+      runId: 'run-synced',
+      projectId: 'p-payments',
+      runtime: 'electron' as const,
+      providerId: 'fake-knowledge-review',
+      model: 'fake',
+      conclusion: 'Review complete.',
+      summary: 'Review summary.',
+      riskCount: 0,
+      missingEvidenceCount: 0,
+      policyFindingCount: 0,
+      policyFindingCategories: [],
+      policyFindings: [],
+      advisoryLevel: 'info' as const,
+      blocksApproval: false,
+      confidence: 0.9,
+      redacted: true,
+      createdAt: '2026-07-31T12:00:00.000Z',
+    }
+
+    await repository.uploadTestEvidenceSummary(
+      { ...evidence, id: 'evidence-current', nodeId: 'n-current' },
+      context,
+    )
+    await repository.uploadTestEvidenceSummary(
+      { ...evidence, id: 'evidence-stale-running', nodeId: 'n-old-test' },
+      context,
+    )
+    await repository.uploadTestEvidenceSummary(
+      {
+        ...evidence,
+        id: 'evidence-stale-failed',
+        nodeId: 'n-old-failed-test',
+        status: 'failed',
+        exitCode: 1,
+      },
+      context,
+    )
+    await repository.uploadAgentReviewSummary(
+      { ...review, id: 'review-current', nodeId: 'n-current' },
+      context,
+    )
+    await repository.uploadAgentReviewSummary(
+      { ...review, id: 'review-stale-blocked', nodeId: 'n-old-design-gate' },
+      context,
+    )
+
+    const nodeWrites = db.queries.filter((query) => query.sql.includes('INSERT INTO workflow_nodes'))
+    const statusFor = (nodeId: string) =>
+      nodeWrites.find((write) => write.params?.[0] === nodeId)?.params?.[3]
+    expect(statusFor('run-synced:n-current')).toBe('running')
+    expect(statusFor('run-synced:n-old-test')).toBe('success')
+    expect(statusFor('run-synced:n-old-failed-test')).toBe('failed')
+    expect(
+      nodeWrites.filter((write) => write.params?.[0] === 'run-synced:n-current').at(-1)?.params?.[3],
+    ).toBe('blocked')
+    expect(statusFor('run-synced:n-old-design-gate')).toBe('success')
+  })
+
+  it('namespaces Gate override foreign keys exactly once while preserving returned node IDs', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+    const context = { organizationId: 'org-demo', userId: 'u-ling' }
+    const localDecision = {
+      id: 'gate-override-local',
+      runId: 'run-remote-1',
+      nodeId: 'n-design-gate',
+      projectId: 'p-payments',
+      userId: 'u-ling',
+      role: 'lead' as const,
+      reason: 'Reviewed local node identity.',
+      blockedReasonIds: ['missing_agent_review:protected_gate:missing'],
+      policyVersion: 1,
+      provisional: false,
+      status: 'accepted' as const,
+      createdAt: '2026-07-31T12:00:00.000Z',
+    }
+    const namespacedDecision = {
+      ...localDecision,
+      id: 'gate-override-namespaced',
+      nodeId: 'run-remote-1:n-design-gate',
+    }
+
+    await expect(repository.saveGateOverride(localDecision, context)).resolves.toEqual(localDecision)
+    await expect(repository.saveGateOverride(namespacedDecision, context)).resolves.toEqual(
+      namespacedDecision,
+    )
+
+    const writes = db.queries.filter((query) =>
+      query.sql.includes('INSERT INTO gate_override_decisions'),
+    )
+    expect(writes.map((write) => write.params?.[3])).toEqual([
+      'run-remote-1:n-design-gate',
+      'run-remote-1:n-design-gate',
     ])
   })
 
@@ -771,6 +1578,9 @@ describe('Postgres team repository', () => {
       message: 'coding agent summary written to Postgres repository',
     })
 
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO workflow_runs'))).toBe(false)
+    expect(db.queries.some((query) => query.sql.includes('FROM workflow_runs'))).toBe(true)
+
     const write = db.queries.at(-1)
     expect(write?.sql).toContain('INSERT INTO coding_agent_summaries')
     expect(write?.params).toEqual([
@@ -797,5 +1607,69 @@ describe('Postgres team repository', () => {
       'estimated',
       true,
     ])
+  })
+
+  it('redacts Coding Summary display text again before writing it to Postgres', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await repository.uploadCodingAgentSummary(
+      {
+        id: 'coding-hostile-metadata',
+        runId: 'run-synced',
+        nodeId: 'n-build',
+        projectId: 'p-payments',
+        requestedBy: 'local-user',
+        providerId: 'fake-coding-engine',
+        engine: 'fake',
+        status: 'completed',
+        branchName: 'C:\\Users\\Alice\\private\\branch API_TOKEN=branch-secret',
+        summary: 'Changed /Users/Alice/private/repo API_TOKEN=summary-secret',
+        changedPaths: ['src/health.ts'],
+        startedAt: '2026-06-16T12:10:00.000Z',
+        completedAt: '2026-06-16T12:11:00.000Z',
+        costSummary: {
+          id: 'cost-hostile-metadata',
+          runId: 'run-synced',
+          nodeId: 'n-build',
+          userId: 'u-ling',
+          projectId: 'p-payments',
+          provider: 'openai',
+          providerId: 'fake-coding-engine',
+          model: 'model from /Users/Alice/private/model API_TOKEN=model-secret',
+          inputTokens: 120,
+          outputTokens: 80,
+          cacheReadTokens: 0,
+          costUsd: 0.018,
+          timestamp: '2026-06-16T12:11:00.000Z',
+          source: 'estimated',
+          redacted: true,
+          apiKey: 'nested-api-key-secret',
+        },
+        budgetDecision: {
+          status: 'allowed',
+          blocksRun: false,
+          currentSpendUsd: 1,
+          projectedCostUsd: 2,
+          reason: 'Approved from /Users/Alice/private/repo API_TOKEN=budget-secret',
+          token: 'nested-budget-token-secret',
+        },
+        redacted: true,
+      } as Parameters<typeof repository.uploadCodingAgentSummary>[0],
+      { organizationId: 'org-demo', userId: 'u-ling' },
+    )
+
+    const write = db.queries.at(-1)
+    expect(write?.params?.[15]).toBe(
+      'model from [REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
+    )
+    expect(JSON.stringify(write?.params)).not.toContain('branch-secret')
+    expect(JSON.stringify(write?.params)).not.toContain('summary-secret')
+    expect(JSON.stringify(write?.params)).not.toContain('budget-secret')
+    expect(JSON.stringify(write?.params)).not.toContain('model-secret')
+    expect(JSON.stringify(write?.params)).not.toContain('nested-api-key-secret')
+    expect(JSON.stringify(write?.params)).not.toContain('nested-budget-token-secret')
+    expect(JSON.stringify(write?.params)).not.toContain('/Users/Alice')
+    expect(JSON.stringify(write?.params)).not.toMatch(/C:[\\/]Users[\\/]Alice/)
   })
 })

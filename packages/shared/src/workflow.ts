@@ -11,6 +11,7 @@ import type {
 } from './domain'
 import type { GateEnforcementDecision } from './enforcement'
 import { nextStatusAfterApproval } from './gates'
+import { redactLocalAbsolutePaths, redactSecrets } from './redaction'
 
 export type CreateWorkflowRunFromRequestInput = {
   runId: string
@@ -522,16 +523,22 @@ export function createPrDraftArtifact(input: CreatePrDraftArtifactInput): Artifa
   const prNode = input.run.nodes.find((node) => node.stage === 'pr' && node.kind === 'pr')
   const rawRequest = input.artifacts.find((artifact) => artifact.kind === 'raw_request')
   const design = input.artifacts.find((artifact) => artifact.kind === 'design')
-  const changedPaths = unique(input.codingDiffs.flatMap((diff) => diff.changedPaths))
+  const changedPaths = unique(input.codingDiffs.flatMap((diff) => diff.changedPaths)).map(redactDeliveryText)
   const latestTest = latestByTimestamp(input.testEvidence, (evidence) => evidence.createdAt)
   const compareUrl = safeCompareUrl(input.project.repository, input.project.defaultBranch, input.run.branchName)
-  const reviewSummary = input.agentReviewSummaries?.join(' | ') || 'No Agent Review summary provided.'
+  const title = redactDeliveryText(input.run.title)
+  const request = redactDeliveryText(rawRequest?.content ?? input.run.request)
+  const designSummary = redactDeliveryText(design?.summary ?? 'No design artifact linked.')
+  const reviewSummary = redactDeliveryText(
+    input.agentReviewSummaries?.join(' | ') || 'No Agent Review summary provided.',
+  )
+  const testSummary = latestTest ? redactDeliveryText(latestTest.summary) : ''
 
   const content = [
-    `# ${input.run.title}`,
+    `# ${title}`,
     '',
-    `Request: ${rawRequest?.summary ?? input.run.request}`,
-    `Design: ${design?.summary ?? 'No design artifact linked.'}`,
+    `Request: ${request}`,
+    `Design: ${designSummary}`,
     `Compare: ${compareUrl ?? 'unavailable'}`,
     ...(compareUrl ? [] : ['Repository mapping could not be converted into a safe compare URL.']),
     '',
@@ -539,7 +546,7 @@ export function createPrDraftArtifact(input: CreatePrDraftArtifactInput): Artifa
     ...(changedPaths.length ? changedPaths.map((path) => `- ${path}`) : ['- No changed paths captured.']),
     '',
     '## Evidence',
-    `Test Evidence: ${latestTest ? `${latestTest.status} - ${latestTest.summary}` : 'missing'}`,
+    `Test Evidence: ${latestTest ? `${latestTest.status} - ${testSummary}` : 'missing'}`,
     `Policy: ${input.enforcement?.status ?? 'not_evaluated'}`,
     `Budget: ${input.budgetDecision ? `${input.budgetDecision.status} - projected $${input.budgetDecision.projectedCostUsd.toFixed(6)}` : 'not_evaluated'}`,
     `Agent Review: ${reviewSummary}`,
@@ -556,8 +563,8 @@ export function createPrDraftArtifact(input: CreatePrDraftArtifactInput): Artifa
     runId: input.run.id,
     nodeId: prNode?.id ?? input.run.currentNodeId,
     kind: 'pr',
-    title: `PR Draft: ${input.run.title}`,
-    summary: `PR draft for ${input.run.title}`,
+    title: `PR Draft: ${title}`,
+    summary: `PR draft for ${title}`,
     content,
     redacted: true,
     updatedAt: input.now,
@@ -572,18 +579,24 @@ export function createAcceptanceEvidenceBundleArtifact(input: CreateAcceptanceEv
     input.artifacts.filter((artifact) => artifact.kind === 'pr'),
     (artifact) => artifact.updatedAt,
   )
-  const changedPaths = unique(input.codingDiffs.flatMap((diff) => diff.changedPaths))
+  const changedPaths = unique(input.codingDiffs.flatMap((diff) => diff.changedPaths)).map(redactDeliveryText)
   const latestTest = latestByTimestamp(input.testEvidence, (evidence) => evidence.createdAt)
-  const reviewSummary = input.agentReviewSummaries?.join(' | ') || 'No Agent Review summary provided.'
+  const title = redactDeliveryText(input.run.title)
+  const request = redactDeliveryText(rawRequest?.content ?? input.run.request)
+  const designSummary = redactDeliveryText(design?.summary ?? 'No design artifact linked.')
+  const reviewSummary = redactDeliveryText(
+    input.agentReviewSummaries?.join(' | ') || 'No Agent Review summary provided.',
+  )
+  const testSummary = latestTest ? redactDeliveryText(latestTest.summary) : ''
 
   const content = [
-    `# Acceptance Evidence Bundle: ${input.run.title}`,
+    `# Acceptance Evidence Bundle: ${title}`,
     '',
-    `Raw Request: ${rawRequest?.content ?? input.run.request}`,
-    `Design: ${design?.summary ?? 'No design artifact linked.'}`,
+    `Raw Request: ${request}`,
+    `Design: ${designSummary}`,
     `PR Draft: ${prDraft?.id ?? 'missing'}`,
     `Changed Paths: ${changedPaths.length ? changedPaths.join(', ') : 'none'}`,
-    `Tests: ${latestTest ? `${latestTest.status} - ${latestTest.summary}` : 'missing'}`,
+    `Tests: ${latestTest ? `${latestTest.status} - ${testSummary}` : 'missing'}`,
     `Policy: ${input.enforcement?.status ?? 'not_evaluated'}`,
     `Budget: ${input.budgetDecision?.status ?? 'not_evaluated'}`,
     `Agent Review: ${reviewSummary}`,
@@ -594,15 +607,22 @@ export function createAcceptanceEvidenceBundleArtifact(input: CreateAcceptanceEv
     runId: input.run.id,
     nodeId: acceptanceNode?.id ?? input.run.currentNodeId,
     kind: 'acceptance',
-    title: `Acceptance Bundle: ${input.run.title}`,
-    summary: `Acceptance evidence bundle for ${input.run.title}`,
+    title: `Acceptance Bundle: ${title}`,
+    summary: `Acceptance evidence bundle for ${title}`,
     content,
     redacted: true,
     updatedAt: input.now,
   }
 }
 
+function redactDeliveryText(input: string): string {
+  return redactSecrets(redactLocalAbsolutePaths(input).value).value
+}
+
 function runStatusForNode(node: WorkflowNode): RunStatus {
+  if (node.kind === 'gate' || node.kind === 'pr' || node.kind === 'acceptance') {
+    return 'paused_at_gate'
+  }
   if (node.stage === 'clarify') return 'clarifying'
   if (node.stage === 'design') return 'designing'
   if (node.stage === 'build') return 'building'

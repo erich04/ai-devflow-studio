@@ -1,10 +1,16 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import initSqlJs, { type Database, type SqlJsStatic, type SqlValue } from 'sql.js'
 import {
+  createTestEvidenceArtifact,
+  createTestEvidenceEvent,
   normalizeWorkflowRunProgress,
+  redactCodingAgentEventForStorage,
+  redactSensitiveText,
+  redactTestEvidenceForStorage,
   type AgentEvent,
   type AgentReviewResult,
   type AgentTrace,
@@ -50,12 +56,41 @@ export type LocalStoreOptions = {
   dbPath: string
 }
 
+export type WorkflowMutation = {
+  expectedRun: WorkflowRun
+  run: WorkflowRun
+  artifacts?: readonly Artifact[]
+  events?: readonly AgentEvent[]
+  testEvidence?: readonly TestEvidence[]
+}
+
+export type WorkflowCreation = {
+  run: WorkflowRun
+  artifacts: readonly Artifact[]
+  events: readonly AgentEvent[]
+}
+
+export type WorkflowCreationResult =
+  | { created: true }
+  | { created: false; reason: 'run_exists' }
+
+export type WorkflowMutationCommitResult =
+  | { committed: true }
+  | { committed: false; reason: 'run_not_found' | 'stale_run' }
+
 export type LocalStore = {
   upsertProject(project: LocalProject): Promise<void>
   listProjects(): Promise<LocalProject[]>
   saveRun(run: WorkflowRun): Promise<void>
   deleteRun(runId: string): Promise<void>
+  getRun(runId: string): Promise<WorkflowRun | null>
   listRuns(): Promise<WorkflowRun[]>
+  createWorkflow(
+    creation: WorkflowCreation,
+  ): Promise<WorkflowCreationResult>
+  commitWorkflowMutation(
+    mutation: WorkflowMutation,
+  ): Promise<WorkflowMutationCommitResult>
   saveArtifact(artifact: Artifact): Promise<void>
   listArtifacts(runId?: string): Promise<Artifact[]>
   saveEvent(event: AgentEvent): Promise<void>
@@ -336,6 +371,7 @@ function migrateSchema(db: Database) {
   `)
 
   migrateWorkflowRunsIntoRelationalTables(db)
+  redactStoredEvidencePrivacy(db)
 }
 
 function readSchemaVersion(db: Database): number {
@@ -542,9 +578,227 @@ function migrateWorkflowRunsIntoRelationalTables(db: Database): void {
   }
 }
 
+function readWorkflowRuns(db: Database): WorkflowRun[] {
+  const storedRuns = selectJson<StoredWorkflowRunJson>(
+    db,
+    'select json from workflow_runs order by updated_at desc, created_at desc',
+  )
+  const nodesByRun = groupRowsByRunId(selectWorkflowNodeRows(db)).entries()
+  const edgesByRun = groupRowsByRunId(selectWorkflowEdgeRows(db)).entries()
+  const nodeMap = new Map(
+    Array.from(nodesByRun).map(([runId, rows]) => [
+      runId,
+      rows.map((row) => row.node),
+    ]),
+  )
+  const edgeMap = new Map(
+    Array.from(edgesByRun).map(([runId, rows]) => [
+      runId,
+      rows.map((row) => row.edge),
+    ]),
+  )
+
+  return storedRuns.map((storedRun) =>
+    normalizeWorkflowRunProgress({
+      ...storedRun,
+      nodes: nodeMap.get(storedRun.id) ?? storedRun.nodes ?? [],
+      edges: edgeMap.get(storedRun.id) ?? storedRun.edges ?? [],
+    }),
+  )
+}
+
+function writeWorkflowRun(db: Database, run: WorkflowRun): void {
+  writeWorkflowRunEnvelope(db, run)
+  replaceWorkflowNodes(db, run)
+  replaceWorkflowEdges(db, run)
+}
+
+function redactArtifactForStorage(artifact: Artifact): Artifact {
+  if (artifact.kind !== 'test_report') {
+    return artifact
+  }
+  const title = redactSensitiveText(artifact.title)
+  const summary = redactSensitiveText(artifact.summary)
+  const content = redactSensitiveText(artifact.content)
+  return {
+    ...artifact,
+    title: title.value,
+    summary: summary.value,
+    content: content.value,
+    redacted: true,
+  }
+}
+
+function writeArtifact(db: Database, artifact: Artifact): void {
+  const safeArtifact = redactArtifactForStorage(artifact)
+  db.run(
+    `
+    insert into artifacts (id, run_id, json, updated_at)
+    values (?, ?, ?, ?)
+    on conflict(id) do update set json = excluded.json, updated_at = excluded.updated_at
+    `,
+    [
+      safeArtifact.id,
+      safeArtifact.runId,
+      JSON.stringify(safeArtifact),
+      safeArtifact.updatedAt,
+    ],
+  )
+}
+
+function redactAgentEventForStorage(event: AgentEvent): AgentEvent {
+  return event.kind === 'test_result'
+    ? { ...event, message: redactSensitiveText(event.message).value }
+    : event
+}
+
+function writeAgentEvent(db: Database, event: AgentEvent): void {
+  const safeEvent = redactAgentEventForStorage(event)
+  db.run(
+    `
+    insert into agent_events (id, run_id, sequence, json, timestamp)
+    values (?, ?, ?, ?, ?)
+    on conflict(id) do update set json = excluded.json, sequence = excluded.sequence, timestamp = excluded.timestamp
+    `,
+    [
+      safeEvent.id,
+      safeEvent.runId,
+      safeEvent.sequence,
+      JSON.stringify(safeEvent),
+      safeEvent.timestamp,
+    ],
+  )
+}
+
+function writeCodingAgentEvent(db: Database, event: CodingAgentEvent): void {
+  const safeEvent = redactCodingAgentEventForStorage(event)
+  db.run(
+    `
+    insert into coding_agent_events (id, coding_run_id, run_id, node_id, sequence, json, timestamp)
+    values (?, ?, ?, ?, ?, ?, ?)
+    on conflict(id) do update set json = excluded.json, sequence = excluded.sequence, timestamp = excluded.timestamp
+    `,
+    [
+      safeEvent.id,
+      safeEvent.codingRunId,
+      safeEvent.runId,
+      safeEvent.nodeId,
+      safeEvent.sequence,
+      JSON.stringify(safeEvent),
+      safeEvent.timestamp,
+    ],
+  )
+}
+
+function writeTestEvidence(db: Database, evidence: TestEvidence): void {
+  const safeEvidence = redactTestEvidenceForStorage(evidence)
+  db.run(
+    `
+    insert into test_evidence (id, run_id, node_id, project_id, json, created_at)
+    values (?, ?, ?, ?, ?, ?)
+    on conflict(id) do update set json = excluded.json, created_at = excluded.created_at
+    `,
+    [
+      safeEvidence.id,
+      safeEvidence.runId,
+      safeEvidence.nodeId,
+      safeEvidence.projectId,
+      JSON.stringify(safeEvidence),
+      safeEvidence.createdAt,
+    ],
+  )
+}
+
+function redactStoredEvidencePrivacy(db: Database): void {
+  const stored = selectJson<TestEvidence>(
+    db,
+    'select json from test_evidence order by created_at asc',
+  )
+  const artifacts = selectJson<Artifact>(db, 'select json from artifacts')
+  for (const artifact of artifacts) {
+    const safeArtifact = redactArtifactForStorage(artifact)
+    if (JSON.stringify(safeArtifact) !== JSON.stringify(artifact)) {
+      writeArtifact(db, safeArtifact)
+    }
+  }
+  const artifactsById = new Map(artifacts.map((artifact) => [artifact.id, artifact]))
+  const eventsById = new Map(
+    selectJson<AgentEvent>(db, 'select json from agent_events').map((event) => [event.id, event]),
+  )
+  const codingEvents = selectJson<CodingAgentEvent>(
+    db,
+    'select json from coding_agent_events order by timestamp asc, sequence asc',
+  )
+  for (const event of codingEvents) {
+    const safeEvent = redactCodingAgentEventForStorage(event)
+    if (JSON.stringify(safeEvent) !== JSON.stringify(event)) {
+      writeCodingAgentEvent(db, safeEvent)
+    }
+  }
+  for (const event of eventsById.values()) {
+    const safeEvent = redactAgentEventForStorage(event)
+    if (JSON.stringify(safeEvent) !== JSON.stringify(event)) {
+      writeAgentEvent(db, safeEvent)
+    }
+  }
+  for (const evidence of stored) {
+    const safeEvidence = redactTestEvidenceForStorage(evidence)
+    const artifact = artifactsById.get(`artifact-${evidence.id}`)
+    if (
+      artifact?.kind === 'test_report' &&
+      artifact.runId === evidence.runId &&
+      artifact.nodeId === evidence.nodeId
+    ) {
+      const safeArtifact = createTestEvidenceArtifact(safeEvidence)
+      if (JSON.stringify(safeArtifact) !== JSON.stringify(artifact)) {
+        writeArtifact(db, safeArtifact)
+      }
+    }
+    const event = eventsById.get(`event-${evidence.id}`)
+    if (
+      event?.kind === 'test_result' &&
+      event.runId === evidence.runId &&
+      event.nodeId === evidence.nodeId
+    ) {
+      const safeEvent = createTestEvidenceEvent(safeEvidence, event.sequence)
+      if (JSON.stringify(safeEvent) !== JSON.stringify(event)) {
+        writeAgentEvent(db, safeEvent)
+      }
+    }
+    if (JSON.stringify(safeEvidence) !== JSON.stringify(evidence)) {
+      writeTestEvidence(db, safeEvidence)
+    }
+  }
+}
+
+function assertWorkflowMutationScope(mutation: WorkflowMutation): void {
+  if (mutation.expectedRun.id !== mutation.run.id) {
+    throw new Error('Workflow mutation run does not match its expected run')
+  }
+  const runId = mutation.run.id
+  if (
+    mutation.artifacts?.some((artifact) => artifact.runId !== runId) ||
+    mutation.events?.some((event) => event.runId !== runId) ||
+    mutation.testEvidence?.some((evidence) => evidence.runId !== runId)
+  ) {
+    throw new Error('Workflow mutation candidates must belong to the mutated run')
+  }
+}
+
+function assertWorkflowCreationScope(creation: WorkflowCreation): void {
+  const runId = creation.run.id
+  if (
+    creation.artifacts.some((artifact) => artifact.runId !== runId) ||
+    creation.events.some((event) => event.runId !== runId)
+  ) {
+    throw new Error('Workflow creation candidates must belong to the created run')
+  }
+}
+
 class SqlJsLocalStore implements LocalStore {
   constructor(
-    private readonly db: Database,
+    private readonly sql: SqlJsStatic,
+    private db: Database,
     private readonly dbPath: string,
   ) {}
 
@@ -571,10 +825,7 @@ class SqlJsLocalStore implements LocalStore {
     const normalizedRun = normalizeWorkflowRunProgress(run)
     this.db.run('begin transaction')
     try {
-      writeWorkflowRunEnvelope(this.db, normalizedRun)
-      this.db.run('delete from workflow_edges where run_id = ?', [normalizedRun.id])
-      replaceWorkflowNodes(this.db, normalizedRun)
-      replaceWorkflowEdges(this.db, normalizedRun)
+      writeWorkflowRun(this.db, normalizedRun)
       this.db.run('commit')
     } catch (error) {
       this.db.run('rollback')
@@ -630,34 +881,101 @@ class SqlJsLocalStore implements LocalStore {
     await this.persist()
   }
 
-  async listRuns(): Promise<WorkflowRun[]> {
-    const storedRuns = selectJson<StoredWorkflowRunJson>(
-      this.db,
-      'select json from workflow_runs order by updated_at desc, created_at desc',
-    )
-    const nodesByRun = groupRowsByRunId(selectWorkflowNodeRows(this.db)).entries()
-    const edgesByRun = groupRowsByRunId(selectWorkflowEdgeRows(this.db)).entries()
-    const nodeMap = new Map(Array.from(nodesByRun).map(([runId, rows]) => [runId, rows.map((row) => row.node)]))
-    const edgeMap = new Map(Array.from(edgesByRun).map(([runId, rows]) => [runId, rows.map((row) => row.edge)]))
+  async getRun(runId: string): Promise<WorkflowRun | null> {
+    return readWorkflowRuns(this.db).find((run) => run.id === runId) ?? null
+  }
 
-    return storedRuns.map((storedRun) =>
-      normalizeWorkflowRunProgress({
-        ...storedRun,
-        nodes: nodeMap.get(storedRun.id) ?? storedRun.nodes ?? [],
-        edges: edgeMap.get(storedRun.id) ?? storedRun.edges ?? [],
-      }),
+  async listRuns(): Promise<WorkflowRun[]> {
+    return readWorkflowRuns(this.db)
+  }
+
+  async createWorkflow(
+    creation: WorkflowCreation,
+  ): Promise<WorkflowCreationResult> {
+    assertWorkflowCreationScope(creation)
+    if (readWorkflowRuns(this.db).some((run) => run.id === creation.run.id)) {
+      return { created: false, reason: 'run_exists' }
+    }
+
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      writeWorkflowRun(this.db, normalizeWorkflowRunProgress(creation.run))
+      for (const artifact of creation.artifacts) {
+        writeArtifact(this.db, artifact)
+      }
+      for (const event of creation.events) {
+        writeAgentEvent(this.db, event)
+      }
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return { created: true }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      throw error
+    }
+  }
+
+  async commitWorkflowMutation(
+    mutation: WorkflowMutation,
+  ): Promise<WorkflowMutationCommitResult> {
+    assertWorkflowMutationScope(mutation)
+    const expectedRun = normalizeWorkflowRunProgress(mutation.expectedRun)
+    const currentRun = readWorkflowRuns(this.db).find(
+      (candidate) => candidate.id === expectedRun.id,
     )
+    if (!currentRun) {
+      return { committed: false, reason: 'run_not_found' }
+    }
+    if (JSON.stringify(currentRun) !== JSON.stringify(expectedRun)) {
+      return { committed: false, reason: 'stale_run' }
+    }
+
+    const snapshot = this.db.export()
+    const nextRun = normalizeWorkflowRunProgress(mutation.run)
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      writeWorkflowRun(this.db, nextRun)
+      for (const artifact of mutation.artifacts ?? []) {
+        writeArtifact(this.db, artifact)
+      }
+      for (const event of mutation.events ?? []) {
+        writeAgentEvent(this.db, event)
+      }
+      for (const evidence of mutation.testEvidence ?? []) {
+        writeTestEvidence(this.db, evidence)
+      }
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return { committed: true }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The snapshot below is authoritative even if SQLite already closed the transaction.
+        }
+      }
+      this.restore(snapshot)
+      throw error
+    }
   }
 
   async saveArtifact(artifact: Artifact): Promise<void> {
-    this.db.run(
-      `
-      insert into artifacts (id, run_id, json, updated_at)
-      values (?, ?, ?, ?)
-      on conflict(id) do update set json = excluded.json, updated_at = excluded.updated_at
-      `,
-      [artifact.id, artifact.runId, JSON.stringify(artifact), artifact.updatedAt],
-    )
+    writeArtifact(this.db, artifact)
     await this.persist()
   }
 
@@ -674,14 +992,7 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveEvent(event: AgentEvent): Promise<void> {
-    this.db.run(
-      `
-      insert into agent_events (id, run_id, sequence, json, timestamp)
-      values (?, ?, ?, ?, ?)
-      on conflict(id) do update set json = excluded.json, sequence = excluded.sequence, timestamp = excluded.timestamp
-      `,
-      [event.id, event.runId, event.sequence, JSON.stringify(event), event.timestamp],
-    )
+    writeAgentEvent(this.db, event)
     await this.persist()
   }
 
@@ -701,21 +1012,7 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveTestEvidence(evidence: TestEvidence): Promise<void> {
-    this.db.run(
-      `
-      insert into test_evidence (id, run_id, node_id, project_id, json, created_at)
-      values (?, ?, ?, ?, ?, ?)
-      on conflict(id) do update set json = excluded.json, created_at = excluded.created_at
-      `,
-      [
-        evidence.id,
-        evidence.runId,
-        evidence.nodeId,
-        evidence.projectId,
-        JSON.stringify(evidence),
-        evidence.createdAt,
-      ],
-    )
+    writeTestEvidence(this.db, evidence)
     await this.persist()
   }
 
@@ -847,22 +1144,7 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveCodingAgentEvent(event: CodingAgentEvent): Promise<void> {
-    this.db.run(
-      `
-      insert into coding_agent_events (id, coding_run_id, run_id, node_id, sequence, json, timestamp)
-      values (?, ?, ?, ?, ?, ?, ?)
-      on conflict(id) do update set json = excluded.json, sequence = excluded.sequence, timestamp = excluded.timestamp
-      `,
-      [
-        event.id,
-        event.codingRunId,
-        event.runId,
-        event.nodeId,
-        event.sequence,
-        JSON.stringify(event),
-        event.timestamp,
-      ],
-    )
+    writeCodingAgentEvent(this.db, event)
     await this.persist()
   }
 
@@ -1331,6 +1613,11 @@ class SqlJsLocalStore implements LocalStore {
     this.db.close()
   }
 
+  private restore(snapshot: Uint8Array): void {
+    this.db.close()
+    this.db = new this.sql.Database(snapshot)
+  }
+
   private async persist(): Promise<void> {
     await persistDatabase(this.db, this.dbPath)
   }
@@ -1347,7 +1634,7 @@ export async function createLocalStore(options: LocalStoreOptions): Promise<Loca
     migrateSchema(db)
     await persistDatabase(db, options.dbPath)
 
-    return new SqlJsLocalStore(db, options.dbPath)
+    return new SqlJsLocalStore(SQL, db, options.dbPath)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(
@@ -1358,5 +1645,11 @@ export async function createLocalStore(options: LocalStoreOptions): Promise<Loca
 
 async function persistDatabase(db: Database, dbPath: string): Promise<void> {
   await mkdir(path.dirname(dbPath), { recursive: true })
-  await writeFile(dbPath, Buffer.from(db.export()))
+  const temporaryPath = `${dbPath}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporaryPath, Buffer.from(db.export()))
+    await rename(temporaryPath, dbPath)
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => undefined)
+  }
 }

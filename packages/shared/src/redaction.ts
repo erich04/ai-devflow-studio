@@ -1,3 +1,5 @@
+import type { CodingAgentEvent } from './domain'
+
 export type RedactionResult = {
   value: string
   redacted: boolean
@@ -5,6 +7,20 @@ export type RedactionResult = {
 }
 
 const secretPatterns: Array<{ label: string; pattern: RegExp }> = [
+  {
+    label: 'authorization_secret',
+    pattern: /\bAuthorization\s*:\s*(?:Bearer|Basic)\s+[^\s,;]+/gi,
+  },
+  {
+    label: 'json_secret',
+    pattern:
+      /\\?["'](?:api[_-]?key|token|secret|password|private[_-]?key|cookie|authorization)\\?["']\s*:\s*\\?["'][^"'\r\n]*\\?["']/gi,
+  },
+  {
+    label: 'cli_secret',
+    pattern:
+      /--(?:api[-_]?key|token|secret|password|private[-_]?key)(?:\s+|=)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s]+)/gi,
+  },
   {
     label: 'env_secret_assignment',
     pattern: /\b[A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|COOKIE)=([^\s]+)/gi,
@@ -18,6 +34,39 @@ const secretPatterns: Array<{ label: string; pattern: RegExp }> = [
   { label: 'github_token', pattern: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g },
   { label: 'jwt', pattern: /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g },
 ]
+
+const localAbsolutePathPatterns: RegExp[] = [
+  /\x1b\[[0-?]*[ -/]*[@-~]\/[^\s/<>"')\]},;!?]+(?:\/[^\s/<>"')\]},;!?]+)*/g,
+  /\\\/[^\\\s<>"')\]},;!?]+(?:\\\/[^\\\s<>"')\]},;!?]+)*/g,
+  /\bfile:\/{2,3}(?:[A-Za-z]:[\\/])?[^/\\\s<>"')\]}][^\s<>"')\]}]*/gi,
+  /\\\\[^\\\s<>"')\]},;!?]+\\[^\\\s<>"')\]},;!?]+(?:\\[^\\\s<>"')\]},;!?]+)*/g,
+  /\b[A-Za-z]:[\\/][^\s<>"')\]}]+/g,
+]
+
+const forwardSlashUncOrWebUrlPattern =
+  /(?<!:)\/\/[^/\s<>"')\]},;!?]+\/[^/\s<>"')\]},;!?]+(?:\/[^/\s<>"')\]},;!?]+)*/g
+
+const posixAbsolutePathPattern =
+  /(^|[\s("'=\[:,])(\/[^\s/<>"')\]},;!?]+(?:\/[^\s/<>"')\]},;!?]+)*)/g
+
+function isSafeApiRoute(value: string, context: string): boolean {
+  const routeCandidate = value.replace(/[.,;:!?]+$/, '')
+  if (!/^\/(?:api|health|metrics|v\d+)(?:\/|$)/.test(routeCandidate)) {
+    return false
+  }
+
+  const hasFileLikeSuffix = /\/[^/]+\.[A-Za-z0-9]{1,12}$/.test(routeCandidate)
+  const hasExplicitWebContext =
+    /(?:\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)|\b(?:route|endpoint|url|request))\s*(?:[:=]\s*)?$/i.test(
+      context,
+    )
+  return !hasFileLikeSuffix || hasExplicitWebContext
+}
+
+function isProtocolRelativeWebUrl(value: string): boolean {
+  const host = value.slice(2).split('/', 1)[0] ?? ''
+  return host.includes('.')
+}
 
 export function redactSecrets(input: string): RedactionResult {
   let value = input
@@ -34,5 +83,141 @@ export function redactSecrets(input: string): RedactionResult {
     value,
     redacted: matches.length > 0,
     matches: Array.from(new Set(matches)),
+  }
+}
+
+export function redactLocalAbsolutePaths(input: string): RedactionResult {
+  let value = input
+  const matches: string[] = []
+
+  for (const pattern of localAbsolutePathPatterns) {
+    value = value.replace(pattern, () => {
+      matches.push('local_absolute_path')
+      return '[REDACTED:local_absolute_path]'
+    })
+  }
+
+  value = value.replace(forwardSlashUncOrWebUrlPattern, (match) => {
+    if (isProtocolRelativeWebUrl(match)) {
+      return match
+    }
+    matches.push('local_absolute_path')
+    return '[REDACTED:local_absolute_path]'
+  })
+
+  value = value.replace(posixAbsolutePathPattern, (
+    match,
+    prefix: string,
+    pathValue: string,
+    offset: number,
+    source: string,
+  ) => {
+    const pathOffset = offset + prefix.length
+    const context = source.slice(Math.max(0, pathOffset - 48), pathOffset)
+    if (isSafeApiRoute(pathValue, context)) {
+      return match
+    }
+    matches.push('local_absolute_path')
+    return `${prefix}[REDACTED:local_absolute_path]`
+  })
+
+  return {
+    value,
+    redacted: matches.length > 0,
+    matches: Array.from(new Set(matches)),
+  }
+}
+
+export function redactSensitiveText(input: string): RedactionResult {
+  const pathResult = redactLocalAbsolutePaths(input)
+  const secretResult = redactSecrets(pathResult.value)
+  return {
+    value: secretResult.value,
+    redacted: pathResult.redacted || secretResult.redacted,
+    matches: Array.from(new Set([...pathResult.matches, ...secretResult.matches])),
+  }
+}
+
+type RecursiveRedactionResult = {
+  value: unknown
+  redacted: boolean
+}
+
+function structuredSecretLabel(key: string): string | null {
+  const normalized = key.trim().toLowerCase().replace(/[-_]/g, '')
+  if (normalized === 'authorization' || normalized === 'proxyauthorization') {
+    return 'authorization_secret'
+  }
+  if (
+    normalized === 'apikey' ||
+    normalized === 'token' ||
+    normalized === 'accesstoken' ||
+    normalized === 'refreshtoken' ||
+    normalized === 'idtoken' ||
+    normalized === 'authtoken' ||
+    normalized === 'bearertoken' ||
+    normalized === 'secret' ||
+    normalized === 'clientsecret' ||
+    normalized === 'password' ||
+    normalized === 'passphrase' ||
+    normalized === 'privatekey' ||
+    normalized === 'cookie' ||
+    normalized === 'setcookie'
+  ) {
+    return 'json_secret'
+  }
+  return null
+}
+
+function redactSensitiveValue(value: unknown): RecursiveRedactionResult {
+  if (typeof value === 'string') {
+    return redactSensitiveText(value)
+  }
+  if (Array.isArray(value)) {
+    let redacted = false
+    const items = value.map((item) => {
+      const result = redactSensitiveValue(item)
+      redacted ||= result.redacted
+      return result.value
+    })
+    return { value: items, redacted }
+  }
+  if (typeof value !== 'object' || value === null) {
+    return { value, redacted: false }
+  }
+
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) {
+    return { value, redacted: false }
+  }
+
+  let redacted = false
+  const record: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value)) {
+    const safeKey = redactSensitiveText(key)
+    const secretLabel = structuredSecretLabel(key)
+    if (secretLabel) {
+      redacted = true
+      record[safeKey.value] = `[REDACTED:${secretLabel}]`
+      continue
+    }
+    const safeItem = redactSensitiveValue(item)
+    redacted ||= safeKey.redacted || safeItem.redacted
+    record[safeKey.value] = safeItem.value
+  }
+  return { value: record, redacted }
+}
+
+export function redactCodingAgentEventForStorage(event: CodingAgentEvent): CodingAgentEvent {
+  const message = redactSensitiveText(event.message)
+  const metadata = event.metadata
+    ? redactSensitiveValue(event.metadata)
+    : { value: undefined, redacted: false }
+
+  return {
+    ...event,
+    message: message.value,
+    ...(metadata.value ? { metadata: metadata.value as Record<string, unknown> } : {}),
+    redacted: event.redacted || message.redacted || metadata.redacted,
   }
 }

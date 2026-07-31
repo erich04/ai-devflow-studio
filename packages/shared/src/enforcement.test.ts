@@ -219,6 +219,148 @@ describe('evaluateGateEnforcement', () => {
     expect(decision.blockingReasons[0]?.target).toBe('missing_agent_review')
   })
 
+  it('accepts an override when its blocker ID set exactly matches in a different order', () => {
+    const effectivePolicy = resolveEffectivePolicy(
+      createRecommendedEnforcementPreset({ organizationId: 'org-demo' }),
+      null,
+    )
+    const blockedDecision = evaluateGateEnforcement({
+      run,
+      node: gate,
+      effectivePolicy,
+      governanceChecks: [apiViolation],
+      agentPolicyFindings: [],
+      latestAgentReview: null,
+      overrides: [],
+      policySource: 'remote_cache',
+    })
+    const override: GateOverrideDecision = {
+      id: 'override-exact-blocker-set',
+      runId: run.id,
+      nodeId: gate.id,
+      projectId: run.projectId,
+      userId: 'u-review-lead',
+      role: 'lead',
+      reason: 'Reviewed the complete blocker set.',
+      blockedReasonIds: blockedDecision.blockingReasons.map((reason) => reason.id).reverse(),
+      policyVersion: blockedDecision.policyVersion,
+      provisional: false,
+      status: 'accepted',
+      createdAt: '2026-06-17T12:00:00.000Z',
+    }
+
+    const overriddenDecision = evaluateGateEnforcement({
+      run,
+      node: gate,
+      effectivePolicy,
+      governanceChecks: [apiViolation],
+      agentPolicyFindings: [],
+      latestAgentReview: null,
+      overrides: [override],
+      policySource: 'remote_cache',
+    })
+
+    expect(overriddenDecision.status).toBe('overridden')
+    expect(overriddenDecision.blocksApproval).toBe(false)
+  })
+
+  it('re-blocks when an accepted override no longer matches the current blocker', () => {
+    const effectivePolicy = resolveEffectivePolicy(
+      createRecommendedEnforcementPreset({ organizationId: 'org-demo' }),
+      null,
+    )
+    const originalDecision = evaluateGateEnforcement({
+      run,
+      node: gate,
+      effectivePolicy,
+      governanceChecks: [],
+      agentPolicyFindings: [],
+      latestAgentReview: null,
+      overrides: [],
+      policySource: 'remote_cache',
+    })
+    const override: GateOverrideDecision = {
+      id: 'override-original-blocker',
+      runId: run.id,
+      nodeId: gate.id,
+      projectId: run.projectId,
+      userId: 'u-review-lead',
+      role: 'lead',
+      reason: 'Reviewed the original missing-review blocker.',
+      blockedReasonIds: originalDecision.blockingReasons.map((reason) => reason.id),
+      policyVersion: originalDecision.policyVersion,
+      provisional: false,
+      status: 'accepted',
+      createdAt: '2026-06-17T12:00:00.000Z',
+    }
+
+    const replacedDecision = evaluateGateEnforcement({
+      run,
+      node: gate,
+      effectivePolicy,
+      governanceChecks: [apiViolation],
+      agentPolicyFindings: [],
+      latestAgentReview: { id: 'review-replacing-blocker', createdAt: '2026-06-17T12:01:00.000Z' },
+      overrides: [override],
+      policySource: 'remote_cache',
+    })
+
+    expect(replacedDecision.status).toBe('blocked')
+    expect(replacedDecision.blocksApproval).toBe(true)
+    expect(replacedDecision.blockingReasons.map((reason) => reason.id)).toEqual([
+      'governance_check:api_contract:violated:check-api-violation',
+    ])
+  })
+
+  it('re-blocks when a new blocker is added after an override was accepted', () => {
+    const effectivePolicy = resolveEffectivePolicy(
+      createRecommendedEnforcementPreset({ organizationId: 'org-demo' }),
+      null,
+    )
+    const originalDecision = evaluateGateEnforcement({
+      run,
+      node: gate,
+      effectivePolicy,
+      governanceChecks: [],
+      agentPolicyFindings: [],
+      latestAgentReview: null,
+      overrides: [],
+      policySource: 'remote_cache',
+    })
+    const override: GateOverrideDecision = {
+      id: 'override-before-new-blocker',
+      runId: run.id,
+      nodeId: gate.id,
+      projectId: run.projectId,
+      userId: 'u-review-lead',
+      role: 'lead',
+      reason: 'Reviewed the blockers that existed at this time.',
+      blockedReasonIds: originalDecision.blockingReasons.map((reason) => reason.id),
+      policyVersion: originalDecision.policyVersion,
+      provisional: false,
+      status: 'accepted',
+      createdAt: '2026-06-17T12:00:00.000Z',
+    }
+
+    const expandedDecision = evaluateGateEnforcement({
+      run,
+      node: gate,
+      effectivePolicy,
+      governanceChecks: [apiViolation],
+      agentPolicyFindings: [],
+      latestAgentReview: null,
+      overrides: [override],
+      policySource: 'remote_cache',
+    })
+
+    expect(expandedDecision.status).toBe('blocked')
+    expect(expandedDecision.blocksApproval).toBe(true)
+    expect(expandedDecision.blockingReasons.map((reason) => reason.id)).toEqual([
+      'missing_agent_review:protected_gate:missing',
+      'governance_check:api_contract:violated:check-api-violation',
+    ])
+  })
+
   it('never hard-blocks agent findings even when explicitly configured to block', () => {
     const orgPolicy = createWarnOnlyDefaultPolicy({ organizationId: 'org-demo' })
     const projectOverride: ProjectEnforcementPolicyOverride = {
@@ -319,6 +461,129 @@ describe('canApproveGateNow', () => {
       enforcement,
       override,
     }).allowed).toBe(true)
+  })
+
+  it('authorizes an evaluated accepted override only for its eligible lead actor', () => {
+    const effectivePolicy = resolveEffectivePolicy(
+      createRecommendedEnforcementPreset({ organizationId: 'org-demo' }),
+      null,
+    )
+    const blockedEnforcement = evaluateGateEnforcement({
+      run,
+      node: gate,
+      effectivePolicy,
+      governanceChecks: [],
+      agentPolicyFindings: [],
+      latestAgentReview: null,
+      overrides: [],
+      policySource: 'remote_cache',
+    })
+    const override: GateOverrideDecision = {
+      id: 'override-owned-by-another-lead',
+      runId: run.id,
+      nodeId: gate.id,
+      projectId: run.projectId,
+      userId: 'u-review-lead',
+      role: 'lead',
+      reason: 'Reviewed risk and approved temporary exception.',
+      blockedReasonIds: blockedEnforcement.blockingReasons.map((reason) => reason.id),
+      policyVersion: blockedEnforcement.policyVersion,
+      provisional: false,
+      status: 'accepted',
+      createdAt: '2026-06-17T12:00:00.000Z',
+    }
+    function canApproveWith(
+      candidate: GateOverrideDecision,
+      userRole: GateOverrideDecision['role'],
+      userId: string,
+    ) {
+      const overrides = [candidate]
+      const overriddenEnforcement = evaluateGateEnforcement({
+        run,
+        node: gate,
+        effectivePolicy,
+        governanceChecks: [],
+        agentPolicyFindings: [],
+        latestAgentReview: null,
+        overrides,
+        policySource: 'remote_cache',
+      })
+
+      expect(overriddenEnforcement.status).toBe('overridden')
+      expect(overriddenEnforcement.blocksApproval).toBe(false)
+      return canApproveGateNow({
+        userRole,
+        userId,
+        run,
+        node: gate,
+        enforcement: overriddenEnforcement,
+        override: candidate,
+      }).allowed
+    }
+
+    expect(canApproveWith(override, 'lead', 'u-other-review-lead')).toBe(false)
+    expect(canApproveWith(override, 'lead', override.userId)).toBe(true)
+    expect(canApproveWith(
+      { ...override, userId: run.creatorId },
+      'lead',
+      run.creatorId,
+    )).toBe(false)
+    expect(canApproveWith(
+      { ...override, userId: gate.ownerId },
+      'lead',
+      gate.ownerId,
+    )).toBe(false)
+    expect(canApproveWith(
+      { ...override, role: 'owner' },
+      'owner',
+      override.userId,
+    )).toBe(false)
+  })
+
+  it('rejects an override bound to a different run, node, status, policy, or blocker set', () => {
+    const enforcement = evaluateGateEnforcement({
+      run,
+      node: gate,
+      effectivePolicy: resolveEffectivePolicy(createRecommendedEnforcementPreset({ organizationId: 'org-demo' }), null),
+      governanceChecks: [],
+      agentPolicyFindings: [],
+      latestAgentReview: null,
+      overrides: [],
+      policySource: 'remote_cache',
+    })
+    const override: GateOverrideDecision = {
+      id: 'override-stale-blockers',
+      runId: run.id,
+      nodeId: gate.id,
+      projectId: run.projectId,
+      userId: 'u-review-lead',
+      role: 'lead',
+      reason: 'Reviewed a previous set of risks.',
+      blockedReasonIds: enforcement.blockingReasons.map((reason) => reason.id),
+      policyVersion: enforcement.policyVersion,
+      provisional: false,
+      status: 'accepted',
+      createdAt: '2026-06-17T12:00:00.000Z',
+    }
+
+    const mismatchedOverrides: GateOverrideDecision[] = [
+      { ...override, runId: 'run-other' },
+      { ...override, nodeId: 'node-other' },
+      { ...override, status: 'provisional' },
+      { ...override, policyVersion: enforcement.policyVersion + 1 },
+      { ...override, blockedReasonIds: ['stale-blocker'] },
+    ]
+
+    for (const mismatchedOverride of mismatchedOverrides) {
+      expect(canApproveGateNow({
+        userRole: 'lead',
+        userId: 'u-review-lead',
+        run,
+        node: gate,
+        enforcement,
+        override: mismatchedOverride,
+      }).allowed).toBe(false)
+    }
   })
 
   it('rejects owner role and conflicted lead overrides', () => {

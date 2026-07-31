@@ -12,14 +12,29 @@ import {
 } from './session'
 
 describe('API session boundary', () => {
-  it('parses a demo request session from explicit headers', () => {
+  it('ignores unsigned identity headers unless development auth is explicitly enabled', () => {
     const session = resolveRequestSession({
       'x-devflow-session-source': 'demo',
       'x-devflow-organization-id': 'org-demo',
       'x-devflow-user-id': 'u-ling',
       'x-devflow-user-role': 'lead',
-      'x-devflow-project-roles': 'p-payments:lead,p-admin:member',
+      'x-devflow-project-roles': 'p-payments:lead',
     })
+
+    expect(session).toBeNull()
+  })
+
+  it('parses a demo request session from explicit headers', () => {
+    const session = resolveRequestSession(
+      {
+        'x-devflow-session-source': 'demo',
+        'x-devflow-organization-id': 'org-demo',
+        'x-devflow-user-id': 'u-ling',
+        'x-devflow-user-role': 'lead',
+        'x-devflow-project-roles': 'p-payments:lead,p-admin:member',
+      },
+      { devAuthEnabled: true },
+    )
 
     expect(session).toEqual({
       source: 'demo',
@@ -31,6 +46,22 @@ describe('API session boundary', () => {
         { projectId: 'p-admin', userId: 'u-ling', role: 'member' },
       ],
     })
+  })
+
+  it('rejects unsigned development identity headers from browser origins', () => {
+    const session = resolveRequestSession(
+      {
+        origin: 'http://renderer.example',
+        'x-devflow-session-source': 'demo',
+        'x-devflow-organization-id': 'org-demo',
+        'x-devflow-user-id': 'u-ling',
+        'x-devflow-user-role': 'lead',
+        'x-devflow-project-roles': 'p-payments:lead',
+      },
+      { devAuthEnabled: true },
+    )
+
+    expect(session).toBeNull()
   })
 
   it('returns null when auth headers are missing and demo fallback is disabled', () => {
@@ -63,13 +94,16 @@ describe('API session boundary', () => {
   })
 
   it('limits non-owner access to explicit project memberships', () => {
-    const session = resolveRequestSession({
-      'x-devflow-session-source': 'demo',
-      'x-devflow-organization-id': 'org-demo',
-      'x-devflow-user-id': 'u-yu',
-      'x-devflow-user-role': 'member',
-      'x-devflow-project-roles': 'p-payments:member',
-    })
+    const session = resolveRequestSession(
+      {
+        'x-devflow-session-source': 'demo',
+        'x-devflow-organization-id': 'org-demo',
+        'x-devflow-user-id': 'u-yu',
+        'x-devflow-user-role': 'member',
+        'x-devflow-project-roles': 'p-payments:member',
+      },
+      { devAuthEnabled: true },
+    )
 
     expect(canAccessProject(session!, 'p-payments')).toBe(true)
     expect(canAccessProject(session!, 'p-admin')).toBe(false)
@@ -100,14 +134,17 @@ describe('API session boundary', () => {
   })
 
   it('parses authenticated request sessions only when an auth account id is present', () => {
-    const session = resolveRequestSession({
-      'x-devflow-session-source': 'authenticated',
-      'x-devflow-organization-id': 'org-demo',
-      'x-devflow-user-id': 'u-github-1',
-      'x-devflow-user-role': 'lead',
-      'x-devflow-auth-account-id': 'acct-github-1',
-      'x-devflow-project-roles': 'p-payments:lead',
-    })
+    const session = resolveRequestSession(
+      {
+        'x-devflow-session-source': 'authenticated',
+        'x-devflow-organization-id': 'org-demo',
+        'x-devflow-user-id': 'u-github-1',
+        'x-devflow-user-role': 'lead',
+        'x-devflow-auth-account-id': 'acct-github-1',
+        'x-devflow-project-roles': 'p-payments:lead',
+      },
+      { devAuthEnabled: true },
+    )
 
     expect(session).toEqual({
       source: 'authenticated',
@@ -121,13 +158,18 @@ describe('API session boundary', () => {
   })
 
   it('rejects authenticated request sessions that omit the auth account id', () => {
-    expect(resolveRequestSession({
-      'x-devflow-session-source': 'authenticated',
-      'x-devflow-organization-id': 'org-demo',
-      'x-devflow-user-id': 'u-github-1',
-      'x-devflow-user-role': 'lead',
-      'x-devflow-project-roles': 'p-payments:lead',
-    })).toBeNull()
+    expect(
+      resolveRequestSession(
+        {
+          'x-devflow-session-source': 'authenticated',
+          'x-devflow-organization-id': 'org-demo',
+          'x-devflow-user-id': 'u-github-1',
+          'x-devflow-user-role': 'lead',
+          'x-devflow-project-roles': 'p-payments:lead',
+        },
+        { devAuthEnabled: true },
+      ),
+    ).toBeNull()
   })
 
   it('reads bearer tokens for paired Desktop clients without accepting other schemes', () => {

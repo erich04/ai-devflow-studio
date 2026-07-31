@@ -1,12 +1,18 @@
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { fileURLToPath } from 'node:url'
+import { resolveE2eRuntime } from './e2e-runtime.mjs'
 
 const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const rootDir = fileURLToPath(new URL('..', import.meta.url))
-const desktopUrl = 'http://127.0.0.1:5173'
-const apiUrl = 'http://127.0.0.1:4310'
-const webUrl = 'http://127.0.0.1:4311'
+const {
+  apiPort,
+  webPort,
+  desktopPort,
+  apiUrl,
+  webUrl,
+  desktopUrl,
+} = await resolveE2eRuntime()
 
 function spawnService(name, args, env = {}) {
   const child = spawn(corepack, args, {
@@ -71,15 +77,6 @@ async function waitForServer(url) {
   throw new Error(`Timed out waiting for ${url}`)
 }
 
-async function probeServer(url) {
-  try {
-    const response = await fetch(url)
-    return response.ok
-  } catch {
-    return false
-  }
-}
-
 async function canBindPort(port) {
   return new Promise((resolve) => {
     const server = createServer()
@@ -95,14 +92,9 @@ async function canBindPort(port) {
 }
 
 async function ensureService({ name, url, port, args, env = {} }) {
-  if (await probeServer(url)) {
-    console.log(`[${name}] Reusing existing service at ${url}`)
-    return null
-  }
-
   if (!(await canBindPort(port))) {
     throw new Error(
-      `[${name}] Port ${port} is occupied but ${url} is not healthy. Stop that process or free the port before running test:e2e.`,
+      `[${name}] Isolated E2E port ${port} became occupied before startup.`,
     )
   }
 
@@ -128,16 +120,18 @@ try {
   api = await ensureService({
     name: 'api',
     url: `${apiUrl}/health`,
-    port: 4310,
+    port: apiPort,
     args: ['pnpm', '--filter', '@ai-devflow/api', 'dev'],
     env: {
       DEVFLOW_ENABLE_DEMO_DATA: 'true',
+      DEV_AUTH_ENABLED: 'true',
+      PORT: String(apiPort),
     },
   })
   desktop = await ensureService({
     name: 'desktop',
     url: desktopUrl,
-    port: 5173,
+    port: desktopPort,
     args: [
       'pnpm',
       '--filter',
@@ -147,7 +141,7 @@ try {
       '--host',
       '127.0.0.1',
       '--port',
-      '5173',
+      String(desktopPort),
       '--strictPort',
     ],
     env: {
@@ -157,8 +151,19 @@ try {
   web = await ensureService({
     name: 'web',
     url: webUrl,
-    port: 4311,
-    args: ['pnpm', '--filter', '@ai-devflow/web', 'dev'],
+    port: webPort,
+    args: [
+      'pnpm',
+      '--filter',
+      '@ai-devflow/web',
+      'exec',
+      'next',
+      'dev',
+      '-H',
+      '127.0.0.1',
+      '-p',
+      String(webPort),
+    ],
     env: {
       DEVFLOW_ENABLE_DEMO_DATA: 'true',
       DEVFLOW_API_BASE_URL: apiUrl,
@@ -171,6 +176,9 @@ try {
     PLAYWRIGHT_SKIP_WEBSERVER: '1',
     DEVFLOW_API_BASE_URL: apiUrl,
     NEXT_PUBLIC_DEVFLOW_API_URL: apiUrl,
+    DEVFLOW_E2E_API_URL: apiUrl,
+    DEVFLOW_E2E_WEB_URL: webUrl,
+    DEVFLOW_E2E_DESKTOP_URL: desktopUrl,
   })
 } finally {
   stop(desktop)

@@ -6,6 +6,18 @@ import { describe, expect, it } from 'vitest'
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const sourceRoots = ['apps', 'packages', 'scripts', 'tests']
 const sourceExtensions = new Set(['.ts', '.tsx', '.mjs'])
+const ignoredDirectoryNames = new Set([
+  '.next',
+  '.tmp',
+  'coverage',
+  'dist',
+  'dist-electron',
+  'node_modules',
+  'out',
+  'outputs',
+  'playwright-report',
+  'test-results',
+])
 const allowedProductionFixtureImports = new Set([
   'apps/api/src/db/cleanup-demo.ts',
   'apps/api/src/db/seed-demo.ts',
@@ -20,6 +32,9 @@ function walkFiles(dir: string): string[] {
     const absolute = path.join(dir, entry)
     const stat = statSync(absolute)
     if (stat.isDirectory()) {
+      if (ignoredDirectoryNames.has(entry)) {
+        continue
+      }
       files.push(...walkFiles(absolute))
       continue
     }
@@ -36,11 +51,26 @@ function isTestFile(relativePath: string): boolean {
   return /\.test\.[cm]?[tj]sx?$/.test(relativePath)
 }
 
+function normalizeRepositoryPath(relativePath: string): string {
+  return relativePath.replace(/\\/g, '/')
+}
+
+function isAllowedProductionFixtureImport(relativePath: string): boolean {
+  return allowedProductionFixtureImports.has(normalizeRepositoryPath(relativePath))
+}
+
 describe('demo fixture boundary', () => {
-  it('does not expose fixtures from the shared public barrel', () => {
+  it('recognizes an allowed production fixture import when the repository path uses Windows separators', () => {
+    expect(isAllowedProductionFixtureImport('apps\\api\\src\\db\\seed-demo.ts')).toBe(true)
+  })
+
+  it('does not expose fixtures or scan dependency and build-output trees', () => {
     const indexSource = readFileSync(path.join(rootDir, 'packages/shared/src/index.ts'), 'utf8')
 
     expect(indexSource).not.toContain("export * from './fixtures'")
+    for (const directory of ['node_modules', '.next', 'dist', 'dist-electron']) {
+      expect(ignoredDirectoryNames.has(directory)).toBe(true)
+    }
   })
 
   it('keeps production fixture imports limited to explicit demo data entrypoints', () => {
@@ -48,7 +78,7 @@ describe('demo fixture boundary', () => {
 
     for (const sourceRoot of sourceRoots) {
       for (const file of walkFiles(path.join(rootDir, sourceRoot))) {
-        const relativePath = path.relative(rootDir, file)
+        const relativePath = normalizeRepositoryPath(path.relative(rootDir, file))
         const source = readFileSync(file, 'utf8')
         const importsFixtures =
           source.includes('@ai-devflow/shared/fixtures') ||
@@ -59,7 +89,7 @@ describe('demo fixture boundary', () => {
           continue
         }
 
-        if (!allowedProductionFixtureImports.has(relativePath)) {
+        if (!isAllowedProductionFixtureImport(relativePath)) {
           offenders.push(relativePath)
         }
       }

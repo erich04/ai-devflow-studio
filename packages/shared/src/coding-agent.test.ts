@@ -17,6 +17,7 @@ import {
   buildCodingBrief,
   canRunCodingAgentOnNode,
   createRemoteCodingAgentSummary,
+  redactRemoteCodingAgentSummaryForSync,
   sanitizeCodingDiffArtifact,
   selectDependencyBootstrap,
 } from './coding-agent'
@@ -368,6 +369,134 @@ describe('createRemoteCodingAgentSummary', () => {
     expect(serialized).not.toContain('stdout')
     expect(serialized).not.toContain('stderr')
     expect(serialized).not.toContain('sk-live')
+  })
+
+  it('redacts local paths and secrets from outbound branch and summary strings', () => {
+    const codingRun: CodingAgentRun = {
+      id: 'coding-run-hostile-metadata',
+      runId: run.id,
+      nodeId: buildNode.id,
+      projectId: project.id,
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      engine: 'fake',
+      status: 'completed',
+      managedWorkspaceId: 'workspace-hostile',
+      branchName: 'C:\\Users\\Alice\\private\\branch API_TOKEN=branch-secret',
+      userInstruction: 'Do it safely.',
+      prompt: 'raw prompt stays local',
+      summary: 'Changed /Users/Alice/private/repo API_TOKEN=summary-secret',
+      changedPaths: ['src/export.ts'],
+      startedAt: '2026-06-17T00:05:00.000Z',
+      completedAt: '2026-06-17T00:07:00.000Z',
+      budgetDecision: {
+        status: 'allowed',
+        blocksRun: false,
+        currentSpendUsd: 1,
+        projectedCostUsd: 2,
+        reason: 'Approved from /Users/Alice/private/repo API_TOKEN=budget-secret',
+      },
+      tokenUsageId: 'tokens-hostile',
+      diffArtifactId: 'diff-hostile',
+      testEvidenceId: 'evidence-hostile',
+      redacted: true,
+    }
+
+    const summary = createRemoteCodingAgentSummary(codingRun)
+
+    expect(summary.branchName).toBe(
+      '[REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
+    )
+    expect(summary.summary).toBe(
+      'Changed [REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
+    )
+    expect(summary.budgetDecision?.reason).toBe(
+      'Approved from [REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
+    )
+    expect(JSON.stringify(summary)).not.toContain('branch-secret')
+    expect(JSON.stringify(summary)).not.toContain('summary-secret')
+    expect(JSON.stringify(summary)).not.toContain('budget-secret')
+    expect(JSON.stringify(summary)).not.toContain('/Users/Alice')
+    expect(JSON.stringify(summary)).not.toMatch(/C:[\\/]Users[\\/]Alice/)
+  })
+
+  it('projects nested cost and budget metadata and redacts the cost model', () => {
+    const summary = redactRemoteCodingAgentSummaryForSync({
+      id: 'coding-run-hostile-nested-metadata',
+      runId: run.id,
+      nodeId: buildNode.id,
+      projectId: project.id,
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      engine: 'fake',
+      status: 'completed',
+      branchName: 'devflow/run-1-node-build',
+      summary: 'Implemented audit export.',
+      changedPaths: ['src/export.ts'],
+      startedAt: '2026-06-17T00:05:00.000Z',
+      costSummary: {
+        id: 'cost-hostile',
+        runId: run.id,
+        nodeId: buildNode.id,
+        userId: 'user-1',
+        projectId: project.id,
+        provider: 'openai',
+        providerId: 'fake-coding-engine',
+        model: 'model from /Users/Alice/private API_TOKEN=model-secret',
+        inputTokens: 12,
+        outputTokens: 3,
+        cacheReadTokens: 1,
+        costUsd: 0.02,
+        timestamp: '2026-06-17T00:07:00.000Z',
+        source: 'estimated',
+        redacted: true,
+        apiKey: 'nested-api-key-secret',
+      },
+      budgetDecision: {
+        status: 'approved_over_budget',
+        blocksRun: false,
+        currentSpendUsd: 1,
+        projectedCostUsd: 2,
+        limitUsd: 1.5,
+        approvalRequiredRole: 'lead',
+        approvalId: 'approval-1',
+        reason: 'Approved from C:\\Users\\Alice\\private API_TOKEN=budget-secret',
+        token: 'nested-budget-token-secret',
+      },
+      redacted: true,
+    } as Parameters<typeof redactRemoteCodingAgentSummaryForSync>[0])
+
+    expect(summary.costSummary).toEqual({
+      id: 'cost-hostile',
+      runId: run.id,
+      nodeId: buildNode.id,
+      userId: 'user-1',
+      projectId: project.id,
+      provider: 'openai',
+      providerId: 'fake-coding-engine',
+      model: 'model from [REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
+      inputTokens: 12,
+      outputTokens: 3,
+      cacheReadTokens: 1,
+      costUsd: 0.02,
+      timestamp: '2026-06-17T00:07:00.000Z',
+      source: 'estimated',
+      redacted: true,
+    })
+    expect(summary.budgetDecision).toEqual({
+      status: 'approved_over_budget',
+      blocksRun: false,
+      currentSpendUsd: 1,
+      projectedCostUsd: 2,
+      limitUsd: 1.5,
+      approvalRequiredRole: 'lead',
+      approvalId: 'approval-1',
+      reason: 'Approved from [REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
+    })
+    expect(JSON.stringify(summary)).not.toContain('nested-api-key-secret')
+    expect(JSON.stringify(summary)).not.toContain('nested-budget-token-secret')
+    expect(JSON.stringify(summary)).not.toContain('model-secret')
+    expect(JSON.stringify(summary)).not.toContain('budget-secret')
   })
 })
 

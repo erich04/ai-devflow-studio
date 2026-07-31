@@ -1,17 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { readBearerToken, resolveRequestSession } from './auth/session'
 import { createGitHubOAuthClient } from './auth/github-oauth'
-import {
-  parseCookieHeader,
-  resolveSessionCookie,
-  SESSION_COOKIE_NAME,
-} from './auth/session-cookie'
 import { resolveServerListenConfig } from './server-config'
 import { createTeamRepositoryRuntime } from './repositories/repository-runtime'
-import { resolveTeamRoute } from './routes/team-routes'
+import { createCorsPreflightHeaders, resolveApiRouteRequest } from './server-request'
 
 const { host, port } = resolveServerListenConfig()
 const sessionSecret = process.env['DEVFLOW_SESSION_SECRET'] ?? 'devflow-dev-session-secret'
+const devAuthEnabled = process.env['DEV_AUTH_ENABLED'] === 'true'
 const repositoryRuntime = await createTeamRepositoryRuntime()
 const repository = repositoryRuntime.repository
 const githubOAuth = createGitHubOAuthClient.fromEnv()
@@ -54,12 +49,7 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`)
 
   if (request.method === 'OPTIONS') {
-    response.writeHead(204, {
-      'access-control-allow-origin': '*',
-      'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
-      'access-control-allow-headers':
-        'authorization,content-type,cookie,x-devflow-session-source,x-devflow-organization-id,x-devflow-user-id,x-devflow-user-role,x-devflow-auth-account-id,x-devflow-project-roles',
-    })
+    response.writeHead(204, createCorsPreflightHeaders())
     response.end()
     return
   }
@@ -86,26 +76,23 @@ const server = createServer(async (request, response) => {
     }
   }
 
-  const cookies = parseCookieHeader(request.headers.cookie)
-  const bearerToken = readBearerToken(request.headers)
-  const session =
-    (bearerToken
-      ? await repository.resolveDesktopTokenSession(bearerToken)
-      : resolveSessionCookie(cookies[SESSION_COOKIE_NAME], sessionSecret) ??
-        resolveRequestSession(request.headers))
   let route
   try {
-    const routeOptions = {
-      auth: { sessionSecret },
-      body: requestBody,
-      cookies,
-      session,
-      searchParams: url.searchParams,
-      ...(githubOAuth ? { githubOAuth } : {}),
-    }
-    route = await resolveTeamRoute(request.method ?? 'GET', url.pathname, repository, {
-      ...routeOptions,
-    })
+    route = await resolveApiRouteRequest(
+      {
+        method: request.method ?? 'GET',
+        pathname: url.pathname,
+        headers: request.headers,
+        body: requestBody,
+        searchParams: url.searchParams,
+      },
+      {
+        repository,
+        sessionSecret,
+        devAuthEnabled,
+        ...(githubOAuth ? { githubOAuth } : {}),
+      },
+    )
   } catch (error) {
     sendJson(response, 500, {
       error: 'internal_error',

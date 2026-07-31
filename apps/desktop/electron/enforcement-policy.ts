@@ -2,8 +2,10 @@ import {
   createWarnOnlyDefaultPolicy,
   resolveEffectivePolicy,
   type GateOverrideDecision,
+  type DesktopPairingCredential,
   type LocalProject,
   type PolicySnapshot,
+  type WorkflowRun,
 } from '@ai-devflow/shared'
 
 type PolicySnapshotStore = {
@@ -96,4 +98,68 @@ export function resolveLocalGateOverrideSettlement(
     provisional: true,
     status: 'provisional',
   }
+}
+
+function hasSameBlockerSet(left: readonly string[], right: readonly string[]): boolean {
+  const leftSet = new Set(left)
+  const rightSet = new Set(right)
+  return leftSet.size === rightSet.size && [...leftSet].every((id) => rightSet.has(id))
+}
+
+export function selectRemoteGateOverridesForLocalStore(input: {
+  remoteOverrides: GateOverrideDecision[]
+  existingOverrides: GateOverrideDecision[]
+  localRuns: WorkflowRun[]
+  pairing: DesktopPairingCredential | null
+}): GateOverrideDecision[] {
+  if (!input.pairing?.localProjectId) {
+    return []
+  }
+
+  return input.remoteOverrides.flatMap((remoteOverride) => {
+    if (
+      remoteOverride.projectId !== input.pairing?.projectId ||
+      remoteOverride.status !== 'accepted' ||
+      remoteOverride.provisional
+    ) {
+      return []
+    }
+
+    const run = input.localRuns.find(
+      (candidate) =>
+        candidate.id === remoteOverride.runId &&
+        candidate.projectId === input.pairing?.localProjectId,
+    )
+    if (!run) {
+      return []
+    }
+
+    const remotePrefix = `${run.id}:`
+    const nodeId = remoteOverride.nodeId.startsWith(remotePrefix)
+      ? remoteOverride.nodeId.slice(remotePrefix.length)
+      : remoteOverride.nodeId
+    if (!run.nodes.some((node) => node.id === nodeId)) {
+      return []
+    }
+
+    const localOverride: GateOverrideDecision = {
+      ...remoteOverride,
+      nodeId,
+      projectId: run.projectId,
+      provisional: false,
+      status: 'accepted',
+    }
+    const alreadyStored = input.existingOverrides.some(
+      (existing) =>
+        existing.id === localOverride.id ||
+        (existing.runId === localOverride.runId &&
+          existing.nodeId === localOverride.nodeId &&
+          existing.userId === localOverride.userId &&
+          existing.status === 'accepted' &&
+          existing.policyVersion === localOverride.policyVersion &&
+          existing.reason === localOverride.reason &&
+          hasSameBlockerSet(existing.blockedReasonIds, localOverride.blockedReasonIds)),
+    )
+    return alreadyStored ? [] : [localOverride]
+  })
 }

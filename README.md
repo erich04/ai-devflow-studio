@@ -1,301 +1,169 @@
 # AI DevFlow Studio
 
-AI DevFlow Studio is a team AI development workflow platform with an Electron developer client.
+**A self-hosted AI development workflow workbench for small engineering teams.**
 
-It is designed for small engineering teams that want AI to move work from clarification to design,
-implementation, tests, and pull request, while keeping human gates, team knowledge, MCP tools, and
-token cost visible.
+DevFlow turns an AI-assisted code change into a governed delivery flow with local execution, reviewable evidence, cost visibility, and explicit human approval.
 
-Research basis: [`../../20-agent-lab/ai-devflow-workflow-research/`](../../20-agent-lab/ai-devflow-workflow-research/).
+![AI DevFlow Studio Electron workbench](docs/guides/screenshots/14-electron-current-userdata-workbench.png)
 
-## Product Shape
+_A real Electron workbench showing the six-stage workflow, local repository controls, Gate Enforcement, knowledge evidence, and agent actions._
 
-- `apps/desktop`: Electron developer client and local execution workbench.
-- `apps/web`: team and manager overview console.
-- `apps/api`: team API for runs, projects, skills, MCP definitions, and cost telemetry.
-- `apps/worker`: async rollup worker placeholder.
-- `packages/shared`: domain types, fixtures, cost aggregation, gate policy, redaction, knowledge
-  governance, and graph helpers.
+> **v1.3 status contract:** This source tree declares `1.3.0` and contains the v1.3-scoped
+> functional closeout.
+>
+> Formal release state is not hard-coded in this README. Read the records under
+> `docs/releases/v1.3.0/` and run `corepack pnpm release:status -- --mode=tagged`; the release is
+> valid only when that check confirms the evidence commit and `v1.3.0` tag.
+>
+> The [2026-07-25 walkthrough result](docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-25.md)
+> remains the failed baseline that motivated the repaired workflow, sync, binding, redaction, and
+> deterministic-provider paths.
 
-Long-term roadmap: [`docs/roadmap.md`](docs/roadmap.md).
+## Why It Exists
 
-Demo guides:
+An AI prompt can produce code, but a team still needs to know what changed, which standards were used, whether tests passed, who approved the risk, and what the runtime cost.
 
-- Full feature walkthrough:
-  [`docs/guides/devflow-studio-full-feature-walkthrough.md`](docs/guides/devflow-studio-full-feature-walkthrough.md)
+DevFlow keeps repository execution on the developer's machine. It turns requests, designs, diffs, tests, reviews, policy decisions, and costs into evidence that a team can inspect before delivery.
 
-- v1.3 current hands-on walkthrough:
-  [`docs/guides/devflow-studio-v1.3-walkthrough.md`](docs/guides/devflow-studio-v1.3-walkthrough.md)
+### Target Users
 
-- v1.2 runtime budget walkthrough:
-  [`docs/guides/devflow-studio-v1.2-walkthrough.md`](docs/guides/devflow-studio-v1.2-walkthrough.md)
+| User | Primary job |
+| --- | --- |
+| Developer | Run AI-assisted work locally, review permissions and diffs, execute tests, and preserve evidence. |
+| Tech lead or reviewer | Inspect policy, knowledge, tests, and Agent Review output before approving a Gate. |
+| Team manager or owner | See redacted delivery health, runtime cost, budget state, and project progress in the Web console. |
 
-- v1.0 hands-on user guide:
-  [`docs/guides/devflow-studio-v1.0-user-guide.md`](docs/guides/devflow-studio-v1.0-user-guide.md)
-- v0.8 historical user guide and workflow validation:
-  [`docs/guides/devflow-studio-v0.8-user-guide.md`](docs/guides/devflow-studio-v0.8-user-guide.md)
-- v0.9 real runtime / observability demo script:
-  [`docs/guides/devflow-studio-v0.9-demo-script.md`](docs/guides/devflow-studio-v0.9-demo-script.md)
-- Self-hosted team pilot guide:
-  [`docs/guides/devflow-studio-self-hosted-pilot.md`](docs/guides/devflow-studio-self-hosted-pilot.md)
+### Product Value
 
-## Core Commands
+- **Governed execution:** human Gates and deterministic policy checks stay in the delivery path.
+- **Evidence over activity:** artifacts, traces, Test Evidence, reviews, and decisions make work auditable.
+- **Local-first safety:** code, raw output, local paths, and provider secrets stay behind the Electron boundary.
+- **Team visibility:** approved redacted summaries reach a self-hosted API, Postgres store, and Web console.
 
-```bash
-corepack pnpm install
-corepack pnpm dev:desktop
-corepack pnpm dev:electron
-corepack pnpm typecheck
-corepack pnpm test
-corepack pnpm verify
-corepack pnpm verify:demo
-corepack pnpm test:postgres-smoke
-corepack pnpm test:docker-smoke
-corepack pnpm test:agent-live
-corepack pnpm test:opencode-smoke
-corepack pnpm opencode:status
-corepack pnpm test:e2e
-corepack pnpm test:electron-smoke
-corepack pnpm release:status
+## Implemented Capabilities
+
+- A six-stage Run model covers request intake, Clarify, Design, Build, Test, PR handoff, and Acceptance.
+- Shared trusted commands enforce current-node order and required evidence across all six stages.
+- Electron selects a local Git repository, validates test commands, runs tests through controlled IPC, and persists local state in SQLite.
+- Coding Agent runs use managed worktrees, explicit permission relay, diff capture, Test Evidence, runtime trace, and cleanup state.
+- Knowledge Governance links Git-managed Markdown standards to Runs, Artifacts, Gates, and review evidence.
+- Knowledge Review produces structured findings, trace, advisory, and cost data without replacing human approval.
+- Gate Enforcement supports team policy, project overrides, remediation candidates, and human-approved retry paths.
+- Runtime budgets model projected provider cost and lead approval; fail-closed paid-runtime hardening remains open.
+- Desktop pairing explicitly binds a Local Project to its Team Project; local-first merge preserves richer local workflow state during sync.
+- Bearer-token sync, API/Postgres persistence, and the Web console provide a self-hosted team-pilot path.
+
+### Verification Evidence
+
+| Evidence path | What it checks |
+| --- | --- |
+| `corepack pnpm verify` | TypeScript checks, the unit/component suite, and the cross-platform static audit. |
+| `corepack pnpm verify:demo` | The default gate plus browser E2E and a real Electron main/preload/SQLite smoke path. |
+| `corepack pnpm test:postgres-smoke` | Migration, persistence, policy, approval, sync, and redacted team reads against Postgres. |
+| `corepack pnpm test:docker-smoke` | The containerized API/Web/Postgres stack, Desktop pairing, bearer auth, and safe overview data. |
+| Release-only opencode smoke | A paid, explicit signoff for the real local coding runtime; it is never part of default CI. |
+
+Deterministic results become release evidence only when `required-gates.json` binds them to the clean
+candidate commit `C`; the README does not substitute for those records or `release:status`.
+
+See the [testing strategy](docs/engineering/testing-strategy.md), [demo and smoke guide](docs/engineering/demo-and-smoke.md), and [release-only runtime policy](docs/plans/release-only-real-opencode-smoke.md) for exact evidence boundaries.
+
+## Architecture and Data Boundary
+
+```mermaid
+flowchart LR
+    Repo["Local Git repository"] <--> Desktop["Electron Desktop<br/>workflow + local execution"]
+    Runtime["Tests / opencode"] <--> Desktop
+    Desktop --> SQLite["Local SQLite<br/>private evidence"]
+    Desktop -- "approved redacted summaries" --> API["Team API"]
+    API --> Postgres["Postgres<br/>team state"]
+    API --> Web["Web Console<br/>lead + manager view"]
+    Core["Shared domain core<br/>workflow · policy · redaction · cost"] --> Desktop
+    Core --> API
+    Core --> Web
 ```
 
-Use `corepack pnpm dev:desktop` for browser-only UI work. It cannot open local folders or execute
-tests because the Electron preload API is not present.
+The Desktop owns local repository access, shell execution, raw runtime detail, and local evidence. Only approved redacted contracts cross into the team layer.
 
-Use `corepack pnpm dev:electron` for the real local demo. It builds the Electron main/preload bundle,
-starts the Vite renderer at `http://127.0.0.1:5173`, and launches Electron with local repository
-selection, controlled IPC, command safety checks, and SQLite persistence enabled.
+The monorepo separates `apps/desktop`, `apps/web`, `apps/api`, `apps/worker`, and `packages/shared`. The worker remains a narrow asynchronous rollup placeholder.
 
-The API defaults to a real empty system. Set `DEVFLOW_DATABASE_URL` or `DATABASE_URL` before
-`corepack pnpm dev:api`; without a database the API fails fast unless
-`DEVFLOW_ENABLE_DEMO_DATA=true` is set explicitly. Demo seed data and fake runtime providers are
-separate switches: use `DEVFLOW_ENABLE_DEMO_DATA=true` for bundled demo data, and
-`DEVFLOW_ENABLE_FAKE_RUNTIME=true` only when a deterministic fake Coding Agent or Knowledge Review
-provider is intended.
+## Five-Minute Demo
 
-For a local Postgres demo, set the database URL and run:
+### 1. Start the real Electron app with deterministic demo runtimes
 
 ```bash
-corepack pnpm --filter @ai-devflow/api db:setup
-DEVFLOW_ENABLE_DEMO_DATA=true corepack pnpm --filter @ai-devflow/api db:seed
-corepack pnpm dev:api
-```
-
-Use `corepack pnpm --filter @ai-devflow/api db:cleanup-demo` to dry-run removal of bundled demo
-seed data from Postgres. The cleanup refuses mixed `org-demo` data and only deletes after
-`--confirm org-demo`.
-
-Use `corepack pnpm verify` for the default no-demo quality gate. Use `corepack pnpm verify:demo`
-when you intentionally want the demo e2e and Electron smoke flows. Use
-`corepack pnpm test:postgres-smoke` with the same database URL to verify migration, seed,
-Postgres-backed API reads, explicit demo session headers, and redacted sync write-through.
-
-For the minimum self-hosted team pilot, copy `.env.example`, run `docker compose up --build`, and
-open the Web console at `http://127.0.0.1:4311`. Run `corepack pnpm test:docker-smoke` to verify the
-containerized API/Web/Postgres stack, Desktop pairing-token exchange, bearer-token sync, and
-redacted team overview path. Docker smoke is explicit and is not part of default `verify`.
-
-Use `corepack pnpm build && corepack pnpm --filter @ai-devflow/desktop electron` to run the built
-desktop app against `apps/desktop/dist/index.html` without the Vite dev server.
-
-## Windows ZIP Smoke
-
-Use this path when a Windows machine cannot reliably `git clone` from GitHub. Download the `main`
-branch ZIP from GitHub, unzip it to a short local path such as `C:\dev\ai-devflow-studio`, and run
-the app from that folder.
-
-Recommended Windows environment:
-
-- Windows 11. Windows 10 is best-effort.
-- Node.js 24.
-- PowerShell.
-- Git for Windows if you want to validate Git-backed local project behavior.
-
-From the unzipped project folder:
-
-```powershell
-corepack enable
 corepack pnpm install --frozen-lockfile
-corepack pnpm verify
+
+DEVFLOW_ENABLE_DEMO_DATA=true \
+DEV_AUTH_ENABLED=true \
+DEVFLOW_ENABLE_FAKE_RUNTIME=true \
+DEVFLOW_CODING_ENGINE=fake \
 corepack pnpm dev:electron
 ```
 
-`dev:electron` builds the Electron main/preload bundle, starts Vite on
-`http://127.0.0.1:5173`, and opens the real Electron desktop app with local folder selection,
-controlled IPC, command safety checks, and SQLite persistence.
+These flags are explicit and local. `DEV_AUTH_ENABLED=true` enables header-based demo sessions only
+for non-browser local clients; keep it disabled on a network-exposed API. This path does not call a
+paid model provider.
 
-Important ZIP boundary: GitHub ZIP downloads do not include a `.git` directory. That is fine for
-running AI DevFlow Studio itself, but if you select the unzipped `ai-devflow-studio` folder as the
-local project inside the app, Branch will show `not a git repo` and Git-backed features such as
-branch refresh, branch watchers, managed coding worktrees, and Git diff capture will be limited.
+Together, these flags expose the built-in deterministic Workflow/Review provider and fake Coding
+Engine without credentials.
 
-For a fuller Windows validation, start AI DevFlow Studio from the ZIP folder, then use the in-app
-`选择本地仓库` picker to select another real local Git repository on the Windows machine. That repo
-can be any small project with a committed `main` branch and a test script. The expected first-pass
-checks are:
+Confirm the fake provider state in Agents before the walkthrough. Production providers still
+require explicit configuration.
 
-- the local project card shows `selected`;
-- the project path is the Windows path you selected;
-- Branch shows the selected repo's current branch, and the refresh button updates after switching
-  branches externally;
-- creating a Run uses the selected repo instead of demo fixture data;
-- running tests uses the detected package script when the selected repo has one.
+### 2. Walk the governed delivery path
 
-If you specifically want to use the unzipped AI DevFlow Studio folder as the selected local project,
-initialize a local Git repository in that folder first:
+1. Select a small committed Git repository and save its detected test command.
+2. Create a Run from a short request, generate Clarification and Design artifacts, and inspect the six-stage canvas.
+3. Run Knowledge Review on a Gate, inspect policy and evidence, then approve the Gate as a human decision.
+4. Start the Coding Agent from the Build task, approve its permission request, and inspect the managed-worktree diff and Test Evidence.
+5. Open Agents and Tests to review the trace, command result, redaction state, and cost source.
 
-```powershell
-git init
-git checkout -b main
-git add .
-git commit -m "local windows smoke"
-```
+Continue through PR Draft and Acceptance Bundle with the [full feature walkthrough](docs/guides/devflow-studio-full-feature-walkthrough.md).
 
-The current Windows support level is source/development validation. The project has Windows
-compatibility checks in CI for typecheck, unit tests, and static cross-platform audits, but it does
-not yet ship a signed Windows installer or claim completed Windows Electron full-smoke signoff.
-Record any Windows failure with the exact command, terminal output, and whether the app source came
-from ZIP, `git clone`, or `git bundle`.
+Use `corepack pnpm dev:electron` for local execution. The browser-only `dev:desktop` path is a visual preview: it cannot select folders, run local tests, or execute Agent, Gate, PR, and Acceptance workflow writes. Those actions fail closed unless the trusted Electron main-process runtime is available.
 
-## v0.6.1 Coding Agent / opencode Signoff
+Remote Run, Test Evidence, and Coding summaries are not renderer upload APIs. Electron main builds
+them from canonical local state (including the current workflow Node), while the API and repositories
+re-apply redaction before team-visible persistence. Unsigned identity headers are disabled by default;
+networked Team writes use a signed session Cookie or paired Desktop Bearer Token.
 
-The default Coding Agent path is not configured until a real engine is selected. Set
-`DEVFLOW_CODING_ENGINE=opencode-http` for the local opencode runtime, or set both
-`DEVFLOW_CODING_ENGINE=fake` and `DEVFLOW_ENABLE_FAKE_RUNTIME=true` for deterministic demo/test
-flows. The real Electron smoke flow is covered by `corepack pnpm verify:demo`: select a local Git
-repo, start the Coding Agent from the build task node, approve the permission relay request, archive
-a redacted diff, run the worktree test command, and persist Test Evidence.
+Test, Review, and Coding summaries use a bounded child-first sync contract: only an explicit missing
+canonical Run causes one latest-Run upload and one child retry. Durable outbox/backoff and visible
+retry operations are intentionally part of v1.4, while v1.3 keeps the committed local state authoritative.
 
-The real opencode runtime is explicitly env-gated. It is not part of default `verify` because it
-depends on a local opencode installation and provider credentials.
-
-Check the local runtime contract without contacting a provider:
+### Minimum Quality Gate
 
 ```bash
-corepack pnpm opencode:status
+corepack pnpm verify
 ```
 
-This reports the local `opencode --version`, confirms live smoke is skipped by default, and shows
-whether the real provider profile is intentionally configured.
+For the API/Web/Postgres team path, use the [self-hosted pilot guide](docs/guides/devflow-studio-self-hosted-pilot.md).
 
-Default safe check:
+## Current Boundaries
 
-```bash
-corepack pnpm test:opencode-smoke
-```
+- The default system is intentionally empty. Demo data and fake runtimes require explicit flags, while real runtimes require explicit provider configuration.
+- The PR stage creates a reviewable handoff artifact. It does not silently push, open, merge, or publish a real GitHub pull request.
+- Real opencode and live Knowledge Review are opt-in paths that can spend provider quota. They stay outside the default quality gate.
+- Skills and MCP are management surfaces today. Real MCP process execution, permission auditing, and MCP policy enforcement are not implemented.
+- Knowledge retrieval is lexical and graph-backed. Full RAG or vector-provider integration is not implemented.
+- Full real-window validation is macOS-local. Windows has CI compatibility checks and a source-validation guide, but no signed installer or full Electron release signoff.
+- The current product is a self-hosted team pilot, not a managed public SaaS offering.
 
-Without live env vars, this exits successfully and prints the skip message. To manually sign off the
-real opencode path, configure the provider and run:
+The [roadmap](docs/roadmap.md) is the source of truth for milestone status, planned GitHub delivery integration, runtime hardening, and deferred platform work.
 
-```bash
-DEVFLOW_RUN_OPENCODE_SMOKE=1 \
-DEVFLOW_CODING_ENGINE=opencode-http \
-DEVFLOW_OPENCODE_PROVIDER_ID=openai \
-DEVFLOW_OPENCODE_MODEL_ID=gpt-4.1-mini \
-OPENAI_API_KEY="$OPENAI_API_KEY" \
-corepack pnpm test:opencode-smoke
-```
+## Documentation Map
 
-For Volcengine Ark Coding Plan through an opencode provider such as `double`:
-
-```bash
-DEVFLOW_RUN_OPENCODE_SMOKE=1 \
-DEVFLOW_CODING_ENGINE=opencode-http \
-DEVFLOW_OPENCODE_PROVIDER_ID=double \
-DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest \
-DEVFLOW_OPENCODE_API_KEY_ENV=VOLCENGINE_ARK_API_KEY \
-VOLCENGINE_ARK_API_KEY="$VOLCENGINE_ARK_API_KEY" \
-corepack pnpm test:opencode-smoke
-```
-
-Expected live-smoke result: DevFlow starts `opencode serve`, creates a managed Git worktree, sends
-the DevFlow coding brief, relays opencode permission requests, captures a redacted diff, runs
-dependency bootstrap when needed, runs `npm test` in the worktree, and removes the temporary smoke
-repo afterward. The smoke output must not print the provider key. v0.6.1 live signoff has been
-verified with opencode `1.17.5` and Volcengine Ark `double/ark-code-latest`, including a multi-step
-`bash -> edit -> bash -> bash` permission sequence.
-
-## v0.5 Knowledge Review Agent Demo
-
-The default demo uses the deterministic fake provider, so it is repeatable and cost-free. It proves
-the Agent runtime, trace, advisory, token usage, artifact, event, and redacted team summary paths
-without calling a live model.
-
-1. Start the real Electron app:
-
-   ```bash
-   corepack pnpm dev:electron
-   ```
-
-2. In Electron, choose a local repository from the project picker.
-3. Select a Gate node in the workflow canvas.
-4. Click `Agent Review` in the Inspector.
-5. Open the `Agents` view to inspect the Knowledge Review Agent history, trace, warning-only Gate
-   advisory, provider status, and token/cost source.
-6. To see the team-visible summary, start the API/Web pair and open the Web console:
-
-   ```bash
-   corepack pnpm dev:api
-   corepack pnpm dev:web
-   ```
-
-   Electron sync uploads only redacted Agent Review summaries. The Web console should show the
-   conclusion/advisory/cost without local cwd, stdout/stderr, raw prompt, or provider secrets.
-
-For a real OpenAI-compatible smoke test, set `DEVFLOW_AGENT_OPENAI_API_KEY` or `OPENAI_API_KEY`
-and run:
-
-```bash
-corepack pnpm test:agent-live
-```
-
-Optional live provider smoke is not part of `corepack pnpm verify`; it should be run manually when
-you explicitly want to spend provider quota and validate the live request/usage mapping path.
-
-For release signoff, the real opencode provider smoke is stricter: starting with the next product
-release, run one live `opencode` smoke against the configured Doubao/Volcengine provider before
-creating the release tag, and record the result with
-[`docs/plans/release-only-real-opencode-smoke.md`](docs/plans/release-only-real-opencode-smoke.md).
-This release-only gate must stay outside default CI and must never print provider secrets.
-
-The first Playwright run in a fresh environment may need browser binaries:
-
-```bash
-corepack pnpm exec playwright install
-```
-
-## v0.8.1 Release Status
-
-Before creating the `v0.8.1` release tag, run:
-
-```bash
-corepack pnpm release:status
-```
-
-This checks the local release-signoff prerequisites that are easy to forget: package metadata,
-required signoff docs, git cleanliness, tag presence, and whether the manual walkthrough has been
-marked complete. Pending items are expected before the final walkthrough and version bump; true
-inconsistencies are marked for attention.
-
-For a hard gate after the human walkthrough and package bump, run:
-
-```bash
-DEVFLOW_RELEASE_WALKTHROUGH=passed corepack pnpm release:status -- --strict
-```
-
-## GitHub Actions Release Workflow
-
-`.github/workflows/verify.yml` is the default quality gate for pushes and pull requests. It runs
-macOS verification, Windows compatibility checks, and Postgres integration smoke tests.
-
-`.github/workflows/release.yml` is intentionally narrower and only runs for explicit releases:
-
-- manual `workflow_dispatch`
-- pushed tags matching `v*`
-
-The release workflow verifies the repository, builds the desktop/web/API/worker outputs, uploads a
-single `ai-devflow-studio-release-artifacts` workflow artifact, and creates or updates a GitHub
-Release for tag-triggered runs. It does not deploy a production web/API service, publish npm
-packages, run paid real-opencode provider smoke, or produce signed Electron installers yet. The paid
-real-opencode provider smoke is a manual release-only signoff gate documented in
-`docs/plans/release-only-real-opencode-smoke.md`.
+| Need | Start here |
+| --- | --- |
+| Product positioning and user workflow | [Product Definition](docs/product/product-definition.md) |
+| Current status and future priorities | [Roadmap](docs/roadmap.md) |
+| Complete hands-on product tour | [Full feature walkthrough](docs/guides/devflow-studio-full-feature-walkthrough.md) |
+| Current delivery-flow walkthrough | [v1.3 Walkthrough](docs/guides/devflow-studio-v1.3-walkthrough.md) |
+| Self-hosted API/Web/Postgres pilot | [Self-Hosted Pilot](docs/guides/devflow-studio-self-hosted-pilot.md) |
+| Windows source and ZIP validation | [Windows ZIP Smoke Guide](docs/guides/windows-zip-smoke.md) |
+| Test layers and quality gates | [Testing Strategy](docs/engineering/testing-strategy.md) |
+| Demo and smoke reproduction | [Demo and Smoke Guide](docs/engineering/demo-and-smoke.md) |
+| Stable domain language | [Context Glossary](CONTEXT.md) |
+| Architecture decisions | [ADRs](docs/adr/) |
+| Historical HoneyAI comparison | [Research Snapshot](docs/research/2026-06-15-honeyai-vs-devflow.md) |

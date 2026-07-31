@@ -167,6 +167,10 @@ describe('delivery artifacts', () => {
       kind: 'pr',
       redacted: true,
     })
+    expect(artifact.content).toContain(
+      'Request: Fix webhook retry handling and archive the delivery evidence.',
+    )
+    expect(artifact.content).not.toContain('Request: Ship webhook retry')
     expect(artifact.content).toContain('Compare: https://github.com/erich/payments-api/compare/main...ai%2Fwebhook-retry')
     expect(artifact.content).toContain('src/webhook.ts')
     expect(artifact.content).toContain('Test Evidence: passed - Tests passed.')
@@ -188,6 +192,39 @@ describe('delivery artifacts', () => {
 
     expect(artifact.content).toContain('Compare: unavailable')
     expect(artifact.content).toContain('Repository mapping could not be converted into a safe compare URL.')
+  })
+
+  it('redacts secrets and local paths from delivery requests', () => {
+    const artifacts = created.artifacts.map((artifact) =>
+      artifact.kind === 'raw_request'
+        ? {
+            ...artifact,
+            content: `${artifact.content} Inspect /Users/alice/private/repo/src/webhook.ts. API_TOKEN=super-secret-token`,
+          }
+        : artifact,
+    )
+    const prArtifact = createPrDraftArtifact({
+      run: created.run,
+      project: { repository: 'erich/payments-api', defaultBranch: 'main' },
+      artifacts,
+      codingDiffs: [codingDiff],
+      testEvidence: [testEvidence],
+      now: '2026-06-21T16:35:00.000Z',
+    })
+    const acceptanceArtifact = createAcceptanceEvidenceBundleArtifact({
+      run: created.run,
+      artifacts,
+      codingDiffs: [codingDiff],
+      testEvidence: [testEvidence],
+      now: '2026-06-21T16:36:00.000Z',
+    })
+
+    for (const artifact of [prArtifact, acceptanceArtifact]) {
+      expect(artifact.content).toContain('[REDACTED:env_secret_assignment]')
+      expect(artifact.content).toContain('[REDACTED:local_absolute_path]')
+      expect(artifact.content).not.toContain('/Users/alice/private/repo')
+      expect(artifact.content).not.toContain('super-secret-token')
+    }
   })
 
   it('creates an acceptance evidence bundle that references the final delivery evidence', () => {
@@ -448,6 +485,35 @@ describe('advanceWorkflowAfterGateApproval', () => {
 })
 
 describe('normalizeWorkflowRunProgress', () => {
+  it('preserves paused_at_gate for a running clarification gate', () => {
+    const created = createWorkflowRunFromRequest({
+      runId: 'run-normalize-gate',
+      title: 'Normalize active gate',
+      request: 'Keep gate status aligned with the trusted command core.',
+      projectId: 'p-payments',
+      creatorId: 'u-wang',
+      branchName: 'ai/normalize-gate',
+      now: '2026-06-21T16:00:00.000Z',
+    })
+    const gateId = 'run-normalize-gate-clarify-gate'
+    const activeGateRun = {
+      ...created.run,
+      status: 'paused_at_gate' as const,
+      currentNodeId: gateId,
+      nodes: created.run.nodes.map((node) => {
+        if (node.id === 'run-normalize-gate-clarify') {
+          return { ...node, status: 'success' as const }
+        }
+        if (node.id === gateId) {
+          return { ...node, status: 'running' as const }
+        }
+        return node
+      }),
+    }
+
+    expect(normalizeWorkflowRunProgress(activeGateRun)).toEqual(activeGateRun)
+  })
+
   it('repairs completed runs that still have an active build node by treating development as current', () => {
     const created = createWorkflowRunFromRequest({
       runId: 'run-inconsistent',

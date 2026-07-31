@@ -1,23 +1,53 @@
 # DevFlow Studio 全量基础功能体验指南
 
-更新时间：2026-06-21  
-适用版本：`v1.3 delivery-flow candidate`
+更新时间：2026-07-31
+
+适用版本：`v1.3.0` 候选与后续产品体验基线
 
 这份指南用于体验 DevFlow Studio 已经落地的基础能力。它不是某一个版本的 release
 walkthrough，而是按当前产品入口把 v0.2 到 v1.3 的核心能力串起来：本地仓库、Run/Gate、
 Knowledge、Agent Review、Coding Agent、测试证据、Team/Web、Pairing、Budget、Tool / Skill
 Trace、PR Draft 和 Acceptance Bundle。
 
-默认路径不调用真实付费模型。真实 `opencode` + 豆包/Volcengine provider smoke 是 release-only
-验证项，放在最后单独执行。
+本指南列出目标体验路径，不代表任何候选已自动通过验收。v1.3.0 的实际发布状态只以
+`docs/releases/v1.3.0/` 的四份证据、`corepack pnpm release:status` 的对应模式结果和
+`v1.3.0` tag 指向为准。
+
+## 候选形成前历史快照（2026-07-31）
+
+2026-07-25 的失败
+Computer Use 基线见
+[devflow-studio-v1.3-walkthrough-result-2026-07-25.md](./devflow-studio-v1.3-walkthrough-result-2026-07-25.md)。
+在该快照中，收尾工作树尚未生成新的 dated result。
+
+默认路径不调用真实付费模型。真实
+`opencode` + 豆包/Volcengine provider smoke 是 release-only 验证项，放在最后单独执行。
+截至该历史快照，V1.3 收尾工作树已加入以下边界：
+
+- 共享可信命令负责 Agent/Gate/Build/Test/PR/Acceptance 的顺序和证据检查；
+- Electron main 从本地 store 重载 canonical state，并以事务提交 Run 与候选交付证据；
+- Pairing 绑定 Local Project 与 Team Project，同 id 本地状态在同步合并时保持权威；
+- `DEVFLOW_ENABLE_FAKE_RUNTIME=true` 显式提供 deterministic fake Agent provider 并允许
+  fake Coding Engine；
+- archived Test Evidence 将已知 workspace root 替换为 `<workspace>`；
+- API/Worker dist 有隔离运行 smoke，Verify/Release workflow 覆盖 build/output、E2E、
+  Electron、Windows、Postgres 和 Docker gate。
+
+这些是当时的实现边界，不是发布结论。该快照中，新的 Computer Use、完整候选 gate、
+付费 real-opencode 记录、版本对齐和 tag 尚未完成；后续是否完成必须重新检查 release
+evidence、`release:status` 和 tag。
 
 ## 0. 启动环境
 
 在项目根目录运行：
 
 ```bash
-cd /Users/erich/File/claude/10-showcase/ai-devflow-studio
+# 从 workbench 根目录进入本 Project
+cd projects/agent-engineering/ai-devflow-studio
 
+DEVFLOW_ENABLE_DEMO_DATA=true \
+DEV_AUTH_ENABLED=true \
+DEVFLOW_ENABLE_FAKE_RUNTIME=true \
 DEVFLOW_API_BASE_URL=http://127.0.0.1:4310 \
 NEXT_PUBLIC_DEVFLOW_API_URL=http://127.0.0.1:4310 \
 corepack pnpm dev:api
@@ -26,6 +56,7 @@ corepack pnpm dev:api
 另开一个终端：
 
 ```bash
+DEVFLOW_ENABLE_DEMO_DATA=true \
 DEVFLOW_API_BASE_URL=http://127.0.0.1:4310 \
 NEXT_PUBLIC_DEVFLOW_API_URL=http://127.0.0.1:4310 \
 corepack pnpm dev:web
@@ -34,6 +65,9 @@ corepack pnpm dev:web
 另开一个终端：
 
 ```bash
+DEVFLOW_ENABLE_DEMO_DATA=true \
+DEVFLOW_ENABLE_FAKE_RUNTIME=true \
+DEVFLOW_CODING_ENGINE=fake \
 DEVFLOW_API_BASE_URL=http://127.0.0.1:4310 \
 NEXT_PUBLIC_DEVFLOW_API_URL=http://127.0.0.1:4310 \
 corepack pnpm dev:electron
@@ -119,7 +153,9 @@ corepack pnpm dev:electron
 
 入口：Workbench Inspector 的 `Agent Review` 或左侧 `Agents`
 
-默认路径使用 `Deterministic Fake Provider`，不花模型钱。它适合本地 walkthrough 和 CI，但不代表真实模型审查。
+`DEVFLOW_ENABLE_FAKE_RUNTIME=true` 时会列出 `Deterministic Fake Provider`，不花模型钱；
+它适合本地 walkthrough 和 CI，但不代表真实模型审查。运行前明确选择它；关闭该 flag
+后，旧 fake provider 选择必须隐藏或被 main 拒绝。
 
 如果要让 DevFlow Review Agent 调用豆包/Volcengine Ark：
 
@@ -168,6 +204,7 @@ corepack pnpm dev:electron
 - 主仓库不被直接修改。
 - diff artifact 只保存 redacted/reviewable 内容。
 - cleanup 状态可见。
+- Build 只在匹配当前节点的 Coding Run 完成且 Diff 已持久化后推进到 Test。
 
 ![Coding Node](./screenshots/09-coding-node.png)
 
@@ -206,6 +243,10 @@ corepack pnpm dev:electron
 - 危险命令被 command safety 阻断。
 - Evidence 显示 command/status/exit code/duration。
 - stdout/stderr summary 经过 redaction。
+- 只有当前 Test 节点可以执行；失败 Test 保持当前并将 Run 标为 `failed`，通过后才进入
+  PR。
+- Test report 中的已知 POSIX/Windows workspace root 显示为 `<workspace>`；上传到 Team
+  的 summary 继续省略 cwd 和原始输出。
 
 ![Tests Evidence](./screenshots/05-tests-evidence.png)
 
@@ -244,6 +285,11 @@ corepack pnpm dev:electron
 - Acceptance Bundle 引用 Raw Request、PR Draft、diff、tests、policy、budget、review。
 - 当前 v1.3 只生成 PR handoff artifact，不创建真实 GitHub PR。
 - 系统不会自动 push、merge 或自动通过 Gate。
+- PR 只在当前 PR 节点、completed Coding Run/Diff 和最新 passing Test/report 都匹配时
+  完成。
+- Acceptance Bundle 还要求已附着 PR Draft；final Acceptance 再要求 bundle、授权角色、
+  非阻断 policy、匹配的非阻断 review 和非阻断 budget decision。
+- 被拒绝的可信命令不会留下孤立的 delivery artifact/event。
 
 ## 10. Team Overview：团队视角与 redacted sync
 
@@ -261,6 +307,10 @@ corepack pnpm dev:electron
 - Web 只显示 redacted summary，不显示 raw prompt、raw logs、cwd、patch、provider secret。
 - Team Overview 能展示项目、成员、成本、风险、delivery summary。
 - API seed mode 可以用于本地 demo；Postgres/Docker 是独立显式路径。
+- Pairing credential 必须绑定当前 `localProjectId` 与一个 Team Project。
+- 远端 Test/Review/Coding Evidence 写入前必须先有同项目 canonical Run；cross-project、
+  stale 或缺 Run 的写入会被拒绝。
+- 同 id 的本地 Run/Artifact/Event 优先于远端 summary，远端只补充 remote-only 数据。
 
 ![Team Overview](./screenshots/11-electron-team-overview.png)
 
@@ -288,22 +338,27 @@ corepack pnpm dev:electron
 
 入口：
 
-- Web Console 项目卡片：`Create desktop pairing code`
-- Desktop 顶栏：`Pairing code` + `Pair`
+- 本地 API 测试前置可调用 `POST /api/team/projects/:projectId/pairing-codes` 创建一次性 code；调用者须有 lead/owner 权限。
+- Desktop 顶栏：`Desktop pairing code` + `绑定`
 - 自托管指南：[devflow-studio-self-hosted-pilot.md](./devflow-studio-self-hosted-pilot.md)
 
 要体验：
 
-- Web 创建 pairing code。
-- Desktop 输入 pairing code 并 pair。
-- Pair 后点击 `同步团队`。
+- 可由本地 API 测试前置创建 pairing code，但不得把这记录为 Web pairing UI 通过。
+- Computer Use 在 Desktop 中亲自输入 code，点击 `绑定`，然后点击 `同步团队`。
+- 关闭并以同一隔离 `userData` 重启 Electron，再次同步。
 
 通过标准：
 
 - Desktop sync 使用 Bearer token，不回退 demo headers。
 - renderer 不接收明文 bearer token。
 - pairing code 是 copy-once / short-lived。
+- 绑定持久化当前 `localProjectId` 和 Team Project，重启后仍可同步。
+- 结果文档和截图不记录 pairing code 或 token。
 - Docker Compose 路径通过 `corepack pnpm test:docker-smoke` 验证，不属于默认 `verify`。
+
+若 pairing code 由本地 API 前置创建，本次证据只能签核 Desktop 绑定、同步和重启持久化；
+除非 Computer Use 另外真实操作并记录 Web pairing UI，否则不得声称该 Web UI 已通过。
 
 ## 13. Skills 与 MCP
 
@@ -321,6 +376,9 @@ corepack pnpm dev:electron
 - MCP 开关本地持久化。
 - 当前不启动真实 MCP 进程。
 - 当前不要宣称 MCP 真执行或 MCP policy enforcement 已完成。
+
+当前实测说明：Skills 显示未加载真实团队能力，MCP 显示未加载本地连接器；这两个页面当前
+应按管理壳计，不按可用 runtime 计。
 
 ![MCP](./screenshots/07-mcp-management.png)
 
@@ -348,12 +406,18 @@ corepack pnpm opencode:status
 确认要花真实 provider 配额后，再运行：
 
 ```bash
-DEVFLOW_RUN_OPENCODE_SMOKE=1 \
-DEVFLOW_CODING_ENGINE=opencode-http \
-DEVFLOW_OPENCODE_PROVIDER_ID=double \
-DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest \
-DEVFLOW_OPENCODE_API_KEY_ENV=ANTHROPIC_AUTH_TOKEN \
+export ANTHROPIC_AUTH_TOKEN="<set in shell only; never commit>"
+export DEVFLOW_RUN_OPENCODE_SMOKE=1
+export DEVFLOW_CODING_ENGINE=opencode-http
+export DEVFLOW_OPENCODE_PROVIDER_ID=double
+export DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest
+export DEVFLOW_OPENCODE_API_KEY_ENV=ANTHROPIC_AUTH_TOKEN
+
+corepack pnpm opencode:status
 corepack pnpm test:opencode-smoke
+
+unset ANTHROPIC_AUTH_TOKEN DEVFLOW_RUN_OPENCODE_SMOKE DEVFLOW_CODING_ENGINE
+unset DEVFLOW_OPENCODE_PROVIDER_ID DEVFLOW_OPENCODE_MODEL_ID DEVFLOW_OPENCODE_API_KEY_ENV
 ```
 
 通过标准：
@@ -364,6 +428,10 @@ corepack pnpm test:opencode-smoke
 - fixture Test Evidence 通过。
 - process/worktree cleanup 完成。
 - 不打印 provider secret。
+
+任一 preflight、permission、diff/tool evidence、Test Evidence、cleanup 或 redaction 条件失败，
+都不得生成 `status: "passed"` 的 `docs/releases/v1.3.0/real-opencode.json`。完整 JSON
+格式见 [release-only policy](../plans/release-only-real-opencode-smoke.md)。
 
 ## 15. 全量体验核对表
 
@@ -387,8 +455,27 @@ corepack pnpm test:opencode-smoke
 | Skills/MCP | Skills/MCP | catalog/server toggles | 不宣称真实 MCP 执行 |
 | Real opencode | Terminal | release-only smoke | 只在接受费用时执行 |
 
-## 当前不要宣称
+Release status 必须显式区分两个阶段：
 
+```bash
+# 创建 tag 前
+corepack pnpm release:status -- --mode=pre-tag
+
+# 仅在全部签核并创建 tag 后
+corepack pnpm release:status -- --mode=tagged
+```
+
+## 版本验收的宣称边界
+
+- 只有 clean `S` 的 pre-tag 与 tagged 检查均通过、且 `v1.3.0` tag 精确指向 `S` 后，
+  才能宣称 v1.3 已完成正式签核并发布。
+- 2026-07-25 的失败结果是历史基线，不能替代绑定候选 `C` 的新 Computer Use 结果。
+- 不要说 Windows、Postgres、Docker、全部 CI 或 candidate-bound release evidence 已通过，
+  除非它们已在同一候选 SHA 上实际运行并记录。
+- 不要说 release-only 真实 opencode 已通过，除非得到付费调用授权并完成记录。
+- 如果 pairing code 由本地 API 测试前置创建，不要说 Web pairing UI 已通过。
+- 不要在 pre-tag 签核完成前创建或宣称 v1.3 tag。
+- 不要说新 Web 壳已经闭环 intake、Gate、pairing 和 run selection。
 - 不要说真实 opencode 是默认 CI/verify 路径。
 - 不要说 fake engine 是真实 provider 行为。
 - 不要说当前能还原 opencode 内部私有 Skill 调用栈。

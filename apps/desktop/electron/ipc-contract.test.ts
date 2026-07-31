@@ -1,17 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import type {
-  AgentEvent,
-  Artifact,
-  McpServerDefinition,
-  RemoteCodingAgentSummary,
-  RemoteRunSummary,
-  RemoteTestEvidenceSummary,
-  WorkflowRun,
-} from '@ai-devflow/shared'
+import type { McpServerDefinition } from '@ai-devflow/shared'
 import {
-  parseAgentEventInput,
+  ipcChannels,
+  parseApproveGateInput,
   parseAgentProviderCredentialInput,
   parseCancelCodingAgentRunInput,
+  parseCreateAcceptanceBundleInput,
+  parseCreatePrDraftInput,
   parseCreateRunInput,
   parseDeleteRunInput,
   parseCompleteWorkflowAgentNodeInput,
@@ -21,54 +16,13 @@ import {
   parseReplyCodingPermissionInput,
   parseRunCodingAgentInput,
   parseRunKnowledgeReviewInput,
-  parseRemoteCodingAgentSummaryInput,
-  parseRemoteRunSummaryInput,
   parseRemoteSnapshotInput,
-  parseRemoteTestEvidenceSummaryInput,
   parseRunProjectTestsInput,
-  parseSaveArtifactInput,
-  parseSaveRunInput,
+  parseSaveGateOverrideInput,
   parseSaveProjectTestCommandInput,
   parseSettingsInput,
   parseValidateTestCommandInput,
 } from './ipc-contract'
-
-const run: WorkflowRun = {
-  id: 'run-1',
-  title: 'Run local tests',
-  request: 'Archive local test evidence.',
-  projectId: 'project-1',
-  creatorId: 'user-1',
-  status: 'testing',
-  currentNodeId: 'node-test',
-  branchName: 'ai/local-tests',
-  createdAt: '2026-06-15T00:00:00.000Z',
-  updatedAt: '2026-06-15T00:00:00.000Z',
-  nodes: [],
-  edges: [],
-}
-
-const event: AgentEvent = {
-  id: 'event-approval-1',
-  runId: 'run-1',
-  nodeId: 'node-test',
-  sequence: 1,
-  kind: 'approval',
-  message: 'Gate approved',
-  timestamp: '2026-06-15T00:01:00.000Z',
-}
-
-const artifact: Artifact = {
-  id: 'artifact-pr-1',
-  runId: 'run-1',
-  nodeId: 'node-pr',
-  kind: 'pr',
-  title: 'PR draft',
-  summary: 'Draft summary',
-  content: 'Draft content',
-  redacted: true,
-  updatedAt: '2026-06-15T00:01:00.000Z',
-}
 
 const mcpServer: McpServerDefinition = {
   id: 'mcp-filesystem',
@@ -77,48 +31,6 @@ const mcpServer: McpServerDefinition = {
   permission: 'read',
   enabledLocally: true,
   lastAuditEvent: 'Enabled locally',
-}
-
-const remoteRunSummary: RemoteRunSummary = {
-  kind: 'approval',
-  runId: 'run-1',
-  projectId: 'project-1',
-  title: 'Run local tests',
-  status: 'building',
-  currentNodeId: 'node-test',
-  branchName: 'ai/local-tests',
-  updatedAt: '2026-06-15T00:02:00.000Z',
-}
-
-const remoteEvidenceSummary: RemoteTestEvidenceSummary = {
-  id: 'evidence-1',
-  runId: 'run-1',
-  nodeId: 'node-test',
-  projectId: 'project-1',
-  command: 'pnpm test',
-  status: 'passed',
-  exitCode: 0,
-  durationMs: 900,
-  summary: 'Tests passed in 900ms',
-  redacted: true,
-  createdAt: '2026-06-15T00:03:00.000Z',
-}
-
-const remoteCodingSummary: RemoteCodingAgentSummary = {
-  id: 'coding-run-1',
-  runId: 'run-1',
-  nodeId: 'node-build',
-  projectId: 'project-1',
-  requestedBy: 'user-1',
-  providerId: 'fake-coding-engine',
-  engine: 'fake',
-  status: 'completed',
-  branchName: 'devflow/run-1-node-build-coding-run-1',
-  summary: 'Created a small fake coding diff.',
-  changedPaths: ['src/example.ts'],
-  startedAt: '2026-06-15T00:04:00.000Z',
-  completedAt: '2026-06-15T00:05:00.000Z',
-  redacted: true,
 }
 
 describe('IPC contract parsers', () => {
@@ -154,9 +66,59 @@ describe('IPC contract parsers', () => {
         projectId: 'project-1',
         runId: 'run-1',
         nodeId: 'node-test',
-        run,
       }),
-    ).toEqual({ projectId: 'project-1', runId: 'run-1', nodeId: 'node-test', run })
+    ).toEqual({ projectId: 'project-1', runId: 'run-1', nodeId: 'node-test' })
+  })
+
+  it('keeps gate approval input identifier-only', () => {
+    expect(
+      parseApproveGateInput({
+        runId: 'run-1',
+        nodeId: 'node-gate',
+      }),
+    ).toEqual({ runId: 'run-1', nodeId: 'node-gate' })
+
+    expect(() =>
+      parseApproveGateInput({
+        runId: 'run-1',
+        nodeId: 'node-gate',
+        userId: 'spoofed-owner',
+        userName: 'Spoofed Owner',
+        role: 'owner',
+      }),
+    ).toThrow(/unexpected field/i)
+  })
+
+  it('keeps Gate override input command-only and rejects derived trust fields', () => {
+    expect(
+      parseSaveGateOverrideInput({
+        runId: 'run-1',
+        nodeId: 'node-gate',
+        reason: 'Reviewed the canonical blocking evidence.',
+      }),
+    ).toEqual({
+      runId: 'run-1',
+      nodeId: 'node-gate',
+      reason: 'Reviewed the canonical blocking evidence.',
+    })
+
+    for (const derivedField of [
+      { projectId: 'spoofed-project' },
+      { userId: 'spoofed-owner' },
+      { role: 'owner' },
+      { blockedReasonIds: [] },
+      { policyVersion: 999 },
+      { provisional: false },
+    ]) {
+      expect(() =>
+        parseSaveGateOverrideInput({
+          runId: 'run-1',
+          nodeId: 'node-gate',
+          reason: 'Reviewed the canonical blocking evidence.',
+          ...derivedField,
+        }),
+      ).toThrow(/unexpected field/i)
+    }
   })
 
   it('accepts a request-based create run payload', () => {
@@ -221,21 +183,58 @@ describe('IPC contract parsers', () => {
     ).toThrow(/request/)
   })
 
-  it('rejects a run project tests payload whose runId does not match the run snapshot', () => {
-    expect(() =>
-      parseRunProjectTestsInput({
-        projectId: 'project-1',
-        runId: 'other-run',
-        nodeId: 'node-test',
-        run,
-      }),
-    ).toThrow(/runId/)
+  it.each(['run', 'artifact', 'event', 'evidence'])(
+    'rejects renderer-supplied %s data in run project tests payloads',
+    (field) => {
+      expect(() =>
+        parseRunProjectTestsInput({
+          projectId: 'project-1',
+          runId: 'run-1',
+          nodeId: 'node-test',
+          [field]: { id: 'forged' },
+        }),
+      ).toThrow(new RegExp(field))
+    },
+  )
+
+  it('exposes dedicated delivery channels without generic persistence channels', () => {
+    expect(ipcChannels).not.toHaveProperty('saveRun')
+    expect(ipcChannels).not.toHaveProperty('saveArtifact')
+    expect(ipcChannels).not.toHaveProperty('saveEvent')
+    expect(ipcChannels).toMatchObject({
+      createPrDraft: 'devflow:pr-draft:create',
+      createAcceptanceBundle: 'devflow:acceptance-bundle:create',
+    })
   })
 
-  it('accepts valid save run, event, settings, and MCP payloads', () => {
-    expect(parseSaveRunInput(run)).toEqual(run)
-    expect(parseSaveArtifactInput(artifact)).toEqual(artifact)
-    expect(parseAgentEventInput(event)).toEqual(event)
+  it.each([
+    ['PR draft', parseCreatePrDraftInput],
+    ['acceptance bundle', parseCreateAcceptanceBundleInput],
+  ])('accepts a minimal %s command payload', (_label, parser) => {
+    expect(
+      parser({
+        runId: 'run-1',
+        nodeId: 'node-delivery',
+      }),
+    ).toEqual({ runId: 'run-1', nodeId: 'node-delivery' })
+  })
+
+  it.each([
+    ['PR draft', parseCreatePrDraftInput],
+    ['acceptance bundle', parseCreateAcceptanceBundleInput],
+  ])('fails closed for renderer-supplied delivery data in %s commands', (_label, parser) => {
+    for (const field of ['run', 'artifact', 'event', 'evidence', 'projectId']) {
+      expect(() =>
+        parser({
+          runId: 'run-1',
+          nodeId: 'node-delivery',
+          [field]: { id: 'forged' },
+        }),
+      ).toThrow(new RegExp(field))
+    }
+  })
+
+  it('accepts valid settings and MCP payloads', () => {
     expect(parseSettingsInput({ themePreference: 'dark' })).toEqual({ themePreference: 'dark' })
     expect(parseMcpServersInput([mcpServer])).toEqual([mcpServer])
   })
@@ -245,50 +244,14 @@ describe('IPC contract parsers', () => {
     expect(() => parseMcpServersInput([{ id: 'mcp-bad', name: 'Bad' }])).toThrow(/MCP/)
   })
 
-  it('accepts remote snapshot and upload payloads', () => {
+  it('accepts remote snapshot payloads without exposing renderer-controlled upload channels', () => {
     expect(parseRemoteSnapshotInput({ organizationId: 'org-1' })).toEqual({
       organizationId: 'org-1',
     })
     expect(parseRemoteSnapshotInput(undefined)).toEqual({})
-    expect(parseRemoteRunSummaryInput(remoteRunSummary)).toEqual(remoteRunSummary)
-    expect(parseRemoteTestEvidenceSummaryInput(remoteEvidenceSummary)).toEqual(remoteEvidenceSummary)
-    expect(parseRemoteCodingAgentSummaryInput(remoteCodingSummary)).toEqual(remoteCodingSummary)
-  })
-
-  it('rejects local-only fields in remote test evidence upload payloads', () => {
-    expect(() =>
-      parseRemoteTestEvidenceSummaryInput({
-        ...remoteEvidenceSummary,
-        cwd: '/Users/erich/project',
-      }),
-    ).toThrow(/local-only/)
-    expect(() =>
-      parseRemoteTestEvidenceSummaryInput({
-        ...remoteEvidenceSummary,
-        stdout: 'secret output',
-      }),
-    ).toThrow(/local-only/)
-  })
-
-  it('rejects local-only fields and unsafe paths in remote coding summary payloads', () => {
-    expect(() =>
-      parseRemoteCodingAgentSummaryInput({
-        ...remoteCodingSummary,
-        cwd: '/Users/erich/project',
-      }),
-    ).toThrow(/local-only/)
-    expect(() =>
-      parseRemoteCodingAgentSummaryInput({
-        ...remoteCodingSummary,
-        patch: '+secret',
-      }),
-    ).toThrow(/local-only/)
-    expect(() =>
-      parseRemoteCodingAgentSummaryInput({
-        ...remoteCodingSummary,
-        changedPaths: ['/Users/erich/project/src/example.ts'],
-      }),
-    ).toThrow(/Invalid remote coding agent summary/)
+    expect(ipcChannels).not.toHaveProperty('uploadRunSummary')
+    expect(ipcChannels).not.toHaveProperty('uploadTestEvidenceSummary')
+    expect(ipcChannels).not.toHaveProperty('uploadCodingAgentSummary')
   })
 
   it('accepts provider credential and knowledge review payloads', () => {
@@ -323,11 +286,18 @@ describe('IPC contract parsers', () => {
     })
   })
 
-  it('accepts desktop pairing codes and rejects empty pairing payloads', () => {
-    expect(parsePairDesktopInput({ code: 'pair-id.copy-once-secret' })).toEqual({
+  it('requires a local project when pairing the desktop with a team project', () => {
+    expect(parsePairDesktopInput({
       code: 'pair-id.copy-once-secret',
+      localProjectId: 'local-project-1',
+    })).toEqual({
+      code: 'pair-id.copy-once-secret',
+      localProjectId: 'local-project-1',
     })
     expect(() => parsePairDesktopInput({ code: ' ' })).toThrow(/code/)
+    expect(() =>
+      parsePairDesktopInput({ code: 'pair-id.copy-once-secret' }),
+    ).toThrow(/localProjectId/)
   })
 
   it('rejects empty provider credentials and malformed knowledge review payloads', () => {

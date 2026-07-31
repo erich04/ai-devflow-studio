@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
 const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEBSERVER === '1'
+const desktopUrl = process.env.DEVFLOW_E2E_DESKTOP_URL ?? 'http://127.0.0.1:5173'
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -12,7 +13,7 @@ export default defineConfig({
   retries: 0,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://127.0.0.1:5173',
+    baseURL: desktopUrl,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },

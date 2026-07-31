@@ -28,6 +28,7 @@ function viewModelFor(node: WorkflowNode, overrides: Partial<Parameters<typeof b
     gateEnforcementDecision: null,
     isLoadingGateEnforcement: false,
     canApprove: false,
+    hasTeamProjectBinding: true,
     ...overrides,
   })
 }

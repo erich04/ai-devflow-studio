@@ -55,6 +55,29 @@ const remediationPlan: RemediationPlan = {
 }
 
 describe('GateEnforcementPanel', () => {
+  it('submits only the lead override reason', () => {
+    const onSaveOverride = vi.fn()
+
+    render(
+      <GateEnforcementPanel
+        policySnapshot={null}
+        decision={decision}
+        overrides={[]}
+        remediationPlan={remediationPlan}
+        isLoading={false}
+        canSaveOverride
+        onSaveOverride={onSaveOverride}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Lead override reason'), {
+      target: { value: 'Reviewed the canonical blocking evidence.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save lead override' }))
+
+    expect(onSaveOverride).toHaveBeenCalledWith('Reviewed the canonical blocking evidence.')
+  })
+
   it('renders remediation candidates and starts a human-approved coding retry', () => {
     const onStartRetry = vi.fn()
 

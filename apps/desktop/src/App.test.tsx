@@ -68,6 +68,7 @@ const fixturePairingCredential: DesktopPairingCredential = {
   tokenId: 'desktop-token-1',
   organizationId: 'org-demo',
   projectId: fixtureRuns[0]!.projectId,
+  localProjectId: localProject.id,
   userId: 'u-ling',
   role: 'lead',
   authAccountId: 'acct-ling',
@@ -147,6 +148,9 @@ afterEach(() => {
 
 function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
   const policy = createWarnOnlyDefaultPolicy({ organizationId: 'org-demo' })
+  let deliveryRun = fixtureRuns[0]!
+  let deliveryArtifacts = [...fixtureArtifacts]
+  let deliveryEvents = [...fixtureEvents]
   const api: DevFlowDesktopApi = {
     platform: 'test',
     loadState: vi.fn().mockResolvedValue(persistedFixtureRunState()),
@@ -160,27 +164,13 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       memberCost: [],
       totalCost: '$0.000',
     }),
-    uploadRunSummary: vi.fn().mockResolvedValue({
-      accepted: true,
-      syncedAt: '2026-06-16T00:00:00.000Z',
-      message: 'run summary accepted',
-    }),
-    uploadTestEvidenceSummary: vi.fn().mockResolvedValue({
-      accepted: true,
-      syncedAt: '2026-06-16T00:00:00.000Z',
-      message: 'test evidence summary accepted',
-    }),
-    uploadCodingAgentSummary: vi.fn().mockResolvedValue({
-      accepted: true,
-      syncedAt: '2026-06-16T00:00:00.000Z',
-      message: 'coding agent summary accepted',
-    }),
     loadDesktopPairing: vi.fn().mockResolvedValue(null),
     pairDesktop: vi.fn().mockResolvedValue({
       credential: {
         tokenId: 'desktop-token-1',
         organizationId: 'org-demo',
         projectId: 'p-payments',
+        localProjectId: localProject.id,
         userId: 'u-ling',
         role: 'lead',
         authAccountId: 'acct-ling',
@@ -210,10 +200,14 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     validateTestCommand: vi.fn().mockImplementation(async ({ testCommand }) =>
       validateTestCommandSafety(testCommand),
     ),
-    runProjectTests: vi.fn().mockImplementation(async ({ run, nodeId }: RunProjectTestsInput) => {
+    runProjectTests: vi.fn().mockImplementation(async ({ runId, nodeId }: RunProjectTestsInput) => {
+      const run = fixtureRuns.find((candidate) => candidate.id === runId) ?? {
+        ...fixtureRuns[0]!,
+        id: runId,
+      }
       const evidence = {
         id: 'evidence-1',
-        runId: run.id,
+        runId,
         nodeId,
         projectId: localProject.id,
         command: 'pnpm test -- --run',
@@ -249,10 +243,13 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       }
       const updatedRun = {
         ...run,
-        status: 'testing' as const,
+        status: 'paused_at_gate' as const,
+        currentNodeId: run.nodes.find((node) => node.kind === 'pr')?.id ?? nodeId,
         nodes: run.nodes.map((node) =>
           node.id === nodeId
             ? { ...node, status: 'success' as const, artifactIds: [...node.artifactIds, artifact.id] }
+            : node.kind === 'pr'
+              ? { ...node, status: 'running' as const }
             : node,
         ),
       }
@@ -375,7 +372,115 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         },
       }
     }),
-    saveRun: vi.fn().mockImplementation(async (run) => run),
+    createPrDraft: vi.fn().mockImplementation(async ({ runId, nodeId }) => {
+      const timestamp = '2026-06-15T00:06:00.000Z'
+      const artifact = {
+        id: `artifact-${runId}-pr-draft`,
+        runId,
+        nodeId,
+        kind: 'pr' as const,
+        title: `PR Draft: ${deliveryRun.title}`,
+        summary: 'Trusted PR draft.',
+        content: 'Compare: https://github.com/erich/payments-api/compare/main...ai/payment-retry',
+        redacted: true,
+        updatedAt: timestamp,
+      }
+      const event = {
+        id: `event-${artifact.id}`,
+        runId,
+        nodeId,
+        sequence: deliveryEvents.length + 1,
+        kind: 'thinking' as const,
+        message: 'PR draft generated.',
+        timestamp,
+      }
+      const acceptanceNode = deliveryRun.nodes.find((node) => node.kind === 'acceptance')
+      deliveryRun = {
+        ...deliveryRun,
+        status: 'paused_at_gate',
+        currentNodeId: acceptanceNode?.id ?? nodeId,
+        updatedAt: timestamp,
+        nodes: deliveryRun.nodes.map((node) => {
+          if (node.id === nodeId) {
+            return {
+              ...node,
+              status: 'success' as const,
+              artifactIds: [...node.artifactIds, artifact.id],
+            }
+          }
+          if (node.id === acceptanceNode?.id) {
+            return { ...node, status: 'running' as const }
+          }
+          return node
+        }),
+      }
+      deliveryArtifacts = [...deliveryArtifacts, artifact]
+      deliveryEvents = [...deliveryEvents, event]
+      return {
+        run: deliveryRun,
+        artifact,
+        event,
+        state: desktopState({
+          projects: [localProject],
+          runs: [deliveryRun],
+          artifacts: deliveryArtifacts,
+          events: deliveryEvents,
+          desktopPairingCredential: fixturePairingCredential,
+        }),
+      }
+    }),
+    createAcceptanceBundle: vi.fn().mockImplementation(async ({ runId, nodeId }) => {
+      const timestamp = '2026-06-15T00:07:00.000Z'
+      const artifact = {
+        id: `artifact-${runId}-acceptance-bundle`,
+        runId,
+        nodeId,
+        kind: 'acceptance' as const,
+        title: `Acceptance Bundle: ${deliveryRun.title}`,
+        summary: 'Trusted acceptance bundle.',
+        content: `Acceptance bundle generated by the Electron workflow runtime.\nPR Draft: ${deliveryRun.title}`,
+        redacted: true,
+        updatedAt: timestamp,
+      }
+      const event = {
+        id: `event-${artifact.id}`,
+        runId,
+        nodeId,
+        sequence: deliveryEvents.length + 1,
+        kind: 'thinking' as const,
+        message: 'Acceptance bundle generated.',
+        timestamp,
+      }
+      deliveryRun = {
+        ...deliveryRun,
+        status: 'paused_at_gate',
+        currentNodeId: nodeId,
+        updatedAt: timestamp,
+        nodes: deliveryRun.nodes.map((node) =>
+          node.id === nodeId
+            ? {
+                ...node,
+                status: 'running' as const,
+                artifactIds: [...node.artifactIds, artifact.id],
+              }
+            : node,
+        ),
+      }
+      deliveryArtifacts = [...deliveryArtifacts, artifact]
+      deliveryEvents = [...deliveryEvents, event]
+      return {
+        run: deliveryRun,
+        artifact,
+        event,
+        state: desktopState({
+          projects: [localProject],
+          runs: [deliveryRun],
+          artifacts: deliveryArtifacts,
+          events: deliveryEvents,
+          desktopPairingCredential: fixturePairingCredential,
+        }),
+      }
+    }),
     approveGate: vi.fn().mockImplementation(async (input) => {
       const timestamp = '2026-06-15T00:05:00.000Z'
       const run = fixtureRuns[0]!
@@ -390,7 +495,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         nodeId: input.nodeId,
         sequence: 1,
         kind: 'approval' as const,
-        message: `${input.userName} Gate approved`,
+        message: `${fixturePairingCredential.userId} Gate approved`,
         timestamp,
       }
 
@@ -418,23 +523,21 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         },
       }
     }),
-    saveArtifact: vi.fn().mockImplementation(async (artifact) => artifact),
     saveGateOverride: vi.fn().mockImplementation(async (input) => ({
       id: 'gate-override-test',
       runId: input.runId,
       nodeId: input.nodeId,
-      projectId: input.projectId,
-      userId: input.userId,
-      role: input.role,
+      projectId: localProject.id,
+      userId: fixturePairingCredential.userId,
+      role: fixturePairingCredential.role,
       reason: input.reason,
-      blockedReasonIds: input.blockedReasonIds,
-      policyVersion: input.policyVersion,
-      provisional: input.provisional === true,
-      status: input.provisional === true ? 'provisional' : 'accepted',
+      blockedReasonIds: [],
+      policyVersion: 1,
+      provisional: false,
+      status: 'accepted',
       createdAt: '2026-06-15T00:05:00.000Z',
     })),
     listGateOverrides: vi.fn().mockResolvedValue([]),
-    saveEvent: vi.fn().mockImplementation(async (event) => event),
     saveSettings: vi.fn().mockImplementation(async (settings) => ({
       themePreference: settings.themePreference ?? 'system',
     })),
@@ -686,7 +789,7 @@ function clickInspectorTab(name: RegExp | string) {
 }
 
 function DeliveryActionHarness({ api }: { api: DevFlowDesktopApi }) {
-  const [runs, setRuns] = useState([fixtureRuns[0]!])
+  const [runs, setRuns] = useState([fixtureRunAtCurrentNode('n-pr')])
   const [artifacts, setArtifacts] = useState([])
   const [events, setEvents] = useState([])
   const [pendingInspectorAction, setPendingInspectorAction] = useState(null)
@@ -705,7 +808,7 @@ function DeliveryActionHarness({ api }: { api: DevFlowDesktopApi }) {
       }],
       testCommandDraft: '',
       commandSafety: null,
-      desktopPairing: null,
+      desktopPairing: fixturePairingCredential,
       pairingCodeDraft: '',
       mcpServers: [],
       selectedAgentProviderId: agentProvider.id,
@@ -753,6 +856,66 @@ function DeliveryActionHarness({ api }: { api: DevFlowDesktopApi }) {
   )
 }
 
+function PrDraftActionHarness({
+  api,
+  pairing,
+}: {
+  api: DevFlowDesktopApi
+  pairing: DesktopPairingCredential | null
+}) {
+  const selectedRun = fixtureRunAtCurrentNode('n-pr')
+  const [pendingInspectorAction, setPendingInspectorAction] = useState(null)
+  const [toast, setToast] = useState('')
+  const actions = useDesktopActions({
+    desktopApi: api,
+    state: {
+      artifacts: [],
+      events: [],
+      testEvidence: [],
+      teamProjects: [],
+      testCommandDraft: '',
+      commandSafety: null,
+      desktopPairing: pairing,
+      pairingCodeDraft: '',
+      mcpServers: [],
+      selectedAgentProviderId: agentProvider.id,
+      providerIdDraft: '',
+      providerBaseUrlDraft: '',
+      providerModelDraft: '',
+      providerKeyDraft: '',
+      runtimeBudgetApprovalId: '',
+      draftTitle: '',
+      draftRequest: '',
+      codingDiffArtifacts: [],
+      agentReviews: [],
+      pendingInspectorAction,
+    } as unknown as DesktopWorkspaceState,
+    setters: {
+      setToast,
+      setPendingInspectorAction,
+    } as unknown as DesktopWorkspaceSetters,
+    derived: {
+      selectedLocalProject: localProject,
+      isTestCommandDirty: false,
+    },
+    selectedRun,
+    selectedNode: selectedRun.nodes.find((node) => node.id === selectedRun.currentNodeId),
+    currentUser: undefined,
+    pendingCodingPermission: undefined,
+    latestCodingRun: undefined,
+    selectedManagedWorkspace: undefined,
+    gateEnforcementDecision: null,
+    applyLocalExecutionState: vi.fn(),
+  })
+
+  return (
+    <>
+      <button onClick={() => void actions.generatePrDraft()}>Generate PR Draft directly</button>
+      <span data-testid="pr-draft-action-toast">{toast}</span>
+    </>
+  )
+}
+
 function GateApprovalFallbackHarness() {
   const selectedRun = fixtureRuns[0]!
   const selectedNode = selectedRun.nodes.find((node) => node.id === selectedRun.currentNodeId)!
@@ -767,7 +930,7 @@ function GateApprovalFallbackHarness() {
     timestamp: '2026-06-15T00:00:00.000Z',
   }])
   const [pendingInspectorAction, setPendingInspectorAction] = useState(null)
-  const [, setToast] = useState('')
+  const [toast, setToast] = useState('')
   const actions = useDesktopActions({
     desktopApi: null,
     state: {
@@ -831,6 +994,156 @@ function GateApprovalFallbackHarness() {
         Approve twice
       </button>
       <output data-testid="event-sequences">{events.map((event) => event.sequence).join(',')}</output>
+      <output data-testid="gate-browser-toast">{toast}</output>
+    </>
+  )
+}
+
+function BrowserDeliveryBoundaryHarness({
+  nodeId,
+  action,
+}: {
+  nodeId: 'n-pr' | 'n-accept'
+  action: 'pr' | 'acceptance'
+}) {
+  const initialRun = fixtureRunAtCurrentNode(nodeId)
+  const [runs, setRuns] = useState([initialRun])
+  const [artifacts, setArtifacts] = useState([...fixtureArtifacts])
+  const [events, setEvents] = useState([...fixtureEvents])
+  const [toast, setToast] = useState('')
+  const [pendingInspectorAction, setPendingInspectorAction] = useState(null)
+  const selectedRun = runs[0]!
+  const actions = useDesktopActions({
+    desktopApi: null,
+    state: {
+      runs,
+      artifacts,
+      events,
+      testEvidence: [],
+      teamProjects: [{
+        id: fixturePairingCredential.projectId,
+        name: 'Payments API',
+        repository: 'erich/payments-api',
+        defaultBranch: 'main',
+      }],
+      testCommandDraft: '',
+      commandSafety: null,
+      desktopPairing: fixturePairingCredential,
+      pairingCodeDraft: '',
+      mcpServers: [],
+      selectedAgentProviderId: agentProvider.id,
+      providerIdDraft: '',
+      providerBaseUrlDraft: '',
+      providerModelDraft: '',
+      providerKeyDraft: '',
+      runtimeBudgetApprovalId: '',
+      draftTitle: '',
+      draftRequest: '',
+      codingDiffArtifacts: [],
+      agentReviews: [],
+      pendingInspectorAction,
+    } as unknown as DesktopWorkspaceState,
+    setters: {
+      setRuns,
+      setArtifacts,
+      setEvents,
+      setToast,
+      setPendingInspectorAction,
+    } as unknown as DesktopWorkspaceSetters,
+    derived: {
+      selectedLocalProject: localProject,
+      isTestCommandDirty: false,
+    },
+    selectedRun,
+    selectedNode: selectedRun.nodes.find((node) => node.id === nodeId),
+    currentUser: {
+      id: 'u-ling',
+      name: 'Ling',
+      role: 'lead',
+      avatarInitials: 'L',
+      focus: 'Delivery',
+    },
+    pendingCodingPermission: undefined,
+    latestCodingRun: undefined,
+    selectedManagedWorkspace: undefined,
+    gateEnforcementDecision: null,
+    applyLocalExecutionState: vi.fn(),
+  })
+
+  return (
+    <>
+      <button
+        onClick={() => void (
+          action === 'pr' ? actions.generatePrDraft() : actions.generateAcceptanceBundle()
+        )}
+      >
+        Attempt browser delivery
+      </button>
+      <output data-testid="browser-delivery-toast">{toast}</output>
+      <output data-testid="browser-delivery-state">
+        {`${selectedRun.currentNodeId}|${artifacts.length}|${events.length}`}
+      </output>
+    </>
+  )
+}
+
+function AcceptanceApprovalHarness({ api }: { api: DevFlowDesktopApi }) {
+  const selectedRun = fixtureRunAtCurrentNode('n-accept')
+  const selectedNode = selectedRun.nodes.find((node) => node.id === 'n-accept')!
+  const [pendingInspectorAction, setPendingInspectorAction] = useState(null)
+  const [toast, setToast] = useState('')
+  const actions = useDesktopActions({
+    desktopApi: api,
+    state: {
+      artifacts: [],
+      events: [],
+      testEvidence: [],
+      teamProjects: [],
+      testCommandDraft: '',
+      commandSafety: null,
+      desktopPairing: fixturePairingCredential,
+      pairingCodeDraft: '',
+      mcpServers: [],
+      selectedAgentProviderId: agentProvider.id,
+      providerIdDraft: '',
+      providerBaseUrlDraft: '',
+      providerModelDraft: '',
+      providerKeyDraft: '',
+      runtimeBudgetApprovalId: '',
+      draftTitle: '',
+      draftRequest: '',
+      codingDiffArtifacts: [],
+      agentReviews: [],
+      pendingInspectorAction,
+    } as unknown as DesktopWorkspaceState,
+    setters: {
+      setToast,
+      setPendingInspectorAction,
+    } as unknown as DesktopWorkspaceSetters,
+    derived: {
+      selectedLocalProject: localProject,
+      isTestCommandDirty: false,
+    },
+    selectedRun,
+    selectedNode,
+    currentUser: {
+      id: 'u-ling',
+      name: 'Ling',
+      role: 'lead',
+      avatarInitials: 'L',
+      focus: 'Delivery',
+    },
+    pendingCodingPermission: undefined,
+    latestCodingRun: undefined,
+    selectedManagedWorkspace: undefined,
+    gateEnforcementDecision: null,
+    applyLocalExecutionState: vi.fn(),
+  })
+
+  return (
+    <>
+      <button onClick={() => void actions.approveSelectedGate()}>Approve acceptance</button>
+      <output data-testid="acceptance-toast">{toast}</output>
     </>
   )
 }
@@ -937,6 +1250,93 @@ describe('App', () => {
     expect(within(localProjectPanel).queryByText('p-payments')).not.toBeInTheDocument()
   })
 
+  it('shows the paired Team Project id while its remote snapshot is still waiting to sync', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [aiFdcProject],
+        runs: [{ ...fixtureRunAtCurrentNode('n-pr'), projectId: aiFdcProject.id }],
+        desktopPairingCredential: {
+          ...fixturePairingCredential,
+          projectId: 'p-payments',
+          localProjectId: aiFdcProject.id,
+        },
+      })),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+
+    const projectSelector = screen.getByLabelText('Project selector')
+    const localProjectPanel = screen.getByLabelText('Local project')
+    expect(within(projectSelector).getByText('p-payments')).toBeInTheDocument()
+    expect(within(projectSelector).getByText('已绑定 · 待同步')).toBeInTheDocument()
+    expect(within(localProjectPanel).getByText('p-payments')).toBeInTheDocument()
+    expect(within(localProjectPanel).getByText('已绑定 · 待同步')).toBeInTheDocument()
+  })
+
+  it('treats a credential for another local project as unbound on the current project', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [aiFdcProject],
+        runs: [{ ...fixtureRunAtCurrentNode('n-pr'), projectId: aiFdcProject.id }],
+        desktopPairingCredential: {
+          ...fixturePairingCredential,
+          projectId: 'p-payments',
+          localProjectId: 'local-project-other',
+        },
+      })),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+
+    expect(screen.getByText('未配对 Team')).toBeInTheDocument()
+    expect(within(screen.getByLabelText('Project selector')).getByText('未绑定')).toBeInTheDocument()
+    expect(within(screen.getByLabelText('Local project')).getByText('未绑定')).toBeInTheDocument()
+  })
+
+  it('shows the explicitly bound Team Project for a local run after sync', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [aiFdcProject],
+        runs: [{ ...fixtureRunAtCurrentNode('n-pr'), projectId: aiFdcProject.id }],
+        desktopPairingCredential: {
+          ...fixturePairingCredential,
+          projectId: 'p-payments',
+          localProjectId: aiFdcProject.id,
+        },
+      })),
+      loadRemoteSnapshot: vi.fn().mockResolvedValue({
+        projects: [{
+          id: 'p-payments',
+          name: 'Payments API',
+          slug: 'payments-api',
+          description: 'The Team Project bound to the selected local repository.',
+          repository: 'erich/payments-api',
+          defaultBranch: 'main',
+          health: 'on_track',
+          knowledgeBasePath: 'docs/',
+          testCommand: 'pnpm test',
+        }],
+        members: [],
+        runs: [],
+        artifacts: [],
+        events: [],
+        projectCost: [],
+        memberCost: [],
+        totalCost: '$0.00',
+      }),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
+
+    expect(within(screen.getByLabelText('Project selector')).getByText('Payments API')).toBeInTheDocument()
+    expect(within(screen.getByLabelText('Local project')).getByText('Payments API')).toBeInTheDocument()
+  })
+
   it('approves the selected lead gate and updates the toast', async () => {
     const api = installDesktopApi()
     render(<App />)
@@ -946,6 +1346,45 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
 
     await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('方案评审 Gate 已通过，Run 进入本地实现阶段'))
+  })
+
+  it('reports final acceptance approval as a completed Run', async () => {
+    const acceptanceRun = fixtureRunAtCurrentNode('n-accept')
+    const completedRun = {
+      ...acceptanceRun,
+      status: 'completed' as const,
+      nodes: acceptanceRun.nodes.map((node) => ({
+        ...node,
+        status: 'success' as const,
+      })),
+    }
+    const api = installDesktopApi({
+      approveGate: vi.fn().mockResolvedValue({
+        run: completedRun,
+        event: {
+          id: 'event-acceptance-approved',
+          runId: completedRun.id,
+          nodeId: 'n-accept',
+          sequence: 1,
+          kind: 'approval',
+          message: 'Acceptance approved.',
+          timestamp: '2026-06-15T00:08:00.000Z',
+        },
+        state: desktopState({
+          projects: [localProject],
+          runs: [completedRun],
+          desktopPairingCredential: fixturePairingCredential,
+        }),
+      }),
+    })
+    render(<AcceptanceApprovalHarness api={api} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Approve acceptance/ }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('acceptance-toast')).toHaveTextContent('Run 已完成'),
+    )
+    expect(screen.getByTestId('acceptance-toast')).not.toHaveTextContent('进入本地实现阶段')
   })
 
   it('creates a new run from the modal', () => {
@@ -1081,7 +1520,7 @@ describe('App', () => {
     expect(await screen.findByTestId('node-inspector')).toHaveTextContent('需求确认 Gate')
   })
 
-  it('completes the current clarify agent in the browser fallback path', async () => {
+  it('keeps workflow execution read-only in the browser preview', async () => {
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
@@ -1089,13 +1528,17 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
     fireEvent.click(await screen.findByTestId('complete-clarify-agent'))
 
-    expect(await screen.findByTestId('node-inspector')).toHaveTextContent('需求确认 Gate')
-    clickInspectorTab(/Evidence/)
-    expect(await screen.findByText('需求澄清结果')).toBeInTheDocument()
+    expect(await screen.findByTestId('node-inspector')).toHaveTextContent('需求澄清')
+    clickInspectorTab(/产物/)
+    expect(screen.queryByText('需求澄清结果')).not.toBeInTheDocument()
+    expect(screen.getByTestId('toast')).toHaveTextContent(
+      '浏览器预览不执行工作流推进，请在 Electron 应用中继续',
+    )
   })
 
   it('generates PR draft and acceptance bundle artifacts from the inspector', async () => {
     const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-pr')),
       loadRemoteSnapshot: vi.fn().mockResolvedValue({
         projects: [{
           id: fixtureRuns[0]!.projectId,
@@ -1127,6 +1570,8 @@ describe('App', () => {
       fireEvent.click(screen.getByRole('button', { name: /生成 PR Draft/ }))
     })
 
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('业务验收')
+    fireEvent.click(screen.getByTestId('flow-node-n-pr'))
     fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /Artifacts/ }))
     expect(await screen.findByText(/PR Draft:/)).toBeInTheDocument()
     expect(screen.getByText(/Compare:/)).not.toBeNull()
@@ -1141,6 +1586,72 @@ describe('App', () => {
     expect(screen.getByText(/PR Draft:/)).toBeInTheDocument()
   })
 
+  it('delegates paired project resolution to the trusted PR draft command', async () => {
+    const boundTeamProjectId = 'team-fixture-project'
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [fixtureRunAtCurrentNode('n-pr')],
+        desktopPairingCredential: {
+          ...fixturePairingCredential,
+          projectId: boundTeamProjectId,
+          projectMemberships: [{
+            projectId: boundTeamProjectId,
+            userId: fixturePairingCredential.userId,
+            role: fixturePairingCredential.role,
+          }],
+        },
+      })),
+      loadRemoteSnapshot: vi.fn().mockResolvedValue({
+        projects: [
+          {
+            id: 'wrong-first-project',
+            name: 'Wrong First Project',
+            slug: 'wrong-first-project',
+            description: 'Must not be used for the local run.',
+            repository: 'erich/wrong-first-project',
+            defaultBranch: 'main',
+            health: 'on_track',
+            knowledgeBasePath: 'docs/',
+            testCommand: 'pnpm test',
+          },
+          {
+            id: boundTeamProjectId,
+            name: 'Bound Project',
+            slug: 'bound-project',
+            description: 'Explicitly bound to the local project.',
+            repository: 'erich/bound-project',
+            defaultBranch: 'main',
+            health: 'on_track',
+            knowledgeBasePath: 'docs/',
+            testCommand: 'pnpm test',
+          },
+        ],
+        members: [],
+        runs: [],
+        artifacts: [],
+        events: [],
+        projectCost: [],
+        memberCost: [],
+        totalCost: '$0.00',
+      }),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
+    fireEvent.click(screen.getByTestId('flow-node-n-pr'))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /生成 PR Draft/ }))
+    })
+
+    expect(api.createPrDraft).toHaveBeenCalledWith({
+      runId: fixtureRuns[0]!.id,
+      nodeId: 'n-pr',
+    })
+  })
+
   it('routes the current build node primary CTA to the coding agent handler', async () => {
     const api = installDesktopApi({
       loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-build')),
@@ -1148,7 +1659,7 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
-    const inspector = screen.getByTestId('node-inspector')
+    const inspector = await screen.findByTestId('node-inspector')
     expect(inspector).toHaveTextContent('启动 Coding Agent')
     expect(inspector).not.toHaveTextContent('Gate Enforcement')
     expect(api.loadEnforcementPolicy).not.toHaveBeenCalled()
@@ -1179,6 +1690,77 @@ describe('App', () => {
     fireEvent.click(within(inspector).getByRole('button', { name: /执行测试/ }))
 
     expect(screen.getByTestId('tests-view')).toHaveTextContent('来自 Workbench Inspector')
+  })
+
+  it('explains and disables PR draft generation until the local project is paired', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [fixtureRunAtCurrentNode('n-pr')],
+        desktopPairingCredential: null,
+      })),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    const inspector = screen.getByTestId('node-inspector')
+    const action = within(inspector).getByRole('button', { name: /生成 PR Draft/ })
+
+    expect(action).toBeDisabled()
+    expect(inspector).toHaveTextContent('先绑定当前 Local Project 与 Team Project')
+    expect(api.createPrDraft).not.toHaveBeenCalled()
+  })
+
+  it('keeps PR draft generation disabled when the pairing belongs to another local project', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [fixtureRunAtCurrentNode('n-pr')],
+        desktopPairingCredential: {
+          ...fixturePairingCredential,
+          localProjectId: 'local-project-other',
+        },
+      })),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    const inspector = screen.getByTestId('node-inspector')
+
+    expect(within(inspector).getByRole('button', { name: /生成 PR Draft/ })).toBeDisabled()
+    expect(inspector).toHaveTextContent('先绑定当前 Local Project 与 Team Project')
+    expect(api.createPrDraft).not.toHaveBeenCalled()
+  })
+
+  it('turns a stale PR binding IPC failure into an actionable re-pairing message', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-pr')),
+      createPrDraft: vi.fn().mockRejectedValue(
+        new Error(
+          "Error invoking remote method 'devflow:pr-draft:create': Error: The workflow project is not bound to the paired Team project",
+        ),
+      ),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /生成 PR Draft/ }))
+
+    const toast = await screen.findByTestId('toast')
+    expect(toast).toHaveTextContent('当前 Local Project 与 Team Project 的绑定已失效，请重新绑定后再生成 PR Draft')
+    expect(toast).not.toHaveTextContent('Error invoking remote method')
+  })
+
+  it('blocks the PR draft renderer action when its local project binding is missing', async () => {
+    const api = installDesktopApi()
+    render(<PrDraftActionHarness api={api} pairing={null} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate PR Draft directly' }))
+
+    expect(api.createPrDraft).not.toHaveBeenCalled()
+    expect(screen.getByTestId('pr-draft-action-toast')).toHaveTextContent(
+      '请先将当前 Local Project 绑定到 Team Project，再生成 PR Draft',
+    )
   })
 
   it('routes the current PR node primary CTA to PR draft generation', async () => {
@@ -1216,12 +1798,28 @@ describe('App', () => {
       fireEvent.click(within(inspector).getByRole('button', { name: /生成 PR Draft/ }))
     })
 
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('业务验收')
+    fireEvent.click(screen.getByTestId('flow-node-n-pr'))
     fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /Artifacts/ }))
     expect(await screen.findByText(/PR Draft:/)).toBeInTheDocument()
-    expect(api.saveArtifact).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'pr',
+    expect(api.createPrDraft).toHaveBeenCalledWith({
+      runId: fixtureRuns[0]!.id,
       nodeId: 'n-pr',
-    }))
+    })
+  })
+
+  it('does not generate a PR draft for a future workflow node', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByTestId('flow-node-n-pr'))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /生成 PR Draft/ }))
+    })
+
+    expect(api.createPrDraft).not.toHaveBeenCalled()
+    expect(screen.getByTestId('toast')).toHaveTextContent('当前 PR 节点')
   })
 
   it('routes the current acceptance node primary CTA to acceptance bundle generation', async () => {
@@ -1246,13 +1844,27 @@ describe('App', () => {
 
     fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /Artifacts/ }))
     expect(await screen.findByText(/Acceptance Bundle:/)).toBeInTheDocument()
-    expect(api.saveArtifact).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'acceptance',
+    expect(api.createAcceptanceBundle).toHaveBeenCalledWith({
+      runId: fixtureRuns[0]!.id,
       nodeId: 'n-accept',
-    }))
+    })
   })
 
-  it('persists increasing delivery event sequences when delivery actions run before a rerender', async () => {
+  it('does not generate an acceptance bundle for a future workflow node', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByTestId('flow-node-n-accept'))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /生成验收证据包/ }))
+    })
+
+    expect(api.createAcceptanceBundle).not.toHaveBeenCalled()
+    expect(screen.getByTestId('toast')).toHaveTextContent('当前验收节点')
+  })
+
+  it('does not bypass current-node delivery guards when actions run before a rerender', async () => {
     const api = installDesktopApi()
     render(<DeliveryActionHarness api={api} />)
 
@@ -1260,11 +1872,14 @@ describe('App', () => {
       fireEvent.click(screen.getByRole('button', { name: /Generate delivery artifacts in one tick/ }))
     })
 
-    await waitFor(() => expect(api.saveEvent).toHaveBeenCalledTimes(2))
-    expect(vi.mocked(api.saveEvent).mock.calls.map(([event]) => event.sequence)).toEqual([1, 2])
+    expect(api.createPrDraft).toHaveBeenCalledWith({
+      runId: fixtureRuns[0]!.id,
+      nodeId: 'n-pr',
+    })
+    expect(api.createAcceptanceBundle).not.toHaveBeenCalled()
   })
 
-  it('increments browser fallback gate approval event sequences from the latest events', async () => {
+  it('does not approve gates or append events in the browser preview', async () => {
     vi.useFakeTimers()
     try {
       render(<GateApprovalFallbackHarness />)
@@ -1273,10 +1888,39 @@ describe('App', () => {
         fireEvent.click(screen.getByRole('button', { name: /Approve twice/ }))
       })
 
-      expect(screen.getByTestId('event-sequences')).toHaveTextContent('7,8,9')
+      expect(screen.getByTestId('event-sequences')).toHaveTextContent('7')
+      expect(screen.getByTestId('gate-browser-toast')).toHaveTextContent(
+        '浏览器预览不执行工作流推进，请在 Electron 应用中继续',
+      )
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('does not generate PR drafts in the browser preview', async () => {
+    render(<BrowserDeliveryBoundaryHarness nodeId="n-pr" action="pr" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Attempt browser delivery' }))
+
+    expect(screen.getByTestId('browser-delivery-toast')).toHaveTextContent(
+      '浏览器预览不执行工作流推进，请在 Electron 应用中继续',
+    )
+    expect(screen.getByTestId('browser-delivery-state')).toHaveTextContent(
+      `n-pr|${fixtureArtifacts.length}|${fixtureEvents.length}`,
+    )
+  })
+
+  it('does not generate acceptance bundles in the browser preview', async () => {
+    render(<BrowserDeliveryBoundaryHarness nodeId="n-accept" action="acceptance" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Attempt browser delivery' }))
+
+    expect(screen.getByTestId('browser-delivery-toast')).toHaveTextContent(
+      '浏览器预览不执行工作流推进，请在 Electron 应用中继续',
+    )
+    expect(screen.getByTestId('browser-delivery-state')).toHaveTextContent(
+      `n-accept|${fixtureArtifacts.length}|${fixtureEvents.length}`,
+    )
   })
 
   it('uses local runs without mixing fixture artifacts and events when SQLite has runs', async () => {
@@ -1462,6 +2106,38 @@ describe('App', () => {
     expect(screen.queryByText('erich/payments-api')).not.toBeInTheDocument()
   })
 
+  it('keeps the complete local workflow when sync returns a lossy run with the same id', async () => {
+    const api = installDesktopApi({
+      loadRemoteSnapshot: vi.fn().mockResolvedValue({
+        projects: [],
+        members: [],
+        runs: [{
+          ...fixtureRuns[0]!,
+          title: 'Lossy remote summary',
+          request: 'Synced from DevFlow Electron.',
+          status: 'completed',
+          currentNodeId: 'remote-node',
+          nodes: [],
+          edges: [],
+        }],
+        artifacts: [],
+        events: [],
+        projectCost: [],
+        memberCost: [],
+        totalCost: '$0.00',
+      }),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+
+    await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
+    expect(screen.getByTestId('flow-node-n-design-gate')).toBeInTheDocument()
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('方案评审 Gate')
+    expect(screen.getByText(/Run Sources/)).toHaveTextContent('1 local · 0 remote')
+  })
+
   it('does not sync remote team state until the desktop is paired', async () => {
     const api = installDesktopApi({
       loadState: vi.fn().mockResolvedValue(desktopState({
@@ -1502,6 +2178,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     fireEvent.change(screen.getByLabelText('Desktop pairing code'), {
       target: { value: 'pair-p-payments.copy-once-secret' },
     })
@@ -1510,6 +2187,7 @@ describe('App', () => {
     await waitFor(() =>
       expect(api.pairDesktop).toHaveBeenCalledWith({
         code: 'pair-p-payments.copy-once-secret',
+        localProjectId: localProject.id,
       }),
     )
     expect(screen.getByText('已配对 Team')).toBeInTheDocument()
@@ -1526,32 +2204,23 @@ describe('App', () => {
     expect(within(inspector).getByRole('button', { name: /通过 Gate/ })).toBeEnabled()
     fireEvent.click(within(inspector).getByRole('button', { name: /通过 Gate/ }))
 
-    await waitFor(() => expect(api.approveGate).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(api.approveGate).toHaveBeenCalledWith({
       runId: fixtureRuns[0]!.id,
       nodeId: 'n-design-gate',
-      role: 'lead',
-    })))
-    await waitFor(() =>
-      expect(api.uploadRunSummary).toHaveBeenCalledWith(expect.objectContaining({
-        kind: 'run',
-        runId: fixtureRuns[0]!.id,
-        projectId: fixtureRuns[0]!.projectId,
-      })),
-    )
+    }))
+    expect(api).not.toHaveProperty('uploadRunSummary')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('approval')
   })
 
-  it('keeps local gate approval successful when remote run sync fails', async () => {
-    const api = installDesktopApi({
-      uploadRunSummary: vi.fn().mockRejectedValue(new Error('remote API unavailable')),
-    })
+  it('keeps remote Run synchronization behind the trusted main-process approval path', async () => {
+    const api = installDesktopApi()
     render(<App />)
 
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
 
     await waitFor(() => expect(api.approveGate).toHaveBeenCalled())
-    await waitFor(() => expect(api.uploadRunSummary).toHaveBeenCalled())
+    expect(window.aiDevFlowDesktop).not.toHaveProperty('uploadRunSummary')
     expect(screen.getByTestId('toast')).toHaveTextContent('方案评审 Gate 已通过')
   })
 
@@ -1561,8 +2230,18 @@ describe('App', () => {
       updatedAt: '2026-06-18T00:00:00.000Z',
     })
     const effectivePolicy = resolveEffectivePolicy(recommended, null)
+    const overrideEligibleRun = {
+      ...fixtureRuns[0]!,
+      nodes: fixtureRuns[0]!.nodes.map((node) =>
+        node.id === 'n-design-gate' ? { ...node, ownerId: 'u-yu' } : node,
+      ),
+    }
     const api = installDesktopApi({
-      loadState: vi.fn().mockResolvedValue(persistedFixtureRunState()),
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [overrideEligibleRun],
+        desktopPairingCredential: fixturePairingCredential,
+      })),
       loadEnforcementPolicy: vi.fn().mockResolvedValue({
         projectId: fixtureRuns[0]!.projectId,
         organizationPolicy: recommended,
@@ -1619,6 +2298,18 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: /通过 Gate/ })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Agent Review' })).not.toBeDisabled()
     expect(screen.queryByRole('button', { name: /执行测试/ })).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Lead override reason'), {
+      target: { value: 'Reviewed the canonical blocking evidence.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save lead override' }))
+    await waitFor(() =>
+      expect(api.saveGateOverride).toHaveBeenCalledWith({
+        runId: fixtureRuns[0]!.id,
+        nodeId: 'n-design-gate',
+        reason: 'Reviewed the canonical blocking evidence.',
+      }),
+    )
   })
 
   it('explains unavailable team policy without hiding the local agent completion action', async () => {
@@ -2107,6 +2798,64 @@ describe('App', () => {
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Pushed permission event.')
   })
 
+  it('reloads the trusted workflow state when a coding run completes', async () => {
+    const handlers: {
+      run?: Parameters<NonNullable<DevFlowDesktopApi['onCodingRunStatusUpdated']>>[0]
+    } = {}
+    const onCodingRunStatusUpdated = vi.fn((listener: NonNullable<typeof handlers.run>) => {
+      handlers.run = listener
+      return vi.fn()
+    })
+    const buildRun = fixtureRunAtCurrentNode('n-build')
+    const testRun = fixtureRunAtCurrentNode('n-test')
+    const completedCodingRun = {
+      id: 'coding-run-completed',
+      runId: buildRun.id,
+      nodeId: 'n-build',
+      projectId: localProject.id,
+      requestedBy: 'u-ling',
+      providerId: 'fake-coding-engine',
+      engine: 'fake' as const,
+      status: 'completed' as const,
+      managedWorkspaceId: 'workspace-completed',
+      branchName: 'devflow/run-completed',
+      userInstruction: 'Complete the build.',
+      prompt: 'local prompt',
+      summary: 'Build implementation completed.',
+      changedPaths: ['src/completed.ts'],
+      startedAt: '2026-06-17T00:00:00.000Z',
+      completedAt: '2026-06-17T00:01:00.000Z',
+      redacted: true,
+    }
+    const loadState = vi
+      .fn()
+      .mockResolvedValueOnce(desktopState({
+        projects: [localProject],
+        runs: [buildRun],
+      }))
+      .mockResolvedValueOnce(desktopState({
+        projects: [localProject],
+        runs: [testRun],
+        codingRuns: [completedCodingRun],
+      }))
+    installDesktopApi({
+      loadState,
+      onCodingRunStatusUpdated,
+    })
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    act(() => {
+      handlers.run?.(completedCodingRun)
+    })
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
+    await waitFor(() =>
+      expect(screen.getByTestId('flow-node-n-test')).toHaveTextContent('当前步骤'),
+    )
+    expect(screen.getByTestId('flow-node-n-build')).toHaveTextContent('已完成')
+  })
+
   it('explains real opencode runtime evidence without exposing raw workspace paths', async () => {
     installDesktopApi({
       loadState: vi.fn().mockResolvedValue({
@@ -2420,7 +3169,9 @@ describe('App', () => {
   })
 
   it('selects a local project, saves an editable test command, and archives local test evidence', async () => {
-    const api = installDesktopApi()
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-test')),
+    })
     render(<App />)
 
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
@@ -2445,22 +3196,14 @@ describe('App', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: /执行测试/ }))
-    await waitFor(() => expect(api.runProjectTests).toHaveBeenCalled())
     await waitFor(() =>
-      expect(api.uploadTestEvidenceSummary).toHaveBeenCalledWith({
-        id: 'evidence-1',
+      expect(api.runProjectTests).toHaveBeenCalledWith({
+        projectId: localProject.id,
         runId: fixtureRuns[0]!.id,
         nodeId: 'n-test',
-        projectId: fixtureRuns[0]!.projectId,
-        command: 'pnpm test -- --run',
-        status: 'passed',
-        exitCode: 0,
-        durationMs: 900,
-        summary: 'Tests passed in 900ms',
-        redacted: true,
-        createdAt: '2026-06-15T00:02:00.000Z',
       }),
     )
+    expect(api).not.toHaveProperty('uploadTestEvidenceSummary')
     await screen.findByText('Local test evidence')
     expect(screen.getByTestId('tests-view')).toHaveTextContent('8 tests passed')
     expect(screen.getByTestId('tests-view')).toHaveTextContent('Exit code 0')
@@ -2520,9 +3263,9 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /已保存/ })).toBeDisabled())
   })
 
-  it('keeps local test evidence visible when remote evidence sync fails', async () => {
+  it('keeps Test Evidence synchronization behind the trusted main-process test path', async () => {
     const api = installDesktopApi({
-      uploadTestEvidenceSummary: vi.fn().mockRejectedValue(new Error('remote API unavailable')),
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-test')),
     })
     render(<App />)
 
@@ -2533,13 +3276,29 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /执行测试/ }))
 
     await waitFor(() => expect(api.runProjectTests).toHaveBeenCalled())
-    await waitFor(() => expect(api.uploadTestEvidenceSummary).toHaveBeenCalled())
+    expect(window.aiDevFlowDesktop).not.toHaveProperty('uploadTestEvidenceSummary')
     await screen.findByText('Local test evidence')
     expect(screen.getByTestId('toast')).toHaveTextContent('测试通过，证据已归档')
   })
 
-  it('shows command safety feedback and blocks dangerous test commands before execution', async () => {
+  it('does not execute tests for a future workflow node', async () => {
     const api = installDesktopApi()
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
+    await screen.findByText('fixture-project')
+    fireEvent.click(screen.getByRole('button', { name: '测试' }))
+    fireEvent.click(screen.getByRole('button', { name: /执行测试/ }))
+
+    expect(api.runProjectTests).not.toHaveBeenCalled()
+    expect(screen.getByTestId('toast')).toHaveTextContent('当前运行中或失败的测试节点')
+  })
+
+  it('shows command safety feedback and blocks dangerous test commands before execution', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-test')),
+    })
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))

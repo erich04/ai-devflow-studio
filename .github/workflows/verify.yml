@@ -1,6 +1,7 @@
 name: Verify
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -13,6 +14,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: pnpm/action-setup@v4
         with:
           version: 9.15.0
@@ -26,12 +29,18 @@ jobs:
       - run: node scripts/ensure-electron-install.mjs
       - run: corepack pnpm exec playwright install chromium
       - run: corepack pnpm verify
+      - run: corepack pnpm build
+      - run: corepack pnpm test:build-output-smoke
+      - run: corepack pnpm test:e2e
+      - run: corepack pnpm test:electron-smoke
 
   windows-compatibility:
     name: Windows compatibility
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: pnpm/action-setup@v4
         with:
           version: 9.15.0

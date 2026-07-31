@@ -97,4 +97,16 @@ describe('GitHub OAuth client', () => {
       }),
     ).toBeNull()
   })
+
+  it('loads GitHub OAuth from the documented self-hosted environment names', () => {
+    const client = createGitHubOAuthClient.fromEnv({
+      GITHUB_CLIENT_ID: 'documented-client',
+      GITHUB_CLIENT_SECRET: 'documented-secret',
+      GITHUB_OAUTH_REDIRECT_URI: 'http://127.0.0.1:4310/api/auth/github/callback',
+    })
+
+    expect(client?.createAuthorizationUrl({ state: 'state-1' })).toContain(
+      'client_id=documented-client',
+    )
+  })
 })

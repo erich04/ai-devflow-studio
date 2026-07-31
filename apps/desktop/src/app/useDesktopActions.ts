@@ -1,19 +1,11 @@
 import { useRef, type FormEvent } from 'react'
 import {
-  advanceWorkflowAfterGateApproval,
   canRunCodingAgentOnNode,
   canApproveGate,
-  completeWorkflowAgentNode,
-  createAcceptanceEvidenceBundleArtifact,
-  createPrDraftArtifact,
-  createRemoteRunSummary,
-  createRemoteTestEvidenceSummary,
   createWorkflowRunFromRequest,
   normalizeWorkflowRunProgress,
   redactSecrets,
   validateTestCommandSafety,
-  type Artifact,
-  type AgentEvent,
   type CodingPermissionDecision,
   type GateEnforcementDecision,
   type ManagedCodingWorkspace,
@@ -24,16 +16,35 @@ import {
 } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from '../desktop-api'
 import {
-  appendArtifactToNode,
-  createRunningRun,
   displayNodeTitle,
   mergeById,
-  nextEventSequence,
+  mergeLocalAndRemoteSnapshot,
   reviewProviderFromMetadata,
   slugifyBranchName,
 } from './desktop-view-model'
 import type { DesktopWorkspaceSetters, DesktopWorkspaceState } from './useDesktopWorkspace'
 import type { PendingInspectorAction, PendingInspectorActionId } from './node-inspector-view-model'
+
+const prDraftBindingFailureMessage =
+  '当前 Local Project 与 Team Project 的绑定已失效，请重新绑定后再生成 PR Draft'
+const prDraftMissingBindingMessage =
+  '请先将当前 Local Project 绑定到 Team Project，再生成 PR Draft'
+const browserPreviewWorkflowWriteMessage =
+  '浏览器预览不执行工作流推进，请在 Electron 应用中继续'
+
+function prDraftFailureMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : ''
+  const knownBindingFailures = [
+    'The workflow project is not bound to the paired Team project',
+    'Pair Team Project before resolving remote project state.',
+    'Paired Team Project is not bound to a local project.',
+    'Paired Team Project is bound to a different local project.',
+  ]
+
+  return knownBindingFailures.some((failure) => message.includes(failure))
+    ? prDraftBindingFailureMessage
+    : message || '保存 PR Draft 失败'
+}
 
 export function useDesktopActions(input: {
   desktopApi: DevFlowDesktopApi | null
@@ -63,7 +74,6 @@ export function useDesktopActions(input: {
     pendingCodingPermission,
     latestCodingRun,
     selectedManagedWorkspace,
-    gateEnforcementDecision,
     applyLocalExecutionState,
   } = input
   const {
@@ -86,8 +96,6 @@ export function useDesktopActions(input: {
     runtimeBudgetApprovalId,
     draftTitle,
     draftRequest,
-    codingDiffArtifacts,
-    agentReviews,
     pendingInspectorAction,
     isRunningAgentReview,
     isStartingCodingAgent,
@@ -144,24 +152,6 @@ export function useDesktopActions(input: {
   const { selectedLocalProject, isTestCommandDirty } = derived
   const eventsRef = useRef(events)
   eventsRef.current = events
-
-  function appendSequencedEvent(event: Omit<AgentEvent, 'sequence'>): AgentEvent {
-    let sequencedEvent = {
-      ...event,
-      sequence: nextEventSequence(eventsRef.current, event.runId),
-    }
-    eventsRef.current = mergeById(eventsRef.current, [sequencedEvent])
-    setEvents((previousEvents) => {
-      sequencedEvent = {
-        ...event,
-        sequence: Math.max(nextEventSequence(previousEvents, event.runId), sequencedEvent.sequence),
-      }
-      const nextEvents = mergeById(previousEvents, [sequencedEvent])
-      eventsRef.current = nextEvents
-      return nextEvents
-    })
-    return sequencedEvent
-  }
 
   function samePendingInspectorAction(
     current: PendingInspectorAction | null,
@@ -234,16 +224,25 @@ export function useDesktopActions(input: {
         organizationId: desktopPairing.organizationId,
       })
       const remoteRuns = snapshot.runs.map(normalizeWorkflowRunProgress)
-      const nextRuns = mergeById(runs.map(normalizeWorkflowRunProgress), remoteRuns)
+      const mergedSnapshot = mergeLocalAndRemoteSnapshot({
+        localRuns: runs.map(normalizeWorkflowRunProgress),
+        remoteRuns,
+        localArtifacts: artifacts,
+        remoteArtifacts: snapshot.artifacts,
+        localEvents: eventsRef.current,
+        remoteEvents: snapshot.events,
+      })
+      const nextRuns = mergedSnapshot.runs
       const nextRun =
         nextRuns.find((run) => run.id === selectedRunId) ??
         remoteRuns[0] ??
         nextRuns[0]
 
       setRuns(nextRuns)
-      setRemoteRunIds(snapshot.runs.map((run) => run.id))
-      setArtifacts((previousArtifacts) => mergeById(previousArtifacts, snapshot.artifacts))
-      setEvents((previousEvents) => mergeById(previousEvents, snapshot.events))
+      setRemoteRunIds(mergedSnapshot.remoteRunIds)
+      setArtifacts(mergedSnapshot.artifacts)
+      setEvents(mergedSnapshot.events)
+      eventsRef.current = mergedSnapshot.events
       setTestEvidence(testEvidence)
       setTeamProjects(snapshot.projects)
       setTeamMembers(snapshot.members)
@@ -278,6 +277,11 @@ export function useDesktopActions(input: {
       return
     }
 
+    if (!selectedLocalProject) {
+      setToast('请先选择要绑定的本地仓库')
+      return
+    }
+
     const code = pairingCodeDraft.trim()
     if (!code) {
       setToast('请输入 Web Team Console 生成的 Desktop pairing code')
@@ -288,7 +292,10 @@ export function useDesktopActions(input: {
     setToast('正在配对团队项目...')
 
     try {
-      const result = await desktopApi.pairDesktop({ code })
+      const result = await desktopApi.pairDesktop({
+        code,
+        localProjectId: selectedLocalProject.id,
+      })
       setDesktopPairing(result.credential)
       setPairingCodeDraft('')
       setToast(`已配对团队项目 ${result.credential.projectId}`)
@@ -313,51 +320,28 @@ export function useDesktopActions(input: {
       return
     }
 
-    const pending = startPendingInspectorAction('approveGate', selectedRun, selectedNode, '正在通过 Gate...')
-
-    if (desktopApi) {
-      try {
-        const result = await desktopApi.approveGate({
-          runId: selectedRun.id,
-          nodeId: selectedNode.id,
-          userId: currentUser.id,
-          userName: currentUser.name,
-          role: currentUser.role,
-        })
-        applyLocalExecutionState(result.state)
-        setToast(`${displayNodeTitle(selectedNode)} 已通过，Run 进入本地实现阶段`)
-        void desktopApi
-          .uploadRunSummary(createRemoteRunSummary(result.run, 'run'))
-          .catch(() => undefined)
-      } catch (error) {
-        setToast(error instanceof Error ? error.message : '保存 Gate 审批失败')
-      } finally {
-        clearPendingInspectorAction(pending)
-      }
+    if (!desktopApi) {
+      setToast(browserPreviewWorkflowWriteMessage)
       return
     }
 
+    const pending = startPendingInspectorAction('approveGate', selectedRun, selectedNode, '正在通过 Gate...')
     try {
-      const timestamp = new Date().toISOString()
-      const { run: updatedRun } = advanceWorkflowAfterGateApproval({
-        run: selectedRun,
-        approvedNodeId: selectedNode.id,
-        now: timestamp,
-      })
-      const approvalEvent: Omit<AgentEvent, 'sequence'> = {
-        id: `event-approval-${timestamp}`,
+      const result = await desktopApi.approveGate({
         runId: selectedRun.id,
         nodeId: selectedNode.id,
-        kind: 'approval',
-        message: `${currentUser.name} Gate 已通过：${displayNodeTitle(selectedNode)}`,
-        timestamp,
-      }
-
-      setRuns((previousRuns) => previousRuns.map((run) => (run.id === selectedRun.id ? updatedRun : run)))
-      appendSequencedEvent(approvalEvent)
-      setToast('Gate 已通过，流程已推进')
+      })
+      applyLocalExecutionState(result.state)
+      const nextNode = result.run.nodes.find((node) => node.id === result.run.currentNodeId)
+      setToast(
+        result.run.status === 'completed'
+          ? `${displayNodeTitle(selectedNode)} 已通过，Run 已完成`
+          : nextNode?.stage === 'build'
+            ? `${displayNodeTitle(selectedNode)} 已通过，Run 进入本地实现阶段`
+            : `${displayNodeTitle(selectedNode)} 已通过，流程已推进`,
+      )
     } catch (error) {
-      setToast(error instanceof Error ? error.message : 'Gate 审批失败')
+      setToast(error instanceof Error ? error.message : '保存 Gate 审批失败')
     } finally {
       clearPendingInspectorAction(pending)
     }
@@ -381,41 +365,14 @@ export function useDesktopActions(input: {
         ? '需求澄清已生成，进入需求确认 Gate'
         : '设计方案已生成，进入方案评审 Gate'
 
-    if (desktopApi) {
-      if (!selectedAgentProviderId) {
-        setToast('请先在 Agents 的 Runtime Settings 配置 Agent Provider：Provider ID、Base URL、Model 和 API Key')
-        return
-      }
-      if (blockIfInspectorWriteInFlight()) {
-        return
-      }
-      const pending = startPendingInspectorAction(
-        'completeAgent',
-        selectedRun,
-        selectedNode,
-        selectedNode.stage === 'clarify' ? '正在生成需求澄清...' : '正在生成设计方案...',
-      )
-      try {
-        const result = await desktopApi.completeWorkflowAgentNode({
-          runId: selectedRun.id,
-          nodeId: selectedNode.id,
-          userId: currentUser.id,
-          userName: currentUser.name,
-          providerId: selectedAgentProviderId,
-        })
-        applyLocalExecutionState(result.state)
-        setSelectedRunId(result.run.id)
-        setSelectedNodeId(result.run.currentNodeId)
-        setActiveView('workbench')
-        setToast(successToast)
-      } catch (error) {
-        setToast(error instanceof Error ? error.message : '生成阶段产物失败')
-      } finally {
-        clearPendingInspectorAction(pending)
-      }
+    if (!desktopApi) {
+      setToast(browserPreviewWorkflowWriteMessage)
       return
     }
-
+    if (!selectedAgentProviderId) {
+      setToast('请先在 Agents 的 Runtime Settings 配置 Agent Provider：Provider ID、Base URL、Model 和 API Key')
+      return
+    }
     if (blockIfInspectorWriteInFlight()) {
       return
     }
@@ -426,22 +383,17 @@ export function useDesktopActions(input: {
       selectedNode.stage === 'clarify' ? '正在生成需求澄清...' : '正在生成设计方案...',
     )
     try {
-      const completed = completeWorkflowAgentNode({
-        run: selectedRun,
+      const result = await desktopApi.completeWorkflowAgentNode({
+        runId: selectedRun.id,
         nodeId: selectedNode.id,
-        artifacts: artifacts.filter((artifact) => artifact.runId === selectedRun.id),
-        existingEvents: events.filter((event) => event.runId === selectedRun.id),
-        actorName: currentUser.name,
-        now: new Date().toISOString(),
+        userId: currentUser.id,
+        userName: currentUser.name,
+        providerId: selectedAgentProviderId,
       })
-
-      setRuns((previousRuns) =>
-        previousRuns.map((run) => (run.id === completed.run.id ? completed.run : run)),
-      )
-      setArtifacts((previousArtifacts) => mergeById(previousArtifacts, completed.artifacts))
-      setEvents((previousEvents) => mergeById(previousEvents, [completed.event]))
-      setSelectedRunId(completed.run.id)
-      setSelectedNodeId(completed.run.currentNodeId)
+      applyLocalExecutionState(result.state)
+      setSelectedRunId(result.run.id)
+      setSelectedNodeId(result.run.currentNodeId)
+      setActiveView('workbench')
       setToast(successToast)
     } catch (error) {
       setToast(error instanceof Error ? error.message : '生成阶段产物失败')
@@ -524,6 +476,17 @@ export function useDesktopActions(input: {
       return
     }
 
+    const testNode = selectedRun.nodes.find((node) => node.id === selectedRun.currentNodeId)
+    if (
+      !testNode ||
+      testNode.kind !== 'test' ||
+      testNode.stage !== 'test' ||
+      (testNode.status !== 'running' && testNode.status !== 'failed')
+    ) {
+      setToast('只能执行当前运行中或失败的测试节点')
+      return
+    }
+
     const commandDraft = testCommandDraft || selectedLocalProject.testCommand
     const localSafety = validateTestCommandSafety(commandDraft)
     const safety =
@@ -536,52 +499,21 @@ export function useDesktopActions(input: {
       return
     }
 
-    const testNode = selectedRun.nodes.find((node) => node.stage === 'test') ?? selectedNode
-    if (!testNode) {
-      setToast('当前 Run 没有测试节点')
-      return
-    }
-
-    const runningRun = createRunningRun(selectedRun, testNode.id)
-    setSelectedNodeId(testNode.id)
-    setRuns((previousRuns) =>
-      previousRuns.map((run) => (run.id === runningRun.id ? runningRun : run)),
-    )
     setIsRunningTests(true)
     setToast('正在执行本地测试命令...')
 
     try {
       const result = await desktopApi.runProjectTests({
         projectId: selectedLocalProject.id,
-        runId: runningRun.id,
+        runId: selectedRun.id,
         nodeId: testNode.id,
-        run: runningRun,
       })
       applyLocalExecutionState(result.state)
-      void desktopApi
-        .uploadTestEvidenceSummary({
-          ...createRemoteTestEvidenceSummary(result.evidence),
-          projectId: runningRun.projectId,
-        })
-        .catch(() => undefined)
-      setSelectedRunId(runningRun.id)
+      setSelectedRunId(selectedRun.id)
       setSelectedNodeId(testNode.id)
       setActiveView('tests')
       setToast(result.evidence.status === 'passed' ? '测试通过，证据已归档' : '测试失败，证据已归档')
     } catch (error) {
-      setRuns((previousRuns) =>
-        previousRuns.map((run) =>
-          run.id === runningRun.id
-            ? {
-                ...runningRun,
-                status: 'failed',
-                nodes: runningRun.nodes.map((node) =>
-                  node.id === testNode.id ? { ...node, status: 'failed' as const } : node,
-                ),
-              }
-            : run,
-        ),
-      )
       setToast(error instanceof Error ? error.message : '本地测试执行失败')
     } finally {
       setIsRunningTests(false)
@@ -888,73 +820,45 @@ export function useDesktopActions(input: {
     }
   }
 
-  async function persistDeliveryArtifact(nextRun: WorkflowRun, artifact: Artifact, message: string) {
-    const timestamp = artifact.updatedAt
-    const event: Omit<AgentEvent, 'sequence'> = {
-      id: `event-${artifact.id}`,
-      runId: artifact.runId,
-      nodeId: artifact.nodeId,
-      kind: 'thinking',
-      message,
-      timestamp,
-    }
-
-    setRuns((previousRuns) => previousRuns.map((run) => (run.id === nextRun.id ? nextRun : run)))
-    setArtifacts((previousArtifacts) => mergeById(previousArtifacts, [artifact]))
-    const sequencedEvent = appendSequencedEvent(event)
-
-    if (!desktopApi) {
-      return
-    }
-
-    await desktopApi.saveRun(nextRun)
-    await desktopApi.saveArtifact(artifact)
-    await desktopApi.saveEvent(sequencedEvent)
-  }
-
   async function generatePrDraft() {
     if (!selectedRun) {
       return
     }
 
-    const project = teamProjects.find((candidate) => candidate.id === selectedRun.projectId) ?? teamProjects[0]
-    if (!project) {
-      setToast('当前 Run 缺少项目仓库映射，无法生成 PR Draft')
+    const node = selectedRun.nodes.find((candidate) => candidate.id === selectedRun.currentNodeId)
+    if (
+      !node ||
+      node.kind !== 'pr' ||
+      node.stage !== 'pr' ||
+      node.status !== 'running'
+    ) {
+      setToast('只能为当前 PR 节点生成 PR Draft')
       return
     }
-    const node = selectedRun.nodes.find((candidate) => candidate.kind === 'pr') ?? selectedNode
-    if (!node) {
+    if (!desktopApi) {
+      setToast(browserPreviewWorkflowWriteMessage)
+      return
+    }
+    if (desktopPairing?.localProjectId !== selectedRun.projectId) {
+      setToast(prDraftMissingBindingMessage)
       return
     }
     if (blockIfInspectorWriteInFlight()) {
       return
     }
+
     const pending = startPendingInspectorAction('createPrDraft', selectedRun, node, '正在生成 PR Draft...')
-
-    const timestamp = new Date().toISOString()
-    const artifact = createPrDraftArtifact({
-      run: selectedRun,
-      project: {
-        repository: project.repository,
-        defaultBranch: project.defaultBranch,
-      },
-      artifacts: artifacts.filter((candidate) => candidate.runId === selectedRun.id),
-      codingDiffs: codingDiffArtifacts.filter((candidate) => candidate.runId === selectedRun.id),
-      testEvidence: testEvidence.filter((candidate) => candidate.runId === selectedRun.id),
-      agentReviewSummaries: agentReviews
-        .filter((review) => review.runId === selectedRun.id)
-        .map((review) => review.summary),
-      now: timestamp,
-      ...(gateEnforcementDecision ? { enforcement: gateEnforcementDecision } : {}),
-      ...(latestCodingRun?.budgetDecision ? { budgetDecision: latestCodingRun.budgetDecision } : {}),
-    })
-    const nextRun = appendArtifactToNode(selectedRun, artifact.nodeId, artifact.id)
-
     try {
-      await persistDeliveryArtifact(nextRun, artifact, 'PR draft artifact generated from delivery evidence.')
+      const result = await desktopApi.createPrDraft({
+        runId: selectedRun.id,
+        nodeId: node.id,
+      })
+      applyLocalExecutionState(result.state)
+      setSelectedRunId(result.run.id)
+      setSelectedNodeId(result.run.currentNodeId)
       setToast('PR Draft 已生成')
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '保存 PR Draft 失败')
+      setToast(prDraftFailureMessage(error))
     } finally {
       clearPendingInspectorAction(pending)
     }
@@ -964,33 +868,38 @@ export function useDesktopActions(input: {
     if (!selectedRun) {
       return
     }
-    const node = selectedRun.nodes.find((candidate) => candidate.kind === 'acceptance') ?? selectedNode
-    if (!node) {
+    const node = selectedRun.nodes.find((candidate) => candidate.id === selectedRun.currentNodeId)
+    if (
+      !node ||
+      node.kind !== 'acceptance' ||
+      node.stage !== 'accept' ||
+      (node.status !== 'running' && node.status !== 'blocked')
+    ) {
+      setToast('只能为当前验收节点生成验收证据包')
+      return
+    }
+    if (!desktopApi) {
+      setToast(browserPreviewWorkflowWriteMessage)
       return
     }
     if (blockIfInspectorWriteInFlight()) {
       return
     }
-    const pending = startPendingInspectorAction('createAcceptanceBundle', selectedRun, node, '正在生成验收证据包...')
 
-    const timestamp = new Date().toISOString()
-    const runArtifacts = artifacts.filter((candidate) => candidate.runId === selectedRun.id)
-    const artifact = createAcceptanceEvidenceBundleArtifact({
-      run: selectedRun,
-      artifacts: runArtifacts,
-      codingDiffs: codingDiffArtifacts.filter((candidate) => candidate.runId === selectedRun.id),
-      testEvidence: testEvidence.filter((candidate) => candidate.runId === selectedRun.id),
-      agentReviewSummaries: agentReviews
-        .filter((review) => review.runId === selectedRun.id)
-        .map((review) => review.summary),
-      now: timestamp,
-      ...(gateEnforcementDecision ? { enforcement: gateEnforcementDecision } : {}),
-      ...(latestCodingRun?.budgetDecision ? { budgetDecision: latestCodingRun.budgetDecision } : {}),
-    })
-    const nextRun = appendArtifactToNode(selectedRun, artifact.nodeId, artifact.id)
-
+    const pending = startPendingInspectorAction(
+      'createAcceptanceBundle',
+      selectedRun,
+      node,
+      '正在生成验收证据包...',
+    )
     try {
-      await persistDeliveryArtifact(nextRun, artifact, 'Acceptance evidence bundle generated from delivery evidence.')
+      const result = await desktopApi.createAcceptanceBundle({
+        runId: selectedRun.id,
+        nodeId: node.id,
+      })
+      applyLocalExecutionState(result.state)
+      setSelectedRunId(result.run.id)
+      setSelectedNodeId(result.run.currentNodeId)
       setToast('验收证据包已生成')
     } catch (error) {
       setToast(error instanceof Error ? error.message : '保存验收证据包失败')

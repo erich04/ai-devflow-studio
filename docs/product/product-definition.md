@@ -209,29 +209,45 @@ Public SaaS, billing, enterprise SSO, and large organization administration are 
 
 ## Current Product Status
 
-The product has already proven:
+v1.3 release status is evidence-driven:
 
-- Local-first Electron workbench.
-- Team API and Web Console.
-- Self-hosted pilot stack.
-- Knowledge governance.
-- Knowledge Review Agent.
-- Managed Coding Agent runtime.
-- Real `opencode` runtime path.
-- Gate Enforcement Policy.
-- Policy-aware remediation and retry.
-- Runtime cost and budget guard foundation.
-- Workflow delivery flow foundations.
+- This source tree declares `1.3.0`. The v1.3-scoped functional closeout is implemented, and all six
+  first-party package manifests are aligned to `1.3.0`.
+- Formal status comes from `docs/releases/v1.3.0/` and
+  `corepack pnpm release:status -- --mode=tagged`, not from a prose claim in this document.
+- The 2026-07-31 candidate-formation snapshot recorded green local `verify:demo`, build/output,
+  Postgres, and Docker paths. Those runs were rehearsal evidence, not candidate-bound signoff.
 
-Known product gaps still being refined:
+The v1.3 closeout now provides:
 
-- End-to-end demand intake and stage completion polish.
-- PR and acceptance handoff depth.
-- Review model provider UX maturity.
-- Runtime budget administration UX.
-- Inspector scrolling and dense-state usability.
-- Multi-user collaboration and conflict handling.
-- GitHub delivery integration.
+- One trusted workflow command boundary for Clarify, Design, Build, Test, PR, and Acceptance.
+- Main-process canonical reload and atomic persistence for Run, Artifact, Event, and Test Evidence.
+- Evidence-gated stage order, including latest-Test, Diff, PR Draft, Acceptance Bundle, policy,
+  review, budget, and role checks.
+- Explicit Local Project ↔ Team Project binding, canonical remote ownership, and local-first sync.
+- Known-workspace path redaction and an explicitly gated deterministic fake provider path.
+- Runnable API/Worker build-output smoke and expanded Verify/Release automation.
+- Clear unpaired-PR guidance and compatibility with the documented GitHub OAuth environment names.
+
+The v1.3 release contract requires:
+
+- a clean candidate commit `C` and a complete candidate-bound local/remote gate result;
+- real `windows-latest` CI against `C`;
+- a new dated, fully paired Computer Use walkthrough through final Acceptance and restart;
+- the explicitly authorized release-only real opencode smoke;
+- an evidence-only commit `S`, successful pre-tag/tagged checks, and tag `v1.3.0` at `S`.
+
+The product remains broader than the v1.3 release scope. Production auth and paid-budget trust
+remain v1.4 work.
+
+Repository knowledge indexing, complete Web management paths, real Skills/MCP execution, GitHub PR
+creation, multi-user conflict handling, and installable packages remain later work.
+
+Therefore, the v1.3 functional scope is closed in code, while the whole product is not
+feature-complete. Formal release state must be read from the evidence and tagged status check.
+
+The [`2026-07-25` walkthrough](../guides/devflow-studio-v1.3-walkthrough-result-2026-07-25.md)
+remains the historical failed baseline, not current acceptance evidence.
 
 ## Non-Goals
 
@@ -253,4 +269,3 @@ A feature is product-ready only when:
 4. Redaction boundaries are preserved.
 5. The behavior is covered by the appropriate layer of tests or smoke.
 6. The walkthrough can explain what the user should do next.
-

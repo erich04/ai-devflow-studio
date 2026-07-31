@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { runs, tokenUsage } from './fixtures'
 import { canApproveGate } from './gates'
 import { findEntityNeighborhood } from './knowledge'
-import { redactSecrets } from './redaction'
+import {
+  redactCodingAgentEventForStorage,
+  redactLocalAbsolutePaths,
+  redactSecrets,
+} from './redaction'
 import { parseThemePreference, resolveThemePreference } from './theme'
 import { rollupTokenUsage } from './cost'
 
@@ -13,6 +17,185 @@ describe('redactSecrets', () => {
     expect(result.redacted).toBe(true)
     expect(result.value).toContain('[REDACTED:env_secret_assignment]')
     expect(result.value).toContain('[REDACTED:github_token]')
+  })
+
+  it('redacts an opaque bearer credential from an Authorization header', () => {
+    const result = redactSecrets('Authorization: Bearer opaque-demo-token-123')
+
+    expect(result.redacted).toBe(true)
+    expect(result.value).not.toContain('opaque-demo-token-123')
+  })
+
+  it('redacts password and token values from JSON-shaped output', () => {
+    const result = redactSecrets(
+      '{"password":"plain-demo-secret","token":"opaque-demo-token"}',
+    )
+
+    expect(result.redacted).toBe(true)
+    expect(result.value).not.toContain('plain-demo-secret')
+    expect(result.value).not.toContain('opaque-demo-token')
+  })
+
+  it('redacts Authorization and token values from escaped JSON-shaped output', () => {
+    const result = redactSecrets(
+      String.raw`payload={\"Authorization\":\"Bearer opaque-json-bearer\",\"token\":\"opaque-json-token\"}`,
+    )
+
+    expect(result.redacted).toBe(true)
+    expect(result.value).not.toContain('opaque-json-bearer')
+    expect(result.value).not.toContain('opaque-json-token')
+  })
+
+  it('redacts token and API key values from CLI options', () => {
+    const result = redactSecrets(
+      'client --token opaque-demo-token --api-key=opaque-demo-api-key',
+    )
+
+    expect(result.redacted).toBe(true)
+    expect(result.value).not.toContain('opaque-demo-token')
+    expect(result.value).not.toContain('opaque-demo-api-key')
+  })
+})
+
+describe('redactCodingAgentEventForStorage', () => {
+  it('redacts values selected by sensitive metadata keys at every nesting level', () => {
+    const result = redactCodingAgentEventForStorage({
+      id: 'coding-event-structured-secret',
+      codingRunId: 'coding-run-structured-secret',
+      runId: 'run-structured-secret',
+      nodeId: 'node-build',
+      sequence: 1,
+      kind: 'tool_result',
+      message: 'Tool completed.',
+      timestamp: '2026-06-17T00:00:00.000Z',
+      metadata: {
+        token: 'opaque-structured-token',
+        Authorization: 'Bearer opaque-structured-bearer',
+        nested: {
+          password: 'opaque-structured-password',
+          apiKey: { value: 'opaque-structured-api-key' },
+          route: '/v1/users',
+        },
+      },
+      redacted: false,
+    })
+
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain('opaque-structured-token')
+    expect(serialized).not.toContain('opaque-structured-bearer')
+    expect(serialized).not.toContain('opaque-structured-password')
+    expect(serialized).not.toContain('opaque-structured-api-key')
+    expect(serialized).toContain('/v1/users')
+    expect(result.redacted).toBe(true)
+  })
+})
+
+describe('redactLocalAbsolutePaths', () => {
+  it('redacts a POSIX path immediately following a diagnostic label', () => {
+    const result = redactLocalAbsolutePaths('error:/Users/alice/private/report.txt')
+
+    expect(result.redacted).toBe(true)
+    expect(result.value).not.toContain('/Users/alice/private')
+  })
+
+  it('redacts a POSIX path immediately following an ANSI color sequence', () => {
+    const result = redactLocalAbsolutePaths('\u001b[31m/Users/alice/private/report.txt\u001b[0m')
+
+    expect(result.redacted).toBe(true)
+    expect(result.value).not.toContain('/Users/alice/private')
+  })
+
+  it('redacts every POSIX path in a comma-separated path list', () => {
+    const result = redactLocalAbsolutePaths(
+      'paths=/Volumes/team/project,/Users/alice/private/report.txt',
+    )
+
+    expect(result.redacted).toBe(true)
+    expect(result.value).not.toContain('/Volumes/team')
+    expect(result.value).not.toContain('/Users/alice/private')
+  })
+
+  it('redacts a JSON-escaped POSIX path', () => {
+    const result = redactLocalAbsolutePaths(
+      String.raw`json=\/Users\/alice\/private\/report.json`,
+    )
+
+    expect(result.redacted).toBe(true)
+    expect(result.value).not.toContain(String.raw`\/Users\/alice\/private`)
+  })
+
+  it('redacts a file URL that uses a single slash', () => {
+    const result = redactLocalAbsolutePaths('file:/Users/alice/private/report.txt')
+
+    expect(result.redacted).toBe(true)
+    expect(result.value).not.toContain('/Users/alice/private')
+  })
+
+  it('preserves versioned routes, metrics routes, and protocol-relative web URLs', () => {
+    const result = redactLocalAbsolutePaths(
+      'GET /v1/users; scrape /metrics; load //cdn.example.com/assets/app.js.',
+    )
+
+    expect(result.value).toContain('/v1/users')
+    expect(result.value).toContain('/metrics')
+    expect(result.value).toContain('//cdn.example.com/assets/app.js')
+  })
+
+  it('redacts a file-shaped path under /api without hiding an API endpoint', () => {
+    const localFile = redactLocalAbsolutePaths(
+      'Read local file /api/private/config.json; keep endpoint /api/runs.',
+    )
+    const httpEndpoint = redactLocalAbsolutePaths('GET /api/private/config.json')
+
+    expect(localFile.value).not.toContain('/api/private/config.json')
+    expect(localFile.value).toContain('/api/runs')
+    expect(httpEndpoint.value).toContain('/api/private/config.json')
+  })
+
+  it('redacts POSIX, Windows, and file URL paths without hiding API routes', () => {
+    const result = redactLocalAbsolutePaths(
+      'Inspect /Users/alice/private/repo/src/index.ts, C:\\Users\\alice\\repo\\test.ts, and file:///private/tmp/devflow/report.txt; keep /health.',
+    )
+
+    expect(result.redacted).toBe(true)
+    expect(result.value).not.toContain('/Users/alice')
+    expect(result.value).not.toContain('C:\\Users\\alice')
+    expect(result.value).not.toContain('file:///private/tmp')
+    expect(result.value).toContain('/health')
+  })
+
+  it('redacts macOS and general POSIX filesystem paths while preserving API routes', () => {
+    const result = redactLocalAbsolutePaths(
+      'Read /Volumes/ClientData/repo/spec.md, /repo/private/config.json, and /usr/local/share/report.txt; keep /health and /api/runs.',
+    )
+
+    expect(result.value).not.toContain('/Volumes/ClientData')
+    expect(result.value).not.toContain('/repo')
+    expect(result.value).not.toContain('/usr/local')
+    expect(result.value).toContain('/health')
+    expect(result.value).toContain('/api/runs')
+  })
+
+  it('redacts single-segment POSIX roots without altering safe API routes or web URLs', () => {
+    const result = redactLocalAbsolutePaths(
+      'cwd=/repo tool=/usr; keep /health, /api/runs, and https://example.com/health.',
+    )
+
+    expect(result.value).not.toContain('cwd=/repo')
+    expect(result.value).not.toContain('tool=/usr')
+    expect(result.value).toContain('/health')
+    expect(result.value).toContain('/api/runs')
+    expect(result.value).toContain('https://example.com/health')
+  })
+
+  it('redacts Windows UNC paths with backslash and forward-slash separators', () => {
+    const result = redactLocalAbsolutePaths(
+      'Read \\\\fileserver\\private-share\\repo\\secret.txt and //fileserver/private-share/repo/secret.txt.',
+    )
+
+    expect(result.redacted).toBe(true)
+    expect(result.value).not.toContain('fileserver')
+    expect(result.value).not.toContain('private-share')
   })
 })
 

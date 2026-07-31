@@ -145,8 +145,10 @@ type GitHubOAuthFactory = {
 
 export const createGitHubOAuthClient: GitHubOAuthFactory = Object.assign(createClient, {
   fromEnv(env: Record<string, string | undefined> = process.env): GitHubOAuthClient | null {
-    const clientId = env['GITHUB_OAUTH_CLIENT_ID']?.trim()
-    const clientSecret = env['GITHUB_OAUTH_CLIENT_SECRET']?.trim()
+    const clientId =
+      env['GITHUB_OAUTH_CLIENT_ID']?.trim() || env['GITHUB_CLIENT_ID']?.trim()
+    const clientSecret =
+      env['GITHUB_OAUTH_CLIENT_SECRET']?.trim() || env['GITHUB_CLIENT_SECRET']?.trim()
     const redirectUri = env['GITHUB_OAUTH_REDIRECT_URI']?.trim()
 
     if (!clientId || !clientSecret || !redirectUri) {

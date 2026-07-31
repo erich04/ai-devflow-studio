@@ -13,11 +13,6 @@ const desktopApi: DevFlowDesktopApi = {
   loadDesktopPairing: () => ipcRenderer.invoke(ipcChannels.loadDesktopPairing),
   pairDesktop: (input) => ipcRenderer.invoke(ipcChannels.pairDesktop, input),
   loadRemoteSnapshot: (input) => ipcRenderer.invoke(ipcChannels.loadRemoteSnapshot, input),
-  uploadRunSummary: (summary) => ipcRenderer.invoke(ipcChannels.uploadRunSummary, summary),
-  uploadTestEvidenceSummary: (summary) =>
-    ipcRenderer.invoke(ipcChannels.uploadTestEvidenceSummary, summary),
-  uploadCodingAgentSummary: (summary) =>
-    ipcRenderer.invoke(ipcChannels.uploadCodingAgentSummary, summary),
   selectLocalProject: () => ipcRenderer.invoke(ipcChannels.selectProject),
   getProjectGitStatus: (input) => ipcRenderer.invoke(ipcChannels.getProjectGitStatus, input),
   watchProjectGitStatus: (input) => ipcRenderer.invoke(ipcChannels.watchProjectGitStatus, input),
@@ -33,12 +28,12 @@ const desktopApi: DevFlowDesktopApi = {
   deleteRun: (input) => ipcRenderer.invoke(ipcChannels.deleteRun, input),
   completeWorkflowAgentNode: (input) =>
     ipcRenderer.invoke(ipcChannels.completeWorkflowAgentNode, input),
-  saveRun: (run) => ipcRenderer.invoke(ipcChannels.saveRun, run),
-  saveArtifact: (artifact) => ipcRenderer.invoke(ipcChannels.saveArtifact, artifact),
+  createPrDraft: (input) => ipcRenderer.invoke(ipcChannels.createPrDraft, input),
+  createAcceptanceBundle: (input) =>
+    ipcRenderer.invoke(ipcChannels.createAcceptanceBundle, input),
   approveGate: (input) => ipcRenderer.invoke(ipcChannels.approveGate, input),
   saveGateOverride: (input) => ipcRenderer.invoke(ipcChannels.saveGateOverride, input),
   listGateOverrides: (input) => ipcRenderer.invoke(ipcChannels.listGateOverrides, input),
-  saveEvent: (event) => ipcRenderer.invoke(ipcChannels.saveEvent, event),
   saveSettings: (settings) => ipcRenderer.invoke(ipcChannels.saveSettings, settings),
   saveMcpServers: (servers) => ipcRenderer.invoke(ipcChannels.saveMcpServers, servers),
   listAgentProviders: () => ipcRenderer.invoke(ipcChannels.listAgentProviders),

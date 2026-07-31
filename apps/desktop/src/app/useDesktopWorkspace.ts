@@ -336,8 +336,25 @@ export function useDesktopWorkspace(input: {
       return
     }
 
+    let disposed = false
     const unsubscribeRun = desktopApi.onCodingRunStatusUpdated((run) => {
       setCodingRuns((previous) => mergeById(previous, [run]))
+      if (run.status !== 'completed') {
+        return
+      }
+
+      void desktopApi
+        .loadState()
+        .then((state) => {
+          if (!disposed) {
+            applyLocalExecutionState(state)
+          }
+        })
+        .catch((error: unknown) => {
+          if (!disposed) {
+            setToast(error instanceof Error ? error.message : '刷新 Coding Agent 完成状态失败')
+          }
+        })
     })
     const unsubscribeEvent = desktopApi.onCodingEventAppended((event) => {
       setCodingEvents((previous) => mergeById(previous, [event]))
@@ -347,6 +364,7 @@ export function useDesktopWorkspace(input: {
     })
 
     return () => {
+      disposed = true
       unsubscribeRun()
       unsubscribeEvent()
       unsubscribePermission()

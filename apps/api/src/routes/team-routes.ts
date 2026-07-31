@@ -15,6 +15,12 @@ import {
   type KnowledgeDocument,
   type OrganizationEnforcementPolicy,
   resolveDevFlowRuntimeFlags,
+  redactLocalAbsolutePaths,
+  redactRemoteCodingAgentSummaryForSync,
+  redactRemoteAgentReviewSummaryForSync,
+  redactRemoteRunSummaryForSync,
+  redactRemoteTestEvidenceSummaryForSync,
+  redactSecrets,
   resolveEffectivePolicy,
   runKnowledgeReviewAgent,
   validateEnforcementPolicy,
@@ -27,15 +33,23 @@ import {
   type RemoteTestEvidenceSummary,
   type TeamSession,
   type TestEvidence,
+  type WorkflowRun,
 } from '@ai-devflow/shared'
-import { canAccessProject, canSyncProject } from '../auth/session'
+import { canAccessProject, canSyncProject, getProjectMembershipRole } from '../auth/session'
 import type { GitHubOAuthClient } from '../auth/github-oauth'
 import {
   decryptAgentCredential,
   encryptAgentCredential,
   maskAgentCredential,
 } from '../agent-credentials'
-import type { RunsBundle, TeamOverviewPayload, TeamRepository } from '../repositories/team-repository'
+import {
+  CanonicalRunRequiredError,
+  RemoteChildSummaryConflictError,
+  RemoteRunSummaryConflictError,
+  type RunsBundle,
+  type TeamOverviewPayload,
+  type TeamRepository,
+} from '../repositories/team-repository'
 import { clearSessionCookie, createSessionCookie } from '../auth/session-cookie'
 
 const defaultKnowledgeDocuments: KnowledgeDocument[] = []
@@ -135,6 +149,44 @@ function hasLocalOnlyEvidenceField(value: Record<string, unknown>): boolean {
   return 'cwd' in value || 'stdout' in value || 'stderr' in value
 }
 
+function hasSameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  const leftSet = new Set(left)
+  const rightSet = new Set(right)
+  return leftSet.size === rightSet.size && [...leftSet].every((value) => rightSet.has(value))
+}
+
+function isRunStatus(value: unknown): boolean {
+  return (
+    value === 'created' ||
+    value === 'clarifying' ||
+    value === 'designing' ||
+    value === 'building' ||
+    value === 'testing' ||
+    value === 'paused_at_gate' ||
+    value === 'completed' ||
+    value === 'failed' ||
+    value === 'cancelled'
+  )
+}
+
+function isRemoteRunNodeSummary(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false
+  }
+
+  const stage = value['stage']
+  const kind = value['kind']
+  const status = value['status']
+  const requiredRole = value['requiredRole']
+  return (
+    typeof value['id'] === 'string' &&
+    (stage === 'clarify' || stage === 'design' || stage === 'build' || stage === 'test' || stage === 'pr' || stage === 'accept') &&
+    (kind === 'agent' || kind === 'gate' || kind === 'task' || kind === 'test' || kind === 'pr' || kind === 'acceptance') &&
+    (status === 'pending' || status === 'running' || status === 'blocked' || status === 'success' || status === 'failed' || status === 'skipped') &&
+    (requiredRole === undefined || requiredRole === 'member' || requiredRole === 'lead' || requiredRole === 'owner')
+  )
+}
+
 function isRemoteRunSummary(value: unknown): value is RemoteRunSummary {
   return (
     isRecord(value) &&
@@ -142,8 +194,10 @@ function isRemoteRunSummary(value: unknown): value is RemoteRunSummary {
     typeof value['runId'] === 'string' &&
     typeof value['projectId'] === 'string' &&
     typeof value['title'] === 'string' &&
-    typeof value['status'] === 'string' &&
+    isRunStatus(value['status']) &&
     typeof value['currentNodeId'] === 'string' &&
+    isRemoteRunNodeSummary(value['currentNode']) &&
+    (value['currentNode'] as Record<string, unknown>)['id'] === value['currentNodeId'] &&
     typeof value['branchName'] === 'string' &&
     typeof value['updatedAt'] === 'string'
   )
@@ -166,14 +220,58 @@ function isRemoteTestEvidenceSummary(value: unknown): value is RemoteTestEvidenc
     (typeof value['exitCode'] === 'number' || value['exitCode'] === null) &&
     typeof value['durationMs'] === 'number' &&
     typeof value['summary'] === 'string' &&
-    typeof value['redacted'] === 'boolean' &&
+    value['redacted'] === true &&
     typeof value['createdAt'] === 'string'
   )
 }
 
 function isRemoteAgentReviewSummary(value: unknown): value is RemoteAgentReviewSummary {
+  if (!isRecord(value)) {
+    return false
+  }
+
+  const policyFindingCount = value['policyFindingCount']
+  const policyFindingCategories = value['policyFindingCategories']
+  const policyFindings = value['policyFindings']
+  const hasValidPolicyFindingCount =
+    policyFindingCount === undefined ||
+    (Number.isInteger(policyFindingCount) && (policyFindingCount as number) >= 0)
+  const hasValidPolicyFindingCategories =
+    policyFindingCategories === undefined ||
+    (Array.isArray(policyFindingCategories) &&
+      policyFindingCategories.every(
+        (category) =>
+          category === 'missing_evidence' ||
+          category === 'test_risk' ||
+          category === 'api_contract_risk' ||
+          category === 'security_risk' ||
+          category === 'review_gap',
+      ))
+  const hasValidPolicyFindings =
+    policyFindings === undefined
+      ? policyFindingCount === undefined || policyFindingCount === 0
+      : Array.isArray(policyFindings) &&
+        (policyFindingCount === undefined || policyFindingCount === policyFindings.length) &&
+        policyFindings.every(
+          (finding) =>
+            isRecord(finding) &&
+            typeof finding['id'] === 'string' &&
+            finding['reviewId'] === value['id'] &&
+            finding['runId'] === value['runId'] &&
+            finding['nodeId'] === value['nodeId'] &&
+            (finding['category'] === 'missing_evidence' ||
+              finding['category'] === 'test_risk' ||
+              finding['category'] === 'api_contract_risk' ||
+              finding['category'] === 'security_risk' ||
+              finding['category'] === 'review_gap') &&
+            (finding['severity'] === 'low' ||
+              finding['severity'] === 'medium' ||
+              finding['severity'] === 'high') &&
+            typeof finding['summary'] === 'string' &&
+            typeof finding['createdAt'] === 'string',
+        )
+
   return (
-    isRecord(value) &&
     typeof value['id'] === 'string' &&
     typeof value['runId'] === 'string' &&
     typeof value['nodeId'] === 'string' &&
@@ -185,10 +283,9 @@ function isRemoteAgentReviewSummary(value: unknown): value is RemoteAgentReviewS
     typeof value['summary'] === 'string' &&
     typeof value['riskCount'] === 'number' &&
     typeof value['missingEvidenceCount'] === 'number' &&
-    (value['policyFindingCount'] === undefined || typeof value['policyFindingCount'] === 'number') &&
-    (value['policyFindingCategories'] === undefined ||
-      (Array.isArray(value['policyFindingCategories']) &&
-        value['policyFindingCategories'].every((category) => typeof category === 'string'))) &&
+    hasValidPolicyFindingCount &&
+    hasValidPolicyFindingCategories &&
+    hasValidPolicyFindings &&
     (value['advisoryLevel'] === 'info' ||
       value['advisoryLevel'] === 'warn' ||
       value['advisoryLevel'] === 'block') &&
@@ -311,7 +408,7 @@ function parseRemoteRunSummary(value: unknown): RemoteRunSummary {
     throw new Error('Invalid remote run summary payload')
   }
 
-  return value
+  return redactRemoteRunSummaryForSync(value)
 }
 
 function parseRemoteTestEvidenceSummary(value: unknown): RemoteTestEvidenceSummary {
@@ -323,7 +420,7 @@ function parseRemoteTestEvidenceSummary(value: unknown): RemoteTestEvidenceSumma
     throw new Error('Invalid remote test evidence summary payload')
   }
 
-  return value
+  return redactRemoteTestEvidenceSummaryForSync(value)
 }
 
 function parseRemoteAgentReviewSummary(value: unknown): RemoteAgentReviewSummary {
@@ -331,7 +428,7 @@ function parseRemoteAgentReviewSummary(value: unknown): RemoteAgentReviewSummary
     throw new Error('Invalid remote agent review summary payload')
   }
 
-  return value
+  return redactRemoteAgentReviewSummaryForSync(value)
 }
 
 function parseRemoteCodingAgentSummary(value: unknown): RemoteCodingAgentSummary {
@@ -343,7 +440,7 @@ function parseRemoteCodingAgentSummary(value: unknown): RemoteCodingAgentSummary
     throw new Error('Invalid remote coding agent summary payload')
   }
 
-  return value
+  return redactRemoteCodingAgentSummaryForSync(value)
 }
 
 function readRequiredString(value: Record<string, unknown>, key: string): string {
@@ -590,6 +687,37 @@ function conflict(message: string): ApiRouteResult {
   }
 }
 
+async function acceptCanonicalRunEvidence<T>(upload: () => Promise<T>): Promise<ApiRouteResult> {
+  try {
+    return {
+      status: 202,
+      body: await upload(),
+    }
+  } catch (error) {
+    if (
+      error instanceof CanonicalRunRequiredError ||
+      error instanceof RemoteChildSummaryConflictError
+    ) {
+      return conflict(error.message)
+    }
+    throw error
+  }
+}
+
+async function acceptCanonicalRunSummary<T>(upload: () => Promise<T>): Promise<ApiRouteResult> {
+  try {
+    return {
+      status: 202,
+      body: await upload(),
+    }
+  } catch (error) {
+    if (error instanceof RemoteRunSummaryConflictError) {
+      return conflict(error.message)
+    }
+    throw error
+  }
+}
+
 function createOAuthStateCookie(state: string): string {
   return `devflow_oauth_state=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`
 }
@@ -670,12 +798,28 @@ async function evaluateEnforcementForInput(
     repository.getEnforcementPolicy(input.projectId, session),
     repository.listGateOverrides({ runId: input.runId }, session),
   ])
-  const run = bundle.runs.find((candidate) => candidate.id === input.runId)
-  if (!run || run.projectId !== input.projectId || !canAccessProject(session, run.projectId)) {
+  const storedRun = bundle.runs.find((candidate) => candidate.id === input.runId)
+  if (!storedRun || storedRun.projectId !== input.projectId || !canAccessProject(session, storedRun.projectId)) {
     throw new Error('Project access required')
   }
 
-  const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
+  const localNodeId = (nodeId: string) => {
+    const remotePrefix = `${storedRun.id}:`
+    return nodeId.startsWith(remotePrefix) ? nodeId.slice(remotePrefix.length) : nodeId
+  }
+  const run: WorkflowRun = {
+    ...storedRun,
+    currentNodeId: localNodeId(storedRun.currentNodeId),
+    nodes: storedRun.nodes.map((candidate) => ({ ...candidate, id: localNodeId(candidate.id) })),
+    edges: storedRun.edges.map((edge) => ({
+      ...edge,
+      source: localNodeId(edge.source),
+      target: localNodeId(edge.target),
+    })),
+  }
+
+  const canonicalNodeId = localNodeId(input.nodeId)
+  const node = run.nodes.find((candidate) => candidate.id === canonicalNodeId)
   if (!node) {
     throw new Error(`Run node not found: ${input.nodeId}`)
   }
@@ -683,19 +827,33 @@ async function evaluateEnforcementForInput(
   const governanceChecks = buildKnowledgeGovernanceChecks({
     run,
     node,
-    artifacts: bundle.artifacts.filter((artifact) => artifact.runId === run.id),
+    artifacts: bundle.artifacts
+      .filter((artifact) => artifact.runId === run.id)
+      .map((artifact) => ({ ...artifact, nodeId: localNodeId(artifact.nodeId) })),
     documents: defaultKnowledgeDocuments,
     chunks: defaultKnowledgeChunks,
     testEvidence: overview.testEvidenceSummaries
       .filter((summary) => summary.runId === run.id)
-      .map(toTestEvidence),
+      .map(toTestEvidence)
+      .map((evidence) => ({ ...evidence, nodeId: localNodeId(evidence.nodeId) })),
   })
-  const latestAgentReview = overview.agentReviews
-    .filter((review) => review.runId === run.id && review.nodeId === node.id)
+  const agentReviews = overview.agentReviews
+    .filter((review) => review.runId === run.id && localNodeId(review.nodeId) === node.id)
+    .map((review) => ({
+      ...review,
+      nodeId: localNodeId(review.nodeId),
+      policyFindings: review.policyFindings.map((finding) => ({
+        ...finding,
+        nodeId: localNodeId(finding.nodeId),
+      })),
+    }))
+  const latestAgentReview = agentReviews
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null
-  const agentPolicyFindings = overview.agentReviews
-    .filter((review) => review.runId === run.id && review.nodeId === node.id)
-    .flatMap((review) => review.policyFindings)
+  const agentPolicyFindings = agentReviews.flatMap((review) => review.policyFindings)
+  const normalizedOverrides = overrides.map((override) => ({
+    ...override,
+    nodeId: localNodeId(override.nodeId),
+  }))
 
   return {
     run,
@@ -708,7 +866,7 @@ async function evaluateEnforcementForInput(
       governanceChecks,
       agentPolicyFindings,
       latestAgentReview,
-      overrides,
+      overrides: normalizedOverrides,
       policySource: 'remote_cache',
     }),
   }
@@ -1014,14 +1172,23 @@ export async function resolveTeamRoute(
       if (decision.policyVersion !== input.policyVersion) {
         return forbidden('Policy version is stale; re-evaluate before overriding')
       }
+      const canonicalBlockedReasonIds = decision.blockingReasons.map((reason) => reason.id)
+      if (!hasSameStringSet(input.blockedReasonIds, canonicalBlockedReasonIds)) {
+        return forbidden('Gate blockers changed; re-evaluate before overriding')
+      }
+      const reason = redactSecrets(redactLocalAbsolutePaths(input.reason).value).value
+      const projectRole = getProjectMembershipRole(options.session, input.projectId)
+      if (!projectRole) {
+        return forbidden('Lead override is not allowed for this Gate')
+      }
 
       if (!canOverrideBlockedGate({
-        userRole: options.session.role,
+        userRole: projectRole,
         userId: options.session.userId,
         run,
         node,
         enforcement: decision,
-        reason: input.reason,
+        reason,
       })) {
         return forbidden('Lead override is not allowed for this Gate')
       }
@@ -1033,9 +1200,9 @@ export async function resolveTeamRoute(
         nodeId: input.nodeId,
         projectId: input.projectId,
         userId: options.session.userId,
-        role: options.session.role,
-        reason: input.reason,
-        blockedReasonIds: input.blockedReasonIds,
+        role: projectRole,
+        reason,
+        blockedReasonIds: [...canonicalBlockedReasonIds].sort(),
         policyVersion: input.policyVersion,
         provisional: false,
         status: 'accepted',
@@ -1360,10 +1527,7 @@ export async function resolveTeamRoute(
       return forbidden(`Project role ${requiredRole} required`)
     }
 
-    return {
-      status: 202,
-      body: await repository.uploadRunSummary(summary, options.session),
-    }
+    return acceptCanonicalRunSummary(() => repository.uploadRunSummary(summary, options.session!))
   }
 
   if (method === 'POST' && pathname === '/api/sync/test-evidence-summary') {
@@ -1382,10 +1546,9 @@ export async function resolveTeamRoute(
       return forbidden('Project role member required')
     }
 
-    return {
-      status: 202,
-      body: await repository.uploadTestEvidenceSummary(summary, options.session),
-    }
+    return acceptCanonicalRunEvidence(() =>
+      repository.uploadTestEvidenceSummary(summary, options.session!),
+    )
   }
 
   if (method === 'POST' && pathname === '/api/sync/agent-review-summary') {
@@ -1404,10 +1567,9 @@ export async function resolveTeamRoute(
       return forbidden('Project role member required')
     }
 
-    return {
-      status: 202,
-      body: await repository.uploadAgentReviewSummary(summary, options.session),
-    }
+    return acceptCanonicalRunEvidence(() =>
+      repository.uploadAgentReviewSummary(summary, options.session!),
+    )
   }
 
   if (method === 'POST' && pathname === '/api/sync/coding-agent-summary') {
@@ -1426,10 +1588,9 @@ export async function resolveTeamRoute(
       return forbidden('Project role member required')
     }
 
-    return {
-      status: 202,
-      body: await repository.uploadCodingAgentSummary(summary, options.session),
-    }
+    return acceptCanonicalRunEvidence(() =>
+      repository.uploadCodingAgentSummary(summary, options.session!),
+    )
   }
 
   return null

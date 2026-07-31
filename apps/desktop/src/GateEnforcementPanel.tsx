@@ -56,7 +56,7 @@ export function GateEnforcementPanel({
   isLoading: boolean
   canSaveOverride: boolean
   isStartingRetry?: boolean
-  onSaveOverride: (reason: string, provisional: boolean) => void
+  onSaveOverride: (reason: string) => void
   onStartRetry?: (candidateId: string) => void
   pairingState?: 'unpaired' | 'paired' | 'sync_failed'
   onSyncTeam?: () => void
@@ -189,7 +189,7 @@ export function GateEnforcementPanel({
                 aria-busy={isSavingOverride || undefined}
                 disabled={isOverrideSaveDisabled}
                 title={isInspectorWriteBlocked && !isSavingOverride ? '其他 Inspector 操作正在进行中' : undefined}
-                onClick={() => onSaveOverride(overrideReason, false)}
+                onClick={() => onSaveOverride(overrideReason)}
               >
                 {isSavingOverride ? '保存中' : 'Save lead override'}
               </button>

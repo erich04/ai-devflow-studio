@@ -353,10 +353,24 @@ function findRule(policy: EffectiveEnforcementPolicy, ruleKey: string): Effectiv
   return policy.rules.find((item) => item.ruleKey === ruleKey)
 }
 
+function hasSameBlockerIds(
+  blockedReasonIds: readonly string[],
+  blockingReasons: readonly GateEnforcementReason[],
+): boolean {
+  const overrideBlockerIds = new Set(blockedReasonIds)
+  const currentBlockerIds = new Set(blockingReasons.map((reason) => reason.id))
+
+  return (
+    overrideBlockerIds.size === currentBlockerIds.size &&
+    [...overrideBlockerIds].every((id) => currentBlockerIds.has(id))
+  )
+}
+
 function acceptedOverrideFor(
   run: WorkflowRun,
   node: WorkflowNode,
   policyVersion: number,
+  blockingReasons: GateEnforcementReason[],
   overrides: GateOverrideDecision[],
 ): GateOverrideDecision | undefined {
   return overrides.find(
@@ -364,7 +378,8 @@ function acceptedOverrideFor(
       item.runId === run.id &&
       item.nodeId === node.id &&
       item.status === 'accepted' &&
-      item.policyVersion === policyVersion,
+      item.policyVersion === policyVersion &&
+      hasSameBlockerIds(item.blockedReasonIds, blockingReasons),
   )
 }
 
@@ -442,7 +457,13 @@ export function evaluateGateEnforcement({
     }
   }
 
-  const acceptedOverride = acceptedOverrideFor(run, node, effectivePolicy.version, overrides)
+  const acceptedOverride = acceptedOverrideFor(
+    run,
+    node,
+    effectivePolicy.version,
+    blockingReasons,
+    overrides,
+  )
   const provisional = acceptedOverride?.provisional ?? false
 
   if (hasHardBlock) {
@@ -541,7 +562,10 @@ export function canApproveGateNow(input: {
     return { allowed: false, reason: 'hard_blocked' }
   }
 
-  if (!input.enforcement.blocksApproval) {
+  if (
+    !input.enforcement.blocksApproval &&
+    input.enforcement.status !== 'overridden'
+  ) {
     return { allowed: true, reason: 'allowed' }
   }
 
@@ -552,10 +576,13 @@ export function canApproveGateNow(input: {
 
   const canUseOverride =
     override.status === 'accepted' &&
+    override.runId === input.run.id &&
+    override.nodeId === input.node.id &&
     override.role === 'lead' &&
     input.userRole === 'lead' &&
     override.userId === input.userId &&
     override.policyVersion === input.enforcement.policyVersion &&
+    hasSameBlockerIds(override.blockedReasonIds, input.enforcement.blockingReasons) &&
     override.reason.trim().length > 0 &&
     input.userId !== input.run.creatorId &&
     input.userId !== input.node.ownerId

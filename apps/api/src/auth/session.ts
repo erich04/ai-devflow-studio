@@ -16,6 +16,10 @@ const ROLE_RANK: Record<Role, number> = {
 
 export type CreateAuthenticatedSessionInput = Omit<AuthenticatedSession, 'source'>
 
+export type ResolveRequestSessionOptions = {
+  devAuthEnabled?: boolean
+}
+
 type HeaderBag = IncomingHttpHeaders | Record<string, string | string[] | undefined>
 
 function readHeader(headers: HeaderBag, key: string): string | undefined {
@@ -91,7 +95,14 @@ export function isAuthenticatedSession(session: TeamSession): session is Authent
   return session.source === 'authenticated'
 }
 
-export function resolveRequestSession(headers: HeaderBag): TeamSession | null {
+export function resolveRequestSession(
+  headers: HeaderBag,
+  options: ResolveRequestSessionOptions = {},
+): TeamSession | null {
+  if (!options.devAuthEnabled || readHeader(headers, 'origin')) {
+    return null
+  }
+
   const userId = readHeader(headers, 'x-devflow-user-id')
   const source = parseSessionSource(readHeader(headers, 'x-devflow-session-source'))
 
@@ -167,6 +178,13 @@ export function getProjectRole(session: TeamSession, projectId: string): Role | 
   }
 
   return session.projectMemberships.find((membership) => membership.projectId === projectId)?.role ?? null
+}
+
+export function getProjectMembershipRole(session: TeamSession, projectId: string): Role | null {
+  return session.projectMemberships.find(
+    (membership) =>
+      membership.projectId === projectId && membership.userId === session.userId,
+  )?.role ?? null
 }
 
 export function canAccessProject(session: TeamSession, projectId: string): boolean {

@@ -6,21 +6,21 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import {
-  applyTestEvidenceToRun,
   buildAgentReviewContext,
   buildKnowledgeGovernanceChecks,
   buildKnowledgeReferences,
   buildRemediationPlan,
   canApproveGateNow,
   canOverrideBlockedGate,
+  createAcceptanceEvidenceBundleArtifact,
   createAgentReviewArtifacts,
-  createOpenAiCompatibleAgentProvider,
-  completeWorkflowAgentNode,
+  createPrDraftArtifact,
   createWorkflowRunFromRequest,
   createRemoteAgentReviewSummary,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
-  advanceWorkflowAfterGateApproval,
+  redactLocalAbsolutePaths,
+  redactTestEvidenceForStorage,
   isActiveCodingAgentRunStatus,
   evaluateGateEnforcement,
   redactSecrets,
@@ -28,8 +28,6 @@ import {
   runKnowledgeReviewAgent,
   runWorkflowStageAgent,
   type AgentEvent,
-  type AgentProvider,
-  type AgentProviderConfig,
   type GateOverrideDecision,
   type KnowledgeChunk,
   type KnowledgeDocument,
@@ -47,7 +45,6 @@ import {
 import { createLocalStore, type LocalStore } from './local-store.js'
 import {
   ipcChannels,
-  parseAgentEventInput,
   parseCancelCodingAgentRunInput,
   parseDeleteRunInput,
   parseDeleteManagedWorktreeInput,
@@ -58,14 +55,13 @@ import {
   parseAgentProviderCredentialInput,
   parsePairDesktopInput,
   parseProjectGitStatusInput,
+  parseCreateAcceptanceBundleInput,
+  parseCreatePrDraftInput,
   parseCreateRunInput,
   parseCompleteWorkflowAgentNodeInput,
   parseListAgentReviewsInput,
   parseReplyCodingPermissionInput,
-  parseRemoteCodingAgentSummaryInput,
-  parseRemoteRunSummaryInput,
   parseRemoteSnapshotInput,
-  parseRemoteTestEvidenceSummaryInput,
   parseRunCodingAgentInput,
   parseRunKnowledgeReviewInput,
   parseRunProjectTestsInput,
@@ -74,8 +70,6 @@ import {
   parseListGateOverridesInput,
   parseLoadEnforcementPolicyInput,
   parseSaveGateOverrideInput,
-  parseSaveArtifactInput,
-  parseSaveRunInput,
   parseSaveProjectTestCommandInput,
   parseStartRetryAttemptInput,
   parseSettingsInput,
@@ -90,9 +84,23 @@ import { deleteManagedCodingWorkspace as removeManagedCodingWorkspaceDirectory }
 import { createOpencodeProcessManager } from './opencode-process.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 import {
+  listElectronAgentProviderConfigs,
+  resolveElectronAgentProvider,
+} from './agent-provider-runtime.js'
+import {
+  createProjectBoundRemoteSync,
+  type ProjectBoundRemoteSync,
+} from './project-bound-remote-sync.js'
+import {
   loadPolicySnapshotForProject as loadStoredPolicySnapshotForProject,
   resolveLocalGateOverrideSettlement,
+  selectRemoteGateOverridesForLocalStore,
 } from './enforcement-policy.js'
+import {
+  createTrustedGateOverrideDraft,
+  createWorkflowRuntime,
+  resolveTrustedWorkflowActor,
+} from './workflow-runtime.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_TEST_TIMEOUT_MS = 120_000
@@ -116,11 +124,8 @@ const gitStatusWatchers = new Map<
     debounce?: ReturnType<typeof setTimeout>
   }
 >()
+const gitStatusWatcherCleanupRegistrations = new Set<number>()
 const opencodeProcessManager = createOpencodeProcessManager()
-
-const DEFAULT_OPENAI_PROVIDER_ID = 'openai-default'
-const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
-const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini'
 
 function getStore() {
   const userDataPath = process.env['DEVFLOW_USER_DATA_DIR'] ?? app.getPath('userData')
@@ -128,6 +133,20 @@ function getStore() {
     dbPath: path.join(userDataPath, 'devflow.sqlite'),
   })
   return storePromise
+}
+
+async function executeWorkflowCommandOrThrow(
+  store: LocalStore,
+  input: Parameters<ReturnType<typeof createWorkflowRuntime>['execute']>[0],
+) {
+  const result = await createWorkflowRuntime(store).execute(input)
+  if (!result.applied) {
+    const message = result.blockers
+      .map((blocker) => `${blocker.code}: ${blocker.message}`)
+      .join('; ')
+    throw new Error(`Workflow command rejected: ${message}`)
+  }
+  return result
 }
 
 async function getRemoteSyncClient() {
@@ -147,6 +166,26 @@ async function getRemoteSyncClient() {
   }
 
   return remoteSyncClient
+}
+
+async function getProjectBoundRemoteSync() {
+  const [remoteSync, store] = await Promise.all([getRemoteSyncClient(), getStore()])
+  return createProjectBoundRemoteSync({
+    remoteSync,
+    credentialSource: store,
+  })
+}
+
+function syncCanonicalRunInBackground(runId: string): void {
+  void getProjectBoundRemoteSync()
+    .then((client) => client.uploadCanonicalRunSummary(runId))
+    .catch(() => undefined)
+}
+
+function syncCanonicalTestEvidenceInBackground(evidenceId: string): void {
+  void getProjectBoundRemoteSync()
+    .then((client) => client.uploadCanonicalTestEvidenceSummary(evidenceId))
+    .catch(() => undefined)
 }
 
 function resetRemoteSyncClient() {
@@ -219,12 +258,38 @@ function scheduleCodingRunTimeout(codingRunId: string, expire: () => Promise<voi
 }
 
 async function createCodingRuntimeForRequest() {
-  const remoteSync = await getRemoteSyncClient()
+  const [remoteSync, store] = await Promise.all([
+    getProjectBoundRemoteSync(),
+    getStore(),
+  ])
   return createCodingRuntime({
-    store: await getStore(),
+    store,
     engine: createCodingEngineAdapterFromEnv(process.env),
     remoteSync,
     budgetGuard: createRuntimeBudgetGuard(remoteSync),
+    completeWorkflowBuild: async ({ runId, nodeId, codingRunId, diffId, now }) => {
+      const existingEvents = await store.listEvents(runId)
+      const event: AgentEvent = {
+        id: `event-build-complete-${randomUUID()}`,
+        runId,
+        nodeId,
+        sequence: existingEvents.length + 1,
+        kind: 'file_change',
+        message: `Coding Agent run ${codingRunId} completed with diff ${diffId}.`,
+        timestamp: now,
+      }
+      await executeWorkflowCommandOrThrow(store, {
+        runId,
+        command: {
+          type: 'complete_build',
+          nodeId,
+          codingRunId,
+          diffId,
+        },
+        candidates: { events: [event] },
+        now,
+      })
+    },
     runTestCommand: runLocalTestCommand,
     runDependencyBootstrap: ({ codingRun, project, workspace, previousDependencyHash, timestamp }) =>
       runDependencyBootstrap({
@@ -252,7 +317,9 @@ async function createCodingRuntimeForRequest() {
   })
 }
 
-function createRuntimeBudgetGuard(remoteSync: RemoteSyncClient): CodingRuntimeBudgetGuard {
+function createRuntimeBudgetGuard(
+  remoteSync: Pick<ProjectBoundRemoteSync, 'evaluateRuntimeBudget'>,
+): CodingRuntimeBudgetGuard {
   return async ({ estimatedCost, project, approvalId }) => {
     if (estimatedCost.costUsd <= 0) {
       return {
@@ -307,42 +374,22 @@ function decryptCredential(secret: string): string {
   return safeStorage.decryptString(Buffer.from(secret, 'base64'))
 }
 
-function providerConfigFromCredential(metadata: ProviderCredentialMetadata): AgentProviderConfig {
-  return {
-    id: metadata.providerId,
-    name: metadata.providerId === DEFAULT_OPENAI_PROVIDER_ID ? 'OpenAI Compatible' : metadata.providerId,
-    kind: 'openai-compatible',
-    model: metadata.model,
-    ...(metadata.baseUrl ? { baseUrl: metadata.baseUrl } : {}),
-    enabled: true,
-    maskedCredential: metadata.maskedCredential,
-    updatedAt: metadata.updatedAt,
-  }
-}
-
-async function listAgentProviderConfigs(): Promise<AgentProviderConfig[]> {
+async function listAgentProviderConfigs() {
   const store = await getStore()
   const credentials = await store.listProviderCredentials()
 
-  return credentials
-    .filter((metadata) => metadata.providerId !== 'fake-knowledge-review')
-    .map(providerConfigFromCredential)
+  return listElectronAgentProviderConfigs({
+    credentials,
+    fakeRuntimeEnabled: runtimeFlags.fakeRuntimeEnabled,
+  })
 }
 
-async function resolveAgentProvider(store: LocalStore, providerId: string): Promise<AgentProvider> {
-  const credentials = await store.listProviderCredentials()
-  const metadata = credentials.find((candidate) => candidate.providerId === providerId)
-  const encryptedSecret = await store.getProviderEncryptedSecret(providerId)
-  if (!metadata || !encryptedSecret) {
-    throw new Error(`Agent provider credential not found: ${providerId}`)
-  }
-
-  return createOpenAiCompatibleAgentProvider({
-    id: metadata.providerId,
-    name: metadata.providerId === DEFAULT_OPENAI_PROVIDER_ID ? 'OpenAI Compatible' : metadata.providerId,
-    model: metadata.model || DEFAULT_OPENAI_MODEL,
-    baseUrl: metadata.baseUrl || DEFAULT_OPENAI_BASE_URL,
-    apiKey: decryptCredential(encryptedSecret),
+async function resolveAgentProvider(store: LocalStore, providerId: string) {
+  return resolveElectronAgentProvider({
+    providerId,
+    fakeRuntimeEnabled: runtimeFlags.fakeRuntimeEnabled,
+    credentialSource: store,
+    decryptCredential,
   })
 }
 
@@ -465,13 +512,24 @@ async function watchProjectGitStatus(
   }
 
   gitStatusWatchers.set(window.id, watcherState)
-  window.once('destroyed', () => clearProjectGitStatusWatcher(window.id))
+  if (!gitStatusWatcherCleanupRegistrations.has(window.id)) {
+    gitStatusWatcherCleanupRegistrations.add(window.id)
+    window.once('destroyed', () => {
+      clearProjectGitStatusWatcher(window.id)
+      gitStatusWatcherCleanupRegistrations.delete(window.id)
+    })
+  }
   return status
 }
 
 async function loadPolicySnapshotForProject(projectId: string): Promise<PolicySnapshot> {
   const store = await getStore()
   return loadStoredPolicySnapshotForProject(store, projectId)
+}
+
+async function resolvePolicyProjectId(projectId: string): Promise<string> {
+  const pairing = await (await getStore()).getDesktopPairingCredential()
+  return pairing?.localProjectId === projectId ? pairing.projectId : projectId
 }
 
 async function cacheRemotePolicySnapshots(snapshot: RemoteTeamSnapshot): Promise<void> {
@@ -481,10 +539,21 @@ async function cacheRemotePolicySnapshots(snapshot: RemoteTeamSnapshot): Promise
 
   const store = await getStore()
   const syncedAt = new Date().toISOString()
-  const { organizationPolicy, projectOverrides, effectivePolicies } = snapshot.enforcementPolicies
+  const { organizationPolicy, projectOverrides, effectivePolicies, gateOverrides } = snapshot.enforcementPolicies
+  const [localRuns, existingOverrides, pairing] = await Promise.all([
+    store.listRuns(),
+    store.listGateOverrides(),
+    store.getDesktopPairingCredential(),
+  ])
+  const remoteOverrides = selectRemoteGateOverridesForLocalStore({
+    remoteOverrides: gateOverrides,
+    existingOverrides,
+    localRuns,
+    pairing,
+  })
 
   await Promise.all(
-    snapshot.projects.map((project) => {
+    [...snapshot.projects.map((project) => {
       const projectOverride = projectOverrides.find((override) => override.projectId === project.id) ?? null
       const effectivePolicy =
         effectivePolicies.find((policy) => policy.projectId === project.id) ??
@@ -500,7 +569,7 @@ async function cacheRemotePolicySnapshots(snapshot: RemoteTeamSnapshot): Promise
         syncedAt,
         source: 'remote_cache',
       })
-    }),
+    }), ...remoteOverrides.map((override) => store.saveGateOverride(override))],
   )
 }
 
@@ -525,6 +594,24 @@ async function refreshRemotePolicySnapshotForProject(projectId: string): Promise
   }
 }
 
+async function loadDeliveryProjectReference(store: LocalStore, localProjectId: string) {
+  const pairing = await store.getDesktopPairingCredential()
+  if (!pairing || pairing.localProjectId !== localProjectId) {
+    throw new Error('The workflow project is not bound to the paired Team project')
+  }
+  const snapshot = await (await getRemoteSyncClient()).loadRemoteSnapshot({
+    organizationId: pairing.organizationId,
+  })
+  const project = snapshot.projects.find((candidate) => candidate.id === pairing.projectId)
+  if (!project) {
+    throw new Error(`Paired Team project not found: ${pairing.projectId}`)
+  }
+  return {
+    repository: project.repository,
+    defaultBranch: project.defaultBranch,
+  }
+}
+
 async function evaluateLocalGateEnforcement(
   input: { runId: string; nodeId: string; projectId?: string },
   options: { refreshPolicy?: boolean } = {},
@@ -539,8 +626,9 @@ async function evaluateLocalGateEnforcement(
     throw new Error(`Run node not found: ${input.nodeId}`)
   }
 
+  const policyProjectId = await resolvePolicyProjectId(input.projectId ?? run.projectId)
   if (options.refreshPolicy) {
-    await refreshRemotePolicySnapshotForProject(input.projectId ?? run.projectId)
+    await refreshRemotePolicySnapshotForProject(policyProjectId)
   }
 
   const [artifacts, testEvidence, agentReviews, gateOverrides, policySnapshot] = await Promise.all([
@@ -548,7 +636,7 @@ async function evaluateLocalGateEnforcement(
     store.listTestEvidence(run.id),
     store.listAgentReviews(run.id),
     store.listGateOverrides(run.id),
-    loadPolicySnapshotForProject(input.projectId ?? run.projectId),
+    loadPolicySnapshotForProject(policyProjectId),
   ])
   const knowledgeReferences = buildKnowledgeReferences({
     run,
@@ -599,7 +687,7 @@ async function evaluateLocalGateEnforcement(
 }
 
 function isRemoteGateOverrideRejection(message: string): boolean {
-  return /Policy version is stale|Lead override is not allowed|Project access|required|forbidden|denied/i.test(message)
+  return /Policy version is stale|Gate blockers changed|Run node not found|Canonical Run Summary|Lead override is not allowed|Project access|required|forbidden|denied/i.test(message)
 }
 
 async function settleGateOverrideWithTeamApi(
@@ -614,12 +702,10 @@ async function settleGateOverrideWithTeamApi(
   }
 
   try {
-    const confirmed = await (await getRemoteSyncClient()).saveGateOverride({
+    const confirmed = await (await getProjectBoundRemoteSync()).saveGateOverride({
       runId: override.runId,
       nodeId: override.nodeId,
       projectId: override.projectId,
-      userId: override.userId,
-      role: override.role,
       reason: override.reason,
       blockedReasonIds: override.blockedReasonIds,
       policyVersion: override.policyVersion,
@@ -649,7 +735,9 @@ async function reconcilePendingGateOverrides(
       continue
     }
 
-    const snapshot = await loadPolicySnapshotForProject(override.projectId)
+    const snapshot = await loadPolicySnapshotForProject(
+      await resolvePolicyProjectId(override.projectId),
+    )
     if (snapshot.source !== 'remote_cache') {
       reconciled.push(override)
       continue
@@ -676,12 +764,17 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.pairDesktop, async (_, payload: unknown) => {
     const input = parsePairDesktopInput(payload)
-    const exchangeResult = await createRemoteSyncClient().exchangeDesktopPairingCode(input)
+    await findProject(input.localProjectId)
+    const exchangeResult = await createRemoteSyncClient().exchangeDesktopPairingCode({ code: input.code })
     const { token, ...credential } = exchangeResult
+    const boundCredential = {
+      ...credential,
+      localProjectId: input.localProjectId,
+    }
     const store = await getStore()
-    await store.saveDesktopPairingCredential(credential, encryptCredential(token))
+    await store.saveDesktopPairingCredential(boundCredential, encryptCredential(token))
     resetRemoteSyncClient()
-    return { credential }
+    return { credential: boundCredential }
   })
 
   ipcMain.handle(ipcChannels.loadRemoteSnapshot, async (_, payload: unknown) => {
@@ -689,21 +782,6 @@ function registerIpcHandlers() {
     const snapshot = await (await getRemoteSyncClient()).loadRemoteSnapshot(input)
     await cacheRemotePolicySnapshots(snapshot)
     return snapshot
-  })
-
-  ipcMain.handle(ipcChannels.uploadRunSummary, async (_, payload: unknown) => {
-    const summary = parseRemoteRunSummaryInput(payload)
-    return (await getRemoteSyncClient()).uploadRunSummary(summary)
-  })
-
-  ipcMain.handle(ipcChannels.uploadTestEvidenceSummary, async (_, payload: unknown) => {
-    const summary = parseRemoteTestEvidenceSummaryInput(payload)
-    return (await getRemoteSyncClient()).uploadTestEvidenceSummary(summary)
-  })
-
-  ipcMain.handle(ipcChannels.uploadCodingAgentSummary, async (_, payload: unknown) => {
-    const summary = parseRemoteCodingAgentSummaryInput(payload)
-    return (await getRemoteSyncClient()).uploadCodingAgentSummary(summary)
   })
 
   ipcMain.handle(ipcChannels.selectProject, async () => {
@@ -777,6 +855,23 @@ function registerIpcHandlers() {
     const input = parseRunProjectTestsInput(payload)
     const store = await getStore()
     const project = await findProject(input.projectId)
+    const run = await store.getRun(input.runId)
+    if (!run) {
+      throw new Error(`Run not found: ${input.runId}`)
+    }
+    if (run.projectId !== project.id) {
+      throw new Error('The selected local project does not own this workflow run')
+    }
+    const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
+    if (
+      !node ||
+      run.currentNodeId !== node.id ||
+      node.kind !== 'test' ||
+      node.stage !== 'test' ||
+      (node.status !== 'running' && node.status !== 'failed')
+    ) {
+      throw new Error('Only the current workflow Test node can execute the project test command')
+    }
     const command = project.testCommand.trim()
 
     if (!command) {
@@ -788,17 +883,13 @@ function registerIpcHandlers() {
       throw new Error(`Test command blocked: ${safety.reasons.join(' ')}`)
     }
 
-    if (!input.run.nodes.some((node) => node.id === input.nodeId)) {
-      throw new Error(`Run node not found: ${input.nodeId}`)
-    }
-
     const result = await runLocalTestCommand({
       command: safety.normalizedCommand,
       cwd: project.path,
       timeoutMs: DEFAULT_TEST_TIMEOUT_MS,
     })
     const createdAt = new Date().toISOString()
-    const evidence: TestEvidence = {
+    const evidence: TestEvidence = redactTestEvidenceForStorage({
       id: `evidence-${randomUUID()}`,
       runId: input.runId,
       nodeId: input.nodeId,
@@ -813,18 +904,29 @@ function registerIpcHandlers() {
       summary: result.summary,
       redacted: result.redacted,
       createdAt,
-    }
+    })
     const artifact = createTestEvidenceArtifact(evidence)
     const event = createTestEvidenceEvent(
       evidence,
       (await store.listEvents(input.runId)).length + 1,
     )
-    const updatedRun = applyTestEvidenceToRun(input.run, evidence, artifact.id)
-
-    await store.saveRun(updatedRun)
-    await store.saveArtifact(artifact)
-    await store.saveEvent(event)
-    await store.saveTestEvidence(evidence)
+    await executeWorkflowCommandOrThrow(store, {
+      runId: run.id,
+      expectedRunUpdatedAt: run.updatedAt,
+      command: {
+        type: 'record_test_result',
+        nodeId: node.id,
+        evidenceId: evidence.id,
+        artifactId: artifact.id,
+      },
+      candidates: {
+        artifacts: [artifact],
+        events: [event],
+        testEvidence: [evidence],
+      },
+      now: createdAt,
+    })
+    syncCanonicalTestEvidenceInBackground(evidence.id)
 
     return {
       evidence,
@@ -834,7 +936,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.loadEnforcementPolicy, async (_, payload: unknown) => {
     const input = parseLoadEnforcementPolicyInput(payload)
-    return loadPolicySnapshotForProject(input.projectId)
+    return loadPolicySnapshotForProject(await resolvePolicyProjectId(input.projectId))
   })
 
   ipcMain.handle(ipcChannels.evaluateGateEnforcement, async (_, payload: unknown) => {
@@ -845,16 +947,21 @@ function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.saveGateOverride, async (_, payload: unknown) => {
     const input = parseSaveGateOverrideInput(payload)
     const store = await getStore()
-    const { run, node, decision } = await evaluateLocalGateEnforcement(input)
-    const redactedReason = redactSecrets(input.reason).value
-
-    if (decision.policyVersion !== input.policyVersion) {
-      throw new Error('Policy version is stale; re-evaluate before overriding')
-    }
+    const { run, node, decision } = await evaluateLocalGateEnforcement(
+      { runId: input.runId, nodeId: input.nodeId },
+      { refreshPolicy: true },
+    )
+    const actor = resolveTrustedWorkflowActor(
+      run,
+      await store.getDesktopPairingCredential(),
+    )
+    const redactedReason = redactSecrets(
+      redactLocalAbsolutePaths(input.reason).value,
+    ).value
 
     if (!canOverrideBlockedGate({
-      userRole: input.role,
-      userId: input.userId,
+      userRole: actor.role,
+      userId: actor.userId,
       run,
       node,
       enforcement: decision,
@@ -864,20 +971,15 @@ function registerIpcHandlers() {
     }
 
     const timestamp = new Date().toISOString()
-    const localOverride: GateOverrideDecision = {
-      id: `gate-override-${input.runId}-${input.nodeId}-${randomUUID()}`,
-      runId: input.runId,
-      nodeId: input.nodeId,
-      projectId: input.projectId,
-      userId: input.userId,
-      role: input.role,
+    const localOverride = createTrustedGateOverrideDraft({
+      id: `gate-override-${run.id}-${node.id}-${randomUUID()}`,
+      run,
+      node,
+      actor,
       reason: redactedReason,
-      blockedReasonIds: input.blockedReasonIds,
-      policyVersion: input.policyVersion,
-      provisional: input.provisional === true,
-      status: input.provisional === true ? 'provisional' : 'accepted',
+      decision,
       createdAt: timestamp,
-    }
+    })
     const settledOverride = await settleGateOverrideWithTeamApi(localOverride, decision.policySource)
     return store.saveGateOverride(settledOverride)
   })
@@ -896,13 +998,15 @@ function registerIpcHandlers() {
       now: new Date().toISOString(),
     })
     const store = await getStore()
-    await store.saveRun(created.run)
-    for (const artifact of created.artifacts) {
-      await store.saveArtifact(artifact)
+    const result = await store.createWorkflow({
+      run: created.run,
+      artifacts: created.artifacts,
+      events: created.events,
+    })
+    if (!result.created) {
+      throw new Error(`Run already exists: ${created.run.id}`)
     }
-    for (const event of created.events) {
-      await store.saveEvent(event)
-    }
+    syncCanonicalRunInBackground(created.run.id)
     return created.run
   })
 
@@ -943,6 +1047,14 @@ function registerIpcHandlers() {
     if (!node) {
       throw new Error(`Run node not found: ${input.nodeId}`)
     }
+    if (
+      run.currentNodeId !== node.id ||
+      node.kind !== 'agent' ||
+      (node.stage !== 'clarify' && node.stage !== 'design') ||
+      node.status !== 'running'
+    ) {
+      throw new Error('Only the current running clarification or design Agent node can execute')
+    }
     const [artifacts, events] = await Promise.all([
       store.listArtifacts(run.id),
       store.listEvents(run.id),
@@ -962,44 +1074,208 @@ function registerIpcHandlers() {
       runtime: 'electron',
       now: () => completedAt,
     })
-    const completed = completeWorkflowAgentNode({
-      run,
-      nodeId: input.nodeId,
-      artifacts,
-      generatedArtifact: generated.artifact,
-      existingEvents: events,
-      actorName: input.userName,
+    const event: AgentEvent = {
+      id: `event-${generated.artifact.id}`,
+      runId: run.id,
+      nodeId: node.id,
+      sequence: events.length + 1,
+      kind: 'thinking',
+      message: `${input.userName} generated ${generated.artifact.title}. Source: ${generated.source === 'model' ? 'model generated' : 'fake/template'} · ${generated.providerId} · ${generated.model}.`,
+      timestamp: completedAt,
+    }
+    const completed = await executeWorkflowCommandOrThrow(store, {
+      runId: run.id,
+      expectedRunUpdatedAt: run.updatedAt,
+      command: {
+        type: 'complete_agent',
+        nodeId: node.id,
+        artifactId: generated.artifact.id,
+      },
+      candidates: {
+        artifacts: [generated.artifact],
+        events: [event],
+      },
       now: completedAt,
     })
-    const event: AgentEvent = {
-      ...completed.event,
-      message: `${completed.event.message} Source: ${generated.source === 'model' ? 'model generated' : 'fake/template'} · ${generated.providerId} · ${generated.model}.`,
-    }
-
-    await store.saveRun(completed.run)
-    await store.saveArtifact(completed.artifact)
-    await store.saveEvent(event)
+    syncCanonicalRunInBackground(completed.run.id)
 
     return {
       run: completed.run,
-      artifact: completed.artifact,
+      artifact: generated.artifact,
       event,
       state: await store.loadState(),
     }
   })
 
-  ipcMain.handle(ipcChannels.saveRun, async (_, payload: unknown) => {
-    const run = parseSaveRunInput(payload)
+  ipcMain.handle(ipcChannels.createPrDraft, async (_, payload: unknown) => {
+    const input = parseCreatePrDraftInput(payload)
     const store = await getStore()
-    await store.saveRun(run)
-    return run
+    const run = await store.getRun(input.runId)
+    if (!run) {
+      throw new Error(`Run not found: ${input.runId}`)
+    }
+    const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
+    if (
+      !node ||
+      run.currentNodeId !== node.id ||
+      node.kind !== 'pr' ||
+      node.stage !== 'pr' ||
+      node.status !== 'running'
+    ) {
+      throw new Error('Only the current running PR node can create a PR draft')
+    }
+
+    const [
+      project,
+      artifacts,
+      codingDiffs,
+      testEvidence,
+      agentReviews,
+      codingRuns,
+      existingEvents,
+      enforcement,
+    ] = await Promise.all([
+      loadDeliveryProjectReference(store, run.projectId),
+      store.listArtifacts(run.id),
+      store.listCodingDiffArtifacts(run.id),
+      store.listTestEvidence(run.id),
+      store.listAgentReviews(run.id),
+      store.listCodingAgentRuns(run.id),
+      store.listEvents(run.id),
+      evaluateLocalGateEnforcement({ runId: run.id, nodeId: node.id }),
+    ])
+    const latestCodingRun = [...codingRuns].sort((left, right) =>
+      (right.completedAt ?? right.startedAt).localeCompare(left.completedAt ?? left.startedAt),
+    )[0]
+    const timestamp = new Date().toISOString()
+    const artifact = createPrDraftArtifact({
+      run,
+      project,
+      artifacts,
+      codingDiffs,
+      testEvidence,
+      agentReviewSummaries: agentReviews.map((review) => review.summary),
+      enforcement: enforcement.decision,
+      ...(latestCodingRun?.budgetDecision
+        ? { budgetDecision: latestCodingRun.budgetDecision }
+        : {}),
+      now: timestamp,
+    })
+    const event: AgentEvent = {
+      id: `event-${artifact.id}-${randomUUID()}`,
+      runId: run.id,
+      nodeId: node.id,
+      sequence: existingEvents.length + 1,
+      kind: 'thinking',
+      message: 'PR draft artifact generated from trusted delivery evidence.',
+      timestamp,
+    }
+    const completed = await executeWorkflowCommandOrThrow(store, {
+      runId: run.id,
+      expectedRunUpdatedAt: run.updatedAt,
+      command: {
+        type: 'complete_pr',
+        nodeId: node.id,
+        artifactId: artifact.id,
+      },
+      candidates: {
+        artifacts: [artifact],
+        events: [event],
+      },
+      now: timestamp,
+    })
+    syncCanonicalRunInBackground(completed.run.id)
+
+    return {
+      run: completed.run,
+      artifact,
+      event,
+      state: await store.loadState(),
+    }
   })
 
-  ipcMain.handle(ipcChannels.saveArtifact, async (_, payload: unknown) => {
-    const artifact = parseSaveArtifactInput(payload)
+  ipcMain.handle(ipcChannels.createAcceptanceBundle, async (_, payload: unknown) => {
+    const input = parseCreateAcceptanceBundleInput(payload)
     const store = await getStore()
-    await store.saveArtifact(artifact)
-    return artifact
+    const run = await store.getRun(input.runId)
+    if (!run) {
+      throw new Error(`Run not found: ${input.runId}`)
+    }
+    const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
+    if (
+      !node ||
+      run.currentNodeId !== node.id ||
+      node.kind !== 'acceptance' ||
+      node.stage !== 'accept' ||
+      (node.status !== 'running' && node.status !== 'blocked')
+    ) {
+      throw new Error('Only the current Acceptance node can create an evidence bundle')
+    }
+
+    const [
+      artifacts,
+      codingDiffs,
+      testEvidence,
+      agentReviews,
+      codingRuns,
+      existingEvents,
+      enforcement,
+    ] = await Promise.all([
+      store.listArtifacts(run.id),
+      store.listCodingDiffArtifacts(run.id),
+      store.listTestEvidence(run.id),
+      store.listAgentReviews(run.id),
+      store.listCodingAgentRuns(run.id),
+      store.listEvents(run.id),
+      evaluateLocalGateEnforcement({ runId: run.id, nodeId: node.id }),
+    ])
+    const latestCodingRun = [...codingRuns].sort((left, right) =>
+      (right.completedAt ?? right.startedAt).localeCompare(left.completedAt ?? left.startedAt),
+    )[0]
+    const timestamp = new Date().toISOString()
+    const artifact = createAcceptanceEvidenceBundleArtifact({
+      run,
+      artifacts,
+      codingDiffs,
+      testEvidence,
+      agentReviewSummaries: agentReviews.map((review) => review.summary),
+      enforcement: enforcement.decision,
+      ...(latestCodingRun?.budgetDecision
+        ? { budgetDecision: latestCodingRun.budgetDecision }
+        : {}),
+      now: timestamp,
+    })
+    const event: AgentEvent = {
+      id: `event-${artifact.id}-${randomUUID()}`,
+      runId: run.id,
+      nodeId: node.id,
+      sequence: existingEvents.length + 1,
+      kind: 'thinking',
+      message: 'Acceptance evidence bundle generated from trusted delivery evidence.',
+      timestamp,
+    }
+    const completed = await executeWorkflowCommandOrThrow(store, {
+      runId: run.id,
+      expectedRunUpdatedAt: run.updatedAt,
+      command: {
+        type: 'attach_acceptance_bundle',
+        nodeId: node.id,
+        artifactId: artifact.id,
+      },
+      candidates: {
+        artifacts: [artifact],
+        events: [event],
+      },
+      now: timestamp,
+    })
+    syncCanonicalRunInBackground(completed.run.id)
+
+    return {
+      run: completed.run,
+      artifact,
+      event,
+      state: await store.loadState(),
+    }
   })
 
   ipcMain.handle(ipcChannels.approveGate, async (_, payload: unknown) => {
@@ -1009,12 +1285,26 @@ function registerIpcHandlers() {
       runId: input.runId,
       nodeId: input.nodeId,
     }, { refreshPolicy: true })
+    const actor = resolveTrustedWorkflowActor(
+      run,
+      await store.getDesktopPairingCredential(),
+    )
     const acceptedOverride = gateOverrides.find(
-      (override) => override.runId === run.id && override.nodeId === node.id,
+      (override) =>
+        override.runId === run.id &&
+        override.nodeId === node.id &&
+        override.userId === actor.userId &&
+        override.status === 'accepted' &&
+        !override.provisional &&
+        override.policyVersion === decision.policyVersion &&
+        override.blockedReasonIds.length === decision.blockingReasons.length &&
+        override.blockedReasonIds.every((id) =>
+          decision.blockingReasons.some((reason) => reason.id === id),
+        ),
     )
     const approval = canApproveGateNow({
-      userRole: input.role,
-      userId: input.userId,
+      userRole: actor.role,
+      userId: actor.userId,
       run,
       node,
       enforcement: decision,
@@ -1026,37 +1316,48 @@ function registerIpcHandlers() {
     }
 
     const timestamp = new Date().toISOString()
-    const existingEvents = await store.listEvents(run.id)
-    const { run: updatedRun } = advanceWorkflowAfterGateApproval({
-      run,
-      approvedNodeId: node.id,
-      now: timestamp,
-    })
+    const [existingEvents, codingRuns] = await Promise.all([
+      store.listEvents(run.id),
+      node.kind === 'acceptance' ? store.listCodingAgentRuns(run.id) : Promise.resolve([]),
+    ])
     const event: AgentEvent = {
       id: `event-approval-${randomUUID()}`,
       runId: run.id,
       nodeId: node.id,
       sequence: existingEvents.length + 1,
       kind: 'approval',
-      message: `${input.userName} Gate approved: ${node.title}`,
+      message: `${actor.userName} Gate approved: ${node.title}`,
       timestamp,
     }
-
-    await store.saveRun(updatedRun)
-    await store.saveEvent(event)
+    const latestCodingRun = [...codingRuns].sort((left, right) =>
+      (right.completedAt ?? right.startedAt).localeCompare(left.completedAt ?? left.startedAt),
+    )[0]
+    const completed = await executeWorkflowCommandOrThrow(store, {
+      runId: run.id,
+      expectedRunUpdatedAt: run.updatedAt,
+      command: {
+        type: node.kind === 'acceptance' ? 'approve_acceptance' : 'approve_gate',
+        nodeId: node.id,
+      },
+      candidates: { events: [event] },
+      approval: {
+        roleAllowed: true,
+        policy: { blocksApproval: false },
+        review: node.kind === 'acceptance' ? 'required' : 'not_required',
+        budget: node.kind === 'acceptance' ? 'required' : 'not_required',
+      },
+      ...(latestCodingRun?.budgetDecision
+        ? { budgetDecision: latestCodingRun.budgetDecision }
+        : {}),
+      now: timestamp,
+    })
+    syncCanonicalRunInBackground(completed.run.id)
 
     return {
-      run: updatedRun,
+      run: completed.run,
       event,
       state: await store.loadState(),
     }
-  })
-
-  ipcMain.handle(ipcChannels.saveEvent, async (_, payload: unknown) => {
-    const event = parseAgentEventInput(payload)
-    const store = await getStore()
-    await store.saveEvent(event)
-    return event
   })
 
   ipcMain.handle(ipcChannels.saveSettings, async (_, payload: unknown) => {
@@ -1192,6 +1493,14 @@ function registerIpcHandlers() {
     if (!node) {
       throw new Error(`Run node not found: ${input.nodeId}`)
     }
+    if (
+      run.projectId !== input.projectId ||
+      run.currentNodeId !== node.id ||
+      (node.kind !== 'gate' && node.kind !== 'acceptance') ||
+      (node.status !== 'running' && node.status !== 'blocked')
+    ) {
+      throw new Error('Knowledge Review can only run for the current Gate or Acceptance node')
+    }
 
     const artifacts = await store.listArtifacts(input.runId)
     const testEvidence = await store.listTestEvidence(input.runId)
@@ -1233,7 +1542,7 @@ function registerIpcHandlers() {
     await store.saveAgentReview(result.review)
     await store.saveAgentTrace(result.trace)
     await store.saveAgentTokenUsage(result.tokenUsage)
-    void getRemoteSyncClient()
+    void getProjectBoundRemoteSync()
       .then((client) => client.uploadAgentReviewSummary(createRemoteAgentReviewSummary(result.review)))
       .catch(() => undefined)
 

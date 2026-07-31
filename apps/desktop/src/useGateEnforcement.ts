@@ -34,7 +34,7 @@ export type GateEnforcementState = {
   isLoading: boolean
   canApprove: boolean
   canSaveOverride: boolean
-  saveOverride: (reason: string, provisional?: boolean) => Promise<void>
+  saveOverride: (reason: string) => Promise<void>
 }
 
 export function useGateEnforcement(input: {
@@ -131,7 +131,7 @@ export function useGateEnforcement(input: {
     onToast,
   ])
 
-  async function saveOverride(reason: string, provisional = false) {
+  async function saveOverride(reason: string) {
     if (!desktopApi || !selectedRun || !selectedNode || !decision || !currentUser) {
       return
     }
@@ -153,13 +153,7 @@ export function useGateEnforcement(input: {
       const override = await desktopApi.saveGateOverride({
         runId: selectedRun.id,
         nodeId: selectedNode.id,
-        projectId: selectedRun.projectId,
-        userId: currentUser.id,
-        role: currentUser.role,
         reason,
-        blockedReasonIds: decision.blockingReasons.map((item) => item.id),
-        policyVersion: decision.policyVersion,
-        provisional,
       })
       setOverrides((previous) => mergeById(previous, [override]))
       const evaluated = await desktopApi.evaluateGateEnforcement({

@@ -7,7 +7,14 @@ import {
   type GateOverrideDecision,
   type TeamSession,
 } from '@ai-devflow/shared'
-import type { RunsBundle, TeamOverviewPayload, TeamRepository } from '../repositories/team-repository'
+import {
+  CanonicalRunRequiredError,
+  RemoteChildSummaryConflictError,
+  RemoteRunSummaryConflictError,
+  type RunsBundle,
+  type TeamOverviewPayload,
+  type TeamRepository,
+} from '../repositories/team-repository'
 import { resolveTeamRoute } from './team-routes'
 
 const ownerSession: TeamSession = {
@@ -999,6 +1006,108 @@ describe('team API route resolver', () => {
     })
   })
 
+  it('normalizes Postgres-scoped node IDs before canonical Gate evaluation', async () => {
+    const repository = createRepository()
+    const bundle = await repository.getRunsBundle()
+    const paymentsRun = bundle.runs.find((run) => run.id === 'run-payments')!
+    repository.getRunsBundle = vi.fn(async () => ({
+      ...bundle,
+      runs: bundle.runs.map((run) =>
+        run.id === paymentsRun.id
+          ? {
+              ...run,
+              currentNodeId: 'run-payments:node-build',
+              nodes: run.nodes.map((node) => ({ ...node, id: `run-payments:${node.id}` })),
+            }
+          : run,
+      ),
+      artifacts: bundle.artifacts.map((artifact) =>
+        artifact.runId === paymentsRun.id
+          ? { ...artifact, nodeId: `run-payments:${artifact.nodeId}` }
+          : artifact,
+      ),
+    }))
+    const policy = createRecommendedEnforcementPreset({
+      organizationId: 'org-demo',
+      updatedAt: '2026-06-16T00:00:00.000Z',
+    })
+    repository.getEnforcementPolicy = vi.fn(async () => ({
+      organizationPolicy: policy,
+      projectOverride: null,
+      effectivePolicy: resolveEffectivePolicy(policy, null),
+    }))
+
+    const result = await resolveTeamRoute('POST', '/api/enforcement/evaluate', repository, {
+      session: leadSession,
+      body: {
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        projectId: 'p-payments',
+      },
+    })
+
+    expect(result?.status).toBe(200)
+    expect(result?.body).toMatchObject({ status: 'blocked', blocksApproval: true })
+    const decision = result?.body as {
+      blockingReasons: Array<{ id: string; sourceId?: string }>
+      warningReasons: Array<{ id: string; sourceId?: string }>
+    }
+    expect(decision.blockingReasons.length).toBeGreaterThan(0)
+    expect(
+      [...decision.blockingReasons, ...decision.warningReasons].every(
+        (reason) =>
+          !reason.id.includes('run-payments:node-build') &&
+          !reason.sourceId?.includes('run-payments:node-build'),
+      ),
+    ).toBe(true)
+    expect(JSON.stringify(decision)).not.toContain('run-payments:node-build')
+  })
+
+  it('normalizes a namespaced node ID returned by a remote Postgres overview', async () => {
+    const repository = createRepository()
+    const bundle = await repository.getRunsBundle()
+    const paymentsRun = bundle.runs.find((run) => run.id === 'run-payments')!
+    repository.getRunsBundle = vi.fn(async () => ({
+      ...bundle,
+      runs: bundle.runs.map((run) =>
+        run.id === paymentsRun.id
+          ? {
+              ...run,
+              currentNodeId: 'run-payments:node-build',
+              nodes: run.nodes.map((node) => ({ ...node, id: `run-payments:${node.id}` })),
+            }
+          : run,
+      ),
+      artifacts: bundle.artifacts.map((artifact) =>
+        artifact.runId === paymentsRun.id
+          ? { ...artifact, nodeId: `run-payments:${artifact.nodeId}` }
+          : artifact,
+      ),
+    }))
+    const policy = createRecommendedEnforcementPreset({
+      organizationId: 'org-demo',
+      updatedAt: '2026-06-16T00:00:00.000Z',
+    })
+    repository.getEnforcementPolicy = vi.fn(async () => ({
+      organizationPolicy: policy,
+      projectOverride: null,
+      effectivePolicy: resolveEffectivePolicy(policy, null),
+    }))
+
+    const result = await resolveTeamRoute('POST', '/api/enforcement/evaluate', repository, {
+      session: leadSession,
+      body: {
+        runId: 'run-payments',
+        nodeId: 'run-payments:node-build',
+        projectId: 'p-payments',
+      },
+    })
+
+    expect(result?.status).toBe(200)
+    expect(result?.body).toMatchObject({ status: 'blocked', blocksApproval: true })
+    expect(JSON.stringify(result?.body)).not.toContain('run-payments:node-build')
+  })
+
   it('evaluates runtime budget guard and accepts lead budget approvals', async () => {
     const repository = createRepository()
 
@@ -1075,6 +1184,137 @@ describe('team API route resolver', () => {
     })).resolves.toMatchObject({ status: 403 })
   })
 
+  it('rejects a Gate override when the target project membership is only member', async () => {
+    const repository = createRepository()
+    const organizationPolicy = createRecommendedEnforcementPreset({
+      organizationId: 'org-demo',
+      updatedAt: '2026-06-16T00:00:00.000Z',
+    })
+    const effectivePolicy = resolveEffectivePolicy(organizationPolicy, null)
+    repository.getEnforcementPolicy = vi.fn(async () => ({
+      organizationPolicy,
+      projectOverride: null,
+      effectivePolicy,
+    }))
+    const projectMemberWithGlobalLeadRole: TeamSession = {
+      ...leadSession,
+      userId: 'u-reviewer',
+      authAccountId: 'acct-reviewer',
+      projectMemberships: [
+        { projectId: 'p-payments', userId: 'u-reviewer', role: 'member' },
+      ],
+    }
+
+    const result = await resolveTeamRoute('POST', '/api/gates/override', repository, {
+      session: projectMemberWithGlobalLeadRole,
+      body: {
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        projectId: 'p-payments',
+        reason: 'I reviewed the canonical blocker.',
+        blockedReasonIds: ['missing_agent_review:protected_gate:missing'],
+        policyVersion: effectivePolicy.version,
+      },
+    })
+
+    expect(result).toMatchObject({ status: 403 })
+    expect(repository.saveGateOverride).not.toHaveBeenCalled()
+  })
+
+  it('authorizes and audits a Gate override with the target project membership role', async () => {
+    const repository = createRepository()
+    const organizationPolicy = createRecommendedEnforcementPreset({
+      organizationId: 'org-demo',
+      updatedAt: '2026-06-16T00:00:00.000Z',
+    })
+    const effectivePolicy = resolveEffectivePolicy(organizationPolicy, null)
+    repository.getEnforcementPolicy = vi.fn(async () => ({
+      organizationPolicy,
+      projectOverride: null,
+      effectivePolicy,
+    }))
+    const projectLeadWithGlobalMemberRole: TeamSession = {
+      ...memberSession,
+      userId: 'u-review-lead',
+      authAccountId: 'acct-review-lead',
+      projectMemberships: [
+        { projectId: 'p-payments', userId: 'u-review-lead', role: 'lead' },
+      ],
+    }
+
+    const result = await resolveTeamRoute('POST', '/api/gates/override', repository, {
+      session: projectLeadWithGlobalMemberRole,
+      body: {
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        projectId: 'p-payments',
+        reason: 'I reviewed the canonical blocker.',
+        blockedReasonIds: ['missing_agent_review:protected_gate:missing'],
+        policyVersion: effectivePolicy.version,
+      },
+    })
+
+    expect(result).toMatchObject({
+      status: 201,
+      body: {
+        nodeId: 'node-build',
+        userId: 'u-review-lead',
+        role: 'lead',
+      },
+    })
+    expect(repository.saveGateOverride).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: 'node-build',
+        userId: 'u-review-lead',
+        role: 'lead',
+      }),
+      projectLeadWithGlobalMemberRole,
+    )
+  })
+
+  it('rejects a Gate override when its blocker set is stale', async () => {
+    const repository = createRepository()
+    const organizationPolicy = createRecommendedEnforcementPreset({
+      organizationId: 'org-demo',
+      updatedAt: '2026-06-16T00:00:00.000Z',
+    })
+    const effectivePolicy = resolveEffectivePolicy(organizationPolicy, null)
+    repository.getEnforcementPolicy = vi.fn(async () => ({
+      organizationPolicy,
+      projectOverride: null,
+      effectivePolicy,
+    }))
+    const independentLead: TeamSession = {
+      ...leadSession,
+      userId: 'u-review-lead',
+      authAccountId: 'acct-review-lead',
+      projectMemberships: [
+        { projectId: 'p-payments', userId: 'u-review-lead', role: 'lead' },
+      ],
+    }
+
+    const result = await resolveTeamRoute('POST', '/api/gates/override', repository, {
+      session: independentLead,
+      body: {
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        projectId: 'p-payments',
+        reason: 'I reviewed the previous blocker.',
+        blockedReasonIds: ['stale-blocker'],
+        policyVersion: effectivePolicy.version,
+      },
+    })
+
+    expect(result).toEqual({
+      status: 403,
+      body: {
+        error: 'forbidden',
+        message: 'Gate blockers changed; re-evaluate before overriding',
+      },
+    })
+    expect(repository.saveGateOverride).not.toHaveBeenCalled()
+  })
+
   it('rejects approval summary sync because Gate approval must use the enforcement write path', async () => {
     const repository = createRepository()
     const summary = {
@@ -1084,6 +1324,7 @@ describe('team API route resolver', () => {
       title: 'Approve payment workflow',
       status: 'building',
       currentNodeId: 'node-build',
+      currentNode: { id: 'node-build', stage: 'build', kind: 'task', status: 'running' },
       branchName: 'ai/payments',
       updatedAt: '2026-06-16T00:00:00.000Z',
     }
@@ -1112,6 +1353,7 @@ describe('team API route resolver', () => {
       title: 'Update payment workflow',
       status: 'building',
       currentNodeId: 'node-build',
+      currentNode: { id: 'node-build', stage: 'build', kind: 'task', status: 'running' },
       branchName: 'ai/payments',
       updatedAt: '2026-06-16T00:00:00.000Z',
     }
@@ -1125,6 +1367,37 @@ describe('team API route resolver', () => {
     expect(repository.uploadRunSummary).toHaveBeenCalledWith(summary, memberSession)
   })
 
+  it('returns conflict when a run summary collides with canonical ownership or is stale', async () => {
+    const repository = createRepository()
+    vi.mocked(repository.uploadRunSummary).mockRejectedValue(
+      new RemoteRunSummaryConflictError('run-1', 'p-payments'),
+    )
+
+    const result = await resolveTeamRoute('POST', '/api/sync/run-summary', repository, {
+      body: {
+        kind: 'run',
+        runId: 'run-1',
+        projectId: 'p-payments',
+        title: 'Stale payment workflow',
+        status: 'building',
+        currentNodeId: 'node-build',
+        currentNode: { id: 'node-build', stage: 'build', kind: 'task', status: 'running' },
+        branchName: 'ai/payments',
+        updatedAt: '2026-06-15T00:00:00.000Z',
+      },
+      session: memberSession,
+    })
+
+    expect(result).toEqual({
+      status: 409,
+      body: {
+        error: 'conflict',
+        message:
+          'Remote Run Summary conflicts with canonical ownership or is stale: run-1 (p-payments)',
+      },
+    })
+  })
+
   it('requires member access for non-approval run summary sync', async () => {
     const repository = createRepository()
 
@@ -1136,6 +1409,7 @@ describe('team API route resolver', () => {
         title: 'Approve payment workflow',
         status: 'building',
         currentNodeId: 'node-build',
+        currentNode: { id: 'node-build', stage: 'build', kind: 'task', status: 'running' },
         branchName: 'ai/payments',
         updatedAt: '2026-06-16T00:00:00.000Z',
       },
@@ -1177,6 +1451,143 @@ describe('team API route resolver', () => {
 
     expect(result?.status).toBe(202)
     expect(repository.uploadTestEvidenceSummary).toHaveBeenCalledWith(summary, memberSession)
+  })
+
+  it('rejects Test Evidence that does not assert redaction', async () => {
+    const repository = createRepository()
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/sync/test-evidence-summary',
+      repository,
+      {
+        body: {
+          id: 'evidence-unredacted',
+          runId: 'run-1',
+          nodeId: 'node-test',
+          projectId: 'p-payments',
+          command: 'pnpm test',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 900,
+          summary: 'Tests passed.',
+          redacted: false,
+          createdAt: '2026-06-16T00:01:00.000Z',
+        },
+        session: memberSession,
+      },
+    )
+
+    expect(result?.status).toBe(400)
+    expect(repository.uploadTestEvidenceSummary).not.toHaveBeenCalled()
+  })
+
+  it('redacts paths and secrets embedded in allowed Test Evidence fields before persistence', async () => {
+    const repository = createRepository()
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/sync/test-evidence-summary',
+      repository,
+      {
+        body: {
+          id: 'evidence-hostile-fields',
+          runId: 'run-1',
+          nodeId: 'node-test',
+          projectId: 'p-payments',
+          command: 'node C:\\Users\\Alice\\repo\\test.js API_TOKEN=command-secret',
+          status: 'failed',
+          exitCode: 1,
+          durationMs: 900,
+          summary: 'failed at file:///C:/Users/Alice/repo/test.js GH_TOKEN=summary-secret',
+          redacted: true,
+          createdAt: '2026-06-16T00:01:00.000Z',
+          rawOutput: '/Users/Alice/repo API_TOKEN=unknown-field-secret',
+        },
+        session: memberSession,
+      },
+    )
+
+    expect(result?.status).toBe(202)
+    const persisted = vi.mocked(repository.uploadTestEvidenceSummary).mock.calls[0]?.[0]
+    expect(persisted?.redacted).toBe(true)
+    expect(JSON.stringify(persisted)).not.toMatch(/C:[\\/]Users[\\/]Alice/)
+    expect(JSON.stringify(persisted)).not.toContain('command-secret')
+    expect(JSON.stringify(persisted)).not.toContain('summary-secret')
+    expect(persisted).not.toHaveProperty('rawOutput')
+  })
+
+  it('returns conflict when evidence arrives before its canonical Run Summary', async () => {
+    const repository = createRepository()
+    vi.mocked(repository.uploadTestEvidenceSummary).mockRejectedValue(
+      new CanonicalRunRequiredError('run-missing', 'p-payments'),
+    )
+
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/sync/test-evidence-summary',
+      repository,
+      {
+        body: {
+          id: 'evidence-orphaned',
+          runId: 'run-missing',
+          nodeId: 'node-test',
+          projectId: 'p-payments',
+          command: 'pnpm test',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 900,
+          summary: 'Tests passed before the Run Summary arrived.',
+          redacted: true,
+          createdAt: '2026-06-16T00:01:00.000Z',
+        },
+        session: memberSession,
+      },
+    )
+
+    expect(result).toEqual({
+      status: 409,
+      body: {
+        error: 'conflict',
+        message: 'Canonical Run Summary is required before evidence sync: run-missing (p-payments)',
+      },
+    })
+  })
+
+  it('returns conflict when a child summary ID is already bound to another scope', async () => {
+    const repository = createRepository()
+    vi.mocked(repository.uploadTestEvidenceSummary).mockRejectedValue(
+      new RemoteChildSummaryConflictError('evidence-victim', 'run-attacker', 'p-payments'),
+    )
+
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/sync/test-evidence-summary',
+      repository,
+      {
+        body: {
+          id: 'evidence-victim',
+          runId: 'run-attacker',
+          nodeId: 'node-test',
+          projectId: 'p-payments',
+          command: 'pnpm test',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 900,
+          summary: 'Attacker attempts to replace victim evidence.',
+          redacted: true,
+          createdAt: '2026-06-16T00:01:00.000Z',
+        },
+        session: memberSession,
+      },
+    )
+
+    expect(result).toEqual({
+      status: 409,
+      body: {
+        error: 'conflict',
+        message:
+          'Remote child summary ID conflicts with canonical scope: evidence-victim -> run-attacker (p-payments)',
+      },
+    })
   })
 
   it('routes redacted agent review summary sync requests through the repository', async () => {
@@ -1287,6 +1698,68 @@ describe('team API route resolver', () => {
 
     expect(result?.status).toBe(202)
     expect(repository.uploadCodingAgentSummary).toHaveBeenCalledWith(summary, memberSession)
+  })
+
+  it('projects hostile nested coding metadata before repository persistence', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('POST', '/api/sync/coding-agent-summary', repository, {
+      body: {
+        id: 'coding-hostile-nested-metadata',
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        projectId: 'p-payments',
+        requestedBy: 'u-ling',
+        providerId: 'fake-coding-engine',
+        engine: 'fake',
+        status: 'completed',
+        branchName: 'devflow/run-payments-node-build',
+        summary: 'Coding completed.',
+        changedPaths: ['src/export.ts'],
+        startedAt: '2026-06-16T00:07:00.000Z',
+        costSummary: {
+          id: 'cost-hostile-nested-metadata',
+          runId: 'run-payments',
+          nodeId: 'node-build',
+          userId: 'u-ling',
+          projectId: 'p-payments',
+          provider: 'openai',
+          providerId: 'fake-coding-engine',
+          model: 'model from /Users/Alice/private API_TOKEN=model-secret',
+          inputTokens: 120,
+          outputTokens: 80,
+          cacheReadTokens: 0,
+          costUsd: 0.018,
+          timestamp: '2026-06-16T00:09:00.000Z',
+          source: 'estimated',
+          redacted: true,
+          apiKey: 'nested-api-key-secret',
+        },
+        budgetDecision: {
+          status: 'allowed',
+          blocksRun: false,
+          currentSpendUsd: 1,
+          projectedCostUsd: 2,
+          reason: 'Approved from C:\\Users\\Alice\\private API_TOKEN=budget-secret',
+          token: 'nested-budget-token-secret',
+        },
+        redacted: true,
+      },
+      session: memberSession,
+    })
+
+    expect(result?.status).toBe(202)
+    const persisted = vi.mocked(repository.uploadCodingAgentSummary).mock.calls[0]?.[0]
+    expect(persisted?.costSummary?.model).toBe(
+      'model from [REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
+    )
+    expect(persisted?.budgetDecision?.reason).toBe(
+      'Approved from [REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
+    )
+    expect(persisted?.costSummary).not.toHaveProperty('apiKey')
+    expect(persisted?.budgetDecision).not.toHaveProperty('token')
+    expect(JSON.stringify(persisted)).not.toContain('model-secret')
+    expect(JSON.stringify(persisted)).not.toContain('budget-secret')
   })
 
   it('rejects coding agent summaries with local-only fields or unsafe paths', async () => {
@@ -1418,6 +1891,7 @@ describe('team API route resolver', () => {
           title: 'Approve payment workflow',
           status: 'building',
           currentNodeId: 'node-build',
+          currentNode: { id: 'node-build', stage: 'build', kind: 'task', status: 'running' },
           branchName: 'ai/payments',
           updatedAt: '2026-06-16T00:00:00.000Z',
         },

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { createWorkflowRunFromRequest } from '@ai-devflow/shared'
-import { createRunningRun, getRunStatusLabel } from './desktop-view-model'
+import {
+  createRunningRun,
+  getRunStatusLabel,
+  mergeLocalAndRemoteSnapshot,
+} from './desktop-view-model'
 
 describe('desktop view model', () => {
   it('maps internal run status values to user-facing workflow labels', () => {
@@ -38,5 +42,88 @@ describe('desktop view model', () => {
     expect(testingRun.nodes.find((node) => node.id === 'run-local-tests-test')?.status).toBe('running')
     expect(testingRun.nodes.find((node) => node.id === 'run-local-tests-pr')?.status).toBe('pending')
     expect(testingRun.nodes.find((node) => node.id === 'run-local-tests-accept')?.status).toBe('pending')
+  })
+
+  it('preserves complete local records when a remote snapshot reuses their ids', () => {
+    const local = createWorkflowRunFromRequest({
+      runId: 'run-synced',
+      title: 'Local workflow',
+      request: 'Keep the complete local workflow after sync.',
+      projectId: 'local-project-1',
+      creatorId: 'u-wang',
+      branchName: 'ai/local-sync',
+      now: '2026-06-21T16:00:00.000Z',
+    })
+    const localArtifact = local.artifacts[0]!
+    const localEvent = local.events[0]!
+    const remoteRun = {
+      ...local.run,
+      title: 'Lossy remote summary',
+      request: 'Synced from DevFlow Electron.',
+      projectId: 'p-payments',
+      status: 'completed' as const,
+      currentNodeId: 'run-synced:remote-node',
+      nodes: [],
+      edges: [],
+    }
+    const remoteArtifact = {
+      ...localArtifact,
+      title: 'Redacted remote artifact',
+      content: 'redacted',
+      redacted: true,
+    }
+    const remoteEvent = {
+      ...localEvent,
+      message: 'Redacted remote event',
+    }
+
+    const merged = mergeLocalAndRemoteSnapshot({
+      localRuns: [local.run],
+      remoteRuns: [remoteRun],
+      localArtifacts: [localArtifact],
+      remoteArtifacts: [remoteArtifact],
+      localEvents: [localEvent],
+      remoteEvents: [remoteEvent],
+    })
+
+    expect(merged.runs).toEqual([local.run])
+    expect(merged.artifacts).toEqual([localArtifact])
+    expect(merged.events).toEqual([localEvent])
+    expect(merged.remoteRunIds).toEqual([])
+  })
+
+  it('appends remote-only records and marks only those runs as remote', () => {
+    const local = createWorkflowRunFromRequest({
+      runId: 'run-local',
+      title: 'Local workflow',
+      request: 'Keep local state.',
+      projectId: 'local-project-1',
+      creatorId: 'u-wang',
+      branchName: 'ai/local',
+      now: '2026-06-21T16:00:00.000Z',
+    })
+    const remote = createWorkflowRunFromRequest({
+      runId: 'run-remote',
+      title: 'Remote workflow',
+      request: 'Show remote-only state.',
+      projectId: 'p-payments',
+      creatorId: 'u-ling',
+      branchName: 'ai/remote',
+      now: '2026-06-21T16:05:00.000Z',
+    })
+
+    const merged = mergeLocalAndRemoteSnapshot({
+      localRuns: [local.run],
+      remoteRuns: [remote.run],
+      localArtifacts: local.artifacts,
+      remoteArtifacts: remote.artifacts,
+      localEvents: local.events,
+      remoteEvents: remote.events,
+    })
+
+    expect(merged.runs).toEqual([local.run, remote.run])
+    expect(merged.artifacts).toEqual([...local.artifacts, ...remote.artifacts])
+    expect(merged.events).toEqual([...local.events, ...remote.events])
+    expect(merged.remoteRunIds).toEqual(['run-remote'])
   })
 })

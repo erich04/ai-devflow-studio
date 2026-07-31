@@ -64,6 +64,12 @@ const runSummary: RemoteRunSummary = {
   title: 'Remote run',
   status: 'building',
   currentNodeId: 'n-build',
+  currentNode: {
+    id: 'n-build',
+    stage: 'build',
+    kind: 'task',
+    status: 'running',
+  },
   branchName: 'ai/remote-run',
   updatedAt: '2026-06-16T00:05:00.000Z',
 }
@@ -381,7 +387,7 @@ describe('Electron remote sync client', () => {
     })
   })
 
-  it('submits Gate overrides through the enforcement API using the override actor session', async () => {
+  it('submits Gate overrides using the authenticated session without renderer actor overrides', async () => {
     const calls: Array<{ url: string; init: RequestInit | undefined }> = []
     const fetcher = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       calls.push({ url: String(input), init })
@@ -397,8 +403,6 @@ describe('Electron remote sync client', () => {
       runId: gateOverride.runId,
       nodeId: gateOverride.nodeId,
       projectId: gateOverride.projectId,
-      userId: gateOverride.userId,
-      role: gateOverride.role,
       reason: gateOverride.reason,
       blockedReasonIds: gateOverride.blockedReasonIds,
       policyVersion: gateOverride.policyVersion,

@@ -40,6 +40,10 @@ import {
   type WorkflowNode,
   type WorkflowRun,
   createWarnOnlyDefaultPolicy,
+  redactRemoteCodingAgentSummaryForSync,
+  redactRemoteAgentReviewSummaryForSync,
+  redactRemoteRunSummaryForSync,
+  redactRemoteTestEvidenceSummaryForSync,
   resolveEffectivePolicy,
   type EffectiveEnforcementPolicy,
   type GateOverrideDecision,
@@ -47,6 +51,11 @@ import {
   type ProjectEnforcementPolicyOverride,
 } from '@ai-devflow/shared'
 import type { TeamDbClient } from '../db/client'
+import {
+  CanonicalRunRequiredError,
+  RemoteChildSummaryConflictError,
+  RemoteRunSummaryConflictError,
+} from './team-repository'
 import type {
   AgentProviderCredentialRecord,
   AgentReviewBundle,
@@ -826,7 +835,59 @@ function mapMcpServer(row: McpServerRow): McpServerDefinition {
 }
 
 function remoteNodeId(runId: string, nodeId: string): string {
-  return `${runId}:${nodeId}`
+  const prefix = `${runId}:`
+  return nodeId.startsWith(prefix) ? nodeId : `${prefix}${nodeId}`
+}
+
+function remoteNodePosition(stage: WorkflowNode['stage'], kind: WorkflowNode['kind']): number {
+  const stagePosition: Record<WorkflowNode['stage'], number> = {
+    clarify: 0,
+    design: 200,
+    build: 400,
+    test: 600,
+    pr: 800,
+    accept: 1_000,
+  }
+  return stagePosition[stage] + (kind === 'gate' || kind === 'acceptance' ? 1 : 0)
+}
+
+async function assertCanonicalRunExists(
+  db: TeamDbClient,
+  input: { runId: string; projectId: string; organizationId: string; userId: string },
+): Promise<{ id: string; currentNodeId: string }> {
+  const rows = await db.query<{ id: string; current_node_id: string }>(
+    `
+      SELECT id, current_node_id
+      FROM workflow_runs
+      WHERE id = $1
+        AND organization_id = $2
+        AND project_id = $3
+        AND creator_id = $4
+      LIMIT 1
+    `,
+    [input.runId, input.organizationId, input.projectId, input.userId],
+  )
+
+  if (!rows[0]) {
+    throw new CanonicalRunRequiredError(input.runId, input.projectId)
+  }
+
+  return {
+    id: rows[0].id,
+    currentNodeId: rows[0].current_node_id,
+  }
+}
+
+function materializedChildNodeStatus(
+  status: NodeStatus,
+  nodeId: string,
+  currentNodeId: string,
+): NodeStatus {
+  if (nodeId !== currentNodeId && (status === 'running' || status === 'blocked')) {
+    return 'success'
+  }
+
+  return status
 }
 
 function mapEvidenceStatusToNodeStatus(status: TestEvidenceStatus): NodeStatus {
@@ -836,18 +897,6 @@ function mapEvidenceStatusToNodeStatus(status: TestEvidenceStatus): NodeStatus {
 
   if (status === 'running') {
     return 'running'
-  }
-
-  return 'failed'
-}
-
-function mapEvidenceStatusToRunStatus(status: TestEvidenceStatus): RunStatus {
-  if (status === 'passed') {
-    return 'completed'
-  }
-
-  if (status === 'running') {
-    return 'testing'
   }
 
   return 'failed'
@@ -1107,10 +1156,16 @@ export function createPostgresTeamRepository(
         SELECT project_id, user_id, role
         FROM project_members
         WHERE user_id = $1
+          AND project_id = $2
         ORDER BY project_id ASC
       `,
-      [tokenRow.user_id],
+      [tokenRow.user_id, tokenRow.project_id],
     )
+    const projectMembership = membershipRows[0]
+    if (!projectMembership) {
+      return null
+    }
+
     await db.query(
       `
         UPDATE desktop_tokens
@@ -1124,9 +1179,9 @@ export function createPostgresTeamRepository(
       source: 'authenticated',
       organizationId: tokenRow.organization_id,
       userId: tokenRow.user_id,
-      role: tokenRow.role,
+      role: projectMembership.role === 'owner' ? 'lead' : projectMembership.role,
       authAccountId: tokenRow.auth_account_id,
-      projectMemberships: membershipRows.map(mapProjectMembership),
+      projectMemberships: [mapProjectMembership(projectMembership)],
     }
   }
 
@@ -1513,7 +1568,8 @@ export function createPostgresTeamRepository(
     },
 
     async uploadRunSummary(summary, context: TeamRepositorySyncContext) {
-      await db.query(
+      summary = redactRemoteRunSummaryForSync(summary)
+      const [acceptedRun] = await db.query<{ id: string }>(
         `
           INSERT INTO workflow_runs (
             id,
@@ -1533,11 +1589,16 @@ export function createPostgresTeamRepository(
           VALUES ($1, $2, $3, $4, 'remote', $5, $6, $7, $8, $9, NULL, $10, $10)
           ON CONFLICT (id) DO UPDATE
           SET title = excluded.title,
-              project_id = excluded.project_id,
               status = excluded.status,
               current_node_id = excluded.current_node_id,
               branch_name = excluded.branch_name,
               updated_at = excluded.updated_at
+          WHERE workflow_runs.organization_id = excluded.organization_id
+            AND workflow_runs.project_id = excluded.project_id
+            AND workflow_runs.creator_id = excluded.creator_id
+            AND workflow_runs.data_origin = 'remote'
+            AND workflow_runs.updated_at <= excluded.updated_at
+          RETURNING id
         `,
         [
           summary.runId,
@@ -1553,6 +1614,69 @@ export function createPostgresTeamRepository(
         ],
       )
 
+      if (!acceptedRun) {
+        throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+      }
+
+      await db.query(
+        `
+          UPDATE workflow_nodes
+          SET status = 'success',
+              updated_at = $3
+          WHERE run_id = $1
+            AND id <> $2
+            AND status IN ('running', 'blocked')
+        `,
+        [
+          summary.runId,
+          remoteNodeId(summary.runId, summary.currentNode.id),
+          summary.updatedAt,
+        ],
+      )
+
+      await db.query(
+        `
+          INSERT INTO workflow_nodes (
+            id,
+            run_id,
+            stage,
+            title,
+            subtitle,
+            kind,
+            status,
+            owner_id,
+            required_role,
+            retry_count,
+            token_usage_id,
+            position,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, NULL, $10, $11, $11)
+          ON CONFLICT (id) DO UPDATE
+          SET stage = excluded.stage,
+              kind = excluded.kind,
+              status = excluded.status,
+              owner_id = excluded.owner_id,
+              required_role = excluded.required_role,
+              position = excluded.position,
+              updated_at = excluded.updated_at
+        `,
+        [
+          remoteNodeId(summary.runId, summary.currentNode.id),
+          summary.runId,
+          summary.currentNode.stage,
+          `Synced ${summary.currentNode.stage} node`,
+          'Canonical current node from DevFlow Electron.',
+          summary.currentNode.kind,
+          summary.currentNode.status,
+          context.userId,
+          summary.currentNode.requiredRole ?? null,
+          remoteNodePosition(summary.currentNode.stage, summary.currentNode.kind),
+          summary.updatedAt,
+        ],
+      )
+
       return {
         accepted: true,
         syncedAt: new Date().toISOString(),
@@ -1561,44 +1685,19 @@ export function createPostgresTeamRepository(
     },
 
     async uploadTestEvidenceSummary(summary, context: TeamRepositorySyncContext) {
+      summary = redactRemoteTestEvidenceSummaryForSync(summary)
       const syncedNodeId = remoteNodeId(summary.runId, summary.nodeId)
-      const nodeStatus = mapEvidenceStatusToNodeStatus(summary.status)
 
-      await db.query(
-        `
-          INSERT INTO workflow_runs (
-            id,
-            organization_id,
-            project_id,
-            creator_id,
-            data_origin,
-            title,
-            request,
-            status,
-            current_node_id,
-            branch_name,
-            pull_request_url,
-            created_at,
-            updated_at
-          )
-          VALUES ($1, $2, $3, $4, 'remote', $5, $6, $7, $8, $9, NULL, $10, $10)
-          ON CONFLICT (id) DO UPDATE
-          SET status = excluded.status,
-              current_node_id = excluded.current_node_id,
-              updated_at = excluded.updated_at
-        `,
-        [
-          summary.runId,
-          context.organizationId,
-          summary.projectId,
-          context.userId,
-          'Synced test evidence',
-          'Redacted test evidence summary synced from DevFlow Electron.',
-          mapEvidenceStatusToRunStatus(summary.status),
-          syncedNodeId,
-          `sync/${summary.runId}`,
-          summary.createdAt,
-        ],
+      const canonicalRun = await assertCanonicalRunExists(db, {
+        runId: summary.runId,
+        projectId: summary.projectId,
+        organizationId: context.organizationId,
+        userId: context.userId,
+      })
+      const nodeStatus = materializedChildNodeStatus(
+        mapEvidenceStatusToNodeStatus(summary.status),
+        syncedNodeId,
+        canonicalRun.currentNodeId,
       )
       await db.query(
         `
@@ -1633,7 +1732,7 @@ export function createPostgresTeamRepository(
           summary.createdAt,
         ],
       )
-      await db.query(
+      const [acceptedSummary] = await db.query<{ id: string }>(
         `
           INSERT INTO test_evidence_summaries (
             id,
@@ -1657,6 +1756,16 @@ export function createPostgresTeamRepository(
               summary = excluded.summary,
               redacted = excluded.redacted,
               created_at = excluded.created_at
+          WHERE test_evidence_summaries.run_id = excluded.run_id
+            AND test_evidence_summaries.node_id = excluded.node_id
+            AND test_evidence_summaries.project_id = excluded.project_id
+            AND EXISTS (
+              SELECT 1
+              FROM workflow_runs AS scoped_run
+              WHERE scoped_run.id = $2
+                AND scoped_run.organization_id = $12
+            )
+          RETURNING id
         `,
         [
           summary.id,
@@ -1670,8 +1779,13 @@ export function createPostgresTeamRepository(
           summary.summary,
           summary.redacted,
           summary.createdAt,
+          context.organizationId,
         ],
       )
+
+      if (!acceptedSummary) {
+        throw new RemoteChildSummaryConflictError(summary.id, summary.runId, summary.projectId)
+      }
 
       return {
         accepted: true,
@@ -1681,41 +1795,25 @@ export function createPostgresTeamRepository(
     },
 
     async uploadAgentReviewSummary(summary, context) {
+      summary = redactRemoteAgentReviewSummaryForSync(summary)
       const syncedNodeId = remoteNodeId(summary.runId, summary.nodeId)
+      const policyFindings = (summary.policyFindings ?? []).map((finding) => ({
+        ...finding,
+        nodeId: syncedNodeId,
+        evidenceIds: [],
+        knowledgeReferenceIds: [],
+      }))
 
-      await db.query(
-        `
-          INSERT INTO workflow_runs (
-            id,
-            organization_id,
-            project_id,
-            creator_id,
-            data_origin,
-            title,
-            request,
-            status,
-            current_node_id,
-            branch_name,
-            pull_request_url,
-            created_at,
-            updated_at
-          )
-          VALUES ($1, $2, $3, $4, 'remote', $5, $6, 'paused_at_gate', $7, $8, NULL, $9, $9)
-          ON CONFLICT (id) DO UPDATE
-          SET current_node_id = excluded.current_node_id,
-              updated_at = excluded.updated_at
-        `,
-        [
-          summary.runId,
-          context.organizationId,
-          summary.projectId,
-          context.userId,
-          'Synced agent review',
-          'Redacted Knowledge Review Agent summary synced from DevFlow Electron.',
-          syncedNodeId,
-          `sync/${summary.runId}`,
-          summary.createdAt,
-        ],
+      const canonicalRun = await assertCanonicalRunExists(db, {
+        runId: summary.runId,
+        projectId: summary.projectId,
+        organizationId: context.organizationId,
+        userId: context.userId,
+      })
+      const reviewNodeStatus = materializedChildNodeStatus(
+        'blocked',
+        syncedNodeId,
+        canonicalRun.currentNodeId,
       )
       await db.query(
         `
@@ -1735,20 +1833,22 @@ export function createPostgresTeamRepository(
             created_at,
             updated_at
           )
-          VALUES ($1, $2, 'design', 'Knowledge Review Target', $3, 'gate', 'blocked', $4, 'lead', 0, NULL, 998, $5, $5)
+          VALUES ($1, $2, 'design', 'Knowledge Review Target', $3, 'gate', $4, $5, 'lead', 0, NULL, 998, $6, $6)
           ON CONFLICT (id) DO UPDATE
           SET subtitle = excluded.subtitle,
+              status = excluded.status,
               updated_at = excluded.updated_at
         `,
         [
           syncedNodeId,
           summary.runId,
           summary.conclusion,
+          reviewNodeStatus,
           context.userId,
           summary.createdAt,
         ],
       )
-      await db.query(
+      const [acceptedSummary] = await db.query<{ id: string }>(
         `
           INSERT INTO agent_reviews (
             id,
@@ -1771,7 +1871,7 @@ export function createPostgresTeamRepository(
             gate_advisory,
             created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, $14, $15::jsonb, $16)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, '[]'::jsonb, '[]'::jsonb, $14::jsonb, $15, $16::jsonb, $17)
           ON CONFLICT (id) DO UPDATE
           SET conclusion = excluded.conclusion,
               summary = excluded.summary,
@@ -1780,6 +1880,11 @@ export function createPostgresTeamRepository(
               policy_findings = excluded.policy_findings,
               confidence = excluded.confidence,
               gate_advisory = excluded.gate_advisory
+          WHERE agent_reviews.organization_id = excluded.organization_id
+            AND agent_reviews.run_id = excluded.run_id
+            AND agent_reviews.node_id = excluded.node_id
+            AND agent_reviews.project_id = excluded.project_id
+          RETURNING id
         `,
         [
           summary.id,
@@ -1800,6 +1905,7 @@ export function createPostgresTeamRepository(
               (_, index) => `Remote summary missing evidence ${index + 1}`,
             ),
           ),
+          JSON.stringify(policyFindings),
           summary.confidence,
           JSON.stringify({
             id: `gate-advisory-${summary.id}`,
@@ -1816,6 +1922,10 @@ export function createPostgresTeamRepository(
         ],
       )
 
+      if (!acceptedSummary) {
+        throw new RemoteChildSummaryConflictError(summary.id, summary.runId, summary.projectId)
+      }
+
       return {
         accepted: true,
         syncedAt: new Date().toISOString(),
@@ -1824,43 +1934,16 @@ export function createPostgresTeamRepository(
     },
 
     async uploadCodingAgentSummary(summary: RemoteCodingAgentSummary, context) {
+      summary = redactRemoteCodingAgentSummaryForSync(summary)
       const syncedNodeId = remoteNodeId(summary.runId, summary.nodeId)
 
-      await db.query(
-        `
-          INSERT INTO workflow_runs (
-            id,
-            organization_id,
-            project_id,
-            creator_id,
-            data_origin,
-            title,
-            request,
-            status,
-            current_node_id,
-            branch_name,
-            pull_request_url,
-            created_at,
-            updated_at
-          )
-          VALUES ($1, $2, $3, $4, 'remote', $5, $6, 'building', $7, $8, NULL, $9, $9)
-          ON CONFLICT (id) DO UPDATE
-          SET current_node_id = excluded.current_node_id,
-              updated_at = excluded.updated_at
-        `,
-        [
-          summary.runId,
-          context.organizationId,
-          summary.projectId,
-          context.userId,
-          'Synced coding agent run',
-          'Redacted Coding Agent summary synced from DevFlow Electron.',
-          syncedNodeId,
-          summary.branchName,
-          summary.completedAt ?? summary.startedAt,
-        ],
-      )
-      await db.query(
+      await assertCanonicalRunExists(db, {
+        runId: summary.runId,
+        projectId: summary.projectId,
+        organizationId: context.organizationId,
+        userId: context.userId,
+      })
+      const [acceptedSummary] = await db.query<{ id: string }>(
         `
           INSERT INTO coding_agent_summaries (
             id,
@@ -1907,6 +1990,11 @@ export function createPostgresTeamRepository(
               cost_usd = excluded.cost_usd,
               cost_source = excluded.cost_source,
               redacted = excluded.redacted
+          WHERE coding_agent_summaries.organization_id = excluded.organization_id
+            AND coding_agent_summaries.run_id = excluded.run_id
+            AND coding_agent_summaries.node_id = excluded.node_id
+            AND coding_agent_summaries.project_id = excluded.project_id
+          RETURNING id
         `,
         [
           summary.id,
@@ -1933,6 +2021,10 @@ export function createPostgresTeamRepository(
           summary.redacted,
         ],
       )
+
+      if (!acceptedSummary) {
+        throw new RemoteChildSummaryConflictError(summary.id, summary.runId, summary.projectId)
+      }
 
       return {
         accepted: true,
@@ -2380,7 +2472,7 @@ export function createPostgresTeamRepository(
           decision.id,
           context.organizationId,
           decision.runId,
-          decision.nodeId,
+          remoteNodeId(decision.runId, decision.nodeId),
           decision.projectId,
           decision.userId,
           decision.role,

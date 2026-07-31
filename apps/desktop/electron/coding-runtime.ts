@@ -8,6 +8,9 @@ import {
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   estimateCodingRuntimeCost,
+  redactCodingAgentEventForStorage,
+  redactLocalAbsolutePaths,
+  redactTestEvidenceForStorage,
   redactSecrets,
   type AgentEvent,
   type Artifact,
@@ -119,6 +122,14 @@ export type CodingRuntimeBudgetGuard = (input: {
   approvalId?: string
 }) => Promise<BudgetGuardDecision>
 
+export type CodingRuntimeCompleteWorkflowBuild = (input: {
+  runId: string
+  nodeId: string
+  codingRunId: string
+  diffId: string
+  now: string
+}) => Promise<void>
+
 const FAKE_CODING_MARKER_TEST_COMMAND =
   'node -e "require(\'node:fs\').accessSync(\'devflow-fake-change.txt\'); console.log(\'Fake coding marker verified\')"'
 
@@ -190,6 +201,7 @@ export type CodingRuntimeDeps = {
   schedulePermissionTimeout?: CodingRuntimePermissionTimeoutScheduler
   scheduleRunTimeout?: CodingRuntimeRunTimeoutScheduler
   budgetGuard?: CodingRuntimeBudgetGuard
+  completeWorkflowBuild?: CodingRuntimeCompleteWorkflowBuild
   testTimeoutMs?: number
   worktreeRoot?: string
   idGenerator?: (prefix?: string) => string
@@ -248,13 +260,38 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     return run
   }
 
-  function findNode(run: WorkflowRun, nodeId: string): WorkflowNode {
-    const node = run.nodes.find((candidate) => candidate.id === nodeId)
+  function validateCodingWorkflowContext(
+    run: WorkflowRun,
+    input: { nodeId: string; projectId: string },
+  ): WorkflowNode {
+    if (run.projectId !== input.projectId) {
+      throw new Error(
+        `Coding workflow project mismatch: run ${run.id} belongs to ${run.projectId}, not ${input.projectId}`,
+      )
+    }
+    if (run.status === 'completed' || run.status === 'cancelled') {
+      throw new Error('Coding Agent cannot run on a terminal workflow run')
+    }
+
+    const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
     if (!node) {
-      throw new Error(`Run node not found: ${nodeId}`)
+      throw new Error(`Run node not found: ${input.nodeId}`)
+    }
+    if (run.currentNodeId !== node.id) {
+      throw new Error('Coding Agent can only run on the current workflow node')
     }
     if (!canRunCodingAgentOnNode(node)) {
       throw new Error('Coding Agent can only run from a build task node')
+    }
+    if (node.status !== 'running' && node.status !== 'failed') {
+      throw new Error('Coding Agent build node must be running or failed')
+    }
+
+    const expectedRunStatus = node.status === 'failed' ? 'failed' : 'building'
+    if (run.status !== expectedRunStatus) {
+      throw new Error(
+        `Coding workflow invariant violation: run status ${run.status} does not match ${node.status} build node ${node.id}`,
+      )
     }
     return node
   }
@@ -289,8 +326,9 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
 
   async function saveEvents(events: CodingAgentEvent[]) {
     for (const event of events) {
-      await deps.store.saveCodingAgentEvent(event)
-      deps.publisher?.publishEvent(event)
+      const safeEvent = redactCodingAgentEventForStorage(event)
+      await deps.store.saveCodingAgentEvent(safeEvent)
+      deps.publisher?.publishEvent(safeEvent)
     }
   }
 
@@ -390,6 +428,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       return { codingRun: input.codingRun }
     }
 
+    const safeCommand = redactSecrets(redactLocalAbsolutePaths(command).value)
     const startedEvent: CodingAgentEvent = {
       id: idGenerator('coding-event'),
       codingRunId: input.codingRun.id,
@@ -397,7 +436,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       nodeId: input.codingRun.nodeId,
       sequence: await nextSequence(input.codingRun.id),
       kind: 'test',
-      message: `Running coding worktree tests: ${command}`,
+      message: `Running coding worktree tests: ${safeCommand.value}`,
       timestamp: input.timestamp,
       redacted: true,
     }
@@ -408,7 +447,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       cwd: input.workspace.worktreePath,
       timeoutMs: deps.testTimeoutMs ?? 120_000,
     })
-    const evidence: TestEvidence = {
+    const evidence: TestEvidence = redactTestEvidenceForStorage({
       id: idGenerator('evidence'),
       runId: input.codingRun.runId,
       nodeId: input.codingRun.nodeId,
@@ -423,7 +462,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       summary: result.summary,
       redacted: result.redacted,
       createdAt: input.timestamp,
-    }
+    })
     const artifact = createTestEvidenceArtifact(evidence)
     const agentEvent = createTestEvidenceEvent(evidence, await nextAgentEventSequence(evidence.runId))
     const completedEvent: CodingAgentEvent = {
@@ -433,7 +472,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       nodeId: input.codingRun.nodeId,
       sequence: await nextSequence(input.codingRun.id),
       kind: 'test',
-      message: `Coding worktree tests ${result.status}: ${result.summary}`,
+      message: `Coding worktree tests ${result.status}: ${evidence.summary}`,
       timestamp: input.timestamp,
       metadata: { evidenceId: evidence.id, status: result.status },
       redacted: true,
@@ -444,7 +483,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       summary:
         result.status === 'passed'
           ? `${input.codingRun.summary} Test evidence passed.`
-          : `${input.codingRun.summary} Test evidence ${result.status}: ${result.summary}`,
+          : `${input.codingRun.summary} Test evidence ${result.status}: ${evidence.summary}`,
     }
 
     await deps.store.saveTestEvidence(evidence)
@@ -700,6 +739,25 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       })
 
       await saveCodingRun(tested.codingRun)
+      if (tested.codingRun.status === 'completed') {
+        try {
+          await deps.completeWorkflowBuild?.({
+            runId: tested.codingRun.runId,
+            nodeId: tested.codingRun.nodeId,
+            codingRunId: tested.codingRun.id,
+            diffId: completed.diff.id,
+            now: timestamp,
+          })
+        } catch (error) {
+          const detail =
+            error instanceof Error && error.message.trim()
+              ? error.message
+              : 'Unknown workflow runtime error'
+          throw new Error(`Workflow build completion failed: ${detail}`, {
+            cause: error,
+          })
+        }
+      }
       await deps.remoteSync
         .uploadCodingAgentSummary(createRemoteCodingAgentSummary(tested.codingRun, completed.diff))
         .catch(() => undefined)
@@ -761,6 +819,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     },
 
     async runCodingAgent(input) {
+      const run = await findRun(input.runId)
+      const node = validateCodingWorkflowContext(run, input)
       const project = await findProject(input.projectId)
       const active = findActiveCodingRun(await deps.store.listCodingAgentRuns(), input.projectId)
       if (active) {
@@ -768,8 +828,6 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       }
 
       const ensuredEngine = await deps.engine.ensure({ project })
-      const run = await findRun(input.runId)
-      const node = findNode(run, input.nodeId)
       const codingRunId = idGenerator('coding-run')
       const briefContext = await loadCodingBriefContext(run, node)
       const workspace = await createWorkspace({
@@ -907,7 +965,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
 
     async startRetryAttempt(input) {
       const run = await findRun(input.runId)
-      const node = findNode(run, input.nodeId)
+      const node = validateCodingWorkflowContext(run, input)
       const selectedCandidates = input.remediationPlan.candidates.filter((candidate) =>
         input.candidateIds.includes(candidate.id),
       )

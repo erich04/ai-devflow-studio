@@ -288,10 +288,29 @@ export function App() {
   const selectedRun = scopedRuns.find((run) => run.id === selectedRunId) ?? scopedRuns[0]
   const selectedNode =
     selectedRun?.nodes.find((node) => node.id === selectedNodeId) ?? selectedRun?.nodes[0]
-  const selectedTeamProject = teamProjects.find((project) => project.id === selectedRun?.projectId)
-  const teamProjectLabel = selectedTeamProject?.name ?? ''
-  const teamProjectSource = selectedTeamProject ? 'remote snapshot' : 'not bound'
-  const teamProjectSourceLabel = teamProjectSource === 'not bound' ? '未绑定' : teamProjectSource
+  const hasSelectedLocalProjectBinding = Boolean(
+    selectedLocalProject && desktopPairing?.localProjectId === selectedLocalProject.id,
+  )
+  const hasDeliveryProjectBinding = Boolean(
+    desktopPairing?.localProjectId && desktopPairing.localProjectId === selectedRun?.projectId,
+  )
+  const selectedTeamProjectId = hasSelectedLocalProjectBinding
+    ? desktopPairing?.projectId
+    : selectedLocalProject
+      ? undefined
+      : selectedRun?.projectId
+  const selectedTeamProject = teamProjects.find((project) => project.id === selectedTeamProjectId)
+  const teamProjectLabel = selectedTeamProject?.name ?? (hasSelectedLocalProjectBinding ? desktopPairing?.projectId ?? '' : '')
+  const teamProjectSource = !hasSelectedLocalProjectBinding
+    ? 'unbound'
+    : selectedTeamProject
+      ? 'bound_synced'
+      : 'bound_unsynced'
+  const teamProjectSourceLabel = {
+    unbound: '未绑定',
+    bound_unsynced: '已绑定 · 待同步',
+    bound_synced: '已绑定 · 已同步',
+  }[teamProjectSource]
   const isSelectedCurrentNode = Boolean(
     selectedRun && selectedNode && selectedRun.currentNodeId === selectedNode.id,
   )
@@ -708,8 +727,8 @@ export function App() {
           <div className="project-switcher" aria-label="Project selector">
             <div className="project-line">
               <span className="project-label">Team Project</span>
-              {selectedTeamProject ? <strong className="project-value">{teamProjectLabel}</strong> : null}
-              <span className={`pill ${selectedTeamProject ? 'accent' : 'soft'}`}>{teamProjectSourceLabel}</span>
+              {teamProjectLabel ? <strong className="project-value">{teamProjectLabel}</strong> : null}
+              <span className={`pill ${teamProjectSource === 'unbound' ? 'soft' : 'accent'}`}>{teamProjectSourceLabel}</span>
             </div>
             <div className="project-line">
               <span className="project-label">Local Project</span>
@@ -755,7 +774,7 @@ export function App() {
           <div className="topbar-actions">
             <ThemeToggle value={themePreference} onChange={changeThemePreference} />
             <form className="desktop-pairing-form" onSubmit={pairDesktopWithTeam}>
-              <span>{desktopPairing ? '已配对 Team' : '未配对 Team'}</span>
+              <span>{hasSelectedLocalProjectBinding ? '已配对 Team' : '未配对 Team'}</span>
               <input
                 aria-label="Desktop pairing code"
                 placeholder="输入 pairing code"
@@ -939,7 +958,8 @@ export function App() {
                   onCompleteAgentNode={completeSelectedWorkflowAgentNode}
                   onSaveGateOverride={gateEnforcement.saveOverride}
                   onStartRemediationRetry={startRemediationRetry}
-                  pairingState={desktopPairing ? 'paired' : 'unpaired'}
+                  pairingState={hasDeliveryProjectBinding ? 'paired' : 'unpaired'}
+                  hasDeliveryProjectBinding={hasDeliveryProjectBinding}
                   onSyncTeam={syncRemoteTeamState}
                   onOpenTests={() => openSupportContext('local-tests', '执行本地测试并生成 Test Evidence')}
                   onOpenKnowledgeReview={() => openSupportContext('knowledge-review', '运行 Knowledge Review 并补齐 Gate Advisory')}

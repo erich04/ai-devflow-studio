@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 
-const apiUrl = 'http://127.0.0.1:4310'
-const webUrl = 'http://127.0.0.1:4311'
+const apiUrl = process.env.DEVFLOW_E2E_API_URL ?? 'http://127.0.0.1:4310'
+const webUrl = process.env.DEVFLOW_E2E_WEB_URL ?? 'http://127.0.0.1:4311'
 const teamHeaders = {
   'x-devflow-session-source': 'demo',
   'x-devflow-organization-id': 'org-demo',
@@ -30,6 +30,7 @@ test.describe('AI DevFlow web team console', () => {
         title: runTitle,
         status: 'building',
         currentNodeId: 'n-build',
+        currentNode: { id: 'n-build', stage: 'build', kind: 'task', status: 'running' },
         branchName: `ai/e2e-team-sync-${suffix}`,
         updatedAt: '2026-06-16T12:00:00.000Z',
       },

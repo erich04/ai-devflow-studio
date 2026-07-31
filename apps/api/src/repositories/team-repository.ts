@@ -4,6 +4,10 @@ import {
   runtimeCostSummaryToTokenUsage,
   buildPolicyAwareDeliverySummaries,
   createWarnOnlyDefaultPolicy,
+  redactRemoteCodingAgentSummaryForSync,
+  redactRemoteAgentReviewSummaryForSync,
+  redactRemoteRunSummaryForSync,
+  redactRemoteTestEvidenceSummaryForSync,
   resolveEffectivePolicy,
   type AgentEvent,
   type AgentProviderConfig,
@@ -93,6 +97,31 @@ export type TeamOverviewPayload = {
 }
 
 export type TeamRepositorySyncContext = Pick<TeamSession, 'organizationId' | 'userId'>
+
+export class CanonicalRunRequiredError extends Error {
+  constructor(runId: string, projectId: string) {
+    super(`Canonical Run Summary is required before evidence sync: ${runId} (${projectId})`)
+    this.name = 'CanonicalRunRequiredError'
+  }
+}
+
+export class RemoteRunSummaryConflictError extends Error {
+  constructor(runId: string, projectId: string) {
+    super(
+      `Remote Run Summary conflicts with canonical ownership or is stale: ${runId} (${projectId})`,
+    )
+    this.name = 'RemoteRunSummaryConflictError'
+  }
+}
+
+export class RemoteChildSummaryConflictError extends Error {
+  constructor(summaryId: string, runId: string, projectId: string) {
+    super(
+      `Remote child summary ID conflicts with canonical scope: ${summaryId} -> ${runId} (${projectId})`,
+    )
+    this.name = 'RemoteChildSummaryConflictError'
+  }
+}
 
 export type GitHubIdentityProfile = {
   providerAccountId: string
@@ -221,6 +250,7 @@ export function createSeedTeamRepository(): TeamRepository {
   const teamProjects = [...projects]
   const syncedRuns = [...runs]
   const seedRunIds = new Set(runs.map((run) => run.id))
+  const runOrganizationIds = new Map(runs.map((run) => [run.id, DEMO_ORGANIZATION_ID]))
   const syncedArtifacts = [...artifacts]
   const syncedEvents = [...events]
   const syncedTestEvidenceSummaries: RemoteTestEvidenceSummary[] = []
@@ -255,6 +285,38 @@ export function createSeedTeamRepository(): TeamRepository {
     }
 
     syncedTestEvidenceSummaries.unshift(summary)
+  }
+
+  function assertCanonicalRun(
+    summary: { runId: string; projectId: string },
+    context: TeamRepositorySyncContext,
+  ) {
+    const canonicalRun = syncedRuns.find(
+      (run) =>
+        run.id === summary.runId &&
+        run.projectId === summary.projectId &&
+        run.creatorId === context.userId &&
+        runOrganizationIds.get(run.id) === context.organizationId,
+    )
+    if (!canonicalRun) {
+      throw new CanonicalRunRequiredError(summary.runId, summary.projectId)
+    }
+  }
+
+  function assertStableChildSummaryScope(
+    existing: { id: string; runId: string; nodeId: string; projectId: string } | undefined,
+    summary: { id: string; runId: string; nodeId: string; projectId: string },
+    context: TeamRepositorySyncContext,
+  ) {
+    if (
+      existing &&
+      (existing.runId !== summary.runId ||
+        existing.nodeId !== summary.nodeId ||
+        existing.projectId !== summary.projectId ||
+        runOrganizationIds.get(existing.runId) !== context.organizationId)
+    ) {
+      throw new RemoteChildSummaryConflictError(summary.id, summary.runId, summary.projectId)
+    }
   }
 
   function agentProviderConfigs(): AgentProviderConfig[] {
@@ -377,15 +439,19 @@ export function createSeedTeamRepository(): TeamRepository {
         'authAccountId' in sessionContext && typeof sessionContext.authAccountId === 'string'
           ? sessionContext.authAccountId
           : `acct-demo-${context.userId}`
-      const projectMemberships = sessionContext.projectMemberships ?? [{ projectId: input.projectId, userId: context.userId, role }]
+      const projectMembership =
+        sessionContext.projectMemberships?.find(
+          (membership) => membership.projectId === input.projectId,
+        ) ?? { projectId: input.projectId, userId: context.userId, role }
+      const tokenRole = role === 'owner' ? 'lead' : role
       const code = `desktop-pairing-${input.projectId}.demo-secret`
       desktopPairingCodes.set(code, {
         organizationId: context.organizationId,
         projectId: input.projectId,
         userId: context.userId,
-        role,
+        role: tokenRole,
         authAccountId,
-        projectMemberships,
+        projectMemberships: [projectMembership],
         createdAt,
       })
       return {
@@ -406,7 +472,7 @@ export function createSeedTeamRepository(): TeamRepository {
         organizationId: DEMO_ORGANIZATION_ID,
         projectId,
         userId: 'u-erich',
-        role: 'owner' as const,
+        role: 'lead' as const,
         authAccountId: 'acct-demo-erich',
         projectMemberships: [{ projectId, userId: 'u-erich', role: 'owner' as const }],
         createdAt,
@@ -441,7 +507,7 @@ export function createSeedTeamRepository(): TeamRepository {
         source: 'authenticated',
         organizationId: DEMO_ORGANIZATION_ID,
         userId: 'u-erich',
-        role: 'owner',
+        role: 'lead',
         authAccountId: 'acct-demo-erich',
         projectMemberships: [{ projectId, userId: 'u-erich', role: 'owner' }],
       }
@@ -503,8 +569,44 @@ export function createSeedTeamRepository(): TeamRepository {
       return mcpServers
     },
 
-    async uploadRunSummary(summary) {
+    async uploadRunSummary(summary, context) {
+      summary = redactRemoteRunSummaryForSync(summary)
       const existingRun = syncedRuns.find((run) => run.id === summary.runId)
+      if (
+        existingRun &&
+        (seedRunIds.has(summary.runId) ||
+          runOrganizationIds.get(summary.runId) !== context.organizationId ||
+          existingRun.projectId !== summary.projectId ||
+          existingRun.creatorId !== context.userId ||
+          existingRun.updatedAt > summary.updatedAt)
+      ) {
+        throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+      }
+
+      const currentNode = {
+        id: summary.currentNode.id,
+        stage: summary.currentNode.stage,
+        title: `Synced ${summary.currentNode.stage} node`,
+        subtitle: 'Canonical current node from DevFlow Electron.',
+        kind: summary.currentNode.kind,
+        status: summary.currentNode.status,
+        ownerId: context.userId,
+        ...(summary.currentNode.requiredRole
+          ? { requiredRole: summary.currentNode.requiredRole }
+          : {}),
+        retryCount: 0,
+        artifactIds: [],
+      }
+      const nodes =
+        existingRun?.nodes
+          .filter((node) => node.id !== currentNode.id)
+          .map((node) =>
+            node.status === 'running' || node.status === 'blocked'
+              ? { ...node, status: 'success' as const }
+              : node,
+          ) ?? []
+      nodes.push(currentNode)
+
       const syncedRun: WorkflowRun = existingRun
         ? {
             ...existingRun,
@@ -514,23 +616,25 @@ export function createSeedTeamRepository(): TeamRepository {
             currentNodeId: summary.currentNodeId,
             branchName: summary.branchName,
             updatedAt: summary.updatedAt,
+            nodes,
           }
         : {
             id: summary.runId,
             title: summary.title,
             request: 'Synced from DevFlow Electron.',
             projectId: summary.projectId,
-            creatorId: 'u-erich',
+            creatorId: context.userId,
             status: summary.status,
             currentNodeId: summary.currentNodeId,
             branchName: summary.branchName,
             createdAt: summary.updatedAt,
             updatedAt: summary.updatedAt,
-            nodes: [],
+            nodes,
             edges: [],
           }
 
       upsertSyncedRun(syncedRun)
+      runOrganizationIds.set(summary.runId, context.organizationId)
 
       return {
         accepted: true,
@@ -566,6 +670,7 @@ export function createSeedTeamRepository(): TeamRepository {
       removeWhere(agentTokenUsage, (usage) => usage.runId === runId)
       removeWhere(codingAgentSummaries, (summary) => summary.runId === runId)
       removeWhere(gateOverrides, (override) => override.runId === runId)
+      runOrganizationIds.delete(runId)
 
       return {
         deleted: true,
@@ -574,7 +679,14 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
 
-    async uploadTestEvidenceSummary(summary) {
+    async uploadTestEvidenceSummary(summary, context) {
+      summary = redactRemoteTestEvidenceSummaryForSync(summary)
+      assertCanonicalRun(summary, context)
+      assertStableChildSummaryScope(
+        syncedTestEvidenceSummaries.find((candidate) => candidate.id === summary.id),
+        summary,
+        context,
+      )
       upsertSyncedEvidence(summary)
 
       return {
@@ -584,7 +696,14 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
 
-    async uploadAgentReviewSummary(summary) {
+    async uploadAgentReviewSummary(summary, context) {
+      summary = redactRemoteAgentReviewSummaryForSync(summary)
+      assertCanonicalRun(summary, context)
+      assertStableChildSummaryScope(
+        agentReviews.find((candidate) => candidate.id === summary.id),
+        summary,
+        context,
+      )
       const review: AgentReviewResult = {
         id: summary.id,
         requestId: `remote-summary-${summary.id}`,
@@ -603,7 +722,11 @@ export function createSeedTeamRepository(): TeamRepository {
         ),
         suggestedTests: [],
         knowledgeReferences: [],
-        policyFindings: [],
+        policyFindings: (summary.policyFindings ?? []).map((finding) => ({
+          ...finding,
+          evidenceIds: [],
+          knowledgeReferenceIds: [],
+        })),
         confidence: summary.confidence,
         gateAdvisory: {
           id: `gate-advisory-${summary.id}`,
@@ -628,7 +751,14 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
 
-    async uploadCodingAgentSummary(summary) {
+    async uploadCodingAgentSummary(summary, context) {
+      summary = redactRemoteCodingAgentSummaryForSync(summary)
+      assertCanonicalRun(summary, context)
+      assertStableChildSummaryScope(
+        codingAgentSummaries.find((candidate) => candidate.id === summary.id),
+        summary,
+        context,
+      )
       upsertById(codingAgentSummaries, summary)
 
       return {

@@ -44,16 +44,6 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
         memberCost: [],
         totalCost: '$0.000',
       }),
-      uploadRunSummary: async () => ({
-        accepted: true,
-        syncedAt: '2026-06-16T00:00:00.000Z',
-        message: 'run summary accepted',
-      }),
-      uploadTestEvidenceSummary: async () => ({
-        accepted: true,
-        syncedAt: '2026-06-16T00:00:00.000Z',
-        message: 'test evidence summary accepted',
-      }),
       selectLocalProject: async () => localProject,
       saveProjectTestCommand: async ({ testCommand }: { testCommand: string }) => ({
         ...localProject,
@@ -258,7 +248,7 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
           id: input.runId,
           title: '重构 GitHub webhook 重试策略',
           request: '请先澄清 webhook retry 的失败边界，再设计实现方案。',
-          projectId: 'p-payments',
+          projectId: localProject.id,
           creatorId: 'u-ling',
           status: 'paused_at_gate',
           currentNodeId: clarifyGateId,
@@ -323,11 +313,9 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
       approveGate: async ({
         runId,
         nodeId,
-        userName,
       }: {
         runId: string
         nodeId: string
-        userName: string
       }) => {
         const timestamp = '2026-06-15T00:01:00.000Z'
         const run = {
@@ -363,7 +351,7 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
           nodeId,
           sequence: 1,
           kind: 'approval',
-          message: `${userName} Gate approved`,
+          message: 'Trusted local actor Gate approved',
           timestamp,
         }
 
@@ -744,11 +732,6 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
         id: workspaceId,
         deletedAt: '2026-06-15T00:06:00.000Z',
       }),
-      uploadCodingAgentSummary: async () => ({
-        accepted: true,
-        syncedAt: '2026-06-16T00:00:00.000Z',
-        message: 'coding agent summary accepted',
-      }),
       onCodingRunStatusUpdated: () => () => undefined,
       onCodingEventAppended: () => () => undefined,
       onCodingPermissionUpdated: () => () => undefined,
@@ -812,6 +795,16 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.getByRole('button', { name: /^Agents$/ }).click()
     await expect(page.getByTestId('agent-workbench')).toContainText('Agent 执行台')
     await expect(page.getByTestId('agent-workbench')).toContainText('doubao-review')
+    await expect(
+      page.getByRole('button', { name: /Run Knowledge Review/ }),
+    ).toHaveCount(0)
+    await page.getByRole('button', { name: /生成需求澄清/ }).click()
+    await expect(page.getByTestId('toast')).toContainText('需求澄清已生成，进入需求确认 Gate')
+    await page
+      .getByTestId('flow-node-run-created-from-request-clarify-gate')
+      .click()
+    await page.getByRole('button', { name: /^Agents$/ }).click()
+    await expect(page.getByTestId('agent-workbench')).toContainText('需求确认 Gate')
     await expect(page.getByRole('button', { name: /Run Knowledge Review/ })).toBeEnabled()
     await page.getByRole('button', { name: /Run Knowledge Review/ }).click()
     await expect(page.getByTestId('toast')).toContainText('Knowledge Review 已归档')
@@ -846,8 +839,8 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.getByRole('button', { name: /^测试$/ }).click()
     await expect(page.getByTestId('tests-view')).toContainText('测试计划与证据')
     await page.getByRole('button', { name: /执行测试/ }).click()
-    await expect(page.getByTestId('toast')).toContainText('测试通过，证据已归档')
-    await expect(page.getByTestId('tests-view')).toContainText('Local test evidence')
-    await expect(page.getByTestId('tests-view')).toContainText('passed')
+    await expect(page.getByTestId('toast')).toContainText('只能执行当前运行中或失败的测试节点')
+    await expect(page.getByTestId('tests-view')).not.toContainText('Local test evidence')
+    await expect(page.getByTestId('tests-view')).not.toContainText('passed')
   })
 })

@@ -28,10 +28,10 @@
 | 当前 Run/Node | `WorkflowRun.currentNodeId` + selected state | `local persisted` | 已接真实状态。 |
 | Policy snapshot | `loadEnforcementPolicy` / `policy_snapshots` | `real IPC/API` + `local persisted` | 显示 source/version/syncedAt/unavailable reason。 |
 | Knowledge Review | `runKnowledgeReview` result + `agent_reviews` | `real IPC/API` + `local persisted` | 继续从 Agents 入口运行并回写当前 Gate。 |
-| Test Evidence | `runProjectTests` result + `test_evidence` | `real IPC/API` + `local persisted` | 失败、超时状态已可表达；`skipped` 需后续合同变更。 |
+| Test Evidence | `runProjectTests` result + `test_evidence` | `real IPC/API` + `local persisted` | Main 从 canonical Evidence 自动同步；renderer 无远端写接口；LocalStore 永久净化旧 Evidence、Test Report、Test Result Event 与 Coding Event，API 与 Repository 再次净化。`skipped` 需后续合同变更。 |
 | Budget guard | `CodingAgentRun.budgetDecision` | `local persisted` | 当前只在 Coding Agent runtime 下真实；通用 budget history 待补。 |
 | Required Artifact | `Artifact[]` + node artifact ids | `local persisted` | 已可从现有合同计算。 |
-| Handoff bundle | PR/acceptance artifacts + trace | `desktop-only adapter` | PR Draft / Acceptance Bundle 仍由 renderer action 汇总现有对象。 |
+| Handoff bundle | PR/acceptance artifacts + trace | `real Electron IPC` + `local persisted` | Renderer 只发送 Run/Node 标识；Electron main 从可信本地状态汇总并提交，浏览器预览失败关闭。 |
 
 ## Agents
 
@@ -41,7 +41,7 @@
 | Provider credential | `saveAgentProviderCredential`；renderer 只拿 masked metadata | `real IPC/API` + `local persisted` | 不让 raw key 回读 renderer。 |
 | Knowledge Review trace | `AgentTrace[]` | `local persisted` | 已可回写当前 Run/Node。 |
 | Token usage | `AgentTokenUsage[]` | `local persisted` | 保留 provider-reported/estimated source。 |
-| Coding Agent run | `runCodingAgent` / subscriptions | `real IPC/API` + `local persisted` | 继续接 permission relay、tool timeline、diff preview。 |
+| Coding Agent run | `runCodingAgent` / subscriptions | `real IPC/API` + `local persisted` | 继续接 permission relay、tool timeline、diff preview；Team summary 的 structured metadata、model/cost、budget/reason 使用严格白名单并递归净化 secret/path，未知嵌套键丢弃。 |
 | Permission relay | `CodingPermissionRequest[]` + decisions | `real IPC/API` + `local persisted` | 已有 IPC；继续补真实 UI 状态。 |
 | Diff preview | `CodingDiffArtifact[]` | `local persisted` | 已可展示。 |
 
@@ -71,11 +71,15 @@
 | Team projects/members/cost | `loadRemoteSnapshot`；无远端时 seed fallback | `real IPC/API` + `fixture fallback` | 同步后显示 snapshot 与 merge 摘要。 |
 | Policy snapshot source/version | `loadEnforcementPolicy` / `policy_snapshots` | `real IPC/API` + `local persisted` | 继续展示 source/version/syncedAt。 |
 | Gate re-evaluation summary | `evaluateGateEnforcement` decision | `real IPC/API` | 当前只针对 selected Run/Node；批量历史需要新合同。 |
+| Canonical Run/Test sync | Electron main 从 LocalStore 读取 Run/current Node/TestEvidence 后生成白名单 summary | `real IPC/API` | Renderer 不暴露 Run/Test/Coding summary 上传；Test/Review/Coding child-first，只有服务端明确返回 canonical-missing 时才上传一次最新 Run 并重试一次 child。Run summary 独占 status/current Node 推进；child ID 固定绑定 organization/project/Run/Node，冲突返回 409。Team ingest 只保存再次净化后的 read model；durable outbox/backoff 留到 v1.4。 |
+| Gate override sync | main 提交 identifier/reason-only override；remote snapshot 回灌 accepted audit | `real IPC/API` + `local persisted` | 独立 Lead 不重传 creator-owned Run。API 规范化 Postgres node namespace、重算 exact blocker/policy，并按目标项目 membership role 与职责分离校验；accepted override 仍只能由同一合格 actor 用于审批。 |
 | Snapshot history | 当前只有 latest snapshot | `missing contract` | 后续单独设计历史查询合同。 |
 
 ## Browser Preview Boundary
 
-浏览器 Vite 预览不能访问 Electron IPC、本地 SQLite、本地测试执行、系统 credential store 或本机 worktree。预览模式只用于 UI fallback/demo，必须显示 `browser preview` 或 `seed fallback`。桌面端才是完整真实运行边界。
+浏览器 Vite 预览不能访问 Electron IPC、本地 SQLite、本地测试执行、系统 credential store 或本机 worktree。预览模式只用于 UI fallback/demo，必须显示 `browser preview` 或 `seed fallback`；Agent、Gate、Test、PR、Acceptance 工作流推进会失败关闭。桌面端才是完整真实运行边界。
+
+Team API 默认不接受未签名 `x-devflow-*` 身份头，CORS 也不放行这些 header。仅本机 CLI/smoke 可显式设置 `DEV_AUTH_ENABLED=true`，且带 `Origin` 的请求仍会被拒绝；生产写入使用签名 Cookie 或配对后的 Bearer Token。
 
 ## 后续合同变更候选
 

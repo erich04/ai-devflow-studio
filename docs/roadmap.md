@@ -32,74 +32,85 @@ The v1.x line should stay anchored to that team-pilot product shape:
   token revoke/rotation, backup/restore guidance, and later multi-Desktop concurrency checks.
 - **v1.1 Runtime Cost + Budget Guard** adds project/run/user/provider cost summaries and lead
   approval before real provider usage exceeds configured budget thresholds.
-- **v1.3-v1.6** should complete the request-to-delivery workflow before broad operations or platform
-  expansion: request intake, workflow advancement, PR draft handoff, acceptance evidence, GitHub
-  delivery integration, runtime operations, and light collaboration hardening.
+- **v1.3-v1.7** should complete the request-to-delivery workflow and pilot trust boundary before
+  broad operations or platform expansion: request intake, workflow advancement, PR draft handoff,
+  acceptance evidence, auth/budget hardening, GitHub delivery integration, runtime operations, and
+  light collaboration hardening.
 - **v2.0** is the earliest reasonable point to revisit managed/public SaaS, billing, hosted
   multi-tenancy, and managed credentials.
 
 Keep these out of the near-term path unless a later roadmap explicitly promotes them: public SaaS,
 billing, enterprise SSO, automatic cloud deployment, signed installers, auto-update, HoneyAI bridge,
-multi-agent orchestration, real MCP execution, and full RAG/vector retrieval. The **Next concrete action**
-after v1.2 is v1.3 Delivery Flow Completion: make the six-stage workflow advance from a raw request
-through PR draft and acceptance evidence before adding broader operations hardening.
+multi-agent orchestration, real MCP execution, and full RAG/vector retrieval. The
+**Next concrete action** depends on the tagged release check. Until v1.3 tagged signoff passes,
+finish its candidate/evidence sequence; afterward, begin the v1.4 pilot trust boundary. GitHub
+delivery and operations expansion wait until both are complete.
 
 ## Current Status
 
-AI DevFlow Studio is currently an Electron-first team developer workbench with a workflow canvas,
-selected-node inspector, local test execution, SQLite-backed test evidence, light/dark/system theme
-support, and Team, Knowledge, Skills, MCP, and Tests views.
+This source tree declares `1.3.0`. Formal release state is evaluated from
+`docs/releases/v1.3.0/` and `corepack pnpm release:status -- --mode=tagged`; it is not hard-coded in
+this roadmap.
 
-The v0.2 Final feature set is complete and release-confirmed locally: a developer can select a
-local repository, create a Run, approve a Gate, validate and execute the project's test command
-through controlled Electron IPC, persist evidence/settings/MCP state in SQLite schema v2, and
-separate local state from seed fixtures. The previously intermittent Electron smoke path around
-selecting the new Run's Gate node has been stabilized, and `corepack pnpm verify` has passed
-repeatedly.
+Candidate-formation audit snapshot, captured on 2026-07-31 before commit `C` existed:
 
-v0.3 Team Backend Synchronization is complete and verified. DevFlow now has a Postgres-backed team
-API path, a Web manager console that reads from the API, an Electron remote sync boundary for
-approved Run/Test Evidence summaries, explicit demo session headers, and CI coverage for macOS
-verify, Windows compatibility checks, and Postgres integration smoke.
+| Layer | Status | Snapshot meaning |
+| --- | --- | --- |
+| Released baseline | `v1.2.0` | Runtime Cost UX + Budget Administration is the last tagged release |
+| v1.3 functional scope | implemented in the working tree | Trusted workflow commands, atomic local mutations, project-bound sync, redaction, deterministic providers, runnable API/Worker output, OAuth env compatibility, and unpaired-PR guidance are present |
+| Package metadata | aligned | Root and all five workspace packages report `1.3.0` |
+| Historical walkthrough | failed | The 2026-07-25 Computer Use walkthrough is the baseline that exposed the now-addressed state/sync gaps |
+| Local deterministic ladder | recorded green | `verify:demo`, build/output, Postgres, and Docker checks passed on the pre-candidate closeout tree; they are not candidate-bound release evidence |
+| Candidate commit `C` | pending | The scoped closeout changes have not yet been frozen into a clean candidate SHA |
+| v1.3 release signoff | not completed | Candidate-bound remote CI, a paired Computer Use result, paid real-opencode evidence, signoff commit `S`, and the v1.3 tag remain |
 
-v0.4 Knowledge Governance and v0.4.x Knowledge Retrieval hardening are implemented in the desktop
-workbench. DevFlow indexes Git-managed Markdown knowledge sources into governance documents,
-section-level chunks, graph entities, tag relations, retrieval hits, and Run references.
+The project has a broad implementation foundation: Electron local persistence and controlled test
+execution, API/Web/Postgres team services, pairing/auth, policy and budget models, Knowledge Review,
+Coding Agent adapters, delivery artifacts, and release automation all exist in code.
 
-v0.5 Knowledge Review Agent Workbench is implemented as the first real Agent runtime slice.
-Electron can run a local Knowledge Review Agent against a selected Run/Node and persist Agent
-Review, trace, token usage, artifact, and event data in SQLite. The API/Web path can run the same
-shared Agent Core against team state and persist the result through the team repository boundary.
-Gate Advisory remains warning-only by default.
+Clarification, Design, Gate approval, Knowledge Review and Test Evidence can be exercised in the
+current UI.
 
-v0.6 opencode Coding Adapter is implemented and signed off for the macOS local runtime path.
-DevFlow can create a managed git worktree, start a Coding Agent Run from a build task node,
-assemble the coding brief from persisted DevFlow context, show and push permission relay updates,
-expire unanswered permission requests, archive a redacted Coding Diff Artifact, persist Dependency
-Bootstrap Evidence and worktree Test Evidence, and sync a redacted Coding Agent summary through
-Electron, API, and Postgres. The real opencode runtime is available through explicit
-`DEVFLOW_CODING_ENGINE=opencode-http` configuration and a manual
-`corepack pnpm test:opencode-smoke` script; default verification remains deterministic on the fake
-engine. Manual live signoff completed with opencode `1.17.5` and Volcengine Ark
-`double/ark-code-latest`, including a multi-step `bash -> edit -> bash -> bash` permission relay.
+The closeout working tree replaces the earlier parallel write paths with a shared seven-command
+workflow evaluator.
 
-GitHub Actions now includes a release-artifact workflow for explicit `v*` tags and manual dispatch.
-It verifies the repository, builds the first-party app outputs, uploads release artifacts, and
-creates or updates GitHub Releases for tags. Production deployment, signed installers, and
-auto-update remain deferred release-engineering work.
+Electron main reloads canonical local state before a command, verifies node order and evidence
+ownership, and atomically commits the Run with generated Artifacts, Events, and Test Evidence.
 
-v0.7 Configurable Gate Enforcement Policy core is implemented. DevFlow now has a shared policy
-resolver/evaluator, warn-only default policy, recommended enforcement preset, Agent Policy Findings,
-API/Postgres policy persistence, Web policy controls, Electron policy snapshot/override persistence,
-and an Electron Gate approval write path that re-checks `canApproveGateNow` in the main process.
-The v0.7.x hardening patch adds explicit Electron app-path launch, Desktop Inspector enforcement
-explanations, no-cache team policy `blocked_policy_unavailable`, online policy refresh before
-approval, and API sync rejection for approval summaries that would bypass the Gate write path.
+Build advances only from a completed Coding Run with its matching Diff. Test, PR, and Acceptance
+each require their upstream evidence; final Acceptance also checks role, policy, review, and budget.
 
-Current validation remains macOS-local for the full real Electron window path. Windows compatibility
-is preserved through static automation checks and Windows CI for typecheck/unit/audit; full Windows
-Electron smoke is still tracked as future compatibility expansion. See
-`docs/adr/0006-cross-platform-electron-compatibility.md`.
+Pairing now records an explicit Local Project ↔ Team Project binding. Remote evidence upload first
+ensures the canonical Run exists, rejects invalid ownership, and uses the bound repository.
+
+Desktop state merge is local-first, so a lossy remote summary cannot replace a same-id local Run,
+Artifact, or Event.
+
+The deterministic fake/no-cost boundary is now explicit: `DEVFLOW_ENABLE_FAKE_RUNTIME=true`
+exposes the fake Agent provider and permits the fake Coding Engine. Disabled mode rejects both.
+
+Known workspace roots become `<workspace>` in archived Test Evidence. API and Worker builds are
+bundled and covered by an isolated `test:build-output-smoke`.
+
+CI definitions include build/output, E2E, Electron, Windows, Postgres, and Docker gates.
+
+The documented GitHub OAuth environment names now resolve correctly, and an unpaired PR node
+explains the required Team Project binding instead of exposing a raw IPC failure.
+
+Implementation and local rehearsal passes are not release evidence by themselves. A valid v1.3
+release requires candidate `C`, candidate-bound gates, and a paired Computer Use walkthrough.
+
+It also requires explicit real-opencode evidence, evidence commit `S`, and successful pre-tag and
+tagged status checks.
+
+Knowledge, Skills and MCP have visible product surfaces, but the current Electron path reports the
+repository as not indexed, has no real team Skills, and has no MCP connectors/runtime.
+
+The new Web shell renders team metrics but does not yet close request intake, Gate actions, pairing,
+or run selection.
+
+The detailed evidence and release exit criteria are recorded in
+`docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-25.md`.
 
 ## Completed Milestones
 
@@ -379,20 +390,51 @@ Electron smoke is still tracked as future compatibility expansion. See
 
 ## Planned Milestones
 
-### v1.3 Candidate: Delivery Flow Completion
+### v1.3 closeout: Delivery Flow Verification and Release Hardening
 
-- Create workflow runs from real user requests instead of cloning seed runs. The shared creator
-  should produce a raw-request artifact, a six-stage node template, edges, and the first agent event.
-- Replace hard-coded Gate approval status changes with a shared workflow advancement helper that
-  moves `currentNodeId` across `workflow_edges` and maps the Run status to the next stage.
-- Add PR draft handoff artifacts that summarize changed paths, test evidence, policy status, budget
-  state, Agent Review, and a safe GitHub compare URL when a project repository mapping is available.
-- Add acceptance evidence bundle artifacts that connect the original request, PR draft, diff, tests,
-  policy, budget, and review evidence before final signoff.
-- Keep real GitHub PR creation out of v1.3. The PR stage creates a human-readable handoff artifact;
-  v1.4 can turn that draft into a GitHub API integration.
+Implemented closeout scope:
 
-### v1.4 Candidate: GitHub Delivery Integration
+- request-based Run creation with raw-request artifact and six-stage template;
+- shared trusted commands for Agent, Gate, Build, Test, PR, and Acceptance transitions;
+- canonical main-process state reload plus atomic Run/artifact/event/Test Evidence commits;
+- evidence-gated Build → Test → PR → Acceptance flow and final signoff;
+- PR Draft and Acceptance Bundle artifact builders behind dedicated identifier-only IPC;
+- explicit Local Project ↔ Team Project binding, canonical remote Run ownership, and local-first
+  sync merge;
+- env-gated deterministic fake Agent/Coding paths and known-workspace Test Evidence redaction;
+- runnable isolated API/Worker dist smoke and expanded Verify/Release workflows;
+- documented GitHub OAuth environment compatibility and actionable unpaired-PR guidance.
+
+Required before v1.3 can be called complete:
+
+- create one clean candidate commit `C` with all package versions already aligned to `1.3.0`;
+- re-run and record all deterministic gates against `C`; the 2026-07-31 working tree has passed
+  `verify:demo`, Electron, build/output, Postgres, and Docker locally, but candidate-bound
+  `windows-latest` verification is still pending;
+- complete a new dated, fully paired Computer Use walkthrough against `C`; the 2026-07-31 isolated
+  rehearsal reached PR after passing Clarify/Design/Build/Test and correctly failed closed without
+  a Team Project binding, so it is not formal release evidence;
+- run and record the required release-only real `test:opencode-smoke` before tagging;
+- create the evidence-only signoff commit `S`, then run
+  `corepack pnpm release:status -- --mode=pre-tag` at clean `S`;
+- create the tag at `S` only after signoff, then run
+  `corepack pnpm release:status -- --mode=tagged`.
+
+Real GitHub PR creation remains out of v1.3. The PR stage should first become a reliable,
+human-readable handoff artifact; the v1.4 trust boundary must land before v1.5 adds GitHub API
+integration.
+
+### v1.4 Candidate: Pilot Trust Boundary
+
+- Connect repository Markdown indexing to the real Electron, API Review, Coding Runtime, and Gate
+  paths instead of passing empty knowledge arrays.
+- Make auth and paid-runtime budget decisions fail closed; remove unsigned identity-header trust
+  from non-demo paths and add negative-path/audit coverage.
+- Complete Web request intake, Gate actions, Desktop pairing, and explicit run selection.
+- Harden the minimum runnable outputs from v1.3 into reproducible Electron/Web/API pilot packages
+  with deploy, upgrade, and rollback smoke before external pilot use.
+
+### v1.5 Candidate: GitHub Delivery Integration
 
 - Add project-to-repository delivery settings and use the v1.3 PR draft artifact as the source for
   GitHub compare/PR creation.
@@ -401,18 +443,18 @@ Electron smoke is still tracked as future compatibility expansion. See
 - Do not silently push or merge. Human approval remains required for branch publication and PR
   creation.
 
-### v1.5 Candidate: Runtime Operations Hardening
+### v1.6 Candidate: Runtime Operations Hardening
 
 - Add self-hosted operations hardening after the delivery flow closes: backup/restore guidance,
   token-revocation UX, selected auth/pairing negative-path smoke coverage, and cleanup/recovery
   notes for self-hosted pilots.
 - Keep release-only real opencode provider smoke as the paid-runtime signoff gate.
 
-### v1.6 Candidate: Collaboration Hardening
+### v1.7 Candidate: Collaboration Hardening
 
 - Add small-team collaboration checks after the single-user delivery loop is coherent: 2-3 Desktop
   clients, basic conflict visibility, audit review, and member administration improvements.
-- Do not treat 10-person concurrency as a v1.3/v1.4 requirement.
+- Do not treat 10-person concurrency as a v1.3-v1.5 requirement.
 
 ## Deferred / Not Yet Started
 

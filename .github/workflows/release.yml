@@ -10,6 +10,30 @@ permissions:
   contents: write
 
 jobs:
+  windows-compatibility:
+    name: Windows compatibility
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm typecheck
+      - run: corepack pnpm test
+      - run: corepack pnpm test:cross-platform
+
   postgres-integration:
     name: Postgres integration
     runs-on: ubuntu-latest
@@ -46,12 +70,38 @@ jobs:
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm test:postgres-smoke
 
+  docker-smoke:
+    name: Docker smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm test:docker-smoke
+
   release-artifacts:
     name: Build release artifacts
     runs-on: macos-latest
-    needs: postgres-integration
+    needs:
+      - windows-compatibility
+      - postgres-integration
+      - docker-smoke
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          fetch-tags: true
 
       - uses: pnpm/action-setup@v4
         with:
@@ -69,13 +119,26 @@ jobs:
       - run: corepack pnpm exec playwright install chromium
       - run: corepack pnpm verify
       - run: corepack pnpm build
+      - run: corepack pnpm test:build-output-smoke
+      - run: corepack pnpm test:e2e
+      - run: corepack pnpm test:electron-smoke
+
+      - name: Verify candidate-bound release signoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            corepack pnpm release:status -- --mode=tagged
+          else
+            corepack pnpm release:status -- --mode=pre-tag
+          fi
 
       - name: Prepare release artifacts
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-artifacts
-          VERSION="${GITHUB_REF_NAME:-manual-${GITHUB_RUN_NUMBER}}"
+          VERSION="$(node scripts/release-artifact-label.mjs)"
           {
             echo "AI DevFlow Studio ${VERSION}"
             echo "Commit: ${GITHUB_SHA}"

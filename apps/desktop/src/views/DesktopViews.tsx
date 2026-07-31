@@ -214,6 +214,7 @@ export function Inspector({
   onSaveGateOverride,
   onStartRemediationRetry,
   pairingState,
+  hasDeliveryProjectBinding,
   onSyncTeam,
   onOpenTests,
   onOpenKnowledgeReview,
@@ -244,9 +245,10 @@ export function Inspector({
   canSaveOverride: boolean
   onApprove: () => void
   onCompleteAgentNode: () => void
-  onSaveGateOverride: (reason: string, provisional: boolean) => void
+  onSaveGateOverride: (reason: string) => void
   onStartRemediationRetry: (candidateId: string) => void
   pairingState: 'unpaired' | 'paired' | 'sync_failed'
+  hasDeliveryProjectBinding: boolean
   onSyncTeam: () => void
   onOpenTests: () => void
   onOpenKnowledgeReview: () => void
@@ -290,6 +292,7 @@ export function Inspector({
     gateEnforcementDecision,
     isLoadingGateEnforcement,
     canApprove,
+    hasTeamProjectBinding: hasDeliveryProjectBinding,
   })
   const focusedArtifactId =
     supportContext?.focusTarget === 'artifact' &&
@@ -344,6 +347,7 @@ export function Inspector({
       requires_current_node: !isSelectedCurrentNode,
       gate_permission_missing: !canApprove,
       starting_coding_agent: isStartingCodingAgent,
+      team_project_binding_missing: !hasDeliveryProjectBinding,
     }[reason]
   }
   const isActionWriteLocked = (action: InspectorAction) => writeActionIds.has(action.id) && hasInspectorWriteLock
@@ -352,6 +356,9 @@ export function Inspector({
   const actionTitle = (action: InspectorAction) => {
     if (isActionWriteLocked(action) && !action.disabledReasons.some((reason) => isDisabledReasonActive(reason))) {
       return pendingMatchesSelectedNode ? '当前节点操作正在进行中' : '其他 Inspector 操作正在进行中'
+    }
+    if (action.disabledReasons.includes('team_project_binding_missing') && !hasDeliveryProjectBinding) {
+      return '先绑定当前 Local Project 与 Team Project'
     }
     return undefined
   }
