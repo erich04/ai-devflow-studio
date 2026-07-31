@@ -277,7 +277,7 @@ describe('agent console view model', () => {
     expect(viewModel.primaryAction.disabledReason).toBe('请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。')
   })
 
-  it('does not fall back to Knowledge Review for PR and acceptance nodes', () => {
+  it('keeps PR delivery in Workbench and offers Knowledge Review for acceptance', () => {
     const prRun = runWithCurrentNode('n-pr')
     const prViewModel = buildAgentConsoleViewModel(baseInput({
       selectedRun: prRun,
@@ -290,7 +290,11 @@ describe('agent console view model', () => {
     }))
 
     expect(prViewModel.primaryAction.id).toBe('return-workbench')
-    expect(acceptanceViewModel.primaryAction.id).toBe('return-workbench')
+    expect(acceptanceViewModel.primaryAction).toMatchObject({
+      id: 'run-review',
+      label: 'Run Knowledge Review',
+      disabled: false,
+    })
   })
 
   it('groups review, coding, permission, diff, test evidence, and cost outputs', () => {

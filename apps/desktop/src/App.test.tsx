@@ -2630,6 +2630,76 @@ describe('App', () => {
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('warning-only')
   })
 
+  it('runs the required Knowledge Review from final acceptance enforcement', async () => {
+    const recommended = createRecommendedEnforcementPreset({
+      organizationId: 'org-demo',
+      updatedAt: '2026-06-18T00:00:00.000Z',
+    })
+    const effectivePolicy = resolveEffectivePolicy(recommended, null)
+    const acceptanceRun = fixtureRunAtCurrentNode('n-accept')
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [acceptanceRun],
+        desktopPairingCredential: fixturePairingCredential,
+      })),
+      loadEnforcementPolicy: vi.fn().mockResolvedValue({
+        projectId: acceptanceRun.projectId,
+        organizationPolicy: recommended,
+        projectOverride: null,
+        effectivePolicy,
+        version: effectivePolicy.version,
+        updatedAt: effectivePolicy.updatedAt,
+        syncedAt: '2026-06-18T00:00:10.000Z',
+        source: 'remote_cache',
+      }),
+      evaluateGateEnforcement: vi.fn().mockResolvedValue({
+        status: 'blocked',
+        blocksApproval: true,
+        blockingReasons: [{
+          id: 'missing_agent_review:protected_gate:missing',
+          target: 'missing_agent_review',
+          ruleKey: 'missing_agent_review:protected_gate:missing',
+          action: 'block',
+          summary: 'Knowledge Review Agent has not reviewed final acceptance.',
+          remediation: 'Run Knowledge Review Agent for final acceptance.',
+        }],
+        warningReasons: [],
+        requiredActions: ['Run Knowledge Review Agent for final acceptance.'],
+        canOverride: false,
+        overrideRoleRequired: 'lead',
+        policySource: 'remote_cache',
+        policyVersion: 1,
+        provisional: false,
+      }),
+    })
+
+    render(<App />)
+
+    await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalledWith({
+      runId: acceptanceRun.id,
+      nodeId: 'n-accept',
+      projectId: acceptanceRun.projectId,
+    }))
+    const inspector = screen.getByTestId('node-inspector')
+    fireEvent.click(within(inspector).getByRole('button', { name: /运行 Agent Review/ }))
+
+    const agentWorkbench = await screen.findByTestId('agent-workbench')
+    expect(agentWorkbench).toHaveTextContent('业务验收')
+    const runReview = within(agentWorkbench).getByRole('button', { name: /Run Knowledge Review/ })
+    expect(runReview).toBeEnabled()
+    fireEvent.click(runReview)
+
+    await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
+      runId: acceptanceRun.id,
+      nodeId: 'n-accept',
+      projectId: acceptanceRun.projectId,
+      requestedBy: fixturePairingCredential.userId,
+      runtime: 'electron',
+      providerId: agentProvider.id,
+    })))
+  })
+
   it('saves a custom Agent Provider credential for Doubao-compatible model calls', async () => {
     const liveProvider = {
       id: 'doubao-review',

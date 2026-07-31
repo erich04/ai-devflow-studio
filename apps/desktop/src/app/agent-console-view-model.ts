@@ -292,11 +292,11 @@ function buildPrimaryAction(input: {
     }
   }
 
-  if (input.selectedNode.kind === 'pr' || input.selectedNode.kind === 'acceptance') {
+  if (input.selectedNode.kind === 'pr') {
     return {
       id: 'return-workbench',
       label: 'Return to Workbench',
-      summary: 'PR 交付和业务验收动作请回到 Workbench 当前 Inspector 执行。',
+      summary: 'PR 交付动作请回到 Workbench 当前 Inspector 执行。',
       tone: 'soft',
       disabled: false,
     }
