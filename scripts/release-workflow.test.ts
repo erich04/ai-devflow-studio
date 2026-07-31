@@ -52,7 +52,7 @@ describe('GitHub release workflow', () => {
     expect(workflow).not.toContain('test:opencode-smoke')
   })
 
-  it('checks out the signoff parent history and tags before release status', () => {
+  it('checks out the signoff parent history without auto-following annotated tags', () => {
     const workflow = readWorkflow(releaseWorkflowPath)
     const windowsJob = jobBlock(workflow, 'windows-compatibility')
     const artifactsJob = jobBlock(workflow, 'release-artifacts')
@@ -61,8 +61,9 @@ describe('GitHub release workflow', () => {
       /- uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 2[\s\S]*?corepack pnpm test/,
     )
     expect(artifactsJob).toMatch(
-      /- uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 2\n\s+fetch-tags: true[\s\S]*?release:status/,
+      /- uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 2[\s\S]*?release:status/,
     )
+    expect(artifactsJob).not.toContain('fetch-tags: true')
   })
 
   it('uses a slash-safe artifact label for manual branch dispatches', () => {
