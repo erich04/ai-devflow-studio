@@ -19,6 +19,17 @@ export type TeamDbClient = {
   close(): Promise<void>
 }
 
+export type TeamDbCheckedOutClient = {
+  query<T>(sql: string, params?: unknown[]): Promise<T[]>
+  release(): Promise<void> | void
+}
+
+export type TeamDbConnectionProvider = {
+  checkout(): Promise<TeamDbCheckedOutClient>
+}
+
+export type TeamDbPoolClient = TeamDbClient & TeamDbConnectionProvider
+
 const DEFAULT_APPLICATION_NAME = 'ai-devflow-api'
 const DEFAULT_STATEMENT_TIMEOUT_MS = 5_000
 
