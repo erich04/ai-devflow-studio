@@ -72,6 +72,7 @@ import type {
   TeamRepository,
   TeamRepositorySyncContext,
 } from './team-repository'
+import { createPostgresWorkRequestRepository } from './postgres-work-request-repository'
 
 type TimestampValue = string | Date
 
@@ -979,6 +980,8 @@ export function createPostgresTeamRepository(
   db: TeamDbRepositoryClient,
   options: PostgresTeamRepositoryOptions = {},
 ): TeamRepository {
+  const workRequestRepository = createPostgresWorkRequestRepository(db)
+
   async function loadAuthenticatedIdentity(input: {
     provider: AuthProvider
     providerAccountId: string
@@ -1350,6 +1353,7 @@ export function createPostgresTeamRepository(
   }
 
   return {
+    ...workRequestRepository,
     async getAuthenticatedIdentity(input) {
       return loadAuthenticatedIdentity(input)
     },

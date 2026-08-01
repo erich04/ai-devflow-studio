@@ -56,6 +56,7 @@ import {
   type TeamRepository,
 } from '../repositories/team-repository'
 import { clearSessionCookie, createSessionCookie } from '../auth/session-cookie'
+import { resolveWorkRequestRoute } from './work-request-routes'
 
 const defaultKnowledgeDocuments: KnowledgeDocument[] = []
 const defaultKnowledgeChunks: KnowledgeChunk[] = []
@@ -956,6 +957,14 @@ export async function resolveTeamRoute(
       },
       body: null,
     }
+  }
+
+  const workRequestResult = await resolveWorkRequestRoute(method, pathname, repository, {
+    body: options.body,
+    ...(options.principal !== undefined ? { principal: options.principal } : {}),
+  })
+  if (workRequestResult) {
+    return workRequestResult
   }
 
   if (method === 'GET' && pathname === '/api/runs') {

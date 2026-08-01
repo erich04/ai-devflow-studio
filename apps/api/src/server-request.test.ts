@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { AuthenticatedSession } from '@ai-devflow/shared'
+import type { AuthenticatedSession, WorkRequest } from '@ai-devflow/shared'
 import { createSessionCookie } from './auth/session-cookie'
 import { createSeedTeamRepository } from './repositories/team-repository'
+import type {
+  WorkRequestMutationResult,
+  WorkRequestRepository,
+} from './repositories/work-request-contract'
 import {
   createCorsPreflightHeaders,
   createInternalErrorResponse,
@@ -57,6 +61,86 @@ function runSummary(runId: string) {
     branchName: 'ai/authenticated-sync',
     updatedAt: '2026-07-31T12:00:00.000Z',
   }
+}
+
+const openWorkRequest: WorkRequest = {
+  id: 'wr-api-rollout',
+  organizationId: 'org-demo',
+  projectId: 'p-payments',
+  title: 'Prepare rollout',
+  request: 'Keep the deployment reversible.',
+  version: 1,
+  status: 'open',
+  createdByUserId: projectMemberSession.userId,
+  claim: null,
+  expiresAt: null,
+  createdAt: '2026-08-01T12:00:00.000Z',
+  updatedAt: '2026-08-01T12:00:00.000Z',
+}
+
+const claimedWorkRequest: WorkRequest = {
+  ...openWorkRequest,
+  version: 2,
+  status: 'claim_pending',
+  claim: {
+    runId: 'run-api-rollout',
+    claimedAt: '2026-08-01T12:01:00.000Z',
+    materializedAt: null,
+  },
+  updatedAt: '2026-08-01T12:01:00.000Z',
+}
+
+function createWorkRequestAwareRepository() {
+  const workRequests: WorkRequestRepository = {
+    listWorkRequests: vi.fn(async () => [openWorkRequest]),
+    createWorkRequest: vi.fn(async () =>
+      ({
+        ok: true,
+        responseStatus: 201,
+        outcomeCode: 'created',
+        replayed: false,
+        workRequest: openWorkRequest,
+      }) satisfies WorkRequestMutationResult,
+    ),
+    claimWorkRequest: vi.fn(async () =>
+      ({
+        ok: true,
+        responseStatus: 200,
+        outcomeCode: 'claimed',
+        replayed: false,
+        workRequest: claimedWorkRequest,
+      }) satisfies WorkRequestMutationResult,
+    ),
+    materializeWorkRequest: vi.fn(async () =>
+      ({
+        ok: true,
+        responseStatus: 200,
+        outcomeCode: 'materialized',
+        replayed: false,
+        workRequest: {
+          ...claimedWorkRequest,
+          version: 3,
+          status: 'materialized',
+          claim: {
+            ...claimedWorkRequest.claim!,
+            materializedAt: '2026-08-01T12:02:00.000Z',
+          },
+          updatedAt: '2026-08-01T12:02:00.000Z',
+        },
+      }) satisfies WorkRequestMutationResult,
+    ),
+    releaseWorkRequest: vi.fn(async () =>
+      ({
+        ok: true,
+        responseStatus: 200,
+        outcomeCode: 'released',
+        replayed: false,
+        workRequest: { ...openWorkRequest, version: 3 },
+      }) satisfies WorkRequestMutationResult,
+    ),
+  }
+
+  return Object.assign(createSeedTeamRepository(), workRequests)
 }
 
 describe('API HTTP authentication boundary', () => {
@@ -503,6 +587,119 @@ describe('API HTTP authentication boundary', () => {
       status: 403,
       body: { error: 'forbidden', message: 'Project role lead required' },
     })
+  })
+
+  it('passes a live session_cookie principal into Work Request creation', async () => {
+    const repository = createWorkRequestAwareRepository()
+    const sessionSecret = 'server-request-test-secret'
+    const cookie = createSessionCookie(
+      { authAccountId: projectMemberSession.authAccountId },
+      sessionSecret,
+    ).split(';')[0]
+    vi.spyOn(repository, 'resolveBrowserSession').mockResolvedValue(
+      projectMemberSession,
+    )
+    const body = {
+      projectId: 'p-payments',
+      title: 'Prepare rollout',
+      request: 'Keep the deployment reversible.',
+      idempotencyKey: 'create:api-rollout',
+      expiresAt: null,
+    }
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'POST',
+        pathname: '/api/team/projects/p-payments/work-requests',
+        headers: { cookie },
+        body,
+      },
+      { repository, sessionSecret },
+    )
+
+    expect(result).toMatchObject({
+      status: 201,
+      body: { outcomeCode: 'created', replayed: false },
+    })
+    expect(repository.createWorkRequest).toHaveBeenCalledWith(body, {
+      session: projectMemberSession,
+      authentication: { kind: 'session_cookie', tokenRecordId: null },
+    })
+  })
+
+  it('passes bearer token identity and tenant scope into Work Request claim', async () => {
+    const repository = createWorkRequestAwareRepository()
+    vi.spyOn(repository, 'resolveDesktopTokenSession').mockResolvedValue({
+      tokenRecordId: 'desktop-token-record-api',
+      session: projectMemberSession,
+    })
+    const body = {
+      workRequestId: openWorkRequest.id,
+      expectedVersion: 1,
+      runId: 'run-api-rollout',
+      idempotencyKey: 'claim:api-rollout',
+    }
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'POST',
+        pathname: `/api/desktop/work-requests/${openWorkRequest.id}/claim`,
+        headers: { authorization: 'Bearer paired-desktop-secret' },
+        body,
+      },
+      { repository, sessionSecret: 'server-request-test-secret' },
+    )
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: { outcomeCode: 'claimed', replayed: false },
+    })
+    expect(repository.claimWorkRequest).toHaveBeenCalledWith(body, {
+      authentication: {
+        kind: 'desktop_bearer',
+        tokenRecordId: 'desktop-token-record-api',
+      },
+      session: expect.objectContaining({
+        organizationId: 'org-demo',
+        userId: projectMemberSession.userId,
+        projectMemberships: [
+          expect.objectContaining({
+            projectId: 'p-payments',
+            userId: projectMemberSession.userId,
+          }),
+        ],
+      }),
+    })
+  })
+
+  it('rejects invalid Work Request authentication without invoking lifecycle methods or reflecting secrets', async () => {
+    const repository = createWorkRequestAwareRepository()
+    const bearerSecret = 'desktop-token-id.invalid-work-request-secret'
+    vi.spyOn(repository, 'resolveDesktopTokenSession').mockResolvedValue(null)
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'POST',
+        pathname: `/api/desktop/work-requests/${openWorkRequest.id}/claim`,
+        headers: { authorization: `Bearer ${bearerSecret}` },
+        body: {
+          workRequestId: openWorkRequest.id,
+          expectedVersion: 1,
+          runId: 'run-api-rollout',
+          idempotencyKey: 'claim:invalid-auth',
+        },
+      },
+      { repository, sessionSecret: 'server-request-test-secret' },
+    )
+
+    expect(result).toEqual({
+      status: 401,
+      body: { error: 'unauthorized', message: 'Authentication required' },
+    })
+    expect(repository.claimWorkRequest).not.toHaveBeenCalled()
+    expect(repository.materializeWorkRequest).not.toHaveBeenCalled()
+    expect(repository.releaseWorkRequest).not.toHaveBeenCalled()
+    expect(JSON.stringify(result)).not.toContain(bearerSecret)
   })
 })
 

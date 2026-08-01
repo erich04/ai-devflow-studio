@@ -54,6 +54,8 @@ import {
   skills,
   tokenUsage,
 } from '@ai-devflow/shared/fixtures'
+import type { WorkRequestRepository } from './work-request-contract'
+import { createSeedWorkRequestRepository } from './seed-work-request-repository'
 
 const DEMO_ORGANIZATION_ID = 'org-demo'
 const DEMO_IDENTITY_TIMESTAMP = new Date(0).toISOString()
@@ -167,7 +169,7 @@ export type TeamProjectCreateInput = {
   testCommand?: string
 }
 
-export type TeamRepository = {
+export type TeamRepository = WorkRequestRepository & {
   getAuthenticatedIdentity(input: {
     provider: AuthProvider
     providerAccountId: string
@@ -302,6 +304,17 @@ export function createSeedTeamRepository(): TeamRepository {
   const runtimeBudgetApprovals: RuntimeBudgetApproval[] = []
   const desktopPairingCodes = new Map<string, Omit<DesktopPairingExchangeResult, 'token' | 'tokenId'>>()
   const desktopTokenSessions = new Map<string, ResolvedDesktopTokenSession>()
+  const workRequestRepository = createSeedWorkRequestRepository({
+    projectExists: (organizationId, projectId) =>
+      projectOrganizationIds.get(projectId) === organizationId,
+    canonicalProjectionExists: (runId, organizationId, projectId) =>
+      syncedRuns.some(
+        (run) =>
+          run.id === runId &&
+          run.projectId === projectId &&
+          runOrganizationIds.get(run.id) === organizationId,
+      ),
+  })
 
   function upsertSyncedRun(run: WorkflowRun) {
     const index = syncedRuns.findIndex((candidate) => candidate.id === run.id)
@@ -420,6 +433,7 @@ export function createSeedTeamRepository(): TeamRepository {
   }
 
   return {
+    ...workRequestRepository,
     async getAuthenticatedIdentity(input) {
       if (input.provider !== 'github' || !input.providerAccountId.startsWith('demo:')) {
         return null

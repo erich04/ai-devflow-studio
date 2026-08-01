@@ -460,6 +460,31 @@ function createRepository(): TeamRepository {
       createdAt: '2026-06-20T00:00:00.000Z',
     })),
     resolveDesktopTokenSession: vi.fn(async () => null),
+    listWorkRequests: vi.fn(async () => []),
+    createWorkRequest: vi.fn(async () => ({
+      ok: false,
+      responseStatus: 403,
+      outcomeCode: 'authentication_forbidden',
+      replayed: false,
+    } as const)),
+    claimWorkRequest: vi.fn(async () => ({
+      ok: false,
+      responseStatus: 403,
+      outcomeCode: 'authentication_forbidden',
+      replayed: false,
+    } as const)),
+    materializeWorkRequest: vi.fn(async () => ({
+      ok: false,
+      responseStatus: 403,
+      outcomeCode: 'authentication_forbidden',
+      replayed: false,
+    } as const)),
+    releaseWorkRequest: vi.fn(async () => ({
+      ok: false,
+      responseStatus: 403,
+      outcomeCode: 'authentication_forbidden',
+      replayed: false,
+    } as const)),
     getRunsBundle: vi.fn(async (context) =>
       context.organizationId === 'org-demo'
         ? runsBundle
