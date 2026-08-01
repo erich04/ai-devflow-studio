@@ -29,6 +29,12 @@ describe('v1.4 pilot trust boundary contract', () => {
     expect(plan).toContain('## Slice A2 — Knowledge Review Paid Preflight And Audit')
   })
 
+  it('records the completed durable outbox before repository knowledge integration', () => {
+    expect(plan).toContain('## Slice B — Durable Remote-Sync Outbox ✅')
+    expect(plan).toContain('Full unit regression passed 870/870')
+    expect(plan).toContain('Slice C integration is next')
+  })
+
   it('keeps deferred delivery and packaging work outside v1.4', () => {
     expect(prd).toContain('Real GitHub push, pull-request creation, merge, or branch publication (V1.5)')
     expect(prd).toContain('signed/notarized installers')
