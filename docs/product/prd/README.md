@@ -14,8 +14,10 @@ separate from:
 
 - [`current-product-prd.md`](./current-product-prd.md): Current product baseline PRD for DevFlow
   Studio's self-hosted AI development workflow workbench.
+- [`v1.4-pilot-trust-boundary-prd.md`](./v1.4-pilot-trust-boundary-prd.md): Scoped V1.4 contract
+  for paid-runtime trust, durable sync, repository knowledge, Web management, and pilot lifecycle.
 
 ## Naming
 
-Use `vX.Y-topic-prd.md` for future scoped product changes, for example
-`v1.4-github-delivery-prd.md`.
+Use `vX.Y-topic-prd.md` for scoped product changes, for example
+`v1.5-github-delivery-prd.md`.
