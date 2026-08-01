@@ -896,6 +896,150 @@ describe('team API route resolver', () => {
     )
   })
 
+  it('rejects Knowledge Review for a non-current run node before resolving provider credentials', async () => {
+    const repository = createRepository()
+    const bundle = await repository.getRunsBundle()
+    const run = bundle.runs.find((candidate) => candidate.id === 'run-payments')
+    if (!run) {
+      throw new Error('Expected payments run fixture')
+    }
+    run.nodes.push({
+      ...run.nodes[0]!,
+      id: 'node-previous-gate',
+      status: 'success',
+    })
+
+    const result = await resolveTeamRoute('POST', '/api/agent/knowledge-review', repository, {
+      session: memberSession,
+      body: {
+        runId: run.id,
+        nodeId: 'node-previous-gate',
+        projectId: run.projectId,
+        providerId: 'openai-default',
+      },
+    })
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: 'bad_request',
+        message: 'Knowledge Review requires the current run node.',
+      },
+    })
+    expect(repository.getAgentProviderCredential).not.toHaveBeenCalled()
+    expect(repository.saveAgentReviewBundle).not.toHaveBeenCalled()
+  })
+
+  it('rejects Knowledge Review for a non-reviewable current node before resolving provider credentials', async () => {
+    const repository = createRepository()
+    const bundle = await repository.getRunsBundle()
+    const run = bundle.runs.find((candidate) => candidate.id === 'run-payments')
+    if (!run) {
+      throw new Error('Expected payments run fixture')
+    }
+    run.nodes[0]!.kind = 'agent'
+
+    const result = await resolveTeamRoute('POST', '/api/agent/knowledge-review', repository, {
+      session: memberSession,
+      body: {
+        runId: run.id,
+        nodeId: run.currentNodeId,
+        projectId: run.projectId,
+        providerId: 'openai-default',
+      },
+    })
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: 'bad_request',
+        message: 'Knowledge Review requires a Gate or Acceptance node.',
+      },
+    })
+    expect(repository.getAgentProviderCredential).not.toHaveBeenCalled()
+    expect(repository.saveAgentReviewBundle).not.toHaveBeenCalled()
+  })
+
+  it('rejects Knowledge Review for an inactive current node before resolving provider credentials', async () => {
+    const repository = createRepository()
+    const bundle = await repository.getRunsBundle()
+    const run = bundle.runs.find((candidate) => candidate.id === 'run-payments')
+    if (!run) {
+      throw new Error('Expected payments run fixture')
+    }
+    run.nodes[0]!.status = 'success'
+
+    const result = await resolveTeamRoute('POST', '/api/agent/knowledge-review', repository, {
+      session: memberSession,
+      body: {
+        runId: run.id,
+        nodeId: run.currentNodeId,
+        projectId: run.projectId,
+        providerId: 'openai-default',
+      },
+    })
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: 'bad_request',
+        message: 'Knowledge Review requires a running or blocked node.',
+      },
+    })
+    expect(repository.getAgentProviderCredential).not.toHaveBeenCalled()
+    expect(repository.saveAgentReviewBundle).not.toHaveBeenCalled()
+  })
+
+  it('forbids Knowledge Review when the requested project does not match the canonical run', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('POST', '/api/agent/knowledge-review', repository, {
+      session: ownerSession,
+      body: {
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        projectId: 'p-admin',
+        providerId: 'openai-default',
+      },
+    })
+
+    expect(result).toEqual({
+      status: 403,
+      body: {
+        error: 'forbidden',
+        message: 'Project access required',
+      },
+    })
+    expect(repository.getAgentProviderCredential).not.toHaveBeenCalled()
+    expect(repository.saveAgentReviewBundle).not.toHaveBeenCalled()
+  })
+
+  it('runs Knowledge Review for a running current Acceptance node', async () => {
+    const repository = createRepository()
+    const bundle = await repository.getRunsBundle()
+    const run = bundle.runs.find((candidate) => candidate.id === 'run-payments')
+    if (!run) {
+      throw new Error('Expected payments run fixture')
+    }
+    run.nodes[0]!.kind = 'acceptance'
+    run.nodes[0]!.status = 'running'
+
+    const result = await withFakeRuntime(() =>
+      resolveTeamRoute('POST', '/api/agent/knowledge-review', repository, {
+        session: memberSession,
+        body: {
+          runId: run.id,
+          nodeId: run.currentNodeId,
+          projectId: run.projectId,
+          providerId: 'fake-knowledge-review',
+        },
+      }),
+    )
+
+    expect(result?.status).toBe(201)
+    expect(repository.saveAgentReviewBundle).toHaveBeenCalledOnce()
+  })
+
   it('rejects fake Knowledge Review unless fake runtime is explicitly enabled', async () => {
     const repository = createRepository()
 

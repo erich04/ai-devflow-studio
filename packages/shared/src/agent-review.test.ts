@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   artifacts,
   knowledgeChunks,
@@ -14,7 +14,9 @@ import {
   estimateAgentTokenUsage,
   estimateKnowledgeReviewCostPreflight,
   isTrustedNoCostKnowledgeReviewProvider,
+  runBudgetedKnowledgeReviewAgent,
   runKnowledgeReviewAgent,
+  type KnowledgeReviewBudgetGuardInput,
 } from './agent-review'
 import type { Artifact, TestEvidence } from './domain'
 
@@ -108,6 +110,215 @@ describe('Knowledge Review cost preflight', () => {
 
     expect(preflight.noCost).toBe(false)
     expect(preflight.projectedCostUsd).toBeGreaterThan(0)
+  })
+})
+
+describe('runBudgetedKnowledgeReviewAgent', () => {
+  it('blocks a real provider when no authoritative budget guard is available', async () => {
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const reviewKnowledge = vi.fn()
+
+    const result = await runBudgetedKnowledgeReviewAgent({
+      request: {
+        id: 'review-request-missing-budget-guard',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+      },
+      context,
+      provider: {
+        id: 'team-openai',
+        name: 'Team OpenAI',
+        model: 'gpt-4.1-mini',
+        reviewKnowledge,
+      },
+    })
+
+    expect(result).toMatchObject({
+      status: 'blocked',
+      budgetDecision: {
+        status: 'unavailable',
+        blocksRun: true,
+      },
+      evidence: {
+        kind: 'knowledge_review_budget_blocked',
+        projectId: run.projectId,
+        providerId: 'team-openai',
+        redacted: true,
+      },
+    })
+    expect(reviewKnowledge).not.toHaveBeenCalled()
+  })
+
+  it('runs the exact trusted fake provider without a guard under an explicit no-cost decision', async () => {
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const provider = createFakeAgentProvider()
+    const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
+
+    const result = await runBudgetedKnowledgeReviewAgent({
+      request: {
+        id: 'review-request-trusted-fake-no-cost',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+      },
+      context,
+      provider,
+      now: () => '2026-07-31T12:00:00.000Z',
+    })
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      budgetDecision: {
+        status: 'disabled',
+        blocksRun: false,
+        currentSpendUsd: 0,
+        projectedCostUsd: 0,
+      },
+      execution: {
+        review: { providerId: 'fake-knowledge-review' },
+      },
+    })
+    expect(reviewKnowledge).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns redacted blocked evidence without calling a provider when the guard rejects', async () => {
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const reviewKnowledge = vi.fn()
+    const budgetGuard = vi.fn(async (_input: KnowledgeReviewBudgetGuardInput) => ({
+      status: 'unavailable' as const,
+      blocksRun: true,
+      currentSpendUsd: 1,
+      projectedCostUsd: 0.01,
+      reason: 'Budget service failed with OPENAI_API_KEY=sk-secret.',
+    }))
+
+    const result = await runBudgetedKnowledgeReviewAgent({
+      request: {
+        id: 'review-request-budget-blocked',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'api',
+      },
+      context,
+      provider: {
+        id: 'team-openai',
+        name: 'Team OpenAI',
+        model: 'gpt-4.1-mini',
+        reviewKnowledge,
+      },
+      approvalId: 'approval-knowledge-1',
+      budgetGuard,
+    })
+
+    expect(budgetGuard).toHaveBeenCalledTimes(1)
+    const guardInput = budgetGuard.mock.calls[0]![0]
+    expect(guardInput).toMatchObject({
+      projectId: run.projectId,
+      providerId: 'team-openai',
+      requestedBy: 'u-ling',
+      projectedCostUsd: expect.any(Number),
+      approvalId: 'approval-knowledge-1',
+    })
+    expect(Object.keys(guardInput).sort()).toEqual([
+      'approvalId',
+      'projectId',
+      'projectedCostUsd',
+      'providerId',
+      'requestedBy',
+    ])
+    expect(result).toMatchObject({
+      status: 'blocked',
+      evidence: {
+        reason: expect.stringContaining('REDACTED'),
+        redacted: true,
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain('sk-secret')
+    expect(reviewKnowledge).not.toHaveBeenCalled()
+  })
+
+  it('runs the existing Knowledge Review agent once after the guard allows the paid call', async () => {
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const reviewKnowledge = vi.fn(async () => ({
+      model: 'gpt-4.1-mini',
+      conclusion: 'ready',
+      summary: 'budget-authorized review',
+      risks: [],
+      missingEvidence: [],
+      suggestedTests: [],
+      confidence: 0.9,
+    }))
+    const budgetGuard = vi.fn(async (_input: KnowledgeReviewBudgetGuardInput) => ({
+      status: 'allowed' as const,
+      blocksRun: false,
+      currentSpendUsd: 1,
+      projectedCostUsd: 0.01,
+      limitUsd: 20,
+      reason: 'Within budget.',
+    }))
+
+    const result = await runBudgetedKnowledgeReviewAgent({
+      request: {
+        id: 'review-request-budget-allowed',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'api',
+      },
+      context,
+      provider: {
+        id: 'team-openai',
+        name: 'Team OpenAI',
+        model: 'gpt-4.1-mini',
+        reviewKnowledge,
+      },
+      budgetGuard,
+      now: () => '2026-07-31T12:01:00.000Z',
+    })
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      budgetDecision: { status: 'allowed', blocksRun: false },
+      execution: { review: { summary: 'budget-authorized review' } },
+    })
+    expect(budgetGuard).toHaveBeenCalledTimes(1)
+    expect(reviewKnowledge).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -12,6 +12,7 @@ import type {
   AgentTraceStep,
   AgentTokenUsage,
   Artifact,
+  BudgetGuardDecision,
   GateAdvisory,
   KnowledgeChunk,
   KnowledgeDocument,
@@ -125,6 +126,45 @@ export type EstimateKnowledgeReviewCostPreflightInput = {
   context: AgentReviewContext
   provider: Pick<AgentProvider, 'id' | 'model'>
 }
+
+export type KnowledgeReviewBudgetGuardInput = {
+  projectId: string
+  providerId: string
+  requestedBy: string
+  projectedCostUsd: number
+  approvalId?: string
+}
+
+export type KnowledgeReviewBudgetGuard = (
+  input: KnowledgeReviewBudgetGuardInput,
+) => Promise<BudgetGuardDecision>
+
+export type RunBudgetedKnowledgeReviewAgentInput = RunKnowledgeReviewAgentInput & {
+  budgetGuard?: KnowledgeReviewBudgetGuard
+  approvalId?: string
+}
+
+export type KnowledgeReviewBudgetBlockedEvidence = {
+  kind: 'knowledge_review_budget_blocked'
+  requestId: string
+  projectId: string
+  providerId: string
+  requestedBy: string
+  reason: string
+  redacted: true
+}
+
+export type BudgetedKnowledgeReviewAgentResult =
+  | {
+      status: 'completed'
+      budgetDecision: BudgetGuardDecision
+      execution: AgentReviewExecutionResult
+    }
+  | {
+      status: 'blocked'
+      budgetDecision: BudgetGuardDecision
+      evidence: KnowledgeReviewBudgetBlockedEvidence
+    }
 
 export type KnowledgeReviewCostPreflight = {
   request: AgentReviewRequest
@@ -424,6 +464,90 @@ export function estimateKnowledgeReviewCostPreflight({
     maxOutputTokens: KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS,
     projectedCostUsd,
     noCost,
+  }
+}
+
+export async function runBudgetedKnowledgeReviewAgent({
+  request,
+  context,
+  provider,
+  now,
+  budgetGuard,
+  approvalId,
+}: RunBudgetedKnowledgeReviewAgentInput): Promise<BudgetedKnowledgeReviewAgentResult> {
+  const preflight = estimateKnowledgeReviewCostPreflight({ request, context, provider })
+  if (preflight.noCost) {
+    const budgetDecision: BudgetGuardDecision = {
+      status: 'disabled',
+      blocksRun: false,
+      currentSpendUsd: 0,
+      projectedCostUsd: 0,
+      reason: 'Trusted fake Knowledge Review provider is explicitly no-cost.',
+    }
+    const execution = await runKnowledgeReviewAgent({
+      request,
+      context,
+      provider,
+      ...(now ? { now } : {}),
+    })
+    return { status: 'completed', budgetDecision, execution }
+  }
+
+  if (budgetGuard) {
+    const budgetDecision = await budgetGuard({
+      projectId: request.projectId,
+      providerId: provider.id,
+      requestedBy: request.requestedBy,
+      projectedCostUsd: preflight.projectedCostUsd,
+      ...(approvalId ? { approvalId } : {}),
+    })
+    if (budgetDecision.blocksRun) {
+      const redactedReason = redactedSummary(budgetDecision.reason)
+      const redactedBudgetDecision = { ...budgetDecision, reason: redactedReason }
+      return {
+        status: 'blocked',
+        budgetDecision: redactedBudgetDecision,
+        evidence: {
+          kind: 'knowledge_review_budget_blocked',
+          requestId: request.id,
+          projectId: request.projectId,
+          providerId: provider.id,
+          requestedBy: request.requestedBy,
+          reason: redactedReason,
+          redacted: true,
+        },
+      }
+    }
+
+    const execution = await runKnowledgeReviewAgent({
+      request,
+      context,
+      provider,
+      ...(now ? { now } : {}),
+    })
+    return { status: 'completed', budgetDecision, execution }
+  }
+
+  const budgetDecision: BudgetGuardDecision = {
+    status: 'unavailable',
+    blocksRun: true,
+    currentSpendUsd: 0,
+    projectedCostUsd: preflight.projectedCostUsd,
+    reason: 'Runtime budget guard is unavailable for this Knowledge Review.',
+  }
+
+  return {
+    status: 'blocked',
+    budgetDecision,
+    evidence: {
+      kind: 'knowledge_review_budget_blocked',
+      requestId: request.id,
+      projectId: request.projectId,
+      providerId: provider.id,
+      requestedBy: request.requestedBy,
+      reason: redactedSummary(budgetDecision.reason),
+      redacted: true,
+    },
   }
 }
 

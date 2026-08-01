@@ -1419,6 +1419,15 @@ export async function resolveTeamRoute(
     if (!node) {
       return badRequest(`Run node not found: ${input.nodeId}`)
     }
+    if (node.id !== run.currentNodeId) {
+      return badRequest('Knowledge Review requires the current run node.')
+    }
+    if (node.kind !== 'gate' && node.kind !== 'acceptance') {
+      return badRequest('Knowledge Review requires a Gate or Acceptance node.')
+    }
+    if (node.status !== 'running' && node.status !== 'blocked') {
+      return badRequest('Knowledge Review requires a running or blocked node.')
+    }
 
     const providerId = input.providerId?.trim()
     if (!providerId) {
