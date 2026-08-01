@@ -40,6 +40,7 @@ import {
 } from '@ai-devflow/shared'
 import { canAccessProject, canSyncProject, getProjectMembershipRole } from '../auth/session'
 import type { GitHubOAuthClient } from '../auth/github-oauth'
+import type { RequestPrincipal } from '../auth/request-auth'
 import {
   decryptAgentCredential,
   encryptAgentCredential,
@@ -79,6 +80,7 @@ export type ResolveTeamRouteOptions = {
   body?: unknown
   cookies?: Record<string, string | undefined>
   githubOAuth?: GitHubOAuthClient
+  principal?: RequestPrincipal | null
   session?: TeamSession | null
   searchParams?: URLSearchParams
 }
@@ -929,14 +931,7 @@ export async function resolveTeamRoute(
     }
 
     const sessionCookie = createSessionCookie(
-      {
-        source: 'authenticated',
-        organizationId: result.identity.user.organizationId,
-        userId: result.identity.user.id,
-        role: result.identity.user.role,
-        authAccountId: result.identity.authAccount.id,
-        projectMemberships: result.identity.projectMemberships,
-      },
+      { authAccountId: result.identity.authAccount.id },
       options.auth.sessionSecret,
     )
 

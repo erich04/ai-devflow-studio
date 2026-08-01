@@ -420,6 +420,7 @@ function createRepository(): TeamRepository {
 
   return {
     getAuthenticatedIdentity: vi.fn(async () => null),
+    resolveBrowserSession: vi.fn(async () => null),
     resolveOrBootstrapGitHubIdentity: vi.fn(async () => ({
       status: 'blocked',
       reason: 'organization_exists',
@@ -621,6 +622,15 @@ describe('team API route resolver', () => {
       expect.stringContaining('devflow_session='),
       'devflow_oauth_state=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0',
     ])
+    const sessionCookie = (result?.headers?.['set-cookie'] as string[])[0]!
+    const encodedPayload = sessionCookie.split('=')[1]!.split('.')[0]!
+    const claims = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'))
+    expect(sessionCookie).toContain('Max-Age=28800')
+    expect(Object.keys(claims).sort()).toEqual(['authAccountId', 'expiresAt', 'v'])
+    expect(claims).toMatchObject({ v: 1, authAccountId: 'acct-github-123456' })
+    expect(claims).not.toHaveProperty('organizationId')
+    expect(claims).not.toHaveProperty('role')
+    expect(claims).not.toHaveProperty('projectMemberships')
     expect(repository.resolveOrBootstrapGitHubIdentity).toHaveBeenCalledWith({
       providerAccountId: '123456',
       username: 'erich04',

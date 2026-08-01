@@ -15,6 +15,7 @@ import {
   type AuthAccount,
   type AuthProvider,
   type AuthenticatedIdentity,
+  type AuthenticatedSession,
   type DesktopPairingCode,
   type McpServerDefinition,
   type NodeKind,
@@ -33,7 +34,6 @@ import {
   type RunStatus,
   type SkillDefinition,
   type TeamMember,
-  type TeamSession,
   type TokenUsage,
   type TokenUsageSource,
   type WorkflowEdge,
@@ -63,6 +63,7 @@ import type {
   AgentReviewBundle,
   GitHubIdentityBootstrapResult,
   GitHubIdentityProfile,
+  ResolvedDesktopTokenSession,
   RunsBundle,
   TeamOverviewPayload,
   TeamRepositoryReadContext,
@@ -986,6 +987,63 @@ export function createPostgresTeamRepository(
     }
   }
 
+  async function loadBrowserSession(authAccountId: string): Promise<AuthenticatedSession | null> {
+    const [identityRow] = await db.query<AuthenticatedIdentityRow>(
+      `
+        SELECT
+          auth_accounts.id AS auth_account_id,
+          auth_accounts.user_id AS auth_account_user_id,
+          auth_accounts.provider,
+          auth_accounts.provider_account_id,
+          auth_accounts.username,
+          auth_accounts.email AS auth_account_email,
+          auth_accounts.created_at AS auth_account_created_at,
+          auth_accounts.updated_at AS auth_account_updated_at,
+          users.id AS user_id,
+          users.organization_id,
+          users.name,
+          users.role,
+          users.email,
+          users.avatar_url,
+          users.avatar_initials,
+          users.focus,
+          users.created_at AS user_created_at,
+          users.updated_at AS user_updated_at
+        FROM auth_accounts
+        JOIN users ON users.id = auth_accounts.user_id
+        WHERE auth_accounts.id = $1
+        LIMIT 1
+      `,
+      [authAccountId],
+    )
+
+    if (!identityRow) {
+      return null
+    }
+
+    const identity = mapAuthenticatedIdentityRow(identityRow)
+    const membershipRows = await db.query<ProjectMembershipRow>(
+      `
+        SELECT project_members.project_id, project_members.user_id, project_members.role
+        FROM project_members
+        JOIN projects ON projects.id = project_members.project_id
+        WHERE project_members.user_id = $1
+          AND projects.organization_id = $2
+        ORDER BY project_members.project_id ASC
+      `,
+      [identity.user.id, identity.user.organizationId],
+    )
+
+    return {
+      source: 'authenticated',
+      organizationId: identity.user.organizationId,
+      userId: identity.user.id,
+      role: identity.user.role,
+      authAccountId: identity.authAccount.id,
+      projectMemberships: membershipRows.map(mapProjectMembership),
+    }
+  }
+
   async function createFirstGitHubOwner(
     input: GitHubIdentityProfile,
   ): Promise<GitHubIdentityBootstrapResult> {
@@ -1166,7 +1224,9 @@ export function createPostgresTeamRepository(
     return { runs, artifacts, events }
   }
 
-  async function resolveDesktopTokenSessionFromToken(token: string): Promise<TeamSession | null> {
+  async function resolveDesktopTokenSessionFromToken(
+    token: string,
+  ): Promise<ResolvedDesktopTokenSession | null> {
     const parsed = parseCopyOnceSecret(token)
     if (!parsed) {
       return null
@@ -1184,7 +1244,12 @@ export function createPostgresTeamRepository(
           users.role,
           auth_accounts.id AS auth_account_id
         FROM desktop_tokens
-        JOIN users ON users.id = desktop_tokens.user_id
+        JOIN users
+          ON users.id = desktop_tokens.user_id
+         AND users.organization_id = desktop_tokens.organization_id
+        JOIN projects
+          ON projects.id = desktop_tokens.project_id
+         AND projects.organization_id = desktop_tokens.organization_id
         JOIN auth_accounts ON auth_accounts.user_id = users.id
         WHERE desktop_tokens.id = $1
         LIMIT 1
@@ -1198,13 +1263,15 @@ export function createPostgresTeamRepository(
 
     const membershipRows = await db.query<ProjectMembershipRow>(
       `
-        SELECT project_id, user_id, role
+        SELECT project_members.project_id, project_members.user_id, project_members.role
         FROM project_members
-        WHERE user_id = $1
-          AND project_id = $2
-        ORDER BY project_id ASC
+        JOIN projects ON projects.id = project_members.project_id
+        WHERE project_members.user_id = $1
+          AND project_members.project_id = $2
+          AND projects.organization_id = $3
+        ORDER BY project_members.project_id ASC
       `,
-      [tokenRow.user_id, tokenRow.project_id],
+      [tokenRow.user_id, tokenRow.project_id, tokenRow.organization_id],
     )
     const projectMembership = membershipRows[0]
     if (!projectMembership) {
@@ -1220,19 +1287,28 @@ export function createPostgresTeamRepository(
       [tokenRow.token_id, new Date().toISOString()],
     )
 
+    const tokenRole = projectMembership.role === 'owner' ? 'lead' : projectMembership.role
+
     return {
-      source: 'authenticated',
-      organizationId: tokenRow.organization_id,
-      userId: tokenRow.user_id,
-      role: projectMembership.role === 'owner' ? 'lead' : projectMembership.role,
-      authAccountId: tokenRow.auth_account_id,
-      projectMemberships: [mapProjectMembership(projectMembership)],
+      tokenRecordId: tokenRow.token_id,
+      session: {
+        source: 'authenticated',
+        organizationId: tokenRow.organization_id,
+        userId: tokenRow.user_id,
+        role: tokenRole,
+        authAccountId: tokenRow.auth_account_id,
+        projectMemberships: [{ ...mapProjectMembership(projectMembership), role: tokenRole }],
+      },
     }
   }
 
   return {
     async getAuthenticatedIdentity(input) {
       return loadAuthenticatedIdentity(input)
+    },
+
+    async resolveBrowserSession(authAccountId) {
+      return loadBrowserSession(authAccountId)
     },
 
     async resolveOrBootstrapGitHubIdentity(input) {
@@ -1441,10 +1517,11 @@ export function createPostgresTeamRepository(
         [pairing.id, createdAt],
       )
 
-      const session = await resolveDesktopTokenSessionFromToken(token)
-      if (!session || session.source !== 'authenticated') {
+      const resolvedSession = await resolveDesktopTokenSessionFromToken(token)
+      if (!resolvedSession) {
         throw new Error('unable to create desktop session')
       }
+      const session = resolvedSession.session
 
       return {
         token,
@@ -1459,7 +1536,7 @@ export function createPostgresTeamRepository(
       }
     },
 
-    async resolveDesktopTokenSession(token): Promise<TeamSession | null> {
+    async resolveDesktopTokenSession(token): Promise<ResolvedDesktopTokenSession | null> {
       return resolveDesktopTokenSessionFromToken(token)
     },
 

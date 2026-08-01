@@ -120,6 +120,21 @@ class FakeTeamDbClient implements TeamDbClient {
     }
 
     if (sql.includes('FROM project_members')) {
+      if (params?.length === 3) {
+        return [
+          {
+            project_id: params[1],
+            user_id: 'u-ling',
+            role: this.desktopUserRole,
+          },
+        ] as T[]
+      }
+      if (sql.includes('JOIN projects')) {
+        return [
+          { project_id: 'p-payments', user_id: 'u-ling', role: 'lead' },
+          { project_id: 'p-admin', user_id: 'u-ling', role: 'member' },
+        ] as T[]
+      }
       if (params?.length === 2) {
         return [
           {
@@ -841,6 +856,29 @@ describe('Postgres team repository', () => {
     expect(db.queries[1]?.params).toEqual(['u-ling'])
   })
 
+  it('resolves a fresh browser session by stable auth account ID', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(repository.resolveBrowserSession('acct-github-ling')).resolves.toEqual({
+      source: 'authenticated',
+      organizationId: 'org-demo',
+      userId: 'u-ling',
+      role: 'lead',
+      authAccountId: 'acct-github-ling',
+      projectMemberships: [
+        { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+        { projectId: 'p-admin', userId: 'u-ling', role: 'member' },
+      ],
+    })
+
+    expect(db.queries[0]?.sql).toContain('auth_accounts.id = $1')
+    expect(db.queries[0]?.params).toEqual(['acct-github-ling'])
+    expect(db.queries[1]?.sql).toContain('JOIN projects')
+    expect(db.queries[1]?.sql).toContain('projects.organization_id = $2')
+    expect(db.queries[1]?.params).toEqual(['u-ling', 'org-demo'])
+  })
+
   it('bootstraps the first GitHub login as the default organization owner only when the deployment is empty', async () => {
     const db = new EmptyBootstrapDbClient()
     const repository = createPostgresTeamRepository(db)
@@ -965,21 +1003,30 @@ describe('Postgres team repository', () => {
     const repository = createPostgresTeamRepository(db)
 
     await expect(repository.resolveDesktopTokenSession('desktop-token-p-payments.demo-secret')).resolves.toEqual({
-      source: 'authenticated',
-      organizationId: 'org-demo',
-      userId: 'u-ling',
-      role: 'lead',
-      authAccountId: 'acct-github-ling',
-      projectMemberships: [
-        { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
-      ],
+      tokenRecordId: 'desktop-token-p-payments',
+      session: {
+        source: 'authenticated',
+        organizationId: 'org-demo',
+        userId: 'u-ling',
+        role: 'lead',
+        authAccountId: 'acct-github-ling',
+        projectMemberships: [
+          { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+        ],
+      },
     })
 
+    const tokenQuery = db.queries.find((query) => query.sql.includes('FROM desktop_tokens'))
+    expect(tokenQuery?.sql).toContain(
+      'users.organization_id = desktop_tokens.organization_id',
+    )
     const membershipQuery = db.queries.find((query) =>
       query.sql.includes('FROM project_members'),
     )
+    expect(membershipQuery?.sql).toContain('JOIN projects')
     expect(membershipQuery?.sql).toContain('project_id = $2')
-    expect(membershipQuery?.params).toEqual(['u-ling', 'p-payments'])
+    expect(membershipQuery?.sql).toContain('projects.organization_id = $3')
+    expect(membershipQuery?.params).toEqual(['u-ling', 'p-payments', 'org-demo'])
   })
 
   it('downgrades organization owners to project-lead authority for desktop bearer tokens', async () => {
@@ -988,10 +1035,13 @@ describe('Postgres team repository', () => {
     await expect(
       repository.resolveDesktopTokenSession('desktop-token-p-payments.demo-secret'),
     ).resolves.toMatchObject({
-      role: 'lead',
-      projectMemberships: [
-        { projectId: 'p-payments', userId: 'u-ling', role: 'owner' },
-      ],
+      tokenRecordId: 'desktop-token-p-payments',
+      session: {
+        role: 'lead',
+        projectMemberships: [
+          { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+        ],
+      },
     })
   })
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { TeamSession } from '@ai-devflow/shared'
+import type { AuthenticatedSession } from '@ai-devflow/shared'
 import { createSessionCookie } from './auth/session-cookie'
 import { createSeedTeamRepository } from './repositories/team-repository'
 import {
@@ -8,7 +8,7 @@ import {
   resolveApiRouteRequest,
 } from './server-request'
 
-const projectMemberSession: TeamSession = {
+const projectMemberSession: AuthenticatedSession = {
   source: 'authenticated',
   organizationId: 'org-demo',
   userId: 'u-api-member',
@@ -19,7 +19,18 @@ const projectMemberSession: TeamSession = {
   ],
 }
 
-const authenticatedWithoutProject: TeamSession = {
+const projectLeadSession: AuthenticatedSession = {
+  source: 'authenticated',
+  organizationId: 'org-demo',
+  userId: 'u-api-lead',
+  role: 'lead',
+  authAccountId: 'acct-api-lead',
+  projectMemberships: [
+    { projectId: 'p-payments', userId: 'u-api-lead', role: 'lead' },
+  ],
+}
+
+const authenticatedWithoutProject: AuthenticatedSession = {
   source: 'authenticated',
   organizationId: 'org-demo',
   userId: 'u-api-outsider',
@@ -173,7 +184,10 @@ describe('API HTTP authentication boundary', () => {
 
   it('accepts a direct run-summary POST authenticated with a paired bearer token', async () => {
     const repository = createSeedTeamRepository()
-    vi.spyOn(repository, 'resolveDesktopTokenSession').mockResolvedValue(projectMemberSession)
+    vi.spyOn(repository, 'resolveDesktopTokenSession').mockResolvedValue({
+      tokenRecordId: 'desktop-token-valid',
+      session: projectMemberSession,
+    })
     const uploadRunSummary = vi.spyOn(repository, 'uploadRunSummary')
 
     const result = await resolveApiRouteRequest(
@@ -264,7 +278,11 @@ describe('API HTTP authentication boundary', () => {
     const repository = createSeedTeamRepository()
     const uploadRunSummary = vi.spyOn(repository, 'uploadRunSummary')
     const sessionSecret = 'server-request-test-secret'
-    const cookie = createSessionCookie(projectMemberSession, sessionSecret).split(';')[0]
+    const cookie = createSessionCookie(
+      { authAccountId: projectMemberSession.authAccountId },
+      sessionSecret,
+    ).split(';')[0]
+    vi.spyOn(repository, 'resolveBrowserSession').mockResolvedValue(projectMemberSession)
 
     const result = await resolveApiRouteRequest(
       {
@@ -284,6 +302,117 @@ describe('API HTTP authentication boundary', () => {
       expect.objectContaining({ runId: 'run-cookie-authenticated' }),
       projectMemberSession,
     )
+  })
+
+  it('reloads live project authority for every request made with the same cookie', async () => {
+    const repository = createSeedTeamRepository()
+    const sessionSecret = 'server-request-test-secret'
+    const cookie = createSessionCookie(
+      { authAccountId: projectLeadSession.authAccountId },
+      sessionSecret,
+    ).split(';')[0]
+    vi.spyOn(repository, 'resolveBrowserSession')
+      .mockResolvedValueOnce(projectLeadSession)
+      .mockResolvedValueOnce({ ...projectLeadSession, role: 'member', projectMemberships: [] })
+
+    const request = {
+      method: 'POST',
+      pathname: '/api/team/projects/p-payments/pairing-codes',
+      headers: { cookie },
+    }
+    const first = await resolveApiRouteRequest(request, { repository, sessionSecret })
+    const afterRevocation = await resolveApiRouteRequest(request, { repository, sessionSecret })
+
+    expect(first?.status).toBe(201)
+    expect(afterRevocation).toEqual({
+      status: 403,
+      body: { error: 'forbidden', message: 'Project role lead required' },
+    })
+    expect(repository.resolveBrowserSession).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns a fixed 503 when live browser identity cannot be loaded', async () => {
+    const repository = createSeedTeamRepository()
+    const internalSecret = 'postgres://private-user:private-password@internal-db/devflow'
+    vi.spyOn(repository, 'resolveBrowserSession').mockRejectedValue(
+      new Error(`identity lookup failed for ${internalSecret}`),
+    )
+    const cookie = createSessionCookie(
+      { authAccountId: projectLeadSession.authAccountId },
+      'server-request-test-secret',
+    ).split(';')[0]
+
+    const result = await resolveApiRouteRequest(
+      { method: 'GET', pathname: '/api/team/overview', headers: { cookie } },
+      { repository, sessionSecret: 'server-request-test-secret' },
+    )
+
+    expect(result).toEqual({
+      status: 503,
+      body: {
+        error: 'service_unavailable',
+        message: 'Authentication service is temporarily unavailable',
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain(internalSecret)
+  })
+
+  it('does not downgrade an invalid cookie to unsigned development headers', async () => {
+    const repository = createSeedTeamRepository()
+    const uploadRunSummary = vi.spyOn(repository, 'uploadRunSummary')
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'POST',
+        pathname: '/api/sync/run-summary',
+        headers: {
+          cookie: 'devflow_session=invalid.signed-cookie',
+          'x-devflow-session-source': 'demo',
+          'x-devflow-organization-id': 'org-demo',
+          'x-devflow-user-id': projectMemberSession.userId,
+          'x-devflow-user-role': 'member',
+          'x-devflow-project-roles': 'p-payments:member',
+        },
+        body: runSummary('run-invalid-cookie-no-downgrade'),
+      },
+      {
+        repository,
+        sessionSecret: 'server-request-test-secret',
+        devAuthEnabled: true,
+      },
+    )
+
+    expect(result).toEqual({
+      status: 401,
+      body: { error: 'unauthorized', message: 'Authentication required' },
+    })
+    expect(uploadRunSummary).not.toHaveBeenCalled()
+  })
+
+  it('does not downgrade an invalid Authorization header to a valid session cookie', async () => {
+    const repository = createSeedTeamRepository()
+    const resolveBrowserSession = vi.spyOn(repository, 'resolveBrowserSession')
+    const sessionSecret = 'server-request-test-secret'
+    const cookie = createSessionCookie(
+      { authAccountId: projectMemberSession.authAccountId },
+      sessionSecret,
+    ).split(';')[0]
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'POST',
+        pathname: '/api/sync/run-summary',
+        headers: { authorization: 'Basic invalid-credential', cookie },
+        body: runSummary('run-invalid-authorization-no-downgrade'),
+      },
+      { repository, sessionSecret },
+    )
+
+    expect(result).toEqual({
+      status: 401,
+      body: { error: 'unauthorized', message: 'Authentication required' },
+    })
+    expect(resolveBrowserSession).not.toHaveBeenCalled()
   })
 
   it('rejects a tampered session cookie without exposing the cookie secret', async () => {
@@ -319,6 +448,12 @@ describe('API HTTP authentication boundary', () => {
     const unauthenticatedRepository = createSeedTeamRepository()
     const inaccessibleRepository = createSeedTeamRepository()
     const insufficientRoleRepository = createSeedTeamRepository()
+    vi.spyOn(inaccessibleRepository, 'resolveBrowserSession').mockResolvedValue(
+      authenticatedWithoutProject,
+    )
+    vi.spyOn(insufficientRoleRepository, 'resolveBrowserSession').mockResolvedValue(
+      projectMemberSession,
+    )
 
     const unauthenticated = await resolveApiRouteRequest(
       {
@@ -333,7 +468,10 @@ describe('API HTTP authentication boundary', () => {
         method: 'DELETE',
         pathname: '/api/runs/run-health-001',
         headers: {
-          cookie: createSessionCookie(authenticatedWithoutProject, sessionSecret).split(';')[0],
+          cookie: createSessionCookie(
+            { authAccountId: authenticatedWithoutProject.authAccountId },
+            sessionSecret,
+          ).split(';')[0],
         },
       },
       { repository: inaccessibleRepository, sessionSecret },
@@ -343,7 +481,10 @@ describe('API HTTP authentication boundary', () => {
         method: 'DELETE',
         pathname: '/api/runs/run-health-001',
         headers: {
-          cookie: createSessionCookie(projectMemberSession, sessionSecret).split(';')[0],
+          cookie: createSessionCookie(
+            { authAccountId: projectMemberSession.authAccountId },
+            sessionSecret,
+          ).split(';')[0],
         },
       },
       { repository: insufficientRoleRepository, sessionSecret },

@@ -281,6 +281,23 @@ describe('seed team repository', () => {
     ).resolves.toBeNull()
   })
 
+  it('resolves browser sessions from stable account identity without cookie authorization state', async () => {
+    const repository = createSeedTeamRepository()
+
+    await expect(repository.resolveBrowserSession('acct-demo-u-ling')).resolves.toEqual({
+      source: 'authenticated',
+      organizationId: 'org-demo',
+      userId: 'u-ling',
+      role: 'lead',
+      authAccountId: 'acct-demo-u-ling',
+      projectMemberships: [
+        { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+        { projectId: 'p-admin', userId: 'u-ling', role: 'lead' },
+      ],
+    })
+    await expect(repository.resolveBrowserSession('acct-demo-missing')).resolves.toBeNull()
+  })
+
   it('keeps the seed desktop pairing token scoped to the pairing creator role', async () => {
     const repository = createSeedTeamRepository()
     const leadContext = {
@@ -299,9 +316,12 @@ describe('seed team repository', () => {
     const exchange = await repository.exchangeDesktopPairingCode({ code: pairing.code })
 
     await expect(repository.resolveDesktopTokenSession(exchange.token)).resolves.toMatchObject({
-      userId: 'u-ling',
-      role: 'lead',
-      projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
+      tokenRecordId: exchange.tokenId,
+      session: {
+        userId: 'u-ling',
+        role: 'lead',
+        projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
+      },
     })
   })
 
@@ -328,15 +348,26 @@ describe('seed team repository', () => {
     expect(exchange).toMatchObject({
       role: 'lead',
       projectMemberships: [
-        { projectId: 'p-payments', userId: 'u-erich', role: 'owner' },
+        { projectId: 'p-payments', userId: 'u-erich', role: 'lead' },
       ],
     })
     await expect(repository.resolveDesktopTokenSession(exchange.token)).resolves.toMatchObject({
-      role: 'lead',
-      projectMemberships: [
-        { projectId: 'p-payments', userId: 'u-erich', role: 'owner' },
-      ],
+      tokenRecordId: exchange.tokenId,
+      session: {
+        role: 'lead',
+        projectMemberships: [
+          { projectId: 'p-payments', userId: 'u-erich', role: 'lead' },
+        ],
+      },
     })
+  })
+
+  it('rejects a seed desktop token that was never created by pairing exchange', async () => {
+    const repository = createSeedTeamRepository()
+
+    await expect(
+      repository.resolveDesktopTokenSession('devflow-desktop-token-p-payments'),
+    ).resolves.toBeNull()
   })
 
   it('rejects pairing a seed project from a different organization', async () => {

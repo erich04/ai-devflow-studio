@@ -19,6 +19,7 @@ import {
   type Artifact,
   type AuthProvider,
   type AuthenticatedIdentity,
+  type AuthenticatedSession,
   type DesktopPairingCode,
   type DesktopPairingExchangeResult,
   type EffectiveEnforcementPolicy,
@@ -101,6 +102,11 @@ export type TeamRepositoryReadContext = Pick<TeamSession, 'organizationId'>
 
 export type TeamRepositorySyncContext = TeamRepositoryReadContext & Pick<TeamSession, 'userId'>
 
+export type ResolvedDesktopTokenSession = {
+  tokenRecordId: string
+  session: AuthenticatedSession
+}
+
 export class CanonicalRunRequiredError extends Error {
   constructor(runId: string, projectId: string) {
     super(`Canonical Run Summary is required before evidence sync: ${runId} (${projectId})`)
@@ -166,6 +172,7 @@ export type TeamRepository = {
     provider: AuthProvider
     providerAccountId: string
   }): Promise<AuthenticatedIdentity | null>
+  resolveBrowserSession(authAccountId: string): Promise<AuthenticatedSession | null>
   resolveOrBootstrapGitHubIdentity(
     input: GitHubIdentityProfile,
   ): Promise<GitHubIdentityBootstrapResult>
@@ -178,7 +185,7 @@ export type TeamRepository = {
     context: TeamRepositorySyncContext,
   ): Promise<DesktopPairingCode>
   exchangeDesktopPairingCode(input: { code: string }): Promise<DesktopPairingExchangeResult>
-  resolveDesktopTokenSession(token: string): Promise<TeamSession | null>
+  resolveDesktopTokenSession(token: string): Promise<ResolvedDesktopTokenSession | null>
   getRunsBundle(context: TeamRepositoryReadContext): Promise<RunsBundle>
   getTeamOverview(context: TeamRepositoryReadContext): Promise<TeamOverviewPayload>
   getSkills(context: TeamRepositoryReadContext): Promise<SkillDefinition[]>
@@ -294,7 +301,7 @@ export function createSeedTeamRepository(): TeamRepository {
   const runtimeBudgetPolicies: RuntimeBudgetPolicy[] = []
   const runtimeBudgetApprovals: RuntimeBudgetApproval[] = []
   const desktopPairingCodes = new Map<string, Omit<DesktopPairingExchangeResult, 'token' | 'tokenId'>>()
-  const desktopTokenSessions = new Map<string, TeamSession>()
+  const desktopTokenSessions = new Map<string, ResolvedDesktopTokenSession>()
 
   function upsertSyncedRun(run: WorkflowRun) {
     const index = syncedRuns.findIndex((candidate) => candidate.id === run.id)
@@ -434,6 +441,35 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
 
+    async resolveBrowserSession(authAccountId) {
+      if (!authAccountId.startsWith('acct-demo-')) {
+        return null
+      }
+
+      const memberId = authAccountId.slice('acct-demo-'.length)
+      const member = members.find((candidate) => candidate.id === memberId)
+      if (!member) {
+        return null
+      }
+
+      return {
+        source: 'authenticated',
+        organizationId: DEMO_ORGANIZATION_ID,
+        userId: member.id,
+        role: member.role,
+        authAccountId,
+        projectMemberships: teamProjects
+          .filter(
+            (project) => projectOrganizationIds.get(project.id) === DEMO_ORGANIZATION_ID,
+          )
+          .map((project) => ({
+            projectId: project.id,
+            userId: member.id,
+            role: member.role,
+          })),
+      }
+    },
+
     async resolveOrBootstrapGitHubIdentity(input) {
       const existing = await this.getAuthenticatedIdentity({
         provider: 'github',
@@ -482,6 +518,7 @@ export function createSeedTeamRepository(): TeamRepository {
           (membership) => membership.projectId === input.projectId,
         ) ?? { projectId: input.projectId, userId: context.userId, role }
       const tokenRole = role === 'owner' ? 'lead' : role
+      const tokenMembership = { ...projectMembership, role: tokenRole }
       const code = `desktop-pairing-${input.projectId}.demo-secret`
       desktopPairingCodes.set(code, {
         organizationId: context.organizationId,
@@ -489,7 +526,7 @@ export function createSeedTeamRepository(): TeamRepository {
         userId: context.userId,
         role: tokenRole,
         authAccountId,
-        projectMemberships: [projectMembership],
+        projectMemberships: [tokenMembership],
         createdAt,
       })
       return {
@@ -516,17 +553,21 @@ export function createSeedTeamRepository(): TeamRepository {
         createdAt,
       }
       const token = `devflow-desktop-token-${projectId}`
+      const tokenId = `desktop-token-${projectId}`
       desktopTokenSessions.set(token, {
-        source: 'authenticated',
-        organizationId: stored.organizationId,
-        userId: stored.userId,
-        role: stored.role,
-        authAccountId: stored.authAccountId,
-        projectMemberships: stored.projectMemberships,
+        tokenRecordId: tokenId,
+        session: {
+          source: 'authenticated',
+          organizationId: stored.organizationId,
+          userId: stored.userId,
+          role: stored.role,
+          authAccountId: stored.authAccountId,
+          projectMemberships: stored.projectMemberships,
+        },
       })
       return {
         token,
-        tokenId: `desktop-token-${projectId}`,
+        tokenId,
         ...stored,
       }
     },
@@ -535,20 +576,7 @@ export function createSeedTeamRepository(): TeamRepository {
         return null
       }
 
-      const stored = desktopTokenSessions.get(token)
-      if (stored) {
-        return stored
-      }
-
-      const projectId = token.replace('devflow-desktop-token-', '')
-      return {
-        source: 'authenticated',
-        organizationId: DEMO_ORGANIZATION_ID,
-        userId: 'u-erich',
-        role: 'lead',
-        authAccountId: 'acct-demo-erich',
-        projectMemberships: [{ projectId, userId: 'u-erich', role: 'owner' }],
-      }
+      return desktopTokenSessions.get(token) ?? null
     },
 
     async getRunsBundle(context) {

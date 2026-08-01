@@ -1,6 +1,6 @@
 import type { IncomingHttpHeaders } from 'node:http'
-import type { TeamSession } from '@ai-devflow/shared'
 import { readBearerToken, resolveRequestSession } from './auth/session'
+import type { RequestPrincipal } from './auth/request-auth'
 import {
   parseCookieHeader,
   resolveSessionCookie,
@@ -43,38 +43,79 @@ export function createInternalErrorResponse(_error?: unknown): ApiRouteResult {
   }
 }
 
+function authenticationUnavailable(): ApiRouteResult {
+  return {
+    status: 503,
+    body: {
+      error: 'service_unavailable',
+      message: 'Authentication service is temporarily unavailable',
+    },
+  }
+}
+
+function hasHeader(headers: IncomingHttpHeaders, name: string): boolean {
+  return Object.keys(headers).some((headerName) => headerName.toLowerCase() === name)
+}
+
 export async function resolveApiRouteRequest(
   request: ApiRouteRequest,
   options: ApiRouteRequestOptions,
 ): Promise<ApiRouteResult | null> {
   const cookies = parseCookieHeader(request.headers.cookie)
   const bearerToken = readBearerToken(request.headers)
-  let session: TeamSession | null
-  if (bearerToken) {
-    try {
-      session = await options.repository.resolveDesktopTokenSession(bearerToken)
-    } catch {
-      return {
-        status: 503,
-        body: {
-          error: 'service_unavailable',
-          message: 'Authentication service is temporarily unavailable',
-        },
+  let principal: RequestPrincipal | null = null
+  if (hasHeader(request.headers, 'authorization')) {
+    if (!bearerToken) {
+      principal = null
+    } else {
+      try {
+        const resolved = await options.repository.resolveDesktopTokenSession(bearerToken)
+        principal = resolved
+          ? {
+              session: resolved.session,
+              authentication: {
+                kind: 'desktop_bearer',
+                tokenRecordId: resolved.tokenRecordId,
+              },
+            }
+          : null
+      } catch {
+        return authenticationUnavailable()
+      }
+    }
+  } else if (Object.prototype.hasOwnProperty.call(cookies, SESSION_COOKIE_NAME)) {
+    const claims = resolveSessionCookie(cookies[SESSION_COOKIE_NAME], options.sessionSecret)
+    if (claims) {
+      try {
+        const session = await options.repository.resolveBrowserSession(claims.authAccountId)
+        principal = session
+          ? {
+              session,
+              authentication: { kind: 'session_cookie', tokenRecordId: null },
+            }
+          : null
+      } catch {
+        return authenticationUnavailable()
       }
     }
   } else {
-    session =
-      resolveSessionCookie(cookies[SESSION_COOKIE_NAME], options.sessionSecret) ??
-      resolveRequestSession(request.headers, {
-        devAuthEnabled: options.devAuthEnabled === true,
-      })
+    const session = resolveRequestSession(request.headers, {
+      devAuthEnabled: options.devAuthEnabled === true,
+    })
+    principal = session
+      ? {
+          session,
+          authentication: { kind: 'development_header', tokenRecordId: null },
+        }
+      : null
   }
 
   return resolveTeamRoute(request.method, request.pathname, options.repository, {
     auth: { sessionSecret: options.sessionSecret },
     body: request.body,
     cookies,
-    session,
+    principal,
+    session: principal?.session ?? null,
     searchParams: request.searchParams ?? new URLSearchParams(),
     ...(options.githubOAuth ? { githubOAuth: options.githubOAuth } : {}),
   })
