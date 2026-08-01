@@ -391,6 +391,92 @@ describe('buildAgentReviewContext', () => {
     })
     expect(JSON.stringify(context)).not.toContain('sk-secret')
   })
+
+  it('redacts secrets and local absolute paths from repository knowledge before review', () => {
+    const document = knowledgeDocuments.find((item) => item.category === 'api_contract')!
+    const sourceChunk = knowledgeChunks.find((item) => item.documentId === document.id)!
+    const secret = 'sk-review-secret-123456'
+    const localPath = '/Users/alice/private/payments-api/.env'
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks: knowledgeChunks.map((chunk) =>
+        chunk.id === sourceChunk.id
+          ? {
+              ...chunk,
+              content: `Public API rule remains usable. OPENAI_API_KEY=${secret} config: ${localPath}`,
+            }
+          : chunk,
+      ),
+    })
+    const reviewedChunk = context.knowledgeChunks.find((chunk) => chunk.id === sourceChunk.id)!
+    const prompt = createKnowledgeReviewPrompt(context)
+
+    expect(reviewedChunk.content).toContain('Public API rule remains usable.')
+    expect(reviewedChunk.content).toContain('REDACTED')
+    expect(JSON.stringify(context)).not.toContain('OPENAI_API_KEY')
+    expect(JSON.stringify(context)).not.toContain(secret)
+    expect(JSON.stringify(context)).not.toContain(localPath)
+    expect(prompt).not.toContain(secret)
+    expect(prompt).not.toContain(localPath)
+  })
+
+  it('deterministically bounds large repository chunks and uses the exact preflight prompt', async () => {
+    const documentTemplate = knowledgeDocuments.find((item) => item.category === 'api_contract')!
+    const chunkTemplate = knowledgeChunks.find((item) => item.documentId === documentTemplate.id)!
+    const largeDocuments = Array.from({ length: 9 }, (_, index) => ({
+      ...documentTemplate,
+      id: `knowledge-document-large-${index}`,
+      title: `Large API contract ${index}`,
+      sourcePath: `docs/api-contract-${index}.md`,
+    }))
+    const largeChunks = largeDocuments.map((document, index) => ({
+      ...chunkTemplate,
+      id: `knowledge-chunk-large-${index}`,
+      documentId: document.id,
+      sourcePath: document.sourcePath,
+      content: `Chunk ${index} usable rule. ${String(index).repeat(220_000)}`,
+    }))
+    const input = {
+      run,
+      node,
+      artifacts: [],
+      testEvidence: [],
+      knowledgeDocuments: largeDocuments,
+      knowledgeChunks: largeChunks,
+    }
+
+    const context = buildAgentReviewContext(input)
+    const repeatedContext = buildAgentReviewContext(input)
+    const contentCharacters = context.knowledgeChunks.reduce(
+      (total, chunk) => total + chunk.content.length,
+      0,
+    )
+    const provider = createFakeAgentProvider()
+    const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
+    const request = {
+      id: 'review-request-large-knowledge',
+      runId: run.id,
+      nodeId: node.id,
+      projectId: run.projectId,
+      requestedBy: 'u-ling',
+      runtime: 'electron' as const,
+    }
+    const preflight = estimateKnowledgeReviewCostPreflight({ request, context, provider })
+
+    await runKnowledgeReviewAgent({ request, context, provider })
+
+    expect(context).toEqual(repeatedContext)
+    expect(context.knowledgeChunks.length).toBeLessThanOrEqual(8)
+    expect(context.knowledgeChunks.every((chunk) => chunk.content.length <= 4_000)).toBe(true)
+    expect(contentCharacters).toBeLessThanOrEqual(24_000)
+    expect(preflight.prompt.length).toBeLessThan(26_000)
+    expect(reviewKnowledge).toHaveBeenCalledTimes(1)
+    expect(reviewKnowledge.mock.calls[0]![0].prompt).toBe(preflight.prompt)
+  })
 })
 
 describe('runKnowledgeReviewAgent', () => {

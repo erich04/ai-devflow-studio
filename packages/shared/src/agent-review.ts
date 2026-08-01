@@ -21,7 +21,7 @@ import type {
   WorkflowRun,
 } from './domain'
 import { buildKnowledgeReferences } from './knowledge'
-import { redactSecrets } from './redaction'
+import { redactSecrets, redactSensitiveText } from './redaction'
 
 export type KnowledgeReviewProviderInput = {
   request: AgentReviewRequest
@@ -188,6 +188,9 @@ const MODEL_PRICES_PER_1K: Record<string, { input: number; output: number }> = {
 const BUILT_IN_FAKE_KNOWLEDGE_REVIEW_PROVIDER_ID = 'fake-knowledge-review'
 const BUILT_IN_FAKE_KNOWLEDGE_REVIEW_MODEL = 'fake'
 export const KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS = 1_024
+export const KNOWLEDGE_REVIEW_MAX_CHUNKS = 8
+export const KNOWLEDGE_REVIEW_MAX_CHUNK_CHARACTERS = 4_000
+export const KNOWLEDGE_REVIEW_MAX_TOTAL_KNOWLEDGE_CHARACTERS = 24_000
 const KNOWLEDGE_REVIEW_SYSTEM_PROMPT =
   'Return only valid JSON with conclusion, summary, risks, missingEvidence, suggestedTests, confidence. Do not wrap it in Markdown.'
 
@@ -225,6 +228,43 @@ function redactedSummaryResult(value: unknown): ReturnType<typeof redactSecrets>
 
 function redactedSummary(value: unknown): string {
   return redactedSummaryResult(value).value
+}
+
+function buildBoundedReviewKnowledgeChunks(
+  knowledgeChunks: KnowledgeChunk[],
+  referencedChunkIds: Set<string>,
+): AgentReviewContext['knowledgeChunks'] {
+  const selectedChunks: AgentReviewContext['knowledgeChunks'] = []
+  let remainingCharacters = KNOWLEDGE_REVIEW_MAX_TOTAL_KNOWLEDGE_CHARACTERS
+
+  for (const chunk of knowledgeChunks) {
+    if (
+      selectedChunks.length >= KNOWLEDGE_REVIEW_MAX_CHUNKS ||
+      remainingCharacters <= 0
+    ) {
+      break
+    }
+    if (!referencedChunkIds.has(chunk.id)) {
+      continue
+    }
+
+    const redactedContent = redactSensitiveText(chunk.content).value
+    const content = redactedContent.slice(
+      0,
+      Math.min(KNOWLEDGE_REVIEW_MAX_CHUNK_CHARACTERS, remainingCharacters),
+    )
+    selectedChunks.push({
+      id: chunk.id,
+      documentId: chunk.documentId,
+      sourcePath: chunk.sourcePath,
+      headingPath: chunk.headingPath,
+      contentHash: chunk.contentHash,
+      content,
+    })
+    remainingCharacters -= content.length
+  }
+
+  return selectedChunks
 }
 
 function redactProviderErrorBody(value: string): string {
@@ -406,17 +446,7 @@ export function buildAgentReviewContext({
         redacted: true,
       })),
     knowledgeReferences: references,
-    knowledgeChunks: knowledgeChunks
-      .filter((chunk) => referencedChunkIds.has(chunk.id))
-      .slice(0, 8)
-      .map((chunk) => ({
-        id: chunk.id,
-        documentId: chunk.documentId,
-        sourcePath: chunk.sourcePath,
-        headingPath: chunk.headingPath,
-        contentHash: chunk.contentHash,
-        content: chunk.content,
-      })),
+    knowledgeChunks: buildBoundedReviewKnowledgeChunks(knowledgeChunks, referencedChunkIds),
   }
 }
 
