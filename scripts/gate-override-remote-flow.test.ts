@@ -166,7 +166,9 @@ describe('remote Gate override flow', () => {
       role: 'lead',
     })
 
-    const storedRun = (await repository.getRunsBundle()).runs.find(
+    const storedRun = (await repository.getRunsBundle({
+      organizationId: reviewerSession.organizationId,
+    })).runs.find(
       (candidate) => candidate.id === remoteRun.runId,
     )
     expect(storedRun).toMatchObject({
@@ -193,7 +195,9 @@ describe('remote Gate override flow', () => {
       retryable: false,
     })
 
-    expect((await repository.getRunsBundle()).runs).not.toEqual(
+    expect((await repository.getRunsBundle({
+      organizationId: reviewerSession.organizationId,
+    })).runs).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: localGateRun.id })]),
     )
   })
