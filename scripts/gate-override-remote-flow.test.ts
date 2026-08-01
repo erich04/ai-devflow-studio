@@ -187,7 +187,11 @@ describe('remote Gate override flow', () => {
       reason: 'Do not fabricate the canonical prerequisite.',
       blockedReasonIds: ['missing_agent_review:protected_gate:missing'],
       policyVersion: policy.version,
-    })).rejects.toThrow('Project access required')
+    })).rejects.toMatchObject({
+      status: 403,
+      code: 'forbidden',
+      retryable: false,
+    })
 
     expect((await repository.getRunsBundle()).runs).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: localGateRun.id })]),
