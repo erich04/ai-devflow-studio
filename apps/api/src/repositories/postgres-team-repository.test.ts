@@ -557,6 +557,20 @@ class OrganizationScopedReadDbClient implements TeamDbClient {
           ]) as T[]
     }
 
+    if (/FROM\s+agent_provider_credentials\b/.test(sql)) {
+      return (hasRequestedOrganization
+        ? []
+        : [{
+            organization_id: 'org-demo',
+            provider_id: 'private-provider',
+            model: 'private-model',
+            base_url: 'https://private.example.invalid',
+            masked_credential: 'private...secret',
+            encrypted_secret: 'encrypted-private-secret',
+            updated_at: '2026-06-16T10:15:00.000Z',
+          }]) as T[]
+    }
+
     return []
   }
 
@@ -571,14 +585,16 @@ describe('Postgres team repository', () => {
     const repository = createPostgresTeamRepository(db)
     const context = { organizationId: 'org-other' }
 
-    const [bundle, overview] = await Promise.all([
+    const [bundle, overview, providers] = await Promise.all([
       repository.getRunsBundle(context),
       repository.getTeamOverview(context),
+      repository.listAgentProviders({ ...context, userId: 'u-other' }),
     ])
 
     expect(bundle).toEqual({ runs: [], artifacts: [], events: [] })
     expect(overview.projects).toEqual([])
     expect(overview.runs).toEqual([])
+    expect(providers).toEqual([])
     expect(overview.enforcementPolicies.organizationPolicy.organizationId).toBe('org-other')
     expect(db.queries.length).toBeGreaterThan(0)
     expect(db.queries.every((query) => query.params?.[0] === 'org-other')).toBe(true)
