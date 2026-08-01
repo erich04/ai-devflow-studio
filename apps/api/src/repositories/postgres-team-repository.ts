@@ -51,7 +51,8 @@ import {
   type OrganizationEnforcementPolicy,
   type ProjectEnforcementPolicyOverride,
 } from '@ai-devflow/shared'
-import type { TeamDbClient } from '../db/client'
+import type { TeamDbClient, TeamDbRepositoryClient } from '../db/client'
+import { withTeamDbTransaction } from '../db/transaction'
 import {
   CanonicalRunRequiredError,
   redactAgentEventForPersistence,
@@ -975,7 +976,7 @@ function fakeAgentProviderConfigs(enabled: boolean | undefined): AgentProviderCo
 }
 
 export function createPostgresTeamRepository(
-  db: TeamDbClient,
+  db: TeamDbRepositoryClient,
   options: PostgresTeamRepositoryOptions = {},
 ): TeamRepository {
   async function loadAuthenticatedIdentity(input: {
@@ -1827,158 +1828,160 @@ export function createPostgresTeamRepository(
 
     async uploadRunSummary(summary, context: TeamRepositorySyncContext) {
       summary = redactRemoteRunSummaryForSync(summary)
-      const [acceptedRun] = await db.query<{ id: string }>(
-        `
-          INSERT INTO workflow_runs (
-            id,
-            run_version,
-            organization_id,
-            project_id,
-            creator_id,
-            data_origin,
-            title,
-            request,
-            status,
-            current_node_id,
-            branch_name,
-            pull_request_url,
-            created_at,
-            updated_at
-          )
-          VALUES ($1, $2, $3, $4, $5, 'remote', $6, $7, $8, $9, $10, NULL, $11, $11)
-          ON CONFLICT (id) DO UPDATE
-          SET run_version = excluded.run_version,
-              title = excluded.title,
-              status = excluded.status,
-              current_node_id = excluded.current_node_id,
-              branch_name = excluded.branch_name,
-              updated_at = excluded.updated_at
-          WHERE workflow_runs.organization_id = excluded.organization_id
-            AND workflow_runs.project_id = excluded.project_id
-            AND workflow_runs.creator_id = excluded.creator_id
-            AND workflow_runs.data_origin = 'remote'
-            AND workflow_runs.run_version < excluded.run_version
-          RETURNING id
-        `,
-        [
-          summary.runId,
-          summary.version,
-          context.organizationId,
-          summary.projectId,
-          context.userId,
-          summary.title,
-          'Synced from DevFlow Electron.',
-          summary.status,
-          remoteNodeId(summary.runId, summary.currentNodeId),
-          summary.branchName,
-          summary.updatedAt,
-        ],
-      )
-
-      if (!acceptedRun) {
-        const [existingProjection] = await db.query<RemoteRunProjectionRow>(
+      return withTeamDbTransaction(db, async (tx) => {
+        const [acceptedRun] = await tx.query<{ id: string }>(
           `
-            SELECT
-              workflow_runs.id,
-              workflow_runs.run_version,
-              workflow_runs.organization_id,
-              workflow_runs.project_id,
-              workflow_runs.creator_id,
-              workflow_runs.data_origin,
-              workflow_runs.title,
-              workflow_runs.status,
-              workflow_runs.current_node_id,
-              workflow_runs.branch_name,
-              workflow_runs.updated_at,
-              current_node.id AS node_id,
-              current_node.stage AS node_stage,
-              current_node.kind AS node_kind,
-              current_node.status AS node_status,
-              current_node.required_role AS node_required_role
-            FROM workflow_runs
-            LEFT JOIN workflow_nodes AS current_node
-              ON current_node.run_id = workflow_runs.id
-             AND current_node.id = workflow_runs.current_node_id
-            WHERE workflow_runs.id = $1
-            LIMIT 1
+            INSERT INTO workflow_runs (
+              id,
+              run_version,
+              organization_id,
+              project_id,
+              creator_id,
+              data_origin,
+              title,
+              request,
+              status,
+              current_node_id,
+              branch_name,
+              pull_request_url,
+              created_at,
+              updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, 'remote', $6, $7, $8, $9, $10, NULL, $11, $11)
+            ON CONFLICT (id) DO UPDATE
+            SET run_version = excluded.run_version,
+                title = excluded.title,
+                status = excluded.status,
+                current_node_id = excluded.current_node_id,
+                branch_name = excluded.branch_name,
+                updated_at = excluded.updated_at
+            WHERE workflow_runs.organization_id = excluded.organization_id
+              AND workflow_runs.project_id = excluded.project_id
+              AND workflow_runs.creator_id = excluded.creator_id
+              AND workflow_runs.data_origin = 'remote'
+              AND workflow_runs.run_version < excluded.run_version
+            RETURNING id
           `,
-          [summary.runId],
+          [
+            summary.runId,
+            summary.version,
+            context.organizationId,
+            summary.projectId,
+            context.userId,
+            summary.title,
+            'Synced from DevFlow Electron.',
+            summary.status,
+            remoteNodeId(summary.runId, summary.currentNodeId),
+            summary.branchName,
+            summary.updatedAt,
+          ],
         )
-        if (!existingProjection || !hasSameRemoteRunProjection(existingProjection, summary, context)) {
-          throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+
+        if (!acceptedRun) {
+          const [existingProjection] = await tx.query<RemoteRunProjectionRow>(
+            `
+              SELECT
+                workflow_runs.id,
+                workflow_runs.run_version,
+                workflow_runs.organization_id,
+                workflow_runs.project_id,
+                workflow_runs.creator_id,
+                workflow_runs.data_origin,
+                workflow_runs.title,
+                workflow_runs.status,
+                workflow_runs.current_node_id,
+                workflow_runs.branch_name,
+                workflow_runs.updated_at,
+                current_node.id AS node_id,
+                current_node.stage AS node_stage,
+                current_node.kind AS node_kind,
+                current_node.status AS node_status,
+                current_node.required_role AS node_required_role
+              FROM workflow_runs
+              LEFT JOIN workflow_nodes AS current_node
+                ON current_node.run_id = workflow_runs.id
+               AND current_node.id = workflow_runs.current_node_id
+              WHERE workflow_runs.id = $1
+              LIMIT 1
+            `,
+            [summary.runId],
+          )
+          if (!existingProjection || !hasSameRemoteRunProjection(existingProjection, summary, context)) {
+            throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+          }
+
+          return {
+            accepted: true,
+            syncedAt: new Date().toISOString(),
+            message: 'run summary written to Postgres repository',
+          }
         }
+
+        await tx.query(
+          `
+            UPDATE workflow_nodes
+            SET status = 'success',
+                updated_at = $3
+            WHERE run_id = $1
+              AND id <> $2
+              AND status IN ('running', 'blocked')
+          `,
+          [
+            summary.runId,
+            remoteNodeId(summary.runId, summary.currentNode.id),
+            summary.updatedAt,
+          ],
+        )
+
+        await tx.query(
+          `
+            INSERT INTO workflow_nodes (
+              id,
+              run_id,
+              stage,
+              title,
+              subtitle,
+              kind,
+              status,
+              owner_id,
+              required_role,
+              retry_count,
+              token_usage_id,
+              position,
+              created_at,
+              updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, NULL, $10, $11, $11)
+            ON CONFLICT (id) DO UPDATE
+            SET stage = excluded.stage,
+                kind = excluded.kind,
+                status = excluded.status,
+                owner_id = excluded.owner_id,
+                required_role = excluded.required_role,
+                position = excluded.position,
+                updated_at = excluded.updated_at
+          `,
+          [
+            remoteNodeId(summary.runId, summary.currentNode.id),
+            summary.runId,
+            summary.currentNode.stage,
+            `Synced ${summary.currentNode.stage} node`,
+            'Canonical current node from DevFlow Electron.',
+            summary.currentNode.kind,
+            summary.currentNode.status,
+            context.userId,
+            summary.currentNode.requiredRole ?? null,
+            remoteNodePosition(summary.currentNode.stage, summary.currentNode.kind),
+            summary.updatedAt,
+          ],
+        )
 
         return {
           accepted: true,
           syncedAt: new Date().toISOString(),
           message: 'run summary written to Postgres repository',
         }
-      }
-
-      await db.query(
-        `
-          UPDATE workflow_nodes
-          SET status = 'success',
-              updated_at = $3
-          WHERE run_id = $1
-            AND id <> $2
-            AND status IN ('running', 'blocked')
-        `,
-        [
-          summary.runId,
-          remoteNodeId(summary.runId, summary.currentNode.id),
-          summary.updatedAt,
-        ],
-      )
-
-      await db.query(
-        `
-          INSERT INTO workflow_nodes (
-            id,
-            run_id,
-            stage,
-            title,
-            subtitle,
-            kind,
-            status,
-            owner_id,
-            required_role,
-            retry_count,
-            token_usage_id,
-            position,
-            created_at,
-            updated_at
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, NULL, $10, $11, $11)
-          ON CONFLICT (id) DO UPDATE
-          SET stage = excluded.stage,
-              kind = excluded.kind,
-              status = excluded.status,
-              owner_id = excluded.owner_id,
-              required_role = excluded.required_role,
-              position = excluded.position,
-              updated_at = excluded.updated_at
-        `,
-        [
-          remoteNodeId(summary.runId, summary.currentNode.id),
-          summary.runId,
-          summary.currentNode.stage,
-          `Synced ${summary.currentNode.stage} node`,
-          'Canonical current node from DevFlow Electron.',
-          summary.currentNode.kind,
-          summary.currentNode.status,
-          context.userId,
-          summary.currentNode.requiredRole ?? null,
-          remoteNodePosition(summary.currentNode.stage, summary.currentNode.kind),
-          summary.updatedAt,
-        ],
-      )
-
-      return {
-        accepted: true,
-        syncedAt: new Date().toISOString(),
-        message: 'run summary written to Postgres repository',
-      }
+      })
     },
 
     async uploadTestEvidenceSummary(summary, context: TeamRepositorySyncContext) {

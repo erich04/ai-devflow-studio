@@ -1,8 +1,8 @@
 import {
   redactConnectionString,
   resolveTeamDbConfig,
-  type TeamDbClient,
   type TeamDbConfig,
+  type TeamDbRepositoryClient,
 } from '../db/client'
 import { resolveDevFlowRuntimeFlags } from '@ai-devflow/shared'
 import { createPostgresPoolClient } from '../db/postgres-client'
@@ -19,7 +19,7 @@ export type TeamRepositoryRuntime = {
 
 export type TeamRepositoryRuntimeOptions = {
   env?: Record<string, string | undefined>
-  createPostgresClient?: (config: TeamDbConfig) => TeamDbClient
+  createPostgresClient?: (config: TeamDbConfig) => TeamDbRepositoryClient
   logger?: Pick<Console, 'info'>
 }
 

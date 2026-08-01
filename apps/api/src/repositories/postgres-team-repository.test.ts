@@ -1,18 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import type { TeamDbClient } from '../db/client'
+import type { TeamDbRepositoryClient } from '../db/client'
 import { createPostgresTeamRepository } from './postgres-team-repository'
 
 const readContext = { organizationId: 'org-demo' }
 
-class FakeTeamDbClient implements TeamDbClient {
+class FakeTeamDbClient implements TeamDbRepositoryClient {
   readonly queries: Array<{ sql: string; params?: unknown[] }> = []
   readonly acceptedChildSummaryWrites = new Map<string, unknown[]>()
+  checkoutCount = 0
+  releaseCount = 0
   private readonly childSummaryScopes = new Map<string, string>()
 
   constructor(
     private readonly canonicalRunExists = true,
     private readonly runSummaryAccepted = true,
     private readonly desktopUserRole: 'owner' | 'lead' | 'member' = 'lead',
+    private readonly failOnSqlFragment?: string,
   ) {}
 
   private acceptScopedChildSummaryWrite(
@@ -34,6 +37,10 @@ class FakeTeamDbClient implements TeamDbClient {
 
   async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
     this.queries.push(params === undefined ? { sql } : { sql, params })
+
+    if (this.failOnSqlFragment && sql.includes(this.failOnSqlFragment)) {
+      throw new Error(`forced repository write failure: ${this.failOnSqlFragment}`)
+    }
 
     if (sql.includes('INSERT INTO test_evidence_summaries')) {
       const values = params ?? []
@@ -345,6 +352,16 @@ class FakeTeamDbClient implements TeamDbClient {
     return []
   }
 
+  async checkout() {
+    this.checkoutCount += 1
+    return {
+      query: <T>(sql: string, params?: unknown[]) => this.query<T>(sql, params),
+      release: () => {
+        this.releaseCount += 1
+      },
+    }
+  }
+
   async close(): Promise<void> {
     return undefined
   }
@@ -494,7 +511,7 @@ class NamespacedMixedOriginDbClient extends FakeTeamDbClient {
   }
 }
 
-class EmptyBootstrapDbClient implements TeamDbClient {
+class EmptyBootstrapDbClient implements TeamDbRepositoryClient {
   readonly queries: Array<{ sql: string; params?: unknown[] }> = []
 
   async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
@@ -514,9 +531,16 @@ class EmptyBootstrapDbClient implements TeamDbClient {
   async close(): Promise<void> {
     return undefined
   }
+
+  async checkout() {
+    return {
+      query: <T>(sql: string, params?: unknown[]) => this.query<T>(sql, params),
+      release() {},
+    }
+  }
 }
 
-class ExistingOrganizationNoAccountDbClient implements TeamDbClient {
+class ExistingOrganizationNoAccountDbClient implements TeamDbRepositoryClient {
   readonly queries: Array<{ sql: string; params?: unknown[] }> = []
 
   async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
@@ -542,9 +566,16 @@ class ExistingOrganizationNoAccountDbClient implements TeamDbClient {
   async close(): Promise<void> {
     return undefined
   }
+
+  async checkout() {
+    return {
+      query: <T>(sql: string, params?: unknown[]) => this.query<T>(sql, params),
+      release() {},
+    }
+  }
 }
 
-class OrganizationScopedReadDbClient implements TeamDbClient {
+class OrganizationScopedReadDbClient implements TeamDbRepositoryClient {
   readonly queries: Array<{ sql: string; params?: unknown[] }> = []
 
   async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
@@ -635,6 +666,13 @@ class OrganizationScopedReadDbClient implements TeamDbClient {
 
   async close(): Promise<void> {
     return undefined
+  }
+
+  async checkout() {
+    return {
+      query: <T>(sql: string, params?: unknown[]) => this.query<T>(sql, params),
+      release() {},
+    }
   }
 }
 
@@ -1132,6 +1170,61 @@ describe('Postgres team repository', () => {
       400,
       '2026-06-16T12:00:00.000Z',
     ])
+    const statements = db.queries.map(({ sql }) => sql.trim())
+    const beginIndex = statements.indexOf('BEGIN')
+    const runWriteIndex = db.queries.findIndex(({ sql }) => sql.includes('INSERT INTO workflow_runs'))
+    const convergenceIndex = db.queries.findIndex(
+      ({ sql }) => sql.includes('UPDATE workflow_nodes'),
+    )
+    const nodeWriteIndex = db.queries.findIndex(
+      ({ sql }) => sql.includes('INSERT INTO workflow_nodes'),
+    )
+    const commitIndex = statements.indexOf('COMMIT')
+    expect(beginIndex).toBeGreaterThanOrEqual(0)
+    expect(runWriteIndex).toBeGreaterThan(beginIndex)
+    expect(convergenceIndex).toBeGreaterThan(runWriteIndex)
+    expect(nodeWriteIndex).toBeGreaterThan(convergenceIndex)
+    expect(commitIndex).toBeGreaterThan(nodeWriteIndex)
+    expect(statements).not.toContain('ROLLBACK')
+    expect(db.checkoutCount).toBe(1)
+    expect(db.releaseCount).toBe(1)
+  })
+
+  it('rolls back the Run projection when the canonical node write fails', async () => {
+    const db = new FakeTeamDbClient(
+      true,
+      true,
+      'lead',
+      'INSERT INTO workflow_nodes',
+    )
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(repository.uploadRunSummary(
+      {
+        kind: 'run',
+        runId: 'run-atomic-failure',
+        version: 2,
+        projectId: 'p-payments',
+        title: 'Atomic Run projection',
+        status: 'testing',
+        currentNodeId: 'n-test',
+        currentNode: {
+          id: 'n-test',
+          stage: 'test',
+          kind: 'test',
+          status: 'running',
+        },
+        branchName: 'ai/atomic-run-projection',
+        updatedAt: '2026-08-01T12:00:00.000Z',
+      },
+      { organizationId: 'org-demo', userId: 'u-ling' },
+    )).rejects.toThrow('forced repository write failure: INSERT INTO workflow_nodes')
+
+    const statements = db.queries.map(({ sql }) => sql.trim())
+    expect(db.checkoutCount).toBe(1)
+    expect(statements).toContain('ROLLBACK')
+    expect(statements).not.toContain('COMMIT')
+    expect(db.releaseCount).toBe(1)
   })
 
   it('accepts an identical Postgres projection idempotently at the same Run version', async () => {

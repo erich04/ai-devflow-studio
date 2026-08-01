@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { TeamDbClient, TeamDbConfig } from '../db/client'
+import type { TeamDbConfig, TeamDbRepositoryClient } from '../db/client'
 import { createTeamRepositoryRuntime } from './repository-runtime'
 
-function createFakeDb(): TeamDbClient {
+function createFakeDb(): TeamDbRepositoryClient {
+  const query = async <T>() => [] as T[]
   return {
-    async query<T>() {
-      return [] as T[]
-    },
+    query,
     async close() {
       return undefined
+    },
+    async checkout() {
+      return { query, release() {} }
     },
   }
 }
@@ -44,7 +46,7 @@ describe('team repository runtime', () => {
   it('uses Postgres when a database URL is configured and redacts logs', async () => {
     const close = vi.fn(async () => undefined)
     const logger = { info: vi.fn() }
-    const createPostgresClient = vi.fn((config: TeamDbConfig): TeamDbClient => ({
+    const createPostgresClient = vi.fn((config: TeamDbConfig): TeamDbRepositoryClient => ({
       ...createFakeDb(),
       close,
       async query<T>() {
