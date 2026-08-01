@@ -652,8 +652,8 @@ export function buildKnowledgeReferences({
         artifactId: artifact.id,
         nodeId: artifact.nodeId,
         documentId: hit.documentId,
-        relation: 'satisfies',
-        reason: `${artifact.title} provides evidence. ${hit.reason}`,
+        relation: 'cites',
+        reason: `${artifact.title} references relevant guidance. ${hit.reason}`,
         ...referenceMetadataFromHit(hit),
       })
     }
@@ -721,14 +721,6 @@ export function buildKnowledgeGovernanceChecks({
           (!reference.nodeId || reference.nodeId === node.id || node.artifactIds.includes(reference.artifactId ?? '')),
       )
       .map((reference) => reference.id)
-    const satisfyingArtifactReferences = references.filter(
-      (reference) =>
-        reference.documentId === document.id &&
-        reference.targetType === 'artifact' &&
-        reference.relation === 'satisfies' &&
-        node.artifactIds.includes(reference.artifactId ?? ''),
-    )
-
     if (document.category === 'testing_standard') {
       const hasPassingEvidence = matchingEvidence.some((evidence) => evidence.status === 'passed')
       const hasFailingEvidence = matchingEvidence.some(
@@ -759,14 +751,8 @@ export function buildKnowledgeGovernanceChecks({
       documentId: document.id,
       title: document.title,
       category: document.category,
-      status: satisfyingArtifactReferences.length > 0 ? 'satisfied' : 'needs_evidence',
-      summary:
-        satisfyingArtifactReferences.length > 0
-          ? `${satisfyingArtifactReferences
-              .map((reference) => reference.artifactId)
-              .filter(Boolean)
-              .join(', ')} cites this standard.`
-          : 'No artifact evidence is linked yet.',
+      status: 'needs_evidence',
+      summary: 'No explicit artifact evidence is linked yet.',
       referenceIds,
     } satisfies KnowledgeGovernanceCheck
   })

@@ -170,7 +170,7 @@ describe('buildKnowledgeReferences', () => {
           targetType: 'artifact',
           artifactId: 'art-design',
           documentId: 'knowledge-doc-api-health',
-          relation: 'satisfies',
+          relation: 'cites',
           chunkId: 'knowledge-chunk-api-health-1-api-health-endpoint-standard',
           strategy: 'lexical',
           score: expect.any(Number),
@@ -194,7 +194,47 @@ describe('buildKnowledgeReferences', () => {
 })
 
 describe('buildKnowledgeGovernanceChecks', () => {
-  it('summarizes selected-node standards with satisfied and missing evidence states', () => {
+  it('keeps retrieval-matched artifacts contextual instead of treating search as governance proof', () => {
+    const index = indexKnowledgeSources(sources)
+    const run = runs[0]!
+    const designGate = run.nodes.find((node) => node.id === 'n-design-gate')!
+    const references = buildKnowledgeReferences({
+      run,
+      artifacts,
+      documents: index.documents,
+      chunks: index.chunks,
+      testEvidence: [],
+    })
+    const checks = buildKnowledgeGovernanceChecks({
+      run,
+      node: designGate,
+      artifacts,
+      documents: index.documents,
+      chunks: index.chunks,
+      testEvidence: [],
+    })
+
+    expect(references).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          targetType: 'artifact',
+          artifactId: 'art-design',
+          documentId: 'knowledge-doc-api-health',
+          relation: 'cites',
+        }),
+      ]),
+    )
+    expect(checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          documentId: 'knowledge-doc-api-health',
+          status: 'needs_evidence',
+        }),
+      ]),
+    )
+  })
+
+  it('summarizes selected-node standards without promoting retrieved artifacts to evidence', () => {
     const index = indexKnowledgeSources(sources)
     const run = runs[0]!
     const designGate = run.nodes.find((node) => node.id === 'n-design-gate')!
@@ -211,7 +251,7 @@ describe('buildKnowledgeGovernanceChecks', () => {
         expect.objectContaining({
           documentId: 'knowledge-doc-api-health',
           title: 'API Health Endpoint Standard',
-          status: 'satisfied',
+          status: 'needs_evidence',
         }),
         expect.objectContaining({
           documentId: 'knowledge-doc-testing-evidence',
