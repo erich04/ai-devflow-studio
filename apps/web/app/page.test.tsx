@@ -457,11 +457,15 @@ describe('web product shell page', () => {
   })
 
   it('renders an error state when the API cannot be reached', async () => {
-    mockedFetchTeamOverview.mockRejectedValue(new Error('network down'))
+    mockedFetchTeamOverview.mockRejectedValue(
+      new Error('connect ECONNREFUSED internal-api.private:4310 API_TOKEN=private-value'),
+    )
 
     render(await Page({}))
 
     expect(screen.getByText('团队数据暂时不可用')).toBeInTheDocument()
-    expect(screen.getByText('network down')).toBeInTheDocument()
+    expect(screen.getByText('无法加载团队数据，请稍后重试。')).toBeInTheDocument()
+    expect(document.body).not.toHaveTextContent('internal-api.private')
+    expect(document.body).not.toHaveTextContent('private-value')
   })
 })

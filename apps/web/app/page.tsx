@@ -112,8 +112,8 @@ export default async function Page({ searchParams }: PageProps) {
       ...(cookieHeader ? { cookieHeader } : {}),
       ...(sessionHeaders ? { sessionHeaders } : {}),
     })
-  } catch (error) {
-    return <ErrorShell message={error instanceof Error ? error.message : '无法连接 DevFlow API'} />
+  } catch {
+    return <ErrorShell message="无法加载团队数据，请稍后重试。" />
   }
 
   const { activeProject, activeRun, projectRuns, selectionError } = resolvePageSelection(

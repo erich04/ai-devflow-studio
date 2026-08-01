@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { DesktopPairingCode } from '@ai-devflow/shared'
+import { parseDesktopPairingCodePayload } from './lib/pairing-code'
 
 type PairingPanelState = {
   projectId: string
@@ -57,7 +58,12 @@ export function PairingCodePanel({ projectId }: { projectId: string }) {
         throw new Error(`Pairing code request failed with ${response.status}`)
       }
 
-      const nextPairingCode = (await response.json()) as DesktopPairingCode
+      const nextPairingCode = parseDesktopPairingCodePayload(
+        await response.json().catch(() => {
+          throw new Error('Pairing code response was invalid.')
+        }),
+        requestProjectId,
+      )
       if (
         currentProjectId.current !== requestProjectId ||
         requestVersion.current !== currentRequestVersion

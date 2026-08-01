@@ -20,6 +20,7 @@ import type {
   TokenUsageRollup,
   WorkflowRun,
 } from '@ai-devflow/shared'
+import { parseDesktopPairingCodePayload } from './pairing-code'
 
 export type TeamOverviewResponse = {
   projects: Project[]
@@ -342,5 +343,8 @@ export async function createDesktopPairingCode(
     throw new DevFlowApiError(endpoint, response.status)
   }
 
-  return response.json() as Promise<DesktopPairingCode>
+  const payload = await response.json().catch(() => {
+    throw new Error('Pairing code response was invalid.')
+  })
+  return parseDesktopPairingCodePayload(payload, options.projectId)
 }

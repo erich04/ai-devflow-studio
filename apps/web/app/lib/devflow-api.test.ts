@@ -498,4 +498,27 @@ describe('DevFlow web API client', () => {
       endpoint: '/api/team/projects/:projectId/pairing-codes',
     })
   })
+
+  it('rejects a pairing payload with the wrong project or unknown secret fields', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(JSON.stringify({
+        id: 'pair-p-other',
+        organizationId: 'org-demo',
+        projectId: 'p-other',
+        createdByUserId: 'u-ling',
+        code: 'p-other.copy-once-secret',
+        expiresAt: '2026-06-20T00:10:00.000Z',
+        createdAt: '2026-06-20T00:00:00.000Z',
+        attemptsRemaining: 5,
+        token: 'must-not-reach-the-browser',
+      }), { status: 201 }),
+    )
+
+    await expect(createDesktopPairingCode({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      cookieHeader: 'devflow_session=session-1',
+      projectId: 'p-agent-platform',
+    })).rejects.toThrow('Pairing code response was invalid.')
+  })
 })

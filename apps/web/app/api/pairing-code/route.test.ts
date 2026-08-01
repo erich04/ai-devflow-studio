@@ -79,4 +79,29 @@ describe('pairing-code Web proxy', () => {
       cookieHeader: 'devflow_session=signed-session-1',
     })
   })
+
+  it('rejects a mismatched or over-broad upstream payload without forwarding secret fields', async () => {
+    mockedCreateDesktopPairingCode.mockResolvedValueOnce({
+      id: 'pair-p-other',
+      organizationId: 'org-demo',
+      projectId: 'p-other',
+      createdByUserId: 'u-lead',
+      code: 'p-other.copy-once-secret',
+      expiresAt: '2026-08-01T12:10:00.000Z',
+      createdAt: '2026-08-01T12:00:00.000Z',
+      attemptsRemaining: 5,
+      token: 'must-not-reach-browser',
+    } as never)
+
+    const response = await POST(
+      new NextRequest('http://web.local/api/pairing-code', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ projectId: 'p-remote' }),
+      }),
+    )
+
+    expect(response.status).toBe(502)
+    expect(JSON.stringify(await response.json())).not.toMatch(/p-other|must-not-reach-browser/)
+  })
 })

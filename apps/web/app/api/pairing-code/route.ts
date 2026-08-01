@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
 import { DevFlowApiError, createDesktopPairingCode } from '../../lib/devflow-api'
+import { parseDesktopPairingCodePayload } from '../../lib/pairing-code'
 
 const safeUpstreamStatuses = new Set([400, 401, 403, 404, 409])
 
@@ -25,7 +26,10 @@ export async function POST(request: NextRequest) {
       ...(cookieHeader ? { cookieHeader } : {}),
     })
 
-    return NextResponse.json(pairingCode, { status: 201 })
+    return NextResponse.json(
+      parseDesktopPairingCodePayload(pairingCode, projectId),
+      { status: 201 },
+    )
   } catch (error) {
     const status =
       error instanceof DevFlowApiError && safeUpstreamStatuses.has(error.status)

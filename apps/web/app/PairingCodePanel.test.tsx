@@ -77,4 +77,28 @@ describe('PairingCodePanel', () => {
     expect(screen.queryByText('late.p-one-secret')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Create desktop pairing code' })).toBeEnabled()
   })
+
+  it('does not display a pairing code returned for a different project', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({
+        id: 'pair-p-two',
+        organizationId: 'org-demo',
+        projectId: 'p-two',
+        createdByUserId: 'u-lead',
+        code: 'p-two.copy-once-secret',
+        expiresAt: '2026-08-01T12:10:00.000Z',
+        createdAt: '2026-08-01T12:00:00.000Z',
+        attemptsRemaining: 5,
+        token: 'must-not-reach-browser',
+      }), { status: 201 }),
+    ))
+    render(<PairingCodePanel projectId="p-one" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('Pairing code response was invalid.')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText('p-two.copy-once-secret')).not.toBeInTheDocument()
+  })
 })
