@@ -33,6 +33,11 @@ Important values:
 - `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_OAUTH_REDIRECT_URI`: optional for the Docker
   smoke, required for a real GitHub OAuth walkthrough.
 
+Docker Compose fixes the API to `DEVFLOW_DEPLOYMENT_PROFILE=pilot`. In that profile,
+`DEV_AUTH_ENABLED=true` is an invalid configuration and the API refuses to start. Unsigned
+`x-devflow-*` identity headers remain available only for an explicitly enabled, loopback-bound,
+non-browser development API; requests with a browser `Origin` never use them.
+
 ## Run The Stack
 
 ```bash
@@ -68,9 +73,10 @@ Run the explicit Docker smoke from the repo:
 corepack pnpm test:docker-smoke
 ```
 
-The smoke starts an isolated Compose project on temporary host ports, creates a pairing code,
-exchanges it for a Desktop token, syncs a redacted run summary, verifies Web/API visibility, and
-then tears the stack down with volumes removed.
+The smoke starts an isolated Compose project on temporary host ports. Its test harness uses a
+signed authenticated session Cookie to create a pairing code, exchanges that code for a Desktop
+Bearer token, syncs a redacted run summary, verifies Web/API visibility, and then tears the stack
+down with volumes removed. It does not enable unsigned identity headers.
 
 `test:docker-smoke` is intentionally not part of `corepack pnpm verify` because it requires Docker.
 

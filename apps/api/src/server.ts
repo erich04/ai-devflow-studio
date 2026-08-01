@@ -1,12 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createGitHubOAuthClient } from './auth/github-oauth'
-import { resolveServerListenConfig } from './server-config'
+import { resolveServerRuntimeConfig } from './server-config'
 import { createTeamRepositoryRuntime } from './repositories/repository-runtime'
 import { createCorsPreflightHeaders, resolveApiRouteRequest } from './server-request'
 
-const { host, port } = resolveServerListenConfig()
+const { devAuthEnabled, host, port } = resolveServerRuntimeConfig()
 const sessionSecret = process.env['DEVFLOW_SESSION_SECRET'] ?? 'devflow-dev-session-secret'
-const devAuthEnabled = process.env['DEV_AUTH_ENABLED'] === 'true'
 const repositoryRuntime = await createTeamRepositoryRuntime()
 const repository = repositoryRuntime.repository
 const githubOAuth = createGitHubOAuthClient.fromEnv()

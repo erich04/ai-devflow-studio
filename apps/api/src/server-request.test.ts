@@ -15,6 +15,15 @@ const projectMemberSession: TeamSession = {
   ],
 }
 
+const authenticatedWithoutProject: TeamSession = {
+  source: 'authenticated',
+  organizationId: 'org-demo',
+  userId: 'u-api-outsider',
+  role: 'member',
+  authAccountId: 'acct-api-outsider',
+  projectMemberships: [],
+}
+
 function runSummary(runId: string) {
   return {
     kind: 'run' as const,
@@ -59,6 +68,35 @@ describe('API HTTP authentication boundary', () => {
           'x-devflow-project-roles': 'p-payments:owner',
         },
         body: runSummary('run-forged-header'),
+      },
+      {
+        repository,
+        sessionSecret: 'server-request-test-secret',
+        devAuthEnabled: true,
+      },
+    )
+
+    expect(result).toMatchObject({ status: 401 })
+    expect(uploadRunSummary).not.toHaveBeenCalled()
+  })
+
+  it('rejects unsigned identity headers for every HTTP casing of Origin', async () => {
+    const repository = createSeedTeamRepository()
+    const uploadRunSummary = vi.spyOn(repository, 'uploadRunSummary')
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'POST',
+        pathname: '/api/sync/run-summary',
+        headers: {
+          Origin: 'http://renderer.example',
+          'x-devflow-session-source': 'demo',
+          'x-devflow-organization-id': 'org-demo',
+          'x-devflow-user-id': projectMemberSession.userId,
+          'x-devflow-user-role': 'owner',
+          'x-devflow-project-roles': 'p-payments:owner',
+        },
+        body: runSummary('run-forged-header-origin-casing'),
       },
       {
         repository,
@@ -157,6 +195,67 @@ describe('API HTTP authentication boundary', () => {
     )
   })
 
+  it('returns 401 for an invalid bearer credential without exposing it', async () => {
+    const repository = createSeedTeamRepository()
+    const bearerSecret = 'desktop-token-id.invalid-private-secret'
+    vi.spyOn(repository, 'resolveDesktopTokenSession').mockResolvedValue(null)
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'POST',
+        pathname: '/api/sync/run-summary',
+        headers: {
+          authorization: `Bearer ${bearerSecret}`,
+        },
+        body: runSummary('run-invalid-bearer'),
+      },
+      {
+        repository,
+        sessionSecret: 'server-request-test-secret',
+      },
+    )
+
+    expect(result).toEqual({
+      status: 401,
+      body: { error: 'unauthorized', message: 'Authentication required' },
+    })
+    expect(JSON.stringify(result)).not.toContain(bearerSecret)
+  })
+
+  it('fails closed without exposing a bearer secret when session lookup fails', async () => {
+    const repository = createSeedTeamRepository()
+    const bearerSecret = 'desktop-token-id.copy-once-private-secret'
+    vi.spyOn(repository, 'resolveDesktopTokenSession').mockRejectedValue(
+      new Error(`lookup failed for Authorization: Bearer ${bearerSecret}`),
+    )
+    const uploadRunSummary = vi.spyOn(repository, 'uploadRunSummary')
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'POST',
+        pathname: '/api/sync/run-summary',
+        headers: {
+          authorization: `Bearer ${bearerSecret}`,
+        },
+        body: runSummary('run-bearer-lookup-failed'),
+      },
+      {
+        repository,
+        sessionSecret: 'server-request-test-secret',
+      },
+    )
+
+    expect(result).toEqual({
+      status: 503,
+      body: {
+        error: 'service_unavailable',
+        message: 'Authentication service is temporarily unavailable',
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain(bearerSecret)
+    expect(uploadRunSummary).not.toHaveBeenCalled()
+  })
+
   it('accepts a direct run-summary POST authenticated with a signed session cookie', async () => {
     const repository = createSeedTeamRepository()
     const uploadRunSummary = vi.spyOn(repository, 'uploadRunSummary')
@@ -181,5 +280,82 @@ describe('API HTTP authentication boundary', () => {
       expect.objectContaining({ runId: 'run-cookie-authenticated' }),
       projectMemberSession,
     )
+  })
+
+  it('rejects a tampered session cookie without exposing the cookie secret', async () => {
+    const repository = createSeedTeamRepository()
+    const cookieSecret = 'opaque-cookie-private-secret'
+    const uploadRunSummary = vi.spyOn(repository, 'uploadRunSummary')
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'POST',
+        pathname: '/api/sync/run-summary',
+        headers: {
+          cookie: `devflow_session=${cookieSecret}.invalid-signature`,
+        },
+        body: runSummary('run-tampered-cookie'),
+      },
+      {
+        repository,
+        sessionSecret: 'server-request-test-secret',
+      },
+    )
+
+    expect(result).toEqual({
+      status: 401,
+      body: { error: 'unauthorized', message: 'Authentication required' },
+    })
+    expect(JSON.stringify(result)).not.toContain(cookieSecret)
+    expect(uploadRunSummary).not.toHaveBeenCalled()
+  })
+
+  it('keeps authentication, project access, and project role failures distinct', async () => {
+    const sessionSecret = 'server-request-test-secret'
+    const unauthenticatedRepository = createSeedTeamRepository()
+    const inaccessibleRepository = createSeedTeamRepository()
+    const insufficientRoleRepository = createSeedTeamRepository()
+
+    const unauthenticated = await resolveApiRouteRequest(
+      {
+        method: 'DELETE',
+        pathname: '/api/runs/run-health-001',
+        headers: {},
+      },
+      { repository: unauthenticatedRepository, sessionSecret },
+    )
+    const inaccessible = await resolveApiRouteRequest(
+      {
+        method: 'DELETE',
+        pathname: '/api/runs/run-health-001',
+        headers: {
+          cookie: createSessionCookie(authenticatedWithoutProject, sessionSecret).split(';')[0],
+        },
+      },
+      { repository: inaccessibleRepository, sessionSecret },
+    )
+    const insufficientRole = await resolveApiRouteRequest(
+      {
+        method: 'DELETE',
+        pathname: '/api/runs/run-health-001',
+        headers: {
+          cookie: createSessionCookie(projectMemberSession, sessionSecret).split(';')[0],
+        },
+      },
+      { repository: insufficientRoleRepository, sessionSecret },
+    )
+
+    expect(unauthenticated).toEqual({
+      status: 401,
+      body: { error: 'unauthorized', message: 'Authentication required' },
+    })
+    expect(inaccessible).toEqual({
+      status: 403,
+      body: { error: 'forbidden', message: 'Project access required' },
+    })
+    expect(insufficientRole).toEqual({
+      status: 403,
+      body: { error: 'forbidden', message: 'Project role lead required' },
+    })
   })
 })

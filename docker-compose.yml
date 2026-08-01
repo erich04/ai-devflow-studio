@@ -24,6 +24,7 @@ services:
         condition: service_healthy
     environment:
       DEVFLOW_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-devflow}@postgres:5432/${POSTGRES_DB:-devflow}
+      DEVFLOW_DEPLOYMENT_PROFILE: pilot
       DEVFLOW_ENABLE_DEMO_DATA: ${DEVFLOW_ENABLE_DEMO_DATA:-false}
       DEV_AUTH_ENABLED: ${DEV_AUTH_ENABLED:-false}
       DEVFLOW_REQUIRE_AUTH: ${DEVFLOW_REQUIRE_AUTH:-false}

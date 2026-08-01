@@ -29,7 +29,7 @@ describe('self-hosted Docker deployment files', () => {
       scripts: Record<string, string>
     }
 
-    expect(pkg.scripts['test:docker-smoke']).toBe('node scripts/docker-smoke.mjs')
+    expect(pkg.scripts['test:docker-smoke']).toBe('tsx scripts/docker-smoke.mjs')
     expect(pkg.scripts['verify']).not.toContain('test:docker-smoke')
   })
 
@@ -39,6 +39,23 @@ describe('self-hosted Docker deployment files', () => {
     expect(compose).toContain(
       'DEVFLOW_ENABLE_DEMO_DATA: ${DEVFLOW_ENABLE_DEMO_DATA:-false}',
     )
+  })
+
+  it('marks the network-exposed API as a pilot deployment', () => {
+    const compose = readFileSync('docker-compose.yml', 'utf8')
+
+    expect(compose).toContain('DEVFLOW_DEPLOYMENT_PROFILE: pilot')
+  })
+
+  it('authenticates Docker pilot smoke requests without unsigned identity headers', () => {
+    const smoke = readFileSync('scripts/docker-smoke.mjs', 'utf8')
+
+    expect(smoke).toContain(
+      "import { createSessionCookie } from '../apps/api/src/auth/session-cookie'",
+    )
+    expect(smoke).toContain("DEV_AUTH_ENABLED: 'false'")
+    expect(smoke).toContain('cookie: pilotSessionCookie')
+    expect(smoke).not.toContain('demoSessionHeaders')
   })
 
   it('runs Docker smoke from the GitHub verify workflow', () => {
@@ -57,5 +74,8 @@ describe('self-hosted Docker deployment files', () => {
     expect(guide).toContain('Desktop pairing')
     expect(guide).toContain('Bearer token')
     expect(guide).toContain('raw stdout/stderr')
+    expect(guide).toContain('DEVFLOW_DEPLOYMENT_PROFILE=pilot')
+    expect(guide).toContain('DEV_AUTH_ENABLED=true')
+    expect(guide).toContain('refuses to start')
   })
 })

@@ -1,4 +1,5 @@
 import type { IncomingHttpHeaders } from 'node:http'
+import type { TeamSession } from '@ai-devflow/shared'
 import { readBearerToken, resolveRequestSession } from './auth/session'
 import {
   parseCookieHeader,
@@ -38,12 +39,26 @@ export async function resolveApiRouteRequest(
 ): Promise<ApiRouteResult | null> {
   const cookies = parseCookieHeader(request.headers.cookie)
   const bearerToken = readBearerToken(request.headers)
-  const session = bearerToken
-    ? await options.repository.resolveDesktopTokenSession(bearerToken)
-    : resolveSessionCookie(cookies[SESSION_COOKIE_NAME], options.sessionSecret) ??
+  let session: TeamSession | null
+  if (bearerToken) {
+    try {
+      session = await options.repository.resolveDesktopTokenSession(bearerToken)
+    } catch {
+      return {
+        status: 503,
+        body: {
+          error: 'service_unavailable',
+          message: 'Authentication service is temporarily unavailable',
+        },
+      }
+    }
+  } else {
+    session =
+      resolveSessionCookie(cookies[SESSION_COOKIE_NAME], options.sessionSecret) ??
       resolveRequestSession(request.headers, {
         devAuthEnabled: options.devAuthEnabled === true,
       })
+  }
 
   return resolveTeamRoute(request.method, request.pathname, options.repository, {
     auth: { sessionSecret: options.sessionSecret },
