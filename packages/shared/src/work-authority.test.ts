@@ -23,7 +23,7 @@ function validOpenRecord(): Record<string, unknown> {
     claim: null,
     expiresAt: null,
     createdAt: '2026-08-01T00:00:00.000Z',
-    updatedAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:03:00.000Z',
   }
 }
 
@@ -54,7 +54,7 @@ describe('Work Request network contract', () => {
       claim: null,
       expiresAt: null,
       createdAt: '2026-08-01T00:00:00.000Z',
-      updatedAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:03:00.000Z',
     })
     expect(Object.keys(result).sort()).toEqual([
       'claim',
@@ -104,7 +104,7 @@ describe('Work Request network contract', () => {
       ).toThrow('Invalid Work Request record.')
     }
 
-    for (const version of [0, -1, 1.5, Number.NaN, '1']) {
+    for (const version of [0, -1, 1.5, 2_147_483_648, Number.MAX_SAFE_INTEGER, Number.NaN, '1']) {
       expect(() =>
         parseWorkRequestRecord({ ...validOpenRecord(), version }),
       ).toThrow('Invalid Work Request record.')
@@ -216,12 +216,19 @@ describe('Work Request network contract', () => {
       ['materialized', materializedClaim],
       ['cancelled', null],
       ['cancelled', pendingClaim],
-      ['expired', null],
     ] as const) {
       expect(
         parseWorkRequestRecord({ ...validOpenRecord(), status, claim }).status,
       ).toBe(status)
     }
+
+    expect(
+      parseWorkRequestRecord({
+        ...validOpenRecord(),
+        status: 'expired',
+        expiresAt: '2026-08-01T00:02:00.000Z',
+      }).status,
+    ).toBe('expired')
 
     for (const [status, claim] of [
       ['open', pendingClaim],
@@ -277,6 +284,11 @@ describe('Work Request network contract', () => {
     for (const changes of [
       { updatedAt: '2026-07-31T23:59:59.999Z' },
       { expiresAt: '2026-08-01T00:00:00.000Z' },
+      { status: 'expired', expiresAt: null },
+      {
+        status: 'expired',
+        expiresAt: '2026-08-01T00:04:00.000Z',
+      },
       {
         status: 'claim_pending',
         claim: {
@@ -285,10 +297,28 @@ describe('Work Request network contract', () => {
         },
       },
       {
+        status: 'claim_pending',
+        expiresAt: '2026-08-01T00:01:00.000Z',
+        claim: validPendingClaim(),
+      },
+      {
+        status: 'claim_pending',
+        updatedAt: '2026-08-01T00:00:30.000Z',
+        claim: validPendingClaim(),
+      },
+      {
         status: 'materialized',
         claim: {
           ...validPendingClaim(),
           materializedAt: '2026-08-01T00:00:59.999Z',
+        },
+      },
+      {
+        status: 'materialized',
+        updatedAt: '2026-08-01T00:01:30.000Z',
+        claim: {
+          ...validPendingClaim(),
+          materializedAt: '2026-08-01T00:02:00.000Z',
         },
       },
     ]) {
@@ -372,6 +402,7 @@ describe('Work Request network contract', () => {
       { ...validClaimInput, runId: ' run-1 ' },
       { ...validClaimInput, expectedVersion: 0 },
       { ...validClaimInput, expectedVersion: 1.5 },
+      { ...validClaimInput, expectedVersion: 2_147_483_648 },
       { ...validClaimInput, expectedVersion: '1' },
       { ...validClaimInput, idempotencyKey: ' claim-key ' },
     ]) {
@@ -420,6 +451,7 @@ describe('Work Request network contract', () => {
       { ...validMaterialize, workRequestId: ' wr-1 ' },
       { ...validMaterialize, runId: '' },
       { ...validMaterialize, expectedVersion: Number.NaN },
+      { ...validMaterialize, expectedVersion: 2_147_483_648 },
       {
         ...validMaterialize,
         idempotencyKey: 'x'.repeat(

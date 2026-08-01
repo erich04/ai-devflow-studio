@@ -73,14 +73,23 @@ describe('team database migration runner', () => {
         name: '0008_v14_work_authority',
         fileName: '0008_v14_work_authority.sql',
       },
+      {
+        version: 9,
+        name: '0009_harden_work_request_timeline',
+        fileName: '0009_harden_work_request_timeline.sql',
+      },
     ])
 
-    const [baseline, v14] = await readTeamMigrationCatalog()
+    const [baseline, v14, hardening] = await readTeamMigrationCatalog()
     expect(baseline).toMatchObject({ version: 7, name: '0001_initial' })
     expect(baseline?.sql).toMatch(/^BEGIN;/)
     expect(migrationChecksum(baseline?.sql ?? '')).toMatch(/^[a-f0-9]{64}$/)
     expect(v14).toMatchObject({ version: 8, name: '0008_v14_work_authority' })
     expect(v14?.sql).not.toMatch(/^BEGIN;/)
+    expect(hardening).toMatchObject({
+      version: 9,
+      name: '0009_harden_work_request_timeline',
+    })
   })
 
   it('runs a fresh baseline inside one checked-out client and filters its outer transaction', async () => {

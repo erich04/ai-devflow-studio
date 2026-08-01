@@ -31,6 +31,11 @@ export const teamMigrationCatalog = [
     name: '0008_v14_work_authority',
     fileName: '0008_v14_work_authority.sql',
   },
+  {
+    version: 9,
+    name: '0009_harden_work_request_timeline',
+    fileName: '0009_harden_work_request_timeline.sql',
+  },
 ] as const
 
 export function splitSqlStatements(sql: string): string[] {

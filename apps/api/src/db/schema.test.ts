@@ -18,7 +18,7 @@ const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(8)
+    expect(TEAM_SCHEMA_VERSION).toBe(9)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -183,7 +183,7 @@ describe('team database schema', () => {
     expect(sql).not.toContain('zsh')
   })
 
-  it('adds the V1.4 work authority schema only through migration v8', async () => {
+  it('adds the V1.4 work authority schema through immutable incremental migrations', async () => {
     expect(teamMigrationCatalog).toEqual([
       { version: 7, name: '0001_initial', fileName: '0001_initial.sql' },
       {
@@ -191,11 +191,20 @@ describe('team database schema', () => {
         name: '0008_v14_work_authority',
         fileName: '0008_v14_work_authority.sql',
       },
+      {
+        version: 9,
+        name: '0009_harden_work_request_timeline',
+        fileName: '0009_harden_work_request_timeline.sql',
+      },
     ])
 
     const migrations = await readTeamMigrationCatalog()
-    const migration = migrations.find((candidate) => candidate.version === 8)
-    expect(migration?.sql).toContain('ADD COLUMN run_version integer NOT NULL DEFAULT 1')
+    const migrationV8 = migrations.find((candidate) => candidate.version === 8)
+    const migrationV9 = migrations.find((candidate) => candidate.version === 9)
+    expect(migrationChecksum(migrationV8?.sql ?? '')).toBe(
+      '630b28be579566ceeafd52353c30394d8182f256c1b787ec3780bb44c94992e5',
+    )
+    expect(migrationV8?.sql).toContain('ADD COLUMN run_version integer NOT NULL DEFAULT 1')
     for (const tableName of [
       'work_requests',
       'collaboration_idempotency',
@@ -204,11 +213,18 @@ describe('team database schema', () => {
       'gate_command_receipts',
       'gate_command_acknowledgements',
     ]) {
-      expect(migration?.sql).toContain(`CREATE TABLE ${tableName}`)
+      expect(migrationV8?.sql).toContain(`CREATE TABLE ${tableName}`)
     }
-    expect(migration?.sql).not.toMatch(
+    expect(migrationV8?.sql).not.toMatch(
       /\b(?:cookie|bearer_token|token_hash|token_secret|raw_(?:prompt|output|evidence))\s+(?:text|jsonb|bytea)\b/i,
     )
+    expect(migrationV9?.sql).toContain(
+      'DROP CONSTRAINT work_requests_time_order',
+    )
+    expect(migrationV9?.sql).toContain("status <> 'expired' OR expires_at IS NOT NULL")
+    expect(migrationV9?.sql).toContain('claimed_at < expires_at')
+    expect(migrationV9?.sql).toContain('updated_at >= claimed_at')
+    expect(migrationV9?.sql).toContain('updated_at >= materialized_at')
   })
 
   it('defines bounded Work Request, idempotency, audit, and Gate delivery records', () => {

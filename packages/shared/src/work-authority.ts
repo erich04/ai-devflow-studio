@@ -4,6 +4,7 @@ export const WORK_REQUEST_ID_MAX_LENGTH = 200
 export const WORK_REQUEST_TITLE_MAX_LENGTH = 200
 export const WORK_REQUEST_BODY_MAX_LENGTH = 8_000
 export const WORK_REQUEST_IDEMPOTENCY_KEY_MAX_LENGTH = 200
+export const WORK_REQUEST_VERSION_MAX = 2_147_483_647
 export const WORK_REQUEST_STATUSES = [
   'open',
   'claim_pending',
@@ -137,7 +138,11 @@ function readIdempotencyKey(value: unknown, errorMessage: string): string {
 }
 
 function readPositiveInteger(value: unknown, errorMessage: string): number {
-  if (!Number.isInteger(value) || (value as number) < 1) {
+  if (
+    !Number.isInteger(value) ||
+    (value as number) < 1 ||
+    (value as number) > WORK_REQUEST_VERSION_MAX
+  ) {
     throw new Error(errorMessage)
   }
 
@@ -249,13 +254,26 @@ export function parseWorkRequestRecord(value: unknown): WorkRequest {
   const createdAt = readCanonicalIso(value.createdAt, invalidWorkRequestRecord)
   const updatedAt = readCanonicalIso(value.updatedAt, invalidWorkRequestRecord)
   const createdTimestamp = Date.parse(createdAt)
+  const updatedTimestamp = Date.parse(updatedAt)
+  const expiresTimestamp = expiresAt === null ? null : Date.parse(expiresAt)
+  const claimedTimestamp = claim === null ? null : Date.parse(claim.claimedAt)
+  const materializedTimestamp =
+    claim?.materializedAt === null || claim?.materializedAt === undefined
+      ? null
+      : Date.parse(claim.materializedAt)
   if (
-    Date.parse(updatedAt) < createdTimestamp ||
-    (expiresAt !== null && Date.parse(expiresAt) <= createdTimestamp) ||
-    (claim !== null && Date.parse(claim.claimedAt) < createdTimestamp) ||
-    (claim !== null &&
-      claim.materializedAt !== null &&
-      Date.parse(claim.materializedAt) < Date.parse(claim.claimedAt))
+    updatedTimestamp < createdTimestamp ||
+    (expiresTimestamp !== null && expiresTimestamp <= createdTimestamp) ||
+    (status === 'expired' && expiresTimestamp === null) ||
+    (status === 'expired' && updatedTimestamp < (expiresTimestamp ?? 0)) ||
+    (claimedTimestamp !== null && claimedTimestamp < createdTimestamp) ||
+    (claimedTimestamp !== null && updatedTimestamp < claimedTimestamp) ||
+    (claimedTimestamp !== null &&
+      expiresTimestamp !== null &&
+      claimedTimestamp >= expiresTimestamp) ||
+    (materializedTimestamp !== null &&
+      (claimedTimestamp === null || materializedTimestamp < claimedTimestamp)) ||
+    (materializedTimestamp !== null && updatedTimestamp < materializedTimestamp)
   ) {
     throw new Error(invalidWorkRequestRecord)
   }
