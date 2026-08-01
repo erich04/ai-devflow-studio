@@ -505,6 +505,7 @@ export type RepositoryKnowledgeWarning =
   | 'total_size_limit_exceeded'
   | 'character_limit_exceeded'
   | 'chunk_limit_exceeded'
+  | 'metadata_limit_exceeded'
 
 export type RepositoryKnowledgeSnapshot = {
   projectId: string
@@ -566,6 +567,7 @@ export type KnowledgeReference = {
   documentId: string
   relation: KnowledgeReferenceRelation
   reason: string
+  sourcePath?: string
   chunkId?: string
   score?: number
   strategy?: KnowledgeRetrievalStrategy

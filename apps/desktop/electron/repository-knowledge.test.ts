@@ -137,6 +137,28 @@ describe('createRepositoryKnowledgeService', () => {
     expect(first.relations).toEqual(second.relations)
   })
 
+  it('bounds per-document and total graph metadata from tracked Markdown frontmatter', async () => {
+    const project = await createTrackedRepository(Object.fromEntries(
+      Array.from({ length: 40 }, (_, documentIndex) => [
+        `docs/metadata-${documentIndex}.md`,
+        [
+          '---',
+          `tags: [${Array.from({ length: 40 }, (_, tagIndex) =>
+            `tag-${documentIndex}-${tagIndex}`).join(', ')}]`,
+          '---',
+          `# Metadata ${documentIndex}`,
+        ].join('\n'),
+      ]),
+    ))
+
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+
+    expect(Math.max(...snapshot.documents.map((document) => document.tags.length))).toBe(32)
+    expect(snapshot.relations).toHaveLength(1_024)
+    expect(snapshot.warnings).toEqual(expect.arrayContaining(['metadata_limit_exceeded']))
+    expect(snapshot.truncated).toBe(true)
+  })
+
   it('does not follow a Git-managed Markdown symlink outside the project root', async () => {
     const project = await createTrackedRepository({})
     const outside = await mkdtemp(path.join(os.tmpdir(), 'devflow-knowledge-outside-'))

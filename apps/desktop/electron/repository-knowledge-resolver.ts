@@ -51,8 +51,14 @@ export function createRepositoryKnowledgeResolver(deps: {
   return {
     loadProject,
     async loadRun(input) {
-      const store = await deps.getStore()
-      const run = (await store.listRuns()).find((candidate) => candidate.id === input.runId)
+      let runs: WorkflowRun[]
+      try {
+        const store = await deps.getStore()
+        runs = await store.listRuns()
+      } catch {
+        throw new Error('Repository knowledge is unavailable for this local project.')
+      }
+      const run = runs.find((candidate) => candidate.id === input.runId)
       if (!run) {
         throw new Error(`Run not found: ${input.runId}`)
       }

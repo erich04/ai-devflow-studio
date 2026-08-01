@@ -115,4 +115,29 @@ describe('repository knowledge resolver', () => {
       'Repository knowledge is unavailable for this local project.',
     )
   })
+
+  it('does not expose local storage errors while resolving canonical Run scope', async () => {
+    const cache = {
+      load: vi.fn(async () => snapshot),
+      refresh: vi.fn(async () => snapshot),
+    }
+    const resolver = createRepositoryKnowledgeResolver({
+      getStore: async () => {
+        throw new Error('SQLITE_CANTOPEN: /Users/example/Library/Application Support/devflow.sqlite')
+      },
+      cache,
+    })
+
+    const failure = await resolver.loadRun({
+      runId: run.id,
+      nodeId: 'node-a',
+      projectId: project.id,
+    }).catch((error: unknown) => error)
+
+    expect(failure).toEqual(
+      new Error('Repository knowledge is unavailable for this local project.'),
+    )
+    expect(String(failure)).not.toContain('/Users/example')
+    expect(cache.load).not.toHaveBeenCalled()
+  })
 })

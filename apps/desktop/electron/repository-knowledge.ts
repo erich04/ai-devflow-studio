@@ -1,7 +1,7 @@
 import { execFile as execFileCallback } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
-import { lstat, open, realpath } from 'node:fs/promises'
+import { lstat, open, realpath, type FileHandle } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import {
@@ -28,6 +28,9 @@ const MAX_FILES = 256
 const MAX_TOTAL_BYTES = 4 * 1024 * 1024
 const MAX_TOTAL_CHARACTERS = 2_000_000
 const MAX_CHUNKS = 4_096
+const MAX_TAGS_PER_DOCUMENT = 32
+const MAX_TOTAL_TAGS = 1_024
+const MAX_TAG_CHARACTERS = 128
 const EXCLUDED_DIRECTORIES = new Set([
   '.git',
   'node_modules',
@@ -96,11 +99,38 @@ async function readSafeRegularFile(
     if (metadata.size > MAX_FILE_BYTES) return { tooLarge: true }
     const resolvedAfterOpen = await realpath(safePath)
     if (!isInsideRoot(root, resolvedAfterOpen)) return null
-    const content = await handle.readFile()
-    return content.byteLength > MAX_FILE_BYTES ? { tooLarge: true } : { content }
+    const pathMetadata = await lstat(resolvedAfterOpen)
+    if (
+      !pathMetadata.isFile() ||
+      pathMetadata.dev !== metadata.dev ||
+      pathMetadata.ino !== metadata.ino
+    ) {
+      return null
+    }
+    return await readBoundedContent(handle)
   } finally {
     await handle.close()
   }
+}
+
+async function readBoundedContent(
+  handle: FileHandle,
+): Promise<{ content: Buffer } | { tooLarge: true }> {
+  const buffer = Buffer.allocUnsafe(MAX_FILE_BYTES + 1)
+  let offset = 0
+  while (offset < buffer.byteLength) {
+    const { bytesRead } = await handle.read(
+      buffer,
+      offset,
+      buffer.byteLength - offset,
+      offset,
+    )
+    if (bytesRead === 0) break
+    offset += bytesRead
+  }
+  return offset > MAX_FILE_BYTES
+    ? { tooLarge: true }
+    : { content: buffer.subarray(0, offset) }
 }
 
 function documentEntityKind(
@@ -196,6 +226,76 @@ function splitMarkdownChunkSegments(markdown: string): string[] {
   return segments.length > 0 ? segments : [markdown]
 }
 
+function boundTagValue(
+  rawValue: string,
+  maxTags: number,
+): { tags: string[]; truncated: boolean } {
+  const value = rawValue.replace(/^\[/u, '').replace(/\]$/u, '')
+  const tags: string[] = []
+  let truncated = false
+  let segmentStart = 0
+
+  for (let index = 0; index <= value.length; index += 1) {
+    if (index < value.length && value[index] !== ',') continue
+    const normalized = value
+      .slice(segmentStart, index)
+      .trim()
+      .replace(/^"|"$/gu, '')
+      .toLocaleLowerCase()
+    segmentStart = index + 1
+    if (!normalized) continue
+    if (tags.length >= maxTags) {
+      truncated = true
+      break
+    }
+    const characters = Array.from(normalized)
+    if (characters.length > MAX_TAG_CHARACTERS) truncated = true
+    tags.push(characters.slice(0, MAX_TAG_CHARACTERS).join(''))
+  }
+
+  return { tags, truncated }
+}
+
+function boundSourceMetadata(sources: KnowledgeSourceFile[]): {
+  sources: KnowledgeSourceFile[]
+  truncated: boolean
+} {
+  let remainingTags = MAX_TOTAL_TAGS
+  let truncated = false
+  const bounded = sources.map((source) => {
+    if (!source.markdown.startsWith('---')) return source
+    const endIndex = source.markdown.indexOf('\n---', 3)
+    if (endIndex === -1) return source
+    const frontmatterLines = source.markdown.slice(3, endIndex).trim().split('\n')
+    const tagLineIndexes = frontmatterLines.flatMap((line, index) => {
+      const separatorIndex = line.indexOf(':')
+      return separatorIndex !== -1 && line.slice(0, separatorIndex).trim() === 'tags'
+        ? [index]
+        : []
+    })
+    const activeTagLineIndex = tagLineIndexes.at(-1)
+    if (activeTagLineIndex === undefined) return source
+    const activeLine = frontmatterLines[activeTagLineIndex]!
+    const separatorIndex = activeLine.indexOf(':')
+    const tagResult = boundTagValue(
+      activeLine.slice(separatorIndex + 1).trim(),
+      Math.min(MAX_TAGS_PER_DOCUMENT, remainingTags),
+    )
+    if (tagResult.truncated) truncated = true
+    remainingTags -= tagResult.tags.length
+    for (const tagLineIndex of tagLineIndexes) {
+      frontmatterLines[tagLineIndex] = tagLineIndex === activeTagLineIndex
+        ? `tags: [${tagResult.tags.map((tag) => JSON.stringify(tag)).join(', ')}]`
+        : 'tags: []'
+    }
+    return {
+      ...source,
+      markdown: `---\n${frontmatterLines.join('\n')}\n---${source.markdown.slice(endIndex + 4)}`,
+    }
+  })
+  return { sources: bounded, truncated }
+}
+
 function boundSourcesForChunkLimit(sources: KnowledgeSourceFile[]): {
   sources: KnowledgeSourceFile[]
   truncated: boolean
@@ -225,6 +325,7 @@ const WARNING_ORDER: readonly RepositoryKnowledgeWarning[] = [
   'total_size_limit_exceeded',
   'character_limit_exceeded',
   'chunk_limit_exceeded',
+  'metadata_limit_exceeded',
 ]
 
 export type RepositoryKnowledgeService = {
@@ -243,7 +344,7 @@ export function createRepositoryKnowledgeService(options: {
       const { stdout } = await execFile(
         'git',
         ['ls-files', '-z', '--cached', '--', '*.md', '*.markdown'],
-        { cwd: root, maxBuffer: 2 * 1024 * 1024 },
+        { cwd: root, maxBuffer: 2 * 1024 * 1024, timeout: 10_000, windowsHide: true },
       )
       const relativePaths = stdout
         .split('\0')
@@ -302,7 +403,11 @@ export function createRepositoryKnowledgeService(options: {
           updatedAt: indexedAt,
         })
       }
-      const boundedSources = boundSourcesForChunkLimit(sources)
+      const metadataBoundedSources = boundSourceMetadata(sources)
+      if (metadataBoundedSources.truncated) {
+        warnings.add('metadata_limit_exceeded')
+      }
+      const boundedSources = boundSourcesForChunkLimit(metadataBoundedSources.sources)
       if (boundedSources.truncated) warnings.add('chunk_limit_exceeded')
       const index = indexKnowledgeSources(boundedSources.sources)
       const fullMarkdownByPath = new Map(sources.map((source) => [
