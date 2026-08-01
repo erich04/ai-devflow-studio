@@ -35,6 +35,15 @@ describe('v1.4 pilot trust boundary contract', () => {
     expect(plan).toContain('Slice C integration is next')
   })
 
+  it('records completed repository knowledge and Web D1 before the collaboration write model', () => {
+    expect(plan).toContain('## Slice C — Repository Knowledge Integration ✅')
+    expect(plan).toContain('Full unit regression passed 944/944')
+    expect(plan).toContain('Web D1 completed')
+    expect(plan).toContain('The Work Request vertical slice completed')
+    expect(plan).toContain('Full unit regression passed 1162/1162')
+    expect(plan).toContain('Gate Command delivery is next')
+  })
+
   it('keeps deferred delivery and packaging work outside v1.4', () => {
     expect(prd).toContain('Real GitHub push, pull-request creation, merge, or branch publication (V1.5)')
     expect(prd).toContain('signed/notarized installers')
