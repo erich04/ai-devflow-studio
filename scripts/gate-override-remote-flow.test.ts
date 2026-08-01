@@ -47,6 +47,7 @@ const reviewerCredential: DesktopPairingCredential = {
 const remoteRun = {
   kind: 'run' as const,
   runId: 'run-independent-lead-override',
+  version: 1,
   projectId: 'p-payments',
   title: 'Independent Lead override',
   status: 'building' as const,
@@ -64,6 +65,7 @@ const remoteRun = {
 
 const localGateRun: WorkflowRun = {
   id: remoteRun.runId,
+  version: remoteRun.version,
   title: remoteRun.title,
   request: 'Prove independent review remains independent.',
   projectId: reviewerCredential.localProjectId!,
