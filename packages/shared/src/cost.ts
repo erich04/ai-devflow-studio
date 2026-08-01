@@ -74,7 +74,7 @@ export type EstimateCodingRuntimeCostInput = {
 }
 
 export function estimateCodingRuntimeCost(input: EstimateCodingRuntimeCostInput): CodingRuntimeCostSummary {
-  if (input.engine === 'fake' || input.providerId.includes('fake')) {
+  if (input.engine === 'fake') {
     return {
       id: `coding-runtime-cost-${input.runId}-${input.nodeId}`,
       runId: input.runId,
@@ -306,7 +306,7 @@ function resolveRuntimeProvider(providerId: string): TokenUsage['provider'] {
   if (normalized.includes('dashscope') || normalized.includes('qwen')) {
     return 'dashscope'
   }
-  if (normalized.includes('local') || normalized.includes('fake')) {
+  if (normalized.includes('local') || normalized === 'fake' || normalized === 'fake-coding-engine') {
     return 'local'
   }
   return 'openai'

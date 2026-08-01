@@ -5,8 +5,8 @@ import type { ProjectBoundRemoteSync } from './project-bound-remote-sync.js'
 export function createRuntimeBudgetGuard(
   remoteSync: Pick<ProjectBoundRemoteSync, 'evaluateRuntimeBudget'>,
 ): CodingRuntimeBudgetGuard {
-  return async ({ estimatedCost, project, providerId, approvalId }) => {
-    if (estimatedCost.costUsd <= 0) {
+  return async ({ engine, estimatedCost, project, providerId, approvalId }) => {
+    if (engine === 'fake') {
       return {
         status: 'disabled',
         blocksRun: false,

@@ -880,7 +880,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
               ? { approvalId: input.runtimeBudgetApprovalId.trim() }
               : {}),
           })
-        : estimatedCost.costUsd <= 0
+        : configuredEngine === 'fake'
           ? {
               status: 'disabled',
               blocksRun: false,

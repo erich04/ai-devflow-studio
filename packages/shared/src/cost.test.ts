@@ -54,6 +54,22 @@ describe('estimateCodingRuntimeCost', () => {
     expect(summary.costUsd).toBeGreaterThan(0)
     expect(JSON.stringify(summary)).not.toContain('Implement the retry plan')
   })
+
+  it('does not treat a real engine as free because its provider id contains fake', () => {
+    const summary = estimateCodingRuntimeCost({
+      engine: 'opencode-http',
+      providerId: 'notfake-paid-provider',
+      model: 'paid-model',
+      prompt: 'This real provider call must pass the authoritative budget service.',
+      runId: 'run-1',
+      nodeId: 'node-1',
+      projectId: 'project-1',
+      userId: 'user-1',
+      timestamp: '2026-07-31T00:00:00.000Z',
+    })
+
+    expect(summary.costUsd).toBeGreaterThan(0)
+  })
 })
 
 describe('parseBudgetGuardDecision', () => {

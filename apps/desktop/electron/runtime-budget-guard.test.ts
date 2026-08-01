@@ -3,6 +3,32 @@ import type { CodingRuntimeBudgetGuard } from './coding-runtime'
 import { createRuntimeBudgetGuard } from './runtime-budget-guard'
 
 describe('RuntimeBudgetGuard', () => {
+  it('still evaluates a real engine remotely when its rounded estimate is zero', async () => {
+    const authoritativeDecision = {
+      status: 'allowed' as const,
+      blocksRun: false,
+      currentSpendUsd: 0,
+      projectedCostUsd: 0,
+      limitUsd: 1,
+      reason: 'Authoritative policy allows the real provider call.',
+    }
+    const evaluateRuntimeBudget = vi.fn(async () => authoritativeDecision)
+    const guard = createRuntimeBudgetGuard({ evaluateRuntimeBudget })
+    const input = paidRuntimeInput()
+
+    const decision = await guard({
+      ...input,
+      estimatedCost: { ...input.estimatedCost, costUsd: 0 },
+    })
+
+    expect(evaluateRuntimeBudget).toHaveBeenCalledWith({
+      projectId: 'local-project-1',
+      providerId: 'double',
+      projectedCostUsd: 0,
+    })
+    expect(decision).toEqual(authoritativeDecision)
+  })
+
   it('blocks paid runtime when the authoritative team budget decision is unavailable', async () => {
     const evaluateRuntimeBudget = vi.fn(async () => {
       throw new Error('remote response included private infrastructure details')
