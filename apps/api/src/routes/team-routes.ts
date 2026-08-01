@@ -740,6 +740,8 @@ function filterOverviewForSession(
 ): TeamOverviewPayload {
   const projects = overview.projects.filter((project) => canAccessProject(session, project.id))
   const projectIds = new Set(projects.map((project) => project.id))
+  const runs = overview.runs.filter((run) => projectIds.has(run.projectId))
+  const runIds = new Set(runs.map((run) => run.id))
   const projectCost = overview.projectCost.filter((rollup) => projectIds.has(rollup.key))
   const organizationPolicy =
     overview.enforcementPolicies.organizationPolicy.organizationId === session.organizationId
@@ -750,19 +752,29 @@ function filterOverviewForSession(
   )
 
   return {
-    ...overview,
     projects,
-    runs: overview.runs.filter((run) => projectIds.has(run.projectId)),
+    members: overview.members,
+    runs,
     projectCost,
+    memberCost: projects.length === overview.projects.length ? overview.memberCost : [],
     totalCost: formatUsd(projectCost.reduce((sum, rollup) => sum + rollup.costUsd, 0)),
     testEvidenceSummaries: overview.testEvidenceSummaries.filter((evidence) =>
-      projectIds.has(evidence.projectId),
+      projectIds.has(evidence.projectId) && runIds.has(evidence.runId),
     ),
+    agentReviews: overview.agentReviews.filter(
+      (review) => projectIds.has(review.projectId) && runIds.has(review.runId),
+    ),
+    agentTraces: overview.agentTraces.filter((trace) => runIds.has(trace.runId)),
+    agentTokenUsage: overview.agentTokenUsage.filter(
+      (usage) => projectIds.has(usage.projectId) && runIds.has(usage.runId),
+    ),
+    agentProviders: overview.agentProviders,
     codingAgentSummaries: overview.codingAgentSummaries.filter((summary) =>
-      projectIds.has(summary.projectId),
+      projectIds.has(summary.projectId) && runIds.has(summary.runId),
     ),
-    policyAwareDeliverySummaries: overview.policyAwareDeliverySummaries.filter((summary) =>
-      projectIds.has(summary.projectId),
+    policyAwareDeliverySummaries: overview.policyAwareDeliverySummaries.filter(
+      (summary) =>
+        projectIds.has(summary.projectId) && (!summary.runId || runIds.has(summary.runId)),
     ),
     enforcementPolicies: {
       organizationPolicy,
@@ -774,9 +786,15 @@ function filterOverviewForSession(
         ),
       ),
       gateOverrides: overview.enforcementPolicies.gateOverrides.filter((override) =>
-        projectIds.has(override.projectId),
+        projectIds.has(override.projectId) && runIds.has(override.runId),
       ),
     },
+    runtimeBudgetPolicies: overview.runtimeBudgetPolicies.filter((policy) =>
+      projectIds.has(policy.projectId),
+    ),
+    runtimeBudgetApprovals: overview.runtimeBudgetApprovals.filter((approval) =>
+      projectIds.has(approval.projectId),
+    ),
   }
 }
 
@@ -790,8 +808,8 @@ async function evaluateEnforcementForInput(
   }
 
   const [bundle, overview, policyBundle, overrides] = await Promise.all([
-    repository.getRunsBundle(),
-    repository.getTeamOverview(),
+    repository.getRunsBundle(session),
+    repository.getTeamOverview(session),
     repository.getEnforcementPolicy(input.projectId, session),
     repository.listGateOverrides({ runId: input.runId }, session),
   ])
@@ -948,7 +966,10 @@ export async function resolveTeamRoute(
 
     return {
       status: 200,
-      body: filterRunsBundleForSession(await repository.getRunsBundle(), options.session),
+      body: filterRunsBundleForSession(
+        await repository.getRunsBundle(options.session),
+        options.session,
+      ),
     }
   }
 
@@ -963,7 +984,7 @@ export async function resolveTeamRoute(
       return badRequest('Invalid runId')
     }
 
-    const bundle = await repository.getRunsBundle()
+    const bundle = await repository.getRunsBundle(options.session)
     const run = bundle.runs.find((candidate) => candidate.id === runId)
     if (!run) {
       return notFound(`Run not found: ${runId}`)
@@ -995,7 +1016,10 @@ export async function resolveTeamRoute(
 
     return {
       status: 200,
-      body: filterOverviewForSession(await repository.getTeamOverview(), options.session),
+      body: filterOverviewForSession(
+        await repository.getTeamOverview(options.session),
+        options.session,
+      ),
     }
   }
 
@@ -1278,7 +1302,7 @@ export async function resolveTeamRoute(
       return forbidden('Project access required')
     }
     const [overview, policy, approvals] = await Promise.all([
-      repository.getTeamOverview(),
+      repository.getTeamOverview(options.session),
       repository.getRuntimeBudgetPolicy(input.projectId, options.session),
       repository.listRuntimeBudgetApprovals({ projectId: input.projectId }, options.session),
     ])
@@ -1388,11 +1412,34 @@ export async function resolveTeamRoute(
       return unauthorized()
     }
 
-    const runId = options.searchParams?.get('runId') ?? undefined
+    const session = options.session
+    const runId = options.searchParams?.get('runId')?.trim() || undefined
+    const bundle = await repository.getRunsBundle(session)
+    const visibleRuns = new Map(
+      bundle.runs
+        .filter((run) => canAccessProject(session, run.projectId))
+        .map((run) => [run.id, run]),
+    )
+    let targetRun: WorkflowRun | undefined
+    if (runId) {
+      targetRun = visibleRuns.get(runId)
+      if (!targetRun) {
+        return notFound('Run not found')
+      }
+    }
+
+    const reviews = await repository.listAgentReviews(runId ? { runId } : {}, session)
     return {
       status: 200,
       body: {
-        reviews: await repository.listAgentReviews(runId ? { runId } : {}, options.session),
+        reviews: reviews.filter((review) => {
+          const visibleRun = visibleRuns.get(review.runId)
+          return Boolean(
+            visibleRun &&
+              visibleRun.projectId === review.projectId &&
+              (!targetRun || visibleRun.id === targetRun.id),
+          )
+        }),
       },
     }
   }
@@ -1414,8 +1461,8 @@ export async function resolveTeamRoute(
     }
 
     const [bundle, overview] = await Promise.all([
-      repository.getRunsBundle(),
-      repository.getTeamOverview(),
+      repository.getRunsBundle(options.session),
+      repository.getTeamOverview(options.session),
     ])
     const run = bundle.runs.find((candidate) => candidate.id === input.runId)
     if (!run || run.projectId !== input.projectId || !canAccessProject(options.session, run.projectId)) {

@@ -64,6 +64,7 @@ import type {
   GitHubIdentityProfile,
   RunsBundle,
   TeamOverviewPayload,
+  TeamRepositoryReadContext,
   TeamRepository,
   TeamRepositorySyncContext,
 } from './team-repository'
@@ -688,12 +689,15 @@ function isProjectOverride(value: unknown): value is ProjectEnforcementPolicyOve
   return Boolean(value && typeof value === 'object' && 'projectId' in value && 'rules' in value)
 }
 
-function mapOrganizationPolicy(row: EnforcementPolicyRow | undefined): OrganizationEnforcementPolicy {
+function mapOrganizationPolicy(
+  row: EnforcementPolicyRow | undefined,
+  organizationId: string,
+): OrganizationEnforcementPolicy {
   if (row && isOrganizationPolicy(row.policy)) {
     return row.policy
   }
 
-  return createWarnOnlyDefaultPolicy({ organizationId: 'org-empty' })
+  return createWarnOnlyDefaultPolicy({ organizationId })
 }
 
 function mapProjectOverride(row: EnforcementPolicyRow | undefined): ProjectEnforcementPolicyOverride | null {
@@ -1092,13 +1096,51 @@ export function createPostgresTeamRepository(
     }
   }
 
-  async function loadRunsBundle(): Promise<RunsBundle> {
+  async function loadRunsBundle(context: TeamRepositoryReadContext): Promise<RunsBundle> {
     const [runRows, nodeRows, edgeRows, artifactRows, eventRows] = await Promise.all([
-      db.query<WorkflowRunRow>('SELECT * FROM workflow_runs ORDER BY updated_at DESC'),
-      db.query<WorkflowNodeRow>('SELECT * FROM workflow_nodes ORDER BY run_id, position ASC'),
-      db.query<WorkflowEdgeRow>('SELECT * FROM workflow_edges ORDER BY run_id, created_at ASC'),
-      db.query<ArtifactRow>('SELECT * FROM artifacts ORDER BY updated_at DESC'),
-      db.query<AgentEventRow>('SELECT * FROM agent_events ORDER BY run_id, sequence ASC'),
+      db.query<WorkflowRunRow>(
+        'SELECT * FROM workflow_runs WHERE organization_id = $1 ORDER BY updated_at DESC',
+        [context.organizationId],
+      ),
+      db.query<WorkflowNodeRow>(
+        `
+          SELECT workflow_nodes.*
+          FROM workflow_nodes
+          JOIN workflow_runs ON workflow_runs.id = workflow_nodes.run_id
+          WHERE workflow_runs.organization_id = $1
+          ORDER BY workflow_nodes.run_id, workflow_nodes.position ASC
+        `,
+        [context.organizationId],
+      ),
+      db.query<WorkflowEdgeRow>(
+        `
+          SELECT workflow_edges.*
+          FROM workflow_edges
+          JOIN workflow_runs ON workflow_runs.id = workflow_edges.run_id
+          WHERE workflow_runs.organization_id = $1
+          ORDER BY workflow_edges.run_id, workflow_edges.created_at ASC
+        `,
+        [context.organizationId],
+      ),
+      db.query<ArtifactRow>(
+        `
+          SELECT artifacts.*
+          FROM artifacts
+          JOIN workflow_runs ON workflow_runs.id = artifacts.run_id
+          WHERE workflow_runs.organization_id = $1
+          ORDER BY artifacts.updated_at DESC
+        `,
+        [context.organizationId],
+      ),
+      db.query<AgentEventRow>(
+        `
+          SELECT *
+          FROM agent_events
+          WHERE organization_id = $1
+          ORDER BY run_id, sequence ASC
+        `,
+        [context.organizationId],
+      ),
     ])
 
     const artifacts = artifactRows.map(mapArtifact)
@@ -1401,11 +1443,11 @@ export function createPostgresTeamRepository(
       return resolveDesktopTokenSessionFromToken(token)
     },
 
-    async getRunsBundle() {
-      return loadRunsBundle()
+    async getRunsBundle(context) {
+      return loadRunsBundle(context)
     },
 
-    async getTeamOverview(): Promise<TeamOverviewPayload> {
+    async getTeamOverview(context): Promise<TeamOverviewPayload> {
       const [
         projectRows,
         memberRows,
@@ -1422,38 +1464,106 @@ export function createPostgresTeamRepository(
         runtimeBudgetPolicyRows,
         runtimeBudgetApprovalRows,
       ] = await Promise.all([
-        db.query<ProjectRow>('SELECT * FROM projects ORDER BY name ASC'),
-        db.query<UserRow>('SELECT * FROM users ORDER BY name ASC'),
-        loadRunsBundle(),
-        db.query<TokenUsageRow>('SELECT * FROM token_usage ORDER BY timestamp DESC'),
-        db.query<TestEvidenceSummaryRow>(
-          'SELECT * FROM test_evidence_summaries ORDER BY created_at DESC',
+        db.query<ProjectRow>(
+          'SELECT * FROM projects WHERE organization_id = $1 ORDER BY name ASC',
+          [context.organizationId],
         ),
-        db.query<AgentReviewRow>('SELECT * FROM agent_reviews ORDER BY created_at DESC'),
-        db.query<AgentTraceRow>('SELECT * FROM agent_traces ORDER BY created_at DESC'),
-        db.query<AgentTokenUsageRow>('SELECT * FROM agent_token_usage ORDER BY timestamp DESC'),
+        db.query<UserRow>(
+          'SELECT * FROM users WHERE organization_id = $1 ORDER BY name ASC',
+          [context.organizationId],
+        ),
+        loadRunsBundle(context),
+        db.query<TokenUsageRow>(
+          `
+            SELECT token_usage.*
+            FROM token_usage
+            JOIN projects ON projects.id = token_usage.project_id
+            WHERE projects.organization_id = $1
+            ORDER BY token_usage.timestamp DESC
+          `,
+          [context.organizationId],
+        ),
+        db.query<TestEvidenceSummaryRow>(
+          `
+            SELECT test_evidence_summaries.*
+            FROM test_evidence_summaries
+            JOIN workflow_runs ON workflow_runs.id = test_evidence_summaries.run_id
+            WHERE workflow_runs.organization_id = $1
+            ORDER BY test_evidence_summaries.created_at DESC
+          `,
+          [context.organizationId],
+        ),
+        db.query<AgentReviewRow>(
+          'SELECT * FROM agent_reviews WHERE organization_id = $1 ORDER BY created_at DESC',
+          [context.organizationId],
+        ),
+        db.query<AgentTraceRow>(
+          'SELECT * FROM agent_traces WHERE organization_id = $1 ORDER BY created_at DESC',
+          [context.organizationId],
+        ),
+        db.query<AgentTokenUsageRow>(
+          'SELECT * FROM agent_token_usage WHERE organization_id = $1 ORDER BY timestamp DESC',
+          [context.organizationId],
+        ),
         db.query<AgentProviderCredentialRow>(
-          'SELECT * FROM agent_provider_credentials ORDER BY updated_at DESC',
+          `
+            SELECT *
+            FROM agent_provider_credentials
+            WHERE organization_id = $1
+            ORDER BY updated_at DESC
+          `,
+          [context.organizationId],
         ),
         db.query<CodingAgentSummaryRow>(
-          'SELECT * FROM coding_agent_summaries ORDER BY started_at DESC',
+          `
+            SELECT *
+            FROM coding_agent_summaries
+            WHERE organization_id = $1
+            ORDER BY started_at DESC
+          `,
+          [context.organizationId],
         ),
         db.query<EnforcementPolicyRow>(
-          'SELECT * FROM enforcement_policies ORDER BY project_id NULLS FIRST, updated_at DESC',
+          `
+            SELECT *
+            FROM enforcement_policies
+            WHERE organization_id = $1
+            ORDER BY project_id NULLS FIRST, updated_at DESC
+          `,
+          [context.organizationId],
         ),
         db.query<GateOverrideDecisionRow>(
-          'SELECT * FROM gate_override_decisions ORDER BY created_at DESC',
+          `
+            SELECT *
+            FROM gate_override_decisions
+            WHERE organization_id = $1
+            ORDER BY created_at DESC
+          `,
+          [context.organizationId],
         ),
         db.query<RuntimeBudgetPolicyRow>(
-          'SELECT * FROM runtime_budget_policies ORDER BY updated_at DESC',
+          `
+            SELECT *
+            FROM runtime_budget_policies
+            WHERE organization_id = $1
+            ORDER BY updated_at DESC
+          `,
+          [context.organizationId],
         ),
         db.query<RuntimeBudgetApprovalRow>(
-          'SELECT * FROM runtime_budget_approvals ORDER BY created_at DESC',
+          `
+            SELECT *
+            FROM runtime_budget_approvals
+            WHERE organization_id = $1
+            ORDER BY created_at DESC
+          `,
+          [context.organizationId],
         ),
       ])
       const tokenUsage = tokenRows.map(mapTokenUsage)
       const organizationPolicy = mapOrganizationPolicy(
         enforcementPolicyRows.find((row) => row.project_id === null),
+        context.organizationId,
       )
       const projectOverrides = enforcementPolicyRows
         .filter((row) => row.project_id !== null)
@@ -2448,7 +2558,10 @@ export function createPostgresTeamRepository(
         `,
         [context.organizationId, projectId],
       )
-      const organizationPolicy = mapOrganizationPolicy(rows.find((row) => row.project_id === null))
+      const organizationPolicy = mapOrganizationPolicy(
+        rows.find((row) => row.project_id === null),
+        context.organizationId,
+      )
       const projectOverride = mapProjectOverride(rows.find((row) => row.project_id === projectId))
 
       return {

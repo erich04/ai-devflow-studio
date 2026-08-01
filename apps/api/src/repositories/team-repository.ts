@@ -97,7 +97,9 @@ export type TeamOverviewPayload = {
   runtimeBudgetApprovals: RuntimeBudgetApproval[]
 }
 
-export type TeamRepositorySyncContext = Pick<TeamSession, 'organizationId' | 'userId'>
+export type TeamRepositoryReadContext = Pick<TeamSession, 'organizationId'>
+
+export type TeamRepositorySyncContext = TeamRepositoryReadContext & Pick<TeamSession, 'userId'>
 
 export class CanonicalRunRequiredError extends Error {
   constructor(runId: string, projectId: string) {
@@ -170,8 +172,8 @@ export type TeamRepository = {
   ): Promise<DesktopPairingCode>
   exchangeDesktopPairingCode(input: { code: string }): Promise<DesktopPairingExchangeResult>
   resolveDesktopTokenSession(token: string): Promise<TeamSession | null>
-  getRunsBundle(): Promise<RunsBundle>
-  getTeamOverview(): Promise<TeamOverviewPayload>
+  getRunsBundle(context: TeamRepositoryReadContext): Promise<RunsBundle>
+  getTeamOverview(context: TeamRepositoryReadContext): Promise<TeamOverviewPayload>
   getSkills(): Promise<SkillDefinition[]>
   getMcpServers(): Promise<McpServerDefinition[]>
   uploadRunSummary(
@@ -265,6 +267,9 @@ export function redactAgentEventForPersistence(event: AgentEvent): AgentEvent {
 
 export function createSeedTeamRepository(): TeamRepository {
   const teamProjects = [...projects]
+  const projectOrganizationIds = new Map(
+    teamProjects.map((project) => [project.id, DEMO_ORGANIZATION_ID]),
+  )
   const syncedRuns = [...runs]
   const seedRunIds = new Set(runs.map((run) => run.id))
   const runOrganizationIds = new Map(runs.map((run) => [run.id, DEMO_ORGANIZATION_ID]))
@@ -336,7 +341,7 @@ export function createSeedTeamRepository(): TeamRepository {
     }
   }
 
-  function agentProviderConfigs(): AgentProviderConfig[] {
+  function agentProviderConfigs(context: TeamRepositoryReadContext): AgentProviderConfig[] {
     return [
       {
         id: 'fake-knowledge-review',
@@ -346,16 +351,21 @@ export function createSeedTeamRepository(): TeamRepository {
         enabled: true,
         updatedAt: new Date(0).toISOString(),
       },
-      ...Array.from(providerCredentials.values()).map(({ metadata }) => ({
-        id: metadata.providerId,
-        name: metadata.providerId === 'openai-default' ? 'OpenAI Compatible' : metadata.providerId,
-        kind: 'openai-compatible' as const,
-        ...(metadata.baseUrl ? { baseUrl: metadata.baseUrl } : {}),
-        model: metadata.model,
-        enabled: true,
-        maskedCredential: metadata.maskedCredential,
-        updatedAt: metadata.updatedAt,
-      })),
+      ...Array.from(providerCredentials.entries())
+        .filter(([key]) => key.startsWith(`${context.organizationId}:`))
+        .map(([, { metadata }]) => ({
+          id: metadata.providerId,
+          name:
+            metadata.providerId === 'openai-default'
+              ? 'OpenAI Compatible'
+              : metadata.providerId,
+          kind: 'openai-compatible' as const,
+          ...(metadata.baseUrl ? { baseUrl: metadata.baseUrl } : {}),
+          model: metadata.model,
+          enabled: true,
+          maskedCredential: metadata.maskedCredential,
+          updatedAt: metadata.updatedAt,
+        })),
     ]
   }
 
@@ -446,6 +456,7 @@ export function createSeedTeamRepository(): TeamRepository {
         testCommand: input.testCommand ?? '',
       }
       upsertById(teamProjects, project)
+      projectOrganizationIds.set(project.id, context.organizationId)
       return project
     },
     async createDesktopPairingCode(input, context) {
@@ -530,51 +541,103 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
 
-    async getRunsBundle() {
-      return { runs: syncedRuns, artifacts: syncedArtifacts, events: syncedEvents }
+    async getRunsBundle(context) {
+      const runs = syncedRuns.filter(
+        (run) => runOrganizationIds.get(run.id) === context.organizationId,
+      )
+      const runIds = new Set(runs.map((run) => run.id))
+      return {
+        runs,
+        artifacts: syncedArtifacts.filter((artifact) => runIds.has(artifact.runId)),
+        events: syncedEvents.filter((event) => runIds.has(event.runId)),
+      }
     },
 
-    async getTeamOverview() {
-      const codingTokenUsage = codingAgentSummaries
+    async getTeamOverview(context) {
+      const scopedProjects = teamProjects.filter(
+        (project) => projectOrganizationIds.get(project.id) === context.organizationId,
+      )
+      const scopedRuns = syncedRuns.filter(
+        (run) => runOrganizationIds.get(run.id) === context.organizationId,
+      )
+      const runIds = new Set(scopedRuns.map((run) => run.id))
+      const projectIds = new Set([
+        ...scopedProjects.map((project) => project.id),
+        ...scopedRuns.map((run) => run.projectId),
+      ])
+      const scopedTestEvidence = syncedTestEvidenceSummaries.filter(
+        (summary) => projectIds.has(summary.projectId) && runIds.has(summary.runId),
+      )
+      const scopedAgentReviews = agentReviews.filter(
+        (review) => projectIds.has(review.projectId) && runIds.has(review.runId),
+      )
+      const scopedAgentTraces = agentTraces.filter((trace) => runIds.has(trace.runId))
+      const scopedAgentTokenUsage = agentTokenUsage.filter(
+        (usage) => projectIds.has(usage.projectId) && runIds.has(usage.runId),
+      )
+      const scopedCodingAgentSummaries = codingAgentSummaries.filter(
+        (summary) => projectIds.has(summary.projectId) && runIds.has(summary.runId),
+      )
+      const codingTokenUsage = scopedCodingAgentSummaries
         .map((summary) => summary.costSummary)
-        .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
+        .filter(
+          (summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> =>
+            Boolean(summary),
+        )
         .map(runtimeCostSummaryToTokenUsage)
-      const allTokenUsage = [...tokenUsage, ...codingTokenUsage]
+      const allTokenUsage = [
+        ...tokenUsage.filter((usage) => projectIds.has(usage.projectId) && runIds.has(usage.runId)),
+        ...codingTokenUsage,
+      ]
+      const scopedOrganizationPolicy =
+        organizationPolicy.organizationId === context.organizationId
+          ? organizationPolicy
+          : createWarnOnlyDefaultPolicy({ organizationId: context.organizationId })
+      const scopedProjectOverrides = projectOverrides.filter((override) =>
+        projectIds.has(override.projectId),
+      )
+      const scopedGateOverrides = gateOverrides.filter(
+        (override) => projectIds.has(override.projectId) && runIds.has(override.runId),
+      )
 
       return {
-        projects: teamProjects,
-        members,
-        runs: syncedRuns,
+        projects: scopedProjects,
+        members: context.organizationId === DEMO_ORGANIZATION_ID ? members : [],
+        runs: scopedRuns,
         projectCost: rollupTokenUsage(allTokenUsage, 'projectId'),
         memberCost: rollupTokenUsage(allTokenUsage, 'userId'),
         totalCost: formatUsd(allTokenUsage.reduce((sum, row) => sum + row.costUsd, 0)),
-        testEvidenceSummaries: syncedTestEvidenceSummaries,
-        agentReviews,
-        agentTraces,
-        agentTokenUsage,
-        agentProviders: agentProviderConfigs(),
-        codingAgentSummaries,
+        testEvidenceSummaries: scopedTestEvidence,
+        agentReviews: scopedAgentReviews,
+        agentTraces: scopedAgentTraces,
+        agentTokenUsage: scopedAgentTokenUsage,
+        agentProviders: agentProviderConfigs(context),
+        codingAgentSummaries: scopedCodingAgentSummaries,
         policyAwareDeliverySummaries: buildPolicyAwareDeliverySummaries({
-          projectIds: teamProjects.map((project) => project.id),
-          testEvidenceSummaries: syncedTestEvidenceSummaries,
-          agentReviews,
-          codingAgentSummaries,
-          gateOverrides,
+          projectIds: scopedProjects.map((project) => project.id),
+          testEvidenceSummaries: scopedTestEvidence,
+          agentReviews: scopedAgentReviews,
+          codingAgentSummaries: scopedCodingAgentSummaries,
+          gateOverrides: scopedGateOverrides,
           updatedAt: new Date().toISOString(),
         }),
         enforcementPolicies: {
-          organizationPolicy,
-          projectOverrides,
-          effectivePolicies: teamProjects.map((project) =>
+          organizationPolicy: scopedOrganizationPolicy,
+          projectOverrides: scopedProjectOverrides,
+          effectivePolicies: scopedProjects.map((project) =>
             resolveEffectivePolicy(
-              organizationPolicy,
-              projectOverrides.find((override) => override.projectId === project.id) ?? null,
+              scopedOrganizationPolicy,
+              scopedProjectOverrides.find((override) => override.projectId === project.id) ?? null,
             ),
           ),
-          gateOverrides,
+          gateOverrides: scopedGateOverrides,
         },
-        runtimeBudgetPolicies,
-        runtimeBudgetApprovals,
+        runtimeBudgetPolicies: runtimeBudgetPolicies.filter((policy) =>
+          projectIds.has(policy.projectId),
+        ),
+        runtimeBudgetApprovals: runtimeBudgetApprovals.filter((approval) =>
+          projectIds.has(approval.projectId),
+        ),
       }
     },
 
@@ -785,17 +848,20 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
 
-    async listAgentProviders() {
-      return agentProviderConfigs()
+    async listAgentProviders(context) {
+      return agentProviderConfigs(context)
     },
 
-    async saveAgentProviderCredential(metadata, encryptedSecret) {
-      providerCredentials.set(metadata.providerId, { metadata, encryptedSecret })
+    async saveAgentProviderCredential(metadata, encryptedSecret, context) {
+      providerCredentials.set(`${context.organizationId}:${metadata.providerId}`, {
+        metadata,
+        encryptedSecret,
+      })
       return metadata
     },
 
-    async getAgentProviderCredential(providerId) {
-      return providerCredentials.get(providerId) ?? null
+    async getAgentProviderCredential(providerId, context) {
+      return providerCredentials.get(`${context.organizationId}:${providerId}`) ?? null
     },
 
     async saveAgentReviewBundle(bundle) {

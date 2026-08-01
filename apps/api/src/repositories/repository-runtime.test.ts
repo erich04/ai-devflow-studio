@@ -32,7 +32,9 @@ describe('team repository runtime', () => {
     })
 
     expect(runtime.source).toBe('seed')
-    await expect(runtime.repository.getTeamOverview()).resolves.toMatchObject({
+    await expect(
+      runtime.repository.getTeamOverview({ organizationId: 'org-demo' }),
+    ).resolves.toMatchObject({
       projects: expect.any(Array),
       members: expect.any(Array),
     })

@@ -45,6 +45,133 @@ const leadSession: TeamSession = {
   projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
 }
 
+function addSensitiveOverviewFixtures(
+  overview: TeamOverviewPayload,
+  projectId: 'p-payments' | 'p-admin',
+  runId: 'run-payments' | 'run-admin',
+) {
+  const suffix = projectId === 'p-payments' ? 'payments' : 'admin'
+  const createdAt = '2026-06-16T00:04:00.000Z'
+
+  overview.agentReviews.push({
+    id: `review-${suffix}`,
+    requestId: `request-${suffix}`,
+    runId,
+    nodeId: 'node-build',
+    projectId,
+    runtime: 'api',
+    providerId: 'fake-knowledge-review',
+    model: 'fake',
+    conclusion: 'pass',
+    summary: `${suffix} private review`,
+    risks: [],
+    missingEvidence: [],
+    suggestedTests: [],
+    knowledgeReferences: [],
+    policyFindings: [],
+    confidence: 1,
+    gateAdvisory: {
+      id: `advisory-${suffix}`,
+      runId,
+      nodeId: 'node-build',
+      level: 'info',
+      blocksApproval: false,
+      summary: `${suffix} private advisory`,
+      missingEvidence: [],
+      riskCount: 0,
+      createdAt,
+    },
+    createdAt,
+  })
+  overview.agentTraces.push({
+    id: `trace-${suffix}`,
+    runId,
+    nodeId: 'node-build',
+    reviewId: `review-${suffix}`,
+    runtime: 'api',
+    steps: [],
+    createdAt,
+  })
+  overview.agentTokenUsage.push({
+    id: `agent-usage-${suffix}`,
+    runId,
+    nodeId: 'node-build',
+    userId: 'u-erich',
+    projectId,
+    provider: 'local',
+    model: 'fake',
+    inputTokens: 10,
+    outputTokens: 5,
+    cacheReadTokens: 0,
+    costUsd: 0,
+    timestamp: createdAt,
+    source: 'estimated',
+  })
+  overview.codingAgentSummaries.push({
+    id: `coding-${suffix}`,
+    runId,
+    nodeId: 'node-build',
+    projectId,
+    requestedBy: 'u-erich',
+    providerId: 'fake-coding-engine',
+    engine: 'fake',
+    status: 'completed',
+    branchName: `devflow/${runId}`,
+    summary: `${suffix} private coding summary`,
+    changedPaths: [],
+    startedAt: createdAt,
+    completedAt: createdAt,
+    redacted: true,
+  })
+  overview.policyAwareDeliverySummaries.push({
+    projectId,
+    runId,
+    warningCount: 0,
+    blockedCount: 0,
+    overrideCount: 0,
+    remediationPlanCount: 0,
+    retryAttemptCount: 0,
+    remainingEvidenceGapCount: 0,
+    redacted: true,
+    updatedAt: createdAt,
+  })
+  overview.enforcementPolicies.gateOverrides.push({
+    id: `override-${suffix}`,
+    runId,
+    nodeId: 'node-build',
+    projectId,
+    userId: 'u-ling',
+    role: 'lead',
+    reason: `${suffix} private override`,
+    blockedReasonIds: [],
+    policyVersion: 1,
+    provisional: false,
+    status: 'accepted',
+    createdAt,
+  })
+  overview.runtimeBudgetPolicies.push({
+    projectId,
+    enabled: true,
+    monthlyLimitUsd: 20,
+    warningThresholdUsd: 15,
+    currency: 'USD',
+    updatedAt: createdAt,
+  })
+  overview.runtimeBudgetApprovals.push({
+    id: `budget-approval-${suffix}`,
+    projectId,
+    requestedBy: 'u-yu',
+    approvedBy: 'u-ling',
+    role: 'lead',
+    providerId: 'openai-default',
+    maxAdditionalCostUsd: 5,
+    reason: `${suffix} private budget approval`,
+    status: 'approved',
+    createdAt,
+    expiresAt: '2026-06-17T00:04:00.000Z',
+  })
+}
+
 async function withFakeRuntime<T>(callback: () => Promise<T>): Promise<T> {
   const previous = process.env['DEVFLOW_ENABLE_FAKE_RUNTIME']
   process.env['DEVFLOW_ENABLE_FAKE_RUNTIME'] = 'true'
@@ -330,8 +457,40 @@ function createRepository(): TeamRepository {
       createdAt: '2026-06-20T00:00:00.000Z',
     })),
     resolveDesktopTokenSession: vi.fn(async () => null),
-    getRunsBundle: vi.fn(async () => runsBundle),
-    getTeamOverview: vi.fn(async () => overview),
+    getRunsBundle: vi.fn(async (context) =>
+      context.organizationId === 'org-demo'
+        ? runsBundle
+        : { runs: [], artifacts: [], events: [] },
+    ),
+    getTeamOverview: vi.fn(async (context) =>
+      context.organizationId === 'org-demo'
+        ? overview
+        : {
+            projects: [],
+            members: [],
+            runs: [],
+            projectCost: [],
+            memberCost: [],
+            totalCost: '$0.00',
+            testEvidenceSummaries: [],
+            agentReviews: [],
+            agentTraces: [],
+            agentTokenUsage: [],
+            agentProviders: [],
+            codingAgentSummaries: [],
+            policyAwareDeliverySummaries: [],
+            enforcementPolicies: {
+              organizationPolicy: createWarnOnlyDefaultPolicy({
+                organizationId: context.organizationId,
+              }),
+              projectOverrides: [],
+              effectivePolicies: [],
+              gateOverrides: [],
+            },
+            runtimeBudgetPolicies: [],
+            runtimeBudgetApprovals: [],
+          },
+    ),
     getSkills: vi.fn(async () => []),
     getMcpServers: vi.fn(async () => []),
     uploadRunSummary: vi.fn(async () => ({
@@ -398,7 +557,9 @@ function createRepository(): TeamRepository {
       tokenUsage: bundle.tokenUsage,
     })),
     saveAgentEvent: vi.fn(async (event) => event),
-    listAgentReviews: vi.fn(async () => []),
+    listAgentReviews: vi.fn(async (input) =>
+      overview.agentReviews.filter((review) => !input.runId || review.runId === input.runId),
+    ),
   }
 }
 
@@ -597,6 +758,33 @@ describe('team API route resolver', () => {
       },
     })
     expect(JSON.stringify(result?.body)).not.toContain('enforcement-policy-org-demo-warn-only')
+  })
+
+  it('does not expose another organization projects or runs to an owner', async () => {
+    const repository = createRepository()
+    const otherOrganizationOwner: TeamSession = {
+      ...ownerSession,
+      organizationId: 'org-other',
+      userId: 'u-other-owner',
+      authAccountId: 'acct-other-owner',
+    }
+
+    const [runsResult, overviewResult] = await Promise.all([
+      resolveTeamRoute('GET', '/api/runs', repository, { session: otherOrganizationOwner }),
+      resolveTeamRoute('GET', '/api/team/overview', repository, {
+        session: otherOrganizationOwner,
+      }),
+    ])
+
+    expect(runsResult?.body).toEqual({ runs: [], artifacts: [], events: [] })
+    expect(overviewResult?.body).toMatchObject({
+      projects: [],
+      runs: [],
+      projectCost: [],
+      totalCost: '$0.00',
+    })
+    expect(JSON.stringify(overviewResult?.body)).not.toContain('p-payments')
+    expect(JSON.stringify(overviewResult?.body)).not.toContain('p-admin')
   })
 
   it('allows an authenticated owner to create a minimal team project', async () => {
@@ -801,6 +989,40 @@ describe('team API route resolver', () => {
     expect(JSON.stringify(overviewResult?.body)).not.toContain('evidence-admin')
   })
 
+  it('filters every project- or run-scoped overview collection for project members', async () => {
+    const repository = createRepository()
+    const storedOverview = await repository.getTeamOverview(ownerSession)
+    addSensitiveOverviewFixtures(storedOverview, 'p-payments', 'run-payments')
+    addSensitiveOverviewFixtures(storedOverview, 'p-admin', 'run-admin')
+
+    const result = await resolveTeamRoute('GET', '/api/team/overview', repository, {
+      session: memberSession,
+    })
+
+    expect(result?.status).toBe(200)
+    const overview = result?.body as TeamOverviewPayload
+    expect(overview.agentReviews.map((review) => review.id)).toEqual(['review-payments'])
+    expect(overview.agentTraces.map((trace) => trace.id)).toEqual(['trace-payments'])
+    expect(overview.agentTokenUsage.map((usage) => usage.id)).toEqual(['agent-usage-payments'])
+    expect(overview.codingAgentSummaries.map((summary) => summary.id)).toEqual(['coding-payments'])
+    expect(overview.policyAwareDeliverySummaries.map((summary) => summary.projectId)).toEqual([
+      'p-payments',
+    ])
+    expect(overview.enforcementPolicies.gateOverrides.map((override) => override.id)).toEqual([
+      'override-payments',
+    ])
+    expect(overview.runtimeBudgetPolicies.map((policy) => policy.projectId)).toEqual([
+      'p-payments',
+    ])
+    expect(overview.runtimeBudgetApprovals.map((approval) => approval.id)).toEqual([
+      'budget-approval-payments',
+    ])
+    expect(JSON.stringify(overview)).not.toContain('private admin')
+    expect(JSON.stringify(overview)).not.toContain('review-admin')
+    expect(JSON.stringify(overview)).not.toContain('run-admin')
+    expect(JSON.stringify(overview)).not.toContain('p-admin')
+  })
+
   it('requires an authenticated session for team routes', async () => {
     const repository = createRepository()
 
@@ -904,7 +1126,7 @@ describe('team API route resolver', () => {
 
   it('blocks a paid Knowledge Review with a redacted audit before resolving credentials when the budget policy is missing', async () => {
     const repository = createRepository()
-    const overview = await repository.getTeamOverview()
+    const overview = await repository.getTeamOverview(ownerSession)
     overview.agentProviders.push({
       id: 'openai-default',
       name: 'OpenAI Compatible',
@@ -961,7 +1183,7 @@ describe('team API route resolver', () => {
 
   it('runs a paid Knowledge Review once with an exact scoped runtime budget approval', async () => {
     const repository = createRepository()
-    const overview = await repository.getTeamOverview()
+    const overview = await repository.getTeamOverview(ownerSession)
     overview.agentProviders.push({
       id: 'openai-default',
       name: 'OpenAI Compatible',
@@ -1070,7 +1292,7 @@ describe('team API route resolver', () => {
 
   it('blocks a paid Knowledge Review before credentials when the selected approval has the wrong provider scope', async () => {
     const repository = createRepository()
-    const overview = await repository.getTeamOverview()
+    const overview = await repository.getTeamOverview(ownerSession)
     overview.agentProviders.push({
       id: 'openai-default',
       name: 'OpenAI Compatible',
@@ -1148,7 +1370,7 @@ describe('team API route resolver', () => {
 
   it('rejects Knowledge Review for a non-current run node before resolving provider credentials', async () => {
     const repository = createRepository()
-    const bundle = await repository.getRunsBundle()
+    const bundle = await repository.getRunsBundle(ownerSession)
     const run = bundle.runs.find((candidate) => candidate.id === 'run-payments')
     if (!run) {
       throw new Error('Expected payments run fixture')
@@ -1182,7 +1404,7 @@ describe('team API route resolver', () => {
 
   it('rejects Knowledge Review for a non-reviewable current node before resolving provider credentials', async () => {
     const repository = createRepository()
-    const bundle = await repository.getRunsBundle()
+    const bundle = await repository.getRunsBundle(ownerSession)
     const run = bundle.runs.find((candidate) => candidate.id === 'run-payments')
     if (!run) {
       throw new Error('Expected payments run fixture')
@@ -1212,7 +1434,7 @@ describe('team API route resolver', () => {
 
   it('rejects Knowledge Review for an inactive current node before resolving provider credentials', async () => {
     const repository = createRepository()
-    const bundle = await repository.getRunsBundle()
+    const bundle = await repository.getRunsBundle(ownerSession)
     const run = bundle.runs.find((candidate) => candidate.id === 'run-payments')
     if (!run) {
       throw new Error('Expected payments run fixture')
@@ -1266,7 +1488,7 @@ describe('team API route resolver', () => {
 
   it('runs Knowledge Review for a running current Acceptance node', async () => {
     const repository = createRepository()
-    const bundle = await repository.getRunsBundle()
+    const bundle = await repository.getRunsBundle(ownerSession)
     const run = bundle.runs.find((candidate) => candidate.id === 'run-payments')
     if (!run) {
       throw new Error('Expected payments run fixture')
@@ -1322,6 +1544,90 @@ describe('team API route resolver', () => {
 
     expect(result?.status).toBe(200)
     expect(repository.listAgentReviews).toHaveBeenCalledWith({ runId: 'run-payments' }, memberSession)
+  })
+
+  it('does not reveal or read agent reviews for a run outside the member project scope', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('GET', '/api/agent/reviews', repository, {
+      session: memberSession,
+      searchParams: new URLSearchParams('runId=run-admin'),
+    })
+
+    expect(result).toEqual({
+      status: 404,
+      body: {
+        error: 'not_found',
+        message: 'Run not found',
+      },
+    })
+    expect(repository.listAgentReviews).not.toHaveBeenCalled()
+  })
+
+  it('applies the same run scope to project leads without granting organization-wide access', async () => {
+    const repository = createRepository()
+    const overview = await repository.getTeamOverview(ownerSession)
+    addSensitiveOverviewFixtures(overview, 'p-payments', 'run-payments')
+    addSensitiveOverviewFixtures(overview, 'p-admin', 'run-admin')
+    const accessibleResult = await resolveTeamRoute('GET', '/api/agent/reviews', repository, {
+      session: leadSession,
+      searchParams: new URLSearchParams('runId=run-payments'),
+    })
+    const inaccessibleResult = await resolveTeamRoute('GET', '/api/agent/reviews', repository, {
+      session: leadSession,
+      searchParams: new URLSearchParams('runId=run-admin'),
+    })
+
+    expect(accessibleResult).toMatchObject({
+      status: 200,
+      body: { reviews: [{ id: 'review-payments' }] },
+    })
+    expect(inaccessibleResult).toEqual({
+      status: 404,
+      body: { error: 'not_found', message: 'Run not found' },
+    })
+    expect(repository.listAgentReviews).toHaveBeenCalledTimes(1)
+  })
+
+  it('filters an unqualified agent review list to the member accessible projects', async () => {
+    const repository = createRepository()
+    const overview = await repository.getTeamOverview(ownerSession)
+    addSensitiveOverviewFixtures(overview, 'p-payments', 'run-payments')
+    addSensitiveOverviewFixtures(overview, 'p-admin', 'run-admin')
+    overview.agentReviews.push({
+      ...overview.agentReviews[0]!,
+      id: 'review-mismatched-run-scope',
+      requestId: 'request-mismatched-run-scope',
+      runId: 'run-admin',
+      projectId: 'p-payments',
+      summary: 'must not survive visible Run filtering',
+    })
+
+    const result = await resolveTeamRoute('GET', '/api/agent/reviews', repository, {
+      session: memberSession,
+    })
+
+    expect(result?.status).toBe(200)
+    expect(
+      (result?.body as { reviews: Array<{ id: string }> }).reviews.map((review) => review.id),
+    ).toEqual(['review-payments'])
+    expect(JSON.stringify(result)).not.toContain('review-admin')
+    expect(JSON.stringify(result)).not.toContain('review-mismatched-run-scope')
+  })
+
+  it('uses the same non-enumerable response for an unknown agent review run', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('GET', '/api/agent/reviews', repository, {
+      session: memberSession,
+      searchParams: new URLSearchParams('runId=run-missing'),
+    })
+
+    expect(result).toEqual({
+      status: 404,
+      body: { error: 'not_found', message: 'Run not found' },
+    })
+    expect(repository.listAgentReviews).not.toHaveBeenCalled()
   })
 
   it('reads the effective enforcement policy for a project', async () => {
@@ -1402,7 +1708,7 @@ describe('team API route resolver', () => {
 
   it('normalizes Postgres-scoped node IDs before canonical Gate evaluation', async () => {
     const repository = createRepository()
-    const bundle = await repository.getRunsBundle()
+    const bundle = await repository.getRunsBundle(ownerSession)
     const paymentsRun = bundle.runs.find((run) => run.id === 'run-payments')!
     repository.getRunsBundle = vi.fn(async () => ({
       ...bundle,
@@ -1459,7 +1765,7 @@ describe('team API route resolver', () => {
 
   it('normalizes a namespaced node ID returned by a remote Postgres overview', async () => {
     const repository = createRepository()
-    const bundle = await repository.getRunsBundle()
+    const bundle = await repository.getRunsBundle(ownerSession)
     const paymentsRun = bundle.runs.find((run) => run.id === 'run-payments')!
     repository.getRunsBundle = vi.fn(async () => ({
       ...bundle,

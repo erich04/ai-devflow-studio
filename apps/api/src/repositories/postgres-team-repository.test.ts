@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { TeamDbClient } from '../db/client'
 import { createPostgresTeamRepository } from './postgres-team-repository'
 
+const readContext = { organizationId: 'org-demo' }
+
 class FakeTeamDbClient implements TeamDbClient {
   readonly queries: Array<{ sql: string; params?: unknown[] }> = []
   readonly acceptedChildSummaryWrites = new Map<string, unknown[]>()
@@ -509,12 +511,84 @@ class ExistingOrganizationNoAccountDbClient implements TeamDbClient {
   }
 }
 
+class OrganizationScopedReadDbClient implements TeamDbClient {
+  readonly queries: Array<{ sql: string; params?: unknown[] }> = []
+
+  async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    this.queries.push(params === undefined ? { sql } : { sql, params })
+    const hasRequestedOrganization =
+      params?.[0] === 'org-other' && /organization_id\s*=\s*\$1/.test(sql)
+
+    if (/FROM\s+projects\b/.test(sql)) {
+      return (hasRequestedOrganization
+        ? []
+        : [
+            {
+              id: 'p-demo-private',
+              name: 'Demo private project',
+              slug: 'demo-private',
+              description: 'Must remain inside org-demo.',
+              repository: 'demo/private',
+              default_branch: 'main',
+              health: 'on_track',
+              knowledge_base_path: 'docs/',
+              test_command: 'pnpm test',
+            },
+          ]) as T[]
+    }
+
+    if (/FROM\s+workflow_runs\b/.test(sql)) {
+      return (hasRequestedOrganization
+        ? []
+        : [
+            {
+              id: 'run-demo-private',
+              title: 'Demo private run',
+              request: 'Must remain inside org-demo.',
+              project_id: 'p-demo-private',
+              creator_id: 'u-demo',
+              status: 'building',
+              current_node_id: 'node-build',
+              branch_name: 'ai/demo-private',
+              pull_request_url: null,
+              created_at: '2026-06-16T10:00:00.000Z',
+              updated_at: '2026-06-16T10:15:00.000Z',
+            },
+          ]) as T[]
+    }
+
+    return []
+  }
+
+  async close(): Promise<void> {
+    return undefined
+  }
+}
+
 describe('Postgres team repository', () => {
+  it('scopes Run and overview reads to the requested organization in SQL', async () => {
+    const db = new OrganizationScopedReadDbClient()
+    const repository = createPostgresTeamRepository(db)
+    const context = { organizationId: 'org-other' }
+
+    const [bundle, overview] = await Promise.all([
+      repository.getRunsBundle(context),
+      repository.getTeamOverview(context),
+    ])
+
+    expect(bundle).toEqual({ runs: [], artifacts: [], events: [] })
+    expect(overview.projects).toEqual([])
+    expect(overview.runs).toEqual([])
+    expect(overview.enforcementPolicies.organizationPolicy.organizationId).toBe('org-other')
+    expect(db.queries.length).toBeGreaterThan(0)
+    expect(db.queries.every((query) => query.params?.[0] === 'org-other')).toBe(true)
+  })
+
   it('maps workflow runs with nodes, edges, artifacts, and events', async () => {
     const db = new FakeTeamDbClient()
     const repository = createPostgresTeamRepository(db)
 
-    const bundle = await repository.getRunsBundle()
+    const bundle = await repository.getRunsBundle(readContext)
 
     expect(bundle.runs[0]).toMatchObject({
       id: 'run-remote-1',
@@ -536,7 +610,7 @@ describe('Postgres team repository', () => {
   it('preserves globally namespaced workflow IDs across seeded and remote Postgres runs', async () => {
     const repository = createPostgresTeamRepository(new NamespacedMixedOriginDbClient())
 
-    const bundle = await repository.getRunsBundle()
+    const bundle = await repository.getRunsBundle(readContext)
 
     expect(bundle.runs).toEqual([
       expect.objectContaining({
@@ -571,7 +645,7 @@ describe('Postgres team repository', () => {
   it('builds team overview and cost rollups from Postgres rows', async () => {
     const repository = createPostgresTeamRepository(new FakeTeamDbClient())
 
-    const overview = await repository.getTeamOverview()
+    const overview = await repository.getTeamOverview(readContext)
 
     expect(overview.projects[0]).toMatchObject({
       id: 'p-payments',

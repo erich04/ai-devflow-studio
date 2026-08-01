@@ -29,7 +29,7 @@ describe('seed team repository', () => {
 
   it('exposes team overview data through the repository boundary', async () => {
     const repository = createSeedTeamRepository()
-    const overview = await repository.getTeamOverview()
+    const overview = await repository.getTeamOverview(syncContext)
 
     expect(overview.projects.length).toBeGreaterThan(0)
     expect(overview.members.length).toBeGreaterThan(0)
@@ -45,6 +45,23 @@ describe('seed team repository', () => {
     expect(overview.agentProviders).toEqual([
       expect.objectContaining({ id: 'fake-knowledge-review', kind: 'fake' }),
     ])
+  })
+
+  it('does not expose seed organization projects or runs through another organization context', async () => {
+    const repository = createSeedTeamRepository()
+    const context = { organizationId: 'org-other' }
+
+    const [overview, bundle] = await Promise.all([
+      repository.getTeamOverview(context),
+      repository.getRunsBundle(context),
+    ])
+
+    expect(bundle).toEqual({ runs: [], artifacts: [], events: [] })
+    expect(overview.projects).toEqual([])
+    expect(overview.runs).toEqual([])
+    expect(overview.projectCost).toEqual([])
+    expect(overview.totalCost).toBe('$0.00')
+    expect(overview.enforcementPolicies.organizationPolicy.organizationId).toBe('org-other')
   })
 
   it('redacts allowed Test Evidence fields again at the repository write boundary', async () => {
@@ -76,7 +93,7 @@ describe('seed team repository', () => {
       rawOutput: '/Users/Alice/repo API_TOKEN=unknown-field-secret',
     } as Parameters<typeof repository.uploadTestEvidenceSummary>[0], syncContext)
 
-    const persisted = (await repository.getTeamOverview()).testEvidenceSummaries.find(
+    const persisted = (await repository.getTeamOverview(syncContext)).testEvidenceSummaries.find(
       (summary) => summary.id === 'evidence-hostile-fields',
     )
     expect(persisted?.redacted).toBe(true)
@@ -104,7 +121,7 @@ describe('seed team repository', () => {
       syncContext,
     )
 
-    const run = (await repository.getRunsBundle()).runs.find(
+    const run = (await repository.getRunsBundle(syncContext)).runs.find(
       (candidate) => candidate.id === 'run-hostile-metadata',
     )
     expect(JSON.stringify(run)).not.toContain('title-secret')
@@ -176,7 +193,7 @@ describe('seed team repository', () => {
       syncContext,
     )
 
-    const stored = (await repository.getTeamOverview()).codingAgentSummaries.find(
+    const stored = (await repository.getTeamOverview(syncContext)).codingAgentSummaries.find(
       (summary) => summary.id === 'coding-hostile-metadata',
     )
     expect(JSON.stringify(stored)).not.toContain('branch-secret')
@@ -193,7 +210,7 @@ describe('seed team repository', () => {
 
   it('returns workflow runs with their artifacts and events', async () => {
     const repository = createSeedTeamRepository()
-    const bundle = await repository.getRunsBundle()
+    const bundle = await repository.getRunsBundle(syncContext)
 
     expect(bundle.runs[0]?.id).toBe('run-health-001')
     expect(bundle.artifacts.every((artifact) => artifact.runId === 'run-health-001')).toBe(true)
@@ -220,7 +237,7 @@ describe('seed team repository', () => {
     expect(saved.message).toBe(
       'Knowledge Review budget blocked. status=unavailable reason=[REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
     )
-    const persisted = (await repository.getRunsBundle()).events.find(
+    const persisted = (await repository.getRunsBundle(syncContext)).events.find(
       (event) => event.id === saved.id,
     )
     expect(persisted).toEqual(saved)
@@ -394,8 +411,8 @@ describe('seed team repository', () => {
       accepted: true,
     })
 
-    const overview = await repository.getTeamOverview()
-    const bundle = await repository.getRunsBundle()
+    const overview = await repository.getTeamOverview(syncContext)
+    const bundle = await repository.getRunsBundle(syncContext)
 
     expect(overview.runs[0]).toMatchObject({
       id: 'run-1',
@@ -584,7 +601,7 @@ describe('seed team repository', () => {
       ),
     ).rejects.toThrow('conflicts with canonical scope')
 
-    const overview = await repository.getTeamOverview()
+    const overview = await repository.getTeamOverview(syncContext)
     expect(overview.testEvidenceSummaries.filter((item) => item.id === evidence.id)).toEqual([
       expect.objectContaining({
         runId: 'run-victim',
@@ -664,7 +681,7 @@ describe('seed team repository', () => {
       )
     }
 
-    const run = (await repository.getRunsBundle()).runs.find(
+    const run = (await repository.getRunsBundle(syncContext)).runs.find(
       (candidate) => candidate.id === 'run-consecutive',
     )
     expect(run?.nodes.map((node) => [node.id, node.status])).toEqual([
@@ -741,7 +758,7 @@ describe('seed team repository', () => {
       ),
     ).rejects.toThrow('Remote Run Summary conflicts with canonical ownership or is stale')
 
-    const storedRun = (await repository.getRunsBundle()).runs.find(
+    const storedRun = (await repository.getRunsBundle(syncContext)).runs.find(
       (run) => run.id === canonical.runId,
     )
     expect(storedRun).toMatchObject({

@@ -38,7 +38,7 @@ describe('remote Run Summary boundary', () => {
     })
 
     expect(result).toMatchObject({ status: 202 })
-    const run = (await repository.getRunsBundle()).runs.find(
+    const run = (await repository.getRunsBundle(projectMemberSession)).runs.find(
       (candidate) => candidate.id === 'run-hostile-metadata',
     )
     expect(run).toMatchObject({
@@ -106,7 +106,9 @@ describe('remote Run Summary boundary', () => {
     )
 
     expect(result).toMatchObject({ status: 202 })
-    const stored = (await repository.getTeamOverview()).codingAgentSummaries.find(
+    const stored = (
+      await repository.getTeamOverview(projectMemberSession)
+    ).codingAgentSummaries.find(
       (summary) => summary.id === 'coding-hostile-metadata',
     )
     expect(JSON.stringify(stored)).not.toContain('branch-secret')
