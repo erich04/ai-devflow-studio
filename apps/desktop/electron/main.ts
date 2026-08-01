@@ -57,6 +57,7 @@ import {
   parseListAgentReviewsInput,
   parseReplyCodingPermissionInput,
   parseRemoteSnapshotInput,
+  parseRetryRemoteSyncOperationInput,
   parseRunCodingAgentInput,
   parseRunKnowledgeReviewInput,
   parseRunProjectTestsInput,
@@ -86,6 +87,9 @@ import {
 import {
   createProjectBoundRemoteSync,
 } from './project-bound-remote-sync.js'
+import { createRemoteSyncOutboxClient } from './remote-sync-outbox-client.js'
+import { createRemoteSyncOutboxProcessor } from './remote-sync-outbox-processor.js'
+import { createRemoteSyncOutboxScheduler } from './remote-sync-outbox-scheduler.js'
 import {
   createKnowledgeReviewRuntimeBudgetGuard,
   createRuntimeBudgetGuard,
@@ -114,6 +118,10 @@ const execFileAsync = promisify(execFile)
 let storePromise: Promise<LocalStore> | undefined
 let remoteSyncClient: RemoteSyncClient | undefined
 let remoteSyncClientKey: string | undefined
+let remoteSyncOutboxScheduler: ReturnType<typeof createRemoteSyncOutboxScheduler> | undefined
+let remoteSyncOutboxSchedulerPromise:
+  | Promise<ReturnType<typeof createRemoteSyncOutboxScheduler>>
+  | undefined
 const codingPermissionTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 const codingRunTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 const gitStatusWatchers = new Map<
@@ -126,6 +134,11 @@ const gitStatusWatchers = new Map<
 >()
 const gitStatusWatcherCleanupRegistrations = new Set<number>()
 const opencodeProcessManager = createOpencodeProcessManager()
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+
+if (!hasSingleInstanceLock) {
+  app.quit()
+}
 
 function getStore() {
   const userDataPath = process.env['DEVFLOW_USER_DATA_DIR'] ?? app.getPath('userData')
@@ -176,16 +189,51 @@ async function getProjectBoundRemoteSync() {
   })
 }
 
-function syncCanonicalRunInBackground(runId: string): void {
-  void getProjectBoundRemoteSync()
-    .then((client) => client.uploadCanonicalRunSummary(runId))
-    .catch(() => undefined)
+async function getRemoteSyncOutboxScheduler() {
+  if (remoteSyncOutboxScheduler) return remoteSyncOutboxScheduler
+
+  remoteSyncOutboxSchedulerPromise ??= (async () => {
+    const store = await getStore()
+    const processor = createRemoteSyncOutboxProcessor({
+      store,
+      getRemoteSync: ({ scope, signal }) =>
+        createRemoteSyncOutboxClient({
+          source: store,
+          expectedScope: scope,
+          signal,
+          decryptToken: decryptCredential,
+        }),
+      onStateChanged: async () => {
+        broadcastToRenderers(ipcChannels.localStateUpdated, await store.loadState())
+      },
+    })
+    remoteSyncOutboxScheduler = createRemoteSyncOutboxScheduler({
+      processor,
+      onError: async () => {
+        console.warn('[remote-sync-outbox] A delivery cycle failed; the lease will be retried.')
+        try {
+          broadcastToRenderers(ipcChannels.localStateUpdated, await store.loadState())
+        } catch {
+          // The next scheduler cycle or renderer load will retry the state read.
+        }
+      },
+    })
+    return remoteSyncOutboxScheduler
+  })()
+
+  try {
+    return await remoteSyncOutboxSchedulerPromise
+  } finally {
+    remoteSyncOutboxSchedulerPromise = undefined
+  }
 }
 
-function syncCanonicalTestEvidenceInBackground(evidenceId: string): void {
-  void getProjectBoundRemoteSync()
-    .then((client) => client.uploadCanonicalTestEvidenceSummary(evidenceId))
-    .catch(() => undefined)
+function wakeRemoteSyncOutbox(): void {
+  void getRemoteSyncOutboxScheduler()
+    .then((scheduler) => scheduler.wake())
+    .catch(() => {
+      console.warn('[remote-sync-outbox] Unable to wake the delivery scheduler.')
+    })
 }
 
 function resetRemoteSyncClient() {
@@ -308,7 +356,10 @@ async function createCodingRuntimeForRequest() {
     scheduleRunTimeout: (codingRun, expire) =>
       scheduleCodingRunTimeout(codingRun.id, expire),
     publisher: {
-      publishRunStatus: (run) => broadcastToRenderers(ipcChannels.codingRunStatusUpdated, run),
+      publishRunStatus: (run) => {
+        broadcastToRenderers(ipcChannels.codingRunStatusUpdated, run)
+        wakeRemoteSyncOutbox()
+      },
       publishEvent: (event) => broadcastToRenderers(ipcChannels.codingEventAppended, event),
       publishPermission: (request) => broadcastToRenderers(ipcChannels.codingPermissionUpdated, request),
     },
@@ -744,6 +795,24 @@ function registerIpcHandlers() {
     return store.loadState()
   })
 
+  ipcMain.handle(ipcChannels.retryRemoteSyncOperation, async (_, payload: unknown) => {
+    const input = parseRetryRemoteSyncOperationInput(payload)
+    const store = await getStore()
+    const result = await store.retryRemoteSyncOperation({
+      id: input.operationId,
+      updatedAt: new Date().toISOString(),
+    })
+    if (!result.retried) {
+      throw new Error(
+        result.reason === 'not_found'
+          ? 'Remote sync operation was not found.'
+          : 'Only a terminal remote sync operation can be retried.',
+      )
+    }
+    wakeRemoteSyncOutbox()
+    return store.loadState()
+  })
+
   ipcMain.handle(ipcChannels.loadDesktopPairing, async () => {
     const store = await getStore()
     return store.getDesktopPairingCredential()
@@ -761,6 +830,19 @@ function registerIpcHandlers() {
     const store = await getStore()
     await store.saveDesktopPairingCredential(boundCredential, encryptCredential(token))
     resetRemoteSyncClient()
+    const retryAt = new Date().toISOString()
+    for (const operation of await store.listRemoteSyncOperations()) {
+      if (
+        operation.localProjectId === input.localProjectId &&
+        operation.organizationId === null &&
+        operation.teamProjectId === null &&
+        operation.status === 'terminal' &&
+        operation.lastErrorCode === 'pairing_required'
+      ) {
+        await store.retryRemoteSyncOperation({ id: operation.id, updatedAt: retryAt })
+      }
+    }
+    wakeRemoteSyncOutbox()
     return { credential: boundCredential }
   })
 
@@ -913,7 +995,7 @@ function registerIpcHandlers() {
       },
       now: createdAt,
     })
-    syncCanonicalTestEvidenceInBackground(evidence.id)
+    wakeRemoteSyncOutbox()
 
     return {
       evidence,
@@ -993,7 +1075,7 @@ function registerIpcHandlers() {
     if (!result.created) {
       throw new Error(`Run already exists: ${created.run.id}`)
     }
-    syncCanonicalRunInBackground(created.run.id)
+    wakeRemoteSyncOutbox()
     return created.run
   })
 
@@ -1084,7 +1166,7 @@ function registerIpcHandlers() {
       },
       now: completedAt,
     })
-    syncCanonicalRunInBackground(completed.run.id)
+    wakeRemoteSyncOutbox()
 
     return {
       run: completed.run,
@@ -1171,7 +1253,7 @@ function registerIpcHandlers() {
       },
       now: timestamp,
     })
-    syncCanonicalRunInBackground(completed.run.id)
+    wakeRemoteSyncOutbox()
 
     return {
       run: completed.run,
@@ -1255,7 +1337,7 @@ function registerIpcHandlers() {
       },
       now: timestamp,
     })
-    syncCanonicalRunInBackground(completed.run.id)
+    wakeRemoteSyncOutbox()
 
     return {
       run: completed.run,
@@ -1338,7 +1420,7 @@ function registerIpcHandlers() {
         : {}),
       now: timestamp,
     })
-    syncCanonicalRunInBackground(completed.run.id)
+    wakeRemoteSyncOutbox()
 
     return {
       run: completed.run,
@@ -1471,7 +1553,9 @@ function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.runKnowledgeReview, async (_, payload: unknown) => {
     const input = parseRunKnowledgeReviewInput(payload)
     const runtime = await createKnowledgeReviewRuntimeForRequest()
-    return runtime.run(input)
+    const result = await runtime.run(input)
+    wakeRemoteSyncOutbox()
+    return result
   })
 }
 
@@ -1518,16 +1602,31 @@ function parseInitialTheme(value: string | undefined): 'system' | 'light' | 'dar
   return undefined
 }
 
-app.whenReady().then(() => {
-  registerIpcHandlers()
-  createWindow()
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
+if (hasSingleInstanceLock) {
+  app.on('second-instance', () => {
+    const [window] = BrowserWindow.getAllWindows()
+    if (window) {
+      if (window.isMinimized()) window.restore()
+      window.focus()
     }
   })
-})
+
+  app.whenReady().then(() => {
+    registerIpcHandlers()
+    createWindow()
+    void getRemoteSyncOutboxScheduler()
+      .then((scheduler) => scheduler.start())
+      .catch(() => {
+        console.warn('[remote-sync-outbox] Unable to start the delivery scheduler.')
+      })
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow()
+      }
+    })
+  })
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -1536,5 +1635,6 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  remoteSyncOutboxScheduler?.stop()
   void opencodeProcessManager.stopAll()
 })
