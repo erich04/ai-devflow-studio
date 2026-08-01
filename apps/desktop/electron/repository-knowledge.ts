@@ -8,8 +8,18 @@ import {
   indexKnowledgeSources,
   type KnowledgeChunk,
   type KnowledgeDocument,
+  type KnowledgeDocumentCategory,
+  type KnowledgeEntity,
+  type KnowledgeRelation,
   type KnowledgeSourceFile,
   type LocalProject,
+  type RepositoryKnowledgeSnapshot,
+  type RepositoryKnowledgeWarning,
+} from '@ai-devflow/shared'
+
+export type {
+  RepositoryKnowledgeSnapshot,
+  RepositoryKnowledgeWarning,
 } from '@ai-devflow/shared'
 
 const execFile = promisify(execFileCallback)
@@ -93,21 +103,69 @@ async function readSafeRegularFile(
   }
 }
 
+function documentEntityKind(
+  category: KnowledgeDocumentCategory,
+): KnowledgeEntity['kind'] {
+  if (category === 'adr') return 'decision'
+  if (category === 'skill_rule' || category === 'mcp_rule') return 'skill'
+  return 'standard'
+}
+
 function remapStableKnowledgeIds(index: {
   documents: KnowledgeDocument[]
   chunks: KnowledgeChunk[]
-}): { documents: KnowledgeDocument[]; chunks: KnowledgeChunk[] } {
+}): {
+  documents: KnowledgeDocument[]
+  chunks: KnowledgeChunk[]
+  entities: KnowledgeEntity[]
+  relations: KnowledgeRelation[]
+} {
   const documentIds = new Map(index.documents.map((document) => [
     document.sourcePath,
     `repository-knowledge-document-${pathIdentifier(document.sourcePath)}`,
   ]))
   const chunkCounts = new Map<string, number>()
+  const documents = index.documents.map((document) => ({
+    ...document,
+    id: documentIds.get(document.sourcePath)!,
+  }))
+  const documentEntities: KnowledgeEntity[] = documents.map((document) => ({
+    id: document.id,
+    label: document.title,
+    kind: documentEntityKind(document.category),
+    sourcePath: document.sourcePath,
+  }))
+  const termEntities = new Map<string, KnowledgeEntity>()
+  const relations: KnowledgeRelation[] = []
+  const relationIds = new Set<string>()
+
+  for (const document of documents) {
+    for (const tag of document.tags) {
+      const termId = `repository-knowledge-term-${pathIdentifier(tag)}`
+      if (!termEntities.has(termId)) {
+        termEntities.set(termId, {
+          id: termId,
+          label: tag,
+          kind: 'term',
+          sourcePath: document.sourcePath,
+        })
+      }
+      const relationId = `repository-knowledge-relation-${pathIdentifier(
+        `${document.sourcePath}\0${tag}`,
+      )}`
+      if (relationIds.has(relationId)) continue
+      relationIds.add(relationId)
+      relations.push({
+        id: relationId,
+        source: document.id,
+        target: termId,
+        label: 'defines',
+      })
+    }
+  }
 
   return {
-    documents: index.documents.map((document) => ({
-      ...document,
-      id: documentIds.get(document.sourcePath)!,
-    })),
+    documents,
     chunks: index.chunks.map((chunk) => {
       const chunkNumber = (chunkCounts.get(chunk.sourcePath) ?? 0) + 1
       chunkCounts.set(chunk.sourcePath, chunkNumber)
@@ -118,6 +176,8 @@ function remapStableKnowledgeIds(index: {
         documentId,
       }
     }),
+    entities: [...documentEntities, ...termEntities.values()],
+    relations,
   }
 }
 
@@ -156,16 +216,6 @@ function boundSourcesForChunkLimit(sources: KnowledgeSourceFile[]): {
   return { sources: bounded, truncated }
 }
 
-export type RepositoryKnowledgeWarning =
-  | 'unsafe_path_skipped'
-  | 'path_limit_exceeded'
-  | 'depth_limit_exceeded'
-  | 'file_count_limit_exceeded'
-  | 'file_size_limit_exceeded'
-  | 'total_size_limit_exceeded'
-  | 'character_limit_exceeded'
-  | 'chunk_limit_exceeded'
-
 const WARNING_ORDER: readonly RepositoryKnowledgeWarning[] = [
   'unsafe_path_skipped',
   'path_limit_exceeded',
@@ -176,16 +226,6 @@ const WARNING_ORDER: readonly RepositoryKnowledgeWarning[] = [
   'character_limit_exceeded',
   'chunk_limit_exceeded',
 ]
-
-export type RepositoryKnowledgeSnapshot = {
-  projectId: string
-  contentHash: string
-  documents: KnowledgeDocument[]
-  chunks: KnowledgeChunk[]
-  indexedAt: string
-  truncated: boolean
-  warnings: RepositoryKnowledgeWarning[]
-}
 
 export type RepositoryKnowledgeService = {
   index(project: LocalProject): Promise<RepositoryKnowledgeSnapshot>
@@ -287,6 +327,8 @@ export function createRepositoryKnowledgeService(options: {
         contentHash: `sha256:${contentHash}`,
         documents: remappedIndex.documents,
         chunks: remappedIndex.chunks,
+        entities: remappedIndex.entities,
+        relations: remappedIndex.relations,
         indexedAt,
         truncated: warnings.size > 0,
         warnings: WARNING_ORDER.filter((warning) => warnings.has(warning)),

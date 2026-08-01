@@ -496,6 +496,28 @@ export type KnowledgeChunk = {
   updatedAt: string
 }
 
+export type RepositoryKnowledgeWarning =
+  | 'unsafe_path_skipped'
+  | 'path_limit_exceeded'
+  | 'depth_limit_exceeded'
+  | 'file_count_limit_exceeded'
+  | 'file_size_limit_exceeded'
+  | 'total_size_limit_exceeded'
+  | 'character_limit_exceeded'
+  | 'chunk_limit_exceeded'
+
+export type RepositoryKnowledgeSnapshot = {
+  projectId: string
+  contentHash: string
+  documents: KnowledgeDocument[]
+  chunks: KnowledgeChunk[]
+  entities: KnowledgeEntity[]
+  relations: KnowledgeRelation[]
+  indexedAt: string
+  truncated: boolean
+  warnings: RepositoryKnowledgeWarning[]
+}
+
 export type KnowledgeRetrievalQuery = {
   id: string
   runId: string

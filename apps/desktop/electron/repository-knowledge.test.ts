@@ -5,6 +5,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { LocalProject } from '@ai-devflow/shared'
+import type { RepositoryKnowledgeSnapshot } from '@ai-devflow/shared'
 import { createRepositoryKnowledgeService } from './repository-knowledge'
 
 const execFile = promisify(execFileCallback)
@@ -98,6 +99,42 @@ describe('createRepositoryKnowledgeService', () => {
     expect(first.chunks.map(({ documentId }) => documentId)).toEqual(
       first.documents.map(({ id }) => id),
     )
+  })
+
+  it('keeps duplicate-basename graph entities and tag relations unique and consistently remapped', async () => {
+    const project = await createTrackedRepository({
+      'docs/guide.md': [
+        '---',
+        'tags: [shared, security]',
+        '---',
+        '# Docs Guide',
+      ].join('\n'),
+      'standards/guide.md': [
+        '---',
+        'tags: [shared, quality]',
+        '---',
+        '# Standards Guide',
+      ].join('\n'),
+    })
+    const service = createRepositoryKnowledgeService({ now: () => indexedAt })
+
+    const first = await service.index(project)
+    const second = await service.index(project)
+    const documentIds = new Set(first.documents.map(({ id }) => id))
+    const documentEntities = first.entities.filter(({ kind }) => kind !== 'term')
+    const termEntities = first.entities.filter(({ kind }) => kind === 'term')
+
+    expect(documentEntities.map(({ id }) => id)).toEqual(first.documents.map(({ id }) => id))
+    expect(new Set(first.entities.map(({ id }) => id)).size).toBe(first.entities.length)
+    expect(termEntities.map(({ label }) => label).sort()).toEqual(['quality', 'security', 'shared'])
+    expect(first.relations).toHaveLength(4)
+    expect(new Set(first.relations.map(({ id }) => id)).size).toBe(first.relations.length)
+    expect(first.relations.every(({ source }) => documentIds.has(source))).toBe(true)
+    expect(first.relations.every(({ target }) =>
+      termEntities.some(({ id }) => id === target),
+    )).toBe(true)
+    expect(first.entities).toEqual(second.entities)
+    expect(first.relations).toEqual(second.relations)
   })
 
   it('does not follow a Git-managed Markdown symlink outside the project root', async () => {
@@ -245,6 +282,12 @@ describe('createRepositoryKnowledgeService', () => {
     expect(snapshot.chunks).toHaveLength(4_096)
     expect(snapshot.truncated).toBe(true)
     expect(snapshot.warnings).toEqual(['chunk_limit_exceeded'])
+
+    const changedMarkdown = markdown.replace('Content 4096.', 'Changed beyond indexed chunks.')
+    await writeFile(path.join(project.path, 'many-headings.md'), changedMarkdown)
+    const changed = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    expect(changed.contentHash).not.toBe(snapshot.contentHash)
+    expect(changed.chunks).toEqual(snapshot.chunks)
   })
 
   it('skips a Git index entry whose relative POSIX path exceeds 1024 characters', async () => {
@@ -270,7 +313,7 @@ describe('createRepositoryKnowledgeService', () => {
     })
     const service = createRepositoryKnowledgeService({ now: () => indexedAt })
 
-    const snapshot = await service.index(project)
+    const snapshot: RepositoryKnowledgeSnapshot = await service.index(project)
 
     expect(snapshot).toMatchObject({
       projectId: project.id,
@@ -281,6 +324,7 @@ describe('createRepositoryKnowledgeService', () => {
       warnings: [],
       contentHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
     })
+    expect(JSON.parse(JSON.stringify(snapshot))).toEqual(snapshot)
     await expect(service.index(project)).resolves.toEqual(snapshot)
   })
 })
