@@ -670,6 +670,41 @@ describe('seed Work Request repository', () => {
     })
   })
 
+  it('never binds a claim to an existing or already claimed canonical Run ID', async () => {
+    const harness = createHarness()
+    const first = await createOpenRequest(harness, { idempotencyKey: 'create-first' })
+    const second = await createOpenRequest(harness, { idempotencyKey: 'create-second' })
+    const third = await createOpenRequest(harness, { idempotencyKey: 'create-third' })
+    if (!first.ok || !second.ok || !third.ok) throw new Error('fixture create failed')
+
+    harness.canonicalRuns.add('org-a:project-a:run-existing')
+    await expect(harness.repository.claimWorkRequest({
+      workRequestId: first.workRequest.id,
+      expectedVersion: 1,
+      runId: 'run-existing',
+      idempotencyKey: 'claim-existing',
+    }, desktopPrincipal)).resolves.toMatchObject({
+      ok: false,
+      outcomeCode: 'claim_conflict',
+    })
+
+    await expect(harness.repository.claimWorkRequest({
+      workRequestId: second.workRequest.id,
+      expectedVersion: 1,
+      runId: 'run-shared',
+      idempotencyKey: 'claim-shared-first',
+    }, desktopPrincipal)).resolves.toMatchObject({ ok: true })
+    await expect(harness.repository.claimWorkRequest({
+      workRequestId: third.workRequest.id,
+      expectedVersion: 1,
+      runId: 'run-shared',
+      idempotencyKey: 'claim-shared-second',
+    }, desktopPrincipal)).resolves.toMatchObject({
+      ok: false,
+      outcomeCode: 'claim_conflict',
+    })
+  })
+
   it('keeps only safe identifiers and fingerprints in internal audit data', async () => {
     const harness = createHarness()
     await createOpenRequest(harness, {

@@ -550,6 +550,21 @@ export function createSeedWorkRequestRepository(
       result = rejection('stale_version')
     } else if (record.status !== 'open') {
       result = rejection('claim_conflict')
+    } else if (
+      (await options.canonicalProjectionExists(
+        input.runId,
+        record.organizationId,
+        record.projectId,
+      )) ||
+      [...records.values()].some(
+        (candidate) =>
+          candidate.id !== record.id &&
+          candidate.organizationId === record.organizationId &&
+          candidate.projectId === record.projectId &&
+          candidate.claim?.runId === input.runId,
+      )
+    ) {
+      result = rejection('claim_conflict')
     } else {
       record.status = 'claim_pending'
       record.version += 1
