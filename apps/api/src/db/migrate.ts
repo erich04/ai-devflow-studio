@@ -26,6 +26,11 @@ export type TeamMigrationRunResult = {
 
 export const teamMigrationCatalog = [
   { version: 7, name: '0001_initial', fileName: '0001_initial.sql' },
+  {
+    version: 8,
+    name: '0008_v14_work_authority',
+    fileName: '0008_v14_work_authority.sql',
+  },
 ] as const
 
 export function splitSqlStatements(sql: string): string[] {

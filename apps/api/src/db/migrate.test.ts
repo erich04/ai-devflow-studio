@@ -65,15 +65,22 @@ describe('team database migration runner', () => {
     ])
   })
 
-  it('catalogs the frozen initial migration as the v7 baseline', async () => {
+  it('catalogs the frozen v7 baseline before the V1.4 migration', async () => {
     expect(teamMigrationCatalog).toEqual([
       { version: 7, name: '0001_initial', fileName: '0001_initial.sql' },
+      {
+        version: 8,
+        name: '0008_v14_work_authority',
+        fileName: '0008_v14_work_authority.sql',
+      },
     ])
 
-    const [baseline] = await readTeamMigrationCatalog()
+    const [baseline, v14] = await readTeamMigrationCatalog()
     expect(baseline).toMatchObject({ version: 7, name: '0001_initial' })
     expect(baseline?.sql).toMatch(/^BEGIN;/)
     expect(migrationChecksum(baseline?.sql ?? '')).toMatch(/^[a-f0-9]{64}$/)
+    expect(v14).toMatchObject({ version: 8, name: '0008_v14_work_authority' })
+    expect(v14?.sql).not.toMatch(/^BEGIN;/)
   })
 
   it('runs a fresh baseline inside one checked-out client and filters its outer transaction', async () => {
