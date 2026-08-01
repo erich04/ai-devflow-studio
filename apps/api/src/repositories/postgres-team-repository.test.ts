@@ -582,6 +582,11 @@ describe('Postgres team repository', () => {
     expect(overview.enforcementPolicies.organizationPolicy.organizationId).toBe('org-other')
     expect(db.queries.length).toBeGreaterThan(0)
     expect(db.queries.every((query) => query.params?.[0] === 'org-other')).toBe(true)
+    const eventQuery = db.queries.find((query) => /FROM\s+agent_events\b/.test(query.sql))
+    expect(eventQuery?.sql).toMatch(
+      /JOIN\s+workflow_runs\s+ON\s+workflow_runs\.id\s*=\s*agent_events\.run_id/,
+    )
+    expect(eventQuery?.sql).toMatch(/workflow_runs\.organization_id\s*=\s*\$1/)
   })
 
   it('maps workflow runs with nodes, edges, artifacts, and events', async () => {

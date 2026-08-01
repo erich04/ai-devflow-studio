@@ -1134,10 +1134,11 @@ export function createPostgresTeamRepository(
       ),
       db.query<AgentEventRow>(
         `
-          SELECT *
+          SELECT agent_events.*
           FROM agent_events
-          WHERE organization_id = $1
-          ORDER BY run_id, sequence ASC
+          JOIN workflow_runs ON workflow_runs.id = agent_events.run_id
+          WHERE workflow_runs.organization_id = $1
+          ORDER BY agent_events.run_id, agent_events.sequence ASC
         `,
         [context.organizationId],
       ),
