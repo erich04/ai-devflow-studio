@@ -9,6 +9,7 @@ import {
   type RemoteCodingAgentSummary,
   type RemoteRunDeleteResult,
   type RemoteRunSummary,
+  type RemoteSyncFailureCode,
   type RemoteSyncUploadResult,
   type RemoteTeamSnapshot,
   type RemoteTestEvidenceSummary,
@@ -24,6 +25,30 @@ import {
 import type { LoadRemoteSnapshotInput } from './ipc-contract'
 
 type Fetcher = typeof fetch
+
+export type RemoteSyncErrorCode = RemoteSyncFailureCode
+
+export class RemoteSyncHttpError extends Error {
+  readonly status: number | null
+  readonly code: RemoteSyncErrorCode
+  readonly path: string
+  readonly retryable: boolean
+
+  constructor(input: {
+    status: number | null
+    code: RemoteSyncErrorCode
+    path: string
+    retryable: boolean
+  }) {
+    const statusLabel = input.status === null ? 'unavailable' : `HTTP ${input.status}`
+    super(`Remote sync request failed (${statusLabel}, ${input.code}).`)
+    this.name = 'RemoteSyncHttpError'
+    this.status = input.status
+    this.code = input.code
+    this.path = input.path
+    this.retryable = input.retryable
+  }
+}
 
 export type RemoteSyncClientOptions = {
   apiBaseUrl?: string
@@ -168,21 +193,90 @@ function headersForSnapshotRequest(
   return { ...sessionHeaders, 'x-devflow-organization-id': input.organizationId }
 }
 
-async function readJson<T>(response: Response, path: string): Promise<T> {
-  if (!response.ok) {
-    let message = `DevFlow API ${path} failed with ${response.status}`
-    try {
-      const body = await response.clone().json() as { message?: unknown }
-      if (typeof body.message === 'string' && body.message.trim()) {
-        message = body.message
-      }
-    } catch {
-      // Keep the status-based fallback when the API does not return JSON.
-    }
-    throw new Error(message)
+const CANONICAL_RUN_REQUIRED_MESSAGE =
+  /^Canonical Run Summary is required before evidence sync: [A-Za-z0-9][A-Za-z0-9._:-]* \([A-Za-z0-9][A-Za-z0-9._:-]*\)$/
+
+function classifyHttpError(status: number): RemoteSyncErrorCode {
+  if (status >= 500) {
+    return 'service_unavailable'
   }
 
-  return response.json() as Promise<T>
+  switch (status) {
+    case 400:
+      return 'bad_request'
+    case 401:
+      return 'unauthorized'
+    case 403:
+      return 'forbidden'
+    case 404:
+      return 'not_found'
+    case 408:
+      return 'request_timeout'
+    case 409:
+      return 'conflict'
+    case 429:
+      return 'rate_limited'
+    default:
+      return 'remote_error'
+  }
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500
+}
+
+async function readJson<T>(response: Response, path: string): Promise<T> {
+  if (!response.ok) {
+    let code = classifyHttpError(response.status)
+    if (response.status === 409) {
+      try {
+        const body = await response.clone().json() as { message?: unknown }
+        if (
+          typeof body.message === 'string' &&
+          CANONICAL_RUN_REQUIRED_MESSAGE.test(body.message)
+        ) {
+          code = 'canonical_run_required'
+        }
+      } catch {
+        // Response bodies are untrusted and never copied into the local error.
+      }
+    }
+    throw new RemoteSyncHttpError({
+      status: response.status,
+      code,
+      path,
+      retryable: isRetryableHttpStatus(response.status),
+    })
+  }
+
+  try {
+    return (await response.json()) as T
+  } catch {
+    throw new RemoteSyncHttpError({
+      status: response.status,
+      code: 'invalid_response',
+      path,
+      retryable: true,
+    })
+  }
+}
+
+async function fetchRemote(
+  fetcher: Fetcher,
+  url: string,
+  init: RequestInit,
+  path: string,
+): Promise<Response> {
+  try {
+    return await fetcher(url, init)
+  } catch {
+    throw new RemoteSyncHttpError({
+      status: null,
+      code: 'remote_unavailable',
+      path,
+      retryable: true,
+    })
+  }
 }
 
 async function postJson<T>(
@@ -192,13 +286,54 @@ async function postJson<T>(
   path: string,
   headers: Record<string, string>,
 ): Promise<T> {
-  const response = await fetcher(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  })
+  const response = await fetchRemote(
+    fetcher,
+    url,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    },
+    path,
+  )
 
   return readJson<T>(response, path)
+}
+
+async function postRemoteSyncUpload(
+  fetcher: Fetcher,
+  url: string,
+  body: unknown,
+  path: string,
+  headers: Record<string, string>,
+): Promise<RemoteSyncUploadResult> {
+  const response = await fetchRemote(
+    fetcher,
+    url,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    },
+    path,
+  )
+  const result = await readJson<unknown>(response, path)
+  if (
+    typeof result !== 'object' ||
+    result === null ||
+    typeof Reflect.get(result, 'accepted') !== 'boolean' ||
+    typeof Reflect.get(result, 'syncedAt') !== 'string' ||
+    typeof Reflect.get(result, 'message') !== 'string'
+  ) {
+    throw new RemoteSyncHttpError({
+      status: response.status,
+      code: 'invalid_response',
+      path,
+      retryable: true,
+    })
+  }
+
+  return result as RemoteSyncUploadResult
 }
 
 export function createRemoteSyncClient(
@@ -227,12 +362,18 @@ export function createRemoteSyncClient(
         ? tokenGetHeaders(authToken)
         : jsonGetHeaders(headersForSnapshotRequest(requireSessionHeaders(sessionHeaders), input))
       const [overview, runsBundle] = await Promise.all([
-        fetcher(buildUrl(apiBaseUrl, overviewPath, input), {
-          headers,
-        }).then((response) => readJson<RemoteTeamOverviewResponse>(response, overviewPath)),
-        fetcher(buildUrl(apiBaseUrl, runsPath, input), {
-          headers,
-        }).then((response) => readJson<RemoteRunsBundleResponse>(response, runsPath)),
+        fetchRemote(
+          fetcher,
+          buildUrl(apiBaseUrl, overviewPath, input),
+          { headers },
+          overviewPath,
+        ).then((response) => readJson<RemoteTeamOverviewResponse>(response, overviewPath)),
+        fetchRemote(
+          fetcher,
+          buildUrl(apiBaseUrl, runsPath, input),
+          { headers },
+          runsPath,
+        ).then((response) => readJson<RemoteRunsBundleResponse>(response, runsPath)),
       ])
 
       return {
@@ -249,7 +390,7 @@ export function createRemoteSyncClient(
     },
 
     async uploadRunSummary(summary) {
-      return postJson<RemoteSyncUploadResult>(
+      return postRemoteSyncUpload(
         fetcher,
         buildUrl(apiBaseUrl, '/api/sync/run-summary'),
         summary,
@@ -260,10 +401,16 @@ export function createRemoteSyncClient(
 
     async deleteRun(input) {
       const path = `/api/runs/${encodeURIComponent(input.runId)}`
-      const response = await fetcher(buildUrl(apiBaseUrl, path), {
-        method: 'DELETE',
-        headers: requireGetHeaders({ authToken, sessionHeaders }),
-      })
+      const safePath = '/api/runs/:runId'
+      const response = await fetchRemote(
+        fetcher,
+        buildUrl(apiBaseUrl, path),
+        {
+          method: 'DELETE',
+          headers: requireGetHeaders({ authToken, sessionHeaders }),
+        },
+        safePath,
+      )
 
       if (response.status === 404) {
         return {
@@ -273,11 +420,11 @@ export function createRemoteSyncClient(
         }
       }
 
-      return readJson<RemoteRunDeleteResult>(response, path)
+      return readJson<RemoteRunDeleteResult>(response, safePath)
     },
 
     async uploadTestEvidenceSummary(summary) {
-      return postJson<RemoteSyncUploadResult>(
+      return postRemoteSyncUpload(
         fetcher,
         buildUrl(apiBaseUrl, '/api/sync/test-evidence-summary'),
         summary,
@@ -287,7 +434,7 @@ export function createRemoteSyncClient(
     },
 
     async uploadAgentReviewSummary(summary) {
-      return postJson<RemoteSyncUploadResult>(
+      return postRemoteSyncUpload(
         fetcher,
         buildUrl(apiBaseUrl, '/api/sync/agent-review-summary'),
         summary,
@@ -297,7 +444,7 @@ export function createRemoteSyncClient(
     },
 
     async uploadCodingAgentSummary(summary) {
-      return postJson<RemoteSyncUploadResult>(
+      return postRemoteSyncUpload(
         fetcher,
         buildUrl(apiBaseUrl, '/api/sync/coding-agent-summary'),
         summary,

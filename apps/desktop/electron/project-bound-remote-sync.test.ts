@@ -8,7 +8,7 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
-import type { RemoteSyncClient } from './remote-sync'
+import { RemoteSyncHttpError, type RemoteSyncClient } from './remote-sync'
 import { createProjectBoundRemoteSync } from './project-bound-remote-sync'
 
 const pairingCredential: DesktopPairingCredential = {
@@ -196,9 +196,12 @@ describe('project-bound Electron remote sync', () => {
       .fn()
       .mockImplementationOnce(async () => {
         uploadOrder.push('evidence')
-        throw new Error(
-          'Canonical Run Summary is required before evidence sync: run-local-1 (team-project-1)',
-        )
+        throw new RemoteSyncHttpError({
+          status: 409,
+          code: 'canonical_run_required',
+          path: '/api/sync/test-evidence-summary',
+          retryable: false,
+        })
       })
       .mockImplementationOnce(async () => {
         uploadOrder.push('evidence')
@@ -240,9 +243,12 @@ describe('project-bound Electron remote sync', () => {
       message: 'accepted',
     }
     const canonicalMissing = () =>
-      new Error(
-        'Canonical Run Summary is required before evidence sync: run-local-1 (team-project-1)',
-      )
+      new RemoteSyncHttpError({
+        status: 409,
+        code: 'canonical_run_required',
+        path: '/api/sync/child-summary',
+        retryable: false,
+      })
     const uploadRunSummary = vi.fn(async () => acceptedUpload)
     const uploadAgentReviewSummary = vi
       .fn()
@@ -280,7 +286,12 @@ describe('project-bound Electron remote sync', () => {
   it('rethrows non-canonical dependent upload errors without a Run fallback', async () => {
     const uploadRunSummary = vi.fn()
     const uploadTestEvidenceSummary = vi.fn(async () => {
-      throw new Error('Project access required')
+      throw new RemoteSyncHttpError({
+        status: 403,
+        code: 'forbidden',
+        path: '/api/sync/test-evidence-summary',
+        retryable: false,
+      })
     })
     const boundRemoteSync = createProjectBoundRemoteSync({
       remoteSync: {
@@ -296,21 +307,59 @@ describe('project-bound Electron remote sync', () => {
 
     await expect(
       boundRemoteSync.uploadCanonicalTestEvidenceSummary(testEvidence.id),
-    ).rejects.toThrow('Project access required')
+    ).rejects.toMatchObject({ status: 403, code: 'forbidden', retryable: false })
     expect(uploadTestEvidenceSummary).toHaveBeenCalledTimes(1)
+    expect(uploadRunSummary).not.toHaveBeenCalled()
+  })
+
+  it('does not trust a canonical error code without the authoritative conflict status', async () => {
+    const uploadRunSummary = vi.fn(async () => ({
+      accepted: true,
+      syncedAt: '2026-06-20T00:06:00.000Z',
+      message: 'accepted',
+    }))
+    const uploadTestEvidenceSummary = vi.fn(async () => {
+      throw new RemoteSyncHttpError({
+        status: 400,
+        code: 'canonical_run_required',
+        path: '/api/sync/test-evidence-summary',
+        retryable: false,
+      })
+    })
+    const boundRemoteSync = createProjectBoundRemoteSync({
+      remoteSync: {
+        uploadRunSummary,
+        uploadTestEvidenceSummary,
+      } as unknown as RemoteSyncClient,
+      credentialSource: {
+        getDesktopPairingCredential: async () => pairingCredential,
+        listRuns: async () => [localRun],
+        listTestEvidence: async () => [testEvidence],
+      },
+    })
+
+    await expect(
+      boundRemoteSync.uploadCanonicalTestEvidenceSummary(testEvidence.id),
+    ).rejects.toMatchObject({ status: 400, code: 'canonical_run_required' })
     expect(uploadRunSummary).not.toHaveBeenCalled()
   })
 
   it('fails closed when the canonical fallback detects a cross-owner Run collision', async () => {
     const uploadRunSummary = vi.fn(async () => {
-      throw new Error(
-        'Remote Run Summary conflicts with canonical ownership or is stale: run-local-1 (team-project-1)',
-      )
+      throw new RemoteSyncHttpError({
+        status: 409,
+        code: 'conflict',
+        path: '/api/sync/run-summary',
+        retryable: false,
+      })
     })
     const uploadAgentReviewSummary = vi.fn(async () => {
-      throw new Error(
-        'Canonical Run Summary is required before evidence sync: run-local-1 (team-project-1)',
-      )
+      throw new RemoteSyncHttpError({
+        status: 409,
+        code: 'canonical_run_required',
+        path: '/api/sync/agent-review-summary',
+        retryable: false,
+      })
     })
     const boundRemoteSync = createProjectBoundRemoteSync({
       remoteSync: {
@@ -324,17 +373,21 @@ describe('project-bound Electron remote sync', () => {
       },
     })
 
-    await expect(boundRemoteSync.uploadAgentReviewSummary(reviewSummary)).rejects.toThrow(
-      'Remote Run Summary conflicts with canonical ownership or is stale',
-    )
+    await expect(boundRemoteSync.uploadAgentReviewSummary(reviewSummary)).rejects.toMatchObject({
+      status: 409,
+      code: 'conflict',
+    })
     expect(uploadAgentReviewSummary).toHaveBeenCalledTimes(1)
     expect(uploadRunSummary).toHaveBeenCalledTimes(1)
   })
 
   it('retries a dependent summary only once when canonical-missing persists', async () => {
-    const canonicalMissing = new Error(
-      'Canonical Run Summary is required before evidence sync: run-local-1 (team-project-1)',
-    )
+    const canonicalMissing = new RemoteSyncHttpError({
+      status: 409,
+      code: 'canonical_run_required',
+      path: '/api/sync/coding-agent-summary',
+      retryable: false,
+    })
     const uploadRunSummary = vi.fn(async () => ({
       accepted: true,
       syncedAt: '2026-06-20T00:06:00.000Z',
@@ -355,9 +408,10 @@ describe('project-bound Electron remote sync', () => {
       },
     })
 
-    await expect(boundRemoteSync.uploadCodingAgentSummary(codingSummary)).rejects.toThrow(
-      'Canonical Run Summary is required before evidence sync',
-    )
+    await expect(boundRemoteSync.uploadCodingAgentSummary(codingSummary)).rejects.toMatchObject({
+      status: 409,
+      code: 'canonical_run_required',
+    })
     expect(uploadCodingAgentSummary).toHaveBeenCalledTimes(2)
     expect(uploadRunSummary).toHaveBeenCalledTimes(1)
   })

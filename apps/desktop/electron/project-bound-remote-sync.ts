@@ -7,7 +7,7 @@ import {
   type TestEvidence,
   type WorkflowRun,
 } from '@ai-devflow/shared'
-import type { RemoteSyncClient } from './remote-sync'
+import { RemoteSyncHttpError, type RemoteSyncClient } from './remote-sync'
 
 type PairingCredentialSource = {
   getDesktopPairingCredential(): Promise<DesktopPairingCredential | null>
@@ -46,8 +46,9 @@ export function createProjectBoundRemoteSync(input: {
 }): ProjectBoundRemoteSync {
   function isCanonicalRunRequiredError(error: unknown): boolean {
     return (
-      error instanceof Error &&
-      /^Canonical Run Summary is required before evidence sync(?::|$)/.test(error.message)
+      error instanceof RemoteSyncHttpError &&
+      error.status === 409 &&
+      error.code === 'canonical_run_required'
     )
   }
 

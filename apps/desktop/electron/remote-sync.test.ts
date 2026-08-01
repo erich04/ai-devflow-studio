@@ -7,7 +7,11 @@ import type {
   RemoteRunSummary,
   RemoteTestEvidenceSummary,
 } from '@ai-devflow/shared'
-import { createRemoteSyncClient, resolveRemoteApiBaseUrl } from './remote-sync'
+import {
+  createRemoteSyncClient,
+  RemoteSyncHttpError,
+  resolveRemoteApiBaseUrl,
+} from './remote-sync'
 
 const overview = {
   projects: [
@@ -262,9 +266,12 @@ describe('Electron remote sync client', () => {
       authToken: 'expired_desktop_token',
     })
 
-    await expect(client.uploadRunSummary(runSummary)).rejects.toThrow(
-      'Desktop pairing expired. Reconnect DevFlow Studio.',
-    )
+    await expect(client.uploadRunSummary(runSummary)).rejects.toMatchObject({
+      status: 401,
+      code: 'unauthorized',
+      path: '/api/sync/run-summary',
+      retryable: false,
+    })
     expect(fetcher).toHaveBeenCalledWith('http://api.local/api/sync/run-summary', {
       method: 'POST',
       headers: {
@@ -273,6 +280,293 @@ describe('Electron remote sync client', () => {
         'content-type': 'application/json',
       },
       body: JSON.stringify(runSummary),
+    })
+  })
+
+  it('reports HTTP failures with safe structured metadata instead of the remote response message', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          error: 'hostile-code',
+          message:
+            'Bearer desktop-secret API_KEY=provider-secret failed at /Users/alice/private/repo',
+        }),
+        {
+          status: 403,
+          headers: { 'set-cookie': 'session=server-cookie-secret' },
+        },
+      ),
+    )
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'desktop-secret',
+    })
+
+    const error = await client.uploadRunSummary(runSummary).catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(RemoteSyncHttpError)
+    expect(error).toMatchObject({
+      status: 403,
+      code: 'forbidden',
+      path: '/api/sync/run-summary',
+      retryable: false,
+    })
+    expect(String(error)).toBe('RemoteSyncHttpError: Remote sync request failed (HTTP 403, forbidden).')
+    expect(String(error)).not.toMatch(
+      /desktop-secret|provider-secret|server-cookie-secret|\/Users\/alice|Bearer|API_KEY/,
+    )
+  })
+
+  it('classifies bad requests from status without trusting the body error code', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(JSON.stringify({ error: 'hostile-code', message: 'bad secret body' }), {
+          status: 400,
+        }),
+      ),
+      authToken: 'desktop-secret',
+    })
+
+    await expect(client.uploadRunSummary(runSummary)).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+      retryable: false,
+    })
+  })
+
+  it('classifies missing remote resources from status without copying the response body', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(JSON.stringify({ message: '/Users/alice/private API_KEY=secret' }), {
+          status: 404,
+        }),
+      ),
+      authToken: 'desktop-secret',
+    })
+
+    const error = await client.uploadRunSummary(runSummary).catch((reason: unknown) => reason)
+    expect(error).toMatchObject({ status: 404, code: 'not_found', retryable: false })
+    expect(String(error)).not.toMatch(/\/Users\/alice|API_KEY|secret/)
+  })
+
+  it('reports network failures as safe retryable unavailable errors', async () => {
+    const fetcher = vi.fn(async () => {
+      throw new Error(
+        'fetch Bearer desktop-secret failed for /Users/alice/private/repo?api_key=provider-secret',
+      )
+    })
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'desktop-secret',
+    })
+
+    const error = await client.uploadRunSummary(runSummary).catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(RemoteSyncHttpError)
+    expect(error).toMatchObject({
+      status: null,
+      code: 'remote_unavailable',
+      path: '/api/sync/run-summary',
+      retryable: true,
+    })
+    expect(String(error)).toBe(
+      'RemoteSyncHttpError: Remote sync request failed (unavailable, remote_unavailable).',
+    )
+    expect(String(error)).not.toMatch(/desktop-secret|provider-secret|\/Users\/alice|Bearer|api_key/)
+  })
+
+  it('classifies transient HTTP failures as retryable without trusting their body', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            error: 'service_unavailable',
+            message: 'upstream at /Users/alice/private Bearer server-secret is down',
+          }),
+          { status: 503 },
+        ),
+      ),
+      authToken: 'desktop-secret',
+    })
+
+    await expect(client.uploadTestEvidenceSummary(evidenceSummary)).rejects.toMatchObject({
+      status: 503,
+      code: 'service_unavailable',
+      path: '/api/sync/test-evidence-summary',
+      retryable: true,
+    })
+  })
+
+  it.each([500, 501, 502, 503, 504, 599])(
+    'classifies HTTP %i as a retryable service failure',
+    async (status) => {
+      const client = createRemoteSyncClient({
+        apiBaseUrl: 'http://api.local',
+        fetcher: vi.fn(async () => new Response('non-json body secret', { status })),
+        authToken: 'desktop-secret',
+      })
+
+      await expect(client.uploadRunSummary(runSummary)).rejects.toMatchObject({
+        status,
+        code: 'service_unavailable',
+        retryable: true,
+      })
+    },
+  )
+
+  it('classifies rate limiting as retryable from the HTTP status alone', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(JSON.stringify({ error: 'hostile-code', message: 'try later' }), {
+          status: 429,
+        }),
+      ),
+      authToken: 'desktop-secret',
+    })
+
+    await expect(client.uploadAgentReviewSummary(agentReviewSummary)).rejects.toMatchObject({
+      status: 429,
+      code: 'rate_limited',
+      path: '/api/sync/agent-review-summary',
+      retryable: true,
+    })
+  })
+
+  it('classifies HTTP request timeouts as retryable', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () => new Response('upstream timeout secret', { status: 408 })),
+      authToken: 'desktop-secret',
+    })
+
+    await expect(client.uploadRunSummary(runSummary)).rejects.toMatchObject({
+      status: 408,
+      code: 'request_timeout',
+      retryable: true,
+    })
+  })
+
+  it('classifies only the canonical-missing conflict needed for child-first recovery', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            error: 'conflict',
+            message:
+              'Canonical Run Summary is required before evidence sync: run-private (project-private)',
+          }),
+          { status: 409 },
+        ),
+      ),
+      authToken: 'desktop-secret',
+    })
+
+    const error = await client
+      .uploadTestEvidenceSummary(evidenceSummary)
+      .catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({
+      status: 409,
+      code: 'canonical_run_required',
+      path: '/api/sync/test-evidence-summary',
+      retryable: false,
+    })
+    expect(String(error)).not.toMatch(/run-private|project-private/)
+  })
+
+  it('keeps non-canonical conflicts terminal even when their message resembles recovery text', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            error: 'conflict',
+            message:
+              'Canonical Run Summary is required before evidence sync: attacker-controlled',
+          }),
+          { status: 409 },
+        ),
+      ),
+      authToken: 'desktop-secret',
+    })
+
+    await expect(client.uploadCodingAgentSummary(codingAgentSummary)).rejects.toMatchObject({
+      status: 409,
+      code: 'conflict',
+      path: '/api/sync/coding-agent-summary',
+      retryable: false,
+    })
+  })
+
+  it('maps a malformed successful response to a safe retryable invalid-response error', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response('Bearer body-secret /Users/alice/private API_KEY=provider-secret', {
+          status: 202,
+        }),
+      ),
+      authToken: 'desktop-secret',
+    })
+
+    const error = await client.uploadRunSummary(runSummary).catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(RemoteSyncHttpError)
+    expect(error).toMatchObject({
+      status: 202,
+      code: 'invalid_response',
+      path: '/api/sync/run-summary',
+      retryable: true,
+    })
+    expect(String(error)).not.toMatch(/body-secret|provider-secret|\/Users\/alice|Bearer|API_KEY/)
+  })
+
+  it('rejects malformed JSON upload results through the shared Run and child upload path', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () => new Response(JSON.stringify({}), { status: 202 })),
+      authToken: 'desktop-secret',
+    })
+
+    await expect(client.uploadRunSummary(runSummary)).rejects.toMatchObject({
+      status: 202,
+      code: 'invalid_response',
+      path: '/api/sync/run-summary',
+      retryable: true,
+    })
+    await expect(client.uploadTestEvidenceSummary(evidenceSummary)).rejects.toMatchObject({
+      status: 202,
+      code: 'invalid_response',
+      path: '/api/sync/test-evidence-summary',
+      retryable: true,
+    })
+  })
+
+  it('uses the same safe unavailable error for snapshot GET failures', async () => {
+    const fetcher = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+      if (String(input).includes('/api/team/overview')) {
+        throw new Error('request failed with Cookie=session-secret at C:\\Users\\alice\\repo')
+      }
+      return new Response(JSON.stringify(runsBundle), { status: 200 })
+    })
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'desktop-secret',
+    })
+
+    await expect(client.loadRemoteSnapshot()).rejects.toMatchObject({
+      status: null,
+      code: 'remote_unavailable',
+      path: '/api/team/overview',
+      retryable: true,
     })
   })
 
@@ -385,6 +679,29 @@ describe('Electron remote sync client', () => {
         authorization: 'Bearer devflow_desktop_token_123',
       },
     })
+  })
+
+  it('reports delete network failures without exposing the requested Run ID', async () => {
+    const fetcher = vi.fn(async () => {
+      throw new Error('network failed with Bearer desktop-secret')
+    })
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'desktop-secret',
+    })
+
+    const error = await client
+      .deleteRun({ runId: 'run-secret-customer-name' })
+      .catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({
+      status: null,
+      code: 'remote_unavailable',
+      path: '/api/runs/:runId',
+      retryable: true,
+    })
+    expect(String(error)).not.toContain('run-secret-customer-name')
   })
 
   it('submits Gate overrides using the authenticated session without renderer actor overrides', async () => {
