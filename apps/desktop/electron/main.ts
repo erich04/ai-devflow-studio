@@ -265,7 +265,6 @@ async function createCodingRuntimeForRequest() {
   return createCodingRuntime({
     store,
     engine: createCodingEngineAdapterFromEnv(process.env),
-    remoteSync,
     budgetGuard: createRuntimeBudgetGuard(remoteSync),
     completeWorkflowBuild: async ({ runId, nodeId, codingRunId, diffId, now }) => {
       const existingEvents = await store.listEvents(runId)
@@ -334,7 +333,6 @@ async function createKnowledgeReviewRuntimeForRequest() {
       }),
     resolveProvider: (providerId) => resolveAgentProvider(store, providerId),
     budgetGuard: createKnowledgeReviewRuntimeBudgetGuard(remoteSync),
-    uploadAgentReviewSummary: (summary) => remoteSync.uploadAgentReviewSummary(summary),
   })
 }
 

@@ -16,7 +16,6 @@ import type {
   DependencyBootstrapEvidence,
   LocalProject,
   ManagedCodingWorkspace,
-  RemoteCodingAgentSummary,
   RemediationPlan,
   RetryAttempt,
   TestEvidence,
@@ -43,7 +42,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine: createFakeCodingEngineAdapter(),
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-1'),
       now: fixedNow('2026-06-17T00:00:00.000Z'),
@@ -79,7 +77,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine,
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       createWorkspace,
       idGenerator: fixedIds('coding-run-budget-unavailable'),
       now: fixedNow('2026-07-31T00:00:00.000Z'),
@@ -128,7 +125,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine: createFakeCodingEngineAdapter(),
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-2'),
       now: fixedNow('2026-06-17T00:00:00.000Z'),
@@ -165,7 +161,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine,
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       createWorkspace,
     })
 
@@ -208,7 +203,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine,
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       createWorkspace,
     })
 
@@ -270,7 +264,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine,
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       createWorkspace,
     })
 
@@ -306,7 +299,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine: createFakeCodingEngineAdapter(),
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-failed-build-retry'),
       now: fixedNow('2026-06-17T00:00:00.000Z'),
@@ -348,7 +340,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine,
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-budget'),
       now: fixedNow('2026-06-20T00:00:00.000Z'),
@@ -393,7 +384,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine,
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       publisher: {
         publishRunStatus,
         publishEvent: vi.fn(),
@@ -488,7 +478,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine,
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-approved-budget'),
       now: fixedNow('2026-06-21T00:00:00.000Z'),
@@ -537,7 +526,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine: createFakeCodingEngineAdapter(),
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-1'),
       now: fixedNow('2026-06-17T00:00:00.000Z'),
@@ -578,7 +566,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine: createFakeCodingEngineAdapter(),
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-1'),
       now: fixedNow('2026-06-17T00:00:00.000Z'),
@@ -613,7 +600,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine: createFakeCodingEngineAdapter(),
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('retry-1', 'coding-run-1'),
       now: fixedNow('2026-06-18T12:00:00.000Z'),
@@ -665,7 +651,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine,
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       createWorkspace,
     })
 
@@ -704,7 +689,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine: createFakeCodingEngineAdapter(),
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       publisher,
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-1'),
@@ -770,7 +754,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine,
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       publisher,
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-redaction'),
@@ -808,7 +791,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine: createFakeCodingEngineAdapter(),
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       schedulePermissionTimeout: (_request, callback) => {
         expire = callback
       },
@@ -863,7 +845,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine,
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       scheduleRunTimeout: (_codingRun, callback) => {
         expireRun = callback
       },
@@ -896,17 +877,12 @@ describe('CodingRuntime', () => {
     expect(store.codingEvents.map((event) => event.kind)).toContain('cleanup')
   })
 
-  it('archives diff and bootstrap evidence and uploads a redacted summary after approval', async () => {
+  it('archives terminal Coding evidence without directly uploading a summary after approval', async () => {
     const repo = await gitRepo()
     const store = new MemoryCodingStore({
       projects: [project(repo)],
       runs: [buildRun()],
     })
-    const uploadCodingAgentSummary = vi.fn(async () => ({
-      accepted: true,
-      syncedAt: '2026-06-17T00:02:00.000Z',
-      message: 'accepted',
-    }))
     const runTestCommand = vi.fn(async ({ cwd }: { cwd: string }) => ({
       status: 'failed' as const,
       exitCode: 1,
@@ -922,16 +898,18 @@ describe('CodingRuntime', () => {
       )
       expect(store.diffArtifacts.find((candidate) => candidate.id === input.diffId)).toBeDefined()
     })
-    const runtime = createCodingRuntime({
+    const legacyDirectUpload = vi.fn()
+    const runtimeDependencies = {
       store,
       engine: createFakeCodingEngineAdapter(),
-      remoteSync: { uploadCodingAgentSummary },
+      remoteSync: { uploadCodingAgentSummary: legacyDirectUpload },
       completeWorkflowBuild,
       runTestCommand,
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-1', 'decision-1', 'evidence-1'),
       now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:01:00.000Z'),
-    })
+    }
+    const runtime = createCodingRuntime(runtimeDependencies)
     const started = await runtime.runCodingAgent({
       runId: 'run-1',
       nodeId: 'node-build',
@@ -981,17 +959,7 @@ describe('CodingRuntime', () => {
       'Test evidence failed: Coding worktree tests failed in <workspace>.',
     )
     expect(store.codingEvents.map((event) => event.kind)).toContain('test')
-    expect(uploadCodingAgentSummary).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: started.codingRun.id,
-        changedPaths: ['devflow-fake-change.txt'],
-        redacted: true,
-      }),
-    )
-    expect(JSON.stringify(uploadCodingAgentSummary.mock.calls)).not.toContain(
-      store.workspaces[0]!.worktreePath,
-    )
-    expect(JSON.stringify(uploadCodingAgentSummary.mock.calls)).not.toContain('super-secret-token')
+    expect(legacyDirectUpload).not.toHaveBeenCalled()
     expect(completeWorkflowBuild).toHaveBeenCalledWith({
       runId: 'run-1',
       nodeId: 'node-build',
@@ -1007,14 +975,12 @@ describe('CodingRuntime', () => {
       projects: [project(repo)],
       runs: [buildRun()],
     })
-    const uploadCodingAgentSummary = vi.fn()
     const completeWorkflowBuild = vi.fn(async () => {
       throw new Error('not_current_node')
     })
     const runtime = createCodingRuntime({
       store,
       engine: createFakeCodingEngineAdapter(),
-      remoteSync: { uploadCodingAgentSummary },
       completeWorkflowBuild,
       runTestCommand: async () => ({
         status: 'passed',
@@ -1051,7 +1017,6 @@ describe('CodingRuntime', () => {
     expect(completeWorkflowBuild).toHaveBeenCalledOnce()
     expect(store.codingRuns.at(-1)?.status).toBe('completed')
     expect(store.diffArtifacts).toHaveLength(1)
-    expect(uploadCodingAgentSummary).not.toHaveBeenCalled()
   })
 
   it('persists the next live permission request without finalizing the run', async () => {
@@ -1110,12 +1075,10 @@ describe('CodingRuntime', () => {
       publishPermission: vi.fn(),
     }
     const runTestCommand = vi.fn()
-    const uploadCodingAgentSummary = vi.fn()
     const completeWorkflowBuild = vi.fn()
     const runtime = createCodingRuntime({
       store,
       engine: engineWithNextPermission,
-      remoteSync: { uploadCodingAgentSummary },
       completeWorkflowBuild,
       publisher,
       runTestCommand,
@@ -1150,7 +1113,6 @@ describe('CodingRuntime', () => {
     })
     expect(store.diffArtifacts).toHaveLength(0)
     expect(runTestCommand).not.toHaveBeenCalled()
-    expect(uploadCodingAgentSummary).not.toHaveBeenCalled()
     expect(completeWorkflowBuild).not.toHaveBeenCalled()
     expect(publisher.publishPermission).toHaveBeenCalledWith(nextPermission)
   })
@@ -1186,13 +1148,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine: engineWithFailedBootstrap,
-      remoteSync: {
-        uploadCodingAgentSummary: vi.fn(async () => ({
-          accepted: true,
-          syncedAt: '2026-06-17T00:01:00.000Z',
-          message: 'accepted',
-        })),
-      },
       completeWorkflowBuild,
       runTestCommand,
       worktreeRoot: await tempDir('devflow-worktrees-'),
@@ -1280,13 +1235,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine: engineWithoutBootstrap,
-      remoteSync: {
-        uploadCodingAgentSummary: vi.fn(async () => ({
-          accepted: true,
-          syncedAt: '2026-06-17T00:02:00.000Z',
-          message: 'accepted',
-        })),
-      },
       runDependencyBootstrap,
       runTestCommand,
       budgetGuard: createAllowingBudgetGuard(),
@@ -1346,12 +1294,10 @@ describe('CodingRuntime', () => {
       projects: [project(repo)],
       runs: [buildRun()],
     })
-    const uploadCodingAgentSummary = vi.fn()
     const completeWorkflowBuild = vi.fn()
     const runtime = createCodingRuntime({
       store,
       engine: createFakeCodingEngineAdapter(),
-      remoteSync: { uploadCodingAgentSummary },
       completeWorkflowBuild,
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-1', 'decision-1', 'event-1'),
@@ -1389,7 +1335,6 @@ describe('CodingRuntime', () => {
         }),
       ]),
     )
-    expect(uploadCodingAgentSummary).not.toHaveBeenCalled()
     expect(completeWorkflowBuild).not.toHaveBeenCalled()
   })
 
@@ -1410,7 +1355,6 @@ describe('CodingRuntime', () => {
     const runtime = createCodingRuntime({
       store,
       engine: createFakeCodingEngineAdapter(),
-      remoteSync: { uploadCodingAgentSummary: vi.fn() },
       completeWorkflowBuild,
       idGenerator: fixedIds('event-1'),
       now: fixedNow('2026-06-17T00:03:00.000Z'),

@@ -1,7 +1,6 @@
 import {
   buildAgentReviewContext,
   createAgentReviewArtifacts,
-  createRemoteAgentReviewSummary,
   redactSensitiveText,
   runBudgetedKnowledgeReviewAgent,
   type AgentEvent,
@@ -14,7 +13,6 @@ import {
   type KnowledgeDocument,
   type KnowledgeReviewBudgetGuard,
   type LocalExecutionState,
-  type RemoteAgentReviewSummary,
   type TestEvidence,
   type WorkflowRun,
 } from '@ai-devflow/shared'
@@ -42,7 +40,6 @@ export type KnowledgeReviewRuntimeDependencies = {
   resolveProviderMetadata(providerId: string): Promise<KnowledgeReviewProviderMetadata>
   resolveProvider(providerId: string): Promise<AgentProvider>
   budgetGuard?: KnowledgeReviewBudgetGuard
-  uploadAgentReviewSummary?(summary: RemoteAgentReviewSummary): Promise<unknown>
   now?: () => string
   createRequestId?: () => string
 }
@@ -194,10 +191,6 @@ export function createKnowledgeReviewRuntime(
       await deps.store.saveAgentReview(result.review)
       await deps.store.saveAgentTrace(result.trace)
       await deps.store.saveAgentTokenUsage(result.tokenUsage)
-      if (deps.uploadAgentReviewSummary) {
-        void deps.uploadAgentReviewSummary(createRemoteAgentReviewSummary(result.review)).catch(() => undefined)
-      }
-
       return {
         ...result,
         state: await deps.store.loadState(),

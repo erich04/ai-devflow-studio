@@ -113,13 +113,13 @@ describe('KnowledgeReviewRuntime', () => {
     expect(store.tokenUsage).toEqual([])
   })
 
-  it('bypasses the budget service only for the exact built-in fake provider and persists the completed bundle', async () => {
+  it('persists the completed fake Review bundle without directly uploading a summary', async () => {
     const store = new MemoryKnowledgeReviewStore()
     const provider = createFakeAgentProvider()
     const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
     const budgetGuard = vi.fn()
-    const uploadAgentReviewSummary = vi.fn(async () => ({ accepted: true }))
-    const runtime = createKnowledgeReviewRuntime({
+    const legacyDirectUpload = vi.fn()
+    const runtimeDependencies = {
       store,
       knowledgeDocuments,
       knowledgeChunks,
@@ -130,10 +130,11 @@ describe('KnowledgeReviewRuntime', () => {
       })),
       resolveProvider: vi.fn(async () => provider),
       budgetGuard,
-      uploadAgentReviewSummary,
+      uploadAgentReviewSummary: legacyDirectUpload,
       now: () => '2026-07-31T12:01:00.000Z',
       createRequestId: () => 'review-request-fake',
-    })
+    }
+    const runtime = createKnowledgeReviewRuntime(runtimeDependencies)
 
     const result = await runtime.run(reviewInput('fake-knowledge-review'))
 
@@ -145,7 +146,7 @@ describe('KnowledgeReviewRuntime', () => {
     expect(store.reviews).toHaveLength(1)
     expect(store.traces).toHaveLength(1)
     expect(store.tokenUsage).toHaveLength(1)
-    expect(uploadAgentReviewSummary).toHaveBeenCalledTimes(1)
+    expect(legacyDirectUpload).not.toHaveBeenCalled()
   })
 
   it('records Electron as the trusted runtime instead of renderer-supplied provenance', async () => {

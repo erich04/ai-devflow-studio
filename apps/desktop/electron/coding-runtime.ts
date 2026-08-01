@@ -4,7 +4,6 @@ import {
   buildKnowledgeReferences,
   buildCodingBrief,
   canRunCodingAgentOnNode,
-  createRemoteCodingAgentSummary,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   estimateCodingRuntimeCost,
@@ -29,8 +28,6 @@ import {
   type LocalExecutionState,
   type LocalProject,
   type ManagedCodingWorkspace,
-  type RemoteCodingAgentSummary,
-  type RemoteSyncUploadResult,
   type RemediationPlan,
   type RetryAttempt,
   type TestEvidence,
@@ -72,10 +69,6 @@ export type CodingRuntimeStore = {
   saveRetryAttempt(attempt: RetryAttempt): Promise<RetryAttempt>
   listRetryAttempts(runId?: string): Promise<RetryAttempt[]>
   loadState(): Promise<LocalExecutionState>
-}
-
-export type CodingRuntimeRemoteSync = {
-  uploadCodingAgentSummary(summary: RemoteCodingAgentSummary): Promise<RemoteSyncUploadResult>
 }
 
 export type CodingRuntimePublisher = {
@@ -195,7 +188,6 @@ export type DeleteManagedWorktreeRuntimeInput = OpenManagedWorktreeRuntimeInput
 export type CodingRuntimeDeps = {
   store: CodingRuntimeStore
   engine: CodingEngineAdapter
-  remoteSync: CodingRuntimeRemoteSync
   publisher?: CodingRuntimePublisher
   runTestCommand?: CodingRuntimeTestCommandRunner
   runDependencyBootstrap?: CodingRuntimeDependencyBootstrapRunner
@@ -733,9 +725,6 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       })
       if (!bootstrapped.canContinue) {
         await saveCodingRun(bootstrapped.codingRun)
-        await deps.remoteSync
-          .uploadCodingAgentSummary(createRemoteCodingAgentSummary(bootstrapped.codingRun, completed.diff))
-          .catch(() => undefined)
         return updatedRequest
       }
       const tested = await runCodingTests({
@@ -765,9 +754,6 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           })
         }
       }
-      await deps.remoteSync
-        .uploadCodingAgentSummary(createRemoteCodingAgentSummary(tested.codingRun, completed.diff))
-        .catch(() => undefined)
     } else {
       const terminalStatus = input.decision === 'expired' ? 'timed_out' : 'interrupted'
       const sequence = await nextSequence(codingRun.id)
