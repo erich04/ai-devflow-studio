@@ -898,11 +898,9 @@ describe('CodingRuntime', () => {
       )
       expect(store.diffArtifacts.find((candidate) => candidate.id === input.diffId)).toBeDefined()
     })
-    const legacyDirectUpload = vi.fn()
     const runtimeDependencies = {
       store,
       engine: createFakeCodingEngineAdapter(),
-      remoteSync: { uploadCodingAgentSummary: legacyDirectUpload },
       completeWorkflowBuild,
       runTestCommand,
       worktreeRoot: await tempDir('devflow-worktrees-'),
@@ -959,7 +957,6 @@ describe('CodingRuntime', () => {
       'Test evidence failed: Coding worktree tests failed in <workspace>.',
     )
     expect(store.codingEvents.map((event) => event.kind)).toContain('test')
-    expect(legacyDirectUpload).not.toHaveBeenCalled()
     expect(completeWorkflowBuild).toHaveBeenCalledWith({
       runId: 'run-1',
       nodeId: 'node-build',

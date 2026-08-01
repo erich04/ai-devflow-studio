@@ -60,8 +60,6 @@ export class CanonicalRemoteSyncEntityError extends Error {
 
 export type ProjectBoundRemoteSync = Pick<
   RemoteSyncClient,
-  | 'uploadAgentReviewSummary'
-  | 'uploadCodingAgentSummary'
   | 'saveGateOverride'
   | 'evaluateRuntimeBudget'
 > & {
@@ -318,24 +316,6 @@ export function createProjectBoundRemoteSync(input: {
         : boundSummary
       return uploadDependentSummary(codingRun.runId, scope, 'coding_agent_run', () =>
         input.remoteSync.uploadCodingAgentSummary(summary),
-      )
-    },
-    async uploadAgentReviewSummary(summary) {
-      const boundSummary = await bindProjectId(summary, input.credentialSource)
-      return uploadDependentSummary(
-        summary.runId,
-        await freezeCanonicalScope(),
-        'agent_review',
-        () => input.remoteSync.uploadAgentReviewSummary(boundSummary),
-      )
-    },
-    async uploadCodingAgentSummary(summary) {
-      const boundSummary = await bindProjectId(summary, input.credentialSource)
-      return uploadDependentSummary(
-        summary.runId,
-        await freezeCanonicalScope(),
-        'coding_agent_run',
-        () => input.remoteSync.uploadCodingAgentSummary(boundSummary),
       )
     },
     async saveGateOverride(override) {

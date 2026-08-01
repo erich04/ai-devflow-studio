@@ -118,7 +118,6 @@ describe('KnowledgeReviewRuntime', () => {
     const provider = createFakeAgentProvider()
     const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
     const budgetGuard = vi.fn()
-    const legacyDirectUpload = vi.fn()
     const runtimeDependencies = {
       store,
       knowledgeDocuments,
@@ -130,7 +129,6 @@ describe('KnowledgeReviewRuntime', () => {
       })),
       resolveProvider: vi.fn(async () => provider),
       budgetGuard,
-      uploadAgentReviewSummary: legacyDirectUpload,
       now: () => '2026-07-31T12:01:00.000Z',
       createRequestId: () => 'review-request-fake',
     }
@@ -146,7 +144,6 @@ describe('KnowledgeReviewRuntime', () => {
     expect(store.reviews).toHaveLength(1)
     expect(store.traces).toHaveLength(1)
     expect(store.tokenUsage).toHaveLength(1)
-    expect(legacyDirectUpload).not.toHaveBeenCalled()
   })
 
   it('records Electron as the trusted runtime instead of renderer-supplied provenance', async () => {

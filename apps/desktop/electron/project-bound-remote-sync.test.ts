@@ -216,6 +216,31 @@ const canonicalCodingDiff: CodingDiffArtifact = {
 }
 
 describe('project-bound Electron remote sync', () => {
+  it('exposes only canonical identifier uploads and project-bound commands', () => {
+    const boundRemoteSync = createProjectBoundRemoteSync({
+      remoteSync: {} as RemoteSyncClient,
+      credentialSource: {
+        getDesktopPairingCredential: async () => pairingCredential,
+        listRuns: async () => [localRun],
+        listTestEvidence: async () => [testEvidence],
+        listAgentReviews: async () => [canonicalReview],
+        listCodingAgentRuns: async () => [canonicalCodingRun],
+        listCodingDiffArtifacts: async () => [canonicalCodingDiff],
+      },
+    })
+
+    expect(Object.keys(boundRemoteSync).sort()).toEqual([
+      'evaluateRuntimeBudget',
+      'saveGateOverride',
+      'uploadCanonicalAgentReviewSummary',
+      'uploadCanonicalCodingAgentSummary',
+      'uploadCanonicalRunSummary',
+      'uploadCanonicalTestEvidenceSummary',
+    ])
+    expect('uploadAgentReviewSummary' in boundRemoteSync).toBe(false)
+    expect('uploadCodingAgentSummary' in boundRemoteSync).toBe(false)
+  })
+
   it('returns a structured operator-safe error when the canonical Run entity is missing', async () => {
     const uploadRunSummary = vi.fn()
     const boundRemoteSync = createProjectBoundRemoteSync({
@@ -1224,12 +1249,12 @@ describe('project-bound Electron remote sync', () => {
       },
     })
 
-    await expect(boundRemoteSync.uploadAgentReviewSummary(reviewSummary)).resolves.toEqual(
-      acceptedUpload,
-    )
-    await expect(boundRemoteSync.uploadCodingAgentSummary(codingSummary)).resolves.toEqual(
-      acceptedUpload,
-    )
+    await expect(
+      boundRemoteSync.uploadCanonicalAgentReviewSummary(canonicalReview.id),
+    ).resolves.toEqual(acceptedUpload)
+    await expect(
+      boundRemoteSync.uploadCanonicalCodingAgentSummary(canonicalCodingRun.id),
+    ).resolves.toEqual(acceptedUpload)
 
     expect(uploadRunSummary).toHaveBeenCalledTimes(2)
     expect(uploadAgentReviewSummary).toHaveBeenCalledTimes(2)
@@ -1335,10 +1360,9 @@ describe('project-bound Electron remote sync', () => {
       },
     })
 
-    await expect(boundRemoteSync.uploadAgentReviewSummary(reviewSummary)).rejects.toMatchObject({
-      status: 409,
-      code: 'conflict',
-    })
+    await expect(
+      boundRemoteSync.uploadCanonicalAgentReviewSummary(canonicalReview.id),
+    ).rejects.toMatchObject({ status: 409, code: 'conflict' })
     expect(uploadAgentReviewSummary).toHaveBeenCalledTimes(1)
     expect(uploadRunSummary).toHaveBeenCalledTimes(1)
   })
@@ -1373,15 +1397,14 @@ describe('project-bound Electron remote sync', () => {
       },
     })
 
-    await expect(boundRemoteSync.uploadCodingAgentSummary(codingSummary)).rejects.toMatchObject({
-      status: 409,
-      code: 'canonical_run_required',
-    })
+    await expect(
+      boundRemoteSync.uploadCanonicalCodingAgentSummary(canonicalCodingRun.id),
+    ).rejects.toMatchObject({ status: 409, code: 'canonical_run_required' })
     expect(uploadCodingAgentSummary).toHaveBeenCalledTimes(2)
     expect(uploadRunSummary).toHaveBeenCalledTimes(1)
   })
 
-  it('binds every project-bearing operation without preflighting existing dependent Runs', async () => {
+  it('binds every exposed project-bearing operation to the Team Project', async () => {
     const acceptedUpload = {
       accepted: true,
       syncedAt: '2026-06-20T00:06:00.000Z',
@@ -1445,9 +1468,10 @@ describe('project-bound Electron remote sync', () => {
       projectedCostUsd: 0.1,
     }
 
+    await boundRemoteSync.uploadCanonicalRunSummary(localRun.id)
     await boundRemoteSync.uploadCanonicalTestEvidenceSummary(testEvidence.id)
-    await boundRemoteSync.uploadAgentReviewSummary(reviewSummary)
-    await boundRemoteSync.uploadCodingAgentSummary(codingSummary)
+    await boundRemoteSync.uploadCanonicalAgentReviewSummary(canonicalReview.id)
+    await boundRemoteSync.uploadCanonicalCodingAgentSummary(canonicalCodingRun.id)
     await boundRemoteSync.saveGateOverride(gateOverride)
     await boundRemoteSync.evaluateRuntimeBudget(budgetRequest)
 
@@ -1455,19 +1479,19 @@ describe('project-bound Electron remote sync', () => {
       ...evidenceSummary,
       projectId: 'team-project-1',
     })
-    expect(uploadAgentReviewSummary).toHaveBeenCalledWith({
-      ...reviewSummary,
-      projectId: 'team-project-1',
-    })
-    expect(uploadCodingAgentSummary).toHaveBeenCalledWith({
-      ...codingSummary,
-      projectId: 'team-project-1',
-    })
+    expect(uploadRunSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 'team-project-1' }),
+    )
+    expect(uploadAgentReviewSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 'team-project-1' }),
+    )
+    expect(uploadCodingAgentSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 'team-project-1' }),
+    )
     expect(saveGateOverride).toHaveBeenCalledWith({
       ...gateOverride,
       projectId: 'team-project-1',
     })
-    expect(uploadRunSummary).not.toHaveBeenCalled()
     expect(evaluateRuntimeBudget).toHaveBeenCalledWith({
       ...budgetRequest,
       projectId: 'team-project-1',
