@@ -250,6 +250,18 @@ describe('node inspector view model', () => {
     expect(viewModelFor(prNode).actions.map((action) => action.id)).not.toContain('approveGate')
   })
 
+  it('keeps build budget guidance neutral until a concrete budget decision is available', () => {
+    const buildNode = findNode((candidate) => candidate.kind === 'task' && candidate.stage === 'build')
+    const descriptor = viewModelFor(buildNode).statusDescriptors.find((candidate) => candidate.id === 'budget')
+
+    expect(descriptor).toMatchObject({
+      state: 'preflight required',
+      summary: '真实 runtime 会在启动前完成预算与授权检查。',
+      nextAction: '在 Agents 中查看预算检查结果，并按实际阻断原因处理。',
+    })
+    expect(`${descriptor?.summary} ${descriptor?.nextAction}`).not.toMatch(/approval|lead/i)
+  })
+
   it('does not expose a primary action for non-current or completed nodes', () => {
     const buildNode = findNode((candidate) => candidate.kind === 'task' && candidate.stage === 'build')
     const clarifyNode = findNode((candidate) => candidate.kind === 'agent' && candidate.stage === 'clarify')

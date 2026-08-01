@@ -34,7 +34,6 @@ import {
   type LocalProject,
   type PolicySnapshot,
   type ProjectGitStatus,
-  type BudgetGuardDecision,
   type ProviderCredentialMetadata,
   type RemoteTeamSnapshot,
   type TestEvidence,
@@ -79,7 +78,7 @@ import {
 import { createRemoteSyncClient, type RemoteSyncClient } from './remote-sync.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
 import { createCodingEngineAdapterFromEnv } from './coding-engine.js'
-import { createCodingRuntime, type CodingRuntimeBudgetGuard } from './coding-runtime.js'
+import { createCodingRuntime } from './coding-runtime.js'
 import { deleteManagedCodingWorkspace as removeManagedCodingWorkspaceDirectory } from './coding-runner.js'
 import { createOpencodeProcessManager } from './opencode-process.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
@@ -89,8 +88,8 @@ import {
 } from './agent-provider-runtime.js'
 import {
   createProjectBoundRemoteSync,
-  type ProjectBoundRemoteSync,
 } from './project-bound-remote-sync.js'
+import { createRuntimeBudgetGuard } from './runtime-budget-guard.js'
 import {
   loadPolicySnapshotForProject as loadStoredPolicySnapshotForProject,
   resolveLocalGateOverrideSettlement,
@@ -315,38 +314,6 @@ async function createCodingRuntimeForRequest() {
     },
     idGenerator: (prefix = 'id') => `${prefix}-${randomUUID()}`,
   })
-}
-
-function createRuntimeBudgetGuard(
-  remoteSync: Pick<ProjectBoundRemoteSync, 'evaluateRuntimeBudget'>,
-): CodingRuntimeBudgetGuard {
-  return async ({ estimatedCost, project, approvalId }) => {
-    if (estimatedCost.costUsd <= 0) {
-      return {
-        status: 'disabled',
-        blocksRun: false,
-        currentSpendUsd: 0,
-        projectedCostUsd: estimatedCost.costUsd,
-        reason: 'Runtime budget guard is skipped for cost-free local or fake provider runs.',
-      } satisfies BudgetGuardDecision
-    }
-
-    try {
-      return await remoteSync.evaluateRuntimeBudget({
-        projectId: project.id,
-        projectedCostUsd: estimatedCost.costUsd,
-        ...(approvalId ? { approvalId } : {}),
-      })
-    } catch {
-      return {
-        status: 'disabled',
-        blocksRun: false,
-        currentSpendUsd: 0,
-        projectedCostUsd: estimatedCost.costUsd,
-        reason: 'Runtime budget guard is unavailable; no team budget decision was applied.',
-      } satisfies BudgetGuardDecision
-    }
-  }
 }
 
 function maskCredential(secret: string): string {

@@ -1125,6 +1125,7 @@ describe('team API route resolver', () => {
     const blocked = await resolveTeamRoute('POST', '/api/runtime/budget/evaluate', repository, {
       body: {
         projectId: 'p-payments',
+        providerId: 'double',
         projectedCostUsd: 0.02,
       },
       session: memberSession,
@@ -1151,6 +1152,7 @@ describe('team API route resolver', () => {
     const allowed = await resolveTeamRoute('POST', '/api/runtime/budget/evaluate', repository, {
       body: {
         projectId: 'p-payments',
+        providerId: 'double',
         projectedCostUsd: 0.02,
         approvalId,
       },

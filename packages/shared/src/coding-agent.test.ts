@@ -420,6 +420,50 @@ describe('createRemoteCodingAgentSummary', () => {
     expect(JSON.stringify(summary)).not.toMatch(/C:[\\/]Users[\\/]Alice/)
   })
 
+  it('preserves an unavailable budget decision while redacting its hostile reason', () => {
+    const codingRun: CodingAgentRun = {
+      id: 'coding-run-budget-unavailable',
+      runId: run.id,
+      nodeId: buildNode.id,
+      projectId: project.id,
+      requestedBy: 'user-1',
+      providerId: 'paid-coding-engine',
+      engine: 'opencode-http',
+      status: 'failed',
+      branchName: 'devflow/run-1-node-build',
+      userInstruction: 'Do it safely.',
+      prompt: 'raw prompt stays local',
+      summary: 'Coding run blocked before the managed workspace was created.',
+      changedPaths: [],
+      startedAt: '2026-06-17T00:05:00.000Z',
+      completedAt: '2026-06-17T00:05:00.000Z',
+      budgetDecision: {
+        status: 'unavailable',
+        blocksRun: true,
+        currentSpendUsd: 0,
+        projectedCostUsd: 0.02,
+        reason:
+          'Budget service failed at /Users/Alice/private/repo with Authorization: Bearer opaque-budget-token',
+      },
+      redacted: true,
+    }
+
+    const summary = createRemoteCodingAgentSummary(codingRun)
+    const serialized = JSON.stringify(summary)
+
+    expect(summary.budgetDecision).toEqual({
+      status: 'unavailable',
+      blocksRun: true,
+      currentSpendUsd: 0,
+      projectedCostUsd: 0.02,
+      reason:
+        'Budget service failed at [REDACTED:local_absolute_path] with [REDACTED:authorization_secret]',
+    })
+    expect(serialized).not.toContain('/Users/Alice')
+    expect(serialized).not.toContain('opaque-budget-token')
+    expect(serialized).not.toContain('raw prompt')
+  })
+
   it('projects nested cost and budget metadata and redacts the cost model', () => {
     const summary = redactRemoteCodingAgentSummaryForSync({
       id: 'coding-run-hostile-nested-metadata',

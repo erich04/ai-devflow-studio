@@ -10,6 +10,7 @@ import {
   estimateCodingRuntimeCost,
   redactCodingAgentEventForStorage,
   redactLocalAbsolutePaths,
+  redactSensitiveText,
   redactTestEvidenceForStorage,
   redactSecrets,
   type AgentEvent,
@@ -559,6 +560,9 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   }
 
   async function cleanupWorkspaceForRun(codingRun: CodingAgentRun, timestamp: string): Promise<void> {
+    if (!codingRun.managedWorkspaceId) {
+      return
+    }
     let workspace: ManagedCodingWorkspace
     try {
       workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
@@ -700,6 +704,9 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
 
     const codingRun = await findCodingRun(input.codingRunId)
     if (input.decision === 'approved') {
+      if (!codingRun.managedWorkspaceId) {
+        throw new Error(`Coding Agent run has no managed workspace: ${codingRun.id}`)
+      }
       const workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
       const project = await findProject(codingRun.projectId)
       const completed = await deps.engine.approvePermission({
@@ -827,31 +834,29 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         throw new Error(`Coding Agent run already active for this project: ${active.id}`)
       }
 
-      const ensuredEngine = await deps.engine.ensure({ project })
+      if (deps.engine.engine === 'not-configured') {
+        await deps.engine.ensure({ project })
+        throw new Error('Coding Agent engine did not report a configured runtime after ensure.')
+      }
+      const configuredEngine = deps.engine.engine
+      const providerId = deps.engine.providerId
       const codingRunId = idGenerator('coding-run')
       const briefContext = await loadCodingBriefContext(run, node)
-      const workspace = await createWorkspace({
-        project,
-        codingRunId,
-        runId: run.id,
-        nodeId: node.id,
-        ...(deps.worktreeRoot ? { worktreeRoot: deps.worktreeRoot } : {}),
-      })
-      const model = deps.engine.modelId ?? input.providerId
+      const model = deps.engine.modelId ?? providerId
       const preliminaryBrief = buildCodingBrief({
         run,
         node,
         project,
         ...briefContext,
         userInstruction: input.userInstruction,
-        worktreePath: workspace.worktreePath,
-        branchName: workspace.branchName,
+        worktreePath: '<managed-worktree-created-after-budget-approval>',
+        branchName: '<managed-branch-created-after-budget-approval>',
         ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
         ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
       })
       const estimatedCost = estimateCodingRuntimeCost({
-        engine: ensuredEngine.engine,
-        providerId: input.providerId,
+        engine: configuredEngine,
+        providerId,
         model,
         prompt: preliminaryBrief.prompt,
         runId: run.id,
@@ -863,8 +868,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const budgetDecision = deps.budgetGuard
         ? await deps.budgetGuard({
             codingRunId,
-            engine: ensuredEngine.engine,
-            providerId: input.providerId,
+            engine: configuredEngine,
+            providerId,
             model,
             project,
             run,
@@ -875,35 +880,51 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
               ? { approvalId: input.runtimeBudgetApprovalId.trim() }
               : {}),
           })
-        : {
-            status: 'disabled',
-            blocksRun: false,
-            currentSpendUsd: 0,
-            projectedCostUsd: estimatedCost.costUsd,
-            reason: 'Runtime budget guard is not configured for this local project.',
-          } satisfies BudgetGuardDecision
+        : estimatedCost.costUsd <= 0
+          ? {
+              status: 'disabled',
+              blocksRun: false,
+              currentSpendUsd: 0,
+              projectedCostUsd: estimatedCost.costUsd,
+              reason: 'Runtime budget guard is skipped for a verified no-cost provider run.',
+            } satisfies BudgetGuardDecision
+          : {
+              status: 'unavailable',
+              blocksRun: true,
+              currentSpendUsd: 0,
+              projectedCostUsd: estimatedCost.costUsd,
+              reason: 'Runtime budget guard is unavailable for this paid provider run.',
+            } satisfies BudgetGuardDecision
 
       if (budgetDecision.blocksRun) {
         const timestamp = now()
+        const safeBudgetDecision = {
+          ...budgetDecision,
+          reason: redactSensitiveText(budgetDecision.reason).value,
+        }
+        const summary = safeBudgetDecision.status === 'requires_lead_approval'
+          ? `Runtime budget requires lead approval before calling ${configuredEngine}; the paid provider was not called. ${safeBudgetDecision.reason}`
+          : safeBudgetDecision.status === 'unavailable'
+            ? `Authoritative runtime budget decision is unavailable before calling ${configuredEngine}; the paid provider was not called. ${safeBudgetDecision.reason}`
+            : `Runtime budget blocked the call to ${configuredEngine}; the paid provider was not called. ${safeBudgetDecision.reason}`
         const blockedRun: CodingAgentRun = {
           id: codingRunId,
           runId: run.id,
           nodeId: node.id,
           projectId: project.id,
           requestedBy: input.requestedBy,
-          providerId: input.providerId,
-          engine: ensuredEngine.engine,
+          providerId,
+          engine: configuredEngine,
           status: 'failed',
-          managedWorkspaceId: workspace.id,
-          branchName: workspace.branchName,
+          branchName: run.branchName,
           userInstruction: input.userInstruction.trim(),
           prompt: preliminaryBrief.prompt,
-          summary: `Runtime budget requires lead approval before calling ${ensuredEngine.engine}. ${budgetDecision.reason}`,
+          summary,
           changedPaths: [],
           startedAt: timestamp,
           completedAt: timestamp,
           runtimeCostSummary: estimatedCost,
-          budgetDecision,
+          budgetDecision: safeBudgetDecision,
           redacted: true,
         }
         const event: CodingAgentEvent = {
@@ -916,22 +937,28 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           message: blockedRun.summary,
           timestamp,
           metadata: {
-            budgetStatus: budgetDecision.status,
-            projectedCostUsd: budgetDecision.projectedCostUsd,
-            limitUsd: budgetDecision.limitUsd,
-            approvalRequiredRole: budgetDecision.approvalRequiredRole,
+            budgetStatus: safeBudgetDecision.status,
+            projectedCostUsd: safeBudgetDecision.projectedCostUsd,
+            limitUsd: safeBudgetDecision.limitUsd,
+            approvalRequiredRole: safeBudgetDecision.approvalRequiredRole,
           },
           redacted: true,
         }
-        await deps.store.saveManagedCodingWorkspace(workspace)
         await saveCodingRun(blockedRun)
         await saveEvents([event])
-        await cleanupWorkspaceForRun(blockedRun, timestamp)
         return {
           codingRun: blockedRun,
           state: await deps.store.loadState(),
         }
       }
+      await deps.engine.ensure({ project })
+      const workspace = await createWorkspace({
+        project,
+        codingRunId,
+        runId: run.id,
+        nodeId: node.id,
+        ...(deps.worktreeRoot ? { worktreeRoot: deps.worktreeRoot } : {}),
+      })
       const bundle = await deps.engine.start({
         id: codingRunId,
         run,
@@ -939,7 +966,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         project,
         workspace,
         requestedBy: input.requestedBy,
-        providerId: input.providerId,
+        providerId,
         userInstruction: input.userInstruction,
         now: now(),
         ...briefContext,

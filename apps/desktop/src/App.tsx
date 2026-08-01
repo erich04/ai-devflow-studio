@@ -478,9 +478,15 @@ export function App() {
   const budgetTone =
     budgetStatus === 'allowed' || budgetStatus === 'approved_over_budget'
       ? 'good'
-      : budgetStatus === 'warning' || budgetStatus === 'requires_lead_approval' || budgetStatus === 'approval entered'
-        ? 'warn'
-        : 'soft'
+      : budgetStatus === 'unavailable'
+        ? 'bad'
+        : budgetStatus === 'warning' || budgetStatus === 'requires_lead_approval' || budgetStatus === 'approval entered'
+          ? 'warn'
+          : 'soft'
+  const budgetRecoveryCopy =
+    budgetStatus === 'unavailable'
+      ? '已阻断付费运行；恢复 Team 项目配对、API 连接和已保存的预算策略后重试。'
+      : null
   const runtimeDataSource = useMemo(
     () =>
       buildRuntimeDataSource({
@@ -816,7 +822,10 @@ export function App() {
           <span className="stat">同步状态 <strong>local + {policySource}</strong></span>
           <span className="stat">Policy Snapshot <strong>{policyVersion ? `v${policyVersion}` : 'not loaded'}</strong></span>
           <span className="stat">策略状态 <strong className={`pill ${policyTone}`}>{policyStatus}</strong></span>
-          <span className="stat">预算状态 <strong className={`pill ${budgetTone}`}>{budgetStatus}</strong></span>
+          <span className="stat" data-testid="runtime-budget-status">
+            预算状态 <strong className={`pill ${budgetTone}`}>{budgetStatus}</strong>
+            {budgetRecoveryCopy ? <em>{budgetRecoveryCopy}</em> : null}
+          </span>
         </section>
 
         {toast && (

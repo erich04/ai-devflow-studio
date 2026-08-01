@@ -1673,6 +1673,7 @@ describe('App', () => {
         projectId: localProject.id,
       })),
     )
+    expect(api.ensureCodingEngine).not.toHaveBeenCalled()
   })
 
   it('routes the current test node primary CTA to Tests', async () => {
@@ -3236,6 +3237,62 @@ describe('App', () => {
     expect(workbench).toHaveTextContent('limit $0.20')
     expect(screen.getByLabelText('Runtime budget approval ID')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Retry with approval/ })).toBeDisabled()
+  })
+
+  it('presents an unavailable runtime budget guard as a blocking recovery state without an approval retry', async () => {
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue({
+        ...localStateAtCurrentNode('n-build'),
+        codingRuns: [
+          {
+            id: 'coding-run-budget-unavailable',
+            runId: fixtureRuns[0]!.id,
+            nodeId: 'n-build',
+            projectId: localProject.id,
+            requestedBy: 'u-ling',
+            providerId: 'doubao-review',
+            engine: 'opencode-http',
+            status: 'failed',
+            branchName: 'devflow/budget-unavailable',
+            userInstruction: 'Use the paid coding runtime.',
+            prompt: 'redacted prompt',
+            summary: 'Runtime budget guard is unavailable.',
+            changedPaths: [],
+            startedAt: '2026-06-21T00:00:00.000Z',
+            completedAt: '2026-06-21T00:00:00.000Z',
+            runtimeCostSummary: {
+              engine: 'opencode-http',
+              providerId: 'doubao-review',
+              model: 'ark-code-latest',
+              inputTokens: 0,
+              outputTokens: 0,
+              cacheReadTokens: 0,
+              costUsd: 0.42,
+              source: 'estimated',
+              timestamp: '2026-06-21T00:00:00.000Z',
+            },
+            budgetDecision: {
+              status: 'unavailable',
+              blocksRun: true,
+              currentSpendUsd: 0,
+              projectedCostUsd: 0.42,
+              reason: 'Runtime budget authorization is unavailable.',
+            },
+            redacted: true,
+          },
+        ],
+      }),
+    })
+    render(<App />)
+
+    const budgetStatus = await screen.findByTestId('runtime-budget-status')
+    expect(within(budgetStatus).getByText('unavailable')).toHaveClass('bad')
+    expect(budgetStatus).toHaveTextContent('恢复 Team 项目配对、API 连接和已保存的预算策略后重试')
+
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    await screen.findByTestId('agent-workbench')
+    expect(screen.queryByLabelText('Runtime budget approval ID')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Retry with approval/ })).not.toBeInTheDocument()
   })
 
   it('selects a local project, saves an editable test command, and archives local test evidence', async () => {

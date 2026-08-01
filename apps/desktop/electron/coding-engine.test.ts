@@ -40,6 +40,7 @@ describe('coding engine selection', () => {
     })
 
     expect(engine.engine).toBe('opencode-http')
+    expect(engine.providerId).toBe('openai')
   })
 
   it('rejects unknown real engine values instead of silently falling back', () => {

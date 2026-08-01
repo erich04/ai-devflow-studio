@@ -419,6 +419,7 @@ describe('project-bound Electron remote sync', () => {
     }
     const budgetRequest: Parameters<RemoteSyncClient['evaluateRuntimeBudget']>[0] = {
       projectId: 'local-project-1',
+      providerId: 'double',
       projectedCostUsd: 0.1,
     }
 

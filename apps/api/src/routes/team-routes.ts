@@ -11,6 +11,7 @@ import {
   evaluateRuntimeBudgetGuard,
   type GateOverrideDecision,
   formatUsd,
+  parseBudgetGuardDecision,
   type KnowledgeChunk,
   type KnowledgeDocument,
   type OrganizationEnforcementPolicy,
@@ -114,6 +115,7 @@ type RuntimeBudgetPolicyInput = {
 
 type RuntimeBudgetEvaluateInput = {
   projectId: string
+  providerId: string
   projectedCostUsd: number
   approvalId?: string
 }
@@ -339,29 +341,16 @@ function isRemoteCodingCostSummary(value: unknown): boolean {
   )
 }
 
-function isBudgetGuardStatus(value: unknown): boolean {
-  return (
-    value === 'allowed' ||
-    value === 'warning' ||
-    value === 'requires_lead_approval' ||
-    value === 'approved_over_budget' ||
-    value === 'disabled'
-  )
-}
-
 function isRemoteBudgetDecision(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    isBudgetGuardStatus(value['status']) &&
-    typeof value['blocksRun'] === 'boolean' &&
-    typeof value['currentSpendUsd'] === 'number' &&
-    typeof value['projectedCostUsd'] === 'number' &&
-    (value['limitUsd'] === undefined || typeof value['limitUsd'] === 'number') &&
-    (value['approvalRequiredRole'] === undefined || value['approvalRequiredRole'] === 'lead') &&
-    (value['approvalId'] === undefined || typeof value['approvalId'] === 'string') &&
-    typeof value['reason'] === 'string' &&
-    !hasLocalOnlyCodingField(value)
-  )
+  if (!isRecord(value) || hasLocalOnlyCodingField(value)) {
+    return false
+  }
+  try {
+    parseBudgetGuardDecision(value)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function isRepoRelativePath(value: unknown): value is string {
@@ -555,6 +544,7 @@ function parseRuntimeBudgetEvaluateInput(value: unknown): RuntimeBudgetEvaluateI
   const approvalId = value['approvalId']
   return {
     projectId: readRequiredString(value, 'projectId'),
+    providerId: readRequiredString(value, 'providerId'),
     projectedCostUsd: readRequiredNumber(value, 'projectedCostUsd'),
     ...(typeof approvalId === 'string' && approvalId.trim() ? { approvalId: approvalId.trim() } : {}),
   }
@@ -1294,6 +1284,8 @@ export async function resolveTeamRoute(
     return {
       status: 200,
       body: evaluateRuntimeBudgetGuard({
+        projectId: input.projectId,
+        providerId: input.providerId,
         policy,
         currentSpendUsd,
         projectedCostUsd: input.projectedCostUsd,

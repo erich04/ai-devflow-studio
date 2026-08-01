@@ -1286,6 +1286,48 @@ describe('createLocalStore', () => {
     second.close()
   })
 
+  it('persists a budget-unavailable coding run without a managed workspace across reopen', async () => {
+    const dbPath = await tempDbPath()
+    const unavailableRun: CodingAgentRun = {
+      id: 'coding-run-budget-unavailable',
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'paid-coding-engine',
+      engine: 'opencode-http',
+      status: 'failed',
+      branchName: 'devflow/run-1-node-build',
+      userInstruction: 'Keep the change minimal.',
+      prompt: 'DevFlow assembled prompt stays local.',
+      summary: 'Coding run blocked because the authoritative budget decision was unavailable.',
+      changedPaths: [],
+      startedAt: '2026-06-15T00:03:00.000Z',
+      completedAt: '2026-06-15T00:03:00.000Z',
+      budgetDecision: {
+        status: 'unavailable',
+        blocksRun: true,
+        currentSpendUsd: 0,
+        projectedCostUsd: 0.02,
+        reason: 'Authoritative budget decision unavailable.',
+      },
+      redacted: true,
+    }
+
+    const first = await createLocalStore({ dbPath })
+    await first.saveCodingAgentRun(unavailableRun)
+    first.close()
+
+    const second = await createLocalStore({ dbPath })
+    expect(await second.listCodingAgentRuns('run-1')).toEqual([unavailableRun])
+    expect(await second.listManagedCodingWorkspaces('project-1')).toEqual([])
+    expect(await second.loadState()).toMatchObject({
+      codingRuns: [unavailableRun],
+      managedCodingWorkspaces: [],
+    })
+    second.close()
+  })
+
   it('recursively redacts Coding Agent events at the local persistence boundary', async () => {
     const dbPath = await tempDbPath()
     const hostileEvent: CodingAgentEvent = {

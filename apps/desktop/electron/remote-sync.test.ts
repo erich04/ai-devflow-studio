@@ -441,7 +441,8 @@ describe('Electron remote sync client', () => {
     const calls: Array<{ url: string; init: RequestInit | undefined }> = []
     const fetcher = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       calls.push({ url: String(input), init })
-      return new Response(JSON.stringify(decision), { status: 200 })
+      const request = JSON.parse(String(init?.body)) as { projectedCostUsd: number }
+      return new Response(JSON.stringify({ ...decision, projectedCostUsd: request.projectedCostUsd }), { status: 200 })
     })
     const client = createRemoteSyncClient({
       apiBaseUrl: 'http://api.local',
@@ -452,6 +453,7 @@ describe('Electron remote sync client', () => {
     await expect(
       client.evaluateRuntimeBudget({
         projectId: 'p-remote',
+        providerId: 'double',
         projectedCostUsd: 0.004,
       }),
     ).resolves.toEqual(decision)
@@ -465,6 +467,7 @@ describe('Electron remote sync client', () => {
     })
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
       projectId: 'p-remote',
+      providerId: 'double',
       projectedCostUsd: 0.004,
     })
     expect(String(calls[0]?.init?.body)).not.toContain('prompt')
@@ -474,13 +477,103 @@ describe('Electron remote sync client', () => {
 
     await client.evaluateRuntimeBudget({
       projectId: 'p-remote',
+      providerId: 'double',
       projectedCostUsd: 0.006,
       approvalId: 'runtime-budget-approval-1',
     })
     expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({
       projectId: 'p-remote',
+      providerId: 'double',
       projectedCostUsd: 0.006,
       approvalId: 'runtime-budget-approval-1',
     })
+  })
+
+  it('rejects a malformed successful runtime budget response', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(JSON.stringify({
+          status: 'disabled',
+          blocksRun: false,
+          reason: 'Missing authoritative spend fields.',
+        }), { status: 200 }),
+      ),
+      authToken: 'devflow_desktop_token_123',
+    })
+
+    await expect(client.evaluateRuntimeBudget({
+      projectId: 'p-remote',
+      providerId: 'double',
+      projectedCostUsd: 0.004,
+    })).rejects.toThrow('Invalid runtime budget decision')
+  })
+
+  it('rejects a fail-open runtime budget response with contradictory status and blocking fields', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(JSON.stringify({
+          status: 'unavailable',
+          blocksRun: false,
+          currentSpendUsd: 0,
+          projectedCostUsd: 0.004,
+          reason: 'Budget authority could not be reached.',
+        }), { status: 200 }),
+      ),
+      authToken: 'devflow_desktop_token_123',
+    })
+
+    await expect(client.evaluateRuntimeBudget({
+      projectId: 'p-remote',
+      providerId: 'double',
+      projectedCostUsd: 0.004,
+    })).rejects.toThrow('Invalid runtime budget decision')
+  })
+
+  it('rejects an over-budget approval response without an auditable approval ID', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(JSON.stringify({
+          status: 'approved_over_budget',
+          blocksRun: false,
+          currentSpendUsd: 0.02,
+          projectedCostUsd: 0.004,
+          limitUsd: 0.02,
+          reason: 'Approved to continue over budget.',
+        }), { status: 200 }),
+      ),
+      authToken: 'devflow_desktop_token_123',
+    })
+
+    await expect(client.evaluateRuntimeBudget({
+      projectId: 'p-remote',
+      providerId: 'double',
+      projectedCostUsd: 0.004,
+    })).rejects.toThrow('Invalid runtime budget decision')
+  })
+
+  it('rejects a runtime budget response for a different projected cost', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(JSON.stringify({
+          status: 'allowed',
+          blocksRun: false,
+          currentSpendUsd: 0,
+          projectedCostUsd: 0.001,
+          limitUsd: 1,
+          reason: 'A decision for a different estimate must not authorize this request.',
+        }), { status: 200 }),
+      ),
+      authToken: 'devflow_desktop_token_123',
+    })
+
+    await expect(client.evaluateRuntimeBudget({
+      projectId: 'p-remote',
+      providerId: 'double',
+      projectedCostUsd: 0.004,
+    })).rejects.toThrow('Invalid runtime budget decision')
   })
 })

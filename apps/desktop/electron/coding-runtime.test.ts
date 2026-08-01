@@ -66,6 +66,57 @@ describe('CodingRuntime', () => {
     expect(await readFile(path.join(store.workspaces[0]!.worktreePath, 'package.json'), 'utf8')).toContain('fixture')
   })
 
+  it('blocks a paid coding run when no authoritative budget guard is configured', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createSpyCodingEngine('opencode-http')
+    const createWorkspace = vi.fn(async () => {
+      throw new Error('createWorkspace should not be called before a paid budget decision')
+    })
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      remoteSync: { uploadCodingAgentSummary: vi.fn() },
+      createWorkspace,
+      idGenerator: fixedIds('coding-run-budget-unavailable'),
+      now: fixedNow('2026-07-31T00:00:00.000Z'),
+    })
+
+    const result = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'double',
+      userInstruction: 'Use the paid runtime.',
+    })
+
+    expect(engine.ensure).not.toHaveBeenCalled()
+    expect(engine.start).not.toHaveBeenCalled()
+    expect(createWorkspace).not.toHaveBeenCalled()
+    expect(result.codingRun).toMatchObject({
+      status: 'failed',
+      budgetDecision: {
+        status: 'unavailable',
+        blocksRun: true,
+      },
+    })
+    expect(result.codingRun.summary).toContain('unavailable')
+    expect(result.codingRun.summary).not.toContain('lead approval')
+    expect(store.codingEvents).toEqual([
+      expect.objectContaining({
+        kind: 'error',
+        redacted: true,
+        metadata: expect.objectContaining({ budgetStatus: 'unavailable' }),
+      }),
+    ])
+    expect(store.workspaces).toHaveLength(0)
+    expect(result.state.managedCodingWorkspaces).toHaveLength(0)
+  })
+
   it('rejects a second active coding run for the same local project', async () => {
     const repo = await gitRepo()
     const activeRun = codingRun({ projectId: 'project-1', status: 'waiting_permission' })
@@ -309,10 +360,11 @@ describe('CodingRuntime', () => {
       nodeId: 'node-build',
       projectId: 'project-1',
       requestedBy: 'user-1',
-      providerId: 'double',
+      providerId: 'opencode-http',
       userInstruction: 'Use the real runtime.',
     })
 
+    expect(engine.ensure).not.toHaveBeenCalled()
     expect(engine.start).not.toHaveBeenCalled()
     expect(budgetGuard).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -323,8 +375,65 @@ describe('CodingRuntime', () => {
       }),
     )
     expect(result.codingRun.status).toBe('failed')
+    expect(result.codingRun.providerId).toBe('double')
     expect(result.codingRun.summary).toContain('Runtime budget requires lead approval')
+    expect(result.codingRun.summary).toContain('paid provider was not called')
+    expect(store.workspaces).toHaveLength(0)
     expect(store.codingEvents.some((event) => event.kind === 'error' && event.message.includes('budget'))).toBe(true)
+  })
+
+  it('redacts an unavailable budget reason before persisting or publishing the blocked run', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createSpyCodingEngine('opencode-http')
+    const publishRunStatus = vi.fn()
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      remoteSync: { uploadCodingAgentSummary: vi.fn() },
+      publisher: {
+        publishRunStatus,
+        publishEvent: vi.fn(),
+        publishPermission: vi.fn(),
+      },
+      createWorkspace: vi.fn(async () => {
+        throw new Error('createWorkspace should not be called after a rejecting budget decision')
+      }),
+      budgetGuard: vi.fn(async () => ({
+        status: 'unavailable',
+        blocksRun: true,
+        currentSpendUsd: 0,
+        projectedCostUsd: 0.2,
+        reason: 'API_KEY=sk-private-value failed at /Users/operator/private/config.json',
+      } satisfies BudgetGuardDecision)),
+      idGenerator: fixedIds('coding-run-budget-redaction'),
+      now: fixedNow('2026-07-31T00:00:00.000Z'),
+    })
+
+    const result = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'double',
+      userInstruction: 'Use the paid runtime.',
+    })
+
+    const persisted = JSON.stringify({
+      run: store.codingRuns[0],
+      events: store.codingEvents,
+      published: publishRunStatus.mock.calls,
+      result: result.codingRun,
+    })
+    expect(persisted).not.toContain('sk-private-value')
+    expect(persisted).not.toContain('/Users/operator/private/config.json')
+    expect(persisted).toContain('[REDACTED:')
+    expect(engine.ensure).not.toHaveBeenCalled()
+    expect(engine.start).not.toHaveBeenCalled()
+    expect(store.workspaces).toHaveLength(0)
   })
 
   it('passes runtime budget approval ids to the guard before starting the real engine', async () => {
@@ -1010,6 +1119,7 @@ describe('CodingRuntime', () => {
       completeWorkflowBuild,
       publisher,
       runTestCommand,
+      budgetGuard: createAllowingBudgetGuard(),
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-1', 'decision-1'),
       now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:01:00.000Z'),
@@ -1179,6 +1289,7 @@ describe('CodingRuntime', () => {
       },
       runDependencyBootstrap,
       runTestCommand,
+      budgetGuard: createAllowingBudgetGuard(),
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-1', 'decision-1', 'evidence-1'),
       now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:01:00.000Z'),
@@ -1493,6 +1604,7 @@ function upsert<T extends { id: string }>(items: T[], item: T) {
 function createSpyCodingEngine(engine: CodingAgentRun['engine']): CodingEngineAdapter {
   return {
     engine,
+    providerId: engine === 'fake' ? 'fake-coding-engine' : 'double',
     modelId: engine === 'fake' ? 'fake' : 'ark-code-latest',
     ensure: vi.fn(async (input) => ({
       projectId: input.project.id,
@@ -1507,6 +1619,17 @@ function createSpyCodingEngine(engine: CodingAgentRun['engine']): CodingEngineAd
     }),
     cancel: vi.fn(async () => undefined),
   }
+}
+
+function createAllowingBudgetGuard() {
+  return vi.fn(async () => ({
+    status: 'allowed',
+    blocksRun: false,
+    currentSpendUsd: 0,
+    projectedCostUsd: 0.01,
+    limitUsd: 10,
+    reason: 'Paid runtime is within the configured project budget.',
+  } satisfies BudgetGuardDecision))
 }
 
 async function tempDir(prefix: string) {

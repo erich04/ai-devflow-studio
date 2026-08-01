@@ -1,24 +1,25 @@
-import type {
-  AgentEvent,
-  Artifact,
-  DevFlowSessionHeaders,
-  DesktopPairingExchangeResult,
-  BudgetGuardDecision,
-  RemoteAgentReviewSummary,
-  RemoteCodingAgentSummary,
-  RemoteRunDeleteResult,
-  RemoteRunSummary,
-  RemoteSyncUploadResult,
-  RemoteTeamSnapshot,
-  RemoteTestEvidenceSummary,
-  EffectiveEnforcementPolicy,
-  GateOverrideDecision,
-  OrganizationEnforcementPolicy,
-  ProjectEnforcementPolicyOverride,
-  TeamMember,
-  Project,
-  TokenUsageRollup,
-  WorkflowRun,
+import {
+  parseBudgetGuardDecision,
+  type AgentEvent,
+  type Artifact,
+  type DevFlowSessionHeaders,
+  type DesktopPairingExchangeResult,
+  type BudgetGuardDecision,
+  type RemoteAgentReviewSummary,
+  type RemoteCodingAgentSummary,
+  type RemoteRunDeleteResult,
+  type RemoteRunSummary,
+  type RemoteSyncUploadResult,
+  type RemoteTeamSnapshot,
+  type RemoteTestEvidenceSummary,
+  type EffectiveEnforcementPolicy,
+  type GateOverrideDecision,
+  type OrganizationEnforcementPolicy,
+  type ProjectEnforcementPolicyOverride,
+  type TeamMember,
+  type Project,
+  type TokenUsageRollup,
+  type WorkflowRun,
 } from '@ai-devflow/shared'
 import type { LoadRemoteSnapshotInput } from './ipc-contract'
 
@@ -75,6 +76,7 @@ export type RemoteGateOverrideInput = {
 
 export type RemoteRuntimeBudgetEvaluateInput = {
   projectId: string
+  providerId: string
   projectedCostUsd: number
   approvalId?: string
 }
@@ -322,17 +324,23 @@ export function createRemoteSyncClient(
     },
 
     async evaluateRuntimeBudget(input) {
-      return postJson<BudgetGuardDecision>(
+      const decision = await postJson<unknown>(
         fetcher,
         buildUrl(apiBaseUrl, '/api/runtime/budget/evaluate'),
         {
           projectId: input.projectId,
+          providerId: input.providerId,
           projectedCostUsd: input.projectedCostUsd,
           ...(input.approvalId ? { approvalId: input.approvalId } : {}),
         },
         '/api/runtime/budget/evaluate',
         requirePostHeaders({ authToken, sessionHeaders }),
       )
+      const parsedDecision = parseBudgetGuardDecision(decision)
+      if (parsedDecision.projectedCostUsd !== input.projectedCostUsd) {
+        throw new Error('Invalid runtime budget decision')
+      }
+      return parsedDecision
     },
   }
 }

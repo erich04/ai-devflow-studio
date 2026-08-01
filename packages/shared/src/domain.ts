@@ -260,7 +260,7 @@ export type RuntimeBudgetApproval = {
 }
 
 export type BudgetGuardDecision = {
-  status: 'allowed' | 'warning' | 'requires_lead_approval' | 'approved_over_budget' | 'disabled'
+  status: 'allowed' | 'warning' | 'requires_lead_approval' | 'approved_over_budget' | 'disabled' | 'unavailable'
   blocksRun: boolean
   currentSpendUsd: number
   projectedCostUsd: number
@@ -668,7 +668,7 @@ export type CodingAgentRun = {
   providerId: string
   engine: CodingAgentEngine
   status: CodingAgentRunStatus
-  managedWorkspaceId: string
+  managedWorkspaceId?: string
   branchName: string
   userInstruction: string
   prompt: string

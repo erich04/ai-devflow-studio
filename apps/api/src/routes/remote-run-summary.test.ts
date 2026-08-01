@@ -93,8 +93,8 @@ describe('remote Run Summary boundary', () => {
           startedAt: '2026-07-31T12:01:00.000Z',
           completedAt: '2026-07-31T12:02:00.000Z',
           budgetDecision: {
-            status: 'allowed',
-            blocksRun: false,
+            status: 'unavailable',
+            blocksRun: true,
             currentSpendUsd: 1,
             projectedCostUsd: 2,
             reason: 'Approved from /Users/Alice/private/repo API_TOKEN=budget-secret',
