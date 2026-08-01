@@ -49,6 +49,7 @@ import {
   CanonicalRunRequiredError,
   RemoteChildSummaryConflictError,
   RemoteRunSummaryConflictError,
+  TeamProjectScopeError,
   type RunsBundle,
   type TeamOverviewPayload,
   type TeamRepository,
@@ -1060,9 +1061,21 @@ export async function resolveTeamRoute(
       return forbidden('Project role lead required')
     }
 
-    return {
-      status: 201,
-      body: await repository.createDesktopPairingCode({ projectId }, options.session),
+    const overview = await repository.getTeamOverview(options.session)
+    if (!overview.projects.some((project) => project.id === projectId)) {
+      return notFound('Project not found')
+    }
+
+    try {
+      return {
+        status: 201,
+        body: await repository.createDesktopPairingCode({ projectId }, options.session),
+      }
+    } catch (error) {
+      if (error instanceof TeamProjectScopeError) {
+        return notFound('Project not found')
+      }
+      throw error
     }
   }
 
@@ -1094,7 +1107,7 @@ export async function resolveTeamRoute(
 
     return {
       status: 200,
-      body: { skills: await repository.getSkills() },
+      body: { skills: await repository.getSkills(options.session) },
     }
   }
 
@@ -1105,7 +1118,7 @@ export async function resolveTeamRoute(
 
     return {
       status: 200,
-      body: { servers: await repository.getMcpServers() },
+      body: { servers: await repository.getMcpServers(options.session) },
     }
   }
 

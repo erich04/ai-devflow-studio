@@ -899,6 +899,30 @@ describe('team API route resolver', () => {
     expect(repository.createDesktopPairingCode).not.toHaveBeenCalled()
   })
 
+  it('does not let an organization owner pair a project from another organization', async () => {
+    const repository = createRepository()
+    const otherOrganizationOwner: TeamSession = {
+      ...ownerSession,
+      organizationId: 'org-other',
+      userId: 'u-other-owner',
+      authAccountId: 'acct-other-owner',
+      projectMemberships: [],
+    }
+
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/team/projects/p-payments/pairing-codes',
+      repository,
+      { session: otherOrganizationOwner },
+    )
+
+    expect(result).toEqual({
+      status: 404,
+      body: { error: 'not_found', message: 'Project not found' },
+    })
+    expect(repository.createDesktopPairingCode).not.toHaveBeenCalled()
+  })
+
   it('exchanges a desktop pairing code for a copy-once bearer token', async () => {
     const repository = createRepository()
 

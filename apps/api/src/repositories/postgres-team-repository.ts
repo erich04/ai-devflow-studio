@@ -56,6 +56,7 @@ import {
   redactAgentEventForPersistence,
   RemoteChildSummaryConflictError,
   RemoteRunSummaryConflictError,
+  TeamProjectScopeError,
 } from './team-repository'
 import type {
   AgentProviderCredentialRecord,
@@ -1311,7 +1312,7 @@ export function createPostgresTeamRepository(
       const createdAt = new Date().toISOString()
       const expiresAt = new Date(Date.parse(createdAt) + 10 * 60 * 1000).toISOString()
 
-      await db.query(
+      const [acceptedPairingCode] = await db.query<{ id: string }>(
         `
           INSERT INTO desktop_pairing_codes (
             id,
@@ -1323,7 +1324,22 @@ export function createPostgresTeamRepository(
             failed_attempts,
             created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          SELECT
+            $1,
+            projects.organization_id,
+            projects.id,
+            users.id,
+            $5,
+            $6,
+            $7,
+            $8
+          FROM projects
+          JOIN users
+            ON users.id = $4
+           AND users.organization_id = projects.organization_id
+          WHERE projects.id = $3
+            AND projects.organization_id = $2
+          RETURNING id
         `,
         [
           id,
@@ -1336,6 +1352,9 @@ export function createPostgresTeamRepository(
           createdAt,
         ],
       )
+      if (!acceptedPairingCode) {
+        throw new TeamProjectScopeError()
+      }
 
       return {
         id,
@@ -1623,14 +1642,18 @@ export function createPostgresTeamRepository(
       }
     },
 
-    async getSkills() {
-      const rows = await db.query<SkillRow>('SELECT * FROM skills ORDER BY name ASC')
+    async getSkills(context) {
+      const rows = await db.query<SkillRow>(
+        'SELECT * FROM skills WHERE organization_id = $1 ORDER BY name ASC',
+        [context.organizationId],
+      )
       return rows.map(mapSkill)
     },
 
-    async getMcpServers() {
+    async getMcpServers(context) {
       const rows = await db.query<McpServerRow>(
-        'SELECT * FROM mcp_server_definitions ORDER BY name ASC',
+        'SELECT * FROM mcp_server_definitions WHERE organization_id = $1 ORDER BY name ASC',
+        [context.organizationId],
       )
       return rows.map(mapMcpServer)
     },

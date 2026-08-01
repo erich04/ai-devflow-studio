@@ -339,6 +339,15 @@ describe('seed team repository', () => {
     })
   })
 
+  it('rejects pairing a seed project from a different organization', async () => {
+    const repository = createSeedTeamRepository()
+
+    await expect(repository.createDesktopPairingCode(
+      { projectId: 'p-payments' },
+      { organizationId: 'org-other', userId: 'u-other-owner' },
+    )).rejects.toMatchObject({ name: 'TeamProjectScopeError' })
+  })
+
   it('makes accepted remote sync summaries visible to team overview readers', async () => {
     const repository = createSeedTeamRepository()
 

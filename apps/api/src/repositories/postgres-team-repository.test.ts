@@ -571,6 +571,31 @@ class OrganizationScopedReadDbClient implements TeamDbClient {
           }]) as T[]
     }
 
+    if (/FROM\s+skills\b/.test(sql)) {
+      return (hasRequestedOrganization ? [] : [{
+        id: 'skill-private',
+        organization_id: 'org-demo',
+        name: 'Private skill',
+        stage: 'all',
+        description: 'Must stay in org-demo.',
+        version: '1.0.0',
+        enabled: true,
+        source: 'team',
+      }]) as T[]
+    }
+
+    if (/FROM\s+mcp_server_definitions\b/.test(sql)) {
+      return (hasRequestedOrganization ? [] : [{
+        id: 'mcp-private',
+        organization_id: 'org-demo',
+        name: 'Private MCP',
+        command: 'private-command',
+        permission: 'shell',
+        enabled_by_default: false,
+        last_audit_event: 'private audit',
+      }]) as T[]
+    }
+
     return []
   }
 
@@ -585,16 +610,24 @@ describe('Postgres team repository', () => {
     const repository = createPostgresTeamRepository(db)
     const context = { organizationId: 'org-other' }
 
-    const [bundle, overview, providers] = await Promise.all([
+    const scopedDefinitions = repository as unknown as {
+      getSkills(input: typeof context): ReturnType<typeof repository.getSkills>
+      getMcpServers(input: typeof context): ReturnType<typeof repository.getMcpServers>
+    }
+    const [bundle, overview, providers, scopedSkills, scopedMcpServers] = await Promise.all([
       repository.getRunsBundle(context),
       repository.getTeamOverview(context),
       repository.listAgentProviders({ ...context, userId: 'u-other' }),
+      scopedDefinitions.getSkills(context),
+      scopedDefinitions.getMcpServers(context),
     ])
 
     expect(bundle).toEqual({ runs: [], artifacts: [], events: [] })
     expect(overview.projects).toEqual([])
     expect(overview.runs).toEqual([])
     expect(providers).toEqual([])
+    expect(scopedSkills).toEqual([])
+    expect(scopedMcpServers).toEqual([])
     expect(overview.enforcementPolicies.organizationPolicy.organizationId).toBe('org-other')
     expect(db.queries.length).toBeGreaterThan(0)
     expect(db.queries.every((query) => query.params?.[0] === 'org-other')).toBe(true)
@@ -741,7 +774,7 @@ describe('Postgres team repository', () => {
   it('maps skills and MCP server definitions from team tables', async () => {
     const repository = createPostgresTeamRepository(new FakeTeamDbClient())
 
-    await expect(repository.getSkills()).resolves.toEqual([
+    await expect(repository.getSkills(readContext)).resolves.toEqual([
       {
         id: 'skill-design-review',
         name: '方案评审',
@@ -752,7 +785,7 @@ describe('Postgres team repository', () => {
         source: 'team',
       },
     ])
-    await expect(repository.getMcpServers()).resolves.toEqual([
+    await expect(repository.getMcpServers(readContext)).resolves.toEqual([
       {
         id: 'mcp-github',
         name: 'GitHub',
@@ -918,6 +951,9 @@ describe('Postgres team repository', () => {
       attemptsRemaining: 5,
     })
     expect(result.code).toContain('.')
+    const insert = db.queries.find((query) => query.sql.includes('INSERT INTO desktop_pairing_codes'))
+    expect(insert?.sql).toMatch(/INSERT INTO desktop_pairing_codes[\s\S]+SELECT[\s\S]+FROM projects/)
+    expect(insert?.sql).toMatch(/projects\.organization_id\s*=\s*\$2/)
     const write = db.queries.find((query) => query.sql.includes('INSERT INTO desktop_pairing_codes'))
     expect(write?.params).toHaveLength(8)
     expect(write?.params).not.toContain(result.code)

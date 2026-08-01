@@ -126,6 +126,13 @@ export class RemoteChildSummaryConflictError extends Error {
   }
 }
 
+export class TeamProjectScopeError extends Error {
+  constructor() {
+    super('Team project is unavailable in the authenticated organization.')
+    this.name = 'TeamProjectScopeError'
+  }
+}
+
 export type GitHubIdentityProfile = {
   providerAccountId: string
   username?: string
@@ -174,8 +181,8 @@ export type TeamRepository = {
   resolveDesktopTokenSession(token: string): Promise<TeamSession | null>
   getRunsBundle(context: TeamRepositoryReadContext): Promise<RunsBundle>
   getTeamOverview(context: TeamRepositoryReadContext): Promise<TeamOverviewPayload>
-  getSkills(): Promise<SkillDefinition[]>
-  getMcpServers(): Promise<McpServerDefinition[]>
+  getSkills(context: TeamRepositoryReadContext): Promise<SkillDefinition[]>
+  getMcpServers(context: TeamRepositoryReadContext): Promise<McpServerDefinition[]>
   uploadRunSummary(
     summary: RemoteRunSummary,
     context: TeamRepositorySyncContext,
@@ -460,6 +467,9 @@ export function createSeedTeamRepository(): TeamRepository {
       return project
     },
     async createDesktopPairingCode(input, context) {
+      if (projectOrganizationIds.get(input.projectId) !== context.organizationId) {
+        throw new TeamProjectScopeError()
+      }
       const createdAt = new Date(0).toISOString()
       const sessionContext = context as TeamRepositorySyncContext & Partial<TeamSession>
       const role = sessionContext.role ?? 'owner'
@@ -641,12 +651,12 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
 
-    async getSkills() {
-      return skills
+    async getSkills(context) {
+      return context.organizationId === DEMO_ORGANIZATION_ID ? skills : []
     },
 
-    async getMcpServers() {
-      return mcpServers
+    async getMcpServers(context) {
+      return context.organizationId === DEMO_ORGANIZATION_ID ? mcpServers : []
     },
 
     async uploadRunSummary(summary, context) {
