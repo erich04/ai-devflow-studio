@@ -144,8 +144,16 @@ export type LocalStore = {
   close(): void
 }
 
-function migrateSchema(db: Database) {
-  db.run(`
+type SchemaMigration = {
+  version: number
+  migrate(db: Database): void
+}
+
+const schemaMigrations: readonly SchemaMigration[] = [
+  {
+    version: 1,
+    migrate(db) {
+      db.run(`
     create table if not exists schema_meta (
       key text primary key,
       value text not null
@@ -164,42 +172,6 @@ function migrateSchema(db: Database) {
       created_at text not null,
       updated_at text not null
     );
-
-    create table if not exists workflow_nodes (
-      id text primary key,
-      run_id text not null references workflow_runs(id) on delete cascade,
-      stage text not null,
-      title text not null,
-      subtitle text not null,
-      kind text not null,
-      status text not null,
-      owner_id text not null,
-      required_role text,
-      retry_count integer not null default 0,
-      token_usage_id text,
-      artifact_ids text not null default '[]',
-      position integer not null default 0,
-      json text not null,
-      created_at text not null,
-      updated_at text not null
-    );
-
-    create table if not exists workflow_edges (
-      id text primary key,
-      run_id text not null references workflow_runs(id) on delete cascade,
-      source_node_id text not null,
-      target_node_id text not null,
-      kind text not null,
-      position integer not null default 0,
-      json text not null,
-      created_at text not null
-    );
-
-    create index if not exists idx_workflow_nodes_run_id_position
-      on workflow_nodes(run_id, position);
-
-    create index if not exists idx_workflow_edges_run_id_position
-      on workflow_edges(run_id, position);
 
     create table if not exists artifacts (
       id text primary key,
@@ -224,6 +196,35 @@ function migrateSchema(db: Database) {
       json text not null,
       created_at text not null
     );
+      `)
+    },
+  },
+  {
+    version: 2,
+    migrate(db) {
+      db.run(`
+    create table if not exists local_settings (
+      key text primary key,
+      json text not null,
+      updated_at text not null
+    );
+
+    create table if not exists mcp_servers (
+      id text primary key,
+      json text not null,
+      updated_at text not null
+    );
+
+    insert into local_settings (key, json, updated_at)
+    values ('settings', '${JSON.stringify(DEFAULT_LOCAL_SETTINGS)}', datetime('now'))
+    on conflict(key) do nothing;
+      `)
+    },
+  },
+  {
+    version: 3,
+    migrate(db) {
+      db.run(`
 
     create table if not exists agent_reviews (
       id text primary key,
@@ -249,6 +250,20 @@ function migrateSchema(db: Database) {
       json text not null,
       timestamp text not null
     );
+
+    create table if not exists provider_credentials (
+      provider_id text primary key,
+      json text not null,
+      encrypted_secret text not null,
+      updated_at text not null
+    );
+      `)
+    },
+  },
+  {
+    version: 4,
+    migrate(db) {
+      db.run(`
 
     create table if not exists coding_agent_runs (
       id text primary key,
@@ -312,20 +327,13 @@ function migrateSchema(db: Database) {
       json text not null,
       created_at text not null
     );
-
-    create table if not exists provider_credentials (
-      provider_id text primary key,
-      json text not null,
-      encrypted_secret text not null,
-      updated_at text not null
-    );
-
-    create table if not exists desktop_pairing_credentials (
-      id text primary key,
-      json text not null,
-      encrypted_token text not null,
-      updated_at text not null
-    );
+      `)
+    },
+  },
+  {
+    version: 5,
+    migrate(db) {
+      db.run(`
 
     create table if not exists policy_snapshots (
       project_id text primary key,
@@ -340,6 +348,13 @@ function migrateSchema(db: Database) {
       json text not null,
       created_at text not null
     );
+      `)
+    },
+  },
+  {
+    version: 6,
+    migrate(db) {
+      db.run(`
 
     create table if not exists retry_attempts (
       id text primary key,
@@ -348,30 +363,108 @@ function migrateSchema(db: Database) {
       json text not null,
       created_at text not null
     );
+      `)
+    },
+  },
+  {
+    version: 7,
+    migrate(db) {
+      db.run(`
 
-    create table if not exists local_settings (
-      key text primary key,
-      json text not null,
-      updated_at text not null
-    );
-
-    create table if not exists mcp_servers (
+    create table if not exists desktop_pairing_credentials (
       id text primary key,
       json text not null,
+      encrypted_token text not null,
+      updated_at text not null
+    );
+      `)
+    },
+  },
+  {
+    version: 8,
+    migrate(db) {
+      db.run(`
+
+    create table if not exists workflow_nodes (
+      id text primary key,
+      run_id text not null references workflow_runs(id) on delete cascade,
+      stage text not null,
+      title text not null,
+      subtitle text not null,
+      kind text not null,
+      status text not null,
+      owner_id text not null,
+      required_role text,
+      retry_count integer not null default 0,
+      token_usage_id text,
+      artifact_ids text not null default '[]',
+      position integer not null default 0,
+      json text not null,
+      created_at text not null,
       updated_at text not null
     );
 
-    insert into schema_meta (key, value)
-    values ('schema_version', '${CURRENT_SCHEMA_VERSION}')
-    on conflict(key) do update set value = excluded.value;
+    create table if not exists workflow_edges (
+      id text primary key,
+      run_id text not null references workflow_runs(id) on delete cascade,
+      source_node_id text not null,
+      target_node_id text not null,
+      kind text not null,
+      position integer not null default 0,
+      json text not null,
+      created_at text not null
+    );
 
-    insert into local_settings (key, json, updated_at)
-    values ('settings', '${JSON.stringify(DEFAULT_LOCAL_SETTINGS)}', datetime('now'))
-    on conflict(key) do nothing;
-  `)
+    create index if not exists idx_workflow_nodes_run_id_position
+      on workflow_nodes(run_id, position);
 
-  migrateWorkflowRunsIntoRelationalTables(db)
-  redactStoredEvidencePrivacy(db)
+    create index if not exists idx_workflow_edges_run_id_position
+      on workflow_edges(run_id, position);
+      `)
+      migrateWorkflowRunsIntoRelationalTables(db)
+    },
+  },
+]
+
+function migrateSchema(db: Database) {
+  const schemaMetaExists = Boolean(
+    db.exec("select name from sqlite_master where type = 'table' and name = 'schema_meta'")[0]
+      ?.values.length,
+  )
+  const existingVersion = schemaMetaExists ? readSchemaVersion(db) : 0
+  if (existingVersion > CURRENT_SCHEMA_VERSION) {
+    throw new Error(
+      `DevFlow local database schema version ${existingVersion} is newer than supported version ${CURRENT_SCHEMA_VERSION}`,
+    )
+  }
+
+  for (const migration of schemaMigrations) {
+    if (migration.version <= existingVersion) {
+      continue
+    }
+
+    db.run('begin transaction')
+    try {
+      migration.migrate(db)
+      db.run(
+        `insert into schema_meta (key, value) values ('schema_version', ?) on conflict(key) do update set value = excluded.value`,
+        [String(migration.version)],
+      )
+      db.run('commit')
+    } catch (error) {
+      db.run('rollback')
+      throw error
+    }
+  }
+
+  db.run('begin transaction')
+  try {
+    redactStoredEvidencePrivacy(db)
+    db.run('commit')
+  } catch (error) {
+    db.run('rollback')
+    throw error
+  }
 }
 
 function readSchemaVersion(db: Database): number {
@@ -796,6 +889,8 @@ function assertWorkflowCreationScope(creation: WorkflowCreation): void {
 }
 
 class SqlJsLocalStore implements LocalStore {
+  private persistenceQueue: Promise<void> = Promise.resolve()
+
   constructor(
     private readonly sql: SqlJsStatic,
     private db: Database,
@@ -1619,7 +1714,9 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   private async persist(): Promise<void> {
-    await persistDatabase(this.db, this.dbPath)
+    const persistence = this.persistenceQueue.then(() => persistDatabase(this.db, this.dbPath))
+    this.persistenceQueue = persistence.catch(() => undefined)
+    await persistence
   }
 }
 

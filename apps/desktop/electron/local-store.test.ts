@@ -446,6 +446,72 @@ describe('createLocalStore', () => {
     db.close()
   })
 
+  it('refuses to open a database created by a newer schema version', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const newerDb = new SQL.Database(await readFile(dbPath))
+    newerDb.run("update schema_meta set value = '9' where key = 'schema_version'")
+    await writeFile(dbPath, Buffer.from(newerDb.export()))
+    newerDb.close()
+
+    await expect(createLocalStore({ dbPath })).rejects.toThrow(
+      /schema version 9 is newer than supported version 8/,
+    )
+
+    const unchangedDb = new SQL.Database(await readFile(dbPath))
+    expect(
+      unchangedDb.exec("select value from schema_meta where key = 'schema_version'")[0]
+        ?.values[0]?.[0],
+    ).toBe('9')
+    unchangedDb.close()
+  })
+
+  it('leaves the previous version and data intact when a migration transaction fails', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    await initial.upsertProject(project)
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const v7Db = new SQL.Database(await readFile(dbPath))
+    v7Db.run(`
+      drop index idx_workflow_nodes_run_id_position;
+      drop table workflow_nodes;
+      create table workflow_nodes (id text primary key);
+      update schema_meta set value = '7' where key = 'schema_version';
+    `)
+    await writeFile(dbPath, Buffer.from(v7Db.export()))
+    v7Db.close()
+
+    await expect(createLocalStore({ dbPath })).rejects.toThrow(
+      /DevFlow local database is unreadable/,
+    )
+
+    const unchangedDb = new SQL.Database(await readFile(dbPath))
+    expect(
+      unchangedDb.exec("select value from schema_meta where key = 'schema_version'")[0]
+        ?.values[0]?.[0],
+    ).toBe('7')
+    expect(
+      JSON.parse(String(unchangedDb.exec('select json from local_projects')[0]?.values[0]?.[0])),
+    ).toEqual(project)
+    unchangedDb.run('drop table workflow_nodes')
+    await writeFile(dbPath, Buffer.from(unchangedDb.export()))
+    unchangedDb.close()
+
+    const migrated = await createLocalStore({ dbPath })
+    expect(await migrated.getSchemaVersion()).toBe(8)
+    expect(await migrated.listProjects()).toEqual([project])
+    migrated.close()
+  })
+
   it('throws a clear error when an existing database file is corrupted', async () => {
     const dbPath = await tempDbPath()
     await writeFile(dbPath, 'not a sqlite database')
@@ -475,6 +541,25 @@ describe('createLocalStore', () => {
       redactTestEvidenceForStorage(evidence),
     ])
     second.close()
+  })
+
+  it('persists concurrent mutations in invocation order without reviving stale snapshots', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const concurrentArtifact: Artifact = {
+      ...artifact,
+      id: 'artifact-concurrent-persist',
+      kind: 'design',
+    }
+
+    const saving = store.saveArtifact(concurrentArtifact)
+    const deleting = store.deleteRun(concurrentArtifact.runId)
+    await Promise.all([saving, deleting])
+
+    store.close()
+    const reopened = await createLocalStore({ dbPath })
+    expect(await reopened.listArtifacts(concurrentArtifact.runId)).toEqual([])
+    reopened.close()
   })
 
   it('redacts Test Result events at the local persistence boundary', async () => {
