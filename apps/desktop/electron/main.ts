@@ -44,7 +44,9 @@ import {
   parseDeleteManagedWorktreeInput,
   parseEnsureCodingEngineInput,
   parseListCodingAgentRunsInput,
+  parseListWorkRequestsInput,
   parseMcpServersInput,
+  parseMaterializeWorkRequestInput,
   parseOpenManagedWorktreeInput,
   parseAgentProviderCredentialInput,
   parsePairDesktopInput,
@@ -74,6 +76,7 @@ import {
   parseValidateTestCommandInput,
 } from './ipc-contract.js'
 import { createRemoteSyncClient, type RemoteSyncClient } from './remote-sync.js'
+import { createDesktopWorkRequestService } from './work-request-service.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
 import { createCodingEngineAdapterFromEnv } from './coding-engine.js'
 import { createCodingRuntime } from './coding-runtime.js'
@@ -143,6 +146,11 @@ const repositoryKnowledgeCache = createRepositoryKnowledgeCache({
 const repositoryKnowledgeResolver = createRepositoryKnowledgeResolver({
   getStore,
   cache: repositoryKnowledgeCache,
+})
+const desktopWorkRequestService = createDesktopWorkRequestService({
+  getStore,
+  decryptToken: decryptCredential,
+  createClient: createRemoteSyncClient,
 })
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
@@ -913,6 +921,23 @@ function registerIpcHandlers() {
     await cacheRemotePolicySnapshots(snapshot)
     return snapshot
   })
+
+  ipcMain.handle(ipcChannels.listWorkRequests, async (_, payload: unknown) => {
+    const input = parseListWorkRequestsInput(payload)
+    return desktopWorkRequestService.list(input)
+  })
+
+  ipcMain.handle(
+    ipcChannels.materializeWorkRequest,
+    async (_, payload: unknown) => {
+      const input = parseMaterializeWorkRequestInput(payload)
+      try {
+        return await desktopWorkRequestService.materialize(input)
+      } finally {
+        wakeRemoteSyncOutbox()
+      }
+    },
+  )
 
   ipcMain.handle(ipcChannels.selectProject, async () => {
     const result = await dialog.showOpenDialog({

@@ -502,6 +502,70 @@ button:disabled {
   box-shadow: var(--focus-ring);
 }
 
+.work-request-inbox {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.work-request-inbox__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 0;
+}
+
+.work-request-inbox__list {
+  display: grid;
+  gap: 8px;
+}
+
+.work-request-row {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.work-request-row__summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.work-request-row__summary strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-request-row__summary small {
+  margin-left: auto;
+  color: var(--text-muted);
+}
+
+.work-request-row p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.work-request-row > .ghost-button {
+  justify-self: start;
+}
+
 .command-safety {
   display: grid;
   gap: 4px;

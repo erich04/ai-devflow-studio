@@ -15,6 +15,8 @@ import {
   parseOpenManagedWorktreeInput,
   parseReplyCodingPermissionInput,
   parseLoadRepositoryKnowledgeInput,
+  parseListWorkRequestsInput,
+  parseMaterializeWorkRequestInput,
   parseRefreshRepositoryKnowledgeInput,
   parseRunCodingAgentInput,
   parseRunKnowledgeReviewInput,
@@ -404,6 +406,99 @@ describe('IPC contract parsers', () => {
     expect(() =>
       parsePairDesktopInput({ code: 'pair-id.copy-once-secret' }),
     ).toThrow(/localProjectId/)
+  })
+
+  it('keeps Work Request list and materialization commands identifier-only', () => {
+    expect(
+      parseListWorkRequestsInput({ localProjectId: 'local-project-1' }),
+    ).toEqual({ localProjectId: 'local-project-1' })
+    expect(
+      parseMaterializeWorkRequestInput({
+        localProjectId: 'local-project-1',
+        workRequestId: 'work-request-1',
+        expectedVersion: 2,
+      }),
+    ).toEqual({
+      localProjectId: 'local-project-1',
+      workRequestId: 'work-request-1',
+      expectedVersion: 2,
+    })
+
+    expect(() =>
+      parseListWorkRequestsInput({
+        localProjectId: 'local-project-1',
+        projectId: 'renderer-team-project',
+      }),
+    ).toThrow(/unexpected field/i)
+  })
+
+  it.each([
+    ['runId', 'renderer-run'],
+    ['projectId', 'renderer-team-project'],
+    ['teamProjectId', 'renderer-team-project'],
+    ['organizationId', 'renderer-organization'],
+    ['title', 'Renderer title'],
+    ['request', 'Renderer request'],
+    ['creatorId', 'renderer-user'],
+    ['branchName', 'renderer/branch'],
+    ['idempotencyKey', 'renderer-idempotency'],
+    ['pairing', { tokenId: 'renderer-token-record' }],
+    ['token', 'renderer-bearer-secret'],
+    ['authToken', 'renderer-bearer-secret'],
+  ])('rejects renderer-supplied Work Request authority field %s', (field, value) => {
+    expect(() =>
+      parseMaterializeWorkRequestInput({
+        localProjectId: 'local-project-1',
+        workRequestId: 'work-request-1',
+        expectedVersion: 2,
+        [field]: value,
+      }),
+    ).toThrow(/unexpected field/i)
+  })
+
+  it('requires exact Work Request identifiers and a positive int4 version', () => {
+    for (const input of [
+      { localProjectId: ' local-project-1 ' },
+      { localProjectId: '' },
+      { localProjectId: '   ' },
+      { localProjectId: 'x'.repeat(201) },
+    ]) {
+      expect(() => parseListWorkRequestsInput(input)).toThrow(/localProjectId/)
+    }
+
+    for (const expectedVersion of [0, -1, 1.5, 2_147_483_648, Number.NaN, Infinity, '1']) {
+      expect(() =>
+        parseMaterializeWorkRequestInput({
+          localProjectId: 'local-project-1',
+          workRequestId: 'work-request-1',
+          expectedVersion,
+        }),
+      ).toThrow(/expectedVersion/)
+    }
+
+    expect(() =>
+      parseMaterializeWorkRequestInput({
+        localProjectId: 'local-project-1',
+        workRequestId: 'x'.repeat(201),
+        expectedVersion: 1,
+      }),
+    ).toThrow(/workRequestId/)
+    expect(() =>
+      parseMaterializeWorkRequestInput({
+        localProjectId: 'local-project-1',
+        workRequestId: ' work-request-1 ',
+        expectedVersion: 1,
+      }),
+    ).toThrow(/workRequestId/)
+  })
+
+  it('exposes only narrow Work Request list and materialize channels', () => {
+    expect(ipcChannels).toMatchObject({
+      listWorkRequests: 'devflow:work-requests:list',
+      materializeWorkRequest: 'devflow:work-requests:materialize',
+    })
+    expect(ipcChannels).not.toHaveProperty('claimWorkRequest')
+    expect(ipcChannels).not.toHaveProperty('createWorkRequest')
   })
 
   it('rejects empty provider credentials and malformed knowledge review payloads', () => {

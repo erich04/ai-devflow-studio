@@ -24,13 +24,17 @@ import type {
   RemoteTeamSnapshot,
   RetryAttempt,
   TestEvidence,
+  WorkRequest,
   WorkflowRun,
 } from '@ai-devflow/shared'
 import type {
   CreateRunInput,
   DeleteRunInput,
   DeleteRunResult,
+  ListWorkRequestsInput,
   LoadRepositoryKnowledgeInput,
+  MaterializeWorkRequestInput,
+  MaterializeWorkRequestResult,
   RefreshRepositoryKnowledgeInput,
   RetryRemoteSyncOperationInput,
 } from '../electron/ipc-contract'
@@ -187,6 +191,10 @@ export type DevFlowDesktopApi = {
   loadDesktopPairing: () => Promise<DesktopPairingCredential | null>
   pairDesktop: (input: PairDesktopInput) => Promise<PairDesktopResult>
   loadRemoteSnapshot: (input?: LoadRemoteSnapshotInput) => Promise<RemoteTeamSnapshot>
+  listWorkRequests: (input: ListWorkRequestsInput) => Promise<WorkRequest[]>
+  materializeWorkRequest: (
+    input: MaterializeWorkRequestInput,
+  ) => Promise<MaterializeWorkRequestResult>
   loadRepositoryKnowledge: (
     input: LoadRepositoryKnowledgeInput,
   ) => Promise<RepositoryKnowledgeSnapshot>

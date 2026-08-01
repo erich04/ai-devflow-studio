@@ -23,6 +23,12 @@ type ExposedDesktopApi = {
   retryRemoteSyncOperation: (input: { operationId: string }) => Promise<unknown>
   loadRepositoryKnowledge: (input: { projectId: string }) => Promise<unknown>
   refreshRepositoryKnowledge: (input: { projectId: string }) => Promise<unknown>
+  listWorkRequests: (input: { localProjectId: string }) => Promise<unknown>
+  materializeWorkRequest: (input: {
+    localProjectId: string
+    workRequestId: string
+    expectedVersion: number
+  }) => Promise<unknown>
   onLocalStateUpdated: (listener: (state: unknown) => void) => () => void
 }
 
@@ -93,5 +99,43 @@ describe('Electron preload remote sync operator surface', () => {
     expect(electron.invoke).toHaveBeenLastCalledWith(ipcChannels.refreshRepositoryKnowledge, {
       projectId: 'project-1',
     })
+  })
+
+  it('forwards only the narrow Work Request list command', async () => {
+    const workRequests = [{ id: 'work-request-1', status: 'open' }]
+    electron.invoke.mockResolvedValueOnce(workRequests)
+
+    await expect(
+      exposedApi.listWorkRequests({ localProjectId: 'local-project-1' }),
+    ).resolves.toBe(workRequests)
+    expect(electron.invoke).toHaveBeenLastCalledWith(ipcChannels.listWorkRequests, {
+      localProjectId: 'local-project-1',
+    })
+  })
+
+  it('forwards only local project, Work Request, and version for materialization', async () => {
+    const result = { workRequest: {}, run: {}, state: {} }
+    const input = {
+      localProjectId: 'local-project-1',
+      workRequestId: 'work-request-1',
+      expectedVersion: 2,
+    }
+    electron.invoke.mockResolvedValueOnce(result)
+
+    await expect(exposedApi.materializeWorkRequest(input)).resolves.toBe(result)
+    expect(electron.invoke).toHaveBeenLastCalledWith(
+      ipcChannels.materializeWorkRequest,
+      input,
+    )
+    expect(exposedApi).not.toHaveProperty('claimWorkRequest')
+    expect(exposedApi).not.toHaveProperty('createWorkRequest')
+    expect(Object.keys(input).sort()).toEqual([
+      'expectedVersion',
+      'localProjectId',
+      'workRequestId',
+    ])
+    expect(JSON.stringify(input)).not.toMatch(
+      /runId|teamProjectId|organizationId|title|creatorId|branchName|idempotency|pairing|token/i,
+    )
   })
 })

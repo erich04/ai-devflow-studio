@@ -217,6 +217,10 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       memberCost: [],
       totalCost: '$0.000',
     }),
+    listWorkRequests: vi.fn().mockResolvedValue([]),
+    materializeWorkRequest: vi.fn().mockRejectedValue(
+      new Error('Work Request materialization is not configured for this test.'),
+    ),
     loadRepositoryKnowledge: vi.fn().mockImplementation(async ({ projectId }) => ({
       projectId,
       contentHash: '',
@@ -1349,6 +1353,112 @@ describe('App', () => {
     expect(within(projectSelector).getByText('已绑定 · 待同步')).toBeInTheDocument()
     expect(within(localProjectPanel).getByText('p-payments')).toBeInTheDocument()
     expect(within(localProjectPanel).getByText('已绑定 · 待同步')).toBeInTheDocument()
+  })
+
+  it('loads the Work Request Inbox only for the selected paired local project', async () => {
+    const inboxWorkRequest = {
+      id: 'work-request-inbox-1',
+      organizationId: 'org-demo',
+      projectId: fixturePairingCredential.projectId,
+      title: '实现 Work Request Inbox',
+      request: '把远端请求安全地创建为本地 Run。',
+      version: 1,
+      status: 'open' as const,
+      createdByUserId: 'u-ling',
+      claim: null,
+      expiresAt: null,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }
+    const api = installDesktopApi({
+      listWorkRequests: vi.fn().mockResolvedValue([inboxWorkRequest]),
+    })
+
+    render(<App />)
+
+    expect(await screen.findByText('实现 Work Request Inbox')).toBeInTheDocument()
+    expect(api.listWorkRequests).toHaveBeenCalledTimes(1)
+    expect(api.listWorkRequests).toHaveBeenCalledWith({
+      localProjectId: localProject.id,
+    })
+    expect(screen.getByRole('region', { name: 'Work Request Inbox' })).toBeInTheDocument()
+  })
+
+  it('materializes a Work Request through the narrow command and selects the returned local Run', async () => {
+    const inboxWorkRequest = {
+      id: 'work-request-inbox-2',
+      organizationId: 'org-demo',
+      projectId: fixturePairingCredential.projectId,
+      title: '交付可恢复 Inbox',
+      request: '创建具备来源绑定的本地 Run。',
+      version: 1,
+      status: 'open' as const,
+      createdByUserId: 'u-ling',
+      claim: null,
+      expiresAt: null,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }
+    const created = createWorkflowRunFromRequest({
+      runId: 'run-from-work-request-inbox',
+      title: inboxWorkRequest.title,
+      request: inboxWorkRequest.request,
+      projectId: localProject.id,
+      creatorId: 'u-ling',
+      branchName: 'ai/work-request-inbox',
+      now: '2026-08-01T00:01:00.000Z',
+    })
+    const materializedWorkRequest = {
+      ...inboxWorkRequest,
+      version: 3,
+      status: 'materialized' as const,
+      claim: {
+        runId: created.run.id,
+        claimedAt: '2026-08-01T00:01:00.000Z',
+        materializedAt: '2026-08-01T00:02:00.000Z',
+      },
+      updatedAt: '2026-08-01T00:02:00.000Z',
+    }
+    const nextState = desktopState({
+      projects: [localProject],
+      runs: [created.run],
+      artifacts: created.artifacts,
+      events: created.events,
+      desktopPairingCredential: fixturePairingCredential,
+    })
+    const api = installDesktopApi({
+      listWorkRequests: vi
+        .fn()
+        .mockResolvedValueOnce([inboxWorkRequest])
+        .mockResolvedValue([materializedWorkRequest]),
+      materializeWorkRequest: vi.fn().mockResolvedValue({
+        workRequest: materializedWorkRequest,
+        run: created.run,
+        state: nextState,
+      }),
+    })
+    render(<App />)
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: '创建本地 Run：交付可恢复 Inbox',
+      }),
+    )
+
+    await waitFor(() => {
+      expect(api.materializeWorkRequest).toHaveBeenCalledWith({
+        localProjectId: localProject.id,
+        workRequestId: 'work-request-inbox-2',
+        expectedVersion: 1,
+      })
+    })
+    expect(Object.keys(vi.mocked(api.materializeWorkRequest).mock.calls[0]![0]).sort()).toEqual([
+      'expectedVersion',
+      'localProjectId',
+      'workRequestId',
+    ])
+    expect(await screen.findByText('ai/work-request-inbox')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Work Request 已创建本地 Run')
   })
 
   it('treats a credential for another local project as unbound on the current project', async () => {

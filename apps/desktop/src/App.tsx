@@ -41,6 +41,8 @@ import {
 import { resolveInspectorTabForSearchResult } from './app/node-inspector-view-model'
 import { useDesktopActions } from './app/useDesktopActions'
 import { useDesktopWorkspace } from './app/useDesktopWorkspace'
+import { useWorkRequestInbox } from './app/useWorkRequestInbox'
+import { WorkRequestInbox } from './WorkRequestInbox'
 import {
   AgentWorkbenchView,
   Inspector,
@@ -325,6 +327,28 @@ export function App() {
   const hasSelectedLocalProjectBinding = Boolean(
     selectedLocalProject && desktopPairing?.localProjectId === selectedLocalProject.id,
   )
+  const handleWorkRequestMaterialized = useCallback(
+    async (result: Awaited<ReturnType<NonNullable<typeof desktopApi>['materializeWorkRequest']>>) => {
+      applyLocalExecutionState(result.state)
+      setSelectedRunId(result.run.id)
+      setSelectedNodeId(result.run.currentNodeId)
+      setActiveView('workbench')
+      setToast('Work Request 已创建本地 Run')
+    },
+    [
+      applyLocalExecutionState,
+      setActiveView,
+      setSelectedNodeId,
+      setSelectedRunId,
+      setToast,
+    ],
+  )
+  const workRequestInbox = useWorkRequestInbox({
+    desktopApi,
+    localProjectId: selectedLocalProject?.id ?? '',
+    isPaired: hasSelectedLocalProjectBinding,
+    onMaterialized: handleWorkRequestMaterialized,
+  })
   const hasDeliveryProjectBinding = Boolean(
     desktopPairing?.localProjectId && desktopPairing.localProjectId === selectedRun?.projectId,
   )
@@ -949,6 +973,17 @@ export function App() {
                 onRefreshGitStatus={refreshProjectGitStatus}
                 onSelectProject={selectLocalProject}
                 desktopConnected={Boolean(desktopApi)}
+              />
+              <WorkRequestInbox
+                workRequests={workRequestInbox.workRequests}
+                isPaired={hasSelectedLocalProjectBinding}
+                isLoading={workRequestInbox.isLoading}
+                materializingId={workRequestInbox.materializingId}
+                error={workRequestInbox.error}
+                onRefresh={() => void workRequestInbox.refresh()}
+                onMaterialize={(workRequest) =>
+                  void workRequestInbox.materialize(workRequest)
+                }
               />
               <div className="section-heading">
                 <span>Runs</span>

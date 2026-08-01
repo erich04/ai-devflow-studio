@@ -7,11 +7,13 @@ import initSqlJs, { type Database, type SqlJsStatic, type SqlValue } from 'sql.j
 import {
   createRemoteSyncIdempotencyKey,
   createRemoteSyncOperation,
+  createWorkflowRunFromRequest,
   isActiveCodingAgentRunStatus,
   REMOTE_SYNC_CLAIM_LEASE_MS,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   normalizeWorkflowRunProgress,
+  parseWorkRequestRecord,
   redactCodingAgentEventForStorage,
   redactSensitiveText,
   redactTestEvidenceForStorage,
@@ -44,8 +46,9 @@ import {
   type WorkflowEdge,
   type WorkflowNode,
   type WorkflowRun,
+  type WorkRequest,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 9
+export const CURRENT_SCHEMA_VERSION = 10
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -81,6 +84,58 @@ export type WorkflowCreation = {
 export type WorkflowCreationResult =
   | { created: true }
   | { created: false; reason: 'run_exists' }
+
+export type WorkRequestMaterializationExpectedPairing = {
+  tokenId: string
+  organizationId: string
+  projectId: string
+  localProjectId: string
+}
+
+export type WorkRequestMaterializationBinding = {
+  workRequestId: string
+  organizationId: string
+  teamProjectId: string
+  localProjectId: string
+  runId: string
+  claimVersion: number
+  sourceFingerprint: string
+  materializeIdempotencyKey: string
+  status: 'pending_ack' | 'acknowledged'
+  acknowledgedVersion: number | null
+  createdAt: string
+  updatedAt: string
+  acknowledgedAt: string | null
+}
+
+export type MaterializeClaimedWorkRequestInput = {
+  workRequest: WorkRequest
+  creation: WorkflowCreation
+  expectedPairing: WorkRequestMaterializationExpectedPairing
+  sourceFingerprint: string
+  materializeIdempotencyKey: string
+}
+
+export type MaterializeClaimedWorkRequestResult = {
+  status: 'created' | 'replayed' | 'conflict' | 'pairing_scope_mismatch'
+}
+
+export type MarkWorkRequestMaterializationAcknowledgedInput = {
+  workRequestId: string
+  runId: string
+  materializedVersion: number
+  acknowledgedAt: string
+  expectedPairing: WorkRequestMaterializationExpectedPairing
+  sourceFingerprint: string
+  materializeIdempotencyKey: string
+}
+
+export type MarkWorkRequestMaterializationAcknowledgedResult =
+  | { acknowledged: true }
+  | {
+      acknowledged: false
+      reason: 'not_found' | 'conflict' | 'pairing_scope_mismatch'
+    }
 
 export type WorkflowMutationCommitResult =
   | { committed: true }
@@ -159,6 +214,18 @@ export type LocalStore = {
   createWorkflow(
     creation: WorkflowCreation,
   ): Promise<WorkflowCreationResult>
+  materializeClaimedWorkRequest(
+    input: MaterializeClaimedWorkRequestInput,
+  ): Promise<MaterializeClaimedWorkRequestResult>
+  markWorkRequestMaterializationAcknowledged(
+    input: MarkWorkRequestMaterializationAcknowledgedInput,
+  ): Promise<MarkWorkRequestMaterializationAcknowledgedResult>
+  getWorkRequestMaterializationByWorkRequestId(
+    workRequestId: string,
+  ): Promise<WorkRequestMaterializationBinding | null>
+  getWorkRequestMaterializationByRunId(
+    runId: string,
+  ): Promise<WorkRequestMaterializationBinding | null>
   commitWorkflowMutation(
     mutation: WorkflowMutation,
   ): Promise<WorkflowMutationCommitResult>
@@ -541,6 +608,56 @@ const schemaMigrations: readonly SchemaMigration[] = [
 
     create index if not exists idx_remote_sync_outbox_due
       on remote_sync_outbox(status, next_attempt_at, created_at);
+      `)
+    },
+  },
+  {
+    version: 10,
+    migrate(db) {
+      db.run(`
+
+    create table if not exists work_request_materializations (
+      work_request_id text primary key,
+      organization_id text not null,
+      team_project_id text not null,
+      local_project_id text not null,
+      run_id text not null unique references workflow_runs(id) on delete restrict,
+      claim_version integer not null,
+      source_fingerprint text not null,
+      materialize_idempotency_key text not null unique,
+      status text not null,
+      acknowledged_version integer,
+      created_at text not null,
+      updated_at text not null,
+      acknowledged_at text,
+      check (length(trim(work_request_id)) > 0 and trim(work_request_id) = work_request_id),
+      check (length(trim(organization_id)) > 0 and trim(organization_id) = organization_id),
+      check (length(trim(team_project_id)) > 0 and trim(team_project_id) = team_project_id),
+      check (length(trim(local_project_id)) > 0 and trim(local_project_id) = local_project_id),
+      check (length(trim(run_id)) > 0 and trim(run_id) = run_id),
+      check (claim_version > 0),
+      check (
+        length(source_fingerprint) = 64 and
+        source_fingerprint not glob '*[^0-9a-f]*'
+      ),
+      check (
+        length(trim(materialize_idempotency_key)) > 0 and
+        length(materialize_idempotency_key) <= 200 and
+        trim(materialize_idempotency_key) = materialize_idempotency_key
+      ),
+      check (status in ('pending_ack', 'acknowledged')),
+      check (updated_at >= created_at),
+      check (
+        (status = 'pending_ack' and acknowledged_version is null and acknowledged_at is null) or
+        (status = 'acknowledged' and acknowledged_version = claim_version + 1 and acknowledged_at is not null)
+      )
+    );
+
+    create index if not exists idx_work_request_materializations_pending
+      on work_request_materializations(status, updated_at, work_request_id);
+
+    create index if not exists idx_work_request_materializations_run_id
+      on work_request_materializations(run_id);
       `)
     },
   },
@@ -1157,6 +1274,175 @@ function assertWorkflowCreationScope(creation: WorkflowCreation): void {
   }
 }
 
+type WorkRequestMaterializationRow = {
+  work_request_id: string
+  organization_id: string
+  team_project_id: string
+  local_project_id: string
+  run_id: string
+  claim_version: number
+  source_fingerprint: string
+  materialize_idempotency_key: string
+  status: WorkRequestMaterializationBinding['status']
+  acknowledged_version: number | null
+  created_at: string
+  updated_at: string
+  acknowledged_at: string | null
+}
+
+const WORK_REQUEST_MATERIALIZATION_COLUMNS = `
+  work_request_id,
+  organization_id,
+  team_project_id,
+  local_project_id,
+  run_id,
+  claim_version,
+  source_fingerprint,
+  materialize_idempotency_key,
+  status,
+  acknowledged_version,
+  created_at,
+  updated_at,
+  acknowledged_at
+`
+
+function isCanonicalTimestamp(value: string): boolean {
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
+}
+
+function isNonEmptyUnpadded(value: string): boolean {
+  return value.length > 0 && value.trim() === value
+}
+
+function hasExpectedMaterializationPairing(
+  current: DesktopPairingCredential | undefined,
+  expected: WorkRequestMaterializationExpectedPairing,
+): current is DesktopPairingCredential & { localProjectId: string } {
+  return (
+    current !== undefined &&
+    current.tokenId === expected.tokenId &&
+    current.organizationId === expected.organizationId &&
+    current.projectId === expected.projectId &&
+    current.localProjectId === expected.localProjectId
+  )
+}
+
+function mapWorkRequestMaterializationRow(
+  row: WorkRequestMaterializationRow,
+): WorkRequestMaterializationBinding {
+  return {
+    workRequestId: row.work_request_id,
+    organizationId: row.organization_id,
+    teamProjectId: row.team_project_id,
+    localProjectId: row.local_project_id,
+    runId: row.run_id,
+    claimVersion: row.claim_version,
+    sourceFingerprint: row.source_fingerprint,
+    materializeIdempotencyKey: row.materialize_idempotency_key,
+    status: row.status,
+    acknowledgedVersion: row.acknowledged_version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    acknowledgedAt: row.acknowledged_at,
+  }
+}
+
+function selectWorkRequestMaterialization(
+  db: Database,
+  where: 'work_request_id' | 'run_id' | 'materialize_idempotency_key',
+  value: string,
+): WorkRequestMaterializationBinding | null {
+  const result = db.exec(
+    `select ${WORK_REQUEST_MATERIALIZATION_COLUMNS}
+     from work_request_materializations
+     where ${where} = ?
+     limit 1`,
+    [value],
+  )
+  const row = result[0]?.values[0]
+  if (!row) {
+    return null
+  }
+  return mapWorkRequestMaterializationRow({
+    work_request_id: String(row[0]),
+    organization_id: String(row[1]),
+    team_project_id: String(row[2]),
+    local_project_id: String(row[3]),
+    run_id: String(row[4]),
+    claim_version: Number(row[5]),
+    source_fingerprint: String(row[6]),
+    materialize_idempotency_key: String(row[7]),
+    status: String(row[8]) as WorkRequestMaterializationBinding['status'],
+    acknowledged_version: row[9] === null ? null : Number(row[9]),
+    created_at: String(row[10]),
+    updated_at: String(row[11]),
+    acknowledged_at: row[12] === null ? null : String(row[12]),
+  })
+}
+
+function validateMaterializationInput(
+  input: MaterializeClaimedWorkRequestInput,
+  currentPairing: DesktopPairingCredential & { localProjectId: string },
+): {
+  workRequest: WorkRequest
+  creation: WorkflowCreation
+} | null {
+  try {
+    const workRequest = parseWorkRequestRecord(input.workRequest)
+    const claim = workRequest.claim
+    if (
+      workRequest.status !== 'claim_pending' ||
+      claim === null ||
+      claim.materializedAt !== null ||
+      workRequest.organizationId !== input.expectedPairing.organizationId ||
+      workRequest.projectId !== input.expectedPairing.projectId ||
+      input.creation.run.id !== claim.runId ||
+      input.creation.run.projectId !== input.expectedPairing.localProjectId ||
+      input.creation.run.creatorId !== currentPairing.userId ||
+      workRequest.updatedAt !== claim.claimedAt ||
+      !/^[0-9a-f]{64}$/.test(input.sourceFingerprint) ||
+      !isNonEmptyUnpadded(input.materializeIdempotencyKey) ||
+      input.materializeIdempotencyKey.length > 200
+    ) {
+      return null
+    }
+
+    const canonicalCreation = createWorkflowRunFromRequest({
+      runId: claim.runId,
+      title: workRequest.title,
+      request: workRequest.request,
+      projectId: input.expectedPairing.localProjectId,
+      creatorId: currentPairing.userId,
+      branchName: input.creation.run.branchName,
+      now: claim.claimedAt,
+    })
+    if (JSON.stringify(canonicalCreation) !== JSON.stringify(input.creation)) {
+      return null
+    }
+    return { workRequest, creation: canonicalCreation }
+  } catch {
+    return null
+  }
+}
+
+function bindingMatchesMaterialization(
+  binding: WorkRequestMaterializationBinding,
+  input: MaterializeClaimedWorkRequestInput,
+  workRequest: WorkRequest,
+): boolean {
+  return (
+    binding.workRequestId === workRequest.id &&
+    binding.organizationId === workRequest.organizationId &&
+    binding.teamProjectId === workRequest.projectId &&
+    binding.localProjectId === input.expectedPairing.localProjectId &&
+    binding.runId === workRequest.claim?.runId &&
+    binding.claimVersion === workRequest.version &&
+    binding.sourceFingerprint === input.sourceFingerprint &&
+    binding.materializeIdempotencyKey === input.materializeIdempotencyKey
+  )
+}
+
 class SqlJsLocalStore implements LocalStore {
   private persistenceQueue: Promise<void> = Promise.resolve()
 
@@ -1206,6 +1492,11 @@ class SqlJsLocalStore implements LocalStore {
     const trimmedRunId = runId.trim()
     if (!trimmedRunId) {
       throw new Error('Invalid runId')
+    }
+    if (
+      selectWorkRequestMaterialization(this.db, 'run_id', trimmedRunId) !== null
+    ) {
+      throw new Error('Run is bound to a Work Request materialization.')
     }
 
     this.db.run('begin transaction')
@@ -1720,6 +2011,274 @@ class SqlJsLocalStore implements LocalStore {
       this.restore(snapshot)
       throw error
     }
+  }
+
+  async materializeClaimedWorkRequest(
+    input: MaterializeClaimedWorkRequestInput,
+  ): Promise<MaterializeClaimedWorkRequestResult> {
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      const [currentPairing] = selectJson<DesktopPairingCredential>(
+        this.db,
+        "select json from desktop_pairing_credentials where id = 'default'",
+      )
+      if (!hasExpectedMaterializationPairing(currentPairing, input.expectedPairing)) {
+        this.db.run('commit')
+        transactionOpen = false
+        return { status: 'pairing_scope_mismatch' }
+      }
+
+      const validated = validateMaterializationInput(input, currentPairing)
+      if (!validated) {
+        this.db.run('commit')
+        transactionOpen = false
+        return { status: 'conflict' }
+      }
+      const { workRequest, creation } = validated
+      const existingByWorkRequest = selectWorkRequestMaterialization(
+        this.db,
+        'work_request_id',
+        workRequest.id,
+      )
+      if (existingByWorkRequest) {
+        const runStillExists = readWorkflowRuns(this.db).some(
+          (candidate) => candidate.id === existingByWorkRequest.runId,
+        )
+        this.db.run('commit')
+        transactionOpen = false
+        return {
+          status:
+            runStillExists &&
+            bindingMatchesMaterialization(existingByWorkRequest, input, workRequest)
+              ? 'replayed'
+              : 'conflict',
+        }
+      }
+
+      const existingByRun = selectWorkRequestMaterialization(
+        this.db,
+        'run_id',
+        creation.run.id,
+      )
+      const existingByIdempotencyKey = selectWorkRequestMaterialization(
+        this.db,
+        'materialize_idempotency_key',
+        input.materializeIdempotencyKey,
+      )
+      const runAlreadyExists = readWorkflowRuns(this.db).some(
+        (candidate) => candidate.id === creation.run.id,
+      )
+      const runSyncIdempotencyKey = createRemoteSyncIdempotencyKey({
+        kind: 'run-summary',
+        localProjectId: creation.run.projectId,
+        organizationId: workRequest.organizationId,
+        teamProjectId: workRequest.projectId,
+        runId: creation.run.id,
+        entityId: creation.run.id,
+      })
+      const [existingRunSync] = selectRemoteSyncOperations(
+        this.db,
+        `select ${REMOTE_SYNC_OPERATION_COLUMNS}
+         from remote_sync_outbox
+         where idempotency_key = ?`,
+        [runSyncIdempotencyKey],
+      )
+      if (
+        existingByRun ||
+        existingByIdempotencyKey ||
+        runAlreadyExists ||
+        existingRunSync
+      ) {
+        this.db.run('commit')
+        transactionOpen = false
+        return { status: 'conflict' }
+      }
+
+      writeWorkflowRun(this.db, creation.run)
+      this.enqueueCanonicalRemoteSyncOperation({
+        kind: 'run-summary',
+        localProjectId: creation.run.projectId,
+        runId: creation.run.id,
+        entityId: creation.run.id,
+        createdAt: creation.run.updatedAt,
+      })
+      for (const artifact of creation.artifacts) {
+        writeArtifact(this.db, artifact)
+      }
+      for (const event of creation.events) {
+        writeAgentEvent(this.db, event)
+      }
+      this.db.run(
+        `
+          insert into work_request_materializations (
+            work_request_id,
+            organization_id,
+            team_project_id,
+            local_project_id,
+            run_id,
+            claim_version,
+            source_fingerprint,
+            materialize_idempotency_key,
+            status,
+            acknowledged_version,
+            created_at,
+            updated_at,
+            acknowledged_at
+          )
+          values (?, ?, ?, ?, ?, ?, ?, ?, 'pending_ack', null, ?, ?, null)
+        `,
+        [
+          workRequest.id,
+          workRequest.organizationId,
+          workRequest.projectId,
+          input.expectedPairing.localProjectId,
+          creation.run.id,
+          workRequest.version,
+          input.sourceFingerprint,
+          input.materializeIdempotencyKey,
+          workRequest.claim!.claimedAt,
+          workRequest.claim!.claimedAt,
+        ],
+      )
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return { status: 'created' }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      throw error
+    }
+  }
+
+  async markWorkRequestMaterializationAcknowledged(
+    input: MarkWorkRequestMaterializationAcknowledgedInput,
+  ): Promise<MarkWorkRequestMaterializationAcknowledgedResult> {
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      const [currentPairing] = selectJson<DesktopPairingCredential>(
+        this.db,
+        "select json from desktop_pairing_credentials where id = 'default'",
+      )
+      if (!hasExpectedMaterializationPairing(currentPairing, input.expectedPairing)) {
+        this.db.run('commit')
+        transactionOpen = false
+        return { acknowledged: false, reason: 'pairing_scope_mismatch' }
+      }
+      const binding = selectWorkRequestMaterialization(
+        this.db,
+        'work_request_id',
+        input.workRequestId,
+      )
+      if (!binding) {
+        this.db.run('commit')
+        transactionOpen = false
+        return { acknowledged: false, reason: 'not_found' }
+      }
+      if (
+        !isNonEmptyUnpadded(input.workRequestId) ||
+        !isNonEmptyUnpadded(input.runId) ||
+        !isCanonicalTimestamp(input.acknowledgedAt) ||
+        !/^[0-9a-f]{64}$/.test(input.sourceFingerprint) ||
+        !isNonEmptyUnpadded(input.materializeIdempotencyKey) ||
+        input.materializeIdempotencyKey.length > 200 ||
+        binding.organizationId !== input.expectedPairing.organizationId ||
+        binding.teamProjectId !== input.expectedPairing.projectId ||
+        binding.localProjectId !== input.expectedPairing.localProjectId ||
+        binding.runId !== input.runId ||
+        binding.sourceFingerprint !== input.sourceFingerprint ||
+        binding.materializeIdempotencyKey !== input.materializeIdempotencyKey ||
+        input.materializedVersion !== binding.claimVersion + 1 ||
+        input.acknowledgedAt < binding.createdAt ||
+        (binding.status === 'acknowledged' &&
+          (binding.acknowledgedVersion !== input.materializedVersion ||
+            binding.acknowledgedAt !== input.acknowledgedAt))
+      ) {
+        this.db.run('commit')
+        transactionOpen = false
+        return { acknowledged: false, reason: 'conflict' }
+      }
+      if (binding.status === 'acknowledged') {
+        this.db.run('commit')
+        transactionOpen = false
+        return { acknowledged: true }
+      }
+
+      this.db.run(
+        `
+          update work_request_materializations
+          set status = 'acknowledged',
+              acknowledged_version = ?,
+              updated_at = ?,
+              acknowledged_at = ?
+          where work_request_id = ?
+            and run_id = ?
+            and source_fingerprint = ?
+            and materialize_idempotency_key = ?
+            and status = 'pending_ack'
+        `,
+        [
+          input.materializedVersion,
+          input.acknowledgedAt,
+          input.acknowledgedAt,
+          input.workRequestId,
+          input.runId,
+          input.sourceFingerprint,
+          input.materializeIdempotencyKey,
+        ],
+      )
+      if (this.db.getRowsModified() !== 1) {
+        throw new Error('Work Request materialization acknowledgement was not atomic.')
+      }
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return { acknowledged: true }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      throw error
+    }
+  }
+
+  async getWorkRequestMaterializationByWorkRequestId(
+    workRequestId: string,
+  ): Promise<WorkRequestMaterializationBinding | null> {
+    if (!isNonEmptyUnpadded(workRequestId)) {
+      return null
+    }
+    return selectWorkRequestMaterialization(
+      this.db,
+      'work_request_id',
+      workRequestId,
+    )
+  }
+
+  async getWorkRequestMaterializationByRunId(
+    runId: string,
+  ): Promise<WorkRequestMaterializationBinding | null> {
+    if (!isNonEmptyUnpadded(runId)) {
+      return null
+    }
+    return selectWorkRequestMaterialization(this.db, 'run_id', runId)
   }
 
   async commitWorkflowMutation(
@@ -2515,6 +3074,8 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'retryRemoteSyncOperation',
   'recoverInterruptedRemoteSyncOperations',
   'createWorkflow',
+  'materializeClaimedWorkRequest',
+  'markWorkRequestMaterializationAcknowledged',
   'commitWorkflowMutation',
   'saveArtifact',
   'saveEvent',

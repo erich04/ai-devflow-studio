@@ -32,10 +32,12 @@ import type {
   ManagedCodingWorkspace,
   RetryAttempt,
   TestEvidence,
+  WorkRequest,
   WorkflowRun,
 } from '@ai-devflow/shared'
 import {
   createLocalStore,
+  type WorkRequestMaterializationExpectedPairing,
   type SettleRemoteSyncOperationInput,
 } from './local-store'
 
@@ -271,6 +273,47 @@ const desktopPairingCredential: DesktopPairingCredential = {
   createdAt: '2026-06-20T00:00:00.000Z',
 }
 
+const workRequestPairing: WorkRequestMaterializationExpectedPairing = {
+  tokenId: desktopPairingCredential.tokenId,
+  organizationId: desktopPairingCredential.organizationId,
+  projectId: desktopPairingCredential.projectId,
+  localProjectId: project.id,
+}
+
+const claimedWorkRequest: WorkRequest = {
+  id: 'wr-local-materialization',
+  organizationId: desktopPairingCredential.organizationId,
+  projectId: desktopPairingCredential.projectId,
+  title: 'Prepare a reversible rollout',
+  request: 'Build the rollout locally and retain evidence.',
+  version: 2,
+  status: 'claim_pending',
+  createdByUserId: 'u-manager',
+  claim: {
+    runId: 'run-work-request-materialization',
+    claimedAt: '2026-08-01T12:00:00.000Z',
+    materializedAt: null,
+  },
+  expiresAt: '2026-08-02T12:00:00.000Z',
+  createdAt: '2026-08-01T11:00:00.000Z',
+  updatedAt: '2026-08-01T12:00:00.000Z',
+}
+
+const claimedWorkRequestCreation = createWorkflowRunFromRequest({
+  runId: claimedWorkRequest.claim!.runId,
+  title: claimedWorkRequest.title,
+  request: claimedWorkRequest.request,
+  projectId: project.id,
+  creatorId: desktopPairingCredential.userId,
+  branchName: 'devflow/run-work-request-materialization',
+  now: claimedWorkRequest.claim!.claimedAt,
+})
+
+const claimedWorkRequestFingerprint = 'a'.repeat(64)
+
+const materializeIdempotencyKey =
+  'work-request-materialize:wr-local-materialization:run-work-request-materialization'
+
 const codingRun: CodingAgentRun = {
   id: 'coding-run-1',
   runId: 'run-1',
@@ -418,16 +461,67 @@ const retryAttempt: RetryAttempt = {
 }
 
 describe('createLocalStore', () => {
-  it('initializes schema version 9 and keeps it stable across reopen', async () => {
+  it('initializes schema version 10 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(9)
+    expect(await first.getSchemaVersion()).toBe(10)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(9)
+    expect(await second.getSchemaVersion()).toBe(10)
     second.close()
+  })
+
+  it('creates a constrained metadata-only Work Request materialization schema', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    store.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const db = new SQL.Database(await readFile(dbPath))
+    const columns =
+      db.exec('pragma table_info(work_request_materializations)')[0]?.values.map(
+        (row) => String(row[1]),
+      ) ?? []
+    expect(columns).toEqual([
+      'work_request_id',
+      'organization_id',
+      'team_project_id',
+      'local_project_id',
+      'run_id',
+      'claim_version',
+      'source_fingerprint',
+      'materialize_idempotency_key',
+      'status',
+      'acknowledged_version',
+      'created_at',
+      'updated_at',
+      'acknowledged_at',
+    ])
+    expect(columns).not.toEqual(
+      expect.arrayContaining([
+        'token_id',
+        'token',
+        'secret',
+        'title',
+        'request_json',
+        'work_request_json',
+        'json',
+      ]),
+    )
+    const indexes =
+      db.exec("select name from sqlite_master where type = 'index' and tbl_name = 'work_request_materializations'")[0]
+        ?.values.map((row) => String(row[0])) ?? []
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        'idx_work_request_materializations_pending',
+        'idx_work_request_materializations_run_id',
+      ]),
+    )
+    db.close()
   })
 
   it('persists only remote-sync operation metadata across reopen', async () => {
@@ -1269,13 +1363,13 @@ describe('createLocalStore', () => {
     second.close()
   })
 
-  it('migrates an existing v1 database to v9 without losing local projects or runs', async () => {
+  it('migrates an existing v1 database to v10 without losing local projects or runs', async () => {
     const dbPath = await tempDbPath()
     await writeLegacyV1Database(dbPath)
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(9)
+    expect(await store.getSchemaVersion()).toBe(10)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -1286,7 +1380,7 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const db = new SQL.Database(await readFile(dbPath))
-    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('9')
+    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('10')
     expect(db.exec("select name from sqlite_master where type = 'table' and name = 'workflow_nodes'")[0]?.values[0]?.[0]).toBe('workflow_nodes')
     db.close()
   })
@@ -1311,7 +1405,7 @@ describe('createLocalStore', () => {
     v8Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(9)
+    expect(await migrated.getSchemaVersion()).toBe(10)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     migrated.close()
@@ -1323,6 +1417,143 @@ describe('createLocalStore', () => {
     expect(columnNames).toContain('idempotency_key')
     expect(columnNames).toContain('lease_expires_at')
     expect(columnNames).not.toEqual(expect.arrayContaining(['json', 'payload', 'raw_body']))
+  })
+
+  it('migrates a retained v9 database to the Work Request materialization schema', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    await initial.upsertProject(project)
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const v9Db = new SQL.Database(await readFile(dbPath))
+    v9Db.run(`
+      drop index idx_work_request_materializations_pending;
+      drop index idx_work_request_materializations_run_id;
+      drop table work_request_materializations;
+      update schema_meta set value = '9' where key = 'schema_version';
+    `)
+    await writeFile(dbPath, Buffer.from(v9Db.export()))
+    v9Db.close()
+
+    const migrated = await createLocalStore({ dbPath })
+    expect(await migrated.getSchemaVersion()).toBe(10)
+    expect(await migrated.listProjects()).toEqual([project])
+    migrated.close()
+
+    const inspected = new SQL.Database(await readFile(dbPath))
+    expect(
+      inspected.exec(
+        "select name from sqlite_master where type = 'table' and name = 'work_request_materializations'",
+      )[0]?.values[0]?.[0],
+    ).toBe('work_request_materializations')
+    inspected.close()
+  })
+
+  it('rolls back a failed v10 materialization migration without advancing schema or losing data', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    await initial.upsertProject(project)
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const malformed = new SQL.Database(await readFile(dbPath))
+    malformed.run(`
+      drop index idx_work_request_materializations_pending;
+      drop index idx_work_request_materializations_run_id;
+      drop table work_request_materializations;
+      create table work_request_materializations (work_request_id text primary key);
+      update schema_meta set value = '9' where key = 'schema_version';
+    `)
+    await writeFile(dbPath, Buffer.from(malformed.export()))
+    malformed.close()
+
+    await expect(createLocalStore({ dbPath })).rejects.toThrow(
+      /DevFlow local database is unreadable/,
+    )
+
+    const unchanged = new SQL.Database(await readFile(dbPath))
+    expect(
+      unchanged.exec("select value from schema_meta where key = 'schema_version'")[0]
+        ?.values[0]?.[0],
+    ).toBe('9')
+    expect(
+      JSON.parse(
+        String(unchanged.exec('select json from local_projects')[0]?.values[0]?.[0]),
+      ),
+    ).toEqual(project)
+    expect(
+      unchanged.exec('pragma table_info(work_request_materializations)')[0]?.values.map(
+        (row) => String(row[1]),
+      ),
+    ).toEqual(['work_request_id'])
+    unchanged.close()
+  })
+
+  it('enforces Work Request materialization state, fingerprint, and version constraints', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveRun(run)
+    store.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const db = new SQL.Database(await readFile(dbPath))
+    const insert = (overrides: {
+      workRequestId?: string
+      claimVersion?: number
+      fingerprint?: string
+      idempotencyKey?: string
+      status?: string
+      acknowledgedVersion?: number | null
+      acknowledgedAt?: string | null
+    }) =>
+      db.run(
+        `insert into work_request_materializations (
+           work_request_id, organization_id, team_project_id, local_project_id,
+           run_id, claim_version, source_fingerprint, materialize_idempotency_key,
+           status, acknowledged_version, created_at, updated_at, acknowledged_at
+         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          overrides.workRequestId ?? `wr-${JSON.stringify(overrides)}`,
+          'org-demo',
+          'p-payments',
+          project.id,
+          run.id,
+          overrides.claimVersion ?? 2,
+          overrides.fingerprint ?? 'a'.repeat(64),
+          overrides.idempotencyKey ?? `materialize-${JSON.stringify(overrides)}`,
+          overrides.status ?? 'pending_ack',
+          overrides.acknowledgedVersion ?? null,
+          '2026-08-01T12:00:00.000Z',
+          '2026-08-01T12:00:00.000Z',
+          overrides.acknowledgedAt ?? null,
+        ],
+      )
+
+    expect(() => insert({ claimVersion: 0 })).toThrow(/constraint/i)
+    expect(() => insert({ fingerprint: 'not-a-sha256' })).toThrow(/constraint/i)
+    expect(() => insert({ idempotencyKey: ' padded ' })).toThrow(/constraint/i)
+    expect(() => insert({ status: 'forgotten' })).toThrow(/constraint/i)
+    expect(() =>
+      insert({ status: 'pending_ack', acknowledgedVersion: 3 }),
+    ).toThrow(/constraint/i)
+    expect(() =>
+      insert({
+        status: 'acknowledged',
+        acknowledgedVersion: 4,
+        acknowledgedAt: '2026-08-01T12:01:00.000Z',
+      }),
+    ).toThrow(/constraint/i)
+    expect(() =>
+      insert({ status: 'acknowledged', acknowledgedVersion: 3 }),
+    ).toThrow(/constraint/i)
+    db.close()
   })
 
   it('enforces remote-sync metadata invariants in the SQLite schema', async () => {
@@ -1388,19 +1619,19 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const newerDb = new SQL.Database(await readFile(dbPath))
-    newerDb.run("update schema_meta set value = '10' where key = 'schema_version'")
+    newerDb.run("update schema_meta set value = '11' where key = 'schema_version'")
     await writeFile(dbPath, Buffer.from(newerDb.export()))
     newerDb.close()
 
     await expect(createLocalStore({ dbPath })).rejects.toThrow(
-      /schema version 10 is newer than supported version 9/,
+      /schema version 11 is newer than supported version 10/,
     )
 
     const unchangedDb = new SQL.Database(await readFile(dbPath))
     expect(
       unchangedDb.exec("select value from schema_meta where key = 'schema_version'")[0]
         ?.values[0]?.[0],
-    ).toBe('10')
+    ).toBe('11')
     unchangedDb.close()
   })
 
@@ -1440,7 +1671,7 @@ describe('createLocalStore', () => {
     unchangedDb.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(9)
+    expect(await migrated.getSchemaVersion()).toBe(10)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
   })
@@ -1923,6 +2154,448 @@ describe('createLocalStore', () => {
     expect(await store.getRun(run.id)).toBeNull()
     expect(await store.listArtifacts(run.id)).toEqual([])
     expect(await store.listEvents(run.id)).toEqual([])
+    store.close()
+  })
+
+  it('atomically materializes a claimed Work Request and reopens its safe pending binding', async () => {
+    const dbPath = await tempDbPath()
+    const first = await createLocalStore({ dbPath })
+    await first.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-materialization-token',
+    )
+
+    await expect(
+      first.materializeClaimedWorkRequest({
+        workRequest: claimedWorkRequest,
+        creation: claimedWorkRequestCreation,
+        expectedPairing: workRequestPairing,
+        sourceFingerprint: claimedWorkRequestFingerprint,
+        materializeIdempotencyKey,
+      }),
+    ).resolves.toEqual({ status: 'created' })
+
+    const expectedBinding = {
+      workRequestId: claimedWorkRequest.id,
+      organizationId: claimedWorkRequest.organizationId,
+      teamProjectId: claimedWorkRequest.projectId,
+      localProjectId: project.id,
+      runId: claimedWorkRequest.claim!.runId,
+      claimVersion: claimedWorkRequest.version,
+      sourceFingerprint: claimedWorkRequestFingerprint,
+      materializeIdempotencyKey,
+      status: 'pending_ack',
+      acknowledgedVersion: null,
+      createdAt: claimedWorkRequest.claim!.claimedAt,
+      updatedAt: claimedWorkRequest.claim!.claimedAt,
+      acknowledgedAt: null,
+    }
+    expect(
+      await first.getWorkRequestMaterializationByWorkRequestId(
+        claimedWorkRequest.id,
+      ),
+    ).toEqual(expectedBinding)
+    expect(
+      await first.getWorkRequestMaterializationByRunId(
+        claimedWorkRequest.claim!.runId,
+      ),
+    ).toEqual(expectedBinding)
+    expect(await first.getRun(claimedWorkRequest.claim!.runId)).toEqual(
+      claimedWorkRequestCreation.run,
+    )
+    expect(
+      await first.listArtifacts(claimedWorkRequest.claim!.runId),
+    ).toEqual(claimedWorkRequestCreation.artifacts)
+    expect(await first.listEvents(claimedWorkRequest.claim!.runId)).toEqual(
+      claimedWorkRequestCreation.events,
+    )
+    expect(
+      await first.listRemoteSyncOperations(claimedWorkRequest.claim!.runId),
+    ).toMatchObject([
+      {
+        kind: 'run-summary',
+        organizationId: claimedWorkRequest.organizationId,
+        teamProjectId: claimedWorkRequest.projectId,
+        runId: claimedWorkRequest.claim!.runId,
+        generation: 1,
+      },
+    ])
+    first.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    expect(
+      await reopened.getWorkRequestMaterializationByWorkRequestId(
+        claimedWorkRequest.id,
+      ),
+    ).toEqual(expectedBinding)
+    expect(await reopened.getRun(claimedWorkRequest.claim!.runId)).toEqual(
+      claimedWorkRequestCreation.run,
+    )
+    reopened.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const inspected = new SQL.Database(await readFile(dbPath))
+    const rawBinding = inspected.exec(
+      'select * from work_request_materializations',
+    )[0]?.values[0]
+    expect(JSON.stringify(rawBinding)).not.toContain(
+      desktopPairingCredential.tokenId,
+    )
+    expect(JSON.stringify(rawBinding)).not.toContain(
+      claimedWorkRequest.title,
+    )
+    expect(JSON.stringify(rawBinding)).not.toContain(
+      claimedWorkRequest.request,
+    )
+    inspected.close()
+  })
+
+  it('replays an identical local materialization without re-enqueueing and rejects changed authority', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-materialization-token',
+    )
+    const input = {
+      workRequest: claimedWorkRequest,
+      creation: claimedWorkRequestCreation,
+      expectedPairing: workRequestPairing,
+      sourceFingerprint: claimedWorkRequestFingerprint,
+      materializeIdempotencyKey,
+    }
+
+    await expect(store.materializeClaimedWorkRequest(input)).resolves.toEqual({
+      status: 'created',
+    })
+    await expect(store.materializeClaimedWorkRequest(input)).resolves.toEqual({
+      status: 'replayed',
+    })
+    expect(
+      await store.listRemoteSyncOperations(claimedWorkRequest.claim!.runId),
+    ).toMatchObject([{ generation: 1, status: 'pending' }])
+
+    await expect(
+      store.materializeClaimedWorkRequest({
+        ...input,
+        sourceFingerprint: 'b'.repeat(64),
+      }),
+    ).resolves.toEqual({ status: 'conflict' })
+    expect(
+      await store.getWorkRequestMaterializationByWorkRequestId(
+        claimedWorkRequest.id,
+      ),
+    ).toMatchObject({ sourceFingerprint: claimedWorkRequestFingerprint })
+    store.close()
+  })
+
+  it('never adopts an existing unbound Run for a Work Request claim', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-materialization-token',
+    )
+    await store.saveRun(claimedWorkRequestCreation.run)
+
+    await expect(
+      store.materializeClaimedWorkRequest({
+        workRequest: claimedWorkRequest,
+        creation: claimedWorkRequestCreation,
+        expectedPairing: workRequestPairing,
+        sourceFingerprint: claimedWorkRequestFingerprint,
+        materializeIdempotencyKey,
+      }),
+    ).resolves.toEqual({ status: 'conflict' })
+    expect(
+      await store.getWorkRequestMaterializationByWorkRequestId(
+        claimedWorkRequest.id,
+      ),
+    ).toBeNull()
+    expect(await store.listArtifacts(claimedWorkRequest.claim!.runId)).toEqual(
+      [],
+    )
+    store.close()
+  })
+
+  it.each([
+    ['tokenId', { tokenId: 'desktop-token-other' }],
+    ['organization', { organizationId: 'org-other' }],
+    ['Team Project', { projectId: 'p-other' }],
+    ['local Project', { localProjectId: 'local-other' }],
+  ])(
+    'fails closed when the current pairing differs by %s',
+    async (_field, change) => {
+      const dbPath = await tempDbPath()
+      const store = await createLocalStore({ dbPath })
+      await store.saveDesktopPairingCredential(
+        { ...desktopPairingCredential, localProjectId: project.id },
+        'encrypted-materialization-token',
+      )
+
+      await expect(
+        store.materializeClaimedWorkRequest({
+          workRequest: claimedWorkRequest,
+          creation: claimedWorkRequestCreation,
+          expectedPairing: { ...workRequestPairing, ...change },
+          sourceFingerprint: claimedWorkRequestFingerprint,
+          materializeIdempotencyKey,
+        }),
+      ).resolves.toEqual({ status: 'pairing_scope_mismatch' })
+      expect(await store.getRun(claimedWorkRequest.claim!.runId)).toBeNull()
+      expect(
+        await store.getWorkRequestMaterializationByWorkRequestId(
+          claimedWorkRequest.id,
+        ),
+      ).toBeNull()
+      store.close()
+    },
+  )
+
+  it('rejects non-canonical claim materialization fields even with a valid upper-layer fingerprint', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-materialization-token',
+    )
+    const variants: Array<{
+      workRequest: WorkRequest
+      creation: typeof claimedWorkRequestCreation
+    }> = [
+      {
+        workRequest: { ...claimedWorkRequest, title: 'Changed title' },
+        creation: claimedWorkRequestCreation,
+      },
+      {
+        workRequest: {
+          ...claimedWorkRequest,
+          claim: { ...claimedWorkRequest.claim!, runId: 'run-other' },
+        },
+        creation: claimedWorkRequestCreation,
+      },
+      {
+        workRequest: claimedWorkRequest,
+        creation: {
+          ...claimedWorkRequestCreation,
+          run: {
+            ...claimedWorkRequestCreation.run,
+            creatorId: 'u-other',
+          },
+        },
+      },
+      {
+        workRequest: claimedWorkRequest,
+        creation: {
+          ...claimedWorkRequestCreation,
+          run: {
+            ...claimedWorkRequestCreation.run,
+            createdAt: '2026-08-01T12:00:01.000Z',
+            updatedAt: '2026-08-01T12:00:01.000Z',
+          },
+        },
+      },
+      {
+        workRequest: claimedWorkRequest,
+        creation: {
+          ...claimedWorkRequestCreation,
+          run: { ...claimedWorkRequestCreation.run, projectId: 'local-other' },
+        },
+      },
+    ]
+
+    for (const variant of variants) {
+      await expect(
+        store.materializeClaimedWorkRequest({
+          ...variant,
+          expectedPairing: workRequestPairing,
+          sourceFingerprint: 'd'.repeat(64),
+          materializeIdempotencyKey,
+        }),
+      ).resolves.toEqual({ status: 'conflict' })
+    }
+    expect(await store.getRun(claimedWorkRequest.claim!.runId)).toBeNull()
+    expect(
+      await store.getWorkRequestMaterializationByWorkRequestId(
+        claimedWorkRequest.id,
+      ),
+    ).toBeNull()
+    store.close()
+  })
+
+  it('serializes colliding Work Request materializations so one Run has one authority binding', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-materialization-token',
+    )
+    const competingRequest: WorkRequest = {
+      ...claimedWorkRequest,
+      id: 'wr-competing-materialization',
+    }
+    const competingFingerprint = 'c'.repeat(64)
+
+    const [winner, loser] = await Promise.all([
+      store.materializeClaimedWorkRequest({
+        workRequest: claimedWorkRequest,
+        creation: claimedWorkRequestCreation,
+        expectedPairing: workRequestPairing,
+        sourceFingerprint: claimedWorkRequestFingerprint,
+        materializeIdempotencyKey,
+      }),
+      store.materializeClaimedWorkRequest({
+        workRequest: competingRequest,
+        creation: claimedWorkRequestCreation,
+        expectedPairing: workRequestPairing,
+        sourceFingerprint: competingFingerprint,
+        materializeIdempotencyKey: 'materialize:competing',
+      }),
+    ])
+
+    expect(winner).toEqual({ status: 'created' })
+    expect(loser).toEqual({ status: 'conflict' })
+    expect(
+      await store.getWorkRequestMaterializationByRunId(
+        claimedWorkRequest.claim!.runId,
+      ),
+    ).toMatchObject({ workRequestId: claimedWorkRequest.id })
+    store.close()
+  })
+
+  it('marks materialization acknowledgement idempotently and rejects changed bindings', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-materialization-token',
+    )
+    await store.materializeClaimedWorkRequest({
+      workRequest: claimedWorkRequest,
+      creation: claimedWorkRequestCreation,
+      expectedPairing: workRequestPairing,
+      sourceFingerprint: claimedWorkRequestFingerprint,
+      materializeIdempotencyKey,
+    })
+    const ackInput = {
+      workRequestId: claimedWorkRequest.id,
+      runId: claimedWorkRequest.claim!.runId,
+      materializedVersion: claimedWorkRequest.version + 1,
+      acknowledgedAt: '2026-08-01T12:01:00.000Z',
+      expectedPairing: workRequestPairing,
+      sourceFingerprint: claimedWorkRequestFingerprint,
+      materializeIdempotencyKey,
+    }
+
+    await expect(
+      store.markWorkRequestMaterializationAcknowledged(ackInput),
+    ).resolves.toEqual({ acknowledged: true })
+    await expect(
+      store.markWorkRequestMaterializationAcknowledged({
+        ...ackInput,
+        acknowledgedAt: '2026-08-01T12:02:00.000Z',
+      }),
+    ).resolves.toEqual({ acknowledged: false, reason: 'conflict' })
+    expect(
+      await store.getWorkRequestMaterializationByWorkRequestId(
+        claimedWorkRequest.id,
+      ),
+    ).toMatchObject({
+      status: 'acknowledged',
+      acknowledgedVersion: claimedWorkRequest.version + 1,
+      acknowledgedAt: ackInput.acknowledgedAt,
+    })
+
+    await expect(
+      store.markWorkRequestMaterializationAcknowledged({
+        ...ackInput,
+        materializedVersion: claimedWorkRequest.version + 2,
+      }),
+    ).resolves.toEqual({ acknowledged: false, reason: 'conflict' })
+    await expect(
+      store.markWorkRequestMaterializationAcknowledged({
+        ...ackInput,
+        expectedPairing: {
+          ...workRequestPairing,
+          tokenId: 'desktop-token-other',
+        },
+      }),
+    ).resolves.toEqual({
+      acknowledged: false,
+      reason: 'pairing_scope_mismatch',
+    })
+    store.close()
+  })
+
+  it('restores Run, evidence, outbox, and binding when materialization persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const backupPath = `${dbPath}.backup`
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-materialization-token',
+    )
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+
+    await expect(
+      store.materializeClaimedWorkRequest({
+        workRequest: claimedWorkRequest,
+        creation: claimedWorkRequestCreation,
+        expectedPairing: workRequestPairing,
+        sourceFingerprint: claimedWorkRequestFingerprint,
+        materializeIdempotencyKey,
+      }),
+    ).rejects.toThrow(/EISDIR|directory/i)
+    expect(await store.getRun(claimedWorkRequest.claim!.runId)).toBeNull()
+    expect(
+      await store.getWorkRequestMaterializationByWorkRequestId(
+        claimedWorkRequest.id,
+      ),
+    ).toBeNull()
+    expect(
+      await store.listRemoteSyncOperations(claimedWorkRequest.claim!.runId),
+    ).toEqual([])
+    store.close()
+
+    await rm(dbPath, { recursive: true })
+    await rename(backupPath, dbPath)
+    const reopened = await createLocalStore({ dbPath })
+    expect(await reopened.getRun(claimedWorkRequest.claim!.runId)).toBeNull()
+    expect(
+      await reopened.getWorkRequestMaterializationByWorkRequestId(
+        claimedWorkRequest.id,
+      ),
+    ).toBeNull()
+    reopened.close()
+  })
+
+  it('refuses to delete a Run while it is bound to a Work Request materialization', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-materialization-token',
+    )
+    await store.materializeClaimedWorkRequest({
+      workRequest: claimedWorkRequest,
+      creation: claimedWorkRequestCreation,
+      expectedPairing: workRequestPairing,
+      sourceFingerprint: claimedWorkRequestFingerprint,
+      materializeIdempotencyKey,
+    })
+
+    await expect(
+      store.deleteRun(claimedWorkRequest.claim!.runId),
+    ).rejects.toThrow('Run is bound to a Work Request materialization.')
+    expect(await store.getRun(claimedWorkRequest.claim!.runId)).not.toBeNull()
+    expect(
+      await store.getWorkRequestMaterializationByRunId(
+        claimedWorkRequest.claim!.runId,
+      ),
+    ).not.toBeNull()
     store.close()
   })
 
