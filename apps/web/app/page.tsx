@@ -27,17 +27,20 @@ import {
   resolveDevFlowRuntimeFlags,
   type DevFlowSessionHeaders,
   type NodeStatus,
+  type WorkRequest,
   type WorkflowNode,
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import {
   fetchTeamOverview,
+  fetchWorkRequests,
   resolveDevFlowPublicApiBaseUrl,
   runKnowledgeReview,
   saveEnforcementPolicy,
   type TeamOverviewResponse,
 } from './lib/devflow-api'
 import { PairingCodePanel } from './PairingCodePanel'
+import { WorkRequestPanel } from './WorkRequestPanel'
 
 type StatusTone = 'done' | 'run' | 'gate' | 'warn' | 'idle' | 'fail'
 
@@ -120,6 +123,19 @@ export default async function Page({ searchParams }: PageProps) {
     overview,
     await searchParams,
   )
+  let workRequests: WorkRequest[] = []
+  let workRequestLoadFailed = false
+  if (activeProject) {
+    try {
+      workRequests = await fetchWorkRequests({
+        projectId: activeProject.id,
+        ...(cookieHeader ? { cookieHeader } : {}),
+        ...(sessionHeaders ? { sessionHeaders } : {}),
+      })
+    } catch {
+      workRequestLoadFailed = true
+    }
+  }
   const activeMember = activeRun
     ? overview.members.find((member) => member.id === activeRun.creatorId)
     : undefined
@@ -285,6 +301,24 @@ export default async function Page({ searchParams }: PageProps) {
             </section>
           ) : null}
         </section>
+
+        {activeProject ? (
+          workRequestLoadFailed ? (
+            <section className="work-request-panel" id="work-request" aria-label="Work Requests">
+              <div>
+                <span>Team intake</span>
+                <h2>工作请求暂时不可用</h2>
+                <p>无法安全加载所选项目的工作请求，请稍后重试。</p>
+              </div>
+            </section>
+          ) : (
+            <WorkRequestPanel
+              key={activeProject.id}
+              projectId={activeProject.id}
+              initialWorkRequests={workRequests}
+            />
+          )
+        ) : null}
 
         <section className="studio-metrics" aria-label="Delivery metrics">
           <MetricCard label="Active Runs" value={String(activeRunCount)} detail={`${gateCount} awaiting gate`} />
@@ -557,7 +591,7 @@ function CompactRow({ title, meta, value }: { title: string; meta: string; value
 
 function EmptyProductState({ title, body }: { title: string; body: string }) {
   return (
-    <div className="studio-empty-state" id="work-request">
+    <div className="studio-empty-state">
       <Database size={24} />
       <strong>{title}</strong>
       <p>{body}</p>

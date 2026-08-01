@@ -1,13 +1,14 @@
 import { render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createWarnOnlyDefaultPolicy, resolveEffectivePolicy } from '@ai-devflow/shared'
 import Page from './page'
-import { fetchTeamOverview } from './lib/devflow-api'
+import { fetchTeamOverview, fetchWorkRequests } from './lib/devflow-api'
 import type { TeamOverviewResponse } from './lib/devflow-api'
 
 vi.mock('./lib/devflow-api', () => ({
   createTeamProject: vi.fn(),
   fetchTeamOverview: vi.fn(),
+  fetchWorkRequests: vi.fn(),
   resolveDevFlowApiBaseUrl: vi.fn(() => 'http://api.local'),
   resolveDevFlowPublicApiBaseUrl: vi.fn(() => 'http://api.local'),
   runKnowledgeReview: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock('next/headers', () => ({
 }))
 
 const mockedFetchTeamOverview = vi.mocked(fetchTeamOverview)
+const mockedFetchWorkRequests = vi.mocked(fetchWorkRequests)
 const organizationPolicy = createWarnOnlyDefaultPolicy({ organizationId: 'org-demo' })
 
 const overview: TeamOverviewResponse = {
@@ -226,6 +228,10 @@ const overview: TeamOverviewResponse = {
   ],
 }
 
+beforeEach(() => {
+  mockedFetchWorkRequests.mockResolvedValue([])
+})
+
 afterEach(() => {
   vi.clearAllMocks()
 })
@@ -380,6 +386,35 @@ describe('web product shell page', () => {
     expect(screen.getByRole('region', { name: 'Desktop pairing for Remote API' })).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Create desktop pairing code' })).toHaveLength(1)
     expect(screen.getAllByText('请选择 Run').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('loads and renders Work Requests only for the explicitly selected project', async () => {
+    mockedFetchTeamOverview.mockResolvedValue(overview)
+    mockedFetchWorkRequests.mockResolvedValueOnce([{
+      id: 'wr-remote',
+      organizationId: 'org-demo',
+      projectId: 'p-remote',
+      title: 'Prepare remote rollout',
+      request: 'Keep the rollout reversible.',
+      version: 1,
+      status: 'open',
+      createdByUserId: 'u-remote',
+      claim: null,
+      expiresAt: null,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }])
+
+    render(await Page({
+      searchParams: Promise.resolve({ projectId: 'p-remote' }),
+    }))
+
+    expect(screen.getByRole('region', { name: 'Work Requests' })).toBeInTheDocument()
+    expect(screen.getByText('Prepare remote rollout')).toBeInTheDocument()
+    expect(mockedFetchWorkRequests).toHaveBeenCalledWith({
+      projectId: 'p-remote',
+      cookieHeader: 'devflow_session=session-1',
+    })
   })
 
   it('renders team overview data loaded from the API client', async () => {

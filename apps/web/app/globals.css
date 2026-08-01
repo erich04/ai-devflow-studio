@@ -939,6 +939,115 @@ button {
   cursor: pointer;
 }
 
+.work-request-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(280px, 1fr) minmax(300px, 1.25fr);
+  gap: 18px;
+  padding: 20px;
+  border: 1px solid var(--studio-line);
+  border-radius: 14px;
+  background: var(--studio-surface);
+}
+
+.work-request-panel > div:first-child span,
+.work-request-panel label span {
+  color: var(--studio-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.work-request-panel h2,
+.work-request-panel p {
+  margin: 7px 0 0;
+}
+
+.work-request-panel > div:first-child p,
+.work-request-list article p {
+  color: var(--studio-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.work-request-panel form {
+  display: grid;
+  gap: 10px;
+}
+
+.work-request-panel label {
+  display: grid;
+  gap: 6px;
+}
+
+.work-request-panel input,
+.work-request-panel textarea {
+  width: 100%;
+  border: 1px solid var(--studio-line);
+  border-radius: 8px;
+  background: var(--studio-surface-soft);
+  color: var(--studio-text);
+  font: inherit;
+}
+
+.work-request-panel input {
+  min-height: 38px;
+  padding: 0 10px;
+}
+
+.work-request-panel textarea {
+  min-height: 82px;
+  padding: 10px;
+  resize: vertical;
+}
+
+.work-request-panel button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--studio-teal);
+  color: white;
+  font-weight: 800;
+}
+
+.work-request-panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.work-request-panel > small {
+  grid-column: 1 / -1;
+  color: var(--studio-muted);
+}
+
+.work-request-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  max-height: 330px;
+  overflow: auto;
+}
+
+.work-request-list article {
+  padding: 12px;
+  border: 1px solid var(--studio-line);
+  border-radius: 9px;
+  background: var(--studio-surface-soft);
+}
+
+.work-request-list article > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.work-request-list article span,
+.work-request-list article small {
+  color: var(--studio-muted);
+  font-size: 11px;
+}
+
 .studio-gate-action button {
   width: 100%;
   background: var(--studio-teal);
@@ -1171,7 +1280,8 @@ button {
 
   .studio-grid,
   .studio-support-grid,
-  .studio-selection {
+  .studio-selection,
+  .work-request-panel {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -1201,7 +1311,8 @@ button {
   .studio-metrics,
   .studio-grid,
   .studio-support-grid,
-  .studio-selection {
+  .studio-selection,
+  .work-request-panel {
     grid-template-columns: 1fr;
   }
 
