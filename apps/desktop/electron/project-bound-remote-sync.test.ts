@@ -32,6 +32,7 @@ const pairingCredential: DesktopPairingCredential = {
 const runSummary: RemoteRunSummary = {
   kind: 'run',
   runId: 'run-local-1',
+  version: 3,
   projectId: 'local-project-1',
   title: 'Local run',
   status: 'building',
@@ -48,6 +49,7 @@ const runSummary: RemoteRunSummary = {
 
 const localRun: WorkflowRun = {
   id: runSummary.runId,
+  version: runSummary.version,
   title: runSummary.title,
   request: 'Verify canonical remote sync ordering.',
   projectId: runSummary.projectId,

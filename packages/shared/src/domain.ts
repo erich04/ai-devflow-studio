@@ -407,6 +407,7 @@ export type AgentReviewArtifact = Artifact & {
 
 export type WorkflowRun = {
   id: string
+  version: number
   title: string
   request: string
   projectId: string
@@ -882,6 +883,7 @@ export type RemoteRunNodeSummary = Pick<
 export type RemoteRunSummary = {
   kind: RemoteRunSummaryKind
   runId: string
+  version: number
   projectId: string
   title: string
   status: RunStatus

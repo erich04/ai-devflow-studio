@@ -88,6 +88,7 @@ export function createRemoteRunSummary(
   return redactRemoteRunSummaryForSync({
     kind,
     runId: run.id,
+    version: run.version,
     projectId: run.projectId,
     title: run.title,
     status: run.status,
@@ -110,6 +111,7 @@ export function redactRemoteRunSummaryForSync(
   return {
     kind: summary.kind,
     runId: summary.runId,
+    version: summary.version,
     projectId: summary.projectId,
     title: redactSensitiveText(summary.title).value,
     status: summary.status,

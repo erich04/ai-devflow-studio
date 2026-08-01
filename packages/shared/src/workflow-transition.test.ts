@@ -439,6 +439,7 @@ describe('workflow command core', () => {
     const result = applyWorkflowCommand({ run, command, evidence, now })
 
     expect(result.applied).toBe(true)
+    expect(result.run.version).toBe(run.version + 1)
     expect(result.run.currentNodeId).toBe('run-transition-design')
     expect(result.run.status).toBe('designing')
     expect(result.run.nodes.find((node) => node.id === gateId)?.status).toBe('success')
@@ -465,6 +466,25 @@ describe('workflow command core', () => {
     expect(decision.blockers.map((item) => item.code)).toEqual([
       'clarification_artifact_missing',
     ])
+  })
+
+  it('preserves the Run version when a canonical command is rejected', () => {
+    const { run, evidence, gateId } = currentClarificationGate()
+    const result = applyWorkflowCommand({
+      run,
+      command: { type: 'approve_gate', nodeId: gateId },
+      evidence: {
+        ...evidence,
+        artifacts: evidence.artifacts.filter(
+          (artifact) => artifact.kind !== 'clarification',
+        ),
+      },
+      now,
+    })
+
+    expect(result.applied).toBe(false)
+    expect(result.run).toBe(run)
+    expect(result.run.version).toBe(run.version)
   })
 
   it('requires the matching design artifact before the design gate can advance to build', () => {
@@ -642,6 +662,50 @@ describe('workflow command core', () => {
     expect(result.run.nodes.find((node) => node.id === 'run-build-transition-pr')?.status).toBe('running')
   })
 
+  it('increments the Run version when a failed test result is committed', () => {
+    const { run, evidence, testNodeId, testEvidence, artifact } = currentTest('failed')
+    const result = applyWorkflowCommand({
+      run,
+      command: {
+        type: 'record_test_result',
+        nodeId: testNodeId,
+        evidenceId: testEvidence.id,
+        artifactId: artifact.id,
+      },
+      evidence,
+      now,
+    })
+
+    expect(result.applied).toBe(true)
+    expect(result.run.version).toBe(run.version + 1)
+    expect(result.run.status).toBe('failed')
+  })
+
+  it('preserves the Run version when the same failed test result is recorded again', () => {
+    const { run, evidence, testNodeId, testEvidence, artifact } = currentTest('failed')
+    const command = {
+      type: 'record_test_result' as const,
+      nodeId: testNodeId,
+      evidenceId: testEvidence.id,
+      artifactId: artifact.id,
+    }
+    const first = applyWorkflowCommand({ run, command, evidence, now })
+    if (!first.applied) {
+      throw new Error('Expected the first failed test result to apply')
+    }
+
+    const replay = applyWorkflowCommand({
+      run: first.run,
+      command,
+      evidence,
+      now: '2026-07-31T12:01:00.000Z',
+    })
+
+    expect(replay.applied).toBe(true)
+    expect(replay.run).toBe(first.run)
+    expect(replay.run.version).toBe(first.run.version)
+  })
+
   it('rejects a test report that is not derived from the selected test evidence', () => {
     const { run, evidence, testNodeId, testEvidence, artifact } = currentTest('passed')
     const unrelatedArtifact: Artifact = {
@@ -756,12 +820,37 @@ describe('workflow command core', () => {
     if (!result.applied) {
       throw new Error('Expected final acceptance to complete')
     }
+    expect(result.run.version).toBe(run.version + 1)
     expect(result.run.currentNodeId).toBe(acceptanceNodeId)
     expect(result.run.status).toBe('paused_at_gate')
     expect(result.run.nodes.find((node) => node.id === acceptanceNodeId)).toMatchObject({
       status: 'running',
       artifactIds: [artifact.id],
     })
+  })
+
+  it('preserves the Run version when the same acceptance bundle is attached again', () => {
+    const { run, evidence, acceptanceNodeId, artifact } = currentAcceptance()
+    const command = {
+      type: 'attach_acceptance_bundle' as const,
+      nodeId: acceptanceNodeId,
+      artifactId: artifact.id,
+    }
+    const first = applyWorkflowCommand({ run, command, evidence, now })
+    if (!first.applied) {
+      throw new Error('Expected the first acceptance bundle attachment to apply')
+    }
+
+    const replay = applyWorkflowCommand({
+      run: first.run,
+      command,
+      evidence,
+      now: '2026-07-31T12:01:00.000Z',
+    })
+
+    expect(replay.applied).toBe(true)
+    expect(replay.run).toBe(first.run)
+    expect(replay.run.version).toBe(first.run.version)
   })
 
   it('approves final acceptance only after authorization, policy, review, budget, and delivery evidence pass', () => {
@@ -779,6 +868,7 @@ describe('workflow command core', () => {
     const result = applyWorkflowCommand({ run, command, evidence, now })
 
     expect(result.applied).toBe(true)
+    expect(result.run.version).toBe(run.version + 1)
     expect(result.run.currentNodeId).toBe(acceptanceNodeId)
     expect(result.run.status).toBe('completed')
     expect(result.run.nodes.find((node) => node.id === acceptanceNodeId)?.status).toBe('success')

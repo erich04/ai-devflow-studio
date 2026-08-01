@@ -104,6 +104,7 @@ function paidRuntimeInput(): Parameters<CodingRuntimeBudgetGuard>[0] {
     },
     run: {
       id: 'run-1',
+      version: 1,
       title: 'Fixture run',
       request: 'Exercise the paid budget guard.',
       projectId: 'local-project-1',

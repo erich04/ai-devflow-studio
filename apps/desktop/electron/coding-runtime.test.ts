@@ -1773,6 +1773,7 @@ function passingEvidence(repo: string): TestEvidence {
 function buildRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
     id: 'run-1',
+    version: 1,
     title: 'Implement build node',
     request: 'Use DevFlow context to implement a small change.',
     projectId: 'project-1',

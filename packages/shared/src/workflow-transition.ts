@@ -439,12 +439,29 @@ export function applyWorkflowCommand(input: ApplyWorkflowCommandInput): Workflow
 
   const command = input.command
   const currentNode = input.run.nodes.find((node) => node.id === command.nodeId)!
+  if (
+    command.type === 'attach_acceptance_bundle' &&
+    currentNode.artifactIds.includes(command.artifactId)
+  ) {
+    return { applied: true, run: input.run, blockers: [] }
+  }
+  if (
+    command.type === 'record_test_result' &&
+    currentNode.status === 'failed' &&
+    currentNode.artifactIds.includes(command.artifactId) &&
+    input.evidence.testEvidence.find(
+      (candidate) => candidate.id === command.evidenceId,
+    )?.status === 'failed'
+  ) {
+    return { applied: true, run: input.run, blockers: [] }
+  }
   if (command.type === 'approve_acceptance') {
     return {
       applied: true,
       blockers: [],
       run: {
         ...input.run,
+        version: input.run.version + 1,
         status: 'completed',
         updatedAt: input.now,
         nodes: input.run.nodes.map((node) =>
@@ -459,6 +476,7 @@ export function applyWorkflowCommand(input: ApplyWorkflowCommandInput): Workflow
       blockers: [],
       run: {
         ...input.run,
+        version: input.run.version + 1,
         updatedAt: input.now,
         nodes: input.run.nodes.map((node) =>
           node.id === currentNode.id
@@ -481,6 +499,7 @@ export function applyWorkflowCommand(input: ApplyWorkflowCommandInput): Workflow
         blockers: [],
         run: {
           ...input.run,
+          version: input.run.version + 1,
           status: 'failed',
           updatedAt: input.now,
           nodes: input.run.nodes.map((node) =>
@@ -502,6 +521,7 @@ export function applyWorkflowCommand(input: ApplyWorkflowCommandInput): Workflow
   const nextNode = input.run.nodes.find((node) => node.id === outgoingEdge.target)!
   const run: WorkflowRun = {
     ...input.run,
+    version: input.run.version + 1,
     currentNodeId: nextNode.id,
     status: runStatusForCurrentNode(nextNode),
     updatedAt: input.now,

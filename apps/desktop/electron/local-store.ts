@@ -767,9 +767,23 @@ function deleteWhereIn(db: Database, table: string, column: string, values: stri
   db.run(`delete from ${table} where ${column} in (${placeholders})`, values)
 }
 
-type StoredWorkflowRunJson = Omit<WorkflowRun, 'nodes' | 'edges'> & {
+type StoredWorkflowRunJson = Omit<WorkflowRun, 'nodes' | 'edges' | 'version'> & {
+  version?: number
   nodes?: WorkflowNode[]
   edges?: WorkflowEdge[]
+}
+
+function hydrateStoredWorkflowRun(input: {
+  storedRun: StoredWorkflowRunJson
+  nodes: WorkflowNode[]
+  edges: WorkflowEdge[]
+}): WorkflowRun {
+  return normalizeWorkflowRunProgress({
+    ...input.storedRun,
+    version: input.storedRun.version ?? 1,
+    nodes: input.nodes,
+    edges: input.edges,
+  })
 }
 
 function workflowRunEnvelope(run: WorkflowRun): Omit<WorkflowRun, 'nodes' | 'edges'> {
@@ -915,8 +929,8 @@ function migrateWorkflowRunsIntoRelationalTables(db: Database): void {
       continue
     }
 
-    const run = normalizeWorkflowRunProgress({
-      ...storedRun,
+    const run = hydrateStoredWorkflowRun({
+      storedRun,
       nodes: runNodes,
       edges: runEdges,
     })
@@ -947,8 +961,8 @@ function readWorkflowRuns(db: Database): WorkflowRun[] {
   )
 
   return storedRuns.map((storedRun) =>
-    normalizeWorkflowRunProgress({
-      ...storedRun,
+    hydrateStoredWorkflowRun({
+      storedRun,
       nodes: nodeMap.get(storedRun.id) ?? storedRun.nodes ?? [],
       edges: edgeMap.get(storedRun.id) ?? storedRun.edges ?? [],
     }),

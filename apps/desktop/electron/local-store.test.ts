@@ -109,9 +109,10 @@ async function writeLegacyV1Database(dbPath: string) {
     'insert into local_projects (id, json, created_at, updated_at) values (?, ?, ?, ?)',
     [project.id, JSON.stringify(project), project.createdAt, project.updatedAt],
   )
+  const { version: _version, ...legacyRun } = run
   db.run(
     'insert into workflow_runs (id, json, created_at, updated_at) values (?, ?, ?, ?)',
-    [run.id, JSON.stringify(run), run.createdAt, run.updatedAt],
+    [run.id, JSON.stringify(legacyRun), run.createdAt, run.updatedAt],
   )
   await writeFile(dbPath, Buffer.from(db.export()))
   db.close()
@@ -130,6 +131,7 @@ const project: LocalProject = {
 
 const run: WorkflowRun = {
   id: 'run-1',
+  version: 1,
   title: 'Run local tests',
   request: 'Archive local test evidence.',
   projectId: 'project-1',

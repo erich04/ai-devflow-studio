@@ -417,6 +417,7 @@ function parsePorcelainStatus(output: string): Array<{ status: string; path: str
 function fakeRun(runId: string, projectId: string, nodeId: string): WorkflowRun {
   return {
     id: runId,
+    version: 1,
     title: 'DevFlow coding run',
     request: 'Use the selected build node context.',
     projectId,

@@ -214,9 +214,11 @@ describe('workflow runtime', () => {
 
     expect(first.applied).toBe(true)
     expect(first.run).toMatchObject({
+      version: 2,
       currentNodeId: gateId,
       status: 'paused_at_gate',
     })
+    expect((await store.getRun(created.run.id))?.version).toBe(2)
     expect(await store.listArtifacts(created.run.id)).toEqual([candidate.artifact])
     expect(await store.listEvents(created.run.id)).toEqual([candidate.event])
 
@@ -238,6 +240,8 @@ describe('workflow runtime', () => {
     expect(duplicate.blockers.map((blocker) => blocker.code)).toEqual([
       'not_current_node',
     ])
+    expect(duplicate.run?.version).toBe(2)
+    expect((await store.getRun(created.run.id))?.version).toBe(2)
     expect(await store.listArtifacts(created.run.id)).toEqual([candidate.artifact])
     expect(await store.listEvents(created.run.id)).toEqual([candidate.event])
     store.close()
@@ -668,7 +672,8 @@ describe('workflow runtime', () => {
       },
       now: '2026-07-31T12:11:00.000Z',
     })
-    expect(completed.run.status).toBe('completed')
+    expect(completed.run).toMatchObject({ status: 'completed', version: 10 })
+    expect((await store.getRun(created.run.id))?.version).toBe(10)
 
     const afterTerminal = await runtime.execute({
       runId: created.run.id,
@@ -680,6 +685,8 @@ describe('workflow runtime', () => {
     expect(afterTerminal.blockers.map((blocker) => blocker.code)).toEqual([
       'run_terminal',
     ])
+    expect(afterTerminal.run?.version).toBe(10)
+    expect((await store.getRun(created.run.id))?.version).toBe(10)
     store.close()
   })
 })

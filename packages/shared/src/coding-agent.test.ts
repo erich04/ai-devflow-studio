@@ -30,6 +30,7 @@ import type { RemediationPlan, RetryAttempt } from './remediation'
 
 const run: WorkflowRun = {
   id: 'run-1',
+  version: 1,
   title: 'Add audit export',
   request: 'Design and build a CSV export for audit events.',
   projectId: 'project-1',

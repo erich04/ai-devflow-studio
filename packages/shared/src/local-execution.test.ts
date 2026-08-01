@@ -11,6 +11,7 @@ import {
 
 const baseRun: WorkflowRun = {
   id: 'run-1',
+  version: 1,
   title: 'Add test evidence',
   request: 'Run local tests and archive evidence.',
   projectId: 'project-1',

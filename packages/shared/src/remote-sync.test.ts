@@ -12,6 +12,7 @@ import {
 
 const run: WorkflowRun = {
   id: 'run-1',
+  version: 4,
   title: 'Remote sync run',
   request: 'Sync only approved summaries.',
   projectId: 'project-1',
@@ -157,6 +158,7 @@ describe('remote sync helpers', () => {
     expect(createRemoteRunSummary(run, 'approval')).toEqual({
       kind: 'approval',
       runId: 'run-1',
+      version: 4,
       projectId: 'project-1',
       title: 'Remote sync run',
       status: 'building',

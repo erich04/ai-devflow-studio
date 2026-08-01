@@ -206,6 +206,7 @@ export function createWorkflowRunFromRequest(input: CreateWorkflowRunFromRequest
 
   const run: WorkflowRun = {
     id: input.runId,
+    version: 1,
     title: input.title,
     request: input.request,
     projectId: input.projectId,

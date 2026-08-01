@@ -64,6 +64,7 @@ const runsBundle = {
 const runSummary: RemoteRunSummary = {
   kind: 'approval',
   runId: 'run-remote',
+  version: 2,
   projectId: 'p-remote',
   title: 'Remote run',
   status: 'building',

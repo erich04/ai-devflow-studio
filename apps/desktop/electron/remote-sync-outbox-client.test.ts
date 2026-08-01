@@ -40,6 +40,7 @@ function makeCredential(
 function makeRun(): WorkflowRun {
   return {
     id: 'run-old',
+    version: 1,
     title: 'Captured run',
     request: 'Test immutable outbox scope.',
     projectId: OLD_SCOPE.localProjectId,
