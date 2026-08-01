@@ -8,6 +8,7 @@ import {
   parseWorkRequestCreate,
   parseWorkRequestMaterialize,
   parseWorkRequestRecord,
+  parseWorkRequestRelease,
 } from './index'
 
 function validOpenRecord(): Record<string, unknown> {
@@ -461,6 +462,45 @@ describe('Work Request network contract', () => {
     ]) {
       expect(() => parseWorkRequestMaterialize(invalidValue)).toThrow(
         'Invalid Work Request materialize input.',
+      )
+    }
+  })
+
+  it('parses a fresh exact release input with optimistic concurrency metadata', () => {
+    const input = {
+      workRequestId: 'wr-1',
+      expectedVersion: 2,
+      idempotencyKey: 'release:wr-1:v2',
+    }
+
+    const result = parseWorkRequestRelease(input)
+
+    expect(result).not.toBe(input)
+    expect(result).toEqual(input)
+    expect(Object.keys(result).sort()).toEqual([
+      'expectedVersion',
+      'idempotencyKey',
+      'workRequestId',
+    ])
+  })
+
+  it('rejects non-exact or out-of-bounds release input', () => {
+    const validRelease = {
+      workRequestId: 'wr-1',
+      expectedVersion: 2,
+      idempotencyKey: 'release:wr-1:v2',
+    }
+
+    for (const invalidValue of [
+      [],
+      { ...validRelease, runId: 'renderer-must-not-release-by-run' },
+      { ...validRelease, workRequestId: ' wr-1 ' },
+      { ...validRelease, expectedVersion: 0 },
+      { ...validRelease, expectedVersion: 2_147_483_648 },
+      { ...validRelease, idempotencyKey: ' release-key ' },
+    ]) {
+      expect(() => parseWorkRequestRelease(invalidValue)).toThrow(
+        'Invalid Work Request release input.',
       )
     }
   })

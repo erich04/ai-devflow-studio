@@ -45,11 +45,17 @@ export const WORK_REQUEST_CLAIM_INPUT_KEYS = [
   'runId',
   'workRequestId',
 ] as const
+export const WORK_REQUEST_RELEASE_INPUT_KEYS = [
+  'expectedVersion',
+  'idempotencyKey',
+  'workRequestId',
+] as const
 
 const invalidWorkRequestRecord = 'Invalid Work Request record.'
 const invalidWorkRequestCreate = 'Invalid Work Request create input.'
 const invalidWorkRequestClaim = 'Invalid Work Request claim input.'
 const invalidWorkRequestMaterialize = 'Invalid Work Request materialize input.'
+const invalidWorkRequestRelease = 'Invalid Work Request release input.'
 
 export type WorkRequestStatus = (typeof WORK_REQUEST_STATUSES)[number]
 
@@ -93,6 +99,12 @@ export type MaterializeWorkRequestInput = {
   workRequestId: string
   expectedVersion: number
   runId: string
+  idempotencyKey: string
+}
+
+export type ReleaseWorkRequestInput = {
+  workRequestId: string
+  expectedVersion: number
   idempotencyKey: string
 }
 
@@ -360,4 +372,22 @@ export function parseWorkRequestMaterialize(
   value: unknown,
 ): MaterializeWorkRequestInput {
   return parseWorkRequestRunInput(value, invalidWorkRequestMaterialize)
+}
+
+export function parseWorkRequestRelease(value: unknown): ReleaseWorkRequestInput {
+  if (!isRecord(value) || !hasExactKeys(value, WORK_REQUEST_RELEASE_INPUT_KEYS)) {
+    throw new Error(invalidWorkRequestRelease)
+  }
+
+  return {
+    workRequestId: readIdentifier(value.workRequestId, invalidWorkRequestRelease),
+    expectedVersion: readPositiveInteger(
+      value.expectedVersion,
+      invalidWorkRequestRelease,
+    ),
+    idempotencyKey: readIdempotencyKey(
+      value.idempotencyKey,
+      invalidWorkRequestRelease,
+    ),
+  }
 }
