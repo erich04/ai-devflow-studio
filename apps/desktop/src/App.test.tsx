@@ -7,14 +7,17 @@ import {
   createRecommendedEnforcementPreset,
   createWorkflowRunFromRequest,
   createWarnOnlyDefaultPolicy,
+  indexKnowledgeSources,
   resolveEffectivePolicy,
   type DesktopPairingCredential,
+  type RepositoryKnowledgeSnapshot,
   type RemoteSyncOperation,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import {
   artifacts as fixtureArtifacts,
   events as fixtureEvents,
+  knowledgeSources as fixtureKnowledgeSources,
   mcpServers as fixtureMcpServers,
   runs as fixtureRuns,
 } from '@ai-devflow/shared/fixtures'
@@ -75,6 +78,26 @@ const fixturePairingCredential: DesktopPairingCredential = {
   authAccountId: 'acct-ling',
   projectMemberships: [{ projectId: fixtureRuns[0]!.projectId, userId: 'u-ling', role: 'lead' }],
   createdAt: '2026-06-20T00:00:00.000Z',
+}
+
+function repositoryKnowledgeSnapshot(
+  projectId: string,
+  overrides: Partial<RepositoryKnowledgeSnapshot> = {},
+): RepositoryKnowledgeSnapshot {
+  const index = indexKnowledgeSources([fixtureKnowledgeSources[0]!])
+
+  return {
+    projectId,
+    contentHash: 'repository-hash-1',
+    documents: index.documents,
+    chunks: index.chunks,
+    entities: index.entities,
+    relations: index.relations,
+    indexedAt: '2026-08-01T00:00:00.000Z',
+    truncated: false,
+    warnings: [],
+    ...overrides,
+  }
 }
 
 function desktopState(
@@ -194,6 +217,28 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       memberCost: [],
       totalCost: '$0.000',
     }),
+    loadRepositoryKnowledge: vi.fn().mockImplementation(async ({ projectId }) => ({
+      projectId,
+      contentHash: '',
+      documents: [],
+      chunks: [],
+      entities: [],
+      relations: [],
+      indexedAt: '2026-08-01T00:00:00.000Z',
+      truncated: false,
+      warnings: [],
+    })),
+    refreshRepositoryKnowledge: vi.fn().mockImplementation(async ({ projectId }) => ({
+      projectId,
+      contentHash: '',
+      documents: [],
+      chunks: [],
+      entities: [],
+      relations: [],
+      indexedAt: '2026-08-01T00:00:00.000Z',
+      truncated: false,
+      warnings: [],
+    })),
     loadDesktopPairing: vi.fn().mockResolvedValue(null),
     pairDesktop: vi.fn().mockResolvedValue({
       credential: {
@@ -2545,7 +2590,7 @@ describe('App', () => {
     expect(screen.getByText('没有匹配的知识节点')).toBeInTheDocument()
   })
 
-  it('shows empty knowledge governance until the selected repository is indexed', async () => {
+  it('shows an indexed but empty repository knowledge snapshot', async () => {
     const api = installDesktopApi()
     render(<App />)
 
@@ -2558,7 +2603,7 @@ describe('App', () => {
 
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Knowledge Governance')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Git Markdown Index')
-    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('not indexed')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('indexed')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Run references')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('没有匹配的知识文档')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('没有匹配的知识节点')
@@ -2600,6 +2645,181 @@ describe('App', () => {
     })
 
     expect(screen.getByTestId('search-results')).toHaveTextContent('没有匹配结果')
+  })
+
+  it('loads repository knowledge by project id and drives search, references, governance, and graph', async () => {
+    const snapshot = repositoryKnowledgeSnapshot(localProject.id, {
+      truncated: true,
+      warnings: ['file_count_limit_exceeded'],
+    })
+    const api = installDesktopApi({
+      loadRepositoryKnowledge: vi.fn().mockResolvedValue(snapshot),
+    })
+    render(<App />)
+
+    await waitFor(() =>
+      expect(api.loadRepositoryKnowledge).toHaveBeenCalledWith({ projectId: localProject.id }),
+    )
+    expect(api.loadRepositoryKnowledge).toHaveBeenCalledTimes(1)
+
+    clickInspectorTab(/Gate条件/)
+    await waitFor(() =>
+      expect(screen.getByTestId('node-inspector')).toHaveTextContent('API Health Endpoint Standard'),
+    )
+
+    fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
+      target: { value: 'API Health Endpoint Standard' },
+    })
+    expect(screen.getByTestId('search-results')).toHaveTextContent('API Health Endpoint Standard')
+
+    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    const knowledgeView = screen.getByTestId('knowledge-view')
+    expect(knowledgeView).toHaveTextContent('indexed · truncated')
+    expect(knowledgeView).toHaveTextContent('file_count_limit_exceeded')
+    expect(knowledgeView).toHaveTextContent('API Health Endpoint Standard')
+    expect(knowledgeView).toHaveTextContent('defines')
+    expect(knowledgeView).toHaveTextContent('2026-08-01T00:00:00.000Z')
+  })
+
+  it('bounds a large repository knowledge graph in the renderer', async () => {
+    const snapshot = repositoryKnowledgeSnapshot(localProject.id, {
+      entities: Array.from({ length: 20 }, (_, index) => ({
+        id: `knowledge-entity-${index}`,
+        label: `Knowledge entity ${index}`,
+        kind: 'term' as const,
+        sourcePath: `docs/entity-${index}.md`,
+      })),
+      relations: [],
+    })
+    installDesktopApi({
+      loadRepositoryKnowledge: vi.fn().mockResolvedValue(snapshot),
+    })
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    await waitFor(() => expect(screen.getAllByTestId('knowledge-graph-node')).toHaveLength(12))
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('图谱较大')
+  })
+
+  it('refreshes repository knowledge and re-evaluates Gate enforcement when the content hash changes', async () => {
+    const initial = repositoryKnowledgeSnapshot(localProject.id)
+    const refreshedIndex = indexKnowledgeSources([fixtureKnowledgeSources[1]!])
+    const refreshed = repositoryKnowledgeSnapshot(localProject.id, {
+      contentHash: 'repository-hash-2',
+      documents: refreshedIndex.documents,
+      chunks: refreshedIndex.chunks,
+      entities: refreshedIndex.entities,
+      relations: refreshedIndex.relations,
+      indexedAt: '2026-08-01T00:05:00.000Z',
+    })
+    const api = installDesktopApi({
+      loadRepositoryKnowledge: vi.fn().mockResolvedValue(initial),
+      refreshRepositoryKnowledge: vi.fn().mockResolvedValue(refreshed),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadRepositoryKnowledge).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
+    const gateEvaluationsBeforeRefresh = vi.mocked(api.evaluateGateEnforcement).mock.calls.length
+
+    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /刷新仓库知识/ }))
+
+    await waitFor(() =>
+      expect(api.refreshRepositoryKnowledge).toHaveBeenCalledWith({ projectId: localProject.id }),
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Local Test Evidence Standard'),
+    )
+    await waitFor(() =>
+      expect(vi.mocked(api.evaluateGateEnforcement).mock.calls.length).toBeGreaterThan(
+        gateEvaluationsBeforeRefresh,
+      ),
+    )
+  })
+
+  it('keeps the last successful repository index when refresh fails without exposing raw paths', async () => {
+    const initial = repositoryKnowledgeSnapshot(localProject.id)
+    const api = installDesktopApi({
+      loadRepositoryKnowledge: vi.fn().mockResolvedValue(initial),
+      refreshRepositoryKnowledge: vi.fn().mockRejectedValue(
+        new Error('EACCES /Users/example/private-repository/secret.md'),
+      ),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadRepositoryKnowledge).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    await waitFor(() =>
+      expect(screen.getByTestId('knowledge-view')).toHaveTextContent('API Health Endpoint Standard'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /刷新仓库知识/ }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('indexed · refresh failed'),
+    )
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('API Health Endpoint Standard')
+    expect(screen.getByTestId('knowledge-view')).not.toHaveTextContent('/Users/example')
+    expect(screen.getByTestId('knowledge-view')).not.toHaveTextContent('secret.md')
+  })
+
+  it('keeps delayed repository knowledge responses isolated after switching projects', async () => {
+    const secondProject = {
+      ...localProject,
+      id: 'local-project-2',
+      name: 'second-project',
+      path: '/tmp/second-project',
+    }
+    let resolveFirst: ((snapshot: RepositoryKnowledgeSnapshot) => void) | undefined
+    const firstLoad = new Promise<RepositoryKnowledgeSnapshot>((resolve) => {
+      resolveFirst = resolve
+    })
+    let resolveSecond: ((snapshot: RepositoryKnowledgeSnapshot) => void) | undefined
+    const secondLoad = new Promise<RepositoryKnowledgeSnapshot>((resolve) => {
+      resolveSecond = resolve
+    })
+    const secondIndex = indexKnowledgeSources([fixtureKnowledgeSources[1]!])
+    const secondSnapshot = repositoryKnowledgeSnapshot(secondProject.id, {
+      contentHash: 'repository-hash-second',
+      documents: secondIndex.documents,
+      chunks: secondIndex.chunks,
+      entities: secondIndex.entities,
+      relations: secondIndex.relations,
+    })
+    const api = installDesktopApi({
+      selectLocalProject: vi.fn().mockResolvedValue(secondProject),
+      loadRepositoryKnowledge: vi.fn().mockImplementation(({ projectId }) =>
+        projectId === localProject.id ? firstLoad : secondLoad,
+      ),
+    })
+    render(<App />)
+
+    await waitFor(() =>
+      expect(api.loadRepositoryKnowledge).toHaveBeenCalledWith({ projectId: localProject.id }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
+    await waitFor(() =>
+      expect(api.loadRepositoryKnowledge).toHaveBeenCalledWith({ projectId: secondProject.id }),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    await act(async () => {
+      resolveFirst?.(repositoryKnowledgeSnapshot(localProject.id))
+    })
+    await waitFor(() => {
+      const secondProjectCalls = vi.mocked(api.loadRepositoryKnowledge).mock.calls.filter(
+        ([input]) => input.projectId === secondProject.id,
+      )
+      expect(secondProjectCalls).toHaveLength(1)
+    })
+    await act(async () => {
+      resolveSecond?.(secondSnapshot)
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Local Test Evidence Standard'),
+    )
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Local Test Evidence Standard')
+    expect(screen.getByTestId('knowledge-view')).not.toHaveTextContent('API Health Endpoint Standard')
   })
 
   it('deep-links Artifact and Event search results back into the inspector', async () => {

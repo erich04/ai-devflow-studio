@@ -48,6 +48,7 @@ export function useGateEnforcement(input: {
   testEvidence: TestEvidence[]
   governanceChecks: KnowledgeGovernanceCheck[]
   knowledgeReferences: KnowledgeReference[]
+  knowledgeContentHash: string
   pendingInspectorAction: PendingInspectorAction | null
   setPendingInspectorAction: Dispatch<SetStateAction<PendingInspectorAction | null>>
   onToast: (message: string) => void
@@ -63,6 +64,7 @@ export function useGateEnforcement(input: {
     testEvidence,
     governanceChecks,
     knowledgeReferences,
+    knowledgeContentHash,
     pendingInspectorAction,
     setPendingInspectorAction,
     onToast,
@@ -123,6 +125,7 @@ export function useGateEnforcement(input: {
     artifacts.length,
     desktopApi,
     isEnabled,
+    knowledgeContentHash,
     selectedNode?.id,
     selectedRun?.id,
     selectedRun?.projectId,

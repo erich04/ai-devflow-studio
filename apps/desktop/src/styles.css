@@ -1571,8 +1571,13 @@ button:disabled {
 
 .knowledge-map {
   position: relative;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  align-items: start;
+  gap: 12px;
   min-height: 520px;
-  overflow: hidden;
+  overflow: auto;
+  padding: 16px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background:
@@ -1583,7 +1588,7 @@ button:disabled {
 }
 
 .knowledge-node {
-  position: absolute;
+  position: relative;
   display: grid;
   gap: 3px;
   min-width: 150px;
@@ -1600,14 +1605,18 @@ button:disabled {
 
 .relation-row {
   position: relative;
-  top: 410px;
-  margin: 8px 12px;
+  grid-column: 1 / -1;
+  margin: 0;
   padding: 8px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
   color: var(--text-muted);
   font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
+}
+
+.knowledge-graph-limit-note {
+  grid-column: 1 / -1;
 }
 
 .test-report {

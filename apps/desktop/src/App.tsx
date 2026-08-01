@@ -20,6 +20,8 @@ import {
   isActiveCodingAgentRunStatus,
   type KnowledgeChunk,
   type KnowledgeDocument,
+  type KnowledgeEntity,
+  type KnowledgeRelation,
   type ProjectGitStatus,
   type WorkflowRun,
 } from '@ai-devflow/shared'
@@ -55,8 +57,10 @@ import {
 
 export { getToastDisplayDurationMs } from './app/desktop-view-model'
 
-const projectKnowledgeDocuments: KnowledgeDocument[] = []
-const projectKnowledgeChunks: KnowledgeChunk[] = []
+const emptyProjectKnowledgeDocuments: KnowledgeDocument[] = []
+const emptyProjectKnowledgeChunks: KnowledgeChunk[] = []
+const emptyProjectKnowledgeEntities: KnowledgeEntity[] = []
+const emptyProjectKnowledgeRelations: KnowledgeRelation[] = []
 
 const remoteSyncStatusLabels = {
   pending: 'queued',
@@ -71,7 +75,7 @@ export function App() {
     defaultReviewProviderDraft,
     reviewProviderFromMetadata,
   })
-  const { desktopApi, applyLocalExecutionState } = workspace
+  const { desktopApi, applyLocalExecutionState, refreshRepositoryKnowledge } = workspace
   const {
     themePreference,
     dataOrigin,
@@ -181,7 +185,17 @@ export function App() {
     setToast,
     setPendingInspectorAction,
   } = workspace.setters
-  const { selectedLocalProject, isTestCommandDirty } = workspace.derived
+  const {
+    selectedLocalProject,
+    isTestCommandDirty,
+    repositoryKnowledge,
+    isLoadingRepositoryKnowledge,
+    repositoryKnowledgeError,
+  } = workspace.derived
+  const projectKnowledgeDocuments = repositoryKnowledge?.documents ?? emptyProjectKnowledgeDocuments
+  const projectKnowledgeChunks = repositoryKnowledge?.chunks ?? emptyProjectKnowledgeChunks
+  const projectKnowledgeEntities = repositoryKnowledge?.entities ?? emptyProjectKnowledgeEntities
+  const projectKnowledgeRelations = repositoryKnowledge?.relations ?? emptyProjectKnowledgeRelations
   const [projectGitStatus, setProjectGitStatus] = useState<ProjectGitStatus | null>(null)
   const [isRefreshingGitStatus, setIsRefreshingGitStatus] = useState(false)
   const [openRunMenuId, setOpenRunMenuId] = useState<string | null>(null)
@@ -384,7 +398,7 @@ export function App() {
             testEvidence: scopedTestEvidence,
           })
         : [],
-    [scopedArtifacts, scopedTestEvidence, selectedRun],
+    [projectKnowledgeChunks, projectKnowledgeDocuments, scopedArtifacts, scopedTestEvidence, selectedRun],
   )
   const selectedGovernanceChecks = useMemo(
     () =>
@@ -398,7 +412,14 @@ export function App() {
             testEvidence: scopedTestEvidence,
           })
         : [],
-    [scopedArtifacts, scopedTestEvidence, selectedNode, selectedRun],
+    [
+      projectKnowledgeChunks,
+      projectKnowledgeDocuments,
+      scopedArtifacts,
+      scopedTestEvidence,
+      selectedNode,
+      selectedRun,
+    ],
   )
   const searchResults = useMemo(
     () =>
@@ -410,7 +431,14 @@ export function App() {
         knowledgeDocuments: projectKnowledgeDocuments,
         knowledgeReferences,
       }),
-    [knowledgeReferences, normalizedSearchQuery, scopedArtifacts, scopedEvents, scopedRuns],
+    [
+      knowledgeReferences,
+      normalizedSearchQuery,
+      projectKnowledgeDocuments,
+      scopedArtifacts,
+      scopedEvents,
+      scopedRuns,
+    ],
   )
   const selectedAgentReviews = useMemo(
     () =>
@@ -523,8 +551,11 @@ export function App() {
       buildKnowledgeDataSource({
         desktopConnected: Boolean(desktopApi),
         dataOrigin,
+        snapshot: repositoryKnowledge,
+        isLoading: isLoadingRepositoryKnowledge,
+        error: repositoryKnowledgeError,
       }),
-    [dataOrigin, desktopApi],
+    [dataOrigin, desktopApi, isLoadingRepositoryKnowledge, repositoryKnowledge, repositoryKnowledgeError],
   )
   const isSelectedNodeGateLike = selectedNode?.kind === 'gate' || selectedNode?.kind === 'acceptance'
   const gateEnforcement = useGateEnforcement({
@@ -538,6 +569,7 @@ export function App() {
     testEvidence,
     governanceChecks: selectedGovernanceChecks,
     knowledgeReferences,
+    knowledgeContentHash: repositoryKnowledge?.contentHash ?? '',
     pendingInspectorAction,
     setPendingInspectorAction,
     onToast: setToast,
@@ -1093,6 +1125,8 @@ export function App() {
           <KnowledgeView
             query={normalizedSearchQuery}
             documents={projectKnowledgeDocuments}
+            entities={projectKnowledgeEntities}
+            relations={projectKnowledgeRelations}
             references={knowledgeReferences}
             selectedRun={selectedRun}
             supportContext={supportContext}
@@ -1107,6 +1141,11 @@ export function App() {
                 : undefined
             }
             dataSource={knowledgeDataSource}
+            indexedAt={repositoryKnowledge?.indexedAt}
+            truncated={repositoryKnowledge?.truncated ?? false}
+            warnings={repositoryKnowledge?.warnings ?? []}
+            isLoading={isLoadingRepositoryKnowledge}
+            onRefresh={() => void refreshRepositoryKnowledge()}
             onReturnToInspector={returnToInspector}
           />
         )}

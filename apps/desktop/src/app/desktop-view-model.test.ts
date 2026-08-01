@@ -1,12 +1,97 @@
 import { describe, expect, it } from 'vitest'
 import { createWorkflowRunFromRequest } from '@ai-devflow/shared'
 import {
+  buildKnowledgeDataSource,
   createRunningRun,
   getRunStatusLabel,
   mergeLocalAndRemoteSnapshot,
 } from './desktop-view-model'
 
 describe('desktop view model', () => {
+  it('distinguishes repository knowledge loading, indexed, and truncated states', () => {
+    expect(
+      buildKnowledgeDataSource({
+        desktopConnected: true,
+        dataOrigin: 'local',
+        isLoading: true,
+      }),
+    ).toMatchObject({
+      status: 'local indexing',
+      label: 'indexing',
+      tone: 'soft',
+    })
+
+    expect(
+      buildKnowledgeDataSource({
+        desktopConnected: true,
+        dataOrigin: 'local',
+        isLoading: false,
+        snapshot: {
+          projectId: 'local-project-1',
+          contentHash: 'repository-hash-1',
+          documents: [],
+          chunks: [],
+          entities: [],
+          relations: [],
+          indexedAt: '2026-08-01T00:00:00.000Z',
+          truncated: false,
+          warnings: [],
+        },
+      }),
+    ).toMatchObject({
+      status: 'local indexed',
+      label: 'indexed',
+      tone: 'good',
+    })
+
+    expect(
+      buildKnowledgeDataSource({
+        desktopConnected: true,
+        dataOrigin: 'local',
+        isLoading: false,
+        snapshot: {
+          projectId: 'local-project-1',
+          contentHash: 'repository-hash-1',
+          documents: [],
+          chunks: [],
+          entities: [],
+          relations: [],
+          indexedAt: '2026-08-01T00:00:00.000Z',
+          truncated: true,
+          warnings: ['file_count_limit_exceeded'],
+        },
+      }),
+    ).toMatchObject({
+      status: 'local indexed',
+      label: 'indexed · truncated',
+      tone: 'warn',
+    })
+
+    expect(
+      buildKnowledgeDataSource({
+        desktopConnected: true,
+        dataOrigin: 'local',
+        isLoading: false,
+        error: '仓库知识索引不可用',
+        snapshot: {
+          projectId: 'local-project-1',
+          contentHash: 'repository-hash-1',
+          documents: [],
+          chunks: [],
+          entities: [],
+          relations: [],
+          indexedAt: '2026-08-01T00:00:00.000Z',
+          truncated: false,
+          warnings: [],
+        },
+      }),
+    ).toMatchObject({
+      status: 'local indexed',
+      label: 'indexed · refresh failed',
+      tone: 'warn',
+    })
+  })
+
   it('maps internal run status values to user-facing workflow labels', () => {
     expect(getRunStatusLabel('building')).toBe('开发实现中')
     expect(getRunStatusLabel('testing')).toBe('测试证据中')

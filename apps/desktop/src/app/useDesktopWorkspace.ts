@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import {
   normalizeWorkflowRunProgress,
   parseThemePreference,
@@ -23,6 +23,7 @@ import {
   type ManagedCodingWorkspace,
   type McpServerDefinition,
   type Project,
+  type RepositoryKnowledgeSnapshot,
   type RemoteSyncOperation,
   type RetryAttempt,
   type TeamMember,
@@ -188,7 +189,11 @@ export function useDesktopWorkspace(input: {
   derived: {
     selectedLocalProject: LocalProject | undefined
     isTestCommandDirty: boolean
+    repositoryKnowledge: RepositoryKnowledgeSnapshot | undefined
+    isLoadingRepositoryKnowledge: boolean
+    repositoryKnowledgeError: string | undefined
   }
+  refreshRepositoryKnowledge: () => Promise<void>
   resetTeamSnapshot: () => void
   applyLocalExecutionState: (state: LocalExecutionState) => void
 } {
@@ -248,6 +253,16 @@ export function useDesktopWorkspace(input: {
   const [searchQuery, setSearchQuery] = useState('')
   const [supportContext, setSupportContext] = useState<SupportContext | null>(null)
   const [toast, setToast] = useState(desktopApi ? '本地执行代理已连接' : '浏览器预览模式')
+  const [repositoryKnowledgeByProjectId, setRepositoryKnowledgeByProjectId] = useState<
+    Record<string, RepositoryKnowledgeSnapshot>
+  >({})
+  const [repositoryKnowledgeLoadingByProjectId, setRepositoryKnowledgeLoadingByProjectId] = useState<
+    Record<string, boolean>
+  >({})
+  const [repositoryKnowledgeErrorByProjectId, setRepositoryKnowledgeErrorByProjectId] = useState<
+    Record<string, string | undefined>
+  >({})
+  const repositoryKnowledgeRequestSequenceRef = useRef<Record<string, number>>({})
   const selectedLocalProjectIdRef = useRef(selectedLocalProjectId)
   const selectedRunIdRef = useRef(selectedRunId)
   selectedLocalProjectIdRef.current = selectedLocalProjectId
@@ -260,6 +275,63 @@ export function useDesktopWorkspace(input: {
       testCommandDraft.trim() &&
       testCommandDraft.trim() !== selectedLocalProject.testCommand.trim(),
   )
+  const repositoryKnowledge = selectedLocalProject
+    ? repositoryKnowledgeByProjectId[selectedLocalProject.id]
+    : undefined
+  const isLoadingRepositoryKnowledge = selectedLocalProject
+    ? Boolean(repositoryKnowledgeLoadingByProjectId[selectedLocalProject.id])
+    : false
+  const repositoryKnowledgeError = selectedLocalProject
+    ? repositoryKnowledgeErrorByProjectId[selectedLocalProject.id]
+    : undefined
+
+  const requestRepositoryKnowledge = useCallback(
+    async (projectId: string, refresh: boolean): Promise<void> => {
+      if (!desktopApi) {
+        return
+      }
+
+      const sequence = (repositoryKnowledgeRequestSequenceRef.current[projectId] ?? 0) + 1
+      repositoryKnowledgeRequestSequenceRef.current[projectId] = sequence
+      setRepositoryKnowledgeLoadingByProjectId((current) => ({ ...current, [projectId]: true }))
+      setRepositoryKnowledgeErrorByProjectId((current) => ({ ...current, [projectId]: undefined }))
+
+      try {
+        const snapshot = refresh
+          ? await desktopApi.refreshRepositoryKnowledge({ projectId })
+          : await desktopApi.loadRepositoryKnowledge({ projectId })
+
+        if (repositoryKnowledgeRequestSequenceRef.current[projectId] !== sequence) {
+          return
+        }
+        if (snapshot.projectId !== projectId) {
+          throw new Error('repository knowledge project mismatch')
+        }
+
+        setRepositoryKnowledgeByProjectId((current) => ({ ...current, [projectId]: snapshot }))
+      } catch {
+        if (repositoryKnowledgeRequestSequenceRef.current[projectId] === sequence) {
+          setRepositoryKnowledgeErrorByProjectId((current) => ({
+            ...current,
+            [projectId]: '仓库知识索引不可用',
+          }))
+        }
+      } finally {
+        if (repositoryKnowledgeRequestSequenceRef.current[projectId] === sequence) {
+          setRepositoryKnowledgeLoadingByProjectId((current) => ({ ...current, [projectId]: false }))
+        }
+      }
+    },
+    [desktopApi],
+  )
+
+  const refreshRepositoryKnowledge = useCallback(async (): Promise<void> => {
+    const projectId = selectedLocalProject?.id
+    if (!projectId) {
+      return
+    }
+    await requestRepositoryKnowledge(projectId, true)
+  }, [requestRepositoryKnowledge, selectedLocalProject?.id])
 
   function resetTeamSnapshot() {
     setTeamProjects([])
@@ -435,6 +507,25 @@ export function useDesktopWorkspace(input: {
   }, [selectedLocalProject?.id, selectedLocalProject?.testCommand])
 
   useEffect(() => {
+    if (
+      !selectedLocalProject ||
+      repositoryKnowledge ||
+      isLoadingRepositoryKnowledge ||
+      repositoryKnowledgeError
+    ) {
+      return
+    }
+
+    void requestRepositoryKnowledge(selectedLocalProject.id, false)
+  }, [
+    isLoadingRepositoryKnowledge,
+    repositoryKnowledge,
+    repositoryKnowledgeError,
+    requestRepositoryKnowledge,
+    selectedLocalProject?.id,
+  ])
+
+  useEffect(() => {
     if (!selectedLocalProject || !testCommandDraft.trim()) {
       setCommandSafety(null)
       return
@@ -591,7 +682,11 @@ export function useDesktopWorkspace(input: {
     derived: {
       selectedLocalProject,
       isTestCommandDirty,
+      repositoryKnowledge,
+      isLoadingRepositoryKnowledge,
+      repositoryKnowledgeError,
     },
+    refreshRepositoryKnowledge,
     resetTeamSnapshot,
     applyLocalExecutionState,
   }
