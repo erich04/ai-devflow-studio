@@ -18,7 +18,13 @@ import type {
   RuntimeBudgetPolicy,
   TeamMember,
   TokenUsageRollup,
+  WorkRequest,
   WorkflowRun,
+} from '@ai-devflow/shared'
+import {
+  parseWorkRequestCreate,
+  parseWorkRequestRecord,
+  type CreateWorkRequestInput,
 } from '@ai-devflow/shared'
 import { parseDesktopPairingCodePayload } from './pairing-code'
 
@@ -347,4 +353,144 @@ export async function createDesktopPairingCode(
     throw new Error('Pairing code response was invalid.')
   })
   return parseDesktopPairingCodePayload(payload, options.projectId)
+}
+
+function isExactRecord(
+  value: unknown,
+  keys: readonly string[],
+): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false
+  }
+
+  const actualKeys = Object.keys(value).sort()
+  const expectedKeys = [...keys].sort()
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key, index) => key === expectedKeys[index])
+  )
+}
+
+function parseWorkRequestListPayload(
+  value: unknown,
+  expectedProjectId: string,
+): WorkRequest[] {
+  if (!isExactRecord(value, ['workRequests']) || !Array.isArray(value.workRequests)) {
+    throw new Error('Work Request response was invalid.')
+  }
+
+  try {
+    return value.workRequests.map((item) => {
+      const workRequest = parseWorkRequestRecord(item)
+      if (workRequest.projectId !== expectedProjectId) {
+        throw new Error('project mismatch')
+      }
+      return workRequest
+    })
+  } catch {
+    throw new Error('Work Request response was invalid.')
+  }
+}
+
+export type FetchWorkRequestsOptions = FetchTeamOverviewOptions & {
+  projectId: string
+}
+
+export async function fetchWorkRequests(
+  options: FetchWorkRequestsOptions,
+): Promise<WorkRequest[]> {
+  const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
+  const fetcher = options.fetcher ?? fetch
+  const endpoint = '/api/team/projects/:projectId/work-requests'
+  const response = await fetcher(
+    `${apiBaseUrl}/api/team/projects/${encodeURIComponent(options.projectId)}/work-requests`,
+    {
+      cache: 'no-store',
+      headers: createApiHeaders({ accept: 'application/json' }, options),
+    },
+  )
+
+  if (!response.ok) {
+    throw new DevFlowApiError(endpoint, response.status)
+  }
+
+  const payload = await response.json().catch(() => {
+    throw new Error('Work Request response was invalid.')
+  })
+  return parseWorkRequestListPayload(payload, options.projectId)
+}
+
+export type CreateWorkRequestOptions = FetchTeamOverviewOptions &
+  CreateWorkRequestInput
+
+export type CreateWorkRequestResult = {
+  workRequest: WorkRequest
+  replayed: boolean
+  outcomeCode: 'created'
+}
+
+function parseCreateWorkRequestPayload(
+  value: unknown,
+  expectedProjectId: string,
+): CreateWorkRequestResult {
+  if (
+    !isExactRecord(value, ['outcomeCode', 'replayed', 'workRequest']) ||
+    value.outcomeCode !== 'created' ||
+    typeof value.replayed !== 'boolean'
+  ) {
+    throw new Error('Work Request response was invalid.')
+  }
+
+  try {
+    const workRequest = parseWorkRequestRecord(value.workRequest)
+    if (workRequest.projectId !== expectedProjectId) {
+      throw new Error('project mismatch')
+    }
+    return {
+      workRequest,
+      replayed: value.replayed,
+      outcomeCode: 'created',
+    }
+  } catch {
+    throw new Error('Work Request response was invalid.')
+  }
+}
+
+export async function createWorkRequest(
+  options: CreateWorkRequestOptions,
+): Promise<CreateWorkRequestResult> {
+  const input = parseWorkRequestCreate({
+    projectId: options.projectId,
+    title: options.title,
+    request: options.request,
+    idempotencyKey: options.idempotencyKey,
+    expiresAt: options.expiresAt,
+  })
+  const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
+  const fetcher = options.fetcher ?? fetch
+  const endpoint = '/api/team/projects/:projectId/work-requests'
+  const response = await fetcher(
+    `${apiBaseUrl}/api/team/projects/${encodeURIComponent(input.projectId)}/work-requests`,
+    {
+      method: 'POST',
+      cache: 'no-store',
+      headers: createApiHeaders(
+        {
+          accept: 'application/json',
+          'content-type': 'application/json',
+        },
+        options,
+      ),
+      body: JSON.stringify(input),
+    },
+  )
+
+  if (!response.ok) {
+    throw new DevFlowApiError(endpoint, response.status)
+  }
+
+  const payload = await response.json().catch(() => {
+    throw new Error('Work Request response was invalid.')
+  })
+  return parseCreateWorkRequestPayload(payload, input.projectId)
 }

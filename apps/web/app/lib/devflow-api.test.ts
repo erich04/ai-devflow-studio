@@ -9,6 +9,8 @@ import {
   createDesktopPairingCode,
   createTeamProject,
   createRuntimeBudgetApproval,
+  createWorkRequest,
+  fetchWorkRequests,
   resolveDevFlowPublicApiBaseUrl,
   resolveDevFlowApiBaseUrl,
   loadRuntimeBudgetPolicy,
@@ -520,5 +522,128 @@ describe('DevFlow web API client', () => {
       cookieHeader: 'devflow_session=session-1',
       projectId: 'p-agent-platform',
     })).rejects.toThrow('Pairing code response was invalid.')
+  })
+
+  it('loads a strictly parsed project-scoped Work Request list', async () => {
+    const workRequest = {
+      id: 'wr-1',
+      organizationId: 'org-demo',
+      projectId: 'p-agent-platform',
+      title: 'Prepare rollout',
+      request: 'Keep the rollout reversible.',
+      version: 1,
+      status: 'open',
+      createdByUserId: 'u-ling',
+      claim: null,
+      expiresAt: null,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }
+    const fetcher = vi.fn(async () =>
+      new Response(JSON.stringify({ workRequests: [workRequest] }), { status: 200 }),
+    )
+
+    await expect(
+      fetchWorkRequests({
+        apiBaseUrl: 'http://api.local',
+        fetcher,
+        cookieHeader: 'devflow_session=session-1',
+        projectId: 'p-agent-platform',
+      }),
+    ).resolves.toEqual([workRequest])
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/team/projects/p-agent-platform/work-requests',
+      {
+        cache: 'no-store',
+        headers: {
+          accept: 'application/json',
+          cookie: 'devflow_session=session-1',
+        },
+      },
+    )
+  })
+
+  it('rejects Work Request lists with the wrong project or secret metadata', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          workRequests: [{
+            id: 'wr-1',
+            organizationId: 'org-demo',
+            projectId: 'p-other',
+            title: 'Prepare rollout',
+            request: 'Keep the rollout reversible.',
+            version: 1,
+            status: 'open',
+            createdByUserId: 'u-ling',
+            claim: null,
+            expiresAt: null,
+            createdAt: '2026-08-01T00:00:00.000Z',
+            updatedAt: '2026-08-01T00:00:00.000Z',
+            claimedByTokenId: 'must-not-reach-web',
+          }],
+        }),
+        { status: 200 },
+      ),
+    )
+
+    await expect(fetchWorkRequests({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      projectId: 'p-agent-platform',
+    })).rejects.toThrow('Work Request response was invalid.')
+  })
+
+  it('creates a Work Request with an explicit browser idempotency key', async () => {
+    const workRequest = {
+      id: 'wr-1',
+      organizationId: 'org-demo',
+      projectId: 'p-agent-platform',
+      title: 'Prepare rollout',
+      request: 'Keep the rollout reversible.',
+      version: 1,
+      status: 'open',
+      createdByUserId: 'u-ling',
+      claim: null,
+      expiresAt: null,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }
+    const fetcher = vi.fn(async () =>
+      new Response(
+        JSON.stringify({ workRequest, replayed: false, outcomeCode: 'created' }),
+        { status: 201 },
+      ),
+    )
+
+    await expect(createWorkRequest({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      cookieHeader: 'devflow_session=session-1',
+      projectId: 'p-agent-platform',
+      title: 'Prepare rollout',
+      request: 'Keep the rollout reversible.',
+      idempotencyKey: 'create:wr-1',
+      expiresAt: null,
+    })).resolves.toEqual({ workRequest, replayed: false, outcomeCode: 'created' })
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/team/projects/p-agent-platform/work-requests',
+      {
+        method: 'POST',
+        cache: 'no-store',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          cookie: 'devflow_session=session-1',
+        },
+        body: JSON.stringify({
+          projectId: 'p-agent-platform',
+          title: 'Prepare rollout',
+          request: 'Keep the rollout reversible.',
+          idempotencyKey: 'create:wr-1',
+          expiresAt: null,
+        }),
+      },
+    )
   })
 })
