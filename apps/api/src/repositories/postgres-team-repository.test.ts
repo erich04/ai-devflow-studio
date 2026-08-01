@@ -16,6 +16,7 @@ class FakeTeamDbClient implements TeamDbRepositoryClient {
     private readonly runSummaryAccepted = true,
     private readonly desktopUserRole: 'owner' | 'lead' | 'member' = 'lead',
     private readonly failOnSqlFragment?: string,
+    private readonly nodeSummaryAccepted = true,
   ) {}
 
   private acceptScopedChildSummaryWrite(
@@ -77,6 +78,10 @@ class FakeTeamDbClient implements TeamDbRepositoryClient {
 
     if (sql.includes('INSERT INTO workflow_runs')) {
       return (this.runSummaryAccepted ? [{ id: params?.[0] }] : []) as T[]
+    }
+
+    if (sql.includes('INSERT INTO workflow_nodes')) {
+      return (this.nodeSummaryAccepted ? [{ id: params?.[0] }] : []) as T[]
     }
 
     if (sql.includes('SELECT id') && sql.includes('FROM workflow_runs')) {
@@ -1364,6 +1369,41 @@ describe('Postgres team repository', () => {
 
     expect(db.queries.some((query) => query.sql.includes('INSERT INTO workflow_nodes'))).toBe(false)
     expect(db.queries.some((query) => query.sql.includes('UPDATE workflow_nodes'))).toBe(false)
+  })
+
+  it('rolls back when a remote node ID collides with a node owned by another Run', async () => {
+    const db = new FakeTeamDbClient(true, true, 'lead', undefined, false)
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.uploadRunSummary(
+        {
+          kind: 'run',
+          runId: 'run:a',
+          version: 2,
+          projectId: 'p-payments',
+          title: 'Collision-safe projection',
+          status: 'building',
+          currentNodeId: 'node:b',
+          currentNode: {
+            id: 'node:b',
+            stage: 'build',
+            kind: 'task',
+            status: 'running',
+          },
+          branchName: 'ai/collision-safe',
+          updatedAt: '2026-08-01T12:00:00.000Z',
+        },
+        { organizationId: 'org-demo', userId: 'u-ling' },
+      ),
+    ).rejects.toThrow('Remote Run Summary conflicts with canonical ownership or is stale')
+
+    const nodeWrite = db.queries.find((query) => query.sql.includes('INSERT INTO workflow_nodes'))
+    expect(nodeWrite?.sql).toContain('WHERE workflow_nodes.run_id = excluded.run_id')
+    expect(nodeWrite?.sql).toContain('RETURNING id')
+    expect(db.queries.map(({ sql }) => sql.trim())).toContain('ROLLBACK')
+    expect(db.queries.map(({ sql }) => sql.trim())).not.toContain('COMMIT')
+    expect(db.releaseCount).toBe(1)
   })
 
   it('deletes workflow runs by tenant and relies on database cascade', async () => {

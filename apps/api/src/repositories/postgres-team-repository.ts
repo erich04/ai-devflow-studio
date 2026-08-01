@@ -1933,7 +1933,7 @@ export function createPostgresTeamRepository(
           ],
         )
 
-        await tx.query(
+        const [acceptedNode] = await tx.query<{ id: string }>(
           `
             INSERT INTO workflow_nodes (
               id,
@@ -1960,6 +1960,8 @@ export function createPostgresTeamRepository(
                 required_role = excluded.required_role,
                 position = excluded.position,
                 updated_at = excluded.updated_at
+            WHERE workflow_nodes.run_id = excluded.run_id
+            RETURNING id
           `,
           [
             remoteNodeId(summary.runId, summary.currentNode.id),
@@ -1975,6 +1977,9 @@ export function createPostgresTeamRepository(
             summary.updatedAt,
           ],
         )
+        if (!acceptedNode) {
+          throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+        }
 
         return {
           accepted: true,
