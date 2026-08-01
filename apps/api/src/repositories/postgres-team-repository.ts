@@ -25,6 +25,7 @@ import {
   type ProjectMembership,
   type ProviderCredentialMetadata,
   type RemoteCodingAgentSummary,
+  type RemoteRunSummary,
   type RuntimeBudgetApproval,
   type RuntimeBudgetPolicy,
   type RemoteTestEvidenceSummary,
@@ -128,6 +129,7 @@ type OrganizationRow = {
 
 type WorkflowRunRow = {
   id: string
+  run_version: number
   title: string
   request: string
   project_id: string
@@ -138,6 +140,25 @@ type WorkflowRunRow = {
   pull_request_url: string | null
   created_at: TimestampValue
   updated_at: TimestampValue
+}
+
+type RemoteRunProjectionRow = {
+  id: string
+  run_version: number
+  organization_id: string
+  project_id: string
+  creator_id: string
+  data_origin: string
+  title: string
+  status: RunStatus
+  current_node_id: string
+  branch_name: string
+  updated_at: TimestampValue
+  node_id: string | null
+  node_stage: NodeStage | null
+  node_kind: NodeKind | null
+  node_status: NodeStatus | null
+  node_required_role: RequiredGateRole | null
 }
 
 type WorkflowNodeRow = {
@@ -575,6 +596,7 @@ function mapRun(
 ): WorkflowRun {
   const run: WorkflowRun = {
     id: row.id,
+    version: row.run_version,
     title: row.title,
     request: row.request,
     projectId: row.project_id,
@@ -844,6 +866,30 @@ function mapMcpServer(row: McpServerRow): McpServerDefinition {
 function remoteNodeId(runId: string, nodeId: string): string {
   const prefix = `${runId}:`
   return nodeId.startsWith(prefix) ? nodeId : `${prefix}${nodeId}`
+}
+
+function hasSameRemoteRunProjection(
+  row: RemoteRunProjectionRow,
+  summary: RemoteRunSummary,
+  context: TeamRepositorySyncContext,
+): boolean {
+  return (
+    row.run_version === summary.version &&
+    row.organization_id === context.organizationId &&
+    row.project_id === summary.projectId &&
+    row.creator_id === context.userId &&
+    row.data_origin === 'remote' &&
+    row.title === summary.title &&
+    row.status === summary.status &&
+    row.current_node_id === remoteNodeId(summary.runId, summary.currentNodeId) &&
+    row.branch_name === summary.branchName &&
+    timestamp(row.updated_at) === summary.updatedAt &&
+    row.node_id === remoteNodeId(summary.runId, summary.currentNode.id) &&
+    row.node_stage === summary.currentNode.stage &&
+    row.node_kind === summary.currentNode.kind &&
+    row.node_status === summary.currentNode.status &&
+    (row.node_required_role ?? undefined) === summary.currentNode.requiredRole
+  )
 }
 
 function remoteNodePosition(stage: WorkflowNode['stage'], kind: WorkflowNode['kind']): number {
@@ -1785,6 +1831,7 @@ export function createPostgresTeamRepository(
         `
           INSERT INTO workflow_runs (
             id,
+            run_version,
             organization_id,
             project_id,
             creator_id,
@@ -1798,9 +1845,10 @@ export function createPostgresTeamRepository(
             created_at,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, 'remote', $5, $6, $7, $8, $9, NULL, $10, $10)
+          VALUES ($1, $2, $3, $4, $5, 'remote', $6, $7, $8, $9, $10, NULL, $11, $11)
           ON CONFLICT (id) DO UPDATE
-          SET title = excluded.title,
+          SET run_version = excluded.run_version,
+              title = excluded.title,
               status = excluded.status,
               current_node_id = excluded.current_node_id,
               branch_name = excluded.branch_name,
@@ -1809,11 +1857,12 @@ export function createPostgresTeamRepository(
             AND workflow_runs.project_id = excluded.project_id
             AND workflow_runs.creator_id = excluded.creator_id
             AND workflow_runs.data_origin = 'remote'
-            AND workflow_runs.updated_at <= excluded.updated_at
+            AND workflow_runs.run_version < excluded.run_version
           RETURNING id
         `,
         [
           summary.runId,
+          summary.version,
           context.organizationId,
           summary.projectId,
           context.userId,
@@ -1827,7 +1876,43 @@ export function createPostgresTeamRepository(
       )
 
       if (!acceptedRun) {
-        throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+        const [existingProjection] = await db.query<RemoteRunProjectionRow>(
+          `
+            SELECT
+              workflow_runs.id,
+              workflow_runs.run_version,
+              workflow_runs.organization_id,
+              workflow_runs.project_id,
+              workflow_runs.creator_id,
+              workflow_runs.data_origin,
+              workflow_runs.title,
+              workflow_runs.status,
+              workflow_runs.current_node_id,
+              workflow_runs.branch_name,
+              workflow_runs.updated_at,
+              current_node.id AS node_id,
+              current_node.stage AS node_stage,
+              current_node.kind AS node_kind,
+              current_node.status AS node_status,
+              current_node.required_role AS node_required_role
+            FROM workflow_runs
+            LEFT JOIN workflow_nodes AS current_node
+              ON current_node.run_id = workflow_runs.id
+             AND current_node.id = workflow_runs.current_node_id
+            WHERE workflow_runs.id = $1
+            LIMIT 1
+          `,
+          [summary.runId],
+        )
+        if (!existingProjection || !hasSameRemoteRunProjection(existingProjection, summary, context)) {
+          throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+        }
+
+        return {
+          accepted: true,
+          syncedAt: new Date().toISOString(),
+          message: 'run summary written to Postgres repository',
+        }
       }
 
       await db.query(

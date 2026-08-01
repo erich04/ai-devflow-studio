@@ -323,6 +323,24 @@ export function createSeedTeamRepository(): TeamRepository {
     syncedTestEvidenceSummaries.unshift(summary)
   }
 
+  function hasSameRunProjection(run: WorkflowRun, summary: RemoteRunSummary): boolean {
+    const currentNode = run.nodes.find((node) => node.id === run.currentNodeId)
+    return (
+      run.version === summary.version &&
+      run.title === summary.title &&
+      run.projectId === summary.projectId &&
+      run.status === summary.status &&
+      run.currentNodeId === summary.currentNodeId &&
+      run.branchName === summary.branchName &&
+      run.updatedAt === summary.updatedAt &&
+      currentNode?.id === summary.currentNode.id &&
+      currentNode.stage === summary.currentNode.stage &&
+      currentNode.kind === summary.currentNode.kind &&
+      currentNode.status === summary.currentNode.status &&
+      currentNode.requiredRole === summary.currentNode.requiredRole
+    )
+  }
+
   function assertCanonicalRun(
     summary: { runId: string; projectId: string },
     context: TeamRepositorySyncContext,
@@ -696,9 +714,21 @@ export function createSeedTeamRepository(): TeamRepository {
           runOrganizationIds.get(summary.runId) !== context.organizationId ||
           existingRun.projectId !== summary.projectId ||
           existingRun.creatorId !== context.userId ||
-          existingRun.updatedAt > summary.updatedAt)
+          existingRun.version > summary.version)
       ) {
         throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+      }
+
+      if (existingRun?.version === summary.version) {
+        if (!hasSameRunProjection(existingRun, summary)) {
+          throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+        }
+
+        return {
+          accepted: true,
+          syncedAt: new Date().toISOString(),
+          message: 'run summary accepted by seed repository',
+        }
       }
 
       const currentNode = {
@@ -728,6 +758,7 @@ export function createSeedTeamRepository(): TeamRepository {
       const syncedRun: WorkflowRun = existingRun
         ? {
             ...existingRun,
+            version: summary.version,
             title: summary.title,
             projectId: summary.projectId,
             status: summary.status,
@@ -738,6 +769,7 @@ export function createSeedTeamRepository(): TeamRepository {
           }
         : {
             id: summary.runId,
+            version: summary.version,
             title: summary.title,
             request: 'Synced from DevFlow Electron.',
             projectId: summary.projectId,

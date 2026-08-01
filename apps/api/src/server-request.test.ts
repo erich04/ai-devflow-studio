@@ -43,6 +43,7 @@ function runSummary(runId: string) {
   return {
     kind: 'run' as const,
     runId,
+    version: 1,
     projectId: 'p-payments',
     title: 'Authenticated sync',
     status: 'testing' as const,

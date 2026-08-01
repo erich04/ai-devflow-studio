@@ -200,6 +200,9 @@ function isRemoteRunSummary(value: unknown): value is RemoteRunSummary {
     isRecord(value) &&
     (value['kind'] === 'run' || value['kind'] === 'approval' || value['kind'] === 'event') &&
     typeof value['runId'] === 'string' &&
+    typeof value['version'] === 'number' &&
+    Number.isInteger(value['version']) &&
+    value['version'] >= 1 &&
     typeof value['projectId'] === 'string' &&
     typeof value['title'] === 'string' &&
     isRunStatus(value['status']) &&

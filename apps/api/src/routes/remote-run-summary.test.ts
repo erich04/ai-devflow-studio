@@ -21,6 +21,7 @@ describe('remote Run Summary boundary', () => {
       body: {
         kind: 'run',
         runId: 'run-hostile-metadata',
+        version: 1,
         projectId: 'project-1',
         title: 'Build from /Users/Alice/private/repo API_TOKEN=title-secret',
         status: 'building',
@@ -57,6 +58,7 @@ describe('remote Run Summary boundary', () => {
       body: {
         kind: 'run',
         runId: 'run-hostile-coding-metadata',
+        version: 1,
         projectId: 'project-1',
         title: 'Coding metadata boundary',
         status: 'building',
@@ -117,4 +119,76 @@ describe('remote Run Summary boundary', () => {
     expect(JSON.stringify(stored)).not.toContain('/Users/Alice')
     expect(JSON.stringify(stored)).not.toMatch(/C:[\\/]Users[\\/]Alice/)
   })
+
+  it('rejects a Run Summary without an explicit positive integer version', async () => {
+    const repository = createSeedTeamRepository()
+
+    const result = await resolveTeamRoute('POST', '/api/sync/run-summary', repository, {
+      body: {
+        kind: 'run',
+        runId: 'run-missing-version',
+        projectId: 'project-1',
+        title: 'Missing version must fail closed',
+        status: 'building',
+        currentNodeId: 'node-build',
+        currentNode: {
+          id: 'node-build',
+          stage: 'build',
+          kind: 'task',
+          status: 'running',
+        },
+        branchName: 'ai/missing-version',
+        updatedAt: '2026-07-31T12:00:00.000Z',
+      },
+      session: projectMemberSession,
+    })
+
+    expect(result).toEqual({
+      status: 400,
+      body: { error: 'bad_request', message: 'Invalid remote run summary payload' },
+    })
+    expect(
+      (await repository.getRunsBundle(projectMemberSession)).runs.some(
+        (run) => run.id === 'run-missing-version',
+      ),
+    ).toBe(false)
+  })
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '1'])(
+    'rejects an invalid Run Summary version (%s)',
+    async (version) => {
+      const repository = createSeedTeamRepository()
+
+      const result = await resolveTeamRoute('POST', '/api/sync/run-summary', repository, {
+        body: {
+          kind: 'run',
+          runId: 'run-invalid-version',
+          version,
+          projectId: 'project-1',
+          title: 'Invalid version must fail closed',
+          status: 'building',
+          currentNodeId: 'node-build',
+          currentNode: {
+            id: 'node-build',
+            stage: 'build',
+            kind: 'task',
+            status: 'running',
+          },
+          branchName: 'ai/invalid-version',
+          updatedAt: '2026-07-31T12:00:00.000Z',
+        },
+        session: projectMemberSession,
+      })
+
+      expect(result).toEqual({
+        status: 400,
+        body: { error: 'bad_request', message: 'Invalid remote run summary payload' },
+      })
+      expect(
+        (await repository.getRunsBundle(projectMemberSession)).runs.some(
+          (run) => run.id === 'run-invalid-version',
+        ),
+      ).toBe(false)
+    },
+  )
 })

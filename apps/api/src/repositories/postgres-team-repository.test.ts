@@ -181,6 +181,7 @@ class FakeTeamDbClient implements TeamDbClient {
       return [
         {
           id: 'run-remote-1',
+          run_version: 4,
           title: 'Remote health endpoint',
           request: 'Add team-visible health endpoint evidence.',
           project_id: 'p-payments',
@@ -349,6 +350,21 @@ class FakeTeamDbClient implements TeamDbClient {
   }
 }
 
+class ExistingRunProjectionDbClient extends FakeTeamDbClient {
+  constructor(private readonly projection: Record<string, unknown>) {
+    super(true, false)
+  }
+
+  override async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    if (sql.includes('workflow_runs.run_version') && sql.includes('node_stage')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [this.projection as T]
+    }
+
+    return super.query<T>(sql, params)
+  }
+}
+
 class NamespacedMixedOriginDbClient extends FakeTeamDbClient {
   override async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
     if (sql.includes('FROM workflow_runs') && !sql.includes('SELECT id')) {
@@ -356,6 +372,7 @@ class NamespacedMixedOriginDbClient extends FakeTeamDbClient {
       return [
         {
           id: 'run-health-001',
+          run_version: 1,
           title: 'Seeded health endpoint',
           request: 'Ship the seeded health endpoint.',
           project_id: 'p-payments',
@@ -370,6 +387,7 @@ class NamespacedMixedOriginDbClient extends FakeTeamDbClient {
         },
         {
           id: 'run-remote-1',
+          run_version: 4,
           title: 'Remote health endpoint',
           request: 'Add team-visible health endpoint evidence.',
           project_id: 'p-payments',
@@ -558,6 +576,7 @@ class OrganizationScopedReadDbClient implements TeamDbClient {
         : [
             {
               id: 'run-demo-private',
+              run_version: 1,
               title: 'Demo private run',
               request: 'Must remain inside org-demo.',
               project_id: 'p-demo-private',
@@ -661,6 +680,7 @@ describe('Postgres team repository', () => {
 
     expect(bundle.runs[0]).toMatchObject({
       id: 'run-remote-1',
+      version: 4,
       projectId: 'p-payments',
       currentNodeId: 'n-design-gate',
       nodes: [
@@ -684,6 +704,7 @@ describe('Postgres team repository', () => {
     expect(bundle.runs).toEqual([
       expect.objectContaining({
         id: 'run-health-001',
+        version: 1,
         currentNodeId: 'run-health-001:n-clarify-gate',
         nodes: [expect.objectContaining({ id: 'run-health-001:n-clarify-gate' })],
         edges: [
@@ -695,6 +716,7 @@ describe('Postgres team repository', () => {
       }),
       expect.objectContaining({
         id: 'run-remote-1',
+        version: 4,
         currentNodeId: 'run-remote-1:n-design-gate',
         nodes: [expect.objectContaining({ id: 'run-remote-1:n-design-gate' })],
         edges: [
@@ -1054,6 +1076,7 @@ describe('Postgres team repository', () => {
         {
           kind: 'approval',
           runId: 'run-synced',
+          version: 7,
           projectId: 'p-payments',
           title: 'Synced approval',
           status: 'building',
@@ -1071,6 +1094,7 @@ describe('Postgres team repository', () => {
 
     const write = db.queries.find((query) => query.sql.includes('INSERT INTO workflow_runs'))
     expect(write?.sql).toContain('INSERT INTO workflow_runs')
+    expect(write?.sql).toContain('run_version')
     expect(write?.sql).toContain('ON CONFLICT (id) DO UPDATE')
     const updateClause = write?.sql.split('SET')[1]?.split('WHERE')[0]
     expect(updateClause).not.toContain('project_id = excluded.project_id')
@@ -1078,10 +1102,12 @@ describe('Postgres team repository', () => {
     expect(write?.sql).toContain('workflow_runs.project_id = excluded.project_id')
     expect(write?.sql).toContain('workflow_runs.creator_id = excluded.creator_id')
     expect(write?.sql).toContain("workflow_runs.data_origin = 'remote'")
-    expect(write?.sql).toContain('workflow_runs.updated_at <= excluded.updated_at')
+    expect(write?.sql).toContain('workflow_runs.run_version < excluded.run_version')
+    expect(write?.sql).not.toContain('workflow_runs.updated_at <= excluded.updated_at')
     expect(write?.sql).toContain('RETURNING id')
     expect(write?.params).toEqual([
       'run-synced',
+      7,
       'org-demo',
       'p-payments',
       'u-ling',
@@ -1108,6 +1134,58 @@ describe('Postgres team repository', () => {
     ])
   })
 
+  it('accepts an identical Postgres projection idempotently at the same Run version', async () => {
+    const summary = {
+      kind: 'run' as const,
+      runId: 'run-idempotent-pg',
+      version: 4,
+      projectId: 'p-payments',
+      title: 'Idempotent Postgres projection',
+      status: 'testing' as const,
+      currentNodeId: 'n-test',
+      currentNode: {
+        id: 'n-test',
+        stage: 'test' as const,
+        kind: 'test' as const,
+        status: 'running' as const,
+      },
+      branchName: 'ai/idempotent-pg',
+      updatedAt: '2026-06-16T12:00:00.000Z',
+    }
+    const db = new ExistingRunProjectionDbClient({
+      id: summary.runId,
+      run_version: summary.version,
+      organization_id: 'org-demo',
+      project_id: summary.projectId,
+      creator_id: 'u-ling',
+      data_origin: 'remote',
+      title: summary.title,
+      status: summary.status,
+      current_node_id: `${summary.runId}:${summary.currentNodeId}`,
+      branch_name: summary.branchName,
+      updated_at: summary.updatedAt,
+      node_id: `${summary.runId}:${summary.currentNode.id}`,
+      node_stage: summary.currentNode.stage,
+      node_kind: summary.currentNode.kind,
+      node_status: summary.currentNode.status,
+      node_required_role: null,
+    })
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.uploadRunSummary(summary, { organizationId: 'org-demo', userId: 'u-ling' }),
+    ).resolves.toMatchObject({ accepted: true })
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO workflow_nodes'))).toBe(false)
+    expect(db.queries.some((query) => query.sql.includes('UPDATE workflow_nodes'))).toBe(false)
+
+    await expect(
+      repository.uploadRunSummary(
+        { ...summary, title: 'Conflicting content at version four' },
+        { organizationId: 'org-demo', userId: 'u-ling' },
+      ),
+    ).rejects.toThrow('Remote Run Summary conflicts with canonical ownership or is stale')
+  })
+
   it('converges non-current active nodes after accepting a newer canonical summary', async () => {
     const db = new FakeTeamDbClient()
     const repository = createPostgresTeamRepository(db)
@@ -1116,6 +1194,7 @@ describe('Postgres team repository', () => {
       {
         kind: 'run',
         runId: 'run-synced',
+        version: 8,
         projectId: 'p-payments',
         title: 'Advanced canonical Run',
         status: 'testing',
@@ -1149,6 +1228,7 @@ describe('Postgres team repository', () => {
       {
         kind: 'run',
         runId: 'run-hostile-metadata',
+        version: 1,
         projectId: 'p-payments',
         title: 'Build from /Users/Alice/private/repo API_TOKEN=title-secret',
         status: 'building',
@@ -1176,6 +1256,7 @@ describe('Postgres team repository', () => {
         {
           kind: 'run',
           runId: 'run-colliding',
+          version: 1,
           projectId: 'p-payments',
           title: 'Colliding summary',
           status: 'building',

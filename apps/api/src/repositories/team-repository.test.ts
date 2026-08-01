@@ -69,6 +69,7 @@ describe('seed team repository', () => {
     await repository.uploadRunSummary({
       kind: 'run',
       runId: 'run-hostile-evidence',
+      version: 1,
       projectId: 'project-1',
       title: 'Repository redaction boundary',
       status: 'testing',
@@ -110,6 +111,7 @@ describe('seed team repository', () => {
       {
         kind: 'run',
         runId: 'run-hostile-metadata',
+        version: 1,
         projectId: 'project-1',
         title: 'Build from /Users/Alice/private/repo API_TOKEN=title-secret',
         status: 'building',
@@ -136,6 +138,7 @@ describe('seed team repository', () => {
       {
         kind: 'run',
         runId: 'run-hostile-coding-metadata',
+        version: 1,
         projectId: 'project-1',
         title: 'Coding metadata boundary',
         status: 'building',
@@ -386,6 +389,7 @@ describe('seed team repository', () => {
       repository.uploadRunSummary({
         kind: 'approval',
         runId: 'run-1',
+        version: 1,
         projectId: 'project-1',
         title: 'Approve payment workflow',
         status: 'building',
@@ -477,6 +481,7 @@ describe('seed team repository', () => {
       {
         kind: 'run',
         runId: 'run-victim',
+        version: 1,
         projectId: 'project-victim',
         title: 'Victim Run',
         status: 'testing',
@@ -491,6 +496,7 @@ describe('seed team repository', () => {
       {
         kind: 'run',
         runId: 'run-attacker',
+        version: 1,
         projectId: 'project-attacker',
         title: 'Attacker Run',
         status: 'testing',
@@ -672,6 +678,7 @@ describe('seed team repository', () => {
     const repository = createSeedTeamRepository()
     const summaries = [
       {
+        version: 1,
         currentNodeId: 'node-design-gate',
         currentNode: {
           id: 'node-design-gate',
@@ -684,6 +691,7 @@ describe('seed team repository', () => {
         updatedAt: '2026-06-16T00:00:00.000Z',
       },
       {
+        version: 2,
         currentNodeId: 'node-build',
         currentNode: {
           id: 'node-build',
@@ -695,6 +703,7 @@ describe('seed team repository', () => {
         updatedAt: '2026-06-16T00:01:00.000Z',
       },
       {
+        version: 3,
         currentNodeId: 'node-test',
         currentNode: {
           id: 'node-test',
@@ -732,6 +741,85 @@ describe('seed team repository', () => {
     expect(
       run?.nodes.filter((node) => node.status === 'running' || node.status === 'blocked'),
     ).toEqual([expect.objectContaining({ id: 'node-test' })])
+    expect(run?.version).toBe(3)
+  })
+
+  it('accepts a higher Run version even when its display timestamp is older', async () => {
+    const repository = createSeedTeamRepository()
+    const summary = {
+      kind: 'run' as const,
+      runId: 'run-version-over-time',
+      version: 1,
+      projectId: 'project-1',
+      title: 'Version one',
+      status: 'building' as const,
+      currentNodeId: 'node-build',
+      currentNode: {
+        id: 'node-build',
+        stage: 'build' as const,
+        kind: 'task' as const,
+        status: 'running' as const,
+      },
+      branchName: 'ai/version-over-time',
+      updatedAt: '2026-06-16T00:10:00.000Z',
+    }
+    await repository.uploadRunSummary(summary, syncContext)
+
+    await expect(
+      repository.uploadRunSummary(
+        {
+          ...summary,
+          version: 2,
+          title: 'Version two is authoritative',
+          updatedAt: '2026-06-16T00:09:00.000Z',
+        },
+        syncContext,
+      ),
+    ).resolves.toMatchObject({ accepted: true })
+
+    expect(
+      (await repository.getRunsBundle(syncContext)).runs.find(
+        (run) => run.id === summary.runId,
+      ),
+    ).toMatchObject({ version: 2, title: 'Version two is authoritative' })
+  })
+
+  it('accepts only an identical projection when the Run version is unchanged', async () => {
+    const repository = createSeedTeamRepository()
+    const summary = {
+      kind: 'run' as const,
+      runId: 'run-idempotent-version',
+      version: 2,
+      projectId: 'project-1',
+      title: 'Stable versioned projection',
+      status: 'testing' as const,
+      currentNodeId: 'node-test',
+      currentNode: {
+        id: 'node-test',
+        stage: 'test' as const,
+        kind: 'test' as const,
+        status: 'running' as const,
+      },
+      branchName: 'ai/idempotent-version',
+      updatedAt: '2026-06-16T00:10:00.000Z',
+    }
+    await repository.uploadRunSummary(summary, syncContext)
+
+    await expect(repository.uploadRunSummary(summary, syncContext)).resolves.toMatchObject({
+      accepted: true,
+    })
+    await expect(
+      repository.uploadRunSummary(
+        { ...summary, title: 'Conflicting content at the same version' },
+        syncContext,
+      ),
+    ).rejects.toThrow('Remote Run Summary conflicts with canonical ownership or is stale')
+
+    expect(
+      (await repository.getRunsBundle(syncContext)).runs.find(
+        (run) => run.id === summary.runId,
+      ),
+    ).toMatchObject({ version: 2, title: summary.title })
   })
 
   it('rejects seed, cross-project, and stale run-summary collisions', async () => {
@@ -739,6 +827,7 @@ describe('seed team repository', () => {
     const canonical = {
       kind: 'run' as const,
       runId: 'run-owned',
+      version: 2,
       projectId: 'project-1',
       title: 'Owned Run',
       status: 'building' as const,
@@ -760,6 +849,7 @@ describe('seed team repository', () => {
       repository.uploadRunSummary(
         {
           ...canonical,
+          version: 3,
           projectId: 'project-2',
           updatedAt: '2026-06-16T00:11:00.000Z',
         },
@@ -770,6 +860,7 @@ describe('seed team repository', () => {
       repository.uploadRunSummary(
         {
           ...canonical,
+          version: 3,
           title: 'Cross-user overwrite',
           updatedAt: '2026-06-16T00:12:00.000Z',
         },
@@ -780,8 +871,9 @@ describe('seed team repository', () => {
       repository.uploadRunSummary(
         {
           ...canonical,
+          version: 1,
           title: 'Stale Run',
-          updatedAt: '2026-06-16T00:09:00.000Z',
+          updatedAt: '2026-06-16T00:20:00.000Z',
         },
         syncContext,
       ),
@@ -790,6 +882,7 @@ describe('seed team repository', () => {
       repository.uploadRunSummary(
         {
           ...canonical,
+          version: 3,
           runId: 'run-health-001',
           projectId: 'p-payments',
           updatedAt: '2026-06-16T00:11:00.000Z',
@@ -802,6 +895,7 @@ describe('seed team repository', () => {
       (run) => run.id === canonical.runId,
     )
     expect(storedRun).toMatchObject({
+      version: canonical.version,
       title: canonical.title,
       creatorId: syncContext.userId,
       nodes: [expect.objectContaining({ ownerId: syncContext.userId })],

@@ -217,6 +217,7 @@ function createRepository(): TeamRepository {
     runs: [
       {
         id: 'run-payments',
+        version: 1,
         title: 'Payments run',
         request: 'Ship payments.',
         projectId: 'p-payments',
@@ -244,6 +245,7 @@ function createRepository(): TeamRepository {
       },
       {
         id: 'run-admin',
+        version: 1,
         title: 'Admin run',
         request: 'Ship admin.',
         projectId: 'p-admin',
@@ -2056,6 +2058,7 @@ describe('team API route resolver', () => {
     const summary = {
       kind: 'approval',
       runId: 'run-1',
+      version: 1,
       projectId: 'p-payments',
       title: 'Approve payment workflow',
       status: 'building',
@@ -2085,6 +2088,7 @@ describe('team API route resolver', () => {
     const summary = {
       kind: 'run',
       runId: 'run-1',
+      version: 1,
       projectId: 'p-payments',
       title: 'Update payment workflow',
       status: 'building',
@@ -2113,6 +2117,7 @@ describe('team API route resolver', () => {
       body: {
         kind: 'run',
         runId: 'run-1',
+        version: 1,
         projectId: 'p-payments',
         title: 'Stale payment workflow',
         status: 'building',
@@ -2141,6 +2146,7 @@ describe('team API route resolver', () => {
       body: {
         kind: 'run',
         runId: 'run-1',
+        version: 1,
         projectId: 'p-admin',
         title: 'Approve payment workflow',
         status: 'building',
@@ -2623,6 +2629,7 @@ describe('team API route resolver', () => {
         body: {
           kind: 'run',
           runId: 'run-1',
+          version: 1,
           projectId: 'p-payments',
           title: 'Approve payment workflow',
           status: 'building',
