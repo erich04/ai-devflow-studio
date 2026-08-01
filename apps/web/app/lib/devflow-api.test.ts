@@ -482,4 +482,20 @@ describe('DevFlow web API client', () => {
       },
     })
   })
+
+  it('keeps the safe upstream status when pairing-code creation is rejected', async () => {
+    const fetcher = vi.fn(async () => new Response(null, { status: 403 }))
+
+    await expect(
+      createDesktopPairingCode({
+        apiBaseUrl: 'http://api.local',
+        fetcher,
+        cookieHeader: 'devflow_session=session-1',
+        projectId: 'p-agent-platform',
+      }),
+    ).rejects.toMatchObject({
+      status: 403,
+      endpoint: '/api/team/projects/:projectId/pairing-codes',
+    })
+  })
 })

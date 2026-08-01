@@ -539,6 +539,88 @@ button {
   justify-content: flex-end;
 }
 
+.studio-selection {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) minmax(220px, 0.7fr);
+  gap: 12px;
+  max-width: 1320px;
+  margin: 0 auto 14px;
+  padding: 12px;
+  border: 1px solid var(--studio-line);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.9);
+  box-shadow: 0 1px 2px rgb(27 44 42 / 0.04);
+}
+
+.studio-selection > div,
+.studio-selection > section {
+  min-width: 0;
+}
+
+.studio-selection > div > span,
+.studio-selection > section > span {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--studio-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.studio-selection nav {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.studio-selection nav a {
+  display: grid;
+  flex: 0 0 min(230px, 78vw);
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--studio-line);
+  border-radius: 8px;
+  background: var(--studio-surface);
+  text-decoration: none;
+}
+
+.studio-selection nav a[aria-current='page'] {
+  border-color: color-mix(in srgb, var(--studio-teal) 50%, var(--studio-line));
+  background: var(--studio-teal-soft);
+}
+
+.studio-selection nav strong,
+.studio-selection > section > strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-selection nav small,
+.studio-selection > div > small {
+  color: var(--studio-muted);
+  font-size: 11px;
+}
+
+.studio-selection .pairing-code-panel {
+  margin-top: 7px;
+}
+
+.studio-selection .pairing-code-panel button {
+  border-color: var(--studio-teal);
+  background: var(--studio-teal);
+  color: white;
+}
+
+.studio-selection .pairing-code-panel code {
+  border-color: var(--studio-line);
+  background: var(--studio-surface-soft);
+  color: var(--studio-text);
+}
+
 .studio-secondary-link {
   display: inline-flex;
   min-height: 38px;
@@ -1088,8 +1170,13 @@ button {
   }
 
   .studio-grid,
-  .studio-support-grid {
+  .studio-support-grid,
+  .studio-selection {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .studio-selection > section {
+    grid-column: 1 / -1;
   }
 
   .studio-gate-panel {
@@ -1113,8 +1200,13 @@ button {
   .studio-topbar,
   .studio-metrics,
   .studio-grid,
-  .studio-support-grid {
+  .studio-support-grid,
+  .studio-selection {
     grid-template-columns: 1fr;
+  }
+
+  .studio-selection > section {
+    grid-column: auto;
   }
 
   .studio-topbar h1 {

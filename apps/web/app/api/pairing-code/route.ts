@@ -1,6 +1,8 @@
 import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
-import { createDesktopPairingCode } from '../../lib/devflow-api'
+import { DevFlowApiError, createDesktopPairingCode } from '../../lib/devflow-api'
+
+const safeUpstreamStatuses = new Set([400, 401, 403, 404, 409])
 
 async function getDevFlowCookieHeader(): Promise<string | undefined> {
   const cookieStore = await cookies()
@@ -25,9 +27,18 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(pairingCode, { status: 201 })
   } catch (error) {
+    const status =
+      error instanceof DevFlowApiError && safeUpstreamStatuses.has(error.status)
+        ? error.status
+        : 502
     return NextResponse.json(
-      { message: error instanceof Error ? error.message : 'Failed to create desktop pairing code' },
-      { status: 502 },
+      {
+        message:
+          status === 502
+            ? 'Pairing code service is unavailable.'
+            : 'Pairing code request was rejected.',
+      },
+      { status },
     )
   }
 }

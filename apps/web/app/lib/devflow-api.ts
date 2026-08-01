@@ -52,6 +52,16 @@ export type FetchTeamOverviewOptions = {
   sessionHeaders?: DevFlowSessionHeaders
 }
 
+export class DevFlowApiError extends Error {
+  constructor(
+    readonly endpoint: string,
+    readonly status: number,
+  ) {
+    super(`DevFlow API ${endpoint} failed with ${status}`)
+    this.name = 'DevFlowApiError'
+  }
+}
+
 export function resolveDevFlowApiBaseUrl(
   env: Record<string, string | undefined> = process.env,
 ): string {
@@ -315,7 +325,8 @@ export async function createDesktopPairingCode(
 ): Promise<DesktopPairingCode> {
   const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
   const fetcher = options.fetcher ?? fetch
-  const response = await fetcher(`${apiBaseUrl}/api/team/projects/${options.projectId}/pairing-codes`, {
+  const endpoint = '/api/team/projects/:projectId/pairing-codes'
+  const response = await fetcher(`${apiBaseUrl}/api/team/projects/${encodeURIComponent(options.projectId)}/pairing-codes`, {
     method: 'POST',
     cache: 'no-store',
     headers: createApiHeaders(
@@ -328,7 +339,7 @@ export async function createDesktopPairingCode(
   })
 
   if (!response.ok) {
-    throw new Error(`DevFlow API /api/team/projects/:projectId/pairing-codes failed with ${response.status}`)
+    throw new DevFlowApiError(endpoint, response.status)
   }
 
   return response.json() as Promise<DesktopPairingCode>

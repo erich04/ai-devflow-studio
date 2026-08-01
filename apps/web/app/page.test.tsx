@@ -231,15 +231,170 @@ afterEach(() => {
 })
 
 describe('web product shell page', () => {
+  it('requires an explicit project selection instead of choosing the global latest run', async () => {
+    mockedFetchTeamOverview.mockResolvedValue(overview)
+
+    render(await Page({}))
+
+    expect(screen.getAllByText('请选择项目').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByRole('heading', { level: 1, name: 'Remote run' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Remote API/ })).toHaveAttribute(
+      'href',
+      '/?projectId=p-remote',
+    )
+    expect(screen.queryByRole('button', { name: 'Apply recommended enforcement' })).not.toBeInTheDocument()
+  })
+
+  it('does not fall back to another project when the requested run is outside the selected project', async () => {
+    mockedFetchTeamOverview.mockResolvedValue({
+      ...overview,
+      projects: [
+        ...overview.projects,
+        {
+          ...overview.projects[0]!,
+          id: 'p-other',
+          name: 'Other Project',
+          repository: 'erich/other-project',
+        },
+      ],
+      runs: [
+        ...overview.runs,
+        {
+          ...overview.runs[0]!,
+          id: 'run-other',
+          projectId: 'p-other',
+          title: 'Other project run',
+          request: 'Must never leak into the selected project.',
+          updatedAt: '2026-06-16T11:10:00.000Z',
+        },
+      ],
+    })
+
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote', runId: 'run-other' }),
+      }),
+    )
+
+    expect(screen.getAllByText('Run 不属于所选项目').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Remote API').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByText('Other project run')).not.toBeInTheDocument()
+    expect(screen.queryByText('Must never leak into the selected project.')).not.toBeInTheDocument()
+  })
+
+  it('shows a distinct empty state for an unknown run identifier', async () => {
+    mockedFetchTeamOverview.mockResolvedValue(overview)
+
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote', runId: 'run-missing' }),
+      }),
+    )
+
+    expect(screen.getAllByText('所选 Run 不存在').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByRole('heading', { level: 1, name: 'Remote run' })).not.toBeInTheDocument()
+  })
+
+  it('derives every management summary from the same selected project and run', async () => {
+    const otherProject = {
+      ...overview.projects[0]!,
+      id: 'p-other',
+      name: 'Other Project',
+      repository: 'erich/other-project',
+    }
+    const otherRun = {
+      ...overview.runs[0]!,
+      id: 'run-other',
+      projectId: otherProject.id,
+      title: 'Other project run',
+      request: 'Foreign request summary.',
+      updatedAt: '2026-06-16T11:10:00.000Z',
+    }
+    mockedFetchTeamOverview.mockResolvedValue({
+      ...overview,
+      projects: [...overview.projects, otherProject],
+      runs: [...overview.runs, otherRun],
+      testEvidenceSummaries: [
+        ...overview.testEvidenceSummaries,
+        {
+          ...overview.testEvidenceSummaries[0]!,
+          id: 'evidence-other',
+          runId: otherRun.id,
+          projectId: otherProject.id,
+          summary: 'Foreign tests must stay hidden.',
+        },
+      ],
+      codingAgentSummaries: [
+        ...overview.codingAgentSummaries,
+        {
+          ...overview.codingAgentSummaries[0]!,
+          id: 'coding-other',
+          runId: otherRun.id,
+          projectId: otherProject.id,
+          summary: 'Foreign coding run must stay hidden.',
+        },
+      ],
+      agentReviews: [
+        {
+          ...overview.agentReviews[0]!,
+          id: 'review-other',
+          runId: otherRun.id,
+          projectId: otherProject.id,
+          gateAdvisory: {
+            ...overview.agentReviews[0]!.gateAdvisory,
+            id: 'advisory-other',
+            runId: otherRun.id,
+            summary: 'Foreign review must stay hidden.',
+          },
+        },
+      ],
+    })
+
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote', runId: 'run-remote' }),
+      }),
+    )
+
+    expect(screen.getAllByText('Remote run').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('Remote tests passed.')).toBeInTheDocument()
+    expect(screen.getByText('Coding Agent completed with redacted changed paths.')).toBeInTheDocument()
+    expect(screen.queryByText('Foreign request summary.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Foreign tests must stay hidden.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Foreign coding run must stay hidden.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Foreign review must stay hidden.')).not.toBeInTheDocument()
+    expect(screen.getByText('此 Run 尚无 Review 结论。')).toBeInTheDocument()
+    expect(screen.getByText('Active Runs').closest('article')).toHaveTextContent('1')
+    expect(screen.getByText('Evidence Items').closest('article')).toHaveTextContent('2')
+  })
+
+  it('offers copy-once Desktop pairing only for the explicitly selected project', async () => {
+    mockedFetchTeamOverview.mockResolvedValue(overview)
+
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote' }),
+      }),
+    )
+
+    expect(screen.getByRole('region', { name: 'Desktop pairing for Remote API' })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Create desktop pairing code' })).toHaveLength(1)
+    expect(screen.getAllByText('请选择 Run').length).toBeGreaterThanOrEqual(1)
+  })
+
   it('renders team overview data loaded from the API client', async () => {
     mockedFetchTeamOverview.mockResolvedValue(overview)
 
-    render(await Page())
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote', runId: 'run-remote' }),
+      }),
+    )
 
     expect(screen.getAllByText('Remote API').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('erich/remote-api')).toBeInTheDocument()
+    expect(screen.getAllByText('erich/remote-api').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Remote Lead')).toBeInTheDocument()
-    expect(screen.getByText('Remote run')).toBeInTheDocument()
+    expect(screen.getAllByText('Remote run').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Ship from API data.')).toBeInTheDocument()
     expect(screen.getAllByText('Evidence Chain').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText('Human Gate').length).toBeGreaterThanOrEqual(1)
@@ -292,7 +447,7 @@ describe('web product shell page', () => {
       runtimeBudgetApprovals: [],
     })
 
-    render(await Page())
+    render(await Page({}))
 
     expect(screen.getByText('等待第一条真实工作请求')).toBeInTheDocument()
     expect(screen.getByText('没有真实 Run')).toBeInTheDocument()
@@ -304,7 +459,7 @@ describe('web product shell page', () => {
   it('renders an error state when the API cannot be reached', async () => {
     mockedFetchTeamOverview.mockRejectedValue(new Error('network down'))
 
-    render(await Page())
+    render(await Page({}))
 
     expect(screen.getByText('团队数据暂时不可用')).toBeInTheDocument()
     expect(screen.getByText('network down')).toBeInTheDocument()
