@@ -2,7 +2,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { createGitHubOAuthClient } from './auth/github-oauth'
 import { resolveServerRuntimeConfig } from './server-config'
 import { createTeamRepositoryRuntime } from './repositories/repository-runtime'
-import { createCorsPreflightHeaders, resolveApiRouteRequest } from './server-request'
+import {
+  createCorsPreflightHeaders,
+  createInternalErrorResponse,
+  resolveApiRouteRequest,
+} from './server-request'
 
 const { devAuthEnabled, host, port } = resolveServerRuntimeConfig()
 const sessionSecret = process.env['DEVFLOW_SESSION_SECRET'] ?? 'devflow-dev-session-secret'
@@ -93,10 +97,8 @@ const server = createServer(async (request, response) => {
       },
     )
   } catch (error) {
-    sendJson(response, 500, {
-      error: 'internal_error',
-      message: error instanceof Error ? error.message : 'Unexpected API error',
-    })
+    const internalError = createInternalErrorResponse(error)
+    sendJson(response, internalError.status, internalError.body)
     return
   }
 

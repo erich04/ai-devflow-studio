@@ -33,6 +33,16 @@ export function createCorsPreflightHeaders(): Record<string, string> {
   }
 }
 
+export function createInternalErrorResponse(_error?: unknown): ApiRouteResult {
+  return {
+    status: 500,
+    body: {
+      error: 'internal_error',
+      message: 'Unexpected API error',
+    },
+  }
+}
+
 export async function resolveApiRouteRequest(
   request: ApiRouteRequest,
   options: ApiRouteRequestOptions,

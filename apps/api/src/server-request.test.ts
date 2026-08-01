@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import type { TeamSession } from '@ai-devflow/shared'
 import { createSessionCookie } from './auth/session-cookie'
 import { createSeedTeamRepository } from './repositories/team-repository'
-import { createCorsPreflightHeaders, resolveApiRouteRequest } from './server-request'
+import {
+  createCorsPreflightHeaders,
+  createInternalErrorResponse,
+  resolveApiRouteRequest,
+} from './server-request'
 
 const projectMemberSession: TeamSession = {
   source: 'authenticated',
@@ -357,5 +361,24 @@ describe('API HTTP authentication boundary', () => {
       status: 403,
       body: { error: 'forbidden', message: 'Project role lead required' },
     })
+  })
+})
+
+describe('API HTTP internal error boundary', () => {
+  it('returns a fixed 500 response without exposing an internal error message', () => {
+    const secret = 'postgres://private-user:private-password@internal-db/devflow'
+
+    const result = createInternalErrorResponse(
+      new Error(`database connection failed for ${secret}`),
+    )
+
+    expect(result).toEqual({
+      status: 500,
+      body: {
+        error: 'internal_error',
+        message: 'Unexpected API error',
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain(secret)
   })
 })
