@@ -1133,7 +1133,9 @@ export function KnowledgeView({
             return (
               <article
                 className={`reference-row ${reference.id === focusedReferenceId ? 'is-focused' : ''}`}
-                data-testid={reference.id === focusedReferenceId ? 'focused-knowledge-reference' : undefined}
+                data-testid={reference.id === focusedReferenceId
+                  ? 'focused-knowledge-reference'
+                  : 'knowledge-run-reference'}
                 key={reference.id}
               >
                 <span>{reference.targetType}</span>
@@ -1145,6 +1147,9 @@ export function KnowledgeView({
                   {reference.headingPath ? <span>{reference.headingPath.join(' / ')}</span> : null}
                 </div>
                 <code>{reference.artifactId ?? reference.evidenceId ?? reference.nodeId ?? reference.runId}</code>
+                {reference.sourcePath ?? document?.sourcePath ? (
+                  <code>{reference.sourcePath ?? document?.sourcePath}</code>
+                ) : null}
                 {reference.contentHash ? <code>{reference.contentHash}</code> : null}
               </article>
             )

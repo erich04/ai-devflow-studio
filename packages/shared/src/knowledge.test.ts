@@ -172,6 +172,7 @@ describe('buildKnowledgeReferences', () => {
           documentId: 'knowledge-doc-api-health',
           relation: 'cites',
           chunkId: 'knowledge-chunk-api-health-1-api-health-endpoint-standard',
+          sourcePath: 'docs/knowledge/standards/api-health.md',
           strategy: 'lexical',
           score: expect.any(Number),
           contentHash: expect.stringMatching(/^kh-[a-f0-9]{8}$/),

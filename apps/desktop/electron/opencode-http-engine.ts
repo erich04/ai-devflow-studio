@@ -1,5 +1,4 @@
 import {
-  buildCodingBrief,
   redactSecrets,
   sanitizeCodingDiffArtifact,
   type CodingAgentEvent,
@@ -85,21 +84,7 @@ export function createOpencodeHttpCodingEngineAdapter(
         binaryPath: config.binaryPath,
         env: config.runtimeEnv ?? process.env,
       })
-      const brief = buildCodingBrief({
-        run: input.run,
-        node: input.node,
-        project: input.project,
-        upstreamArtifacts: input.upstreamArtifacts,
-        knowledgeReferences: input.knowledgeReferences,
-        governanceChecks: input.governanceChecks,
-        gateDecisions: input.gateDecisions,
-        testEvidence: input.testEvidence,
-        remediationPlan: input.remediationPlan,
-        retryAttempt: input.retryAttempt,
-        userInstruction: input.userInstruction,
-        worktreePath: input.workspace.worktreePath,
-        branchName: input.workspace.branchName,
-      })
+      const brief = input.brief
       const session = await createOpencodeSession({
         baseUrl: server.baseUrl,
         directory: input.workspace.worktreePath,
@@ -111,7 +96,7 @@ export function createOpencodeHttpCodingEngineAdapter(
         baseUrl: server.baseUrl,
         sessionId: session.id,
         model: { providerID: config.providerID, modelID: config.modelID },
-        text: `DevFlow Coding Brief\n\n${brief.prompt}`,
+        text: brief.prompt,
         ...fetcherOption(config.fetcher),
       }).then(
         () => ({ ok: true as const }),

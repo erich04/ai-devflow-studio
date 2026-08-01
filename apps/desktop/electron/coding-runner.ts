@@ -17,6 +17,7 @@ import {
   type CodingPermissionRequest,
   type DependencyBootstrapEvidence,
   type GateDecision,
+  type KnowledgeChunk,
   type KnowledgeGovernanceCheck,
   type KnowledgeReference,
   type LocalProject,
@@ -52,11 +53,13 @@ export type FakeCodingRunBundleInput = {
   node?: WorkflowNode
   upstreamArtifacts?: Artifact[]
   knowledgeReferences?: KnowledgeReference[]
+  knowledgeChunks?: KnowledgeChunk[]
   governanceChecks?: KnowledgeGovernanceCheck[]
   gateDecisions?: GateDecision[]
   testEvidence?: TestEvidence[]
   remediationPlan?: RemediationPlan | undefined
   retryAttempt?: RetryAttempt | undefined
+  brief?: CodingBrief
 }
 
 export type FakeCodingRunBundle = {
@@ -211,12 +214,13 @@ export function createFakeCodingRunBundle(input: FakeCodingRunBundleInput): Fake
   const now = input.now ?? new Date().toISOString()
   const node = input.node ?? fakeNode(input.nodeId)
   const run = input.run ?? fakeRun(input.runId, input.project.id, input.nodeId)
-  const brief = buildCodingBrief({
+  const brief = input.brief ?? buildCodingBrief({
     run,
     node,
     project: input.project,
     upstreamArtifacts: input.upstreamArtifacts ?? [],
     knowledgeReferences: input.knowledgeReferences ?? [],
+    knowledgeChunks: input.knowledgeChunks ?? [],
     governanceChecks: input.governanceChecks ?? [],
     gateDecisions: input.gateDecisions ?? [],
     testEvidence: input.testEvidence ?? [],

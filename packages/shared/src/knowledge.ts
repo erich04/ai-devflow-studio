@@ -538,6 +538,7 @@ export const heuristicKnowledgeRetriever: KnowledgeRetriever = {
 
 function referenceMetadataFromHit(hit: KnowledgeRetrievalHit) {
   return {
+    sourcePath: hit.sourcePath,
     chunkId: hit.chunkId,
     score: hit.score,
     strategy: hit.strategy,
@@ -549,11 +550,12 @@ function referenceMetadataFromHit(hit: KnowledgeRetrievalHit) {
 function firstChunkMetadataForDocument(
   document: KnowledgeDocument,
   chunks: KnowledgeChunk[],
-): Pick<KnowledgeReference, 'chunkId' | 'contentHash' | 'headingPath'> {
+): Pick<KnowledgeReference, 'sourcePath' | 'chunkId' | 'contentHash' | 'headingPath'> {
   const chunk = chunks.find((item) => item.documentId === document.id)
 
   if (!chunk) {
     return {
+      sourcePath: document.sourcePath,
       chunkId: `knowledge-chunk-${slugify(basenameWithoutExtension(document.sourcePath))}-1-body`,
       contentHash: stableContentHash(document.markdown || document.summary),
       headingPath: [document.title],
@@ -561,6 +563,7 @@ function firstChunkMetadataForDocument(
   }
 
   return {
+    sourcePath: chunk.sourcePath,
     chunkId: chunk.id,
     contentHash: chunk.contentHash,
     headingPath: chunk.headingPath,

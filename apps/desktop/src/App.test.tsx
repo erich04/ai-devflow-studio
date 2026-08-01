@@ -2679,6 +2679,10 @@ describe('App', () => {
     expect(knowledgeView).toHaveTextContent('API Health Endpoint Standard')
     expect(knowledgeView).toHaveTextContent('defines')
     expect(knowledgeView).toHaveTextContent('2026-08-01T00:00:00.000Z')
+    expect(screen.getAllByTestId('knowledge-run-reference')).not.toHaveLength(0)
+    for (const reference of screen.getAllByTestId('knowledge-run-reference')) {
+      expect(reference).toHaveTextContent('docs/knowledge/standards/api-health.md')
+    }
   })
 
   it('bounds a large repository knowledge graph in the renderer', async () => {

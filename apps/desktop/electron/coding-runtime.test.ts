@@ -8,12 +8,15 @@ import type {
   AgentEvent,
   Artifact,
   BudgetGuardDecision,
+  CodingBrief,
   CodingAgentEvent,
   CodingAgentRun,
   CodingDiffArtifact,
   CodingPermissionDecision,
   CodingPermissionRequest,
   DependencyBootstrapEvidence,
+  KnowledgeChunk,
+  KnowledgeDocument,
   LocalProject,
   ManagedCodingWorkspace,
   RemediationPlan,
@@ -21,6 +24,7 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
+import { estimateCodingRuntimeCost } from '@ai-devflow/shared'
 import { createFakeCodingEngineAdapter, type CodingEngineAdapter } from './coding-engine'
 import { createCodingRuntime } from './coding-runtime'
 
@@ -587,6 +591,122 @@ describe('CodingRuntime', () => {
     expect(result.codingRun.prompt).toContain('approved by devflow: Lead Gate 已通过：方案评审 Gate')
     expect(result.codingRun.prompt).toContain('Existing Test Evidence')
     expect(result.codingRun.prompt).toContain('npm test [passed]: Existing local tests passed.')
+  })
+
+  it('carries referenced repository knowledge content and its relative source into the fake coding prompt', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+      artifacts: [designArtifact()],
+    })
+    const knowledgeDocuments: KnowledgeDocument[] = [{
+      id: 'knowledge-doc-api-health',
+      title: 'API Health Standard',
+      category: 'api_contract',
+      sourcePath: 'docs/standards/api-health.md',
+      summary: 'Health endpoints expose degraded dependency states.',
+      tags: ['api', 'health'],
+      updatedAt: '2026-06-17T00:00:00.000Z',
+      markdown: '# API Health Standard\n\nUNIQUE_KNOWLEDGE_CONTENT requires contract tests.',
+    }]
+    const knowledgeChunks: KnowledgeChunk[] = [{
+      id: 'knowledge-chunk-api-health',
+      documentId: 'knowledge-doc-api-health',
+      sourcePath: 'docs/standards/api-health.md',
+      headingPath: ['API Health Standard'],
+      content: 'UNIQUE_KNOWLEDGE_CONTENT requires contract tests. API_TOKEN=runtime-secret-value',
+      contentHash: 'hash-api-health',
+      tokenCount: 12,
+      tags: ['api', 'health'],
+      updatedAt: '2026-06-17T00:00:00.000Z',
+    }]
+    const runtime = createCodingRuntime({
+      store,
+      engine: createFakeCodingEngineAdapter(),
+      knowledgeDocuments,
+      knowledgeChunks,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-knowledge'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    })
+
+    const result = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Use the approved health endpoint design.',
+    })
+
+    expect(result.codingRun.prompt).toContain('UNIQUE_KNOWLEDGE_CONTENT requires contract tests.')
+    expect(result.codingRun.prompt).toContain('source=docs/standards/api-health.md')
+    expect(result.codingRun.prompt).toContain('[REDACTED:env_secret_assignment]')
+    expect(result.codingRun.prompt).not.toContain('runtime-secret-value')
+  })
+
+  it('uses one canonical coding brief for paid budget preflight and the engine prompt', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+      artifacts: [designArtifact()],
+    })
+    const fakeDelegate = createFakeCodingEngineAdapter()
+    const engine: CodingEngineAdapter = {
+      ...fakeDelegate,
+      engine: 'opencode-http',
+      providerId: 'double',
+      modelId: 'ark-code-latest',
+      start: vi.fn(async (input) => {
+        const bundle = await fakeDelegate.start(input)
+        return {
+          ...bundle,
+          codingRun: {
+            ...bundle.codingRun,
+            engine: 'opencode-http' as const,
+            providerId: 'double',
+          },
+        }
+      }),
+    }
+    const budgetGuard = createAllowingBudgetGuard()
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      budgetGuard,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-canonical-brief'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    })
+
+    const result = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'double',
+      userInstruction: 'Use the approved health endpoint design.',
+    })
+
+    const startInput = vi.mocked(engine.start).mock.calls[0]?.[0] as unknown as { brief?: CodingBrief }
+    expect(startInput.brief?.prompt).toBe(result.codingRun.prompt)
+    expect(startInput).not.toHaveProperty('knowledgeChunks')
+    expect(result.codingRun.prompt).toContain('Managed worktree: <managed-worktree-created-after-budget-approval>')
+    expect(result.codingRun.prompt).not.toContain(repo)
+    const expectedCost = estimateCodingRuntimeCost({
+      engine: 'opencode-http',
+      providerId: 'double',
+      model: 'ark-code-latest',
+      prompt: startInput.brief?.prompt ?? '',
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      userId: 'user-1',
+      timestamp: '2026-06-17T00:00:00.000Z',
+    })
+    expect(result.codingRun.runtimeCostSummary?.inputTokens).toBe(expectedCost.inputTokens)
   })
 
   it('starts a human-approved retry attempt with remediation context in the coding brief', async () => {

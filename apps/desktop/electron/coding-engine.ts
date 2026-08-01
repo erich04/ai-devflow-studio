@@ -3,6 +3,7 @@ import type {
   CodingAgentEngine,
   CodingAgentEvent,
   CodingAgentRun,
+  CodingBrief,
   CodingDiffArtifact,
   CodingPermissionRequest,
   DependencyBootstrapEvidence,
@@ -51,6 +52,7 @@ export type CodingEngineStartInput = {
   testEvidence: TestEvidence[]
   remediationPlan?: RemediationPlan
   retryAttempt?: RetryAttempt
+  brief: CodingBrief
 }
 
 export type CodingEngineStartResult = {
@@ -184,6 +186,7 @@ export function createFakeCodingEngineAdapter(): CodingEngineAdapter {
         testEvidence: input.testEvidence,
         remediationPlan: input.remediationPlan,
         retryAttempt: input.retryAttempt,
+        brief: input.brief,
       })
 
       return {

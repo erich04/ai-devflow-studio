@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { LocalProject, ManagedCodingWorkspace } from '@ai-devflow/shared'
+import { buildCodingBrief, type LocalProject, type ManagedCodingWorkspace } from '@ai-devflow/shared'
 import { projects, runs } from '@ai-devflow/shared/fixtures'
 import type { CodingEngineApprovePermissionResult } from './coding-engine'
 import { createOpencodeHttpCodingEngineAdapter, type OpencodeHttpProcessManager } from './opencode-http-engine'
@@ -26,7 +26,12 @@ describe('opencode HTTP coding engine', () => {
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
 
-    const result = await engine.start(startInput({ run, node, project, workspace }))
+    const input = startInput({ run, node, project, workspace })
+    input.brief = {
+      ...input.brief,
+      prompt: `${input.brief.prompt}\nUNIQUE_KNOWLEDGE_CONTENT source=docs/standards/api-health.md`,
+    }
+    const result = await engine.start(input)
 
     expect(result.codingRun.engine).toBe('opencode-http')
     expect(result.codingRun.status).toBe('waiting_permission')
@@ -43,6 +48,10 @@ describe('opencode HTTP coding engine', () => {
     ])
     expect(fetcher.bodies.join('\n')).toContain('Implement the build node.')
     expect(fetcher.bodies.join('\n')).toContain('DevFlow Coding Brief')
+    expect(fetcher.bodies.join('\n')).toContain('UNIQUE_KNOWLEDGE_CONTENT source=docs/standards/api-health.md')
+    expect(result.codingRun.prompt).toBe(input.brief.prompt)
+    const messageBody = JSON.parse(fetcher.bodies[1]!) as { parts: Array<{ text: string }> }
+    expect(messageBody.parts[0]?.text).toBe(input.brief.prompt)
   })
 
   it('records a redacted coding tool_call event from opencode permission metadata', async () => {
@@ -518,7 +527,7 @@ function startInput(input: {
   project: ReturnType<typeof localProject>
   workspace: ManagedCodingWorkspace
 }) {
-  return {
+  const context = {
     id: 'coding-run-1',
     run: input.run,
     node: input.node,
@@ -533,6 +542,22 @@ function startInput(input: {
     governanceChecks: [],
     gateDecisions: [],
     testEvidence: [],
+  }
+  return {
+    ...context,
+    brief: buildCodingBrief({
+      run: input.run,
+      node: input.node,
+      project: input.project,
+      upstreamArtifacts: context.upstreamArtifacts,
+      knowledgeReferences: context.knowledgeReferences,
+      governanceChecks: context.governanceChecks,
+      gateDecisions: context.gateDecisions,
+      testEvidence: context.testEvidence,
+      userInstruction: context.userInstruction,
+      worktreePath: '<managed-worktree-created-after-budget-approval>',
+      branchName: '<managed-branch-created-after-budget-approval>',
+    }),
   }
 }
 

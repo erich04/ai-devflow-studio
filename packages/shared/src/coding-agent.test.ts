@@ -5,6 +5,7 @@ import type {
   CodingDiffArtifact,
   DependencyBootstrapSnapshot,
   GateDecision,
+  KnowledgeChunk,
   KnowledgeGovernanceCheck,
   KnowledgeReference,
   LocalProject,
@@ -14,6 +15,9 @@ import type {
 } from './domain'
 import {
   MAX_DIFF_CHARS,
+  MAX_CODING_KNOWLEDGE_EXCERPT_CHARS,
+  MAX_CODING_KNOWLEDGE_REFERENCES,
+  MAX_CODING_KNOWLEDGE_TOTAL_EXCERPT_CHARS,
   buildCodingBrief,
   canRunCodingAgentOnNode,
   createRemoteCodingAgentSummary,
@@ -76,6 +80,19 @@ const knowledgeReference: KnowledgeReference = {
   strategy: 'lexical',
   contentHash: 'hash-api',
   headingPath: ['API Health Endpoint Standard', 'Evidence'],
+  sourcePath: 'docs/standards/api-health.md',
+}
+
+const knowledgeChunk: KnowledgeChunk = {
+  id: 'chunk-api-health',
+  documentId: 'doc-api',
+  sourcePath: 'docs/standards/api-health.md',
+  headingPath: ['API Health Endpoint Standard', 'Evidence'],
+  content: 'UNIQUE_KNOWLEDGE_CONTENT requires contract tests. API_TOKEN=super-secret-value',
+  contentHash: 'hash-api',
+  tokenCount: 12,
+  tags: ['api', 'testing'],
+  updatedAt: '2026-06-17T00:02:00.000Z',
 }
 
 const governanceCheck: KnowledgeGovernanceCheck = {
@@ -195,6 +212,7 @@ describe('buildCodingBrief', () => {
       project,
       upstreamArtifacts: [designArtifact],
       knowledgeReferences: [knowledgeReference],
+      knowledgeChunks: [knowledgeChunk],
       governanceChecks: [governanceCheck],
       gateDecisions: [gateDecision],
       testEvidence: [testEvidence],
@@ -211,6 +229,13 @@ describe('buildCodingBrief', () => {
     expect(brief.prompt).toContain('Node: Build audit export')
     expect(brief.prompt).toContain('Audit export design')
     expect(brief.prompt).toContain('Knowledge References')
+    expect(brief.prompt).toContain('source=docs/standards/api-health.md')
+    expect(brief.prompt).toContain('section="API Health Endpoint Standard > Evidence"')
+    expect(brief.prompt).toContain('strategy=lexical')
+    expect(brief.prompt).toContain('contentHash=hash-api')
+    expect(brief.prompt).toContain('UNIQUE_KNOWLEDGE_CONTENT requires contract tests.')
+    expect(brief.prompt).toContain('[REDACTED:env_secret_assignment]')
+    expect(brief.prompt).not.toContain('super-secret-value')
     expect(brief.prompt).toContain('Testing Evidence Standard')
     expect(brief.prompt).toContain('Approved with test evidence required')
     expect(brief.prompt).toContain('Existing Test Evidence')
@@ -256,6 +281,53 @@ describe('buildCodingBrief', () => {
     expect(retryBrief.prompt).toContain('Fix API contract violation')
     expect(retryBrief.prompt).toContain('Policy reason: governance_check:api_contract:violated:check-api')
     expect(retryBrief.prompt).toContain('Retry requested by: lead-1')
+  })
+
+  it('bounds referenced repository knowledge by count, per-excerpt size, and total excerpt size', () => {
+    const references: KnowledgeReference[] = Array.from({ length: 9 }, (_, index) => ({
+      ...knowledgeReference,
+      id: `ref-${index}`,
+      documentId: `doc-${index}`,
+      chunkId: `chunk-${index}`,
+      contentHash: `hash-${index}`,
+      sourcePath: `docs/standards/standard-${index}.md`,
+    }))
+    const chunks: KnowledgeChunk[] = references.map((reference, index) => ({
+      ...knowledgeChunk,
+      id: reference.chunkId!,
+      documentId: reference.documentId,
+      sourcePath: reference.sourcePath!,
+      contentHash: reference.contentHash!,
+      content: `UNIQUE_KNOWLEDGE_${index}_${'x'.repeat(2_000)}`,
+    }))
+
+    const brief = buildCodingBrief({
+      run,
+      node: buildNode,
+      project,
+      upstreamArtifacts: [],
+      knowledgeReferences: references,
+      knowledgeChunks: chunks,
+      governanceChecks: [],
+      gateDecisions: [],
+      testEvidence: [],
+      userInstruction: 'Apply the referenced standards.',
+      worktreePath: '<managed-worktree>',
+      branchName: '<managed-branch>',
+    })
+
+    const knowledgeSection = brief.prompt.split('Knowledge References\n')[1]!.split('\n\nGovernance Checks')[0]!
+    const referenceLines = knowledgeSection.match(/^- doc-\d+/gm) ?? []
+    const excerpts = Array.from(knowledgeSection.matchAll(/^  Excerpt: (.*)$/gm), (match) => match[1] ?? '')
+
+    expect(referenceLines).toHaveLength(MAX_CODING_KNOWLEDGE_REFERENCES)
+    expect(knowledgeSection).not.toContain('doc-8 ')
+    expect(excerpts.every((excerpt) => excerpt.length <= MAX_CODING_KNOWLEDGE_EXCERPT_CHARS)).toBe(true)
+    expect(excerpts.reduce((total, excerpt) => total + excerpt.length, 0)).toBeLessThanOrEqual(
+      MAX_CODING_KNOWLEDGE_TOTAL_EXCERPT_CHARS,
+    )
+    expect(knowledgeSection).toContain('UNIQUE_KNOWLEDGE_4_')
+    expect(knowledgeSection).not.toContain('UNIQUE_KNOWLEDGE_5_')
   })
 })
 

@@ -379,10 +379,14 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       chunks: knowledgeChunks,
       testEvidence,
     })
+    const referencedChunkIds = new Set(
+      knowledgeReferences.flatMap((reference) => reference.chunkId ? [reference.chunkId] : []),
+    )
 
     return {
       upstreamArtifacts: artifacts.filter((artifact) => artifact.nodeId !== node.id),
       knowledgeReferences,
+      knowledgeChunks: knowledgeChunks.filter((chunk) => referencedChunkIds.has(chunk.id)),
       governanceChecks,
       gateDecisions: events.flatMap((event) => gateDecisionFromEvent(event)),
       testEvidence,
@@ -829,7 +833,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const codingRunId = idGenerator('coding-run')
       const briefContext = await loadCodingBriefContext(run, node)
       const model = deps.engine.modelId ?? providerId
-      const preliminaryBrief = buildCodingBrief({
+      const canonicalBrief = buildCodingBrief({
         run,
         node,
         project,
@@ -844,7 +848,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         engine: configuredEngine,
         providerId,
         model,
-        prompt: preliminaryBrief.prompt,
+        prompt: canonicalBrief.prompt,
         runId: run.id,
         nodeId: node.id,
         projectId: project.id,
@@ -904,7 +908,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           status: 'failed',
           branchName: run.branchName,
           userInstruction: input.userInstruction.trim(),
-          prompt: preliminaryBrief.prompt,
+          prompt: canonicalBrief.prompt,
           summary,
           changedPaths: [],
           startedAt: timestamp,
@@ -945,6 +949,13 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         nodeId: node.id,
         ...(deps.worktreeRoot ? { worktreeRoot: deps.worktreeRoot } : {}),
       })
+      const engineBriefContext = {
+        upstreamArtifacts: briefContext.upstreamArtifacts,
+        knowledgeReferences: briefContext.knowledgeReferences,
+        governanceChecks: briefContext.governanceChecks,
+        gateDecisions: briefContext.gateDecisions,
+        testEvidence: briefContext.testEvidence,
+      }
       const bundle = await deps.engine.start({
         id: codingRunId,
         run,
@@ -955,7 +966,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         providerId,
         userInstruction: input.userInstruction,
         now: now(),
-        ...briefContext,
+        ...engineBriefContext,
+        brief: canonicalBrief,
         ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
         ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
       })
