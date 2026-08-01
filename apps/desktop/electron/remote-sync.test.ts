@@ -353,7 +353,9 @@ describe('Electron remote sync client', () => {
   })
 
   it('reports network failures as safe retryable unavailable errors', async () => {
-    const fetcher = vi.fn(async () => {
+    const controller = new AbortController()
+    const fetcher = vi.fn(async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      expect(init?.signal).toBe(controller.signal)
       throw new Error(
         'fetch Bearer desktop-secret failed for /Users/alice/private/repo?api_key=provider-secret',
       )
@@ -362,6 +364,7 @@ describe('Electron remote sync client', () => {
       apiBaseUrl: 'http://api.local',
       fetcher,
       authToken: 'desktop-secret',
+      signal: controller.signal,
     })
 
     const error = await client.uploadRunSummary(runSummary).catch((reason: unknown) => reason)
@@ -377,6 +380,35 @@ describe('Electron remote sync client', () => {
       'RemoteSyncHttpError: Remote sync request failed (unavailable, remote_unavailable).',
     )
     expect(String(error)).not.toMatch(/desktop-secret|provider-secret|\/Users\/alice|Bearer|api_key/)
+  })
+
+  it('classifies an aborted summary upload as a safe retryable timeout', async () => {
+    const controller = new AbortController()
+    const fetcher = vi.fn(async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      expect(init?.signal).toBe(controller.signal)
+      controller.abort('Bearer abort-secret for http://api.local/private-body')
+      throw new DOMException('aborted with private request data', 'AbortError')
+    })
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'desktop-secret',
+      signal: controller.signal,
+    })
+
+    const error = await client.uploadRunSummary(runSummary).catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(RemoteSyncHttpError)
+    expect(error).toMatchObject({
+      status: null,
+      code: 'request_timeout',
+      path: '/api/sync/run-summary',
+      retryable: true,
+    })
+    expect(String(error)).toBe(
+      'RemoteSyncHttpError: Remote sync request failed (unavailable, request_timeout).',
+    )
+    expect(String(error)).not.toMatch(/abort-secret|api\.local|private-body|desktop-secret/)
   })
 
   it('classifies transient HTTP failures as retryable without trusting their body', async () => {
@@ -570,6 +602,34 @@ describe('Electron remote sync client', () => {
     })
   })
 
+  it('classifies aborted snapshot GET requests with the captured client signal', async () => {
+    const controller = new AbortController()
+    controller.abort('Cookie=session-secret for http://api.local/private-snapshot')
+    const observedSignals: Array<AbortSignal | null | undefined> = []
+    const fetcher = vi.fn(async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      observedSignals.push(init?.signal)
+      throw new DOMException('aborted snapshot with private URL', 'AbortError')
+    })
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'desktop-secret',
+      signal: controller.signal,
+    })
+
+    const error = await client.loadRemoteSnapshot().catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({
+      status: null,
+      code: 'request_timeout',
+      path: '/api/team/overview',
+      retryable: true,
+    })
+    expect(observedSignals).toHaveLength(2)
+    expect(observedSignals.every((signal) => signal === controller.signal)).toBe(true)
+    expect(String(error)).not.toMatch(/session-secret|api\.local|private-snapshot|desktop-secret/)
+  })
+
   it('exchanges a desktop pairing code without sending demo session headers', async () => {
     const exchangeResult = {
       token: 'devflow-desktop-token-copy-once',
@@ -600,6 +660,37 @@ describe('Electron remote sync client', () => {
       },
       body: JSON.stringify({ code: 'pair.code-secret' }),
     })
+  })
+
+  it('classifies an aborted pairing POST with the captured client signal', async () => {
+    const controller = new AbortController()
+    const fetcher = vi.fn(async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      expect(init?.signal).toBe(controller.signal)
+      controller.abort('pair.secret-body at http://api.local/private-pairing')
+      throw new DOMException('aborted pairing request with private data', 'AbortError')
+    })
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      sessionHeaders: authenticatedSessionHeaders,
+      signal: controller.signal,
+    })
+
+    const error = await client
+      .exchangeDesktopPairingCode({ code: 'pair.secret-body' })
+      .catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(RemoteSyncHttpError)
+    expect(error).toMatchObject({
+      status: null,
+      code: 'request_timeout',
+      path: '/api/desktop/pairing/exchange',
+      retryable: true,
+    })
+    expect(String(error)).toBe(
+      'RemoteSyncHttpError: Remote sync request failed (unavailable, request_timeout).',
+    )
+    expect(String(error)).not.toMatch(/pair\.secret-body|api\.local|private-pairing|session-secret/)
   })
 
   it('uploads run, test evidence, agent review, and coding agent summaries without local-only raw fields', async () => {

@@ -55,6 +55,7 @@ export type RemoteSyncClientOptions = {
   fetcher?: Fetcher
   authToken?: string
   sessionHeaders?: DevFlowSessionHeaders
+  signal?: AbortSignal
 }
 
 export type RemoteRunsBundleResponse = {
@@ -266,13 +267,14 @@ async function fetchRemote(
   url: string,
   init: RequestInit,
   path: string,
+  signal?: AbortSignal,
 ): Promise<Response> {
   try {
-    return await fetcher(url, init)
+    return await fetcher(url, signal ? { ...init, signal } : init)
   } catch {
     throw new RemoteSyncHttpError({
       status: null,
-      code: 'remote_unavailable',
+      code: signal?.aborted ? 'request_timeout' : 'remote_unavailable',
       path,
       retryable: true,
     })
@@ -285,6 +287,7 @@ async function postJson<T>(
   body: unknown,
   path: string,
   headers: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<T> {
   const response = await fetchRemote(
     fetcher,
@@ -295,6 +298,7 @@ async function postJson<T>(
       body: JSON.stringify(body),
     },
     path,
+    signal,
   )
 
   return readJson<T>(response, path)
@@ -306,6 +310,7 @@ async function postRemoteSyncUpload(
   body: unknown,
   path: string,
   headers: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<RemoteSyncUploadResult> {
   const response = await fetchRemote(
     fetcher,
@@ -316,6 +321,7 @@ async function postRemoteSyncUpload(
       body: JSON.stringify(body),
     },
     path,
+    signal,
   )
   const result = await readJson<unknown>(response, path)
   if (
@@ -343,6 +349,7 @@ export function createRemoteSyncClient(
   const fetcher = options.fetcher ?? fetch
   const authToken = options.authToken?.trim()
   const sessionHeaders = options.sessionHeaders
+  const signal = options.signal
 
   return {
     async exchangeDesktopPairingCode(input) {
@@ -352,6 +359,7 @@ export function createRemoteSyncClient(
         input,
         '/api/desktop/pairing/exchange',
         { accept: 'application/json', 'content-type': 'application/json' },
+        signal,
       )
     },
 
@@ -367,12 +375,14 @@ export function createRemoteSyncClient(
           buildUrl(apiBaseUrl, overviewPath, input),
           { headers },
           overviewPath,
+          signal,
         ).then((response) => readJson<RemoteTeamOverviewResponse>(response, overviewPath)),
         fetchRemote(
           fetcher,
           buildUrl(apiBaseUrl, runsPath, input),
           { headers },
           runsPath,
+          signal,
         ).then((response) => readJson<RemoteRunsBundleResponse>(response, runsPath)),
       ])
 
@@ -396,6 +406,7 @@ export function createRemoteSyncClient(
         summary,
         '/api/sync/run-summary',
         requirePostHeaders({ authToken, sessionHeaders }),
+        signal,
       )
     },
 
@@ -410,6 +421,7 @@ export function createRemoteSyncClient(
           headers: requireGetHeaders({ authToken, sessionHeaders }),
         },
         safePath,
+        signal,
       )
 
       if (response.status === 404) {
@@ -430,6 +442,7 @@ export function createRemoteSyncClient(
         summary,
         '/api/sync/test-evidence-summary',
         requirePostHeaders({ authToken, sessionHeaders }),
+        signal,
       )
     },
 
@@ -440,6 +453,7 @@ export function createRemoteSyncClient(
         summary,
         '/api/sync/agent-review-summary',
         requirePostHeaders({ authToken, sessionHeaders }),
+        signal,
       )
     },
 
@@ -450,6 +464,7 @@ export function createRemoteSyncClient(
         summary,
         '/api/sync/coding-agent-summary',
         requirePostHeaders({ authToken, sessionHeaders }),
+        signal,
       )
     },
 
@@ -467,6 +482,7 @@ export function createRemoteSyncClient(
         },
         '/api/gates/override',
         requirePostHeaders({ authToken, sessionHeaders }),
+        signal,
       )
     },
 
@@ -482,6 +498,7 @@ export function createRemoteSyncClient(
         },
         '/api/runtime/budget/evaluate',
         requirePostHeaders({ authToken, sessionHeaders }),
+        signal,
       )
       const parsedDecision = parseBudgetGuardDecision(decision)
       if (parsedDecision.projectedCostUsd !== input.projectedCostUsd) {
