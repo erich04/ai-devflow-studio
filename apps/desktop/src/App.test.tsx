@@ -80,6 +80,7 @@ function desktopState(
   overrides: Partial<Awaited<ReturnType<DevFlowDesktopApi['loadState']>>> = {},
 ): Awaited<ReturnType<DevFlowDesktopApi['loadState']>> {
   return {
+    remoteSyncOperations: [],
     projects: [],
     runs: [],
     artifacts: [],
@@ -178,6 +179,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         createdAt: '2026-06-20T00:00:00.000Z',
       },
     }),
+    retryRemoteSyncOperation: vi.fn().mockResolvedValue(desktopState()),
     selectLocalProject: vi.fn().mockResolvedValue(localProject),
     getProjectGitStatus: vi.fn().mockResolvedValue({
       projectId: localProject.id,
@@ -766,6 +768,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     onCodingEventAppended: vi.fn(() => vi.fn()),
     onCodingPermissionUpdated: vi.fn(() => vi.fn()),
     onProjectGitStatusUpdated: vi.fn(() => vi.fn()),
+    onLocalStateUpdated: vi.fn(() => vi.fn()),
     ...overrides,
   }
 

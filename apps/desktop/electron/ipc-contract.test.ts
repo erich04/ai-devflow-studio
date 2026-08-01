@@ -17,6 +17,7 @@ import {
   parseRunCodingAgentInput,
   parseRunKnowledgeReviewInput,
   parseRemoteSnapshotInput,
+  parseRetryRemoteSyncOperationInput,
   parseRunProjectTestsInput,
   parseSaveGateOverrideInput,
   parseSaveProjectTestCommandInput,
@@ -252,6 +253,36 @@ describe('IPC contract parsers', () => {
     expect(ipcChannels).not.toHaveProperty('uploadRunSummary')
     expect(ipcChannels).not.toHaveProperty('uploadTestEvidenceSummary')
     expect(ipcChannels).not.toHaveProperty('uploadCodingAgentSummary')
+  })
+
+  it('accepts an identifier-only remote sync retry command', () => {
+    expect(parseRetryRemoteSyncOperationInput({ operationId: ' operation-1 ' })).toEqual({
+      operationId: 'operation-1',
+    })
+  })
+
+  it.each(['payload', 'scope', 'body', 'token'])(
+    'rejects renderer-supplied %s data in remote sync retry commands',
+    (field) => {
+      expect(() =>
+        parseRetryRemoteSyncOperationInput({
+          operationId: 'operation-1',
+          [field]: { forged: true },
+        }),
+      ).toThrow(new RegExp(field))
+    },
+  )
+
+  it('exposes only an operator retry channel for renderer-initiated remote sync writes', () => {
+    expect(ipcChannels).toMatchObject({
+      retryRemoteSyncOperation: 'devflow:remote-sync:operation:retry',
+    })
+    expect(ipcChannels).not.toHaveProperty('enqueueRemoteSyncOperation')
+    expect(ipcChannels).not.toHaveProperty('uploadRunSummary')
+  })
+
+  it('defines a dedicated main-to-renderer local state update channel', () => {
+    expect(ipcChannels.localStateUpdated).toBe('devflow:local-state:updated')
   })
 
   it('accepts provider credential and knowledge review payloads', () => {

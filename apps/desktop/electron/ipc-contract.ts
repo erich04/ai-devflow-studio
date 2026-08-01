@@ -45,6 +45,10 @@ export type DeleteRunResult = {
   remote?: RemoteRunDeleteResult
 }
 
+export type RetryRemoteSyncOperationInput = {
+  operationId: string
+}
+
 export const ipcChannels = {
   loadState: 'devflow:local-state:load',
   selectProject: 'devflow:local-project:select',
@@ -67,6 +71,7 @@ export const ipcChannels = {
   saveSettings: 'devflow:settings:save',
   saveMcpServers: 'devflow:mcp-servers:save',
   loadRemoteSnapshot: 'devflow:remote:snapshot:load',
+  retryRemoteSyncOperation: 'devflow:remote-sync:operation:retry',
   loadDesktopPairing: 'devflow:desktop-pairing:load',
   pairDesktop: 'devflow:desktop-pairing:pair',
   listAgentProviders: 'devflow:agent:providers:list',
@@ -86,6 +91,7 @@ export const ipcChannels = {
   codingEventAppended: 'devflow:coding:push:event',
   codingPermissionUpdated: 'devflow:coding:push:permission',
   projectGitStatusUpdated: 'devflow:local-project:git-status:updated',
+  localStateUpdated: 'devflow:local-state:updated',
 } as const
 
 export type SaveProjectTestCommandInput = {
@@ -284,6 +290,9 @@ export type DevFlowDesktopApi = {
   loadDesktopPairing: () => Promise<DesktopPairingCredential | null>
   pairDesktop: (input: PairDesktopInput) => Promise<PairDesktopResult>
   loadRemoteSnapshot: (input?: LoadRemoteSnapshotInput) => Promise<RemoteTeamSnapshot>
+  retryRemoteSyncOperation: (
+    input: RetryRemoteSyncOperationInput,
+  ) => Promise<LocalExecutionState>
   selectLocalProject: () => Promise<LocalProject | null>
   getProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
   watchProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
@@ -322,6 +331,7 @@ export type DevFlowDesktopApi = {
   onCodingEventAppended: (listener: (event: CodingAgentEvent) => void) => () => void
   onCodingPermissionUpdated: (listener: (request: CodingPermissionRequest) => void) => () => void
   onProjectGitStatusUpdated: (listener: (status: ProjectGitStatus) => void) => () => void
+  onLocalStateUpdated: (listener: (state: LocalExecutionState) => void) => () => void
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -583,6 +593,17 @@ export function parseRemoteSnapshotInput(value: unknown): LoadRemoteSnapshotInpu
   }
 
   return organizationId ? { organizationId: organizationId.trim() } : {}
+}
+
+export function parseRetryRemoteSyncOperationInput(
+  value: unknown,
+): RetryRemoteSyncOperationInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid retry remote sync operation payload')
+  }
+  rejectUnexpectedFields(value, ['operationId'], 'retry remote sync operation payload')
+
+  return { operationId: readRequiredString(value, 'operationId') }
 }
 
 export function parseAgentProviderCredentialInput(value: unknown): AgentProviderCredentialInput {

@@ -13,6 +13,8 @@ const desktopApi: DevFlowDesktopApi = {
   loadDesktopPairing: () => ipcRenderer.invoke(ipcChannels.loadDesktopPairing),
   pairDesktop: (input) => ipcRenderer.invoke(ipcChannels.pairDesktop, input),
   loadRemoteSnapshot: (input) => ipcRenderer.invoke(ipcChannels.loadRemoteSnapshot, input),
+  retryRemoteSyncOperation: (input) =>
+    ipcRenderer.invoke(ipcChannels.retryRemoteSyncOperation, input),
   selectLocalProject: () => ipcRenderer.invoke(ipcChannels.selectProject),
   getProjectGitStatus: (input) => ipcRenderer.invoke(ipcChannels.getProjectGitStatus, input),
   watchProjectGitStatus: (input) => ipcRenderer.invoke(ipcChannels.watchProjectGitStatus, input),
@@ -58,6 +60,7 @@ const desktopApi: DevFlowDesktopApi = {
     onIpcPayload(ipcChannels.codingPermissionUpdated, listener),
   onProjectGitStatusUpdated: (listener) =>
     onIpcPayload(ipcChannels.projectGitStatusUpdated, listener),
+  onLocalStateUpdated: (listener) => onIpcPayload(ipcChannels.localStateUpdated, listener),
 }
 
 contextBridge.exposeInMainWorld('aiDevFlowDesktop', desktopApi)

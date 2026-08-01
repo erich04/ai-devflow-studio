@@ -25,7 +25,12 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
-import type { CreateRunInput, DeleteRunInput, DeleteRunResult } from '../electron/ipc-contract'
+import type {
+  CreateRunInput,
+  DeleteRunInput,
+  DeleteRunResult,
+  RetryRemoteSyncOperationInput,
+} from '../electron/ipc-contract'
 
 export type SaveProjectTestCommandInput = {
   projectId: string
@@ -179,6 +184,9 @@ export type DevFlowDesktopApi = {
   loadDesktopPairing: () => Promise<DesktopPairingCredential | null>
   pairDesktop: (input: PairDesktopInput) => Promise<PairDesktopResult>
   loadRemoteSnapshot: (input?: LoadRemoteSnapshotInput) => Promise<RemoteTeamSnapshot>
+  retryRemoteSyncOperation: (
+    input: RetryRemoteSyncOperationInput,
+  ) => Promise<LocalExecutionState>
   selectLocalProject: () => Promise<LocalProject | null>
   getProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
   watchProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
@@ -223,6 +231,7 @@ export type DevFlowDesktopApi = {
   onCodingEventAppended: (listener: (event: CodingAgentEvent) => void) => () => void
   onCodingPermissionUpdated: (listener: (request: CodingPermissionRequest) => void) => () => void
   onProjectGitStatusUpdated: (listener: (status: ProjectGitStatus) => void) => () => void
+  onLocalStateUpdated: (listener: (state: LocalExecutionState) => void) => () => void
 }
 
 declare global {
