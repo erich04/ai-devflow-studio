@@ -175,6 +175,12 @@ accepts the recorded terminal outcome only when the matching receipt proves Desk
 rejected it before expiry. A receipt obtained before expiry does not authorize a new application
 after expiry.
 
+The acknowledgement record keeps Team's receive time as server-authored `createdAt`. A Desktop
+`evaluatedAt` may lead that receive time only while it remains inside the server-issued receipt and
+command windows, and by no more than the protocol's 60-second receipt-lease maximum. This bounded
+skew tolerance never extends either deadline; an `expired` outcome additionally requires Team's
+current server time to have reached the command expiry.
+
 The API failure categories are stable and fail closed:
 
 | Result | Meaning |
@@ -195,13 +201,22 @@ no ambiguous state that assumes a failed response applied a transition.
 
 ### Audit and data minimization
 
-Audit is append-only at both authority boundaries. Team audit covers every Work Request create,
-content/version change, claim/release, materialization acknowledgement, cancellation, and expiry,
-plus every Gate command submission, server preflight, receipt, acknowledgement, and expiry. Each
-entry contains stable record IDs, organization/project scope, actor ID, authentication mechanism
+Audit is append-only at both authority boundaries. After a live signed identity and project scope
+have been verified, Team audit covers every Work Request create, content/version change,
+claim/release, materialization acknowledgement, cancellation, and expiry, plus command submission,
+server preflight, receipt, acknowledgement, and expiry across every Gate command, including replay
+and conflict attempts. Each entry contains stable record IDs, organization/project scope, actor ID,
+authentication mechanism
 kind, verified project role, expected/observed versions, action, blocker IDs or hashes, safe outcome
-code, idempotency fingerprint, and timestamps. Desktop records receipt, evaluation, atomic outcome,
-and acknowledgement retry state against the local Run and Node.
+code, idempotency fingerprint, and timestamps. Desktop records receipt observation before local
+evidence reads, followed by evaluation, atomic outcome, and acknowledgement retry state against the
+local Run and Node.
+
+An attempt that fails before Team can verify a live actor and project is security telemetry, not a
+collaboration-domain audit row. Team must not invent an actor, role, project, or token attribution to
+satisfy audit-table foreign keys. Likewise, a transaction that rolls back because authoritative
+storage is unavailable cannot promise a durable row in that same unavailable transaction; the API
+returns its fixed safe failure while deployment telemetry records the availability incident.
 
 Audit never stores Cookies, Bearer Tokens, API keys, or provider credentials. It stores a safe token
 record ID where attribution is necessary, never the token or token hash. User-entered titles,

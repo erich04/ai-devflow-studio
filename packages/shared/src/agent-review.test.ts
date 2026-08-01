@@ -927,7 +927,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
           JSON.stringify({
             error: {
               message:
-                'bad request OPENAI_API_KEY=sk-secret 6363516a-2de2-4d35-8d6e-b99f6c2f15f2',
+                'bad request OPENAI_API_KEY=sk-secret [redacted-provider-token]',
             },
           }),
           { status: 400, headers: { 'content-type': 'application/json' } },

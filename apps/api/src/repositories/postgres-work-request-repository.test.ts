@@ -153,6 +153,12 @@ describe('Postgres Work Request repository', () => {
     expect(listCall?.sql).toMatch(/organization_id\s*=\s*\$1/i)
     expect(listCall?.sql).toMatch(/project_id\s*=\s*\$2/i)
     expect(listCall?.params).toEqual(['org-demo', 'p-payments'])
+    const authorityCall = db.calls.find(
+      ({ sql }) => marker(sql) === 'cookie-identity',
+    )
+    expect(authorityCall?.sql).not.toMatch(/FOR SHARE/i)
+    expect(db.checkoutCount).toBe(0)
+    expect(db.calls.map(({ sql }) => sql)).not.toContain('BEGIN')
   })
 
   it('limits the Desktop inbox to open requests and claims owned by its live token record', async () => {
@@ -182,6 +188,12 @@ describe('Postgres Work Request repository', () => {
       'p-payments',
       'desktop-token-safe-id',
     ])
+    const authorityCall = db.calls.find(
+      ({ sql }) => marker(sql) === 'bearer-identity',
+    )
+    expect(authorityCall?.sql).not.toMatch(/FOR SHARE/i)
+    expect(db.checkoutCount).toBe(0)
+    expect(db.calls.map(({ sql }) => sql)).not.toContain('BEGIN')
   })
 
   it('creates under one transaction after lock, idempotency lookup, and live Cookie recheck', async () => {
@@ -189,6 +201,7 @@ describe('Postgres Work Request repository', () => {
     const db = new FakeWorkRequestDb((sql) => {
       switch (marker(sql)) {
         case 'idempotency-lock':
+        case 'claim-run-lock':
         case 'audit-insert':
         case 'idempotency-insert':
           return []
@@ -238,6 +251,16 @@ describe('Postgres Work Request repository', () => {
       'audit-insert',
       'idempotency-insert',
     ])
+    const authorityCall = db.calls.find(
+      ({ sql }) => marker(sql) === 'cookie-identity',
+    )
+    expect(authorityCall?.sql).toMatch(
+      /\(\s*SELECT\s+project_members\.role[\s\S]*?FOR SHARE\s*\)\s+AS project_role/i,
+    )
+    expect(authorityCall?.sql).toMatch(
+      /FOR SHARE OF auth_accounts,\s*users,\s*projects/i,
+    )
+    expect(authorityCall?.sql).not.toMatch(/LEFT JOIN project_members/i)
     const persistedResponse = db.calls.find(
       ({ sql }) => marker(sql) === 'idempotency-insert',
     )?.params.at(-1)
@@ -302,7 +325,13 @@ describe('Postgres Work Request repository', () => {
     })
     const authCall = db.calls.find(({ sql }) => marker(sql) === 'bearer-identity')
     expect(authCall?.sql).toMatch(/desktop_tokens\.revoked_at\s+IS\s+NULL/i)
-    expect(authCall?.sql).toMatch(/project_members/i)
+    expect(authCall?.sql).toMatch(
+      /\(\s*SELECT\s+project_members\.role[\s\S]*?FOR SHARE\s*\)\s+AS project_role/i,
+    )
+    expect(authCall?.sql).toMatch(
+      /FOR SHARE OF desktop_tokens,\s*users,\s*projects/i,
+    )
+    expect(authCall?.sql).not.toMatch(/LEFT JOIN project_members/i)
     expect(authCall?.params).toEqual([
       'desktop-token-safe-id',
       'org-demo',
@@ -378,6 +407,54 @@ describe('Postgres Work Request repository', () => {
     expect(db.calls.at(-1)?.sql).toBe('COMMIT')
   })
 
+  it('keeps a live Bearer identity distinguishable from missing project membership', async () => {
+    const db = new FakeWorkRequestDb((sql) => {
+      switch (marker(sql)) {
+        case 'idempotency-lock':
+        case 'claim-run-lock':
+        case 'audit-insert':
+        case 'idempotency-insert':
+          return []
+        case 'project-probe':
+          return [
+            { project_id: 'p-payments', claimed_run_id: 'run-local-1' },
+          ]
+        case 'idempotency-read':
+          return []
+        case 'bearer-identity':
+          return [{ ...bearerIdentity(), project_role: null }]
+        default:
+          throw new Error(`Unexpected query: ${sql}`)
+      }
+    })
+    const repository = createPostgresWorkRequestRepository(db, {
+      now: () => new Date(now),
+    })
+
+    await expect(
+      repository.claimWorkRequest(
+        {
+          workRequestId: 'wr-1',
+          expectedVersion: 1,
+          runId: 'run-local-1',
+          idempotencyKey: 'claim:membership-removed',
+        },
+        bearerPrincipal,
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      responseStatus: 403,
+      outcomeCode: 'project_forbidden',
+      replayed: false,
+    })
+
+    expect(db.markers()).toContain('bearer-identity')
+    expect(db.markers()).toContain('audit-insert')
+    expect(db.markers()).toContain('idempotency-insert')
+    expect(db.markers()).not.toContain('row-lock')
+    expect(db.calls.at(-1)?.sql).toBe('COMMIT')
+  })
+
   it('commits expiry plus an audited and idempotent 410 instead of rolling it back', async () => {
     const expiredOpen = {
       ...openRow,
@@ -386,6 +463,7 @@ describe('Postgres Work Request repository', () => {
     const db = new FakeWorkRequestDb((sql) => {
       switch (marker(sql)) {
         case 'idempotency-lock':
+        case 'claim-run-lock':
         case 'audit-insert':
         case 'idempotency-insert':
           return []
@@ -492,6 +570,15 @@ describe('Postgres Work Request repository', () => {
       outcomeCode: 'materialized',
       workRequest: { version: 3, status: 'materialized' },
     })
+    const authorityCall = db.calls.find(
+      ({ sql }) => marker(sql) === 'bearer-identity',
+    )
+    expect(authorityCall?.sql).toMatch(
+      /\(\s*SELECT\s+project_members\.role[\s\S]*?FOR SHARE\s*\)\s+AS project_role/i,
+    )
+    expect(authorityCall?.sql).toMatch(
+      /FOR SHARE OF desktop_tokens,\s*users,\s*projects/i,
+    )
     expect(db.markers()).not.toContain('expire')
   })
 
@@ -517,11 +604,16 @@ describe('Postgres Work Request repository', () => {
         case 'idempotency-insert':
           return []
         case 'project-probe':
-          return [{ project_id: 'p-payments' }]
+          return [
+            { project_id: 'p-payments', claimed_run_id: 'run-local-1' },
+          ]
         case 'idempotency-read':
           return []
         case 'cookie-identity':
           return [cookieIdentity()]
+        case 'release-run-lock':
+        case 'release-tombstone':
+          return []
         case 'row-lock':
           return [pendingRow]
         case 'canonical-run-check':
@@ -550,12 +642,50 @@ describe('Postgres Work Request repository', () => {
       outcomeCode: 'released',
       workRequest: { version: 3, status: 'open', claim: null },
     })
+    const authorityCall = db.calls.find(
+      ({ sql }) => marker(sql) === 'cookie-identity',
+    )
+    expect(authorityCall?.sql).toMatch(
+      /\(\s*SELECT\s+project_members\.role[\s\S]*?FOR SHARE\s*\)\s+AS project_role/i,
+    )
+    expect(authorityCall?.sql).toMatch(
+      /FOR SHARE OF auth_accounts,\s*users,\s*projects/i,
+    )
     const projectionCheck = db.calls.find(
       ({ sql }) => marker(sql) === 'canonical-run-check',
     )
     expect(projectionCheck?.sql).toMatch(/workflow_runs/i)
     expect(projectionCheck?.sql).toMatch(/organization_id\s*=\s*\$2/i)
     expect(projectionCheck?.sql).toMatch(/project_id\s*=\s*\$3/i)
+    const releaseRunLockIndex = db.markers().indexOf('release-run-lock')
+    const rowLockIndex = db.markers().indexOf('row-lock')
+    expect(releaseRunLockIndex).toBeGreaterThanOrEqual(0)
+    expect(releaseRunLockIndex).toBeLessThan(rowLockIndex)
+    expect(releaseRunLockIndex).toBeLessThan(
+      db.markers().indexOf('canonical-run-check'),
+    )
+    const releaseRunLock = db.calls.find(
+      ({ sql }) => marker(sql) === 'release-run-lock',
+    )
+    expect(releaseRunLock?.params).toEqual([
+      JSON.stringify(['org-demo', 'p-payments', 'run-local-1']),
+    ])
+    const tombstoneIndex = db.markers().indexOf('release-tombstone')
+    expect(tombstoneIndex).toBeGreaterThan(rowLockIndex)
+    expect(tombstoneIndex).toBeLessThan(db.markers().indexOf('release'))
+    const tombstone = db.calls.find(
+      ({ sql }) => marker(sql) === 'release-tombstone',
+    )
+    expect(tombstone?.params).toEqual([
+      'org-demo',
+      'p-payments',
+      'wr-1',
+      'run-local-1',
+      'desktop-token-safe-id',
+      'u-ling',
+      2,
+      now,
+    ])
   })
 
   it('replays only a matching fingerprint and commits mismatches as fixed conflicts', async () => {
@@ -664,6 +794,43 @@ describe('Postgres Work Request repository', () => {
     expect(db.calls.map(({ sql }) => sql).at(-1)).toBe('ROLLBACK')
     expect(db.releaseCount).toBe(1)
     expect(db.markers()).not.toContain('idempotency-insert')
+  })
+
+  it('resolves a materialized claim by exact organization, project, and Run scope', async () => {
+    const db = new FakeWorkRequestDb((sql, params) => {
+      switch (marker(sql)) {
+        case 'materialized-claim-lookup':
+          expect(params).toEqual(['org-demo', 'p-payments', 'run-gate-owner'])
+          expect(sql).toMatch(/status\s*=\s*'materialized'/i)
+          expect(sql).toMatch(/claimed_by_token_id\s+IS\s+NOT\s+NULL/i)
+          return [
+            {
+              organization_id: 'org-demo',
+              project_id: 'p-payments',
+              work_request_id: 'wr-gate-owner',
+              run_id: 'run-gate-owner',
+              claimed_by_token_id: 'desktop-token-safe-id',
+            },
+          ]
+        default:
+          throw new Error(`Unexpected query: ${sql}`)
+      }
+    })
+    const repository = createPostgresWorkRequestRepository(db)
+
+    await expect(
+      repository.resolveMaterializedWorkRequestClaim({
+        organizationId: 'org-demo',
+        projectId: 'p-payments',
+        runId: 'run-gate-owner',
+      }),
+    ).resolves.toEqual({
+      organizationId: 'org-demo',
+      projectId: 'p-payments',
+      workRequestId: 'wr-gate-owner',
+      runId: 'run-gate-owner',
+      claimedByTokenId: 'desktop-token-safe-id',
+    })
   })
 
   it('fails closed on disallowed authentication kinds without a lifecycle write', async () => {

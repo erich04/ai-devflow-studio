@@ -23,6 +23,8 @@ export type ApiRouteRequestOptions = {
   sessionSecret: string
   devAuthEnabled?: boolean
   githubOAuth?: GitHubOAuthClient
+  postAuthRedirectUrl?: string
+  secureCookies?: boolean
 }
 
 export function createCorsPreflightHeaders(): Record<string, string> {
@@ -111,12 +113,18 @@ export async function resolveApiRouteRequest(
   }
 
   return resolveTeamRoute(request.method, request.pathname, options.repository, {
-    auth: { sessionSecret: options.sessionSecret },
+    auth: {
+      sessionSecret: options.sessionSecret,
+      secureCookies: options.secureCookies === true,
+    },
     body: request.body,
     cookies,
     principal,
     session: principal?.session ?? null,
     searchParams: request.searchParams ?? new URLSearchParams(),
     ...(options.githubOAuth ? { githubOAuth: options.githubOAuth } : {}),
+    ...(options.postAuthRedirectUrl
+      ? { postAuthRedirectUrl: options.postAuthRedirectUrl }
+      : {}),
   })
 }

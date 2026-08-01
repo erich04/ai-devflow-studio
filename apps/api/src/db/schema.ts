@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 9
+export const TEAM_SCHEMA_VERSION = 10
 
 export const requiredTeamTableNames = [
   'team_schema_migrations',
@@ -35,6 +35,7 @@ export const requiredTeamTableNames = [
   'gate_commands',
   'gate_command_receipts',
   'gate_command_acknowledgements',
+  'released_work_request_claims',
 ] as const
 
 export type TeamTableName = (typeof requiredTeamTableNames)[number]
@@ -561,6 +562,7 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
     name: 'gate_commands',
     columns: [
       column('id', 'text', { primaryKey: true }),
+      column('version', 'integer'),
       column('organization_id', 'text', { references: 'organizations.id' }),
       column('project_id', 'text', { references: 'projects.id' }),
       column('work_request_id', 'text', {
@@ -583,6 +585,7 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('expected_blocker_ids', 'jsonb'),
       column('evaluation_status', 'text'),
       column('evaluation_blocker_ids', 'jsonb'),
+      column('evaluated_at', 'timestamptz'),
       column('status', 'text'),
       column('outcome_code', 'text', { nullable: true }),
       column('expires_at', 'timestamptz'),
@@ -613,6 +616,19 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('after_run_version', 'integer'),
       column('evaluated_at', 'timestamptz'),
       column('created_at', 'timestamptz'),
+    ],
+  },
+  {
+    name: 'released_work_request_claims',
+    columns: [
+      column('organization_id', 'text', { references: 'organizations.id' }),
+      column('project_id', 'text', { references: 'projects.id' }),
+      column('work_request_id', 'text', { references: 'work_requests.id' }),
+      column('run_id', 'text'),
+      column('claimed_by_token_id', 'text', { references: 'desktop_tokens.id' }),
+      column('released_by_user_id', 'text', { references: 'users.id' }),
+      column('released_claim_version', 'integer'),
+      column('released_at', 'timestamptz'),
     ],
   },
 ]

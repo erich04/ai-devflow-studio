@@ -16,6 +16,7 @@ import {
   type TeamRepository,
 } from '../repositories/team-repository'
 import { encryptAgentCredential } from '../agent-credentials'
+import type { GateCommandRepository } from '../repositories/gate-command-contract'
 import { resolveTeamRoute } from './team-routes'
 
 const ownerSession: TeamSession = {
@@ -212,7 +213,7 @@ const githubIdentity: AuthenticatedIdentity = {
   projectMemberships: [],
 }
 
-function createRepository(): TeamRepository {
+function createRepository(): TeamRepository & GateCommandRepository {
   const runsBundle: RunsBundle = {
     runs: [
       {
@@ -485,6 +486,26 @@ function createRepository(): TeamRepository {
       outcomeCode: 'authentication_forbidden',
       replayed: false,
     } as const)),
+    listGateCommands: vi.fn(async () => []),
+    createGateCommand: vi.fn(async () => ({
+      ok: false,
+      responseStatus: 403,
+      outcomeCode: 'authentication_forbidden',
+      replayed: false,
+    } as const)),
+    listGateCommandInbox: vi.fn(async () => []),
+    createGateCommandReceipt: vi.fn(async () => ({
+      ok: false,
+      responseStatus: 403,
+      outcomeCode: 'authentication_forbidden',
+      replayed: false,
+    } as const)),
+    acknowledgeGateCommand: vi.fn(async () => ({
+      ok: false,
+      responseStatus: 403,
+      outcomeCode: 'authentication_forbidden',
+      replayed: false,
+    } as const)),
     getRunsBundle: vi.fn(async (context) =>
       context.organizationId === 'org-demo'
         ? runsBundle
@@ -592,6 +613,30 @@ function createRepository(): TeamRepository {
 }
 
 describe('team API route resolver', () => {
+  it('dispatches Gate Command routes through the authenticated Team resolver', async () => {
+    const repository = createRepository()
+
+    await expect(
+      resolveTeamRoute(
+        'GET',
+        '/api/team/projects/p-payments/gate-commands',
+        repository,
+        {
+          principal: {
+            session: ownerSession,
+            authentication: { kind: 'session_cookie', tokenRecordId: null },
+          },
+        },
+      ),
+    ).resolves.toEqual({ status: 200, body: { commands: [] } })
+    expect(repository.listGateCommands).toHaveBeenCalledWith(
+      'p-payments',
+      expect.objectContaining({
+        authentication: { kind: 'session_cookie', tokenRecordId: null },
+      }),
+    )
+  })
+
   it('starts GitHub OAuth by setting a state cookie and redirecting to GitHub', async () => {
     const repository = createRepository()
     const githubOAuth = {
@@ -605,6 +650,7 @@ describe('team API route resolver', () => {
       auth: {
         sessionSecret: 'test-secret',
         createState: () => 'state-1',
+        secureCookies: true,
       },
       githubOAuth,
     })
@@ -613,7 +659,7 @@ describe('team API route resolver', () => {
       status: 302,
       headers: {
         location: 'https://github.com/login/oauth/authorize?client_id=client-1&state=state-1',
-        'set-cookie': 'devflow_oauth_state=state-1; HttpOnly; SameSite=Lax; Path=/; Max-Age=600',
+        'set-cookie': 'devflow_oauth_state=state-1; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600',
       },
       body: { redirectTo: 'https://github.com/login/oauth/authorize?client_id=client-1&state=state-1' },
     })
@@ -639,20 +685,23 @@ describe('team API route resolver', () => {
     const result = await resolveTeamRoute('GET', '/api/auth/github/callback', repository, {
       searchParams: new URLSearchParams('code=code-1&state=state-1'),
       cookies: { devflow_oauth_state: 'state-1' },
-      auth: { sessionSecret: 'test-secret' },
+      auth: { sessionSecret: 'test-secret', secureCookies: true },
       githubOAuth,
+      postAuthRedirectUrl: 'https://devflow.example/team',
     })
 
     expect(result?.status).toBe(302)
-    expect(result?.headers?.location).toBe('/')
+    expect(result?.headers?.location).toBe('https://devflow.example/team')
+    expect(result?.body).toEqual({ redirectTo: 'https://devflow.example/team' })
     expect(result?.headers?.['set-cookie']).toEqual([
       expect.stringContaining('devflow_session='),
-      'devflow_oauth_state=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0',
+      'devflow_oauth_state=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0',
     ])
     const sessionCookie = (result?.headers?.['set-cookie'] as string[])[0]!
     const encodedPayload = sessionCookie.split('=')[1]!.split('.')[0]!
     const claims = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'))
     expect(sessionCookie).toContain('Max-Age=28800')
+    expect(sessionCookie).toContain('HttpOnly; Secure; SameSite=Lax')
     expect(Object.keys(claims).sort()).toEqual(['authAccountId', 'expiresAt', 'v'])
     expect(claims).toMatchObject({ v: 1, authAccountId: 'acct-github-123456' })
     expect(claims).not.toHaveProperty('organizationId')
@@ -1045,6 +1094,9 @@ describe('team API route resolver', () => {
       runs: [{ id: 'run-payments' }],
       projectCost: [{ key: 'p-payments' }],
       testEvidenceSummaries: [{ id: 'evidence-payments' }],
+      enforcementPolicies: {
+        effectivePolicies: [{ projectId: 'p-payments' }],
+      },
     })
     expect(JSON.stringify(overviewResult?.body)).not.toContain('p-admin')
     expect(JSON.stringify(overviewResult?.body)).not.toContain('evidence-admin')
@@ -2130,6 +2182,85 @@ describe('team API route resolver', () => {
 
     expect(result?.status).toBe(202)
     expect(repository.uploadRunSummary).toHaveBeenCalledWith(summary, memberSession)
+  })
+
+  it('forwards the exact Desktop bearer token record into Run authority checks', async () => {
+    const repository = createRepository()
+    const summary = {
+      kind: 'run',
+      runId: 'run-desktop-authority',
+      version: 1,
+      projectId: 'p-payments',
+      title: 'Desktop-owned Run',
+      status: 'building',
+      currentNodeId: 'node-build',
+      currentNode: {
+        id: 'node-build',
+        stage: 'build',
+        kind: 'task',
+        status: 'running',
+      },
+      branchName: 'ai/desktop-authority',
+      updatedAt: '2026-08-01T12:00:00.000Z',
+    }
+    const principal = {
+      session: memberSession,
+      authentication: {
+        kind: 'desktop_bearer' as const,
+        tokenRecordId: 'desktop-token-authority',
+      },
+    }
+
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/sync/run-summary',
+      repository,
+      {
+        body: summary,
+        session: memberSession,
+        principal,
+      },
+    )
+
+    expect(result?.status).toBe(202)
+    expect(repository.uploadRunSummary).toHaveBeenCalledWith(summary, {
+      ...memberSession,
+      tokenRecordId: 'desktop-token-authority',
+    })
+  })
+
+  it('rejects a remote summary whose local node ID uses the Team storage namespace', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('POST', '/api/sync/run-summary', repository, {
+      body: {
+        kind: 'run',
+        runId: 'run-1',
+        version: 1,
+        projectId: 'p-payments',
+        title: 'Ambiguous node identity',
+        status: 'building',
+        currentNodeId: 'run-1:node-build',
+        currentNode: {
+          id: 'run-1:node-build',
+          stage: 'build',
+          kind: 'task',
+          status: 'running',
+        },
+        branchName: 'ai/payments',
+        updatedAt: '2026-06-16T00:00:00.000Z',
+      },
+      session: memberSession,
+    })
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: 'bad_request',
+        message: 'Local node ID uses the reserved Team node namespace.',
+      },
+    })
+    expect(repository.uploadRunSummary).not.toHaveBeenCalled()
   })
 
   it('returns conflict when a run summary collides with canonical ownership or is stale', async () => {

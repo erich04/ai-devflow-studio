@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import type {
   ClaimWorkRequestInput,
+  CreateGateCommandAcknowledgementInput,
   DesktopPairingCredential,
   DevFlowSessionHeaders,
+  GateCommand,
+  GateCommandAcknowledgement,
+  GateCommandReceipt,
   MaterializeWorkRequestInput,
   RemoteAgentReviewSummary,
   RemoteCodingAgentSummary,
@@ -1395,5 +1399,908 @@ describe('Electron Work Request remote client', () => {
       .catch((reason: unknown) => reason)
     expect(error).toMatchObject({ status: 200, code: 'invalid_response' })
     expect(String(error)).not.toContain('response-token-secret')
+  })
+})
+
+const pendingGateCommand: GateCommand = {
+  id: 'gate-command-1',
+  organizationId: 'org-1',
+  projectId: 'p-remote',
+  workRequestId: 'wr-rollout',
+  runId: 'run-rollout',
+  nodeId: 'run-rollout-design-gate',
+  action: 'approve',
+  workflowCommand: 'approve_gate',
+  reason: 'Approve the current design Gate.',
+  requestedByUserId: 'u-review-lead',
+  requestedRole: 'lead',
+  idempotencyKey: 'gate-command:create:run-rollout:v3',
+  requestFingerprint: 'a'.repeat(64),
+  expectedRunVersion: 3,
+  expectedPolicyVersion: 2,
+  expectedBlockerIds: [],
+  version: 1,
+  evaluationStatus: 'allowed',
+  evaluationBlockerIds: [],
+  evaluatedAt: '2026-08-01T02:00:00.000Z',
+  status: 'pending',
+  outcomeCode: null,
+  expiresAt: '2026-08-01T02:15:00.000Z',
+  createdAt: '2026-08-01T02:00:01.000Z',
+  updatedAt: '2026-08-01T02:00:01.000Z',
+}
+
+describe('Electron Gate Command remote client', () => {
+  it('performs zero network I/O without both pairing metadata and its Bearer token', async () => {
+    const fetcher = vi.fn()
+    const pairedClientWithoutToken = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      sessionHeaders: authenticatedSessionHeaders,
+    })
+    const tokenClientWithoutPairing = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'orphaned-bearer-secret',
+    })
+
+    await expect(
+      pairedClientWithoutToken.listGateCommandInbox(
+        'p-remote',
+        workRequestPairing,
+      ),
+    ).rejects.toThrow(
+      'Pair DevFlow Studio with a Team Project before syncing remote team state.',
+    )
+    await expect(
+      tokenClientWithoutPairing.createGateCommandReceipt(
+        pendingGateCommand.id,
+        null,
+      ),
+    ).rejects.toThrow(
+      'Pair DevFlow Studio with a Team Project before syncing remote team state.',
+    )
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('rejects a project/pairing scope mismatch before network I/O', async () => {
+    const fetcher = vi.fn()
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.listGateCommandInbox('p-other', workRequestPairing),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: 'scope_mismatch',
+      path: '/api/desktop/projects/:projectId/gate-commands/inbox',
+      retryable: false,
+    })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('passes the captured AbortSignal and maps an aborted inbox request safely', async () => {
+    const controller = new AbortController()
+    const fetcher = vi.fn(async (_url: URL | RequestInfo, init?: RequestInit) => {
+      expect(init?.signal).toBe(controller.signal)
+      controller.abort()
+      throw new Error('hostile timeout detail with paired-bearer-secret')
+    })
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'paired-bearer-secret',
+      signal: controller.signal,
+    })
+
+    const error = await client
+      .listGateCommandInbox('p-remote', workRequestPairing)
+      .catch((reason: unknown) => reason)
+    expect(error).toMatchObject({
+      status: null,
+      code: 'request_timeout',
+      path: '/api/desktop/projects/:projectId/gate-commands/inbox',
+      retryable: true,
+    })
+    expect(String(error)).not.toContain('paired-bearer-secret')
+  })
+
+  it('lists the paired project inbox with Bearer auth and a strict command envelope', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(JSON.stringify({ commands: [pendingGateCommand] }), {
+        status: 200,
+      }),
+    )
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.listGateCommandInbox('p-remote', workRequestPairing),
+    ).resolves.toEqual([pendingGateCommand])
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/desktop/projects/p-remote/gate-commands/inbox',
+      {
+        headers: {
+          accept: 'application/json',
+          authorization: 'Bearer paired-bearer-secret',
+        },
+      },
+    )
+  })
+
+  it('rejects a valid inbox envelope returned with a non-200 success status', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(JSON.stringify({ commands: [pendingGateCommand] }), {
+          status: 201,
+        }),
+      ),
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.listGateCommandInbox('p-remote', workRequestPairing),
+    ).rejects.toMatchObject({
+      status: 201,
+      code: 'invalid_response',
+      path: '/api/desktop/projects/:projectId/gate-commands/inbox',
+      retryable: true,
+    })
+  })
+
+  it('accepts a delivering command that remains eligible for redelivery', async () => {
+    const command: GateCommand = {
+      ...pendingGateCommand,
+      version: 2,
+      status: 'delivering',
+      updatedAt: '2026-08-01T02:01:00.000Z',
+    }
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(JSON.stringify({ commands: [command] }), { status: 200 }),
+      ),
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.listGateCommandInbox('p-remote', workRequestPairing),
+    ).resolves.toEqual([command])
+  })
+
+  it('fails closed when an inbox command belongs to another project', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            commands: [{ ...pendingGateCommand, projectId: 'p-other' }],
+          }),
+          { status: 200 },
+        ),
+      ),
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.listGateCommandInbox('p-remote', workRequestPairing),
+    ).rejects.toMatchObject({
+      status: 200,
+      code: 'invalid_response',
+      path: '/api/desktop/projects/:projectId/gate-commands/inbox',
+      retryable: true,
+    })
+  })
+
+  it('fails closed when an inbox command has no Work Request identity', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            commands: [{ ...pendingGateCommand, workRequestId: null }],
+          }),
+          { status: 200 },
+        ),
+      ),
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.listGateCommandInbox('p-remote', workRequestPairing),
+    ).rejects.toMatchObject({
+      status: 200,
+      code: 'invalid_response',
+      path: '/api/desktop/projects/:projectId/gate-commands/inbox',
+      retryable: true,
+    })
+  })
+
+  it.each([
+    {
+      commands: [pendingGateCommand],
+      bearerToken: 'response-token-secret',
+    },
+    {
+      commands: [
+        { ...pendingGateCommand, tokenId: 'desktop-token-record-secret' },
+      ],
+    },
+  ])('rejects unknown secret fields in an inbox response', async (body) => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(JSON.stringify(body), { status: 200 }),
+      ),
+      authToken: 'paired-bearer-secret',
+    })
+
+    const error = await client
+      .listGateCommandInbox('p-remote', workRequestPairing)
+      .catch((reason: unknown) => reason)
+    expect(error).toMatchObject({
+      status: 200,
+      code: 'invalid_response',
+      path: '/api/desktop/projects/:projectId/gate-commands/inbox',
+    })
+    expect(String(error)).not.toMatch(
+      /response-token-secret|desktop-token-record-secret|paired-bearer-secret/,
+    )
+  })
+
+  it('creates an exact command receipt with an empty object body', async () => {
+    const deliveringCommand: GateCommand = {
+      ...pendingGateCommand,
+      version: 2,
+      status: 'delivering',
+      updatedAt: '2026-08-01T02:01:00.000Z',
+    }
+    const receipt = {
+      id: 'gate-receipt-1',
+      commandId: deliveringCommand.id,
+      attempt: 1,
+      leasedAt: '2026-08-01T02:01:00.000Z',
+      leaseExpiresAt: '2026-08-01T02:02:00.000Z',
+      acknowledgedAt: null,
+    }
+    const fetcher = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          command: deliveringCommand,
+          receipt,
+          outcomeCode: 'receipt_created',
+          replayed: false,
+        }),
+        { status: 201 },
+      ),
+    )
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.createGateCommandReceipt(
+        deliveringCommand.id,
+        workRequestPairing,
+      ),
+    ).resolves.toEqual({
+      command: deliveringCommand,
+      receipt,
+      replayed: false,
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/desktop/gate-commands/gate-command-1/receipts',
+      {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          authorization: 'Bearer paired-bearer-secret',
+          'content-type': 'application/json',
+        },
+        body: '{}',
+      },
+    )
+  })
+
+  it('rejects a valid receipt envelope returned with a non-201 success status', async () => {
+    const command: GateCommand = {
+      ...pendingGateCommand,
+      version: 2,
+      status: 'delivering',
+      updatedAt: '2026-08-01T02:01:00.000Z',
+    }
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            command,
+            receipt: {
+              id: 'gate-receipt-1',
+              commandId: command.id,
+              attempt: 1,
+              leasedAt: '2026-08-01T02:01:00.000Z',
+              leaseExpiresAt: '2026-08-01T02:02:00.000Z',
+              acknowledgedAt: null,
+            },
+            outcomeCode: 'receipt_created',
+            replayed: false,
+          }),
+          { status: 200 },
+        ),
+      ),
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.createGateCommandReceipt(command.id, workRequestPairing),
+    ).rejects.toMatchObject({
+      status: 200,
+      code: 'invalid_response',
+      path: '/api/desktop/gate-commands/:commandId/receipts',
+      retryable: true,
+    })
+  })
+
+  it('fails closed when a receipt response belongs to another command', async () => {
+    const command: GateCommand = {
+      ...pendingGateCommand,
+      id: 'gate-command-other',
+      version: 2,
+      status: 'delivering',
+      updatedAt: '2026-08-01T02:01:00.000Z',
+    }
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            command,
+            receipt: {
+              id: 'gate-receipt-other',
+              commandId: command.id,
+              attempt: 1,
+              leasedAt: '2026-08-01T02:01:00.000Z',
+              leaseExpiresAt: '2026-08-01T02:02:00.000Z',
+              acknowledgedAt: null,
+            },
+            outcomeCode: 'receipt_created',
+            replayed: false,
+          }),
+          { status: 201 },
+        ),
+      ),
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.createGateCommandReceipt(
+        pendingGateCommand.id,
+        workRequestPairing,
+      ),
+    ).rejects.toMatchObject({
+      status: 201,
+      code: 'invalid_response',
+      path: '/api/desktop/gate-commands/:commandId/receipts',
+      retryable: true,
+    })
+  })
+
+  it('fails closed when a receipt command has no Work Request identity', async () => {
+    const command: GateCommand = {
+      ...pendingGateCommand,
+      workRequestId: null,
+      version: 2,
+      status: 'delivering',
+      updatedAt: '2026-08-01T02:01:00.000Z',
+    }
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            command,
+            receipt: {
+              id: 'gate-receipt-1',
+              commandId: command.id,
+              attempt: 1,
+              leasedAt: '2026-08-01T02:01:00.000Z',
+              leaseExpiresAt: '2026-08-01T02:02:00.000Z',
+              acknowledgedAt: null,
+            },
+            outcomeCode: 'receipt_created',
+            replayed: false,
+          }),
+          { status: 201 },
+        ),
+      ),
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.createGateCommandReceipt(command.id, workRequestPairing),
+    ).rejects.toMatchObject({
+      status: 201,
+      code: 'invalid_response',
+      path: '/api/desktop/gate-commands/:commandId/receipts',
+      retryable: true,
+    })
+  })
+
+  it.each(['wrapper', 'receipt'] as const)(
+    'rejects an unknown secret field in the receipt %s',
+    async (location) => {
+      const command: GateCommand = {
+        ...pendingGateCommand,
+        version: 2,
+        status: 'delivering',
+        updatedAt: '2026-08-01T02:01:00.000Z',
+      }
+      const receipt = {
+        id: 'gate-receipt-1',
+        commandId: command.id,
+        attempt: 1,
+        leasedAt: '2026-08-01T02:01:00.000Z',
+        leaseExpiresAt: '2026-08-01T02:02:00.000Z',
+        acknowledgedAt: null,
+        ...(location === 'receipt'
+          ? { leasedToTokenId: 'receipt-token-secret' }
+          : {}),
+      }
+      const client = createRemoteSyncClient({
+        apiBaseUrl: 'http://api.local',
+        fetcher: vi.fn(async () =>
+          new Response(
+            JSON.stringify({
+              command,
+              receipt,
+              outcomeCode: 'receipt_created',
+              replayed: false,
+              ...(location === 'wrapper'
+                ? { bearerToken: 'wrapper-token-secret' }
+                : {}),
+            }),
+            { status: 201 },
+          ),
+        ),
+        authToken: 'paired-bearer-secret',
+      })
+
+      const error = await client
+        .createGateCommandReceipt(command.id, workRequestPairing)
+        .catch((reason: unknown) => reason)
+      expect(error).toMatchObject({
+        status: 201,
+        code: 'invalid_response',
+        path: '/api/desktop/gate-commands/:commandId/receipts',
+      })
+      expect(String(error)).not.toMatch(
+        /receipt-token-secret|wrapper-token-secret|paired-bearer-secret/,
+      )
+    },
+  )
+
+  it.each([
+    [401, 'unauthorized', false],
+    [403, 'forbidden', false],
+    [409, 'conflict', false],
+    [410, 'remote_error', false],
+    [503, 'service_unavailable', true],
+  ] as const)(
+    'maps Gate Command HTTP %i to fixed safe metadata',
+    async (status, code, retryable) => {
+      const fetcher = vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            error: 'hostile',
+            message: 'Bearer response-secret for secret-command',
+            token: 'response-token-secret',
+          }),
+          { status },
+        ),
+      )
+      const client = createRemoteSyncClient({
+        apiBaseUrl: 'http://api.local',
+        fetcher,
+        authToken: 'paired-bearer-secret',
+      })
+
+      const error = await client
+        .createGateCommandReceipt(
+          pendingGateCommand.id,
+          workRequestPairing,
+        )
+        .catch((reason: unknown) => reason)
+
+      expect(error).toBeInstanceOf(RemoteSyncHttpError)
+      expect(error).toMatchObject({
+        status,
+        code,
+        path: '/api/desktop/gate-commands/:commandId/receipts',
+        retryable,
+      })
+      expect(String(error)).not.toMatch(
+        /response-secret|secret-command|response-token-secret|paired-bearer-secret/,
+      )
+    },
+  )
+
+  it('acknowledges an exact receipt with the shared create input', async () => {
+    const command: GateCommand = {
+      ...pendingGateCommand,
+      version: 3,
+      status: 'applied',
+      outcomeCode: 'applied',
+      updatedAt: '2026-08-01T02:01:30.000Z',
+    }
+    const receipt: GateCommandReceipt = {
+      id: 'gate-receipt-1',
+      commandId: command.id,
+      attempt: 1,
+      leasedAt: '2026-08-01T02:01:00.000Z',
+      leaseExpiresAt: '2026-08-01T02:02:00.000Z',
+      acknowledgedAt: '2026-08-01T02:01:31.000Z',
+    }
+    const input: CreateGateCommandAcknowledgementInput = {
+      commandId: command.id,
+      outcomeCode: 'applied',
+      beforeRunVersion: 3,
+      afterRunVersion: 4,
+      evaluatedAt: '2026-08-01T02:01:30.000Z',
+    }
+    const acknowledgement: GateCommandAcknowledgement = {
+      id: 'gate-acknowledgement-1',
+      commandId: command.id,
+      receiptId: receipt.id,
+      outcomeCode: input.outcomeCode,
+      beforeRunVersion: input.beforeRunVersion,
+      afterRunVersion: input.afterRunVersion,
+      evaluatedAt: input.evaluatedAt,
+      createdAt: '2026-08-01T02:01:31.000Z',
+    }
+    const fetcher = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          command,
+          receipt,
+          acknowledgement,
+          outcomeCode: 'acknowledged',
+          replayed: false,
+        }),
+        { status: 201 },
+      ),
+    )
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.acknowledgeGateCommandReceipt(
+        receipt.id,
+        input,
+        workRequestPairing,
+      ),
+    ).resolves.toEqual({
+      acknowledgement,
+      replayed: false,
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/desktop/gate-command-receipts/gate-receipt-1/acknowledgements',
+      {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          authorization: 'Bearer paired-bearer-secret',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(input),
+      },
+    )
+  })
+
+  it('rejects a valid acknowledgement envelope returned with a non-201 success status', async () => {
+    const command: GateCommand = {
+      ...pendingGateCommand,
+      version: 3,
+      status: 'applied',
+      outcomeCode: 'applied',
+      updatedAt: '2026-08-01T02:01:30.000Z',
+    }
+    const input: CreateGateCommandAcknowledgementInput = {
+      commandId: command.id,
+      outcomeCode: 'applied',
+      beforeRunVersion: 3,
+      afterRunVersion: 4,
+      evaluatedAt: '2026-08-01T02:01:30.000Z',
+    }
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            command,
+            receipt: {
+              id: 'gate-receipt-1',
+              commandId: command.id,
+              attempt: 1,
+              leasedAt: '2026-08-01T02:01:00.000Z',
+              leaseExpiresAt: '2026-08-01T02:02:00.000Z',
+              acknowledgedAt: '2026-08-01T02:01:31.000Z',
+            },
+            acknowledgement: {
+              id: 'gate-acknowledgement-1',
+              commandId: command.id,
+              receiptId: 'gate-receipt-1',
+              outcomeCode: input.outcomeCode,
+              beforeRunVersion: input.beforeRunVersion,
+              afterRunVersion: input.afterRunVersion,
+              evaluatedAt: input.evaluatedAt,
+              createdAt: '2026-08-01T02:01:31.000Z',
+            },
+            outcomeCode: 'acknowledged',
+            replayed: false,
+          }),
+          { status: 200 },
+        ),
+      ),
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.acknowledgeGateCommandReceipt(
+        'gate-receipt-1',
+        input,
+        workRequestPairing,
+      ),
+    ).rejects.toMatchObject({
+      status: 200,
+      code: 'invalid_response',
+      path: '/api/desktop/gate-command-receipts/:receiptId/acknowledgements',
+      retryable: true,
+    })
+  })
+
+  it('fails closed when an acknowledgement command has no Work Request identity', async () => {
+    const command: GateCommand = {
+      ...pendingGateCommand,
+      workRequestId: null,
+      version: 3,
+      status: 'applied',
+      outcomeCode: 'applied',
+      updatedAt: '2026-08-01T02:01:30.000Z',
+    }
+    const input: CreateGateCommandAcknowledgementInput = {
+      commandId: command.id,
+      outcomeCode: 'applied',
+      beforeRunVersion: 3,
+      afterRunVersion: 4,
+      evaluatedAt: '2026-08-01T02:01:30.000Z',
+    }
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            command,
+            receipt: {
+              id: 'gate-receipt-1',
+              commandId: command.id,
+              attempt: 1,
+              leasedAt: '2026-08-01T02:01:00.000Z',
+              leaseExpiresAt: '2026-08-01T02:02:00.000Z',
+              acknowledgedAt: '2026-08-01T02:01:31.000Z',
+            },
+            acknowledgement: {
+              id: 'gate-acknowledgement-1',
+              commandId: command.id,
+              receiptId: 'gate-receipt-1',
+              outcomeCode: input.outcomeCode,
+              beforeRunVersion: input.beforeRunVersion,
+              afterRunVersion: input.afterRunVersion,
+              evaluatedAt: input.evaluatedAt,
+              createdAt: '2026-08-01T02:01:31.000Z',
+            },
+            outcomeCode: 'acknowledged',
+            replayed: false,
+          }),
+          { status: 201 },
+        ),
+      ),
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.acknowledgeGateCommandReceipt(
+        'gate-receipt-1',
+        input,
+        workRequestPairing,
+      ),
+    ).rejects.toMatchObject({
+      status: 201,
+      code: 'invalid_response',
+      path: '/api/desktop/gate-command-receipts/:receiptId/acknowledgements',
+      retryable: true,
+    })
+  })
+
+  it('rejects an acknowledgement input with an unknown secret field before network I/O', async () => {
+    const fetcher = vi.fn()
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'paired-bearer-secret',
+    })
+    const input = {
+      commandId: pendingGateCommand.id,
+      outcomeCode: 'applied',
+      beforeRunVersion: 3,
+      afterRunVersion: 4,
+      evaluatedAt: '2026-08-01T02:01:30.000Z',
+      token: 'input-token-secret',
+    } as CreateGateCommandAcknowledgementInput
+
+    const error = await client
+      .acknowledgeGateCommandReceipt(
+        'gate-receipt-1',
+        input,
+        workRequestPairing,
+      )
+      .catch((reason: unknown) => reason)
+    expect(error).toMatchObject({
+      status: null,
+      code: 'bad_request',
+      path: '/api/desktop/gate-command-receipts/:receiptId/acknowledgements',
+      retryable: false,
+    })
+    expect(String(error)).not.toMatch(
+      /input-token-secret|paired-bearer-secret/,
+    )
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it.each(['wrapper', 'acknowledgement'] as const)(
+    'rejects an unknown secret field in the acknowledgement %s',
+    async (location) => {
+      const command: GateCommand = {
+        ...pendingGateCommand,
+        version: 3,
+        status: 'applied',
+        outcomeCode: 'applied',
+        updatedAt: '2026-08-01T02:01:30.000Z',
+      }
+      const input: CreateGateCommandAcknowledgementInput = {
+        commandId: command.id,
+        outcomeCode: 'applied',
+        beforeRunVersion: 3,
+        afterRunVersion: 4,
+        evaluatedAt: '2026-08-01T02:01:30.000Z',
+      }
+      const receipt: GateCommandReceipt = {
+        id: 'gate-receipt-1',
+        commandId: command.id,
+        attempt: 1,
+        leasedAt: '2026-08-01T02:01:00.000Z',
+        leaseExpiresAt: '2026-08-01T02:02:00.000Z',
+        acknowledgedAt: '2026-08-01T02:01:31.000Z',
+      }
+      const acknowledgement = {
+        id: 'gate-acknowledgement-1',
+        commandId: command.id,
+        receiptId: receipt.id,
+        outcomeCode: input.outcomeCode,
+        beforeRunVersion: input.beforeRunVersion,
+        afterRunVersion: input.afterRunVersion,
+        evaluatedAt: input.evaluatedAt,
+        createdAt: '2026-08-01T02:01:31.000Z',
+        ...(location === 'acknowledgement'
+          ? { tokenId: 'acknowledgement-token-secret' }
+          : {}),
+      }
+      const client = createRemoteSyncClient({
+        apiBaseUrl: 'http://api.local',
+        fetcher: vi.fn(async () =>
+          new Response(
+            JSON.stringify({
+              command,
+              receipt,
+              acknowledgement,
+              outcomeCode: 'acknowledged',
+              replayed: false,
+              ...(location === 'wrapper'
+                ? { bearerToken: 'wrapper-token-secret' }
+                : {}),
+            }),
+            { status: 201 },
+          ),
+        ),
+        authToken: 'paired-bearer-secret',
+      })
+
+      const error = await client
+        .acknowledgeGateCommandReceipt(receipt.id, input, workRequestPairing)
+        .catch((reason: unknown) => reason)
+      expect(error).toMatchObject({
+        status: 201,
+        code: 'invalid_response',
+        path:
+          '/api/desktop/gate-command-receipts/:receiptId/acknowledgements',
+      })
+      expect(String(error)).not.toMatch(
+        /acknowledgement-token-secret|wrapper-token-secret|paired-bearer-secret/,
+      )
+    },
+  )
+
+  it('fails closed when an acknowledgement response belongs to another receipt', async () => {
+    const command: GateCommand = {
+      ...pendingGateCommand,
+      version: 3,
+      status: 'applied',
+      outcomeCode: 'applied',
+      updatedAt: '2026-08-01T02:01:30.000Z',
+    }
+    const input: CreateGateCommandAcknowledgementInput = {
+      commandId: command.id,
+      outcomeCode: 'applied',
+      beforeRunVersion: 3,
+      afterRunVersion: 4,
+      evaluatedAt: '2026-08-01T02:01:30.000Z',
+    }
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            command,
+            receipt: {
+              id: 'gate-receipt-other',
+              commandId: command.id,
+              attempt: 1,
+              leasedAt: '2026-08-01T02:01:00.000Z',
+              leaseExpiresAt: '2026-08-01T02:02:00.000Z',
+              acknowledgedAt: '2026-08-01T02:01:31.000Z',
+            },
+            acknowledgement: {
+              id: 'gate-acknowledgement-other',
+              commandId: command.id,
+              receiptId: 'gate-receipt-other',
+              outcomeCode: input.outcomeCode,
+              beforeRunVersion: input.beforeRunVersion,
+              afterRunVersion: input.afterRunVersion,
+              evaluatedAt: input.evaluatedAt,
+              createdAt: '2026-08-01T02:01:31.000Z',
+            },
+            outcomeCode: 'acknowledged',
+            replayed: false,
+          }),
+          { status: 201 },
+        ),
+      ),
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.acknowledgeGateCommandReceipt(
+        'gate-receipt-1',
+        input,
+        workRequestPairing,
+      ),
+    ).rejects.toMatchObject({
+      status: 201,
+      code: 'invalid_response',
+      path: '/api/desktop/gate-command-receipts/:receiptId/acknowledgements',
+      retryable: true,
+    })
   })
 })

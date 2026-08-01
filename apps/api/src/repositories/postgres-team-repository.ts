@@ -46,6 +46,7 @@ import {
   redactRemoteRunSummaryForSync,
   redactRemoteTestEvidenceSummaryForSync,
   resolveEffectivePolicy,
+  toTeamStoredNodeId,
   type EffectiveEnforcementPolicy,
   type GateOverrideDecision,
   type OrganizationEnforcementPolicy,
@@ -55,6 +56,7 @@ import type { TeamDbClient, TeamDbRepositoryClient } from '../db/client'
 import { withTeamDbTransaction } from '../db/transaction'
 import {
   CanonicalRunRequiredError,
+  findCurrentGateCommandOverride,
   redactAgentEventForPersistence,
   RemoteChildSummaryConflictError,
   RemoteRunSummaryConflictError,
@@ -73,8 +75,23 @@ import type {
   TeamRepositorySyncContext,
 } from './team-repository'
 import { createPostgresWorkRequestRepository } from './postgres-work-request-repository'
+import { createPostgresGateCommandRepository } from './postgres-gate-command-repository'
+import { evaluateTeamGateEnforcement } from './team-gate-enforcement'
+import { preflightGateCommand } from './gate-command-preflight'
+import { collaborationRunLockKey } from './collaboration-run-lock'
 
 type TimestampValue = string | Date
+
+type WorkRequestRunClaimRow = {
+  id: string
+  status: string
+  claimed_by_token_id: string | null
+}
+
+type ReleasedWorkRequestClaimRow = {
+  work_request_id: string
+  claimed_by_token_id: string
+}
 
 type ProjectRow = {
   id: string
@@ -866,8 +883,7 @@ function mapMcpServer(row: McpServerRow): McpServerDefinition {
 }
 
 function remoteNodeId(runId: string, nodeId: string): string {
-  const prefix = `${runId}:`
-  return nodeId.startsWith(prefix) ? nodeId : `${prefix}${nodeId}`
+  return toTeamStoredNodeId(runId, nodeId)
 }
 
 function hasSameRemoteRunProjection(
@@ -981,6 +997,81 @@ export function createPostgresTeamRepository(
   options: PostgresTeamRepositoryOptions = {},
 ): TeamRepository {
   const workRequestRepository = createPostgresWorkRequestRepository(db)
+  const gateCommandRepository = createPostgresGateCommandRepository(db, {
+    async resolvePreflight({ tx, command, principal, identity }) {
+      if (principal.session.source !== 'authenticated') return null
+      const verifiedSession: AuthenticatedSession = {
+        source: 'authenticated',
+        authAccountId: principal.session.authAccountId,
+        organizationId: identity.organizationId,
+        userId: identity.userId,
+        role: identity.role,
+        projectMemberships:
+          identity.role === 'owner'
+            ? []
+            : [
+                {
+                  projectId: identity.projectId,
+                  userId: identity.userId,
+                  role: identity.role,
+                },
+              ],
+      }
+      try {
+        let transactionQueryTail: Promise<unknown> = Promise.resolve()
+        const transactionDb: TeamDbRepositoryClient = {
+          query<T>(sql: string, params?: unknown[]) {
+            const query = transactionQueryTail.then(() =>
+              tx.query<T>(sql, params),
+            )
+            transactionQueryTail = query
+            return query
+          },
+          async close() {},
+          async checkout() {
+            throw new Error('Nested transactions are unavailable during Gate preflight.')
+          },
+        }
+        const transactionRepository = createPostgresTeamRepository(
+          transactionDb,
+          options,
+        )
+        const context = await evaluateTeamGateEnforcement(
+          transactionRepository,
+          verifiedSession,
+          command,
+        )
+        const matchingOverride = findCurrentGateCommandOverride({
+          decision: context.decision,
+          overrides: context.overrides,
+          projectId: context.run.projectId,
+          runId: context.run.id,
+          nodeId: context.node.id,
+          userId: identity.userId,
+          role: identity.role,
+        })
+        const preflight = preflightGateCommand({
+          command,
+          run: context.run,
+          currentNode: context.node,
+          requester: { userId: identity.userId, role: identity.role },
+          enforcement: context.decision,
+          ...(matchingOverride ? { override: matchingOverride } : {}),
+        })
+        return {
+          ...preflight,
+          observedPolicyVersion: context.decision.policyVersion,
+          observedBlockerIds: [
+            ...new Set(
+              context.decision.blockingReasons.map((reason) => reason.id),
+            ),
+          ].sort(),
+        }
+      } catch {
+        return null
+      }
+    },
+  })
 
   async function loadAuthenticatedIdentity(input: {
     provider: AuthProvider
@@ -1354,6 +1445,7 @@ export function createPostgresTeamRepository(
 
   return {
     ...workRequestRepository,
+    ...gateCommandRepository,
     async getAuthenticatedIdentity(input) {
       return loadAuthenticatedIdentity(input)
     },
@@ -1753,12 +1845,13 @@ export function createPostgresTeamRepository(
         enforcementPolicies: {
           organizationPolicy,
           projectOverrides,
-          effectivePolicies: projectRows.map((project) =>
-            resolveEffectivePolicy(
+          effectivePolicies: projectRows.map((project) => ({
+            ...resolveEffectivePolicy(
               organizationPolicy,
               projectOverrides.find((override) => override.projectId === project.id) ?? null,
             ),
-          ),
+            projectId: project.id,
+          })),
           gateOverrides,
         },
         runtimeBudgetPolicies,
@@ -1833,6 +1926,58 @@ export function createPostgresTeamRepository(
     async uploadRunSummary(summary, context: TeamRepositorySyncContext) {
       summary = redactRemoteRunSummaryForSync(summary)
       return withTeamDbTransaction(db, async (tx) => {
+        await tx.query(
+          `
+            /* run_summary:authority-lock */
+            SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
+          `,
+          [
+            collaborationRunLockKey({
+              organizationId: context.organizationId,
+              projectId: summary.projectId,
+              runId: summary.runId,
+            }),
+          ],
+        )
+        const [currentClaim] = await tx.query<WorkRequestRunClaimRow>(
+          `
+            /* run_summary:current-work-request-claim */
+            SELECT id, status, claimed_by_token_id
+            FROM work_requests
+            WHERE organization_id = $1
+              AND project_id = $2
+              AND claimed_run_id = $3
+            LIMIT 1
+            FOR SHARE
+          `,
+          [context.organizationId, summary.projectId, summary.runId],
+        )
+        const [releasedClaim] = await tx.query<ReleasedWorkRequestClaimRow>(
+          `
+            /* run_summary:released-claim-tombstone */
+            SELECT work_request_id, claimed_by_token_id
+            FROM released_work_request_claims
+            WHERE organization_id = $1
+              AND project_id = $2
+              AND run_id = $3
+            LIMIT 1
+            FOR SHARE
+          `,
+          [context.organizationId, summary.projectId, summary.runId],
+        )
+        const hasExactCurrentClaim =
+          currentClaim !== undefined &&
+          (currentClaim.status === 'claim_pending' ||
+            currentClaim.status === 'materialized') &&
+          currentClaim.claimed_by_token_id !== null &&
+          currentClaim.claimed_by_token_id === context.tokenRecordId
+        if (
+          (currentClaim !== undefined && !hasExactCurrentClaim) ||
+          (currentClaim === undefined && releasedClaim !== undefined)
+        ) {
+          throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+        }
+
         const [acceptedRun] = await tx.query<{ id: string }>(
           `
             INSERT INTO workflow_runs (
@@ -2771,7 +2916,10 @@ export function createPostgresTeamRepository(
       return {
         organizationPolicy,
         projectOverride,
-        effectivePolicy: resolveEffectivePolicy(organizationPolicy, projectOverride),
+        effectivePolicy: {
+          ...resolveEffectivePolicy(organizationPolicy, projectOverride),
+          projectId,
+        },
       }
     },
 

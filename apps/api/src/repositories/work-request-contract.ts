@@ -71,6 +71,28 @@ export type WorkRequestRepository = {
   ): Promise<WorkRequestMutationResult>
 }
 
+export type MaterializedWorkRequestClaimLookup = {
+  organizationId: string
+  projectId: string
+  runId: string
+}
+
+export type MaterializedWorkRequestClaim = MaterializedWorkRequestClaimLookup & {
+  workRequestId: string
+  claimedByTokenId: string
+}
+
+/**
+ * Internal authority lookup used to route a Gate Command to the exact Desktop
+ * token record that materialized its canonical Run. Its result is never part
+ * of a network response.
+ */
+export type MaterializedWorkRequestClaimResolver = {
+  resolveMaterializedWorkRequestClaim(
+    input: MaterializedWorkRequestClaimLookup,
+  ): Promise<MaterializedWorkRequestClaim | null>
+}
+
 export type WorkRequestOperationInput =
   | CreateWorkRequestInput
   | ClaimWorkRequestInput

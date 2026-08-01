@@ -34,6 +34,17 @@ export type TeamDbPoolClient = TeamDbRepositoryClient
 
 const DEFAULT_APPLICATION_NAME = 'ai-devflow-api'
 const DEFAULT_STATEMENT_TIMEOUT_MS = 5_000
+const MAX_STATEMENT_TIMEOUT_MS = 2_147_483_647
+
+export function isValidDatabaseStatementTimeout(value: string): boolean {
+  if (!/^[1-9]\d*$/.test(value)) return false
+  const parsed = Number(value)
+  return (
+    Number.isSafeInteger(parsed) &&
+    parsed > 0 &&
+    parsed <= MAX_STATEMENT_TIMEOUT_MS
+  )
+}
 
 export function resolveTeamDbConfig(
   env: Record<string, string | undefined> = process.env,
@@ -43,17 +54,23 @@ export function resolveTeamDbConfig(
     return null
   }
 
-  const statementTimeoutMs = Number.parseInt(
-    env['DEVFLOW_DATABASE_STATEMENT_TIMEOUT_MS'] ?? '',
-    10,
-  )
+  const configuredStatementTimeout = env['DEVFLOW_DATABASE_STATEMENT_TIMEOUT_MS']
+  if (
+    configuredStatementTimeout !== undefined &&
+    !isValidDatabaseStatementTimeout(configuredStatementTimeout)
+  ) {
+    throw new Error(
+      'DEVFLOW_DATABASE_STATEMENT_TIMEOUT_MS must be a positive decimal integer.',
+    )
+  }
+  const statementTimeoutMs = configuredStatementTimeout
+    ? Number(configuredStatementTimeout)
+    : DEFAULT_STATEMENT_TIMEOUT_MS
 
   return {
     connectionString,
     applicationName: env['DEVFLOW_DATABASE_APPLICATION_NAME'] ?? DEFAULT_APPLICATION_NAME,
-    statementTimeoutMs: Number.isFinite(statementTimeoutMs)
-      ? statementTimeoutMs
-      : DEFAULT_STATEMENT_TIMEOUT_MS,
+    statementTimeoutMs,
   }
 }
 

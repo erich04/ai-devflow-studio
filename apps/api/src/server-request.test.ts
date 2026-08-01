@@ -294,7 +294,10 @@ describe('API HTTP authentication boundary', () => {
     expect(repository.resolveDesktopTokenSession).toHaveBeenCalledWith('valid-desktop-token')
     expect(uploadRunSummary).toHaveBeenCalledWith(
       expect.objectContaining({ runId: 'run-bearer-authenticated' }),
-      projectMemberSession,
+      {
+        ...projectMemberSession,
+        tokenRecordId: 'desktop-token-valid',
+      },
     )
   })
 
@@ -700,6 +703,96 @@ describe('API HTTP authentication boundary', () => {
     expect(repository.materializeWorkRequest).not.toHaveBeenCalled()
     expect(repository.releaseWorkRequest).not.toHaveBeenCalled()
     expect(JSON.stringify(result)).not.toContain(bearerSecret)
+  })
+
+  it('passes a live signed-cookie principal into Team Gate Command reads', async () => {
+    const repository = createSeedTeamRepository()
+    const listGateCommands = vi.spyOn(repository, 'listGateCommands')
+    const sessionSecret = 'server-request-test-secret'
+    const cookie = createSessionCookie(
+      { authAccountId: projectLeadSession.authAccountId },
+      sessionSecret,
+    ).split(';')[0]
+    vi.spyOn(repository, 'resolveBrowserSession').mockResolvedValue(
+      projectLeadSession,
+    )
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'GET',
+        pathname: '/api/team/projects/p-payments/gate-commands',
+        headers: { cookie },
+      },
+      { repository, sessionSecret },
+    )
+
+    expect(result).toEqual({ status: 200, body: { commands: [] } })
+    expect(listGateCommands).toHaveBeenCalledWith('p-payments', {
+      session: projectLeadSession,
+      authentication: { kind: 'session_cookie', tokenRecordId: null },
+    })
+  })
+
+  it('never treats development headers as browser authority for Gate Commands', async () => {
+    const repository = createSeedTeamRepository()
+    const listGateCommands = vi.spyOn(repository, 'listGateCommands')
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'GET',
+        pathname: '/api/team/projects/p-payments/gate-commands',
+        headers: {
+          'x-devflow-session-source': 'demo',
+          'x-devflow-organization-id': 'org-demo',
+          'x-devflow-user-id': projectLeadSession.userId,
+          'x-devflow-user-role': 'lead',
+          'x-devflow-project-roles': 'p-payments:lead',
+        },
+      },
+      {
+        repository,
+        sessionSecret: 'server-request-test-secret',
+        devAuthEnabled: true,
+      },
+    )
+
+    expect(result).toEqual({
+      status: 403,
+      body: {
+        error: 'forbidden',
+        message: 'This authentication method cannot perform that Gate Command operation.',
+        outcomeCode: 'authentication_forbidden',
+        replayed: false,
+      },
+    })
+    expect(listGateCommands).not.toHaveBeenCalled()
+  })
+
+  it('passes the exact paired token principal into the Desktop Gate inbox', async () => {
+    const repository = createSeedTeamRepository()
+    const listGateCommandInbox = vi.spyOn(repository, 'listGateCommandInbox')
+    vi.spyOn(repository, 'resolveDesktopTokenSession').mockResolvedValue({
+      tokenRecordId: 'desktop-token-record-gate',
+      session: projectMemberSession,
+    })
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'GET',
+        pathname: '/api/desktop/projects/p-payments/gate-commands/inbox',
+        headers: { authorization: 'Bearer paired-desktop-secret' },
+      },
+      { repository, sessionSecret: 'server-request-test-secret' },
+    )
+
+    expect(result).toEqual({ status: 200, body: { commands: [] } })
+    expect(listGateCommandInbox).toHaveBeenCalledWith('p-payments', {
+      session: projectMemberSession,
+      authentication: {
+        kind: 'desktop_bearer',
+        tokenRecordId: 'desktop-token-record-gate',
+      },
+    })
   })
 })
 

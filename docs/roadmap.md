@@ -42,8 +42,8 @@ The v1.x line should stay anchored to that team-pilot product shape:
 Keep these out of the near-term path unless a later roadmap explicitly promotes them: public SaaS,
 billing, enterprise SSO, automatic cloud deployment, signed installers, auto-update, HoneyAI bridge,
 multi-agent orchestration, real MCP execution, and full RAG/vector retrieval. The
-**Next concrete action** is the v1.4 pilot trust boundary. GitHub delivery and operations
-expansion wait until the trust boundary is complete.
+**Next concrete action** is V1.4 candidate formation and candidate-bound verification. GitHub
+delivery and operations expansion wait until V1.4 formal signoff is complete.
 
 ## Current Status
 
@@ -60,7 +60,7 @@ passed macOS, Windows, Postgres, and Docker jobs.
 | Layer | Current status |
 | --- | --- |
 | Released baseline | `v1.3.0` signed, tagged, and published |
-| Development branch | V1.4 Pilot Trust Boundary in progress from `b7b879c` |
+| Development branch | V1.4 scoped implementation complete from `b7b879c`; candidate formation pending |
 | Package metadata | Remains `1.3.0` until V1.4 candidate formation |
 | V1.4 contract | `docs/product/prd/v1.4-pilot-trust-boundary-prd.md` |
 | V1.4 execution | `docs/plans/v1.4-pilot-trust-boundary.md` |
@@ -69,9 +69,11 @@ V1.3 provides the complete local request-to-delivery workflow, canonical main-pr
 paired project-bound sync, local-first merge, evidence-gated Acceptance, explicit fake/no-cost
 runtime boundaries, redaction, runnable API/Worker outputs, and expanded release automation.
 
-V1.4 now closes the pilot trust gaps: paid-runtime fail-closed decisions, durable sync outbox,
-real repository knowledge integration, authenticated Web management paths, and reproducible
-unsigned pilot lifecycle artifacts. Real GitHub delivery remains V1.5.
+V1.4 scoped implementation has closed the planned pilot trust gaps: paid-runtime fail-closed
+decisions, durable sync outbox, real repository knowledge integration, authenticated Web management
+paths, and reproducible unsigned pilot lifecycle artifacts. Candidate formation, package version
+alignment, candidate-bound verification, and formal signoff remain pending. Real GitHub delivery
+remains V1.5.
 
 ## Completed Milestones
 
@@ -362,7 +364,7 @@ unsigned pilot lifecycle artifacts. Real GitHub delivery remains V1.5.
 
 ## Planned Milestones
 
-### v1.4 Candidate: Pilot Trust Boundary
+### v1.4 Candidate: Pilot Trust Boundary (implementation complete; candidate pending)
 
 - Make real paid Coding and Knowledge Review runtimes fail closed on missing, invalid,
   unauthenticated, out-of-scope, or unavailable budget decisions, with redacted audit evidence.

@@ -26,6 +26,7 @@ import {
   formatUsd,
   resolveDevFlowRuntimeFlags,
   type DevFlowSessionHeaders,
+  type GateCommand,
   type NodeStatus,
   type WorkRequest,
   type WorkflowNode,
@@ -34,13 +35,18 @@ import {
 import {
   fetchTeamOverview,
   fetchWorkRequests,
+  fetchGateCommands,
+  evaluateGateCommandSnapshot,
   resolveDevFlowPublicApiBaseUrl,
   runKnowledgeReview,
   saveEnforcementPolicy,
   type TeamOverviewResponse,
+  type GateCommandEvaluationSnapshot,
 } from './lib/devflow-api'
 import { PairingCodePanel } from './PairingCodePanel'
 import { WorkRequestPanel } from './WorkRequestPanel'
+import { GateCommandPanel } from './GateCommandPanel'
+import { selectGateCommandTarget } from './gate-command-view-model'
 
 type StatusTone = 'done' | 'run' | 'gate' | 'warn' | 'idle' | 'fail'
 
@@ -125,6 +131,7 @@ export default async function Page({ searchParams }: PageProps) {
   )
   let workRequests: WorkRequest[] = []
   let workRequestLoadFailed = false
+  let gateCommands: GateCommand[] = []
   if (activeProject) {
     try {
       workRequests = await fetchWorkRequests({
@@ -135,12 +142,44 @@ export default async function Page({ searchParams }: PageProps) {
     } catch {
       workRequestLoadFailed = true
     }
+    if (cookieHeader) {
+      try {
+        gateCommands = await fetchGateCommands({
+          projectId: activeProject.id,
+          cookieHeader,
+        })
+      } catch {
+        gateCommands = []
+      }
+    }
   }
   const activeMember = activeRun
     ? overview.members.find((member) => member.id === activeRun.creatorId)
     : undefined
   const currentNode = activeRun?.nodes.find((node) => node.id === activeRun.currentNodeId)
-  const gateNode = activeRun ? selectGateNode(activeRun, currentNode) : undefined
+  const gateTarget = activeRun ? selectGateCommandTarget(activeRun) : null
+  const gateNode = gateTarget?.node
+  const gateCommandNodeId = gateTarget?.commandNodeId
+  let gateEvaluation: GateCommandEvaluationSnapshot | null = null
+  if (
+    cookieHeader &&
+    activeProject &&
+    activeRun?.status === 'paused_at_gate' &&
+    gateNode &&
+    gateCommandNodeId &&
+    (gateNode.status === 'running' || gateNode.status === 'blocked')
+  ) {
+    try {
+      gateEvaluation = await evaluateGateCommandSnapshot({
+        projectId: activeProject.id,
+        runId: activeRun.id,
+        nodeId: gateCommandNodeId,
+        cookieHeader,
+      })
+    } catch {
+      gateEvaluation = null
+    }
+  }
   const currentReviews = activeRun
     ? overview.agentReviews.filter(
         (review) => review.projectId === activeProject?.id && review.runId === activeRun.id,
@@ -415,16 +454,27 @@ export default async function Page({ searchParams }: PageProps) {
               </button>
             </form>
 
-            <div className="studio-gate-buttons">
-              <button type="button" disabled={!gateNode}>
-                <CheckCircle2 size={16} />
-                批准并继续
-              </button>
-              <button type="button" disabled={!gateNode}>
-                <XCircle size={16} />
-                驳回
-              </button>
-            </div>
+            {activeProject && activeRun && gateNode && gateCommandNodeId ? (
+              <GateCommandPanel
+                projectId={activeProject.id}
+                runId={activeRun.id}
+                nodeId={gateCommandNodeId}
+                expectedRunVersion={activeRun.version}
+                evaluation={gateEvaluation}
+                initialCommands={gateCommands}
+              />
+            ) : (
+              <div className="studio-gate-buttons">
+                <button type="button" disabled>
+                  <CheckCircle2 size={16} />
+                  批准并继续
+                </button>
+                <button type="button" disabled>
+                  <XCircle size={16} />
+                  驳回
+                </button>
+              </div>
+            )}
           </aside>
         </section>
 
@@ -651,11 +701,6 @@ function resolvePageSelection(
   }
 
   return { activeProject, activeRun: requestedRun, projectRuns, selectionError: undefined }
-}
-
-function selectGateNode(run: WorkflowRun, currentNode?: WorkflowNode) {
-  if (currentNode?.kind === 'gate') return currentNode
-  return run.nodes.find((node) => node.kind === 'gate' && node.status === 'blocked') ?? run.nodes.find((node) => node.kind === 'gate')
 }
 
 function calculateProgress(nodes: WorkflowNode[]) {

@@ -78,18 +78,64 @@ describe('team database migration runner', () => {
         name: '0009_harden_work_request_timeline',
         fileName: '0009_harden_work_request_timeline.sql',
       },
+      {
+        version: 10,
+        name: '0010_harden_gate_command_delivery',
+        fileName: '0010_harden_gate_command_delivery.sql',
+      },
     ])
 
-    const [baseline, v14, hardening] = await readTeamMigrationCatalog()
+    const [baseline, v14, workRequestHardening, gateCommandHardening] =
+      await readTeamMigrationCatalog()
     expect(baseline).toMatchObject({ version: 7, name: '0001_initial' })
     expect(baseline?.sql).toMatch(/^BEGIN;/)
     expect(migrationChecksum(baseline?.sql ?? '')).toMatch(/^[a-f0-9]{64}$/)
     expect(v14).toMatchObject({ version: 8, name: '0008_v14_work_authority' })
     expect(v14?.sql).not.toMatch(/^BEGIN;/)
-    expect(hardening).toMatchObject({
+    expect(workRequestHardening).toMatchObject({
       version: 9,
       name: '0009_harden_work_request_timeline',
     })
+    expect(gateCommandHardening).toMatchObject({
+      version: 10,
+      name: '0010_harden_gate_command_delivery',
+    })
+    expect(migrationChecksum(gateCommandHardening?.sql ?? '')).toBe(
+      '1de25f1b785f0b0c384d8bc5475040563812f9c8dd38f5b486aeb807296ae312',
+    )
+    expect(gateCommandHardening?.sql).toContain(
+      'CREATE TABLE released_work_request_claims',
+    )
+  })
+
+  it('orders the v10 Gate backfill before validation and keeps its SQL function atomic', async () => {
+    const hardening = (await readTeamMigrationCatalog()).find(
+      (migration) => migration.version === 10,
+    )
+    const statements = splitSqlStatements(hardening?.sql ?? '')
+    const addEvaluatedAt = statements.findIndex((statement) =>
+      statement.includes('ADD COLUMN evaluated_at timestamptz'),
+    )
+    const backfillEvaluatedAt = statements.findIndex((statement) =>
+      statement.includes('SET evaluated_at = created_at'),
+    )
+    const requireEvaluatedAt = statements.findIndex((statement) =>
+      statement.includes('ALTER COLUMN evaluated_at SET NOT NULL'),
+    )
+    const validateCommands = statements.findIndex((statement) =>
+      statement.includes('ADD CONSTRAINT gate_commands_version_positive'),
+    )
+
+    expect(addEvaluatedAt).toBeGreaterThanOrEqual(0)
+    expect(backfillEvaluatedAt).toBeGreaterThan(addEvaluatedAt)
+    expect(requireEvaluatedAt).toBeGreaterThan(backfillEvaluatedAt)
+    expect(validateCommands).toBeGreaterThan(requireEvaluatedAt)
+    expect(
+      statements.filter((statement) =>
+        statement.includes('CREATE FUNCTION gate_command_blocker_ids_are_bounded'),
+      ),
+    ).toHaveLength(1)
+    expect(hardening?.sql).not.toMatch(/^\s*(?:DELETE FROM|TRUNCATE TABLE)\b/im)
   })
 
   it('runs a fresh baseline inside one checked-out client and filters its outer transaction', async () => {
@@ -250,6 +296,158 @@ describe('team database migration runner', () => {
       'ROLLBACK',
     ]))
     expect(connection.calls.map(({ sql }) => sql)).not.toContain('COMMIT')
+    expect(connection.calls.at(-1)?.sql).toContain('pg_advisory_unlock')
+    expect(connection.releaseCount).toBe(1)
+  })
+
+  it('rolls back all v10 hardening when legacy Gate rows fail constraint validation', async () => {
+    const migrations = await readTeamMigrationCatalog()
+    const hardening = migrations.find((migration) => migration.version === 10)
+    const validationStatement = splitSqlStatements(hardening?.sql ?? '').find(
+      (statement) => statement.includes(
+        'ADD CONSTRAINT gate_commands_evaluation_status',
+      ),
+    )
+    expect(validationStatement).toBeDefined()
+    if (!validationStatement) {
+      throw new Error('v10 Gate validation statement is missing')
+    }
+    expect(validationStatement).toContain(
+      "expires_at <= created_at + interval '15 minutes'",
+    )
+
+    const historicalMigrations = migrations.filter(
+      (migration) => migration.version <= 9,
+    )
+    const connection = new FakeConnection({
+      schemaVersion: 9,
+      historyExists: true,
+      historyRows: historicalMigrations.map((migration) => ({
+        version: migration.version,
+        name: migration.name,
+        checksum: migrationChecksum(migration.sql),
+      })),
+      failOnSql: validationStatement,
+    })
+    const pool = new FakePool(connection)
+
+    await expect(runTeamMigrations(pool, migrations)).rejects.toThrow(
+      /forced migration failure/,
+    )
+
+    expect(connection.calls.map(({ sql }) => sql)).toContain('ROLLBACK')
+    expect(connection.calls.map(({ sql }) => sql)).not.toContain('COMMIT')
+    expect(connection.calls).not.toContainEqual(expect.objectContaining({
+      sql: expect.stringContaining("VALUES ('schema_version', $1)"),
+      params: ['10'],
+    }))
+    expect(connection.calls).not.toContainEqual(expect.objectContaining({
+      params: [
+        10,
+        '0010_harden_gate_command_delivery',
+        expect.any(String),
+        false,
+      ],
+    }))
+    expect(connection.calls.at(-1)?.sql).toContain('pg_advisory_unlock')
+    expect(connection.releaseCount).toBe(1)
+  })
+
+  it('rolls back v10 when a legacy Gate command used non-browser auth', async () => {
+    const migrations = await readTeamMigrationCatalog()
+    const hardening = migrations.find((migration) => migration.version === 10)
+    const authValidationStatement = splitSqlStatements(
+      hardening?.sql ?? '',
+    ).find((statement) => statement.includes(
+      'ADD CONSTRAINT gate_commands_browser_write_auth',
+    ))
+    expect(authValidationStatement).toContain("auth_kind = 'session_cookie'")
+    expect(authValidationStatement).toContain(
+      'auth_token_record_id IS NULL',
+    )
+    if (!authValidationStatement) {
+      throw new Error('v10 Gate browser-write validation statement is missing')
+    }
+
+    const historicalMigrations = migrations.filter(
+      (migration) => migration.version <= 9,
+    )
+    const connection = new FakeConnection({
+      schemaVersion: 9,
+      historyExists: true,
+      historyRows: historicalMigrations.map((migration) => ({
+        version: migration.version,
+        name: migration.name,
+        checksum: migrationChecksum(migration.sql),
+      })),
+      failOnSql: authValidationStatement,
+    })
+
+    await expect(
+      runTeamMigrations(new FakePool(connection), migrations),
+    ).rejects.toThrow(/forced migration failure/)
+
+    expect(connection.calls.map(({ sql }) => sql)).toContain('ROLLBACK')
+    expect(connection.calls.map(({ sql }) => sql)).not.toContain('COMMIT')
+    expect(connection.calls).not.toContainEqual(expect.objectContaining({
+      sql: expect.stringContaining("VALUES ('schema_version', $1)"),
+      params: ['10'],
+    }))
+    expect(connection.calls).not.toContainEqual(expect.objectContaining({
+      params: [
+        10,
+        '0010_harden_gate_command_delivery',
+        expect.any(String),
+        false,
+      ],
+    }))
+    expect(connection.calls.at(-1)?.sql).toContain('pg_advisory_unlock')
+    expect(connection.releaseCount).toBe(1)
+  })
+
+  it('rolls back v10 when a legacy Gate receipt exceeds the bounded lease', async () => {
+    const migrations = await readTeamMigrationCatalog()
+    const hardening = migrations.find((migration) => migration.version === 10)
+    const receiptValidationStatement = splitSqlStatements(
+      hardening?.sql ?? '',
+    ).find((statement) => statement.includes(
+      'ADD CONSTRAINT gate_command_receipts_identifiers_bounded',
+    ))
+    expect(receiptValidationStatement).toContain(
+      "lease_expires_at <= leased_at + interval '60 seconds'",
+    )
+    if (!receiptValidationStatement) {
+      throw new Error('v10 Gate receipt validation statement is missing')
+    }
+
+    const historicalMigrations = migrations.filter(
+      (migration) => migration.version <= 9,
+    )
+    const connection = new FakeConnection({
+      schemaVersion: 9,
+      historyExists: true,
+      historyRows: historicalMigrations.map((migration) => ({
+        version: migration.version,
+        name: migration.name,
+        checksum: migrationChecksum(migration.sql),
+      })),
+      failOnSql: receiptValidationStatement,
+    })
+
+    await expect(
+      runTeamMigrations(new FakePool(connection), migrations),
+    ).rejects.toThrow(/forced migration failure/)
+
+    expect(connection.calls.map(({ sql }) => sql)).toContain('ROLLBACK')
+    expect(connection.calls.map(({ sql }) => sql)).not.toContain('COMMIT')
+    expect(connection.calls).not.toContainEqual(expect.objectContaining({
+      params: [
+        10,
+        '0010_harden_gate_command_delivery',
+        expect.any(String),
+        false,
+      ],
+    }))
     expect(connection.calls.at(-1)?.sql).toContain('pg_advisory_unlock')
     expect(connection.releaseCount).toBe(1)
   })

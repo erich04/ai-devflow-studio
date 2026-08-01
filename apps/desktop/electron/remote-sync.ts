@@ -1,11 +1,16 @@
 import {
   parseBudgetGuardDecision,
+  parseGateCommandAcknowledgementCreate,
+  parseGateCommandAcknowledgementRecord,
+  parseGateCommandRecord,
+  parseGateCommandReceiptRecord,
   parseWorkRequestClaim,
   parseWorkRequestMaterialize,
   parseWorkRequestRecord,
   type AgentEvent,
   type Artifact,
   type ClaimWorkRequestInput,
+  type CreateGateCommandAcknowledgementInput,
   type DevFlowSessionHeaders,
   type DesktopPairingCredential,
   type DesktopPairingExchangeResult,
@@ -20,6 +25,9 @@ import {
   type RemoteTeamSnapshot,
   type RemoteTestEvidenceSummary,
   type EffectiveEnforcementPolicy,
+  type GateCommand,
+  type GateCommandAcknowledgement,
+  type GateCommandReceipt,
   type GateOverrideDecision,
   type OrganizationEnforcementPolicy,
   type ProjectEnforcementPolicyOverride,
@@ -101,6 +109,19 @@ export type RemoteSyncClient = {
     input: MaterializeWorkRequestInput,
     pairing: DesktopPairingCredential | null,
   ): Promise<RemoteMaterializeWorkRequestResult>
+  listGateCommandInbox(
+    projectId: string,
+    pairing: DesktopPairingCredential | null,
+  ): Promise<GateCommand[]>
+  createGateCommandReceipt(
+    commandId: string,
+    pairing: DesktopPairingCredential | null,
+  ): Promise<RemoteGateCommandReceiptResult>
+  acknowledgeGateCommandReceipt(
+    receiptId: string,
+    input: CreateGateCommandAcknowledgementInput,
+    pairing: DesktopPairingCredential | null,
+  ): Promise<RemoteGateCommandAcknowledgementResult>
   uploadRunSummary(summary: RemoteRunSummary): Promise<RemoteSyncUploadResult>
   deleteRun(input: { runId: string }): Promise<RemoteRunDeleteResult>
   uploadTestEvidenceSummary(summary: RemoteTestEvidenceSummary): Promise<RemoteSyncUploadResult>
@@ -120,6 +141,17 @@ export type RemoteMaterializeWorkRequestResult = {
   workRequest: WorkRequest
   replayed: boolean
   outcomeCode: 'materialized'
+}
+
+export type RemoteGateCommandReceiptResult = {
+  command: GateCommand
+  receipt: GateCommandReceipt
+  replayed: boolean
+}
+
+export type RemoteGateCommandAcknowledgementResult = {
+  acknowledgement: GateCommandAcknowledgement
+  replayed: boolean
 }
 
 export type RemoteGateOverrideInput = {
@@ -388,6 +420,26 @@ const WORK_REQUEST_MUTATION_RESPONSE_KEYS = [
   'replayed',
   'workRequest',
 ] as const
+const GATE_COMMAND_INBOX_PATH =
+  '/api/desktop/projects/:projectId/gate-commands/inbox'
+const GATE_COMMAND_INBOX_RESPONSE_KEYS = ['commands'] as const
+const GATE_COMMAND_RECEIPT_PATH =
+  '/api/desktop/gate-commands/:commandId/receipts'
+const GATE_COMMAND_RECEIPT_RESPONSE_KEYS = [
+  'command',
+  'outcomeCode',
+  'receipt',
+  'replayed',
+] as const
+const GATE_COMMAND_ACKNOWLEDGEMENT_PATH =
+  '/api/desktop/gate-command-receipts/:receiptId/acknowledgements'
+const GATE_COMMAND_ACKNOWLEDGEMENT_RESPONSE_KEYS = [
+  'acknowledgement',
+  'command',
+  'outcomeCode',
+  'receipt',
+  'replayed',
+] as const
 const DESKTOP_WORK_REQUEST_LIST_STATUSES = new Set([
   'open',
   // The Bearer-scoped API filters claim_pending by token record. The public
@@ -413,6 +465,15 @@ function hasExactKeys(
 }
 
 function invalidWorkRequestResponse(status: number, path: string): RemoteSyncHttpError {
+  return new RemoteSyncHttpError({
+    status,
+    code: 'invalid_response',
+    path,
+    retryable: true,
+  })
+}
+
+function invalidGateCommandResponse(status: number, path: string): RemoteSyncHttpError {
   return new RemoteSyncHttpError({
     status,
     code: 'invalid_response',
@@ -555,6 +616,174 @@ function parseWorkRequestMutationResponse<
     workRequest,
     replayed: value.replayed,
     outcomeCode: input.expectedOutcome,
+  }
+}
+
+function parseGateCommandInboxResponse(input: {
+  value: unknown
+  responseStatus: number
+  pairing: DesktopPairingCredential
+}): GateCommand[] {
+  if (
+    input.responseStatus !== 200 ||
+    !isRecord(input.value) ||
+    !hasExactKeys(input.value, GATE_COMMAND_INBOX_RESPONSE_KEYS) ||
+    !Array.isArray(input.value.commands)
+  ) {
+    throw invalidGateCommandResponse(
+      input.responseStatus,
+      GATE_COMMAND_INBOX_PATH,
+    )
+  }
+
+  const seenIds = new Set<string>()
+  try {
+    return input.value.commands.map((candidate) => {
+      const command = parseGateCommandRecord(candidate)
+      if (
+        command.organizationId !== input.pairing.organizationId ||
+        command.projectId !== input.pairing.projectId ||
+        command.workRequestId === null ||
+        (command.status !== 'pending' && command.status !== 'delivering') ||
+        seenIds.has(command.id)
+      ) {
+        throw invalidGateCommandResponse(
+          input.responseStatus,
+          GATE_COMMAND_INBOX_PATH,
+        )
+      }
+      seenIds.add(command.id)
+      return command
+    })
+  } catch (error) {
+    if (error instanceof RemoteSyncHttpError) {
+      throw error
+    }
+    throw invalidGateCommandResponse(
+      input.responseStatus,
+      GATE_COMMAND_INBOX_PATH,
+    )
+  }
+}
+
+function parseGateCommandReceiptResponse(input: {
+  value: unknown
+  responseStatus: number
+  pairing: DesktopPairingCredential
+  commandId: string
+}): RemoteGateCommandReceiptResult {
+  if (
+    input.responseStatus !== 201 ||
+    !isRecord(input.value) ||
+    !hasExactKeys(input.value, GATE_COMMAND_RECEIPT_RESPONSE_KEYS) ||
+    input.value.outcomeCode !== 'receipt_created' ||
+    typeof input.value.replayed !== 'boolean'
+  ) {
+    throw invalidGateCommandResponse(
+      input.responseStatus,
+      GATE_COMMAND_RECEIPT_PATH,
+    )
+  }
+
+  try {
+    const command = parseGateCommandRecord(input.value.command)
+    const receipt = parseGateCommandReceiptRecord(input.value.receipt)
+    if (
+      command.organizationId !== input.pairing.organizationId ||
+      command.projectId !== input.pairing.projectId ||
+      command.workRequestId === null ||
+      command.id !== input.commandId ||
+      command.status !== 'delivering' ||
+      receipt.commandId !== input.commandId ||
+      receipt.acknowledgedAt !== null
+    ) {
+      throw invalidGateCommandResponse(
+        input.responseStatus,
+        GATE_COMMAND_RECEIPT_PATH,
+      )
+    }
+    return {
+      command,
+      receipt,
+      replayed: input.value.replayed,
+    }
+  } catch (error) {
+    if (error instanceof RemoteSyncHttpError) {
+      throw error
+    }
+    throw invalidGateCommandResponse(
+      input.responseStatus,
+      GATE_COMMAND_RECEIPT_PATH,
+    )
+  }
+}
+
+function parseGateCommandAcknowledgementResponse(input: {
+  value: unknown
+  responseStatus: number
+  pairing: DesktopPairingCredential
+  receiptId: string
+  acknowledgementInput: CreateGateCommandAcknowledgementInput
+}): RemoteGateCommandAcknowledgementResult {
+  if (
+    input.responseStatus !== 201 ||
+    !isRecord(input.value) ||
+    !hasExactKeys(
+      input.value,
+      GATE_COMMAND_ACKNOWLEDGEMENT_RESPONSE_KEYS,
+    ) ||
+    input.value.outcomeCode !== 'acknowledged' ||
+    typeof input.value.replayed !== 'boolean'
+  ) {
+    throw invalidGateCommandResponse(
+      input.responseStatus,
+      GATE_COMMAND_ACKNOWLEDGEMENT_PATH,
+    )
+  }
+
+  try {
+    const command = parseGateCommandRecord(input.value.command)
+    const receipt = parseGateCommandReceiptRecord(input.value.receipt)
+    const acknowledgement = parseGateCommandAcknowledgementRecord(
+      input.value.acknowledgement,
+    )
+    const expected = input.acknowledgementInput
+    if (
+      command.organizationId !== input.pairing.organizationId ||
+      command.projectId !== input.pairing.projectId ||
+      command.workRequestId === null ||
+      command.id !== expected.commandId ||
+      command.outcomeCode !== expected.outcomeCode ||
+      (command.status !== 'applied' &&
+        command.status !== 'rejected' &&
+        command.status !== 'expired') ||
+      receipt.id !== input.receiptId ||
+      receipt.commandId !== expected.commandId ||
+      receipt.acknowledgedAt === null ||
+      acknowledgement.commandId !== expected.commandId ||
+      acknowledgement.receiptId !== input.receiptId ||
+      acknowledgement.outcomeCode !== expected.outcomeCode ||
+      acknowledgement.beforeRunVersion !== expected.beforeRunVersion ||
+      acknowledgement.afterRunVersion !== expected.afterRunVersion ||
+      acknowledgement.evaluatedAt !== expected.evaluatedAt
+    ) {
+      throw invalidGateCommandResponse(
+        input.responseStatus,
+        GATE_COMMAND_ACKNOWLEDGEMENT_PATH,
+      )
+    }
+    return {
+      acknowledgement,
+      replayed: input.value.replayed,
+    }
+  } catch (error) {
+    if (error instanceof RemoteSyncHttpError) {
+      throw error
+    }
+    throw invalidGateCommandResponse(
+      input.responseStatus,
+      GATE_COMMAND_ACKNOWLEDGEMENT_PATH,
+    )
   }
 }
 
@@ -707,6 +936,120 @@ export function createRemoteSyncClient(
         expectedVersion: input.expectedVersion,
         expectedStatus: 'materialized',
         expectedOutcome: 'materialized',
+      })
+    },
+
+    async listGateCommandInbox(projectId, pairing) {
+      const authorization = requireWorkRequestPairing({
+        authToken,
+        pairing,
+        path: GATE_COMMAND_INBOX_PATH,
+        projectId,
+      })
+      const actualPath =
+        `/api/desktop/projects/${encodeURIComponent(projectId)}/gate-commands/inbox`
+      const response = await fetchRemote(
+        fetcher,
+        buildUrl(apiBaseUrl, actualPath),
+        { headers: authorization.headers },
+        GATE_COMMAND_INBOX_PATH,
+        signal,
+      )
+      return parseGateCommandInboxResponse({
+        value: await readJson<unknown>(response, GATE_COMMAND_INBOX_PATH),
+        responseStatus: response.status,
+        pairing: authorization.pairing,
+      })
+    },
+
+    async createGateCommandReceipt(commandId, pairing) {
+      const authorization = requireWorkRequestPairing({
+        authToken,
+        pairing,
+        path: GATE_COMMAND_RECEIPT_PATH,
+      })
+      if (!isExactIdentifier(commandId)) {
+        throw new RemoteSyncHttpError({
+          status: null,
+          code: 'bad_request',
+          path: GATE_COMMAND_RECEIPT_PATH,
+          retryable: false,
+        })
+      }
+      const actualPath =
+        `/api/desktop/gate-commands/${encodeURIComponent(commandId)}/receipts`
+      const response = await fetchRemote(
+        fetcher,
+        buildUrl(apiBaseUrl, actualPath),
+        {
+          method: 'POST',
+          headers: {
+            ...authorization.headers,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({}),
+        },
+        GATE_COMMAND_RECEIPT_PATH,
+        signal,
+      )
+      return parseGateCommandReceiptResponse({
+        value: await readJson<unknown>(response, GATE_COMMAND_RECEIPT_PATH),
+        responseStatus: response.status,
+        pairing: authorization.pairing,
+        commandId,
+      })
+    },
+
+    async acknowledgeGateCommandReceipt(receiptId, rawInput, pairing) {
+      const authorization = requireWorkRequestPairing({
+        authToken,
+        pairing,
+        path: GATE_COMMAND_ACKNOWLEDGEMENT_PATH,
+      })
+      if (!isExactIdentifier(receiptId)) {
+        throw new RemoteSyncHttpError({
+          status: null,
+          code: 'bad_request',
+          path: GATE_COMMAND_ACKNOWLEDGEMENT_PATH,
+          retryable: false,
+        })
+      }
+      let input: CreateGateCommandAcknowledgementInput
+      try {
+        input = parseGateCommandAcknowledgementCreate(rawInput)
+      } catch {
+        throw new RemoteSyncHttpError({
+          status: null,
+          code: 'bad_request',
+          path: GATE_COMMAND_ACKNOWLEDGEMENT_PATH,
+          retryable: false,
+        })
+      }
+      const actualPath =
+        `/api/desktop/gate-command-receipts/${encodeURIComponent(receiptId)}/acknowledgements`
+      const response = await fetchRemote(
+        fetcher,
+        buildUrl(apiBaseUrl, actualPath),
+        {
+          method: 'POST',
+          headers: {
+            ...authorization.headers,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(input),
+        },
+        GATE_COMMAND_ACKNOWLEDGEMENT_PATH,
+        signal,
+      )
+      return parseGateCommandAcknowledgementResponse({
+        value: await readJson<unknown>(
+          response,
+          GATE_COMMAND_ACKNOWLEDGEMENT_PATH,
+        ),
+        responseStatus: response.status,
+        pairing: authorization.pairing,
+        receiptId,
+        acknowledgementInput: input,
       })
     },
 

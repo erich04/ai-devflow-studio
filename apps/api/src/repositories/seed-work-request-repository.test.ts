@@ -473,6 +473,23 @@ describe('seed Work Request repository', () => {
     )
     if (!claimed.ok) throw new Error('fixture claim failed')
 
+    expect(
+      harness.repository.permitsRunSummaryUpload({
+        organizationId: 'org-a',
+        projectId: 'project-a',
+        runId: 'run-release',
+        tokenRecordId: 'desktop-token-record-1',
+      }),
+    ).toBe(true)
+    expect(
+      harness.repository.permitsRunSummaryUpload({
+        organizationId: 'org-a',
+        projectId: 'project-a',
+        runId: 'run-release',
+        tokenRecordId: 'desktop-token-stale',
+      }),
+    ).toBe(false)
+
     const memberPrincipal = {
       ...cookiePrincipal,
       session: {
@@ -529,6 +546,14 @@ describe('seed Work Request repository', () => {
       outcomeCode: 'released',
       workRequest: { status: 'open', version: 3, claim: null },
     })
+    expect(
+      harness.repository.permitsRunSummaryUpload({
+        organizationId: 'org-a',
+        projectId: 'project-a',
+        runId: 'run-release',
+        tokenRecordId: 'desktop-token-record-1',
+      }),
+    ).toBe(false)
 
     const expiring = await createOpenRequest(harness, {
       idempotencyKey: 'create-release-expired',
@@ -703,6 +728,52 @@ describe('seed Work Request repository', () => {
       ok: false,
       outcomeCode: 'claim_conflict',
     })
+  })
+
+  it('resolves only the exact materialized claim for internal Gate delivery', async () => {
+    const harness = createHarness()
+    const created = await createOpenRequest(harness)
+    if (!created.ok) throw new Error('fixture create failed')
+
+    await harness.repository.claimWorkRequest(
+      {
+        workRequestId: created.workRequest.id,
+        expectedVersion: 1,
+        runId: 'run-gate-owner',
+        idempotencyKey: 'claim-gate-owner',
+      },
+      desktopPrincipal,
+    )
+    await harness.repository.materializeWorkRequest(
+      {
+        workRequestId: created.workRequest.id,
+        expectedVersion: 2,
+        runId: 'run-gate-owner',
+        idempotencyKey: 'materialize-gate-owner',
+      },
+      desktopPrincipal,
+    )
+
+    await expect(
+      harness.repository.resolveMaterializedWorkRequestClaim({
+        organizationId: 'org-a',
+        projectId: 'project-a',
+        runId: 'run-gate-owner',
+      }),
+    ).resolves.toEqual({
+      organizationId: 'org-a',
+      projectId: 'project-a',
+      workRequestId: created.workRequest.id,
+      runId: 'run-gate-owner',
+      claimedByTokenId: 'desktop-token-record-1',
+    })
+    await expect(
+      harness.repository.resolveMaterializedWorkRequestClaim({
+        organizationId: 'org-b',
+        projectId: 'project-a',
+        runId: 'run-gate-owner',
+      }),
+    ).resolves.toBeNull()
   })
 
   it('keeps only safe identifiers and fingerprints in internal audit data', async () => {

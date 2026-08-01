@@ -41,6 +41,9 @@ describe('GitHub release workflow', () => {
     expect(workflow).toContain('corepack pnpm test:electron-smoke')
     expect(workflow).toContain('corepack pnpm test:postgres-smoke')
     expect(workflow).toContain('corepack pnpm test:docker-smoke')
+    expect(workflow).toContain('corepack pnpm test:docker-lifecycle-smoke')
+    expect(workflow).toContain('corepack pnpm build:desktop-pilot')
+    expect(workflow).toContain('corepack pnpm test:desktop-pilot-smoke')
     expect(workflow).toContain('windows-compatibility:')
     expect(workflow).toContain('runs-on: windows-latest')
     expect(workflow).toContain('--mode=pre-tag')
@@ -71,6 +74,25 @@ describe('GitHub release workflow', () => {
 
     expect(workflow).toContain('VERSION="$(node scripts/release-artifact-label.mjs)"')
     expect(workflow).not.toContain('VERSION="${GITHUB_REF_NAME:-manual-${GITHUB_RUN_NUMBER}}"')
+  })
+
+  it('publishes the executable Desktop pilot archive and its integrity manifest', () => {
+    const workflow = readWorkflow(releaseWorkflowPath)
+    const artifactsJob = jobBlock(workflow, 'release-artifacts')
+
+    expect(artifactsJob).toContain('out/desktop-pilot/*.tar.gz')
+    expect(artifactsJob).toContain('out/desktop-pilot/*.manifest.json')
+    expect(artifactsJob).not.toContain('-desktop-renderer.tar.gz')
+    expect(artifactsJob).not.toContain('-desktop-electron.tar.gz')
+  })
+
+  it('bounds Docker smoke jobs so a stuck daemon cannot consume the release runner forever', () => {
+    const workflow = readWorkflow(releaseWorkflowPath)
+    const dockerJob = jobBlock(workflow, 'docker-smoke')
+    const lifecycleJob = jobBlock(workflow, 'docker-lifecycle-smoke')
+
+    expect(dockerJob).toContain('timeout-minutes: 30')
+    expect(lifecycleJob).toContain('timeout-minutes: 45')
   })
 })
 

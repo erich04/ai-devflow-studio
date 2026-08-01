@@ -1062,6 +1062,41 @@ button {
   margin-top: 8px;
 }
 
+.gate-command-panel,
+.gate-command-panel label {
+  display: grid;
+  gap: 8px;
+}
+
+.gate-command-panel label span,
+.gate-command-panel small {
+  color: var(--studio-muted);
+  font-size: 11px;
+}
+
+.gate-command-panel label span {
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.gate-command-panel textarea {
+  width: 100%;
+  min-height: 82px;
+  padding: 10px;
+  resize: vertical;
+  border: 1px solid var(--studio-line);
+  border-radius: 8px;
+  background: var(--studio-surface-soft);
+  color: var(--studio-text);
+  font: inherit;
+}
+
+.gate-command-panel textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .studio-gate-buttons button:nth-child(2) {
   color: var(--studio-red);
 }

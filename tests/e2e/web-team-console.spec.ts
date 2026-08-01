@@ -27,6 +27,7 @@ test.describe('AI DevFlow web team console', () => {
       data: {
         kind: 'run',
         runId,
+        version: 1,
         projectId: 'p-payments',
         title: runTitle,
         status: 'building',
@@ -87,7 +88,7 @@ test.describe('AI DevFlow web team console', () => {
     await expect(page.getByText('Evidence Chain').first()).toBeVisible()
     await expect(page.getByText('Human Gate').first()).toBeVisible()
     await expect(page.getByText('Test Evidence')).toBeVisible()
-    await expect(page.getByText(runTitle)).toBeVisible()
+    await expect(page.getByRole('heading', { name: runTitle, exact: true })).toBeVisible()
     await expect(page.getByText(evidenceSummary)).toBeVisible()
     await expect(page.locator('body')).toContainText(reviewSummary)
     await expect(page.locator('body')).toContainText('warning-only')

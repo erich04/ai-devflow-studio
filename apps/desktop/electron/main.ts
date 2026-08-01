@@ -24,6 +24,8 @@ import {
   resolveEffectivePolicy,
   runWorkflowStageAgent,
   type AgentEvent,
+  type GateCommand,
+  type GateEnforcementDecision,
   type GateOverrideDecision,
   type LocalProject,
   type PolicySnapshot,
@@ -32,6 +34,9 @@ import {
   type RepositoryKnowledgeSnapshot,
   type RemoteTeamSnapshot,
   type TestEvidence,
+  type WorkflowEvidenceSnapshot,
+  type WorkflowNode,
+  type WorkflowRun,
   createDemoTeamSessionHeaders,
   resolveDevFlowRuntimeFlags,
   validateTestCommandSafety,
@@ -95,6 +100,12 @@ import { createRemoteSyncOutboxClient } from './remote-sync-outbox-client.js'
 import { createRemoteSyncOutboxProcessor } from './remote-sync-outbox-processor.js'
 import { createRemoteSyncOutboxScheduler } from './remote-sync-outbox-scheduler.js'
 import {
+  createGateCommandProcessor,
+  type FrozenGateCommandBinding,
+  type LocalGateCommandEvaluation,
+} from './gate-command-processor.js'
+import { createGateCommandScheduler } from './gate-command-scheduler.js'
+import {
   createKnowledgeReviewRuntimeBudgetGuard,
   createRuntimeBudgetGuard,
 } from './runtime-budget-guard.js'
@@ -112,9 +123,15 @@ import {
   createWorkflowRuntime,
   resolveTrustedWorkflowActor,
 } from './workflow-runtime.js'
+import { resolveDesktopRendererEntry } from './renderer-entry.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const configuredUserDataDirectory = process.env['DEVFLOW_USER_DATA_DIR']?.trim()
+if (configuredUserDataDirectory) {
+  app.setPath('userData', path.resolve(configuredUserDataDirectory))
+}
 const DEFAULT_TEST_TIMEOUT_MS = 120_000
+const GATE_COMMAND_CYCLE_TIMEOUT_MS = 30_000
 const INITIAL_THEME = parseInitialTheme(process.env['DEVFLOW_INITIAL_THEME'])
 const DEFAULT_CODING_RUN_TIMEOUT_MS = 10 * 60_000
 const runtimeFlags = resolveDevFlowRuntimeFlags(process.env)
@@ -127,6 +144,11 @@ let remoteSyncOutboxScheduler: ReturnType<typeof createRemoteSyncOutboxScheduler
 let remoteSyncOutboxSchedulerPromise:
   | Promise<ReturnType<typeof createRemoteSyncOutboxScheduler>>
   | undefined
+let gateCommandScheduler: ReturnType<typeof createGateCommandScheduler> | undefined
+let gateCommandSchedulerPromise:
+  | Promise<ReturnType<typeof createGateCommandScheduler>>
+  | undefined
+let gateCommandCycleAbortController: AbortController | undefined
 const codingPermissionTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 const codingRunTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 const gitStatusWatchers = new Map<
@@ -159,7 +181,7 @@ if (!hasSingleInstanceLock) {
 }
 
 function getStore() {
-  const userDataPath = process.env['DEVFLOW_USER_DATA_DIR'] ?? app.getPath('userData')
+  const userDataPath = app.getPath('userData')
   storePromise ??= createLocalStore({
     dbPath: path.join(userDataPath, 'devflow.sqlite'),
   })
@@ -251,6 +273,274 @@ function wakeRemoteSyncOutbox(): void {
     .then((scheduler) => scheduler.wake())
     .catch(() => {
       console.warn('[remote-sync-outbox] Unable to wake the delivery scheduler.')
+    })
+}
+
+function freezeGateCommandBinding(
+  credential: Awaited<ReturnType<LocalStore['getDesktopPairingCredential']>> & {
+    localProjectId: string
+  },
+): FrozenGateCommandBinding {
+  const pairing = {
+    ...credential,
+    projectMemberships: credential.projectMemberships.map((membership) => ({
+      ...membership,
+    })),
+  }
+  for (const membership of pairing.projectMemberships) {
+    Object.freeze(membership)
+  }
+  Object.freeze(pairing.projectMemberships)
+  Object.freeze(pairing)
+  return Object.freeze({
+    pairing,
+    claimTokenId: pairing.tokenId,
+    project: Object.freeze({
+      teamProjectId: pairing.projectId,
+      localProjectId: credential.localProjectId,
+    }),
+  })
+}
+
+function isKnownGateCommandEvaluationUnavailable(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  return (
+    error.message ===
+      'Repository knowledge is unavailable for this local project.' ||
+    error.message ===
+      'The requested Run does not belong to the selected local project.' ||
+    error.message.startsWith('Run not found:') ||
+    error.message.startsWith('Run node not found:')
+  )
+}
+
+function withLatestBudgetDecision(
+  evidence: Omit<WorkflowEvidenceSnapshot, 'budgetDecision'>,
+): WorkflowEvidenceSnapshot {
+  const latestCodingRun = [...evidence.codingRuns].sort((left, right) =>
+    (right.completedAt ?? right.startedAt).localeCompare(
+      left.completedAt ?? left.startedAt,
+    ),
+  )[0]
+  return {
+    ...evidence,
+    ...(latestCodingRun?.budgetDecision
+      ? { budgetDecision: latestCodingRun.budgetDecision }
+      : {}),
+  }
+}
+
+async function buildUnavailableGateCommandEvaluation(input: {
+  command: GateCommand
+  run: WorkflowRun
+  store: LocalStore
+  remoteSync: RemoteSyncClient
+}): Promise<LocalGateCommandEvaluation> {
+  const policyRefreshed = await refreshRemotePolicySnapshotForProject(
+    input.command.projectId,
+    input.remoteSync,
+  )
+  const [
+    storedPolicySnapshot,
+    artifacts,
+    codingRuns,
+    codingDiffs,
+    testEvidence,
+    agentReviews,
+    overrides,
+  ] = await Promise.all([
+    loadPolicySnapshotForProject(input.command.projectId),
+    input.store.listArtifacts(input.run.id),
+    input.store.listCodingAgentRuns(input.run.id),
+    input.store.listCodingDiffArtifacts(input.run.id),
+    input.store.listTestEvidence(input.run.id),
+    input.store.listAgentReviews(input.run.id),
+    input.store.listGateOverrides(input.run.id),
+  ])
+  const unavailableAt = new Date().toISOString()
+  const policySnapshot: PolicySnapshot =
+    policyRefreshed &&
+    storedPolicySnapshot.source === 'remote_cache' &&
+    storedPolicySnapshot.effectivePolicy !== null
+      ? storedPolicySnapshot
+      : {
+          projectId: input.command.projectId,
+          organizationPolicy: null,
+          projectOverride: null,
+          effectivePolicy: null,
+          version: 0,
+          updatedAt: unavailableAt,
+          syncedAt: unavailableAt,
+          source: 'unavailable',
+        }
+  const localUnavailableReason = {
+    id: 'gate-command-local-evidence-unavailable',
+    target: 'missing_agent_review' as const,
+    ruleKey: 'gate-command.local-evidence-unavailable',
+    action: 'block' as const,
+    summary: 'Required local project evidence is unavailable.',
+  }
+  const decision: GateEnforcementDecision = {
+    status:
+      policySnapshot.source === 'unavailable'
+        ? 'blocked_policy_unavailable'
+        : 'hard_blocked',
+    blocksApproval: true,
+    blockingReasons: [localUnavailableReason],
+    warningReasons: [],
+    requiredActions: ['Restore the required local project evidence.'],
+    canOverride: false,
+    overrideRoleRequired: 'lead',
+    policySource: policySnapshot.source,
+    policyVersion: policySnapshot.version,
+    provisional: policySnapshot.source !== 'remote_cache',
+  }
+  return {
+    decision,
+    policySnapshot,
+    overrides,
+    repositoryKnowledge: {
+      projectId: input.run.projectId,
+      evaluatedFingerprint: 'unavailable',
+      observedFingerprint: 'unavailable',
+    },
+    evidence: withLatestBudgetDecision({
+      artifacts,
+      codingRuns,
+      codingDiffs,
+      testEvidence,
+      agentReviews,
+    }),
+  }
+}
+
+async function evaluateGateCommandLocally(input: {
+  command: GateCommand
+  run: WorkflowRun
+  node: WorkflowNode
+  store: LocalStore
+  remoteSync: RemoteSyncClient
+}): Promise<LocalGateCommandEvaluation> {
+  try {
+    const [evaluation, codingRuns, codingDiffs] = await Promise.all([
+      evaluateLocalGateEnforcement(
+        {
+          runId: input.run.id,
+          nodeId: input.node.id,
+          projectId: input.run.projectId,
+        },
+        {
+          refreshPolicy: true,
+          requireFreshPolicy: true,
+          remoteSync: input.remoteSync,
+        },
+      ),
+      input.store.listCodingAgentRuns(input.run.id),
+      input.store.listCodingDiffArtifacts(input.run.id),
+    ])
+    const observedKnowledge = await loadTrustedRepositoryKnowledge(
+      input.run.projectId,
+    )
+    return {
+      decision: evaluation.decision,
+      policySnapshot: evaluation.policySnapshot,
+      overrides: evaluation.gateOverrides,
+      repositoryKnowledge: {
+        projectId: input.run.projectId,
+        evaluatedFingerprint: evaluation.knowledgeSnapshot.contentHash,
+        observedFingerprint: observedKnowledge.contentHash,
+      },
+      evidence: withLatestBudgetDecision({
+        artifacts: evaluation.artifacts,
+        codingRuns,
+        codingDiffs,
+        testEvidence: evaluation.testEvidence,
+        agentReviews: evaluation.agentReviews,
+      }),
+    }
+  } catch (error) {
+    if (!isKnownGateCommandEvaluationUnavailable(error)) {
+      throw error
+    }
+    return buildUnavailableGateCommandEvaluation(input)
+  }
+}
+
+async function processAvailableGateCommands(): Promise<void> {
+  const store = await getStore()
+  const bundle = await store.getDesktopPairingCredentialBundle()
+  const localProjectId = bundle?.credential.localProjectId?.trim()
+  if (
+    !bundle ||
+    !localProjectId ||
+    !bundle.credential.tokenId.trim() ||
+    !bundle.credential.organizationId.trim() ||
+    !bundle.credential.projectId.trim()
+  ) {
+    return
+  }
+
+  const binding = freezeGateCommandBinding({
+    ...bundle.credential,
+    localProjectId,
+  })
+  const authToken = decryptCredential(bundle.encryptedToken)
+  const cycleAbortController = new AbortController()
+  gateCommandCycleAbortController = cycleAbortController
+  const cycleTimeout = setTimeout(() => {
+    cycleAbortController.abort()
+  }, GATE_COMMAND_CYCLE_TIMEOUT_MS)
+  try {
+    const gateRemoteSync = createRemoteSyncClient({
+      authToken,
+      signal: cycleAbortController.signal,
+    })
+    const processor = createGateCommandProcessor({
+      store,
+      remote: gateRemoteSync,
+      evaluateLocalEnforcement: ({ command, run, node }) =>
+        evaluateGateCommandLocally({
+          command,
+          run,
+          node,
+          store,
+          remoteSync: gateRemoteSync,
+        }),
+    })
+    await processor.processAvailable(binding)
+  } finally {
+    clearTimeout(cycleTimeout)
+    if (gateCommandCycleAbortController === cycleAbortController) {
+      gateCommandCycleAbortController = undefined
+    }
+  }
+}
+
+async function getGateCommandScheduler() {
+  if (gateCommandScheduler) return gateCommandScheduler
+
+  gateCommandSchedulerPromise ??= Promise.resolve().then(() => {
+    gateCommandScheduler = createGateCommandScheduler({
+      processAvailable: processAvailableGateCommands,
+      onError: () => {
+        console.warn('[gate-command] A processing cycle failed and will be retried.')
+      },
+    })
+    return gateCommandScheduler
+  })
+
+  try {
+    return await gateCommandSchedulerPromise
+  } finally {
+    gateCommandSchedulerPromise = undefined
+  }
+}
+
+function wakeGateCommandScheduler(): void {
+  void getGateCommandScheduler()
+    .then((scheduler) => scheduler.wake())
+    .catch(() => {
+      console.warn('[gate-command] Unable to wake the processing scheduler.')
     })
 }
 
@@ -658,24 +948,37 @@ async function cacheRemotePolicySnapshots(snapshot: RemoteTeamSnapshot): Promise
   )
 }
 
-async function refreshRemotePolicySnapshotForProject(projectId: string): Promise<void> {
+async function refreshRemotePolicySnapshotForProject(
+  projectId: string,
+  remoteSync?: RemoteSyncClient,
+): Promise<boolean> {
   if (projectId.startsWith('local-')) {
-    return
+    return false
   }
 
   try {
     const store = await getStore()
     const pairing = await store.getDesktopPairingCredential()
-    if (!pairing) {
-      return
+    if (!pairing || pairing.projectId !== projectId) {
+      return false
     }
 
-    const snapshot = await (await getRemoteSyncClient()).loadRemoteSnapshot({
+    const snapshot = await (remoteSync ?? await getRemoteSyncClient()).loadRemoteSnapshot({
       organizationId: pairing.organizationId,
     })
+    const hasAuthoritativeProjectPolicy =
+      snapshot.projects.some((project) => project.id === projectId) &&
+      snapshot.enforcementPolicies?.effectivePolicies.some(
+        (policy) => policy.projectId === projectId,
+      ) === true
+    if (!hasAuthoritativeProjectPolicy) {
+      return false
+    }
     await cacheRemotePolicySnapshots(snapshot)
+    return true
   } catch {
     // Keep the last authoritative cache if the team API is offline.
+    return false
   }
 }
 
@@ -701,6 +1004,8 @@ async function evaluateLocalGateEnforcement(
   input: { runId: string; nodeId: string; projectId?: string },
   options: {
     refreshPolicy?: boolean
+    requireFreshPolicy?: boolean
+    remoteSync?: RemoteSyncClient
     knowledgeSnapshot?: RepositoryKnowledgeSnapshot
   } = {},
 ) {
@@ -724,17 +1029,35 @@ async function evaluateLocalGateEnforcement(
   }
 
   const policyProjectId = await resolvePolicyProjectId(run.projectId)
+  let policyRefreshSucceeded = !options.requireFreshPolicy
   if (options.refreshPolicy) {
-    await refreshRemotePolicySnapshotForProject(policyProjectId)
+    policyRefreshSucceeded = await refreshRemotePolicySnapshotForProject(
+      policyProjectId,
+      options.remoteSync,
+    )
   }
 
-  const [artifacts, testEvidence, agentReviews, gateOverrides, policySnapshot] = await Promise.all([
+  const [artifacts, testEvidence, agentReviews, gateOverrides, storedPolicySnapshot] = await Promise.all([
     store.listArtifacts(run.id),
     store.listTestEvidence(run.id),
     store.listAgentReviews(run.id),
     store.listGateOverrides(run.id),
     loadPolicySnapshotForProject(policyProjectId),
   ])
+  const unavailableAt = new Date().toISOString()
+  const policySnapshot: PolicySnapshot =
+    options.requireFreshPolicy && !policyRefreshSucceeded
+      ? {
+          projectId: policyProjectId,
+          organizationPolicy: null,
+          projectOverride: null,
+          effectivePolicy: null,
+          version: 0,
+          updatedAt: unavailableAt,
+          syncedAt: unavailableAt,
+          source: 'unavailable',
+        }
+      : storedPolicySnapshot
   const knowledgeReferences = buildKnowledgeReferences({
     run,
     artifacts,
@@ -777,6 +1100,7 @@ async function evaluateLocalGateEnforcement(
     knowledgeReferences,
     governanceChecks,
     agentPolicyFindings,
+    knowledgeSnapshot,
     decision,
     policySnapshot,
     gateOverrides,
@@ -912,6 +1236,7 @@ function registerIpcHandlers() {
       }
     }
     wakeRemoteSyncOutbox()
+    wakeGateCommandScheduler()
     return { credential: boundCredential }
   })
 
@@ -935,6 +1260,7 @@ function registerIpcHandlers() {
         return await desktopWorkRequestService.materialize(input)
       } finally {
         wakeRemoteSyncOutbox()
+        wakeGateCommandScheduler()
       }
     },
   )
@@ -1678,10 +2004,13 @@ function createWindow() {
     },
   })
 
-  const devServerUrl = process.env['VITE_DEV_SERVER_URL']
+  const rendererEntry = resolveDesktopRendererEntry({
+    isPackaged: app.isPackaged,
+    developmentServerUrl: process.env['VITE_DEV_SERVER_URL'],
+  })
 
-  if (devServerUrl) {
-    void window.loadURL(devServerUrl)
+  if (rendererEntry.kind === 'development_url') {
+    void window.loadURL(rendererEntry.url)
   } else {
     void window.loadFile(path.join(__dirname, '../dist/index.html'))
   }
@@ -1711,6 +2040,11 @@ if (hasSingleInstanceLock) {
       .catch(() => {
         console.warn('[remote-sync-outbox] Unable to start the delivery scheduler.')
       })
+    void getGateCommandScheduler()
+      .then((scheduler) => scheduler.start())
+      .catch(() => {
+        console.warn('[gate-command] Unable to start the processing scheduler.')
+      })
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -1727,6 +2061,8 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  gateCommandCycleAbortController?.abort()
+  gateCommandScheduler?.stop()
   remoteSyncOutboxScheduler?.stop()
   void opencodeProcessManager.stopAll()
 })

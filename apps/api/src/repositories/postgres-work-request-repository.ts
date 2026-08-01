@@ -17,6 +17,7 @@ import {
 import {
   fingerprintWorkRequestOperation,
   safeWorkRequest,
+  type MaterializedWorkRequestClaimResolver,
   type WorkRequestMutationResult,
   type WorkRequestOperationInput,
   type WorkRequestOperationKind,
@@ -24,6 +25,7 @@ import {
   type WorkRequestRepository,
   type WorkRequestSuccessCode,
 } from './work-request-contract'
+import { collaborationRunLockKey } from './collaboration-run-lock'
 
 type TimestampValue = string | Date
 
@@ -45,7 +47,10 @@ type WorkRequestRow = {
   updated_at: TimestampValue
 }
 
-type ProjectProbeRow = { project_id: string }
+type WorkRequestProbeRow = {
+  project_id: string
+  claimed_run_id: string | null
+}
 
 type IdentityRow = {
   user_id: string
@@ -240,7 +245,7 @@ function isLeadOrOwner(role: Role): boolean {
 export function createPostgresWorkRequestRepository(
   db: TeamDbRepositoryClient,
   options: PostgresWorkRequestRepositoryOptions = {},
-): WorkRequestRepository {
+): WorkRequestRepository & MaterializedWorkRequestClaimResolver {
   const now = options.now ?? (() => new Date())
   const createId =
     options.createId ?? ((kind: IdKind) => `${kind.replace('_', '-')}-${randomUUID()}`)
@@ -267,15 +272,15 @@ export function createPostgresWorkRequestRepository(
     )
   }
 
-  async function probeProject(
+  async function probeWorkRequest(
     tx: TeamDbTransactionClient,
     workRequestId: string,
     principal: RequestPrincipal,
-  ): Promise<string | null> {
-    const [row] = await tx.query<ProjectProbeRow>(
+  ): Promise<{ projectId: string; claimedRunId: string | null } | null> {
+    const [row] = await tx.query<WorkRequestProbeRow>(
       `
         /* work_request:project-probe */
-        SELECT project_id
+        SELECT project_id, claimed_run_id
         FROM work_requests
         WHERE id = $1
           AND organization_id = $2
@@ -283,7 +288,28 @@ export function createPostgresWorkRequestRepository(
       `,
       [workRequestId, principal.session.organizationId],
     )
-    return row?.project_id ?? soleSessionProject(principal)
+    if (row) {
+      return {
+        projectId: row.project_id,
+        claimedRunId: row.claimed_run_id ?? null,
+      }
+    }
+    const projectId = soleSessionProject(principal)
+    return projectId === null ? null : { projectId, claimedRunId: null }
+  }
+
+  async function lockRunAuthority(
+    tx: TeamDbTransactionClient,
+    input: { organizationId: string; projectId: string; runId: string },
+    operation: 'claim' | 'release',
+  ): Promise<void> {
+    await tx.query(
+      `
+        /* work_request:${operation}-run-lock */
+        SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
+      `,
+      [collaborationRunLockKey(input)],
+    )
   }
 
   async function loadIdempotencyResult(
@@ -320,6 +346,7 @@ export function createPostgresWorkRequestRepository(
     query: TeamDbTransactionClient,
     principal: RequestPrincipal,
     projectId: string,
+    lockAuthority = false,
   ): Promise<VerifiedIdentity | null> {
     if (
       principal.authentication.kind !== 'session_cookie' ||
@@ -334,19 +361,24 @@ export function createPostgresWorkRequestRepository(
           users.id AS user_id,
           users.organization_id,
           users.role AS organization_role,
-          project_members.role AS project_role
+          (
+            SELECT project_members.role
+            FROM project_members
+            WHERE project_members.project_id = projects.id
+              AND project_members.user_id = users.id
+            LIMIT 1
+            ${lockAuthority ? 'FOR SHARE' : ''}
+          ) AS project_role
         FROM auth_accounts
         JOIN users ON users.id = auth_accounts.user_id
         JOIN projects
           ON projects.id = $4
          AND projects.organization_id = users.organization_id
-        LEFT JOIN project_members
-          ON project_members.project_id = projects.id
-         AND project_members.user_id = users.id
         WHERE auth_accounts.id = $1
           AND users.organization_id = $2
           AND users.id = $3
         LIMIT 1
+        ${lockAuthority ? 'FOR SHARE OF auth_accounts, users, projects' : ''}
       `,
       [
         principal.session.authAccountId,
@@ -378,6 +410,7 @@ export function createPostgresWorkRequestRepository(
     query: TeamDbTransactionClient,
     principal: RequestPrincipal,
     projectId: string,
+    lockAuthority = false,
   ): Promise<VerifiedIdentity | null> {
     if (
       principal.authentication.kind !== 'desktop_bearer' ||
@@ -393,7 +426,14 @@ export function createPostgresWorkRequestRepository(
           users.organization_id,
           users.role AS organization_role,
           desktop_tokens.project_id,
-          project_members.role AS project_role
+          (
+            SELECT project_members.role
+            FROM project_members
+            WHERE project_members.project_id = projects.id
+              AND project_members.user_id = users.id
+            LIMIT 1
+            ${lockAuthority ? 'FOR SHARE' : ''}
+          ) AS project_role
         FROM desktop_tokens
         JOIN users
           ON users.id = desktop_tokens.user_id
@@ -401,15 +441,13 @@ export function createPostgresWorkRequestRepository(
         JOIN projects
           ON projects.id = desktop_tokens.project_id
          AND projects.organization_id = desktop_tokens.organization_id
-        LEFT JOIN project_members
-          ON project_members.project_id = desktop_tokens.project_id
-         AND project_members.user_id = desktop_tokens.user_id
         WHERE desktop_tokens.id = $1
           AND desktop_tokens.organization_id = $2
           AND desktop_tokens.user_id = $3
           AND desktop_tokens.project_id = $4
           AND desktop_tokens.revoked_at IS NULL
         LIMIT 1
+        ${lockAuthority ? 'FOR SHARE OF desktop_tokens, users, projects' : ''}
       `,
       [
         principal.authentication.tokenRecordId,
@@ -724,7 +762,12 @@ export function createPostgresWorkRequestRepository(
       if (principal.authentication.kind !== 'session_cookie') {
         return rejection('authentication_forbidden')
       }
-      const identity = await loadCookieIdentity(tx, principal, input.projectId)
+      const identity = await loadCookieIdentity(
+        tx,
+        principal,
+        input.projectId,
+        true,
+      )
       if (!identity?.hasProjectAccess) {
         return finalizeProjectDenial(tx, {
           identity,
@@ -809,10 +852,11 @@ export function createPostgresWorkRequestRepository(
     return withTeamDbTransaction(db, async (tx) => {
       const operation = 'work_request_claim' as const
       await lockIdempotencyKey(tx, operation, input.idempotencyKey, principal)
-      const projectId = await probeProject(tx, input.workRequestId, principal)
-      if (!projectId) {
+      const probe = await probeWorkRequest(tx, input.workRequestId, principal)
+      if (!probe) {
         return rejection('not_found')
       }
+      const { projectId } = probe
       const existing = await loadIdempotencyResult(
         tx,
         projectId,
@@ -824,7 +868,12 @@ export function createPostgresWorkRequestRepository(
       if (principal.authentication.kind !== 'desktop_bearer') {
         return rejection('authentication_forbidden')
       }
-      const identity = await loadBearerIdentity(tx, principal, projectId)
+      const identity = await loadBearerIdentity(
+        tx,
+        principal,
+        projectId,
+        true,
+      )
       if (!identity?.hasProjectAccess) {
         return finalizeProjectDenial(tx, {
           identity,
@@ -839,6 +888,15 @@ export function createPostgresWorkRequestRepository(
         return replay
       }
 
+      await lockRunAuthority(
+        tx,
+        {
+          organizationId: identity.organizationId,
+          projectId: identity.projectId,
+          runId: input.runId,
+        },
+        'claim',
+      )
       const row = await lockWorkRequest(tx, input.workRequestId, identity)
       if (!row) {
         return finalize(tx, {
@@ -915,13 +973,6 @@ export function createPostgresWorkRequestRepository(
         })
       }
 
-      await tx.query(
-        `
-          /* work_request:claim-run-lock */
-          SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
-        `,
-        [JSON.stringify([identity.organizationId, identity.projectId, input.runId])],
-      )
       const [runConflict] = await tx.query<{ conflict_kind: string }>(
         `
           /* work_request:claim-run-conflict */
@@ -1018,10 +1069,11 @@ export function createPostgresWorkRequestRepository(
     return withTeamDbTransaction(db, async (tx) => {
       const operation = 'work_request_materialize' as const
       await lockIdempotencyKey(tx, operation, input.idempotencyKey, principal)
-      const projectId = await probeProject(tx, input.workRequestId, principal)
-      if (!projectId) {
+      const probe = await probeWorkRequest(tx, input.workRequestId, principal)
+      if (!probe) {
         return rejection('not_found')
       }
+      const { projectId } = probe
       const existing = await loadIdempotencyResult(
         tx,
         projectId,
@@ -1033,7 +1085,12 @@ export function createPostgresWorkRequestRepository(
       if (principal.authentication.kind !== 'desktop_bearer') {
         return rejection('authentication_forbidden')
       }
-      const identity = await loadBearerIdentity(tx, principal, projectId)
+      const identity = await loadBearerIdentity(
+        tx,
+        principal,
+        projectId,
+        true,
+      )
       if (!identity?.hasProjectAccess) {
         return finalizeProjectDenial(tx, {
           identity,
@@ -1156,10 +1213,11 @@ export function createPostgresWorkRequestRepository(
     return withTeamDbTransaction(db, async (tx) => {
       const operation = 'work_request_release' as const
       await lockIdempotencyKey(tx, operation, input.idempotencyKey, principal)
-      const projectId = await probeProject(tx, input.workRequestId, principal)
-      if (!projectId) {
+      const probe = await probeWorkRequest(tx, input.workRequestId, principal)
+      if (!probe) {
         return rejection('not_found')
       }
+      const { projectId } = probe
       const existing = await loadIdempotencyResult(
         tx,
         projectId,
@@ -1171,7 +1229,12 @@ export function createPostgresWorkRequestRepository(
       if (principal.authentication.kind !== 'session_cookie') {
         return rejection('authentication_forbidden')
       }
-      const identity = await loadCookieIdentity(tx, principal, projectId)
+      const identity = await loadCookieIdentity(
+        tx,
+        principal,
+        projectId,
+        true,
+      )
       if (!identity?.hasProjectAccess || !isLeadOrOwner(identity.role)) {
         return finalizeProjectDenial(tx, {
           identity,
@@ -1186,6 +1249,17 @@ export function createPostgresWorkRequestRepository(
         return replay
       }
 
+      if (probe.claimedRunId !== null) {
+        await lockRunAuthority(
+          tx,
+          {
+            organizationId: identity.organizationId,
+            projectId: identity.projectId,
+            runId: probe.claimedRunId,
+          },
+          'release',
+        )
+      }
       const row = await lockWorkRequest(tx, input.workRequestId, identity)
       if (!row) {
         return finalize(tx, {
@@ -1220,6 +1294,17 @@ export function createPostgresWorkRequestRepository(
           result: rejection('not_claim_pending'),
         })
       }
+      if (probe.claimedRunId !== row.claimed_run_id) {
+        return finalize(tx, {
+          identity,
+          recordId: row.id,
+          operation,
+          operationInput: input,
+          expectedVersion: input.expectedVersion,
+          observedVersion: row.version,
+          result: rejection('stale_version'),
+        })
+      }
 
       const [projection] = await tx.query<{ projection_exists: boolean }>(
         `
@@ -1247,6 +1332,38 @@ export function createPostgresWorkRequestRepository(
       }
 
       const timestamp = now().toISOString()
+      await tx.query(
+        `
+          /* work_request:release-tombstone */
+          INSERT INTO released_work_request_claims (
+            organization_id,
+            project_id,
+            work_request_id,
+            run_id,
+            claimed_by_token_id,
+            released_by_user_id,
+            released_claim_version,
+            released_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          ON CONFLICT (organization_id, project_id, run_id) DO UPDATE
+          SET work_request_id = excluded.work_request_id,
+              claimed_by_token_id = excluded.claimed_by_token_id,
+              released_by_user_id = excluded.released_by_user_id,
+              released_claim_version = excluded.released_claim_version,
+              released_at = excluded.released_at
+        `,
+        [
+          identity.organizationId,
+          identity.projectId,
+          row.id,
+          row.claimed_run_id,
+          row.claimed_by_token_id,
+          identity.userId,
+          row.version,
+          timestamp,
+        ],
+      )
       const [releasedRow] = await tx.query<WorkRequestRow>(
         `
           /* work_request:release */
@@ -1300,11 +1417,53 @@ export function createPostgresWorkRequestRepository(
     })
   }
 
+  async function resolveMaterializedWorkRequestClaim(input: {
+    organizationId: string
+    projectId: string
+    runId: string
+  }) {
+    const [row] = await db.query<{
+      organization_id: string
+      project_id: string
+      work_request_id: string
+      run_id: string
+      claimed_by_token_id: string
+    }>(
+      `
+        /* work_request:materialized-claim-lookup */
+        SELECT organization_id,
+               project_id,
+               id AS work_request_id,
+               claimed_run_id AS run_id,
+               claimed_by_token_id
+        FROM work_requests
+        WHERE organization_id = $1
+          AND project_id = $2
+          AND claimed_run_id = $3
+          AND status = 'materialized'
+          AND materialized_at IS NOT NULL
+          AND claimed_by_token_id IS NOT NULL
+        LIMIT 1
+      `,
+      [input.organizationId, input.projectId, input.runId],
+    )
+    if (!row) return null
+
+    return {
+      organizationId: row.organization_id,
+      projectId: row.project_id,
+      workRequestId: row.work_request_id,
+      runId: row.run_id,
+      claimedByTokenId: row.claimed_by_token_id,
+    }
+  }
+
   return {
     listWorkRequests,
     createWorkRequest,
     claimWorkRequest,
     materializeWorkRequest,
     releaseWorkRequest,
+    resolveMaterializedWorkRequestClaim,
   }
 }

@@ -1,8 +1,339 @@
 import { describe, expect, it } from 'vitest'
+import {
+  createRecommendedEnforcementPreset,
+  type GateOverrideDecision,
+} from '@ai-devflow/shared'
+import type { RequestPrincipal } from '../auth/request-auth'
 import { createSeedTeamRepository } from './team-repository'
+import { evaluateTeamGateEnforcement } from './team-gate-enforcement'
+
+const gateBrowserPrincipal: RequestPrincipal = {
+  session: {
+    source: 'authenticated',
+    authAccountId: 'acct-demo-u-ling',
+    organizationId: 'org-demo',
+    userId: 'u-ling',
+    role: 'lead',
+    projectMemberships: [
+      { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+    ],
+  },
+  authentication: { kind: 'session_cookie', tokenRecordId: null },
+}
+
+const gateDesktopPrincipal: RequestPrincipal = {
+  session: {
+    source: 'authenticated',
+    authAccountId: 'acct-demo-u-wang',
+    organizationId: 'org-demo',
+    userId: 'u-wang',
+    role: 'member',
+    projectMemberships: [
+      { projectId: 'p-payments', userId: 'u-wang', role: 'member' },
+    ],
+  },
+  authentication: {
+    kind: 'desktop_bearer',
+    tokenRecordId: 'desktop-token-team-repository-gate',
+  },
+}
+
+async function materializeSeedGateRun(
+  repository: ReturnType<typeof createSeedTeamRepository>,
+  runId: string,
+  suffix: string,
+) {
+  const created = await repository.createWorkRequest(
+    {
+      projectId: 'p-payments',
+      title: `Gate repository test ${suffix}`,
+      request: 'Keep Gate command authority bound to one materialized Run.',
+      idempotencyKey: `work-request:create:${suffix}`,
+      expiresAt: null,
+    },
+    gateBrowserPrincipal,
+  )
+  if (!created.ok) throw new Error('Work Request create failed.')
+  const claimed = await repository.claimWorkRequest(
+    {
+      workRequestId: created.workRequest.id,
+      expectedVersion: 1,
+      runId,
+      idempotencyKey: `work-request:claim:${suffix}`,
+    },
+    gateDesktopPrincipal,
+  )
+  if (!claimed.ok) throw new Error('Work Request claim failed.')
+  const materialized = await repository.materializeWorkRequest(
+    {
+      workRequestId: created.workRequest.id,
+      expectedVersion: 2,
+      runId,
+      idempotencyKey: `work-request:materialize:${suffix}`,
+    },
+    gateDesktopPrincipal,
+  )
+  if (!materialized.ok) throw new Error('Work Request materialization failed.')
+}
 
 describe('seed team repository', () => {
   const syncContext = { organizationId: 'org-demo', userId: 'u-erich' }
+
+  it('loads Gate enforcement inputs sequentially for transaction-backed repositories', async () => {
+    const source = createSeedTeamRepository()
+    const runId = 'run-gate-serial-preflight'
+    const nodeId = 'node-design-gate'
+    await materializeSeedGateRun(source, runId, 'serial-preflight')
+    await source.uploadRunSummary(
+      {
+        kind: 'run',
+        runId,
+        version: 3,
+        projectId: 'p-payments',
+        title: 'Serial Gate preflight',
+        status: 'paused_at_gate',
+        currentNodeId: nodeId,
+        currentNode: {
+          id: nodeId,
+          stage: 'design',
+          kind: 'gate',
+          status: 'blocked',
+          requiredRole: 'lead',
+        },
+        branchName: 'codex/gate-serial-preflight',
+        updatedAt: '2026-07-31T12:10:00.000Z',
+      },
+      {
+        ...gateDesktopPrincipal.session,
+        tokenRecordId: gateDesktopPrincipal.authentication.tokenRecordId,
+      },
+    )
+
+    let activeRead = false
+    const calls: string[] = []
+    async function guarded<T>(label: string, read: () => Promise<T>): Promise<T> {
+      if (activeRead) throw new Error('concurrent transaction query')
+      activeRead = true
+      calls.push(label)
+      try {
+        await Promise.resolve()
+        return await read()
+      } finally {
+        activeRead = false
+      }
+    }
+    const repository = {
+      getRunsBundle: (...args: Parameters<typeof source.getRunsBundle>) =>
+        guarded('runs', () => source.getRunsBundle(...args)),
+      getTeamOverview: (...args: Parameters<typeof source.getTeamOverview>) =>
+        guarded('overview', () => source.getTeamOverview(...args)),
+      getEnforcementPolicy: (
+        ...args: Parameters<typeof source.getEnforcementPolicy>
+      ) => guarded('policy', () => source.getEnforcementPolicy(...args)),
+      listGateOverrides: (...args: Parameters<typeof source.listGateOverrides>) =>
+        guarded('overrides', () => source.listGateOverrides(...args)),
+    }
+
+    await expect(
+      evaluateTeamGateEnforcement(repository, gateBrowserPrincipal.session, {
+        projectId: 'p-payments',
+        runId,
+        nodeId,
+      }),
+    ).resolves.toMatchObject({ run: { id: runId }, node: { id: nodeId } })
+    expect(calls).toEqual(['runs', 'overview', 'policy', 'overrides'])
+  })
+
+  it('does not inject a historical Gate override into a non-blocking enforcement decision', async () => {
+    const repository = createSeedTeamRepository()
+    const runId = 'run-gate-pass-history'
+    const nodeId = 'node-design-gate'
+    await materializeSeedGateRun(repository, runId, 'pass-history')
+    await repository.uploadRunSummary(
+      {
+        kind: 'run',
+        runId,
+        version: 3,
+        projectId: 'p-payments',
+        title: 'Non-blocking Gate history',
+        status: 'paused_at_gate',
+        currentNodeId: nodeId,
+        currentNode: {
+          id: nodeId,
+          stage: 'design',
+          kind: 'gate',
+          status: 'blocked',
+          requiredRole: 'lead',
+        },
+        branchName: 'codex/gate-pass-history',
+        updatedAt: '2026-07-31T12:10:00.000Z',
+      },
+      {
+        ...gateDesktopPrincipal.session,
+        tokenRecordId: gateDesktopPrincipal.authentication.tokenRecordId,
+      },
+    )
+    await repository.saveGateOverride(
+      {
+        id: 'gate-override-stale-pass-history',
+        runId,
+        nodeId,
+        projectId: 'p-payments',
+        userId: 'u-ling',
+        role: 'lead',
+        reason: 'This decision belongs to an obsolete policy snapshot.',
+        blockedReasonIds: ['obsolete-blocker'],
+        policyVersion: 999,
+        provisional: false,
+        status: 'accepted',
+        createdAt: '2026-07-31T12:00:00.000Z',
+      },
+      gateBrowserPrincipal.session,
+    )
+
+    await expect(
+      repository.createGateCommand(
+        {
+          projectId: 'p-payments',
+          runId,
+          nodeId,
+          action: 'approve',
+          reason: 'Approve the current non-blocking policy snapshot.',
+          expectedRunVersion: 3,
+          expectedPolicyVersion: 1,
+          expectedBlockerIds: [],
+          idempotencyKey: 'gate-command:create:pass-history:v1',
+        },
+        gateBrowserPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      responseStatus: 201,
+      outcomeCode: 'created',
+    })
+  })
+
+  it('selects only the exact accepted non-provisional override for the current overridden decision', async () => {
+    const repository = createSeedTeamRepository()
+    const runId = 'run-gate-exact-override'
+    const nodeId = 'node-design-gate'
+    await materializeSeedGateRun(repository, runId, 'exact-override')
+    await repository.uploadRunSummary(
+      {
+        kind: 'run',
+        runId,
+        version: 3,
+        projectId: 'p-payments',
+        title: 'Exact Gate override',
+        status: 'paused_at_gate',
+        currentNodeId: nodeId,
+        currentNode: {
+          id: nodeId,
+          stage: 'design',
+          kind: 'gate',
+          status: 'blocked',
+          requiredRole: 'lead',
+        },
+        branchName: 'codex/gate-exact-override',
+        updatedAt: '2026-07-31T12:10:00.000Z',
+      },
+      {
+        ...gateDesktopPrincipal.session,
+        tokenRecordId: gateDesktopPrincipal.authentication.tokenRecordId,
+      },
+    )
+    await repository.saveEnforcementPolicy(
+      createRecommendedEnforcementPreset({ organizationId: 'org-demo' }),
+      gateBrowserPrincipal.session,
+    )
+    const blockedContext = await evaluateTeamGateEnforcement(
+      repository,
+      gateBrowserPrincipal.session,
+      { projectId: 'p-payments', runId, nodeId },
+    )
+    expect(blockedContext.decision).toMatchObject({
+      status: 'blocked',
+      blocksApproval: true,
+      canOverride: true,
+    })
+    const blockerIds = blockedContext.decision.blockingReasons
+      .map((reason) => reason.id)
+      .sort()
+    const exactOverride: GateOverrideDecision = {
+      id: 'gate-override-exact-current',
+      runId,
+      nodeId,
+      projectId: 'p-payments',
+      userId: 'u-ling',
+      role: 'lead',
+      reason: 'Independently reviewed every current blocker.',
+      blockedReasonIds: blockerIds,
+      policyVersion: blockedContext.decision.policyVersion,
+      provisional: false,
+      status: 'accepted',
+      createdAt: '2026-07-31T12:20:00.000Z',
+    }
+    await repository.saveGateOverride(
+      exactOverride,
+      gateBrowserPrincipal.session,
+    )
+    const invalidOverrides: GateOverrideDecision[] = [
+      { ...exactOverride, id: 'gate-override-rejected', status: 'rejected' },
+      { ...exactOverride, id: 'gate-override-provisional', provisional: true },
+      { ...exactOverride, id: 'gate-override-project', projectId: 'p-admin' },
+      { ...exactOverride, id: 'gate-override-role', role: 'owner' },
+      {
+        ...exactOverride,
+        id: 'gate-override-policy',
+        policyVersion: exactOverride.policyVersion + 1,
+      },
+      {
+        ...exactOverride,
+        id: 'gate-override-blockers',
+        blockedReasonIds: ['obsolete-blocker'],
+      },
+      {
+        ...exactOverride,
+        id: 'gate-override-noncanonical-blockers',
+        blockedReasonIds: [...blockerIds, blockerIds[0]!],
+      },
+      { ...exactOverride, id: 'gate-override-node', nodeId: 'node-other' },
+      { ...exactOverride, id: 'gate-override-user', userId: 'u-erich' },
+    ]
+    for (const override of invalidOverrides) {
+      await repository.saveGateOverride(override, gateBrowserPrincipal.session)
+    }
+    const overriddenContext = await evaluateTeamGateEnforcement(
+      repository,
+      gateBrowserPrincipal.session,
+      { projectId: 'p-payments', runId, nodeId },
+    )
+    expect(overriddenContext.decision).toMatchObject({
+      status: 'overridden',
+      blocksApproval: false,
+    })
+
+    await expect(
+      repository.createGateCommand(
+        {
+          projectId: 'p-payments',
+          runId,
+          nodeId,
+          action: 'approve',
+          reason: 'Use only the exact current accepted override.',
+          expectedRunVersion: 3,
+          expectedPolicyVersion: blockedContext.decision.policyVersion,
+          expectedBlockerIds: blockerIds,
+          idempotencyKey: 'gate-command:create:exact-override:v3',
+        },
+        gateBrowserPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      responseStatus: 201,
+      outcomeCode: 'created',
+    })
+  })
 
   it('rejects evidence summaries until a canonical Run Summary exists', async () => {
     const repository = createSeedTeamRepository()
@@ -45,6 +376,18 @@ describe('seed team repository', () => {
     expect(overview.agentProviders).toEqual([
       expect.objectContaining({ id: 'fake-knowledge-review', kind: 'fake' }),
     ])
+    expect(
+      overview.enforcementPolicies.effectivePolicies.map((policy) => policy.projectId),
+    ).toEqual(overview.projects.map((project) => project.id))
+  })
+
+  it('scopes the effective policy returned for a project without an override', async () => {
+    const repository = createSeedTeamRepository()
+
+    const result = await repository.getEnforcementPolicy('p-payments', syncContext)
+
+    expect(result.projectOverride).toBeNull()
+    expect(result.effectivePolicy.projectId).toBe('p-payments')
   })
 
   it('does not expose seed organization projects or runs through another organization context', async () => {

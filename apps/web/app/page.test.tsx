@@ -1,14 +1,21 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createWarnOnlyDefaultPolicy, resolveEffectivePolicy } from '@ai-devflow/shared'
 import Page from './page'
-import { fetchTeamOverview, fetchWorkRequests } from './lib/devflow-api'
+import {
+  evaluateGateCommandSnapshot,
+  fetchGateCommands,
+  fetchTeamOverview,
+  fetchWorkRequests,
+} from './lib/devflow-api'
 import type { TeamOverviewResponse } from './lib/devflow-api'
 
 vi.mock('./lib/devflow-api', () => ({
   createTeamProject: vi.fn(),
   fetchTeamOverview: vi.fn(),
   fetchWorkRequests: vi.fn(),
+  fetchGateCommands: vi.fn(),
+  evaluateGateCommandSnapshot: vi.fn(),
   resolveDevFlowApiBaseUrl: vi.fn(() => 'http://api.local'),
   resolveDevFlowPublicApiBaseUrl: vi.fn(() => 'http://api.local'),
   runKnowledgeReview: vi.fn(),
@@ -25,6 +32,8 @@ vi.mock('next/headers', () => ({
 
 const mockedFetchTeamOverview = vi.mocked(fetchTeamOverview)
 const mockedFetchWorkRequests = vi.mocked(fetchWorkRequests)
+const mockedFetchGateCommands = vi.mocked(fetchGateCommands)
+const mockedEvaluateGateCommandSnapshot = vi.mocked(evaluateGateCommandSnapshot)
 const organizationPolicy = createWarnOnlyDefaultPolicy({ organizationId: 'org-demo' })
 
 const overview: TeamOverviewResponse = {
@@ -56,6 +65,7 @@ const overview: TeamOverviewResponse = {
       projectId: 'p-remote',
       creatorId: 'u-remote',
       status: 'building',
+      version: 1,
       currentNodeId: 'n-build',
       branchName: 'ai/remote-run',
       createdAt: '2026-06-16T10:00:00.000Z',
@@ -230,6 +240,13 @@ const overview: TeamOverviewResponse = {
 
 beforeEach(() => {
   mockedFetchWorkRequests.mockResolvedValue([])
+  mockedFetchGateCommands.mockResolvedValue([])
+  mockedEvaluateGateCommandSnapshot.mockResolvedValue({
+    status: 'pass',
+    blocksApproval: false,
+    policyVersion: 1,
+    expectedBlockerIds: [],
+  })
 })
 
 afterEach(() => {
@@ -455,6 +472,94 @@ describe('web product shell page', () => {
     expect(mockedFetchTeamOverview).toHaveBeenCalledWith({
       cookieHeader: 'devflow_session=session-1',
     })
+  })
+
+  it('loads an authoritative Gate Command snapshot only for the current paused Gate', async () => {
+    mockedFetchTeamOverview.mockResolvedValue({
+      ...overview,
+      runs: [
+        {
+          ...overview.runs[0]!,
+          status: 'paused_at_gate',
+          version: 7,
+          currentNodeId: 'run-remote:n-build',
+          nodes: [
+            {
+              ...overview.runs[0]!.nodes[0]!,
+              id: 'run-remote:n-build',
+              status: 'running',
+            },
+          ],
+        },
+      ],
+    })
+
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote', runId: 'run-remote' }),
+      }),
+    )
+
+    expect(mockedFetchGateCommands).toHaveBeenCalledWith({
+      projectId: 'p-remote',
+      cookieHeader: 'devflow_session=session-1',
+    })
+    expect(mockedEvaluateGateCommandSnapshot).toHaveBeenCalledWith({
+      projectId: 'p-remote',
+      runId: 'run-remote',
+      nodeId: 'n-build',
+      cookieHeader: 'devflow_session=session-1',
+    })
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Gate Command reason' }), {
+      target: { value: 'Evidence reviewed.' },
+    })
+    expect(screen.getByRole('button', { name: '批准并继续' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '驳回' })).toBeEnabled()
+  })
+
+  it('never exposes a historical Gate when the current node is not a Gate', async () => {
+    mockedFetchTeamOverview.mockResolvedValue({
+      ...overview,
+      runs: [
+        {
+          ...overview.runs[0]!,
+          status: 'building',
+          currentNodeId: 'n-current-task',
+          nodes: [
+            {
+              ...overview.runs[0]!.nodes[0]!,
+              id: 'n-historical-gate',
+              status: 'completed',
+            },
+            {
+              id: 'n-current-task',
+              stage: 'build',
+              title: 'Current implementation',
+              subtitle: 'Coding',
+              kind: 'task',
+              status: 'running',
+              ownerId: 'u-remote',
+              requiredRole: 'member',
+              retryCount: 0,
+              artifactIds: [],
+            },
+          ],
+        },
+      ],
+    })
+
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote', runId: 'run-remote' }),
+      }),
+    )
+
+    expect(screen.getByRole('heading', { level: 2, name: '暂无待审 Gate' })).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Gate Command reason' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '批准并继续' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '驳回' })).toBeDisabled()
+    expect(mockedEvaluateGateCommandSnapshot).not.toHaveBeenCalled()
   })
 
   it('renders an empty state when the API has no team projects yet', async () => {

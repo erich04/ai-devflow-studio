@@ -1,9 +1,9 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-devflow}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-devflow}"]
@@ -13,42 +13,86 @@ services:
     volumes:
       - devflow-postgres-data:/var/lib/postgresql/data
 
-  api:
+  migrate:
     build:
       context: .
-    command: >
-      sh -lc "corepack pnpm --filter @ai-devflow/api db:migrate &&
-              corepack pnpm --filter @ai-devflow/api exec tsx src/server.ts"
+      target: api-runtime
+    command: ["node", "migrate.js"]
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      DEVFLOW_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-devflow}@postgres:5432/${POSTGRES_DB:-devflow}
+      DEVFLOW_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-devflow}
+      DEVFLOW_DATABASE_STATEMENT_TIMEOUT_MS: ${DEVFLOW_DATABASE_STATEMENT_TIMEOUT_MS:-15000}
+    restart: "no"
+
+  seed:
+    profiles: ["demo"]
+    build:
+      context: .
+      target: api-runtime
+    command: ["node", "seed-demo.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DEVFLOW_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-devflow}
+      DEVFLOW_DATABASE_STATEMENT_TIMEOUT_MS: ${DEVFLOW_DATABASE_STATEMENT_TIMEOUT_MS:-15000}
+      DEVFLOW_ENABLE_DEMO_DATA: "true"
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      target: api-runtime
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DEVFLOW_AGENT_CREDENTIAL_KEY: ${DEVFLOW_AGENT_CREDENTIAL_KEY:?Set DEVFLOW_AGENT_CREDENTIAL_KEY in .env}
+      DEVFLOW_DATABASE_STATEMENT_TIMEOUT_MS: ${DEVFLOW_DATABASE_STATEMENT_TIMEOUT_MS:-15000}
+      DEVFLOW_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-devflow}
       DEVFLOW_DEPLOYMENT_PROFILE: pilot
-      DEVFLOW_ENABLE_DEMO_DATA: ${DEVFLOW_ENABLE_DEMO_DATA:-false}
-      DEV_AUTH_ENABLED: ${DEV_AUTH_ENABLED:-false}
-      DEVFLOW_REQUIRE_AUTH: ${DEVFLOW_REQUIRE_AUTH:-false}
-      DEVFLOW_SESSION_SECRET: ${DEVFLOW_SESSION_SECRET:-replace-this-devflow-session-secret}
-      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
-      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
-      GITHUB_OAUTH_REDIRECT_URI: ${GITHUB_OAUTH_REDIRECT_URI:-http://127.0.0.1:${DEVFLOW_API_PORT:-4310}/api/auth/github/callback}
+      DEVFLOW_ENABLE_DEMO_DATA: "false"
+      DEVFLOW_ENABLE_FAKE_RUNTIME: "false"
+      DEVFLOW_REQUIRE_AUTH: "true"
+      DEVFLOW_SESSION_SECRET: ${DEVFLOW_SESSION_SECRET:?Set DEVFLOW_SESSION_SECRET in .env}
+      DEVFLOW_WEB_APP_URL: ${DEVFLOW_WEB_APP_URL:-http://127.0.0.1:${DEVFLOW_WEB_PORT:-4311}}
+      DEV_AUTH_ENABLED: "false"
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:?Set GITHUB_CLIENT_ID in .env}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:?Set GITHUB_CLIENT_SECRET in .env}
+      GITHUB_OAUTH_REDIRECT_URI: ${GITHUB_OAUTH_REDIRECT_URI:?Set GITHUB_OAUTH_REDIRECT_URI in .env}
       HOST: 0.0.0.0
       PORT: 4310
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4310/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
     ports:
-      - "${DEVFLOW_API_PORT:-4310}:4310"
+      - "127.0.0.1:${DEVFLOW_API_PORT:-4310}:4310"
 
   web:
     build:
       context: .
-    command: corepack pnpm --filter @ai-devflow/web exec next start -H 0.0.0.0 -p 4311
+      target: web-runtime
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     environment:
       DEVFLOW_INTERNAL_API_BASE_URL: http://api:4310
-      NEXT_PUBLIC_DEVFLOW_API_URL: http://127.0.0.1:${DEVFLOW_API_PORT:-4310}
+      DEVFLOW_PUBLIC_API_BASE_URL: ${DEVFLOW_PUBLIC_API_BASE_URL:-http://127.0.0.1:4310}
+      HOSTNAME: 0.0.0.0
+      PORT: 4311
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4311/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
     ports:
-      - "${DEVFLOW_WEB_PORT:-4311}:4311"
+      - "127.0.0.1:${DEVFLOW_WEB_PORT:-4311}:4311"
 
 volumes:
   devflow-postgres-data:

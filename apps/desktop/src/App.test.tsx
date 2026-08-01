@@ -3311,8 +3311,10 @@ describe('App', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '重试 run-summary 同步' }))
 
-    const toast = await screen.findByTestId('toast')
-    expect(toast).toHaveTextContent('远端同步重试失败，请稍后再试')
+    await waitFor(() =>
+      expect(screen.getByTestId('toast')).toHaveTextContent('远端同步重试失败，请稍后再试'),
+    )
+    const toast = screen.getByTestId('toast')
     expect(toast).not.toHaveTextContent(/secret-token|api\.internal|private|raw body/i)
     expect(screen.getByTestId('remote-sync-operations')).toHaveTextContent('terminal')
   })

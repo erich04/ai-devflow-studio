@@ -24,6 +24,7 @@ import {
   type DesktopPairingExchangeResult,
   type EffectiveEnforcementPolicy,
   type GateOverrideDecision,
+  type GateEnforcementDecision,
   type McpServerDefinition,
   type OrganizationEnforcementPolicy,
   type Project,
@@ -55,7 +56,11 @@ import {
   tokenUsage,
 } from '@ai-devflow/shared/fixtures'
 import type { WorkRequestRepository } from './work-request-contract'
+import type { GateCommandRepository } from './gate-command-contract'
 import { createSeedWorkRequestRepository } from './seed-work-request-repository'
+import { createSeedGateCommandRepository } from './seed-gate-command-repository'
+import { preflightGateCommand } from './gate-command-preflight'
+import { evaluateTeamGateEnforcement } from './team-gate-enforcement'
 
 const DEMO_ORGANIZATION_ID = 'org-demo'
 const DEMO_IDENTITY_TIMESTAMP = new Date(0).toISOString()
@@ -102,7 +107,10 @@ export type TeamOverviewPayload = {
 
 export type TeamRepositoryReadContext = Pick<TeamSession, 'organizationId'>
 
-export type TeamRepositorySyncContext = TeamRepositoryReadContext & Pick<TeamSession, 'userId'>
+export type TeamRepositorySyncContext = TeamRepositoryReadContext &
+  Pick<TeamSession, 'userId'> & {
+    tokenRecordId?: string | null
+  }
 
 export type ResolvedDesktopTokenSession = {
   tokenRecordId: string
@@ -169,7 +177,7 @@ export type TeamProjectCreateInput = {
   testCommand?: string
 }
 
-export type TeamRepository = WorkRequestRepository & {
+export type TeamRepository = WorkRequestRepository & GateCommandRepository & {
   getAuthenticatedIdentity(input: {
     provider: AuthProvider
     providerAccountId: string
@@ -279,6 +287,44 @@ export function redactAgentEventForPersistence(event: AgentEvent): AgentEvent {
     message: redactSensitiveText(event.message).value,
     timestamp: event.timestamp,
   }
+}
+
+export function findCurrentGateCommandOverride(input: {
+  decision: GateEnforcementDecision
+  overrides: readonly GateOverrideDecision[]
+  projectId: string
+  runId: string
+  nodeId: string
+  userId: string
+  role: GateOverrideDecision['role']
+}): GateOverrideDecision | undefined {
+  if (
+    !input.decision.canOverride ||
+    input.decision.blockingReasons.length === 0 ||
+    (!input.decision.blocksApproval && input.decision.status !== 'overridden')
+  ) {
+    return undefined
+  }
+
+  const blockerIds = [
+    ...new Set(input.decision.blockingReasons.map((reason) => reason.id)),
+  ].sort()
+  return input.overrides.find(
+    (override) =>
+      override.status === 'accepted' &&
+      !override.provisional &&
+      override.projectId === input.projectId &&
+      override.runId === input.runId &&
+      override.nodeId === input.nodeId &&
+      override.userId === input.userId &&
+      override.role === input.role &&
+      override.policyVersion === input.decision.policyVersion &&
+      override.reason.trim().length > 0 &&
+      override.blockedReasonIds.length === blockerIds.length &&
+      override.blockedReasonIds.every(
+        (blockerId, index) => blockerId === blockerIds[index],
+      ),
+  )
 }
 
 export function createSeedTeamRepository(): TeamRepository {
@@ -432,8 +478,110 @@ export function createSeedTeamRepository(): TeamRepository {
     }
   }
 
-  return {
+  const roleRank: Record<TeamMember['role'], number> = {
+    member: 1,
+    lead: 2,
+    owner: 3,
+  }
+  let repository: TeamRepository
+  const gateCommandRepository = createSeedGateCommandRepository({
+    resolveMaterializedWorkRequestClaim: (input) =>
+      workRequestRepository.resolveMaterializedWorkRequestClaim(input),
+    async evaluatePreflight(input, principal) {
+      const requestedRole =
+        principal.session.role === 'owner'
+          ? 'owner'
+          : principal.session.projectMemberships.find(
+              (membership) =>
+                membership.projectId === input.projectId &&
+                membership.userId === principal.session.userId,
+            )?.role
+      if (!requestedRole) {
+        return { ok: false, outcomeCode: 'project_forbidden' }
+      }
+      const scopedRun = syncedRuns.find(
+        (run) =>
+          run.id === input.runId &&
+          run.projectId === input.projectId &&
+          runOrganizationIds.get(run.id) ===
+            principal.session.organizationId,
+      )
+      if (!scopedRun) {
+        return { ok: false, outcomeCode: 'stale_run' }
+      }
+      const storagePrefix = `${scopedRun.id}:`
+      const localNodeId = (nodeId: string) =>
+        nodeId.startsWith(storagePrefix)
+          ? nodeId.slice(storagePrefix.length)
+          : nodeId
+      if (
+        !scopedRun.nodes.some(
+          (node) => localNodeId(node.id) === localNodeId(input.nodeId),
+        )
+      ) {
+        return { ok: false, outcomeCode: 'node_not_current' }
+      }
+
+      try {
+        const context = await evaluateTeamGateEnforcement(
+          repository,
+          principal.session,
+          input,
+        )
+        const matchingOverride = findCurrentGateCommandOverride({
+          decision: context.decision,
+          overrides: context.overrides,
+          projectId: context.run.projectId,
+          runId: context.run.id,
+          nodeId: context.node.id,
+          userId: principal.session.userId,
+          role: requestedRole,
+        })
+        const result = preflightGateCommand({
+          command: input,
+          run: context.run,
+          currentNode: context.node,
+          requester: {
+            userId: principal.session.userId,
+            role: requestedRole,
+          },
+          enforcement: context.decision,
+          ...(matchingOverride ? { override: matchingOverride } : {}),
+        })
+        return result.allowed
+          ? {
+              ok: true,
+              requestedRole,
+              workflowCommand: result.workflowCommand,
+              evaluationBlockerIds: result.evaluationBlockerIds,
+            }
+          : { ok: false, outcomeCode: result.code }
+      } catch {
+        return {
+          ok: false,
+          outcomeCode: 'authoritative_state_unavailable',
+        }
+      }
+    },
+    requesterStillAuthorized(command) {
+      if (
+        projectOrganizationIds.get(command.projectId) !==
+        command.organizationId
+      ) {
+        return false
+      }
+      const current = members.find(
+        (member) => member.id === command.requestedByUserId,
+      )
+      return Boolean(
+        current && roleRank[current.role] >= roleRank[command.requestedRole],
+      )
+    },
+  })
+
+  repository = {
     ...workRequestRepository,
+    ...gateCommandRepository,
     async getAuthenticatedIdentity(input) {
       if (input.provider !== 'github' || !input.providerAccountId.startsWith('demo:')) {
         return null
@@ -694,12 +842,13 @@ export function createSeedTeamRepository(): TeamRepository {
         enforcementPolicies: {
           organizationPolicy: scopedOrganizationPolicy,
           projectOverrides: scopedProjectOverrides,
-          effectivePolicies: scopedProjects.map((project) =>
-            resolveEffectivePolicy(
+          effectivePolicies: scopedProjects.map((project) => ({
+            ...resolveEffectivePolicy(
               scopedOrganizationPolicy,
               scopedProjectOverrides.find((override) => override.projectId === project.id) ?? null,
             ),
-          ),
+            projectId: project.id,
+          })),
           gateOverrides: scopedGateOverrides,
         },
         runtimeBudgetPolicies: runtimeBudgetPolicies.filter((policy) =>
@@ -721,6 +870,16 @@ export function createSeedTeamRepository(): TeamRepository {
 
     async uploadRunSummary(summary, context) {
       summary = redactRemoteRunSummaryForSync(summary)
+      if (
+        !workRequestRepository.permitsRunSummaryUpload({
+          organizationId: context.organizationId,
+          projectId: summary.projectId,
+          runId: summary.runId,
+          tokenRecordId: context.tokenRecordId ?? null,
+        })
+      ) {
+        throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+      }
       const existingRun = syncedRuns.find((run) => run.id === summary.runId)
       if (
         existingRun &&
@@ -981,7 +1140,10 @@ export function createSeedTeamRepository(): TeamRepository {
       return {
         organizationPolicy,
         projectOverride,
-        effectivePolicy: resolveEffectivePolicy(organizationPolicy, projectOverride),
+        effectivePolicy: {
+          ...resolveEffectivePolicy(organizationPolicy, projectOverride),
+          projectId,
+        },
       }
     },
 
@@ -1022,4 +1184,5 @@ export function createSeedTeamRepository(): TeamRepository {
       return runtimeBudgetApprovals.filter((approval) => !input.projectId || approval.projectId === input.projectId)
     },
   }
+  return repository
 }

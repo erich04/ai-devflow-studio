@@ -36,6 +36,11 @@ export const teamMigrationCatalog = [
     name: '0009_harden_work_request_timeline',
     fileName: '0009_harden_work_request_timeline.sql',
   },
+  {
+    version: 10,
+    name: '0010_harden_gate_command_delivery',
+    fileName: '0010_harden_gate_command_delivery.sql',
+  },
 ] as const
 
 export function splitSqlStatements(sql: string): string[] {

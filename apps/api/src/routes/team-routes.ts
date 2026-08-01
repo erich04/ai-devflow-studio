@@ -1,20 +1,18 @@
 import { randomUUID } from 'node:crypto'
 import {
   buildAgentReviewContext,
-  buildKnowledgeGovernanceChecks,
   canOverrideBlockedGate,
   createAgentReviewArtifacts,
   createFakeAgentProvider,
   createWarnOnlyDefaultPolicy,
   createOpenAiCompatibleAgentProvider,
-  evaluateGateEnforcement,
   evaluateRuntimeBudgetGuard,
   type AgentProvider,
   type GateOverrideDecision,
   formatUsd,
-  parseBudgetGuardDecision,
   type KnowledgeChunk,
   type KnowledgeDocument,
+  parseBudgetGuardDecision,
   type OrganizationEnforcementPolicy,
   resolveDevFlowRuntimeFlags,
   redactLocalAbsolutePaths,
@@ -57,6 +55,8 @@ import {
 } from '../repositories/team-repository'
 import { clearSessionCookie, createSessionCookie } from '../auth/session-cookie'
 import { resolveWorkRequestRoute } from './work-request-routes'
+import { resolveGateCommandRoute } from './gate-command-routes'
+import { evaluateTeamGateEnforcement } from '../repositories/team-gate-enforcement'
 
 const defaultKnowledgeDocuments: KnowledgeDocument[] = []
 const defaultKnowledgeChunks: KnowledgeChunk[] = []
@@ -77,10 +77,12 @@ export type ResolveTeamRouteOptions = {
   auth?: {
     sessionSecret: string
     createState?: () => string
+    secureCookies?: boolean
   }
   body?: unknown
   cookies?: Record<string, string | undefined>
   githubOAuth?: GitHubOAuthClient
+  postAuthRedirectUrl?: string
   principal?: RequestPrincipal | null
   session?: TeamSession | null
   searchParams?: URLSearchParams
@@ -722,12 +724,12 @@ async function acceptCanonicalRunSummary<T>(upload: () => Promise<T>): Promise<A
   }
 }
 
-function createOAuthStateCookie(state: string): string {
-  return `devflow_oauth_state=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`
+function createOAuthStateCookie(state: string, secure = false): string {
+  return `devflow_oauth_state=${state}; HttpOnly${secure ? '; Secure' : ''}; SameSite=Lax; Path=/; Max-Age=600`
 }
 
-function clearOAuthStateCookie(): string {
-  return 'devflow_oauth_state=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'
+function clearOAuthStateCookie(secure = false): string {
+  return `devflow_oauth_state=; HttpOnly${secure ? '; Secure' : ''}; SameSite=Lax; Path=/; Max-Age=0`
 }
 
 function filterRunsBundleForSession(bundle: RunsBundle, session: TeamSession): RunsBundle {
@@ -786,12 +788,13 @@ function filterOverviewForSession(
     enforcementPolicies: {
       organizationPolicy,
       projectOverrides,
-      effectivePolicies: projects.map((project) =>
-        resolveEffectivePolicy(
+      effectivePolicies: projects.map((project) => ({
+        ...resolveEffectivePolicy(
           organizationPolicy,
           projectOverrides.find((override) => override.projectId === project.id) ?? null,
         ),
-      ),
+        projectId: project.id,
+      })),
       gateOverrides: overview.enforcementPolicies.gateOverrides.filter((override) =>
         projectIds.has(override.projectId) && runIds.has(override.runId),
       ),
@@ -802,95 +805,6 @@ function filterOverviewForSession(
     runtimeBudgetApprovals: overview.runtimeBudgetApprovals.filter((approval) =>
       projectIds.has(approval.projectId),
     ),
-  }
-}
-
-async function evaluateEnforcementForInput(
-  repository: TeamRepository,
-  session: TeamSession,
-  input: EnforcementEvaluateInput,
-) {
-  if (!canAccessProject(session, input.projectId)) {
-    throw new Error('Project access required')
-  }
-
-  const [bundle, overview, policyBundle, overrides] = await Promise.all([
-    repository.getRunsBundle(session),
-    repository.getTeamOverview(session),
-    repository.getEnforcementPolicy(input.projectId, session),
-    repository.listGateOverrides({ runId: input.runId }, session),
-  ])
-  const storedRun = bundle.runs.find((candidate) => candidate.id === input.runId)
-  if (!storedRun || storedRun.projectId !== input.projectId || !canAccessProject(session, storedRun.projectId)) {
-    throw new Error('Project access required')
-  }
-
-  const localNodeId = (nodeId: string) => {
-    const remotePrefix = `${storedRun.id}:`
-    return nodeId.startsWith(remotePrefix) ? nodeId.slice(remotePrefix.length) : nodeId
-  }
-  const run: WorkflowRun = {
-    ...storedRun,
-    currentNodeId: localNodeId(storedRun.currentNodeId),
-    nodes: storedRun.nodes.map((candidate) => ({ ...candidate, id: localNodeId(candidate.id) })),
-    edges: storedRun.edges.map((edge) => ({
-      ...edge,
-      source: localNodeId(edge.source),
-      target: localNodeId(edge.target),
-    })),
-  }
-
-  const canonicalNodeId = localNodeId(input.nodeId)
-  const node = run.nodes.find((candidate) => candidate.id === canonicalNodeId)
-  if (!node) {
-    throw new Error(`Run node not found: ${input.nodeId}`)
-  }
-
-  const governanceChecks = buildKnowledgeGovernanceChecks({
-    run,
-    node,
-    artifacts: bundle.artifacts
-      .filter((artifact) => artifact.runId === run.id)
-      .map((artifact) => ({ ...artifact, nodeId: localNodeId(artifact.nodeId) })),
-    documents: defaultKnowledgeDocuments,
-    chunks: defaultKnowledgeChunks,
-    testEvidence: overview.testEvidenceSummaries
-      .filter((summary) => summary.runId === run.id)
-      .map(toTestEvidence)
-      .map((evidence) => ({ ...evidence, nodeId: localNodeId(evidence.nodeId) })),
-  })
-  const agentReviews = overview.agentReviews
-    .filter((review) => review.runId === run.id && localNodeId(review.nodeId) === node.id)
-    .map((review) => ({
-      ...review,
-      nodeId: localNodeId(review.nodeId),
-      policyFindings: review.policyFindings.map((finding) => ({
-        ...finding,
-        nodeId: localNodeId(finding.nodeId),
-      })),
-    }))
-  const latestAgentReview = agentReviews
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null
-  const agentPolicyFindings = agentReviews.flatMap((review) => review.policyFindings)
-  const normalizedOverrides = overrides.map((override) => ({
-    ...override,
-    nodeId: localNodeId(override.nodeId),
-  }))
-
-  return {
-    run,
-    node,
-    policyBundle,
-    decision: evaluateGateEnforcement({
-      run,
-      node,
-      effectivePolicy: policyBundle.effectivePolicy,
-      governanceChecks,
-      agentPolicyFindings,
-      latestAgentReview,
-      overrides: normalizedOverrides,
-      policySource: 'remote_cache',
-    }),
   }
 }
 
@@ -911,7 +825,10 @@ export async function resolveTeamRoute(
       status: 302,
       headers: {
         location: redirectTo,
-        'set-cookie': createOAuthStateCookie(state),
+        'set-cookie': createOAuthStateCookie(
+          state,
+          options.auth.secureCookies === true,
+        ),
       },
       body: { redirectTo },
     }
@@ -937,15 +854,20 @@ export async function resolveTeamRoute(
     const sessionCookie = createSessionCookie(
       { authAccountId: result.identity.authAccount.id },
       options.auth.sessionSecret,
+      { secure: options.auth.secureCookies === true },
     )
+    const redirectTo = options.postAuthRedirectUrl ?? '/'
 
     return {
       status: 302,
       headers: {
-        location: '/',
-        'set-cookie': [sessionCookie, clearOAuthStateCookie()],
+        location: redirectTo,
+        'set-cookie': [
+          sessionCookie,
+          clearOAuthStateCookie(options.auth.secureCookies === true),
+        ],
       },
-      body: { redirectTo: '/' },
+      body: { redirectTo },
     }
   }
 
@@ -953,7 +875,9 @@ export async function resolveTeamRoute(
     return {
       status: 204,
       headers: {
-        'set-cookie': clearSessionCookie(),
+        'set-cookie': clearSessionCookie({
+          secure: options.auth?.secureCookies === true,
+        }),
       },
       body: null,
     }
@@ -965,6 +889,14 @@ export async function resolveTeamRoute(
   })
   if (workRequestResult) {
     return workRequestResult
+  }
+
+  const gateCommandResult = await resolveGateCommandRoute(method, pathname, repository, {
+    body: options.body,
+    ...(options.principal !== undefined ? { principal: options.principal } : {}),
+  })
+  if (gateCommandResult) {
+    return gateCommandResult
   }
 
   if (method === 'GET' && pathname === '/api/runs') {
@@ -1188,7 +1120,7 @@ export async function resolveTeamRoute(
     }
 
     try {
-      const { decision } = await evaluateEnforcementForInput(repository, options.session, input)
+      const { decision } = await evaluateTeamGateEnforcement(repository, options.session, input)
       return { status: 200, body: decision }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to evaluate enforcement'
@@ -1209,7 +1141,7 @@ export async function resolveTeamRoute(
     }
 
     try {
-      const { run, node, decision } = await evaluateEnforcementForInput(repository, options.session, input)
+      const { run, node, decision } = await evaluateTeamGateEnforcement(repository, options.session, input)
       if (decision.policyVersion !== input.policyVersion) {
         return forbidden('Policy version is stale; re-evaluate before overriding')
       }
@@ -1689,7 +1621,16 @@ export async function resolveTeamRoute(
       return forbidden(`Project role ${requiredRole} required`)
     }
 
-    return acceptCanonicalRunSummary(() => repository.uploadRunSummary(summary, options.session!))
+    const syncContext =
+      options.principal?.authentication.kind === 'desktop_bearer'
+        ? {
+            ...options.session,
+            tokenRecordId: options.principal.authentication.tokenRecordId,
+          }
+        : options.session
+    return acceptCanonicalRunSummary(() =>
+      repository.uploadRunSummary(summary, syncContext),
+    )
   }
 
   if (method === 'POST' && pathname === '/api/sync/test-evidence-summary') {

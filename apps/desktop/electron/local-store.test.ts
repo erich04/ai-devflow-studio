@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 import { afterEach, describe, expect, it } from 'vitest'
 import initSqlJs from 'sql.js'
 import {
+  applyWorkflowCommand,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   createRemoteSyncOperation,
@@ -26,17 +27,25 @@ import type {
   CodingPermissionRequest,
   DependencyBootstrapEvidence,
   DesktopPairingCredential,
+  GateCommand,
+  GateCommandAcknowledgement,
+  GateEnforcementDecision,
+  GateOverrideDecision,
+  GateCommandReceipt,
   GateAdvisory,
   LocalProject,
   McpServerDefinition,
   ManagedCodingWorkspace,
+  PolicySnapshot,
   RetryAttempt,
   TestEvidence,
   WorkRequest,
+  WorkflowEvidenceSnapshot,
   WorkflowRun,
 } from '@ai-devflow/shared'
 import {
   createLocalStore,
+  gateCommandExecutionFingerprint,
   type WorkRequestMaterializationExpectedPairing,
   type SettleRemoteSyncOperationInput,
 } from './local-store'
@@ -280,6 +289,170 @@ const workRequestPairing: WorkRequestMaterializationExpectedPairing = {
   localProjectId: project.id,
 }
 
+const gateWorkflowCreation = createWorkflowRunFromRequest({
+  runId: run.id,
+  title: run.title,
+  request: run.request,
+  projectId: project.id,
+  creatorId: run.creatorId,
+  branchName: run.branchName,
+  now: '2026-08-01T01:58:00.000Z',
+})
+const gateClarificationArtifact: Artifact = {
+  id: 'artifact-gate-command-clarification',
+  runId: gateWorkflowCreation.run.id,
+  nodeId: gateWorkflowCreation.run.currentNodeId,
+  kind: 'clarification',
+  title: 'Clarified Gate Command scope',
+  summary: 'The bounded collaboration intent is ready for approval.',
+  content: 'Apply the shared workflow transition over canonical local evidence.',
+  redacted: true,
+  updatedAt: '2026-08-01T01:59:00.000Z',
+}
+const gateCompletion = applyWorkflowCommand({
+  run: gateWorkflowCreation.run,
+  command: {
+    type: 'complete_agent',
+    nodeId: gateWorkflowCreation.run.currentNodeId,
+    artifactId: gateClarificationArtifact.id,
+  },
+  evidence: {
+    artifacts: [gateClarificationArtifact],
+    codingRuns: [],
+    codingDiffs: [],
+    testEvidence: [],
+    agentReviews: [],
+  },
+  now: gateClarificationArtifact.updatedAt,
+})
+if (!gateCompletion.applied) {
+  throw new Error('Gate Command fixture did not reach its clarification Gate.')
+}
+const gateRunBefore: WorkflowRun = {
+  ...gateCompletion.run,
+  version: 3,
+  updatedAt: '2026-08-01T02:00:00.000Z',
+}
+const gateTransition = applyWorkflowCommand({
+  run: gateRunBefore,
+  command: { type: 'approve_gate', nodeId: gateRunBefore.currentNodeId },
+  evidence: {
+    artifacts: [gateClarificationArtifact],
+    codingRuns: [],
+    codingDiffs: [],
+    testEvidence: [],
+    agentReviews: [],
+    approval: {
+      roleAllowed: true,
+      policy: { blocksApproval: false },
+      review: 'not_required',
+      budget: 'not_required',
+    },
+  },
+  now: '2026-08-01T02:01:30.000Z',
+})
+if (!gateTransition.applied) {
+  throw new Error('Gate Command fixture did not apply its shared transition.')
+}
+const gateRunAfter = gateTransition.run
+
+const deliveringGateCommand: GateCommand = {
+  id: 'gate-command-local-1',
+  organizationId: desktopPairingCredential.organizationId,
+  projectId: desktopPairingCredential.projectId,
+  workRequestId: null,
+  runId: gateRunBefore.id,
+  nodeId: gateRunBefore.currentNodeId,
+  action: 'approve',
+  workflowCommand: 'approve_gate',
+  reason: 'Approve the current Design Gate.',
+  requestedByUserId: 'u-review-lead',
+  requestedRole: 'lead',
+  idempotencyKey: 'gate-command:create:run-1:v3',
+  requestFingerprint: 'b'.repeat(64),
+  expectedRunVersion: gateRunBefore.version,
+  expectedPolicyVersion: 2,
+  expectedBlockerIds: [],
+  version: 2,
+  evaluationStatus: 'allowed',
+  evaluationBlockerIds: [],
+  evaluatedAt: '2026-08-01T02:00:00.000Z',
+  status: 'delivering',
+  outcomeCode: null,
+  expiresAt: '2026-08-01T02:15:00.000Z',
+  createdAt: '2026-08-01T02:00:00.000Z',
+  updatedAt: '2026-08-01T02:01:00.000Z',
+}
+
+const gateCommandReceipt: GateCommandReceipt = {
+  id: 'gate-command-receipt-local-1',
+  commandId: deliveringGateCommand.id,
+  attempt: 1,
+  leasedAt: '2026-08-01T02:01:00.000Z',
+  leaseExpiresAt: '2026-08-01T02:02:00.000Z',
+  acknowledgedAt: null,
+}
+
+const gateApprovalEvent: AgentEvent = {
+  id: 'event-gate-command-local-1',
+  runId: gateRunBefore.id,
+  nodeId: gateRunBefore.currentNodeId,
+  sequence: 1,
+  kind: 'approval',
+  message: 'Remote Gate Command applied.',
+  timestamp: gateRunAfter.updatedAt,
+}
+
+const gateOrganizationPolicyV2 = {
+  ...createWarnOnlyDefaultPolicy({
+    organizationId: desktopPairingCredential.organizationId,
+    updatedAt: '2026-08-01T01:59:00.000Z',
+  }),
+  version: 2,
+}
+const gatePolicySnapshotV2: PolicySnapshot = {
+  projectId: desktopPairingCredential.projectId,
+  organizationPolicy: gateOrganizationPolicyV2,
+  projectOverride: null,
+  effectivePolicy: resolveEffectivePolicy(gateOrganizationPolicyV2, null),
+  version: 2,
+  updatedAt: gateOrganizationPolicyV2.updatedAt,
+  syncedAt: '2026-08-01T01:59:30.000Z',
+  source: 'remote_cache',
+}
+const gateEnforcementV2: GateEnforcementDecision = {
+  status: 'pass',
+  blocksApproval: false,
+  blockingReasons: [],
+  warningReasons: [],
+  requiredActions: [],
+  canOverride: false,
+  overrideRoleRequired: 'lead',
+  policySource: 'remote_cache',
+  policyVersion: 2,
+  provisional: false,
+}
+const gatePersistedEvidence: WorkflowEvidenceSnapshot = {
+  artifacts: [gateClarificationArtifact],
+  codingRuns: [],
+  codingDiffs: [],
+  testEvidence: [],
+  agentReviews: [],
+}
+const gateKnowledgeFingerprint = `sha256:${'a'.repeat(64)}`
+const gateEvaluationBinding = {
+  policySnapshot: gatePolicySnapshotV2,
+  enforcement: gateEnforcementV2,
+  overrides: [] as GateOverrideDecision[],
+  selectedOverrideId: null,
+  evidence: gatePersistedEvidence,
+  repositoryKnowledge: {
+    projectId: project.id,
+    evaluatedFingerprint: gateKnowledgeFingerprint,
+    observedFingerprint: gateKnowledgeFingerprint,
+  },
+}
+
 const claimedWorkRequest: WorkRequest = {
   id: 'wr-local-materialization',
   organizationId: desktopPairingCredential.organizationId,
@@ -461,16 +634,2011 @@ const retryAttempt: RetryAttempt = {
 }
 
 describe('createLocalStore', () => {
-  it('initializes schema version 10 and keeps it stable across reopen', async () => {
+  it('initializes schema version 12 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(10)
+    expect(await first.getSchemaVersion()).toBe(12)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(10)
+    expect(await second.getSchemaVersion()).toBe(12)
     second.close()
+  })
+
+  it('creates metadata-only Gate Command execution, receipt, and acknowledgement tables', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    store.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const db = new SQL.Database(await readFile(dbPath))
+    const columns = (table: string) =>
+      db.exec(`pragma table_info(${table})`)[0]?.values.map((row) => String(row[1])) ?? []
+
+    expect(columns('gate_command_executions')).toEqual([
+      'command_id',
+      'organization_id',
+      'team_project_id',
+      'local_project_id',
+      'claim_token_id',
+      'work_request_id',
+      'run_id',
+      'node_id',
+      'action',
+      'workflow_command',
+      'requested_by_user_id',
+      'requested_role',
+      'server_request_fingerprint',
+      'execution_fingerprint',
+      'expected_run_version',
+      'expected_policy_version',
+      'expected_blocker_ids_hash',
+      'outcome_code',
+      'before_run_version',
+      'after_run_version',
+      'evaluated_at',
+      'command_expires_at',
+      'created_at',
+    ])
+    expect(columns('gate_command_receipts')).toEqual([
+      'receipt_id',
+      'command_id',
+      'attempt',
+      'leased_at',
+      'lease_expires_at',
+      'acknowledged_at',
+      'received_at',
+    ])
+    expect(columns('gate_command_acknowledgements')).toEqual([
+      'receipt_id',
+      'command_id',
+      'outcome_code',
+      'before_run_version',
+      'after_run_version',
+      'evaluated_at',
+      'status',
+      'remote_acknowledgement_id',
+      'remote_created_at',
+      'remote_replayed',
+      'created_at',
+      'acknowledged_at',
+      'failure_code',
+      'failed_at',
+    ])
+    expect(columns('gate_command_receipt_observations')).toEqual([
+      'receipt_id',
+      'command_id',
+      'attempt',
+      'leased_at',
+      'lease_expires_at',
+      'received_at',
+      'organization_id',
+      'team_project_id',
+      'local_project_id',
+      'work_request_id',
+      'run_id',
+      'node_id',
+      'claim_token_id',
+      'execution_fingerprint',
+      'status',
+      'outcome_code',
+      'evaluated_at',
+    ])
+    for (const table of [
+      'gate_command_executions',
+      'gate_command_receipts',
+      'gate_command_acknowledgements',
+      'gate_command_receipt_observations',
+    ]) {
+      expect(columns(table)).not.toEqual(
+        expect.arrayContaining([
+          'json',
+          'raw_json',
+          'reason',
+          'token',
+          'token_id',
+          'secret',
+        ]),
+      )
+    }
+    db.close()
+  })
+
+  it('persists a received Gate Command receipt observation before evaluation and across reopen', async () => {
+    const dbPath = await tempDbPath()
+    const first = await createLocalStore({ dbPath })
+    await first.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+
+    await expect(
+      first.recordGateCommandReceiptObservation({
+        command: deliveringGateCommand,
+        receipt: gateCommandReceipt,
+        expectedPairing: workRequestPairing,
+        receivedAt: '2026-08-01T02:01:10.000Z',
+      }),
+    ).resolves.toEqual({
+      recorded: true,
+      replayed: false,
+      observation: {
+        receiptId: gateCommandReceipt.id,
+        commandId: deliveringGateCommand.id,
+        attempt: gateCommandReceipt.attempt,
+        leasedAt: gateCommandReceipt.leasedAt,
+        leaseExpiresAt: gateCommandReceipt.leaseExpiresAt,
+        receivedAt: '2026-08-01T02:01:10.000Z',
+        organizationId: deliveringGateCommand.organizationId,
+        teamProjectId: deliveringGateCommand.projectId,
+        localProjectId: project.id,
+        workRequestId: null,
+        runId: deliveringGateCommand.runId,
+        nodeId: deliveringGateCommand.nodeId,
+        claimTokenId: desktopPairingCredential.tokenId,
+        executionFingerprint: gateCommandExecutionFingerprint(deliveringGateCommand),
+        status: 'received',
+        outcomeCode: null,
+        evaluatedAt: null,
+      },
+    })
+    first.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(
+      reopened.getGateCommandReceiptObservation(gateCommandReceipt.id),
+    ).resolves.toMatchObject({
+      receiptId: gateCommandReceipt.id,
+      commandId: deliveringGateCommand.id,
+      status: 'received',
+      outcomeCode: null,
+      evaluatedAt: null,
+    })
+    reopened.close()
+  })
+
+  it('replays exact receipt observations, accepts a new attempt, and rejects changed authority', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    const initial = {
+      command: deliveringGateCommand,
+      receipt: gateCommandReceipt,
+      expectedPairing: workRequestPairing,
+      receivedAt: '2026-08-01T02:01:10.000Z',
+    }
+    await expect(
+      store.recordGateCommandReceiptObservation(initial),
+    ).resolves.toMatchObject({ recorded: true, replayed: false })
+    await expect(
+      store.recordGateCommandReceiptObservation({
+        ...initial,
+        receivedAt: '2026-08-01T02:01:20.000Z',
+      }),
+    ).resolves.toMatchObject({
+      recorded: true,
+      replayed: true,
+      observation: { receivedAt: initial.receivedAt },
+    })
+
+    await expect(
+      store.recordGateCommandReceiptObservation({
+        ...initial,
+        receipt: {
+          ...gateCommandReceipt,
+          id: 'gate-command-receipt-local-2',
+          attempt: 2,
+          leasedAt: '2026-08-01T02:02:00.000Z',
+          leaseExpiresAt: '2026-08-01T02:03:00.000Z',
+        },
+        receivedAt: '2026-08-01T02:02:10.000Z',
+      }),
+    ).resolves.toMatchObject({
+      recorded: true,
+      replayed: false,
+      observation: { attempt: 2, status: 'received' },
+    })
+
+    await expect(
+      store.recordGateCommandReceiptObservation({
+        ...initial,
+        receipt: {
+          ...gateCommandReceipt,
+          leaseExpiresAt: '2026-08-01T02:01:59.000Z',
+        },
+      }),
+    ).resolves.toEqual({ recorded: false, reason: 'receipt_conflict' })
+    await expect(
+      store.recordGateCommandReceiptObservation({
+        ...initial,
+        receivedAt: gateCommandReceipt.leaseExpiresAt,
+      }),
+    ).resolves.toEqual({ recorded: false, reason: 'invalid_input' })
+    await expect(
+      store.recordGateCommandReceiptObservation({
+        ...initial,
+        receipt: { ...gateCommandReceipt, id: 'colliding-receipt-id' },
+      }),
+    ).resolves.toEqual({ recorded: false, reason: 'receipt_conflict' })
+    await expect(
+      store.recordGateCommandReceiptObservation({
+        ...initial,
+        command: {
+          ...deliveringGateCommand,
+          reason: 'Changed signed execution payload.',
+        },
+      }),
+    ).resolves.toEqual({ recorded: false, reason: 'fingerprint_conflict' })
+    await expect(
+      store.recordGateCommandReceiptObservation({
+        ...initial,
+        command: { ...deliveringGateCommand, organizationId: 'other-org' },
+      }),
+    ).resolves.toEqual({ recorded: false, reason: 'pairing_scope_mismatch' })
+    await expect(
+      store.recordGateCommandReceiptObservation({
+        ...initial,
+        expectedPairing: { ...workRequestPairing, tokenId: 'other-token' },
+      }),
+    ).resolves.toEqual({ recorded: false, reason: 'pairing_scope_mismatch' })
+    store.close()
+  })
+
+  it('marks the pre-observed receipt evaluated in the final Gate execution commit', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    const command: GateCommand = {
+      ...deliveringGateCommand,
+      id: 'gate-command-observed-reject',
+      action: 'reject',
+      workflowCommand: null,
+      reason: 'Reject after durable receipt observation.',
+      idempotencyKey: 'gate-command:observed-reject:run-1:v3',
+      requestFingerprint: '8'.repeat(64),
+    }
+    const receipt: GateCommandReceipt = {
+      ...gateCommandReceipt,
+      id: 'gate-command-receipt-observed-reject',
+      commandId: command.id,
+    }
+    const receivedAt = '2026-08-01T02:01:10.000Z'
+
+    await store.recordGateCommandReceiptObservation({
+      command,
+      receipt,
+      expectedPairing: workRequestPairing,
+      receivedAt,
+    })
+    await expect(
+      store.commitGateCommandExecution({
+        command,
+        receipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'human_rejected',
+        evaluatedAt: gateRunAfter.updatedAt,
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      execution: { outcomeCode: 'human_rejected' },
+    })
+    await expect(
+      store.getGateCommandReceiptObservation(receipt.id),
+    ).resolves.toMatchObject({
+      receiptId: receipt.id,
+      commandId: command.id,
+      receivedAt,
+      status: 'evaluated',
+      outcomeCode: 'human_rejected',
+      evaluatedAt: gateRunAfter.updatedAt,
+    })
+    await expect(
+      store.recordGateCommandReceiptObservation({
+        command,
+        receipt,
+        expectedPairing: workRequestPairing,
+        receivedAt: '2026-08-01T02:01:40.000Z',
+      }),
+    ).resolves.toMatchObject({
+      recorded: true,
+      replayed: true,
+      observation: {
+        receivedAt,
+        status: 'evaluated',
+        outcomeCode: 'human_rejected',
+        evaluatedAt: gateRunAfter.updatedAt,
+      },
+    })
+    store.close()
+  })
+
+  it('restores a pre-evaluation receipt observation when durable persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const backupPath = `${dbPath}.backup`
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+
+    await expect(
+      store.recordGateCommandReceiptObservation({
+        command: deliveringGateCommand,
+        receipt: gateCommandReceipt,
+        expectedPairing: workRequestPairing,
+        receivedAt: '2026-08-01T02:01:10.000Z',
+      }),
+    ).rejects.toThrow(/EISDIR|directory/i)
+    await expect(
+      store.getGateCommandReceiptObservation(gateCommandReceipt.id),
+    ).resolves.toBeNull()
+    store.close()
+  })
+
+  it('enforces the shared 15-minute command TTL and 60-second receipt lease in SQLite', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    store.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const db = new SQL.Database(await readFile(dbPath))
+    const insertExecution = (
+      commandId: string,
+      expiresAt: string,
+      claimTokenId = 'claim-token-1',
+    ) =>
+      db.run(
+        `insert into gate_command_executions (
+           command_id, organization_id, team_project_id, local_project_id,
+           claim_token_id,
+           work_request_id, run_id, node_id, action, workflow_command,
+           requested_by_user_id, requested_role, server_request_fingerprint,
+           execution_fingerprint, expected_run_version, expected_policy_version,
+           expected_blocker_ids_hash, outcome_code, before_run_version,
+           after_run_version, evaluated_at, command_expires_at, created_at
+         ) values (?, 'org-1', 'team-project-1', 'local-project-1', ?, null,
+           'run-1', 'node-1', 'approve', 'approve_gate', 'user-1', 'lead',
+           ?, ?, 3, 2, ?, 'stale_policy', 3, 3,
+           '2026-08-01T02:01:00.000Z', ?, '2026-08-01T02:00:00.000Z')`,
+        [commandId, claimTokenId, 'a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64), expiresAt],
+      )
+
+    expect(() =>
+      insertExecution('gate-command-too-long', '2026-08-01T02:15:00.001Z'),
+    ).toThrow(/constraint/i)
+    insertExecution('gate-command-valid-ttl', '2026-08-01T02:15:00.000Z')
+    expect(() =>
+      insertExecution(
+        'gate-command-invalid-claim-token',
+        '2026-08-01T02:15:00.000Z',
+        ` ${'x'.repeat(200)}`,
+      ),
+    ).toThrow(/constraint/i)
+    expect(() =>
+      db.run(
+        `insert into gate_command_receipts (
+           receipt_id, command_id, attempt, leased_at, lease_expires_at, received_at
+         ) values ('receipt-too-long', 'gate-command-valid-ttl', 1,
+           '2026-08-01T02:01:00.000Z', '2026-08-01T02:02:00.001Z',
+           '2026-08-01T02:01:30.000Z')`,
+      ),
+    ).toThrow(/constraint/i)
+    db.close()
+  })
+
+  it('enforces receipt observation identity, fingerprint, lease, and lifecycle state in SQLite', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    store.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const db = new SQL.Database(await readFile(dbPath))
+    const insert = (overrides: {
+      receiptId?: string
+      commandId?: string
+      attempt?: number
+      leaseExpiresAt?: string
+      receivedAt?: string
+      executionFingerprint?: string
+      status?: string
+      outcomeCode?: string | null
+      evaluatedAt?: string | null
+    } = {}) =>
+      db.run(
+        `insert into gate_command_receipt_observations (
+           receipt_id, command_id, attempt, leased_at, lease_expires_at, received_at,
+           organization_id, team_project_id, local_project_id, work_request_id,
+           run_id, node_id, claim_token_id, execution_fingerprint,
+           status, outcome_code, evaluated_at
+         ) values (?, ?, ?, '2026-08-01T02:01:00.000Z', ?, ?,
+           'org-1', 'team-1', 'local-1', null, 'run-1', 'node-1', 'token-1',
+           ?, ?, ?, ?)`,
+        [
+          overrides.receiptId ?? 'observation-receipt',
+          overrides.commandId ?? 'observation-command',
+          overrides.attempt ?? 1,
+          overrides.leaseExpiresAt ?? '2026-08-01T02:02:00.000Z',
+          overrides.receivedAt ?? '2026-08-01T02:01:10.000Z',
+          overrides.executionFingerprint ?? 'a'.repeat(64),
+          overrides.status ?? 'received',
+          overrides.outcomeCode ?? null,
+          overrides.evaluatedAt ?? null,
+        ],
+      )
+
+    expect(() => insert({ executionFingerprint: 'not-a-fingerprint' })).toThrow(
+      /constraint/i,
+    )
+    expect(() => insert({ leaseExpiresAt: '2026-08-01T02:02:00.001Z' })).toThrow(
+      /constraint/i,
+    )
+    expect(() => insert({ receivedAt: '2026-08-01T02:00:59.999Z' })).toThrow(
+      /constraint/i,
+    )
+    expect(() => insert({ outcomeCode: 'applied' })).toThrow(/constraint/i)
+    expect(() =>
+      insert({ status: 'evaluated', outcomeCode: 'applied' }),
+    ).toThrow(/constraint/i)
+    insert()
+    expect(() =>
+      insert({ receiptId: 'other-receipt-same-attempt' }),
+    ).toThrow(/constraint/i)
+    insert({
+      receiptId: 'evaluated-observation-receipt',
+      commandId: 'evaluated-observation-command',
+      status: 'evaluated',
+      outcomeCode: 'human_rejected',
+      evaluatedAt: '2026-08-01T02:01:30.000Z',
+    })
+    db.close()
+  })
+
+  it('atomically applies an approved Gate Command with its receipt, event, and Run summary', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await store.saveArtifact(gateClarificationArtifact)
+    await store.savePolicySnapshot(gatePolicySnapshotV2)
+
+    await expect(
+      store.commitGateCommandExecution({
+        command: deliveringGateCommand,
+        receipt: gateCommandReceipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'applied',
+        evaluatedAt: gateRunAfter.updatedAt,
+        expectedRun: gateRunBefore,
+        run: gateRunAfter,
+        event: gateApprovalEvent,
+        evaluationBinding: gateEvaluationBinding,
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      replayed: false,
+      acknowledgement: {
+        receiptId: gateCommandReceipt.id,
+        commandId: deliveringGateCommand.id,
+        outcomeCode: 'applied',
+        beforeRunVersion: 3,
+        afterRunVersion: 4,
+        evaluatedAt: gateRunAfter.updatedAt,
+        status: 'pending',
+        remoteAcknowledgementId: null,
+      },
+    })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunAfter)
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([
+      gateApprovalEvent,
+    ])
+    await expect(store.listRemoteSyncOperations(gateRunBefore.id)).resolves.toEqual([
+      expect.objectContaining({
+        kind: 'run-summary',
+        generation: 2,
+        status: 'pending',
+      }),
+    ])
+    await expect(
+      store.getGateCommandExecution(deliveringGateCommand.id),
+    ).resolves.toMatchObject({
+      commandId: deliveringGateCommand.id,
+      runId: gateRunBefore.id,
+      claimTokenId: desktopPairingCredential.tokenId,
+      action: 'approve',
+      outcomeCode: 'applied',
+      beforeRunVersion: 3,
+      afterRunVersion: 4,
+      executionFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+      expectedBlockerIdsHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    })
+    store.close()
+  })
+
+  it('rejects an applied Gate commit that omits its enforcement evaluation binding', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await store.saveArtifact(gateClarificationArtifact)
+    await store.savePolicySnapshot(gatePolicySnapshotV2)
+
+    await expect(
+      store.commitGateCommandExecution({
+        command: deliveringGateCommand,
+        receipt: gateCommandReceipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'applied',
+        evaluatedAt: gateRunAfter.updatedAt,
+        expectedRun: gateRunBefore,
+        run: gateRunAfter,
+        event: gateApprovalEvent,
+      }),
+    ).resolves.toEqual({ committed: false, reason: 'invalid_input' })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    await expect(store.getGateCommandExecution(deliveringGateCommand.id)).resolves.toBeNull()
+    store.close()
+  })
+
+  it('records stale_policy without applying when policy changes after a version-3 Run was evaluated', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await store.saveArtifact(gateClarificationArtifact)
+    await store.savePolicySnapshot(gatePolicySnapshotV2)
+    await store.savePolicySnapshot({
+      ...gatePolicySnapshotV2,
+      organizationPolicy: {
+        ...gateOrganizationPolicyV2,
+        version: 3,
+        updatedAt: '2026-08-01T02:01:00.000Z',
+      },
+      effectivePolicy: {
+        ...gatePolicySnapshotV2.effectivePolicy!,
+        version: 3,
+        updatedAt: '2026-08-01T02:01:00.000Z',
+      },
+      version: 3,
+      updatedAt: '2026-08-01T02:01:00.000Z',
+      syncedAt: '2026-08-01T02:01:01.000Z',
+    })
+
+    await expect(
+      store.commitGateCommandExecution({
+        command: deliveringGateCommand,
+        receipt: gateCommandReceipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'applied',
+        evaluatedAt: gateRunAfter.updatedAt,
+        expectedRun: gateRunBefore,
+        run: gateRunAfter,
+        event: gateApprovalEvent,
+        evaluationBinding: gateEvaluationBinding,
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      replayed: false,
+      execution: {
+        outcomeCode: 'stale_policy',
+        beforeRunVersion: 3,
+        afterRunVersion: 3,
+      },
+      acknowledgement: {
+        outcomeCode: 'stale_policy',
+        beforeRunVersion: 3,
+        afterRunVersion: 3,
+      },
+    })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([])
+    store.close()
+  })
+
+  it('records evidence_blocked without applying when the evaluated exact override is revoked', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const blockerId = 'governance_check:testing_standard:needs_evidence'
+    const command: GateCommand = {
+      ...deliveringGateCommand,
+      id: 'gate-command-override-revoked',
+      idempotencyKey: 'gate-command:override-revoked:run-1:v3',
+      requestFingerprint: '7'.repeat(64),
+      expectedBlockerIds: [blockerId],
+      evaluationStatus: 'allowed',
+      evaluationBlockerIds: [blockerId],
+    }
+    const receipt: GateCommandReceipt = {
+      ...gateCommandReceipt,
+      id: 'gate-command-receipt-override-revoked',
+      commandId: command.id,
+    }
+    const enforcement: GateEnforcementDecision = {
+      ...gateEnforcementV2,
+      status: 'blocked',
+      blocksApproval: true,
+      blockingReasons: [{
+        id: blockerId,
+        target: 'governance_check',
+        ruleKey: 'testing-standard-needs-evidence',
+        action: 'block',
+        summary: 'Passing test evidence is required.',
+      }],
+      canOverride: true,
+    }
+    const acceptedOverride: GateOverrideDecision = {
+      id: 'gate-override-command-revoked',
+      runId: gateRunBefore.id,
+      nodeId: gateRunBefore.currentNodeId,
+      projectId: project.id,
+      userId: command.requestedByUserId,
+      role: 'lead',
+      reason: 'Lead accepts this bounded policy exception.',
+      blockedReasonIds: [blockerId],
+      policyVersion: command.expectedPolicyVersion,
+      provisional: false,
+      status: 'accepted',
+      createdAt: '2026-08-01T02:00:30.000Z',
+    }
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await store.saveArtifact(gateClarificationArtifact)
+    await store.savePolicySnapshot(gatePolicySnapshotV2)
+    await store.saveGateOverride(acceptedOverride)
+    await store.saveGateOverride({ ...acceptedOverride, status: 'rejected' })
+
+    await expect(
+      store.commitGateCommandExecution({
+        command,
+        receipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'applied',
+        evaluatedAt: gateRunAfter.updatedAt,
+        expectedRun: gateRunBefore,
+        run: gateRunAfter,
+        event: { ...gateApprovalEvent, id: 'event-gate-override-revoked' },
+        evaluationBinding: {
+          ...gateEvaluationBinding,
+          enforcement,
+          overrides: [acceptedOverride],
+          selectedOverrideId: acceptedOverride.id,
+        },
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      execution: {
+        outcomeCode: 'evidence_blocked',
+        beforeRunVersion: 3,
+        afterRunVersion: 3,
+      },
+      acknowledgement: {
+        outcomeCode: 'evidence_blocked',
+        beforeRunVersion: 3,
+        afterRunVersion: 3,
+      },
+    })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([])
+    store.close()
+  })
+
+  it('accepts an exact local-project override when the Team project id is different', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const blockerId = 'governance_check:testing_standard:needs_evidence'
+    const command: GateCommand = {
+      ...deliveringGateCommand,
+      id: 'gate-command-local-project-override',
+      idempotencyKey: 'gate-command:local-project-override:run-1:v3',
+      requestFingerprint: '5'.repeat(64),
+      expectedBlockerIds: [blockerId],
+      evaluationBlockerIds: [blockerId],
+    }
+    const receipt: GateCommandReceipt = {
+      ...gateCommandReceipt,
+      id: 'gate-command-receipt-local-project-override',
+      commandId: command.id,
+    }
+    const override: GateOverrideDecision = {
+      id: 'gate-override-local-project',
+      runId: gateRunBefore.id,
+      nodeId: gateRunBefore.currentNodeId,
+      projectId: project.id,
+      userId: command.requestedByUserId,
+      role: 'lead',
+      reason: 'Lead accepts this exact bounded exception.',
+      blockedReasonIds: [blockerId],
+      policyVersion: command.expectedPolicyVersion,
+      provisional: false,
+      status: 'accepted',
+      createdAt: '2026-08-01T02:00:30.000Z',
+    }
+    const enforcement: GateEnforcementDecision = {
+      ...gateEnforcementV2,
+      status: 'overridden',
+      blockingReasons: [{
+        id: blockerId,
+        target: 'governance_check',
+        ruleKey: 'testing-standard-needs-evidence',
+        action: 'block',
+        summary: 'Passing test evidence is required.',
+      }],
+      canOverride: true,
+    }
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await store.saveArtifact(gateClarificationArtifact)
+    await store.savePolicySnapshot(gatePolicySnapshotV2)
+    await store.saveGateOverride(override)
+
+    await expect(
+      store.commitGateCommandExecution({
+        command,
+        receipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'applied',
+        evaluatedAt: gateRunAfter.updatedAt,
+        expectedRun: gateRunBefore,
+        run: gateRunAfter,
+        event: { ...gateApprovalEvent, id: 'event-gate-local-project-override' },
+        evaluationBinding: {
+          ...gateEvaluationBinding,
+          enforcement,
+          overrides: [override],
+          selectedOverrideId: override.id,
+        },
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      execution: { outcomeCode: 'applied', afterRunVersion: 4 },
+    })
+    expect(command.projectId).not.toBe(override.projectId)
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunAfter)
+    store.close()
+  })
+
+  it('rechecks enforcement authorization and refuses a blocked evaluation without an exact override', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const blockerId = 'governance_check:testing_standard:needs_evidence'
+    const command: GateCommand = {
+      ...deliveringGateCommand,
+      id: 'gate-command-missing-exact-override',
+      idempotencyKey: 'gate-command:missing-exact-override:run-1:v3',
+      requestFingerprint: '6'.repeat(64),
+      expectedBlockerIds: [blockerId],
+      evaluationBlockerIds: [blockerId],
+    }
+    const receipt: GateCommandReceipt = {
+      ...gateCommandReceipt,
+      id: 'gate-command-receipt-missing-exact-override',
+      commandId: command.id,
+    }
+    const enforcement: GateEnforcementDecision = {
+      ...gateEnforcementV2,
+      status: 'blocked',
+      blocksApproval: true,
+      blockingReasons: [{
+        id: blockerId,
+        target: 'governance_check',
+        ruleKey: 'testing-standard-needs-evidence',
+        action: 'block',
+        summary: 'Passing test evidence is required.',
+      }],
+      canOverride: true,
+    }
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await store.saveArtifact(gateClarificationArtifact)
+    await store.savePolicySnapshot(gatePolicySnapshotV2)
+
+    await expect(
+      store.commitGateCommandExecution({
+        command,
+        receipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'applied',
+        evaluatedAt: gateRunAfter.updatedAt,
+        expectedRun: gateRunBefore,
+        run: gateRunAfter,
+        event: { ...gateApprovalEvent, id: 'event-gate-missing-exact-override' },
+        evaluationBinding: {
+          ...gateEvaluationBinding,
+          enforcement,
+        },
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      execution: { outcomeCode: 'evidence_blocked', afterRunVersion: 3 },
+      acknowledgement: { outcomeCode: 'evidence_blocked', afterRunVersion: 3 },
+    })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([])
+    store.close()
+  })
+
+  it('records evidence_blocked without applying when persisted evidence changes after evaluation', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await store.saveArtifact(gateClarificationArtifact)
+    await store.savePolicySnapshot(gatePolicySnapshotV2)
+    await store.saveArtifact({
+      ...gateClarificationArtifact,
+      id: 'artifact-added-after-gate-evaluation',
+      title: 'Changed evidence after evaluation',
+      updatedAt: '2026-08-01T02:01:00.000Z',
+    })
+
+    await expect(
+      store.commitGateCommandExecution({
+        command: deliveringGateCommand,
+        receipt: gateCommandReceipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'applied',
+        evaluatedAt: gateRunAfter.updatedAt,
+        expectedRun: gateRunBefore,
+        run: gateRunAfter,
+        event: gateApprovalEvent,
+        evaluationBinding: gateEvaluationBinding,
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      execution: {
+        outcomeCode: 'evidence_blocked',
+        beforeRunVersion: 3,
+        afterRunVersion: 3,
+      },
+      acknowledgement: {
+        outcomeCode: 'evidence_blocked',
+        beforeRunVersion: 3,
+        afterRunVersion: 3,
+      },
+    })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([])
+    store.close()
+  })
+
+  it('records evidence_blocked when the optimistic repository knowledge fingerprint changes', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await store.saveArtifact(gateClarificationArtifact)
+    await store.savePolicySnapshot(gatePolicySnapshotV2)
+
+    await expect(
+      store.commitGateCommandExecution({
+        command: deliveringGateCommand,
+        receipt: gateCommandReceipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'applied',
+        evaluatedAt: gateRunAfter.updatedAt,
+        expectedRun: gateRunBefore,
+        run: gateRunAfter,
+        event: gateApprovalEvent,
+        evaluationBinding: {
+          ...gateEvaluationBinding,
+          repositoryKnowledge: {
+            ...gateEvaluationBinding.repositoryKnowledge,
+            observedFingerprint: `sha256:${'b'.repeat(64)}`,
+          },
+        },
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      execution: { outcomeCode: 'evidence_blocked', afterRunVersion: 3 },
+      acknowledgement: { outcomeCode: 'evidence_blocked', afterRunVersion: 3 },
+    })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([])
+    store.close()
+  })
+
+  it('fails closed instead of overwriting an existing workflow event during Gate apply', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await store.saveArtifact(gateClarificationArtifact)
+    const existingEvent = {
+      ...gateApprovalEvent,
+      message: 'Existing immutable workflow event.',
+    }
+    await store.saveEvent(existingEvent)
+
+    await expect(
+      store.commitGateCommandExecution({
+        command: deliveringGateCommand,
+        receipt: gateCommandReceipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'applied',
+        evaluatedAt: gateRunAfter.updatedAt,
+        expectedRun: gateRunBefore,
+        run: gateRunAfter,
+        event: gateApprovalEvent,
+      }),
+    ).resolves.toEqual({ committed: false, reason: 'invalid_input' })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([
+      existingEvent,
+    ])
+    await expect(
+      store.getGateCommandExecution(deliveringGateCommand.id),
+    ).resolves.toBeNull()
+    store.close()
+  })
+
+  it('fails closed when an applied Gate candidate is not the exact shared workflow transition', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await store.saveArtifact(gateClarificationArtifact)
+    const forgedRun: WorkflowRun = {
+      ...gateRunBefore,
+      version: gateRunBefore.version + 1,
+      updatedAt: gateRunAfter.updatedAt,
+    }
+
+    await expect(
+      store.commitGateCommandExecution({
+        command: deliveringGateCommand,
+        receipt: gateCommandReceipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'applied',
+        evaluatedAt: gateRunAfter.updatedAt,
+        expectedRun: gateRunBefore,
+        run: forgedRun,
+        event: gateApprovalEvent,
+      }),
+    ).resolves.toEqual({ committed: false, reason: 'invalid_input' })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([])
+    await expect(
+      store.getGateCommandExecution(deliveringGateCommand.id),
+    ).resolves.toBeNull()
+    store.close()
+  })
+
+  it('rejects apply exactly at the receipt or command expiry boundary', async () => {
+    const cases = [
+      {
+        suffix: 'receipt-boundary',
+        command: deliveringGateCommand,
+        receipt: gateCommandReceipt,
+        evaluatedAt: gateCommandReceipt.leaseExpiresAt,
+      },
+      {
+        suffix: 'command-boundary',
+        command: {
+          ...deliveringGateCommand,
+          id: 'gate-command-command-boundary',
+          idempotencyKey: 'gate-command:command-boundary:run-1:v3',
+          requestFingerprint: '8'.repeat(64),
+          updatedAt: '2026-08-01T02:14:00.000Z',
+        },
+        receipt: {
+          ...gateCommandReceipt,
+          id: 'gate-command-receipt-command-boundary',
+          commandId: 'gate-command-command-boundary',
+          leasedAt: '2026-08-01T02:14:00.000Z',
+          leaseExpiresAt: '2026-08-01T02:15:00.000Z',
+        },
+        evaluatedAt: deliveringGateCommand.expiresAt,
+      },
+    ] satisfies Array<{
+      suffix: string
+      command: GateCommand
+      receipt: GateCommandReceipt
+      evaluatedAt: string
+    }>
+
+    for (const testCase of cases) {
+      const dbPath = await tempDbPath()
+      const store = await createLocalStore({ dbPath })
+      await store.saveDesktopPairingCredential(
+        { ...desktopPairingCredential, localProjectId: project.id },
+        'encrypted-token',
+      )
+      await store.saveRun(gateRunBefore)
+      await store.saveArtifact(gateClarificationArtifact)
+      const boundaryTransition = applyWorkflowCommand({
+        run: gateRunBefore,
+        command: { type: 'approve_gate', nodeId: gateRunBefore.currentNodeId },
+        evidence: {
+          artifacts: [gateClarificationArtifact],
+          codingRuns: [],
+          codingDiffs: [],
+          testEvidence: [],
+          agentReviews: [],
+          approval: {
+            roleAllowed: true,
+            policy: { blocksApproval: false },
+            review: 'not_required',
+            budget: 'not_required',
+          },
+        },
+        now: testCase.evaluatedAt,
+      })
+      if (!boundaryTransition.applied) {
+        throw new Error(`Invalid boundary fixture: ${testCase.suffix}`)
+      }
+
+      await expect(
+        store.commitGateCommandExecution({
+          command: testCase.command,
+          receipt: testCase.receipt,
+          expectedPairing: workRequestPairing,
+          outcomeCode: 'applied',
+          evaluatedAt: testCase.evaluatedAt,
+          expectedRun: gateRunBefore,
+          run: boundaryTransition.run,
+          event: {
+            ...gateApprovalEvent,
+            id: `event-${testCase.suffix}`,
+            timestamp: testCase.evaluatedAt,
+          },
+        }),
+      ).resolves.toEqual({ committed: false, reason: 'invalid_input' })
+      await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+      store.close()
+    }
+  })
+
+  it('records a human rejection without mutating the Run, events, or Run-summary outbox', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    const rejectCommand: GateCommand = {
+      ...deliveringGateCommand,
+      id: 'gate-command-local-reject',
+      action: 'reject',
+      workflowCommand: null,
+      reason: 'Reject until the rollout plan is clearer.',
+      idempotencyKey: 'gate-command:reject:run-1:v3',
+      requestFingerprint: 'c'.repeat(64),
+    }
+    const rejectReceipt: GateCommandReceipt = {
+      ...gateCommandReceipt,
+      id: 'gate-command-receipt-local-reject',
+      commandId: rejectCommand.id,
+    }
+
+    await expect(
+      store.commitGateCommandExecution({
+        command: rejectCommand,
+        receipt: rejectReceipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'human_rejected',
+        evaluatedAt: gateRunAfter.updatedAt,
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      replayed: false,
+      execution: {
+        outcomeCode: 'human_rejected',
+        beforeRunVersion: 3,
+        afterRunVersion: 3,
+      },
+      acknowledgement: {
+        outcomeCode: 'human_rejected',
+        beforeRunVersion: 3,
+        afterRunVersion: 3,
+        status: 'pending',
+      },
+    })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([])
+    await expect(store.listRemoteSyncOperations(gateRunBefore.id)).resolves.toEqual([
+      expect.objectContaining({
+        kind: 'run-summary',
+        generation: 1,
+        status: 'pending',
+      }),
+    ])
+    await expect(
+      store.getGateCommandReceiptObservation(rejectReceipt.id),
+    ).resolves.toMatchObject({
+      receiptId: rejectReceipt.id,
+      status: 'evaluated',
+      outcomeCode: 'human_rejected',
+      receivedAt: gateRunAfter.updatedAt,
+      evaluatedAt: gateRunAfter.updatedAt,
+    })
+    store.close()
+  })
+
+  it('records a deterministic Gate failure without mutating canonical workflow state', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    const command = {
+      ...deliveringGateCommand,
+      id: 'gate-command-local-stale-policy',
+      idempotencyKey: 'gate-command:stale-policy:run-1:v3',
+      requestFingerprint: 'd'.repeat(64),
+    }
+    const receipt = {
+      ...gateCommandReceipt,
+      id: 'gate-command-receipt-local-stale-policy',
+      commandId: command.id,
+    }
+
+    await expect(
+      store.commitGateCommandExecution({
+        command,
+        receipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'stale_policy',
+        evaluatedAt: gateRunAfter.updatedAt,
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      replayed: false,
+      execution: {
+        outcomeCode: 'stale_policy',
+        beforeRunVersion: 3,
+        afterRunVersion: 3,
+      },
+    })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([])
+    await expect(store.listRemoteSyncOperations(gateRunBefore.id)).resolves.toEqual([
+      expect.objectContaining({ generation: 1 }),
+    ])
+    store.close()
+  })
+
+  it('deduplicates an applied command across a later delivery receipt without applying twice', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await store.saveArtifact(gateClarificationArtifact)
+    await store.savePolicySnapshot(gatePolicySnapshotV2)
+    const initial = {
+      command: deliveringGateCommand,
+      receipt: gateCommandReceipt,
+      expectedPairing: workRequestPairing,
+      outcomeCode: 'applied' as const,
+      evaluatedAt: gateRunAfter.updatedAt,
+      expectedRun: gateRunBefore,
+      run: gateRunAfter,
+      event: gateApprovalEvent,
+      evaluationBinding: gateEvaluationBinding,
+    }
+    await store.commitGateCommandExecution(initial)
+
+    const redeliveryReceipt: GateCommandReceipt = {
+      ...gateCommandReceipt,
+      id: 'gate-command-receipt-local-redelivery',
+      attempt: 2,
+      leasedAt: '2026-08-01T02:03:00.000Z',
+      leaseExpiresAt: '2026-08-01T02:04:00.000Z',
+    }
+    const redelivery = {
+      ...initial,
+      receipt: redeliveryReceipt,
+      evaluatedAt: '2026-08-01T02:03:30.000Z',
+    }
+    const expectedReplay = {
+      committed: true,
+      replayed: true,
+      execution: {
+        evaluatedAt: gateRunAfter.updatedAt,
+        outcomeCode: 'applied',
+        beforeRunVersion: 3,
+        afterRunVersion: 4,
+      },
+      acknowledgement: {
+        receiptId: gateCommandReceipt.id,
+        evaluatedAt: gateRunAfter.updatedAt,
+        outcomeCode: 'applied',
+        beforeRunVersion: 3,
+        afterRunVersion: 4,
+      },
+    }
+    await expect(store.commitGateCommandExecution(redelivery)).resolves.toMatchObject(
+      expectedReplay,
+    )
+    await expect(store.commitGateCommandExecution(redelivery)).resolves.toMatchObject(
+      expectedReplay,
+    )
+    await expect(store.listPendingGateCommandAcknowledgements()).resolves.toEqual([
+      expect.objectContaining({
+        receiptId: gateCommandReceipt.id,
+        evaluatedAt: gateRunAfter.updatedAt,
+        status: 'pending',
+      }),
+    ])
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunAfter)
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([
+      gateApprovalEvent,
+    ])
+    await expect(store.listRemoteSyncOperations(gateRunBefore.id)).resolves.toEqual([
+      expect.objectContaining({ generation: 2 }),
+    ])
+    await expect(
+      store.getGateCommandReceiptObservation(redeliveryReceipt.id),
+    ).resolves.toMatchObject({
+      receiptId: redeliveryReceipt.id,
+      attempt: 2,
+      status: 'evaluated',
+      outcomeCode: 'applied',
+      receivedAt: redelivery.evaluatedAt,
+      evaluatedAt: redelivery.evaluatedAt,
+    })
+    store.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const inspected = new SQL.Database(await readFile(dbPath))
+    expect(
+      inspected.exec(
+        `select
+           (select count(*) from gate_command_receipts where command_id = ?),
+           (select count(*) from gate_command_acknowledgements where command_id = ?)`,
+        [deliveringGateCommand.id, deliveringGateCommand.id],
+      )[0]?.values[0],
+    ).toEqual([2, 1])
+    inspected.close()
+  })
+
+  it('refuses to attach a redelivery receipt after pairing changes to a new token record', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await store.saveArtifact(gateClarificationArtifact)
+    await store.savePolicySnapshot(gatePolicySnapshotV2)
+    const initial = await store.commitGateCommandExecution({
+      command: deliveringGateCommand,
+      receipt: gateCommandReceipt,
+      expectedPairing: workRequestPairing,
+      outcomeCode: 'applied',
+      evaluatedAt: gateRunAfter.updatedAt,
+      expectedRun: gateRunBefore,
+      run: gateRunAfter,
+      event: gateApprovalEvent,
+      evaluationBinding: gateEvaluationBinding,
+    })
+    expect(initial).toMatchObject({ committed: true, replayed: false })
+    const replacementTokenId = 'desktop-token-replacement'
+    await store.saveDesktopPairingCredential(
+      {
+        ...desktopPairingCredential,
+        tokenId: replacementTokenId,
+        localProjectId: project.id,
+      },
+      'encrypted-replacement-token',
+    )
+    const repairedReceipt: GateCommandReceipt = {
+      ...gateCommandReceipt,
+      id: 'gate-command-receipt-after-repair',
+      attempt: 2,
+      leasedAt: '2026-08-01T02:03:00.000Z',
+      leaseExpiresAt: '2026-08-01T02:04:00.000Z',
+    }
+    const replacementPairing = {
+      ...workRequestPairing,
+      tokenId: replacementTokenId,
+    }
+
+    await expect(
+      store.recordGateCommandReceiptObservation({
+        command: deliveringGateCommand,
+        receipt: repairedReceipt,
+        expectedPairing: replacementPairing,
+        receivedAt: '2026-08-01T02:03:10.000Z',
+      }),
+    ).resolves.toEqual({ recorded: false, reason: 'pairing_scope_mismatch' })
+
+    await expect(
+      store.commitGateCommandExecution({
+        command: deliveringGateCommand,
+        receipt: repairedReceipt,
+        expectedPairing: replacementPairing,
+        outcomeCode: 'applied',
+        evaluatedAt: '2026-08-01T02:03:30.000Z',
+        expectedRun: gateRunBefore,
+        run: gateRunAfter,
+        event: gateApprovalEvent,
+        evaluationBinding: gateEvaluationBinding,
+      }),
+    ).resolves.toEqual({ committed: false, reason: 'pairing_scope_mismatch' })
+    await expect(store.getGateCommandExecution(deliveringGateCommand.id)).resolves.toMatchObject({
+      claimTokenId: desktopPairingCredential.tokenId,
+    })
+    await expect(
+      store.getGateCommandAcknowledgement('gate-command-receipt-after-repair'),
+    ).resolves.toBeNull()
+    store.close()
+  })
+
+  it('fails closed when the same command ID changes canonical execution fields', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    const initial = {
+      command: deliveringGateCommand,
+      receipt: gateCommandReceipt,
+      expectedPairing: workRequestPairing,
+      outcomeCode: 'stale_policy' as const,
+      evaluatedAt: gateRunAfter.updatedAt,
+    }
+    await store.commitGateCommandExecution(initial)
+    const conflictingReceipt = {
+      ...gateCommandReceipt,
+      id: 'gate-command-receipt-local-conflict',
+      attempt: 2,
+      leasedAt: '2026-08-01T02:03:00.000Z',
+      leaseExpiresAt: '2026-08-01T02:04:00.000Z',
+    }
+
+    await expect(
+      store.commitGateCommandExecution({
+        ...initial,
+        command: {
+          ...deliveringGateCommand,
+          expectedPolicyVersion: 3,
+        },
+        receipt: conflictingReceipt,
+        evaluatedAt: '2026-08-01T02:03:30.000Z',
+      }),
+    ).resolves.toEqual({
+      committed: false,
+      reason: 'fingerprint_conflict',
+    })
+    await expect(
+      store.getGateCommandAcknowledgement(conflictingReceipt.id),
+    ).resolves.toBeNull()
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    store.close()
+  })
+
+  it('never persists Gate reason text or idempotency material in the execution audit tables', async () => {
+    const dbPath = await tempDbPath()
+    const reasonSentinel = 'never-persist-gate-reason-sentinel'
+    const idempotencySentinel = 'never-persist-gate-idempotency-sentinel'
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await store.commitGateCommandExecution({
+      command: {
+        ...deliveringGateCommand,
+        id: 'gate-command-local-data-minimization',
+        reason: reasonSentinel,
+        idempotencyKey: idempotencySentinel,
+        requestFingerprint: '9'.repeat(64),
+      },
+      receipt: {
+        ...gateCommandReceipt,
+        id: 'gate-command-receipt-local-data-minimization',
+        commandId: 'gate-command-local-data-minimization',
+      },
+      expectedPairing: workRequestPairing,
+      outcomeCode: 'stale_policy',
+      evaluatedAt: gateRunAfter.updatedAt,
+    })
+    store.close()
+
+    const persisted = (await readFile(dbPath)).toString()
+    expect(persisted).not.toContain(reasonSentinel)
+    expect(persisted).not.toContain(idempotencySentinel)
+  })
+
+  it('atomically records stale_run when the approved Run CAS loses a race', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    const concurrentRun = {
+      ...gateRunBefore,
+      version: 4,
+      updatedAt: '2026-08-01T02:01:15.000Z',
+    }
+    await store.saveRun(concurrentRun)
+
+    await expect(
+      store.commitGateCommandExecution({
+        command: deliveringGateCommand,
+        receipt: gateCommandReceipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'applied',
+        evaluatedAt: gateRunAfter.updatedAt,
+        expectedRun: gateRunBefore,
+        run: gateRunAfter,
+        event: gateApprovalEvent,
+        evaluationBinding: gateEvaluationBinding,
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      replayed: false,
+      execution: {
+        outcomeCode: 'stale_run',
+        beforeRunVersion: 4,
+        afterRunVersion: 4,
+      },
+      acknowledgement: {
+        outcomeCode: 'stale_run',
+        beforeRunVersion: 4,
+        afterRunVersion: 4,
+      },
+    })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(concurrentRun)
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([])
+    await expect(store.listRemoteSyncOperations(gateRunBefore.id)).resolves.toEqual([
+      expect.objectContaining({ generation: 2 }),
+    ])
+    store.close()
+  })
+
+  it('atomically records the actual stale Run version when a deterministic outcome loses its CAS', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    const concurrentRun = {
+      ...gateRunBefore,
+      version: 4,
+      updatedAt: '2026-08-01T02:01:15.000Z',
+    }
+    await store.saveRun(concurrentRun)
+    const command: GateCommand = {
+      ...deliveringGateCommand,
+      id: 'gate-command-local-deterministic-stale-run',
+      idempotencyKey: 'gate-command:deterministic-stale-run:run-1:v3',
+      requestFingerprint: 'f'.repeat(64),
+    }
+    const receipt: GateCommandReceipt = {
+      ...gateCommandReceipt,
+      id: 'gate-command-receipt-local-deterministic-stale-run',
+      commandId: command.id,
+    }
+
+    await expect(
+      store.commitGateCommandExecution({
+        command,
+        receipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'stale_policy',
+        evaluatedAt: gateRunAfter.updatedAt,
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      replayed: false,
+      execution: {
+        outcomeCode: 'stale_run',
+        beforeRunVersion: 4,
+        afterRunVersion: 4,
+      },
+      acknowledgement: {
+        outcomeCode: 'stale_run',
+        beforeRunVersion: 4,
+        afterRunVersion: 4,
+      },
+    })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(concurrentRun)
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([])
+    await expect(store.listRemoteSyncOperations(gateRunBefore.id)).resolves.toEqual([
+      expect.objectContaining({ generation: 1 }),
+    ])
+    store.close()
+  })
+
+  it('records run_not_found with the expected version placeholder when a deterministic outcome loses its Run', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    const command: GateCommand = {
+      ...deliveringGateCommand,
+      id: 'gate-command-local-deterministic-run-not-found',
+      idempotencyKey: 'gate-command:deterministic-run-not-found:run-1:v3',
+      requestFingerprint: '1'.repeat(64),
+    }
+    const receipt: GateCommandReceipt = {
+      ...gateCommandReceipt,
+      id: 'gate-command-receipt-local-deterministic-run-not-found',
+      commandId: command.id,
+    }
+
+    await expect(
+      store.commitGateCommandExecution({
+        command,
+        receipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'stale_policy',
+        evaluatedAt: gateRunAfter.updatedAt,
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      replayed: false,
+      execution: {
+        outcomeCode: 'run_not_found',
+        beforeRunVersion: 3,
+        afterRunVersion: 3,
+      },
+      acknowledgement: {
+        outcomeCode: 'run_not_found',
+        beforeRunVersion: 3,
+        afterRunVersion: 3,
+      },
+    })
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([])
+    await expect(store.listRemoteSyncOperations(gateRunBefore.id)).resolves.toEqual([])
+    store.close()
+  })
+
+  it('records expiry after the command deadline without treating the old lease as transition authority', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    const expiringCommand: GateCommand = {
+      ...deliveringGateCommand,
+      id: 'gate-command-local-expired',
+      idempotencyKey: 'gate-command:expired:run-1:v3',
+      requestFingerprint: 'e'.repeat(64),
+      updatedAt: '2026-08-01T02:14:30.000Z',
+    }
+    const expiringReceipt: GateCommandReceipt = {
+      id: 'gate-command-receipt-local-expired',
+      commandId: expiringCommand.id,
+      attempt: 1,
+      leasedAt: '2026-08-01T02:14:30.000Z',
+      leaseExpiresAt: expiringCommand.expiresAt,
+      acknowledgedAt: null,
+    }
+
+    await expect(
+      store.commitGateCommandExecution({
+        command: expiringCommand,
+        receipt: expiringReceipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'expired',
+        evaluatedAt: '2026-08-01T02:15:01.000Z',
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      execution: {
+        outcomeCode: 'expired',
+        beforeRunVersion: 3,
+        afterRunVersion: 3,
+      },
+    })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    await expect(store.listRemoteSyncOperations(gateRunBefore.id)).resolves.toEqual([
+      expect.objectContaining({ generation: 1 }),
+    ])
+    store.close()
+  })
+
+  it('keeps expired precedence when scope also changes at the command deadline', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    const command: GateCommand = {
+      ...deliveringGateCommand,
+      id: 'gate-command-expired-and-scope-mismatch',
+      projectId: 'p-other',
+      idempotencyKey: 'gate-command:expired-and-scope-mismatch:run-1:v3',
+      requestFingerprint: '4'.repeat(64),
+      updatedAt: '2026-08-01T02:14:30.000Z',
+    }
+    const receipt: GateCommandReceipt = {
+      id: 'gate-command-receipt-expired-and-scope-mismatch',
+      commandId: command.id,
+      attempt: 1,
+      leasedAt: '2026-08-01T02:14:30.000Z',
+      leaseExpiresAt: command.expiresAt,
+      acknowledgedAt: null,
+    }
+
+    await expect(
+      store.commitGateCommandExecution({
+        command,
+        receipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'expired',
+        evaluatedAt: command.expiresAt,
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      execution: { outcomeCode: 'expired', beforeRunVersion: 3, afterRunVersion: 3 },
+      acknowledgement: { outcomeCode: 'expired' },
+    })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    store.close()
+  })
+
+  it('records scope_mismatch without touching a Run when a delivered command escapes the pairing scope', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    const escapedCommand: GateCommand = {
+      ...deliveringGateCommand,
+      id: 'gate-command-local-scope-mismatch',
+      projectId: 'p-other',
+      idempotencyKey: 'gate-command:scope-mismatch:run-1:v3',
+      requestFingerprint: 'f'.repeat(64),
+    }
+    const escapedReceipt: GateCommandReceipt = {
+      ...gateCommandReceipt,
+      id: 'gate-command-receipt-local-scope-mismatch',
+      commandId: escapedCommand.id,
+    }
+
+    await expect(
+      store.commitGateCommandExecution({
+        command: escapedCommand,
+        receipt: escapedReceipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'scope_mismatch',
+        evaluatedAt: gateRunAfter.updatedAt,
+      }),
+    ).resolves.toMatchObject({
+      committed: true,
+      execution: {
+        teamProjectId: 'p-other',
+        localProjectId: project.id,
+        outcomeCode: 'scope_mismatch',
+        beforeRunVersion: 3,
+        afterRunVersion: 3,
+      },
+    })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    await expect(store.listRemoteSyncOperations(gateRunBefore.id)).resolves.toEqual([
+      expect.objectContaining({ generation: 1 }),
+    ])
+    store.close()
+  })
+
+  it('persists a pending acknowledgement and seals it with the real replayed server acknowledgement', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    const committed = await store.commitGateCommandExecution({
+      command: deliveringGateCommand,
+      receipt: gateCommandReceipt,
+      expectedPairing: workRequestPairing,
+      outcomeCode: 'stale_policy',
+      evaluatedAt: gateRunAfter.updatedAt,
+    })
+    if (!committed.committed) throw new Error('Expected local Gate execution')
+    await expect(store.listPendingGateCommandAcknowledgements()).resolves.toEqual([
+      committed.acknowledgement,
+    ])
+    const remoteAcknowledgement: GateCommandAcknowledgement = {
+      id: 'gate-ack-server-1',
+      commandId: deliveringGateCommand.id,
+      receiptId: gateCommandReceipt.id,
+      outcomeCode: 'stale_policy',
+      beforeRunVersion: 3,
+      afterRunVersion: 3,
+      evaluatedAt: gateRunAfter.updatedAt,
+      createdAt: '2026-08-01T02:01:40.000Z',
+    }
+
+    await expect(
+      store.recordGateCommandAcknowledgement({
+        receiptId: gateCommandReceipt.id,
+        acknowledgement: remoteAcknowledgement,
+        replayed: true,
+        acknowledgedAt: '2026-08-01T02:01:41.000Z',
+      }),
+    ).resolves.toMatchObject({
+      recorded: true,
+      replayed: false,
+      acknowledgement: {
+        status: 'acknowledged',
+        remoteAcknowledgementId: remoteAcknowledgement.id,
+        remoteCreatedAt: remoteAcknowledgement.createdAt,
+        remoteReplayed: true,
+        acknowledgedAt: '2026-08-01T02:01:41.000Z',
+      },
+    })
+    await expect(store.listPendingGateCommandAcknowledgements()).resolves.toEqual([])
+    await expect(
+      store.terminalizeGateCommandAcknowledgement({
+        receiptId: gateCommandReceipt.id,
+        failureCode: 'forbidden',
+        failedAt: '2026-08-01T02:01:42.000Z',
+      }),
+    ).resolves.toEqual({ terminalized: false, reason: 'conflict' })
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(
+      reopened.getGateCommandAcknowledgement(gateCommandReceipt.id),
+    ).resolves.toMatchObject({
+      status: 'acknowledged',
+      remoteAcknowledgementId: remoteAcknowledgement.id,
+      remoteReplayed: true,
+    })
+    reopened.close()
+  })
+
+  it('terminalizes a non-retryable scope mismatch with safe metadata and replays it idempotently', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    const committed = await store.commitGateCommandExecution({
+      command: deliveringGateCommand,
+      receipt: gateCommandReceipt,
+      expectedPairing: workRequestPairing,
+      outcomeCode: 'stale_policy',
+      evaluatedAt: gateRunAfter.updatedAt,
+    })
+    if (!committed.committed) throw new Error('Expected local Gate execution')
+    const failure = {
+      receiptId: gateCommandReceipt.id,
+      failureCode: 'scope_mismatch' as const,
+      failedAt: '2026-08-01T02:01:42.000Z',
+    }
+
+    await expect(
+      store.terminalizeGateCommandAcknowledgement(failure),
+    ).resolves.toMatchObject({
+      terminalized: true,
+      replayed: false,
+      acknowledgement: {
+        receiptId: gateCommandReceipt.id,
+        status: 'terminal',
+        remoteAcknowledgementId: null,
+        remoteCreatedAt: null,
+        remoteReplayed: null,
+        acknowledgedAt: null,
+        failureCode: 'scope_mismatch',
+        failedAt: failure.failedAt,
+      },
+    })
+    await expect(
+      store.terminalizeGateCommandAcknowledgement(failure),
+    ).resolves.toMatchObject({ terminalized: true, replayed: true })
+    await expect(
+      store.terminalizeGateCommandAcknowledgement({
+        ...failure,
+        failureCode: 'not_found',
+      }),
+    ).resolves.toEqual({ terminalized: false, reason: 'conflict' })
+    await expect(
+      store.terminalizeGateCommandAcknowledgement({
+        ...failure,
+        failureCode: 'network',
+      }),
+    ).resolves.toEqual({ terminalized: false, reason: 'invalid_input' })
+    await expect(
+      store.recordGateCommandAcknowledgement({
+        receiptId: gateCommandReceipt.id,
+        acknowledgement: {
+          id: 'gate-ack-server-after-terminal',
+          commandId: deliveringGateCommand.id,
+          receiptId: gateCommandReceipt.id,
+          outcomeCode: 'stale_policy',
+          beforeRunVersion: 3,
+          afterRunVersion: 3,
+          evaluatedAt: gateRunAfter.updatedAt,
+          createdAt: '2026-08-01T02:01:43.000Z',
+        },
+        replayed: false,
+        acknowledgedAt: '2026-08-01T02:01:44.000Z',
+      }),
+    ).resolves.toEqual({
+      recorded: false,
+      reason: 'acknowledgement_conflict',
+    })
+    await expect(store.listPendingGateCommandAcknowledgements()).resolves.toEqual([])
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(
+      reopened.getGateCommandAcknowledgement(gateCommandReceipt.id),
+    ).resolves.toMatchObject({
+      status: 'terminal',
+      failureCode: 'scope_mismatch',
+      failedAt: failure.failedAt,
+    })
+    await expect(
+      reopened.listPendingGateCommandAcknowledgements(),
+    ).resolves.toEqual([])
+    reopened.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const inspected = new SQL.Database(await readFile(dbPath))
+    expect(() =>
+      inspected.run(
+        `update gate_command_acknowledgements
+         set failure_code = 'network' where receipt_id = ?`,
+        [gateCommandReceipt.id],
+      ),
+    ).toThrow(/constraint/i)
+    expect(() =>
+      inspected.run(
+        `update gate_command_acknowledgements
+         set failure_code = null where receipt_id = ?`,
+        [gateCommandReceipt.id],
+      ),
+    ).toThrow(/constraint/i)
+    inspected.close()
+  })
+
+  it('restores a pending acknowledgement when terminal failure persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const backupPath = `${dbPath}.backup`
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    const committed = await store.commitGateCommandExecution({
+      command: deliveringGateCommand,
+      receipt: gateCommandReceipt,
+      expectedPairing: workRequestPairing,
+      outcomeCode: 'stale_policy',
+      evaluatedAt: gateRunAfter.updatedAt,
+    })
+    if (!committed.committed) throw new Error('Expected local Gate execution')
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+
+    await expect(
+      store.terminalizeGateCommandAcknowledgement({
+        receiptId: gateCommandReceipt.id,
+        failureCode: 'forbidden',
+        failedAt: '2026-08-01T02:01:42.000Z',
+      }),
+    ).rejects.toThrow(/EISDIR|directory/i)
+    await expect(
+      store.getGateCommandAcknowledgement(gateCommandReceipt.id),
+    ).resolves.toEqual(committed.acknowledgement)
+    await expect(store.listPendingGateCommandAcknowledgements()).resolves.toEqual([
+      committed.acknowledgement,
+    ])
+    store.close()
+  })
+
+  it('restores Run, event, receipt observation, execution, acknowledgement, and outbox when Gate persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const backupPath = `${dbPath}.backup`
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await store.saveArtifact(gateClarificationArtifact)
+    await store.savePolicySnapshot(gatePolicySnapshotV2)
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+
+    await expect(
+      store.commitGateCommandExecution({
+        command: deliveringGateCommand,
+        receipt: gateCommandReceipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'applied',
+        evaluatedAt: gateRunAfter.updatedAt,
+        expectedRun: gateRunBefore,
+        run: gateRunAfter,
+        event: gateApprovalEvent,
+        evaluationBinding: gateEvaluationBinding,
+      }),
+    ).rejects.toThrow(/EISDIR|directory/i)
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    await expect(
+      store.getGateCommandExecution(deliveringGateCommand.id),
+    ).resolves.toBeNull()
+    await expect(
+      store.getGateCommandAcknowledgement(gateCommandReceipt.id),
+    ).resolves.toBeNull()
+    await expect(
+      store.getGateCommandReceiptObservation(gateCommandReceipt.id),
+    ).resolves.toBeNull()
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([])
+    await expect(store.listRemoteSyncOperations(gateRunBefore.id)).resolves.toEqual([
+      expect.objectContaining({ generation: 1 }),
+    ])
+    store.close()
   })
 
   it('creates a constrained metadata-only Work Request materialization schema', async () => {
@@ -1363,13 +3531,13 @@ describe('createLocalStore', () => {
     second.close()
   })
 
-  it('migrates an existing v1 database to v10 without losing local projects or runs', async () => {
+  it('migrates an existing v1 database to v12 without losing local projects or runs', async () => {
     const dbPath = await tempDbPath()
     await writeLegacyV1Database(dbPath)
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(10)
+    expect(await store.getSchemaVersion()).toBe(12)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -1380,7 +3548,7 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const db = new SQL.Database(await readFile(dbPath))
-    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('10')
+    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('12')
     expect(db.exec("select name from sqlite_master where type = 'table' and name = 'workflow_nodes'")[0]?.values[0]?.[0]).toBe('workflow_nodes')
     db.close()
   })
@@ -1405,7 +3573,7 @@ describe('createLocalStore', () => {
     v8Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(10)
+    expect(await migrated.getSchemaVersion()).toBe(12)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     migrated.close()
@@ -1439,7 +3607,7 @@ describe('createLocalStore', () => {
     v9Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(10)
+    expect(await migrated.getSchemaVersion()).toBe(12)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -1450,6 +3618,199 @@ describe('createLocalStore', () => {
       )[0]?.values[0]?.[0],
     ).toBe('work_request_materializations')
     inspected.close()
+  })
+
+  it('migrates a retained v10 database to the Gate Command execution schema', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    await initial.upsertProject(project)
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const v10Db = new SQL.Database(await readFile(dbPath))
+    v10Db.run(`
+      drop index idx_gate_command_acknowledgements_pending;
+      drop table gate_command_acknowledgements;
+      drop index idx_gate_command_receipts_command;
+      drop table gate_command_receipts;
+      drop table gate_command_executions;
+      update schema_meta set value = '10' where key = 'schema_version';
+    `)
+    await writeFile(dbPath, Buffer.from(v10Db.export()))
+    v10Db.close()
+
+    const migrated = await createLocalStore({ dbPath })
+    expect(await migrated.getSchemaVersion()).toBe(12)
+    expect(await migrated.listProjects()).toEqual([project])
+    migrated.close()
+
+    const inspected = new SQL.Database(await readFile(dbPath))
+    expect(
+      inspected.exec(
+        "select name from sqlite_master where type = 'table' and name = 'gate_command_executions'",
+      )[0]?.values[0]?.[0],
+    ).toBe('gate_command_executions')
+    expect(
+      inspected.exec('pragma table_info(gate_command_executions)')[0]?.values.map(
+        (row) => String(row[1]),
+      ),
+    ).toContain('claim_token_id')
+    expect(
+      inspected.exec('pragma table_info(gate_command_acknowledgements)')[0]?.values.map(
+        (row) => String(row[1]),
+      ),
+    ).toEqual(expect.arrayContaining(['status', 'failure_code', 'failed_at']))
+    inspected.close()
+  })
+
+  it('migrates retained v11 Gate receipts into evaluated metadata observations', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    await initial.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await initial.saveRun(gateRunBefore)
+    const command: GateCommand = {
+      ...deliveringGateCommand,
+      id: 'gate-command-v11-observation-migration',
+      action: 'reject',
+      workflowCommand: null,
+      reason: 'Retained v11 execution.',
+      idempotencyKey: 'gate-command:v11-observation-migration:run-1:v3',
+      requestFingerprint: '9'.repeat(64),
+    }
+    const receipt: GateCommandReceipt = {
+      ...gateCommandReceipt,
+      id: 'gate-command-receipt-v11-observation-migration',
+      commandId: command.id,
+    }
+    await initial.commitGateCommandExecution({
+      command,
+      receipt,
+      expectedPairing: workRequestPairing,
+      outcomeCode: 'human_rejected',
+      evaluatedAt: gateRunAfter.updatedAt,
+    })
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const v11Db = new SQL.Database(await readFile(dbPath))
+    v11Db.run(`
+      drop index idx_gate_command_receipt_observations_command;
+      drop table gate_command_receipt_observations;
+      update schema_meta set value = '11' where key = 'schema_version';
+    `)
+    await writeFile(dbPath, Buffer.from(v11Db.export()))
+    v11Db.close()
+
+    const migrated = await createLocalStore({ dbPath })
+    expect(await migrated.getSchemaVersion()).toBe(12)
+    await expect(
+      migrated.getGateCommandReceiptObservation(receipt.id),
+    ).resolves.toMatchObject({
+      receiptId: receipt.id,
+      commandId: command.id,
+      claimTokenId: desktopPairingCredential.tokenId,
+      status: 'evaluated',
+      outcomeCode: 'human_rejected',
+      receivedAt: gateRunAfter.updatedAt,
+      evaluatedAt: gateRunAfter.updatedAt,
+    })
+    migrated.close()
+  })
+
+  it('rolls back a failed v11 Gate Command migration without advancing schema or losing data', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    await initial.upsertProject(project)
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const malformed = new SQL.Database(await readFile(dbPath))
+    malformed.run(`
+      drop index idx_gate_command_acknowledgements_pending;
+      drop table gate_command_acknowledgements;
+      drop index idx_gate_command_receipts_command;
+      drop table gate_command_receipts;
+      drop table gate_command_executions;
+      create table gate_command_receipts (receipt_id text primary key);
+      update schema_meta set value = '10' where key = 'schema_version';
+    `)
+    await writeFile(dbPath, Buffer.from(malformed.export()))
+    malformed.close()
+
+    await expect(createLocalStore({ dbPath })).rejects.toThrow(
+      /DevFlow local database is unreadable/,
+    )
+
+    const unchanged = new SQL.Database(await readFile(dbPath))
+    expect(
+      unchanged.exec("select value from schema_meta where key = 'schema_version'")[0]
+        ?.values[0]?.[0],
+    ).toBe('10')
+    expect(
+      JSON.parse(
+        String(unchanged.exec('select json from local_projects')[0]?.values[0]?.[0]),
+      ),
+    ).toEqual(project)
+    expect(
+      unchanged.exec('pragma table_info(gate_command_receipts)')[0]?.values.map(
+        (row) => String(row[1]),
+      ),
+    ).toEqual(['receipt_id'])
+    expect(
+      unchanged.exec(
+        "select name from sqlite_master where type = 'table' and name = 'gate_command_executions'",
+      )[0],
+    ).toBeUndefined()
+    unchanged.close()
+  })
+
+  it('rolls back a failed v12 receipt observation migration without advancing schema or losing data', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    await initial.upsertProject(project)
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const malformed = new SQL.Database(await readFile(dbPath))
+    malformed.run(`
+      drop index idx_gate_command_receipt_observations_command;
+      drop table gate_command_receipt_observations;
+      create table gate_command_receipt_observations (receipt_id text primary key);
+      update schema_meta set value = '11' where key = 'schema_version';
+    `)
+    await writeFile(dbPath, Buffer.from(malformed.export()))
+    malformed.close()
+
+    await expect(createLocalStore({ dbPath })).rejects.toThrow(
+      /DevFlow local database is unreadable/,
+    )
+
+    const unchanged = new SQL.Database(await readFile(dbPath))
+    expect(
+      unchanged.exec("select value from schema_meta where key = 'schema_version'")[0]
+        ?.values[0]?.[0],
+    ).toBe('11')
+    expect(
+      JSON.parse(
+        String(unchanged.exec('select json from local_projects')[0]?.values[0]?.[0]),
+      ),
+    ).toEqual(project)
+    expect(
+      unchanged.exec('pragma table_info(gate_command_receipt_observations)')[0]
+        ?.values.map((row) => String(row[1])),
+    ).toEqual(['receipt_id'])
+    unchanged.close()
   })
 
   it('rolls back a failed v10 materialization migration without advancing schema or losing data', async () => {
@@ -1619,19 +3980,19 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const newerDb = new SQL.Database(await readFile(dbPath))
-    newerDb.run("update schema_meta set value = '11' where key = 'schema_version'")
+    newerDb.run("update schema_meta set value = '13' where key = 'schema_version'")
     await writeFile(dbPath, Buffer.from(newerDb.export()))
     newerDb.close()
 
     await expect(createLocalStore({ dbPath })).rejects.toThrow(
-      /schema version 11 is newer than supported version 10/,
+      /schema version 13 is newer than supported version 12/,
     )
 
     const unchangedDb = new SQL.Database(await readFile(dbPath))
     expect(
       unchangedDb.exec("select value from schema_meta where key = 'schema_version'")[0]
         ?.values[0]?.[0],
-    ).toBe('11')
+    ).toBe('13')
     unchangedDb.close()
   })
 
@@ -1671,7 +4032,7 @@ describe('createLocalStore', () => {
     unchangedDb.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(10)
+    expect(await migrated.getSchemaVersion()).toBe(12)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
   })

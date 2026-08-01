@@ -11,6 +11,7 @@ import type { RequestPrincipal } from '../auth/request-auth'
 import {
   fingerprintWorkRequestOperation,
   safeWorkRequest,
+  type MaterializedWorkRequestClaimResolver,
   type WorkRequestMutationResult,
   type WorkRequestOperationInput,
   type WorkRequestOperationKind,
@@ -60,7 +61,14 @@ export type SeedWorkRequestAuditEvent = {
   createdAt: string
 }
 
-export type SeedWorkRequestRepository = WorkRequestRepository & {
+export type SeedWorkRequestRepository = WorkRequestRepository &
+  MaterializedWorkRequestClaimResolver & {
+  permitsRunSummaryUpload(input: {
+    organizationId: string
+    projectId: string
+    runId: string
+    tokenRecordId: string | null
+  }): boolean
   inspectForTests(): {
     internalRecords: InternalWorkRequest[]
     auditEvents: SeedWorkRequestAuditEvent[]
@@ -184,6 +192,7 @@ export function createSeedWorkRequestRepository(
   options: SeedWorkRequestRepositoryOptions,
 ): SeedWorkRequestRepository {
   const records = new Map<string, InternalWorkRequest>()
+  const releasedClaimRunScopes = new Set<string>()
   const idempotency = new Map<string, StoredIdempotencyResult>()
   const auditEvents: SeedWorkRequestAuditEvent[] = []
   const now = options.now ?? (() => new Date())
@@ -196,6 +205,14 @@ export function createSeedWorkRequestRepository(
       throw new Error('Seed Work Request clock returned an invalid date.')
     }
     return date.toISOString()
+  }
+
+  function runScope(
+    organizationId: string,
+    projectId: string,
+    runId: string,
+  ): string {
+    return JSON.stringify([organizationId, projectId, runId])
   }
 
   function findRecord(
@@ -695,6 +712,9 @@ export function createSeedWorkRequestRepository(
       const expired =
         record.expiresAt !== null &&
         Date.parse(record.expiresAt) <= Date.parse(at)
+      releasedClaimRunScopes.add(
+        runScope(record.organizationId, record.projectId, record.claim.runId),
+      )
       record.status = expired ? 'expired' : 'open'
       record.version += 1
       record.claim = null
@@ -713,12 +733,64 @@ export function createSeedWorkRequestRepository(
     )
   }
 
+  async function resolveMaterializedWorkRequestClaim(input: {
+    organizationId: string
+    projectId: string
+    runId: string
+  }) {
+    const record = [...records.values()].find(
+      (candidate) =>
+        candidate.organizationId === input.organizationId &&
+        candidate.projectId === input.projectId &&
+        candidate.status === 'materialized' &&
+        candidate.claim?.runId === input.runId &&
+        candidate.claimedByTokenId !== null,
+    )
+    if (!record?.claim || record.claimedByTokenId === null) return null
+
+    return {
+      organizationId: record.organizationId,
+      projectId: record.projectId,
+      workRequestId: record.id,
+      runId: record.claim.runId,
+      claimedByTokenId: record.claimedByTokenId,
+    }
+  }
+
+  function permitsRunSummaryUpload(input: {
+    organizationId: string
+    projectId: string
+    runId: string
+    tokenRecordId: string | null
+  }): boolean {
+    const currentClaim = [...records.values()].find(
+      (candidate) =>
+        candidate.organizationId === input.organizationId &&
+        candidate.projectId === input.projectId &&
+        (candidate.status === 'claim_pending' ||
+          candidate.status === 'materialized') &&
+        candidate.claim?.runId === input.runId,
+    )
+    if (currentClaim) {
+      return (
+        input.tokenRecordId !== null &&
+        currentClaim.claimedByTokenId === input.tokenRecordId
+      )
+    }
+
+    return !releasedClaimRunScopes.has(
+      runScope(input.organizationId, input.projectId, input.runId),
+    )
+  }
+
   return {
     listWorkRequests,
     createWorkRequest,
     claimWorkRequest,
     materializeWorkRequest,
     releaseWorkRequest,
+    resolveMaterializedWorkRequestClaim,
+    permitsRunSummaryUpload,
     inspectForTests() {
       return {
         internalRecords: [...records.values()].map((record) => ({

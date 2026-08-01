@@ -18,6 +18,13 @@ describe('v1.4 pilot trust boundary contract', () => {
     expect(roadmap).toContain('v1.4-pilot-trust-boundary-prd.md')
     expect(roadmap).toContain('v1.4-pilot-trust-boundary.md')
     expect(roadmap).toContain('durable remote-sync outbox')
+    expect(roadmap).toContain(
+      'V1.4 scoped implementation complete from `b7b879c`; candidate formation pending',
+    )
+    expect(roadmap).toContain('Remains `1.3.0` until V1.4 candidate formation')
+    expect(prd).toContain(
+      'Status: Implementation complete; candidate formation and formal signoff pending',
+    )
   })
 
   it('keeps durable sync and paid fail-closed behavior in the release contract', () => {
@@ -35,13 +42,28 @@ describe('v1.4 pilot trust boundary contract', () => {
     expect(plan).toContain('Slice C integration is next')
   })
 
-  it('records completed repository knowledge and Web D1 before the collaboration write model', () => {
+  it('records completed repository knowledge and Web collaboration authority', () => {
     expect(plan).toContain('## Slice C — Repository Knowledge Integration ✅')
     expect(plan).toContain('Full unit regression passed 944/944')
     expect(plan).toContain('Web D1 completed')
     expect(plan).toContain('The Work Request vertical slice completed')
     expect(plan).toContain('Full unit regression passed 1162/1162')
-    expect(plan).toContain('Gate Command delivery is next')
+    expect(plan).toContain('## Slice D — Web Management Closure ✅')
+    expect(plan).toContain(
+      '[x] Add the versioned Gate Command preflight, delivery, local apply, acknowledgement, and Web flow.',
+    )
+    expect(plan).toContain('`human_rejected` plus acknowledgement')
+  })
+
+  it('records completed reproducible lifecycle evidence without claiming release', () => {
+    expect(plan).toContain('## Slice E — Reproducible Pilot Lifecycle ✅')
+    expect(plan).toContain('Postgres migration bundle now reaches schema v10')
+    expect(plan).toContain('Desktop SQLite reaches schema v12')
+    expect(plan).toContain('retained V1.3-to-V1.4 data upgrade')
+    expect(plan).toContain('transactional failed-upgrade recovery')
+    expect(plan).toContain('bounded V1.3 API read rollback')
+    expect(plan).toContain('Desktop pilot artifact also built and passed its packaged smoke')
+    expect(plan).toContain('This plan does not claim that V1.4 is released or signed.')
   })
 
   it('keeps deferred delivery and packaging work outside v1.4', () => {

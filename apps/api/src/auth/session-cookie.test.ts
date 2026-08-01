@@ -81,4 +81,16 @@ describe('session cookie boundary', () => {
       'devflow_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0',
     )
   })
+
+  it('marks session and clear cookies Secure for an HTTPS pilot', () => {
+    expect(
+      createSessionCookie({ authAccountId }, 'test-secret', {
+        nowMs,
+        secure: true,
+      }),
+    ).toContain('HttpOnly; Secure; SameSite=Lax')
+    expect(clearSessionCookie({ secure: true })).toBe(
+      'devflow_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0',
+    )
+  })
 })

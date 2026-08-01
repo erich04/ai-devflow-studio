@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev -H 127.0.0.1 -p 4311",
     "build": "next build",
+    "start:prod": "node .next/standalone/apps/web/server.js",
     "typecheck": "next build"
   },
   "dependencies": {

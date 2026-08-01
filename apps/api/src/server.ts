@@ -8,8 +8,8 @@ import {
   resolveApiRouteRequest,
 } from './server-request'
 
-const { devAuthEnabled, host, port } = resolveServerRuntimeConfig()
-const sessionSecret = process.env['DEVFLOW_SESSION_SECRET'] ?? 'devflow-dev-session-secret'
+const { devAuthEnabled, host, port, secureCookies, sessionSecret, webAppUrl } =
+  resolveServerRuntimeConfig()
 const repositoryRuntime = await createTeamRepositoryRuntime()
 const repository = repositoryRuntime.repository
 const githubOAuth = createGitHubOAuthClient.fromEnv()
@@ -66,6 +66,22 @@ const server = createServer(async (request, response) => {
     return
   }
 
+  if (url.pathname === '/ready') {
+    try {
+      await repositoryRuntime.checkReadiness()
+      sendJson(response, 200, {
+        status: 'ready',
+        service: '@ai-devflow/api',
+      })
+    } catch {
+      sendJson(response, 503, {
+        status: 'unavailable',
+        service: '@ai-devflow/api',
+      })
+    }
+    return
+  }
+
   let requestBody: unknown
   if (request.method === 'POST' || request.method === 'PUT') {
     try {
@@ -93,6 +109,8 @@ const server = createServer(async (request, response) => {
         repository,
         sessionSecret,
         devAuthEnabled,
+        postAuthRedirectUrl: webAppUrl,
+        secureCookies,
         ...(githubOAuth ? { githubOAuth } : {}),
       },
     )

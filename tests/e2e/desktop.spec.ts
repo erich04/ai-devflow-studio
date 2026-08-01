@@ -735,6 +735,7 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
       onCodingRunStatusUpdated: () => () => undefined,
       onCodingEventAppended: () => () => undefined,
       onCodingPermissionUpdated: () => () => undefined,
+      onLocalStateUpdated: () => () => undefined,
     }
   })
 }

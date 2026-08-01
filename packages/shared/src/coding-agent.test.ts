@@ -614,6 +614,21 @@ describe('createRemoteCodingAgentSummary', () => {
     expect(JSON.stringify(summary)).not.toContain('nested-budget-token-secret')
     expect(JSON.stringify(summary)).not.toContain('model-secret')
     expect(JSON.stringify(summary)).not.toContain('budget-secret')
+    expect(() =>
+      redactRemoteCodingAgentSummaryForSync({
+        ...summary,
+        nodeId: `${summary.runId}:${summary.nodeId}`,
+      }),
+    ).toThrow(/reserved Team node namespace/)
+    expect(() =>
+      redactRemoteCodingAgentSummaryForSync({
+        ...summary,
+        costSummary: {
+          ...summary.costSummary!,
+          nodeId: 'node-other',
+        },
+      }),
+    ).toThrow('Remote coding cost scope must match its coding summary.')
   })
 })
 

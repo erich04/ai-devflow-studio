@@ -32,6 +32,25 @@ class FakeTransactionProvider {
 }
 
 describe('withTeamDbTransaction', () => {
+  it('opens an explicitly requested repeatable-read snapshot before any work query', async () => {
+    const connection = new FakeTransactionConnection()
+    const provider = new FakeTransactionProvider(connection)
+
+    await withTeamDbTransaction(
+      provider,
+      async (db) => {
+        await db.query('SELECT policy_version FROM enforcement_policies')
+      },
+      { isolationLevel: 'repeatable_read' },
+    )
+
+    expect(connection.calls.map(({ sql }) => sql)).toEqual([
+      'BEGIN ISOLATION LEVEL REPEATABLE READ',
+      'SELECT policy_version FROM enforcement_policies',
+      'COMMIT',
+    ])
+  })
+
   it('uses one checked-out client and returns the generic work result after commit', async () => {
     const connection = new FakeTransactionConnection()
     const provider = new FakeTransactionProvider(connection)

@@ -11,6 +11,7 @@ import type {
 } from './domain'
 import { redactTestEvidenceForStorage } from './local-execution'
 import { redactLocalAbsolutePaths, redactSecrets, redactSensitiveText } from './redaction'
+import { assertCanonicalLocalNodeId } from './remote-node-identity'
 
 export function resolveTeamProjectId(input: {
   localProjectId: string
@@ -108,6 +109,8 @@ export function createRemoteRunSummary(
 export function redactRemoteRunSummaryForSync(
   summary: RemoteRunSummary,
 ): RemoteRunSummary {
+  assertCanonicalLocalNodeId(summary.runId, summary.currentNodeId)
+  assertCanonicalLocalNodeId(summary.runId, summary.currentNode.id)
   return {
     kind: summary.kind,
     runId: summary.runId,
@@ -152,6 +155,7 @@ export function createRemoteTestEvidenceSummary(
 export function redactRemoteTestEvidenceSummaryForSync(
   summary: RemoteTestEvidenceSummary,
 ): RemoteTestEvidenceSummary {
+  assertCanonicalLocalNodeId(summary.runId, summary.nodeId)
   const command = redactSecrets(redactLocalAbsolutePaths(summary.command).value)
   const evidenceSummary = redactSecrets(redactLocalAbsolutePaths(summary.summary).value)
 
@@ -173,6 +177,10 @@ export function redactRemoteTestEvidenceSummaryForSync(
 export function redactRemoteAgentReviewSummaryForSync(
   summary: RemoteAgentReviewSummary,
 ): RemoteAgentReviewSummary {
+  assertCanonicalLocalNodeId(summary.runId, summary.nodeId)
+  for (const finding of summary.policyFindings ?? []) {
+    assertCanonicalLocalNodeId(finding.runId, finding.nodeId)
+  }
   const policyFindings = summary.policyFindings?.map((finding) => ({
     id: finding.id,
     reviewId: finding.reviewId,

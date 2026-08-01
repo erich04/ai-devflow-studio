@@ -18,6 +18,7 @@ import type {
 import type { RemediationPlan, RetryAttempt } from './remediation'
 import { detectPackageManager } from './local-execution'
 import { redactSecrets, redactSensitiveText } from './redaction'
+import { assertCanonicalLocalNodeId } from './remote-node-identity'
 
 export const MAX_DIFF_CHARS = 50_000
 export const MAX_REMOTE_CHANGED_PATHS = 50
@@ -340,6 +341,22 @@ function redactRemoteBudgetDecisionForSync(
 export function redactRemoteCodingAgentSummaryForSync(
   summary: RemoteCodingAgentSummary,
 ): RemoteCodingAgentSummary {
+  assertCanonicalLocalNodeId(summary.runId, summary.nodeId)
+  if (summary.costSummary) {
+    assertCanonicalLocalNodeId(
+      summary.costSummary.runId,
+      summary.costSummary.nodeId,
+    )
+    if (
+      summary.costSummary.runId !== summary.runId ||
+      summary.costSummary.nodeId !== summary.nodeId ||
+      summary.costSummary.projectId !== summary.projectId
+    ) {
+      throw new Error(
+        'Remote coding cost scope must match its coding summary.',
+      )
+    }
+  }
   return {
     id: summary.id,
     runId: summary.runId,

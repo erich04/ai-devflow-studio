@@ -4,9 +4,14 @@ export type TeamDbTransactionClient = {
   query<T>(sql: string, params?: unknown[]): Promise<T[]>
 }
 
+export type TeamDbTransactionOptions = {
+  isolationLevel?: 'repeatable_read'
+}
+
 export async function withTeamDbTransaction<T>(
   provider: TeamDbConnectionProvider,
   work: (db: TeamDbTransactionClient) => Promise<T>,
+  options: TeamDbTransactionOptions = {},
 ): Promise<T> {
   const noFailure = Symbol('no transaction failure')
   const connection = await provider.checkout()
@@ -21,7 +26,11 @@ export async function withTeamDbTransaction<T>(
   let result: T | undefined
 
   try {
-    await connection.query('BEGIN')
+    await connection.query(
+      options.isolationLevel === 'repeatable_read'
+        ? 'BEGIN ISOLATION LEVEL REPEATABLE READ'
+        : 'BEGIN',
+    )
     transactionOpen = true
     result = await work(queryClient)
     await connection.query('COMMIT')

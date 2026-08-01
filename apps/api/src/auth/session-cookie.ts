@@ -13,6 +13,7 @@ export type BrowserSessionCookieClaims = {
 
 type SessionCookieClockOptions = {
   nowMs?: number
+  secure?: boolean
 }
 
 function encodeBase64Url(value: string): string {
@@ -70,11 +71,13 @@ export function createSessionCookie(
   }
   const payload = encodeBase64Url(JSON.stringify(claims))
   const signature = signPayload(payload, secret)
-  return `${SESSION_COOKIE_NAME}=${payload}.${signature}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_COOKIE_MAX_AGE_SECONDS}`
+  const secure = options.secure ? '; Secure' : ''
+  return `${SESSION_COOKIE_NAME}=${payload}.${signature}; HttpOnly${secure}; SameSite=Lax; Path=/; Max-Age=${SESSION_COOKIE_MAX_AGE_SECONDS}`
 }
 
-export function clearSessionCookie(): string {
-  return `${SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`
+export function clearSessionCookie(options: Pick<SessionCookieClockOptions, 'secure'> = {}): string {
+  const secure = options.secure ? '; Secure' : ''
+  return `${SESSION_COOKIE_NAME}=; HttpOnly${secure}; SameSite=Lax; Path=/; Max-Age=0`
 }
 
 export function parseCookieHeader(header: string | undefined): Record<string, string> {
