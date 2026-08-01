@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import type {
+  ClaimWorkRequestInput,
+  DesktopPairingCredential,
   DevFlowSessionHeaders,
+  MaterializeWorkRequestInput,
   RemoteAgentReviewSummary,
   RemoteCodingAgentSummary,
   GateOverrideDecision,
   RemoteRunSummary,
   RemoteTestEvidenceSummary,
+  WorkRequest,
 } from '@ai-devflow/shared'
 import {
   createRemoteSyncClient,
@@ -984,5 +988,412 @@ describe('Electron remote sync client', () => {
       providerId: 'double',
       projectedCostUsd: 0.004,
     })).rejects.toThrow('Invalid runtime budget decision')
+  })
+})
+
+const workRequestPairing: DesktopPairingCredential = {
+  tokenId: 'desktop-token-record-1',
+  organizationId: 'org-1',
+  projectId: 'p-remote',
+  localProjectId: 'local-project-1',
+  userId: 'u-remote',
+  role: 'lead',
+  authAccountId: 'acct-remote',
+  projectMemberships: [
+    { projectId: 'p-remote', userId: 'u-remote', role: 'lead' },
+  ],
+  createdAt: '2026-08-01T00:00:00.000Z',
+}
+
+const openRemoteWorkRequest: WorkRequest = {
+  id: 'wr-rollout',
+  organizationId: 'org-1',
+  projectId: 'p-remote',
+  title: 'Prepare rollout',
+  request: 'Keep the rollout reversible.',
+  version: 1,
+  status: 'open',
+  createdByUserId: 'u-remote',
+  claim: null,
+  expiresAt: null,
+  createdAt: '2026-08-01T01:00:00.000Z',
+  updatedAt: '2026-08-01T01:00:00.000Z',
+}
+
+const claimedRemoteWorkRequest: WorkRequest = {
+  ...openRemoteWorkRequest,
+  version: 2,
+  status: 'claim_pending',
+  claim: {
+    runId: 'run-rollout',
+    claimedAt: '2026-08-01T01:01:00.000Z',
+    materializedAt: null,
+  },
+  updatedAt: '2026-08-01T01:01:00.000Z',
+}
+
+const materializedRemoteWorkRequest: WorkRequest = {
+  ...claimedRemoteWorkRequest,
+  version: 3,
+  status: 'materialized',
+  claim: {
+    ...claimedRemoteWorkRequest.claim!,
+    materializedAt: '2026-08-01T01:02:00.000Z',
+  },
+  updatedAt: '2026-08-01T01:02:00.000Z',
+}
+
+const claimInput: ClaimWorkRequestInput = {
+  workRequestId: 'wr-rollout',
+  expectedVersion: 1,
+  runId: 'run-rollout',
+  idempotencyKey: 'claim:wr-rollout:run-rollout',
+}
+
+const materializeInput: MaterializeWorkRequestInput = {
+  workRequestId: 'wr-rollout',
+  expectedVersion: 2,
+  runId: 'run-rollout',
+  idempotencyKey: 'materialize:wr-rollout:run-rollout',
+}
+
+describe('Electron Work Request remote client', () => {
+  it('lists only server-filtered, resumable desktop Work Request states with paired Bearer auth', async () => {
+    const listedWorkRequests = [
+      { ...openRemoteWorkRequest, id: 'wr-open' },
+      { ...claimedRemoteWorkRequest, id: 'wr-recoverable' },
+      { ...materializedRemoteWorkRequest, id: 'wr-materialized' },
+    ]
+    const fetcher = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          workRequests: listedWorkRequests,
+        }),
+        { status: 200 },
+      ),
+    )
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'paired-bearer-secret',
+      sessionHeaders: authenticatedSessionHeaders,
+    })
+
+    await expect(
+      client.listWorkRequests('p-remote', workRequestPairing),
+    ).resolves.toEqual(listedWorkRequests)
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/team/projects/p-remote/work-requests',
+      {
+        headers: {
+          accept: 'application/json',
+          authorization: 'Bearer paired-bearer-secret',
+        },
+      },
+    )
+    expect(JSON.stringify(fetcher.mock.calls)).not.toContain('x-devflow-user-id')
+    expect(JSON.stringify(fetcher.mock.calls)).not.toContain('desktop-token-record-1')
+  })
+
+  it('claims with an exact shared input body and validates the canonical transition', async () => {
+    const fetcher = vi.fn(
+      async (
+        _input: Parameters<typeof fetch>[0],
+        _init?: Parameters<typeof fetch>[1],
+      ) => new Response(
+        JSON.stringify({
+          workRequest: claimedRemoteWorkRequest,
+          replayed: false,
+          outcomeCode: 'claimed',
+        }),
+        { status: 200 },
+      ),
+    )
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.claimWorkRequest(claimInput, workRequestPairing),
+    ).resolves.toEqual({
+      workRequest: claimedRemoteWorkRequest,
+      replayed: false,
+      outcomeCode: 'claimed',
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/desktop/work-requests/wr-rollout/claim',
+      {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          authorization: 'Bearer paired-bearer-secret',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(claimInput),
+      },
+    )
+    expect(String(fetcher.mock.calls[0]?.[1]?.body)).not.toContain('token')
+  })
+
+  it('materializes with an exact shared input body and validates run, version, and status', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          workRequest: materializedRemoteWorkRequest,
+          replayed: true,
+          outcomeCode: 'materialized',
+        }),
+        { status: 200 },
+      ),
+    )
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.materializeWorkRequest(materializeInput, workRequestPairing),
+    ).resolves.toEqual({
+      workRequest: materializedRemoteWorkRequest,
+      replayed: true,
+      outcomeCode: 'materialized',
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/desktop/work-requests/wr-rollout/materialized',
+      {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          authorization: 'Bearer paired-bearer-secret',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(materializeInput),
+      },
+    )
+  })
+
+  it('performs zero network I/O without both frozen pairing metadata and its Bearer token', async () => {
+    const fetcher = vi.fn()
+    const pairedClientWithoutToken = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      sessionHeaders: authenticatedSessionHeaders,
+    })
+    const tokenClientWithoutPairing = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'orphaned-bearer-secret',
+    })
+
+    await expect(
+      pairedClientWithoutToken.listWorkRequests('p-remote', workRequestPairing),
+    ).rejects.toThrow(
+      'Pair DevFlow Studio with a Team Project before syncing remote team state.',
+    )
+    await expect(
+      tokenClientWithoutPairing.claimWorkRequest(claimInput, null),
+    ).rejects.toThrow(
+      'Pair DevFlow Studio with a Team Project before syncing remote team state.',
+    )
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('rejects project/pairing scope mismatch before network I/O', async () => {
+    const fetcher = vi.fn()
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.listWorkRequests('p-other', workRequestPairing),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: 'scope_mismatch',
+      path: '/api/team/projects/:projectId/work-requests',
+      retryable: false,
+    })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('uses shared input parsing before sending a mutation', async () => {
+    const fetcher = vi.fn()
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.claimWorkRequest(
+        { ...claimInput, token: 'must-not-send' } as ClaimWorkRequestInput,
+        workRequestPairing,
+      ),
+    ).rejects.toThrow('Invalid Work Request claim input.')
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [401, 'unauthorized', false],
+    [403, 'forbidden', false],
+    [409, 'conflict', false],
+    [410, 'remote_error', false],
+    [503, 'service_unavailable', true],
+  ] as const)(
+    'maps Work Request HTTP %i to fixed safe metadata',
+    async (status, code, retryable) => {
+      const fetcher = vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            error: 'hostile',
+            message:
+              'Canonical Run Summary is required before evidence sync: secret-run (secret-project) Bearer response-secret',
+            token: 'response-token-secret',
+          }),
+          { status },
+        ),
+      )
+      const client = createRemoteSyncClient({
+        apiBaseUrl: 'http://api.local',
+        fetcher,
+        authToken: 'paired-bearer-secret',
+      })
+
+      const error = await client
+        .claimWorkRequest(claimInput, workRequestPairing)
+        .catch((reason: unknown) => reason)
+
+      expect(error).toBeInstanceOf(RemoteSyncHttpError)
+      expect(error).toMatchObject({
+        status,
+        code,
+        path: '/api/desktop/work-requests/:workRequestId/claim',
+        retryable,
+      })
+      expect(String(error)).not.toMatch(
+        /secret-run|secret-project|response-secret|response-token-secret|paired-bearer-secret/,
+      )
+    },
+  )
+
+  it.each([
+    ['organization', { ...claimedRemoteWorkRequest, organizationId: 'org-other' }],
+    ['project', { ...claimedRemoteWorkRequest, projectId: 'p-other' }],
+    ['workRequest', { ...claimedRemoteWorkRequest, id: 'wr-other' }],
+    [
+      'run',
+      {
+        ...claimedRemoteWorkRequest,
+        claim: { ...claimedRemoteWorkRequest.claim!, runId: 'run-other' },
+      },
+    ],
+    ['version', { ...claimedRemoteWorkRequest, version: 3 }],
+    ['status', openRemoteWorkRequest],
+  ] as const)(
+    'fails closed on a claim response with mismatched %s',
+    async (_field, workRequest) => {
+      const client = createRemoteSyncClient({
+        apiBaseUrl: 'http://api.local',
+        fetcher: vi.fn(async () =>
+          new Response(
+            JSON.stringify({
+              workRequest,
+              replayed: false,
+              outcomeCode: 'claimed',
+            }),
+            { status: 200 },
+          ),
+        ),
+        authToken: 'paired-bearer-secret',
+      })
+
+      await expect(
+        client.claimWorkRequest(claimInput, workRequestPairing),
+      ).rejects.toMatchObject({
+        status: 200,
+        code: 'invalid_response',
+        path: '/api/desktop/work-requests/:workRequestId/claim',
+        retryable: true,
+      })
+    },
+  )
+
+  it('rejects list states that the paired desktop API must never expose', async () => {
+    const expired: WorkRequest = {
+      ...openRemoteWorkRequest,
+      version: 2,
+      status: 'expired',
+      expiresAt: '2026-08-01T01:01:00.000Z',
+      updatedAt: '2026-08-01T01:02:00.000Z',
+    }
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(JSON.stringify({ workRequests: [expired] }), { status: 200 }),
+      ),
+      authToken: 'paired-bearer-secret',
+    })
+
+    await expect(
+      client.listWorkRequests('p-remote', workRequestPairing),
+    ).rejects.toMatchObject({
+      status: 200,
+      code: 'invalid_response',
+      path: '/api/team/projects/:projectId/work-requests',
+    })
+  })
+
+  it.each([
+    {
+      workRequests: [openRemoteWorkRequest],
+      bearerToken: 'response-token-secret',
+    },
+    {
+      workRequests: [
+        { ...openRemoteWorkRequest, tokenId: 'desktop-token-record-1' },
+      ],
+    },
+  ])('fails closed when a list response adds an unknown secret/token field', async (body) => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(JSON.stringify(body), { status: 200 }),
+      ),
+      authToken: 'paired-bearer-secret',
+    })
+
+    const error = await client
+      .listWorkRequests('p-remote', workRequestPairing)
+      .catch((reason: unknown) => reason)
+    expect(error).toMatchObject({ status: 200, code: 'invalid_response' })
+    expect(String(error)).not.toMatch(/response-token-secret|desktop-token-record-1/)
+  })
+
+  it('fails closed when a mutation wrapper adds an unknown secret field', async () => {
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            workRequest: claimedRemoteWorkRequest,
+            replayed: false,
+            outcomeCode: 'claimed',
+            token: 'response-token-secret',
+          }),
+          { status: 200 },
+        ),
+      ),
+      authToken: 'paired-bearer-secret',
+    })
+
+    const error = await client
+      .claimWorkRequest(claimInput, workRequestPairing)
+      .catch((reason: unknown) => reason)
+    expect(error).toMatchObject({ status: 200, code: 'invalid_response' })
+    expect(String(error)).not.toContain('response-token-secret')
   })
 })

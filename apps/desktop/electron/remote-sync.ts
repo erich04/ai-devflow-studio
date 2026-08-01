@@ -1,10 +1,16 @@
 import {
   parseBudgetGuardDecision,
+  parseWorkRequestClaim,
+  parseWorkRequestMaterialize,
+  parseWorkRequestRecord,
   type AgentEvent,
   type Artifact,
+  type ClaimWorkRequestInput,
   type DevFlowSessionHeaders,
+  type DesktopPairingCredential,
   type DesktopPairingExchangeResult,
   type BudgetGuardDecision,
+  type MaterializeWorkRequestInput,
   type RemoteAgentReviewSummary,
   type RemoteCodingAgentSummary,
   type RemoteRunDeleteResult,
@@ -20,6 +26,7 @@ import {
   type TeamMember,
   type Project,
   type TokenUsageRollup,
+  type WorkRequest,
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import type { LoadRemoteSnapshotInput } from './ipc-contract'
@@ -82,6 +89,18 @@ export type RemoteTeamOverviewResponse = {
 export type RemoteSyncClient = {
   exchangeDesktopPairingCode(input: { code: string }): Promise<DesktopPairingExchangeResult>
   loadRemoteSnapshot(input?: LoadRemoteSnapshotInput): Promise<RemoteTeamSnapshot>
+  listWorkRequests(
+    projectId: string,
+    pairing: DesktopPairingCredential | null,
+  ): Promise<WorkRequest[]>
+  claimWorkRequest(
+    input: ClaimWorkRequestInput,
+    pairing: DesktopPairingCredential | null,
+  ): Promise<RemoteClaimWorkRequestResult>
+  materializeWorkRequest(
+    input: MaterializeWorkRequestInput,
+    pairing: DesktopPairingCredential | null,
+  ): Promise<RemoteMaterializeWorkRequestResult>
   uploadRunSummary(summary: RemoteRunSummary): Promise<RemoteSyncUploadResult>
   deleteRun(input: { runId: string }): Promise<RemoteRunDeleteResult>
   uploadTestEvidenceSummary(summary: RemoteTestEvidenceSummary): Promise<RemoteSyncUploadResult>
@@ -89,6 +108,18 @@ export type RemoteSyncClient = {
   uploadCodingAgentSummary(summary: RemoteCodingAgentSummary): Promise<RemoteSyncUploadResult>
   saveGateOverride(input: RemoteGateOverrideInput): Promise<GateOverrideDecision>
   evaluateRuntimeBudget(input: RemoteRuntimeBudgetEvaluateInput): Promise<BudgetGuardDecision>
+}
+
+export type RemoteClaimWorkRequestResult = {
+  workRequest: WorkRequest
+  replayed: boolean
+  outcomeCode: 'claimed'
+}
+
+export type RemoteMaterializeWorkRequestResult = {
+  workRequest: WorkRequest
+  replayed: boolean
+  outcomeCode: 'materialized'
 }
 
 export type RemoteGateOverrideInput = {
@@ -196,6 +227,11 @@ function headersForSnapshotRequest(
 
 const CANONICAL_RUN_REQUIRED_MESSAGE =
   /^Canonical Run Summary is required before evidence sync: [A-Za-z0-9][A-Za-z0-9._:-]* \([A-Za-z0-9][A-Za-z0-9._:-]*\)$/
+const CANONICAL_RUN_RECOVERY_PATHS = new Set([
+  '/api/sync/test-evidence-summary',
+  '/api/sync/agent-review-summary',
+  '/api/sync/coding-agent-summary',
+])
 
 function classifyHttpError(status: number): RemoteSyncErrorCode {
   if (status >= 500) {
@@ -229,7 +265,7 @@ function isRetryableHttpStatus(status: number): boolean {
 async function readJson<T>(response: Response, path: string): Promise<T> {
   if (!response.ok) {
     let code = classifyHttpError(response.status)
-    if (response.status === 409) {
+    if (response.status === 409 && CANONICAL_RUN_RECOVERY_PATHS.has(path)) {
       try {
         const body = await response.clone().json() as { message?: unknown }
         if (
@@ -342,6 +378,186 @@ async function postRemoteSyncUpload(
   return result as RemoteSyncUploadResult
 }
 
+const WORK_REQUEST_LIST_PATH = '/api/team/projects/:projectId/work-requests'
+const WORK_REQUEST_CLAIM_PATH = '/api/desktop/work-requests/:workRequestId/claim'
+const WORK_REQUEST_MATERIALIZE_PATH =
+  '/api/desktop/work-requests/:workRequestId/materialized'
+const WORK_REQUEST_LIST_RESPONSE_KEYS = ['workRequests'] as const
+const WORK_REQUEST_MUTATION_RESPONSE_KEYS = [
+  'outcomeCode',
+  'replayed',
+  'workRequest',
+] as const
+const DESKTOP_WORK_REQUEST_LIST_STATUSES = new Set([
+  'open',
+  // The Bearer-scoped API filters claim_pending by token record. The public
+  // Work Request intentionally omits that identifier, so the client must not
+  // infer claim ownership from a user ID or Run ID.
+  'claim_pending',
+  'materialized',
+])
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expectedKeys: readonly string[],
+): boolean {
+  const actualKeys = Object.keys(value).sort()
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key, index) => key === expectedKeys[index])
+  )
+}
+
+function invalidWorkRequestResponse(status: number, path: string): RemoteSyncHttpError {
+  return new RemoteSyncHttpError({
+    status,
+    code: 'invalid_response',
+    path,
+    retryable: true,
+  })
+}
+
+function invalidPairingError(path: string): RemoteSyncHttpError {
+  return new RemoteSyncHttpError({
+    status: 401,
+    code: 'unauthorized',
+    path,
+    retryable: false,
+  })
+}
+
+function pairingScopeMismatchError(path: string): RemoteSyncHttpError {
+  return new RemoteSyncHttpError({
+    status: 403,
+    code: 'scope_mismatch',
+    path,
+    retryable: false,
+  })
+}
+
+function isExactIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value.trim() === value
+}
+
+function requireWorkRequestPairing(input: {
+  authToken: string | undefined
+  pairing: DesktopPairingCredential | null
+  path: string
+  projectId?: string
+}): { pairing: DesktopPairingCredential; headers: Record<string, string> } {
+  if (!input.pairing || !hasAuthToken(input.authToken)) {
+    throw missingRemoteAuthError()
+  }
+  if (
+    !isExactIdentifier(input.pairing.tokenId) ||
+    !isExactIdentifier(input.pairing.organizationId) ||
+    !isExactIdentifier(input.pairing.projectId)
+  ) {
+    throw invalidPairingError(input.path)
+  }
+  if (input.projectId !== undefined && input.projectId !== input.pairing.projectId) {
+    throw pairingScopeMismatchError(input.path)
+  }
+
+  return {
+    pairing: input.pairing,
+    headers: tokenGetHeaders(input.authToken),
+  }
+}
+
+function parseDesktopWorkRequestListResponse(input: {
+  value: unknown
+  responseStatus: number
+  pairing: DesktopPairingCredential
+}): WorkRequest[] {
+  const { value, responseStatus, pairing } = input
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, WORK_REQUEST_LIST_RESPONSE_KEYS) ||
+    !Array.isArray(value.workRequests)
+  ) {
+    throw invalidWorkRequestResponse(responseStatus, WORK_REQUEST_LIST_PATH)
+  }
+
+  const seenIds = new Set<string>()
+  try {
+    return value.workRequests.map((candidate) => {
+      const workRequest = parseWorkRequestRecord(candidate)
+      if (
+        workRequest.organizationId !== pairing.organizationId ||
+        workRequest.projectId !== pairing.projectId ||
+        !DESKTOP_WORK_REQUEST_LIST_STATUSES.has(workRequest.status) ||
+        seenIds.has(workRequest.id)
+      ) {
+        throw invalidWorkRequestResponse(responseStatus, WORK_REQUEST_LIST_PATH)
+      }
+      seenIds.add(workRequest.id)
+      return workRequest
+    })
+  } catch (error) {
+    if (error instanceof RemoteSyncHttpError) {
+      throw error
+    }
+    throw invalidWorkRequestResponse(responseStatus, WORK_REQUEST_LIST_PATH)
+  }
+}
+
+function parseWorkRequestMutationResponse<
+  TOutcome extends 'claimed' | 'materialized',
+>(input: {
+  value: unknown
+  responseStatus: number
+  path: string
+  pairing: DesktopPairingCredential
+  workRequestId: string
+  runId: string
+  expectedVersion: number
+  expectedStatus: 'claim_pending' | 'materialized'
+  expectedOutcome: TOutcome
+}): {
+  workRequest: WorkRequest
+  replayed: boolean
+  outcomeCode: TOutcome
+} {
+  const { value } = input
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, WORK_REQUEST_MUTATION_RESPONSE_KEYS) ||
+    typeof value.replayed !== 'boolean' ||
+    value.outcomeCode !== input.expectedOutcome
+  ) {
+    throw invalidWorkRequestResponse(input.responseStatus, input.path)
+  }
+
+  let workRequest: WorkRequest
+  try {
+    workRequest = parseWorkRequestRecord(value.workRequest)
+  } catch {
+    throw invalidWorkRequestResponse(input.responseStatus, input.path)
+  }
+
+  if (
+    workRequest.organizationId !== input.pairing.organizationId ||
+    workRequest.projectId !== input.pairing.projectId ||
+    workRequest.id !== input.workRequestId ||
+    workRequest.status !== input.expectedStatus ||
+    workRequest.version !== input.expectedVersion + 1 ||
+    workRequest.claim?.runId !== input.runId
+  ) {
+    throw invalidWorkRequestResponse(input.responseStatus, input.path)
+  }
+
+  return {
+    workRequest,
+    replayed: value.replayed,
+    outcomeCode: input.expectedOutcome,
+  }
+}
+
 export function createRemoteSyncClient(
   options: RemoteSyncClientOptions = {},
 ): RemoteSyncClient {
@@ -397,6 +613,101 @@ export function createRemoteSyncClient(
         totalCost: overview.totalCost,
         ...(overview.enforcementPolicies ? { enforcementPolicies: overview.enforcementPolicies } : {}),
       }
+    },
+
+    async listWorkRequests(projectId, pairing) {
+      const authorization = requireWorkRequestPairing({
+        authToken,
+        pairing,
+        path: WORK_REQUEST_LIST_PATH,
+        projectId,
+      })
+      const actualPath = `/api/team/projects/${encodeURIComponent(projectId)}/work-requests`
+      const response = await fetchRemote(
+        fetcher,
+        buildUrl(apiBaseUrl, actualPath),
+        { headers: authorization.headers },
+        WORK_REQUEST_LIST_PATH,
+        signal,
+      )
+      const value = await readJson<unknown>(response, WORK_REQUEST_LIST_PATH)
+      return parseDesktopWorkRequestListResponse({
+        value,
+        responseStatus: response.status,
+        pairing: authorization.pairing,
+      })
+    },
+
+    async claimWorkRequest(rawInput, pairing) {
+      const authorization = requireWorkRequestPairing({
+        authToken,
+        pairing,
+        path: WORK_REQUEST_CLAIM_PATH,
+      })
+      const input = parseWorkRequestClaim(rawInput)
+      const actualPath = `/api/desktop/work-requests/${encodeURIComponent(input.workRequestId)}/claim`
+      const response = await fetchRemote(
+        fetcher,
+        buildUrl(apiBaseUrl, actualPath),
+        {
+          method: 'POST',
+          headers: {
+            ...authorization.headers,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(input),
+        },
+        WORK_REQUEST_CLAIM_PATH,
+        signal,
+      )
+      const value = await readJson<unknown>(response, WORK_REQUEST_CLAIM_PATH)
+      return parseWorkRequestMutationResponse({
+        value,
+        responseStatus: response.status,
+        path: WORK_REQUEST_CLAIM_PATH,
+        pairing: authorization.pairing,
+        workRequestId: input.workRequestId,
+        runId: input.runId,
+        expectedVersion: input.expectedVersion,
+        expectedStatus: 'claim_pending',
+        expectedOutcome: 'claimed',
+      })
+    },
+
+    async materializeWorkRequest(rawInput, pairing) {
+      const authorization = requireWorkRequestPairing({
+        authToken,
+        pairing,
+        path: WORK_REQUEST_MATERIALIZE_PATH,
+      })
+      const input = parseWorkRequestMaterialize(rawInput)
+      const actualPath = `/api/desktop/work-requests/${encodeURIComponent(input.workRequestId)}/materialized`
+      const response = await fetchRemote(
+        fetcher,
+        buildUrl(apiBaseUrl, actualPath),
+        {
+          method: 'POST',
+          headers: {
+            ...authorization.headers,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(input),
+        },
+        WORK_REQUEST_MATERIALIZE_PATH,
+        signal,
+      )
+      const value = await readJson<unknown>(response, WORK_REQUEST_MATERIALIZE_PATH)
+      return parseWorkRequestMutationResponse({
+        value,
+        responseStatus: response.status,
+        path: WORK_REQUEST_MATERIALIZE_PATH,
+        pairing: authorization.pairing,
+        workRequestId: input.workRequestId,
+        runId: input.runId,
+        expectedVersion: input.expectedVersion,
+        expectedStatus: 'materialized',
+        expectedOutcome: 'materialized',
+      })
     },
 
     async uploadRunSummary(summary) {
