@@ -9,14 +9,107 @@ import {
   buildAgentReviewContext,
   createAgentReviewArtifacts,
   createFakeAgentProvider,
+  createKnowledgeReviewPrompt,
   createOpenAiCompatibleAgentProvider,
   estimateAgentTokenUsage,
+  estimateKnowledgeReviewCostPreflight,
+  isTrustedNoCostKnowledgeReviewProvider,
   runKnowledgeReviewAgent,
 } from './agent-review'
 import type { Artifact, TestEvidence } from './domain'
 
 const run = runs[0]!
 const node = run.nodes.find((item) => item.id === 'n-design-gate')!
+
+describe('Knowledge Review cost preflight', () => {
+  it('trusts only the exact built-in fake provider as no-cost', () => {
+    expect(
+      isTrustedNoCostKnowledgeReviewProvider({
+        id: 'fake-knowledge-review',
+        model: 'fake',
+      }),
+    ).toBe(true)
+    expect(
+      isTrustedNoCostKnowledgeReviewProvider({
+        id: 'fake-knowledge-review-lookalike',
+        model: 'fake',
+      }),
+    ).toBe(false)
+    expect(
+      isTrustedNoCostKnowledgeReviewProvider({
+        id: 'fake-knowledge-review',
+        model: 'paid-model',
+      }),
+    ).toBe(false)
+  })
+
+  it('deterministically estimates the current real review request from its exact prompt and output cap', () => {
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const request = {
+      id: 'review-request-cost-preflight',
+      runId: run.id,
+      nodeId: node.id,
+      projectId: run.projectId,
+      requestedBy: 'u-ling',
+      runtime: 'electron' as const,
+      providerId: 'team-openai',
+    }
+    const input = {
+      request,
+      context,
+      provider: { id: 'team-openai', model: 'gpt-4.1-mini' },
+    }
+
+    const preflight = estimateKnowledgeReviewCostPreflight(input)
+
+    expect(preflight).toMatchObject({
+      request,
+      projectId: run.projectId,
+      requestedBy: 'u-ling',
+      providerId: 'team-openai',
+      model: 'gpt-4.1-mini',
+      prompt: createKnowledgeReviewPrompt(context),
+      maxOutputTokens: 1_024,
+      noCost: false,
+    })
+    expect(preflight.inputTokens).toBeGreaterThan(0)
+    expect(preflight.projectedCostUsd).toBeGreaterThan(0)
+    expect(estimateKnowledgeReviewCostPreflight(input)).toEqual(preflight)
+  })
+
+  it('does not let a real provider become no-cost by claiming the fake model name', () => {
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const preflight = estimateKnowledgeReviewCostPreflight({
+      request: {
+        id: 'review-request-fake-model-lookalike',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+      },
+      context,
+      provider: { id: 'team-provider', model: 'fake' },
+    })
+
+    expect(preflight.noCost).toBe(false)
+    expect(preflight.projectedCostUsd).toBeGreaterThan(0)
+  })
+})
 
 const evidence: TestEvidence = {
   id: 'evidence-secret',
@@ -229,6 +322,58 @@ describe('estimateAgentTokenUsage', () => {
 })
 
 describe('createOpenAiCompatibleAgentProvider', () => {
+  it('caps Knowledge Review output tokens before calling a real compatible provider', async () => {
+    let requestBody: Record<string, unknown> | undefined
+    const provider = createOpenAiCompatibleAgentProvider({
+      model: 'ark-code-latest',
+      apiKey: 'secret-key',
+      fetcher: async (_, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    conclusion: 'ok',
+                    summary: 'bounded review',
+                    risks: [],
+                    missingEvidence: [],
+                    suggestedTests: [],
+                    confidence: 0.8,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      },
+    })
+
+    await provider.reviewKnowledge({
+      request: {
+        id: 'review-request-bounded-output',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'api',
+      },
+      context: buildAgentReviewContext({
+        run,
+        node,
+        artifacts,
+        testEvidence: [],
+        knowledgeDocuments,
+        knowledgeChunks,
+      }),
+      prompt: 'Return a bounded review.',
+    })
+
+    expect(requestBody).toMatchObject({ max_tokens: 1_024 })
+  })
+
   it('sends a plain chat-completions request without provider-specific JSON mode', async () => {
     let requestBody: Record<string, unknown> | undefined
     const provider = createOpenAiCompatibleAgentProvider({

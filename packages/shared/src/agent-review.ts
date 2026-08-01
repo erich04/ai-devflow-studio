@@ -120,10 +120,44 @@ export type EstimateAgentTokenUsageInput = {
   providerUsage?: AgentProviderUsage
 }
 
+export type EstimateKnowledgeReviewCostPreflightInput = {
+  request: AgentReviewRequest
+  context: AgentReviewContext
+  provider: Pick<AgentProvider, 'id' | 'model'>
+}
+
+export type KnowledgeReviewCostPreflight = {
+  request: AgentReviewRequest
+  projectId: string
+  requestedBy: string
+  providerId: string
+  model: string
+  prompt: string
+  inputTokens: number
+  maxOutputTokens: number
+  projectedCostUsd: number
+  noCost: boolean
+}
+
 const MODEL_PRICES_PER_1K: Record<string, { input: number; output: number }> = {
   'gpt-4.1-mini': { input: 0.0004, output: 0.0016 },
   'gpt-4o-mini': { input: 0.00015, output: 0.0006 },
   fake: { input: 0, output: 0 },
+}
+
+const BUILT_IN_FAKE_KNOWLEDGE_REVIEW_PROVIDER_ID = 'fake-knowledge-review'
+const BUILT_IN_FAKE_KNOWLEDGE_REVIEW_MODEL = 'fake'
+export const KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS = 1_024
+const KNOWLEDGE_REVIEW_SYSTEM_PROMPT =
+  'Return only valid JSON with conclusion, summary, risks, missingEvidence, suggestedTests, confidence. Do not wrap it in Markdown.'
+
+export function isTrustedNoCostKnowledgeReviewProvider(
+  provider: Pick<AgentProvider, 'id' | 'model'>,
+): boolean {
+  return (
+    provider.id === BUILT_IN_FAKE_KNOWLEDGE_REVIEW_PROVIDER_ID &&
+    provider.model === BUILT_IN_FAKE_KNOWLEDGE_REVIEW_MODEL
+  )
 }
 
 function estimateTokens(value: string): number {
@@ -359,6 +393,38 @@ export function createKnowledgeReviewPrompt(context: AgentReviewContext): string
       .map((chunk) => `${chunk.sourcePath}#${chunk.headingPath.join('/')} ${chunk.content}`)
       .join(' | ')}`,
   ].join('\n')
+}
+
+export function estimateKnowledgeReviewCostPreflight({
+  request,
+  context,
+  provider,
+}: EstimateKnowledgeReviewCostPreflightInput): KnowledgeReviewCostPreflight {
+  const prompt = createKnowledgeReviewPrompt(context)
+  const noCost = isTrustedNoCostKnowledgeReviewProvider(provider)
+  const inputTokens = estimateTokens(`${KNOWLEDGE_REVIEW_SYSTEM_PROMPT}\n${prompt}`)
+  const configuredPrice = MODEL_PRICES_PER_1K[provider.model]
+  const price = noCost
+    ? MODEL_PRICES_PER_1K.fake!
+    : configuredPrice && (configuredPrice.input > 0 || configuredPrice.output > 0)
+      ? configuredPrice
+      : MODEL_PRICES_PER_1K['gpt-4.1-mini']!
+  const projectedCostUsd =
+    (inputTokens / 1000) * price.input +
+    (KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS / 1000) * price.output
+
+  return {
+    request,
+    projectId: request.projectId,
+    requestedBy: request.requestedBy,
+    providerId: provider.id,
+    model: provider.model,
+    prompt,
+    inputTokens,
+    maxOutputTokens: KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS,
+    projectedCostUsd,
+    noCost,
+  }
 }
 
 export function createFakeAgentProvider(): AgentProvider {
@@ -760,11 +826,11 @@ export function createOpenAiCompatibleAgentProvider({
         body: JSON.stringify({
           model,
           temperature: 0.2,
+          max_tokens: KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS,
           messages: [
             {
               role: 'system',
-              content:
-                'Return only valid JSON with conclusion, summary, risks, missingEvidence, suggestedTests, confidence. Do not wrap it in Markdown.',
+              content: KNOWLEDGE_REVIEW_SYSTEM_PROMPT,
             },
             { role: 'user', content: prompt },
           ],
