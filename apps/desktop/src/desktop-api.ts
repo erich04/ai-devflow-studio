@@ -20,6 +20,7 @@ import type {
   PolicySnapshot,
   ProjectGitStatus,
   ProviderCredentialMetadata,
+  RepositoryKnowledgeSnapshot,
   RemoteTeamSnapshot,
   RetryAttempt,
   TestEvidence,
@@ -29,6 +30,8 @@ import type {
   CreateRunInput,
   DeleteRunInput,
   DeleteRunResult,
+  LoadRepositoryKnowledgeInput,
+  RefreshRepositoryKnowledgeInput,
   RetryRemoteSyncOperationInput,
 } from '../electron/ipc-contract'
 
@@ -184,6 +187,12 @@ export type DevFlowDesktopApi = {
   loadDesktopPairing: () => Promise<DesktopPairingCredential | null>
   pairDesktop: (input: PairDesktopInput) => Promise<PairDesktopResult>
   loadRemoteSnapshot: (input?: LoadRemoteSnapshotInput) => Promise<RemoteTeamSnapshot>
+  loadRepositoryKnowledge: (
+    input: LoadRepositoryKnowledgeInput,
+  ) => Promise<RepositoryKnowledgeSnapshot>
+  refreshRepositoryKnowledge: (
+    input: RefreshRepositoryKnowledgeInput,
+  ) => Promise<RepositoryKnowledgeSnapshot>
   retryRemoteSyncOperation: (
     input: RetryRemoteSyncOperationInput,
   ) => Promise<LocalExecutionState>

@@ -19,6 +19,7 @@ import type {
   PolicySnapshot,
   ProjectGitStatus,
   ProviderCredentialMetadata,
+  RepositoryKnowledgeSnapshot,
   RemoteRunDeleteResult,
   RemoteTeamSnapshot,
   RetryAttempt,
@@ -49,6 +50,12 @@ export type RetryRemoteSyncOperationInput = {
   operationId: string
 }
 
+export type LoadRepositoryKnowledgeInput = {
+  projectId: string
+}
+
+export type RefreshRepositoryKnowledgeInput = LoadRepositoryKnowledgeInput
+
 export const ipcChannels = {
   loadState: 'devflow:local-state:load',
   selectProject: 'devflow:local-project:select',
@@ -72,6 +79,8 @@ export const ipcChannels = {
   saveMcpServers: 'devflow:mcp-servers:save',
   loadRemoteSnapshot: 'devflow:remote:snapshot:load',
   retryRemoteSyncOperation: 'devflow:remote-sync:operation:retry',
+  loadRepositoryKnowledge: 'devflow:repository-knowledge:load',
+  refreshRepositoryKnowledge: 'devflow:repository-knowledge:refresh',
   loadDesktopPairing: 'devflow:desktop-pairing:load',
   pairDesktop: 'devflow:desktop-pairing:pair',
   listAgentProviders: 'devflow:agent:providers:list',
@@ -290,6 +299,12 @@ export type DevFlowDesktopApi = {
   loadDesktopPairing: () => Promise<DesktopPairingCredential | null>
   pairDesktop: (input: PairDesktopInput) => Promise<PairDesktopResult>
   loadRemoteSnapshot: (input?: LoadRemoteSnapshotInput) => Promise<RemoteTeamSnapshot>
+  loadRepositoryKnowledge: (
+    input: LoadRepositoryKnowledgeInput,
+  ) => Promise<RepositoryKnowledgeSnapshot>
+  refreshRepositoryKnowledge: (
+    input: RefreshRepositoryKnowledgeInput,
+  ) => Promise<RepositoryKnowledgeSnapshot>
   retryRemoteSyncOperation: (
     input: RetryRemoteSyncOperationInput,
   ) => Promise<LocalExecutionState>
@@ -604,6 +619,28 @@ export function parseRetryRemoteSyncOperationInput(
   rejectUnexpectedFields(value, ['operationId'], 'retry remote sync operation payload')
 
   return { operationId: readRequiredString(value, 'operationId') }
+}
+
+export function parseLoadRepositoryKnowledgeInput(
+  value: unknown,
+): LoadRepositoryKnowledgeInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid load repository knowledge payload')
+  }
+  rejectUnexpectedFields(value, ['projectId'], 'load repository knowledge payload')
+
+  return { projectId: readRequiredString(value, 'projectId') }
+}
+
+export function parseRefreshRepositoryKnowledgeInput(
+  value: unknown,
+): RefreshRepositoryKnowledgeInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid refresh repository knowledge payload')
+  }
+  rejectUnexpectedFields(value, ['projectId'], 'refresh repository knowledge payload')
+
+  return { projectId: readRequiredString(value, 'projectId') }
 }
 
 export function parseAgentProviderCredentialInput(value: unknown): AgentProviderCredentialInput {

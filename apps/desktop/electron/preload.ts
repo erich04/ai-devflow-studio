@@ -13,6 +13,10 @@ const desktopApi: DevFlowDesktopApi = {
   loadDesktopPairing: () => ipcRenderer.invoke(ipcChannels.loadDesktopPairing),
   pairDesktop: (input) => ipcRenderer.invoke(ipcChannels.pairDesktop, input),
   loadRemoteSnapshot: (input) => ipcRenderer.invoke(ipcChannels.loadRemoteSnapshot, input),
+  loadRepositoryKnowledge: (input) =>
+    ipcRenderer.invoke(ipcChannels.loadRepositoryKnowledge, input),
+  refreshRepositoryKnowledge: (input) =>
+    ipcRenderer.invoke(ipcChannels.refreshRepositoryKnowledge, input),
   retryRemoteSyncOperation: (input) =>
     ipcRenderer.invoke(ipcChannels.retryRemoteSyncOperation, input),
   selectLocalProject: () => ipcRenderer.invoke(ipcChannels.selectProject),

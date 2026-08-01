@@ -14,6 +14,8 @@ import {
   parseMcpServersInput,
   parseOpenManagedWorktreeInput,
   parseReplyCodingPermissionInput,
+  parseLoadRepositoryKnowledgeInput,
+  parseRefreshRepositoryKnowledgeInput,
   parseRunCodingAgentInput,
   parseRunKnowledgeReviewInput,
   parseRemoteSnapshotInput,
@@ -259,6 +261,59 @@ describe('IPC contract parsers', () => {
     expect(parseRetryRemoteSyncOperationInput({ operationId: ' operation-1 ' })).toEqual({
       operationId: 'operation-1',
     })
+  })
+
+  it('accepts an identifier-only repository knowledge load command', () => {
+    expect(parseLoadRepositoryKnowledgeInput({ projectId: ' project-1 ' })).toEqual({
+      projectId: 'project-1',
+    })
+  })
+
+  it.each(['path', 'root', 'cwd', 'project', 'markdown'])(
+    'rejects renderer-supplied %s in repository knowledge load commands',
+    (field) => {
+      expect(() =>
+        parseLoadRepositoryKnowledgeInput({
+          projectId: 'project-1',
+          [field]: field === 'project' ? { path: '/private/repo' } : 'private content',
+        }),
+      ).toThrow(new RegExp(field))
+    },
+  )
+
+  it('accepts an identifier-only repository knowledge refresh command', () => {
+    expect(parseRefreshRepositoryKnowledgeInput({ projectId: ' project-1 ' })).toEqual({
+      projectId: 'project-1',
+    })
+  })
+
+  it.each(['path', 'root', 'cwd', 'project', 'markdown'])(
+    'rejects renderer-supplied %s in repository knowledge refresh commands',
+    (field) => {
+      expect(() =>
+        parseRefreshRepositoryKnowledgeInput({
+          projectId: 'project-1',
+          [field]: field === 'project' ? { path: '/private/repo' } : 'private content',
+        }),
+      ).toThrow(new RegExp(field))
+    },
+  )
+
+  it.each([
+    ['load', parseLoadRepositoryKnowledgeInput],
+    ['refresh', parseRefreshRepositoryKnowledgeInput],
+  ])('rejects an empty projectId in repository knowledge %s commands', (_label, parser) => {
+    expect(() => parser({ projectId: ' ' })).toThrow(/projectId/)
+  })
+
+  it('exposes identifier-only repository knowledge channels without raw repository writers', () => {
+    expect(ipcChannels).toMatchObject({
+      loadRepositoryKnowledge: 'devflow:repository-knowledge:load',
+      refreshRepositoryKnowledge: 'devflow:repository-knowledge:refresh',
+    })
+    expect(ipcChannels).not.toHaveProperty('indexRepositoryPath')
+    expect(ipcChannels).not.toHaveProperty('uploadRepositoryKnowledge')
+    expect(ipcChannels).not.toHaveProperty('writeRepositoryKnowledge')
   })
 
   it.each(['payload', 'scope', 'body', 'token'])(

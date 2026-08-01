@@ -25,12 +25,11 @@ import {
   runWorkflowStageAgent,
   type AgentEvent,
   type GateOverrideDecision,
-  type KnowledgeChunk,
-  type KnowledgeDocument,
   type LocalProject,
   type PolicySnapshot,
   type ProjectGitStatus,
   type ProviderCredentialMetadata,
+  type RepositoryKnowledgeSnapshot,
   type RemoteTeamSnapshot,
   type TestEvidence,
   createDemoTeamSessionHeaders,
@@ -65,6 +64,8 @@ import {
   parseEvaluateGateEnforcementInput,
   parseListGateOverridesInput,
   parseLoadEnforcementPolicyInput,
+  parseLoadRepositoryKnowledgeInput,
+  parseRefreshRepositoryKnowledgeInput,
   parseSaveGateOverrideInput,
   parseSaveProjectTestCommandInput,
   parseStartRetryAttemptInput,
@@ -95,6 +96,9 @@ import {
   createRuntimeBudgetGuard,
 } from './runtime-budget-guard.js'
 import { createKnowledgeReviewRuntime } from './knowledge-review-runtime.js'
+import { createRepositoryKnowledgeCache } from './repository-knowledge-cache.js'
+import { createRepositoryKnowledgeResolver } from './repository-knowledge-resolver.js'
+import { createRepositoryKnowledgeService } from './repository-knowledge.js'
 import {
   loadPolicySnapshotForProject as loadStoredPolicySnapshotForProject,
   resolveLocalGateOverrideSettlement,
@@ -111,8 +115,6 @@ const DEFAULT_TEST_TIMEOUT_MS = 120_000
 const INITIAL_THEME = parseInitialTheme(process.env['DEVFLOW_INITIAL_THEME'])
 const DEFAULT_CODING_RUN_TIMEOUT_MS = 10 * 60_000
 const runtimeFlags = resolveDevFlowRuntimeFlags(process.env)
-const defaultKnowledgeDocuments: KnowledgeDocument[] = []
-const defaultKnowledgeChunks: KnowledgeChunk[] = []
 const execFileAsync = promisify(execFile)
 
 let storePromise: Promise<LocalStore> | undefined
@@ -134,6 +136,14 @@ const gitStatusWatchers = new Map<
 >()
 const gitStatusWatcherCleanupRegistrations = new Set<number>()
 const opencodeProcessManager = createOpencodeProcessManager()
+const repositoryKnowledgeService = createRepositoryKnowledgeService()
+const repositoryKnowledgeCache = createRepositoryKnowledgeCache({
+  service: repositoryKnowledgeService,
+})
+const repositoryKnowledgeResolver = createRepositoryKnowledgeResolver({
+  getStore,
+  cache: repositoryKnowledgeCache,
+})
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) {
@@ -305,7 +315,9 @@ function scheduleCodingRunTimeout(codingRunId: string, expire: () => Promise<voi
   codingRunTimeouts.set(codingRunId, timer)
 }
 
-async function createCodingRuntimeForRequest() {
+async function createCodingRuntimeForRequest(
+  knowledgeSnapshot?: RepositoryKnowledgeSnapshot,
+) {
   const [remoteSync, store] = await Promise.all([
     getProjectBoundRemoteSync(),
     getStore(),
@@ -313,6 +325,12 @@ async function createCodingRuntimeForRequest() {
   return createCodingRuntime({
     store,
     engine: createCodingEngineAdapterFromEnv(process.env),
+    ...(knowledgeSnapshot
+      ? {
+          knowledgeDocuments: knowledgeSnapshot.documents,
+          knowledgeChunks: knowledgeSnapshot.chunks,
+        }
+      : {}),
     budgetGuard: createRuntimeBudgetGuard(remoteSync),
     completeWorkflowBuild: async ({ runId, nodeId, codingRunId, diffId, now }) => {
       const existingEvents = await store.listEvents(runId)
@@ -367,15 +385,17 @@ async function createCodingRuntimeForRequest() {
   })
 }
 
-async function createKnowledgeReviewRuntimeForRequest() {
+async function createKnowledgeReviewRuntimeForRequest(
+  knowledgeSnapshot: RepositoryKnowledgeSnapshot,
+) {
   const [remoteSync, store] = await Promise.all([
     getProjectBoundRemoteSync(),
     getStore(),
   ])
   return createKnowledgeReviewRuntime({
     store,
-    knowledgeDocuments: defaultKnowledgeDocuments,
-    knowledgeChunks: defaultKnowledgeChunks,
+    knowledgeDocuments: knowledgeSnapshot.documents,
+    knowledgeChunks: knowledgeSnapshot.chunks,
     resolveProviderMetadata: (providerId) =>
       resolveElectronAgentProviderMetadata({
         providerId,
@@ -439,6 +459,25 @@ async function findProject(projectId: string): Promise<LocalProject> {
   }
 
   return project
+}
+
+async function loadTrustedRepositoryKnowledge(
+  projectId: string,
+  options: { refresh?: boolean } = {},
+): Promise<RepositoryKnowledgeSnapshot> {
+  return repositoryKnowledgeResolver.loadProject(projectId, options)
+}
+
+async function loadTrustedRunKnowledge(input: {
+  runId: string
+  nodeId: string
+  projectId: string
+}): Promise<{
+  knowledgeSnapshot: RepositoryKnowledgeSnapshot
+}> {
+  return {
+    knowledgeSnapshot: await repositoryKnowledgeResolver.loadRun(input),
+  }
 }
 
 async function runGit(project: LocalProject, args: string[]): Promise<string> {
@@ -652,7 +691,10 @@ async function loadDeliveryProjectReference(store: LocalStore, localProjectId: s
 
 async function evaluateLocalGateEnforcement(
   input: { runId: string; nodeId: string; projectId?: string },
-  options: { refreshPolicy?: boolean } = {},
+  options: {
+    refreshPolicy?: boolean
+    knowledgeSnapshot?: RepositoryKnowledgeSnapshot
+  } = {},
 ) {
   const store = await getStore()
   const run = (await store.listRuns()).find((candidate) => candidate.id === input.runId)
@@ -663,8 +705,17 @@ async function evaluateLocalGateEnforcement(
   if (!node) {
     throw new Error(`Run node not found: ${input.nodeId}`)
   }
+  if (input.projectId !== undefined && input.projectId !== run.projectId) {
+    throw new Error('The requested Run does not belong to the selected local project.')
+  }
 
-  const policyProjectId = await resolvePolicyProjectId(input.projectId ?? run.projectId)
+  const knowledgeSnapshot = options.knowledgeSnapshot
+    ?? await loadTrustedRepositoryKnowledge(run.projectId)
+  if (knowledgeSnapshot.projectId !== run.projectId) {
+    throw new Error('Repository knowledge is unavailable for this local project.')
+  }
+
+  const policyProjectId = await resolvePolicyProjectId(run.projectId)
   if (options.refreshPolicy) {
     await refreshRemotePolicySnapshotForProject(policyProjectId)
   }
@@ -679,16 +730,16 @@ async function evaluateLocalGateEnforcement(
   const knowledgeReferences = buildKnowledgeReferences({
     run,
     artifacts,
-    documents: defaultKnowledgeDocuments,
-    chunks: defaultKnowledgeChunks,
+    documents: knowledgeSnapshot.documents,
+    chunks: knowledgeSnapshot.chunks,
     testEvidence,
   })
   const governanceChecks = buildKnowledgeGovernanceChecks({
     run,
     node,
     artifacts,
-    documents: defaultKnowledgeDocuments,
-    chunks: defaultKnowledgeChunks,
+    documents: knowledgeSnapshot.documents,
+    chunks: knowledgeSnapshot.chunks,
     testEvidence,
   })
   const latestAgentReview =
@@ -793,6 +844,16 @@ function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.loadState, async () => {
     const store = await getStore()
     return store.loadState()
+  })
+
+  ipcMain.handle(ipcChannels.loadRepositoryKnowledge, async (_, payload: unknown) => {
+    const input = parseLoadRepositoryKnowledgeInput(payload)
+    return loadTrustedRepositoryKnowledge(input.projectId)
+  })
+
+  ipcMain.handle(ipcChannels.refreshRepositoryKnowledge, async (_, payload: unknown) => {
+    const input = parseRefreshRepositoryKnowledgeInput(payload)
+    return loadTrustedRepositoryKnowledge(input.projectId, { refresh: true })
   })
 
   ipcMain.handle(ipcChannels.retryRemoteSyncOperation, async (_, payload: unknown) => {
@@ -1479,13 +1540,15 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.runCodingAgent, async (_, payload: unknown) => {
     const input = parseRunCodingAgentInput(payload)
-    const runtime = await createCodingRuntimeForRequest()
+    const { knowledgeSnapshot } = await loadTrustedRunKnowledge(input)
+    const runtime = await createCodingRuntimeForRequest(knowledgeSnapshot)
     return runtime.runCodingAgent(input)
   })
 
   ipcMain.handle(ipcChannels.startRetryAttempt, async (_, payload: unknown) => {
     const input = parseStartRetryAttemptInput(payload)
-    const runtime = await createCodingRuntimeForRequest()
+    const { knowledgeSnapshot } = await loadTrustedRunKnowledge(input)
+    const runtime = await createCodingRuntimeForRequest(knowledgeSnapshot)
     const {
       run,
       node,
@@ -1497,6 +1560,9 @@ function registerIpcHandlers() {
     } = await evaluateLocalGateEnforcement({
       runId: input.runId,
       nodeId: input.nodeId,
+      projectId: input.projectId,
+    }, {
+      knowledgeSnapshot,
     })
     const remediationPlan = buildRemediationPlan({
       run,
@@ -1552,7 +1618,8 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.runKnowledgeReview, async (_, payload: unknown) => {
     const input = parseRunKnowledgeReviewInput(payload)
-    const runtime = await createKnowledgeReviewRuntimeForRequest()
+    const { knowledgeSnapshot } = await loadTrustedRunKnowledge(input)
+    const runtime = await createKnowledgeReviewRuntimeForRequest(knowledgeSnapshot)
     const result = await runtime.run(input)
     wakeRemoteSyncOutbox()
     return result

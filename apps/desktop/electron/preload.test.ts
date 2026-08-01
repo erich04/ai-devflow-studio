@@ -21,6 +21,8 @@ await import('./preload')
 
 type ExposedDesktopApi = {
   retryRemoteSyncOperation: (input: { operationId: string }) => Promise<unknown>
+  loadRepositoryKnowledge: (input: { projectId: string }) => Promise<unknown>
+  refreshRepositoryKnowledge: (input: { projectId: string }) => Promise<unknown>
   onLocalStateUpdated: (listener: (state: unknown) => void) => () => void
 }
 
@@ -62,5 +64,34 @@ describe('Electron preload remote sync operator surface', () => {
       ipcChannels.localStateUpdated,
       wrappedListener,
     )
+  })
+
+  it('loads repository knowledge by project identifier without exposing raw repository writers', async () => {
+    const snapshot = { projectId: 'project-1', documents: [] }
+    electron.invoke.mockResolvedValueOnce(snapshot)
+
+    await expect(
+      exposedApi.loadRepositoryKnowledge({ projectId: 'project-1' }),
+    ).resolves.toBe(snapshot)
+    expect(electron.invoke).toHaveBeenLastCalledWith(ipcChannels.loadRepositoryKnowledge, {
+      projectId: 'project-1',
+    })
+    expect(
+      Object.keys(exposedApi).filter((method) =>
+        /index.*path|upload.*knowledge|write.*knowledge/i.test(method),
+      ),
+    ).toEqual([])
+  })
+
+  it('refreshes repository knowledge with only the project identifier', async () => {
+    const snapshot = { projectId: 'project-1', documents: [] }
+    electron.invoke.mockResolvedValueOnce(snapshot)
+
+    await expect(
+      exposedApi.refreshRepositoryKnowledge({ projectId: 'project-1' }),
+    ).resolves.toBe(snapshot)
+    expect(electron.invoke).toHaveBeenLastCalledWith(ipcChannels.refreshRepositoryKnowledge, {
+      projectId: 'project-1',
+    })
   })
 })
