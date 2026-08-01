@@ -58,6 +58,14 @@ export { getToastDisplayDurationMs } from './app/desktop-view-model'
 const projectKnowledgeDocuments: KnowledgeDocument[] = []
 const projectKnowledgeChunks: KnowledgeChunk[] = []
 
+const remoteSyncStatusLabels = {
+  pending: 'queued',
+  sending: 'sending',
+  'retry-scheduled': 'retry_wait',
+  completed: 'synced',
+  terminal: 'terminal',
+} as const
+
 export function App() {
   const workspace = useDesktopWorkspace({
     defaultReviewProviderDraft,
@@ -103,6 +111,7 @@ export function App() {
     dependencyBootstrapEvidence,
     codingDiffArtifacts,
     retryAttempts,
+    remoteSyncOperations,
     providerIdDraft,
     providerBaseUrlDraft,
     providerModelDraft,
@@ -267,6 +276,17 @@ export function App() {
         ? runs.filter((run) => run.projectId === selectedLocalProject.id)
         : runs,
     [runs, selectedLocalProject],
+  )
+  const scopedRemoteSyncOperations = useMemo(
+    () =>
+      selectedLocalProject
+        ? remoteSyncOperations.filter(
+            (operation) =>
+              operation.localProjectId === selectedLocalProject.id &&
+              operation.status !== 'completed',
+          )
+        : [],
+    [remoteSyncOperations, selectedLocalProject],
   )
   const scopedRunIdSet = useMemo(() => new Set(scopedRuns.map((run) => run.id)), [scopedRuns])
   const scopedArtifacts = useMemo(
@@ -561,6 +581,21 @@ export function App() {
     applyLocalExecutionState,
   })
 
+  async function retryTerminalRemoteSyncOperation(operationId: string) {
+    if (!desktopApi) {
+      setToast('请在 Electron 应用中重试远端同步')
+      return
+    }
+
+    try {
+      const state = await desktopApi.retryRemoteSyncOperation({ operationId })
+      applyLocalExecutionState(state)
+      setToast('远端同步操作已重新排队')
+    } catch {
+      setToast('远端同步重试失败，请稍后再试')
+    }
+  }
+
   async function confirmDeleteRun() {
     if (!deleteRunTarget) {
       return
@@ -820,6 +855,36 @@ export function App() {
           <span className="stat">Token Cost <strong>{teamTotalCost}</strong></span>
           <span className="stat">Tests Today <strong>{testsTodayCount}</strong></span>
           <span className="stat">同步状态 <strong>local + {policySource}</strong></span>
+          {scopedRemoteSyncOperations.length > 0 ? (
+            <div className="stat remote-sync-operations" data-testid="remote-sync-operations">
+              <span>远端同步</span>
+              {scopedRemoteSyncOperations.map((operation) => (
+                <span
+                  className="remote-sync-operation"
+                  data-status={operation.status}
+                  key={operation.id}
+                >
+                  <span>{operation.kind}</span>
+                  <strong>{remoteSyncStatusLabels[operation.status]}</strong>
+                  <small>attempt {operation.attemptCount}</small>
+                  {operation.lastErrorCode ? <code>{operation.lastErrorCode}</code> : null}
+                  {operation.nextAttemptAt ? (
+                    <time dateTime={operation.nextAttemptAt}>{operation.nextAttemptAt}</time>
+                  ) : null}
+                  {operation.status === 'terminal' ? (
+                    <button
+                      className="ghost-button remote-sync-retry"
+                      type="button"
+                      aria-label={`重试 ${operation.kind} 同步`}
+                      onClick={() => void retryTerminalRemoteSyncOperation(operation.id)}
+                    >
+                      重试
+                    </button>
+                  ) : null}
+                </span>
+              ))}
+            </div>
+          ) : null}
           <span className="stat">Policy Snapshot <strong>{policyVersion ? `v${policyVersion}` : 'not loaded'}</strong></span>
           <span className="stat">策略状态 <strong className={`pill ${policyTone}`}>{policyStatus}</strong></span>
           <span className="stat" data-testid="runtime-budget-status">

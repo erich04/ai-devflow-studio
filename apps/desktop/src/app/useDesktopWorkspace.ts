@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import {
   normalizeWorkflowRunProgress,
   parseThemePreference,
@@ -23,6 +23,7 @@ import {
   type ManagedCodingWorkspace,
   type McpServerDefinition,
   type Project,
+  type RemoteSyncOperation,
   type RetryAttempt,
   type TeamMember,
   type TestEvidence,
@@ -104,6 +105,7 @@ export type DesktopWorkspaceState = {
   dependencyBootstrapEvidence: DependencyBootstrapEvidence[]
   codingDiffArtifacts: CodingDiffArtifact[]
   retryAttempts: RetryAttempt[]
+  remoteSyncOperations: RemoteSyncOperation[]
   providerIdDraft: string
   providerBaseUrlDraft: string
   providerModelDraft: string
@@ -231,6 +233,7 @@ export function useDesktopWorkspace(input: {
   const [dependencyBootstrapEvidence, setDependencyBootstrapEvidence] = useState<DependencyBootstrapEvidence[]>([])
   const [codingDiffArtifacts, setCodingDiffArtifacts] = useState<CodingDiffArtifact[]>([])
   const [retryAttempts, setRetryAttempts] = useState<RetryAttempt[]>([])
+  const [remoteSyncOperations, setRemoteSyncOperations] = useState<RemoteSyncOperation[]>([])
   const [providerIdDraft, setProviderIdDraft] = useState(input.defaultReviewProviderDraft.providerId)
   const [providerBaseUrlDraft, setProviderBaseUrlDraft] = useState(input.defaultReviewProviderDraft.baseUrl)
   const [providerModelDraft, setProviderModelDraft] = useState(input.defaultReviewProviderDraft.model)
@@ -245,6 +248,10 @@ export function useDesktopWorkspace(input: {
   const [searchQuery, setSearchQuery] = useState('')
   const [supportContext, setSupportContext] = useState<SupportContext | null>(null)
   const [toast, setToast] = useState(desktopApi ? '本地执行代理已连接' : '浏览器预览模式')
+  const selectedLocalProjectIdRef = useRef(selectedLocalProjectId)
+  const selectedRunIdRef = useRef(selectedRunId)
+  selectedLocalProjectIdRef.current = selectedLocalProjectId
+  selectedRunIdRef.current = selectedRunId
 
   const selectedLocalProject =
     localProjects.find((project) => project.id === selectedLocalProjectId) ?? localProjects[0]
@@ -266,21 +273,23 @@ export function useDesktopWorkspace(input: {
     setLocalProjects(state.projects)
     setThemePreference(state.settings.themePreference)
     setHasLoadedLocalState(true)
-    if (state.projects[0] && !selectedLocalProjectId) {
+    if (state.projects[0] && !selectedLocalProjectIdRef.current) {
       setSelectedLocalProjectId(state.projects[0].id)
+      selectedLocalProjectIdRef.current = state.projects[0].id
     }
 
     const normalizedRuns = state.runs.map(normalizeWorkflowRunProgress)
 
     if (normalizedRuns.length > 0) {
-      const nextRunId = normalizedRuns.some((run) => run.id === selectedRunId)
-        ? selectedRunId
+      const nextRunId = normalizedRuns.some((run) => run.id === selectedRunIdRef.current)
+        ? selectedRunIdRef.current
         : normalizedRuns[0]!.id
       const nextRun = normalizedRuns.find((run) => run.id === nextRunId) ?? normalizedRuns[0]!
 
       setRuns(normalizedRuns)
       setRemoteRunIds([])
       setSelectedRunId(nextRunId)
+      selectedRunIdRef.current = nextRunId
       setSelectedNodeId((current) => {
         return nextRun.nodes.some((node) => node.id === current) ? current : nextRun.currentNodeId
       })
@@ -292,6 +301,7 @@ export function useDesktopWorkspace(input: {
       setRuns([])
       setRemoteRunIds([])
       setSelectedRunId('')
+      selectedRunIdRef.current = ''
       setSelectedNodeId('')
       setArtifacts([])
       setEvents([])
@@ -311,6 +321,7 @@ export function useDesktopWorkspace(input: {
     setDependencyBootstrapEvidence(state.dependencyBootstrapEvidence)
     setCodingDiffArtifacts(state.codingDiffArtifacts)
     setRetryAttempts(state.retryAttempts ?? [])
+    setRemoteSyncOperations(state.remoteSyncOperations ?? [])
     setDesktopPairing(state.desktopPairingCredential ?? null)
     if (state.mcpServers.length > 0) {
       setMcpServers(state.mcpServers)
@@ -362,12 +373,18 @@ export function useDesktopWorkspace(input: {
     const unsubscribePermission = desktopApi.onCodingPermissionUpdated((request) => {
       setCodingPermissionRequests((previous) => mergeById(previous, [request]))
     })
+    const unsubscribeLocalState = desktopApi.onLocalStateUpdated((state) => {
+      if (!disposed) {
+        applyLocalExecutionState(state)
+      }
+    })
 
     return () => {
       disposed = true
       unsubscribeRun()
       unsubscribeEvent()
       unsubscribePermission()
+      unsubscribeLocalState()
     }
   }, [desktopApi])
 
@@ -494,6 +511,7 @@ export function useDesktopWorkspace(input: {
     dependencyBootstrapEvidence,
     codingDiffArtifacts,
     retryAttempts,
+    remoteSyncOperations,
     providerIdDraft,
     providerBaseUrlDraft,
     providerModelDraft,

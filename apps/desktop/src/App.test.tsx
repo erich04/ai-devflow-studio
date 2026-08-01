@@ -9,6 +9,7 @@ import {
   createWarnOnlyDefaultPolicy,
   resolveEffectivePolicy,
   type DesktopPairingCredential,
+  type RemoteSyncOperation,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import {
@@ -98,6 +99,34 @@ function desktopState(
     managedCodingWorkspaces: [],
     dependencyBootstrapEvidence: [],
     codingDiffArtifacts: [],
+    ...overrides,
+  }
+}
+
+function remoteSyncOperation(
+  overrides: Partial<RemoteSyncOperation> = {},
+): RemoteSyncOperation {
+  return {
+    id: 'remote-sync-operation-1',
+    kind: 'run-summary',
+    localProjectId: localProject.id,
+    organizationId: 'org-demo',
+    teamProjectId: fixtureRuns[0]!.projectId,
+    runId: fixtureRuns[0]!.id,
+    entityId: fixtureRuns[0]!.id,
+    idempotencyKey: 'remote-sync:v1:fixture-project:run-summary:run-1:run-1',
+    status: 'pending',
+    generation: 1,
+    attemptCount: 0,
+    nextAttemptAt: '2026-08-01T12:00:00.000Z',
+    leaseExpiresAt: null,
+    lastAttemptAt: null,
+    lastErrorCode: null,
+    lastErrorMessage: null,
+    recovery: 'none',
+    completedAt: null,
+    createdAt: '2026-08-01T12:00:00.000Z',
+    updatedAt: '2026-08-01T12:00:00.000Z',
     ...overrides,
   }
 }
@@ -2772,6 +2801,186 @@ describe('App', () => {
 
     expect(api.saveAgentProviderCredential).not.toHaveBeenCalled()
     expect(screen.getByText('请输入 API Key')).toBeInTheDocument()
+  })
+
+  it('applies main-process local state pushes to the current project sync status', async () => {
+    let localStateListener:
+      | Parameters<DevFlowDesktopApi['onLocalStateUpdated']>[0]
+      | undefined
+    const onLocalStateUpdated = vi.fn(
+      (listener: Parameters<DevFlowDesktopApi['onLocalStateUpdated']>[0]) => {
+        localStateListener = listener
+        return vi.fn()
+      },
+    )
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: fixtureRuns,
+      })),
+      onLocalStateUpdated,
+    })
+    render(<App />)
+
+    await waitFor(() => expect(onLocalStateUpdated).toHaveBeenCalledTimes(1))
+    act(() => {
+      localStateListener?.(desktopState({
+        projects: [localProject],
+        runs: fixtureRuns,
+        remoteSyncOperations: [
+          remoteSyncOperation(),
+          remoteSyncOperation({
+            id: 'remote-sync-operation-2',
+            kind: 'test-evidence-summary',
+            status: 'sending',
+          }),
+          remoteSyncOperation({
+            id: 'remote-sync-operation-3',
+            kind: 'agent-review-summary',
+            status: 'retry-scheduled',
+            attemptCount: 2,
+          }),
+        ],
+      }))
+    })
+
+    const syncStatus = await screen.findByTestId('remote-sync-operations')
+    expect(syncStatus).toHaveTextContent('run-summary')
+    expect(syncStatus).toHaveTextContent('queued')
+    expect(syncStatus).toHaveTextContent('sending')
+    expect(syncStatus).toHaveTextContent('retry_wait')
+  })
+
+  it('preserves the selected Run when an outbox state push arrives', async () => {
+    let localStateListener:
+      | Parameters<DevFlowDesktopApi['onLocalStateUpdated']>[0]
+      | undefined
+    const secondRun = {
+      ...fixtureRuns[0]!,
+      id: 'run-selected-during-sync',
+      title: 'Selected during sync',
+      branchName: 'codex/selected-during-sync',
+    }
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [fixtureRuns[0]!, secondRun],
+      })),
+      onLocalStateUpdated: vi.fn((listener) => {
+        localStateListener = listener
+        return vi.fn()
+      }),
+    })
+    render(<App />)
+
+    const selectedRunButton = await screen.findByTitle('Selected during sync')
+    fireEvent.click(selectedRunButton)
+    expect(selectedRunButton.closest('.run-row')).toHaveClass('is-selected')
+
+    act(() => {
+      localStateListener?.(desktopState({
+        projects: [localProject],
+        runs: [fixtureRuns[0]!, secondRun],
+        remoteSyncOperations: [remoteSyncOperation()],
+      }))
+    })
+
+    expect(selectedRunButton.closest('.run-row')).toHaveClass('is-selected')
+  })
+
+  it('shows terminal sync metadata without exposing raw remote errors', async () => {
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: fixtureRuns,
+        remoteSyncOperations: [remoteSyncOperation({
+          status: 'terminal',
+          attemptCount: 4,
+          lastErrorCode: 'immutable_conflict',
+          lastErrorMessage:
+            'Bearer secret-token failed at https://api.internal/private with raw body',
+          nextAttemptAt: '2026-08-02T12:30:00.000Z',
+        })],
+      })),
+    })
+    render(<App />)
+
+    const syncStatus = await screen.findByTestId('remote-sync-operations')
+    expect(syncStatus).toHaveTextContent('run-summary')
+    expect(syncStatus).toHaveTextContent('terminal')
+    expect(syncStatus).toHaveTextContent('attempt 4')
+    expect(syncStatus).toHaveTextContent('immutable_conflict')
+    expect(syncStatus).toHaveTextContent('2026-08-02T12:30:00.000Z')
+    expect(syncStatus).not.toHaveTextContent(/secret-token|api\.internal|private|raw body/i)
+    expect(screen.getByRole('button', { name: '重试 run-summary 同步' })).toBeEnabled()
+  })
+
+  it('retries terminal sync with only the operation ID and applies the returned state', async () => {
+    const operation = remoteSyncOperation({
+      status: 'terminal',
+      attemptCount: 4,
+      lastErrorCode: 'immutable_conflict',
+      nextAttemptAt: null,
+    })
+    const retryRemoteSyncOperation = vi.fn().mockResolvedValue(desktopState({
+      projects: [localProject],
+      runs: fixtureRuns,
+      remoteSyncOperations: [remoteSyncOperation({
+        status: 'pending',
+        attemptCount: 0,
+        nextAttemptAt: '2026-08-02T13:00:00.000Z',
+      })],
+    }))
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: fixtureRuns,
+        remoteSyncOperations: [operation],
+      })),
+      retryRemoteSyncOperation,
+    })
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '重试 run-summary 同步' }))
+
+    await waitFor(() =>
+      expect(retryRemoteSyncOperation).toHaveBeenCalledWith({
+        operationId: 'remote-sync-operation-1',
+      }),
+    )
+    expect(retryRemoteSyncOperation).toHaveBeenCalledTimes(1)
+    await waitFor(() =>
+      expect(screen.getByTestId('remote-sync-operations')).toHaveTextContent('queued'),
+    )
+    expect(screen.getByTestId('remote-sync-operations')).not.toHaveTextContent('terminal')
+    expect(screen.getByTestId('toast')).toHaveTextContent('远端同步操作已重新排队')
+  })
+
+  it('shows a fixed safe toast when a terminal sync retry fails', async () => {
+    const retryRemoteSyncOperation = vi.fn().mockRejectedValue(
+      new Error('Bearer secret-token failed at https://api.internal/private with raw body'),
+    )
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: fixtureRuns,
+        remoteSyncOperations: [remoteSyncOperation({
+          status: 'terminal',
+          attemptCount: 4,
+          lastErrorCode: 'immutable_conflict',
+          nextAttemptAt: null,
+        })],
+      })),
+      retryRemoteSyncOperation,
+    })
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '重试 run-summary 同步' }))
+
+    const toast = await screen.findByTestId('toast')
+    expect(toast).toHaveTextContent('远端同步重试失败，请稍后再试')
+    expect(toast).not.toHaveTextContent(/secret-token|api\.internal|private|raw body/i)
+    expect(screen.getByTestId('remote-sync-operations')).toHaveTextContent('terminal')
   })
 
   it('subscribes to coding push updates and merges pushed state into the Agents view', async () => {

@@ -2069,6 +2069,55 @@ body {
   white-space: nowrap;
 }
 
+.remote-sync-operations,
+.remote-sync-operation {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.remote-sync-operation {
+  min-height: 30px;
+  padding: 3px 6px 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.remote-sync-operation > strong {
+  color: var(--text);
+}
+
+.remote-sync-operation[data-status='retry-scheduled'] > strong {
+  color: var(--amber);
+}
+
+.remote-sync-operation[data-status='terminal'] {
+  border-color: color-mix(in srgb, var(--danger) 44%, var(--border));
+}
+
+.remote-sync-operation[data-status='terminal'] > strong,
+.remote-sync-operation > code {
+  color: var(--danger);
+}
+
+.remote-sync-operation > small,
+.remote-sync-operation > time,
+.remote-sync-operation > code {
+  font-size: 11px;
+}
+
+.remote-sync-operation > time {
+  color: var(--text-faint);
+}
+
+.remote-sync-retry.ghost-button {
+  min-height: 26px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
 .stat strong {
   color: var(--text);
   font-size: 15px;
