@@ -5,12 +5,17 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import initSqlJs, { type Database, type SqlJsStatic, type SqlValue } from 'sql.js'
 import {
+  createRemoteSyncIdempotencyKey,
+  createRemoteSyncOperation,
+  isActiveCodingAgentRunStatus,
+  REMOTE_SYNC_CLAIM_LEASE_MS,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   normalizeWorkflowRunProgress,
   redactCodingAgentEventForStorage,
   redactSensitiveText,
   redactTestEvidenceForStorage,
+  sanitizeRemoteSyncErrorMessage,
   type AgentEvent,
   type AgentReviewResult,
   type AgentTrace,
@@ -32,12 +37,15 @@ import {
   type PolicySnapshot,
   type ProviderCredentialMetadata,
   type RetryAttempt,
+  type RemoteSyncFailureCode,
+  type RemoteSyncOperation,
+  type RemoteSyncRecovery,
   type TestEvidence,
   type WorkflowEdge,
   type WorkflowNode,
   type WorkflowRun,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 8
+export const CURRENT_SCHEMA_VERSION = 9
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -78,6 +86,54 @@ export type WorkflowMutationCommitResult =
   | { committed: true }
   | { committed: false; reason: 'run_not_found' | 'stale_run' }
 
+export type EnqueueRemoteSyncOperationResult =
+  | { enqueued: true; operation: RemoteSyncOperation }
+  | { enqueued: false; reason: 'coalesced'; operation: RemoteSyncOperation }
+  | {
+      enqueued: false
+      reason: 'invalid_idempotency_key' | 'invalid_operation' | 'scope_mismatch'
+    }
+
+export type BindRemoteSyncOperationScopeInput = {
+  id: string
+  generation: number
+  organizationId: string
+  teamProjectId: string
+  updatedAt: string
+}
+
+export type BindRemoteSyncOperationScopeResult =
+  | { bound: true; operation: RemoteSyncOperation }
+  | {
+      bound: false
+      reason: 'not_found' | 'not_sending' | 'stale_generation' | 'scope_mismatch'
+    }
+
+export type SettleRemoteSyncOperationInput = {
+  id: string
+  generation: number
+  status: 'completed' | 'retry-scheduled' | 'terminal'
+  updatedAt: string
+  nextAttemptAt?: string | null
+  lastErrorCode?: RemoteSyncFailureCode | null
+  lastErrorMessage?: string | null
+  recovery?: RemoteSyncRecovery
+  completedAt?: string | null
+}
+
+export type SettleRemoteSyncOperationResult =
+  | { settled: true; operation: RemoteSyncOperation }
+  | { settled: false; reason: 'not_found' | 'stale_generation' | 'not_sending' }
+
+export type RetryRemoteSyncOperationInput = {
+  id: string
+  updatedAt: string
+}
+
+export type RetryRemoteSyncOperationResult =
+  | { retried: true; operation: RemoteSyncOperation }
+  | { retried: false; reason: 'not_found' | 'not_terminal' }
+
 export type LocalStore = {
   upsertProject(project: LocalProject): Promise<void>
   listProjects(): Promise<LocalProject[]>
@@ -85,6 +141,21 @@ export type LocalStore = {
   deleteRun(runId: string): Promise<void>
   getRun(runId: string): Promise<WorkflowRun | null>
   listRuns(): Promise<WorkflowRun[]>
+  enqueueRemoteSyncOperation(
+    operation: RemoteSyncOperation,
+  ): Promise<EnqueueRemoteSyncOperationResult>
+  listRemoteSyncOperations(runId?: string): Promise<RemoteSyncOperation[]>
+  claimNextRemoteSyncOperation(now: string): Promise<RemoteSyncOperation | null>
+  bindRemoteSyncOperationScope(
+    input: BindRemoteSyncOperationScopeInput,
+  ): Promise<BindRemoteSyncOperationScopeResult>
+  settleRemoteSyncOperation(
+    input: SettleRemoteSyncOperationInput,
+  ): Promise<SettleRemoteSyncOperationResult>
+  retryRemoteSyncOperation(
+    input: RetryRemoteSyncOperationInput,
+  ): Promise<RetryRemoteSyncOperationResult>
+  recoverInterruptedRemoteSyncOperations(updatedAt: string): Promise<number>
   createWorkflow(
     creation: WorkflowCreation,
   ): Promise<WorkflowCreationResult>
@@ -129,6 +200,10 @@ export type LocalStore = {
   ): Promise<DesktopPairingCredential>
   getDesktopPairingCredential(): Promise<DesktopPairingCredential | null>
   getDesktopPairingEncryptedToken(): Promise<string | null>
+  getDesktopPairingCredentialBundle(): Promise<{
+    credential: DesktopPairingCredential
+    encryptedToken: string
+  } | null>
   savePolicySnapshot(snapshot: PolicySnapshot): Promise<PolicySnapshot>
   getPolicySnapshot(projectId: string): Promise<PolicySnapshot | null>
   saveGateOverride(decision: GateOverrideDecision): Promise<GateOverrideDecision>
@@ -424,6 +499,51 @@ const schemaMigrations: readonly SchemaMigration[] = [
       migrateWorkflowRunsIntoRelationalTables(db)
     },
   },
+  {
+    version: 9,
+    migrate(db) {
+      db.run(`
+
+    create table if not exists remote_sync_outbox (
+      id text primary key,
+      kind text not null,
+      local_project_id text not null,
+      organization_id text,
+      team_project_id text,
+      run_id text not null,
+      entity_id text not null,
+      idempotency_key text not null unique,
+      status text not null,
+      generation integer not null,
+      attempt_count integer not null,
+      next_attempt_at text,
+      lease_expires_at text,
+      last_attempt_at text,
+      last_error_code text,
+      last_error_message text,
+      recovery text not null,
+      completed_at text,
+      created_at text not null,
+      updated_at text not null,
+      check (kind in ('run-summary', 'test-evidence-summary', 'agent-review-summary', 'coding-agent-summary')),
+      check (status in ('pending', 'sending', 'retry-scheduled', 'completed', 'terminal')),
+      check (generation >= 1),
+      check (attempt_count >= 0),
+      check (
+        (status = 'sending' and lease_expires_at is not null) or
+        (status <> 'sending' and lease_expires_at is null)
+      ),
+      check (
+        (organization_id is null and team_project_id is null) or
+        (organization_id is not null and team_project_id is not null)
+      )
+    );
+
+    create index if not exists idx_remote_sync_outbox_due
+      on remote_sync_outbox(status, next_attempt_at, created_at);
+      `)
+    },
+  },
 ]
 
 function migrateSchema(db: Database) {
@@ -501,6 +621,141 @@ function selectStringColumn(db: Database, sql: string, params: SqlValue[] = []):
   }
 
   return first.values.map((row) => String(row[0]))
+}
+
+function selectRemoteSyncOperations(
+  db: Database,
+  sql: string,
+  params: SqlValue[] = [],
+): RemoteSyncOperation[] {
+  const result = db.exec(sql, params)
+  const rows = result[0]?.values ?? []
+  return rows.map((row) => ({
+    id: String(row[0]),
+    kind: String(row[1]) as RemoteSyncOperation['kind'],
+    localProjectId: String(row[2]),
+    organizationId: row[3] === null ? null : String(row[3]),
+    teamProjectId: row[4] === null ? null : String(row[4]),
+    runId: String(row[5]),
+    entityId: String(row[6]),
+    idempotencyKey: String(row[7]),
+    status: String(row[8]) as RemoteSyncOperation['status'],
+    generation: Number(row[9]),
+    attemptCount: Number(row[10]),
+    nextAttemptAt: row[11] === null ? null : String(row[11]),
+    leaseExpiresAt: row[12] === null ? null : String(row[12]),
+    lastAttemptAt: row[13] === null ? null : String(row[13]),
+    lastErrorCode: row[14] === null ? null : String(row[14]) as RemoteSyncFailureCode,
+    lastErrorMessage: row[15] === null ? null : String(row[15]),
+    recovery: String(row[16]) as RemoteSyncRecovery,
+    completedAt: row[17] === null ? null : String(row[17]),
+    createdAt: String(row[18]),
+    updatedAt: String(row[19]),
+  }))
+}
+
+const REMOTE_SYNC_OPERATION_COLUMNS = `
+  id, kind, local_project_id, organization_id, team_project_id, run_id, entity_id,
+  idempotency_key, status, generation, attempt_count, next_attempt_at, lease_expires_at, last_attempt_at,
+  last_error_code, last_error_message, recovery, completed_at, created_at, updated_at
+`
+
+const REMOTE_SYNC_OPERATION_KINDS: readonly RemoteSyncOperation['kind'][] = [
+  'run-summary',
+  'test-evidence-summary',
+  'agent-review-summary',
+  'coding-agent-summary',
+]
+
+function isNonEmptyIdentifier(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value) {
+    return false
+  }
+  try {
+    encodeURIComponent(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isCanonicalIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
+}
+
+function isCanonicalInitialRemoteSyncOperation(
+  operation: RemoteSyncOperation,
+): boolean {
+  const hasNullScope =
+    operation.organizationId === null && operation.teamProjectId === null
+  const hasCompleteScope =
+    isNonEmptyIdentifier(operation.organizationId) &&
+    isNonEmptyIdentifier(operation.teamProjectId)
+
+  return (
+    isNonEmptyIdentifier(operation.id) &&
+    isNonEmptyIdentifier(operation.localProjectId) &&
+    isNonEmptyIdentifier(operation.runId) &&
+    isNonEmptyIdentifier(operation.entityId) &&
+    REMOTE_SYNC_OPERATION_KINDS.includes(operation.kind) &&
+    (hasNullScope || hasCompleteScope) &&
+    operation.status === 'pending' &&
+    operation.generation === 1 &&
+    operation.attemptCount === 0 &&
+    isCanonicalIsoTimestamp(operation.createdAt) &&
+    operation.updatedAt === operation.createdAt &&
+    operation.nextAttemptAt === operation.createdAt &&
+    operation.leaseExpiresAt === null &&
+    operation.lastAttemptAt === null &&
+    operation.lastErrorCode === null &&
+    operation.lastErrorMessage === null &&
+    operation.recovery === 'none' &&
+    operation.completedAt === null
+  )
+}
+
+function isAbsent(value: unknown): boolean {
+  return value === undefined || value === null
+}
+
+function hasErrorDetails(input: SettleRemoteSyncOperationInput): boolean {
+  return (
+    typeof input.lastErrorCode === 'string' &&
+    typeof input.lastErrorMessage === 'string' &&
+    input.lastErrorMessage.trim().length > 0
+  )
+}
+
+function isValidRemoteSyncSettlement(input: SettleRemoteSyncOperationInput): boolean {
+  if (!isCanonicalIsoTimestamp(input.updatedAt)) return false
+
+  if (input.status === 'completed') {
+    return (
+      isAbsent(input.nextAttemptAt) &&
+      isAbsent(input.lastErrorCode) &&
+      isAbsent(input.lastErrorMessage) &&
+      (isAbsent(input.recovery) || input.recovery === 'none') &&
+      (isAbsent(input.completedAt) || isCanonicalIsoTimestamp(input.completedAt))
+    )
+  }
+
+  if (input.status === 'retry-scheduled') {
+    return (
+      isCanonicalIsoTimestamp(input.nextAttemptAt) &&
+      Date.parse(input.nextAttemptAt) > Date.parse(input.updatedAt) &&
+      hasErrorDetails(input) &&
+      (isAbsent(input.recovery) || input.recovery === 'none') &&
+      isAbsent(input.completedAt)
+    )
+  }
+
+  return (
+    isAbsent(input.nextAttemptAt) &&
+    hasErrorDetails(input) &&
+    isAbsent(input.completedAt)
+  )
 }
 
 function deleteWhereIn(db: Database, table: string, column: string, values: string[]): void {
@@ -921,6 +1176,10 @@ class SqlJsLocalStore implements LocalStore {
     this.db.run('begin transaction')
     try {
       writeWorkflowRun(this.db, normalizedRun)
+      this.enqueueCanonicalRemoteSyncOperation({
+        kind: 'run-summary', localProjectId: normalizedRun.projectId,
+        runId: normalizedRun.id, entityId: normalizedRun.id, createdAt: normalizedRun.updatedAt,
+      })
       this.db.run('commit')
     } catch (error) {
       this.db.run('rollback')
@@ -964,6 +1223,7 @@ class SqlJsLocalStore implements LocalStore {
       this.db.run('delete from test_evidence where run_id = ?', [trimmedRunId])
       this.db.run('delete from artifacts where run_id = ?', [trimmedRunId])
       this.db.run('delete from agent_events where run_id = ?', [trimmedRunId])
+      this.db.run('delete from remote_sync_outbox where run_id = ?', [trimmedRunId])
       this.db.run('delete from workflow_edges where run_id = ?', [trimmedRunId])
       this.db.run('delete from workflow_nodes where run_id = ?', [trimmedRunId])
       this.db.run('delete from workflow_runs where id = ?', [trimmedRunId])
@@ -984,6 +1244,428 @@ class SqlJsLocalStore implements LocalStore {
     return readWorkflowRuns(this.db)
   }
 
+  private enqueueCanonicalRemoteSyncOperation(input: {
+    kind: RemoteSyncOperation['kind']
+    localProjectId: string
+    runId: string
+    entityId: string
+    createdAt: string
+  }): void {
+    const [pairing] = selectJson<DesktopPairingCredential>(
+      this.db,
+      "select json from desktop_pairing_credentials where id = 'default'",
+    )
+    const bound = pairing?.localProjectId === input.localProjectId
+    const metadata = {
+      kind: input.kind,
+      localProjectId: input.localProjectId,
+      runId: input.runId,
+      entityId: input.entityId,
+      organizationId: bound ? pairing.organizationId : null,
+      teamProjectId: bound ? pairing.projectId : null,
+    }
+    const id = createRemoteSyncIdempotencyKey(metadata)
+    const result = this.writeRemoteSyncOperation(
+      createRemoteSyncOperation({
+        id,
+        ...metadata,
+        createdAt: input.createdAt,
+      }),
+      { terminalizeScopeMismatch: true },
+    )
+    if (!result.enqueued && result.reason !== 'coalesced') {
+      throw new Error(`Canonical remote-sync enqueue failed (${result.reason}).`)
+    }
+  }
+
+  async enqueueRemoteSyncOperation(
+    operation: RemoteSyncOperation,
+  ): Promise<EnqueueRemoteSyncOperationResult> {
+    const result = this.writeRemoteSyncOperation(operation)
+    if (result.enqueued || result.reason === 'coalesced') {
+      await this.persist()
+    }
+    return result
+  }
+
+  private writeRemoteSyncOperation(
+    operation: RemoteSyncOperation,
+    options: { terminalizeScopeMismatch?: boolean } = {},
+  ): EnqueueRemoteSyncOperationResult {
+    if (!isCanonicalInitialRemoteSyncOperation(operation)) {
+      return { enqueued: false, reason: 'invalid_operation' }
+    }
+    if (operation.idempotencyKey !== createRemoteSyncIdempotencyKey(operation)) {
+      return { enqueued: false, reason: 'invalid_idempotency_key' }
+    }
+
+    const [existing] = selectRemoteSyncOperations(
+      this.db,
+      `select ${REMOTE_SYNC_OPERATION_COLUMNS} from remote_sync_outbox where idempotency_key = ?`,
+      [operation.idempotencyKey],
+    )
+    if (existing) {
+      const existingHasScope = existing.organizationId !== null || existing.teamProjectId !== null
+      const incomingHasScope = operation.organizationId !== null || operation.teamProjectId !== null
+      if (
+        existingHasScope &&
+        incomingHasScope &&
+        (existing.organizationId !== operation.organizationId ||
+          existing.teamProjectId !== operation.teamProjectId)
+      ) {
+        if (options.terminalizeScopeMismatch) {
+          const terminal: RemoteSyncOperation = {
+            ...existing,
+            status: 'terminal',
+            generation: existing.generation + 1,
+            nextAttemptAt: null,
+            leaseExpiresAt: null,
+            lastErrorCode: 'scope_mismatch',
+            lastErrorMessage:
+              'The paired Team Project does not match the remote sync operation.',
+            recovery: 'none',
+            completedAt: null,
+            updatedAt: operation.updatedAt,
+          }
+          this.db.run(
+            `update remote_sync_outbox set
+               status = ?, generation = ?, next_attempt_at = null, lease_expires_at = null,
+               last_error_code = ?, last_error_message = ?, recovery = ?,
+               completed_at = null, updated_at = ?
+             where id = ?`,
+            [
+              terminal.status,
+              terminal.generation,
+              terminal.lastErrorCode,
+              terminal.lastErrorMessage,
+              terminal.recovery,
+              terminal.updatedAt,
+              terminal.id,
+            ],
+          )
+          return { enqueued: false, reason: 'coalesced', operation: terminal }
+        }
+        return { enqueued: false, reason: 'scope_mismatch' }
+      }
+
+      const coalesced: RemoteSyncOperation = {
+        ...existing,
+        organizationId: existingHasScope
+          ? existing.organizationId
+          : operation.organizationId,
+        teamProjectId: existingHasScope
+          ? existing.teamProjectId
+          : operation.teamProjectId,
+        status: 'pending',
+        generation: existing.generation + 1,
+        attemptCount: 0,
+        nextAttemptAt: operation.nextAttemptAt,
+        leaseExpiresAt: null,
+        lastAttemptAt: null,
+        lastErrorCode: null,
+        lastErrorMessage: null,
+        recovery: 'none',
+        completedAt: null,
+        updatedAt: operation.updatedAt,
+      }
+      this.db.run(
+        `update remote_sync_outbox set
+           organization_id = ?, team_project_id = ?, status = ?, generation = ?,
+           attempt_count = ?, next_attempt_at = ?,
+           lease_expires_at = ?, last_attempt_at = ?, last_error_code = ?, last_error_message = ?, recovery = ?,
+           completed_at = ?, updated_at = ?
+         where id = ?`,
+        [
+          coalesced.organizationId,
+          coalesced.teamProjectId,
+          coalesced.status,
+          coalesced.generation,
+          coalesced.attemptCount,
+          coalesced.nextAttemptAt,
+          coalesced.leaseExpiresAt,
+          coalesced.lastAttemptAt,
+          coalesced.lastErrorCode,
+          coalesced.lastErrorMessage,
+          coalesced.recovery,
+          coalesced.completedAt,
+          coalesced.updatedAt,
+          coalesced.id,
+        ],
+      )
+      return { enqueued: false, reason: 'coalesced', operation: coalesced }
+    }
+
+    const lastErrorMessage = operation.lastErrorMessage === null
+      ? null
+      : sanitizeRemoteSyncErrorMessage(operation.lastErrorMessage)
+    this.db.run(
+      `
+      insert into remote_sync_outbox (
+        ${REMOTE_SYNC_OPERATION_COLUMNS}
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        operation.id,
+        operation.kind,
+        operation.localProjectId,
+        operation.organizationId,
+        operation.teamProjectId,
+        operation.runId,
+        operation.entityId,
+        operation.idempotencyKey,
+        operation.status,
+        operation.generation,
+        operation.attemptCount,
+        operation.nextAttemptAt,
+        operation.leaseExpiresAt,
+        operation.lastAttemptAt,
+        operation.lastErrorCode,
+        lastErrorMessage,
+        operation.recovery,
+        operation.completedAt,
+        operation.createdAt,
+        operation.updatedAt,
+      ],
+    )
+    return {
+      enqueued: true,
+      operation: { ...operation, lastErrorMessage },
+    }
+  }
+
+  async listRemoteSyncOperations(runId?: string): Promise<RemoteSyncOperation[]> {
+    const trimmedRunId = runId?.trim()
+    const whereClause = trimmedRunId ? 'where run_id = ?' : ''
+    return selectRemoteSyncOperations(
+      this.db,
+      `select ${REMOTE_SYNC_OPERATION_COLUMNS} from remote_sync_outbox ${whereClause}
+       order by created_at asc, id asc`,
+      trimmedRunId ? [trimmedRunId] : [],
+    )
+  }
+
+  async claimNextRemoteSyncOperation(now: string): Promise<RemoteSyncOperation | null> {
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      const [candidate] = selectRemoteSyncOperations(
+        this.db,
+        `select ${REMOTE_SYNC_OPERATION_COLUMNS}
+         from remote_sync_outbox
+         where status in ('pending', 'retry-scheduled')
+           and next_attempt_at is not null
+           and next_attempt_at <= ?
+         order by next_attempt_at asc,
+           case when kind = 'run-summary' then 1 else 0 end asc,
+           created_at asc, id asc
+         limit 1`,
+        [now],
+      )
+      if (!candidate) {
+        this.db.run('commit')
+        transactionOpen = false
+        return null
+      }
+
+      this.db.run(
+        `update remote_sync_outbox
+         set status = 'sending', attempt_count = attempt_count + 1,
+             next_attempt_at = null, lease_expires_at = ?, last_attempt_at = ?, updated_at = ?
+         where id = ? and generation = ?
+           and status in ('pending', 'retry-scheduled')`,
+        [
+          new Date(Date.parse(now) + REMOTE_SYNC_CLAIM_LEASE_MS).toISOString(),
+          now,
+          now,
+          candidate.id,
+          candidate.generation,
+        ],
+      )
+      const [claimed] = selectRemoteSyncOperations(
+        this.db,
+        `select ${REMOTE_SYNC_OPERATION_COLUMNS} from remote_sync_outbox where id = ?`,
+        [candidate.id],
+      )
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return claimed ?? null
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      throw error
+    }
+  }
+
+  async bindRemoteSyncOperationScope(
+    input: BindRemoteSyncOperationScopeInput,
+  ): Promise<BindRemoteSyncOperationScopeResult> {
+    if (
+      !isNonEmptyIdentifier(input.id) ||
+      !Number.isInteger(input.generation) ||
+      input.generation < 1 ||
+      !isNonEmptyIdentifier(input.organizationId) ||
+      !isNonEmptyIdentifier(input.teamProjectId) ||
+      !isCanonicalIsoTimestamp(input.updatedAt)
+    ) {
+      throw new Error('Invalid remote-sync scope binding input.')
+    }
+    const [operation] = selectRemoteSyncOperations(
+      this.db,
+      `select ${REMOTE_SYNC_OPERATION_COLUMNS} from remote_sync_outbox where id = ?`,
+      [input.id],
+    )
+    if (!operation) {
+      return { bound: false, reason: 'not_found' }
+    }
+    if (operation.generation !== input.generation) {
+      return { bound: false, reason: 'stale_generation' }
+    }
+    if (operation.status !== 'sending') {
+      return { bound: false, reason: 'not_sending' }
+    }
+
+    if (operation.organizationId !== null || operation.teamProjectId !== null) {
+      return operation.organizationId === input.organizationId &&
+        operation.teamProjectId === input.teamProjectId
+        ? { bound: true, operation }
+        : { bound: false, reason: 'scope_mismatch' }
+    }
+
+    this.db.run(
+      `update remote_sync_outbox
+       set organization_id = ?, team_project_id = ?, updated_at = ?
+       where id = ? and generation = ?
+         and status = 'sending'
+         and organization_id is null and team_project_id is null`,
+      [
+        input.organizationId,
+        input.teamProjectId,
+        input.updatedAt,
+        operation.id,
+        operation.generation,
+      ],
+    )
+    const [bound] = selectRemoteSyncOperations(
+      this.db,
+      `select ${REMOTE_SYNC_OPERATION_COLUMNS} from remote_sync_outbox where id = ?`,
+      [operation.id],
+    )
+    await this.persist()
+    return { bound: true, operation: bound! }
+  }
+
+  async settleRemoteSyncOperation(
+    input: SettleRemoteSyncOperationInput,
+  ): Promise<SettleRemoteSyncOperationResult> {
+    const [operation] = selectRemoteSyncOperations(
+      this.db,
+      `select ${REMOTE_SYNC_OPERATION_COLUMNS} from remote_sync_outbox where id = ?`,
+      [input.id],
+    )
+    if (!operation) {
+      return { settled: false, reason: 'not_found' }
+    }
+    if (operation.generation !== input.generation) {
+      return { settled: false, reason: 'stale_generation' }
+    }
+    if (operation.status !== 'sending') {
+      return { settled: false, reason: 'not_sending' }
+    }
+    if (!isValidRemoteSyncSettlement(input)) {
+      throw new Error('Invalid remote-sync settlement state.')
+    }
+
+    const nextAttemptAt = input.status === 'retry-scheduled' ? input.nextAttemptAt! : null
+    const completedAt = input.status === 'completed'
+      ? input.completedAt ?? input.updatedAt
+      : null
+    const lastErrorMessage = input.lastErrorMessage === undefined || input.lastErrorMessage === null
+      ? null
+      : sanitizeRemoteSyncErrorMessage(input.lastErrorMessage)
+    this.db.run(
+      `update remote_sync_outbox set
+         status = ?, next_attempt_at = ?, lease_expires_at = null,
+         last_error_code = ?, last_error_message = ?,
+         recovery = ?, completed_at = ?, updated_at = ?
+       where id = ? and generation = ? and status = 'sending'`,
+      [
+        input.status,
+        nextAttemptAt,
+        input.lastErrorCode ?? null,
+        lastErrorMessage,
+        input.recovery ?? operation.recovery,
+        completedAt,
+        input.updatedAt,
+        operation.id,
+        operation.generation,
+      ],
+    )
+    const [settled] = selectRemoteSyncOperations(
+      this.db,
+      `select ${REMOTE_SYNC_OPERATION_COLUMNS} from remote_sync_outbox where id = ?`,
+      [operation.id],
+    )
+    await this.persist()
+    return { settled: true, operation: settled! }
+  }
+
+  async retryRemoteSyncOperation(
+    input: RetryRemoteSyncOperationInput,
+  ): Promise<RetryRemoteSyncOperationResult> {
+    const [operation] = selectRemoteSyncOperations(
+      this.db,
+      `select ${REMOTE_SYNC_OPERATION_COLUMNS} from remote_sync_outbox where id = ?`,
+      [input.id],
+    )
+    if (!operation) {
+      return { retried: false, reason: 'not_found' }
+    }
+    if (operation.status !== 'terminal') {
+      return { retried: false, reason: 'not_terminal' }
+    }
+
+    this.db.run(
+      `update remote_sync_outbox set
+         status = 'pending', generation = generation + 1, attempt_count = 0,
+         next_attempt_at = ?, lease_expires_at = null, last_attempt_at = null, last_error_code = null,
+         last_error_message = null, recovery = 'none', completed_at = null, updated_at = ?
+       where id = ? and status = 'terminal'`,
+      [input.updatedAt, input.updatedAt, operation.id],
+    )
+    const [retried] = selectRemoteSyncOperations(
+      this.db,
+      `select ${REMOTE_SYNC_OPERATION_COLUMNS} from remote_sync_outbox where id = ?`,
+      [operation.id],
+    )
+    await this.persist()
+    return { retried: true, operation: retried! }
+  }
+
+  async recoverInterruptedRemoteSyncOperations(updatedAt: string): Promise<number> {
+    this.db.run(
+      `update remote_sync_outbox set
+         status = 'pending', generation = generation + 1,
+         next_attempt_at = ?, lease_expires_at = null, updated_at = ?
+       where status = 'sending'
+         and (lease_expires_at is null or lease_expires_at <= ?)`,
+      [updatedAt, updatedAt, updatedAt],
+    )
+    const recoveredCount = this.db.getRowsModified()
+    if (recoveredCount > 0) {
+      await this.persist()
+    }
+    return recoveredCount
+  }
+
   async createWorkflow(
     creation: WorkflowCreation,
   ): Promise<WorkflowCreationResult> {
@@ -997,7 +1679,12 @@ class SqlJsLocalStore implements LocalStore {
     try {
       this.db.run('begin transaction')
       transactionOpen = true
-      writeWorkflowRun(this.db, normalizeWorkflowRunProgress(creation.run))
+      const createdRun = normalizeWorkflowRunProgress(creation.run)
+      writeWorkflowRun(this.db, createdRun)
+      this.enqueueCanonicalRemoteSyncOperation({
+        kind: 'run-summary', localProjectId: createdRun.projectId,
+        runId: createdRun.id, entityId: createdRun.id, createdAt: createdRun.updatedAt,
+      })
       for (const artifact of creation.artifacts) {
         writeArtifact(this.db, artifact)
       }
@@ -1043,6 +1730,10 @@ class SqlJsLocalStore implements LocalStore {
       this.db.run('begin transaction')
       transactionOpen = true
       writeWorkflowRun(this.db, nextRun)
+      this.enqueueCanonicalRemoteSyncOperation({
+        kind: 'run-summary', localProjectId: nextRun.projectId,
+        runId: nextRun.id, entityId: nextRun.id, createdAt: nextRun.updatedAt,
+      })
       for (const artifact of mutation.artifacts ?? []) {
         writeArtifact(this.db, artifact)
       }
@@ -1051,6 +1742,10 @@ class SqlJsLocalStore implements LocalStore {
       }
       for (const evidence of mutation.testEvidence ?? []) {
         writeTestEvidence(this.db, evidence)
+        this.enqueueCanonicalRemoteSyncOperation({
+          kind: 'test-evidence-summary', localProjectId: evidence.projectId,
+          runId: evidence.runId, entityId: evidence.id, createdAt: evidence.createdAt,
+        })
       }
       this.db.run('commit')
       transactionOpen = false
@@ -1107,7 +1802,18 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveTestEvidence(evidence: TestEvidence): Promise<void> {
-    writeTestEvidence(this.db, evidence)
+    this.db.run('begin transaction')
+    try {
+      writeTestEvidence(this.db, evidence)
+      this.enqueueCanonicalRemoteSyncOperation({
+        kind: 'test-evidence-summary', localProjectId: evidence.projectId,
+        runId: evidence.runId, entityId: evidence.id, createdAt: evidence.createdAt,
+      })
+      this.db.run('commit')
+    } catch (error) {
+      this.db.run('rollback')
+      throw error
+    }
     await this.persist()
   }
 
@@ -1124,14 +1830,25 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveAgentReview(review: AgentReviewResult): Promise<void> {
-    this.db.run(
-      `
-      insert into agent_reviews (id, run_id, node_id, json, created_at)
-      values (?, ?, ?, ?, ?)
-      on conflict(id) do update set json = excluded.json, created_at = excluded.created_at
-      `,
-      [review.id, review.runId, review.nodeId, JSON.stringify(review), review.createdAt],
-    )
+    this.db.run('begin transaction')
+    try {
+      this.db.run(
+        `
+        insert into agent_reviews (id, run_id, node_id, json, created_at)
+        values (?, ?, ?, ?, ?)
+        on conflict(id) do update set json = excluded.json, created_at = excluded.created_at
+        `,
+        [review.id, review.runId, review.nodeId, JSON.stringify(review), review.createdAt],
+      )
+      this.enqueueCanonicalRemoteSyncOperation({
+        kind: 'agent-review-summary', localProjectId: review.projectId,
+        runId: review.runId, entityId: review.id, createdAt: review.createdAt,
+      })
+      this.db.run('commit')
+    } catch (error) {
+      this.db.run('rollback')
+      throw error
+    }
     await this.persist()
   }
 
@@ -1205,21 +1922,35 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveCodingAgentRun(run: CodingAgentRun): Promise<void> {
-    this.db.run(
-      `
-      insert into coding_agent_runs (id, run_id, node_id, json, started_at, updated_at)
-      values (?, ?, ?, ?, ?, ?)
-      on conflict(id) do update set json = excluded.json, updated_at = excluded.updated_at
-      `,
-      [
-        run.id,
-        run.runId,
-        run.nodeId,
-        JSON.stringify(run),
-        run.startedAt,
-        run.completedAt ?? run.startedAt,
-      ],
-    )
+    this.db.run('begin transaction')
+    try {
+      this.db.run(
+        `
+        insert into coding_agent_runs (id, run_id, node_id, json, started_at, updated_at)
+        values (?, ?, ?, ?, ?, ?)
+        on conflict(id) do update set json = excluded.json, updated_at = excluded.updated_at
+        `,
+        [
+          run.id,
+          run.runId,
+          run.nodeId,
+          JSON.stringify(run),
+          run.startedAt,
+          run.completedAt ?? run.startedAt,
+        ],
+      )
+      if (!isActiveCodingAgentRunStatus(run.status)) {
+        this.enqueueCanonicalRemoteSyncOperation({
+          kind: 'coding-agent-summary', localProjectId: run.projectId,
+          runId: run.runId, entityId: run.id,
+          createdAt: run.completedAt ?? run.startedAt,
+        })
+      }
+      this.db.run('commit')
+    } catch (error) {
+      this.db.run('rollback')
+      throw error
+    }
     await this.persist()
   }
 
@@ -1507,6 +2238,29 @@ class SqlJsLocalStore implements LocalStore {
     return typeof value === 'string' ? value : null
   }
 
+  async getDesktopPairingCredentialBundle(): Promise<{
+    credential: DesktopPairingCredential
+    encryptedToken: string
+  } | null> {
+    const result = this.db.exec(
+      "select json, encrypted_token from desktop_pairing_credentials where id = 'default'",
+    )
+    const row = result[0]?.values[0]
+    const json = row?.[0]
+    const encryptedToken = row?.[1]
+    if (
+      typeof json !== 'string' ||
+      typeof encryptedToken !== 'string' ||
+      encryptedToken.length === 0
+    ) {
+      return null
+    }
+    return {
+      credential: JSON.parse(json) as DesktopPairingCredential,
+      encryptedToken,
+    }
+  }
+
   async savePolicySnapshot(snapshot: PolicySnapshot): Promise<PolicySnapshot> {
     this.db.run(
       `
@@ -1640,6 +2394,7 @@ class SqlJsLocalStore implements LocalStore {
 
   async loadState(): Promise<LocalExecutionState> {
     const [
+      remoteSyncOperations,
       projects,
       runs,
       artifacts,
@@ -1660,6 +2415,7 @@ class SqlJsLocalStore implements LocalStore {
       settings,
       mcpServers,
     ] = await Promise.all([
+      this.listRemoteSyncOperations(),
       this.listProjects(),
       this.listRuns(),
       this.listArtifacts(),
@@ -1682,6 +2438,7 @@ class SqlJsLocalStore implements LocalStore {
     ])
 
     return {
+      remoteSyncOperations,
       projects,
       runs,
       artifacts,
@@ -1708,16 +2465,88 @@ class SqlJsLocalStore implements LocalStore {
     this.db.close()
   }
 
+  async runDurableMutation<T>(mutation: () => Promise<T>): Promise<T> {
+    const snapshot = this.db.export()
+    try {
+      return await mutation()
+    } catch (error) {
+      this.restore(snapshot)
+      throw error
+    }
+  }
+
   private restore(snapshot: Uint8Array): void {
     this.db.close()
     this.db = new this.sql.Database(snapshot)
   }
 
   private async persist(): Promise<void> {
-    const persistence = this.persistenceQueue.then(() => persistDatabase(this.db, this.dbPath))
+    const snapshot = this.db.export()
+    const persistence = this.persistenceQueue.then(() =>
+      persistDatabaseSnapshot(snapshot, this.dbPath),
+    )
     this.persistenceQueue = persistence.catch(() => undefined)
     await persistence
   }
+}
+
+const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
+  'upsertProject',
+  'saveRun',
+  'deleteRun',
+  'enqueueRemoteSyncOperation',
+  'claimNextRemoteSyncOperation',
+  'bindRemoteSyncOperationScope',
+  'settleRemoteSyncOperation',
+  'retryRemoteSyncOperation',
+  'recoverInterruptedRemoteSyncOperations',
+  'createWorkflow',
+  'commitWorkflowMutation',
+  'saveArtifact',
+  'saveEvent',
+  'saveTestEvidence',
+  'saveAgentReview',
+  'saveAgentTrace',
+  'saveAgentTokenUsage',
+  'saveCodingAgentRun',
+  'saveCodingAgentEvent',
+  'saveCodingPermissionRequest',
+  'saveCodingPermissionDecision',
+  'saveManagedCodingWorkspace',
+  'saveDependencyBootstrapEvidence',
+  'saveCodingDiffArtifact',
+  'saveProviderCredential',
+  'saveDesktopPairingCredential',
+  'savePolicySnapshot',
+  'saveGateOverride',
+  'saveRetryAttempt',
+  'saveSettings',
+  'saveMcpServers',
+])
+
+function serializeLocalStoreMutations(store: SqlJsLocalStore): LocalStore {
+  let mutationQueue: Promise<void> = Promise.resolve()
+
+  return new Proxy(store, {
+    get(target, property) {
+      const value = Reflect.get(target, property)
+      if (typeof value !== 'function') return value
+      if (!MUTATING_LOCAL_STORE_METHODS.has(property as keyof LocalStore)) {
+        return value.bind(target)
+      }
+
+      return (...args: unknown[]) => {
+        const invocation = mutationQueue.then(() =>
+          target.runDurableMutation(async () => await Reflect.apply(value, target, args)),
+        )
+        mutationQueue = invocation.then(
+          () => undefined,
+          () => undefined,
+        )
+        return invocation
+      }
+    },
+  }) as unknown as LocalStore
 }
 
 export async function createLocalStore(options: LocalStoreOptions): Promise<LocalStore> {
@@ -1731,7 +2560,7 @@ export async function createLocalStore(options: LocalStoreOptions): Promise<Loca
     migrateSchema(db)
     await persistDatabase(db, options.dbPath)
 
-    return new SqlJsLocalStore(SQL, db, options.dbPath)
+    return serializeLocalStoreMutations(new SqlJsLocalStore(SQL, db, options.dbPath))
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(
@@ -1741,10 +2570,17 @@ export async function createLocalStore(options: LocalStoreOptions): Promise<Loca
 }
 
 async function persistDatabase(db: Database, dbPath: string): Promise<void> {
+  return persistDatabaseSnapshot(db.export(), dbPath)
+}
+
+async function persistDatabaseSnapshot(
+  snapshot: Uint8Array,
+  dbPath: string,
+): Promise<void> {
   await mkdir(path.dirname(dbPath), { recursive: true })
   const temporaryPath = `${dbPath}.${randomUUID()}.tmp`
   try {
-    await writeFile(temporaryPath, Buffer.from(db.export()))
+    await writeFile(temporaryPath, Buffer.from(snapshot))
     await rename(temporaryPath, dbPath)
   } finally {
     await rm(temporaryPath, { force: true }).catch(() => undefined)

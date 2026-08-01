@@ -808,6 +808,7 @@ export type LocalSettings = {
 }
 
 export type LocalExecutionState = {
+  remoteSyncOperations: import('./remote-sync-outbox').RemoteSyncOperation[]
   projects: LocalProject[]
   runs: WorkflowRun[]
   artifacts: Artifact[]

@@ -1514,6 +1514,7 @@ class MemoryCodingStore {
 
   async loadState() {
     return {
+      remoteSyncOperations: [],
       projects: this.projects,
       runs: this.runs,
       artifacts: this.artifacts,

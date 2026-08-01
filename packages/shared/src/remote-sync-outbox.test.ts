@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   REMOTE_SYNC_BACKOFF_BASE_MS,
   REMOTE_SYNC_BACKOFF_MAX_MS,
+  REMOTE_SYNC_CLAIM_LEASE_MS,
   REMOTE_SYNC_ERROR_MESSAGE_MAX_LENGTH,
   REMOTE_SYNC_MAX_ATTEMPTS,
   calculateRemoteSyncBackoffMs,
@@ -65,6 +66,7 @@ describe('remote sync outbox contract', () => {
       generation: 1,
       attemptCount: 0,
       nextAttemptAt: '2026-08-01T00:00:00.000Z',
+      leaseExpiresAt: null,
       lastAttemptAt: null,
       lastErrorCode: null,
       lastErrorMessage: null,
@@ -98,6 +100,7 @@ describe('remote sync outbox contract', () => {
     expect(REMOTE_SYNC_BACKOFF_BASE_MS).toBe(1_000)
     expect(REMOTE_SYNC_BACKOFF_MAX_MS).toBe(300_000)
     expect(REMOTE_SYNC_MAX_ATTEMPTS).toBe(5)
+    expect(REMOTE_SYNC_CLAIM_LEASE_MS).toBe(60_000)
     expect([
       calculateRemoteSyncBackoffMs(1),
       calculateRemoteSyncBackoffMs(2),

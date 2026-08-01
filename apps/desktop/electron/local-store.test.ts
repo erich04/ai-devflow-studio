@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { createRequire } from 'node:module'
@@ -7,6 +7,7 @@ import initSqlJs from 'sql.js'
 import {
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
+  createRemoteSyncOperation,
   createWorkflowRunFromRequest,
   createWarnOnlyDefaultPolicy,
   redactTestEvidenceForStorage,
@@ -33,7 +34,10 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
-import { createLocalStore } from './local-store'
+import {
+  createLocalStore,
+  type SettleRemoteSyncOperationInput,
+} from './local-store'
 
 let tempDirs: string[] = []
 
@@ -412,25 +416,864 @@ const retryAttempt: RetryAttempt = {
 }
 
 describe('createLocalStore', () => {
-  it('initializes schema version 8 and keeps it stable across reopen', async () => {
+  it('initializes schema version 9 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(8)
+    expect(await first.getSchemaVersion()).toBe(9)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(8)
+    expect(await second.getSchemaVersion()).toBe(9)
     second.close()
   })
 
-  it('migrates an existing v1 database to v8 without losing local projects or runs', async () => {
+  it('persists only remote-sync operation metadata across reopen', async () => {
+    const dbPath = await tempDbPath()
+    const sentinel = 'never-persist-outbox-payload-sentinel'
+    const operation = {
+      ...createRemoteSyncOperation({
+        id: 'sync-1',
+        kind: 'test-evidence-summary',
+        localProjectId: project.id,
+        runId: run.id,
+        entityId: evidence.id,
+        createdAt: '2026-08-01T00:00:00.000Z',
+      }),
+      payload: sentinel,
+      prompt: sentinel,
+      stdout: sentinel,
+      stderr: sentinel,
+      patch: sentinel,
+    }
+
+    const first = await createLocalStore({ dbPath })
+    await first.enqueueRemoteSyncOperation(operation)
+    first.close()
+
+    const second = await createLocalStore({ dbPath })
+    expect(await second.listRemoteSyncOperations()).toEqual([
+      createRemoteSyncOperation({
+        id: 'sync-1',
+        kind: 'test-evidence-summary',
+        localProjectId: project.id,
+        runId: run.id,
+        entityId: evidence.id,
+        createdAt: '2026-08-01T00:00:00.000Z',
+      }),
+    ])
+    second.close()
+    expect((await readFile(dbPath)).toString()).not.toContain(sentinel)
+  })
+
+  it('atomically enqueues canonical summaries with paired scope across entity writes', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(run)
+    await store.saveRun({ ...run, updatedAt: '2026-06-15T00:00:30.000Z' })
+    await store.saveTestEvidence(evidence)
+    await store.saveAgentReview(agentReview)
+    await store.saveCodingAgentRun({ ...codingRun, status: 'running' })
+    await store.saveCodingAgentRun(codingRun)
+
+    const operations = await store.listRemoteSyncOperations()
+    expect(operations.map((operation) => operation.kind)).toEqual([
+      'run-summary',
+      'test-evidence-summary',
+      'agent-review-summary',
+      'coding-agent-summary',
+    ])
+    expect(operations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'run-summary', generation: 2,
+        organizationId: desktopPairingCredential.organizationId,
+        teamProjectId: desktopPairingCredential.projectId,
+      }),
+    ]))
+    expect((await store.loadState()).remoteSyncOperations).toEqual(operations)
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    expect(await reopened.listRemoteSyncOperations()).toEqual(operations)
+    reopened.close()
+  })
+
+  it('keeps the old fixed scope terminal without blocking a canonical save after re-pairing', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const originalPairing = {
+      ...desktopPairingCredential,
+      localProjectId: project.id,
+    }
+    await store.saveDesktopPairingCredential(originalPairing, 'encrypted-token-1')
+    await store.saveRun(run)
+    const claimed = await store.claimNextRemoteSyncOperation('2026-08-01T00:00:00.000Z')
+    expect(claimed).toMatchObject({
+      status: 'sending',
+      generation: 1,
+      organizationId: originalPairing.organizationId,
+      teamProjectId: originalPairing.projectId,
+    })
+
+    await store.saveDesktopPairingCredential({
+      ...originalPairing,
+      organizationId: 'org-repaired',
+      projectId: 'team-project-repaired',
+      createdAt: '2026-08-01T00:01:00.000Z',
+    }, 'encrypted-token-2')
+    const updatedRun = { ...run, updatedAt: '2026-08-01T00:02:00.000Z' }
+
+    await expect(store.saveRun(updatedRun)).resolves.toBeUndefined()
+    await expect(store.getRun(run.id)).resolves.toEqual(updatedRun)
+    await expect(store.listRemoteSyncOperations()).resolves.toEqual([
+      expect.objectContaining({
+        id: claimed!.id,
+        idempotencyKey: claimed!.idempotencyKey,
+        organizationId: originalPairing.organizationId,
+        teamProjectId: originalPairing.projectId,
+        status: 'terminal',
+        generation: 2,
+        nextAttemptAt: null,
+        leaseExpiresAt: null,
+        lastErrorCode: 'scope_mismatch',
+        lastErrorMessage: 'The paired Team Project does not match the remote sync operation.',
+        recovery: 'none',
+        completedAt: null,
+        updatedAt: updatedRun.updatedAt,
+      }),
+    ])
+    await expect(store.claimNextRemoteSyncOperation('2026-08-01T00:03:00.000Z')).resolves.toBeNull()
+    store.close()
+  })
+
+  it('rejects a remote-sync operation with a forged idempotency key', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const operation = {
+      ...createRemoteSyncOperation({
+        id: 'sync-forged-key',
+        kind: 'run-summary',
+        localProjectId: project.id,
+        runId: run.id,
+        entityId: run.id,
+        createdAt: '2026-08-01T00:00:00.000Z',
+      }),
+      idempotencyKey: 'remote-sync:v1:forged',
+    }
+
+    await expect(store.enqueueRemoteSyncOperation(operation)).resolves.toEqual({
+      enqueued: false,
+      reason: 'invalid_idempotency_key',
+    })
+    expect(await store.listRemoteSyncOperations()).toEqual([])
+    store.close()
+  })
+
+  it('rejects non-canonical initial remote-sync operations at enqueue', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const canonical = createRemoteSyncOperation({
+      id: 'sync-canonical',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    const invalid = [
+      { ...canonical, id: '' },
+      { ...canonical, localProjectId: '\uD800' },
+      { ...canonical, organizationId: 'org-1', teamProjectId: null },
+      { ...canonical, organizationId: '', teamProjectId: 'team-project-1' },
+      { ...canonical, status: 'sending' as const },
+      { ...canonical, generation: 2 },
+      { ...canonical, attemptCount: 1 },
+      { ...canonical, nextAttemptAt: null },
+      { ...canonical, leaseExpiresAt: '2026-08-01T00:01:00.000Z' },
+      {
+        ...canonical,
+        createdAt: 'not-a-date',
+        updatedAt: 'not-a-date',
+        nextAttemptAt: 'not-a-date',
+      },
+    ]
+
+    for (const operation of invalid) {
+      await expect(store.enqueueRemoteSyncOperation(operation)).resolves.toEqual({
+        enqueued: false,
+        reason: 'invalid_operation',
+      })
+    }
+    expect(await store.listRemoteSyncOperations()).toEqual([])
+    store.close()
+  })
+
+  it('coalesces the same logical remote-sync work into a new pending generation', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const first = createRemoteSyncOperation({
+      id: 'sync-original',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    const replacement = createRemoteSyncOperation({
+      id: 'sync-replacement',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:01:00.000Z',
+    })
+
+    await store.enqueueRemoteSyncOperation(first)
+    const result = await store.enqueueRemoteSyncOperation(replacement)
+    if (result.enqueued || result.reason !== 'coalesced') {
+      throw new Error('Expected the duplicate operation to coalesce')
+    }
+
+    expect(result).toEqual({
+      enqueued: false,
+      reason: 'coalesced',
+      operation: {
+        ...first,
+        generation: 2,
+        nextAttemptAt: replacement.createdAt,
+        updatedAt: replacement.updatedAt,
+      },
+    })
+    expect(await store.listRemoteSyncOperations()).toEqual([result.operation])
+    store.close()
+  })
+
+  it('rejects coalescing a logical operation into a different fixed Team scope', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const original = createRemoteSyncOperation({
+      id: 'sync-fixed-scope',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      organizationId: 'org-1',
+      teamProjectId: 'team-project-1',
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(original)
+
+    const result = await store.enqueueRemoteSyncOperation(createRemoteSyncOperation({
+      id: 'sync-other-scope',
+      kind: original.kind,
+      localProjectId: original.localProjectId,
+      organizationId: 'org-2',
+      teamProjectId: 'team-project-2',
+      runId: original.runId,
+      entityId: original.entityId,
+      createdAt: '2026-08-01T00:01:00.000Z',
+    }))
+
+    expect(result).toEqual({ enqueued: false, reason: 'scope_mismatch' })
+    expect(await store.listRemoteSyncOperations()).toEqual([original])
+    store.close()
+  })
+
+  it('adopts Team scope once during coalesce and keeps it immutable afterwards', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const unbound = createRemoteSyncOperation({
+      id: 'sync-scope-original',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    const bound = createRemoteSyncOperation({
+      id: 'sync-scope-bound',
+      kind: unbound.kind,
+      localProjectId: unbound.localProjectId,
+      organizationId: 'org-1',
+      teamProjectId: 'team-project-1',
+      runId: unbound.runId,
+      entityId: unbound.entityId,
+      createdAt: '2026-08-01T00:01:00.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(unbound)
+
+    await expect(store.enqueueRemoteSyncOperation(bound)).resolves.toMatchObject({
+      enqueued: false,
+      reason: 'coalesced',
+      operation: {
+        organizationId: 'org-1',
+        teamProjectId: 'team-project-1',
+      },
+    })
+    await expect(store.enqueueRemoteSyncOperation({
+      ...unbound,
+      id: 'sync-scope-unbound-again',
+      createdAt: '2026-08-01T00:02:00.000Z',
+      updatedAt: '2026-08-01T00:02:00.000Z',
+      nextAttemptAt: '2026-08-01T00:02:00.000Z',
+    })).resolves.toMatchObject({
+      operation: {
+        organizationId: 'org-1',
+        teamProjectId: 'team-project-1',
+      },
+    })
+    await expect(store.enqueueRemoteSyncOperation({
+      ...bound,
+      id: 'sync-scope-other',
+      organizationId: 'org-2',
+      teamProjectId: 'team-project-2',
+      createdAt: '2026-08-01T00:03:00.000Z',
+      updatedAt: '2026-08-01T00:03:00.000Z',
+      nextAttemptAt: '2026-08-01T00:03:00.000Z',
+    })).resolves.toEqual({ enqueued: false, reason: 'scope_mismatch' })
+    store.close()
+  })
+
+  it('atomically claims only the next due remote-sync operation', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const later = createRemoteSyncOperation({
+      id: 'sync-later',
+      kind: 'agent-review-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: 'review-2',
+      createdAt: '2026-08-01T00:02:00.000Z',
+    })
+    const due = createRemoteSyncOperation({
+      id: 'sync-due',
+      kind: 'test-evidence-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: evidence.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(later)
+    await store.enqueueRemoteSyncOperation(due)
+
+    const claimed = await store.claimNextRemoteSyncOperation('2026-08-01T00:01:00.000Z')
+
+    expect(claimed).toEqual({
+      ...due,
+      status: 'sending',
+      attemptCount: 1,
+      nextAttemptAt: null,
+      leaseExpiresAt: '2026-08-01T00:02:00.000Z',
+      lastAttemptAt: '2026-08-01T00:01:00.000Z',
+      updatedAt: '2026-08-01T00:01:00.000Z',
+    })
+    expect(await store.claimNextRemoteSyncOperation('2026-08-01T00:01:00.000Z')).toBeNull()
+    store.close()
+  })
+
+  it('claims child evidence before the canonical Run when both are due together', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const canonicalRun = createRemoteSyncOperation({
+      id: 'aaa-run-operation',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    const childEvidence = createRemoteSyncOperation({
+      id: 'zzz-child-operation',
+      kind: 'test-evidence-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: evidence.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(canonicalRun)
+    await store.enqueueRemoteSyncOperation(childEvidence)
+
+    await expect(
+      store.claimNextRemoteSyncOperation('2026-08-01T00:00:10.000Z'),
+    ).resolves.toMatchObject({ id: childEvidence.id, kind: childEvidence.kind })
+    store.close()
+  })
+
+  it('serializes overlapping outbox mutations and persists their invocation order', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const runOperation = createRemoteSyncOperation({
+      id: 'sync-overlap-run',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    const childOperation = createRemoteSyncOperation({
+      id: 'sync-overlap-child',
+      kind: 'test-evidence-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: evidence.id,
+      createdAt: '2026-08-01T00:00:20.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(runOperation)
+
+    const claiming = store.claimNextRemoteSyncOperation('2026-08-01T00:00:10.000Z')
+    const enqueueing = store.enqueueRemoteSyncOperation(childOperation)
+    const [claimed, enqueued] = await Promise.all([claiming, enqueueing])
+
+    expect(claimed).toMatchObject({ id: runOperation.id, status: 'sending' })
+    expect(enqueued).toMatchObject({ enqueued: true })
+    store.close()
+    const reopened = await createLocalStore({ dbPath })
+    expect(await reopened.listRemoteSyncOperations()).toEqual([claimed, childOperation])
+    reopened.close()
+  })
+
+  it('restores the pending claim state and preserves the persistence error when saving fails', async () => {
+    const dbPath = await tempDbPath()
+    const backupPath = `${dbPath}.backup`
+    const store = await createLocalStore({ dbPath })
+    const operation = createRemoteSyncOperation({
+      id: 'sync-persist-failure',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(operation)
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+
+    await expect(
+      store.claimNextRemoteSyncOperation('2026-08-01T00:00:10.000Z'),
+    ).rejects.toThrow(/EISDIR|directory/i)
+    expect(await store.listRemoteSyncOperations()).toEqual([operation])
+    store.close()
+  })
+
+  it('rolls back a remote-sync settlement when persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const backupPath = `${dbPath}.backup`
+    const store = await createLocalStore({ dbPath })
+    const operation = createRemoteSyncOperation({
+      id: 'sync-settle-persist-failure',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(operation)
+    const claimed = await store.claimNextRemoteSyncOperation('2026-08-01T00:00:10.000Z')
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+
+    await expect(store.settleRemoteSyncOperation({
+      id: operation.id,
+      generation: operation.generation,
+      status: 'terminal',
+      lastErrorCode: 'remote_error',
+      lastErrorMessage: 'Safe fixed failure.',
+      updatedAt: '2026-08-01T00:00:20.000Z',
+    })).rejects.toThrow(/EISDIR|directory/i)
+    expect(await store.listRemoteSyncOperations()).toEqual([claimed])
+    await rm(dbPath, { recursive: true })
+    await rename(backupPath, dbPath)
+    const subsequent = createRemoteSyncOperation({
+      id: 'sync-after-settle-failure',
+      kind: 'test-evidence-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: evidence.id,
+      createdAt: '2026-08-01T00:00:30.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(subsequent)
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    expect(await reopened.listRemoteSyncOperations()).toEqual([claimed, subsequent])
+    reopened.close()
+  })
+
+  it('rolls back a canonical entity and its outbox operation when persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const backupPath = `${dbPath}.backup`
+    const store = await createLocalStore({ dbPath })
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+
+    await expect(store.saveRun(run)).rejects.toThrow(/EISDIR|directory/i)
+    expect(await store.getRun(run.id)).toBeNull()
+    expect(await store.listRemoteSyncOperations()).toEqual([])
+    store.close()
+  })
+
+  it('binds an unbound remote-sync operation to one Team scope', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const operation = createRemoteSyncOperation({
+      id: 'sync-bind',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(operation)
+    const claimed = await store.claimNextRemoteSyncOperation('2026-08-01T00:00:10.000Z')
+
+    const result = await store.bindRemoteSyncOperationScope({
+      id: operation.id,
+      generation: operation.generation,
+      organizationId: 'org-1',
+      teamProjectId: 'team-project-1',
+      updatedAt: '2026-08-01T00:00:30.000Z',
+    })
+
+    expect(result).toEqual({
+      bound: true,
+      operation: {
+        ...claimed!,
+        organizationId: 'org-1',
+        teamProjectId: 'team-project-1',
+        updatedAt: '2026-08-01T00:00:30.000Z',
+      },
+    })
+    await expect(store.bindRemoteSyncOperationScope({
+      id: operation.id,
+      generation: operation.generation,
+      organizationId: 'org-1',
+      teamProjectId: 'team-project-1',
+      updatedAt: '2026-08-01T00:00:40.000Z',
+    })).resolves.toMatchObject({ bound: true })
+    await expect(store.bindRemoteSyncOperationScope({
+      id: operation.id,
+      generation: operation.generation,
+      organizationId: 'org-2',
+      teamProjectId: 'team-project-2',
+      updatedAt: '2026-08-01T00:00:50.000Z',
+    })).resolves.toEqual({ bound: false, reason: 'scope_mismatch' })
+    store.close()
+  })
+
+  it('does not bind Team scope before an operation is claimed for sending', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const operation = createRemoteSyncOperation({
+      id: 'sync-pending-bind',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(operation)
+
+    await expect(store.bindRemoteSyncOperationScope({
+      id: operation.id,
+      generation: operation.generation,
+      organizationId: 'org-1',
+      teamProjectId: 'team-project-1',
+      updatedAt: '2026-08-01T00:00:30.000Z',
+    })).resolves.toEqual({ bound: false, reason: 'not_sending' })
+    expect(await store.listRemoteSyncOperations()).toEqual([operation])
+    store.close()
+  })
+
+  it('rejects malformed Team scope binding input', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const operation = createRemoteSyncOperation({
+      id: 'sync-invalid-bind',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(operation)
+    await store.claimNextRemoteSyncOperation('2026-08-01T00:00:10.000Z')
+
+    await expect(store.bindRemoteSyncOperationScope({
+      id: operation.id,
+      generation: operation.generation,
+      organizationId: '',
+      teamProjectId: 'team-project-1',
+      updatedAt: '2026-08-01T00:00:20.000Z',
+    })).rejects.toThrow(/invalid remote-sync scope binding input/i)
+    await expect(store.bindRemoteSyncOperationScope({
+      id: operation.id,
+      generation: operation.generation,
+      organizationId: 'org-1',
+      teamProjectId: 'team-project-1',
+      updatedAt: 'not-a-date',
+    })).rejects.toThrow(/invalid remote-sync scope binding input/i)
+    expect(await store.listRemoteSyncOperations()).toMatchObject([
+      { status: 'sending', organizationId: null, teamProjectId: null },
+    ])
+    store.close()
+  })
+
+  it('rejects a stale settle after newer logical work supersedes an in-flight generation', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const operation = createRemoteSyncOperation({
+      id: 'sync-cas',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(operation)
+    const claimed = await store.claimNextRemoteSyncOperation('2026-08-01T00:00:10.000Z')
+    await store.enqueueRemoteSyncOperation({
+      ...operation,
+      id: 'ignored-new-id',
+      createdAt: '2026-08-01T00:00:20.000Z',
+      updatedAt: '2026-08-01T00:00:20.000Z',
+      nextAttemptAt: '2026-08-01T00:00:20.000Z',
+    })
+
+    const result = await store.settleRemoteSyncOperation({
+      id: operation.id,
+      generation: claimed!.generation,
+      status: 'completed',
+      completedAt: '2026-08-01T00:00:30.000Z',
+      updatedAt: '2026-08-01T00:00:30.000Z',
+    })
+
+    expect(result).toEqual({ settled: false, reason: 'stale_generation' })
+    expect(await store.listRemoteSyncOperations()).toEqual([
+      {
+        ...operation,
+        generation: 2,
+        nextAttemptAt: '2026-08-01T00:00:20.000Z',
+        updatedAt: '2026-08-01T00:00:20.000Z',
+      },
+    ])
+    store.close()
+  })
+
+  it('rejects inconsistent remote-sync settlement state combinations', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const operation = createRemoteSyncOperation({
+      id: 'sync-invalid-settle',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(operation)
+    await store.claimNextRemoteSyncOperation('2026-08-01T00:00:10.000Z')
+    const common = {
+      id: operation.id,
+      generation: operation.generation,
+      updatedAt: '2026-08-01T00:00:20.000Z',
+    }
+    const invalid: SettleRemoteSyncOperationInput[] = [
+      { ...common, status: 'retry-scheduled' },
+      {
+        ...common,
+        status: 'retry-scheduled',
+        nextAttemptAt: '2026-08-01T00:00:30.000Z',
+      },
+      { ...common, status: 'terminal' },
+      {
+        ...common,
+        status: 'completed',
+        lastErrorCode: 'remote_error',
+        lastErrorMessage: 'should not survive completion',
+      },
+      { ...common, status: 'completed', updatedAt: 'not-a-date' },
+    ]
+
+    for (const settlement of invalid) {
+      await expect(store.settleRemoteSyncOperation(settlement)).rejects.toThrow(
+        /invalid remote-sync settlement/i,
+      )
+    }
+    expect(await store.listRemoteSyncOperations()).toMatchObject([
+      { status: 'sending', leaseExpiresAt: '2026-08-01T00:01:10.000Z' },
+    ])
+    store.close()
+  })
+
+  it('manually retries a terminal operation without changing its identity or scope', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const operation = createRemoteSyncOperation({
+      id: 'sync-retry',
+      kind: 'coding-agent-summary',
+      localProjectId: project.id,
+      organizationId: 'org-1',
+      teamProjectId: 'team-project-1',
+      runId: run.id,
+      entityId: 'coding-run-1',
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(operation)
+    const claimed = await store.claimNextRemoteSyncOperation('2026-08-01T00:00:10.000Z')
+    await store.settleRemoteSyncOperation({
+      id: operation.id,
+      generation: claimed!.generation,
+      status: 'terminal',
+      lastErrorCode: 'forbidden',
+      lastErrorMessage: 'Authorization: Bearer never-store-this-token',
+      updatedAt: '2026-08-01T00:00:20.000Z',
+    })
+    const [terminal] = await store.listRemoteSyncOperations()
+    expect(terminal?.lastErrorMessage).toContain('[REDACTED:authorization_secret]')
+    expect(terminal?.lastErrorMessage).not.toContain('never-store-this-token')
+
+    const result = await store.retryRemoteSyncOperation({
+      id: operation.id,
+      updatedAt: '2026-08-01T00:00:30.000Z',
+    })
+
+    expect(result).toEqual({
+      retried: true,
+      operation: {
+        ...operation,
+        generation: 2,
+        nextAttemptAt: '2026-08-01T00:00:30.000Z',
+        updatedAt: '2026-08-01T00:00:30.000Z',
+      },
+    })
+    store.close()
+  })
+
+  it('recovers interrupted sending work after reopen without accepting the old generation', async () => {
+    const dbPath = await tempDbPath()
+    const operation = createRemoteSyncOperation({
+      id: 'sync-interrupted',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    const first = await createLocalStore({ dbPath })
+    await first.enqueueRemoteSyncOperation(operation)
+    const claimed = await first.claimNextRemoteSyncOperation('2026-08-01T00:00:10.000Z')
+    first.close()
+
+    const second = await createLocalStore({ dbPath })
+    expect(
+      await second.recoverInterruptedRemoteSyncOperations('2026-08-01T00:01:20.000Z'),
+    ).toBe(1)
+    expect(await second.listRemoteSyncOperations()).toEqual([
+      {
+        ...operation,
+        generation: 2,
+        attemptCount: 1,
+        nextAttemptAt: '2026-08-01T00:01:20.000Z',
+        lastAttemptAt: '2026-08-01T00:00:10.000Z',
+        updatedAt: '2026-08-01T00:01:20.000Z',
+      },
+    ])
+    await expect(second.settleRemoteSyncOperation({
+      id: operation.id,
+      generation: claimed!.generation,
+      status: 'completed',
+      updatedAt: '2026-08-01T00:01:30.000Z',
+    })).resolves.toEqual({ settled: false, reason: 'stale_generation' })
+    second.close()
+  })
+
+  it('recovers only expired remote-sync claim leases', async () => {
+    const dbPath = await tempDbPath()
+    const operation = createRemoteSyncOperation({
+      id: 'sync-leased',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    const store = await createLocalStore({ dbPath })
+    await store.enqueueRemoteSyncOperation(operation)
+    await store.claimNextRemoteSyncOperation('2026-08-01T00:00:10.000Z')
+
+    expect(
+      await store.recoverInterruptedRemoteSyncOperations('2026-08-01T00:00:30.000Z'),
+    ).toBe(0)
+    expect(await store.listRemoteSyncOperations()).toMatchObject([
+      {
+        status: 'sending',
+        generation: 1,
+        leaseExpiresAt: '2026-08-01T00:01:10.000Z',
+      },
+    ])
+
+    expect(
+      await store.recoverInterruptedRemoteSyncOperations('2026-08-01T00:01:10.000Z'),
+    ).toBe(1)
+    expect(await store.listRemoteSyncOperations()).toMatchObject([
+      {
+        status: 'pending',
+        generation: 2,
+        nextAttemptAt: '2026-08-01T00:01:10.000Z',
+        leaseExpiresAt: null,
+      },
+    ])
+    store.close()
+  })
+
+  it('recovers legacy sending operations that have no claim lease', async () => {
+    const dbPath = await tempDbPath()
+    const operation = createRemoteSyncOperation({
+      id: 'sync-legacy-lease',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    const first = await createLocalStore({ dbPath })
+    await first.enqueueRemoteSyncOperation(operation)
+    await first.claimNextRemoteSyncOperation('2026-08-01T00:00:10.000Z')
+    first.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const legacy = new SQL.Database(await readFile(dbPath))
+    legacy.run('pragma ignore_check_constraints = on')
+    legacy.run(
+      'update remote_sync_outbox set lease_expires_at = null where id = ?',
+      [operation.id],
+    )
+    await writeFile(dbPath, Buffer.from(legacy.export()))
+    legacy.close()
+
+    const second = await createLocalStore({ dbPath })
+    expect(
+      await second.recoverInterruptedRemoteSyncOperations('2026-08-01T00:00:20.000Z'),
+    ).toBe(1)
+    expect(await second.listRemoteSyncOperations()).toMatchObject([
+      { status: 'pending', generation: 2, leaseExpiresAt: null },
+    ])
+    second.close()
+  })
+
+  it('migrates an existing v1 database to v9 without losing local projects or runs', async () => {
     const dbPath = await tempDbPath()
     await writeLegacyV1Database(dbPath)
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(8)
+    expect(await store.getSchemaVersion()).toBe(9)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -441,8 +1284,96 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const db = new SQL.Database(await readFile(dbPath))
-    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('8')
+    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('9')
     expect(db.exec("select name from sqlite_master where type = 'table' and name = 'workflow_nodes'")[0]?.values[0]?.[0]).toBe('workflow_nodes')
+    db.close()
+  })
+
+  it('migrates v8 data into a metadata-only remote-sync outbox schema', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    await initial.upsertProject(project)
+    await initial.saveRun(run)
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const v8Db = new SQL.Database(await readFile(dbPath))
+    v8Db.run(`
+      drop index idx_remote_sync_outbox_due;
+      drop table remote_sync_outbox;
+      update schema_meta set value = '8' where key = 'schema_version';
+    `)
+    await writeFile(dbPath, Buffer.from(v8Db.export()))
+    v8Db.close()
+
+    const migrated = await createLocalStore({ dbPath })
+    expect(await migrated.getSchemaVersion()).toBe(9)
+    expect(await migrated.listProjects()).toEqual([project])
+    expect(await migrated.listRuns()).toEqual([run])
+    migrated.close()
+
+    const inspected = new SQL.Database(await readFile(dbPath))
+    const columnNames = inspected.exec('pragma table_info(remote_sync_outbox)')[0]?.values
+      .map((row) => String(row[1])) ?? []
+    inspected.close()
+    expect(columnNames).toContain('idempotency_key')
+    expect(columnNames).toContain('lease_expires_at')
+    expect(columnNames).not.toEqual(expect.arrayContaining(['json', 'payload', 'raw_body']))
+  })
+
+  it('enforces remote-sync metadata invariants in the SQLite schema', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    store.close()
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const db = new SQL.Database(await readFile(dbPath))
+    const insert = (overrides: {
+      kind?: string
+      organizationId?: string | null
+      teamProjectId?: string | null
+      status?: string
+      generation?: number
+      attemptCount?: number
+      leaseExpiresAt?: string | null
+    }) => db.run(
+      `insert into remote_sync_outbox (
+         id, kind, local_project_id, organization_id, team_project_id, run_id, entity_id,
+         idempotency_key, status, generation, attempt_count, next_attempt_at, lease_expires_at, recovery,
+         created_at, updated_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        `invalid-${JSON.stringify(overrides)}`,
+        overrides.kind ?? 'run-summary',
+        'local-1',
+        overrides.organizationId ?? null,
+        overrides.teamProjectId ?? null,
+        'run-1',
+        'run-1',
+        `key-${JSON.stringify(overrides)}`,
+        overrides.status ?? 'pending',
+        overrides.generation ?? 1,
+        overrides.attemptCount ?? 0,
+        '2026-08-01T00:00:00.000Z',
+        overrides.leaseExpiresAt ?? null,
+        'none',
+        '2026-08-01T00:00:00.000Z',
+        '2026-08-01T00:00:00.000Z',
+      ],
+    )
+
+    expect(() => insert({ organizationId: 'org-1' })).toThrow(/constraint/i)
+    expect(() => insert({ kind: 'payload-dump' })).toThrow(/constraint/i)
+    expect(() => insert({ status: 'forgotten' })).toThrow(/constraint/i)
+    expect(() => insert({ generation: 0 })).toThrow(/constraint/i)
+    expect(() => insert({ attemptCount: -1 })).toThrow(/constraint/i)
+    expect(() => insert({ status: 'sending' })).toThrow(/constraint/i)
+    expect(() => insert({ leaseExpiresAt: '2026-08-01T00:01:00.000Z' })).toThrow(
+      /constraint/i,
+    )
     db.close()
   })
 
@@ -455,19 +1386,19 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const newerDb = new SQL.Database(await readFile(dbPath))
-    newerDb.run("update schema_meta set value = '9' where key = 'schema_version'")
+    newerDb.run("update schema_meta set value = '10' where key = 'schema_version'")
     await writeFile(dbPath, Buffer.from(newerDb.export()))
     newerDb.close()
 
     await expect(createLocalStore({ dbPath })).rejects.toThrow(
-      /schema version 9 is newer than supported version 8/,
+      /schema version 10 is newer than supported version 9/,
     )
 
     const unchangedDb = new SQL.Database(await readFile(dbPath))
     expect(
       unchangedDb.exec("select value from schema_meta where key = 'schema_version'")[0]
         ?.values[0]?.[0],
-    ).toBe('9')
+    ).toBe('10')
     unchangedDb.close()
   })
 
@@ -507,7 +1438,7 @@ describe('createLocalStore', () => {
     unchangedDb.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(8)
+    expect(await migrated.getSchemaVersion()).toBe(9)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
   })
@@ -1322,6 +2253,25 @@ describe('createLocalStore', () => {
     second.close()
   })
 
+  it('reads desktop pairing metadata and token as one consistent bundle', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+
+    await expect(store.getDesktopPairingCredentialBundle()).resolves.toBeNull()
+    await store.saveDesktopPairingCredential(desktopPairingCredential, '')
+    await expect(store.getDesktopPairingCredentialBundle()).resolves.toBeNull()
+
+    await store.saveDesktopPairingCredential(
+      desktopPairingCredential,
+      'encrypted-desktop-token-value',
+    )
+    await expect(store.getDesktopPairingCredentialBundle()).resolves.toEqual({
+      credential: desktopPairingCredential,
+      encryptedToken: 'encrypted-desktop-token-value',
+    })
+    store.close()
+  })
+
   it('persists the active local project binding in pairing metadata', async () => {
     const dbPath = await tempDbPath()
     const boundCredential: DesktopPairingCredential = {
@@ -1538,6 +2488,24 @@ describe('createLocalStore', () => {
     await store.saveRetryAttempt(retryAttempt)
     await store.savePolicySnapshot(policySnapshot)
     await store.saveProviderCredential(providerMetadata, 'encrypted-provider-secret')
+    const deletedRunSyncOperation = createRemoteSyncOperation({
+      id: 'sync-deleted-run',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    })
+    const preservedRunSyncOperation = createRemoteSyncOperation({
+      id: 'sync-preserved-run',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: otherRun.id,
+      entityId: otherRun.id,
+      createdAt: '2026-08-01T00:01:00.000Z',
+    })
+    await store.enqueueRemoteSyncOperation(deletedRunSyncOperation)
+    await store.enqueueRemoteSyncOperation(preservedRunSyncOperation)
 
     await store.deleteRun('run-1')
 
@@ -1558,6 +2526,10 @@ describe('createLocalStore', () => {
     expect(await store.listCodingDiffArtifacts('run-1')).toEqual([])
     expect(await store.listGateOverrides('run-1')).toEqual([])
     expect(await store.listRetryAttempts('run-1')).toEqual([])
+    expect(await store.listRemoteSyncOperations('run-1')).toEqual([])
+    expect(await store.listRemoteSyncOperations('run-2')).toMatchObject([
+      { kind: 'run-summary', runId: 'run-2', entityId: 'run-2', status: 'pending' },
+    ])
     expect(await store.listProjects()).toEqual([project])
     expect(await store.getPolicySnapshot('project-1')).toEqual(policySnapshot)
     expect(await store.listProviderCredentials()).toEqual([providerMetadata])

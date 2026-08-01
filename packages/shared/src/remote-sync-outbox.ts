@@ -61,6 +61,7 @@ export type RemoteSyncFailureClassification =
 export const REMOTE_SYNC_BACKOFF_BASE_MS = 1_000
 export const REMOTE_SYNC_BACKOFF_MAX_MS = 300_000
 export const REMOTE_SYNC_MAX_ATTEMPTS = 5
+export const REMOTE_SYNC_CLAIM_LEASE_MS = 60_000
 export const REMOTE_SYNC_ERROR_MESSAGE_MAX_LENGTH = 500
 
 export type RemoteSyncOperation = RemoteSyncOperationMetadata & {
@@ -70,6 +71,7 @@ export type RemoteSyncOperation = RemoteSyncOperationMetadata & {
   generation: number
   attemptCount: number
   nextAttemptAt: string | null
+  leaseExpiresAt: string | null
   lastAttemptAt: string | null
   lastErrorCode: RemoteSyncFailureCode | null
   lastErrorMessage: string | null
@@ -125,6 +127,7 @@ export function createRemoteSyncOperation(
     generation: 1,
     attemptCount: 0,
     nextAttemptAt: input.createdAt,
+    leaseExpiresAt: null,
     lastAttemptAt: null,
     lastErrorCode: null,
     lastErrorMessage: null,
