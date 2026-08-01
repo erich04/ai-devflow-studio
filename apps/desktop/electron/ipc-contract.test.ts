@@ -284,6 +284,26 @@ describe('IPC contract parsers', () => {
       requestedBy: 'u-ling',
       runtime: 'electron',
     })
+
+    expect(
+      parseRunKnowledgeReviewInput({
+        runId: 'run-1',
+        nodeId: 'node-test',
+        projectId: 'project-1',
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+        providerId: 'team-openai',
+        runtimeBudgetApprovalId: ' approval-knowledge-1 ',
+      }),
+    ).toEqual({
+      runId: 'run-1',
+      nodeId: 'node-test',
+      projectId: 'project-1',
+      requestedBy: 'u-ling',
+      runtime: 'electron',
+      providerId: 'team-openai',
+      runtimeBudgetApprovalId: 'approval-knowledge-1',
+    })
   })
 
   it('requires a local project when pairing the desktop with a team project', () => {

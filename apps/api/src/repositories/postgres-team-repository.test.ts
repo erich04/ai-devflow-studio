@@ -1672,4 +1672,44 @@ describe('Postgres team repository', () => {
     expect(JSON.stringify(write?.params)).not.toContain('/Users/Alice')
     expect(JSON.stringify(write?.params)).not.toMatch(/C:[\\/]Users[\\/]Alice/)
   })
+
+  it('persists a standalone redacted Knowledge Review budget-block event', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    const saved = await repository.saveAgentEvent(
+      {
+        id: 'knowledge-review-budget-audit-1',
+        runId: 'run-remote-1',
+        nodeId: 'n-design-gate',
+        sequence: 2,
+        kind: 'error',
+        message:
+          'Knowledge Review budget blocked. projectId=p-payments providerId=openai-default requestedBy=u-ling status=unavailable reason=Failed at /Users/Alice/private/repo API_TOKEN=audit-secret',
+        timestamp: '2026-07-31T00:00:00.000Z',
+      },
+      { organizationId: 'org-demo', userId: 'u-ling' },
+    )
+
+    expect(saved).toMatchObject({
+      id: 'knowledge-review-budget-audit-1',
+      kind: 'error',
+      message:
+        'Knowledge Review budget blocked. projectId=p-payments providerId=openai-default requestedBy=u-ling status=unavailable reason=Failed at [REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
+    })
+    const write = db.queries.at(-1)
+    expect(write?.sql).toContain('INSERT INTO agent_events')
+    expect(write?.params).toEqual([
+      'knowledge-review-budget-audit-1',
+      'run-remote-1',
+      'n-design-gate',
+      2,
+      'error',
+      saved.message,
+      '2026-07-31T00:00:00.000Z',
+      'org-demo',
+    ])
+    expect(JSON.stringify(write?.params)).not.toContain('audit-secret')
+    expect(JSON.stringify(write?.params)).not.toContain('/Users/Alice')
+  })
 })

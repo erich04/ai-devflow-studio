@@ -2,9 +2,43 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   listElectronAgentProviderConfigs,
   resolveElectronAgentProvider,
+  resolveElectronAgentProviderMetadata,
 } from './agent-provider-runtime'
 
 describe('Electron agent provider runtime', () => {
+  it('resolves paid provider metadata for cost preflight without reading or decrypting its secret', async () => {
+    const credentialSource = {
+      listProviderCredentials: vi.fn(async () => [{
+        providerId: 'team-openai',
+        model: 'gpt-4.1-mini',
+        baseUrl: 'https://api.example.test/v1',
+        maskedCredential: 'sk-***last',
+        updatedAt: '2026-07-31T00:00:00.000Z',
+      }]),
+      getProviderEncryptedSecret: vi.fn(async () => {
+        throw new Error('preflight must not read the encrypted secret')
+      }),
+    }
+    const decryptCredential = vi.fn(() => {
+      throw new Error('preflight must not decrypt the provider secret')
+    })
+
+    const metadata = await resolveElectronAgentProviderMetadata({
+      providerId: 'team-openai',
+      fakeRuntimeEnabled: false,
+      credentialSource,
+    })
+
+    expect(metadata).toEqual({
+      id: 'team-openai',
+      name: 'team-openai',
+      model: 'gpt-4.1-mini',
+    })
+    expect(credentialSource.listProviderCredentials).toHaveBeenCalledTimes(1)
+    expect(credentialSource.getProviderEncryptedSecret).not.toHaveBeenCalled()
+    expect(decryptCredential).not.toHaveBeenCalled()
+  })
+
   it('exposes the built-in fake provider without a saved credential when fake runtime is enabled', () => {
     expect(listElectronAgentProviderConfigs({
       credentials: [],

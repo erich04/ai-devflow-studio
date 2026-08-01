@@ -124,6 +124,7 @@ export type RunKnowledgeReviewInput = {
   requestedBy: string
   runtime: 'electron' | 'api'
   providerId?: string
+  runtimeBudgetApprovalId?: string
 }
 
 export type RunKnowledgeReviewResult = AgentReviewExecutionResult & {

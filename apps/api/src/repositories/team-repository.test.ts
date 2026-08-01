@@ -200,6 +200,34 @@ describe('seed team repository', () => {
     expect(bundle.events.every((event) => event.runId === 'run-health-001')).toBe(true)
   })
 
+  it('keeps a standalone Knowledge Review budget-block event visible and redacted', async () => {
+    const repository = createSeedTeamRepository()
+
+    const saved = await repository.saveAgentEvent(
+      {
+        id: 'knowledge-review-budget-audit-seed',
+        runId: 'run-health-001',
+        nodeId: 'n-design-gate',
+        sequence: 99,
+        kind: 'error',
+        message:
+          'Knowledge Review budget blocked. status=unavailable reason=/Users/Alice/private API_TOKEN=seed-secret',
+        timestamp: '2026-07-31T00:00:00.000Z',
+      },
+      syncContext,
+    )
+
+    expect(saved.message).toBe(
+      'Knowledge Review budget blocked. status=unavailable reason=[REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
+    )
+    const persisted = (await repository.getRunsBundle()).events.find(
+      (event) => event.id === saved.id,
+    )
+    expect(persisted).toEqual(saved)
+    expect(JSON.stringify(persisted)).not.toContain('seed-secret')
+    expect(JSON.stringify(persisted)).not.toContain('/Users/Alice')
+  })
+
   it('resolves demo auth accounts to an authenticated identity projection', async () => {
     const repository = createSeedTeamRepository()
 

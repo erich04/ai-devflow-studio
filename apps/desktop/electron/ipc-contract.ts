@@ -189,6 +189,7 @@ export type RunKnowledgeReviewInput = {
   requestedBy: string
   runtime: AgentReviewRuntime
   providerId?: string
+  runtimeBudgetApprovalId?: string
 }
 
 export type ListAgentReviewsInput = {
@@ -627,6 +628,7 @@ export function parseRunKnowledgeReviewInput(value: unknown): RunKnowledgeReview
     throw new Error('Invalid runtime')
   }
   const providerId = value['providerId']
+  const runtimeBudgetApprovalId = value['runtimeBudgetApprovalId']
 
   return {
     runId,
@@ -635,6 +637,9 @@ export function parseRunKnowledgeReviewInput(value: unknown): RunKnowledgeReview
     requestedBy,
     runtime,
     ...(typeof providerId === 'string' && providerId.trim() ? { providerId: providerId.trim() } : {}),
+    ...(typeof runtimeBudgetApprovalId === 'string' && runtimeBudgetApprovalId.trim()
+      ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
+      : {}),
   }
 }
 

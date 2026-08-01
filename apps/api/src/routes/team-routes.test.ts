@@ -15,6 +15,7 @@ import {
   type TeamOverviewPayload,
   type TeamRepository,
 } from '../repositories/team-repository'
+import { encryptAgentCredential } from '../agent-credentials'
 import { resolveTeamRoute } from './team-routes'
 
 const ownerSession: TeamSession = {
@@ -396,6 +397,7 @@ function createRepository(): TeamRepository {
       trace: bundle.trace,
       tokenUsage: bundle.tokenUsage,
     })),
+    saveAgentEvent: vi.fn(async (event) => event),
     listAgentReviews: vi.fn(async () => []),
   }
 }
@@ -894,6 +896,254 @@ describe('team API route resolver', () => {
       }),
       memberSession,
     )
+    expect(repository.getRuntimeBudgetPolicy).not.toHaveBeenCalled()
+    expect(repository.listRuntimeBudgetApprovals).not.toHaveBeenCalled()
+    expect(repository.getAgentProviderCredential).not.toHaveBeenCalled()
+    expect(repository.saveAgentEvent).not.toHaveBeenCalled()
+  })
+
+  it('blocks a paid Knowledge Review with a redacted audit before resolving credentials when the budget policy is missing', async () => {
+    const repository = createRepository()
+    const overview = await repository.getTeamOverview()
+    overview.agentProviders.push({
+      id: 'openai-default',
+      name: 'OpenAI Compatible',
+      kind: 'openai-compatible',
+      model: 'gpt-4.1-mini',
+      enabled: true,
+      maskedCredential: 'sk-...cret',
+      updatedAt: '2026-06-16T00:00:00.000Z',
+    })
+    const providerFetch = vi.fn()
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = providerFetch as typeof fetch
+
+    try {
+      const result = await resolveTeamRoute('POST', '/api/agent/knowledge-review', repository, {
+        session: memberSession,
+        body: {
+          runId: 'run-payments',
+          nodeId: 'node-build',
+          projectId: 'p-payments',
+          providerId: 'openai-default',
+        },
+      })
+
+      expect(result).toMatchObject({
+        status: 409,
+        body: {
+          status: 'blocked',
+          budgetDecision: {
+            status: 'unavailable',
+            blocksRun: true,
+            reason: 'Runtime budget policy is unavailable for this project.',
+          },
+          audit: {
+            runId: 'run-payments',
+            nodeId: 'node-build',
+            kind: 'error',
+            message: expect.stringContaining(
+              'projectId=p-payments providerId=openai-default requestedBy=u-yu approvalId=none status=unavailable',
+            ),
+          },
+        },
+      })
+      expect(repository.getRuntimeBudgetPolicy).toHaveBeenCalledWith('p-payments', memberSession)
+      expect(repository.getAgentProviderCredential).not.toHaveBeenCalled()
+      expect(providerFetch).not.toHaveBeenCalled()
+      expect(repository.saveAgentReviewBundle).not.toHaveBeenCalled()
+      expect(repository.saveAgentEvent).toHaveBeenCalledOnce()
+      expect(JSON.stringify(result)).not.toContain('sk-...cret')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('runs a paid Knowledge Review once with an exact scoped runtime budget approval', async () => {
+    const repository = createRepository()
+    const overview = await repository.getTeamOverview()
+    overview.agentProviders.push({
+      id: 'openai-default',
+      name: 'OpenAI Compatible',
+      kind: 'openai-compatible',
+      model: 'gpt-4.1-mini',
+      enabled: true,
+      maskedCredential: 'sk-...cret',
+      updatedAt: '2026-06-16T00:00:00.000Z',
+    })
+    await repository.saveRuntimeBudgetPolicy(
+      {
+        projectId: 'p-payments',
+        enabled: true,
+        monthlyLimitUsd: 0,
+        warningThresholdUsd: 0,
+        currency: 'USD',
+        updatedAt: '2026-07-31T00:00:00.000Z',
+      },
+      memberSession,
+    )
+    await repository.saveRuntimeBudgetApproval(
+      {
+        id: 'knowledge-review-approval-1',
+        projectId: 'p-payments',
+        requestedBy: memberSession.userId,
+        approvedBy: leadSession.userId,
+        role: 'lead',
+        providerId: 'openai-default',
+        maxAdditionalCostUsd: 1,
+        reason: 'Approved for this review only.',
+        status: 'approved',
+        createdAt: '2026-07-31T00:00:00.000Z',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      },
+      leadSession,
+    )
+    vi.mocked(repository.getAgentProviderCredential).mockResolvedValue({
+      metadata: {
+        providerId: 'openai-default',
+        model: 'gpt-4.1-mini',
+        baseUrl: 'https://provider.example/v1',
+        maskedCredential: 'sk-...cret',
+        updatedAt: '2026-06-16T00:00:00.000Z',
+      },
+      encryptedSecret: encryptAgentCredential('sk-test-provider-secret'),
+    })
+    const providerFetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  conclusion: 'ready',
+                  summary: 'Scoped paid review completed.',
+                  risks: [],
+                  missingEvidence: [],
+                  suggestedTests: [],
+                  confidence: 0.9,
+                }),
+              },
+            },
+          ],
+          usage: { prompt_tokens: 100, completion_tokens: 20 },
+        }),
+        { status: 200 },
+      ),
+    )
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = providerFetch as typeof fetch
+
+    try {
+      const result = await resolveTeamRoute('POST', '/api/agent/knowledge-review', repository, {
+        session: memberSession,
+        body: {
+          runId: 'run-payments',
+          nodeId: 'node-build',
+          projectId: 'p-payments',
+          providerId: 'openai-default',
+          runtimeBudgetApprovalId: 'knowledge-review-approval-1',
+        },
+      })
+
+      expect(result).toMatchObject({
+        status: 201,
+        body: {
+          review: {
+            providerId: 'openai-default',
+            summary: 'Scoped paid review completed.',
+          },
+          budgetDecision: {
+            status: 'approved_over_budget',
+            blocksRun: false,
+            approvalId: 'knowledge-review-approval-1',
+          },
+        },
+      })
+      expect(providerFetch).toHaveBeenCalledOnce()
+      expect(repository.getAgentProviderCredential).toHaveBeenCalledOnce()
+      expect(repository.saveAgentReviewBundle).toHaveBeenCalledOnce()
+      expect(repository.saveAgentEvent).not.toHaveBeenCalled()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('blocks a paid Knowledge Review before credentials when the selected approval has the wrong provider scope', async () => {
+    const repository = createRepository()
+    const overview = await repository.getTeamOverview()
+    overview.agentProviders.push({
+      id: 'openai-default',
+      name: 'OpenAI Compatible',
+      kind: 'openai-compatible',
+      model: 'gpt-4.1-mini',
+      enabled: true,
+      maskedCredential: 'sk-...cret',
+      updatedAt: '2026-06-16T00:00:00.000Z',
+    })
+    await repository.saveRuntimeBudgetPolicy(
+      {
+        projectId: 'p-payments',
+        enabled: true,
+        monthlyLimitUsd: 0,
+        warningThresholdUsd: 0,
+        currency: 'USD',
+        updatedAt: '2026-07-31T00:00:00.000Z',
+      },
+      memberSession,
+    )
+    await repository.saveRuntimeBudgetApproval(
+      {
+        id: 'wrong-provider-approval',
+        projectId: 'p-payments',
+        requestedBy: memberSession.userId,
+        approvedBy: leadSession.userId,
+        role: 'lead',
+        providerId: 'anthropic-default',
+        maxAdditionalCostUsd: 1,
+        reason: 'This approval belongs to another provider.',
+        status: 'approved',
+        createdAt: '2026-07-31T00:00:00.000Z',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      },
+      leadSession,
+    )
+    const providerFetch = vi.fn()
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = providerFetch as typeof fetch
+
+    try {
+      const result = await resolveTeamRoute('POST', '/api/agent/knowledge-review', repository, {
+        session: memberSession,
+        body: {
+          runId: 'run-payments',
+          nodeId: 'node-build',
+          projectId: 'p-payments',
+          providerId: 'openai-default',
+          runtimeBudgetApprovalId: 'wrong-provider-approval',
+        },
+      })
+
+      expect(result).toMatchObject({
+        status: 409,
+        body: {
+          status: 'blocked',
+          budgetDecision: {
+            status: 'requires_lead_approval',
+            blocksRun: true,
+          },
+          audit: {
+            kind: 'error',
+            message: expect.stringContaining('approvalId=wrong-provider-approval'),
+          },
+        },
+      })
+      expect(repository.getAgentProviderCredential).not.toHaveBeenCalled()
+      expect(providerFetch).not.toHaveBeenCalled()
+      expect(repository.saveAgentReviewBundle).not.toHaveBeenCalled()
+      expect(repository.saveAgentEvent).toHaveBeenCalledOnce()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   it('rejects Knowledge Review for a non-current run node before resolving provider credentials', async () => {

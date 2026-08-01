@@ -585,6 +585,9 @@ export function useDesktopActions(input: {
         requestedBy: currentUser.id,
         runtime: 'electron',
         providerId: selectedAgentProviderId,
+        ...(runtimeBudgetApprovalId.trim()
+          ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
+          : {}),
       })
       applyLocalExecutionState(result.state)
       setSelectedRunId(result.review.runId)

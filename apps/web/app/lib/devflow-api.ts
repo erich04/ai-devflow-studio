@@ -108,6 +108,7 @@ export type RunKnowledgeReviewOptions = FetchTeamOverviewOptions & {
   nodeId: string
   projectId: string
   providerId?: string
+  runtimeBudgetApprovalId?: string
 }
 
 export async function runKnowledgeReview(
@@ -130,6 +131,7 @@ export async function runKnowledgeReview(
       nodeId: options.nodeId,
       projectId: options.projectId,
       providerId: options.providerId,
+      runtimeBudgetApprovalId: options.runtimeBudgetApprovalId,
     }),
   })
 

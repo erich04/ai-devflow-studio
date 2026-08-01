@@ -1,8 +1,41 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { CodingRuntimeBudgetGuard } from './coding-runtime'
-import { createRuntimeBudgetGuard } from './runtime-budget-guard'
+import {
+  createKnowledgeReviewRuntimeBudgetGuard,
+  createRuntimeBudgetGuard,
+} from './runtime-budget-guard'
 
 describe('RuntimeBudgetGuard', () => {
+  it('turns an unavailable Knowledge Review budget service into a generic blocking decision', async () => {
+    const evaluateRuntimeBudget = vi.fn(async () => {
+      throw new Error('malformed response exposed Authorization: Bearer private-token')
+    })
+    const guard = createKnowledgeReviewRuntimeBudgetGuard({ evaluateRuntimeBudget })
+
+    const decision = await guard({
+      projectId: 'local-project-1',
+      providerId: 'team-openai',
+      requestedBy: 'user-1',
+      projectedCostUsd: 0.02,
+      approvalId: 'approval-knowledge-1',
+    })
+
+    expect(evaluateRuntimeBudget).toHaveBeenCalledWith({
+      projectId: 'local-project-1',
+      providerId: 'team-openai',
+      projectedCostUsd: 0.02,
+      approvalId: 'approval-knowledge-1',
+    })
+    expect(decision).toEqual({
+      status: 'unavailable',
+      blocksRun: true,
+      currentSpendUsd: 0,
+      projectedCostUsd: 0.02,
+      reason: 'Runtime budget decision is unavailable. Pair the project and restore the authenticated Team API connection before retrying.',
+    })
+    expect(JSON.stringify(decision)).not.toContain('private-token')
+  })
+
   it('still evaluates a real engine remotely when its rounded estimate is zero', async () => {
     const authoritativeDecision = {
       status: 'allowed' as const,

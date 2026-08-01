@@ -53,6 +53,7 @@ import {
 import type { TeamDbClient } from '../db/client'
 import {
   CanonicalRunRequiredError,
+  redactAgentEventForPersistence,
   RemoteChildSummaryConflictError,
   RemoteRunSummaryConflictError,
 } from './team-repository'
@@ -2371,6 +2372,54 @@ export function createPostgresTeamRepository(
         trace: bundle.trace,
         tokenUsage: bundle.tokenUsage,
       }
+    },
+
+    async saveAgentEvent(
+      event: AgentEvent,
+      context: TeamRepositorySyncContext,
+    ) {
+      const redactedEvent = redactAgentEventForPersistence(event)
+      const acceptedEvent = await db.query<{ id: string }>(
+        `
+          INSERT INTO agent_events (
+            id,
+            run_id,
+            node_id,
+            sequence,
+            kind,
+            message,
+            timestamp
+          )
+          SELECT $1, $2, $3, $4, $5, $6, $7
+          WHERE EXISTS (
+            SELECT 1
+            FROM workflow_runs
+            WHERE id = $2 AND organization_id = $8
+          )
+          ON CONFLICT (run_id, sequence) DO UPDATE
+          SET id = excluded.id,
+              node_id = excluded.node_id,
+              kind = excluded.kind,
+              message = excluded.message,
+              timestamp = excluded.timestamp
+          RETURNING id
+        `,
+        [
+          redactedEvent.id,
+          redactedEvent.runId,
+          redactedEvent.nodeId ?? null,
+          redactedEvent.sequence,
+          redactedEvent.kind,
+          redactedEvent.message,
+          redactedEvent.timestamp,
+          context.organizationId,
+        ],
+      )
+      if (!acceptedEvent[0]) {
+        throw new CanonicalRunRequiredError(redactedEvent.runId, 'unknown')
+      }
+
+      return redactedEvent
     },
 
     async listAgentReviews(input, context) {

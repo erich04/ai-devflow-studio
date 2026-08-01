@@ -9,6 +9,7 @@ import {
   createOpenAiCompatibleAgentProvider,
   evaluateGateEnforcement,
   evaluateRuntimeBudgetGuard,
+  type AgentProvider,
   type GateOverrideDecision,
   formatUsd,
   parseBudgetGuardDecision,
@@ -22,8 +23,9 @@ import {
   redactRemoteRunSummaryForSync,
   redactRemoteTestEvidenceSummaryForSync,
   redactSecrets,
+  redactSensitiveText,
   resolveEffectivePolicy,
-  runKnowledgeReviewAgent,
+  runBudgetedKnowledgeReviewAgent,
   validateEnforcementPolicy,
   type ProviderCredentialMetadata,
   type RemoteAgentReviewSummary,
@@ -92,6 +94,7 @@ type KnowledgeReviewInput = {
   nodeId: string
   projectId: string
   providerId?: string
+  runtimeBudgetApprovalId?: string
 }
 
 type EnforcementEvaluateInput = {
@@ -471,12 +474,16 @@ function parseKnowledgeReviewInput(value: unknown): KnowledgeReviewInput {
   }
 
   const providerId = value['providerId']
+  const runtimeBudgetApprovalId = value['runtimeBudgetApprovalId']
 
   return {
     runId: readRequiredString(value, 'runId'),
     nodeId: readRequiredString(value, 'nodeId'),
     projectId: readRequiredString(value, 'projectId'),
     ...(typeof providerId === 'string' && providerId.trim() ? { providerId: providerId.trim() } : {}),
+    ...(typeof runtimeBudgetApprovalId === 'string' && runtimeBudgetApprovalId.trim()
+      ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
+      : {}),
   }
 }
 
@@ -1434,7 +1441,7 @@ export async function resolveTeamRoute(
       return badRequest('Review provider is not configured. Save a provider credential before running Knowledge Review.')
     }
 
-    const provider = providerId === 'fake-knowledge-review'
+    const provider: AgentProvider | null = providerId === 'fake-knowledge-review'
       ? (() => {
           if (!isFakeRuntimeEnabled()) {
             return null
@@ -1442,22 +1449,41 @@ export async function resolveTeamRoute(
 
           return createFakeAgentProvider()
         })()
-      : await (async () => {
-          const credential = await repository.getAgentProviderCredential(providerId, options.session!)
-          if (!credential) {
-            throw new Error(`Agent provider credential not found: ${providerId}`)
+      : (() => {
+          const configuredProvider = overview.agentProviders.find(
+            (candidate) => candidate.id === providerId && candidate.kind === 'openai-compatible',
+          )
+          if (!configuredProvider) {
+            return null
           }
 
-          return createOpenAiCompatibleAgentProvider({
-            id: credential.metadata.providerId,
-            name: 'OpenAI Compatible',
-            model: credential.metadata.model,
-            ...(credential.metadata.baseUrl ? { baseUrl: credential.metadata.baseUrl } : {}),
-            apiKey: decryptAgentCredential(credential.encryptedSecret),
-          })
+          return {
+            id: configuredProvider.id,
+            name: configuredProvider.name,
+            model: configuredProvider.model,
+            async reviewKnowledge(providerInput) {
+              const credential = await repository.getAgentProviderCredential(providerId, options.session!)
+              if (!credential) {
+                throw new Error(`Agent provider credential not found: ${providerId}`)
+              }
+              if (credential.metadata.model !== configuredProvider.model) {
+                throw new Error('Agent provider changed after the budget preflight. Retry the review.')
+              }
+
+              return createOpenAiCompatibleAgentProvider({
+                id: credential.metadata.providerId,
+                name: 'OpenAI Compatible',
+                model: credential.metadata.model,
+                ...(credential.metadata.baseUrl ? { baseUrl: credential.metadata.baseUrl } : {}),
+                apiKey: decryptAgentCredential(credential.encryptedSecret),
+              }).reviewKnowledge(providerInput)
+            },
+          }
         })()
     if (!provider) {
-      return badRequest('Fake Knowledge Review requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.')
+      return providerId === 'fake-knowledge-review'
+        ? badRequest('Fake Knowledge Review requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.')
+        : badRequest(`Agent provider credential not found: ${providerId}`)
     }
     const context = buildAgentReviewContext({
       run,
@@ -1469,20 +1495,87 @@ export async function resolveTeamRoute(
       knowledgeDocuments: defaultKnowledgeDocuments,
       knowledgeChunks: defaultKnowledgeChunks,
     })
-    const result = await runKnowledgeReviewAgent({
-      request: {
-        id: `api-review-request-${Date.now()}`,
-        runId: run.id,
-        nodeId: node.id,
-        projectId: run.projectId,
-        requestedBy: options.session.userId,
-        runtime: 'api',
-        providerId,
-      },
+    const request = {
+      id: `api-review-request-${Date.now()}`,
+      runId: run.id,
+      nodeId: node.id,
+      projectId: run.projectId,
+      requestedBy: options.session.userId,
+      runtime: 'api' as const,
+      providerId,
+    }
+    const result = await runBudgetedKnowledgeReviewAgent({
+      request,
       context,
       provider,
+      ...(input.runtimeBudgetApprovalId
+        ? { approvalId: input.runtimeBudgetApprovalId }
+        : {}),
+      budgetGuard: async (budgetInput) => {
+        const [policy, approvals] = await Promise.all([
+          repository.getRuntimeBudgetPolicy(budgetInput.projectId, options.session!),
+          repository.listRuntimeBudgetApprovals(
+            { projectId: budgetInput.projectId },
+            options.session!,
+          ),
+        ])
+        const currentSpendUsd =
+          overview.projectCost.find((rollup) => rollup.key === budgetInput.projectId)?.costUsd ?? 0
+
+        return evaluateRuntimeBudgetGuard({
+          projectId: budgetInput.projectId,
+          providerId: budgetInput.providerId,
+          policy,
+          currentSpendUsd,
+          projectedCostUsd: budgetInput.projectedCostUsd,
+          requestedBy: budgetInput.requestedBy,
+          approval: budgetInput.approvalId
+            ? approvals.find((candidate) => candidate.id === budgetInput.approvalId) ?? null
+            : null,
+          now: new Date().toISOString(),
+        })
+      },
     })
-    const artifactAndEvent = createAgentReviewArtifacts(result)
+
+    if (result.status === 'blocked') {
+      const budgetDecision = {
+        ...result.budgetDecision,
+        reason: redactSensitiveText(result.budgetDecision.reason).value,
+      }
+      const audit = {
+        id: `knowledge-review-budget-audit-${randomUUID()}`,
+        runId: run.id,
+        nodeId: node.id,
+        sequence: bundle.events.filter((event) => event.runId === run.id).length + 1,
+        kind: 'error' as const,
+        message: [
+          'Knowledge Review budget blocked.',
+          `requestId=${request.id}`,
+          `projectId=${run.projectId}`,
+          `providerId=${providerId}`,
+          `requestedBy=${options.session.userId}`,
+          `approvalId=${input.runtimeBudgetApprovalId ?? 'none'}`,
+          `status=${budgetDecision.status}`,
+          `currentSpendUsd=${budgetDecision.currentSpendUsd}`,
+          `projectedCostUsd=${budgetDecision.projectedCostUsd}`,
+          `reason=${budgetDecision.reason}`,
+          'redacted=true',
+        ].join(' '),
+        timestamp: new Date().toISOString(),
+      }
+      const savedAudit = await repository.saveAgentEvent(audit, options.session)
+
+      return {
+        status: 409,
+        body: {
+          status: 'blocked',
+          budgetDecision,
+          audit: savedAudit,
+        },
+      }
+    }
+
+    const artifactAndEvent = createAgentReviewArtifacts(result.execution)
     const event = {
       ...artifactAndEvent.event,
       sequence: bundle.events.filter((event) => event.runId === run.id).length + 1,
@@ -1490,7 +1583,7 @@ export async function resolveTeamRoute(
 
     const saved = await repository.saveAgentReviewBundle(
       {
-        ...result,
+        ...result.execution,
         artifact: artifactAndEvent.artifact,
         event,
       },
@@ -1501,6 +1594,7 @@ export async function resolveTeamRoute(
       status: 201,
       body: {
         ...saved,
+        budgetDecision: result.budgetDecision,
         artifact: artifactAndEvent.artifact,
         event,
       },

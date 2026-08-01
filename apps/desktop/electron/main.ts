@@ -6,17 +6,14 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import {
-  buildAgentReviewContext,
   buildKnowledgeGovernanceChecks,
   buildKnowledgeReferences,
   buildRemediationPlan,
   canApproveGateNow,
   canOverrideBlockedGate,
   createAcceptanceEvidenceBundleArtifact,
-  createAgentReviewArtifacts,
   createPrDraftArtifact,
   createWorkflowRunFromRequest,
-  createRemoteAgentReviewSummary,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   redactLocalAbsolutePaths,
@@ -25,7 +22,6 @@ import {
   evaluateGateEnforcement,
   redactSecrets,
   resolveEffectivePolicy,
-  runKnowledgeReviewAgent,
   runWorkflowStageAgent,
   type AgentEvent,
   type GateOverrideDecision,
@@ -85,11 +81,16 @@ import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 import {
   listElectronAgentProviderConfigs,
   resolveElectronAgentProvider,
+  resolveElectronAgentProviderMetadata,
 } from './agent-provider-runtime.js'
 import {
   createProjectBoundRemoteSync,
 } from './project-bound-remote-sync.js'
-import { createRuntimeBudgetGuard } from './runtime-budget-guard.js'
+import {
+  createKnowledgeReviewRuntimeBudgetGuard,
+  createRuntimeBudgetGuard,
+} from './runtime-budget-guard.js'
+import { createKnowledgeReviewRuntime } from './knowledge-review-runtime.js'
 import {
   loadPolicySnapshotForProject as loadStoredPolicySnapshotForProject,
   resolveLocalGateOverrideSettlement,
@@ -313,6 +314,27 @@ async function createCodingRuntimeForRequest() {
       publishPermission: (request) => broadcastToRenderers(ipcChannels.codingPermissionUpdated, request),
     },
     idGenerator: (prefix = 'id') => `${prefix}-${randomUUID()}`,
+  })
+}
+
+async function createKnowledgeReviewRuntimeForRequest() {
+  const [remoteSync, store] = await Promise.all([
+    getProjectBoundRemoteSync(),
+    getStore(),
+  ])
+  return createKnowledgeReviewRuntime({
+    store,
+    knowledgeDocuments: defaultKnowledgeDocuments,
+    knowledgeChunks: defaultKnowledgeChunks,
+    resolveProviderMetadata: (providerId) =>
+      resolveElectronAgentProviderMetadata({
+        providerId,
+        fakeRuntimeEnabled: runtimeFlags.fakeRuntimeEnabled,
+        credentialSource: store,
+      }),
+    resolveProvider: (providerId) => resolveAgentProvider(store, providerId),
+    budgetGuard: createKnowledgeReviewRuntimeBudgetGuard(remoteSync),
+    uploadAgentReviewSummary: (summary) => remoteSync.uploadAgentReviewSummary(summary),
   })
 }
 
@@ -1450,73 +1472,8 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.runKnowledgeReview, async (_, payload: unknown) => {
     const input = parseRunKnowledgeReviewInput(payload)
-    const store = await getStore()
-    const runs = await store.listRuns()
-    const run = runs.find((candidate) => candidate.id === input.runId)
-    if (!run) {
-      throw new Error(`Run not found: ${input.runId}`)
-    }
-    const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
-    if (!node) {
-      throw new Error(`Run node not found: ${input.nodeId}`)
-    }
-    if (
-      run.projectId !== input.projectId ||
-      run.currentNodeId !== node.id ||
-      (node.kind !== 'gate' && node.kind !== 'acceptance') ||
-      (node.status !== 'running' && node.status !== 'blocked')
-    ) {
-      throw new Error('Knowledge Review can only run for the current Gate or Acceptance node')
-    }
-
-    const artifacts = await store.listArtifacts(input.runId)
-    const testEvidence = await store.listTestEvidence(input.runId)
-    const context = buildAgentReviewContext({
-      run,
-      node,
-      artifacts,
-      testEvidence,
-      knowledgeDocuments: defaultKnowledgeDocuments,
-      knowledgeChunks: defaultKnowledgeChunks,
-    })
-    const providerId = input.providerId
-    if (!providerId) {
-      throw new Error('Agent provider is not configured. Save Provider ID, Base URL, Model, and API Key before running Knowledge Review.')
-    }
-    const resolvedProvider = await resolveAgentProvider(store, providerId)
-
-    const result = await runKnowledgeReviewAgent({
-      request: {
-        id: `review-request-${Date.now()}`,
-        runId: input.runId,
-        nodeId: input.nodeId,
-        projectId: input.projectId,
-        requestedBy: input.requestedBy,
-        runtime: 'electron',
-        providerId,
-      },
-      context,
-      provider: resolvedProvider,
-    })
-    const output = createAgentReviewArtifacts(result)
-    const event: typeof output.event = {
-      ...output.event,
-      sequence: (await store.listEvents(input.runId)).length + 1,
-    }
-
-    await store.saveArtifact(output.artifact)
-    await store.saveEvent(event)
-    await store.saveAgentReview(result.review)
-    await store.saveAgentTrace(result.trace)
-    await store.saveAgentTokenUsage(result.tokenUsage)
-    void getProjectBoundRemoteSync()
-      .then((client) => client.uploadAgentReviewSummary(createRemoteAgentReviewSummary(result.review)))
-      .catch(() => undefined)
-
-    return {
-      ...result,
-      state: await store.loadState(),
-    }
+    const runtime = await createKnowledgeReviewRuntimeForRequest()
+    return runtime.run(input)
   })
 }
 

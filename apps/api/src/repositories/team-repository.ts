@@ -1,5 +1,6 @@
 import {
   formatUsd,
+  redactSensitiveText,
   rollupTokenUsage,
   runtimeCostSummaryToTokenUsage,
   buildPolicyAwareDeliverySummaries,
@@ -204,6 +205,10 @@ export type TeamRepository = {
     bundle: AgentReviewBundle,
     context: TeamRepositorySyncContext,
   ): Promise<AgentReviewExecutionResult>
+  saveAgentEvent(
+    event: AgentEvent,
+    context: TeamRepositorySyncContext,
+  ): Promise<AgentEvent>
   listAgentReviews(
     input: { runId?: string },
     context: TeamRepositorySyncContext,
@@ -244,6 +249,18 @@ export type TeamRepository = {
     input: { projectId?: string },
     context: TeamRepositorySyncContext,
   ): Promise<RuntimeBudgetApproval[]>
+}
+
+export function redactAgentEventForPersistence(event: AgentEvent): AgentEvent {
+  return {
+    id: event.id,
+    runId: event.runId,
+    ...(event.nodeId ? { nodeId: event.nodeId } : {}),
+    sequence: event.sequence,
+    kind: event.kind,
+    message: redactSensitiveText(event.message).value,
+    timestamp: event.timestamp,
+  }
 }
 
 export function createSeedTeamRepository(): TeamRepository {
@@ -792,6 +809,17 @@ export function createSeedTeamRepository(): TeamRepository {
         trace: bundle.trace,
         tokenUsage: bundle.tokenUsage,
       }
+    },
+
+    async saveAgentEvent(event, context) {
+      if (!syncedRuns.some(
+        (run) => run.id === event.runId && runOrganizationIds.get(run.id) === context.organizationId,
+      )) {
+        throw new CanonicalRunRequiredError(event.runId, 'unknown')
+      }
+      const redactedEvent = redactAgentEventForPersistence(event)
+      upsertById(syncedEvents, redactedEvent)
+      return redactedEvent
     },
 
     async listAgentReviews(input) {

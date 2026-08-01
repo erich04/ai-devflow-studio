@@ -213,7 +213,7 @@ describe('DevFlow web API client', () => {
     })
   })
 
-  it('passes an explicit Knowledge Review provider through the API boundary', async () => {
+  it('passes an explicit Knowledge Review provider and runtime budget approval through the API boundary', async () => {
     const fetcher = vi.fn(async () =>
       new Response(JSON.stringify({
         review: {
@@ -252,6 +252,7 @@ describe('DevFlow web API client', () => {
       nodeId: 'node-1',
       projectId: 'p-payments',
       providerId: 'review-provider-1',
+      runtimeBudgetApprovalId: 'review-budget-approval-1',
     })
 
     expect(fetcher).toHaveBeenCalledWith('http://api.local/api/agent/knowledge-review', expect.objectContaining({
@@ -260,6 +261,7 @@ describe('DevFlow web API client', () => {
         nodeId: 'node-1',
         projectId: 'p-payments',
         providerId: 'review-provider-1',
+        runtimeBudgetApprovalId: 'review-budget-approval-1',
       }),
     }))
   })
