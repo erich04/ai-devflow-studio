@@ -148,8 +148,9 @@ This bundle is deliberately narrow:
 - the smoke proves launch isolation and built-renderer loading, not code signing, auto-update,
   Windows UI behavior from a macOS host, or suitability for public distribution.
 
-Until V1.4 candidate formation, repository package metadata remains `1.3.0`; therefore development
-artifacts also retain that version label. A version label alone is never evidence of V1.4 signoff.
+Version alignment occurs during V1.4 candidate formation. The packaged artifact manifest and
+filenames must match the frozen candidate version, but a version label alone is never evidence of
+V1.4 signoff.
 
 ## Complete Pairing, Work Request, And Gate Walkthrough
 

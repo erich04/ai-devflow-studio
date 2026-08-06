@@ -3,6 +3,19 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const roadmap = readFileSync(join(process.cwd(), 'docs/roadmap.md'), 'utf8')
+const readme = readFileSync(join(process.cwd(), 'README.md'), 'utf8')
+const productDefinition = readFileSync(
+  join(process.cwd(), 'docs/product/product-definition.md'),
+  'utf8',
+)
+const pilotGuide = readFileSync(
+  join(process.cwd(), 'docs/guides/devflow-studio-self-hosted-pilot.md'),
+  'utf8',
+)
+const walkthrough = readFileSync(
+  join(process.cwd(), 'docs/guides/devflow-studio-v1.4-walkthrough.md'),
+  'utf8',
+)
 const prd = readFileSync(
   join(process.cwd(), 'docs/product/prd/v1.4-pilot-trust-boundary-prd.md'),
   'utf8',
@@ -17,14 +30,46 @@ describe('v1.4 pilot trust boundary contract', () => {
     expect(roadmap).toContain('`v1.3.0` is the released baseline')
     expect(roadmap).toContain('v1.4-pilot-trust-boundary-prd.md')
     expect(roadmap).toContain('v1.4-pilot-trust-boundary.md')
-    expect(roadmap).toContain('durable remote-sync outbox')
+    expect(roadmap).toContain('durable sync outbox')
     expect(roadmap).toContain(
-      'V1.4 scoped implementation complete from `b7b879c`; candidate formation pending',
+      'V1.4 scoped implementation complete at `5b64354`; candidate preparation in progress',
     )
-    expect(roadmap).toContain('Remains `1.3.0` until V1.4 candidate formation')
+    expect(roadmap).toContain('Version alignment occurs during V1.4 candidate formation')
     expect(prd).toContain(
       'Status: Implementation complete; candidate formation and formal signoff pending',
     )
+  })
+
+  it('keeps current entry points truthful during v1.4 candidate preparation', () => {
+    expect(readme).toContain('V1.4 candidate preparation')
+    expect(readme).toContain('Paid Coding and Knowledge Review runtimes fail closed')
+    expect(readme).toContain('Durable redacted sync uses a persisted outbox')
+    expect(readme).not.toContain('fail-closed paid-runtime hardening remains open')
+
+    expect(productDefinition).toContain('V1.4 scoped implementation is complete')
+    expect(productDefinition).toContain('candidate-bound signoff is in preparation')
+    expect(productDefinition).not.toContain('Production auth and paid-budget trust remain v1.4 work')
+    expect(productDefinition).not.toContain(
+      'Repository knowledge indexing, complete Web management paths',
+    )
+
+    expect(roadmap).toContain('V1.4 API Review knowledge provenance remains `none`')
+    expect(roadmap).not.toContain(
+      'Connect repository Markdown indexing to the real Electron, API Review',
+    )
+    expect(pilotGuide).toContain('Version alignment occurs during V1.4 candidate formation')
+  })
+
+  it('defines a stable v1.4 operator walkthrough without claiming a result', () => {
+    expect(walkthrough).toContain('Status: Stable operator procedure; no result claimed')
+    expect(walkthrough).toContain('Candidate commit `C`')
+    expect(walkthrough).toContain('Team Policy')
+    expect(walkthrough).toContain('Desktop outcome: `human_rejected`')
+    expect(walkthrough).toContain('Team command: `applied`')
+    expect(walkthrough).toContain('Receipt acknowledgement: `acknowledged`')
+    expect(walkthrough).toContain('cold-start')
+    expect(walkthrough).toContain('no raw repository content')
+    expect(walkthrough).not.toContain('Status: passed')
   })
 
   it('keeps durable sync and paid fail-closed behavior in the release contract', () => {

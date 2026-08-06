@@ -42,7 +42,7 @@ The v1.x line should stay anchored to that team-pilot product shape:
 Keep these out of the near-term path unless a later roadmap explicitly promotes them: public SaaS,
 billing, enterprise SSO, automatic cloud deployment, signed installers, auto-update, HoneyAI bridge,
 multi-agent orchestration, real MCP execution, and full RAG/vector retrieval. The
-**Next concrete action** is V1.4 candidate formation and candidate-bound verification. GitHub
+**Next concrete action** is V1.4 candidate preparation and candidate-bound verification. GitHub
 delivery and operations expansion wait until V1.4 formal signoff is complete.
 
 ## Current Status
@@ -60,8 +60,8 @@ passed macOS, Windows, Postgres, and Docker jobs.
 | Layer | Current status |
 | --- | --- |
 | Released baseline | `v1.3.0` signed, tagged, and published |
-| Development branch | V1.4 scoped implementation complete from `b7b879c`; candidate formation pending |
-| Package metadata | Remains `1.3.0` until V1.4 candidate formation |
+| Development branch | V1.4 scoped implementation complete at `5b64354`; candidate preparation in progress |
+| Package metadata | Version alignment occurs during V1.4 candidate formation |
 | V1.4 contract | `docs/product/prd/v1.4-pilot-trust-boundary-prd.md` |
 | V1.4 execution | `docs/plans/v1.4-pilot-trust-boundary.md` |
 
@@ -71,9 +71,9 @@ runtime boundaries, redaction, runnable API/Worker outputs, and expanded release
 
 V1.4 scoped implementation has closed the planned pilot trust gaps: paid-runtime fail-closed
 decisions, durable sync outbox, real repository knowledge integration, authenticated Web management
-paths, and reproducible unsigned pilot lifecycle artifacts. Candidate formation, package version
-alignment, candidate-bound verification, and formal signoff remain pending. Real GitHub delivery
-remains V1.5.
+paths, and reproducible unsigned pilot lifecycle artifacts. Candidate preparation is now reconciling
+release tooling and documentation before version alignment and candidate-bound verification. No
+V1.4 signoff, tag, or Release is claimed yet. Real GitHub delivery remains V1.5.
 
 ## Completed Milestones
 
@@ -364,20 +364,21 @@ remains V1.5.
 
 ## Planned Milestones
 
-### v1.4 Candidate: Pilot Trust Boundary (implementation complete; candidate pending)
+### v1.4 Candidate: Pilot Trust Boundary (implementation complete; candidate preparation)
 
-- Make real paid Coding and Knowledge Review runtimes fail closed on missing, invalid,
+- Real paid Coding and Knowledge Review runtimes now fail closed on missing, invalid,
   unauthenticated, out-of-scope, or unavailable budget decisions, with redacted audit evidence.
-- Add a durable remote-sync outbox with bounded backoff, restart recovery, immutable project scope,
+- Durable remote-sync now uses an outbox with bounded backoff, restart recovery, immutable project scope,
   and operator-visible retry/recovery state.
-- Connect repository Markdown indexing to the real Electron, API Review, Coding Runtime, and Gate
-  paths instead of passing empty knowledge arrays.
-- Keep unsigned identity headers out of pilot/production paths and add remaining negative-path and
-  configuration coverage.
-- Complete Web request intake, Gate actions, Desktop pairing, and explicit run selection.
-- Harden the minimum runnable outputs from v1.3 into reproducible Electron/Web/API pilot packages
-  with deploy, upgrade, and rollback smoke before external pilot use.
-- Execute against `docs/product/prd/v1.4-pilot-trust-boundary-prd.md` and
+- Repository Markdown indexing supplies bounded local context to Electron Gate, Knowledge Review,
+  and Coding paths. V1.4 API Review knowledge provenance remains `none`; raw Desktop repository
+  content is not uploaded implicitly.
+- Unsigned identity headers stay out of pilot/production paths with negative-path and configuration
+  coverage.
+- Web request intake, Gate actions, Desktop pairing, and explicit run selection are implemented.
+- Reproducible unsigned Electron/Web/API pilot packages have deploy, upgrade, failed-upgrade
+  recovery, bounded rollback, and packaged Desktop smoke coverage.
+- Candidate signoff follows `docs/product/prd/v1.4-pilot-trust-boundary-prd.md`,
   `docs/plans/v1.4-pilot-trust-boundary.md`.
 
 ### v1.5 Candidate: GitHub Delivery Integration
@@ -411,12 +412,12 @@ remains V1.5.
 - MCP policy enforcement and Skill/MCP runtime execution.
 - RAG/vector retrieval provider integration.
 - Repository file watcher, in-app Markdown editor, and remote knowledge synchronization.
-- Electron packaging, macOS signing/notarization, Windows installer/signing, auto-update, and release
+- Signed/notarized Electron installers, Windows installer signing, auto-update, and public release
   distribution.
 - Public SaaS onboarding, billing, hosted multi-tenancy, and managed credentials.
 - Windows real-opencode smoke for managed worktree path handling and dependency bootstrap once the
   macOS manual runtime path is promoted from local signoff to release validation.
-- Full release/distribution CI beyond the current verify workflow.
+- Signed/public distribution automation beyond the current Verify and Release workflows.
 
 ## Knowledge Roadmap Notes
 
