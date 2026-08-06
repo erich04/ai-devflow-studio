@@ -7,6 +7,7 @@ import {
   packagePaths,
   parseReleaseMode,
   releaseEvidencePaths,
+  releaseProfileFor,
   requiredDocPaths,
   requiredGateIds,
 } from './release-signoff-status.mjs'
@@ -51,7 +52,9 @@ function record(path: string, value: Record<string, unknown>): EvidenceRecord {
 }
 
 function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSignoffSnapshot {
-  const targetVersion = '1.3.0'
+  const targetVersion = overrides.targetVersion ?? '1.3.0'
+  const releaseSeries = targetVersion.split('.').slice(0, 2).join('.')
+  const profile = releaseProfileFor(targetVersion)
   const evidencePaths = releaseEvidencePaths(targetVersion)
 
   return {
@@ -63,12 +66,14 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
       evidencePaths.walkthrough,
       evidencePaths.requiredGates,
       evidencePaths.realOpencode,
-      'docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-31.md',
+      `docs/guides/devflow-studio-v${releaseSeries}-walkthrough-result-2026-07-31.md`,
     ],
     packageVersions: Object.fromEntries(packagePaths.map((path) => [path, targetVersion])),
-    requiredDocs: Object.fromEntries(requiredDocPaths.map((path) => [path, true])),
+    requiredDocs: Object.fromEntries(
+      (profile?.requiredDocPaths ?? []).map((path) => [path, true]),
+    ),
     workingTreeClean: true,
-    currentBranch: 'codex/v1.3-closeout',
+    currentBranch: `codex/v${releaseSeries}-closeout`,
     releaseTagExists: false,
     releaseTagTarget: null,
     walkthroughEvidence: record(evidencePaths.walkthrough, {
@@ -77,14 +82,14 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
       status: 'passed',
       date: '2026-07-31',
       method: 'computer-use',
-      evidencePath: 'docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-31.md',
+      evidencePath: `docs/guides/devflow-studio-v${releaseSeries}-walkthrough-result-2026-07-31.md`,
       evidenceExists: true,
     }),
     requiredGateRecord: record(evidencePaths.requiredGates, {
       targetVersion,
       candidateSha,
       status: 'passed',
-      gates: Object.fromEntries(requiredGateIds.map((gate) => [gate, 'passed'])),
+      gates: Object.fromEntries((profile?.requiredGateIds ?? []).map((gate) => [gate, 'passed'])),
     }),
     realOpencodeRecord: record(evidencePaths.realOpencode, {
       targetVersion,
@@ -101,6 +106,9 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
       testEvidence: 'passed',
       cleanup: 'passed',
       redactionCheck: 'passed',
+      ...(releaseSeries === '1.4'
+        ? { attemptCount: 1, automaticRetry: false, costCapUsd: 20 }
+        : {}),
     }),
     ...overrides,
   }
@@ -139,6 +147,16 @@ describe('release signoff status', () => {
     )
   })
 
+  it('requires the v1.4 PRD, plan, walkthrough, and paid-smoke policy docs', () => {
+    expect(releaseProfileFor('1.4.0')?.requiredDocPaths).toEqual([
+      'docs/product/prd/v1.4-pilot-trust-boundary-prd.md',
+      'docs/plans/v1.4-pilot-trust-boundary.md',
+      'docs/plans/v1.4-release-signoff.md',
+      'docs/guides/devflow-studio-v1.4-walkthrough.md',
+      'docs/plans/release-only-real-opencode-smoke.md',
+    ])
+  })
+
   it('requires every deterministic v1.3 release gate in the candidate-bound record', () => {
     expect(requiredGateIds).toEqual(
       expect.arrayContaining([
@@ -152,6 +170,103 @@ describe('release signoff status', () => {
         'build-output-smoke',
       ]),
     )
+  })
+
+  it('requires every deterministic v1.4 release gate in the candidate-bound record', () => {
+    expect(releaseProfileFor('1.4.0')?.requiredGateIds).toEqual([
+      'verify',
+      'windows-compatibility',
+      'e2e',
+      'electron-smoke',
+      'postgres-smoke',
+      'docker-smoke',
+      'docker-lifecycle-smoke',
+      'build',
+      'build-output-smoke',
+      'desktop-pilot-build',
+      'desktop-pilot-smoke',
+    ])
+  })
+
+  it('evaluates v1.4 docs and gates against the v1.4 profile', () => {
+    const ready = snapshot({ targetVersion: '1.4.0' })
+    const items = evaluateReleaseSignoffSnapshot({
+      ...ready,
+      requiredDocs: {
+        ...ready.requiredDocs,
+        'docs/guides/devflow-studio-v1.4-walkthrough.md': false,
+      },
+      requiredGateRecord: record(ready.requiredGateRecord.path, {
+        ...ready.requiredGateRecord.value,
+        gates: {
+          ...(ready.requiredGateRecord.value?.gates as Record<string, unknown>),
+          'docker-lifecycle-smoke': 'failed',
+        },
+      }),
+    })
+
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        id: 'release-docs',
+        label: 'v1.4 release docs',
+        state: 'attention',
+      }),
+    )
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        id: 'required-gates',
+        state: 'attention',
+        detail: expect.stringContaining('docker-lifecycle-smoke'),
+      }),
+    )
+  })
+
+  it('rejects an unknown release series instead of falling back to a known profile', () => {
+    expect(releaseProfileFor('1.5.0')).toBeNull()
+
+    const items = evaluateReleaseSignoffSnapshot(snapshot({ targetVersion: '1.5.0' }))
+
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        id: 'release-profile',
+        state: 'attention',
+        detail: expect.stringContaining('1.5.0'),
+      }),
+    )
+  })
+
+  it('fails closed when the target release version is missing', () => {
+    const items = evaluateReleaseSignoffSnapshot({
+      ...snapshot(),
+      targetVersion: null as unknown as string,
+    })
+
+    expect(items).toContainEqual(
+      expect.objectContaining({ id: 'release-profile', state: 'attention' }),
+    )
+  })
+
+  it('requires one no-retry attempt and a US$20 cap in v1.4 paid-smoke evidence', () => {
+    const ready = snapshot({ targetVersion: '1.4.0' })
+    expect(evaluateReleaseSignoffSnapshot(ready).every((item) => item.state === 'ready')).toBe(true)
+
+    for (const invalidControls of [
+      { attemptCount: 2 },
+      { automaticRetry: true },
+      { costCapUsd: 21 },
+    ]) {
+      const items = evaluateReleaseSignoffSnapshot({
+        ...ready,
+        realOpencodeRecord: record(ready.realOpencodeRecord.path, {
+          ...ready.realOpencodeRecord.value,
+          ...invalidControls,
+        }),
+      })
+
+      expect(items).toContainEqual(
+        expect.objectContaining({ id: 'real-opencode', state: 'attention' }),
+      )
+    }
   })
 
   it('binds all evidence to the signoff commit first parent candidate', () => {

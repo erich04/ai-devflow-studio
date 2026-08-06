@@ -69,6 +69,13 @@ describe('opencode runtime contract refresh documentation', () => {
     expect(releaseGate).toContain('ANTHROPIC_AUTH_TOKEN="<set in shell only; never commit>"')
     expect(releaseGate).toContain('Required Evidence To Record')
     expect(releaseGate).toContain('managed worktree deleted or cleanup_failed')
+    expect(releaseGate).toContain('docs/releases/v1.4.0/real-opencode.json')
+    expect(releaseGate).toContain('"attemptCount": 1')
+    expect(releaseGate).toContain('"automaticRetry": false')
+    expect(releaseGate).toContain('"costCapUsd": 20')
+    expect(releaseGate).toContain(
+      'A second actual provider invocation requires new explicit authorization',
+    )
     for (const sentinel of forbiddenSecretSentinels) {
       expect(releaseGate).not.toContain(sentinel)
     }
