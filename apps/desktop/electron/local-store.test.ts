@@ -51,6 +51,7 @@ import {
 } from './local-store'
 
 let tempDirs: string[] = []
+const persistenceFailurePattern = /EISDIR|EPERM|directory|operation not permitted/i
 
 afterEach(async () => {
   await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })))
@@ -980,7 +981,7 @@ describe('createLocalStore', () => {
         expectedPairing: workRequestPairing,
         receivedAt: '2026-08-01T02:01:10.000Z',
       }),
-    ).rejects.toThrow(/EISDIR|directory/i)
+    ).rejects.toThrow(persistenceFailurePattern)
     await expect(
       store.getGateCommandReceiptObservation(gateCommandReceipt.id),
     ).resolves.toBeNull()
@@ -2587,7 +2588,7 @@ describe('createLocalStore', () => {
         failureCode: 'forbidden',
         failedAt: '2026-08-01T02:01:42.000Z',
       }),
-    ).rejects.toThrow(/EISDIR|directory/i)
+    ).rejects.toThrow(persistenceFailurePattern)
     await expect(
       store.getGateCommandAcknowledgement(gateCommandReceipt.id),
     ).resolves.toEqual(committed.acknowledgement)
@@ -2623,7 +2624,7 @@ describe('createLocalStore', () => {
         event: gateApprovalEvent,
         evaluationBinding: gateEvaluationBinding,
       }),
-    ).rejects.toThrow(/EISDIR|directory/i)
+    ).rejects.toThrow(persistenceFailurePattern)
     await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
     await expect(
       store.getGateCommandExecution(deliveringGateCommand.id),
@@ -3118,7 +3119,7 @@ describe('createLocalStore', () => {
 
     await expect(
       store.claimNextRemoteSyncOperation('2026-08-01T00:00:10.000Z'),
-    ).rejects.toThrow(/EISDIR|directory/i)
+    ).rejects.toThrow(persistenceFailurePattern)
     expect(await store.listRemoteSyncOperations()).toEqual([operation])
     store.close()
   })
@@ -3147,7 +3148,7 @@ describe('createLocalStore', () => {
       lastErrorCode: 'remote_error',
       lastErrorMessage: 'Safe fixed failure.',
       updatedAt: '2026-08-01T00:00:20.000Z',
-    })).rejects.toThrow(/EISDIR|directory/i)
+    })).rejects.toThrow(persistenceFailurePattern)
     expect(await store.listRemoteSyncOperations()).toEqual([claimed])
     await rm(dbPath, { recursive: true })
     await rename(backupPath, dbPath)
@@ -3174,7 +3175,7 @@ describe('createLocalStore', () => {
     await rename(dbPath, backupPath)
     await mkdir(dbPath)
 
-    await expect(store.saveRun(run)).rejects.toThrow(/EISDIR|directory/i)
+    await expect(store.saveRun(run)).rejects.toThrow(persistenceFailurePattern)
     expect(await store.getRun(run.id)).toBeNull()
     expect(await store.listRemoteSyncOperations()).toEqual([])
     store.close()
@@ -4909,7 +4910,7 @@ describe('createLocalStore', () => {
         sourceFingerprint: claimedWorkRequestFingerprint,
         materializeIdempotencyKey,
       }),
-    ).rejects.toThrow(/EISDIR|directory/i)
+    ).rejects.toThrow(persistenceFailurePattern)
     expect(await store.getRun(claimedWorkRequest.claim!.runId)).toBeNull()
     expect(
       await store.getWorkRequestMaterializationByWorkRequestId(

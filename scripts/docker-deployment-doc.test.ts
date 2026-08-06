@@ -66,7 +66,7 @@ describe('self-hosted Docker deployment files', () => {
   })
 
   it('documents required self-hosted environment variables without secrets', () => {
-    const envExample = readFileSync('.env.example', 'utf8')
+    const envExample = readFileSync('.env.example', 'utf8').replace(/\r\n?/g, '\n')
 
     expect(envExample).toContain('POSTGRES_PASSWORD=\n')
     expect(envExample).toContain('DEVFLOW_SESSION_SECRET=\n')

@@ -57,7 +57,7 @@ describe('Desktop pilot artifact', () => {
       expect.objectContaining({
         path: 'Contents/runner',
         type: 'file',
-        mode: '0755',
+        mode: process.platform === 'win32' ? '0644' : '0755',
       }),
     )
   })

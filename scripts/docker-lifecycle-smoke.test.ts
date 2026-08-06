@@ -4,7 +4,10 @@ import { describe, expect, it } from 'vitest'
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {
   scripts: Record<string, string>
 }
-const lifecycleSmoke = readFileSync('scripts/docker-lifecycle-smoke.mjs', 'utf8')
+const lifecycleSmoke = readFileSync('scripts/docker-lifecycle-smoke.mjs', 'utf8').replace(
+  /\r\n?/g,
+  '\n',
+)
 
 describe('V1.4 Docker lifecycle smoke contract', () => {
   it('pins the released V1.3 baseline by annotated-tag commit and builds that source', () => {
