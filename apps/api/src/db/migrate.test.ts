@@ -65,6 +65,13 @@ describe('team database migration runner', () => {
     ])
   })
 
+  it('computes the same immutable checksum for LF and CRLF migration SQL', () => {
+    const lfSql = 'BEGIN;\nSELECT 1;\nCOMMIT;\n'
+    const crlfSql = lfSql.replace(/\n/g, '\r\n')
+
+    expect(migrationChecksum(crlfSql)).toBe(migrationChecksum(lfSql))
+  })
+
   it('catalogs the frozen v7 baseline before the V1.4 migration', async () => {
     expect(teamMigrationCatalog).toEqual([
       { version: 7, name: '0001_initial', fileName: '0001_initial.sql' },

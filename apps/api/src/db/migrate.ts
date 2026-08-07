@@ -65,7 +65,8 @@ export async function readTeamMigrationCatalog(): Promise<TeamMigration[]> {
 }
 
 export function migrationChecksum(sql: string): string {
-  return createHash('sha256').update(sql, 'utf8').digest('hex')
+  const canonicalSql = sql.replace(/\r\n/g, '\n')
+  return createHash('sha256').update(canonicalSql, 'utf8').digest('hex')
 }
 
 function migrationStatements(sql: string): string[] {
