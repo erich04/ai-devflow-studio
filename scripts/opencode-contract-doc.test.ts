@@ -72,7 +72,8 @@ describe('opencode runtime contract refresh documentation', () => {
     expect(releaseGate).toContain('docs/releases/v1.4.0/real-opencode.json')
     expect(releaseGate).toContain('"attemptCount": 1')
     expect(releaseGate).toContain('"automaticRetry": false')
-    expect(releaseGate).toContain('"costCapUsd": 20')
+    expect(releaseGate).toContain('"costCapUsd": null')
+    expect(releaseGate).toContain('does not impose a hard provider cost cap')
     expect(releaseGate).toContain(
       'A second actual provider invocation requires new explicit authorization',
     )

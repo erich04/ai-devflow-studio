@@ -61,7 +61,7 @@ const releaseProfiles = {
     realOpencodeControls: {
       attemptCount: 1,
       automaticRetry: false,
-      costCapUsd: 20,
+      costCapUsd: null,
     },
   },
 }
@@ -427,7 +427,7 @@ function evaluateRealOpencodeRecord(snapshot) {
       : forbiddenFields.length > 0
         ? `Secret-bearing fields are forbidden in ${snapshot.realOpencodeRecord.path}: ${forbiddenFields.join(', ')}.`
         : !controlsValid
-          ? `${snapshot.realOpencodeRecord.path} must record one attempt, no automatic retry, and a US$20 cost cap.`
+          ? `${snapshot.realOpencodeRecord.path} must record one attempt, no automatic retry, and an explicit uncapped authorization.`
         : `${snapshot.realOpencodeRecord.path} is missing required non-secret live-smoke metadata.`,
   }
 }

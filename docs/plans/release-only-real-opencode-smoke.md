@@ -27,7 +27,7 @@ state is determined by the release JSON files, the matching `release:status` mod
   bound to the candidate commit `C`.
 - For v1.4, the passing result must be written to `docs/releases/v1.4.0/real-opencode.json`, bound
   to candidate `C`, and record exactly one actual provider attempt, no automatic retry, and the
-  authorized US$20 cost cap.
+  owner's explicit authorization without a hard provider cost cap.
 - A second actual provider invocation requires new explicit authorization.
 - Provider secrets must never be written to docs, logs, screenshots, PR descriptions, GitHub
   releases, team summaries, or smoke artifacts.
@@ -94,12 +94,14 @@ at `docs/releases/v1.4.0/real-opencode.json` uses the same observed non-secret m
   "status": "passed",
   "attemptCount": 1,
   "automaticRetry": false,
-  "costCapUsd": 20
+  "costCapUsd": null
 }
 ```
 
-These values describe the authorization boundary, not an invented billed amount. Once the real
-provider invocation begins, a pass, failure, timeout, or provider error consumes the one attempt.
+These values describe the authorization boundary, not an invented billed amount. `costCapUsd: null`
+explicitly records that this authorization does not impose a hard provider cost cap; it is not a
+missing or unknown field. Once the real provider invocation begins, a pass, failure, timeout, or
+provider error consumes the one attempt.
 
 Replace every placeholder with observed data from the run against `C`. `recordedAt` must be a valid
 date-time, and `diffEvidence` must contain at least one non-empty, repository-relative changed path.

@@ -107,7 +107,7 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
       cleanup: 'passed',
       redactionCheck: 'passed',
       ...(releaseSeries === '1.4'
-        ? { attemptCount: 1, automaticRetry: false, costCapUsd: 20 }
+        ? { attemptCount: 1, automaticRetry: false, costCapUsd: null }
         : {}),
     }),
     ...overrides,
@@ -246,14 +246,14 @@ describe('release signoff status', () => {
     )
   })
 
-  it('requires one no-retry attempt and a US$20 cap in v1.4 paid-smoke evidence', () => {
+  it('requires one no-retry attempt with an explicit uncapped authorization in v1.4 paid-smoke evidence', () => {
     const ready = snapshot({ targetVersion: '1.4.0' })
     expect(evaluateReleaseSignoffSnapshot(ready).every((item) => item.state === 'ready')).toBe(true)
 
     for (const invalidControls of [
       { attemptCount: 2 },
       { automaticRetry: true },
-      { costCapUsd: 21 },
+      { costCapUsd: 20 },
     ]) {
       const items = evaluateReleaseSignoffSnapshot({
         ...ready,
