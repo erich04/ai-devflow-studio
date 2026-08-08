@@ -40,6 +40,15 @@ describe('V1.4 Docker lifecycle smoke contract', () => {
     expect(lifecycleSmoke).not.toContain("'exec',\n      'exec',")
   })
 
+  it('waits for the final Postgres process rather than the temporary healthy init server', () => {
+    expect(lifecycleSmoke).toContain('waitForFinalPostgresReadiness({')
+    expect(lifecycleSmoke).toContain("'/proc/1/comm'")
+    expect(lifecycleSmoke).toContain("'pg_isready',")
+    expect(lifecycleSmoke).toContain('healthStatus: state.stdout.trim()')
+    expect(lifecycleSmoke).toContain('initProcessName')
+    expect(lifecycleSmoke).toContain('liveProbeReady = true')
+  })
+
   it('proves a failed v9 to v10 migration rolls back before remediation and retry', () => {
     expect(lifecycleSmoke).toContain("const FAILURE_DATABASE = 'devflow_failed_upgrade'")
     expect(lifecycleSmoke).toContain('0008_v14_work_authority.sql')

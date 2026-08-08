@@ -6,6 +6,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { waitForFinalPostgresReadiness } from './docker-lifecycle-readiness.mjs'
+
 const V13_TAG = 'v1.3.0'
 const V13_COMMIT = '06f3cc321300e3751aaa41c67f66d70cfaf6ebe4'
 const FRESH_DATABASE = 'devflow_fresh'
@@ -209,17 +211,52 @@ async function startPostgres() {
     'postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777',
   ])
 
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    const state = await runDocker([
-      'inspect',
-      '--format',
-      '{{.State.Health.Status}}',
-      postgresContainerName,
-    ])
-    if (state.stdout.trim() === 'healthy') return
-    await new Promise((resolve) => setTimeout(resolve, 250))
-  }
-  throw new Error('Timed out waiting for lifecycle Postgres health.')
+  await waitForFinalPostgresReadiness({
+    readObservation: async () => {
+      const state = await runDocker([
+        'inspect',
+        '--format',
+        '{{.State.Health.Status}}',
+        postgresContainerName,
+      ])
+      let initProcessName = 'unavailable'
+      try {
+        const process = await runDocker([
+          'exec',
+          postgresContainerName,
+          'cat',
+          '/proc/1/comm',
+        ])
+        initProcessName = process.stdout.trim()
+      } catch {
+        // A Docker exec launched during the entrypoint handoff can fail transiently.
+      }
+      let liveProbeReady = false
+      if (initProcessName === 'postgres') {
+        try {
+          await runDocker([
+            'exec',
+            postgresContainerName,
+            'pg_isready',
+            '-U',
+            postgresUser,
+            '-d',
+            'postgres',
+          ])
+          liveProbeReady = true
+        } catch {
+          // Docker health can still reflect the temporary init server; probe again.
+        }
+      }
+      return {
+        healthStatus: state.stdout.trim(),
+        initProcessName,
+        liveProbeReady,
+      }
+    },
+    maxAttempts: 120,
+    delay: () => new Promise((resolve) => setTimeout(resolve, 250)),
+  })
 }
 
 async function restartPostgresWithRetainedVolume() {
