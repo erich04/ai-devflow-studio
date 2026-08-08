@@ -1,4 +1,18 @@
+import {
+  buildCodingBrief,
+} from '../packages/shared/src/coding-agent.ts'
+import type {
+  LocalProject,
+  WorkflowNode,
+  WorkflowRun,
+} from '../packages/shared/src/domain.ts'
+import type { CodingEngineApprovePermissionCompletedResult } from '../apps/desktop/electron/coding-engine.ts'
 import { evaluateOpencodeSmokePreflight } from './opencode-smoke-preflight'
+
+type ReadyOpencodeSmokePreflight = Extract<
+  ReturnType<typeof evaluateOpencodeSmokePreflight>,
+  { mode: 'ready' }
+>
 
 const preflight = evaluateOpencodeSmokePreflight(process.env)
 
@@ -12,7 +26,7 @@ if (preflight.mode === 'blocked') {
   process.exit(1)
 }
 
-async function main() {
+async function main(preflight: ReadyOpencodeSmokePreflight) {
   const { execFile } = await import('node:child_process')
   const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
   const os = await import('node:os')
@@ -52,156 +66,175 @@ async function main() {
   }
 
   try {
-  await setupRepository()
-  const run = {
-    id: 'run-opencode-smoke',
-    title: 'opencode smoke run',
-    request: 'Create a tiny smoke marker file and keep the change minimal.',
-    projectId: 'project-opencode-smoke',
-    status: 'running' as const,
-    branchName: 'devflow/opencode-smoke',
-    nodes: [
-      {
-        id: 'n-build',
-        stage: 'build' as const,
-        title: 'Implement smoke marker',
-        subtitle: 'Create a marker file in the managed worktree.',
-        kind: 'task' as const,
-        status: 'running' as const,
-      },
-    ],
-    artifacts: [],
-    events: [],
-    createdAt: now,
-    updatedAt: now,
-  }
-  const node = run.nodes[0]!
-  const project = {
-    id: 'project-opencode-smoke',
-    name: 'opencode-smoke',
-    path: repoDir,
-    packageManager: 'npm' as const,
-    testCommand: 'npm test',
-    createdAt: now,
-    updatedAt: now,
-  }
-  const workspace = await createManagedCodingWorkspace({
-    project,
-    codingRunId: 'coding-run-opencode-smoke',
-    runId: run.id,
-    nodeId: node.id,
-    worktreeRoot,
-  })
-  processManager = createOpencodeProcessManager()
-  const engine = createOpencodeHttpCodingEngineAdapter({
-    binaryPath: preflight.binaryPath,
-    providerID: preflight.providerID,
-    modelID: preflight.modelID,
-    apiKeyEnvName: preflight.apiKeyEnvName,
-    processManager,
-    runtimeEnv: process.env,
-    permissionDiscoveryTimeoutMs: 120_000,
-  })
-
-  const started = await engine.start({
-    id: 'coding-run-opencode-smoke',
-    run,
-    node,
-    project,
-    workspace,
-    requestedBy: 'devflow-smoke',
-    providerId: preflight.providerID,
-    userInstruction:
-      'First run pwd once to confirm the managed worktree, then create devflow-opencode-smoke.txt with a short success message. Keep the change minimal.',
-    now,
-    upstreamArtifacts: [],
-    knowledgeReferences: [],
-    governanceChecks: [],
-    gateDecisions: [],
-    testEvidence: [],
-  })
-  let codingRun = started.codingRun
-  let permissionRequest = started.permissionRequest
-  const codingEvents = [...started.events]
-  let completed: Awaited<ReturnType<typeof engine.approvePermission>> | undefined
-  for (let approvalCount = 0; approvalCount < 8; approvalCount += 1) {
-    console.log(`opencode requested ${permissionRequest.permission}; approving once.`)
-    const result = await engine.approvePermission({
-      codingRun,
-      workspace,
+    await setupRepository()
+    const userInstruction =
+      'First run pwd once to confirm the managed worktree, then create devflow-opencode-smoke.txt with a short success message. Keep the change minimal.'
+    const node: WorkflowNode = {
+      id: 'n-build',
+      stage: 'build',
+      title: 'Implement smoke marker',
+      subtitle: 'Create a marker file in the managed worktree.',
+      kind: 'task',
+      status: 'running',
+      ownerId: 'devflow-smoke',
+      retryCount: 0,
+      artifactIds: [],
+    }
+    const run: WorkflowRun = {
+      id: 'run-opencode-smoke',
+      version: 1,
+      title: 'opencode smoke run',
+      request: 'Create a tiny smoke marker file and keep the change minimal.',
+      projectId: 'project-opencode-smoke',
+      creatorId: 'devflow-smoke',
+      status: 'building',
+      currentNodeId: node.id,
+      branchName: 'devflow/opencode-smoke',
+      nodes: [node],
+      edges: [],
+      createdAt: now,
+      updatedAt: now,
+    }
+    const project: LocalProject = {
+      id: 'project-opencode-smoke',
+      name: 'opencode-smoke',
+      path: repoDir,
+      packageManager: 'npm',
+      testCommand: 'npm test',
+      createdAt: now,
+      updatedAt: now,
+    }
+    const workspace = await createManagedCodingWorkspace({
       project,
-      request: permissionRequest,
+      codingRunId: 'coding-run-opencode-smoke',
+      runId: run.id,
+      nodeId: node.id,
+      worktreeRoot,
+    })
+    const briefContext = {
+      upstreamArtifacts: [],
+      knowledgeReferences: [],
+      governanceChecks: [],
+      gateDecisions: [],
+      testEvidence: [],
+    }
+    const brief = buildCodingBrief({
+      run,
+      node,
+      project,
+      ...briefContext,
+      userInstruction,
+      worktreePath: '<managed-worktree-created-after-budget-approval>',
+      branchName: '<managed-branch-created-after-budget-approval>',
+    })
+    processManager = createOpencodeProcessManager()
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: preflight.binaryPath,
+      providerID: preflight.providerID,
+      modelID: preflight.modelID,
+      apiKeyEnvName: preflight.apiKeyEnvName,
+      processManager,
+      runtimeEnv: process.env,
+      permissionDiscoveryTimeoutMs: 120_000,
+    })
+
+    const started = await engine.start({
+      id: 'coding-run-opencode-smoke',
+      run,
+      node,
+      project,
+      workspace,
+      requestedBy: 'devflow-smoke',
+      providerId: preflight.providerID,
+      userInstruction,
+      now,
+      ...briefContext,
+      brief,
+    })
+    let codingRun = started.codingRun
+    let permissionRequest = started.permissionRequest
+    const codingEvents = [...started.events]
+    let completed: CodingEngineApprovePermissionCompletedResult | undefined
+    for (let approvalCount = 0; approvalCount < 8; approvalCount += 1) {
+      console.log(`opencode requested ${permissionRequest.permission}; approving once.`)
+      const result = await engine.approvePermission({
+        codingRun,
+        workspace,
+        project,
+        request: permissionRequest,
+        now: new Date().toISOString(),
+      })
+      codingEvents.push(...result.events)
+      if ('permissionRequest' in result) {
+        codingRun = result.codingRun
+        permissionRequest = result.permissionRequest
+        continue
+      }
+      completed = result
+      break
+    }
+
+    if (!completed) {
+      throw new Error('opencode smoke exceeded the permission approval limit.')
+    }
+
+    if (!completed.diff.changedPaths.length) {
+      throw new Error('opencode smoke did not produce a changed path.')
+    }
+    if (!codingEvents.some((event) => event.kind === 'tool_call')) {
+      throw new Error('opencode smoke did not record a tool_call coding event.')
+    }
+    if (!codingEvents.some((event) => event.kind === 'tool_result')) {
+      throw new Error('opencode smoke did not record a tool_result coding event.')
+    }
+    const metadataBlob = JSON.stringify(codingEvents.map((event) => event.metadata ?? {}))
+    for (const forbidden of ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'raw stdout', 'raw stderr']) {
+      if (metadataBlob.includes(forbidden)) {
+        throw new Error(`opencode smoke leaked forbidden metadata marker: ${forbidden}`)
+      }
+    }
+    if (metadataBlob.includes(workspace.worktreePath) || metadataBlob.includes(repoDir)) {
+      throw new Error('opencode smoke leaked an absolute workspace path in tool metadata.')
+    }
+
+    const bootstrap = await runDependencyBootstrap({
+      codingRunId: completed.codingRun.id,
+      runId: completed.codingRun.runId,
+      nodeId: completed.codingRun.nodeId,
+      projectId: completed.codingRun.projectId,
+      worktreePath: workspace.worktreePath,
+      runCommand: runLocalTestCommand,
+      timeoutMs: 120_000,
       now: new Date().toISOString(),
     })
-    codingEvents.push(...result.events)
-    if ('permissionRequest' in result) {
-      codingRun = result.codingRun
-      permissionRequest = result.permissionRequest
-      continue
+    if (bootstrap.status !== 'passed' && bootstrap.status !== 'skipped') {
+      throw new Error(`Dependency bootstrap did not pass: ${bootstrap.status} ${bootstrap.summary}`)
     }
-    completed = result
-    break
-  }
 
-  if (!completed) {
-    throw new Error('opencode smoke exceeded the permission approval limit.')
-  }
-
-  if (!completed.diff.changedPaths.length) {
-    throw new Error('opencode smoke did not produce a changed path.')
-  }
-  if (!codingEvents.some((event) => event.kind === 'tool_call')) {
-    throw new Error('opencode smoke did not record a tool_call coding event.')
-  }
-  if (!codingEvents.some((event) => event.kind === 'tool_result')) {
-    throw new Error('opencode smoke did not record a tool_result coding event.')
-  }
-  const metadataBlob = JSON.stringify(codingEvents.map((event) => event.metadata ?? {}))
-  for (const forbidden of ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'raw stdout', 'raw stderr']) {
-    if (metadataBlob.includes(forbidden)) {
-      throw new Error(`opencode smoke leaked forbidden metadata marker: ${forbidden}`)
+    const tests = await runLocalTestCommand({
+      command: project.testCommand,
+      cwd: workspace.worktreePath,
+      timeoutMs: 120_000,
+    })
+    if (tests.status !== 'passed') {
+      throw new Error(`opencode smoke tests did not pass: ${tests.summary}`)
     }
-  }
-  if (metadataBlob.includes(workspace.worktreePath) || metadataBlob.includes(repoDir)) {
-    throw new Error('opencode smoke leaked an absolute workspace path in tool metadata.')
-  }
 
-  const bootstrap = await runDependencyBootstrap({
-    codingRunId: completed.codingRun.id,
-    runId: completed.codingRun.runId,
-    nodeId: completed.codingRun.nodeId,
-    projectId: completed.codingRun.projectId,
-    worktreePath: workspace.worktreePath,
-    runCommand: runLocalTestCommand,
-    timeoutMs: 120_000,
-    now: new Date().toISOString(),
-  })
-  if (bootstrap.status !== 'passed' && bootstrap.status !== 'skipped') {
-    throw new Error(`Dependency bootstrap did not pass: ${bootstrap.status} ${bootstrap.summary}`)
-  }
-
-  const tests = await runLocalTestCommand({
-    command: project.testCommand,
-    cwd: workspace.worktreePath,
-    timeoutMs: 120_000,
-  })
-  if (tests.status !== 'passed') {
-    throw new Error(`opencode smoke tests did not pass: ${tests.summary}`)
-  }
-
-  await processManager.stopAll()
-  const deletedWorkspace = await deleteManagedCodingWorkspace(workspace)
-  if (deletedWorkspace.cleanupStatus !== 'deleted') {
-    throw new Error(`Managed worktree cleanup did not complete: ${deletedWorkspace.cleanupStatus}`)
-  }
-  console.log(`opencode smoke passed; changed paths: ${completed.diff.changedPaths.join(', ')}`)
+    await processManager.stopAll()
+    const deletedWorkspace = await deleteManagedCodingWorkspace(workspace)
+    if (deletedWorkspace.cleanupStatus !== 'deleted') {
+      throw new Error(`Managed worktree cleanup did not complete: ${deletedWorkspace.cleanupStatus}`)
+    }
+    console.log(`opencode smoke passed; changed paths: ${completed.diff.changedPaths.join(', ')}`)
   } finally {
     await processManager?.stopAll().catch(() => undefined)
     await rm(tempRoot, { recursive: true, force: true })
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error)
-  process.exit(1)
-})
+if (preflight.mode === 'ready') {
+  main(preflight).catch((error) => {
+    console.error(error instanceof Error ? error.message : error)
+    process.exit(1)
+  })
+}
