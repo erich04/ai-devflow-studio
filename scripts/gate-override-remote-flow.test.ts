@@ -47,6 +47,7 @@ const reviewerCredential: DesktopPairingCredential = {
 const remoteRun = {
   kind: 'run' as const,
   runId: 'run-independent-lead-override',
+  version: 1,
   projectId: 'p-payments',
   title: 'Independent Lead override',
   status: 'building' as const,
@@ -64,6 +65,7 @@ const remoteRun = {
 
 const localGateRun: WorkflowRun = {
   id: remoteRun.runId,
+  version: remoteRun.version,
   title: remoteRun.title,
   request: 'Prove independent review remains independent.',
   projectId: reviewerCredential.localProjectId!,
@@ -166,7 +168,9 @@ describe('remote Gate override flow', () => {
       role: 'lead',
     })
 
-    const storedRun = (await repository.getRunsBundle()).runs.find(
+    const storedRun = (await repository.getRunsBundle({
+      organizationId: reviewerSession.organizationId,
+    })).runs.find(
       (candidate) => candidate.id === remoteRun.runId,
     )
     expect(storedRun).toMatchObject({
@@ -187,9 +191,15 @@ describe('remote Gate override flow', () => {
       reason: 'Do not fabricate the canonical prerequisite.',
       blockedReasonIds: ['missing_agent_review:protected_gate:missing'],
       policyVersion: policy.version,
-    })).rejects.toThrow('Project access required')
+    })).rejects.toMatchObject({
+      status: 403,
+      code: 'forbidden',
+      retryable: false,
+    })
 
-    expect((await repository.getRunsBundle()).runs).not.toEqual(
+    expect((await repository.getRunsBundle({
+      organizationId: reviewerSession.organizationId,
+    })).runs).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: localGateRun.id })]),
     )
   })

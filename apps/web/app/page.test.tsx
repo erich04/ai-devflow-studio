@@ -1,13 +1,22 @@
-import { render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cookies } from 'next/headers'
 import { createWarnOnlyDefaultPolicy, resolveEffectivePolicy } from '@ai-devflow/shared'
 import Page from './page'
-import { fetchTeamOverview } from './lib/devflow-api'
+import {
+  evaluateGateCommandSnapshot,
+  fetchGateCommands,
+  fetchTeamOverview,
+  fetchWorkRequests,
+} from './lib/devflow-api'
 import type { TeamOverviewResponse } from './lib/devflow-api'
 
 vi.mock('./lib/devflow-api', () => ({
   createTeamProject: vi.fn(),
   fetchTeamOverview: vi.fn(),
+  fetchWorkRequests: vi.fn(),
+  fetchGateCommands: vi.fn(),
+  evaluateGateCommandSnapshot: vi.fn(),
   resolveDevFlowApiBaseUrl: vi.fn(() => 'http://api.local'),
   resolveDevFlowPublicApiBaseUrl: vi.fn(() => 'http://api.local'),
   runKnowledgeReview: vi.fn(),
@@ -23,6 +32,10 @@ vi.mock('next/headers', () => ({
 }))
 
 const mockedFetchTeamOverview = vi.mocked(fetchTeamOverview)
+const mockedCookies = vi.mocked(cookies)
+const mockedFetchWorkRequests = vi.mocked(fetchWorkRequests)
+const mockedFetchGateCommands = vi.mocked(fetchGateCommands)
+const mockedEvaluateGateCommandSnapshot = vi.mocked(evaluateGateCommandSnapshot)
 const organizationPolicy = createWarnOnlyDefaultPolicy({ organizationId: 'org-demo' })
 
 const overview: TeamOverviewResponse = {
@@ -54,6 +67,7 @@ const overview: TeamOverviewResponse = {
       projectId: 'p-remote',
       creatorId: 'u-remote',
       status: 'building',
+      version: 1,
       currentNodeId: 'n-build',
       branchName: 'ai/remote-run',
       createdAt: '2026-06-16T10:00:00.000Z',
@@ -226,20 +240,215 @@ const overview: TeamOverviewResponse = {
   ],
 }
 
+beforeEach(() => {
+  mockedFetchWorkRequests.mockResolvedValue([])
+  mockedFetchGateCommands.mockResolvedValue([])
+  mockedEvaluateGateCommandSnapshot.mockResolvedValue({
+    status: 'pass',
+    blocksApproval: false,
+    policyVersion: 1,
+    expectedBlockerIds: [],
+  })
+})
+
 afterEach(() => {
   vi.clearAllMocks()
 })
 
 describe('web product shell page', () => {
+  it('requires an explicit project selection instead of choosing the global latest run', async () => {
+    mockedFetchTeamOverview.mockResolvedValue(overview)
+
+    render(await Page({}))
+
+    expect(screen.getAllByText('请选择项目').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByRole('heading', { level: 1, name: 'Remote run' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Remote API/ })).toHaveAttribute(
+      'href',
+      '/?projectId=p-remote',
+    )
+    expect(screen.queryByRole('button', { name: 'Apply recommended enforcement' })).not.toBeInTheDocument()
+  })
+
+  it('does not fall back to another project when the requested run is outside the selected project', async () => {
+    mockedFetchTeamOverview.mockResolvedValue({
+      ...overview,
+      projects: [
+        ...overview.projects,
+        {
+          ...overview.projects[0]!,
+          id: 'p-other',
+          name: 'Other Project',
+          repository: 'erich/other-project',
+        },
+      ],
+      runs: [
+        ...overview.runs,
+        {
+          ...overview.runs[0]!,
+          id: 'run-other',
+          projectId: 'p-other',
+          title: 'Other project run',
+          request: 'Must never leak into the selected project.',
+          updatedAt: '2026-06-16T11:10:00.000Z',
+        },
+      ],
+    })
+
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote', runId: 'run-other' }),
+      }),
+    )
+
+    expect(screen.getAllByText('Run 不属于所选项目').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Remote API').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByText('Other project run')).not.toBeInTheDocument()
+    expect(screen.queryByText('Must never leak into the selected project.')).not.toBeInTheDocument()
+  })
+
+  it('shows a distinct empty state for an unknown run identifier', async () => {
+    mockedFetchTeamOverview.mockResolvedValue(overview)
+
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote', runId: 'run-missing' }),
+      }),
+    )
+
+    expect(screen.getAllByText('所选 Run 不存在').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByRole('heading', { level: 1, name: 'Remote run' })).not.toBeInTheDocument()
+  })
+
+  it('derives every management summary from the same selected project and run', async () => {
+    const otherProject = {
+      ...overview.projects[0]!,
+      id: 'p-other',
+      name: 'Other Project',
+      repository: 'erich/other-project',
+    }
+    const otherRun = {
+      ...overview.runs[0]!,
+      id: 'run-other',
+      projectId: otherProject.id,
+      title: 'Other project run',
+      request: 'Foreign request summary.',
+      updatedAt: '2026-06-16T11:10:00.000Z',
+    }
+    mockedFetchTeamOverview.mockResolvedValue({
+      ...overview,
+      projects: [...overview.projects, otherProject],
+      runs: [...overview.runs, otherRun],
+      testEvidenceSummaries: [
+        ...overview.testEvidenceSummaries,
+        {
+          ...overview.testEvidenceSummaries[0]!,
+          id: 'evidence-other',
+          runId: otherRun.id,
+          projectId: otherProject.id,
+          summary: 'Foreign tests must stay hidden.',
+        },
+      ],
+      codingAgentSummaries: [
+        ...overview.codingAgentSummaries,
+        {
+          ...overview.codingAgentSummaries[0]!,
+          id: 'coding-other',
+          runId: otherRun.id,
+          projectId: otherProject.id,
+          summary: 'Foreign coding run must stay hidden.',
+        },
+      ],
+      agentReviews: [
+        {
+          ...overview.agentReviews[0]!,
+          id: 'review-other',
+          runId: otherRun.id,
+          projectId: otherProject.id,
+          gateAdvisory: {
+            ...overview.agentReviews[0]!.gateAdvisory,
+            id: 'advisory-other',
+            runId: otherRun.id,
+            summary: 'Foreign review must stay hidden.',
+          },
+        },
+      ],
+    })
+
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote', runId: 'run-remote' }),
+      }),
+    )
+
+    expect(screen.getAllByText('Remote run').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('Remote tests passed.')).toBeInTheDocument()
+    expect(screen.getByText('Coding Agent completed with redacted changed paths.')).toBeInTheDocument()
+    expect(screen.queryByText('Foreign request summary.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Foreign tests must stay hidden.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Foreign coding run must stay hidden.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Foreign review must stay hidden.')).not.toBeInTheDocument()
+    expect(screen.getByText('此 Run 尚无 Review 结论。')).toBeInTheDocument()
+    expect(screen.getByText('Active Runs').closest('article')).toHaveTextContent('1')
+    expect(screen.getByText('Evidence Items').closest('article')).toHaveTextContent('2')
+  })
+
+  it('offers copy-once Desktop pairing only for the explicitly selected project', async () => {
+    mockedFetchTeamOverview.mockResolvedValue(overview)
+
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote' }),
+      }),
+    )
+
+    expect(screen.getByRole('region', { name: 'Desktop pairing for Remote API' })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Create desktop pairing code' })).toHaveLength(1)
+    expect(screen.getAllByText('请选择 Run').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('loads and renders Work Requests only for the explicitly selected project', async () => {
+    mockedFetchTeamOverview.mockResolvedValue(overview)
+    mockedFetchWorkRequests.mockResolvedValueOnce([{
+      id: 'wr-remote',
+      organizationId: 'org-demo',
+      projectId: 'p-remote',
+      title: 'Prepare remote rollout',
+      request: 'Keep the rollout reversible.',
+      version: 1,
+      status: 'open',
+      createdByUserId: 'u-remote',
+      claim: null,
+      expiresAt: null,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }])
+
+    render(await Page({
+      searchParams: Promise.resolve({ projectId: 'p-remote' }),
+    }))
+
+    expect(screen.getByRole('region', { name: 'Work Requests' })).toBeInTheDocument()
+    expect(screen.getByText('Prepare remote rollout')).toBeInTheDocument()
+    expect(mockedFetchWorkRequests).toHaveBeenCalledWith({
+      projectId: 'p-remote',
+      cookieHeader: 'devflow_session=session-1',
+    })
+  })
+
   it('renders team overview data loaded from the API client', async () => {
     mockedFetchTeamOverview.mockResolvedValue(overview)
 
-    render(await Page())
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote', runId: 'run-remote' }),
+      }),
+    )
 
     expect(screen.getAllByText('Remote API').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('erich/remote-api')).toBeInTheDocument()
+    expect(screen.getAllByText('erich/remote-api').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Remote Lead')).toBeInTheDocument()
-    expect(screen.getByText('Remote run')).toBeInTheDocument()
+    expect(screen.getAllByText('Remote run').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Ship from API data.')).toBeInTheDocument()
     expect(screen.getAllByText('Evidence Chain').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText('Human Gate').length).toBeGreaterThanOrEqual(1)
@@ -267,6 +476,94 @@ describe('web product shell page', () => {
     })
   })
 
+  it('loads an authoritative Gate Command snapshot only for the current paused Gate', async () => {
+    mockedFetchTeamOverview.mockResolvedValue({
+      ...overview,
+      runs: [
+        {
+          ...overview.runs[0]!,
+          status: 'paused_at_gate',
+          version: 7,
+          currentNodeId: 'run-remote:n-build',
+          nodes: [
+            {
+              ...overview.runs[0]!.nodes[0]!,
+              id: 'run-remote:n-build',
+              status: 'running',
+            },
+          ],
+        },
+      ],
+    })
+
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote', runId: 'run-remote' }),
+      }),
+    )
+
+    expect(mockedFetchGateCommands).toHaveBeenCalledWith({
+      projectId: 'p-remote',
+      cookieHeader: 'devflow_session=session-1',
+    })
+    expect(mockedEvaluateGateCommandSnapshot).toHaveBeenCalledWith({
+      projectId: 'p-remote',
+      runId: 'run-remote',
+      nodeId: 'n-build',
+      cookieHeader: 'devflow_session=session-1',
+    })
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Gate Command reason' }), {
+      target: { value: 'Evidence reviewed.' },
+    })
+    expect(screen.getByRole('button', { name: '批准并继续' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '驳回' })).toBeEnabled()
+  })
+
+  it('never exposes a historical Gate when the current node is not a Gate', async () => {
+    mockedFetchTeamOverview.mockResolvedValue({
+      ...overview,
+      runs: [
+        {
+          ...overview.runs[0]!,
+          status: 'building',
+          currentNodeId: 'n-current-task',
+          nodes: [
+            {
+              ...overview.runs[0]!.nodes[0]!,
+              id: 'n-historical-gate',
+              status: 'completed',
+            },
+            {
+              id: 'n-current-task',
+              stage: 'build',
+              title: 'Current implementation',
+              subtitle: 'Coding',
+              kind: 'task',
+              status: 'running',
+              ownerId: 'u-remote',
+              requiredRole: 'member',
+              retryCount: 0,
+              artifactIds: [],
+            },
+          ],
+        },
+      ],
+    })
+
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote', runId: 'run-remote' }),
+      }),
+    )
+
+    expect(screen.getByRole('heading', { level: 2, name: '暂无待审 Gate' })).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Gate Command reason' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '批准并继续' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '驳回' })).toBeDisabled()
+    expect(mockedEvaluateGateCommandSnapshot).not.toHaveBeenCalled()
+  })
+
   it('renders an empty state when the API has no team projects yet', async () => {
     mockedFetchTeamOverview.mockResolvedValue({
       projects: [],
@@ -292,7 +589,7 @@ describe('web product shell page', () => {
       runtimeBudgetApprovals: [],
     })
 
-    render(await Page())
+    render(await Page({}))
 
     expect(screen.getByText('等待第一条真实工作请求')).toBeInTheDocument()
     expect(screen.getByText('没有真实 Run')).toBeInTheDocument()
@@ -301,12 +598,22 @@ describe('web product shell page', () => {
     ).toBeInTheDocument()
   })
 
-  it('renders an error state when the API cannot be reached', async () => {
-    mockedFetchTeamOverview.mockRejectedValue(new Error('network down'))
+  it('offers the normal GitHub sign-in route when an unauthenticated overview request fails', async () => {
+    mockedCookies.mockResolvedValueOnce({ get: vi.fn(() => undefined) } as never)
+    mockedFetchTeamOverview.mockRejectedValue(
+      new Error('DevFlow API /api/team/overview failed with 401 internal-api.private API_TOKEN=private-value'),
+    )
 
-    render(await Page())
+    render(await Page({}))
 
     expect(screen.getByText('团队数据暂时不可用')).toBeInTheDocument()
-    expect(screen.getByText('network down')).toBeInTheDocument()
+    expect(screen.getByText('无法加载团队数据，请稍后重试。')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Sign in with GitHub/ })).toHaveAttribute(
+      'href',
+      'http://api.local/api/auth/github/start',
+    )
+    expect(mockedFetchTeamOverview).toHaveBeenCalledWith({})
+    expect(document.body).not.toHaveTextContent('internal-api.private')
+    expect(document.body).not.toHaveTextContent('private-value')
   })
 })

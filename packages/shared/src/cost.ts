@@ -74,7 +74,7 @@ export type EstimateCodingRuntimeCostInput = {
 }
 
 export function estimateCodingRuntimeCost(input: EstimateCodingRuntimeCostInput): CodingRuntimeCostSummary {
-  if (input.engine === 'fake' || input.providerId.includes('fake')) {
+  if (input.engine === 'fake') {
     return {
       id: `coding-runtime-cost-${input.runId}-${input.nodeId}`,
       runId: input.runId,
@@ -122,6 +122,8 @@ export function estimateCodingRuntimeCost(input: EstimateCodingRuntimeCostInput)
 }
 
 export type EvaluateRuntimeBudgetGuardInput = {
+  projectId: string
+  providerId: string
   policy?: RuntimeBudgetPolicy | null
   currentSpendUsd: number
   projectedCostUsd: number
@@ -130,10 +132,84 @@ export type EvaluateRuntimeBudgetGuardInput = {
   now: string
 }
 
+const BUDGET_GUARD_STATUSES = new Set<BudgetGuardDecision['status']>([
+  'allowed',
+  'warning',
+  'requires_lead_approval',
+  'approved_over_budget',
+  'disabled',
+  'unavailable',
+])
+
+export function parseBudgetGuardDecision(value: unknown): BudgetGuardDecision {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error('Invalid runtime budget decision')
+  }
+
+  const decision = value as Record<string, unknown>
+  const status = decision['status']
+  const blocksRun = decision['blocksRun']
+  const currentSpendUsd = decision['currentSpendUsd']
+  const projectedCostUsd = decision['projectedCostUsd']
+  const reason = decision['reason']
+
+  if (
+    typeof status !== 'string' ||
+    !BUDGET_GUARD_STATUSES.has(status as BudgetGuardDecision['status']) ||
+    typeof blocksRun !== 'boolean' ||
+    !isNonNegativeFiniteNumber(currentSpendUsd) ||
+    !isNonNegativeFiniteNumber(projectedCostUsd) ||
+    typeof reason !== 'string' ||
+    !reason.trim()
+  ) {
+    throw new Error('Invalid runtime budget decision')
+  }
+
+  const limitUsd = decision['limitUsd']
+  const approvalRequiredRole = decision['approvalRequiredRole']
+  const approvalId = decision['approvalId']
+  const expectedBlocksRun =
+    status === 'requires_lead_approval' || status === 'unavailable'
+  if (
+    blocksRun !== expectedBlocksRun ||
+    (limitUsd !== undefined && !isNonNegativeFiniteNumber(limitUsd)) ||
+    (approvalRequiredRole !== undefined && approvalRequiredRole !== 'lead') ||
+    (status === 'requires_lead_approval' && approvalRequiredRole !== 'lead') ||
+    (status !== 'requires_lead_approval' && approvalRequiredRole !== undefined) ||
+    (status === 'approved_over_budget' &&
+      (typeof approvalId !== 'string' || !approvalId.trim())) ||
+    (status !== 'approved_over_budget' && approvalId !== undefined) ||
+    (approvalId !== undefined && (typeof approvalId !== 'string' || !approvalId.trim()))
+  ) {
+    throw new Error('Invalid runtime budget decision')
+  }
+
+  return {
+    status: status as BudgetGuardDecision['status'],
+    blocksRun,
+    currentSpendUsd,
+    projectedCostUsd,
+    ...(limitUsd !== undefined ? { limitUsd } : {}),
+    ...(approvalRequiredRole !== undefined ? { approvalRequiredRole } : {}),
+    ...(approvalId !== undefined ? { approvalId } : {}),
+    reason,
+  }
+}
+
 export function evaluateRuntimeBudgetGuard(
   input: EvaluateRuntimeBudgetGuardInput,
 ): BudgetGuardDecision {
-  if (!input.policy || !input.policy.enabled) {
+  if (!input.policy || input.policy.projectId !== input.projectId) {
+    return {
+      status: 'unavailable',
+      blocksRun: true,
+      currentSpendUsd: input.currentSpendUsd,
+      projectedCostUsd: input.projectedCostUsd,
+      reason: 'Runtime budget policy is unavailable for this project.',
+    }
+  }
+
+  if (!input.policy.enabled) {
     return {
       status: 'disabled',
       blocksRun: false,
@@ -214,6 +290,10 @@ function estimateTokens(value: string): number {
   return Math.max(1, Math.ceil(length / ESTIMATED_CHARS_PER_TOKEN))
 }
 
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
 function roundCost(value: number): number {
   return Number(value.toFixed(6))
 }
@@ -226,7 +306,7 @@ function resolveRuntimeProvider(providerId: string): TokenUsage['provider'] {
   if (normalized.includes('dashscope') || normalized.includes('qwen')) {
     return 'dashscope'
   }
-  if (normalized.includes('local') || normalized.includes('fake')) {
+  if (normalized.includes('local') || normalized === 'fake' || normalized === 'fake-coding-engine') {
     return 'local'
   }
   return 'openai'
@@ -240,6 +320,8 @@ function isValidRuntimeBudgetApproval(
     approval &&
       approval.status === 'approved' &&
       approval.role === 'lead' &&
+      approval.projectId === input.projectId &&
+      approval.providerId === input.providerId &&
       approval.requestedBy === input.requestedBy &&
       Date.parse(approval.expiresAt) > Date.parse(input.now) &&
       approval.maxAdditionalCostUsd >= input.projectedCostUsd,

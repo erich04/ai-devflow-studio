@@ -33,6 +33,34 @@ function providerConfigFromCredential(metadata: ProviderCredentialMetadata): Age
   }
 }
 
+export async function resolveElectronAgentProviderMetadata(input: {
+  providerId: string
+  fakeRuntimeEnabled: boolean
+  credentialSource: {
+    listProviderCredentials(): Promise<ProviderCredentialMetadata[]>
+  }
+}): Promise<Pick<AgentProvider, 'id' | 'name' | 'model'>> {
+  if (input.providerId === FAKE_AGENT_PROVIDER_ID) {
+    if (!input.fakeRuntimeEnabled) {
+      throw new Error('Fake Agent Provider requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.')
+    }
+    return {
+      id: fakeAgentProviderConfig.id,
+      name: fakeAgentProviderConfig.name,
+      model: fakeAgentProviderConfig.model,
+    }
+  }
+
+  const credentials = await input.credentialSource.listProviderCredentials()
+  const metadata = credentials.find((candidate) => candidate.providerId === input.providerId)
+  if (!metadata) {
+    throw new Error(`Agent provider credential metadata not found: ${input.providerId}`)
+  }
+
+  const config = providerConfigFromCredential(metadata)
+  return { id: config.id, name: config.name, model: config.model }
+}
+
 export function listElectronAgentProviderConfigs(input: {
   credentials: ProviderCredentialMetadata[]
   fakeRuntimeEnabled: boolean

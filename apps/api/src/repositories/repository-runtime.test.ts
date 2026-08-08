@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { TeamDbClient, TeamDbConfig } from '../db/client'
+import type { TeamDbConfig, TeamDbRepositoryClient } from '../db/client'
 import { createTeamRepositoryRuntime } from './repository-runtime'
 
-function createFakeDb(): TeamDbClient {
+function createFakeDb(): TeamDbRepositoryClient {
+  const query = async <T>() => [] as T[]
   return {
-    async query<T>() {
-      return [] as T[]
-    },
+    query,
     async close() {
       return undefined
+    },
+    async checkout() {
+      return { query, release() {} }
     },
   }
 }
@@ -32,7 +34,9 @@ describe('team repository runtime', () => {
     })
 
     expect(runtime.source).toBe('seed')
-    await expect(runtime.repository.getTeamOverview()).resolves.toMatchObject({
+    await expect(
+      runtime.repository.getTeamOverview({ organizationId: 'org-demo' }),
+    ).resolves.toMatchObject({
       projects: expect.any(Array),
       members: expect.any(Array),
     })
@@ -42,7 +46,7 @@ describe('team repository runtime', () => {
   it('uses Postgres when a database URL is configured and redacts logs', async () => {
     const close = vi.fn(async () => undefined)
     const logger = { info: vi.fn() }
-    const createPostgresClient = vi.fn((config: TeamDbConfig): TeamDbClient => ({
+    const createPostgresClient = vi.fn((config: TeamDbConfig): TeamDbRepositoryClient => ({
       ...createFakeDb(),
       close,
       async query<T>() {
@@ -71,4 +75,47 @@ describe('team repository runtime', () => {
     await runtime.close()
     expect(close).toHaveBeenCalled()
   })
+
+  it('reports Postgres readiness only at the current Team schema version', async () => {
+    const querySpy = vi.fn(async (_sql: string) => [{ value: '10' }])
+    const query = async <T>(sql: string): Promise<T[]> =>
+      (await querySpy(sql)) as T[]
+    const runtime = await createTeamRepositoryRuntime({
+      env: {
+        DEVFLOW_DATABASE_URL: 'postgres://devflow:secret@localhost:5432/devflow',
+      },
+      logger: { info: vi.fn() },
+      createPostgresClient: () => ({
+        ...createFakeDb(),
+        query,
+      }),
+    })
+
+    await expect(runtime.checkReadiness()).resolves.toBeUndefined()
+    expect(querySpy).toHaveBeenCalledWith(
+      "SELECT value FROM schema_meta WHERE key = 'schema_version'",
+    )
+  })
+
+  it.each([undefined, '9', '11', '10junk', ' 10 '])(
+    'rejects missing or non-canonical Team schema version %s',
+    async (schemaVersion) => {
+      const query = async <T>(): Promise<T[]> =>
+        (schemaVersion === undefined ? [] : [{ value: schemaVersion }]) as T[]
+      const runtime = await createTeamRepositoryRuntime({
+        env: {
+          DEVFLOW_DATABASE_URL: 'postgres://devflow:secret@localhost:5432/devflow',
+        },
+        logger: { info: vi.fn() },
+        createPostgresClient: () => ({
+          ...createFakeDb(),
+          query,
+        }),
+      })
+
+      await expect(runtime.checkReadiness()).rejects.toThrow(
+        'Team repository schema is not ready.',
+      )
+    },
+  )
 })

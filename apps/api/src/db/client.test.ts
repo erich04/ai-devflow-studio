@@ -16,6 +16,28 @@ describe('team database client boundary', () => {
     })
   })
 
+  it.each(['0', '-1', '1e4', '0x2710', '2500ms', ' 2500 '])(
+    'rejects a non-canonical database statement timeout %s',
+    (statementTimeout) => {
+      expect(() =>
+        resolveTeamDbConfig({
+          DEVFLOW_DATABASE_URL: 'postgres://devflow:secret@localhost:5432/devflow',
+          DEVFLOW_DATABASE_STATEMENT_TIMEOUT_MS: statementTimeout,
+        }),
+      ).toThrow(
+        'DEVFLOW_DATABASE_STATEMENT_TIMEOUT_MS must be a positive decimal integer.',
+      )
+    },
+  )
+
+  it('uses the bounded default when no database statement timeout is provided', () => {
+    expect(
+      resolveTeamDbConfig({
+        DEVFLOW_DATABASE_URL: 'postgres://devflow:secret@localhost:5432/devflow',
+      })?.statementTimeoutMs,
+    ).toBe(5000)
+  })
+
   it('redacts credentials before a database URL is logged', () => {
     expect(redactConnectionString('postgres://devflow:secret@localhost:5432/devflow')).toBe(
       'postgres://devflow:***@localhost:5432/devflow',

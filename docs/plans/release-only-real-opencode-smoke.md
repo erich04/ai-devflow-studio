@@ -25,6 +25,10 @@ state is determined by the release JSON files, the matching `release:status` mod
 - The smoke must be run before creating the release tag.
 - For v1.3, the passing result must be written to `docs/releases/v1.3.0/real-opencode.json` and
   bound to the candidate commit `C`.
+- For v1.4, the passing result must be written to `docs/releases/v1.4.0/real-opencode.json`, bound
+  to candidate `C`, and record exactly one actual provider attempt, no automatic retry, and the
+  owner's explicit authorization without a hard provider cost cap.
+- A second actual provider invocation requires new explicit authorization.
 - Provider secrets must never be written to docs, logs, screenshots, PR descriptions, GitHub
   releases, team summaries, or smoke artifacts.
 
@@ -80,6 +84,25 @@ The release record is a JSON object at `docs/releases/v1.3.0/real-opencode.json`
 }
 ```
 
+The V1.3 record above is historical and remains valid without retroactive fields. The V1.4 record
+at `docs/releases/v1.4.0/real-opencode.json` uses the same observed non-secret metadata and adds:
+
+```json
+{
+  "targetVersion": "1.4.0",
+  "candidateSha": "<C full SHA>",
+  "status": "passed",
+  "attemptCount": 1,
+  "automaticRetry": false,
+  "costCapUsd": null
+}
+```
+
+These values describe the authorization boundary, not an invented billed amount. `costCapUsd: null`
+explicitly records that this authorization does not impose a hard provider cost cap; it is not a
+missing or unknown field. Once the real provider invocation begins, a pass, failure, timeout, or
+provider error consumes the one attempt.
+
 Replace every placeholder with observed data from the run against `C`. `recordedAt` must be a valid
 date-time, and `diffEvidence` must contain at least one non-empty, repository-relative changed path.
 
@@ -111,8 +134,9 @@ Run the smoke against the clean candidate commit `C`. Create the JSON only from 
 Its `candidateSha` must equal the full SHA of `C`, not the later evidence commit or tag target.
 
 The direct child commit `S` contains exactly this JSON, `walkthrough.json`, `required-gates.json`,
-and the dated Computer Use result. Run pre-tag status on clean `S` while `v1.3.0` is absent. Only
-after it passes may `v1.3.0` be created at the same `S` and tagged status be run.
+and the dated Computer Use result. For V1.3, run pre-tag status on clean `S` while `v1.3.0` is
+absent. For V1.4, run it while `v1.4.0` is absent. Only after the matching profile passes may its
+version tag be created at that same `S` and tagged status be run.
 
 ## Pass Criteria
 

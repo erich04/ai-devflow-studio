@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
         env:
           POSTGRES_DB: devflow_release
           POSTGRES_USER: postgres
@@ -73,6 +73,7 @@ jobs:
   docker-smoke:
     name: Docker smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -90,6 +91,27 @@ jobs:
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm test:docker-smoke
 
+  docker-lifecycle-smoke:
+    name: Docker lifecycle smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: corepack enable
+      - run: corepack pnpm test:docker-lifecycle-smoke
+
   release-artifacts:
     name: Build release artifacts
     runs-on: macos-latest
@@ -97,6 +119,7 @@ jobs:
       - windows-compatibility
       - postgres-integration
       - docker-smoke
+      - docker-lifecycle-smoke
     steps:
       - uses: actions/checkout@v4
         with:
@@ -121,6 +144,8 @@ jobs:
       - run: corepack pnpm test:build-output-smoke
       - run: corepack pnpm test:e2e
       - run: corepack pnpm test:electron-smoke
+      - run: corepack pnpm build:desktop-pilot
+      - run: corepack pnpm test:desktop-pilot-smoke
 
       - name: Verify candidate-bound release signoff
         shell: bash
@@ -144,14 +169,13 @@ jobs:
             echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo
             echo "Artifacts:"
-            echo "- desktop-renderer: apps/desktop/dist"
-            echo "- desktop-electron: apps/desktop/dist-electron"
+            echo "- desktop-pilot: executable current-runner archive plus integrity manifest"
             echo "- web-next-build: apps/web/.next"
             echo "- api-build: apps/api/dist"
             echo "- worker-build: apps/worker/dist"
           } > release-artifacts/manifest.txt
-          tar -czf "release-artifacts/ai-devflow-studio-${VERSION}-desktop-renderer.tar.gz" -C apps/desktop dist
-          tar -czf "release-artifacts/ai-devflow-studio-${VERSION}-desktop-electron.tar.gz" -C apps/desktop dist-electron
+          cp out/desktop-pilot/*.tar.gz release-artifacts/
+          cp out/desktop-pilot/*.manifest.json release-artifacts/
           tar -czf "release-artifacts/ai-devflow-studio-${VERSION}-web-next-build.tar.gz" -C apps/web .next
           tar -czf "release-artifacts/ai-devflow-studio-${VERSION}-api-build.tar.gz" -C apps/api dist
           tar -czf "release-artifacts/ai-devflow-studio-${VERSION}-worker-build.tar.gz" -C apps/worker dist

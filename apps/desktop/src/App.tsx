@@ -20,6 +20,8 @@ import {
   isActiveCodingAgentRunStatus,
   type KnowledgeChunk,
   type KnowledgeDocument,
+  type KnowledgeEntity,
+  type KnowledgeRelation,
   type ProjectGitStatus,
   type WorkflowRun,
 } from '@ai-devflow/shared'
@@ -39,6 +41,8 @@ import {
 import { resolveInspectorTabForSearchResult } from './app/node-inspector-view-model'
 import { useDesktopActions } from './app/useDesktopActions'
 import { useDesktopWorkspace } from './app/useDesktopWorkspace'
+import { useWorkRequestInbox } from './app/useWorkRequestInbox'
+import { WorkRequestInbox } from './WorkRequestInbox'
 import {
   AgentWorkbenchView,
   Inspector,
@@ -55,15 +59,25 @@ import {
 
 export { getToastDisplayDurationMs } from './app/desktop-view-model'
 
-const projectKnowledgeDocuments: KnowledgeDocument[] = []
-const projectKnowledgeChunks: KnowledgeChunk[] = []
+const emptyProjectKnowledgeDocuments: KnowledgeDocument[] = []
+const emptyProjectKnowledgeChunks: KnowledgeChunk[] = []
+const emptyProjectKnowledgeEntities: KnowledgeEntity[] = []
+const emptyProjectKnowledgeRelations: KnowledgeRelation[] = []
+
+const remoteSyncStatusLabels = {
+  pending: 'queued',
+  sending: 'sending',
+  'retry-scheduled': 'retry_wait',
+  completed: 'synced',
+  terminal: 'terminal',
+} as const
 
 export function App() {
   const workspace = useDesktopWorkspace({
     defaultReviewProviderDraft,
     reviewProviderFromMetadata,
   })
-  const { desktopApi, applyLocalExecutionState } = workspace
+  const { desktopApi, applyLocalExecutionState, refreshRepositoryKnowledge } = workspace
   const {
     themePreference,
     dataOrigin,
@@ -103,6 +117,7 @@ export function App() {
     dependencyBootstrapEvidence,
     codingDiffArtifacts,
     retryAttempts,
+    remoteSyncOperations,
     providerIdDraft,
     providerBaseUrlDraft,
     providerModelDraft,
@@ -172,7 +187,17 @@ export function App() {
     setToast,
     setPendingInspectorAction,
   } = workspace.setters
-  const { selectedLocalProject, isTestCommandDirty } = workspace.derived
+  const {
+    selectedLocalProject,
+    isTestCommandDirty,
+    repositoryKnowledge,
+    isLoadingRepositoryKnowledge,
+    repositoryKnowledgeError,
+  } = workspace.derived
+  const projectKnowledgeDocuments = repositoryKnowledge?.documents ?? emptyProjectKnowledgeDocuments
+  const projectKnowledgeChunks = repositoryKnowledge?.chunks ?? emptyProjectKnowledgeChunks
+  const projectKnowledgeEntities = repositoryKnowledge?.entities ?? emptyProjectKnowledgeEntities
+  const projectKnowledgeRelations = repositoryKnowledge?.relations ?? emptyProjectKnowledgeRelations
   const [projectGitStatus, setProjectGitStatus] = useState<ProjectGitStatus | null>(null)
   const [isRefreshingGitStatus, setIsRefreshingGitStatus] = useState(false)
   const [openRunMenuId, setOpenRunMenuId] = useState<string | null>(null)
@@ -268,6 +293,17 @@ export function App() {
         : runs,
     [runs, selectedLocalProject],
   )
+  const scopedRemoteSyncOperations = useMemo(
+    () =>
+      selectedLocalProject
+        ? remoteSyncOperations.filter(
+            (operation) =>
+              operation.localProjectId === selectedLocalProject.id &&
+              operation.status !== 'completed',
+          )
+        : [],
+    [remoteSyncOperations, selectedLocalProject],
+  )
   const scopedRunIdSet = useMemo(() => new Set(scopedRuns.map((run) => run.id)), [scopedRuns])
   const scopedArtifacts = useMemo(
     () => artifacts.filter((artifact) => scopedRunIdSet.has(artifact.runId)),
@@ -291,6 +327,28 @@ export function App() {
   const hasSelectedLocalProjectBinding = Boolean(
     selectedLocalProject && desktopPairing?.localProjectId === selectedLocalProject.id,
   )
+  const handleWorkRequestMaterialized = useCallback(
+    async (result: Awaited<ReturnType<NonNullable<typeof desktopApi>['materializeWorkRequest']>>) => {
+      applyLocalExecutionState(result.state)
+      setSelectedRunId(result.run.id)
+      setSelectedNodeId(result.run.currentNodeId)
+      setActiveView('workbench')
+      setToast('Work Request 已创建本地 Run')
+    },
+    [
+      applyLocalExecutionState,
+      setActiveView,
+      setSelectedNodeId,
+      setSelectedRunId,
+      setToast,
+    ],
+  )
+  const workRequestInbox = useWorkRequestInbox({
+    desktopApi,
+    localProjectId: selectedLocalProject?.id ?? '',
+    isPaired: hasSelectedLocalProjectBinding,
+    onMaterialized: handleWorkRequestMaterialized,
+  })
   const hasDeliveryProjectBinding = Boolean(
     desktopPairing?.localProjectId && desktopPairing.localProjectId === selectedRun?.projectId,
   )
@@ -364,7 +422,7 @@ export function App() {
             testEvidence: scopedTestEvidence,
           })
         : [],
-    [scopedArtifacts, scopedTestEvidence, selectedRun],
+    [projectKnowledgeChunks, projectKnowledgeDocuments, scopedArtifacts, scopedTestEvidence, selectedRun],
   )
   const selectedGovernanceChecks = useMemo(
     () =>
@@ -378,7 +436,14 @@ export function App() {
             testEvidence: scopedTestEvidence,
           })
         : [],
-    [scopedArtifacts, scopedTestEvidence, selectedNode, selectedRun],
+    [
+      projectKnowledgeChunks,
+      projectKnowledgeDocuments,
+      scopedArtifacts,
+      scopedTestEvidence,
+      selectedNode,
+      selectedRun,
+    ],
   )
   const searchResults = useMemo(
     () =>
@@ -390,7 +455,14 @@ export function App() {
         knowledgeDocuments: projectKnowledgeDocuments,
         knowledgeReferences,
       }),
-    [knowledgeReferences, normalizedSearchQuery, scopedArtifacts, scopedEvents, scopedRuns],
+    [
+      knowledgeReferences,
+      normalizedSearchQuery,
+      projectKnowledgeDocuments,
+      scopedArtifacts,
+      scopedEvents,
+      scopedRuns,
+    ],
   )
   const selectedAgentReviews = useMemo(
     () =>
@@ -478,9 +550,15 @@ export function App() {
   const budgetTone =
     budgetStatus === 'allowed' || budgetStatus === 'approved_over_budget'
       ? 'good'
-      : budgetStatus === 'warning' || budgetStatus === 'requires_lead_approval' || budgetStatus === 'approval entered'
-        ? 'warn'
-        : 'soft'
+      : budgetStatus === 'unavailable'
+        ? 'bad'
+        : budgetStatus === 'warning' || budgetStatus === 'requires_lead_approval' || budgetStatus === 'approval entered'
+          ? 'warn'
+          : 'soft'
+  const budgetRecoveryCopy =
+    budgetStatus === 'unavailable'
+      ? '已阻断付费运行；恢复 Team 项目配对、API 连接和已保存的预算策略后重试。'
+      : null
   const runtimeDataSource = useMemo(
     () =>
       buildRuntimeDataSource({
@@ -497,8 +575,11 @@ export function App() {
       buildKnowledgeDataSource({
         desktopConnected: Boolean(desktopApi),
         dataOrigin,
+        snapshot: repositoryKnowledge,
+        isLoading: isLoadingRepositoryKnowledge,
+        error: repositoryKnowledgeError,
       }),
-    [dataOrigin, desktopApi],
+    [dataOrigin, desktopApi, isLoadingRepositoryKnowledge, repositoryKnowledge, repositoryKnowledgeError],
   )
   const isSelectedNodeGateLike = selectedNode?.kind === 'gate' || selectedNode?.kind === 'acceptance'
   const gateEnforcement = useGateEnforcement({
@@ -512,6 +593,7 @@ export function App() {
     testEvidence,
     governanceChecks: selectedGovernanceChecks,
     knowledgeReferences,
+    knowledgeContentHash: repositoryKnowledge?.contentHash ?? '',
     pendingInspectorAction,
     setPendingInspectorAction,
     onToast: setToast,
@@ -554,6 +636,21 @@ export function App() {
     gateEnforcementDecision: gateEnforcement.decision,
     applyLocalExecutionState,
   })
+
+  async function retryTerminalRemoteSyncOperation(operationId: string) {
+    if (!desktopApi) {
+      setToast('请在 Electron 应用中重试远端同步')
+      return
+    }
+
+    try {
+      const state = await desktopApi.retryRemoteSyncOperation({ operationId })
+      applyLocalExecutionState(state)
+      setToast('远端同步操作已重新排队')
+    } catch {
+      setToast('远端同步重试失败，请稍后再试')
+    }
+  }
 
   async function confirmDeleteRun() {
     if (!deleteRunTarget) {
@@ -814,9 +911,42 @@ export function App() {
           <span className="stat">Token Cost <strong>{teamTotalCost}</strong></span>
           <span className="stat">Tests Today <strong>{testsTodayCount}</strong></span>
           <span className="stat">同步状态 <strong>local + {policySource}</strong></span>
+          {scopedRemoteSyncOperations.length > 0 ? (
+            <div className="stat remote-sync-operations" data-testid="remote-sync-operations">
+              <span>远端同步</span>
+              {scopedRemoteSyncOperations.map((operation) => (
+                <span
+                  className="remote-sync-operation"
+                  data-status={operation.status}
+                  key={operation.id}
+                >
+                  <span>{operation.kind}</span>
+                  <strong>{remoteSyncStatusLabels[operation.status]}</strong>
+                  <small>attempt {operation.attemptCount}</small>
+                  {operation.lastErrorCode ? <code>{operation.lastErrorCode}</code> : null}
+                  {operation.nextAttemptAt ? (
+                    <time dateTime={operation.nextAttemptAt}>{operation.nextAttemptAt}</time>
+                  ) : null}
+                  {operation.status === 'terminal' ? (
+                    <button
+                      className="ghost-button remote-sync-retry"
+                      type="button"
+                      aria-label={`重试 ${operation.kind} 同步`}
+                      onClick={() => void retryTerminalRemoteSyncOperation(operation.id)}
+                    >
+                      重试
+                    </button>
+                  ) : null}
+                </span>
+              ))}
+            </div>
+          ) : null}
           <span className="stat">Policy Snapshot <strong>{policyVersion ? `v${policyVersion}` : 'not loaded'}</strong></span>
           <span className="stat">策略状态 <strong className={`pill ${policyTone}`}>{policyStatus}</strong></span>
-          <span className="stat">预算状态 <strong className={`pill ${budgetTone}`}>{budgetStatus}</strong></span>
+          <span className="stat" data-testid="runtime-budget-status">
+            预算状态 <strong className={`pill ${budgetTone}`}>{budgetStatus}</strong>
+            {budgetRecoveryCopy ? <em>{budgetRecoveryCopy}</em> : null}
+          </span>
         </section>
 
         {toast && (
@@ -843,6 +973,17 @@ export function App() {
                 onRefreshGitStatus={refreshProjectGitStatus}
                 onSelectProject={selectLocalProject}
                 desktopConnected={Boolean(desktopApi)}
+              />
+              <WorkRequestInbox
+                workRequests={workRequestInbox.workRequests}
+                isPaired={hasSelectedLocalProjectBinding}
+                isLoading={workRequestInbox.isLoading}
+                materializingId={workRequestInbox.materializingId}
+                error={workRequestInbox.error}
+                onRefresh={() => void workRequestInbox.refresh()}
+                onMaterialize={(workRequest) =>
+                  void workRequestInbox.materialize(workRequest)
+                }
               />
               <div className="section-heading">
                 <span>Runs</span>
@@ -1019,6 +1160,8 @@ export function App() {
           <KnowledgeView
             query={normalizedSearchQuery}
             documents={projectKnowledgeDocuments}
+            entities={projectKnowledgeEntities}
+            relations={projectKnowledgeRelations}
             references={knowledgeReferences}
             selectedRun={selectedRun}
             supportContext={supportContext}
@@ -1033,6 +1176,11 @@ export function App() {
                 : undefined
             }
             dataSource={knowledgeDataSource}
+            indexedAt={repositoryKnowledge?.indexedAt}
+            truncated={repositoryKnowledge?.truncated ?? false}
+            warnings={repositoryKnowledge?.warnings ?? []}
+            isLoading={isLoadingRepositoryKnowledge}
+            onRefresh={() => void refreshRepositoryKnowledge()}
             onReturnToInspector={returnToInspector}
           />
         )}

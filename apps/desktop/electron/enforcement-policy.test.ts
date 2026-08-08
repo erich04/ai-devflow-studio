@@ -155,6 +155,7 @@ describe('selectRemoteGateOverridesForLocalStore', () => {
   }
   const run: WorkflowRun = {
     id: 'run-1',
+    version: 1,
     title: 'Remote override sync',
     request: 'Sync an accepted Team override.',
     projectId: localProject.id,

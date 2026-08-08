@@ -1,0 +1,21 @@
+import { readFileSync } from 'node:fs'
+import { describe, expect, it } from 'vitest'
+
+describe('Desktop pilot launch smoke contract', () => {
+  const smoke = readFileSync('scripts/desktop-pilot-smoke.mjs', 'utf8')
+
+  it('launches the packaged executable with isolated user data', () => {
+    expect(smoke).toContain("import { _electron as electron } from '@playwright/test'")
+    expect(smoke).toContain("'artifact-index.json'")
+    expect(smoke).toContain('executablePath')
+    expect(smoke).toContain('DEVFLOW_USER_DATA_DIR: userDataDirectory')
+    expect(smoke).toContain('await electronApp.close()')
+  })
+
+  it('proves a packaged launch cannot navigate to VITE_DEV_SERVER_URL', () => {
+    expect(smoke).toContain('hostileDevelopmentServerRequests')
+    expect(smoke).toContain('VITE_DEV_SERVER_URL: hostileDevelopmentServerUrl')
+    expect(smoke).toContain("loadedUrl.startsWith('file://')")
+    expect(smoke).toContain('hostileDevelopmentServerRequests !== 0')
+  })
+})

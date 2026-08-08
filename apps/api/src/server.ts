@@ -1,12 +1,15 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createGitHubOAuthClient } from './auth/github-oauth'
-import { resolveServerListenConfig } from './server-config'
+import { resolveServerRuntimeConfig } from './server-config'
 import { createTeamRepositoryRuntime } from './repositories/repository-runtime'
-import { createCorsPreflightHeaders, resolveApiRouteRequest } from './server-request'
+import {
+  createCorsPreflightHeaders,
+  createInternalErrorResponse,
+  resolveApiRouteRequest,
+} from './server-request'
 
-const { host, port } = resolveServerListenConfig()
-const sessionSecret = process.env['DEVFLOW_SESSION_SECRET'] ?? 'devflow-dev-session-secret'
-const devAuthEnabled = process.env['DEV_AUTH_ENABLED'] === 'true'
+const { devAuthEnabled, host, port, secureCookies, sessionSecret, webAppUrl } =
+  resolveServerRuntimeConfig()
 const repositoryRuntime = await createTeamRepositoryRuntime()
 const repository = repositoryRuntime.repository
 const githubOAuth = createGitHubOAuthClient.fromEnv()
@@ -63,6 +66,22 @@ const server = createServer(async (request, response) => {
     return
   }
 
+  if (url.pathname === '/ready') {
+    try {
+      await repositoryRuntime.checkReadiness()
+      sendJson(response, 200, {
+        status: 'ready',
+        service: '@ai-devflow/api',
+      })
+    } catch {
+      sendJson(response, 503, {
+        status: 'unavailable',
+        service: '@ai-devflow/api',
+      })
+    }
+    return
+  }
+
   let requestBody: unknown
   if (request.method === 'POST' || request.method === 'PUT') {
     try {
@@ -90,14 +109,14 @@ const server = createServer(async (request, response) => {
         repository,
         sessionSecret,
         devAuthEnabled,
+        postAuthRedirectUrl: webAppUrl,
+        secureCookies,
         ...(githubOAuth ? { githubOAuth } : {}),
       },
     )
   } catch (error) {
-    sendJson(response, 500, {
-      error: 'internal_error',
-      message: error instanceof Error ? error.message : 'Unexpected API error',
-    })
+    const internalError = createInternalErrorResponse(error)
+    sendJson(response, internalError.status, internalError.body)
     return
   }
 

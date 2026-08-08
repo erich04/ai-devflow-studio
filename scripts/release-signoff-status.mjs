@@ -32,6 +32,54 @@ export const requiredGateIds = [
   'build-output-smoke',
 ]
 
+const releaseProfiles = {
+  '1.3': {
+    requiredDocPaths,
+    requiredGateIds,
+  },
+  '1.4': {
+    requiredDocPaths: [
+      'docs/product/prd/v1.4-pilot-trust-boundary-prd.md',
+      'docs/plans/v1.4-pilot-trust-boundary.md',
+      'docs/plans/v1.4-release-signoff.md',
+      'docs/guides/devflow-studio-v1.4-walkthrough.md',
+      'docs/plans/release-only-real-opencode-smoke.md',
+    ],
+    requiredGateIds: [
+      'verify',
+      'windows-compatibility',
+      'e2e',
+      'electron-smoke',
+      'postgres-smoke',
+      'docker-smoke',
+      'docker-lifecycle-smoke',
+      'build',
+      'build-output-smoke',
+      'desktop-pilot-build',
+      'desktop-pilot-smoke',
+    ],
+    realOpencodeControls: {
+      attemptCount: 1,
+      automaticRetry: false,
+      costCapUsd: null,
+    },
+  },
+}
+
+function releaseSeriesFor(targetVersion) {
+  if (typeof targetVersion !== 'string') {
+    return null
+  }
+
+  const match = /^(\d+)\.(\d+)\.\d+$/.exec(targetVersion.trim())
+  return match ? `${match[1]}.${match[2]}` : null
+}
+
+export function releaseProfileFor(targetVersion) {
+  const releaseSeries = releaseSeriesFor(targetVersion)
+  return releaseSeries ? (releaseProfiles[releaseSeries] ?? null) : null
+}
+
 function runGit(args) {
   return execFileSync('git', args, { encoding: 'utf8' }).trim()
 }
@@ -133,10 +181,13 @@ export function collectReleaseSignoffSnapshot(mode, env = process.env) {
   }
 
   const targetVersion = resolveTargetVersion(env)
+  const releaseProfile = releaseProfileFor(targetVersion)
   const packageVersions = Object.fromEntries(
     packagePaths.map((path) => [path, readPackageVersion(path)]),
   )
-  const requiredDocs = Object.fromEntries(requiredDocPaths.map((path) => [path, existsSync(path)]))
+  const requiredDocs = Object.fromEntries(
+    (releaseProfile?.requiredDocPaths ?? []).map((path) => [path, existsSync(path)]),
+  )
   const status = runGit(['status', '--short'])
   const currentBranch = runGit(['branch', '--show-current'])
   const headSha = runGit(['rev-parse', 'HEAD'])
@@ -249,8 +300,8 @@ function evaluateWalkthroughEvidence(snapshot) {
   }
 
   const value = snapshot.walkthroughEvidence.value
-  const releaseSeries = snapshot.targetVersion.split('.').slice(0, 2).join('.')
-  const expectedPath = `docs/guides/devflow-studio-v${releaseSeries}-walkthrough-result-${value.date}.md`
+  const releaseSeries = releaseSeriesFor(snapshot.targetVersion)
+  const expectedPath = `docs/guides/devflow-studio-v${releaseSeries ?? 'unknown'}-walkthrough-result-${value.date}.md`
   const validDate = typeof value.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
   const validEvidence =
     validDate &&
@@ -264,7 +315,7 @@ function evaluateWalkthroughEvidence(snapshot) {
     state: validEvidence ? 'ready' : 'attention',
     detail: validEvidence
       ? `${value.evidencePath} passed for ${snapshot.candidateSha}.`
-      : `Walkthrough record must name an existing dated v${releaseSeries} Computer Use result for ${snapshot.candidateSha}.`,
+      : `Walkthrough record must name an existing dated v${releaseSeries ?? 'unknown'} Computer Use result for ${snapshot.candidateSha}.`,
   }
 }
 
@@ -279,10 +330,11 @@ function evaluateRequiredGateRecord(snapshot) {
   }
 
   const gates = snapshot.requiredGateRecord.value.gates
+  const profileGateIds = releaseProfileFor(snapshot.targetVersion)?.requiredGateIds ?? []
   const missingOrFailed =
     isRecord(gates) === false
-      ? requiredGateIds
-      : requiredGateIds.filter((gate) => gates[gate] !== 'passed')
+      ? profileGateIds
+      : profileGateIds.filter((gate) => gates[gate] !== 'passed')
 
   return {
     id: 'required-gates',
@@ -358,7 +410,13 @@ function evaluateRealOpencodeRecord(snapshot) {
     value.testEvidence === 'passed' &&
     value.cleanup === 'passed' &&
     value.redactionCheck === 'passed'
-  const ready = requiredMetadataValid && forbiddenFields.length === 0
+  const expectedControls = releaseProfileFor(snapshot.targetVersion)?.realOpencodeControls
+  const controlsValid =
+    expectedControls === undefined ||
+    (value.attemptCount === expectedControls.attemptCount &&
+      value.automaticRetry === expectedControls.automaticRetry &&
+      value.costCapUsd === expectedControls.costCapUsd)
+  const ready = requiredMetadataValid && controlsValid && forbiddenFields.length === 0
 
   return {
     id: 'real-opencode',
@@ -368,6 +426,8 @@ function evaluateRealOpencodeRecord(snapshot) {
       ? `Live smoke passed for ${snapshot.candidateSha}; only non-secret metadata is recorded.`
       : forbiddenFields.length > 0
         ? `Secret-bearing fields are forbidden in ${snapshot.realOpencodeRecord.path}: ${forbiddenFields.join(', ')}.`
+        : !controlsValid
+          ? `${snapshot.realOpencodeRecord.path} must record one attempt, no automatic retry, and an explicit uncapped authorization.`
         : `${snapshot.realOpencodeRecord.path} is missing required non-secret live-smoke metadata.`,
   }
 }
@@ -441,6 +501,9 @@ function evaluateSignoffContents(snapshot) {
 }
 
 export function evaluateReleaseSignoffSnapshot(snapshot) {
+  const releaseSeries = releaseSeriesFor(snapshot.targetVersion)
+  const releaseSeriesLabel = releaseSeries ? `v${releaseSeries}` : 'Unknown'
+  const releaseProfile = releaseProfileFor(snapshot.targetVersion)
   const versions = Object.values(snapshot.packageVersions)
   const missingPackages = Object.entries(snapshot.packageVersions)
     .filter(([, version]) => version === null)
@@ -472,6 +535,14 @@ export function evaluateReleaseSignoffSnapshot(snapshot) {
         : 'Mode must be pre-tag or tagged.',
     },
     {
+      id: 'release-profile',
+      label: 'Release profile',
+      state: releaseProfile ? 'ready' : 'attention',
+      detail: releaseProfile
+        ? `Using the explicit ${releaseSeriesLabel} release profile.`
+        : `Unknown release series for target ${String(snapshot.targetVersion)}; refusing to fall back.`,
+    },
+    {
       id: 'package-versions',
       label: 'Package metadata',
       state: packageState,
@@ -498,11 +569,11 @@ export function evaluateReleaseSignoffSnapshot(snapshot) {
     },
     {
       id: 'release-docs',
-      label: 'v1.3 release docs',
+      label: `${releaseSeriesLabel} release docs`,
       state: missingDocs.length === 0 ? 'ready' : 'attention',
       detail:
         missingDocs.length === 0
-          ? 'Required v1.3 closeout docs exist.'
+          ? `Required ${releaseSeriesLabel} release docs exist.`
           : `Missing ${missingDocs.join(', ')}.`,
     },
     evaluateSignoffContents(snapshot),

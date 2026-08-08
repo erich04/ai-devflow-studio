@@ -9,6 +9,7 @@ import {
   type KnowledgeReference,
   type NodeStage,
   type ProviderCredentialMetadata,
+  type RepositoryKnowledgeSnapshot,
   type RunStatus,
   type TestEvidence,
   type WorkflowNode,
@@ -163,6 +164,9 @@ export type BackendReadinessStatus =
   | 'local persisted'
   | 'development adapter'
   | 'desktop-only adapter'
+  | 'local indexing'
+  | 'local indexed'
+  | 'local index unavailable'
   | 'missing contract'
   | 'not configured'
 
@@ -245,6 +249,9 @@ export function buildRuntimeDataSource(input: {
 export function buildKnowledgeDataSource(input: {
   desktopConnected: boolean
   dataOrigin: DataOrigin
+  snapshot?: RepositoryKnowledgeSnapshot | undefined
+  isLoading?: boolean
+  error?: string | undefined
 }): FieldDataSource {
   if (!input.desktopConnected || input.dataOrigin === 'seed') {
     return {
@@ -252,6 +259,41 @@ export function buildKnowledgeDataSource(input: {
       label: 'not indexed',
       detail: 'No real repository knowledge index is loaded in this view.',
       tone: 'soft',
+    }
+  }
+
+  if (input.isLoading) {
+    return {
+      status: 'local indexing',
+      label: 'indexing',
+      detail: 'Selected repository Git-tracked Markdown is being indexed locally.',
+      tone: 'soft',
+    }
+  }
+
+  if (input.error) {
+    if (input.snapshot) {
+      return {
+        status: 'local indexed',
+        label: 'indexed · refresh failed',
+        detail: `Showing the last successful index from ${input.snapshot.indexedAt}; the latest refresh failed.`,
+        tone: 'warn',
+      }
+    }
+    return {
+      status: 'local index unavailable',
+      label: 'index unavailable',
+      detail: 'Repository knowledge indexing is unavailable for the selected local project.',
+      tone: 'warn',
+    }
+  }
+
+  if (input.snapshot) {
+    return {
+      status: 'local indexed',
+      label: input.snapshot.truncated ? 'indexed · truncated' : 'indexed',
+      detail: `${input.snapshot.documents.length} Git Markdown documents indexed at ${input.snapshot.indexedAt}.`,
+      tone: input.snapshot.truncated ? 'warn' : 'good',
     }
   }
 

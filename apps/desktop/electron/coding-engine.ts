@@ -3,6 +3,7 @@ import type {
   CodingAgentEngine,
   CodingAgentEvent,
   CodingAgentRun,
+  CodingBrief,
   CodingDiffArtifact,
   CodingPermissionRequest,
   DependencyBootstrapEvidence,
@@ -22,7 +23,10 @@ import {
   completeFakeCodingRun,
   createFakeCodingRunBundle,
 } from './coding-runner.js'
-import { createOpencodeHttpCodingEngineAdapter } from './opencode-http-engine.js'
+import {
+  createOpencodeHttpCodingEngineAdapter,
+  type OpencodeHttpProcessManager,
+} from './opencode-http-engine.js'
 
 export type CodingEngineEnsureInput = {
   project: LocalProject
@@ -51,6 +55,7 @@ export type CodingEngineStartInput = {
   testEvidence: TestEvidence[]
   remediationPlan?: RemediationPlan
   retryAttempt?: RetryAttempt
+  brief: CodingBrief
 }
 
 export type CodingEngineStartResult = {
@@ -90,6 +95,7 @@ export type CodingEngineCancelInput = {
 
 export type CodingEngineAdapter = {
   engine: CodingAgentEngine | 'not-configured'
+  providerId: string
   modelId?: string
   ensure(input: CodingEngineEnsureInput): Promise<CodingEngineEnsureResult>
   start(input: CodingEngineStartInput): Promise<CodingEngineStartResult>
@@ -109,8 +115,13 @@ export type CodingEngineSelectionEnv = Partial<
   >
 >
 
+export type CodingEngineAdapterFactoryDeps = {
+  processManager?: OpencodeHttpProcessManager
+}
+
 export function createCodingEngineAdapterFromEnv(
   env: CodingEngineSelectionEnv = process.env,
+  deps: CodingEngineAdapterFactoryDeps = {},
 ): CodingEngineAdapter {
   const selection = resolveDevFlowCodingEngineSelection(env)
   if (!selection.engine) {
@@ -126,6 +137,7 @@ export function createCodingEngineAdapterFromEnv(
       providerID: env.DEVFLOW_OPENCODE_PROVIDER_ID ?? 'openai',
       modelID: env.DEVFLOW_OPENCODE_MODEL_ID ?? 'gpt-4.1-mini',
       apiKeyEnvName,
+      ...(deps.processManager ? { processManager: deps.processManager } : {}),
       runtimeEnv: buildOpencodeRuntimeEnv({
         baseEnv: process.env,
         apiKeyEnvName,
@@ -152,6 +164,7 @@ export function buildOpencodeRuntimeEnv(input: {
 export function createFakeCodingEngineAdapter(): CodingEngineAdapter {
   return {
     engine: 'fake',
+    providerId: 'fake-coding-engine',
     modelId: 'fake',
 
     async ensure(input) {
@@ -182,6 +195,7 @@ export function createFakeCodingEngineAdapter(): CodingEngineAdapter {
         testEvidence: input.testEvidence,
         remediationPlan: input.remediationPlan,
         retryAttempt: input.retryAttempt,
+        brief: input.brief,
       })
 
       return {
@@ -215,6 +229,7 @@ export function createUnconfiguredCodingEngineAdapter(): CodingEngineAdapter {
 
   return {
     engine: 'not-configured',
+    providerId: 'not-configured',
 
     async ensure() {
       throw error()

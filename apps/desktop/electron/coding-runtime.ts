@@ -4,12 +4,12 @@ import {
   buildKnowledgeReferences,
   buildCodingBrief,
   canRunCodingAgentOnNode,
-  createRemoteCodingAgentSummary,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   estimateCodingRuntimeCost,
   redactCodingAgentEventForStorage,
   redactLocalAbsolutePaths,
+  redactSensitiveText,
   redactTestEvidenceForStorage,
   redactSecrets,
   type AgentEvent,
@@ -28,8 +28,6 @@ import {
   type LocalExecutionState,
   type LocalProject,
   type ManagedCodingWorkspace,
-  type RemoteCodingAgentSummary,
-  type RemoteSyncUploadResult,
   type RemediationPlan,
   type RetryAttempt,
   type TestEvidence,
@@ -43,6 +41,7 @@ import {
   findActiveCodingRun,
 } from './coding-runner.js'
 import type { CodingEngineAdapter } from './coding-engine.js'
+import { CodingEngineStartupCleanupError } from './coding-engine-lifecycle.js'
 
 const defaultKnowledgeDocuments: KnowledgeDocument[] = []
 const defaultKnowledgeChunks: KnowledgeChunk[] = []
@@ -71,10 +70,6 @@ export type CodingRuntimeStore = {
   saveRetryAttempt(attempt: RetryAttempt): Promise<RetryAttempt>
   listRetryAttempts(runId?: string): Promise<RetryAttempt[]>
   loadState(): Promise<LocalExecutionState>
-}
-
-export type CodingRuntimeRemoteSync = {
-  uploadCodingAgentSummary(summary: RemoteCodingAgentSummary): Promise<RemoteSyncUploadResult>
 }
 
 export type CodingRuntimePublisher = {
@@ -194,7 +189,6 @@ export type DeleteManagedWorktreeRuntimeInput = OpenManagedWorktreeRuntimeInput
 export type CodingRuntimeDeps = {
   store: CodingRuntimeStore
   engine: CodingEngineAdapter
-  remoteSync: CodingRuntimeRemoteSync
   publisher?: CodingRuntimePublisher
   runTestCommand?: CodingRuntimeTestCommandRunner
   runDependencyBootstrap?: CodingRuntimeDependencyBootstrapRunner
@@ -386,10 +380,14 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       chunks: knowledgeChunks,
       testEvidence,
     })
+    const referencedChunkIds = new Set(
+      knowledgeReferences.flatMap((reference) => reference.chunkId ? [reference.chunkId] : []),
+    )
 
     return {
       upstreamArtifacts: artifacts.filter((artifact) => artifact.nodeId !== node.id),
       knowledgeReferences,
+      knowledgeChunks: knowledgeChunks.filter((chunk) => referencedChunkIds.has(chunk.id)),
       governanceChecks,
       gateDecisions: events.flatMap((event) => gateDecisionFromEvent(event)),
       testEvidence,
@@ -559,6 +557,9 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   }
 
   async function cleanupWorkspaceForRun(codingRun: CodingAgentRun, timestamp: string): Promise<void> {
+    if (!codingRun.managedWorkspaceId) {
+      return
+    }
     let workspace: ManagedCodingWorkspace
     try {
       workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
@@ -603,10 +604,12 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   }
 
   function cleanupErrorSummary(error: unknown): string {
-    if (error instanceof Error && error.message.trim()) {
-      return error.message.slice(0, 500)
-    }
-    return 'Workspace cleanup failed.'
+    const message = error instanceof Error && error.message.trim()
+      ? error.message
+      : typeof error === 'string' && error.trim()
+        ? error
+        : 'Workspace cleanup failed.'
+    return redactSensitiveText(redactLocalAbsolutePaths(message).value).value.slice(0, 500)
   }
 
   async function expirePendingPermissions(codingRunId: string, timestamp: string, comment: string) {
@@ -634,7 +637,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       return
     }
     const timestamp = now()
-    await deps.engine.cancel({ codingRun }).catch(() => undefined)
+    await deps.engine.cancel({ codingRun })
     const expiredRequests = await expirePendingPermissions(codingRunId, timestamp, summary)
     const updated: CodingAgentRun = {
       ...codingRun,
@@ -694,12 +697,19 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       comment: input.comment,
       decidedAt: timestamp,
     }
+    const codingRun = await findCodingRun(input.codingRunId)
+
+    if (input.decision !== 'approved') {
+      await deps.engine.cancel({ codingRun })
+    }
 
     await savePermissionRequest(updatedRequest)
     await deps.store.saveCodingPermissionDecision(decision)
 
-    const codingRun = await findCodingRun(input.codingRunId)
     if (input.decision === 'approved') {
+      if (!codingRun.managedWorkspaceId) {
+        throw new Error(`Coding Agent run has no managed workspace: ${codingRun.id}`)
+      }
       const workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
       const project = await findProject(codingRun.projectId)
       const completed = await deps.engine.approvePermission({
@@ -726,9 +736,6 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       })
       if (!bootstrapped.canContinue) {
         await saveCodingRun(bootstrapped.codingRun)
-        await deps.remoteSync
-          .uploadCodingAgentSummary(createRemoteCodingAgentSummary(bootstrapped.codingRun, completed.diff))
-          .catch(() => undefined)
         return updatedRequest
       }
       const tested = await runCodingTests({
@@ -758,9 +765,6 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           })
         }
       }
-      await deps.remoteSync
-        .uploadCodingAgentSummary(createRemoteCodingAgentSummary(tested.codingRun, completed.diff))
-        .catch(() => undefined)
     } else {
       const terminalStatus = input.decision === 'expired' ? 'timed_out' : 'interrupted'
       const sequence = await nextSequence(codingRun.id)
@@ -827,33 +831,31 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         throw new Error(`Coding Agent run already active for this project: ${active.id}`)
       }
 
-      const ensuredEngine = await deps.engine.ensure({ project })
+      if (deps.engine.engine === 'not-configured') {
+        await deps.engine.ensure({ project })
+        throw new Error('Coding Agent engine did not report a configured runtime after ensure.')
+      }
+      const configuredEngine = deps.engine.engine
+      const providerId = deps.engine.providerId
       const codingRunId = idGenerator('coding-run')
       const briefContext = await loadCodingBriefContext(run, node)
-      const workspace = await createWorkspace({
-        project,
-        codingRunId,
-        runId: run.id,
-        nodeId: node.id,
-        ...(deps.worktreeRoot ? { worktreeRoot: deps.worktreeRoot } : {}),
-      })
-      const model = deps.engine.modelId ?? input.providerId
-      const preliminaryBrief = buildCodingBrief({
+      const model = deps.engine.modelId ?? providerId
+      const canonicalBrief = buildCodingBrief({
         run,
         node,
         project,
         ...briefContext,
         userInstruction: input.userInstruction,
-        worktreePath: workspace.worktreePath,
-        branchName: workspace.branchName,
+        worktreePath: '<managed-worktree-created-after-budget-approval>',
+        branchName: '<managed-branch-created-after-budget-approval>',
         ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
         ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
       })
       const estimatedCost = estimateCodingRuntimeCost({
-        engine: ensuredEngine.engine,
-        providerId: input.providerId,
+        engine: configuredEngine,
+        providerId,
         model,
-        prompt: preliminaryBrief.prompt,
+        prompt: canonicalBrief.prompt,
         runId: run.id,
         nodeId: node.id,
         projectId: project.id,
@@ -863,8 +865,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const budgetDecision = deps.budgetGuard
         ? await deps.budgetGuard({
             codingRunId,
-            engine: ensuredEngine.engine,
-            providerId: input.providerId,
+            engine: configuredEngine,
+            providerId,
             model,
             project,
             run,
@@ -875,35 +877,51 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
               ? { approvalId: input.runtimeBudgetApprovalId.trim() }
               : {}),
           })
-        : {
-            status: 'disabled',
-            blocksRun: false,
-            currentSpendUsd: 0,
-            projectedCostUsd: estimatedCost.costUsd,
-            reason: 'Runtime budget guard is not configured for this local project.',
-          } satisfies BudgetGuardDecision
+        : configuredEngine === 'fake'
+          ? {
+              status: 'disabled',
+              blocksRun: false,
+              currentSpendUsd: 0,
+              projectedCostUsd: estimatedCost.costUsd,
+              reason: 'Runtime budget guard is skipped for a verified no-cost provider run.',
+            } satisfies BudgetGuardDecision
+          : {
+              status: 'unavailable',
+              blocksRun: true,
+              currentSpendUsd: 0,
+              projectedCostUsd: estimatedCost.costUsd,
+              reason: 'Runtime budget guard is unavailable for this paid provider run.',
+            } satisfies BudgetGuardDecision
 
       if (budgetDecision.blocksRun) {
         const timestamp = now()
+        const safeBudgetDecision = {
+          ...budgetDecision,
+          reason: redactSensitiveText(budgetDecision.reason).value,
+        }
+        const summary = safeBudgetDecision.status === 'requires_lead_approval'
+          ? `Runtime budget requires lead approval before calling ${configuredEngine}; the paid provider was not called. ${safeBudgetDecision.reason}`
+          : safeBudgetDecision.status === 'unavailable'
+            ? `Authoritative runtime budget decision is unavailable before calling ${configuredEngine}; the paid provider was not called. ${safeBudgetDecision.reason}`
+            : `Runtime budget blocked the call to ${configuredEngine}; the paid provider was not called. ${safeBudgetDecision.reason}`
         const blockedRun: CodingAgentRun = {
           id: codingRunId,
           runId: run.id,
           nodeId: node.id,
           projectId: project.id,
           requestedBy: input.requestedBy,
-          providerId: input.providerId,
-          engine: ensuredEngine.engine,
+          providerId,
+          engine: configuredEngine,
           status: 'failed',
-          managedWorkspaceId: workspace.id,
-          branchName: workspace.branchName,
+          branchName: run.branchName,
           userInstruction: input.userInstruction.trim(),
-          prompt: preliminaryBrief.prompt,
-          summary: `Runtime budget requires lead approval before calling ${ensuredEngine.engine}. ${budgetDecision.reason}`,
+          prompt: canonicalBrief.prompt,
+          summary,
           changedPaths: [],
           startedAt: timestamp,
           completedAt: timestamp,
           runtimeCostSummary: estimatedCost,
-          budgetDecision,
+          budgetDecision: safeBudgetDecision,
           redacted: true,
         }
         const event: CodingAgentEvent = {
@@ -916,40 +934,99 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           message: blockedRun.summary,
           timestamp,
           metadata: {
-            budgetStatus: budgetDecision.status,
-            projectedCostUsd: budgetDecision.projectedCostUsd,
-            limitUsd: budgetDecision.limitUsd,
-            approvalRequiredRole: budgetDecision.approvalRequiredRole,
+            budgetStatus: safeBudgetDecision.status,
+            projectedCostUsd: safeBudgetDecision.projectedCostUsd,
+            limitUsd: safeBudgetDecision.limitUsd,
+            approvalRequiredRole: safeBudgetDecision.approvalRequiredRole,
           },
           redacted: true,
         }
-        await deps.store.saveManagedCodingWorkspace(workspace)
         await saveCodingRun(blockedRun)
         await saveEvents([event])
-        await cleanupWorkspaceForRun(blockedRun, timestamp)
         return {
           codingRun: blockedRun,
           state: await deps.store.loadState(),
         }
       }
-      const bundle = await deps.engine.start({
-        id: codingRunId,
-        run,
-        node,
+      await deps.engine.ensure({ project })
+      const workspace = await createWorkspace({
         project,
-        workspace,
-        requestedBy: input.requestedBy,
-        providerId: input.providerId,
-        userInstruction: input.userInstruction,
-        now: now(),
-        ...briefContext,
-        ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
-        ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
+        codingRunId,
+        runId: run.id,
+        nodeId: node.id,
+        ...(deps.worktreeRoot ? { worktreeRoot: deps.worktreeRoot } : {}),
       })
+      try {
+        await deps.store.saveManagedCodingWorkspace(workspace)
+      } catch (error) {
+        const cleaned = await deleteWorkspace(workspace)
+        if ((cleaned.cleanupStatus ?? (cleaned.deletedAt ? 'deleted' : 'active')) !== 'deleted') {
+          throw new AggregateError(
+            [error, new Error('Managed coding workspace cleanup failed.')],
+            'coding workspace registration failed and cleanup did not complete',
+          )
+        }
+        throw error
+      }
+      const engineBriefContext = {
+        upstreamArtifacts: briefContext.upstreamArtifacts,
+        knowledgeReferences: briefContext.knowledgeReferences,
+        governanceChecks: briefContext.governanceChecks,
+        gateDecisions: briefContext.gateDecisions,
+        testEvidence: briefContext.testEvidence,
+      }
+      let bundle
+      try {
+        bundle = await deps.engine.start({
+          id: codingRunId,
+          run,
+          node,
+          project,
+          workspace,
+          requestedBy: input.requestedBy,
+          providerId,
+          userInstruction: input.userInstruction,
+          now: now(),
+          ...engineBriefContext,
+          brief: canonicalBrief,
+          ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
+          ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
+        })
+      } catch (error) {
+        if (error instanceof CodingEngineStartupCleanupError) {
+          await deps.store.saveManagedCodingWorkspace({
+            ...workspace,
+            cleanupStatus: 'cleanup_failed',
+            cleanupError: 'Coding engine session cleanup did not complete; manual cleanup is required.',
+          })
+          throw error
+        }
+
+        let cleaned: ManagedCodingWorkspace
+        try {
+          cleaned = await deleteWorkspace(workspace)
+        } catch (cleanupError) {
+          cleaned = {
+            ...workspace,
+            cleanupStatus: 'cleanup_failed',
+            cleanupError: cleanupErrorSummary(cleanupError),
+          }
+        }
+        if (cleaned.cleanupStatus === 'cleanup_failed' && cleaned.cleanupError) {
+          cleaned = { ...cleaned, cleanupError: cleanupErrorSummary(cleaned.cleanupError) }
+        }
+        await deps.store.saveManagedCodingWorkspace(cleaned)
+        if ((cleaned.cleanupStatus ?? (cleaned.deletedAt ? 'deleted' : 'active')) !== 'deleted') {
+          throw new AggregateError(
+            [error, new Error('Managed coding workspace cleanup failed.')],
+            'coding engine failed to start and workspace cleanup did not complete',
+          )
+        }
+        throw error
+      }
       bundle.codingRun.runtimeCostSummary = estimatedCost
       bundle.codingRun.budgetDecision = budgetDecision
 
-      await deps.store.saveManagedCodingWorkspace(workspace)
       await saveCodingRun(bundle.codingRun)
       await saveEvents(bundle.events)
       await savePermissionRequest(bundle.permissionRequest)

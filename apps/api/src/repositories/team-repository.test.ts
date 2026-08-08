@@ -1,8 +1,339 @@
 import { describe, expect, it } from 'vitest'
+import {
+  createRecommendedEnforcementPreset,
+  type GateOverrideDecision,
+} from '@ai-devflow/shared'
+import type { RequestPrincipal } from '../auth/request-auth'
 import { createSeedTeamRepository } from './team-repository'
+import { evaluateTeamGateEnforcement } from './team-gate-enforcement'
+
+const gateBrowserPrincipal: RequestPrincipal = {
+  session: {
+    source: 'authenticated',
+    authAccountId: 'acct-demo-u-ling',
+    organizationId: 'org-demo',
+    userId: 'u-ling',
+    role: 'lead',
+    projectMemberships: [
+      { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+    ],
+  },
+  authentication: { kind: 'session_cookie', tokenRecordId: null },
+}
+
+const gateDesktopPrincipal: RequestPrincipal = {
+  session: {
+    source: 'authenticated',
+    authAccountId: 'acct-demo-u-wang',
+    organizationId: 'org-demo',
+    userId: 'u-wang',
+    role: 'member',
+    projectMemberships: [
+      { projectId: 'p-payments', userId: 'u-wang', role: 'member' },
+    ],
+  },
+  authentication: {
+    kind: 'desktop_bearer',
+    tokenRecordId: 'desktop-token-team-repository-gate',
+  },
+}
+
+async function materializeSeedGateRun(
+  repository: ReturnType<typeof createSeedTeamRepository>,
+  runId: string,
+  suffix: string,
+) {
+  const created = await repository.createWorkRequest(
+    {
+      projectId: 'p-payments',
+      title: `Gate repository test ${suffix}`,
+      request: 'Keep Gate command authority bound to one materialized Run.',
+      idempotencyKey: `work-request:create:${suffix}`,
+      expiresAt: null,
+    },
+    gateBrowserPrincipal,
+  )
+  if (!created.ok) throw new Error('Work Request create failed.')
+  const claimed = await repository.claimWorkRequest(
+    {
+      workRequestId: created.workRequest.id,
+      expectedVersion: 1,
+      runId,
+      idempotencyKey: `work-request:claim:${suffix}`,
+    },
+    gateDesktopPrincipal,
+  )
+  if (!claimed.ok) throw new Error('Work Request claim failed.')
+  const materialized = await repository.materializeWorkRequest(
+    {
+      workRequestId: created.workRequest.id,
+      expectedVersion: 2,
+      runId,
+      idempotencyKey: `work-request:materialize:${suffix}`,
+    },
+    gateDesktopPrincipal,
+  )
+  if (!materialized.ok) throw new Error('Work Request materialization failed.')
+}
 
 describe('seed team repository', () => {
   const syncContext = { organizationId: 'org-demo', userId: 'u-erich' }
+
+  it('loads Gate enforcement inputs sequentially for transaction-backed repositories', async () => {
+    const source = createSeedTeamRepository()
+    const runId = 'run-gate-serial-preflight'
+    const nodeId = 'node-design-gate'
+    await materializeSeedGateRun(source, runId, 'serial-preflight')
+    await source.uploadRunSummary(
+      {
+        kind: 'run',
+        runId,
+        version: 3,
+        projectId: 'p-payments',
+        title: 'Serial Gate preflight',
+        status: 'paused_at_gate',
+        currentNodeId: nodeId,
+        currentNode: {
+          id: nodeId,
+          stage: 'design',
+          kind: 'gate',
+          status: 'blocked',
+          requiredRole: 'lead',
+        },
+        branchName: 'codex/gate-serial-preflight',
+        updatedAt: '2026-07-31T12:10:00.000Z',
+      },
+      {
+        ...gateDesktopPrincipal.session,
+        tokenRecordId: gateDesktopPrincipal.authentication.tokenRecordId,
+      },
+    )
+
+    let activeRead = false
+    const calls: string[] = []
+    async function guarded<T>(label: string, read: () => Promise<T>): Promise<T> {
+      if (activeRead) throw new Error('concurrent transaction query')
+      activeRead = true
+      calls.push(label)
+      try {
+        await Promise.resolve()
+        return await read()
+      } finally {
+        activeRead = false
+      }
+    }
+    const repository = {
+      getRunsBundle: (...args: Parameters<typeof source.getRunsBundle>) =>
+        guarded('runs', () => source.getRunsBundle(...args)),
+      getTeamOverview: (...args: Parameters<typeof source.getTeamOverview>) =>
+        guarded('overview', () => source.getTeamOverview(...args)),
+      getEnforcementPolicy: (
+        ...args: Parameters<typeof source.getEnforcementPolicy>
+      ) => guarded('policy', () => source.getEnforcementPolicy(...args)),
+      listGateOverrides: (...args: Parameters<typeof source.listGateOverrides>) =>
+        guarded('overrides', () => source.listGateOverrides(...args)),
+    }
+
+    await expect(
+      evaluateTeamGateEnforcement(repository, gateBrowserPrincipal.session, {
+        projectId: 'p-payments',
+        runId,
+        nodeId,
+      }),
+    ).resolves.toMatchObject({ run: { id: runId }, node: { id: nodeId } })
+    expect(calls).toEqual(['runs', 'overview', 'policy', 'overrides'])
+  })
+
+  it('does not inject a historical Gate override into a non-blocking enforcement decision', async () => {
+    const repository = createSeedTeamRepository()
+    const runId = 'run-gate-pass-history'
+    const nodeId = 'node-design-gate'
+    await materializeSeedGateRun(repository, runId, 'pass-history')
+    await repository.uploadRunSummary(
+      {
+        kind: 'run',
+        runId,
+        version: 3,
+        projectId: 'p-payments',
+        title: 'Non-blocking Gate history',
+        status: 'paused_at_gate',
+        currentNodeId: nodeId,
+        currentNode: {
+          id: nodeId,
+          stage: 'design',
+          kind: 'gate',
+          status: 'blocked',
+          requiredRole: 'lead',
+        },
+        branchName: 'codex/gate-pass-history',
+        updatedAt: '2026-07-31T12:10:00.000Z',
+      },
+      {
+        ...gateDesktopPrincipal.session,
+        tokenRecordId: gateDesktopPrincipal.authentication.tokenRecordId,
+      },
+    )
+    await repository.saveGateOverride(
+      {
+        id: 'gate-override-stale-pass-history',
+        runId,
+        nodeId,
+        projectId: 'p-payments',
+        userId: 'u-ling',
+        role: 'lead',
+        reason: 'This decision belongs to an obsolete policy snapshot.',
+        blockedReasonIds: ['obsolete-blocker'],
+        policyVersion: 999,
+        provisional: false,
+        status: 'accepted',
+        createdAt: '2026-07-31T12:00:00.000Z',
+      },
+      gateBrowserPrincipal.session,
+    )
+
+    await expect(
+      repository.createGateCommand(
+        {
+          projectId: 'p-payments',
+          runId,
+          nodeId,
+          action: 'approve',
+          reason: 'Approve the current non-blocking policy snapshot.',
+          expectedRunVersion: 3,
+          expectedPolicyVersion: 1,
+          expectedBlockerIds: [],
+          idempotencyKey: 'gate-command:create:pass-history:v1',
+        },
+        gateBrowserPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      responseStatus: 201,
+      outcomeCode: 'created',
+    })
+  })
+
+  it('selects only the exact accepted non-provisional override for the current overridden decision', async () => {
+    const repository = createSeedTeamRepository()
+    const runId = 'run-gate-exact-override'
+    const nodeId = 'node-design-gate'
+    await materializeSeedGateRun(repository, runId, 'exact-override')
+    await repository.uploadRunSummary(
+      {
+        kind: 'run',
+        runId,
+        version: 3,
+        projectId: 'p-payments',
+        title: 'Exact Gate override',
+        status: 'paused_at_gate',
+        currentNodeId: nodeId,
+        currentNode: {
+          id: nodeId,
+          stage: 'design',
+          kind: 'gate',
+          status: 'blocked',
+          requiredRole: 'lead',
+        },
+        branchName: 'codex/gate-exact-override',
+        updatedAt: '2026-07-31T12:10:00.000Z',
+      },
+      {
+        ...gateDesktopPrincipal.session,
+        tokenRecordId: gateDesktopPrincipal.authentication.tokenRecordId,
+      },
+    )
+    await repository.saveEnforcementPolicy(
+      createRecommendedEnforcementPreset({ organizationId: 'org-demo' }),
+      gateBrowserPrincipal.session,
+    )
+    const blockedContext = await evaluateTeamGateEnforcement(
+      repository,
+      gateBrowserPrincipal.session,
+      { projectId: 'p-payments', runId, nodeId },
+    )
+    expect(blockedContext.decision).toMatchObject({
+      status: 'blocked',
+      blocksApproval: true,
+      canOverride: true,
+    })
+    const blockerIds = blockedContext.decision.blockingReasons
+      .map((reason) => reason.id)
+      .sort()
+    const exactOverride: GateOverrideDecision = {
+      id: 'gate-override-exact-current',
+      runId,
+      nodeId,
+      projectId: 'p-payments',
+      userId: 'u-ling',
+      role: 'lead',
+      reason: 'Independently reviewed every current blocker.',
+      blockedReasonIds: blockerIds,
+      policyVersion: blockedContext.decision.policyVersion,
+      provisional: false,
+      status: 'accepted',
+      createdAt: '2026-07-31T12:20:00.000Z',
+    }
+    await repository.saveGateOverride(
+      exactOverride,
+      gateBrowserPrincipal.session,
+    )
+    const invalidOverrides: GateOverrideDecision[] = [
+      { ...exactOverride, id: 'gate-override-rejected', status: 'rejected' },
+      { ...exactOverride, id: 'gate-override-provisional', provisional: true },
+      { ...exactOverride, id: 'gate-override-project', projectId: 'p-admin' },
+      { ...exactOverride, id: 'gate-override-role', role: 'owner' },
+      {
+        ...exactOverride,
+        id: 'gate-override-policy',
+        policyVersion: exactOverride.policyVersion + 1,
+      },
+      {
+        ...exactOverride,
+        id: 'gate-override-blockers',
+        blockedReasonIds: ['obsolete-blocker'],
+      },
+      {
+        ...exactOverride,
+        id: 'gate-override-noncanonical-blockers',
+        blockedReasonIds: [...blockerIds, blockerIds[0]!],
+      },
+      { ...exactOverride, id: 'gate-override-node', nodeId: 'node-other' },
+      { ...exactOverride, id: 'gate-override-user', userId: 'u-erich' },
+    ]
+    for (const override of invalidOverrides) {
+      await repository.saveGateOverride(override, gateBrowserPrincipal.session)
+    }
+    const overriddenContext = await evaluateTeamGateEnforcement(
+      repository,
+      gateBrowserPrincipal.session,
+      { projectId: 'p-payments', runId, nodeId },
+    )
+    expect(overriddenContext.decision).toMatchObject({
+      status: 'overridden',
+      blocksApproval: false,
+    })
+
+    await expect(
+      repository.createGateCommand(
+        {
+          projectId: 'p-payments',
+          runId,
+          nodeId,
+          action: 'approve',
+          reason: 'Use only the exact current accepted override.',
+          expectedRunVersion: 3,
+          expectedPolicyVersion: blockedContext.decision.policyVersion,
+          expectedBlockerIds: blockerIds,
+          idempotencyKey: 'gate-command:create:exact-override:v3',
+        },
+        gateBrowserPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      responseStatus: 201,
+      outcomeCode: 'created',
+    })
+  })
 
   it('rejects evidence summaries until a canonical Run Summary exists', async () => {
     const repository = createSeedTeamRepository()
@@ -29,7 +360,7 @@ describe('seed team repository', () => {
 
   it('exposes team overview data through the repository boundary', async () => {
     const repository = createSeedTeamRepository()
-    const overview = await repository.getTeamOverview()
+    const overview = await repository.getTeamOverview(syncContext)
 
     expect(overview.projects.length).toBeGreaterThan(0)
     expect(overview.members.length).toBeGreaterThan(0)
@@ -45,6 +376,35 @@ describe('seed team repository', () => {
     expect(overview.agentProviders).toEqual([
       expect.objectContaining({ id: 'fake-knowledge-review', kind: 'fake' }),
     ])
+    expect(
+      overview.enforcementPolicies.effectivePolicies.map((policy) => policy.projectId),
+    ).toEqual(overview.projects.map((project) => project.id))
+  })
+
+  it('scopes the effective policy returned for a project without an override', async () => {
+    const repository = createSeedTeamRepository()
+
+    const result = await repository.getEnforcementPolicy('p-payments', syncContext)
+
+    expect(result.projectOverride).toBeNull()
+    expect(result.effectivePolicy.projectId).toBe('p-payments')
+  })
+
+  it('does not expose seed organization projects or runs through another organization context', async () => {
+    const repository = createSeedTeamRepository()
+    const context = { organizationId: 'org-other' }
+
+    const [overview, bundle] = await Promise.all([
+      repository.getTeamOverview(context),
+      repository.getRunsBundle(context),
+    ])
+
+    expect(bundle).toEqual({ runs: [], artifacts: [], events: [] })
+    expect(overview.projects).toEqual([])
+    expect(overview.runs).toEqual([])
+    expect(overview.projectCost).toEqual([])
+    expect(overview.totalCost).toBe('$0.00')
+    expect(overview.enforcementPolicies.organizationPolicy.organizationId).toBe('org-other')
   })
 
   it('redacts allowed Test Evidence fields again at the repository write boundary', async () => {
@@ -52,6 +412,7 @@ describe('seed team repository', () => {
     await repository.uploadRunSummary({
       kind: 'run',
       runId: 'run-hostile-evidence',
+      version: 1,
       projectId: 'project-1',
       title: 'Repository redaction boundary',
       status: 'testing',
@@ -76,7 +437,7 @@ describe('seed team repository', () => {
       rawOutput: '/Users/Alice/repo API_TOKEN=unknown-field-secret',
     } as Parameters<typeof repository.uploadTestEvidenceSummary>[0], syncContext)
 
-    const persisted = (await repository.getTeamOverview()).testEvidenceSummaries.find(
+    const persisted = (await repository.getTeamOverview(syncContext)).testEvidenceSummaries.find(
       (summary) => summary.id === 'evidence-hostile-fields',
     )
     expect(persisted?.redacted).toBe(true)
@@ -93,6 +454,7 @@ describe('seed team repository', () => {
       {
         kind: 'run',
         runId: 'run-hostile-metadata',
+        version: 1,
         projectId: 'project-1',
         title: 'Build from /Users/Alice/private/repo API_TOKEN=title-secret',
         status: 'building',
@@ -104,7 +466,7 @@ describe('seed team repository', () => {
       syncContext,
     )
 
-    const run = (await repository.getRunsBundle()).runs.find(
+    const run = (await repository.getRunsBundle(syncContext)).runs.find(
       (candidate) => candidate.id === 'run-hostile-metadata',
     )
     expect(JSON.stringify(run)).not.toContain('title-secret')
@@ -119,6 +481,7 @@ describe('seed team repository', () => {
       {
         kind: 'run',
         runId: 'run-hostile-coding-metadata',
+        version: 1,
         projectId: 'project-1',
         title: 'Coding metadata boundary',
         status: 'building',
@@ -176,7 +539,7 @@ describe('seed team repository', () => {
       syncContext,
     )
 
-    const stored = (await repository.getTeamOverview()).codingAgentSummaries.find(
+    const stored = (await repository.getTeamOverview(syncContext)).codingAgentSummaries.find(
       (summary) => summary.id === 'coding-hostile-metadata',
     )
     expect(JSON.stringify(stored)).not.toContain('branch-secret')
@@ -193,11 +556,39 @@ describe('seed team repository', () => {
 
   it('returns workflow runs with their artifacts and events', async () => {
     const repository = createSeedTeamRepository()
-    const bundle = await repository.getRunsBundle()
+    const bundle = await repository.getRunsBundle(syncContext)
 
     expect(bundle.runs[0]?.id).toBe('run-health-001')
     expect(bundle.artifacts.every((artifact) => artifact.runId === 'run-health-001')).toBe(true)
     expect(bundle.events.every((event) => event.runId === 'run-health-001')).toBe(true)
+  })
+
+  it('keeps a standalone Knowledge Review budget-block event visible and redacted', async () => {
+    const repository = createSeedTeamRepository()
+
+    const saved = await repository.saveAgentEvent(
+      {
+        id: 'knowledge-review-budget-audit-seed',
+        runId: 'run-health-001',
+        nodeId: 'n-design-gate',
+        sequence: 99,
+        kind: 'error',
+        message:
+          'Knowledge Review budget blocked. status=unavailable reason=/Users/Alice/private API_TOKEN=seed-secret',
+        timestamp: '2026-07-31T00:00:00.000Z',
+      },
+      syncContext,
+    )
+
+    expect(saved.message).toBe(
+      'Knowledge Review budget blocked. status=unavailable reason=[REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
+    )
+    const persisted = (await repository.getRunsBundle(syncContext)).events.find(
+      (event) => event.id === saved.id,
+    )
+    expect(persisted).toEqual(saved)
+    expect(JSON.stringify(persisted)).not.toContain('seed-secret')
+    expect(JSON.stringify(persisted)).not.toContain('/Users/Alice')
   })
 
   it('resolves demo auth accounts to an authenticated identity projection', async () => {
@@ -236,6 +627,23 @@ describe('seed team repository', () => {
     ).resolves.toBeNull()
   })
 
+  it('resolves browser sessions from stable account identity without cookie authorization state', async () => {
+    const repository = createSeedTeamRepository()
+
+    await expect(repository.resolveBrowserSession('acct-demo-u-ling')).resolves.toEqual({
+      source: 'authenticated',
+      organizationId: 'org-demo',
+      userId: 'u-ling',
+      role: 'lead',
+      authAccountId: 'acct-demo-u-ling',
+      projectMemberships: [
+        { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+        { projectId: 'p-admin', userId: 'u-ling', role: 'lead' },
+      ],
+    })
+    await expect(repository.resolveBrowserSession('acct-demo-missing')).resolves.toBeNull()
+  })
+
   it('keeps the seed desktop pairing token scoped to the pairing creator role', async () => {
     const repository = createSeedTeamRepository()
     const leadContext = {
@@ -254,9 +662,12 @@ describe('seed team repository', () => {
     const exchange = await repository.exchangeDesktopPairingCode({ code: pairing.code })
 
     await expect(repository.resolveDesktopTokenSession(exchange.token)).resolves.toMatchObject({
-      userId: 'u-ling',
-      role: 'lead',
-      projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
+      tokenRecordId: exchange.tokenId,
+      session: {
+        userId: 'u-ling',
+        role: 'lead',
+        projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
+      },
     })
   })
 
@@ -283,15 +694,35 @@ describe('seed team repository', () => {
     expect(exchange).toMatchObject({
       role: 'lead',
       projectMemberships: [
-        { projectId: 'p-payments', userId: 'u-erich', role: 'owner' },
+        { projectId: 'p-payments', userId: 'u-erich', role: 'lead' },
       ],
     })
     await expect(repository.resolveDesktopTokenSession(exchange.token)).resolves.toMatchObject({
-      role: 'lead',
-      projectMemberships: [
-        { projectId: 'p-payments', userId: 'u-erich', role: 'owner' },
-      ],
+      tokenRecordId: exchange.tokenId,
+      session: {
+        role: 'lead',
+        projectMemberships: [
+          { projectId: 'p-payments', userId: 'u-erich', role: 'lead' },
+        ],
+      },
     })
+  })
+
+  it('rejects a seed desktop token that was never created by pairing exchange', async () => {
+    const repository = createSeedTeamRepository()
+
+    await expect(
+      repository.resolveDesktopTokenSession('devflow-desktop-token-p-payments'),
+    ).resolves.toBeNull()
+  })
+
+  it('rejects pairing a seed project from a different organization', async () => {
+    const repository = createSeedTeamRepository()
+
+    await expect(repository.createDesktopPairingCode(
+      { projectId: 'p-payments' },
+      { organizationId: 'org-other', userId: 'u-other-owner' },
+    )).rejects.toMatchObject({ name: 'TeamProjectScopeError' })
   })
 
   it('makes accepted remote sync summaries visible to team overview readers', async () => {
@@ -301,6 +732,7 @@ describe('seed team repository', () => {
       repository.uploadRunSummary({
         kind: 'approval',
         runId: 'run-1',
+        version: 1,
         projectId: 'project-1',
         title: 'Approve payment workflow',
         status: 'building',
@@ -366,8 +798,8 @@ describe('seed team repository', () => {
       accepted: true,
     })
 
-    const overview = await repository.getTeamOverview()
-    const bundle = await repository.getRunsBundle()
+    const overview = await repository.getTeamOverview(syncContext)
+    const bundle = await repository.getRunsBundle(syncContext)
 
     expect(overview.runs[0]).toMatchObject({
       id: 'run-1',
@@ -392,6 +824,7 @@ describe('seed team repository', () => {
       {
         kind: 'run',
         runId: 'run-victim',
+        version: 1,
         projectId: 'project-victim',
         title: 'Victim Run',
         status: 'testing',
@@ -406,6 +839,7 @@ describe('seed team repository', () => {
       {
         kind: 'run',
         runId: 'run-attacker',
+        version: 1,
         projectId: 'project-attacker',
         title: 'Attacker Run',
         status: 'testing',
@@ -556,7 +990,7 @@ describe('seed team repository', () => {
       ),
     ).rejects.toThrow('conflicts with canonical scope')
 
-    const overview = await repository.getTeamOverview()
+    const overview = await repository.getTeamOverview(syncContext)
     expect(overview.testEvidenceSummaries.filter((item) => item.id === evidence.id)).toEqual([
       expect.objectContaining({
         runId: 'run-victim',
@@ -587,6 +1021,7 @@ describe('seed team repository', () => {
     const repository = createSeedTeamRepository()
     const summaries = [
       {
+        version: 1,
         currentNodeId: 'node-design-gate',
         currentNode: {
           id: 'node-design-gate',
@@ -599,6 +1034,7 @@ describe('seed team repository', () => {
         updatedAt: '2026-06-16T00:00:00.000Z',
       },
       {
+        version: 2,
         currentNodeId: 'node-build',
         currentNode: {
           id: 'node-build',
@@ -610,6 +1046,7 @@ describe('seed team repository', () => {
         updatedAt: '2026-06-16T00:01:00.000Z',
       },
       {
+        version: 3,
         currentNodeId: 'node-test',
         currentNode: {
           id: 'node-test',
@@ -636,7 +1073,7 @@ describe('seed team repository', () => {
       )
     }
 
-    const run = (await repository.getRunsBundle()).runs.find(
+    const run = (await repository.getRunsBundle(syncContext)).runs.find(
       (candidate) => candidate.id === 'run-consecutive',
     )
     expect(run?.nodes.map((node) => [node.id, node.status])).toEqual([
@@ -647,6 +1084,85 @@ describe('seed team repository', () => {
     expect(
       run?.nodes.filter((node) => node.status === 'running' || node.status === 'blocked'),
     ).toEqual([expect.objectContaining({ id: 'node-test' })])
+    expect(run?.version).toBe(3)
+  })
+
+  it('accepts a higher Run version even when its display timestamp is older', async () => {
+    const repository = createSeedTeamRepository()
+    const summary = {
+      kind: 'run' as const,
+      runId: 'run-version-over-time',
+      version: 1,
+      projectId: 'project-1',
+      title: 'Version one',
+      status: 'building' as const,
+      currentNodeId: 'node-build',
+      currentNode: {
+        id: 'node-build',
+        stage: 'build' as const,
+        kind: 'task' as const,
+        status: 'running' as const,
+      },
+      branchName: 'ai/version-over-time',
+      updatedAt: '2026-06-16T00:10:00.000Z',
+    }
+    await repository.uploadRunSummary(summary, syncContext)
+
+    await expect(
+      repository.uploadRunSummary(
+        {
+          ...summary,
+          version: 2,
+          title: 'Version two is authoritative',
+          updatedAt: '2026-06-16T00:09:00.000Z',
+        },
+        syncContext,
+      ),
+    ).resolves.toMatchObject({ accepted: true })
+
+    expect(
+      (await repository.getRunsBundle(syncContext)).runs.find(
+        (run) => run.id === summary.runId,
+      ),
+    ).toMatchObject({ version: 2, title: 'Version two is authoritative' })
+  })
+
+  it('accepts only an identical projection when the Run version is unchanged', async () => {
+    const repository = createSeedTeamRepository()
+    const summary = {
+      kind: 'run' as const,
+      runId: 'run-idempotent-version',
+      version: 2,
+      projectId: 'project-1',
+      title: 'Stable versioned projection',
+      status: 'testing' as const,
+      currentNodeId: 'node-test',
+      currentNode: {
+        id: 'node-test',
+        stage: 'test' as const,
+        kind: 'test' as const,
+        status: 'running' as const,
+      },
+      branchName: 'ai/idempotent-version',
+      updatedAt: '2026-06-16T00:10:00.000Z',
+    }
+    await repository.uploadRunSummary(summary, syncContext)
+
+    await expect(repository.uploadRunSummary(summary, syncContext)).resolves.toMatchObject({
+      accepted: true,
+    })
+    await expect(
+      repository.uploadRunSummary(
+        { ...summary, title: 'Conflicting content at the same version' },
+        syncContext,
+      ),
+    ).rejects.toThrow('Remote Run Summary conflicts with canonical ownership or is stale')
+
+    expect(
+      (await repository.getRunsBundle(syncContext)).runs.find(
+        (run) => run.id === summary.runId,
+      ),
+    ).toMatchObject({ version: 2, title: summary.title })
   })
 
   it('rejects seed, cross-project, and stale run-summary collisions', async () => {
@@ -654,6 +1170,7 @@ describe('seed team repository', () => {
     const canonical = {
       kind: 'run' as const,
       runId: 'run-owned',
+      version: 2,
       projectId: 'project-1',
       title: 'Owned Run',
       status: 'building' as const,
@@ -675,6 +1192,7 @@ describe('seed team repository', () => {
       repository.uploadRunSummary(
         {
           ...canonical,
+          version: 3,
           projectId: 'project-2',
           updatedAt: '2026-06-16T00:11:00.000Z',
         },
@@ -685,6 +1203,7 @@ describe('seed team repository', () => {
       repository.uploadRunSummary(
         {
           ...canonical,
+          version: 3,
           title: 'Cross-user overwrite',
           updatedAt: '2026-06-16T00:12:00.000Z',
         },
@@ -695,8 +1214,9 @@ describe('seed team repository', () => {
       repository.uploadRunSummary(
         {
           ...canonical,
+          version: 1,
           title: 'Stale Run',
-          updatedAt: '2026-06-16T00:09:00.000Z',
+          updatedAt: '2026-06-16T00:20:00.000Z',
         },
         syncContext,
       ),
@@ -705,6 +1225,7 @@ describe('seed team repository', () => {
       repository.uploadRunSummary(
         {
           ...canonical,
+          version: 3,
           runId: 'run-health-001',
           projectId: 'p-payments',
           updatedAt: '2026-06-16T00:11:00.000Z',
@@ -713,10 +1234,11 @@ describe('seed team repository', () => {
       ),
     ).rejects.toThrow('Remote Run Summary conflicts with canonical ownership or is stale')
 
-    const storedRun = (await repository.getRunsBundle()).runs.find(
+    const storedRun = (await repository.getRunsBundle(syncContext)).runs.find(
       (run) => run.id === canonical.runId,
     )
     expect(storedRun).toMatchObject({
+      version: canonical.version,
       title: canonical.title,
       creatorId: syncContext.userId,
       nodes: [expect.objectContaining({ ownerId: syncContext.userId })],

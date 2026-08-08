@@ -467,12 +467,12 @@ export function buildStatusDescriptors(input: {
   const budgetStatus = (): StatusDescriptor => ({
     id: 'budget',
     label: 'Budget guard',
-    state: input.node.stage === 'build' ? 'over budget approval' : 'default',
+    state: input.node.stage === 'build' ? 'preflight required' : 'default',
     tone: input.node.stage === 'build' ? 'warn' : 'soft',
     summary: input.node.stage === 'build'
-      ? '真实 runtime 可能需要 lead approval 后才能继续。'
+      ? '真实 runtime 会在启动前完成预算与授权检查。'
       : '当前节点没有活跃 runtime budget 请求。',
-    nextAction: input.node.stage === 'build' ? '在 Agents 中填写 approval id 后重试。' : '无需预算动作。',
+    nextAction: input.node.stage === 'build' ? '在 Agents 中查看预算检查结果，并按实际阻断原因处理。' : '无需预算动作。',
     impact: 'Coding Agent runtime',
   })
   const requiredArtifactStatus = (): StatusDescriptor => ({

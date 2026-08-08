@@ -211,7 +211,7 @@ describe('remote agent-review enforcement', () => {
     )
 
     expect(result).toMatchObject({ status: 202 })
-    const overview = await repository.getTeamOverview()
+    const overview = await repository.getTeamOverview(runCreatorSession)
     const stored = overview.agentReviews.find(
       (candidate) => candidate.id === 'review-hostile-policy-finding',
     )

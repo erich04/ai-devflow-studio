@@ -33,6 +33,8 @@ jobs:
       - run: corepack pnpm test:build-output-smoke
       - run: corepack pnpm test:e2e
       - run: corepack pnpm test:electron-smoke
+      - run: corepack pnpm build:desktop-pilot
+      - run: corepack pnpm test:desktop-pilot-smoke
 
   windows-compatibility:
     name: Windows compatibility
@@ -60,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
         env:
           POSTGRES_DB: devflow_ci
           POSTGRES_USER: postgres
@@ -104,3 +106,21 @@ jobs:
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm test:docker-smoke
+
+  docker-lifecycle-smoke:
+    name: Docker lifecycle smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: corepack pnpm test:docker-lifecycle-smoke

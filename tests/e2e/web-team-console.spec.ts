@@ -16,6 +16,7 @@ test.describe('AI DevFlow web team console', () => {
     request,
   }) => {
     const suffix = Date.now()
+    const runId = `run-e2e-${suffix}`
     const runTitle = `E2E synced team run ${suffix}`
     const evidenceSummary = `E2E tests passed ${suffix}`
     const reviewConclusion = `E2E Knowledge Review completed ${suffix}`
@@ -25,7 +26,8 @@ test.describe('AI DevFlow web team console', () => {
       headers: teamHeaders,
       data: {
         kind: 'run',
-        runId: `run-e2e-${suffix}`,
+        runId,
+        version: 1,
         projectId: 'p-payments',
         title: runTitle,
         status: 'building',
@@ -41,7 +43,7 @@ test.describe('AI DevFlow web team console', () => {
       headers: teamHeaders,
       data: {
         id: `evidence-e2e-${suffix}`,
-        runId: `run-e2e-${suffix}`,
+        runId,
         nodeId: 'n-test',
         projectId: 'p-payments',
         command: 'pnpm test -- --run',
@@ -59,7 +61,7 @@ test.describe('AI DevFlow web team console', () => {
       headers: teamHeaders,
       data: {
         id: `agent-review-e2e-${suffix}`,
-        runId: `run-e2e-${suffix}`,
+        runId,
         nodeId: 'n-build',
         projectId: 'p-payments',
         runtime: 'electron',
@@ -78,12 +80,15 @@ test.describe('AI DevFlow web team console', () => {
     })
     expect(agentReviewResponse.status()).toBe(202)
 
-    await page.goto(webUrl)
+    const selectedRunUrl = new URL(webUrl)
+    selectedRunUrl.searchParams.set('projectId', 'p-payments')
+    selectedRunUrl.searchParams.set('runId', runId)
+    await page.goto(selectedRunUrl.toString())
 
     await expect(page.getByText('Evidence Chain').first()).toBeVisible()
     await expect(page.getByText('Human Gate').first()).toBeVisible()
     await expect(page.getByText('Test Evidence')).toBeVisible()
-    await expect(page.getByText(runTitle)).toBeVisible()
+    await expect(page.getByRole('heading', { name: runTitle, exact: true })).toBeVisible()
     await expect(page.getByText(evidenceSummary)).toBeVisible()
     await expect(page.locator('body')).toContainText(reviewSummary)
     await expect(page.locator('body')).toContainText('warning-only')

@@ -1,11 +1,12 @@
 import {
   redactConnectionString,
   resolveTeamDbConfig,
-  type TeamDbClient,
   type TeamDbConfig,
+  type TeamDbRepositoryClient,
 } from '../db/client'
 import { resolveDevFlowRuntimeFlags } from '@ai-devflow/shared'
 import { createPostgresPoolClient } from '../db/postgres-client'
+import { teamMigrationCatalog } from '../db/migrate'
 import { createPostgresTeamRepository } from './postgres-team-repository'
 import { createSeedTeamRepository, type TeamRepository } from './team-repository'
 
@@ -14,12 +15,15 @@ export type TeamRepositorySource = 'seed' | 'postgres'
 export type TeamRepositoryRuntime = {
   source: TeamRepositorySource
   repository: TeamRepository
+  checkReadiness(): Promise<void>
   close(): Promise<void>
 }
 
+const currentTeamSchemaVersion = teamMigrationCatalog.at(-1)!.version
+
 export type TeamRepositoryRuntimeOptions = {
   env?: Record<string, string | undefined>
-  createPostgresClient?: (config: TeamDbConfig) => TeamDbClient
+  createPostgresClient?: (config: TeamDbConfig) => TeamDbRepositoryClient
   logger?: Pick<Console, 'info'>
 }
 
@@ -42,6 +46,9 @@ export async function createTeamRepositoryRuntime(
     return {
       source: 'seed',
       repository: createSeedTeamRepository(),
+      async checkReadiness() {
+        return undefined
+      },
       async close() {
         return undefined
       },
@@ -61,6 +68,14 @@ export async function createTeamRepositoryRuntime(
     repository: createPostgresTeamRepository(db, {
       fakeRuntimeEnabled: flags.fakeRuntimeEnabled,
     }),
+    async checkReadiness() {
+      const [row] = await db.query<{ value: string }>(
+        "SELECT value FROM schema_meta WHERE key = 'schema_version'",
+      )
+      if (row?.value !== String(currentTeamSchemaVersion)) {
+        throw new Error('Team repository schema is not ready.')
+      }
+    },
     async close() {
       await db.close()
     },

@@ -2,6 +2,19 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 
 const CIPHER = 'aes-256-gcm'
 const DEV_FALLBACK_KEY = 'devflow-agent-credential-dev-key'
+const PILOT_CREDENTIAL_KEY_MIN_LENGTH = 32
+const CREDENTIAL_KEY_PLACEHOLDER =
+  /(?:replace[-_ ]?this|placeholder|change[-_ ]?me|your[-_ ]?key|<[^>]+>)/i
+
+export function isPilotAgentCredentialKey(value: string | undefined): boolean {
+  const configured = value?.trim()
+  return Boolean(
+    configured &&
+      configured.length >= PILOT_CREDENTIAL_KEY_MIN_LENGTH &&
+      configured !== DEV_FALLBACK_KEY &&
+      !CREDENTIAL_KEY_PLACEHOLDER.test(configured),
+  )
+}
 
 function resolveKey(env: Record<string, string | undefined> = process.env): Buffer {
   const configured = env['DEVFLOW_AGENT_CREDENTIAL_KEY']

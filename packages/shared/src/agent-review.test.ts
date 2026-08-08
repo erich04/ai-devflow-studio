@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   artifacts,
   knowledgeChunks,
@@ -9,14 +9,318 @@ import {
   buildAgentReviewContext,
   createAgentReviewArtifacts,
   createFakeAgentProvider,
+  createKnowledgeReviewPrompt,
   createOpenAiCompatibleAgentProvider,
   estimateAgentTokenUsage,
+  estimateKnowledgeReviewCostPreflight,
+  isTrustedNoCostKnowledgeReviewProvider,
+  runBudgetedKnowledgeReviewAgent,
   runKnowledgeReviewAgent,
+  type KnowledgeReviewBudgetGuardInput,
 } from './agent-review'
 import type { Artifact, TestEvidence } from './domain'
 
 const run = runs[0]!
 const node = run.nodes.find((item) => item.id === 'n-design-gate')!
+
+describe('Knowledge Review cost preflight', () => {
+  it('trusts only the exact built-in fake provider as no-cost', () => {
+    expect(
+      isTrustedNoCostKnowledgeReviewProvider({
+        id: 'fake-knowledge-review',
+        model: 'fake',
+      }),
+    ).toBe(true)
+    expect(
+      isTrustedNoCostKnowledgeReviewProvider({
+        id: 'fake-knowledge-review-lookalike',
+        model: 'fake',
+      }),
+    ).toBe(false)
+    expect(
+      isTrustedNoCostKnowledgeReviewProvider({
+        id: 'fake-knowledge-review',
+        model: 'paid-model',
+      }),
+    ).toBe(false)
+  })
+
+  it('deterministically estimates the current real review request from its exact prompt and output cap', () => {
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const request = {
+      id: 'review-request-cost-preflight',
+      runId: run.id,
+      nodeId: node.id,
+      projectId: run.projectId,
+      requestedBy: 'u-ling',
+      runtime: 'electron' as const,
+      providerId: 'team-openai',
+    }
+    const input = {
+      request,
+      context,
+      provider: { id: 'team-openai', model: 'gpt-4.1-mini' },
+    }
+
+    const preflight = estimateKnowledgeReviewCostPreflight(input)
+
+    expect(preflight).toMatchObject({
+      request,
+      projectId: run.projectId,
+      requestedBy: 'u-ling',
+      providerId: 'team-openai',
+      model: 'gpt-4.1-mini',
+      prompt: createKnowledgeReviewPrompt(context),
+      maxOutputTokens: 1_024,
+      noCost: false,
+    })
+    expect(preflight.inputTokens).toBeGreaterThan(0)
+    expect(preflight.projectedCostUsd).toBeGreaterThan(0)
+    expect(estimateKnowledgeReviewCostPreflight(input)).toEqual(preflight)
+  })
+
+  it('does not let a real provider become no-cost by claiming the fake model name', () => {
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const preflight = estimateKnowledgeReviewCostPreflight({
+      request: {
+        id: 'review-request-fake-model-lookalike',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+      },
+      context,
+      provider: { id: 'team-provider', model: 'fake' },
+    })
+
+    expect(preflight.noCost).toBe(false)
+    expect(preflight.projectedCostUsd).toBeGreaterThan(0)
+  })
+})
+
+describe('runBudgetedKnowledgeReviewAgent', () => {
+  it('blocks a real provider when no authoritative budget guard is available', async () => {
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const reviewKnowledge = vi.fn()
+
+    const result = await runBudgetedKnowledgeReviewAgent({
+      request: {
+        id: 'review-request-missing-budget-guard',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+      },
+      context,
+      provider: {
+        id: 'team-openai',
+        name: 'Team OpenAI',
+        model: 'gpt-4.1-mini',
+        reviewKnowledge,
+      },
+    })
+
+    expect(result).toMatchObject({
+      status: 'blocked',
+      budgetDecision: {
+        status: 'unavailable',
+        blocksRun: true,
+      },
+      evidence: {
+        kind: 'knowledge_review_budget_blocked',
+        projectId: run.projectId,
+        providerId: 'team-openai',
+        redacted: true,
+      },
+    })
+    expect(reviewKnowledge).not.toHaveBeenCalled()
+  })
+
+  it('runs the exact trusted fake provider without a guard under an explicit no-cost decision', async () => {
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const provider = createFakeAgentProvider()
+    const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
+
+    const result = await runBudgetedKnowledgeReviewAgent({
+      request: {
+        id: 'review-request-trusted-fake-no-cost',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+      },
+      context,
+      provider,
+      now: () => '2026-07-31T12:00:00.000Z',
+    })
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      budgetDecision: {
+        status: 'disabled',
+        blocksRun: false,
+        currentSpendUsd: 0,
+        projectedCostUsd: 0,
+      },
+      execution: {
+        review: { providerId: 'fake-knowledge-review' },
+      },
+    })
+    expect(reviewKnowledge).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns redacted blocked evidence without calling a provider when the guard rejects', async () => {
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const reviewKnowledge = vi.fn()
+    const budgetGuard = vi.fn(async (_input: KnowledgeReviewBudgetGuardInput) => ({
+      status: 'unavailable' as const,
+      blocksRun: true,
+      currentSpendUsd: 1,
+      projectedCostUsd: 0.01,
+      reason: 'Budget service failed with OPENAI_API_KEY=sk-secret.',
+    }))
+
+    const result = await runBudgetedKnowledgeReviewAgent({
+      request: {
+        id: 'review-request-budget-blocked',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'api',
+      },
+      context,
+      provider: {
+        id: 'team-openai',
+        name: 'Team OpenAI',
+        model: 'gpt-4.1-mini',
+        reviewKnowledge,
+      },
+      approvalId: 'approval-knowledge-1',
+      budgetGuard,
+    })
+
+    expect(budgetGuard).toHaveBeenCalledTimes(1)
+    const guardInput = budgetGuard.mock.calls[0]![0]
+    expect(guardInput).toMatchObject({
+      projectId: run.projectId,
+      providerId: 'team-openai',
+      requestedBy: 'u-ling',
+      projectedCostUsd: expect.any(Number),
+      approvalId: 'approval-knowledge-1',
+    })
+    expect(Object.keys(guardInput).sort()).toEqual([
+      'approvalId',
+      'projectId',
+      'projectedCostUsd',
+      'providerId',
+      'requestedBy',
+    ])
+    expect(result).toMatchObject({
+      status: 'blocked',
+      evidence: {
+        reason: expect.stringContaining('REDACTED'),
+        redacted: true,
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain('sk-secret')
+    expect(reviewKnowledge).not.toHaveBeenCalled()
+  })
+
+  it('runs the existing Knowledge Review agent once after the guard allows the paid call', async () => {
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const reviewKnowledge = vi.fn(async () => ({
+      model: 'gpt-4.1-mini',
+      conclusion: 'ready',
+      summary: 'budget-authorized review',
+      risks: [],
+      missingEvidence: [],
+      suggestedTests: [],
+      confidence: 0.9,
+    }))
+    const budgetGuard = vi.fn(async (_input: KnowledgeReviewBudgetGuardInput) => ({
+      status: 'allowed' as const,
+      blocksRun: false,
+      currentSpendUsd: 1,
+      projectedCostUsd: 0.01,
+      limitUsd: 20,
+      reason: 'Within budget.',
+    }))
+
+    const result = await runBudgetedKnowledgeReviewAgent({
+      request: {
+        id: 'review-request-budget-allowed',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'api',
+      },
+      context,
+      provider: {
+        id: 'team-openai',
+        name: 'Team OpenAI',
+        model: 'gpt-4.1-mini',
+        reviewKnowledge,
+      },
+      budgetGuard,
+      now: () => '2026-07-31T12:01:00.000Z',
+    })
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      budgetDecision: { status: 'allowed', blocksRun: false },
+      execution: { review: { summary: 'budget-authorized review' } },
+    })
+    expect(budgetGuard).toHaveBeenCalledTimes(1)
+    expect(reviewKnowledge).toHaveBeenCalledTimes(1)
+  })
+})
 
 const evidence: TestEvidence = {
   id: 'evidence-secret',
@@ -86,6 +390,92 @@ describe('buildAgentReviewContext', () => {
       redacted: true,
     })
     expect(JSON.stringify(context)).not.toContain('sk-secret')
+  })
+
+  it('redacts secrets and local absolute paths from repository knowledge before review', () => {
+    const document = knowledgeDocuments.find((item) => item.category === 'api_contract')!
+    const sourceChunk = knowledgeChunks.find((item) => item.documentId === document.id)!
+    const secret = 'sk-review-secret-123456'
+    const localPath = '/Users/alice/private/payments-api/.env'
+    const context = buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks: knowledgeChunks.map((chunk) =>
+        chunk.id === sourceChunk.id
+          ? {
+              ...chunk,
+              content: `Public API rule remains usable. OPENAI_API_KEY=${secret} config: ${localPath}`,
+            }
+          : chunk,
+      ),
+    })
+    const reviewedChunk = context.knowledgeChunks.find((chunk) => chunk.id === sourceChunk.id)!
+    const prompt = createKnowledgeReviewPrompt(context)
+
+    expect(reviewedChunk.content).toContain('Public API rule remains usable.')
+    expect(reviewedChunk.content).toContain('REDACTED')
+    expect(JSON.stringify(context)).not.toContain('OPENAI_API_KEY')
+    expect(JSON.stringify(context)).not.toContain(secret)
+    expect(JSON.stringify(context)).not.toContain(localPath)
+    expect(prompt).not.toContain(secret)
+    expect(prompt).not.toContain(localPath)
+  })
+
+  it('deterministically bounds large repository chunks and uses the exact preflight prompt', async () => {
+    const documentTemplate = knowledgeDocuments.find((item) => item.category === 'api_contract')!
+    const chunkTemplate = knowledgeChunks.find((item) => item.documentId === documentTemplate.id)!
+    const largeDocuments = Array.from({ length: 9 }, (_, index) => ({
+      ...documentTemplate,
+      id: `knowledge-document-large-${index}`,
+      title: `Large API contract ${index}`,
+      sourcePath: `docs/api-contract-${index}.md`,
+    }))
+    const largeChunks = largeDocuments.map((document, index) => ({
+      ...chunkTemplate,
+      id: `knowledge-chunk-large-${index}`,
+      documentId: document.id,
+      sourcePath: document.sourcePath,
+      content: `Chunk ${index} usable rule. ${String(index).repeat(220_000)}`,
+    }))
+    const input = {
+      run,
+      node,
+      artifacts: [],
+      testEvidence: [],
+      knowledgeDocuments: largeDocuments,
+      knowledgeChunks: largeChunks,
+    }
+
+    const context = buildAgentReviewContext(input)
+    const repeatedContext = buildAgentReviewContext(input)
+    const contentCharacters = context.knowledgeChunks.reduce(
+      (total, chunk) => total + chunk.content.length,
+      0,
+    )
+    const provider = createFakeAgentProvider()
+    const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
+    const request = {
+      id: 'review-request-large-knowledge',
+      runId: run.id,
+      nodeId: node.id,
+      projectId: run.projectId,
+      requestedBy: 'u-ling',
+      runtime: 'electron' as const,
+    }
+    const preflight = estimateKnowledgeReviewCostPreflight({ request, context, provider })
+
+    await runKnowledgeReviewAgent({ request, context, provider })
+
+    expect(context).toEqual(repeatedContext)
+    expect(context.knowledgeChunks.length).toBeLessThanOrEqual(8)
+    expect(context.knowledgeChunks.every((chunk) => chunk.content.length <= 4_000)).toBe(true)
+    expect(contentCharacters).toBeLessThanOrEqual(24_000)
+    expect(preflight.prompt.length).toBeLessThan(26_000)
+    expect(reviewKnowledge).toHaveBeenCalledTimes(1)
+    expect(reviewKnowledge.mock.calls[0]![0].prompt).toBe(preflight.prompt)
   })
 })
 
@@ -229,6 +619,58 @@ describe('estimateAgentTokenUsage', () => {
 })
 
 describe('createOpenAiCompatibleAgentProvider', () => {
+  it('caps Knowledge Review output tokens before calling a real compatible provider', async () => {
+    let requestBody: Record<string, unknown> | undefined
+    const provider = createOpenAiCompatibleAgentProvider({
+      model: 'ark-code-latest',
+      apiKey: 'secret-key',
+      fetcher: async (_, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    conclusion: 'ok',
+                    summary: 'bounded review',
+                    risks: [],
+                    missingEvidence: [],
+                    suggestedTests: [],
+                    confidence: 0.8,
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      },
+    })
+
+    await provider.reviewKnowledge({
+      request: {
+        id: 'review-request-bounded-output',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'api',
+      },
+      context: buildAgentReviewContext({
+        run,
+        node,
+        artifacts,
+        testEvidence: [],
+        knowledgeDocuments,
+        knowledgeChunks,
+      }),
+      prompt: 'Return a bounded review.',
+    })
+
+    expect(requestBody).toMatchObject({ max_tokens: 1_024 })
+  })
+
   it('sends a plain chat-completions request without provider-specific JSON mode', async () => {
     let requestBody: Record<string, unknown> | undefined
     const provider = createOpenAiCompatibleAgentProvider({
@@ -485,7 +927,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
           JSON.stringify({
             error: {
               message:
-                'bad request OPENAI_API_KEY=sk-secret 6363516a-2de2-4d35-8d6e-b99f6c2f15f2',
+                'bad request OPENAI_API_KEY=sk-secret [redacted-provider-token]',
             },
           }),
           { status: 400, headers: { 'content-type': 'application/json' } },

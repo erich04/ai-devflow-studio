@@ -502,6 +502,70 @@ button:disabled {
   box-shadow: var(--focus-ring);
 }
 
+.work-request-inbox {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.work-request-inbox__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 0;
+}
+
+.work-request-inbox__list {
+  display: grid;
+  gap: 8px;
+}
+
+.work-request-row {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.work-request-row__summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.work-request-row__summary strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-request-row__summary small {
+  margin-left: auto;
+  color: var(--text-muted);
+}
+
+.work-request-row p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.work-request-row > .ghost-button {
+  justify-self: start;
+}
+
 .command-safety {
   display: grid;
   gap: 4px;
@@ -1571,8 +1635,13 @@ button:disabled {
 
 .knowledge-map {
   position: relative;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  align-items: start;
+  gap: 12px;
   min-height: 520px;
-  overflow: hidden;
+  overflow: auto;
+  padding: 16px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background:
@@ -1583,7 +1652,7 @@ button:disabled {
 }
 
 .knowledge-node {
-  position: absolute;
+  position: relative;
   display: grid;
   gap: 3px;
   min-width: 150px;
@@ -1600,14 +1669,18 @@ button:disabled {
 
 .relation-row {
   position: relative;
-  top: 410px;
-  margin: 8px 12px;
+  grid-column: 1 / -1;
+  margin: 0;
   padding: 8px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
   color: var(--text-muted);
   font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
+}
+
+.knowledge-graph-limit-note {
+  grid-column: 1 / -1;
 }
 
 .test-report {
@@ -2067,6 +2140,55 @@ body {
   font-size: 13px;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.remote-sync-operations,
+.remote-sync-operation {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.remote-sync-operation {
+  min-height: 30px;
+  padding: 3px 6px 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.remote-sync-operation > strong {
+  color: var(--text);
+}
+
+.remote-sync-operation[data-status='retry-scheduled'] > strong {
+  color: var(--amber);
+}
+
+.remote-sync-operation[data-status='terminal'] {
+  border-color: color-mix(in srgb, var(--danger) 44%, var(--border));
+}
+
+.remote-sync-operation[data-status='terminal'] > strong,
+.remote-sync-operation > code {
+  color: var(--danger);
+}
+
+.remote-sync-operation > small,
+.remote-sync-operation > time,
+.remote-sync-operation > code {
+  font-size: 11px;
+}
+
+.remote-sync-operation > time {
+  color: var(--text-faint);
+}
+
+.remote-sync-retry.ghost-button {
+  min-height: 26px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
 }
 
 .stat strong {

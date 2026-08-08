@@ -12,6 +12,7 @@ import type {
   AgentTraceStep,
   AgentTokenUsage,
   Artifact,
+  BudgetGuardDecision,
   GateAdvisory,
   KnowledgeChunk,
   KnowledgeDocument,
@@ -20,7 +21,7 @@ import type {
   WorkflowRun,
 } from './domain'
 import { buildKnowledgeReferences } from './knowledge'
-import { redactSecrets } from './redaction'
+import { redactSecrets, redactSensitiveText } from './redaction'
 
 export type KnowledgeReviewProviderInput = {
   request: AgentReviewRequest
@@ -120,10 +121,86 @@ export type EstimateAgentTokenUsageInput = {
   providerUsage?: AgentProviderUsage
 }
 
+export type EstimateKnowledgeReviewCostPreflightInput = {
+  request: AgentReviewRequest
+  context: AgentReviewContext
+  provider: Pick<AgentProvider, 'id' | 'model'>
+}
+
+export type KnowledgeReviewBudgetGuardInput = {
+  projectId: string
+  providerId: string
+  requestedBy: string
+  projectedCostUsd: number
+  approvalId?: string
+}
+
+export type KnowledgeReviewBudgetGuard = (
+  input: KnowledgeReviewBudgetGuardInput,
+) => Promise<BudgetGuardDecision>
+
+export type RunBudgetedKnowledgeReviewAgentInput = RunKnowledgeReviewAgentInput & {
+  budgetGuard?: KnowledgeReviewBudgetGuard
+  approvalId?: string
+}
+
+export type KnowledgeReviewBudgetBlockedEvidence = {
+  kind: 'knowledge_review_budget_blocked'
+  requestId: string
+  projectId: string
+  providerId: string
+  requestedBy: string
+  reason: string
+  redacted: true
+}
+
+export type BudgetedKnowledgeReviewAgentResult =
+  | {
+      status: 'completed'
+      budgetDecision: BudgetGuardDecision
+      execution: AgentReviewExecutionResult
+    }
+  | {
+      status: 'blocked'
+      budgetDecision: BudgetGuardDecision
+      evidence: KnowledgeReviewBudgetBlockedEvidence
+    }
+
+export type KnowledgeReviewCostPreflight = {
+  request: AgentReviewRequest
+  projectId: string
+  requestedBy: string
+  providerId: string
+  model: string
+  prompt: string
+  inputTokens: number
+  maxOutputTokens: number
+  projectedCostUsd: number
+  noCost: boolean
+}
+
 const MODEL_PRICES_PER_1K: Record<string, { input: number; output: number }> = {
   'gpt-4.1-mini': { input: 0.0004, output: 0.0016 },
   'gpt-4o-mini': { input: 0.00015, output: 0.0006 },
   fake: { input: 0, output: 0 },
+}
+
+const BUILT_IN_FAKE_KNOWLEDGE_REVIEW_PROVIDER_ID = 'fake-knowledge-review'
+const BUILT_IN_FAKE_KNOWLEDGE_REVIEW_MODEL = 'fake'
+export const KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS = 1_024
+export const KNOWLEDGE_REVIEW_MAX_CHUNKS = 8
+export const KNOWLEDGE_REVIEW_MAX_CHUNK_CHARACTERS = 4_000
+export const KNOWLEDGE_REVIEW_MAX_TOTAL_KNOWLEDGE_CHARACTERS = 24_000
+const KNOWLEDGE_REVIEW_SYSTEM_PROMPT =
+  'Return only valid JSON with conclusion, summary, risks, missingEvidence, suggestedTests, confidence. Do not wrap it in Markdown.'
+
+export function isTrustedNoCostKnowledgeReviewProvider(
+  provider: Pick<AgentProvider, 'id' | 'model'>,
+): boolean {
+  return (
+    provider.id === BUILT_IN_FAKE_KNOWLEDGE_REVIEW_PROVIDER_ID &&
+    provider.model === BUILT_IN_FAKE_KNOWLEDGE_REVIEW_MODEL
+  )
 }
 
 function estimateTokens(value: string): number {
@@ -151,6 +228,43 @@ function redactedSummaryResult(value: unknown): ReturnType<typeof redactSecrets>
 
 function redactedSummary(value: unknown): string {
   return redactedSummaryResult(value).value
+}
+
+function buildBoundedReviewKnowledgeChunks(
+  knowledgeChunks: KnowledgeChunk[],
+  referencedChunkIds: Set<string>,
+): AgentReviewContext['knowledgeChunks'] {
+  const selectedChunks: AgentReviewContext['knowledgeChunks'] = []
+  let remainingCharacters = KNOWLEDGE_REVIEW_MAX_TOTAL_KNOWLEDGE_CHARACTERS
+
+  for (const chunk of knowledgeChunks) {
+    if (
+      selectedChunks.length >= KNOWLEDGE_REVIEW_MAX_CHUNKS ||
+      remainingCharacters <= 0
+    ) {
+      break
+    }
+    if (!referencedChunkIds.has(chunk.id)) {
+      continue
+    }
+
+    const redactedContent = redactSensitiveText(chunk.content).value
+    const content = redactedContent.slice(
+      0,
+      Math.min(KNOWLEDGE_REVIEW_MAX_CHUNK_CHARACTERS, remainingCharacters),
+    )
+    selectedChunks.push({
+      id: chunk.id,
+      documentId: chunk.documentId,
+      sourcePath: chunk.sourcePath,
+      headingPath: chunk.headingPath,
+      contentHash: chunk.contentHash,
+      content,
+    })
+    remainingCharacters -= content.length
+  }
+
+  return selectedChunks
 }
 
 function redactProviderErrorBody(value: string): string {
@@ -332,17 +446,7 @@ export function buildAgentReviewContext({
         redacted: true,
       })),
     knowledgeReferences: references,
-    knowledgeChunks: knowledgeChunks
-      .filter((chunk) => referencedChunkIds.has(chunk.id))
-      .slice(0, 8)
-      .map((chunk) => ({
-        id: chunk.id,
-        documentId: chunk.documentId,
-        sourcePath: chunk.sourcePath,
-        headingPath: chunk.headingPath,
-        contentHash: chunk.contentHash,
-        content: chunk.content,
-      })),
+    knowledgeChunks: buildBoundedReviewKnowledgeChunks(knowledgeChunks, referencedChunkIds),
   }
 }
 
@@ -359,6 +463,122 @@ export function createKnowledgeReviewPrompt(context: AgentReviewContext): string
       .map((chunk) => `${chunk.sourcePath}#${chunk.headingPath.join('/')} ${chunk.content}`)
       .join(' | ')}`,
   ].join('\n')
+}
+
+export function estimateKnowledgeReviewCostPreflight({
+  request,
+  context,
+  provider,
+}: EstimateKnowledgeReviewCostPreflightInput): KnowledgeReviewCostPreflight {
+  const prompt = createKnowledgeReviewPrompt(context)
+  const noCost = isTrustedNoCostKnowledgeReviewProvider(provider)
+  const inputTokens = estimateTokens(`${KNOWLEDGE_REVIEW_SYSTEM_PROMPT}\n${prompt}`)
+  const configuredPrice = MODEL_PRICES_PER_1K[provider.model]
+  const price = noCost
+    ? MODEL_PRICES_PER_1K.fake!
+    : configuredPrice && (configuredPrice.input > 0 || configuredPrice.output > 0)
+      ? configuredPrice
+      : MODEL_PRICES_PER_1K['gpt-4.1-mini']!
+  const projectedCostUsd =
+    (inputTokens / 1000) * price.input +
+    (KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS / 1000) * price.output
+
+  return {
+    request,
+    projectId: request.projectId,
+    requestedBy: request.requestedBy,
+    providerId: provider.id,
+    model: provider.model,
+    prompt,
+    inputTokens,
+    maxOutputTokens: KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS,
+    projectedCostUsd,
+    noCost,
+  }
+}
+
+export async function runBudgetedKnowledgeReviewAgent({
+  request,
+  context,
+  provider,
+  now,
+  budgetGuard,
+  approvalId,
+}: RunBudgetedKnowledgeReviewAgentInput): Promise<BudgetedKnowledgeReviewAgentResult> {
+  const preflight = estimateKnowledgeReviewCostPreflight({ request, context, provider })
+  if (preflight.noCost) {
+    const budgetDecision: BudgetGuardDecision = {
+      status: 'disabled',
+      blocksRun: false,
+      currentSpendUsd: 0,
+      projectedCostUsd: 0,
+      reason: 'Trusted fake Knowledge Review provider is explicitly no-cost.',
+    }
+    const execution = await runKnowledgeReviewAgent({
+      request,
+      context,
+      provider,
+      ...(now ? { now } : {}),
+    })
+    return { status: 'completed', budgetDecision, execution }
+  }
+
+  if (budgetGuard) {
+    const budgetDecision = await budgetGuard({
+      projectId: request.projectId,
+      providerId: provider.id,
+      requestedBy: request.requestedBy,
+      projectedCostUsd: preflight.projectedCostUsd,
+      ...(approvalId ? { approvalId } : {}),
+    })
+    if (budgetDecision.blocksRun) {
+      const redactedReason = redactedSummary(budgetDecision.reason)
+      const redactedBudgetDecision = { ...budgetDecision, reason: redactedReason }
+      return {
+        status: 'blocked',
+        budgetDecision: redactedBudgetDecision,
+        evidence: {
+          kind: 'knowledge_review_budget_blocked',
+          requestId: request.id,
+          projectId: request.projectId,
+          providerId: provider.id,
+          requestedBy: request.requestedBy,
+          reason: redactedReason,
+          redacted: true,
+        },
+      }
+    }
+
+    const execution = await runKnowledgeReviewAgent({
+      request,
+      context,
+      provider,
+      ...(now ? { now } : {}),
+    })
+    return { status: 'completed', budgetDecision, execution }
+  }
+
+  const budgetDecision: BudgetGuardDecision = {
+    status: 'unavailable',
+    blocksRun: true,
+    currentSpendUsd: 0,
+    projectedCostUsd: preflight.projectedCostUsd,
+    reason: 'Runtime budget guard is unavailable for this Knowledge Review.',
+  }
+
+  return {
+    status: 'blocked',
+    budgetDecision,
+    evidence: {
+      kind: 'knowledge_review_budget_blocked',
+      requestId: request.id,
+      projectId: request.projectId,
+      providerId: provider.id,
+      requestedBy: request.requestedBy,
+      reason: redactedSummary(budgetDecision.reason),
+      redacted: true,
+    },
+  }
 }
 
 export function createFakeAgentProvider(): AgentProvider {
@@ -760,11 +980,11 @@ export function createOpenAiCompatibleAgentProvider({
         body: JSON.stringify({
           model,
           temperature: 0.2,
+          max_tokens: KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS,
           messages: [
             {
               role: 'system',
-              content:
-                'Return only valid JSON with conclusion, summary, risks, missingEvidence, suggestedTests, confidence. Do not wrap it in Markdown.',
+              content: KNOWLEDGE_REVIEW_SYSTEM_PROMPT,
             },
             { role: 'user', content: prompt },
           ],

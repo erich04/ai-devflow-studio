@@ -1,5 +1,6 @@
 import {
   formatUsd,
+  redactSensitiveText,
   rollupTokenUsage,
   runtimeCostSummaryToTokenUsage,
   buildPolicyAwareDeliverySummaries,
@@ -18,10 +19,12 @@ import {
   type Artifact,
   type AuthProvider,
   type AuthenticatedIdentity,
+  type AuthenticatedSession,
   type DesktopPairingCode,
   type DesktopPairingExchangeResult,
   type EffectiveEnforcementPolicy,
   type GateOverrideDecision,
+  type GateEnforcementDecision,
   type McpServerDefinition,
   type OrganizationEnforcementPolicy,
   type Project,
@@ -52,6 +55,12 @@ import {
   skills,
   tokenUsage,
 } from '@ai-devflow/shared/fixtures'
+import type { WorkRequestRepository } from './work-request-contract'
+import type { GateCommandRepository } from './gate-command-contract'
+import { createSeedWorkRequestRepository } from './seed-work-request-repository'
+import { createSeedGateCommandRepository } from './seed-gate-command-repository'
+import { preflightGateCommand } from './gate-command-preflight'
+import { evaluateTeamGateEnforcement } from './team-gate-enforcement'
 
 const DEMO_ORGANIZATION_ID = 'org-demo'
 const DEMO_IDENTITY_TIMESTAMP = new Date(0).toISOString()
@@ -96,7 +105,17 @@ export type TeamOverviewPayload = {
   runtimeBudgetApprovals: RuntimeBudgetApproval[]
 }
 
-export type TeamRepositorySyncContext = Pick<TeamSession, 'organizationId' | 'userId'>
+export type TeamRepositoryReadContext = Pick<TeamSession, 'organizationId'>
+
+export type TeamRepositorySyncContext = TeamRepositoryReadContext &
+  Pick<TeamSession, 'userId'> & {
+    tokenRecordId?: string | null
+  }
+
+export type ResolvedDesktopTokenSession = {
+  tokenRecordId: string
+  session: AuthenticatedSession
+}
 
 export class CanonicalRunRequiredError extends Error {
   constructor(runId: string, projectId: string) {
@@ -120,6 +139,13 @@ export class RemoteChildSummaryConflictError extends Error {
       `Remote child summary ID conflicts with canonical scope: ${summaryId} -> ${runId} (${projectId})`,
     )
     this.name = 'RemoteChildSummaryConflictError'
+  }
+}
+
+export class TeamProjectScopeError extends Error {
+  constructor() {
+    super('Team project is unavailable in the authenticated organization.')
+    this.name = 'TeamProjectScopeError'
   }
 }
 
@@ -151,11 +177,12 @@ export type TeamProjectCreateInput = {
   testCommand?: string
 }
 
-export type TeamRepository = {
+export type TeamRepository = WorkRequestRepository & GateCommandRepository & {
   getAuthenticatedIdentity(input: {
     provider: AuthProvider
     providerAccountId: string
   }): Promise<AuthenticatedIdentity | null>
+  resolveBrowserSession(authAccountId: string): Promise<AuthenticatedSession | null>
   resolveOrBootstrapGitHubIdentity(
     input: GitHubIdentityProfile,
   ): Promise<GitHubIdentityBootstrapResult>
@@ -168,11 +195,11 @@ export type TeamRepository = {
     context: TeamRepositorySyncContext,
   ): Promise<DesktopPairingCode>
   exchangeDesktopPairingCode(input: { code: string }): Promise<DesktopPairingExchangeResult>
-  resolveDesktopTokenSession(token: string): Promise<TeamSession | null>
-  getRunsBundle(): Promise<RunsBundle>
-  getTeamOverview(): Promise<TeamOverviewPayload>
-  getSkills(): Promise<SkillDefinition[]>
-  getMcpServers(): Promise<McpServerDefinition[]>
+  resolveDesktopTokenSession(token: string): Promise<ResolvedDesktopTokenSession | null>
+  getRunsBundle(context: TeamRepositoryReadContext): Promise<RunsBundle>
+  getTeamOverview(context: TeamRepositoryReadContext): Promise<TeamOverviewPayload>
+  getSkills(context: TeamRepositoryReadContext): Promise<SkillDefinition[]>
+  getMcpServers(context: TeamRepositoryReadContext): Promise<McpServerDefinition[]>
   uploadRunSummary(
     summary: RemoteRunSummary,
     context: TeamRepositorySyncContext,
@@ -204,6 +231,10 @@ export type TeamRepository = {
     bundle: AgentReviewBundle,
     context: TeamRepositorySyncContext,
   ): Promise<AgentReviewExecutionResult>
+  saveAgentEvent(
+    event: AgentEvent,
+    context: TeamRepositorySyncContext,
+  ): Promise<AgentEvent>
   listAgentReviews(
     input: { runId?: string },
     context: TeamRepositorySyncContext,
@@ -246,8 +277,61 @@ export type TeamRepository = {
   ): Promise<RuntimeBudgetApproval[]>
 }
 
+export function redactAgentEventForPersistence(event: AgentEvent): AgentEvent {
+  return {
+    id: event.id,
+    runId: event.runId,
+    ...(event.nodeId ? { nodeId: event.nodeId } : {}),
+    sequence: event.sequence,
+    kind: event.kind,
+    message: redactSensitiveText(event.message).value,
+    timestamp: event.timestamp,
+  }
+}
+
+export function findCurrentGateCommandOverride(input: {
+  decision: GateEnforcementDecision
+  overrides: readonly GateOverrideDecision[]
+  projectId: string
+  runId: string
+  nodeId: string
+  userId: string
+  role: GateOverrideDecision['role']
+}): GateOverrideDecision | undefined {
+  if (
+    !input.decision.canOverride ||
+    input.decision.blockingReasons.length === 0 ||
+    (!input.decision.blocksApproval && input.decision.status !== 'overridden')
+  ) {
+    return undefined
+  }
+
+  const blockerIds = [
+    ...new Set(input.decision.blockingReasons.map((reason) => reason.id)),
+  ].sort()
+  return input.overrides.find(
+    (override) =>
+      override.status === 'accepted' &&
+      !override.provisional &&
+      override.projectId === input.projectId &&
+      override.runId === input.runId &&
+      override.nodeId === input.nodeId &&
+      override.userId === input.userId &&
+      override.role === input.role &&
+      override.policyVersion === input.decision.policyVersion &&
+      override.reason.trim().length > 0 &&
+      override.blockedReasonIds.length === blockerIds.length &&
+      override.blockedReasonIds.every(
+        (blockerId, index) => blockerId === blockerIds[index],
+      ),
+  )
+}
+
 export function createSeedTeamRepository(): TeamRepository {
   const teamProjects = [...projects]
+  const projectOrganizationIds = new Map(
+    teamProjects.map((project) => [project.id, DEMO_ORGANIZATION_ID]),
+  )
   const syncedRuns = [...runs]
   const seedRunIds = new Set(runs.map((run) => run.id))
   const runOrganizationIds = new Map(runs.map((run) => [run.id, DEMO_ORGANIZATION_ID]))
@@ -265,7 +349,18 @@ export function createSeedTeamRepository(): TeamRepository {
   const runtimeBudgetPolicies: RuntimeBudgetPolicy[] = []
   const runtimeBudgetApprovals: RuntimeBudgetApproval[] = []
   const desktopPairingCodes = new Map<string, Omit<DesktopPairingExchangeResult, 'token' | 'tokenId'>>()
-  const desktopTokenSessions = new Map<string, TeamSession>()
+  const desktopTokenSessions = new Map<string, ResolvedDesktopTokenSession>()
+  const workRequestRepository = createSeedWorkRequestRepository({
+    projectExists: (organizationId, projectId) =>
+      projectOrganizationIds.get(projectId) === organizationId,
+    canonicalProjectionExists: (runId, organizationId, projectId) =>
+      syncedRuns.some(
+        (run) =>
+          run.id === runId &&
+          run.projectId === projectId &&
+          runOrganizationIds.get(run.id) === organizationId,
+      ),
+  })
 
   function upsertSyncedRun(run: WorkflowRun) {
     const index = syncedRuns.findIndex((candidate) => candidate.id === run.id)
@@ -285,6 +380,24 @@ export function createSeedTeamRepository(): TeamRepository {
     }
 
     syncedTestEvidenceSummaries.unshift(summary)
+  }
+
+  function hasSameRunProjection(run: WorkflowRun, summary: RemoteRunSummary): boolean {
+    const currentNode = run.nodes.find((node) => node.id === run.currentNodeId)
+    return (
+      run.version === summary.version &&
+      run.title === summary.title &&
+      run.projectId === summary.projectId &&
+      run.status === summary.status &&
+      run.currentNodeId === summary.currentNodeId &&
+      run.branchName === summary.branchName &&
+      run.updatedAt === summary.updatedAt &&
+      currentNode?.id === summary.currentNode.id &&
+      currentNode.stage === summary.currentNode.stage &&
+      currentNode.kind === summary.currentNode.kind &&
+      currentNode.status === summary.currentNode.status &&
+      currentNode.requiredRole === summary.currentNode.requiredRole
+    )
   }
 
   function assertCanonicalRun(
@@ -319,7 +432,7 @@ export function createSeedTeamRepository(): TeamRepository {
     }
   }
 
-  function agentProviderConfigs(): AgentProviderConfig[] {
+  function agentProviderConfigs(context: TeamRepositoryReadContext): AgentProviderConfig[] {
     return [
       {
         id: 'fake-knowledge-review',
@@ -329,16 +442,21 @@ export function createSeedTeamRepository(): TeamRepository {
         enabled: true,
         updatedAt: new Date(0).toISOString(),
       },
-      ...Array.from(providerCredentials.values()).map(({ metadata }) => ({
-        id: metadata.providerId,
-        name: metadata.providerId === 'openai-default' ? 'OpenAI Compatible' : metadata.providerId,
-        kind: 'openai-compatible' as const,
-        ...(metadata.baseUrl ? { baseUrl: metadata.baseUrl } : {}),
-        model: metadata.model,
-        enabled: true,
-        maskedCredential: metadata.maskedCredential,
-        updatedAt: metadata.updatedAt,
-      })),
+      ...Array.from(providerCredentials.entries())
+        .filter(([key]) => key.startsWith(`${context.organizationId}:`))
+        .map(([, { metadata }]) => ({
+          id: metadata.providerId,
+          name:
+            metadata.providerId === 'openai-default'
+              ? 'OpenAI Compatible'
+              : metadata.providerId,
+          kind: 'openai-compatible' as const,
+          ...(metadata.baseUrl ? { baseUrl: metadata.baseUrl } : {}),
+          model: metadata.model,
+          enabled: true,
+          maskedCredential: metadata.maskedCredential,
+          updatedAt: metadata.updatedAt,
+        })),
     ]
   }
 
@@ -360,7 +478,110 @@ export function createSeedTeamRepository(): TeamRepository {
     }
   }
 
-  return {
+  const roleRank: Record<TeamMember['role'], number> = {
+    member: 1,
+    lead: 2,
+    owner: 3,
+  }
+  let repository: TeamRepository
+  const gateCommandRepository = createSeedGateCommandRepository({
+    resolveMaterializedWorkRequestClaim: (input) =>
+      workRequestRepository.resolveMaterializedWorkRequestClaim(input),
+    async evaluatePreflight(input, principal) {
+      const requestedRole =
+        principal.session.role === 'owner'
+          ? 'owner'
+          : principal.session.projectMemberships.find(
+              (membership) =>
+                membership.projectId === input.projectId &&
+                membership.userId === principal.session.userId,
+            )?.role
+      if (!requestedRole) {
+        return { ok: false, outcomeCode: 'project_forbidden' }
+      }
+      const scopedRun = syncedRuns.find(
+        (run) =>
+          run.id === input.runId &&
+          run.projectId === input.projectId &&
+          runOrganizationIds.get(run.id) ===
+            principal.session.organizationId,
+      )
+      if (!scopedRun) {
+        return { ok: false, outcomeCode: 'stale_run' }
+      }
+      const storagePrefix = `${scopedRun.id}:`
+      const localNodeId = (nodeId: string) =>
+        nodeId.startsWith(storagePrefix)
+          ? nodeId.slice(storagePrefix.length)
+          : nodeId
+      if (
+        !scopedRun.nodes.some(
+          (node) => localNodeId(node.id) === localNodeId(input.nodeId),
+        )
+      ) {
+        return { ok: false, outcomeCode: 'node_not_current' }
+      }
+
+      try {
+        const context = await evaluateTeamGateEnforcement(
+          repository,
+          principal.session,
+          input,
+        )
+        const matchingOverride = findCurrentGateCommandOverride({
+          decision: context.decision,
+          overrides: context.overrides,
+          projectId: context.run.projectId,
+          runId: context.run.id,
+          nodeId: context.node.id,
+          userId: principal.session.userId,
+          role: requestedRole,
+        })
+        const result = preflightGateCommand({
+          command: input,
+          run: context.run,
+          currentNode: context.node,
+          requester: {
+            userId: principal.session.userId,
+            role: requestedRole,
+          },
+          enforcement: context.decision,
+          ...(matchingOverride ? { override: matchingOverride } : {}),
+        })
+        return result.allowed
+          ? {
+              ok: true,
+              requestedRole,
+              workflowCommand: result.workflowCommand,
+              evaluationBlockerIds: result.evaluationBlockerIds,
+            }
+          : { ok: false, outcomeCode: result.code }
+      } catch {
+        return {
+          ok: false,
+          outcomeCode: 'authoritative_state_unavailable',
+        }
+      }
+    },
+    requesterStillAuthorized(command) {
+      if (
+        projectOrganizationIds.get(command.projectId) !==
+        command.organizationId
+      ) {
+        return false
+      }
+      const current = members.find(
+        (member) => member.id === command.requestedByUserId,
+      )
+      return Boolean(
+        current && roleRank[current.role] >= roleRank[command.requestedRole],
+      )
+    },
+  })
+
+  repository = {
+    ...workRequestRepository,
+    ...gateCommandRepository,
     async getAuthenticatedIdentity(input) {
       if (input.provider !== 'github' || !input.providerAccountId.startsWith('demo:')) {
         return null
@@ -400,6 +621,35 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
 
+    async resolveBrowserSession(authAccountId) {
+      if (!authAccountId.startsWith('acct-demo-')) {
+        return null
+      }
+
+      const memberId = authAccountId.slice('acct-demo-'.length)
+      const member = members.find((candidate) => candidate.id === memberId)
+      if (!member) {
+        return null
+      }
+
+      return {
+        source: 'authenticated',
+        organizationId: DEMO_ORGANIZATION_ID,
+        userId: member.id,
+        role: member.role,
+        authAccountId,
+        projectMemberships: teamProjects
+          .filter(
+            (project) => projectOrganizationIds.get(project.id) === DEMO_ORGANIZATION_ID,
+          )
+          .map((project) => ({
+            projectId: project.id,
+            userId: member.id,
+            role: member.role,
+          })),
+      }
+    },
+
     async resolveOrBootstrapGitHubIdentity(input) {
       const existing = await this.getAuthenticatedIdentity({
         provider: 'github',
@@ -429,9 +679,13 @@ export function createSeedTeamRepository(): TeamRepository {
         testCommand: input.testCommand ?? '',
       }
       upsertById(teamProjects, project)
+      projectOrganizationIds.set(project.id, context.organizationId)
       return project
     },
     async createDesktopPairingCode(input, context) {
+      if (projectOrganizationIds.get(input.projectId) !== context.organizationId) {
+        throw new TeamProjectScopeError()
+      }
       const createdAt = new Date(0).toISOString()
       const sessionContext = context as TeamRepositorySyncContext & Partial<TeamSession>
       const role = sessionContext.role ?? 'owner'
@@ -444,6 +698,7 @@ export function createSeedTeamRepository(): TeamRepository {
           (membership) => membership.projectId === input.projectId,
         ) ?? { projectId: input.projectId, userId: context.userId, role }
       const tokenRole = role === 'owner' ? 'lead' : role
+      const tokenMembership = { ...projectMembership, role: tokenRole }
       const code = `desktop-pairing-${input.projectId}.demo-secret`
       desktopPairingCodes.set(code, {
         organizationId: context.organizationId,
@@ -451,7 +706,7 @@ export function createSeedTeamRepository(): TeamRepository {
         userId: context.userId,
         role: tokenRole,
         authAccountId,
-        projectMemberships: [projectMembership],
+        projectMemberships: [tokenMembership],
         createdAt,
       })
       return {
@@ -478,17 +733,21 @@ export function createSeedTeamRepository(): TeamRepository {
         createdAt,
       }
       const token = `devflow-desktop-token-${projectId}`
+      const tokenId = `desktop-token-${projectId}`
       desktopTokenSessions.set(token, {
-        source: 'authenticated',
-        organizationId: stored.organizationId,
-        userId: stored.userId,
-        role: stored.role,
-        authAccountId: stored.authAccountId,
-        projectMemberships: stored.projectMemberships,
+        tokenRecordId: tokenId,
+        session: {
+          source: 'authenticated',
+          organizationId: stored.organizationId,
+          userId: stored.userId,
+          role: stored.role,
+          authAccountId: stored.authAccountId,
+          projectMemberships: stored.projectMemberships,
+        },
       })
       return {
         token,
-        tokenId: `desktop-token-${projectId}`,
+        tokenId,
         ...stored,
       }
     },
@@ -497,80 +756,130 @@ export function createSeedTeamRepository(): TeamRepository {
         return null
       }
 
-      const stored = desktopTokenSessions.get(token)
-      if (stored) {
-        return stored
-      }
+      return desktopTokenSessions.get(token) ?? null
+    },
 
-      const projectId = token.replace('devflow-desktop-token-', '')
+    async getRunsBundle(context) {
+      const runs = syncedRuns.filter(
+        (run) => runOrganizationIds.get(run.id) === context.organizationId,
+      )
+      const runIds = new Set(runs.map((run) => run.id))
       return {
-        source: 'authenticated',
-        organizationId: DEMO_ORGANIZATION_ID,
-        userId: 'u-erich',
-        role: 'lead',
-        authAccountId: 'acct-demo-erich',
-        projectMemberships: [{ projectId, userId: 'u-erich', role: 'owner' }],
+        runs,
+        artifacts: syncedArtifacts.filter((artifact) => runIds.has(artifact.runId)),
+        events: syncedEvents.filter((event) => runIds.has(event.runId)),
       }
     },
 
-    async getRunsBundle() {
-      return { runs: syncedRuns, artifacts: syncedArtifacts, events: syncedEvents }
-    },
-
-    async getTeamOverview() {
-      const codingTokenUsage = codingAgentSummaries
+    async getTeamOverview(context) {
+      const scopedProjects = teamProjects.filter(
+        (project) => projectOrganizationIds.get(project.id) === context.organizationId,
+      )
+      const scopedRuns = syncedRuns.filter(
+        (run) => runOrganizationIds.get(run.id) === context.organizationId,
+      )
+      const runIds = new Set(scopedRuns.map((run) => run.id))
+      const projectIds = new Set([
+        ...scopedProjects.map((project) => project.id),
+        ...scopedRuns.map((run) => run.projectId),
+      ])
+      const scopedTestEvidence = syncedTestEvidenceSummaries.filter(
+        (summary) => projectIds.has(summary.projectId) && runIds.has(summary.runId),
+      )
+      const scopedAgentReviews = agentReviews.filter(
+        (review) => projectIds.has(review.projectId) && runIds.has(review.runId),
+      )
+      const scopedAgentTraces = agentTraces.filter((trace) => runIds.has(trace.runId))
+      const scopedAgentTokenUsage = agentTokenUsage.filter(
+        (usage) => projectIds.has(usage.projectId) && runIds.has(usage.runId),
+      )
+      const scopedCodingAgentSummaries = codingAgentSummaries.filter(
+        (summary) => projectIds.has(summary.projectId) && runIds.has(summary.runId),
+      )
+      const codingTokenUsage = scopedCodingAgentSummaries
         .map((summary) => summary.costSummary)
-        .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
+        .filter(
+          (summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> =>
+            Boolean(summary),
+        )
         .map(runtimeCostSummaryToTokenUsage)
-      const allTokenUsage = [...tokenUsage, ...codingTokenUsage]
+      const allTokenUsage = [
+        ...tokenUsage.filter((usage) => projectIds.has(usage.projectId) && runIds.has(usage.runId)),
+        ...codingTokenUsage,
+      ]
+      const scopedOrganizationPolicy =
+        organizationPolicy.organizationId === context.organizationId
+          ? organizationPolicy
+          : createWarnOnlyDefaultPolicy({ organizationId: context.organizationId })
+      const scopedProjectOverrides = projectOverrides.filter((override) =>
+        projectIds.has(override.projectId),
+      )
+      const scopedGateOverrides = gateOverrides.filter(
+        (override) => projectIds.has(override.projectId) && runIds.has(override.runId),
+      )
 
       return {
-        projects: teamProjects,
-        members,
-        runs: syncedRuns,
+        projects: scopedProjects,
+        members: context.organizationId === DEMO_ORGANIZATION_ID ? members : [],
+        runs: scopedRuns,
         projectCost: rollupTokenUsage(allTokenUsage, 'projectId'),
         memberCost: rollupTokenUsage(allTokenUsage, 'userId'),
         totalCost: formatUsd(allTokenUsage.reduce((sum, row) => sum + row.costUsd, 0)),
-        testEvidenceSummaries: syncedTestEvidenceSummaries,
-        agentReviews,
-        agentTraces,
-        agentTokenUsage,
-        agentProviders: agentProviderConfigs(),
-        codingAgentSummaries,
+        testEvidenceSummaries: scopedTestEvidence,
+        agentReviews: scopedAgentReviews,
+        agentTraces: scopedAgentTraces,
+        agentTokenUsage: scopedAgentTokenUsage,
+        agentProviders: agentProviderConfigs(context),
+        codingAgentSummaries: scopedCodingAgentSummaries,
         policyAwareDeliverySummaries: buildPolicyAwareDeliverySummaries({
-          projectIds: teamProjects.map((project) => project.id),
-          testEvidenceSummaries: syncedTestEvidenceSummaries,
-          agentReviews,
-          codingAgentSummaries,
-          gateOverrides,
+          projectIds: scopedProjects.map((project) => project.id),
+          testEvidenceSummaries: scopedTestEvidence,
+          agentReviews: scopedAgentReviews,
+          codingAgentSummaries: scopedCodingAgentSummaries,
+          gateOverrides: scopedGateOverrides,
           updatedAt: new Date().toISOString(),
         }),
         enforcementPolicies: {
-          organizationPolicy,
-          projectOverrides,
-          effectivePolicies: teamProjects.map((project) =>
-            resolveEffectivePolicy(
-              organizationPolicy,
-              projectOverrides.find((override) => override.projectId === project.id) ?? null,
+          organizationPolicy: scopedOrganizationPolicy,
+          projectOverrides: scopedProjectOverrides,
+          effectivePolicies: scopedProjects.map((project) => ({
+            ...resolveEffectivePolicy(
+              scopedOrganizationPolicy,
+              scopedProjectOverrides.find((override) => override.projectId === project.id) ?? null,
             ),
-          ),
-          gateOverrides,
+            projectId: project.id,
+          })),
+          gateOverrides: scopedGateOverrides,
         },
-        runtimeBudgetPolicies,
-        runtimeBudgetApprovals,
+        runtimeBudgetPolicies: runtimeBudgetPolicies.filter((policy) =>
+          projectIds.has(policy.projectId),
+        ),
+        runtimeBudgetApprovals: runtimeBudgetApprovals.filter((approval) =>
+          projectIds.has(approval.projectId),
+        ),
       }
     },
 
-    async getSkills() {
-      return skills
+    async getSkills(context) {
+      return context.organizationId === DEMO_ORGANIZATION_ID ? skills : []
     },
 
-    async getMcpServers() {
-      return mcpServers
+    async getMcpServers(context) {
+      return context.organizationId === DEMO_ORGANIZATION_ID ? mcpServers : []
     },
 
     async uploadRunSummary(summary, context) {
       summary = redactRemoteRunSummaryForSync(summary)
+      if (
+        !workRequestRepository.permitsRunSummaryUpload({
+          organizationId: context.organizationId,
+          projectId: summary.projectId,
+          runId: summary.runId,
+          tokenRecordId: context.tokenRecordId ?? null,
+        })
+      ) {
+        throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+      }
       const existingRun = syncedRuns.find((run) => run.id === summary.runId)
       if (
         existingRun &&
@@ -578,9 +887,21 @@ export function createSeedTeamRepository(): TeamRepository {
           runOrganizationIds.get(summary.runId) !== context.organizationId ||
           existingRun.projectId !== summary.projectId ||
           existingRun.creatorId !== context.userId ||
-          existingRun.updatedAt > summary.updatedAt)
+          existingRun.version > summary.version)
       ) {
         throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+      }
+
+      if (existingRun?.version === summary.version) {
+        if (!hasSameRunProjection(existingRun, summary)) {
+          throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+        }
+
+        return {
+          accepted: true,
+          syncedAt: new Date().toISOString(),
+          message: 'run summary accepted by seed repository',
+        }
       }
 
       const currentNode = {
@@ -610,6 +931,7 @@ export function createSeedTeamRepository(): TeamRepository {
       const syncedRun: WorkflowRun = existingRun
         ? {
             ...existingRun,
+            version: summary.version,
             title: summary.title,
             projectId: summary.projectId,
             status: summary.status,
@@ -620,6 +942,7 @@ export function createSeedTeamRepository(): TeamRepository {
           }
         : {
             id: summary.runId,
+            version: summary.version,
             title: summary.title,
             request: 'Synced from DevFlow Electron.',
             projectId: summary.projectId,
@@ -768,17 +1091,20 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
 
-    async listAgentProviders() {
-      return agentProviderConfigs()
+    async listAgentProviders(context) {
+      return agentProviderConfigs(context)
     },
 
-    async saveAgentProviderCredential(metadata, encryptedSecret) {
-      providerCredentials.set(metadata.providerId, { metadata, encryptedSecret })
+    async saveAgentProviderCredential(metadata, encryptedSecret, context) {
+      providerCredentials.set(`${context.organizationId}:${metadata.providerId}`, {
+        metadata,
+        encryptedSecret,
+      })
       return metadata
     },
 
-    async getAgentProviderCredential(providerId) {
-      return providerCredentials.get(providerId) ?? null
+    async getAgentProviderCredential(providerId, context) {
+      return providerCredentials.get(`${context.organizationId}:${providerId}`) ?? null
     },
 
     async saveAgentReviewBundle(bundle) {
@@ -794,6 +1120,17 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
 
+    async saveAgentEvent(event, context) {
+      if (!syncedRuns.some(
+        (run) => run.id === event.runId && runOrganizationIds.get(run.id) === context.organizationId,
+      )) {
+        throw new CanonicalRunRequiredError(event.runId, 'unknown')
+      }
+      const redactedEvent = redactAgentEventForPersistence(event)
+      upsertById(syncedEvents, redactedEvent)
+      return redactedEvent
+    },
+
     async listAgentReviews(input) {
       return agentReviews.filter((review) => !input.runId || review.runId === input.runId)
     },
@@ -803,7 +1140,10 @@ export function createSeedTeamRepository(): TeamRepository {
       return {
         organizationPolicy,
         projectOverride,
-        effectivePolicy: resolveEffectivePolicy(organizationPolicy, projectOverride),
+        effectivePolicy: {
+          ...resolveEffectivePolicy(organizationPolicy, projectOverride),
+          projectId,
+        },
       }
     },
 
@@ -844,4 +1184,5 @@ export function createSeedTeamRepository(): TeamRepository {
       return runtimeBudgetApprovals.filter((approval) => !input.projectId || approval.projectId === input.projectId)
     },
   }
+  return repository
 }

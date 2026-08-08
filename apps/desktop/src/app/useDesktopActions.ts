@@ -585,6 +585,9 @@ export function useDesktopActions(input: {
         requestedBy: currentUser.id,
         runtime: 'electron',
         providerId: selectedAgentProviderId,
+        ...(runtimeBudgetApprovalId.trim()
+          ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
+          : {}),
       })
       applyLocalExecutionState(result.state)
       setSelectedRunId(result.review.runId)
@@ -622,7 +625,6 @@ export function useDesktopActions(input: {
     setToast('正在创建 managed worktree 并启动 Coding Agent...')
 
     try {
-      await desktopApi.ensureCodingEngine({ projectId: selectedLocalProject.id })
       const result = await desktopApi.runCodingAgent({
         runId: selectedRun.id,
         nodeId: selectedNode.id,
@@ -664,7 +666,6 @@ export function useDesktopActions(input: {
     setToast('正在按 Remediation Plan 启动 Coding Retry...')
 
     try {
-      await desktopApi.ensureCodingEngine({ projectId: selectedLocalProject.id })
       const result = await desktopApi.startRetryAttempt({
         runId: selectedRun.id,
         nodeId: selectedNode.id,

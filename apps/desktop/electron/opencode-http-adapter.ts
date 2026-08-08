@@ -18,6 +18,8 @@ export type OpencodeMessageModel = {
 
 export type OpencodeSession = {
   id: string
+  directory: string
+  permission?: OpencodePermissionRule[]
 }
 
 export type OpencodePermission = {
@@ -75,8 +77,7 @@ export async function createOpencodeSession(input: {
   model: OpencodeSessionModel
   fetcher?: Fetcher
 }): Promise<OpencodeSession> {
-  return postJson<OpencodeSession>(input.fetcher, input.baseUrl, '/session', {
-    directory: input.directory,
+  return postJson<OpencodeSession>(input.fetcher, input.baseUrl, withDirectory('/session', input.directory), {
     title: input.title,
     model: input.model,
     permission: createDefaultOpencodePermissionRules(),
@@ -86,21 +87,32 @@ export async function createOpencodeSession(input: {
 export async function sendOpencodeMessage(input: {
   baseUrl: string
   sessionId: string
+  directory: string
   model: OpencodeMessageModel
   text: string
   fetcher?: Fetcher
 }): Promise<unknown> {
-  return postJson(input.fetcher, input.baseUrl, `/session/${input.sessionId}/message`, {
-    model: input.model,
-    parts: [{ type: 'text', text: input.text }],
-  })
+  return postJson(
+    input.fetcher,
+    input.baseUrl,
+    withDirectory(`/session/${input.sessionId}/message`, input.directory),
+    {
+      model: input.model,
+      parts: [{ type: 'text', text: input.text }],
+    },
+  )
 }
 
 export async function listOpencodePermissions(input: {
   baseUrl: string
+  directory?: string
   fetcher?: Fetcher
 }): Promise<OpencodePermission[]> {
-  return getJson<OpencodePermission[]>(input.fetcher, input.baseUrl, '/permission')
+  return getJson<OpencodePermission[]>(
+    input.fetcher,
+    input.baseUrl,
+    input.directory ? withDirectory('/permission', input.directory) : '/permission',
+  )
 }
 
 export async function replyOpencodePermission(input: {
@@ -111,11 +123,15 @@ export async function replyOpencodePermission(input: {
   message: string
   fetcher?: Fetcher
 }): Promise<boolean> {
-  return postJson<boolean>(input.fetcher, input.baseUrl, `/permission/${input.requestId}/reply`, {
-    directory: input.directory,
-    reply: input.reply,
-    message: input.message,
-  })
+  return postJson<boolean>(
+    input.fetcher,
+    input.baseUrl,
+    withDirectory(`/permission/${input.requestId}/reply`, input.directory),
+    {
+      reply: input.reply,
+      message: input.message,
+    },
+  )
 }
 
 export async function abortOpencodeSession(input: {
@@ -127,7 +143,7 @@ export async function abortOpencodeSession(input: {
   return postJson<boolean>(
     input.fetcher,
     input.baseUrl,
-    `/session/${input.sessionId}/abort?directory=${encodeURIComponent(input.directory)}`,
+    withDirectory(`/session/${input.sessionId}/abort`, input.directory),
     undefined,
   )
 }
@@ -141,12 +157,16 @@ export async function listOpencodeDiff(input: {
   return getJson<OpencodeDiffFile[]>(
     input.fetcher,
     input.baseUrl,
-    `/session/${input.sessionId}/diff?directory=${encodeURIComponent(input.directory)}`,
+    withDirectory(`/session/${input.sessionId}/diff`, input.directory),
   )
 }
 
+function withDirectory(pathname: string, directory: string): string {
+  return `${pathname}?directory=${encodeURIComponent(directory)}`
+}
+
 async function getJson<T>(fetcher: Fetcher | undefined, baseUrl: string, pathname: string): Promise<T> {
-  const response = await (fetcher ?? fetch)(url(baseUrl, pathname), {
+  const response = await fetchOpencodeResponse(fetcher, baseUrl, pathname, {
     headers: { accept: 'application/json' },
   })
   return readJson<T>(response, pathname)
@@ -158,7 +178,7 @@ async function postJson<T>(
   pathname: string,
   body: unknown,
 ): Promise<T> {
-  const response = await (fetcher ?? fetch)(url(baseUrl, pathname), {
+  const response = await fetchOpencodeResponse(fetcher, baseUrl, pathname, {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -166,12 +186,34 @@ async function postJson<T>(
   return readJson<T>(response, pathname)
 }
 
-async function readJson<T>(response: Response, pathname: string): Promise<T> {
-  const text = await response.text()
-  if (!response.ok) {
-    throw new Error(`opencode ${pathname} failed with ${response.status}: ${text.slice(0, 500)}`)
+async function fetchOpencodeResponse(
+  fetcher: Fetcher | undefined,
+  baseUrl: string,
+  pathname: string,
+  init: RequestInit,
+): Promise<Response> {
+  try {
+    return await (fetcher ?? fetch)(url(baseUrl, pathname), init)
+  } catch {
+    throw new Error(`opencode ${safeEndpoint(pathname)} request failed`)
   }
-  return (text ? JSON.parse(text) : undefined) as T
+}
+
+async function readJson<T>(response: Response, pathname: string): Promise<T> {
+  const endpoint = safeEndpoint(pathname)
+  if (!response.ok) {
+    throw new Error(`opencode ${endpoint} failed with ${response.status}`)
+  }
+  try {
+    const text = await response.text()
+    return (text ? JSON.parse(text) : undefined) as T
+  } catch {
+    throw new Error(`opencode ${endpoint} returned an invalid JSON response`)
+  }
+}
+
+function safeEndpoint(pathname: string): string {
+  return pathname.split('?', 1)[0] ?? pathname
 }
 
 function url(baseUrl: string, pathname: string): string {

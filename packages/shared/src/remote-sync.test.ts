@@ -12,6 +12,7 @@ import {
 
 const run: WorkflowRun = {
   id: 'run-1',
+  version: 4,
   title: 'Remote sync run',
   request: 'Sync only approved summaries.',
   projectId: 'project-1',
@@ -157,6 +158,7 @@ describe('remote sync helpers', () => {
     expect(createRemoteRunSummary(run, 'approval')).toEqual({
       kind: 'approval',
       runId: 'run-1',
+      version: 4,
       projectId: 'project-1',
       title: 'Remote sync run',
       status: 'building',
@@ -171,6 +173,26 @@ describe('remote sync helpers', () => {
       branchName: 'ai/remote-sync',
       updatedAt: '2026-06-16T00:10:00.000Z',
     })
+  })
+
+  it('rejects local node IDs that impersonate the Team storage namespace', () => {
+    expect(() =>
+      createRemoteRunSummary({
+        ...run,
+        currentNodeId: 'run-1:node-gate',
+        nodes: run.nodes.map((node) => ({
+          ...node,
+          id: 'run-1:node-gate',
+        })),
+      }),
+    ).toThrow(/reserved Team node namespace/)
+
+    expect(() =>
+      createRemoteTestEvidenceSummary({
+        ...evidence,
+        nodeId: 'run-1:node-test',
+      }),
+    ).toThrow(/reserved Team node namespace/)
   })
 
   it('redacts paths and secrets from outbound Run title and branch name', () => {
@@ -297,5 +319,19 @@ describe('remote sync helpers', () => {
     expect(JSON.stringify(summary)).not.toContain('finding-secret')
     expect(JSON.stringify(summary)).not.toContain('local-evidence-id')
     expect(JSON.stringify(summary)).not.toContain('local-knowledge-reference-id')
+    expect(() =>
+      createRemoteAgentReviewSummary({
+        ...review,
+        nodeId: 'run-1:node-gate',
+        policyFindings: review.policyFindings.map((finding) => ({
+          ...finding,
+          nodeId: 'run-1:node-gate',
+        })),
+        gateAdvisory: {
+          ...review.gateAdvisory,
+          nodeId: 'run-1:node-gate',
+        },
+      }),
+    ).toThrow(/reserved Team node namespace/)
   })
 })

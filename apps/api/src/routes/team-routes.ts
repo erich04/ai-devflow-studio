@@ -1,18 +1,18 @@
 import { randomUUID } from 'node:crypto'
 import {
   buildAgentReviewContext,
-  buildKnowledgeGovernanceChecks,
   canOverrideBlockedGate,
   createAgentReviewArtifacts,
   createFakeAgentProvider,
   createWarnOnlyDefaultPolicy,
   createOpenAiCompatibleAgentProvider,
-  evaluateGateEnforcement,
   evaluateRuntimeBudgetGuard,
+  type AgentProvider,
   type GateOverrideDecision,
   formatUsd,
   type KnowledgeChunk,
   type KnowledgeDocument,
+  parseBudgetGuardDecision,
   type OrganizationEnforcementPolicy,
   resolveDevFlowRuntimeFlags,
   redactLocalAbsolutePaths,
@@ -21,8 +21,9 @@ import {
   redactRemoteRunSummaryForSync,
   redactRemoteTestEvidenceSummaryForSync,
   redactSecrets,
+  redactSensitiveText,
   resolveEffectivePolicy,
-  runKnowledgeReviewAgent,
+  runBudgetedKnowledgeReviewAgent,
   validateEnforcementPolicy,
   type ProviderCredentialMetadata,
   type RemoteAgentReviewSummary,
@@ -37,6 +38,7 @@ import {
 } from '@ai-devflow/shared'
 import { canAccessProject, canSyncProject, getProjectMembershipRole } from '../auth/session'
 import type { GitHubOAuthClient } from '../auth/github-oauth'
+import type { RequestPrincipal } from '../auth/request-auth'
 import {
   decryptAgentCredential,
   encryptAgentCredential,
@@ -46,11 +48,15 @@ import {
   CanonicalRunRequiredError,
   RemoteChildSummaryConflictError,
   RemoteRunSummaryConflictError,
+  TeamProjectScopeError,
   type RunsBundle,
   type TeamOverviewPayload,
   type TeamRepository,
 } from '../repositories/team-repository'
 import { clearSessionCookie, createSessionCookie } from '../auth/session-cookie'
+import { resolveWorkRequestRoute } from './work-request-routes'
+import { resolveGateCommandRoute } from './gate-command-routes'
+import { evaluateTeamGateEnforcement } from '../repositories/team-gate-enforcement'
 
 const defaultKnowledgeDocuments: KnowledgeDocument[] = []
 const defaultKnowledgeChunks: KnowledgeChunk[] = []
@@ -71,10 +77,13 @@ export type ResolveTeamRouteOptions = {
   auth?: {
     sessionSecret: string
     createState?: () => string
+    secureCookies?: boolean
   }
   body?: unknown
   cookies?: Record<string, string | undefined>
   githubOAuth?: GitHubOAuthClient
+  postAuthRedirectUrl?: string
+  principal?: RequestPrincipal | null
   session?: TeamSession | null
   searchParams?: URLSearchParams
 }
@@ -91,6 +100,7 @@ type KnowledgeReviewInput = {
   nodeId: string
   projectId: string
   providerId?: string
+  runtimeBudgetApprovalId?: string
 }
 
 type EnforcementEvaluateInput = {
@@ -114,6 +124,7 @@ type RuntimeBudgetPolicyInput = {
 
 type RuntimeBudgetEvaluateInput = {
   projectId: string
+  providerId: string
   projectedCostUsd: number
   approvalId?: string
 }
@@ -192,6 +203,9 @@ function isRemoteRunSummary(value: unknown): value is RemoteRunSummary {
     isRecord(value) &&
     (value['kind'] === 'run' || value['kind'] === 'approval' || value['kind'] === 'event') &&
     typeof value['runId'] === 'string' &&
+    typeof value['version'] === 'number' &&
+    Number.isInteger(value['version']) &&
+    value['version'] >= 1 &&
     typeof value['projectId'] === 'string' &&
     typeof value['title'] === 'string' &&
     isRunStatus(value['status']) &&
@@ -339,29 +353,16 @@ function isRemoteCodingCostSummary(value: unknown): boolean {
   )
 }
 
-function isBudgetGuardStatus(value: unknown): boolean {
-  return (
-    value === 'allowed' ||
-    value === 'warning' ||
-    value === 'requires_lead_approval' ||
-    value === 'approved_over_budget' ||
-    value === 'disabled'
-  )
-}
-
 function isRemoteBudgetDecision(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    isBudgetGuardStatus(value['status']) &&
-    typeof value['blocksRun'] === 'boolean' &&
-    typeof value['currentSpendUsd'] === 'number' &&
-    typeof value['projectedCostUsd'] === 'number' &&
-    (value['limitUsd'] === undefined || typeof value['limitUsd'] === 'number') &&
-    (value['approvalRequiredRole'] === undefined || value['approvalRequiredRole'] === 'lead') &&
-    (value['approvalId'] === undefined || typeof value['approvalId'] === 'string') &&
-    typeof value['reason'] === 'string' &&
-    !hasLocalOnlyCodingField(value)
-  )
+  if (!isRecord(value) || hasLocalOnlyCodingField(value)) {
+    return false
+  }
+  try {
+    parseBudgetGuardDecision(value)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function isRepoRelativePath(value: unknown): value is string {
@@ -482,12 +483,16 @@ function parseKnowledgeReviewInput(value: unknown): KnowledgeReviewInput {
   }
 
   const providerId = value['providerId']
+  const runtimeBudgetApprovalId = value['runtimeBudgetApprovalId']
 
   return {
     runId: readRequiredString(value, 'runId'),
     nodeId: readRequiredString(value, 'nodeId'),
     projectId: readRequiredString(value, 'projectId'),
     ...(typeof providerId === 'string' && providerId.trim() ? { providerId: providerId.trim() } : {}),
+    ...(typeof runtimeBudgetApprovalId === 'string' && runtimeBudgetApprovalId.trim()
+      ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
+      : {}),
   }
 }
 
@@ -555,6 +560,7 @@ function parseRuntimeBudgetEvaluateInput(value: unknown): RuntimeBudgetEvaluateI
   const approvalId = value['approvalId']
   return {
     projectId: readRequiredString(value, 'projectId'),
+    providerId: readRequiredString(value, 'providerId'),
     projectedCostUsd: readRequiredNumber(value, 'projectedCostUsd'),
     ...(typeof approvalId === 'string' && approvalId.trim() ? { approvalId: approvalId.trim() } : {}),
   }
@@ -718,12 +724,12 @@ async function acceptCanonicalRunSummary<T>(upload: () => Promise<T>): Promise<A
   }
 }
 
-function createOAuthStateCookie(state: string): string {
-  return `devflow_oauth_state=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`
+function createOAuthStateCookie(state: string, secure = false): string {
+  return `devflow_oauth_state=${state}; HttpOnly${secure ? '; Secure' : ''}; SameSite=Lax; Path=/; Max-Age=600`
 }
 
-function clearOAuthStateCookie(): string {
-  return 'devflow_oauth_state=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'
+function clearOAuthStateCookie(secure = false): string {
+  return `devflow_oauth_state=; HttpOnly${secure ? '; Secure' : ''}; SameSite=Lax; Path=/; Max-Age=0`
 }
 
 function filterRunsBundleForSession(bundle: RunsBundle, session: TeamSession): RunsBundle {
@@ -743,6 +749,8 @@ function filterOverviewForSession(
 ): TeamOverviewPayload {
   const projects = overview.projects.filter((project) => canAccessProject(session, project.id))
   const projectIds = new Set(projects.map((project) => project.id))
+  const runs = overview.runs.filter((run) => projectIds.has(run.projectId))
+  const runIds = new Set(runs.map((run) => run.id))
   const projectCost = overview.projectCost.filter((rollup) => projectIds.has(rollup.key))
   const organizationPolicy =
     overview.enforcementPolicies.organizationPolicy.organizationId === session.organizationId
@@ -753,122 +761,50 @@ function filterOverviewForSession(
   )
 
   return {
-    ...overview,
     projects,
-    runs: overview.runs.filter((run) => projectIds.has(run.projectId)),
+    members: overview.members,
+    runs,
     projectCost,
+    memberCost: projects.length === overview.projects.length ? overview.memberCost : [],
     totalCost: formatUsd(projectCost.reduce((sum, rollup) => sum + rollup.costUsd, 0)),
     testEvidenceSummaries: overview.testEvidenceSummaries.filter((evidence) =>
-      projectIds.has(evidence.projectId),
+      projectIds.has(evidence.projectId) && runIds.has(evidence.runId),
     ),
+    agentReviews: overview.agentReviews.filter(
+      (review) => projectIds.has(review.projectId) && runIds.has(review.runId),
+    ),
+    agentTraces: overview.agentTraces.filter((trace) => runIds.has(trace.runId)),
+    agentTokenUsage: overview.agentTokenUsage.filter(
+      (usage) => projectIds.has(usage.projectId) && runIds.has(usage.runId),
+    ),
+    agentProviders: overview.agentProviders,
     codingAgentSummaries: overview.codingAgentSummaries.filter((summary) =>
-      projectIds.has(summary.projectId),
+      projectIds.has(summary.projectId) && runIds.has(summary.runId),
     ),
-    policyAwareDeliverySummaries: overview.policyAwareDeliverySummaries.filter((summary) =>
-      projectIds.has(summary.projectId),
+    policyAwareDeliverySummaries: overview.policyAwareDeliverySummaries.filter(
+      (summary) =>
+        projectIds.has(summary.projectId) && (!summary.runId || runIds.has(summary.runId)),
     ),
     enforcementPolicies: {
       organizationPolicy,
       projectOverrides,
-      effectivePolicies: projects.map((project) =>
-        resolveEffectivePolicy(
+      effectivePolicies: projects.map((project) => ({
+        ...resolveEffectivePolicy(
           organizationPolicy,
           projectOverrides.find((override) => override.projectId === project.id) ?? null,
         ),
-      ),
+        projectId: project.id,
+      })),
       gateOverrides: overview.enforcementPolicies.gateOverrides.filter((override) =>
-        projectIds.has(override.projectId),
+        projectIds.has(override.projectId) && runIds.has(override.runId),
       ),
     },
-  }
-}
-
-async function evaluateEnforcementForInput(
-  repository: TeamRepository,
-  session: TeamSession,
-  input: EnforcementEvaluateInput,
-) {
-  if (!canAccessProject(session, input.projectId)) {
-    throw new Error('Project access required')
-  }
-
-  const [bundle, overview, policyBundle, overrides] = await Promise.all([
-    repository.getRunsBundle(),
-    repository.getTeamOverview(),
-    repository.getEnforcementPolicy(input.projectId, session),
-    repository.listGateOverrides({ runId: input.runId }, session),
-  ])
-  const storedRun = bundle.runs.find((candidate) => candidate.id === input.runId)
-  if (!storedRun || storedRun.projectId !== input.projectId || !canAccessProject(session, storedRun.projectId)) {
-    throw new Error('Project access required')
-  }
-
-  const localNodeId = (nodeId: string) => {
-    const remotePrefix = `${storedRun.id}:`
-    return nodeId.startsWith(remotePrefix) ? nodeId.slice(remotePrefix.length) : nodeId
-  }
-  const run: WorkflowRun = {
-    ...storedRun,
-    currentNodeId: localNodeId(storedRun.currentNodeId),
-    nodes: storedRun.nodes.map((candidate) => ({ ...candidate, id: localNodeId(candidate.id) })),
-    edges: storedRun.edges.map((edge) => ({
-      ...edge,
-      source: localNodeId(edge.source),
-      target: localNodeId(edge.target),
-    })),
-  }
-
-  const canonicalNodeId = localNodeId(input.nodeId)
-  const node = run.nodes.find((candidate) => candidate.id === canonicalNodeId)
-  if (!node) {
-    throw new Error(`Run node not found: ${input.nodeId}`)
-  }
-
-  const governanceChecks = buildKnowledgeGovernanceChecks({
-    run,
-    node,
-    artifacts: bundle.artifacts
-      .filter((artifact) => artifact.runId === run.id)
-      .map((artifact) => ({ ...artifact, nodeId: localNodeId(artifact.nodeId) })),
-    documents: defaultKnowledgeDocuments,
-    chunks: defaultKnowledgeChunks,
-    testEvidence: overview.testEvidenceSummaries
-      .filter((summary) => summary.runId === run.id)
-      .map(toTestEvidence)
-      .map((evidence) => ({ ...evidence, nodeId: localNodeId(evidence.nodeId) })),
-  })
-  const agentReviews = overview.agentReviews
-    .filter((review) => review.runId === run.id && localNodeId(review.nodeId) === node.id)
-    .map((review) => ({
-      ...review,
-      nodeId: localNodeId(review.nodeId),
-      policyFindings: review.policyFindings.map((finding) => ({
-        ...finding,
-        nodeId: localNodeId(finding.nodeId),
-      })),
-    }))
-  const latestAgentReview = agentReviews
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null
-  const agentPolicyFindings = agentReviews.flatMap((review) => review.policyFindings)
-  const normalizedOverrides = overrides.map((override) => ({
-    ...override,
-    nodeId: localNodeId(override.nodeId),
-  }))
-
-  return {
-    run,
-    node,
-    policyBundle,
-    decision: evaluateGateEnforcement({
-      run,
-      node,
-      effectivePolicy: policyBundle.effectivePolicy,
-      governanceChecks,
-      agentPolicyFindings,
-      latestAgentReview,
-      overrides: normalizedOverrides,
-      policySource: 'remote_cache',
-    }),
+    runtimeBudgetPolicies: overview.runtimeBudgetPolicies.filter((policy) =>
+      projectIds.has(policy.projectId),
+    ),
+    runtimeBudgetApprovals: overview.runtimeBudgetApprovals.filter((approval) =>
+      projectIds.has(approval.projectId),
+    ),
   }
 }
 
@@ -889,7 +825,10 @@ export async function resolveTeamRoute(
       status: 302,
       headers: {
         location: redirectTo,
-        'set-cookie': createOAuthStateCookie(state),
+        'set-cookie': createOAuthStateCookie(
+          state,
+          options.auth.secureCookies === true,
+        ),
       },
       body: { redirectTo },
     }
@@ -913,24 +852,22 @@ export async function resolveTeamRoute(
     }
 
     const sessionCookie = createSessionCookie(
-      {
-        source: 'authenticated',
-        organizationId: result.identity.user.organizationId,
-        userId: result.identity.user.id,
-        role: result.identity.user.role,
-        authAccountId: result.identity.authAccount.id,
-        projectMemberships: result.identity.projectMemberships,
-      },
+      { authAccountId: result.identity.authAccount.id },
       options.auth.sessionSecret,
+      { secure: options.auth.secureCookies === true },
     )
+    const redirectTo = options.postAuthRedirectUrl ?? '/'
 
     return {
       status: 302,
       headers: {
-        location: '/',
-        'set-cookie': [sessionCookie, clearOAuthStateCookie()],
+        location: redirectTo,
+        'set-cookie': [
+          sessionCookie,
+          clearOAuthStateCookie(options.auth.secureCookies === true),
+        ],
       },
-      body: { redirectTo: '/' },
+      body: { redirectTo },
     }
   }
 
@@ -938,10 +875,28 @@ export async function resolveTeamRoute(
     return {
       status: 204,
       headers: {
-        'set-cookie': clearSessionCookie(),
+        'set-cookie': clearSessionCookie({
+          secure: options.auth?.secureCookies === true,
+        }),
       },
       body: null,
     }
+  }
+
+  const workRequestResult = await resolveWorkRequestRoute(method, pathname, repository, {
+    body: options.body,
+    ...(options.principal !== undefined ? { principal: options.principal } : {}),
+  })
+  if (workRequestResult) {
+    return workRequestResult
+  }
+
+  const gateCommandResult = await resolveGateCommandRoute(method, pathname, repository, {
+    body: options.body,
+    ...(options.principal !== undefined ? { principal: options.principal } : {}),
+  })
+  if (gateCommandResult) {
+    return gateCommandResult
   }
 
   if (method === 'GET' && pathname === '/api/runs') {
@@ -951,7 +906,10 @@ export async function resolveTeamRoute(
 
     return {
       status: 200,
-      body: filterRunsBundleForSession(await repository.getRunsBundle(), options.session),
+      body: filterRunsBundleForSession(
+        await repository.getRunsBundle(options.session),
+        options.session,
+      ),
     }
   }
 
@@ -966,7 +924,7 @@ export async function resolveTeamRoute(
       return badRequest('Invalid runId')
     }
 
-    const bundle = await repository.getRunsBundle()
+    const bundle = await repository.getRunsBundle(options.session)
     const run = bundle.runs.find((candidate) => candidate.id === runId)
     if (!run) {
       return notFound(`Run not found: ${runId}`)
@@ -998,7 +956,10 @@ export async function resolveTeamRoute(
 
     return {
       status: 200,
-      body: filterOverviewForSession(await repository.getTeamOverview(), options.session),
+      body: filterOverviewForSession(
+        await repository.getTeamOverview(options.session),
+        options.session,
+      ),
     }
   }
 
@@ -1039,9 +1000,21 @@ export async function resolveTeamRoute(
       return forbidden('Project role lead required')
     }
 
-    return {
-      status: 201,
-      body: await repository.createDesktopPairingCode({ projectId }, options.session),
+    const overview = await repository.getTeamOverview(options.session)
+    if (!overview.projects.some((project) => project.id === projectId)) {
+      return notFound('Project not found')
+    }
+
+    try {
+      return {
+        status: 201,
+        body: await repository.createDesktopPairingCode({ projectId }, options.session),
+      }
+    } catch (error) {
+      if (error instanceof TeamProjectScopeError) {
+        return notFound('Project not found')
+      }
+      throw error
     }
   }
 
@@ -1073,7 +1046,7 @@ export async function resolveTeamRoute(
 
     return {
       status: 200,
-      body: { skills: await repository.getSkills() },
+      body: { skills: await repository.getSkills(options.session) },
     }
   }
 
@@ -1084,7 +1057,7 @@ export async function resolveTeamRoute(
 
     return {
       status: 200,
-      body: { servers: await repository.getMcpServers() },
+      body: { servers: await repository.getMcpServers(options.session) },
     }
   }
 
@@ -1147,7 +1120,7 @@ export async function resolveTeamRoute(
     }
 
     try {
-      const { decision } = await evaluateEnforcementForInput(repository, options.session, input)
+      const { decision } = await evaluateTeamGateEnforcement(repository, options.session, input)
       return { status: 200, body: decision }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to evaluate enforcement'
@@ -1168,7 +1141,7 @@ export async function resolveTeamRoute(
     }
 
     try {
-      const { run, node, decision } = await evaluateEnforcementForInput(repository, options.session, input)
+      const { run, node, decision } = await evaluateTeamGateEnforcement(repository, options.session, input)
       if (decision.policyVersion !== input.policyVersion) {
         return forbidden('Policy version is stale; re-evaluate before overriding')
       }
@@ -1281,7 +1254,7 @@ export async function resolveTeamRoute(
       return forbidden('Project access required')
     }
     const [overview, policy, approvals] = await Promise.all([
-      repository.getTeamOverview(),
+      repository.getTeamOverview(options.session),
       repository.getRuntimeBudgetPolicy(input.projectId, options.session),
       repository.listRuntimeBudgetApprovals({ projectId: input.projectId }, options.session),
     ])
@@ -1294,6 +1267,8 @@ export async function resolveTeamRoute(
     return {
       status: 200,
       body: evaluateRuntimeBudgetGuard({
+        projectId: input.projectId,
+        providerId: input.providerId,
         policy,
         currentSpendUsd,
         projectedCostUsd: input.projectedCostUsd,
@@ -1389,11 +1364,34 @@ export async function resolveTeamRoute(
       return unauthorized()
     }
 
-    const runId = options.searchParams?.get('runId') ?? undefined
+    const session = options.session
+    const runId = options.searchParams?.get('runId')?.trim() || undefined
+    const bundle = await repository.getRunsBundle(session)
+    const visibleRuns = new Map(
+      bundle.runs
+        .filter((run) => canAccessProject(session, run.projectId))
+        .map((run) => [run.id, run]),
+    )
+    let targetRun: WorkflowRun | undefined
+    if (runId) {
+      targetRun = visibleRuns.get(runId)
+      if (!targetRun) {
+        return notFound('Run not found')
+      }
+    }
+
+    const reviews = await repository.listAgentReviews(runId ? { runId } : {}, session)
     return {
       status: 200,
       body: {
-        reviews: await repository.listAgentReviews(runId ? { runId } : {}, options.session),
+        reviews: reviews.filter((review) => {
+          const visibleRun = visibleRuns.get(review.runId)
+          return Boolean(
+            visibleRun &&
+              visibleRun.projectId === review.projectId &&
+              (!targetRun || visibleRun.id === targetRun.id),
+          )
+        }),
       },
     }
   }
@@ -1415,8 +1413,8 @@ export async function resolveTeamRoute(
     }
 
     const [bundle, overview] = await Promise.all([
-      repository.getRunsBundle(),
-      repository.getTeamOverview(),
+      repository.getRunsBundle(options.session),
+      repository.getTeamOverview(options.session),
     ])
     const run = bundle.runs.find((candidate) => candidate.id === input.runId)
     if (!run || run.projectId !== input.projectId || !canAccessProject(options.session, run.projectId)) {
@@ -1427,13 +1425,22 @@ export async function resolveTeamRoute(
     if (!node) {
       return badRequest(`Run node not found: ${input.nodeId}`)
     }
+    if (node.id !== run.currentNodeId) {
+      return badRequest('Knowledge Review requires the current run node.')
+    }
+    if (node.kind !== 'gate' && node.kind !== 'acceptance') {
+      return badRequest('Knowledge Review requires a Gate or Acceptance node.')
+    }
+    if (node.status !== 'running' && node.status !== 'blocked') {
+      return badRequest('Knowledge Review requires a running or blocked node.')
+    }
 
     const providerId = input.providerId?.trim()
     if (!providerId) {
       return badRequest('Review provider is not configured. Save a provider credential before running Knowledge Review.')
     }
 
-    const provider = providerId === 'fake-knowledge-review'
+    const provider: AgentProvider | null = providerId === 'fake-knowledge-review'
       ? (() => {
           if (!isFakeRuntimeEnabled()) {
             return null
@@ -1441,22 +1448,41 @@ export async function resolveTeamRoute(
 
           return createFakeAgentProvider()
         })()
-      : await (async () => {
-          const credential = await repository.getAgentProviderCredential(providerId, options.session!)
-          if (!credential) {
-            throw new Error(`Agent provider credential not found: ${providerId}`)
+      : (() => {
+          const configuredProvider = overview.agentProviders.find(
+            (candidate) => candidate.id === providerId && candidate.kind === 'openai-compatible',
+          )
+          if (!configuredProvider) {
+            return null
           }
 
-          return createOpenAiCompatibleAgentProvider({
-            id: credential.metadata.providerId,
-            name: 'OpenAI Compatible',
-            model: credential.metadata.model,
-            ...(credential.metadata.baseUrl ? { baseUrl: credential.metadata.baseUrl } : {}),
-            apiKey: decryptAgentCredential(credential.encryptedSecret),
-          })
+          return {
+            id: configuredProvider.id,
+            name: configuredProvider.name,
+            model: configuredProvider.model,
+            async reviewKnowledge(providerInput) {
+              const credential = await repository.getAgentProviderCredential(providerId, options.session!)
+              if (!credential) {
+                throw new Error(`Agent provider credential not found: ${providerId}`)
+              }
+              if (credential.metadata.model !== configuredProvider.model) {
+                throw new Error('Agent provider changed after the budget preflight. Retry the review.')
+              }
+
+              return createOpenAiCompatibleAgentProvider({
+                id: credential.metadata.providerId,
+                name: 'OpenAI Compatible',
+                model: credential.metadata.model,
+                ...(credential.metadata.baseUrl ? { baseUrl: credential.metadata.baseUrl } : {}),
+                apiKey: decryptAgentCredential(credential.encryptedSecret),
+              }).reviewKnowledge(providerInput)
+            },
+          }
         })()
     if (!provider) {
-      return badRequest('Fake Knowledge Review requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.')
+      return providerId === 'fake-knowledge-review'
+        ? badRequest('Fake Knowledge Review requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.')
+        : badRequest(`Agent provider credential not found: ${providerId}`)
     }
     const context = buildAgentReviewContext({
       run,
@@ -1468,20 +1494,87 @@ export async function resolveTeamRoute(
       knowledgeDocuments: defaultKnowledgeDocuments,
       knowledgeChunks: defaultKnowledgeChunks,
     })
-    const result = await runKnowledgeReviewAgent({
-      request: {
-        id: `api-review-request-${Date.now()}`,
-        runId: run.id,
-        nodeId: node.id,
-        projectId: run.projectId,
-        requestedBy: options.session.userId,
-        runtime: 'api',
-        providerId,
-      },
+    const request = {
+      id: `api-review-request-${Date.now()}`,
+      runId: run.id,
+      nodeId: node.id,
+      projectId: run.projectId,
+      requestedBy: options.session.userId,
+      runtime: 'api' as const,
+      providerId,
+    }
+    const result = await runBudgetedKnowledgeReviewAgent({
+      request,
       context,
       provider,
+      ...(input.runtimeBudgetApprovalId
+        ? { approvalId: input.runtimeBudgetApprovalId }
+        : {}),
+      budgetGuard: async (budgetInput) => {
+        const [policy, approvals] = await Promise.all([
+          repository.getRuntimeBudgetPolicy(budgetInput.projectId, options.session!),
+          repository.listRuntimeBudgetApprovals(
+            { projectId: budgetInput.projectId },
+            options.session!,
+          ),
+        ])
+        const currentSpendUsd =
+          overview.projectCost.find((rollup) => rollup.key === budgetInput.projectId)?.costUsd ?? 0
+
+        return evaluateRuntimeBudgetGuard({
+          projectId: budgetInput.projectId,
+          providerId: budgetInput.providerId,
+          policy,
+          currentSpendUsd,
+          projectedCostUsd: budgetInput.projectedCostUsd,
+          requestedBy: budgetInput.requestedBy,
+          approval: budgetInput.approvalId
+            ? approvals.find((candidate) => candidate.id === budgetInput.approvalId) ?? null
+            : null,
+          now: new Date().toISOString(),
+        })
+      },
     })
-    const artifactAndEvent = createAgentReviewArtifacts(result)
+
+    if (result.status === 'blocked') {
+      const budgetDecision = {
+        ...result.budgetDecision,
+        reason: redactSensitiveText(result.budgetDecision.reason).value,
+      }
+      const audit = {
+        id: `knowledge-review-budget-audit-${randomUUID()}`,
+        runId: run.id,
+        nodeId: node.id,
+        sequence: bundle.events.filter((event) => event.runId === run.id).length + 1,
+        kind: 'error' as const,
+        message: [
+          'Knowledge Review budget blocked.',
+          `requestId=${request.id}`,
+          `projectId=${run.projectId}`,
+          `providerId=${providerId}`,
+          `requestedBy=${options.session.userId}`,
+          `approvalId=${input.runtimeBudgetApprovalId ?? 'none'}`,
+          `status=${budgetDecision.status}`,
+          `currentSpendUsd=${budgetDecision.currentSpendUsd}`,
+          `projectedCostUsd=${budgetDecision.projectedCostUsd}`,
+          `reason=${budgetDecision.reason}`,
+          'redacted=true',
+        ].join(' '),
+        timestamp: new Date().toISOString(),
+      }
+      const savedAudit = await repository.saveAgentEvent(audit, options.session)
+
+      return {
+        status: 409,
+        body: {
+          status: 'blocked',
+          budgetDecision,
+          audit: savedAudit,
+        },
+      }
+    }
+
+    const artifactAndEvent = createAgentReviewArtifacts(result.execution)
     const event = {
       ...artifactAndEvent.event,
       sequence: bundle.events.filter((event) => event.runId === run.id).length + 1,
@@ -1489,7 +1582,7 @@ export async function resolveTeamRoute(
 
     const saved = await repository.saveAgentReviewBundle(
       {
-        ...result,
+        ...result.execution,
         artifact: artifactAndEvent.artifact,
         event,
       },
@@ -1500,6 +1593,7 @@ export async function resolveTeamRoute(
       status: 201,
       body: {
         ...saved,
+        budgetDecision: result.budgetDecision,
         artifact: artifactAndEvent.artifact,
         event,
       },
@@ -1527,7 +1621,16 @@ export async function resolveTeamRoute(
       return forbidden(`Project role ${requiredRole} required`)
     }
 
-    return acceptCanonicalRunSummary(() => repository.uploadRunSummary(summary, options.session!))
+    const syncContext =
+      options.principal?.authentication.kind === 'desktop_bearer'
+        ? {
+            ...options.session,
+            tokenRecordId: options.principal.authentication.tokenRecordId,
+          }
+        : options.session
+    return acceptCanonicalRunSummary(() =>
+      repository.uploadRunSummary(summary, syncContext),
+    )
   }
 
   if (method === 'POST' && pathname === '/api/sync/test-evidence-summary') {

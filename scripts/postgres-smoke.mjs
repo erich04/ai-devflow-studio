@@ -1,10 +1,16 @@
 import { spawn } from 'node:child_process'
+import { createHmac } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
 const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const rootDir = fileURLToPath(new URL('..', import.meta.url))
 const apiUrl = 'http://127.0.0.1:4322'
 const databaseUrl = process.env.DEVFLOW_DATABASE_URL ?? process.env.DATABASE_URL
+const sessionSecret = 'devflow-postgres-smoke-hmac-key-non-production-32-plus'
+const pilotSessionCookie = createSessionCookieValue('acct-demo-u-erich', sessionSecret)
+const pilotSessionHeaders = {
+  cookie: pilotSessionCookie,
+}
 const ownerSessionHeaders = {
   'x-devflow-session-source': 'demo',
   'x-devflow-organization-id': 'org-demo',
@@ -36,6 +42,17 @@ const independentLeadSessionHeaders = {
 
 if (!databaseUrl) {
   throw new Error('Set DEVFLOW_DATABASE_URL or DATABASE_URL before running test:postgres-smoke.')
+}
+
+function createSessionCookieValue(authAccountId, secret) {
+  const claims = {
+    v: 1,
+    authAccountId,
+    expiresAt: Math.floor(Date.now() / 1_000) + 8 * 60 * 60,
+  }
+  const payload = Buffer.from(JSON.stringify(claims), 'utf8').toString('base64url')
+  const signature = createHmac('sha256', secret).update(payload).digest('base64url')
+  return `devflow_session=${payload}.${signature}`
 }
 
 function run(command, args, env = {}) {
@@ -208,6 +225,43 @@ async function postJsonWithBearer(pathname, body, token) {
   )
 }
 
+async function postJsonResult(pathname, body, headers) {
+  const response = await fetch(`${apiUrl}${pathname}`, {
+    method: 'POST',
+    headers: jsonHeaders(headers),
+    body: JSON.stringify(body),
+  })
+  const text = await response.text()
+  let parsed
+  try {
+    parsed = text ? JSON.parse(text) : null
+  } catch {
+    parsed = text
+  }
+  return { status: response.status, body: parsed }
+}
+
+async function getJson(pathname, sessionHeaders) {
+  return readJson(
+    await fetch(`${apiUrl}${pathname}`, {
+      headers: { accept: 'application/json', ...sessionHeaders },
+    }),
+    pathname,
+  )
+}
+
+async function getJsonWithBearer(pathname, token) {
+  return readJson(
+    await fetch(`${apiUrl}${pathname}`, {
+      headers: {
+        accept: 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+    }),
+    pathname,
+  )
+}
+
 async function putJson(pathname, body, sessionHeaders = ownerSessionHeaders) {
   return readJson(
     await fetch(`${apiUrl}${pathname}`, {
@@ -248,6 +302,18 @@ function expect(condition, message) {
   }
 }
 
+function canonicalLocalNodeId(runId, storedNodeId) {
+  const prefix = `${runId}:`
+  const nodeId = storedNodeId.startsWith(prefix)
+    ? storedNodeId.slice(prefix.length)
+    : storedNodeId
+  expect(
+    nodeId.length > 0 && !nodeId.startsWith(prefix),
+    'Team node identity did not resolve to one canonical local node ID.',
+  )
+  return nodeId
+}
+
 function expectNoLocalOnlyFields(value, label) {
   const serialized = JSON.stringify(value).toLowerCase()
   const blockedFragments = [
@@ -264,6 +330,18 @@ function expectNoLocalOnlyFields(value, label) {
 
   for (const fragment of blockedFragments) {
     expect(!serialized.includes(fragment), `${label} leaked local-only fragment: ${fragment}`)
+  }
+}
+
+function expectNoCredentialLeak(value, credentials, label) {
+  const serialized = JSON.stringify(value)
+  for (const credential of credentials) {
+    expect(
+      typeof credential !== 'string' ||
+        credential.length === 0 ||
+        !serialized.includes(credential),
+      `${label} leaked a copy-once credential.`,
+    )
   }
 }
 
@@ -327,6 +405,8 @@ function expectMissingReviewBlock(decision, label) {
 const suffix = Date.now()
 const runId = `run-postgres-smoke-${suffix}`
 const pairedRunId = `run-postgres-paired-smoke-${suffix}`
+const gateRunId = `run-postgres-gate-smoke-${suffix}`
+const gateNodeId = 'n-design-gate'
 const evidenceId = `evidence-postgres-smoke-${suffix}`
 const remoteReviewId = `agent-review-postgres-smoke-${suffix}`
 const timestamp = new Date().toISOString()
@@ -348,6 +428,7 @@ try {
     DEVFLOW_DATABASE_URL: databaseUrl,
     DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
     DEVFLOW_REQUIRE_AUTH: 'true',
+    DEVFLOW_SESSION_SECRET: sessionSecret,
     DEV_AUTH_ENABLED: 'true',
     PORT: '4322',
   })
@@ -383,6 +464,14 @@ try {
     conflictedLeadGate?.ownerId === leadSessionHeaders['x-devflow-user-id'],
     'Seeded run did not include a lead-owned Gate for conflict smoke coverage.',
   )
+  const compliantGateLocalId = canonicalLocalNodeId(
+    seededRun.id,
+    compliantGate.id,
+  )
+  const conflictedLeadGateLocalId = canonicalLocalNodeId(
+    seededRun.id,
+    conflictedLeadGate.id,
+  )
 
   expect(
     initialOverview.enforcementPolicies?.organizationPolicy?.name === 'Warn-only default enforcement policy',
@@ -402,11 +491,348 @@ try {
   expect(desktopPairing.token?.includes('.'), 'Desktop pairing exchange did not return a copy-once bearer token.')
   expect(desktopPairing.projectId === 'p-payments', 'Desktop bearer token was not scoped to the Payments project.')
   expect(desktopPairing.userId === leadSessionHeaders['x-devflow-user-id'], 'Desktop token user did not match the pairing lead.')
+
+  const gatePairingCode = await postJson(
+    '/api/team/projects/p-payments/pairing-codes',
+    {},
+    pilotSessionHeaders,
+  )
+  expect(
+    typeof gatePairingCode.code === 'string' && gatePairingCode.code.includes('.'),
+    'Gate vertical smoke did not create a signed-Cookie pairing code.',
+  )
+  const gateDesktopPairing = await postJsonWithoutSession(
+    '/api/desktop/pairing/exchange',
+    { code: gatePairingCode.code },
+  )
+  expect(
+    typeof gateDesktopPairing.token === 'string' &&
+      gateDesktopPairing.token.includes('.'),
+    'Gate vertical smoke did not exchange the pairing code.',
+  )
+
+  const createdWorkRequest = await postJson(
+    '/api/team/projects/p-payments/work-requests',
+    {
+      projectId: 'p-payments',
+      title: 'Postgres Gate Command smoke',
+      request: 'Exercise the version-bound human rejection path.',
+      idempotencyKey: `work-request:create:${gateRunId}`,
+      expiresAt: null,
+    },
+    pilotSessionHeaders,
+  )
+  const workRequest = createdWorkRequest.workRequest
+  expect(
+    workRequest?.version === 1 && workRequest.status === 'open',
+    'Gate vertical smoke did not create an open Work Request v1.',
+  )
+  const claimedWorkRequest = await postJsonWithBearer(
+    `/api/desktop/work-requests/${workRequest.id}/claim`,
+    {
+      workRequestId: workRequest.id,
+      expectedVersion: 1,
+      runId: gateRunId,
+      idempotencyKey: `work-request:claim:${gateRunId}`,
+    },
+    gateDesktopPairing.token,
+  )
+  expect(
+    claimedWorkRequest.workRequest?.version === 2 &&
+      claimedWorkRequest.workRequest.status === 'claim_pending',
+    'Gate vertical smoke did not claim the Work Request at v2.',
+  )
+  const materializedWorkRequest = await postJsonWithBearer(
+    `/api/desktop/work-requests/${workRequest.id}/materialized`,
+    {
+      workRequestId: workRequest.id,
+      expectedVersion: 2,
+      runId: gateRunId,
+      idempotencyKey: `work-request:materialize:${gateRunId}`,
+    },
+    gateDesktopPairing.token,
+  )
+  expect(
+    materializedWorkRequest.workRequest?.version === 3 &&
+      materializedWorkRequest.workRequest.status === 'materialized',
+    'Gate vertical smoke did not materialize the Work Request at v3.',
+  )
+
+  const gateProjectedAt = new Date().toISOString()
+  await postJsonWithBearer(
+    '/api/sync/run-summary',
+    {
+      kind: 'run',
+      runId: gateRunId,
+      version: 3,
+      projectId: 'p-payments',
+      title: 'Postgres Gate Command vertical smoke',
+      status: 'paused_at_gate',
+      currentNodeId: gateNodeId,
+      currentNode: {
+        id: gateNodeId,
+        stage: 'design',
+        kind: 'gate',
+        status: 'blocked',
+        requiredRole: 'lead',
+      },
+      branchName: 'codex/postgres-gate-smoke',
+      updatedAt: gateProjectedAt,
+    },
+    gateDesktopPairing.token,
+  )
+  const gateEvaluation = await postJson(
+    '/api/enforcement/evaluate',
+    { projectId: 'p-payments', runId: gateRunId, nodeId: gateNodeId },
+    pilotSessionHeaders,
+  )
+  const expectedGateBlockerIds = gateEvaluation.blockingReasons
+    .map((reason) => reason.id)
+    .sort()
+  const createdGateCommand = await postJson(
+    '/api/team/projects/p-payments/gate-commands',
+    {
+      projectId: 'p-payments',
+      runId: gateRunId,
+      nodeId: gateNodeId,
+      action: 'reject',
+      reason: 'The pilot operator intentionally rejects this smoke Gate.',
+      expectedRunVersion: 3,
+      expectedPolicyVersion: gateEvaluation.policyVersion,
+      expectedBlockerIds: expectedGateBlockerIds,
+      idempotencyKey: `gate-command:create:${gateRunId}:v3`,
+    },
+    pilotSessionHeaders,
+  )
+  const command = createdGateCommand.command
+  expect(
+    command?.workRequestId === workRequest.id &&
+      command.status === 'pending' &&
+      command.action === 'reject',
+    'Gate vertical smoke did not bind the reject command to the materialized Work Request.',
+  )
+  const gateInbox = await getJsonWithBearer(
+    '/api/desktop/projects/p-payments/gate-commands/inbox',
+    gateDesktopPairing.token,
+  )
+  expect(
+    gateInbox.commands?.some((candidate) => candidate.id === command.id),
+    'Gate vertical smoke inbox did not return the bound command.',
+  )
+  const createdReceipt = await postJsonWithBearer(
+    `/api/desktop/gate-commands/${command.id}/receipts`,
+    {},
+    gateDesktopPairing.token,
+  )
+  const receipt = createdReceipt.receipt
+  expect(
+    receipt?.commandId === command.id && receipt.acknowledgedAt === null,
+    'Gate vertical smoke did not create an active command receipt.',
+  )
+  const gateOverviewBeforeAck = await fetchOverview(
+    '/api/team/overview before Gate Command ACK',
+    pilotSessionHeaders,
+  )
+  const teamRunBeforeAck = gateOverviewBeforeAck.runs?.find(
+    (run) => run.id === gateRunId,
+  )
+  expect(
+    teamRunBeforeAck,
+    'Gate vertical smoke Team overview did not include the Run before ACK.',
+  )
+  const createdAcknowledgement = await postJsonWithBearer(
+    `/api/desktop/gate-command-receipts/${receipt.id}/acknowledgements`,
+    {
+      commandId: command.id,
+      outcomeCode: 'human_rejected',
+      beforeRunVersion: 3,
+      afterRunVersion: 3,
+      evaluatedAt: receipt.leasedAt,
+    },
+    gateDesktopPairing.token,
+  )
+  expect(
+    createdAcknowledgement.acknowledgement?.outcomeCode === 'human_rejected' &&
+      createdAcknowledgement.command?.status === 'applied',
+    'Gate vertical smoke did not acknowledge the human rejection.',
+  )
+
+  const gateOverview = await fetchOverview(
+    '/api/team/overview after Gate Command ACK',
+    pilotSessionHeaders,
+  )
+  const teamRun = gateOverview.runs?.find((run) => run.id === gateRunId)
+  expect(teamRun, 'Gate vertical smoke Team overview did not include the Run.')
+  expect(
+    teamRun.version === teamRunBeforeAck.version,
+    'Gate Command ACK mutated the Team Run version.',
+  )
+  expect(
+    teamRun.status === teamRunBeforeAck.status,
+    'Gate Command ACK mutated the Team Run status.',
+  )
+  expect(
+    teamRun.currentNodeId === teamRunBeforeAck.currentNodeId,
+    'Gate Command ACK mutated the Team Run current node.',
+  )
+  expectNoCredentialLeak(
+    {
+      createdWorkRequest,
+      claimedWorkRequest,
+      materializedWorkRequest,
+      gateEvaluation,
+      createdGateCommand,
+      gateInbox,
+      createdReceipt,
+      gateOverviewBeforeAck,
+      createdAcknowledgement,
+      gateOverview,
+    },
+    [
+      gatePairingCode.code,
+      gateDesktopPairing.token,
+      pilotSessionCookie,
+      sessionSecret,
+    ],
+    'Postgres Gate vertical smoke responses',
+  )
+
+  const concurrentGatePayload = {
+    projectId: 'p-payments',
+    runId: gateRunId,
+    nodeId: gateNodeId,
+    action: 'reject',
+    reason: 'Concurrent Gate Command smoke contender.',
+    expectedRunVersion: 3,
+    expectedPolicyVersion: gateEvaluation.policyVersion,
+    expectedBlockerIds: expectedGateBlockerIds,
+  }
+  const concurrentGateResults = await Promise.all([
+    postJsonResult(
+      '/api/team/projects/p-payments/gate-commands',
+      {
+        ...concurrentGatePayload,
+        idempotencyKey: `gate-command:race:${gateRunId}:first`,
+      },
+      pilotSessionHeaders,
+    ),
+    postJsonResult(
+      '/api/team/projects/p-payments/gate-commands',
+      {
+        ...concurrentGatePayload,
+        idempotencyKey: `gate-command:race:${gateRunId}:second`,
+      },
+      pilotSessionHeaders,
+    ),
+  ])
+  expect(
+    concurrentGateResults.map(({ status }) => status).sort().join(',') ===
+      '201,409',
+    `Concurrent Gate create expected one 201 and one 409, received ${concurrentGateResults
+      .map(({ status }) => status)
+      .join(',')}.`,
+  )
+  expect(
+    concurrentGateResults.find(({ status }) => status === 409)?.body
+      ?.outcomeCode === 'active_command_conflict',
+    'Concurrent Gate loser did not return active_command_conflict.',
+  )
+  const gateCommandsAfterRace = await getJson(
+    '/api/team/projects/p-payments/gate-commands',
+    pilotSessionHeaders,
+  )
+  const activeRaceCommands = gateCommandsAfterRace.commands.filter(
+    (candidate) =>
+      candidate.runId === gateRunId &&
+      candidate.nodeId === gateNodeId &&
+      candidate.expectedRunVersion === 3 &&
+      (candidate.status === 'pending' || candidate.status === 'delivering'),
+  )
+  expect(
+    activeRaceCommands.length === 1,
+    `Concurrent Gate create persisted ${activeRaceCommands.length} active commands.`,
+  )
+
+  const releaseRaceRunId = `run-postgres-release-race-${suffix}`
+  const releaseRaceRequest = await postJson(
+    '/api/team/projects/p-payments/work-requests',
+    {
+      projectId: 'p-payments',
+      title: 'Postgres release and upload race',
+      request: 'Prove a released claim cannot accept a late canonical projection.',
+      idempotencyKey: `work-request:create:${releaseRaceRunId}`,
+      expiresAt: null,
+    },
+    pilotSessionHeaders,
+  )
+  const releaseRaceWorkRequest = releaseRaceRequest.workRequest
+  await postJsonWithBearer(
+    `/api/desktop/work-requests/${releaseRaceWorkRequest.id}/claim`,
+    {
+      workRequestId: releaseRaceWorkRequest.id,
+      expectedVersion: 1,
+      runId: releaseRaceRunId,
+      idempotencyKey: `work-request:claim:${releaseRaceRunId}`,
+    },
+    gateDesktopPairing.token,
+  )
+  const releaseRaceResults = await Promise.all([
+    postJsonResult(
+      `/api/team/work-requests/${releaseRaceWorkRequest.id}/release`,
+      {
+        workRequestId: releaseRaceWorkRequest.id,
+        expectedVersion: 2,
+        idempotencyKey: `work-request:release:${releaseRaceRunId}`,
+      },
+      pilotSessionHeaders,
+    ),
+    postJsonResult(
+      '/api/sync/run-summary',
+      {
+        kind: 'run',
+        runId: releaseRaceRunId,
+        version: 1,
+        projectId: 'p-payments',
+        title: 'Postgres late Run Summary contender',
+        status: 'clarifying',
+        currentNodeId: 'n-clarify',
+        currentNode: {
+          id: 'n-clarify',
+          stage: 'clarify',
+          kind: 'agent',
+          status: 'running',
+        },
+        branchName: 'codex/postgres-release-race',
+        updatedAt: new Date().toISOString(),
+      },
+      { authorization: `Bearer ${gateDesktopPairing.token}` },
+    ),
+  ])
+  expect(
+    releaseRaceResults.filter(({ status }) => status >= 200 && status < 300)
+      .length === 1 &&
+      releaseRaceResults.filter(({ status }) => status === 409).length === 1,
+    `Release/upload race must have one success and one 409, received ${releaseRaceResults
+      .map(({ status }) => status)
+      .join(',')}.`,
+  )
+  const releaseRaceOverview = await fetchOverview(
+    '/api/team/overview after release/upload race',
+    pilotSessionHeaders,
+  )
+  const releaseWon = releaseRaceResults[0].status === 200
+  expect(
+    releaseRaceOverview.runs.some((candidate) => candidate.id === releaseRaceRunId) ===
+      !releaseWon,
+    'Release/upload race projection state did not match its single winning operation.',
+  )
+
   await postJsonWithBearer(
     '/api/sync/run-summary',
     {
       kind: 'run',
       runId: pairedRunId,
+      version: 1,
       projectId: 'p-payments',
       title: 'Postgres paired desktop synced run',
       status: 'testing',
@@ -430,6 +856,7 @@ try {
     {
       kind: 'run',
       runId: pairedRunId,
+      version: 2,
       projectId: 'p-payments',
       title: 'Cross-user overwrite attempt',
       status: 'completed',
@@ -451,7 +878,7 @@ try {
 
   const warnOnlyDecision = await postJson('/api/enforcement/evaluate', {
     runId: seededRun.id,
-    nodeId: compliantGate.id,
+    nodeId: compliantGateLocalId,
     projectId: seededRun.projectId,
   })
   expect(
@@ -468,6 +895,7 @@ try {
     {
       kind: 'run',
       runId: pairedRunId,
+      version: 2,
       projectId: 'p-payments',
       title: 'Postgres paired desktop synced run',
       status: 'paused_at_gate',
@@ -520,13 +948,13 @@ try {
 
   const blockedDecision = await postJson('/api/enforcement/evaluate', {
     runId: seededRun.id,
-    nodeId: compliantGate.id,
+    nodeId: compliantGateLocalId,
     projectId: seededRun.projectId,
   })
   expectMissingReviewBlock(blockedDecision, 'Recommended policy compliant Gate evaluation')
   const overridePayload = {
     runId: seededRun.id,
-    nodeId: compliantGate.id,
+    nodeId: compliantGateLocalId,
     projectId: seededRun.projectId,
     reason: 'Postgres smoke lead override for missing Knowledge Review.',
     blockedReasonIds: blockedDecision.blockingReasons.map((reason) => reason.id),
@@ -537,7 +965,7 @@ try {
 
   const conflictedLeadDecision = await postJson('/api/enforcement/evaluate', {
     runId: seededRun.id,
-    nodeId: conflictedLeadGate.id,
+    nodeId: conflictedLeadGateLocalId,
     projectId: seededRun.projectId,
   }, leadSessionHeaders)
   expectMissingReviewBlock(conflictedLeadDecision, 'Recommended policy conflicted lead Gate evaluation')
@@ -545,7 +973,7 @@ try {
     '/api/gates/override',
     {
       ...overridePayload,
-      nodeId: conflictedLeadGate.id,
+      nodeId: conflictedLeadGateLocalId,
       blockedReasonIds: conflictedLeadDecision.blockingReasons.map((reason) => reason.id),
       policyVersion: conflictedLeadDecision.policyVersion,
     },
@@ -560,7 +988,7 @@ try {
 
   const overriddenDecision = await postJson('/api/enforcement/evaluate', {
     runId: seededRun.id,
-    nodeId: compliantGate.id,
+    nodeId: compliantGateLocalId,
     projectId: seededRun.projectId,
   }, leadSessionHeaders)
   expect(
@@ -583,6 +1011,7 @@ try {
     {
       kind: 'approval',
       runId,
+      version: 1,
       projectId: 'p-payments',
       title: 'Postgres smoke approval bypass attempt',
       status: 'building',
@@ -605,6 +1034,7 @@ try {
   await postJson('/api/sync/run-summary', {
     kind: 'run',
     runId,
+    version: 1,
     projectId: 'p-payments',
     title: 'Postgres smoke synced run',
     status: 'testing',
@@ -642,6 +1072,7 @@ try {
   await postJson('/api/sync/run-summary', {
     kind: 'run',
     runId,
+    version: 2,
     projectId: 'p-payments',
     title: 'Postgres smoke synced run',
     status: 'completed',

@@ -1,3 +1,4 @@
+import { WORK_REQUEST_ID_MAX_LENGTH } from '@ai-devflow/shared'
 import type {
   AgentEvent,
   AgentProviderConfig,
@@ -19,11 +20,13 @@ import type {
   PolicySnapshot,
   ProjectGitStatus,
   ProviderCredentialMetadata,
+  RepositoryKnowledgeSnapshot,
   RemoteRunDeleteResult,
   RemoteTeamSnapshot,
   RetryAttempt,
   TestEvidence,
   AgentReviewRuntime,
+  WorkRequest,
   WorkflowRun,
 } from '@ai-devflow/shared'
 
@@ -44,6 +47,16 @@ export type DeleteRunResult = {
   state: LocalExecutionState
   remote?: RemoteRunDeleteResult
 }
+
+export type RetryRemoteSyncOperationInput = {
+  operationId: string
+}
+
+export type LoadRepositoryKnowledgeInput = {
+  projectId: string
+}
+
+export type RefreshRepositoryKnowledgeInput = LoadRepositoryKnowledgeInput
 
 export const ipcChannels = {
   loadState: 'devflow:local-state:load',
@@ -67,6 +80,11 @@ export const ipcChannels = {
   saveSettings: 'devflow:settings:save',
   saveMcpServers: 'devflow:mcp-servers:save',
   loadRemoteSnapshot: 'devflow:remote:snapshot:load',
+  listWorkRequests: 'devflow:work-requests:list',
+  materializeWorkRequest: 'devflow:work-requests:materialize',
+  retryRemoteSyncOperation: 'devflow:remote-sync:operation:retry',
+  loadRepositoryKnowledge: 'devflow:repository-knowledge:load',
+  refreshRepositoryKnowledge: 'devflow:repository-knowledge:refresh',
   loadDesktopPairing: 'devflow:desktop-pairing:load',
   pairDesktop: 'devflow:desktop-pairing:pair',
   listAgentProviders: 'devflow:agent:providers:list',
@@ -86,6 +104,7 @@ export const ipcChannels = {
   codingEventAppended: 'devflow:coding:push:event',
   codingPermissionUpdated: 'devflow:coding:push:permission',
   projectGitStatusUpdated: 'devflow:local-project:git-status:updated',
+  localStateUpdated: 'devflow:local-state:updated',
 } as const
 
 export type SaveProjectTestCommandInput = {
@@ -189,6 +208,7 @@ export type RunKnowledgeReviewInput = {
   requestedBy: string
   runtime: AgentReviewRuntime
   providerId?: string
+  runtimeBudgetApprovalId?: string
 }
 
 export type ListAgentReviewsInput = {
@@ -268,6 +288,22 @@ export type LoadRemoteSnapshotInput = {
   organizationId?: string
 }
 
+export type ListWorkRequestsInput = {
+  localProjectId: string
+}
+
+export type MaterializeWorkRequestInput = {
+  localProjectId: string
+  workRequestId: string
+  expectedVersion: number
+}
+
+export type MaterializeWorkRequestResult = {
+  workRequest: WorkRequest
+  run: WorkflowRun
+  state: LocalExecutionState
+}
+
 export type PairDesktopInput = {
   code: string
   localProjectId: string
@@ -283,6 +319,19 @@ export type DevFlowDesktopApi = {
   loadDesktopPairing: () => Promise<DesktopPairingCredential | null>
   pairDesktop: (input: PairDesktopInput) => Promise<PairDesktopResult>
   loadRemoteSnapshot: (input?: LoadRemoteSnapshotInput) => Promise<RemoteTeamSnapshot>
+  listWorkRequests: (input: ListWorkRequestsInput) => Promise<WorkRequest[]>
+  materializeWorkRequest: (
+    input: MaterializeWorkRequestInput,
+  ) => Promise<MaterializeWorkRequestResult>
+  loadRepositoryKnowledge: (
+    input: LoadRepositoryKnowledgeInput,
+  ) => Promise<RepositoryKnowledgeSnapshot>
+  refreshRepositoryKnowledge: (
+    input: RefreshRepositoryKnowledgeInput,
+  ) => Promise<RepositoryKnowledgeSnapshot>
+  retryRemoteSyncOperation: (
+    input: RetryRemoteSyncOperationInput,
+  ) => Promise<LocalExecutionState>
   selectLocalProject: () => Promise<LocalProject | null>
   getProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
   watchProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
@@ -321,6 +370,7 @@ export type DevFlowDesktopApi = {
   onCodingEventAppended: (listener: (event: CodingAgentEvent) => void) => () => void
   onCodingPermissionUpdated: (listener: (request: CodingPermissionRequest) => void) => () => void
   onProjectGitStatusUpdated: (listener: (status: ProjectGitStatus) => void) => () => void
+  onLocalStateUpdated: (listener: (state: LocalExecutionState) => void) => () => void
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -334,6 +384,24 @@ function readRequiredString(value: Record<string, unknown>, key: string): string
   }
 
   return raw.trim()
+}
+
+function readExactRequiredIdentifier(
+  value: Record<string, unknown>,
+  key: string,
+): string {
+  const raw = value[key]
+  if (
+    typeof raw !== 'string' ||
+    raw.length > WORK_REQUEST_ID_MAX_LENGTH ||
+    raw.length === 0 ||
+    raw.trim().length === 0 ||
+    raw.trim() !== raw
+  ) {
+    throw new Error(`Invalid ${key}`)
+  }
+
+  return raw
 }
 
 function rejectUnexpectedFields(
@@ -584,6 +652,78 @@ export function parseRemoteSnapshotInput(value: unknown): LoadRemoteSnapshotInpu
   return organizationId ? { organizationId: organizationId.trim() } : {}
 }
 
+export function parseListWorkRequestsInput(value: unknown): ListWorkRequestsInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid list Work Requests payload')
+  }
+  rejectUnexpectedFields(value, ['localProjectId'], 'list Work Requests payload')
+
+  return {
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+  }
+}
+
+export function parseMaterializeWorkRequestInput(
+  value: unknown,
+): MaterializeWorkRequestInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid materialize Work Request payload')
+  }
+  rejectUnexpectedFields(
+    value,
+    ['localProjectId', 'workRequestId', 'expectedVersion'],
+    'materialize Work Request payload',
+  )
+
+  const expectedVersion = value['expectedVersion']
+  if (
+    !Number.isInteger(expectedVersion) ||
+    (expectedVersion as number) < 1 ||
+    (expectedVersion as number) > 2_147_483_647
+  ) {
+    throw new Error('Invalid expectedVersion')
+  }
+
+  return {
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+    workRequestId: readExactRequiredIdentifier(value, 'workRequestId'),
+    expectedVersion: expectedVersion as number,
+  }
+}
+
+export function parseRetryRemoteSyncOperationInput(
+  value: unknown,
+): RetryRemoteSyncOperationInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid retry remote sync operation payload')
+  }
+  rejectUnexpectedFields(value, ['operationId'], 'retry remote sync operation payload')
+
+  return { operationId: readRequiredString(value, 'operationId') }
+}
+
+export function parseLoadRepositoryKnowledgeInput(
+  value: unknown,
+): LoadRepositoryKnowledgeInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid load repository knowledge payload')
+  }
+  rejectUnexpectedFields(value, ['projectId'], 'load repository knowledge payload')
+
+  return { projectId: readRequiredString(value, 'projectId') }
+}
+
+export function parseRefreshRepositoryKnowledgeInput(
+  value: unknown,
+): RefreshRepositoryKnowledgeInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid refresh repository knowledge payload')
+  }
+  rejectUnexpectedFields(value, ['projectId'], 'refresh repository knowledge payload')
+
+  return { projectId: readRequiredString(value, 'projectId') }
+}
+
 export function parseAgentProviderCredentialInput(value: unknown): AgentProviderCredentialInput {
   if (!isRecord(value)) {
     throw new Error('Invalid agent provider credential payload')
@@ -627,6 +767,7 @@ export function parseRunKnowledgeReviewInput(value: unknown): RunKnowledgeReview
     throw new Error('Invalid runtime')
   }
   const providerId = value['providerId']
+  const runtimeBudgetApprovalId = value['runtimeBudgetApprovalId']
 
   return {
     runId,
@@ -635,6 +776,9 @@ export function parseRunKnowledgeReviewInput(value: unknown): RunKnowledgeReview
     requestedBy,
     runtime,
     ...(typeof providerId === 'string' && providerId.trim() ? { providerId: providerId.trim() } : {}),
+    ...(typeof runtimeBudgetApprovalId === 'string' && runtimeBudgetApprovalId.trim()
+      ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
+      : {}),
   }
 }
 

@@ -23,7 +23,10 @@ export type ResolveRequestSessionOptions = {
 type HeaderBag = IncomingHttpHeaders | Record<string, string | string[] | undefined>
 
 function readHeader(headers: HeaderBag, key: string): string | undefined {
-  const raw = headers[key.toLowerCase()] ?? headers[key]
+  const normalizedKey = key.toLowerCase()
+  const raw =
+    headers[normalizedKey] ??
+    Object.entries(headers).find(([headerName]) => headerName.toLowerCase() === normalizedKey)?.[1]
   const value = Array.isArray(raw) ? raw[0] : raw
   return value?.trim() || undefined
 }

@@ -7,6 +7,7 @@ import {
   Code2,
   GitPullRequest,
   Play,
+  RefreshCw,
 } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import type * as React from 'react'
@@ -19,8 +20,11 @@ import {
   type GateEnforcementDecision,
   type GateOverrideDecision,
   type KnowledgeDocument,
+  type KnowledgeEntity,
   type KnowledgeGovernanceCheck,
   type KnowledgeReference,
+  type KnowledgeRelation,
+  type RepositoryKnowledgeWarning,
   type PolicySnapshot,
   type Project,
   type RemediationPlan,
@@ -927,25 +931,42 @@ export function TeamOverview({
 export function KnowledgeView({
   query,
   documents,
+  entities,
+  relations,
   references,
   selectedRun,
   supportContext,
   focusedDocumentId,
   focusedReferenceId,
   dataSource,
+  indexedAt,
+  truncated,
+  warnings,
+  isLoading,
+  onRefresh,
   onReturnToInspector,
 }: {
   query: string
   documents: KnowledgeDocument[]
+  entities: KnowledgeEntity[]
+  relations: KnowledgeRelation[]
   references: KnowledgeReference[]
   selectedRun: WorkflowRun | undefined
   supportContext: SupportContext | null
   focusedDocumentId: string | undefined
   focusedReferenceId: string | undefined
   dataSource: FieldDataSource
+  indexedAt: string | undefined
+  truncated: boolean
+  warnings: RepositoryKnowledgeWarning[]
+  isLoading: boolean
+  onRefresh: () => void
   onReturnToInspector: () => void
 }) {
+  const maxVisibleEntities = 12
+  const maxVisibleRelations = 16
   const documentById = new Map(documents.map((document) => [document.id, document]))
+  const entityById = new Map(entities.map((entity) => [entity.id, entity]))
   const visibleDocuments = documents
     .filter((document) =>
       document.id === focusedDocumentId ||
@@ -958,8 +979,44 @@ export function KnowledgeView({
       ]),
     )
     .sort((left, right) => Number(right.id === focusedDocumentId) - Number(left.id === focusedDocumentId))
-  const visibleEntities: Array<{ id: string; label: string; kind: string }> = []
-  const visibleRelations: Array<{ id: string; source: string; label: string; target: string }> = []
+  const directlyMatchedEntityIds = new Set(
+    entities
+      .filter((entity) => matchesQuery(query, [entity.label, entity.kind, entity.sourcePath]))
+      .map((entity) => entity.id),
+  )
+  const matchedRelations = relations.filter((relation) =>
+    matchesQuery(query, [
+      relation.label,
+      entityById.get(relation.source)?.label,
+      entityById.get(relation.target)?.label,
+    ]) ||
+    directlyMatchedEntityIds.has(relation.source) ||
+    directlyMatchedEntityIds.has(relation.target),
+  )
+  const orderedEntityIds: string[] = []
+  const candidateEntityIds = new Set<string>()
+  function addEntity(entityId: string) {
+    if (!candidateEntityIds.has(entityId) && entityById.has(entityId)) {
+      candidateEntityIds.add(entityId)
+      orderedEntityIds.push(entityId)
+    }
+  }
+  for (const relation of matchedRelations) {
+    addEntity(relation.source)
+    addEntity(relation.target)
+  }
+  for (const entityId of directlyMatchedEntityIds) addEntity(entityId)
+  const visibleEntities = orderedEntityIds
+    .slice(0, maxVisibleEntities)
+    .map((entityId) => entityById.get(entityId)!)
+  const visibleEntityIds = new Set(visibleEntities.map((entity) => entity.id))
+  const visibleRelations = matchedRelations
+    .filter((relation) =>
+      visibleEntityIds.has(relation.source) && visibleEntityIds.has(relation.target),
+    )
+    .slice(0, maxVisibleRelations)
+  const graphSelectionTruncated =
+    orderedEntityIds.length > visibleEntities.length || matchedRelations.length > visibleRelations.length
 
   return (
     <section className="page-grid" data-testid="knowledge-view">
@@ -972,6 +1029,25 @@ export function KnowledgeView({
           </span>
         </div>
         <p className="empty-note knowledge-source-note">{dataSource.status} · {dataSource.detail}</p>
+        <div className="compact-row" data-testid="knowledge-index-metadata">
+          <span>{indexedAt ? `indexed ${indexedAt}` : isLoading ? 'indexing repository knowledge' : 'not indexed'}</span>
+          <button
+            aria-label="刷新仓库知识"
+            className="ghost-button"
+            disabled={isLoading}
+            onClick={onRefresh}
+            type="button"
+          >
+            <RefreshCw size={16} />
+            {isLoading ? '索引中' : '刷新索引'}
+          </button>
+        </div>
+        {truncated || warnings.length > 0 ? (
+          <div className="mini-card soft" data-testid="knowledge-index-warnings">
+            <strong>{truncated ? '索引结果已截断' : '索引警告'}</strong>
+            {warnings.map((warning) => <code key={warning}>{warning}</code>)}
+          </div>
+        ) : null}
         {supportContext?.focusTarget === 'knowledge-reference' ? (
           <div className="support-context-banner" data-testid="support-context-banner">
             <div>
@@ -1019,11 +1095,11 @@ export function KnowledgeView({
           {visibleEntities.length === 0 ? (
             <p className="empty-note">没有匹配的知识节点</p>
           ) : (
-            visibleEntities.map((entity, index) => (
+            visibleEntities.map((entity) => (
               <div
                 key={entity.id}
                 className={`knowledge-node knowledge-node--${entity.kind}`}
-                style={{ left: `${18 + index * 20}%`, top: `${24 + (index % 2) * 34}%` }}
+                data-testid="knowledge-graph-node"
               >
                 <strong>{entity.label}</strong>
                 <span>{entity.kind}</span>
@@ -1031,10 +1107,16 @@ export function KnowledgeView({
             ))
           )}
           {visibleRelations.map((relation) => (
-            <div className="relation-row" key={relation.id}>
-              {relation.source} {relation.label} {relation.target}
+            <div className="relation-row" data-testid="knowledge-graph-relation" key={relation.id}>
+              {entityById.get(relation.source)?.label ?? relation.source} {relation.label}{' '}
+              {entityById.get(relation.target)?.label ?? relation.target}
             </div>
           ))}
+          {graphSelectionTruncated ? (
+            <p className="empty-note knowledge-graph-limit-note">
+              图谱较大，当前显示与搜索最相关的 {visibleEntities.length} 个节点。
+            </p>
+          ) : null}
         </div>
       </div>
       <aside className="page-side">
@@ -1051,7 +1133,9 @@ export function KnowledgeView({
             return (
               <article
                 className={`reference-row ${reference.id === focusedReferenceId ? 'is-focused' : ''}`}
-                data-testid={reference.id === focusedReferenceId ? 'focused-knowledge-reference' : undefined}
+                data-testid={reference.id === focusedReferenceId
+                  ? 'focused-knowledge-reference'
+                  : 'knowledge-run-reference'}
                 key={reference.id}
               >
                 <span>{reference.targetType}</span>
@@ -1063,6 +1147,9 @@ export function KnowledgeView({
                   {reference.headingPath ? <span>{reference.headingPath.join(' / ')}</span> : null}
                 </div>
                 <code>{reference.artifactId ?? reference.evidenceId ?? reference.nodeId ?? reference.runId}</code>
+                {reference.sourcePath ?? document?.sourcePath ? (
+                  <code>{reference.sourcePath ?? document?.sourcePath}</code>
+                ) : null}
                 {reference.contentHash ? <code>{reference.contentHash}</code> : null}
               </article>
             )

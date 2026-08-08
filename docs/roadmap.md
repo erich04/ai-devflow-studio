@@ -42,75 +42,38 @@ The v1.x line should stay anchored to that team-pilot product shape:
 Keep these out of the near-term path unless a later roadmap explicitly promotes them: public SaaS,
 billing, enterprise SSO, automatic cloud deployment, signed installers, auto-update, HoneyAI bridge,
 multi-agent orchestration, real MCP execution, and full RAG/vector retrieval. The
-**Next concrete action** depends on the tagged release check. Until v1.3 tagged signoff passes,
-finish its candidate/evidence sequence; afterward, begin the v1.4 pilot trust boundary. GitHub
-delivery and operations expansion wait until both are complete.
+**Next concrete action** is V1.4 candidate preparation and candidate-bound verification. GitHub
+delivery and operations expansion wait until V1.4 formal signoff is complete.
 
 ## Current Status
 
-This source tree declares `1.3.0`. Formal release state is evaluated from
-`docs/releases/v1.3.0/` and `corepack pnpm release:status -- --mode=tagged`; it is not hard-coded in
-this roadmap.
+`v1.3.0` is the released baseline. The annotated tag resolves to signoff commit
+`06f3cc321300e3751aaa41c67f66d70cfaf6ebe4`, whose evidence is stored under
+`docs/releases/v1.3.0/`. The formal paired walkthrough and the single authorized real-opencode
+smoke are recorded in `docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-31.md`.
 
-Candidate-formation audit snapshot, captured on 2026-07-31 before commit `C` existed:
+The tag-triggered Release run exposed an annotated-tag shallow-fetch conflict before checkout. The
+release assets were recovered from the successful pre-tag run at the same signoff SHA, and
+`b7b879c` fixed the workflow for future tags without moving `v1.3.0`. The post-fix `main` Verify run
+passed macOS, Windows, Postgres, and Docker jobs.
 
-| Layer | Status | Snapshot meaning |
-| --- | --- | --- |
-| Released baseline | `v1.2.0` | Runtime Cost UX + Budget Administration is the last tagged release |
-| v1.3 functional scope | implemented in the working tree | Trusted workflow commands, atomic local mutations, project-bound sync, redaction, deterministic providers, runnable API/Worker output, OAuth env compatibility, and unpaired-PR guidance are present |
-| Package metadata | aligned | Root and all five workspace packages report `1.3.0` |
-| Historical walkthrough | failed | The 2026-07-25 Computer Use walkthrough is the baseline that exposed the now-addressed state/sync gaps |
-| Local deterministic ladder | recorded green | `verify:demo`, build/output, Postgres, and Docker checks passed on the pre-candidate closeout tree; they are not candidate-bound release evidence |
-| Candidate commit `C` | pending | The scoped closeout changes have not yet been frozen into a clean candidate SHA |
-| v1.3 release signoff | not completed | Candidate-bound remote CI, a paired Computer Use result, paid real-opencode evidence, signoff commit `S`, and the v1.3 tag remain |
+| Layer | Current status |
+| --- | --- |
+| Released baseline | `v1.3.0` signed, tagged, and published |
+| Development branch | V1.4 scoped implementation complete at `5b64354`; candidate preparation in progress |
+| Package metadata | Version alignment occurs during V1.4 candidate formation |
+| V1.4 contract | `docs/product/prd/v1.4-pilot-trust-boundary-prd.md` |
+| V1.4 execution | `docs/plans/v1.4-pilot-trust-boundary.md` |
 
-The project has a broad implementation foundation: Electron local persistence and controlled test
-execution, API/Web/Postgres team services, pairing/auth, policy and budget models, Knowledge Review,
-Coding Agent adapters, delivery artifacts, and release automation all exist in code.
+V1.3 provides the complete local request-to-delivery workflow, canonical main-process writes,
+paired project-bound sync, local-first merge, evidence-gated Acceptance, explicit fake/no-cost
+runtime boundaries, redaction, runnable API/Worker outputs, and expanded release automation.
 
-Clarification, Design, Gate approval, Knowledge Review and Test Evidence can be exercised in the
-current UI.
-
-The closeout working tree replaces the earlier parallel write paths with a shared seven-command
-workflow evaluator.
-
-Electron main reloads canonical local state before a command, verifies node order and evidence
-ownership, and atomically commits the Run with generated Artifacts, Events, and Test Evidence.
-
-Build advances only from a completed Coding Run with its matching Diff. Test, PR, and Acceptance
-each require their upstream evidence; final Acceptance also checks role, policy, review, and budget.
-
-Pairing now records an explicit Local Project ↔ Team Project binding. Remote evidence upload first
-ensures the canonical Run exists, rejects invalid ownership, and uses the bound repository.
-
-Desktop state merge is local-first, so a lossy remote summary cannot replace a same-id local Run,
-Artifact, or Event.
-
-The deterministic fake/no-cost boundary is now explicit: `DEVFLOW_ENABLE_FAKE_RUNTIME=true`
-exposes the fake Agent provider and permits the fake Coding Engine. Disabled mode rejects both.
-
-Known workspace roots become `<workspace>` in archived Test Evidence. API and Worker builds are
-bundled and covered by an isolated `test:build-output-smoke`.
-
-CI definitions include build/output, E2E, Electron, Windows, Postgres, and Docker gates.
-
-The documented GitHub OAuth environment names now resolve correctly, and an unpaired PR node
-explains the required Team Project binding instead of exposing a raw IPC failure.
-
-Implementation and local rehearsal passes are not release evidence by themselves. A valid v1.3
-release requires candidate `C`, candidate-bound gates, and a paired Computer Use walkthrough.
-
-It also requires explicit real-opencode evidence, evidence commit `S`, and successful pre-tag and
-tagged status checks.
-
-Knowledge, Skills and MCP have visible product surfaces, but the current Electron path reports the
-repository as not indexed, has no real team Skills, and has no MCP connectors/runtime.
-
-The new Web shell renders team metrics but does not yet close request intake, Gate actions, pairing,
-or run selection.
-
-The detailed evidence and release exit criteria are recorded in
-`docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-25.md`.
+V1.4 scoped implementation has closed the planned pilot trust gaps: paid-runtime fail-closed
+decisions, durable sync outbox, real repository knowledge integration, authenticated Web management
+paths, and reproducible unsigned pilot lifecycle artifacts. Candidate preparation is now reconciling
+release tooling and documentation before version alignment and candidate-bound verification. No
+V1.4 signoff, tag, or Release is claimed yet. Real GitHub delivery remains V1.5.
 
 ## Completed Milestones
 
@@ -388,51 +351,35 @@ The detailed evidence and release exit criteria are recorded in
   path redaction for tool traces.
 - See `docs/plans/v1.2-runtime-cost-ux-budget-administration.md`.
 
+### v1.3: Delivery Flow Verification and Release Hardening
+
+- Released `v1.3.0` with the request-based six-stage workflow, trusted main-process commands,
+  atomic local evidence writes, project-bound sync, local-first merge, redaction, and final
+  Acceptance checks.
+- Signed off candidate-bound macOS, Windows, Postgres, Docker, Electron, build/output, paired
+  Computer Use, and one explicitly authorized real-opencode smoke.
+- Published the release at signoff commit `06f3cc3`; fixed the annotated-tag checkout workflow on
+  post-release `main` without moving the tag.
+- Kept PR delivery as a human-readable artifact; real GitHub publication remains V1.5.
+
 ## Planned Milestones
 
-### v1.3 closeout: Delivery Flow Verification and Release Hardening
+### v1.4 Candidate: Pilot Trust Boundary (implementation complete; candidate preparation)
 
-Implemented closeout scope:
-
-- request-based Run creation with raw-request artifact and six-stage template;
-- shared trusted commands for Agent, Gate, Build, Test, PR, and Acceptance transitions;
-- canonical main-process state reload plus atomic Run/artifact/event/Test Evidence commits;
-- evidence-gated Build → Test → PR → Acceptance flow and final signoff;
-- PR Draft and Acceptance Bundle artifact builders behind dedicated identifier-only IPC;
-- explicit Local Project ↔ Team Project binding, canonical remote Run ownership, and local-first
-  sync merge;
-- env-gated deterministic fake Agent/Coding paths and known-workspace Test Evidence redaction;
-- runnable isolated API/Worker dist smoke and expanded Verify/Release workflows;
-- documented GitHub OAuth environment compatibility and actionable unpaired-PR guidance.
-
-Required before v1.3 can be called complete:
-
-- create one clean candidate commit `C` with all package versions already aligned to `1.3.0`;
-- re-run and record all deterministic gates against `C`; the 2026-07-31 working tree has passed
-  `verify:demo`, Electron, build/output, Postgres, and Docker locally, but candidate-bound
-  `windows-latest` verification is still pending;
-- complete a new dated, fully paired Computer Use walkthrough against `C`; the 2026-07-31 isolated
-  rehearsal reached PR after passing Clarify/Design/Build/Test and correctly failed closed without
-  a Team Project binding, so it is not formal release evidence;
-- run and record the required release-only real `test:opencode-smoke` before tagging;
-- create the evidence-only signoff commit `S`, then run
-  `corepack pnpm release:status -- --mode=pre-tag` at clean `S`;
-- create the tag at `S` only after signoff, then run
-  `corepack pnpm release:status -- --mode=tagged`.
-
-Real GitHub PR creation remains out of v1.3. The PR stage should first become a reliable,
-human-readable handoff artifact; the v1.4 trust boundary must land before v1.5 adds GitHub API
-integration.
-
-### v1.4 Candidate: Pilot Trust Boundary
-
-- Connect repository Markdown indexing to the real Electron, API Review, Coding Runtime, and Gate
-  paths instead of passing empty knowledge arrays.
-- Make auth and paid-runtime budget decisions fail closed; remove unsigned identity-header trust
-  from non-demo paths and add negative-path/audit coverage.
-- Complete Web request intake, Gate actions, Desktop pairing, and explicit run selection.
-- Harden the minimum runnable outputs from v1.3 into reproducible Electron/Web/API pilot packages
-  with deploy, upgrade, and rollback smoke before external pilot use.
+- Real paid Coding and Knowledge Review runtimes now fail closed on missing, invalid,
+  unauthenticated, out-of-scope, or unavailable budget decisions, with redacted audit evidence.
+- Durable remote-sync now uses an outbox with bounded backoff, restart recovery, immutable project scope,
+  and operator-visible retry/recovery state.
+- Repository Markdown indexing supplies bounded local context to Electron Gate, Knowledge Review,
+  and Coding paths. V1.4 API Review knowledge provenance remains `none`; raw Desktop repository
+  content is not uploaded implicitly.
+- Unsigned identity headers stay out of pilot/production paths with negative-path and configuration
+  coverage.
+- Web request intake, Gate actions, Desktop pairing, and explicit run selection are implemented.
+- Reproducible unsigned Electron/Web/API pilot packages have deploy, upgrade, failed-upgrade
+  recovery, bounded rollback, and packaged Desktop smoke coverage.
+- Candidate signoff follows `docs/product/prd/v1.4-pilot-trust-boundary-prd.md`,
+  `docs/plans/v1.4-pilot-trust-boundary.md`.
 
 ### v1.5 Candidate: GitHub Delivery Integration
 
@@ -465,12 +412,12 @@ integration.
 - MCP policy enforcement and Skill/MCP runtime execution.
 - RAG/vector retrieval provider integration.
 - Repository file watcher, in-app Markdown editor, and remote knowledge synchronization.
-- Electron packaging, macOS signing/notarization, Windows installer/signing, auto-update, and release
+- Signed/notarized Electron installers, Windows installer signing, auto-update, and public release
   distribution.
 - Public SaaS onboarding, billing, hosted multi-tenancy, and managed credentials.
 - Windows real-opencode smoke for managed worktree path handling and dependency bootstrap once the
   macOS manual runtime path is promoted from local signoff to release validation.
-- Full release/distribution CI beyond the current verify workflow.
+- Signed/public distribution automation beyond the current Verify and Release workflows.
 
 ## Knowledge Roadmap Notes
 

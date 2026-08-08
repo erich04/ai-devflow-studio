@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   estimateCodingRuntimeCost,
   evaluateRuntimeBudgetGuard,
+  parseBudgetGuardDecision,
   runtimeCostSummaryToTokenUsage,
 } from './cost'
 import type { RuntimeBudgetApproval, RuntimeBudgetPolicy } from './domain'
@@ -53,6 +54,72 @@ describe('estimateCodingRuntimeCost', () => {
     expect(summary.costUsd).toBeGreaterThan(0)
     expect(JSON.stringify(summary)).not.toContain('Implement the retry plan')
   })
+
+  it('does not treat a real engine as free because its provider id contains fake', () => {
+    const summary = estimateCodingRuntimeCost({
+      engine: 'opencode-http',
+      providerId: 'notfake-paid-provider',
+      model: 'paid-model',
+      prompt: 'This real provider call must pass the authoritative budget service.',
+      runId: 'run-1',
+      nodeId: 'node-1',
+      projectId: 'project-1',
+      userId: 'user-1',
+      timestamp: '2026-07-31T00:00:00.000Z',
+    })
+
+    expect(summary.costUsd).toBeGreaterThan(0)
+  })
+})
+
+describe('parseBudgetGuardDecision', () => {
+  it('returns only the whitelisted budget decision fields', () => {
+    const decision = parseBudgetGuardDecision({
+      status: 'allowed',
+      blocksRun: false,
+      currentSpendUsd: 0.1,
+      projectedCostUsd: 0.01,
+      limitUsd: 1,
+      reason: 'Within budget.',
+      internalDebugToken: 'must-not-cross-the-boundary',
+    })
+
+    expect(decision).toEqual({
+      status: 'allowed',
+      blocksRun: false,
+      currentSpendUsd: 0.1,
+      projectedCostUsd: 0.01,
+      limitUsd: 1,
+      reason: 'Within budget.',
+    })
+    expect('internalDebugToken' in decision).toBe(false)
+  })
+
+  it.each([
+    {
+      label: 'a lead-approval decision without the required role',
+      value: {
+        status: 'requires_lead_approval',
+        blocksRun: true,
+        currentSpendUsd: 1,
+        projectedCostUsd: 0.1,
+        reason: 'Approval required.',
+      },
+    },
+    {
+      label: 'an allowed decision carrying unrelated approval metadata',
+      value: {
+        status: 'allowed',
+        blocksRun: false,
+        currentSpendUsd: 0,
+        projectedCostUsd: 0.1,
+        approvalId: 'approval-from-another-decision',
+        reason: 'Within budget.',
+      },
+    },
+  ])('rejects $label', ({ value }) => {
+    expect(() => parseBudgetGuardDecision(value)).toThrow('Invalid runtime budget decision')
+  })
 })
 
 describe('evaluateRuntimeBudgetGuard', () => {
@@ -65,8 +132,63 @@ describe('evaluateRuntimeBudgetGuard', () => {
     updatedAt: '2026-06-20T00:00:00.000Z',
   }
 
+  it('blocks paid runtime when the project budget policy is unavailable', () => {
+    const decision = evaluateRuntimeBudgetGuard({
+      projectId: 'project-1',
+      providerId: 'double',
+      policy: null,
+      currentSpendUsd: 0,
+      projectedCostUsd: 0.01,
+      requestedBy: 'user-1',
+      now: '2026-06-20T00:00:00.000Z',
+    })
+
+    expect(decision).toMatchObject({
+      status: 'unavailable',
+      blocksRun: true,
+      currentSpendUsd: 0,
+      projectedCostUsd: 0.01,
+    })
+  })
+
+  it('allows runtime when a project lead explicitly saved a disabled budget policy', () => {
+    const decision = evaluateRuntimeBudgetGuard({
+      projectId: 'project-1',
+      providerId: 'double',
+      policy: { ...policy, enabled: false },
+      currentSpendUsd: 0,
+      projectedCostUsd: 0.01,
+      requestedBy: 'user-1',
+      now: '2026-06-20T00:00:00.000Z',
+    })
+
+    expect(decision).toMatchObject({
+      status: 'disabled',
+      blocksRun: false,
+    })
+  })
+
+  it('does not apply a disabled budget policy from a different project', () => {
+    const decision = evaluateRuntimeBudgetGuard({
+      projectId: 'project-1',
+      providerId: 'double',
+      policy: { ...policy, projectId: 'project-2', enabled: false },
+      currentSpendUsd: 0,
+      projectedCostUsd: 0.01,
+      requestedBy: 'user-1',
+      now: '2026-06-20T00:00:00.000Z',
+    })
+
+    expect(decision).toMatchObject({
+      status: 'unavailable',
+      blocksRun: true,
+    })
+  })
+
   it('allows runs below the warning threshold', () => {
     const decision = evaluateRuntimeBudgetGuard({
+      projectId: 'project-1',
+      providerId: 'double',
       policy,
       currentSpendUsd: 0.4,
       projectedCostUsd: 0.1,
@@ -84,6 +206,8 @@ describe('evaluateRuntimeBudgetGuard', () => {
 
   it('warns when spend enters the project threshold but remains below the hard limit', () => {
     const decision = evaluateRuntimeBudgetGuard({
+      projectId: 'project-1',
+      providerId: 'double',
       policy,
       currentSpendUsd: 0.7,
       projectedCostUsd: 0.1,
@@ -97,6 +221,8 @@ describe('evaluateRuntimeBudgetGuard', () => {
 
   it('requires a lead approval before continuing beyond the project limit', () => {
     const decision = evaluateRuntimeBudgetGuard({
+      projectId: 'project-1',
+      providerId: 'double',
       policy,
       currentSpendUsd: 0.95,
       projectedCostUsd: 0.2,
@@ -127,6 +253,8 @@ describe('evaluateRuntimeBudgetGuard', () => {
     }
 
     const decision = evaluateRuntimeBudgetGuard({
+      projectId: 'project-1',
+      providerId: 'double',
       policy,
       currentSpendUsd: 0.95,
       projectedCostUsd: 0.2,
@@ -139,6 +267,70 @@ describe('evaluateRuntimeBudgetGuard', () => {
       status: 'approved_over_budget',
       blocksRun: false,
       approvalId: 'budget-approval-1',
+    })
+  })
+
+  it('rejects a lead approval issued for a different project', () => {
+    const approval: RuntimeBudgetApproval = {
+      id: 'budget-approval-1',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      approvedBy: 'lead-1',
+      role: 'lead',
+      providerId: 'double',
+      maxAdditionalCostUsd: 0.25,
+      reason: 'Release smoke is approved.',
+      status: 'approved',
+      createdAt: '2026-06-20T00:00:00.000Z',
+      expiresAt: '2026-06-20T01:00:00.000Z',
+    }
+
+    const decision = evaluateRuntimeBudgetGuard({
+      projectId: 'project-2',
+      providerId: 'double',
+      policy: { ...policy, projectId: 'project-2' },
+      currentSpendUsd: 0.95,
+      projectedCostUsd: 0.2,
+      requestedBy: 'user-1',
+      approval,
+      now: '2026-06-20T00:30:00.000Z',
+    })
+
+    expect(decision).toMatchObject({
+      status: 'requires_lead_approval',
+      blocksRun: true,
+    })
+  })
+
+  it('rejects a lead approval issued for a different provider', () => {
+    const approval: RuntimeBudgetApproval = {
+      id: 'budget-approval-1',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      approvedBy: 'lead-1',
+      role: 'lead',
+      providerId: 'double',
+      maxAdditionalCostUsd: 0.25,
+      reason: 'Release smoke is approved.',
+      status: 'approved',
+      createdAt: '2026-06-20T00:00:00.000Z',
+      expiresAt: '2026-06-20T01:00:00.000Z',
+    }
+
+    const decision = evaluateRuntimeBudgetGuard({
+      projectId: 'project-1',
+      providerId: 'another-provider',
+      policy,
+      currentSpendUsd: 0.95,
+      projectedCostUsd: 0.2,
+      requestedBy: 'user-1',
+      approval,
+      now: '2026-06-20T00:30:00.000Z',
+    })
+
+    expect(decision).toMatchObject({
+      status: 'requires_lead_approval',
+      blocksRun: true,
     })
   })
 })

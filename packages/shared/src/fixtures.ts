@@ -48,6 +48,7 @@ export const projects: Project[] = [
 export const runs: WorkflowRun[] = [
   {
     id: 'run-health-001',
+    version: 1,
     title: '为 Payments API 增加 /health 端点',
     request: '给 API 增加一个返回 db/redis/runtime 状态的 health endpoint，并补齐测试。',
     projectId: 'p-payments',

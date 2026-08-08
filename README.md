@@ -8,16 +8,17 @@ DevFlow turns an AI-assisted code change into a governed delivery flow with loca
 
 _A real Electron workbench showing the six-stage workflow, local repository controls, Gate Enforcement, knowledge evidence, and agent actions._
 
-> **v1.3 status contract:** This source tree declares `1.3.0` and contains the v1.3-scoped
-> functional closeout.
+> **V1.4 candidate preparation:** `v1.3.0` remains the released baseline. V1.4 scoped
+> implementation is complete at `5b64354`, while candidate-bound verification and formal signoff
+> are still in progress. Version alignment occurs during V1.4 candidate formation; a package label
+> alone is not release evidence.
 >
-> Formal release state is not hard-coded in this README. Read the records under
-> `docs/releases/v1.3.0/` and run `corepack pnpm release:status -- --mode=tagged`; the release is
-> valid only when that check confirms the evidence commit and `v1.3.0` tag.
+> The V1.3 release remains recorded under `docs/releases/v1.3.0/`. V1.4 becomes signed and released
+> only after its candidate `C`, evidence-only child `S`, tagged status, and tag-triggered Release all
+> pass the [V1.4 signoff plan](docs/plans/v1.4-release-signoff.md).
 >
-> The [2026-07-25 walkthrough result](docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-25.md)
-> remains the failed baseline that motivated the repaired workflow, sync, binding, redaction, and
-> deterministic-provider paths.
+> The [2026-08-01 V1.4 walkthrough result](docs/guides/devflow-studio-v1.4-walkthrough-result-2026-08-01.md)
+> is development evidence, not candidate-bound release evidence.
 
 ## Why It Exists
 
@@ -49,9 +50,10 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 - Knowledge Governance links Git-managed Markdown standards to Runs, Artifacts, Gates, and review evidence.
 - Knowledge Review produces structured findings, trace, advisory, and cost data without replacing human approval.
 - Gate Enforcement supports team policy, project overrides, remediation candidates, and human-approved retry paths.
-- Runtime budgets model projected provider cost and lead approval; fail-closed paid-runtime hardening remains open.
-- Desktop pairing explicitly binds a Local Project to its Team Project; local-first merge preserves richer local workflow state during sync.
-- Bearer-token sync, API/Postgres persistence, and the Web console provide a self-hosted team-pilot path.
+- Runtime budgets model projected provider cost and lead approval. Paid Coding and Knowledge Review runtimes fail closed before provider invocation when authoritative budget context is missing, invalid, unavailable, unauthenticated, or out of scope.
+- Desktop pairing explicitly binds a Local Project to its Team Project; Web Work Requests and Gate Commands preserve Desktop authority over the canonical local Run.
+- Durable redacted sync uses a persisted outbox with bounded backoff, restart recovery, immutable project scope, and operator-visible retry state.
+- Bearer-token sync, API/Postgres persistence, reproducible unsigned pilot artifacts, and the Web console provide a self-hosted team-pilot path.
 
 ### Verification Evidence
 
@@ -61,6 +63,8 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 | `corepack pnpm verify:demo` | The default gate plus browser E2E and a real Electron main/preload/SQLite smoke path. |
 | `corepack pnpm test:postgres-smoke` | Migration, persistence, policy, approval, sync, and redacted team reads against Postgres. |
 | `corepack pnpm test:docker-smoke` | The containerized API/Web/Postgres stack, Desktop pairing, bearer auth, and safe overview data. |
+| `corepack pnpm test:docker-lifecycle-smoke` | Fresh schema v10, retained V1.3 upgrade, failed-upgrade recovery, and bounded V1.3 API read rollback. |
+| `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive and packaged launch isolation. |
 | Release-only opencode smoke | A paid, explicit signoff for the real local coding runtime; it is never part of default CI. |
 
 Deterministic results become release evidence only when `required-gates.json` binds them to the clean
@@ -133,8 +137,9 @@ their original organization/project/Run/Node, and an independent Lead override e
 creator-owned Run without republishing it under the reviewer's identity.
 
 Test, Review, and Coding summaries use a bounded child-first sync contract: only an explicit missing
-canonical Run causes one latest-Run upload and one child retry. Durable outbox/backoff and visible
-retry operations are intentionally part of v1.4, while v1.3 keeps the committed local state authoritative.
+canonical Run causes one latest-Run upload and one child retry. The V1.4 durable outbox rebuilds
+redacted summaries from canonical local state, resumes after restart, and surfaces terminal recovery
+without changing the V1.3 local-authority invariant.
 
 ### Minimum Quality Gate
 
@@ -163,7 +168,7 @@ The [roadmap](docs/roadmap.md) is the source of truth for milestone status, plan
 | Product positioning and user workflow | [Product Definition](docs/product/product-definition.md) |
 | Current status and future priorities | [Roadmap](docs/roadmap.md) |
 | Complete hands-on product tour | [Full feature walkthrough](docs/guides/devflow-studio-full-feature-walkthrough.md) |
-| Current delivery-flow walkthrough | [v1.3 Walkthrough](docs/guides/devflow-studio-v1.3-walkthrough.md) |
+| Current V1.4 candidate walkthrough | [v1.4 Walkthrough](docs/guides/devflow-studio-v1.4-walkthrough.md) |
 | Self-hosted API/Web/Postgres pilot | [Self-Hosted Pilot](docs/guides/devflow-studio-self-hosted-pilot.md) |
 | Windows source and ZIP validation | [Windows ZIP Smoke Guide](docs/guides/windows-zip-smoke.md) |
 | Test layers and quality gates | [Testing Strategy](docs/engineering/testing-strategy.md) |

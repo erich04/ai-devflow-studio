@@ -15,6 +15,7 @@ import {
   type AuthAccount,
   type AuthProvider,
   type AuthenticatedIdentity,
+  type AuthenticatedSession,
   type DesktopPairingCode,
   type McpServerDefinition,
   type NodeKind,
@@ -24,6 +25,7 @@ import {
   type ProjectMembership,
   type ProviderCredentialMetadata,
   type RemoteCodingAgentSummary,
+  type RemoteRunSummary,
   type RuntimeBudgetApproval,
   type RuntimeBudgetPolicy,
   type RemoteTestEvidenceSummary,
@@ -33,7 +35,6 @@ import {
   type RunStatus,
   type SkillDefinition,
   type TeamMember,
-  type TeamSession,
   type TokenUsage,
   type TokenUsageSource,
   type WorkflowEdge,
@@ -45,29 +46,52 @@ import {
   redactRemoteRunSummaryForSync,
   redactRemoteTestEvidenceSummaryForSync,
   resolveEffectivePolicy,
+  toTeamStoredNodeId,
   type EffectiveEnforcementPolicy,
   type GateOverrideDecision,
   type OrganizationEnforcementPolicy,
   type ProjectEnforcementPolicyOverride,
 } from '@ai-devflow/shared'
-import type { TeamDbClient } from '../db/client'
+import type { TeamDbClient, TeamDbRepositoryClient } from '../db/client'
+import { withTeamDbTransaction } from '../db/transaction'
 import {
   CanonicalRunRequiredError,
+  findCurrentGateCommandOverride,
+  redactAgentEventForPersistence,
   RemoteChildSummaryConflictError,
   RemoteRunSummaryConflictError,
+  TeamProjectScopeError,
 } from './team-repository'
 import type {
   AgentProviderCredentialRecord,
   AgentReviewBundle,
   GitHubIdentityBootstrapResult,
   GitHubIdentityProfile,
+  ResolvedDesktopTokenSession,
   RunsBundle,
   TeamOverviewPayload,
+  TeamRepositoryReadContext,
   TeamRepository,
   TeamRepositorySyncContext,
 } from './team-repository'
+import { createPostgresWorkRequestRepository } from './postgres-work-request-repository'
+import { createPostgresGateCommandRepository } from './postgres-gate-command-repository'
+import { evaluateTeamGateEnforcement } from './team-gate-enforcement'
+import { preflightGateCommand } from './gate-command-preflight'
+import { collaborationRunLockKey } from './collaboration-run-lock'
 
 type TimestampValue = string | Date
+
+type WorkRequestRunClaimRow = {
+  id: string
+  status: string
+  claimed_by_token_id: string | null
+}
+
+type ReleasedWorkRequestClaimRow = {
+  work_request_id: string
+  claimed_by_token_id: string
+}
 
 type ProjectRow = {
   id: string
@@ -124,6 +148,7 @@ type OrganizationRow = {
 
 type WorkflowRunRow = {
   id: string
+  run_version: number
   title: string
   request: string
   project_id: string
@@ -134,6 +159,25 @@ type WorkflowRunRow = {
   pull_request_url: string | null
   created_at: TimestampValue
   updated_at: TimestampValue
+}
+
+type RemoteRunProjectionRow = {
+  id: string
+  run_version: number
+  organization_id: string
+  project_id: string
+  creator_id: string
+  data_origin: string
+  title: string
+  status: RunStatus
+  current_node_id: string
+  branch_name: string
+  updated_at: TimestampValue
+  node_id: string | null
+  node_stage: NodeStage | null
+  node_kind: NodeKind | null
+  node_status: NodeStatus | null
+  node_required_role: RequiredGateRole | null
 }
 
 type WorkflowNodeRow = {
@@ -571,6 +615,7 @@ function mapRun(
 ): WorkflowRun {
   const run: WorkflowRun = {
     id: row.id,
+    version: row.run_version,
     title: row.title,
     request: row.request,
     projectId: row.project_id,
@@ -687,12 +732,15 @@ function isProjectOverride(value: unknown): value is ProjectEnforcementPolicyOve
   return Boolean(value && typeof value === 'object' && 'projectId' in value && 'rules' in value)
 }
 
-function mapOrganizationPolicy(row: EnforcementPolicyRow | undefined): OrganizationEnforcementPolicy {
+function mapOrganizationPolicy(
+  row: EnforcementPolicyRow | undefined,
+  organizationId: string,
+): OrganizationEnforcementPolicy {
   if (row && isOrganizationPolicy(row.policy)) {
     return row.policy
   }
 
-  return createWarnOnlyDefaultPolicy({ organizationId: 'org-empty' })
+  return createWarnOnlyDefaultPolicy({ organizationId })
 }
 
 function mapProjectOverride(row: EnforcementPolicyRow | undefined): ProjectEnforcementPolicyOverride | null {
@@ -835,8 +883,31 @@ function mapMcpServer(row: McpServerRow): McpServerDefinition {
 }
 
 function remoteNodeId(runId: string, nodeId: string): string {
-  const prefix = `${runId}:`
-  return nodeId.startsWith(prefix) ? nodeId : `${prefix}${nodeId}`
+  return toTeamStoredNodeId(runId, nodeId)
+}
+
+function hasSameRemoteRunProjection(
+  row: RemoteRunProjectionRow,
+  summary: RemoteRunSummary,
+  context: TeamRepositorySyncContext,
+): boolean {
+  return (
+    row.run_version === summary.version &&
+    row.organization_id === context.organizationId &&
+    row.project_id === summary.projectId &&
+    row.creator_id === context.userId &&
+    row.data_origin === 'remote' &&
+    row.title === summary.title &&
+    row.status === summary.status &&
+    row.current_node_id === remoteNodeId(summary.runId, summary.currentNodeId) &&
+    row.branch_name === summary.branchName &&
+    timestamp(row.updated_at) === summary.updatedAt &&
+    row.node_id === remoteNodeId(summary.runId, summary.currentNode.id) &&
+    row.node_stage === summary.currentNode.stage &&
+    row.node_kind === summary.currentNode.kind &&
+    row.node_status === summary.currentNode.status &&
+    (row.node_required_role ?? undefined) === summary.currentNode.requiredRole
+  )
 }
 
 function remoteNodePosition(stage: WorkflowNode['stage'], kind: WorkflowNode['kind']): number {
@@ -922,9 +993,86 @@ function fakeAgentProviderConfigs(enabled: boolean | undefined): AgentProviderCo
 }
 
 export function createPostgresTeamRepository(
-  db: TeamDbClient,
+  db: TeamDbRepositoryClient,
   options: PostgresTeamRepositoryOptions = {},
 ): TeamRepository {
+  const workRequestRepository = createPostgresWorkRequestRepository(db)
+  const gateCommandRepository = createPostgresGateCommandRepository(db, {
+    async resolvePreflight({ tx, command, principal, identity }) {
+      if (principal.session.source !== 'authenticated') return null
+      const verifiedSession: AuthenticatedSession = {
+        source: 'authenticated',
+        authAccountId: principal.session.authAccountId,
+        organizationId: identity.organizationId,
+        userId: identity.userId,
+        role: identity.role,
+        projectMemberships:
+          identity.role === 'owner'
+            ? []
+            : [
+                {
+                  projectId: identity.projectId,
+                  userId: identity.userId,
+                  role: identity.role,
+                },
+              ],
+      }
+      try {
+        let transactionQueryTail: Promise<unknown> = Promise.resolve()
+        const transactionDb: TeamDbRepositoryClient = {
+          query<T>(sql: string, params?: unknown[]) {
+            const query = transactionQueryTail.then(() =>
+              tx.query<T>(sql, params),
+            )
+            transactionQueryTail = query
+            return query
+          },
+          async close() {},
+          async checkout() {
+            throw new Error('Nested transactions are unavailable during Gate preflight.')
+          },
+        }
+        const transactionRepository = createPostgresTeamRepository(
+          transactionDb,
+          options,
+        )
+        const context = await evaluateTeamGateEnforcement(
+          transactionRepository,
+          verifiedSession,
+          command,
+        )
+        const matchingOverride = findCurrentGateCommandOverride({
+          decision: context.decision,
+          overrides: context.overrides,
+          projectId: context.run.projectId,
+          runId: context.run.id,
+          nodeId: context.node.id,
+          userId: identity.userId,
+          role: identity.role,
+        })
+        const preflight = preflightGateCommand({
+          command,
+          run: context.run,
+          currentNode: context.node,
+          requester: { userId: identity.userId, role: identity.role },
+          enforcement: context.decision,
+          ...(matchingOverride ? { override: matchingOverride } : {}),
+        })
+        return {
+          ...preflight,
+          observedPolicyVersion: context.decision.policyVersion,
+          observedBlockerIds: [
+            ...new Set(
+              context.decision.blockingReasons.map((reason) => reason.id),
+            ),
+          ].sort(),
+        }
+      } catch {
+        return null
+      }
+    },
+  })
+
   async function loadAuthenticatedIdentity(input: {
     provider: AuthProvider
     providerAccountId: string
@@ -976,6 +1124,63 @@ export function createPostgresTeamRepository(
 
     return {
       ...identity,
+      projectMemberships: membershipRows.map(mapProjectMembership),
+    }
+  }
+
+  async function loadBrowserSession(authAccountId: string): Promise<AuthenticatedSession | null> {
+    const [identityRow] = await db.query<AuthenticatedIdentityRow>(
+      `
+        SELECT
+          auth_accounts.id AS auth_account_id,
+          auth_accounts.user_id AS auth_account_user_id,
+          auth_accounts.provider,
+          auth_accounts.provider_account_id,
+          auth_accounts.username,
+          auth_accounts.email AS auth_account_email,
+          auth_accounts.created_at AS auth_account_created_at,
+          auth_accounts.updated_at AS auth_account_updated_at,
+          users.id AS user_id,
+          users.organization_id,
+          users.name,
+          users.role,
+          users.email,
+          users.avatar_url,
+          users.avatar_initials,
+          users.focus,
+          users.created_at AS user_created_at,
+          users.updated_at AS user_updated_at
+        FROM auth_accounts
+        JOIN users ON users.id = auth_accounts.user_id
+        WHERE auth_accounts.id = $1
+        LIMIT 1
+      `,
+      [authAccountId],
+    )
+
+    if (!identityRow) {
+      return null
+    }
+
+    const identity = mapAuthenticatedIdentityRow(identityRow)
+    const membershipRows = await db.query<ProjectMembershipRow>(
+      `
+        SELECT project_members.project_id, project_members.user_id, project_members.role
+        FROM project_members
+        JOIN projects ON projects.id = project_members.project_id
+        WHERE project_members.user_id = $1
+          AND projects.organization_id = $2
+        ORDER BY project_members.project_id ASC
+      `,
+      [identity.user.id, identity.user.organizationId],
+    )
+
+    return {
+      source: 'authenticated',
+      organizationId: identity.user.organizationId,
+      userId: identity.user.id,
+      role: identity.user.role,
+      authAccountId: identity.authAccount.id,
       projectMemberships: membershipRows.map(mapProjectMembership),
     }
   }
@@ -1091,13 +1296,52 @@ export function createPostgresTeamRepository(
     }
   }
 
-  async function loadRunsBundle(): Promise<RunsBundle> {
+  async function loadRunsBundle(context: TeamRepositoryReadContext): Promise<RunsBundle> {
     const [runRows, nodeRows, edgeRows, artifactRows, eventRows] = await Promise.all([
-      db.query<WorkflowRunRow>('SELECT * FROM workflow_runs ORDER BY updated_at DESC'),
-      db.query<WorkflowNodeRow>('SELECT * FROM workflow_nodes ORDER BY run_id, position ASC'),
-      db.query<WorkflowEdgeRow>('SELECT * FROM workflow_edges ORDER BY run_id, created_at ASC'),
-      db.query<ArtifactRow>('SELECT * FROM artifacts ORDER BY updated_at DESC'),
-      db.query<AgentEventRow>('SELECT * FROM agent_events ORDER BY run_id, sequence ASC'),
+      db.query<WorkflowRunRow>(
+        'SELECT * FROM workflow_runs WHERE organization_id = $1 ORDER BY updated_at DESC',
+        [context.organizationId],
+      ),
+      db.query<WorkflowNodeRow>(
+        `
+          SELECT workflow_nodes.*
+          FROM workflow_nodes
+          JOIN workflow_runs ON workflow_runs.id = workflow_nodes.run_id
+          WHERE workflow_runs.organization_id = $1
+          ORDER BY workflow_nodes.run_id, workflow_nodes.position ASC
+        `,
+        [context.organizationId],
+      ),
+      db.query<WorkflowEdgeRow>(
+        `
+          SELECT workflow_edges.*
+          FROM workflow_edges
+          JOIN workflow_runs ON workflow_runs.id = workflow_edges.run_id
+          WHERE workflow_runs.organization_id = $1
+          ORDER BY workflow_edges.run_id, workflow_edges.created_at ASC
+        `,
+        [context.organizationId],
+      ),
+      db.query<ArtifactRow>(
+        `
+          SELECT artifacts.*
+          FROM artifacts
+          JOIN workflow_runs ON workflow_runs.id = artifacts.run_id
+          WHERE workflow_runs.organization_id = $1
+          ORDER BY artifacts.updated_at DESC
+        `,
+        [context.organizationId],
+      ),
+      db.query<AgentEventRow>(
+        `
+          SELECT agent_events.*
+          FROM agent_events
+          JOIN workflow_runs ON workflow_runs.id = agent_events.run_id
+          WHERE workflow_runs.organization_id = $1
+          ORDER BY agent_events.run_id, agent_events.sequence ASC
+        `,
+        [context.organizationId],
+      ),
     ])
 
     const artifacts = artifactRows.map(mapArtifact)
@@ -1121,7 +1365,9 @@ export function createPostgresTeamRepository(
     return { runs, artifacts, events }
   }
 
-  async function resolveDesktopTokenSessionFromToken(token: string): Promise<TeamSession | null> {
+  async function resolveDesktopTokenSessionFromToken(
+    token: string,
+  ): Promise<ResolvedDesktopTokenSession | null> {
     const parsed = parseCopyOnceSecret(token)
     if (!parsed) {
       return null
@@ -1139,7 +1385,12 @@ export function createPostgresTeamRepository(
           users.role,
           auth_accounts.id AS auth_account_id
         FROM desktop_tokens
-        JOIN users ON users.id = desktop_tokens.user_id
+        JOIN users
+          ON users.id = desktop_tokens.user_id
+         AND users.organization_id = desktop_tokens.organization_id
+        JOIN projects
+          ON projects.id = desktop_tokens.project_id
+         AND projects.organization_id = desktop_tokens.organization_id
         JOIN auth_accounts ON auth_accounts.user_id = users.id
         WHERE desktop_tokens.id = $1
         LIMIT 1
@@ -1153,13 +1404,15 @@ export function createPostgresTeamRepository(
 
     const membershipRows = await db.query<ProjectMembershipRow>(
       `
-        SELECT project_id, user_id, role
+        SELECT project_members.project_id, project_members.user_id, project_members.role
         FROM project_members
-        WHERE user_id = $1
-          AND project_id = $2
-        ORDER BY project_id ASC
+        JOIN projects ON projects.id = project_members.project_id
+        WHERE project_members.user_id = $1
+          AND project_members.project_id = $2
+          AND projects.organization_id = $3
+        ORDER BY project_members.project_id ASC
       `,
-      [tokenRow.user_id, tokenRow.project_id],
+      [tokenRow.user_id, tokenRow.project_id, tokenRow.organization_id],
     )
     const projectMembership = membershipRows[0]
     if (!projectMembership) {
@@ -1175,19 +1428,30 @@ export function createPostgresTeamRepository(
       [tokenRow.token_id, new Date().toISOString()],
     )
 
+    const tokenRole = projectMembership.role === 'owner' ? 'lead' : projectMembership.role
+
     return {
-      source: 'authenticated',
-      organizationId: tokenRow.organization_id,
-      userId: tokenRow.user_id,
-      role: projectMembership.role === 'owner' ? 'lead' : projectMembership.role,
-      authAccountId: tokenRow.auth_account_id,
-      projectMemberships: [mapProjectMembership(projectMembership)],
+      tokenRecordId: tokenRow.token_id,
+      session: {
+        source: 'authenticated',
+        organizationId: tokenRow.organization_id,
+        userId: tokenRow.user_id,
+        role: tokenRole,
+        authAccountId: tokenRow.auth_account_id,
+        projectMemberships: [{ ...mapProjectMembership(projectMembership), role: tokenRole }],
+      },
     }
   }
 
   return {
+    ...workRequestRepository,
+    ...gateCommandRepository,
     async getAuthenticatedIdentity(input) {
       return loadAuthenticatedIdentity(input)
+    },
+
+    async resolveBrowserSession(authAccountId) {
+      return loadBrowserSession(authAccountId)
     },
 
     async resolveOrBootstrapGitHubIdentity(input) {
@@ -1267,7 +1531,7 @@ export function createPostgresTeamRepository(
       const createdAt = new Date().toISOString()
       const expiresAt = new Date(Date.parse(createdAt) + 10 * 60 * 1000).toISOString()
 
-      await db.query(
+      const [acceptedPairingCode] = await db.query<{ id: string }>(
         `
           INSERT INTO desktop_pairing_codes (
             id,
@@ -1279,7 +1543,22 @@ export function createPostgresTeamRepository(
             failed_attempts,
             created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          SELECT
+            $1,
+            projects.organization_id,
+            projects.id,
+            users.id,
+            $5,
+            $6,
+            $7,
+            $8
+          FROM projects
+          JOIN users
+            ON users.id = $4
+           AND users.organization_id = projects.organization_id
+          WHERE projects.id = $3
+            AND projects.organization_id = $2
+          RETURNING id
         `,
         [
           id,
@@ -1292,6 +1571,9 @@ export function createPostgresTeamRepository(
           createdAt,
         ],
       )
+      if (!acceptedPairingCode) {
+        throw new TeamProjectScopeError()
+      }
 
       return {
         id,
@@ -1378,10 +1660,11 @@ export function createPostgresTeamRepository(
         [pairing.id, createdAt],
       )
 
-      const session = await resolveDesktopTokenSessionFromToken(token)
-      if (!session || session.source !== 'authenticated') {
+      const resolvedSession = await resolveDesktopTokenSessionFromToken(token)
+      if (!resolvedSession) {
         throw new Error('unable to create desktop session')
       }
+      const session = resolvedSession.session
 
       return {
         token,
@@ -1396,15 +1679,15 @@ export function createPostgresTeamRepository(
       }
     },
 
-    async resolveDesktopTokenSession(token): Promise<TeamSession | null> {
+    async resolveDesktopTokenSession(token): Promise<ResolvedDesktopTokenSession | null> {
       return resolveDesktopTokenSessionFromToken(token)
     },
 
-    async getRunsBundle() {
-      return loadRunsBundle()
+    async getRunsBundle(context) {
+      return loadRunsBundle(context)
     },
 
-    async getTeamOverview(): Promise<TeamOverviewPayload> {
+    async getTeamOverview(context): Promise<TeamOverviewPayload> {
       const [
         projectRows,
         memberRows,
@@ -1421,38 +1704,106 @@ export function createPostgresTeamRepository(
         runtimeBudgetPolicyRows,
         runtimeBudgetApprovalRows,
       ] = await Promise.all([
-        db.query<ProjectRow>('SELECT * FROM projects ORDER BY name ASC'),
-        db.query<UserRow>('SELECT * FROM users ORDER BY name ASC'),
-        loadRunsBundle(),
-        db.query<TokenUsageRow>('SELECT * FROM token_usage ORDER BY timestamp DESC'),
-        db.query<TestEvidenceSummaryRow>(
-          'SELECT * FROM test_evidence_summaries ORDER BY created_at DESC',
+        db.query<ProjectRow>(
+          'SELECT * FROM projects WHERE organization_id = $1 ORDER BY name ASC',
+          [context.organizationId],
         ),
-        db.query<AgentReviewRow>('SELECT * FROM agent_reviews ORDER BY created_at DESC'),
-        db.query<AgentTraceRow>('SELECT * FROM agent_traces ORDER BY created_at DESC'),
-        db.query<AgentTokenUsageRow>('SELECT * FROM agent_token_usage ORDER BY timestamp DESC'),
+        db.query<UserRow>(
+          'SELECT * FROM users WHERE organization_id = $1 ORDER BY name ASC',
+          [context.organizationId],
+        ),
+        loadRunsBundle(context),
+        db.query<TokenUsageRow>(
+          `
+            SELECT token_usage.*
+            FROM token_usage
+            JOIN projects ON projects.id = token_usage.project_id
+            WHERE projects.organization_id = $1
+            ORDER BY token_usage.timestamp DESC
+          `,
+          [context.organizationId],
+        ),
+        db.query<TestEvidenceSummaryRow>(
+          `
+            SELECT test_evidence_summaries.*
+            FROM test_evidence_summaries
+            JOIN workflow_runs ON workflow_runs.id = test_evidence_summaries.run_id
+            WHERE workflow_runs.organization_id = $1
+            ORDER BY test_evidence_summaries.created_at DESC
+          `,
+          [context.organizationId],
+        ),
+        db.query<AgentReviewRow>(
+          'SELECT * FROM agent_reviews WHERE organization_id = $1 ORDER BY created_at DESC',
+          [context.organizationId],
+        ),
+        db.query<AgentTraceRow>(
+          'SELECT * FROM agent_traces WHERE organization_id = $1 ORDER BY created_at DESC',
+          [context.organizationId],
+        ),
+        db.query<AgentTokenUsageRow>(
+          'SELECT * FROM agent_token_usage WHERE organization_id = $1 ORDER BY timestamp DESC',
+          [context.organizationId],
+        ),
         db.query<AgentProviderCredentialRow>(
-          'SELECT * FROM agent_provider_credentials ORDER BY updated_at DESC',
+          `
+            SELECT *
+            FROM agent_provider_credentials
+            WHERE organization_id = $1
+            ORDER BY updated_at DESC
+          `,
+          [context.organizationId],
         ),
         db.query<CodingAgentSummaryRow>(
-          'SELECT * FROM coding_agent_summaries ORDER BY started_at DESC',
+          `
+            SELECT *
+            FROM coding_agent_summaries
+            WHERE organization_id = $1
+            ORDER BY started_at DESC
+          `,
+          [context.organizationId],
         ),
         db.query<EnforcementPolicyRow>(
-          'SELECT * FROM enforcement_policies ORDER BY project_id NULLS FIRST, updated_at DESC',
+          `
+            SELECT *
+            FROM enforcement_policies
+            WHERE organization_id = $1
+            ORDER BY project_id NULLS FIRST, updated_at DESC
+          `,
+          [context.organizationId],
         ),
         db.query<GateOverrideDecisionRow>(
-          'SELECT * FROM gate_override_decisions ORDER BY created_at DESC',
+          `
+            SELECT *
+            FROM gate_override_decisions
+            WHERE organization_id = $1
+            ORDER BY created_at DESC
+          `,
+          [context.organizationId],
         ),
         db.query<RuntimeBudgetPolicyRow>(
-          'SELECT * FROM runtime_budget_policies ORDER BY updated_at DESC',
+          `
+            SELECT *
+            FROM runtime_budget_policies
+            WHERE organization_id = $1
+            ORDER BY updated_at DESC
+          `,
+          [context.organizationId],
         ),
         db.query<RuntimeBudgetApprovalRow>(
-          'SELECT * FROM runtime_budget_approvals ORDER BY created_at DESC',
+          `
+            SELECT *
+            FROM runtime_budget_approvals
+            WHERE organization_id = $1
+            ORDER BY created_at DESC
+          `,
+          [context.organizationId],
         ),
       ])
       const tokenUsage = tokenRows.map(mapTokenUsage)
       const organizationPolicy = mapOrganizationPolicy(
         enforcementPolicyRows.find((row) => row.project_id === null),
+        context.organizationId,
       )
       const projectOverrides = enforcementPolicyRows
         .filter((row) => row.project_id !== null)
@@ -1494,12 +1845,13 @@ export function createPostgresTeamRepository(
         enforcementPolicies: {
           organizationPolicy,
           projectOverrides,
-          effectivePolicies: projectRows.map((project) =>
-            resolveEffectivePolicy(
+          effectivePolicies: projectRows.map((project) => ({
+            ...resolveEffectivePolicy(
               organizationPolicy,
               projectOverrides.find((override) => override.projectId === project.id) ?? null,
             ),
-          ),
+            projectId: project.id,
+          })),
           gateOverrides,
         },
         runtimeBudgetPolicies,
@@ -1511,14 +1863,18 @@ export function createPostgresTeamRepository(
       }
     },
 
-    async getSkills() {
-      const rows = await db.query<SkillRow>('SELECT * FROM skills ORDER BY name ASC')
+    async getSkills(context) {
+      const rows = await db.query<SkillRow>(
+        'SELECT * FROM skills WHERE organization_id = $1 ORDER BY name ASC',
+        [context.organizationId],
+      )
       return rows.map(mapSkill)
     },
 
-    async getMcpServers() {
+    async getMcpServers(context) {
       const rows = await db.query<McpServerRow>(
-        'SELECT * FROM mcp_server_definitions ORDER BY name ASC',
+        'SELECT * FROM mcp_server_definitions WHERE organization_id = $1 ORDER BY name ASC',
+        [context.organizationId],
       )
       return rows.map(mapMcpServer)
     },
@@ -1569,119 +1925,217 @@ export function createPostgresTeamRepository(
 
     async uploadRunSummary(summary, context: TeamRepositorySyncContext) {
       summary = redactRemoteRunSummaryForSync(summary)
-      const [acceptedRun] = await db.query<{ id: string }>(
-        `
-          INSERT INTO workflow_runs (
-            id,
-            organization_id,
-            project_id,
-            creator_id,
-            data_origin,
-            title,
-            request,
-            status,
-            current_node_id,
-            branch_name,
-            pull_request_url,
-            created_at,
-            updated_at
+      return withTeamDbTransaction(db, async (tx) => {
+        await tx.query(
+          `
+            /* run_summary:authority-lock */
+            SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
+          `,
+          [
+            collaborationRunLockKey({
+              organizationId: context.organizationId,
+              projectId: summary.projectId,
+              runId: summary.runId,
+            }),
+          ],
+        )
+        const [currentClaim] = await tx.query<WorkRequestRunClaimRow>(
+          `
+            /* run_summary:current-work-request-claim */
+            SELECT id, status, claimed_by_token_id
+            FROM work_requests
+            WHERE organization_id = $1
+              AND project_id = $2
+              AND claimed_run_id = $3
+            LIMIT 1
+            FOR SHARE
+          `,
+          [context.organizationId, summary.projectId, summary.runId],
+        )
+        const [releasedClaim] = await tx.query<ReleasedWorkRequestClaimRow>(
+          `
+            /* run_summary:released-claim-tombstone */
+            SELECT work_request_id, claimed_by_token_id
+            FROM released_work_request_claims
+            WHERE organization_id = $1
+              AND project_id = $2
+              AND run_id = $3
+            LIMIT 1
+            FOR SHARE
+          `,
+          [context.organizationId, summary.projectId, summary.runId],
+        )
+        const hasExactCurrentClaim =
+          currentClaim !== undefined &&
+          (currentClaim.status === 'claim_pending' ||
+            currentClaim.status === 'materialized') &&
+          currentClaim.claimed_by_token_id !== null &&
+          currentClaim.claimed_by_token_id === context.tokenRecordId
+        if (
+          (currentClaim !== undefined && !hasExactCurrentClaim) ||
+          (currentClaim === undefined && releasedClaim !== undefined)
+        ) {
+          throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+        }
+
+        const [acceptedRun] = await tx.query<{ id: string }>(
+          `
+            INSERT INTO workflow_runs (
+              id,
+              run_version,
+              organization_id,
+              project_id,
+              creator_id,
+              data_origin,
+              title,
+              request,
+              status,
+              current_node_id,
+              branch_name,
+              pull_request_url,
+              created_at,
+              updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, 'remote', $6, $7, $8, $9, $10, NULL, $11, $11)
+            ON CONFLICT (id) DO UPDATE
+            SET run_version = excluded.run_version,
+                title = excluded.title,
+                status = excluded.status,
+                current_node_id = excluded.current_node_id,
+                branch_name = excluded.branch_name,
+                updated_at = excluded.updated_at
+            WHERE workflow_runs.organization_id = excluded.organization_id
+              AND workflow_runs.project_id = excluded.project_id
+              AND workflow_runs.creator_id = excluded.creator_id
+              AND workflow_runs.data_origin = 'remote'
+              AND workflow_runs.run_version < excluded.run_version
+            RETURNING id
+          `,
+          [
+            summary.runId,
+            summary.version,
+            context.organizationId,
+            summary.projectId,
+            context.userId,
+            summary.title,
+            'Synced from DevFlow Electron.',
+            summary.status,
+            remoteNodeId(summary.runId, summary.currentNodeId),
+            summary.branchName,
+            summary.updatedAt,
+          ],
+        )
+
+        if (!acceptedRun) {
+          const [existingProjection] = await tx.query<RemoteRunProjectionRow>(
+            `
+              SELECT
+                workflow_runs.id,
+                workflow_runs.run_version,
+                workflow_runs.organization_id,
+                workflow_runs.project_id,
+                workflow_runs.creator_id,
+                workflow_runs.data_origin,
+                workflow_runs.title,
+                workflow_runs.status,
+                workflow_runs.current_node_id,
+                workflow_runs.branch_name,
+                workflow_runs.updated_at,
+                current_node.id AS node_id,
+                current_node.stage AS node_stage,
+                current_node.kind AS node_kind,
+                current_node.status AS node_status,
+                current_node.required_role AS node_required_role
+              FROM workflow_runs
+              LEFT JOIN workflow_nodes AS current_node
+                ON current_node.run_id = workflow_runs.id
+               AND current_node.id = workflow_runs.current_node_id
+              WHERE workflow_runs.id = $1
+              LIMIT 1
+            `,
+            [summary.runId],
           )
-          VALUES ($1, $2, $3, $4, 'remote', $5, $6, $7, $8, $9, NULL, $10, $10)
-          ON CONFLICT (id) DO UPDATE
-          SET title = excluded.title,
-              status = excluded.status,
-              current_node_id = excluded.current_node_id,
-              branch_name = excluded.branch_name,
-              updated_at = excluded.updated_at
-          WHERE workflow_runs.organization_id = excluded.organization_id
-            AND workflow_runs.project_id = excluded.project_id
-            AND workflow_runs.creator_id = excluded.creator_id
-            AND workflow_runs.data_origin = 'remote'
-            AND workflow_runs.updated_at <= excluded.updated_at
-          RETURNING id
-        `,
-        [
-          summary.runId,
-          context.organizationId,
-          summary.projectId,
-          context.userId,
-          summary.title,
-          'Synced from DevFlow Electron.',
-          summary.status,
-          remoteNodeId(summary.runId, summary.currentNodeId),
-          summary.branchName,
-          summary.updatedAt,
-        ],
-      )
+          if (!existingProjection || !hasSameRemoteRunProjection(existingProjection, summary, context)) {
+            throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+          }
 
-      if (!acceptedRun) {
-        throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
-      }
+          return {
+            accepted: true,
+            syncedAt: new Date().toISOString(),
+            message: 'run summary written to Postgres repository',
+          }
+        }
 
-      await db.query(
-        `
-          UPDATE workflow_nodes
-          SET status = 'success',
-              updated_at = $3
-          WHERE run_id = $1
-            AND id <> $2
-            AND status IN ('running', 'blocked')
-        `,
-        [
-          summary.runId,
-          remoteNodeId(summary.runId, summary.currentNode.id),
-          summary.updatedAt,
-        ],
-      )
+        await tx.query(
+          `
+            UPDATE workflow_nodes
+            SET status = 'success',
+                updated_at = $3
+            WHERE run_id = $1
+              AND id <> $2
+              AND status IN ('running', 'blocked')
+          `,
+          [
+            summary.runId,
+            remoteNodeId(summary.runId, summary.currentNode.id),
+            summary.updatedAt,
+          ],
+        )
 
-      await db.query(
-        `
-          INSERT INTO workflow_nodes (
-            id,
-            run_id,
-            stage,
-            title,
-            subtitle,
-            kind,
-            status,
-            owner_id,
-            required_role,
-            retry_count,
-            token_usage_id,
-            position,
-            created_at,
-            updated_at
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, NULL, $10, $11, $11)
-          ON CONFLICT (id) DO UPDATE
-          SET stage = excluded.stage,
-              kind = excluded.kind,
-              status = excluded.status,
-              owner_id = excluded.owner_id,
-              required_role = excluded.required_role,
-              position = excluded.position,
-              updated_at = excluded.updated_at
-        `,
-        [
-          remoteNodeId(summary.runId, summary.currentNode.id),
-          summary.runId,
-          summary.currentNode.stage,
-          `Synced ${summary.currentNode.stage} node`,
-          'Canonical current node from DevFlow Electron.',
-          summary.currentNode.kind,
-          summary.currentNode.status,
-          context.userId,
-          summary.currentNode.requiredRole ?? null,
-          remoteNodePosition(summary.currentNode.stage, summary.currentNode.kind),
-          summary.updatedAt,
-        ],
-      )
+        const [acceptedNode] = await tx.query<{ id: string }>(
+          `
+            INSERT INTO workflow_nodes (
+              id,
+              run_id,
+              stage,
+              title,
+              subtitle,
+              kind,
+              status,
+              owner_id,
+              required_role,
+              retry_count,
+              token_usage_id,
+              position,
+              created_at,
+              updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, NULL, $10, $11, $11)
+            ON CONFLICT (id) DO UPDATE
+            SET stage = excluded.stage,
+                kind = excluded.kind,
+                status = excluded.status,
+                owner_id = excluded.owner_id,
+                required_role = excluded.required_role,
+                position = excluded.position,
+                updated_at = excluded.updated_at
+            WHERE workflow_nodes.run_id = excluded.run_id
+            RETURNING id
+          `,
+          [
+            remoteNodeId(summary.runId, summary.currentNode.id),
+            summary.runId,
+            summary.currentNode.stage,
+            `Synced ${summary.currentNode.stage} node`,
+            'Canonical current node from DevFlow Electron.',
+            summary.currentNode.kind,
+            summary.currentNode.status,
+            context.userId,
+            summary.currentNode.requiredRole ?? null,
+            remoteNodePosition(summary.currentNode.stage, summary.currentNode.kind),
+            summary.updatedAt,
+          ],
+        )
+        if (!acceptedNode) {
+          throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+        }
 
-      return {
-        accepted: true,
-        syncedAt: new Date().toISOString(),
-        message: 'run summary written to Postgres repository',
-      }
+        return {
+          accepted: true,
+          syncedAt: new Date().toISOString(),
+          message: 'run summary written to Postgres repository',
+        }
+      })
     },
 
     async uploadTestEvidenceSummary(summary, context: TeamRepositorySyncContext) {
@@ -2033,9 +2487,15 @@ export function createPostgresTeamRepository(
       }
     },
 
-    async listAgentProviders() {
+    async listAgentProviders(context) {
       const rows = await db.query<AgentProviderCredentialRow>(
-        'SELECT * FROM agent_provider_credentials ORDER BY updated_at DESC',
+        `
+          SELECT *
+          FROM agent_provider_credentials
+          WHERE organization_id = $1
+          ORDER BY updated_at DESC
+        `,
+        [context.organizationId],
       )
 
       return [
@@ -2373,6 +2833,54 @@ export function createPostgresTeamRepository(
       }
     },
 
+    async saveAgentEvent(
+      event: AgentEvent,
+      context: TeamRepositorySyncContext,
+    ) {
+      const redactedEvent = redactAgentEventForPersistence(event)
+      const acceptedEvent = await db.query<{ id: string }>(
+        `
+          INSERT INTO agent_events (
+            id,
+            run_id,
+            node_id,
+            sequence,
+            kind,
+            message,
+            timestamp
+          )
+          SELECT $1, $2, $3, $4, $5, $6, $7
+          WHERE EXISTS (
+            SELECT 1
+            FROM workflow_runs
+            WHERE id = $2 AND organization_id = $8
+          )
+          ON CONFLICT (run_id, sequence) DO UPDATE
+          SET id = excluded.id,
+              node_id = excluded.node_id,
+              kind = excluded.kind,
+              message = excluded.message,
+              timestamp = excluded.timestamp
+          RETURNING id
+        `,
+        [
+          redactedEvent.id,
+          redactedEvent.runId,
+          redactedEvent.nodeId ?? null,
+          redactedEvent.sequence,
+          redactedEvent.kind,
+          redactedEvent.message,
+          redactedEvent.timestamp,
+          context.organizationId,
+        ],
+      )
+      if (!acceptedEvent[0]) {
+        throw new CanonicalRunRequiredError(redactedEvent.runId, 'unknown')
+      }
+
+      return redactedEvent
+    },
+
     async listAgentReviews(input, context) {
       const rows = await db.query<AgentReviewRow>(
         `
@@ -2399,13 +2907,19 @@ export function createPostgresTeamRepository(
         `,
         [context.organizationId, projectId],
       )
-      const organizationPolicy = mapOrganizationPolicy(rows.find((row) => row.project_id === null))
+      const organizationPolicy = mapOrganizationPolicy(
+        rows.find((row) => row.project_id === null),
+        context.organizationId,
+      )
       const projectOverride = mapProjectOverride(rows.find((row) => row.project_id === projectId))
 
       return {
         organizationPolicy,
         projectOverride,
-        effectivePolicy: resolveEffectivePolicy(organizationPolicy, projectOverride),
+        effectivePolicy: {
+          ...resolveEffectivePolicy(organizationPolicy, projectOverride),
+          projectId,
+        },
       }
     },
 

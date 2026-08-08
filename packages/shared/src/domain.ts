@@ -260,7 +260,7 @@ export type RuntimeBudgetApproval = {
 }
 
 export type BudgetGuardDecision = {
-  status: 'allowed' | 'warning' | 'requires_lead_approval' | 'approved_over_budget' | 'disabled'
+  status: 'allowed' | 'warning' | 'requires_lead_approval' | 'approved_over_budget' | 'disabled' | 'unavailable'
   blocksRun: boolean
   currentSpendUsd: number
   projectedCostUsd: number
@@ -407,6 +407,7 @@ export type AgentReviewArtifact = Artifact & {
 
 export type WorkflowRun = {
   id: string
+  version: number
   title: string
   request: string
   projectId: string
@@ -496,6 +497,29 @@ export type KnowledgeChunk = {
   updatedAt: string
 }
 
+export type RepositoryKnowledgeWarning =
+  | 'unsafe_path_skipped'
+  | 'path_limit_exceeded'
+  | 'depth_limit_exceeded'
+  | 'file_count_limit_exceeded'
+  | 'file_size_limit_exceeded'
+  | 'total_size_limit_exceeded'
+  | 'character_limit_exceeded'
+  | 'chunk_limit_exceeded'
+  | 'metadata_limit_exceeded'
+
+export type RepositoryKnowledgeSnapshot = {
+  projectId: string
+  contentHash: string
+  documents: KnowledgeDocument[]
+  chunks: KnowledgeChunk[]
+  entities: KnowledgeEntity[]
+  relations: KnowledgeRelation[]
+  indexedAt: string
+  truncated: boolean
+  warnings: RepositoryKnowledgeWarning[]
+}
+
 export type KnowledgeRetrievalQuery = {
   id: string
   runId: string
@@ -544,6 +568,7 @@ export type KnowledgeReference = {
   documentId: string
   relation: KnowledgeReferenceRelation
   reason: string
+  sourcePath?: string
   chunkId?: string
   score?: number
   strategy?: KnowledgeRetrievalStrategy
@@ -668,7 +693,7 @@ export type CodingAgentRun = {
   providerId: string
   engine: CodingAgentEngine
   status: CodingAgentRunStatus
-  managedWorkspaceId: string
+  managedWorkspaceId?: string
   branchName: string
   userInstruction: string
   prompt: string
@@ -808,6 +833,7 @@ export type LocalSettings = {
 }
 
 export type LocalExecutionState = {
+  remoteSyncOperations: import('./remote-sync-outbox').RemoteSyncOperation[]
   projects: LocalProject[]
   runs: WorkflowRun[]
   artifacts: Artifact[]
@@ -857,6 +883,7 @@ export type RemoteRunNodeSummary = Pick<
 export type RemoteRunSummary = {
   kind: RemoteRunSummaryKind
   runId: string
+  version: number
   projectId: string
   title: string
   status: RunStatus

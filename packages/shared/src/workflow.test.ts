@@ -24,6 +24,7 @@ describe('createWorkflowRunFromRequest', () => {
 
     expect(created.run).toMatchObject({
       id: 'run-webhook-retry',
+      version: 1,
       title: 'Fix webhook retry edge cases',
       request: 'Clarify webhook retry failure boundaries, design the change, implement it, and archive evidence.',
       projectId: 'p-payments',

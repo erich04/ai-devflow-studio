@@ -26,19 +26,35 @@ import {
   formatUsd,
   resolveDevFlowRuntimeFlags,
   type DevFlowSessionHeaders,
+  type GateCommand,
   type NodeStatus,
+  type WorkRequest,
   type WorkflowNode,
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import {
   fetchTeamOverview,
+  fetchWorkRequests,
+  fetchGateCommands,
+  evaluateGateCommandSnapshot,
   resolveDevFlowPublicApiBaseUrl,
   runKnowledgeReview,
   saveEnforcementPolicy,
   type TeamOverviewResponse,
+  type GateCommandEvaluationSnapshot,
 } from './lib/devflow-api'
+import { PairingCodePanel } from './PairingCodePanel'
+import { WorkRequestPanel } from './WorkRequestPanel'
+import { GateCommandPanel } from './GateCommandPanel'
+import { selectGateCommandTarget } from './gate-command-view-model'
 
 type StatusTone = 'done' | 'run' | 'gate' | 'warn' | 'idle' | 'fail'
+
+type PageSearchParams = Record<string, string | string[] | undefined>
+
+type PageProps = {
+  searchParams?: Promise<PageSearchParams>
+}
 
 async function getDevFlowCookieHeader(): Promise<string | undefined> {
   const cookieStore = await cookies()
@@ -94,7 +110,7 @@ async function applyRecommendedPolicyAction(formData: FormData) {
   })
 }
 
-export default async function Page() {
+export default async function Page({ searchParams }: PageProps) {
   const apiBaseUrl = resolveDevFlowPublicApiBaseUrl()
   const cookieHeader = await getDevFlowCookieHeader()
   const sessionHeaders = cookieHeader ? undefined : getDemoSessionHeadersIfEnabled()
@@ -105,32 +121,93 @@ export default async function Page() {
       ...(cookieHeader ? { cookieHeader } : {}),
       ...(sessionHeaders ? { sessionHeaders } : {}),
     })
-  } catch (error) {
-    return <ErrorShell message={error instanceof Error ? error.message : '无法连接 DevFlow API'} />
+  } catch {
+    return (
+      <ErrorShell
+        message="无法加载团队数据，请稍后重试。"
+        signInHref={`${apiBaseUrl}/api/auth/github/start`}
+      />
+    )
   }
 
-  const activeRun = selectActiveRun(overview.runs)
-  const activeProject = activeRun
-    ? overview.projects.find((project) => project.id === activeRun.projectId)
-    : overview.projects[0]
+  const { activeProject, activeRun, projectRuns, selectionError } = resolvePageSelection(
+    overview,
+    await searchParams,
+  )
+  let workRequests: WorkRequest[] = []
+  let workRequestLoadFailed = false
+  let gateCommands: GateCommand[] = []
+  if (activeProject) {
+    try {
+      workRequests = await fetchWorkRequests({
+        projectId: activeProject.id,
+        ...(cookieHeader ? { cookieHeader } : {}),
+        ...(sessionHeaders ? { sessionHeaders } : {}),
+      })
+    } catch {
+      workRequestLoadFailed = true
+    }
+    if (cookieHeader) {
+      try {
+        gateCommands = await fetchGateCommands({
+          projectId: activeProject.id,
+          cookieHeader,
+        })
+      } catch {
+        gateCommands = []
+      }
+    }
+  }
   const activeMember = activeRun
     ? overview.members.find((member) => member.id === activeRun.creatorId)
-    : overview.members[0]
+    : undefined
   const currentNode = activeRun?.nodes.find((node) => node.id === activeRun.currentNodeId)
-  const gateNode = activeRun ? selectGateNode(activeRun, currentNode) : undefined
-  const gateReview =
-    overview.agentReviews.find((review) => review.runId === activeRun?.id && review.nodeId === gateNode?.id) ??
-    overview.agentReviews[0]
+  const gateTarget = activeRun ? selectGateCommandTarget(activeRun) : null
+  const gateNode = gateTarget?.node
+  const gateCommandNodeId = gateTarget?.commandNodeId
+  let gateEvaluation: GateCommandEvaluationSnapshot | null = null
+  if (
+    cookieHeader &&
+    activeProject &&
+    activeRun?.status === 'paused_at_gate' &&
+    gateNode &&
+    gateCommandNodeId &&
+    (gateNode.status === 'running' || gateNode.status === 'blocked')
+  ) {
+    try {
+      gateEvaluation = await evaluateGateCommandSnapshot({
+        projectId: activeProject.id,
+        runId: activeRun.id,
+        nodeId: gateCommandNodeId,
+        cookieHeader,
+      })
+    } catch {
+      gateEvaluation = null
+    }
+  }
+  const currentReviews = activeRun
+    ? overview.agentReviews.filter(
+        (review) => review.projectId === activeProject?.id && review.runId === activeRun.id,
+      )
+    : []
+  const reviewNodeId = gateNode?.id ?? currentNode?.id
+  const gateReview = reviewNodeId
+    ? currentReviews.find((review) => review.nodeId === reviewNodeId)
+    : undefined
   const currentEvidence = activeRun
-    ? overview.testEvidenceSummaries.filter((item) => item.runId === activeRun.id)
-    : overview.testEvidenceSummaries
+    ? overview.testEvidenceSummaries.filter(
+        (item) => item.projectId === activeProject?.id && item.runId === activeRun.id,
+      )
+    : []
   const currentCodingRuns = activeRun
-    ? overview.codingAgentSummaries.filter((item) => item.runId === activeRun.id)
-    : overview.codingAgentSummaries
+    ? overview.codingAgentSummaries.filter(
+        (item) => item.projectId === activeProject?.id && item.runId === activeRun.id,
+      )
+    : []
   const knowledgeReviewProviderId = overview.agentProviders[0]?.id ?? ''
   const policySummary = activeProject
     ? overview.policyAwareDeliverySummaries.find((item) => item.projectId === activeProject.id)
-    : overview.policyAwareDeliverySummaries[0]
+    : undefined
   const budgetPolicy = activeProject
     ? overview.runtimeBudgetPolicies.find((item) => item.projectId === activeProject.id)
     : undefined
@@ -141,10 +218,11 @@ export default async function Page() {
     budgetPolicy?.monthlyLimitUsd != null && budgetPolicy.monthlyLimitUsd > 0
       ? Math.min(Math.round((projectSpend / budgetPolicy.monthlyLimitUsd) * 100), 999)
       : 0
-  const activeRunCount = overview.runs.filter((run) => !['completed', 'failed', 'cancelled'].includes(run.status)).length
-  const gateCount = overview.runs.filter((run) => run.status === 'paused_at_gate').length
-  const evidenceCount =
-    overview.testEvidenceSummaries.length + overview.agentReviews.length + overview.codingAgentSummaries.length
+  const activeRunCount = projectRuns.filter(
+    (run) => !['completed', 'failed', 'cancelled'].includes(run.status),
+  ).length
+  const gateCount = projectRuns.filter((run) => run.status === 'paused_at_gate').length
+  const evidenceCount = currentEvidence.length + currentReviews.length + currentCodingRuns.length
   const progress = activeRun ? calculateProgress(activeRun.nodes) : 0
 
   return (
@@ -220,6 +298,72 @@ export default async function Page() {
           </div>
         </header>
 
+        <section className="studio-selection" aria-label="Project and Run selection">
+          <div>
+            <span>Project</span>
+            <nav aria-label="Select project">
+              {overview.projects.map((project) => (
+                <a
+                  aria-current={project.id === activeProject?.id ? 'page' : undefined}
+                  href={`/?projectId=${encodeURIComponent(project.id)}`}
+                  key={project.id}
+                >
+                  <strong>{project.name}</strong>
+                  <small>{project.repository}</small>
+                </a>
+              ))}
+            </nav>
+          </div>
+          <div>
+            <span>Run</span>
+            {activeProject ? (
+              projectRuns.length > 0 ? (
+                <nav aria-label="Select Run">
+                  {projectRuns.map((run) => (
+                    <a
+                      aria-current={run.id === activeRun?.id ? 'page' : undefined}
+                      href={`/?projectId=${encodeURIComponent(activeProject.id)}&runId=${encodeURIComponent(run.id)}`}
+                      key={run.id}
+                    >
+                      <strong>{run.title}</strong>
+                      <small>{runStatusLabel(run.status)}</small>
+                    </a>
+                  ))}
+                </nav>
+              ) : (
+                <small>所选项目还没有同步 Run。</small>
+              )
+            ) : (
+              <small>先选择一个项目。</small>
+            )}
+          </div>
+          {activeProject ? (
+            <section aria-label={`Desktop pairing for ${activeProject.name}`}>
+              <span>Desktop</span>
+              <strong>Pair this project</strong>
+              <PairingCodePanel key={activeProject.id} projectId={activeProject.id} />
+            </section>
+          ) : null}
+        </section>
+
+        {activeProject ? (
+          workRequestLoadFailed ? (
+            <section className="work-request-panel" id="work-request" aria-label="Work Requests">
+              <div>
+                <span>Team intake</span>
+                <h2>工作请求暂时不可用</h2>
+                <p>无法安全加载所选项目的工作请求，请稍后重试。</p>
+              </div>
+            </section>
+          ) : (
+            <WorkRequestPanel
+              key={activeProject.id}
+              projectId={activeProject.id}
+              initialWorkRequests={workRequests}
+            />
+          )
+        ) : null}
+
         <section className="studio-metrics" aria-label="Delivery metrics">
           <MetricCard label="Active Runs" value={String(activeRunCount)} detail={`${gateCount} awaiting gate`} />
           <MetricCard label="Evidence Items" value={String(evidenceCount)} detail="tests · reviews · coding runs" />
@@ -236,7 +380,7 @@ export default async function Page() {
             <div className="studio-section-heading">
               <div>
                 <span>Evidence Chain</span>
-                <h2>{activeRun ? '当前工作请求证据链' : '等待第一条真实工作请求'}</h2>
+                <h2>{activeRun ? '当前工作请求证据链' : selectionError ?? '等待第一条真实工作请求'}</h2>
               </div>
               <div className="studio-progress">
                 <span>{progress}%</span>
@@ -259,8 +403,12 @@ export default async function Page() {
               </div>
             ) : (
               <EmptyProductState
-                title="没有真实 Run"
-                body="连接 Desktop 或 API 创建工作请求后，这里会显示从澄清、设计、编码、测试到 PR 的证据链。"
+                title={selectionError ?? '没有真实 Run'}
+                body={
+                  selectionError
+                    ? '请从所选项目的 Run 列表中重新选择；页面不会回退到其他项目的最新 Run。'
+                    : '连接 Desktop 或 API 创建工作请求后，这里会显示从澄清、设计、编码、测试到 PR 的证据链。'
+                }
               />
             )}
           </section>
@@ -292,7 +440,7 @@ export default async function Page() {
             </dl>
 
             <div className="studio-advisory">
-              <strong>{gateReview?.gateAdvisory.summary ?? '没有阻断性知识缺口。'}</strong>
+              <strong>{gateReview?.gateAdvisory.summary ?? '此 Run 尚无 Review 结论。'}</strong>
               <p>
                 {gateReview
                   ? `${gateReview.policyFindings.length} policy findings · ${gateReview.missingEvidence.length} missing evidence`
@@ -311,16 +459,27 @@ export default async function Page() {
               </button>
             </form>
 
-            <div className="studio-gate-buttons">
-              <button type="button" disabled={!gateNode}>
-                <CheckCircle2 size={16} />
-                批准并继续
-              </button>
-              <button type="button" disabled={!gateNode}>
-                <XCircle size={16} />
-                驳回
-              </button>
-            </div>
+            {activeProject && activeRun && gateNode && gateCommandNodeId ? (
+              <GateCommandPanel
+                projectId={activeProject.id}
+                runId={activeRun.id}
+                nodeId={gateCommandNodeId}
+                expectedRunVersion={activeRun.version}
+                evaluation={gateEvaluation}
+                initialCommands={gateCommands}
+              />
+            ) : (
+              <div className="studio-gate-buttons">
+                <button type="button" disabled>
+                  <CheckCircle2 size={16} />
+                  批准并继续
+                </button>
+                <button type="button" disabled>
+                  <XCircle size={16} />
+                  驳回
+                </button>
+              </div>
+            )}
           </aside>
         </section>
 
@@ -353,21 +512,35 @@ export default async function Page() {
           </SupportPanel>
 
           <SupportPanel id="policy" icon={<AlertTriangle size={17} />} title="Policy / Warnings" action="应用推荐策略">
-            <CompactRow
-              title={policySummary ? `${policySummary.blockedCount} blocking · ${policySummary.warningCount} warnings` : 'Warn-only default'}
-              meta={`${policySummary?.retryAttemptCount ?? 0} retries · ${policySummary?.overrideCount ?? 0} overrides`}
-              value={`${overview.enforcementPolicies.organizationPolicy.version}`}
-            />
-            <form action={applyRecommendedPolicyAction}>
-              <input
-                type="hidden"
-                name="organizationId"
-                value={overview.enforcementPolicies.organizationPolicy.organizationId}
+            {activeProject ? (
+              <>
+                <CompactRow
+                  title={
+                    policySummary
+                      ? `${policySummary.blockedCount} blocking · ${policySummary.warningCount} warnings`
+                      : 'No policy summary for selected project'
+                  }
+                  meta={`${policySummary?.retryAttemptCount ?? 0} retries · ${policySummary?.overrideCount ?? 0} overrides`}
+                  value={`${overview.enforcementPolicies.organizationPolicy.version}`}
+                />
+                <form action={applyRecommendedPolicyAction}>
+                  <input
+                    type="hidden"
+                    name="organizationId"
+                    value={overview.enforcementPolicies.organizationPolicy.organizationId}
+                  />
+                  <button type="submit" className="studio-small-button">
+                    Apply recommended enforcement
+                  </button>
+                </form>
+              </>
+            ) : (
+              <CompactRow
+                title="No project selected"
+                meta="Choose a project to inspect policy signals"
+                value="—"
               />
-              <button type="submit" className="studio-small-button">
-                Apply recommended enforcement
-              </button>
-            </form>
+            )}
           </SupportPanel>
         </section>
       </section>
@@ -375,7 +548,7 @@ export default async function Page() {
   )
 }
 
-function ErrorShell({ message }: { message: string }) {
+function ErrorShell({ message, signInHref }: { message: string; signInHref: string }) {
   return (
     <main className="studio-shell studio-shell--error">
       <section className="studio-error-panel">
@@ -383,6 +556,7 @@ function ErrorShell({ message }: { message: string }) {
         <span>DevFlow API</span>
         <h1>团队数据暂时不可用</h1>
         <p>{message}</p>
+        <a href={signInHref}>Sign in with GitHub</a>
         <a href="/legacy-shell">打开旧壳备份</a>
       </section>
     </main>
@@ -473,7 +647,7 @@ function CompactRow({ title, meta, value }: { title: string; meta: string; value
 
 function EmptyProductState({ title, body }: { title: string; body: string }) {
   return (
-    <div className="studio-empty-state" id="work-request">
+    <div className="studio-empty-state">
       <Database size={24} />
       <strong>{title}</strong>
       <p>{body}</p>
@@ -485,25 +659,54 @@ function StatusPill({ tone, children }: { tone: StatusTone; children: ReactNode 
   return <span className={`studio-status-pill is-${tone}`}>{children}</span>
 }
 
-function selectActiveRun(runs: WorkflowRun[]) {
-  const activeStatuses = new Set<WorkflowRun['status']>([
-    'paused_at_gate',
-    'building',
-    'testing',
-    'designing',
-    'clarifying',
-    'created',
-  ])
-  const byLatestUpdate = (left: WorkflowRun, right: WorkflowRun) =>
-    Date.parse(right.updatedAt) - Date.parse(left.updatedAt)
-  const activeRuns = runs.filter((run) => activeStatuses.has(run.status)).sort(byLatestUpdate)
+const byLatestUpdate = (left: WorkflowRun, right: WorkflowRun) =>
+  Date.parse(right.updatedAt) - Date.parse(left.updatedAt)
 
-  return activeRuns[0] ?? [...runs].sort(byLatestUpdate)[0]
+function readSearchParam(searchParams: PageSearchParams | undefined, key: string) {
+  const value = searchParams?.[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
-function selectGateNode(run: WorkflowRun, currentNode?: WorkflowNode) {
-  if (currentNode?.kind === 'gate') return currentNode
-  return run.nodes.find((node) => node.kind === 'gate' && node.status === 'blocked') ?? run.nodes.find((node) => node.kind === 'gate')
+function resolvePageSelection(
+  overview: TeamOverviewResponse,
+  searchParams: PageSearchParams | undefined,
+) {
+  const requestedProjectId = readSearchParam(searchParams, 'projectId')
+  const requestedRunId = readSearchParam(searchParams, 'runId')
+
+  if (overview.projects.length === 0) {
+    return { activeProject: undefined, activeRun: undefined, projectRuns: [], selectionError: undefined }
+  }
+  if (!requestedProjectId) {
+    return { activeProject: undefined, activeRun: undefined, projectRuns: [], selectionError: '请选择项目' }
+  }
+
+  const activeProject = overview.projects.find((project) => project.id === requestedProjectId)
+  if (!activeProject) {
+    return { activeProject: undefined, activeRun: undefined, projectRuns: [], selectionError: '所选项目不存在' }
+  }
+
+  const projectRuns = overview.runs
+    .filter((run) => run.projectId === activeProject.id)
+    .sort(byLatestUpdate)
+  if (!requestedRunId) {
+    return {
+      activeProject,
+      activeRun: undefined,
+      projectRuns,
+      selectionError: projectRuns.length > 0 ? '请选择 Run' : '所选项目暂无 Run',
+    }
+  }
+
+  const requestedRun = overview.runs.find((run) => run.id === requestedRunId)
+  if (!requestedRun) {
+    return { activeProject, activeRun: undefined, projectRuns, selectionError: '所选 Run 不存在' }
+  }
+  if (requestedRun.projectId !== activeProject.id) {
+    return { activeProject, activeRun: undefined, projectRuns, selectionError: 'Run 不属于所选项目' }
+  }
+
+  return { activeProject, activeRun: requestedRun, projectRuns, selectionError: undefined }
 }
 
 function calculateProgress(nodes: WorkflowNode[]) {
@@ -514,9 +717,15 @@ function calculateProgress(nodes: WorkflowNode[]) {
 
 function evidenceCountForNode(overview: TeamOverviewResponse, run: WorkflowRun, node: WorkflowNode) {
   return (
-    overview.testEvidenceSummaries.filter((item) => item.runId === run.id && item.nodeId === node.id).length +
-    overview.agentReviews.filter((item) => item.runId === run.id && item.nodeId === node.id).length +
-    overview.codingAgentSummaries.filter((item) => item.runId === run.id && item.nodeId === node.id).length +
+    overview.testEvidenceSummaries.filter(
+      (item) => item.projectId === run.projectId && item.runId === run.id && item.nodeId === node.id,
+    ).length +
+    overview.agentReviews.filter(
+      (item) => item.projectId === run.projectId && item.runId === run.id && item.nodeId === node.id,
+    ).length +
+    overview.codingAgentSummaries.filter(
+      (item) => item.projectId === run.projectId && item.runId === run.id && item.nodeId === node.id,
+    ).length +
     node.artifactIds.length
   )
 }

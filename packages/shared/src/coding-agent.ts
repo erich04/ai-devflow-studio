@@ -5,6 +5,7 @@ import type {
   DependencyBootstrapDecision,
   DependencyBootstrapSnapshot,
   GateDecision,
+  KnowledgeChunk,
   KnowledgeGovernanceCheck,
   KnowledgeReference,
   LocalProject,
@@ -17,9 +18,13 @@ import type {
 import type { RemediationPlan, RetryAttempt } from './remediation'
 import { detectPackageManager } from './local-execution'
 import { redactSecrets, redactSensitiveText } from './redaction'
+import { assertCanonicalLocalNodeId } from './remote-node-identity'
 
 export const MAX_DIFF_CHARS = 50_000
 export const MAX_REMOTE_CHANGED_PATHS = 50
+export const MAX_CODING_KNOWLEDGE_REFERENCES = 8
+export const MAX_CODING_KNOWLEDGE_EXCERPT_CHARS = 1_200
+export const MAX_CODING_KNOWLEDGE_TOTAL_EXCERPT_CHARS = 6_000
 export const activeCodingAgentRunStatuses: readonly CodingAgentRun['status'][] = [
   'queued',
   'preparing',
@@ -39,6 +44,7 @@ export type CodingBriefInput = {
   project: LocalProject
   upstreamArtifacts: Artifact[]
   knowledgeReferences: KnowledgeReference[]
+  knowledgeChunks?: KnowledgeChunk[]
   governanceChecks: KnowledgeGovernanceCheck[]
   gateDecisions: GateDecision[]
   testEvidence: TestEvidence[]
@@ -82,11 +88,26 @@ export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
         return `- ${artifact.title} (${artifact.kind}): ${artifact.summary}\n  ${artifact.content}`
       })
     : ['- No upstream artifacts are available.']
+  let remainingKnowledgeExcerptChars = MAX_CODING_KNOWLEDGE_TOTAL_EXCERPT_CHARS
   const knowledgeLines = input.knowledgeReferences.length
-    ? input.knowledgeReferences.map((reference) => {
+    ? input.knowledgeReferences.slice(0, MAX_CODING_KNOWLEDGE_REFERENCES).map((reference) => {
+        const chunk = input.knowledgeChunks?.find(
+          (candidate) =>
+            candidate.id === reference.chunkId &&
+            candidate.documentId === reference.documentId &&
+            (!reference.contentHash || candidate.contentHash === reference.contentHash),
+        )
+        const sourcePath = safeKnowledgeSourcePath(reference.sourcePath ?? chunk?.sourcePath)
         const section = reference.headingPath?.length ? ` section="${reference.headingPath.join(' > ')}"` : ''
         const score = typeof reference.score === 'number' ? ` score=${reference.score.toFixed(2)}` : ''
-        return `- ${reference.documentId}${section}${score}: ${reference.reason}`
+        const strategy = reference.strategy ? ` strategy=${reference.strategy}` : ''
+        const contentHash = reference.contentHash ? ` contentHash=${reference.contentHash}` : ''
+        const excerptLimit = Math.min(MAX_CODING_KNOWLEDGE_EXCERPT_CHARS, remainingKnowledgeExcerptChars)
+        const excerpt = chunk && excerptLimit > 0
+          ? redactSensitiveText(chunk.content).value.slice(0, excerptLimit)
+          : ''
+        remainingKnowledgeExcerptChars -= excerpt.length
+        return `- ${reference.documentId}${sourcePath ? ` source=${sourcePath}` : ''}${section}${strategy}${score}${contentHash}: ${redactSensitiveText(reference.reason).value}${excerpt ? `\n  Excerpt: ${excerpt}` : ''}`
       })
     : ['- No knowledge references are attached.']
   const governanceLines = input.governanceChecks.length
@@ -120,6 +141,8 @@ export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
       : []
 
   const prompt = [
+    'DevFlow Coding Brief',
+    '',
     'You are the DevFlow managed coding adapter. Work only inside the managed worktree.',
     '',
     `Run: ${input.run.title}`,
@@ -168,6 +191,21 @@ export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
     userInstruction,
     prompt,
   }
+}
+
+function safeKnowledgeSourcePath(sourcePath: string | undefined): string | undefined {
+  if (!sourcePath) {
+    return undefined
+  }
+  const normalized = sourcePath.replace(/\\/g, '/')
+  if (
+    normalized.startsWith('/') ||
+    /^[A-Za-z]:\//.test(normalized) ||
+    normalized.split('/').some((segment) => segment === '..')
+  ) {
+    return undefined
+  }
+  return redactSensitiveText(normalized).value.slice(0, 1_024)
 }
 
 export function selectDependencyBootstrap(
@@ -303,6 +341,22 @@ function redactRemoteBudgetDecisionForSync(
 export function redactRemoteCodingAgentSummaryForSync(
   summary: RemoteCodingAgentSummary,
 ): RemoteCodingAgentSummary {
+  assertCanonicalLocalNodeId(summary.runId, summary.nodeId)
+  if (summary.costSummary) {
+    assertCanonicalLocalNodeId(
+      summary.costSummary.runId,
+      summary.costSummary.nodeId,
+    )
+    if (
+      summary.costSummary.runId !== summary.runId ||
+      summary.costSummary.nodeId !== summary.nodeId ||
+      summary.costSummary.projectId !== summary.projectId
+    ) {
+      throw new Error(
+        'Remote coding cost scope must match its coding summary.',
+      )
+    }
+  }
   return {
     id: summary.id,
     runId: summary.runId,

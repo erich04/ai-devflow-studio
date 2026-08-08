@@ -1,16 +1,41 @@
 import { describe, expect, it } from 'vitest'
-import type { TeamDbClient } from '../db/client'
+import type { RequestPrincipal } from '../auth/request-auth'
+import type { TeamDbRepositoryClient } from '../db/client'
 import { createPostgresTeamRepository } from './postgres-team-repository'
 
-class FakeTeamDbClient implements TeamDbClient {
+const readContext = { organizationId: 'org-demo' }
+
+const postgresGatePrincipal: RequestPrincipal = {
+  session: {
+    source: 'authenticated',
+    authAccountId: 'acct-github-ling',
+    organizationId: 'org-demo',
+    userId: 'u-ling',
+    role: 'lead',
+    projectMemberships: [
+      { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+    ],
+  },
+  authentication: { kind: 'session_cookie', tokenRecordId: null },
+}
+
+function gateCommandMarker(sql: string): string | null {
+  return /\/\* gate_command:([^*]+) \*\//.exec(sql)?.[1]?.trim() ?? null
+}
+
+class FakeTeamDbClient implements TeamDbRepositoryClient {
   readonly queries: Array<{ sql: string; params?: unknown[] }> = []
   readonly acceptedChildSummaryWrites = new Map<string, unknown[]>()
+  checkoutCount = 0
+  releaseCount = 0
   private readonly childSummaryScopes = new Map<string, string>()
 
   constructor(
     private readonly canonicalRunExists = true,
     private readonly runSummaryAccepted = true,
     private readonly desktopUserRole: 'owner' | 'lead' | 'member' = 'lead',
+    private readonly failOnSqlFragment?: string,
+    private readonly nodeSummaryAccepted = true,
   ) {}
 
   private acceptScopedChildSummaryWrite(
@@ -32,6 +57,10 @@ class FakeTeamDbClient implements TeamDbClient {
 
   async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
     this.queries.push(params === undefined ? { sql } : { sql, params })
+
+    if (this.failOnSqlFragment && sql.includes(this.failOnSqlFragment)) {
+      throw new Error(`forced repository write failure: ${this.failOnSqlFragment}`)
+    }
 
     if (sql.includes('INSERT INTO test_evidence_summaries')) {
       const values = params ?? []
@@ -68,6 +97,10 @@ class FakeTeamDbClient implements TeamDbClient {
 
     if (sql.includes('INSERT INTO workflow_runs')) {
       return (this.runSummaryAccepted ? [{ id: params?.[0] }] : []) as T[]
+    }
+
+    if (sql.includes('INSERT INTO workflow_nodes')) {
+      return (this.nodeSummaryAccepted ? [{ id: params?.[0] }] : []) as T[]
     }
 
     if (sql.includes('SELECT id') && sql.includes('FROM workflow_runs')) {
@@ -118,6 +151,21 @@ class FakeTeamDbClient implements TeamDbClient {
     }
 
     if (sql.includes('FROM project_members')) {
+      if (params?.length === 3) {
+        return [
+          {
+            project_id: params[1],
+            user_id: 'u-ling',
+            role: this.desktopUserRole,
+          },
+        ] as T[]
+      }
+      if (sql.includes('JOIN projects')) {
+        return [
+          { project_id: 'p-payments', user_id: 'u-ling', role: 'lead' },
+          { project_id: 'p-admin', user_id: 'u-ling', role: 'member' },
+        ] as T[]
+      }
       if (params?.length === 2) {
         return [
           {
@@ -164,6 +212,7 @@ class FakeTeamDbClient implements TeamDbClient {
       return [
         {
           id: 'run-remote-1',
+          run_version: 4,
           title: 'Remote health endpoint',
           request: 'Add team-visible health endpoint evidence.',
           project_id: 'p-payments',
@@ -327,8 +376,167 @@ class FakeTeamDbClient implements TeamDbClient {
     return []
   }
 
+  async checkout() {
+    this.checkoutCount += 1
+    return {
+      query: <T>(sql: string, params?: unknown[]) => this.query<T>(sql, params),
+      release: () => {
+        this.releaseCount += 1
+      },
+    }
+  }
+
   async close(): Promise<void> {
     return undefined
+  }
+}
+
+class ReleasedWorkRequestRunDbClient extends FakeTeamDbClient {
+  override async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    if (sql.includes('/* run_summary:authority-lock */')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return []
+    }
+    if (sql.includes('/* run_summary:current-work-request-claim */')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return []
+    }
+    if (sql.includes('/* run_summary:released-claim-tombstone */')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [
+        {
+          work_request_id: 'wr-released',
+          claimed_by_token_id: 'desktop-token-p-payments',
+        } as T,
+      ]
+    }
+    return super.query<T>(sql, params)
+  }
+}
+
+class CurrentWorkRequestRunDbClient extends FakeTeamDbClient {
+  constructor(private readonly claimantTokenId: string) {
+    super()
+  }
+
+  override async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    if (sql.includes('/* run_summary:authority-lock */')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return []
+    }
+    if (sql.includes('/* run_summary:current-work-request-claim */')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [
+        {
+          id: 'wr-current',
+          status: 'materialized',
+          claimed_by_token_id: this.claimantTokenId,
+        } as T,
+      ]
+    }
+    if (sql.includes('/* run_summary:released-claim-tombstone */')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return []
+    }
+    return super.query<T>(sql, params)
+  }
+}
+
+class HistoricalGateOverrideDbClient extends FakeTeamDbClient {
+  override async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    const marker = gateCommandMarker(sql)
+    if (marker === 'cookie-identity') {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [
+        {
+          user_id: 'u-ling',
+          organization_id: 'org-demo',
+          organization_role: 'lead',
+          project_role: 'lead',
+        } as T,
+      ]
+    }
+    if (marker === 'create-authority') {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [
+        {
+          work_request_id: 'work-request-gate-history',
+          claimed_by_token_id: 'desktop-token-gate-history',
+          run_id: 'run-remote-1',
+          run_version: 4,
+          current_node_id: 'run-remote-1:n-design-gate',
+          creator_id: 'u-ling',
+        } as T,
+      ]
+    }
+    if (marker === 'create') {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      const values = params ?? []
+      return [
+        {
+          id: values[0],
+          version: 1,
+          organization_id: values[1],
+          project_id: values[2],
+          work_request_id: values[3],
+          run_id: values[4],
+          node_id: values[5],
+          action: values[6],
+          workflow_command: values[7],
+          reason: values[8],
+          requested_by_user_id: values[9],
+          requested_role: values[10],
+          idempotency_key: values[11],
+          request_fingerprint: values[12],
+          expected_run_version: values[13],
+          expected_policy_version: values[14],
+          expected_blocker_ids: values[15],
+          evaluation_status: values[16],
+          evaluation_blocker_ids: values[17],
+          evaluated_at: values[18],
+          status: 'pending',
+          outcome_code: null,
+          expires_at: values[19],
+          created_at: values[18],
+          updated_at: values[18],
+        } as T,
+      ]
+    }
+    if (sql.includes('FROM gate_override_decisions')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [
+        {
+          id: 'gate-override-stale-pass-history',
+          run_id: 'run-remote-1',
+          node_id: 'n-design-gate',
+          project_id: 'p-payments',
+          user_id: 'u-ling',
+          role: 'lead',
+          reason: 'This decision belongs to an obsolete policy snapshot.',
+          blocked_reason_ids: ['obsolete-blocker'],
+          policy_version: 999,
+          provisional: false,
+          status: 'accepted',
+          created_at: '2026-07-31T12:00:00.000Z',
+        } as T,
+      ]
+    }
+    return super.query<T>(sql, params)
+  }
+}
+
+class ExistingRunProjectionDbClient extends FakeTeamDbClient {
+  constructor(private readonly projection: Record<string, unknown>) {
+    super(true, false)
+  }
+
+  override async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    if (sql.includes('workflow_runs.run_version') && sql.includes('node_stage')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [this.projection as T]
+    }
+
+    return super.query<T>(sql, params)
   }
 }
 
@@ -339,6 +547,7 @@ class NamespacedMixedOriginDbClient extends FakeTeamDbClient {
       return [
         {
           id: 'run-health-001',
+          run_version: 1,
           title: 'Seeded health endpoint',
           request: 'Ship the seeded health endpoint.',
           project_id: 'p-payments',
@@ -353,6 +562,7 @@ class NamespacedMixedOriginDbClient extends FakeTeamDbClient {
         },
         {
           id: 'run-remote-1',
+          run_version: 4,
           title: 'Remote health endpoint',
           request: 'Add team-visible health endpoint evidence.',
           project_id: 'p-payments',
@@ -459,7 +669,7 @@ class NamespacedMixedOriginDbClient extends FakeTeamDbClient {
   }
 }
 
-class EmptyBootstrapDbClient implements TeamDbClient {
+class EmptyBootstrapDbClient implements TeamDbRepositoryClient {
   readonly queries: Array<{ sql: string; params?: unknown[] }> = []
 
   async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
@@ -479,9 +689,16 @@ class EmptyBootstrapDbClient implements TeamDbClient {
   async close(): Promise<void> {
     return undefined
   }
+
+  async checkout() {
+    return {
+      query: <T>(sql: string, params?: unknown[]) => this.query<T>(sql, params),
+      release() {},
+    }
+  }
 }
 
-class ExistingOrganizationNoAccountDbClient implements TeamDbClient {
+class ExistingOrganizationNoAccountDbClient implements TeamDbRepositoryClient {
   readonly queries: Array<{ sql: string; params?: unknown[] }> = []
 
   async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
@@ -507,17 +724,186 @@ class ExistingOrganizationNoAccountDbClient implements TeamDbClient {
   async close(): Promise<void> {
     return undefined
   }
+
+  async checkout() {
+    return {
+      query: <T>(sql: string, params?: unknown[]) => this.query<T>(sql, params),
+      release() {},
+    }
+  }
+}
+
+class OrganizationScopedReadDbClient implements TeamDbRepositoryClient {
+  readonly queries: Array<{ sql: string; params?: unknown[] }> = []
+
+  async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    this.queries.push(params === undefined ? { sql } : { sql, params })
+    const hasRequestedOrganization =
+      params?.[0] === 'org-other' && /organization_id\s*=\s*\$1/.test(sql)
+
+    if (/FROM\s+projects\b/.test(sql)) {
+      return (hasRequestedOrganization
+        ? []
+        : [
+            {
+              id: 'p-demo-private',
+              name: 'Demo private project',
+              slug: 'demo-private',
+              description: 'Must remain inside org-demo.',
+              repository: 'demo/private',
+              default_branch: 'main',
+              health: 'on_track',
+              knowledge_base_path: 'docs/',
+              test_command: 'pnpm test',
+            },
+          ]) as T[]
+    }
+
+    if (/FROM\s+workflow_runs\b/.test(sql)) {
+      return (hasRequestedOrganization
+        ? []
+        : [
+            {
+              id: 'run-demo-private',
+              run_version: 1,
+              title: 'Demo private run',
+              request: 'Must remain inside org-demo.',
+              project_id: 'p-demo-private',
+              creator_id: 'u-demo',
+              status: 'building',
+              current_node_id: 'node-build',
+              branch_name: 'ai/demo-private',
+              pull_request_url: null,
+              created_at: '2026-06-16T10:00:00.000Z',
+              updated_at: '2026-06-16T10:15:00.000Z',
+            },
+          ]) as T[]
+    }
+
+    if (/FROM\s+agent_provider_credentials\b/.test(sql)) {
+      return (hasRequestedOrganization
+        ? []
+        : [{
+            organization_id: 'org-demo',
+            provider_id: 'private-provider',
+            model: 'private-model',
+            base_url: 'https://private.example.invalid',
+            masked_credential: 'private...secret',
+            encrypted_secret: 'encrypted-private-secret',
+            updated_at: '2026-06-16T10:15:00.000Z',
+          }]) as T[]
+    }
+
+    if (/FROM\s+skills\b/.test(sql)) {
+      return (hasRequestedOrganization ? [] : [{
+        id: 'skill-private',
+        organization_id: 'org-demo',
+        name: 'Private skill',
+        stage: 'all',
+        description: 'Must stay in org-demo.',
+        version: '1.0.0',
+        enabled: true,
+        source: 'team',
+      }]) as T[]
+    }
+
+    if (/FROM\s+mcp_server_definitions\b/.test(sql)) {
+      return (hasRequestedOrganization ? [] : [{
+        id: 'mcp-private',
+        organization_id: 'org-demo',
+        name: 'Private MCP',
+        command: 'private-command',
+        permission: 'shell',
+        enabled_by_default: false,
+        last_audit_event: 'private audit',
+      }]) as T[]
+    }
+
+    return []
+  }
+
+  async close(): Promise<void> {
+    return undefined
+  }
+
+  async checkout() {
+    return {
+      query: <T>(sql: string, params?: unknown[]) => this.query<T>(sql, params),
+      release() {},
+    }
+  }
 }
 
 describe('Postgres team repository', () => {
+  it('does not inject a historical Gate override into a non-blocking Postgres enforcement decision', async () => {
+    const repository = createPostgresTeamRepository(
+      new HistoricalGateOverrideDbClient(),
+    )
+
+    await expect(
+      repository.createGateCommand(
+        {
+          projectId: 'p-payments',
+          runId: 'run-remote-1',
+          nodeId: 'n-design-gate',
+          action: 'approve',
+          reason: 'Approve the current non-blocking policy snapshot.',
+          expectedRunVersion: 4,
+          expectedPolicyVersion: 1,
+          expectedBlockerIds: [],
+          idempotencyKey: 'gate-command:create:postgres-pass-history:v4',
+        },
+        postgresGatePrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      responseStatus: 201,
+      outcomeCode: 'created',
+    })
+  })
+
+  it('scopes Run and overview reads to the requested organization in SQL', async () => {
+    const db = new OrganizationScopedReadDbClient()
+    const repository = createPostgresTeamRepository(db)
+    const context = { organizationId: 'org-other' }
+
+    const scopedDefinitions = repository as unknown as {
+      getSkills(input: typeof context): ReturnType<typeof repository.getSkills>
+      getMcpServers(input: typeof context): ReturnType<typeof repository.getMcpServers>
+    }
+    const [bundle, overview, providers, scopedSkills, scopedMcpServers] = await Promise.all([
+      repository.getRunsBundle(context),
+      repository.getTeamOverview(context),
+      repository.listAgentProviders({ ...context, userId: 'u-other' }),
+      scopedDefinitions.getSkills(context),
+      scopedDefinitions.getMcpServers(context),
+    ])
+
+    expect(bundle).toEqual({ runs: [], artifacts: [], events: [] })
+    expect(overview.projects).toEqual([])
+    expect(overview.runs).toEqual([])
+    expect(providers).toEqual([])
+    expect(scopedSkills).toEqual([])
+    expect(scopedMcpServers).toEqual([])
+    expect(overview.enforcementPolicies.organizationPolicy.organizationId).toBe('org-other')
+    expect(db.queries.length).toBeGreaterThan(0)
+    expect(db.queries.every((query) => query.params?.[0] === 'org-other')).toBe(true)
+    const eventQuery = db.queries.find((query) => /FROM\s+agent_events\b/.test(query.sql))
+    expect(eventQuery?.sql).toMatch(
+      /JOIN\s+workflow_runs\s+ON\s+workflow_runs\.id\s*=\s*agent_events\.run_id/,
+    )
+    expect(eventQuery?.sql).toMatch(/workflow_runs\.organization_id\s*=\s*\$1/)
+  })
+
   it('maps workflow runs with nodes, edges, artifacts, and events', async () => {
     const db = new FakeTeamDbClient()
     const repository = createPostgresTeamRepository(db)
 
-    const bundle = await repository.getRunsBundle()
+    const bundle = await repository.getRunsBundle(readContext)
 
     expect(bundle.runs[0]).toMatchObject({
       id: 'run-remote-1',
+      version: 4,
       projectId: 'p-payments',
       currentNodeId: 'n-design-gate',
       nodes: [
@@ -536,11 +922,12 @@ describe('Postgres team repository', () => {
   it('preserves globally namespaced workflow IDs across seeded and remote Postgres runs', async () => {
     const repository = createPostgresTeamRepository(new NamespacedMixedOriginDbClient())
 
-    const bundle = await repository.getRunsBundle()
+    const bundle = await repository.getRunsBundle(readContext)
 
     expect(bundle.runs).toEqual([
       expect.objectContaining({
         id: 'run-health-001',
+        version: 1,
         currentNodeId: 'run-health-001:n-clarify-gate',
         nodes: [expect.objectContaining({ id: 'run-health-001:n-clarify-gate' })],
         edges: [
@@ -552,6 +939,7 @@ describe('Postgres team repository', () => {
       }),
       expect.objectContaining({
         id: 'run-remote-1',
+        version: 4,
         currentNodeId: 'run-remote-1:n-design-gate',
         nodes: [expect.objectContaining({ id: 'run-remote-1:n-design-gate' })],
         edges: [
@@ -571,7 +959,7 @@ describe('Postgres team repository', () => {
   it('builds team overview and cost rollups from Postgres rows', async () => {
     const repository = createPostgresTeamRepository(new FakeTeamDbClient())
 
-    const overview = await repository.getTeamOverview()
+    const overview = await repository.getTeamOverview(readContext)
 
     expect(overview.projects[0]).toMatchObject({
       id: 'p-payments',
@@ -592,6 +980,9 @@ describe('Postgres team repository', () => {
       },
     ])
     expect(overview.totalCost).toBe('$0.109')
+    expect(
+      overview.enforcementPolicies.effectivePolicies.map((policy) => policy.projectId),
+    ).toEqual(overview.projects.map((project) => project.id))
     expect(overview.testEvidenceSummaries).toEqual([
       {
         id: 'evidence-remote-1',
@@ -627,6 +1018,18 @@ describe('Postgres team repository', () => {
     ])
   })
 
+  it('scopes the effective policy returned for a project without an override', async () => {
+    const repository = createPostgresTeamRepository(new FakeTeamDbClient())
+
+    const result = await repository.getEnforcementPolicy('p-payments', {
+      ...readContext,
+      userId: 'u-ling',
+    })
+
+    expect(result.projectOverride).toBeNull()
+    expect(result.effectivePolicy.projectId).toBe('p-payments')
+  })
+
   it('only exposes the fake agent provider when fake runtime is enabled', async () => {
     await expect(createPostgresTeamRepository(new FakeTeamDbClient()).listAgentProviders({
       organizationId: 'org-demo',
@@ -646,7 +1049,7 @@ describe('Postgres team repository', () => {
   it('maps skills and MCP server definitions from team tables', async () => {
     const repository = createPostgresTeamRepository(new FakeTeamDbClient())
 
-    await expect(repository.getSkills()).resolves.toEqual([
+    await expect(repository.getSkills(readContext)).resolves.toEqual([
       {
         id: 'skill-design-review',
         name: '方案评审',
@@ -657,7 +1060,7 @@ describe('Postgres team repository', () => {
         source: 'team',
       },
     ])
-    await expect(repository.getMcpServers()).resolves.toEqual([
+    await expect(repository.getMcpServers(readContext)).resolves.toEqual([
       {
         id: 'mcp-github',
         name: 'GitHub',
@@ -711,6 +1114,29 @@ describe('Postgres team repository', () => {
     expect(db.queries[0]?.params).toEqual(['github', 'github:ling'])
     expect(db.queries[1]?.sql).toContain('FROM project_members')
     expect(db.queries[1]?.params).toEqual(['u-ling'])
+  })
+
+  it('resolves a fresh browser session by stable auth account ID', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(repository.resolveBrowserSession('acct-github-ling')).resolves.toEqual({
+      source: 'authenticated',
+      organizationId: 'org-demo',
+      userId: 'u-ling',
+      role: 'lead',
+      authAccountId: 'acct-github-ling',
+      projectMemberships: [
+        { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+        { projectId: 'p-admin', userId: 'u-ling', role: 'member' },
+      ],
+    })
+
+    expect(db.queries[0]?.sql).toContain('auth_accounts.id = $1')
+    expect(db.queries[0]?.params).toEqual(['acct-github-ling'])
+    expect(db.queries[1]?.sql).toContain('JOIN projects')
+    expect(db.queries[1]?.sql).toContain('projects.organization_id = $2')
+    expect(db.queries[1]?.params).toEqual(['u-ling', 'org-demo'])
   })
 
   it('bootstraps the first GitHub login as the default organization owner only when the deployment is empty', async () => {
@@ -823,6 +1249,9 @@ describe('Postgres team repository', () => {
       attemptsRemaining: 5,
     })
     expect(result.code).toContain('.')
+    const insert = db.queries.find((query) => query.sql.includes('INSERT INTO desktop_pairing_codes'))
+    expect(insert?.sql).toMatch(/INSERT INTO desktop_pairing_codes[\s\S]+SELECT[\s\S]+FROM projects/)
+    expect(insert?.sql).toMatch(/projects\.organization_id\s*=\s*\$2/)
     const write = db.queries.find((query) => query.sql.includes('INSERT INTO desktop_pairing_codes'))
     expect(write?.params).toHaveLength(8)
     expect(write?.params).not.toContain(result.code)
@@ -834,21 +1263,30 @@ describe('Postgres team repository', () => {
     const repository = createPostgresTeamRepository(db)
 
     await expect(repository.resolveDesktopTokenSession('desktop-token-p-payments.demo-secret')).resolves.toEqual({
-      source: 'authenticated',
-      organizationId: 'org-demo',
-      userId: 'u-ling',
-      role: 'lead',
-      authAccountId: 'acct-github-ling',
-      projectMemberships: [
-        { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
-      ],
+      tokenRecordId: 'desktop-token-p-payments',
+      session: {
+        source: 'authenticated',
+        organizationId: 'org-demo',
+        userId: 'u-ling',
+        role: 'lead',
+        authAccountId: 'acct-github-ling',
+        projectMemberships: [
+          { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+        ],
+      },
     })
 
+    const tokenQuery = db.queries.find((query) => query.sql.includes('FROM desktop_tokens'))
+    expect(tokenQuery?.sql).toContain(
+      'users.organization_id = desktop_tokens.organization_id',
+    )
     const membershipQuery = db.queries.find((query) =>
       query.sql.includes('FROM project_members'),
     )
+    expect(membershipQuery?.sql).toContain('JOIN projects')
     expect(membershipQuery?.sql).toContain('project_id = $2')
-    expect(membershipQuery?.params).toEqual(['u-ling', 'p-payments'])
+    expect(membershipQuery?.sql).toContain('projects.organization_id = $3')
+    expect(membershipQuery?.params).toEqual(['u-ling', 'p-payments', 'org-demo'])
   })
 
   it('downgrades organization owners to project-lead authority for desktop bearer tokens', async () => {
@@ -857,10 +1295,13 @@ describe('Postgres team repository', () => {
     await expect(
       repository.resolveDesktopTokenSession('desktop-token-p-payments.demo-secret'),
     ).resolves.toMatchObject({
-      role: 'lead',
-      projectMemberships: [
-        { projectId: 'p-payments', userId: 'u-ling', role: 'owner' },
-      ],
+      tokenRecordId: 'desktop-token-p-payments',
+      session: {
+        role: 'lead',
+        projectMemberships: [
+          { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+        ],
+      },
     })
   })
 
@@ -873,6 +1314,7 @@ describe('Postgres team repository', () => {
         {
           kind: 'approval',
           runId: 'run-synced',
+          version: 7,
           projectId: 'p-payments',
           title: 'Synced approval',
           status: 'building',
@@ -890,6 +1332,7 @@ describe('Postgres team repository', () => {
 
     const write = db.queries.find((query) => query.sql.includes('INSERT INTO workflow_runs'))
     expect(write?.sql).toContain('INSERT INTO workflow_runs')
+    expect(write?.sql).toContain('run_version')
     expect(write?.sql).toContain('ON CONFLICT (id) DO UPDATE')
     const updateClause = write?.sql.split('SET')[1]?.split('WHERE')[0]
     expect(updateClause).not.toContain('project_id = excluded.project_id')
@@ -897,10 +1340,12 @@ describe('Postgres team repository', () => {
     expect(write?.sql).toContain('workflow_runs.project_id = excluded.project_id')
     expect(write?.sql).toContain('workflow_runs.creator_id = excluded.creator_id')
     expect(write?.sql).toContain("workflow_runs.data_origin = 'remote'")
-    expect(write?.sql).toContain('workflow_runs.updated_at <= excluded.updated_at')
+    expect(write?.sql).toContain('workflow_runs.run_version < excluded.run_version')
+    expect(write?.sql).not.toContain('workflow_runs.updated_at <= excluded.updated_at')
     expect(write?.sql).toContain('RETURNING id')
     expect(write?.params).toEqual([
       'run-synced',
+      7,
       'org-demo',
       'p-payments',
       'u-ling',
@@ -925,6 +1370,244 @@ describe('Postgres team repository', () => {
       400,
       '2026-06-16T12:00:00.000Z',
     ])
+    const statements = db.queries.map(({ sql }) => sql.trim())
+    const beginIndex = statements.indexOf('BEGIN')
+    const runWriteIndex = db.queries.findIndex(({ sql }) => sql.includes('INSERT INTO workflow_runs'))
+    const convergenceIndex = db.queries.findIndex(
+      ({ sql }) => sql.includes('UPDATE workflow_nodes'),
+    )
+    const nodeWriteIndex = db.queries.findIndex(
+      ({ sql }) => sql.includes('INSERT INTO workflow_nodes'),
+    )
+    const commitIndex = statements.indexOf('COMMIT')
+    expect(beginIndex).toBeGreaterThanOrEqual(0)
+    expect(runWriteIndex).toBeGreaterThan(beginIndex)
+    expect(convergenceIndex).toBeGreaterThan(runWriteIndex)
+    expect(nodeWriteIndex).toBeGreaterThan(convergenceIndex)
+    expect(commitIndex).toBeGreaterThan(nodeWriteIndex)
+    expect(statements).not.toContain('ROLLBACK')
+    expect(db.checkoutCount).toBe(1)
+    expect(db.releaseCount).toBe(1)
+  })
+
+  it('rejects a late Run projection after its Work Request claim was released', async () => {
+    const db = new ReleasedWorkRequestRunDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.uploadRunSummary(
+        {
+          kind: 'run',
+          runId: 'run-released-work-request',
+          version: 1,
+          projectId: 'p-payments',
+          title: 'Released Work Request Run',
+          status: 'clarifying',
+          currentNodeId: 'n-clarify',
+          currentNode: {
+            id: 'n-clarify',
+            stage: 'clarify',
+            kind: 'task',
+            status: 'running',
+          },
+          branchName: 'ai/released-work-request',
+          updatedAt: '2026-08-01T12:00:00.000Z',
+        },
+        {
+          organizationId: 'org-demo',
+          userId: 'u-ling',
+          tokenRecordId: 'desktop-token-p-payments',
+        },
+      ),
+    ).rejects.toThrow('Remote Run Summary conflicts with canonical ownership or is stale')
+
+    const statements = db.queries.map(({ sql }) => sql.trim())
+    expect(statements.indexOf('BEGIN')).toBeGreaterThanOrEqual(0)
+    const authorityLockIndex = db.queries.findIndex(({ sql }) =>
+      sql.includes('/* run_summary:authority-lock */'),
+    )
+    const tombstoneIndex = db.queries.findIndex(({ sql }) =>
+      sql.includes('/* run_summary:released-claim-tombstone */'),
+    )
+    expect(authorityLockIndex).toBeGreaterThan(statements.indexOf('BEGIN'))
+    expect(authorityLockIndex).toBeLessThan(tombstoneIndex)
+    expect(
+      db.queries.some(({ sql }) => sql.includes('INSERT INTO workflow_runs')),
+    ).toBe(false)
+    expect(statements).toContain('ROLLBACK')
+  })
+
+  it('rejects a Work Request Run projection from a stale Desktop token', async () => {
+    const db = new CurrentWorkRequestRunDbClient('desktop-token-current')
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.uploadRunSummary(
+        {
+          kind: 'run',
+          runId: 'run-current-work-request',
+          version: 1,
+          projectId: 'p-payments',
+          title: 'Current Work Request Run',
+          status: 'clarifying',
+          currentNodeId: 'n-clarify',
+          currentNode: {
+            id: 'n-clarify',
+            stage: 'clarify',
+            kind: 'task',
+            status: 'running',
+          },
+          branchName: 'ai/current-work-request',
+          updatedAt: '2026-08-01T12:00:00.000Z',
+        },
+        {
+          organizationId: 'org-demo',
+          userId: 'u-ling',
+          tokenRecordId: 'desktop-token-stale',
+        },
+      ),
+    ).rejects.toThrow('Remote Run Summary conflicts with canonical ownership or is stale')
+
+    expect(
+      db.queries.some(({ sql }) => sql.includes('INSERT INTO workflow_runs')),
+    ).toBe(false)
+  })
+
+  it('accepts a Work Request Run projection only from its exact claimant token', async () => {
+    const db = new CurrentWorkRequestRunDbClient('desktop-token-current')
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.uploadRunSummary(
+        {
+          kind: 'run',
+          runId: 'run-current-work-request',
+          version: 1,
+          projectId: 'p-payments',
+          title: 'Current Work Request Run',
+          status: 'clarifying',
+          currentNodeId: 'n-clarify',
+          currentNode: {
+            id: 'n-clarify',
+            stage: 'clarify',
+            kind: 'task',
+            status: 'running',
+          },
+          branchName: 'ai/current-work-request',
+          updatedAt: '2026-08-01T12:00:00.000Z',
+        },
+        {
+          organizationId: 'org-demo',
+          userId: 'u-ling',
+          tokenRecordId: 'desktop-token-current',
+        },
+      ),
+    ).resolves.toMatchObject({ accepted: true })
+
+    const beginIndex = db.queries.findIndex(({ sql }) => sql.trim() === 'BEGIN')
+    const authorityLockIndex = db.queries.findIndex(({ sql }) =>
+      sql.includes('/* run_summary:authority-lock */'),
+    )
+    const firstBusinessQueryIndex = db.queries.findIndex(
+      ({ sql }) => sql.trim() !== 'BEGIN',
+    )
+    expect(authorityLockIndex).toBeGreaterThan(beginIndex)
+    expect(authorityLockIndex).toBe(firstBusinessQueryIndex)
+    expect(db.queries[authorityLockIndex]?.params).toEqual([
+      '["org-demo","p-payments","run-current-work-request"]',
+    ])
+    expect(
+      db.queries.some(({ sql }) => sql.includes('INSERT INTO workflow_runs')),
+    ).toBe(true)
+  })
+
+  it('rolls back the Run projection when the canonical node write fails', async () => {
+    const db = new FakeTeamDbClient(
+      true,
+      true,
+      'lead',
+      'INSERT INTO workflow_nodes',
+    )
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(repository.uploadRunSummary(
+      {
+        kind: 'run',
+        runId: 'run-atomic-failure',
+        version: 2,
+        projectId: 'p-payments',
+        title: 'Atomic Run projection',
+        status: 'testing',
+        currentNodeId: 'n-test',
+        currentNode: {
+          id: 'n-test',
+          stage: 'test',
+          kind: 'test',
+          status: 'running',
+        },
+        branchName: 'ai/atomic-run-projection',
+        updatedAt: '2026-08-01T12:00:00.000Z',
+      },
+      { organizationId: 'org-demo', userId: 'u-ling' },
+    )).rejects.toThrow('forced repository write failure: INSERT INTO workflow_nodes')
+
+    const statements = db.queries.map(({ sql }) => sql.trim())
+    expect(db.checkoutCount).toBe(1)
+    expect(statements).toContain('ROLLBACK')
+    expect(statements).not.toContain('COMMIT')
+    expect(db.releaseCount).toBe(1)
+  })
+
+  it('accepts an identical Postgres projection idempotently at the same Run version', async () => {
+    const summary = {
+      kind: 'run' as const,
+      runId: 'run-idempotent-pg',
+      version: 4,
+      projectId: 'p-payments',
+      title: 'Idempotent Postgres projection',
+      status: 'testing' as const,
+      currentNodeId: 'n-test',
+      currentNode: {
+        id: 'n-test',
+        stage: 'test' as const,
+        kind: 'test' as const,
+        status: 'running' as const,
+      },
+      branchName: 'ai/idempotent-pg',
+      updatedAt: '2026-06-16T12:00:00.000Z',
+    }
+    const db = new ExistingRunProjectionDbClient({
+      id: summary.runId,
+      run_version: summary.version,
+      organization_id: 'org-demo',
+      project_id: summary.projectId,
+      creator_id: 'u-ling',
+      data_origin: 'remote',
+      title: summary.title,
+      status: summary.status,
+      current_node_id: `${summary.runId}:${summary.currentNodeId}`,
+      branch_name: summary.branchName,
+      updated_at: summary.updatedAt,
+      node_id: `${summary.runId}:${summary.currentNode.id}`,
+      node_stage: summary.currentNode.stage,
+      node_kind: summary.currentNode.kind,
+      node_status: summary.currentNode.status,
+      node_required_role: null,
+    })
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.uploadRunSummary(summary, { organizationId: 'org-demo', userId: 'u-ling' }),
+    ).resolves.toMatchObject({ accepted: true })
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO workflow_nodes'))).toBe(false)
+    expect(db.queries.some((query) => query.sql.includes('UPDATE workflow_nodes'))).toBe(false)
+
+    await expect(
+      repository.uploadRunSummary(
+        { ...summary, title: 'Conflicting content at version four' },
+        { organizationId: 'org-demo', userId: 'u-ling' },
+      ),
+    ).rejects.toThrow('Remote Run Summary conflicts with canonical ownership or is stale')
   })
 
   it('converges non-current active nodes after accepting a newer canonical summary', async () => {
@@ -935,6 +1618,7 @@ describe('Postgres team repository', () => {
       {
         kind: 'run',
         runId: 'run-synced',
+        version: 8,
         projectId: 'p-payments',
         title: 'Advanced canonical Run',
         status: 'testing',
@@ -968,6 +1652,7 @@ describe('Postgres team repository', () => {
       {
         kind: 'run',
         runId: 'run-hostile-metadata',
+        version: 1,
         projectId: 'p-payments',
         title: 'Build from /Users/Alice/private/repo API_TOKEN=title-secret',
         status: 'building',
@@ -995,6 +1680,7 @@ describe('Postgres team repository', () => {
         {
           kind: 'run',
           runId: 'run-colliding',
+          version: 1,
           projectId: 'p-payments',
           title: 'Colliding summary',
           status: 'building',
@@ -1009,6 +1695,41 @@ describe('Postgres team repository', () => {
 
     expect(db.queries.some((query) => query.sql.includes('INSERT INTO workflow_nodes'))).toBe(false)
     expect(db.queries.some((query) => query.sql.includes('UPDATE workflow_nodes'))).toBe(false)
+  })
+
+  it('rolls back when a remote node ID collides with a node owned by another Run', async () => {
+    const db = new FakeTeamDbClient(true, true, 'lead', undefined, false)
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.uploadRunSummary(
+        {
+          kind: 'run',
+          runId: 'run:a',
+          version: 2,
+          projectId: 'p-payments',
+          title: 'Collision-safe projection',
+          status: 'building',
+          currentNodeId: 'node:b',
+          currentNode: {
+            id: 'node:b',
+            stage: 'build',
+            kind: 'task',
+            status: 'running',
+          },
+          branchName: 'ai/collision-safe',
+          updatedAt: '2026-08-01T12:00:00.000Z',
+        },
+        { organizationId: 'org-demo', userId: 'u-ling' },
+      ),
+    ).rejects.toThrow('Remote Run Summary conflicts with canonical ownership or is stale')
+
+    const nodeWrite = db.queries.find((query) => query.sql.includes('INSERT INTO workflow_nodes'))
+    expect(nodeWrite?.sql).toContain('WHERE workflow_nodes.run_id = excluded.run_id')
+    expect(nodeWrite?.sql).toContain('RETURNING id')
+    expect(db.queries.map(({ sql }) => sql.trim())).toContain('ROLLBACK')
+    expect(db.queries.map(({ sql }) => sql.trim())).not.toContain('COMMIT')
+    expect(db.releaseCount).toBe(1)
   })
 
   it('deletes workflow runs by tenant and relies on database cascade', async () => {
@@ -1494,7 +2215,7 @@ describe('Postgres team repository', () => {
     expect(statusFor('run-synced:n-old-design-gate')).toBe('success')
   })
 
-  it('namespaces Gate override foreign keys exactly once while preserving returned node IDs', async () => {
+  it('namespaces a canonical local Gate override and rejects storage-style node IDs', async () => {
     const db = new FakeTeamDbClient()
     const repository = createPostgresTeamRepository(db)
     const context = { organizationId: 'org-demo', userId: 'u-ling' }
@@ -1519,15 +2240,14 @@ describe('Postgres team repository', () => {
     }
 
     await expect(repository.saveGateOverride(localDecision, context)).resolves.toEqual(localDecision)
-    await expect(repository.saveGateOverride(namespacedDecision, context)).resolves.toEqual(
-      namespacedDecision,
-    )
+    await expect(
+      repository.saveGateOverride(namespacedDecision, context),
+    ).rejects.toThrow('Local node ID uses the reserved Team node namespace.')
 
     const writes = db.queries.filter((query) =>
       query.sql.includes('INSERT INTO gate_override_decisions'),
     )
     expect(writes.map((write) => write.params?.[3])).toEqual([
-      'run-remote-1:n-design-gate',
       'run-remote-1:n-design-gate',
     ])
   })
@@ -1671,5 +2391,45 @@ describe('Postgres team repository', () => {
     expect(JSON.stringify(write?.params)).not.toContain('nested-budget-token-secret')
     expect(JSON.stringify(write?.params)).not.toContain('/Users/Alice')
     expect(JSON.stringify(write?.params)).not.toMatch(/C:[\\/]Users[\\/]Alice/)
+  })
+
+  it('persists a standalone redacted Knowledge Review budget-block event', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    const saved = await repository.saveAgentEvent(
+      {
+        id: 'knowledge-review-budget-audit-1',
+        runId: 'run-remote-1',
+        nodeId: 'n-design-gate',
+        sequence: 2,
+        kind: 'error',
+        message:
+          'Knowledge Review budget blocked. projectId=p-payments providerId=openai-default requestedBy=u-ling status=unavailable reason=Failed at /Users/Alice/private/repo API_TOKEN=audit-secret',
+        timestamp: '2026-07-31T00:00:00.000Z',
+      },
+      { organizationId: 'org-demo', userId: 'u-ling' },
+    )
+
+    expect(saved).toMatchObject({
+      id: 'knowledge-review-budget-audit-1',
+      kind: 'error',
+      message:
+        'Knowledge Review budget blocked. projectId=p-payments providerId=openai-default requestedBy=u-ling status=unavailable reason=Failed at [REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
+    })
+    const write = db.queries.at(-1)
+    expect(write?.sql).toContain('INSERT INTO agent_events')
+    expect(write?.params).toEqual([
+      'knowledge-review-budget-audit-1',
+      'run-remote-1',
+      'n-design-gate',
+      2,
+      'error',
+      saved.message,
+      '2026-07-31T00:00:00.000Z',
+      'org-demo',
+    ])
+    expect(JSON.stringify(write?.params)).not.toContain('audit-secret')
+    expect(JSON.stringify(write?.params)).not.toContain('/Users/Alice')
   })
 })

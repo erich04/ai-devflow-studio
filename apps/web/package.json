@@ -1,11 +1,12 @@
 {
   "name": "@ai-devflow/web",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "next dev -H 127.0.0.1 -p 4311",
     "build": "next build",
+    "start:prod": "node .next/standalone/apps/web/server.js",
     "typecheck": "next build"
   },
   "dependencies": {

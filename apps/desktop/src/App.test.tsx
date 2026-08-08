@@ -7,13 +7,17 @@ import {
   createRecommendedEnforcementPreset,
   createWorkflowRunFromRequest,
   createWarnOnlyDefaultPolicy,
+  indexKnowledgeSources,
   resolveEffectivePolicy,
   type DesktopPairingCredential,
+  type RepositoryKnowledgeSnapshot,
+  type RemoteSyncOperation,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import {
   artifacts as fixtureArtifacts,
   events as fixtureEvents,
+  knowledgeSources as fixtureKnowledgeSources,
   mcpServers as fixtureMcpServers,
   runs as fixtureRuns,
 } from '@ai-devflow/shared/fixtures'
@@ -76,10 +80,31 @@ const fixturePairingCredential: DesktopPairingCredential = {
   createdAt: '2026-06-20T00:00:00.000Z',
 }
 
+function repositoryKnowledgeSnapshot(
+  projectId: string,
+  overrides: Partial<RepositoryKnowledgeSnapshot> = {},
+): RepositoryKnowledgeSnapshot {
+  const index = indexKnowledgeSources([fixtureKnowledgeSources[0]!])
+
+  return {
+    projectId,
+    contentHash: 'repository-hash-1',
+    documents: index.documents,
+    chunks: index.chunks,
+    entities: index.entities,
+    relations: index.relations,
+    indexedAt: '2026-08-01T00:00:00.000Z',
+    truncated: false,
+    warnings: [],
+    ...overrides,
+  }
+}
+
 function desktopState(
   overrides: Partial<Awaited<ReturnType<DevFlowDesktopApi['loadState']>>> = {},
 ): Awaited<ReturnType<DevFlowDesktopApi['loadState']>> {
   return {
+    remoteSyncOperations: [],
     projects: [],
     runs: [],
     artifacts: [],
@@ -97,6 +122,34 @@ function desktopState(
     managedCodingWorkspaces: [],
     dependencyBootstrapEvidence: [],
     codingDiffArtifacts: [],
+    ...overrides,
+  }
+}
+
+function remoteSyncOperation(
+  overrides: Partial<RemoteSyncOperation> = {},
+): RemoteSyncOperation {
+  return {
+    id: 'remote-sync-operation-1',
+    kind: 'run-summary',
+    localProjectId: localProject.id,
+    organizationId: 'org-demo',
+    teamProjectId: fixtureRuns[0]!.projectId,
+    runId: fixtureRuns[0]!.id,
+    entityId: fixtureRuns[0]!.id,
+    idempotencyKey: 'remote-sync:v1:fixture-project:run-summary:run-1:run-1',
+    status: 'pending',
+    generation: 1,
+    attemptCount: 0,
+    nextAttemptAt: '2026-08-01T12:00:00.000Z',
+    leaseExpiresAt: null,
+    lastAttemptAt: null,
+    lastErrorCode: null,
+    lastErrorMessage: null,
+    recovery: 'none',
+    completedAt: null,
+    createdAt: '2026-08-01T12:00:00.000Z',
+    updatedAt: '2026-08-01T12:00:00.000Z',
     ...overrides,
   }
 }
@@ -164,6 +217,32 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       memberCost: [],
       totalCost: '$0.000',
     }),
+    listWorkRequests: vi.fn().mockResolvedValue([]),
+    materializeWorkRequest: vi.fn().mockRejectedValue(
+      new Error('Work Request materialization is not configured for this test.'),
+    ),
+    loadRepositoryKnowledge: vi.fn().mockImplementation(async ({ projectId }) => ({
+      projectId,
+      contentHash: '',
+      documents: [],
+      chunks: [],
+      entities: [],
+      relations: [],
+      indexedAt: '2026-08-01T00:00:00.000Z',
+      truncated: false,
+      warnings: [],
+    })),
+    refreshRepositoryKnowledge: vi.fn().mockImplementation(async ({ projectId }) => ({
+      projectId,
+      contentHash: '',
+      documents: [],
+      chunks: [],
+      entities: [],
+      relations: [],
+      indexedAt: '2026-08-01T00:00:00.000Z',
+      truncated: false,
+      warnings: [],
+    })),
     loadDesktopPairing: vi.fn().mockResolvedValue(null),
     pairDesktop: vi.fn().mockResolvedValue({
       credential: {
@@ -178,6 +257,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         createdAt: '2026-06-20T00:00:00.000Z',
       },
     }),
+    retryRemoteSyncOperation: vi.fn().mockResolvedValue(desktopState()),
     selectLocalProject: vi.fn().mockResolvedValue(localProject),
     getProjectGitStatus: vi.fn().mockResolvedValue({
       projectId: localProject.id,
@@ -766,6 +846,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     onCodingEventAppended: vi.fn(() => vi.fn()),
     onCodingPermissionUpdated: vi.fn(() => vi.fn()),
     onProjectGitStatusUpdated: vi.fn(() => vi.fn()),
+    onLocalStateUpdated: vi.fn(() => vi.fn()),
     ...overrides,
   }
 
@@ -1274,6 +1355,112 @@ describe('App', () => {
     expect(within(localProjectPanel).getByText('已绑定 · 待同步')).toBeInTheDocument()
   })
 
+  it('loads the Work Request Inbox only for the selected paired local project', async () => {
+    const inboxWorkRequest = {
+      id: 'work-request-inbox-1',
+      organizationId: 'org-demo',
+      projectId: fixturePairingCredential.projectId,
+      title: '实现 Work Request Inbox',
+      request: '把远端请求安全地创建为本地 Run。',
+      version: 1,
+      status: 'open' as const,
+      createdByUserId: 'u-ling',
+      claim: null,
+      expiresAt: null,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }
+    const api = installDesktopApi({
+      listWorkRequests: vi.fn().mockResolvedValue([inboxWorkRequest]),
+    })
+
+    render(<App />)
+
+    expect(await screen.findByText('实现 Work Request Inbox')).toBeInTheDocument()
+    expect(api.listWorkRequests).toHaveBeenCalledTimes(1)
+    expect(api.listWorkRequests).toHaveBeenCalledWith({
+      localProjectId: localProject.id,
+    })
+    expect(screen.getByRole('region', { name: 'Work Request Inbox' })).toBeInTheDocument()
+  })
+
+  it('materializes a Work Request through the narrow command and selects the returned local Run', async () => {
+    const inboxWorkRequest = {
+      id: 'work-request-inbox-2',
+      organizationId: 'org-demo',
+      projectId: fixturePairingCredential.projectId,
+      title: '交付可恢复 Inbox',
+      request: '创建具备来源绑定的本地 Run。',
+      version: 1,
+      status: 'open' as const,
+      createdByUserId: 'u-ling',
+      claim: null,
+      expiresAt: null,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }
+    const created = createWorkflowRunFromRequest({
+      runId: 'run-from-work-request-inbox',
+      title: inboxWorkRequest.title,
+      request: inboxWorkRequest.request,
+      projectId: localProject.id,
+      creatorId: 'u-ling',
+      branchName: 'ai/work-request-inbox',
+      now: '2026-08-01T00:01:00.000Z',
+    })
+    const materializedWorkRequest = {
+      ...inboxWorkRequest,
+      version: 3,
+      status: 'materialized' as const,
+      claim: {
+        runId: created.run.id,
+        claimedAt: '2026-08-01T00:01:00.000Z',
+        materializedAt: '2026-08-01T00:02:00.000Z',
+      },
+      updatedAt: '2026-08-01T00:02:00.000Z',
+    }
+    const nextState = desktopState({
+      projects: [localProject],
+      runs: [created.run],
+      artifacts: created.artifacts,
+      events: created.events,
+      desktopPairingCredential: fixturePairingCredential,
+    })
+    const api = installDesktopApi({
+      listWorkRequests: vi
+        .fn()
+        .mockResolvedValueOnce([inboxWorkRequest])
+        .mockResolvedValue([materializedWorkRequest]),
+      materializeWorkRequest: vi.fn().mockResolvedValue({
+        workRequest: materializedWorkRequest,
+        run: created.run,
+        state: nextState,
+      }),
+    })
+    render(<App />)
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: '创建本地 Run：交付可恢复 Inbox',
+      }),
+    )
+
+    await waitFor(() => {
+      expect(api.materializeWorkRequest).toHaveBeenCalledWith({
+        localProjectId: localProject.id,
+        workRequestId: 'work-request-inbox-2',
+        expectedVersion: 1,
+      })
+    })
+    expect(Object.keys(vi.mocked(api.materializeWorkRequest).mock.calls[0]![0]).sort()).toEqual([
+      'expectedVersion',
+      'localProjectId',
+      'workRequestId',
+    ])
+    expect(await screen.findByText('ai/work-request-inbox')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Work Request 已创建本地 Run')
+  })
+
   it('treats a credential for another local project as unbound on the current project', async () => {
     const api = installDesktopApi({
       loadState: vi.fn().mockResolvedValue(desktopState({
@@ -1673,6 +1860,7 @@ describe('App', () => {
         projectId: localProject.id,
       })),
     )
+    expect(api.ensureCodingEngine).not.toHaveBeenCalled()
   })
 
   it('routes the current test node primary CTA to Tests', async () => {
@@ -2512,7 +2700,7 @@ describe('App', () => {
     expect(screen.getByText('没有匹配的知识节点')).toBeInTheDocument()
   })
 
-  it('shows empty knowledge governance until the selected repository is indexed', async () => {
+  it('shows an indexed but empty repository knowledge snapshot', async () => {
     const api = installDesktopApi()
     render(<App />)
 
@@ -2525,7 +2713,7 @@ describe('App', () => {
 
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Knowledge Governance')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Git Markdown Index')
-    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('not indexed')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('indexed')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Run references')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('没有匹配的知识文档')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('没有匹配的知识节点')
@@ -2567,6 +2755,185 @@ describe('App', () => {
     })
 
     expect(screen.getByTestId('search-results')).toHaveTextContent('没有匹配结果')
+  })
+
+  it('loads repository knowledge by project id and drives search, references, governance, and graph', async () => {
+    const snapshot = repositoryKnowledgeSnapshot(localProject.id, {
+      truncated: true,
+      warnings: ['file_count_limit_exceeded'],
+    })
+    const api = installDesktopApi({
+      loadRepositoryKnowledge: vi.fn().mockResolvedValue(snapshot),
+    })
+    render(<App />)
+
+    await waitFor(() =>
+      expect(api.loadRepositoryKnowledge).toHaveBeenCalledWith({ projectId: localProject.id }),
+    )
+    expect(api.loadRepositoryKnowledge).toHaveBeenCalledTimes(1)
+
+    clickInspectorTab(/Gate条件/)
+    await waitFor(() =>
+      expect(screen.getByTestId('node-inspector')).toHaveTextContent('API Health Endpoint Standard'),
+    )
+
+    fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
+      target: { value: 'API Health Endpoint Standard' },
+    })
+    expect(screen.getByTestId('search-results')).toHaveTextContent('API Health Endpoint Standard')
+
+    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    const knowledgeView = screen.getByTestId('knowledge-view')
+    expect(knowledgeView).toHaveTextContent('indexed · truncated')
+    expect(knowledgeView).toHaveTextContent('file_count_limit_exceeded')
+    expect(knowledgeView).toHaveTextContent('API Health Endpoint Standard')
+    expect(knowledgeView).toHaveTextContent('defines')
+    expect(knowledgeView).toHaveTextContent('2026-08-01T00:00:00.000Z')
+    expect(screen.getAllByTestId('knowledge-run-reference')).not.toHaveLength(0)
+    for (const reference of screen.getAllByTestId('knowledge-run-reference')) {
+      expect(reference).toHaveTextContent('docs/knowledge/standards/api-health.md')
+    }
+  })
+
+  it('bounds a large repository knowledge graph in the renderer', async () => {
+    const snapshot = repositoryKnowledgeSnapshot(localProject.id, {
+      entities: Array.from({ length: 20 }, (_, index) => ({
+        id: `knowledge-entity-${index}`,
+        label: `Knowledge entity ${index}`,
+        kind: 'term' as const,
+        sourcePath: `docs/entity-${index}.md`,
+      })),
+      relations: [],
+    })
+    installDesktopApi({
+      loadRepositoryKnowledge: vi.fn().mockResolvedValue(snapshot),
+    })
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    await waitFor(() => expect(screen.getAllByTestId('knowledge-graph-node')).toHaveLength(12))
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('图谱较大')
+  })
+
+  it('refreshes repository knowledge and re-evaluates Gate enforcement when the content hash changes', async () => {
+    const initial = repositoryKnowledgeSnapshot(localProject.id)
+    const refreshedIndex = indexKnowledgeSources([fixtureKnowledgeSources[1]!])
+    const refreshed = repositoryKnowledgeSnapshot(localProject.id, {
+      contentHash: 'repository-hash-2',
+      documents: refreshedIndex.documents,
+      chunks: refreshedIndex.chunks,
+      entities: refreshedIndex.entities,
+      relations: refreshedIndex.relations,
+      indexedAt: '2026-08-01T00:05:00.000Z',
+    })
+    const api = installDesktopApi({
+      loadRepositoryKnowledge: vi.fn().mockResolvedValue(initial),
+      refreshRepositoryKnowledge: vi.fn().mockResolvedValue(refreshed),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadRepositoryKnowledge).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
+    const gateEvaluationsBeforeRefresh = vi.mocked(api.evaluateGateEnforcement).mock.calls.length
+
+    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /刷新仓库知识/ }))
+
+    await waitFor(() =>
+      expect(api.refreshRepositoryKnowledge).toHaveBeenCalledWith({ projectId: localProject.id }),
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Local Test Evidence Standard'),
+    )
+    await waitFor(() =>
+      expect(vi.mocked(api.evaluateGateEnforcement).mock.calls.length).toBeGreaterThan(
+        gateEvaluationsBeforeRefresh,
+      ),
+    )
+  })
+
+  it('keeps the last successful repository index when refresh fails without exposing raw paths', async () => {
+    const initial = repositoryKnowledgeSnapshot(localProject.id)
+    const api = installDesktopApi({
+      loadRepositoryKnowledge: vi.fn().mockResolvedValue(initial),
+      refreshRepositoryKnowledge: vi.fn().mockRejectedValue(
+        new Error('EACCES /Users/example/private-repository/secret.md'),
+      ),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadRepositoryKnowledge).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    await waitFor(() =>
+      expect(screen.getByTestId('knowledge-view')).toHaveTextContent('API Health Endpoint Standard'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /刷新仓库知识/ }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('indexed · refresh failed'),
+    )
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('API Health Endpoint Standard')
+    expect(screen.getByTestId('knowledge-view')).not.toHaveTextContent('/Users/example')
+    expect(screen.getByTestId('knowledge-view')).not.toHaveTextContent('secret.md')
+  })
+
+  it('keeps delayed repository knowledge responses isolated after switching projects', async () => {
+    const secondProject = {
+      ...localProject,
+      id: 'local-project-2',
+      name: 'second-project',
+      path: '/tmp/second-project',
+    }
+    let resolveFirst: ((snapshot: RepositoryKnowledgeSnapshot) => void) | undefined
+    const firstLoad = new Promise<RepositoryKnowledgeSnapshot>((resolve) => {
+      resolveFirst = resolve
+    })
+    let resolveSecond: ((snapshot: RepositoryKnowledgeSnapshot) => void) | undefined
+    const secondLoad = new Promise<RepositoryKnowledgeSnapshot>((resolve) => {
+      resolveSecond = resolve
+    })
+    const secondIndex = indexKnowledgeSources([fixtureKnowledgeSources[1]!])
+    const secondSnapshot = repositoryKnowledgeSnapshot(secondProject.id, {
+      contentHash: 'repository-hash-second',
+      documents: secondIndex.documents,
+      chunks: secondIndex.chunks,
+      entities: secondIndex.entities,
+      relations: secondIndex.relations,
+    })
+    const api = installDesktopApi({
+      selectLocalProject: vi.fn().mockResolvedValue(secondProject),
+      loadRepositoryKnowledge: vi.fn().mockImplementation(({ projectId }) =>
+        projectId === localProject.id ? firstLoad : secondLoad,
+      ),
+    })
+    render(<App />)
+
+    await waitFor(() =>
+      expect(api.loadRepositoryKnowledge).toHaveBeenCalledWith({ projectId: localProject.id }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
+    await waitFor(() =>
+      expect(api.loadRepositoryKnowledge).toHaveBeenCalledWith({ projectId: secondProject.id }),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    await act(async () => {
+      resolveFirst?.(repositoryKnowledgeSnapshot(localProject.id))
+    })
+    await waitFor(() => {
+      const secondProjectCalls = vi.mocked(api.loadRepositoryKnowledge).mock.calls.filter(
+        ([input]) => input.projectId === secondProject.id,
+      )
+      expect(secondProjectCalls).toHaveLength(1)
+    })
+    await act(async () => {
+      resolveSecond?.(secondSnapshot)
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Local Test Evidence Standard'),
+    )
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Local Test Evidence Standard')
+    expect(screen.getByTestId('knowledge-view')).not.toHaveTextContent('API Health Endpoint Standard')
   })
 
   it('deep-links Artifact and Event search results back into the inspector', async () => {
@@ -2768,6 +3135,188 @@ describe('App', () => {
 
     expect(api.saveAgentProviderCredential).not.toHaveBeenCalled()
     expect(screen.getByText('请输入 API Key')).toBeInTheDocument()
+  })
+
+  it('applies main-process local state pushes to the current project sync status', async () => {
+    let localStateListener:
+      | Parameters<DevFlowDesktopApi['onLocalStateUpdated']>[0]
+      | undefined
+    const onLocalStateUpdated = vi.fn(
+      (listener: Parameters<DevFlowDesktopApi['onLocalStateUpdated']>[0]) => {
+        localStateListener = listener
+        return vi.fn()
+      },
+    )
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: fixtureRuns,
+      })),
+      onLocalStateUpdated,
+    })
+    render(<App />)
+
+    await waitFor(() => expect(onLocalStateUpdated).toHaveBeenCalledTimes(1))
+    act(() => {
+      localStateListener?.(desktopState({
+        projects: [localProject],
+        runs: fixtureRuns,
+        remoteSyncOperations: [
+          remoteSyncOperation(),
+          remoteSyncOperation({
+            id: 'remote-sync-operation-2',
+            kind: 'test-evidence-summary',
+            status: 'sending',
+          }),
+          remoteSyncOperation({
+            id: 'remote-sync-operation-3',
+            kind: 'agent-review-summary',
+            status: 'retry-scheduled',
+            attemptCount: 2,
+          }),
+        ],
+      }))
+    })
+
+    const syncStatus = await screen.findByTestId('remote-sync-operations')
+    expect(syncStatus).toHaveTextContent('run-summary')
+    expect(syncStatus).toHaveTextContent('queued')
+    expect(syncStatus).toHaveTextContent('sending')
+    expect(syncStatus).toHaveTextContent('retry_wait')
+  })
+
+  it('preserves the selected Run when an outbox state push arrives', async () => {
+    let localStateListener:
+      | Parameters<DevFlowDesktopApi['onLocalStateUpdated']>[0]
+      | undefined
+    const secondRun = {
+      ...fixtureRuns[0]!,
+      id: 'run-selected-during-sync',
+      title: 'Selected during sync',
+      branchName: 'codex/selected-during-sync',
+    }
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [fixtureRuns[0]!, secondRun],
+      })),
+      onLocalStateUpdated: vi.fn((listener) => {
+        localStateListener = listener
+        return vi.fn()
+      }),
+    })
+    render(<App />)
+
+    const selectedRunButton = await screen.findByTitle('Selected during sync')
+    fireEvent.click(selectedRunButton)
+    expect(selectedRunButton.closest('.run-row')).toHaveClass('is-selected')
+
+    act(() => {
+      localStateListener?.(desktopState({
+        projects: [localProject],
+        runs: [fixtureRuns[0]!, secondRun],
+        remoteSyncOperations: [remoteSyncOperation()],
+      }))
+    })
+
+    expect(selectedRunButton.closest('.run-row')).toHaveClass('is-selected')
+  })
+
+  it('shows terminal sync metadata without exposing raw remote errors', async () => {
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: fixtureRuns,
+        remoteSyncOperations: [remoteSyncOperation({
+          status: 'terminal',
+          attemptCount: 4,
+          lastErrorCode: 'immutable_conflict',
+          lastErrorMessage:
+            'Bearer secret-token failed at https://api.internal/private with raw body',
+          nextAttemptAt: '2026-08-02T12:30:00.000Z',
+        })],
+      })),
+    })
+    render(<App />)
+
+    const syncStatus = await screen.findByTestId('remote-sync-operations')
+    expect(syncStatus).toHaveTextContent('run-summary')
+    expect(syncStatus).toHaveTextContent('terminal')
+    expect(syncStatus).toHaveTextContent('attempt 4')
+    expect(syncStatus).toHaveTextContent('immutable_conflict')
+    expect(syncStatus).toHaveTextContent('2026-08-02T12:30:00.000Z')
+    expect(syncStatus).not.toHaveTextContent(/secret-token|api\.internal|private|raw body/i)
+    expect(screen.getByRole('button', { name: '重试 run-summary 同步' })).toBeEnabled()
+  })
+
+  it('retries terminal sync with only the operation ID and applies the returned state', async () => {
+    const operation = remoteSyncOperation({
+      status: 'terminal',
+      attemptCount: 4,
+      lastErrorCode: 'immutable_conflict',
+      nextAttemptAt: null,
+    })
+    const retryRemoteSyncOperation = vi.fn().mockResolvedValue(desktopState({
+      projects: [localProject],
+      runs: fixtureRuns,
+      remoteSyncOperations: [remoteSyncOperation({
+        status: 'pending',
+        attemptCount: 0,
+        nextAttemptAt: '2026-08-02T13:00:00.000Z',
+      })],
+    }))
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: fixtureRuns,
+        remoteSyncOperations: [operation],
+      })),
+      retryRemoteSyncOperation,
+    })
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '重试 run-summary 同步' }))
+
+    await waitFor(() =>
+      expect(retryRemoteSyncOperation).toHaveBeenCalledWith({
+        operationId: 'remote-sync-operation-1',
+      }),
+    )
+    expect(retryRemoteSyncOperation).toHaveBeenCalledTimes(1)
+    await waitFor(() =>
+      expect(screen.getByTestId('remote-sync-operations')).toHaveTextContent('queued'),
+    )
+    expect(screen.getByTestId('remote-sync-operations')).not.toHaveTextContent('terminal')
+    expect(screen.getByTestId('toast')).toHaveTextContent('远端同步操作已重新排队')
+  })
+
+  it('shows a fixed safe toast when a terminal sync retry fails', async () => {
+    const retryRemoteSyncOperation = vi.fn().mockRejectedValue(
+      new Error('Bearer secret-token failed at https://api.internal/private with raw body'),
+    )
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: fixtureRuns,
+        remoteSyncOperations: [remoteSyncOperation({
+          status: 'terminal',
+          attemptCount: 4,
+          lastErrorCode: 'immutable_conflict',
+          nextAttemptAt: null,
+        })],
+      })),
+      retryRemoteSyncOperation,
+    })
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '重试 run-summary 同步' }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('toast')).toHaveTextContent('远端同步重试失败，请稍后再试'),
+    )
+    const toast = screen.getByTestId('toast')
+    expect(toast).not.toHaveTextContent(/secret-token|api\.internal|private|raw body/i)
+    expect(screen.getByTestId('remote-sync-operations')).toHaveTextContent('terminal')
   })
 
   it('subscribes to coding push updates and merges pushed state into the Agents view', async () => {
@@ -3236,6 +3785,62 @@ describe('App', () => {
     expect(workbench).toHaveTextContent('limit $0.20')
     expect(screen.getByLabelText('Runtime budget approval ID')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Retry with approval/ })).toBeDisabled()
+  })
+
+  it('presents an unavailable runtime budget guard as a blocking recovery state without an approval retry', async () => {
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue({
+        ...localStateAtCurrentNode('n-build'),
+        codingRuns: [
+          {
+            id: 'coding-run-budget-unavailable',
+            runId: fixtureRuns[0]!.id,
+            nodeId: 'n-build',
+            projectId: localProject.id,
+            requestedBy: 'u-ling',
+            providerId: 'doubao-review',
+            engine: 'opencode-http',
+            status: 'failed',
+            branchName: 'devflow/budget-unavailable',
+            userInstruction: 'Use the paid coding runtime.',
+            prompt: 'redacted prompt',
+            summary: 'Runtime budget guard is unavailable.',
+            changedPaths: [],
+            startedAt: '2026-06-21T00:00:00.000Z',
+            completedAt: '2026-06-21T00:00:00.000Z',
+            runtimeCostSummary: {
+              engine: 'opencode-http',
+              providerId: 'doubao-review',
+              model: 'ark-code-latest',
+              inputTokens: 0,
+              outputTokens: 0,
+              cacheReadTokens: 0,
+              costUsd: 0.42,
+              source: 'estimated',
+              timestamp: '2026-06-21T00:00:00.000Z',
+            },
+            budgetDecision: {
+              status: 'unavailable',
+              blocksRun: true,
+              currentSpendUsd: 0,
+              projectedCostUsd: 0.42,
+              reason: 'Runtime budget authorization is unavailable.',
+            },
+            redacted: true,
+          },
+        ],
+      }),
+    })
+    render(<App />)
+
+    const budgetStatus = await screen.findByTestId('runtime-budget-status')
+    expect(within(budgetStatus).getByText('unavailable')).toHaveClass('bad')
+    expect(budgetStatus).toHaveTextContent('恢复 Team 项目配对、API 连接和已保存的预算策略后重试')
+
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    await screen.findByTestId('agent-workbench')
+    expect(screen.queryByLabelText('Runtime budget approval ID')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Retry with approval/ })).not.toBeInTheDocument()
   })
 
   it('selects a local project, saves an editable test command, and archives local test evidence', async () => {
