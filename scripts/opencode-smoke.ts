@@ -8,6 +8,18 @@ import type {
 } from '../packages/shared/src/domain.ts'
 import type { CodingEngineApprovePermissionCompletedResult } from '../apps/desktop/electron/coding-engine.ts'
 import { evaluateOpencodeSmokePreflight } from './opencode-smoke-preflight'
+import {
+  assertCandidateIdentity,
+  assertCleanCandidateStatus,
+  assertCleanFixtureStatus,
+  assertOpencodeSmokeChangedPaths,
+  assertOpencodeSmokePermission,
+  buildIsolatedOpencodeSmokeRuntimeEnv,
+  combineOpencodeSmokeFailures,
+  opencodeSmokeErrorMessages,
+  OPENCODE_SMOKE_MARKER,
+  type CandidateGitIdentity,
+} from './opencode-smoke-policy.ts'
 
 type ReadyOpencodeSmokePreflight = Extract<
   ReturnType<typeof evaluateOpencodeSmokePreflight>,
@@ -28,7 +40,7 @@ if (preflight.mode === 'blocked') {
 
 async function main(preflight: ReadyOpencodeSmokePreflight) {
   const { execFile } = await import('node:child_process')
-  const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+  const { access, mkdir, mkdtemp, readFile, rm, writeFile } = await import('node:fs/promises')
   const os = await import('node:os')
   const path = await import('node:path')
   const { promisify } = await import('node:util')
@@ -41,11 +53,54 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
   const { runLocalTestCommand } = await import('../apps/desktop/electron/test-runner.ts')
 
   const execFileAsync = promisify(execFile)
+  const candidateRoot = process.cwd()
+  const readGitOutput = async (cwd: string, args: string[], failureMessage: string) => {
+    try {
+      const result = await execFileAsync('git', args, { cwd })
+      return String(result.stdout)
+    } catch {
+      throw new Error(failureMessage)
+    }
+  }
+  const readGitStatus = (cwd: string) =>
+    readGitOutput(
+      cwd,
+      ['status', '--porcelain=v1', '--untracked-files=all'],
+      'opencode smoke could not verify Git worktree cleanliness',
+    )
+  const readCandidateIdentity = async (): Promise<CandidateGitIdentity> => ({
+    head: (
+      await readGitOutput(
+        candidateRoot,
+        ['rev-parse', 'HEAD'],
+        'opencode smoke could not verify candidate Git identity',
+      )
+    ).trim(),
+    branch: (
+      await readGitOutput(
+        candidateRoot,
+        ['rev-parse', '--abbrev-ref', 'HEAD'],
+        'opencode smoke could not verify candidate Git identity',
+      )
+    ).trim(),
+  })
+  assertCleanCandidateStatus(await readGitStatus(candidateRoot))
+  const initialCandidateIdentity = await readCandidateIdentity()
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'devflow-opencode-smoke-'))
   const repoDir = path.join(tempRoot, 'repo')
   const worktreeRoot = path.join(tempRoot, 'worktrees')
+  const opencodeRuntimeRoot = path.join(tempRoot, 'opencode-runtime')
+  const opencodeRuntimeEnv = buildIsolatedOpencodeSmokeRuntimeEnv(
+    process.env,
+    preflight.apiKeyEnvName,
+    opencodeRuntimeRoot,
+  )
   const now = new Date().toISOString()
   let processManager: ReturnType<typeof createOpencodeProcessManager> | undefined
+  let fixtureRepositoryReady = false
+  let hasPrimaryError = false
+  let primaryError: unknown
+  let successChangedPaths: string[] | undefined
   const setupRepository = async () => {
     await execFileAsync('git', ['init', repoDir])
     await execFileAsync('git', ['config', 'user.email', 'devflow@example.com'], { cwd: repoDir })
@@ -66,9 +121,15 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
   }
 
   try {
+    await Promise.all(
+      ['home', 'tmp', 'config', 'data', 'cache', 'state'].map((name) =>
+        mkdir(path.join(opencodeRuntimeRoot, name), { recursive: true }),
+      ),
+    )
     await setupRepository()
+    fixtureRepositoryReady = true
     const userInstruction =
-      'First run pwd once to confirm the managed worktree, then create devflow-opencode-smoke.txt with a short success message. Keep the change minimal.'
+      'First request bash permission to run exactly `pwd` once. Then use the edit tool to create only devflow-opencode-smoke.txt with a short success message. Do not change any other path.'
     const node: WorkflowNode = {
       id: 'n-build',
       stage: 'build',
@@ -134,7 +195,7 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
       modelID: preflight.modelID,
       apiKeyEnvName: preflight.apiKeyEnvName,
       processManager,
-      runtimeEnv: process.env,
+      runtimeEnv: opencodeRuntimeEnv,
       permissionDiscoveryTimeoutMs: 120_000,
     })
 
@@ -155,7 +216,8 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
     let permissionRequest = started.permissionRequest
     const codingEvents = [...started.events]
     let completed: CodingEngineApprovePermissionCompletedResult | undefined
-    for (let approvalCount = 0; approvalCount < 8; approvalCount += 1) {
+    for (let approvalCount = 0; approvalCount < 4; approvalCount += 1) {
+      assertOpencodeSmokePermission(permissionRequest)
       console.log(`opencode requested ${permissionRequest.permission}; approving once.`)
       const result = await engine.approvePermission({
         codingRun,
@@ -178,8 +240,19 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
       throw new Error('opencode smoke exceeded the permission approval limit.')
     }
 
-    if (!completed.diff.changedPaths.length) {
-      throw new Error('opencode smoke did not produce a changed path.')
+    assertOpencodeSmokeChangedPaths(completed.diff.changedPaths)
+    const markerPath = path.join(workspace.worktreePath, OPENCODE_SMOKE_MARKER)
+    const markerContents = await readFile(markerPath, 'utf8')
+    if (!markerContents.trim() || Buffer.byteLength(markerContents, 'utf8') > 256) {
+      throw new Error('opencode smoke marker contents were missing or unexpectedly large')
+    }
+    try {
+      await access(path.join(repoDir, OPENCODE_SMOKE_MARKER))
+      throw new Error('opencode smoke wrote the marker outside the managed worktree')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error
+      }
     }
     if (!codingEvents.some((event) => event.kind === 'tool_call')) {
       throw new Error('opencode smoke did not record a tool_call coding event.')
@@ -188,6 +261,13 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
       throw new Error('opencode smoke did not record a tool_result coding event.')
     }
     const metadataBlob = JSON.stringify(codingEvents.map((event) => event.metadata ?? {}))
+    const providerKey = process.env[preflight.apiKeyEnvName]
+    if (
+      providerKey &&
+      [metadataBlob, markerContents, completed.diff.patch].some((value) => value.includes(providerKey))
+    ) {
+      throw new Error('opencode smoke leaked the provider key into managed evidence')
+    }
     for (const forbidden of ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'raw stdout', 'raw stderr']) {
       if (metadataBlob.includes(forbidden)) {
         throw new Error(`opencode smoke leaked forbidden metadata marker: ${forbidden}`)
@@ -225,16 +305,59 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
     if (deletedWorkspace.cleanupStatus !== 'deleted') {
       throw new Error(`Managed worktree cleanup did not complete: ${deletedWorkspace.cleanupStatus}`)
     }
-    console.log(`opencode smoke passed; changed paths: ${completed.diff.changedPaths.join(', ')}`)
-  } finally {
-    await processManager?.stopAll().catch(() => undefined)
-    await rm(tempRoot, { recursive: true, force: true })
+    successChangedPaths = completed.diff.changedPaths
+  } catch (error) {
+    primaryError = error
+    hasPrimaryError = true
   }
+
+  const safetyErrors: unknown[] = []
+  try {
+    await processManager?.stopAll()
+  } catch (cause) {
+    safetyErrors.push(new Error('opencode smoke could not stop the managed runtime', { cause }))
+  }
+  try {
+    assertCleanCandidateStatus(await readGitStatus(candidateRoot))
+  } catch (error) {
+    safetyErrors.push(error)
+  }
+  try {
+    assertCandidateIdentity(initialCandidateIdentity, await readCandidateIdentity())
+  } catch (error) {
+    safetyErrors.push(error)
+  }
+  if (fixtureRepositoryReady) {
+    try {
+      assertCleanFixtureStatus(await readGitStatus(repoDir))
+    } catch (error) {
+      safetyErrors.push(error)
+    }
+  }
+  try {
+    await rm(tempRoot, { recursive: true, force: true })
+  } catch (cause) {
+    safetyErrors.push(new Error('opencode smoke could not remove its temporary fixture', { cause }))
+  }
+
+  const failure = combineOpencodeSmokeFailures(
+    hasPrimaryError ? primaryError : undefined,
+    safetyErrors,
+  )
+  if (failure !== undefined) {
+    throw failure
+  }
+  if (!successChangedPaths) {
+    throw new Error('opencode smoke finished without a result')
+  }
+  console.log(`opencode smoke passed; changed paths: ${successChangedPaths.join(', ')}`)
 }
 
 if (preflight.mode === 'ready') {
   main(preflight).catch((error) => {
-    console.error(error instanceof Error ? error.message : error)
+    for (const message of opencodeSmokeErrorMessages(error, process.env[preflight.apiKeyEnvName])) {
+      console.error(message)
+    }
     process.exit(1)
   })
 }

@@ -15,6 +15,21 @@ describe('Electron durable remote sync wiring', () => {
   it('stops the scheduler before the application quits', () => {
     expect(main).toContain("app.on('before-quit'")
     expect(main).toContain('remoteSyncOutboxScheduler?.stop()')
+    expect(main).toMatch(
+      /app\.on\('before-quit', \(event\) => \{[\s\S]*?event\.preventDefault\(\)[\s\S]*?stopOpencodeWithRetry\(opencodeProcessManager\)[\s\S]*?quitCleanupComplete = true[\s\S]*?app\.quit\(\)/,
+    )
+  })
+
+  it('shares one coding engine and process manager across IPC requests and application shutdown', () => {
+    expect(main).toMatch(
+      /const opencodeProcessManager = createOpencodeProcessManager\(\)[\s\S]*?const codingEngineAdapter = createCodingEngineAdapterFromEnv\(process\.env, \{[\s\S]*?processManager: opencodeProcessManager[\s\S]*?\}\)/,
+    )
+    expect(main).toMatch(
+      /async function createCodingRuntimeForRequest[\s\S]*?return createCodingRuntime\(\{[\s\S]*?engine: codingEngineAdapter/,
+    )
+    expect(main).toMatch(
+      /app\.on\('before-quit'[\s\S]*?stopOpencodeWithRetry\(opencodeProcessManager\)/,
+    )
   })
 
   it('wakes delivery after canonical review and coding state changes', () => {

@@ -41,6 +41,7 @@ import {
   findActiveCodingRun,
 } from './coding-runner.js'
 import type { CodingEngineAdapter } from './coding-engine.js'
+import { CodingEngineStartupCleanupError } from './coding-engine-lifecycle.js'
 
 const defaultKnowledgeDocuments: KnowledgeDocument[] = []
 const defaultKnowledgeChunks: KnowledgeChunk[] = []
@@ -603,10 +604,12 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   }
 
   function cleanupErrorSummary(error: unknown): string {
-    if (error instanceof Error && error.message.trim()) {
-      return error.message.slice(0, 500)
-    }
-    return 'Workspace cleanup failed.'
+    const message = error instanceof Error && error.message.trim()
+      ? error.message
+      : typeof error === 'string' && error.trim()
+        ? error
+        : 'Workspace cleanup failed.'
+    return redactSensitiveText(redactLocalAbsolutePaths(message).value).value.slice(0, 500)
   }
 
   async function expirePendingPermissions(codingRunId: string, timestamp: string, comment: string) {
@@ -634,7 +637,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       return
     }
     const timestamp = now()
-    await deps.engine.cancel({ codingRun }).catch(() => undefined)
+    await deps.engine.cancel({ codingRun })
     const expiredRequests = await expirePendingPermissions(codingRunId, timestamp, summary)
     const updated: CodingAgentRun = {
       ...codingRun,
@@ -694,11 +697,15 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       comment: input.comment,
       decidedAt: timestamp,
     }
+    const codingRun = await findCodingRun(input.codingRunId)
+
+    if (input.decision !== 'approved') {
+      await deps.engine.cancel({ codingRun })
+    }
 
     await savePermissionRequest(updatedRequest)
     await deps.store.saveCodingPermissionDecision(decision)
 
-    const codingRun = await findCodingRun(input.codingRunId)
     if (input.decision === 'approved') {
       if (!codingRun.managedWorkspaceId) {
         throw new Error(`Coding Agent run has no managed workspace: ${codingRun.id}`)
@@ -949,6 +956,18 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         nodeId: node.id,
         ...(deps.worktreeRoot ? { worktreeRoot: deps.worktreeRoot } : {}),
       })
+      try {
+        await deps.store.saveManagedCodingWorkspace(workspace)
+      } catch (error) {
+        const cleaned = await deleteWorkspace(workspace)
+        if ((cleaned.cleanupStatus ?? (cleaned.deletedAt ? 'deleted' : 'active')) !== 'deleted') {
+          throw new AggregateError(
+            [error, new Error('Managed coding workspace cleanup failed.')],
+            'coding workspace registration failed and cleanup did not complete',
+          )
+        }
+        throw error
+      }
       const engineBriefContext = {
         upstreamArtifacts: briefContext.upstreamArtifacts,
         knowledgeReferences: briefContext.knowledgeReferences,
@@ -956,25 +975,58 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         gateDecisions: briefContext.gateDecisions,
         testEvidence: briefContext.testEvidence,
       }
-      const bundle = await deps.engine.start({
-        id: codingRunId,
-        run,
-        node,
-        project,
-        workspace,
-        requestedBy: input.requestedBy,
-        providerId,
-        userInstruction: input.userInstruction,
-        now: now(),
-        ...engineBriefContext,
-        brief: canonicalBrief,
-        ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
-        ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
-      })
+      let bundle
+      try {
+        bundle = await deps.engine.start({
+          id: codingRunId,
+          run,
+          node,
+          project,
+          workspace,
+          requestedBy: input.requestedBy,
+          providerId,
+          userInstruction: input.userInstruction,
+          now: now(),
+          ...engineBriefContext,
+          brief: canonicalBrief,
+          ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
+          ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
+        })
+      } catch (error) {
+        if (error instanceof CodingEngineStartupCleanupError) {
+          await deps.store.saveManagedCodingWorkspace({
+            ...workspace,
+            cleanupStatus: 'cleanup_failed',
+            cleanupError: 'Coding engine session cleanup did not complete; manual cleanup is required.',
+          })
+          throw error
+        }
+
+        let cleaned: ManagedCodingWorkspace
+        try {
+          cleaned = await deleteWorkspace(workspace)
+        } catch (cleanupError) {
+          cleaned = {
+            ...workspace,
+            cleanupStatus: 'cleanup_failed',
+            cleanupError: cleanupErrorSummary(cleanupError),
+          }
+        }
+        if (cleaned.cleanupStatus === 'cleanup_failed' && cleaned.cleanupError) {
+          cleaned = { ...cleaned, cleanupError: cleanupErrorSummary(cleaned.cleanupError) }
+        }
+        await deps.store.saveManagedCodingWorkspace(cleaned)
+        if ((cleaned.cleanupStatus ?? (cleaned.deletedAt ? 'deleted' : 'active')) !== 'deleted') {
+          throw new AggregateError(
+            [error, new Error('Managed coding workspace cleanup failed.')],
+            'coding engine failed to start and workspace cleanup did not complete',
+          )
+        }
+        throw error
+      }
       bundle.codingRun.runtimeCostSummary = estimatedCost
       bundle.codingRun.budgetDecision = budgetDecision
 
-      await deps.store.saveManagedCodingWorkspace(workspace)
       await saveCodingRun(bundle.codingRun)
       await saveEvents(bundle.events)
       await savePermissionRequest(bundle.permissionRequest)

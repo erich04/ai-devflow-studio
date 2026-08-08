@@ -26,7 +26,13 @@ import type {
 } from '@ai-devflow/shared'
 import { estimateCodingRuntimeCost } from '@ai-devflow/shared'
 import { createFakeCodingEngineAdapter, type CodingEngineAdapter } from './coding-engine'
+import { CodingEngineStartupCleanupError } from './coding-engine-lifecycle'
 import { createCodingRuntime } from './coding-runtime'
+import { createOpencodeHttpCodingEngineAdapter } from './opencode-http-engine'
+import {
+  createDefaultOpencodePermissionRules,
+  type Fetcher,
+} from './opencode-http-adapter'
 
 const execFileAsync = promisify(execFile)
 const tempDirs: string[] = []
@@ -37,6 +43,196 @@ afterEach(async () => {
 })
 
 describe('CodingRuntime', () => {
+  it('continues one opencode session across separate request-scoped runtimes', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const fetcher = opencodeSequenceFetcher([
+      {
+        id: 'ses-cross-runtime',
+        directory: '/tmp/worktree',
+        permission: createDefaultOpencodePermissionRules(),
+      },
+      {},
+      [{
+        id: 'permission-cross-runtime',
+        sessionID: 'ses-cross-runtime',
+        permission: 'edit',
+        metadata: { filepath: 'devflow-opencode-smoke.txt' },
+      }],
+      true,
+      [],
+      [{
+        file: 'devflow-opencode-smoke.txt',
+        patch: 'diff --git a/devflow-opencode-smoke.txt b/devflow-opencode-smoke.txt\n+ok\n',
+      }],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'double',
+      modelID: 'ark-code-latest',
+      processManager: {
+        ensure: vi.fn(async ({ projectId }) => ({
+          baseUrl: 'http://127.0.0.1:4097',
+          child: {} as never,
+          projectId,
+        })),
+      },
+      resolveManagedDirectory: (directory) => directory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    let idSequence = 0
+    const runtimeDependencies = {
+      store,
+      engine,
+      budgetGuard: createAllowingBudgetGuard(),
+      createWorkspace: async (input: {
+        codingRunId: string
+        project: LocalProject
+      }) => managedWorkspace({
+        id: `workspace-${input.codingRunId}`,
+        projectId: input.project.id,
+        codingRunId: input.codingRunId,
+        sourcePath: input.project.path,
+        worktreePath: '/tmp/worktree',
+      }),
+      runTestCommand: async () => ({
+        status: 'passed' as const,
+        exitCode: 0,
+        durationMs: 1,
+        stdout: 'passed',
+        stderr: '',
+        redacted: true,
+        summary: 'Coding worktree tests passed.',
+      }),
+      completeWorkflowBuild: vi.fn(async () => undefined),
+      idGenerator: (prefix = 'id') => `${prefix}-cross-runtime-${idSequence += 1}`,
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    }
+    const runRequestRuntime = createCodingRuntime(runtimeDependencies)
+    const replyRequestRuntime = createCodingRuntime(runtimeDependencies)
+
+    const started = await runRequestRuntime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'double',
+      userInstruction: 'Add the marker file.',
+    })
+    await replyRequestRuntime.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id,
+      codingRunId: started.codingRun.id,
+      decidedBy: 'user-1',
+      decision: 'approved',
+      comment: 'Approved from a later IPC request.',
+    })
+
+    expect(store.codingRuns.at(-1)?.status).toBe('completed')
+    expect(store.diffArtifacts[0]?.changedPaths).toEqual(['devflow-opencode-smoke.txt'])
+    expect(fetcher.urls).toContain(
+      'http://127.0.0.1:4097/permission/permission-cross-runtime/reply?directory=%2Ftmp%2Fworktree',
+    )
+  })
+
+  it.each([
+    { decision: 'rejected' as const, expectedStatus: 'interrupted' as const },
+    { decision: 'expired' as const, expectedStatus: 'timed_out' as const },
+  ])('aborts and forgets a shared opencode session when a later request records $decision', async ({
+    decision,
+    expectedStatus,
+  }) => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const fetcher = opencodeSequenceFetcher([
+      {
+        id: 'ses-cross-runtime-rejected',
+        directory: '/tmp/worktree',
+        permission: createDefaultOpencodePermissionRules(),
+      },
+      {},
+      [{
+        id: 'permission-cross-runtime-rejected',
+        sessionID: 'ses-cross-runtime-rejected',
+        permission: 'edit',
+        metadata: { filepath: 'devflow-opencode-smoke.txt' },
+      }],
+      true,
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'double',
+      modelID: 'ark-code-latest',
+      processManager: {
+        ensure: vi.fn(async ({ projectId }) => ({
+          baseUrl: 'http://127.0.0.1:4097',
+          child: {} as never,
+          projectId,
+        })),
+      },
+      resolveManagedDirectory: (directory) => directory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    let idSequence = 0
+    const runtimeDependencies = {
+      store,
+      engine,
+      budgetGuard: createAllowingBudgetGuard(),
+      createWorkspace: async (input: {
+        codingRunId: string
+        project: LocalProject
+      }) => managedWorkspace({
+        id: `workspace-${input.codingRunId}`,
+        projectId: input.project.id,
+        codingRunId: input.codingRunId,
+        sourcePath: input.project.path,
+        worktreePath: '/tmp/worktree',
+      }),
+      deleteWorkspace: async (workspace: ManagedCodingWorkspace) => ({
+        ...workspace,
+        cleanupStatus: 'deleted' as const,
+        deletedAt: '2026-06-17T00:01:00.000Z',
+      }),
+      idGenerator: (prefix = 'id') => `${prefix}-cross-runtime-rejected-${idSequence += 1}`,
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    }
+    const runRequestRuntime = createCodingRuntime(runtimeDependencies)
+    const replyRequestRuntime = createCodingRuntime(runtimeDependencies)
+
+    const started = await runRequestRuntime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'double',
+      userInstruction: 'Add the marker file.',
+    })
+    await replyRequestRuntime.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id,
+      codingRunId: started.codingRun.id,
+      decidedBy: 'user-1',
+      decision,
+      comment: `${decision} from a later IPC request.`,
+    })
+
+    const abortUrl =
+      'http://127.0.0.1:4097/session/ses-cross-runtime-rejected/abort?directory=%2Ftmp%2Fworktree'
+    expect(fetcher.urls).toContain(abortUrl)
+    expect(store.codingRuns.at(-1)?.status).toBe(expectedStatus)
+    const requestCountAfterReject = fetcher.urls.length
+    await engine.cancel({ codingRun: started.codingRun })
+    expect(fetcher.urls).toHaveLength(requestCountAfterReject)
+  })
+
   it('starts a fake coding run by creating a worktree and persisting the run bundle', async () => {
     const repo = await gitRepo()
     const store = new MemoryCodingStore({
@@ -66,6 +262,102 @@ describe('CodingRuntime', () => {
     expect(store.codingEvents.map((event) => event.kind)).toEqual(['brief', 'permission'])
     expect(store.permissionRequests).toHaveLength(1)
     expect(await readFile(path.join(store.workspaces[0]!.worktreePath, 'package.json'), 'utf8')).toContain('fixture')
+  })
+
+  it('removes and records a managed worktree when the coding engine fails to start safely', async () => {
+    const repo = await gitRepo()
+    const workspace = managedWorkspace({
+      id: 'workspace-start-failure',
+      codingRunId: 'coding-run-start-failure',
+      sourcePath: repo,
+      worktreePath: '/tmp/start-failure-worktree',
+    })
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    vi.spyOn(engine, 'start').mockRejectedValueOnce(new Error('coding engine start failed'))
+    const createWorkspace = vi.fn(async () => workspace)
+    const deleteWorkspace = vi.fn(async (input: ManagedCodingWorkspace) => ({
+      ...input,
+      cleanupStatus: 'deleted' as const,
+      deletedAt: '2026-06-17T00:00:01.000Z',
+    }))
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      createWorkspace,
+      deleteWorkspace,
+      idGenerator: fixedIds('coding-run-start-failure'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    })
+
+    await expect(runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Start safely.',
+    })).rejects.toThrow('coding engine start failed')
+
+    expect(createWorkspace).toHaveBeenCalledOnce()
+    expect(deleteWorkspace).toHaveBeenCalledWith(workspace)
+    expect(store.workspaces).toEqual([
+      expect.objectContaining({
+        id: workspace.id,
+        cleanupStatus: 'deleted',
+      }),
+    ])
+    expect(store.codingRuns).toHaveLength(0)
+  })
+
+  it('retains a recoverable workspace when coding engine startup cleanup is incomplete', async () => {
+    const repo = await gitRepo()
+    const workspace = managedWorkspace({
+      id: 'workspace-start-cleanup-failure',
+      codingRunId: 'coding-run-start-cleanup-failure',
+      sourcePath: repo,
+      worktreePath: '/tmp/start-cleanup-failure-worktree',
+    })
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    vi.spyOn(engine, 'start').mockRejectedValueOnce(new CodingEngineStartupCleanupError([
+      new Error('coding engine start failed'),
+      new Error('session abort failed'),
+    ]))
+    const deleteWorkspace = vi.fn(async () => workspace)
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      createWorkspace: async () => workspace,
+      deleteWorkspace,
+      idGenerator: fixedIds('coding-run-start-cleanup-failure'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    })
+
+    await expect(runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Start safely.',
+    })).rejects.toThrow('coding engine startup failed and cleanup did not complete')
+
+    expect(deleteWorkspace).not.toHaveBeenCalled()
+    expect(store.workspaces).toEqual([
+      expect.objectContaining({
+        id: workspace.id,
+        cleanupStatus: 'cleanup_failed',
+        cleanupError: 'Coding engine session cleanup did not complete; manual cleanup is required.',
+      }),
+    ])
+    expect(store.codingRuns).toHaveLength(0)
   })
 
   it('blocks a paid coding run when no authoritative budget guard is configured', async () => {
@@ -908,9 +1200,11 @@ describe('CodingRuntime', () => {
       runs: [buildRun()],
     })
     let expire: (() => Promise<void>) | undefined
+    const engine = createFakeCodingEngineAdapter()
+    const cancel = vi.spyOn(engine, 'cancel')
     const runtime = createCodingRuntime({
       store,
-      engine: createFakeCodingEngineAdapter(),
+      engine,
       schedulePermissionTimeout: (_request, callback) => {
         expire = callback
       },
@@ -936,6 +1230,7 @@ describe('CodingRuntime', () => {
       decidedBy: 'devflow-timeout',
     })
     expect(store.codingRuns.at(-1)?.status).toBe('timed_out')
+    expect(cancel).toHaveBeenCalledWith({ codingRun: started.codingRun })
     expect(store.codingEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -995,6 +1290,54 @@ describe('CodingRuntime', () => {
       status: 'timed_out',
     })
     expect(store.codingEvents.map((event) => event.kind)).toContain('cleanup')
+  })
+
+  it('keeps a timed-out run recoverable when engine cancellation fails', async () => {
+    const repo = await gitRepo()
+    const workspace = managedWorkspace({ sourcePath: repo, worktreePath: '/tmp/worktree-timeout-retry' })
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    let expireRun: (() => Promise<void>) | undefined
+    const engine = createFakeCodingEngineAdapter()
+    vi.spyOn(engine, 'cancel').mockRejectedValueOnce(new Error('engine cancellation failed'))
+    const deleteWorkspace = vi.fn(async (input: ManagedCodingWorkspace) => ({
+      ...input,
+      deletedAt: '2026-06-17T00:02:00.000Z',
+      cleanupStatus: 'deleted' as const,
+    }))
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      createWorkspace: async () => workspace,
+      deleteWorkspace,
+      scheduleRunTimeout: (_codingRun, callback) => {
+        expireRun = callback
+      },
+      idGenerator: fixedIds('coding-run-timeout-retry'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    })
+
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Add the marker file.',
+    })
+    expect(expireRun).toBeTypeOf('function')
+
+    await expect(expireRun!()).rejects.toThrow('engine cancellation failed')
+
+    expect(store.codingRuns.at(-1)).toMatchObject({
+      id: started.codingRun.id,
+      status: 'waiting_permission',
+    })
+    expect(store.permissionRequests[0]).toMatchObject({ status: 'pending' })
+    expect(store.workspaces.at(-1)).toMatchObject({ cleanupStatus: 'active' })
+    expect(deleteWorkspace).not.toHaveBeenCalled()
   })
 
   it('archives terminal Coding evidence without directly uploading a summary after approval', async () => {
@@ -1412,9 +1755,11 @@ describe('CodingRuntime', () => {
       runs: [buildRun()],
     })
     const completeWorkflowBuild = vi.fn()
+    const engine = createFakeCodingEngineAdapter()
+    const cancel = vi.spyOn(engine, 'cancel')
     const runtime = createCodingRuntime({
       store,
-      engine: createFakeCodingEngineAdapter(),
+      engine,
       completeWorkflowBuild,
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-1', 'decision-1', 'event-1'),
@@ -1439,6 +1784,7 @@ describe('CodingRuntime', () => {
 
     expect(request.status).toBe('rejected')
     expect(store.codingRuns.at(-1)?.status).toBe('interrupted')
+    expect(cancel).toHaveBeenCalledWith({ codingRun: started.codingRun })
     expect(store.codingEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1661,6 +2007,19 @@ function upsert<T extends { id: string }>(items: T[], item: T) {
   } else {
     items.push(item)
   }
+}
+
+function opencodeSequenceFetcher(
+  responses: unknown[],
+): Fetcher & { urls: string[] } {
+  const queue = [...responses]
+  const urls: string[] = []
+  const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+    urls.push(String(input))
+    return new Response(JSON.stringify(queue.shift()), { status: 200 })
+  }) as unknown as Fetcher & { urls: string[] }
+  fetcher.urls = urls
+  return fetcher
 }
 
 function createSpyCodingEngine(engine: CodingAgentRun['engine']): CodingEngineAdapter {

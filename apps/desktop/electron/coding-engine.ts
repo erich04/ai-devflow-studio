@@ -23,7 +23,10 @@ import {
   completeFakeCodingRun,
   createFakeCodingRunBundle,
 } from './coding-runner.js'
-import { createOpencodeHttpCodingEngineAdapter } from './opencode-http-engine.js'
+import {
+  createOpencodeHttpCodingEngineAdapter,
+  type OpencodeHttpProcessManager,
+} from './opencode-http-engine.js'
 
 export type CodingEngineEnsureInput = {
   project: LocalProject
@@ -112,8 +115,13 @@ export type CodingEngineSelectionEnv = Partial<
   >
 >
 
+export type CodingEngineAdapterFactoryDeps = {
+  processManager?: OpencodeHttpProcessManager
+}
+
 export function createCodingEngineAdapterFromEnv(
   env: CodingEngineSelectionEnv = process.env,
+  deps: CodingEngineAdapterFactoryDeps = {},
 ): CodingEngineAdapter {
   const selection = resolveDevFlowCodingEngineSelection(env)
   if (!selection.engine) {
@@ -129,6 +137,7 @@ export function createCodingEngineAdapterFromEnv(
       providerID: env.DEVFLOW_OPENCODE_PROVIDER_ID ?? 'openai',
       modelID: env.DEVFLOW_OPENCODE_MODEL_ID ?? 'gpt-4.1-mini',
       apiKeyEnvName,
+      ...(deps.processManager ? { processManager: deps.processManager } : {}),
       runtimeEnv: buildOpencodeRuntimeEnv({
         baseEnv: process.env,
         apiKeyEnvName,

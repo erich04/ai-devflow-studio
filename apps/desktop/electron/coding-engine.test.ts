@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { buildOpencodeRuntimeEnv, createCodingEngineAdapterFromEnv } from './coding-engine'
 
 describe('coding engine selection', () => {
@@ -41,6 +41,37 @@ describe('coding engine selection', () => {
 
     expect(engine.engine).toBe('opencode-http')
     expect(engine.providerId).toBe('openai')
+  })
+
+  it('uses the injected shared process manager for opencode-http', async () => {
+    const ensure = vi.fn(async ({ projectId }: { projectId: string }) => ({
+      projectId,
+      baseUrl: 'http://127.0.0.1:4097',
+      child: {} as never,
+    }))
+    const engine = createCodingEngineAdapterFromEnv(
+      {
+        DEVFLOW_CODING_ENGINE: 'opencode-http',
+        DEVFLOW_OPENCODE_PROVIDER_ID: 'openai',
+        DEVFLOW_OPENCODE_MODEL_ID: 'gpt-4.1-mini',
+      },
+      { processManager: { ensure } },
+    )
+
+    await engine.ensure({
+      project: {
+        id: 'local-1',
+        name: 'Local project',
+        path: '/tmp/local-project',
+        packageManager: 'pnpm',
+        testCommand: 'pnpm test',
+        createdAt: '2026-06-30T00:00:00.000Z',
+        updatedAt: '2026-06-30T00:00:00.000Z',
+      },
+    })
+
+    expect(ensure).toHaveBeenCalledTimes(1)
+    expect(ensure).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'local-1' }))
   })
 
   it('rejects unknown real engine values instead of silently falling back', () => {

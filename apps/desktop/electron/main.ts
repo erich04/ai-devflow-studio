@@ -87,6 +87,7 @@ import { createCodingEngineAdapterFromEnv } from './coding-engine.js'
 import { createCodingRuntime } from './coding-runtime.js'
 import { deleteManagedCodingWorkspace as removeManagedCodingWorkspaceDirectory } from './coding-runner.js'
 import { createOpencodeProcessManager } from './opencode-process.js'
+import { stopOpencodeWithRetry } from './opencode-shutdown.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 import {
   listElectronAgentProviderConfigs,
@@ -161,6 +162,11 @@ const gitStatusWatchers = new Map<
 >()
 const gitStatusWatcherCleanupRegistrations = new Set<number>()
 const opencodeProcessManager = createOpencodeProcessManager()
+const codingEngineAdapter = createCodingEngineAdapterFromEnv(process.env, {
+  processManager: opencodeProcessManager,
+})
+let quitCleanupComplete = false
+let quitCleanupPromise: Promise<void> | undefined
 const repositoryKnowledgeService = createRepositoryKnowledgeService()
 const repositoryKnowledgeCache = createRepositoryKnowledgeCache({
   service: repositoryKnowledgeService,
@@ -622,7 +628,7 @@ async function createCodingRuntimeForRequest(
   ])
   return createCodingRuntime({
     store,
-    engine: createCodingEngineAdapterFromEnv(process.env),
+    engine: codingEngineAdapter,
     ...(knowledgeSnapshot
       ? {
           knowledgeDocuments: knowledgeSnapshot.documents,
@@ -2060,9 +2066,21 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (quitCleanupComplete) {
+    return
+  }
+  event.preventDefault()
   gateCommandCycleAbortController?.abort()
   gateCommandScheduler?.stop()
   remoteSyncOutboxScheduler?.stop()
-  void opencodeProcessManager.stopAll()
+  quitCleanupPromise ??= stopOpencodeWithRetry(opencodeProcessManager)
+    .catch(() => {
+      console.warn('[opencode] Unable to complete managed runtime cleanup before quit.')
+    })
+    .finally(() => {
+      quitCleanupComplete = true
+      app.quit()
+    })
+  void quitCleanupPromise
 })

@@ -5,10 +5,13 @@ import {
   type CodingAgentRun,
   type CodingPermissionRequest,
 } from '@ai-devflow/shared'
-import { isAbsolute, relative } from 'node:path'
+import { realpathSync, statSync } from 'node:fs'
+import { isAbsolute, relative, resolve } from 'node:path'
 import type { CodingEngineAdapter, CodingEngineStartInput } from './coding-engine.js'
+import { CodingEngineStartupCleanupError } from './coding-engine-lifecycle.js'
 import {
   createOpencodeSession,
+  createDefaultOpencodePermissionRules,
   abortOpencodeSession,
   listOpencodeDiff,
   listOpencodePermissions,
@@ -38,6 +41,7 @@ export type OpencodeHttpCodingEngineConfig = {
   runtimeEnv?: NodeJS.ProcessEnv
   permissionPollMs?: number
   permissionDiscoveryTimeoutMs?: number
+  resolveManagedDirectory?: (directory: string) => string
   captureWorktreeDiff?: (input: { worktreePath: string }) => Promise<CapturedWorktreeDiff>
 }
 
@@ -79,6 +83,8 @@ export function createOpencodeHttpCodingEngineAdapter(
     },
 
     async start(input) {
+      const resolveManagedDirectory = config.resolveManagedDirectory ?? resolveManagedOpencodeDirectory
+      const directory = resolveManagedDirectory(input.workspace.worktreePath)
       const server = await processManager.ensure({
         projectId: input.project.id,
         binaryPath: config.binaryPath,
@@ -87,45 +93,65 @@ export function createOpencodeHttpCodingEngineAdapter(
       const brief = input.brief
       const session = await createOpencodeSession({
         baseUrl: server.baseUrl,
-        directory: input.workspace.worktreePath,
+        directory,
         title: `DevFlow ${input.run.title}`,
         model: { providerID: config.providerID, id: config.modelID },
         ...fetcherOption(config.fetcher),
       })
-      const messagePromise = sendOpencodeMessage({
-        baseUrl: server.baseUrl,
-        sessionId: session.id,
-        model: { providerID: config.providerID, modelID: config.modelID },
-        text: brief.prompt,
-        ...fetcherOption(config.fetcher),
-      }).then(
-        () => ({ ok: true as const }),
-        (error: unknown) => ({ ok: false as const, error }),
-      )
-      const permission = await waitForPermission({
-        baseUrl: server.baseUrl,
-        messagePromise,
-        pollMs: config.permissionPollMs ?? 1_000,
-        sessionId: session.id,
-        timeoutMs: config.permissionDiscoveryTimeoutMs ?? 60_000,
-        ...fetcherOption(config.fetcher),
-      })
-      sessions.set(input.id, {
-        baseUrl: server.baseUrl,
-        directory: input.workspace.worktreePath,
-        handledPermissionIds: new Set([permission.id]),
-        messagePromise,
-        nextEventSequence: 4,
-        projectPath: input.project.path,
-        sessionId: session.id,
-      })
+      try {
+        assertManagedOpencodeSession(session, directory, resolveManagedDirectory)
+        const messagePromise = sendOpencodeMessage({
+          baseUrl: server.baseUrl,
+          sessionId: session.id,
+          directory,
+          model: { providerID: config.providerID, modelID: config.modelID },
+          text: brief.prompt,
+          ...fetcherOption(config.fetcher),
+        }).then(
+          () => ({ ok: true as const }),
+          (error: unknown) => ({ ok: false as const, error }),
+        )
+        const permission = await waitForPermission({
+          baseUrl: server.baseUrl,
+          directory,
+          messagePromise,
+          pollMs: config.permissionPollMs ?? 1_000,
+          sessionId: session.id,
+          timeoutMs: config.permissionDiscoveryTimeoutMs ?? 60_000,
+          ...fetcherOption(config.fetcher),
+        })
+        sessions.set(input.id, {
+          baseUrl: server.baseUrl,
+          directory,
+          handledPermissionIds: new Set([permission.id]),
+          messagePromise,
+          nextEventSequence: 4,
+          projectPath: input.project.path,
+          sessionId: session.id,
+        })
 
-      return createStartResult(input, brief.prompt, session.id, permission)
+        return createStartResult(input, brief.prompt, session.id, permission, directory)
+      } catch (error) {
+        try {
+          const aborted = await abortOpencodeSession({
+            baseUrl: server.baseUrl,
+            sessionId: session.id,
+            directory,
+            ...fetcherOption(config.fetcher),
+          })
+          if (aborted !== true) {
+            throw new Error('opencode session abort was not acknowledged')
+          }
+        } catch (cleanupError) {
+          throw new CodingEngineStartupCleanupError([error, cleanupError])
+        }
+        throw error
+      }
     },
 
     async approvePermission(input) {
       const session = findSession(sessions, input.codingRun.id)
-      await replyOpencodePermission({
+      const replied = await replyOpencodePermission({
         baseUrl: session.baseUrl,
         requestId: input.request.id,
         directory: session.directory,
@@ -133,9 +159,13 @@ export function createOpencodeHttpCodingEngineAdapter(
         message: 'Approved by DevFlow.',
         ...fetcherOption(config.fetcher),
       })
+      if (replied !== true) {
+        throw new Error('opencode permission reply was not acknowledged')
+      }
       session.handledPermissionIds.add(input.request.id)
       const continuation = await waitForNextPermissionOrMessage({
         baseUrl: session.baseUrl,
+        directory: session.directory,
         handledPermissionIds: session.handledPermissionIds,
         messagePromise: session.messagePromise,
         pollMs: config.permissionPollMs ?? 1_000,
@@ -221,19 +251,68 @@ export function createOpencodeHttpCodingEngineAdapter(
       if (!session) {
         return
       }
-      await abortOpencodeSession({
+      const aborted = await abortOpencodeSession({
         baseUrl: session.baseUrl,
         sessionId: session.sessionId,
         directory: session.directory,
         ...fetcherOption(config.fetcher),
       })
+      if (aborted !== true) {
+        throw new Error('opencode session abort was not acknowledged')
+      }
       sessions.delete(input.codingRun.id)
     },
   }
 }
 
+function assertManagedOpencodeSession(
+  session: Awaited<ReturnType<typeof createOpencodeSession>>,
+  directory: string,
+  resolveManagedDirectory: (directory: string) => string,
+): void {
+  let sessionDirectory: string
+  try {
+    sessionDirectory = resolveManagedDirectory(session.directory)
+  } catch {
+    throw new Error('opencode session directory did not match the managed worktree')
+  }
+  if (sessionDirectory !== directory) {
+    throw new Error('opencode session directory did not match the managed worktree')
+  }
+
+  const actualRules = session.permission ?? []
+  const expectedRules = createDefaultOpencodePermissionRules()
+  const preservedRelayRules =
+    actualRules.length === expectedRules.length &&
+    actualRules.every((actual, index) => {
+      const expected = expectedRules[index]
+      return Boolean(
+        expected &&
+        actual.permission === expected.permission &&
+        actual.pattern === expected.pattern &&
+        actual.action === expected.action,
+      )
+    })
+  if (!preservedRelayRules) {
+    throw new Error('opencode session did not preserve DevFlow permission relay rules')
+  }
+}
+
+export function resolveManagedOpencodeDirectory(directory: string): string {
+  try {
+    const canonical = realpathSync.native(resolve(directory))
+    if (!statSync(canonical).isDirectory()) {
+      throw new Error('not a directory')
+    }
+    return canonical
+  } catch {
+    throw new Error('managed opencode worktree directory could not be resolved')
+  }
+}
+
 async function waitForNextPermissionOrMessage(input: {
   baseUrl: string
+  directory: string
   fetcher?: Fetcher
   handledPermissionIds: Set<string>
   messagePromise: OpencodeRuntimeSession['messagePromise']
@@ -266,12 +345,14 @@ async function waitForNextPermissionOrMessage(input: {
 
 async function findUnhandledPermission(input: {
   baseUrl: string
+  directory: string
   fetcher?: Fetcher
   handledPermissionIds: Set<string>
   sessionId: string
 }): Promise<OpencodePermission | undefined> {
   const permissions = await listOpencodePermissions({
     baseUrl: input.baseUrl,
+    directory: input.directory,
     ...fetcherOption(input.fetcher),
   })
   return permissions.find(
@@ -309,6 +390,7 @@ async function readOpencodeDiffSource(input: {
 
 async function waitForPermission(input: {
   baseUrl: string
+  directory: string
   fetcher?: Fetcher
   messagePromise: OpencodeRuntimeSession['messagePromise']
   pollMs: number
@@ -325,6 +407,7 @@ async function waitForPermission(input: {
   while (Date.now() <= expiresAt) {
     const permissions = await listOpencodePermissions({
       baseUrl: input.baseUrl,
+      directory: input.directory,
       ...fetcherOption(input.fetcher),
     })
     const permission = permissions.find((candidate) => candidate.sessionID === input.sessionId)
@@ -349,6 +432,7 @@ function createStartResult(
   prompt: string,
   sessionId: string,
   permission: OpencodePermission,
+  directory: string,
 ) {
   const codingRun: CodingAgentRun = {
     id: input.id,
@@ -396,7 +480,7 @@ function createStartResult(
     createToolCallEvent({
       codingRun,
       permission,
-      worktreePath: input.workspace.worktreePath,
+      worktreePath: directory,
       projectPath: input.project.path,
       sequence: 3,
       now: input.now,
@@ -404,10 +488,10 @@ function createStartResult(
   ]
   const filePath = metadataString(permission.metadata, 'filepath') ?? metadataString(permission.metadata, 'path')
   const command = metadataString(permission.metadata, 'command')
-  const safePath = filePath ? safeRelativePath(filePath, input.workspace.worktreePath) : undefined
+  const safePath = filePath ? safeRelativePath(filePath, directory) : undefined
   const safeCommand = command
     ? redactToolText(command, [
-        { label: 'worktree_path', value: input.workspace.worktreePath },
+        { label: 'worktree_path', value: directory },
         { label: 'project_path', value: input.project.path },
       ])
     : undefined
