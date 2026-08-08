@@ -122,7 +122,12 @@ export default async function Page({ searchParams }: PageProps) {
       ...(sessionHeaders ? { sessionHeaders } : {}),
     })
   } catch {
-    return <ErrorShell message="无法加载团队数据，请稍后重试。" />
+    return (
+      <ErrorShell
+        message="无法加载团队数据，请稍后重试。"
+        signInHref={`${apiBaseUrl}/api/auth/github/start`}
+      />
+    )
   }
 
   const { activeProject, activeRun, projectRuns, selectionError } = resolvePageSelection(
@@ -543,7 +548,7 @@ export default async function Page({ searchParams }: PageProps) {
   )
 }
 
-function ErrorShell({ message }: { message: string }) {
+function ErrorShell({ message, signInHref }: { message: string; signInHref: string }) {
   return (
     <main className="studio-shell studio-shell--error">
       <section className="studio-error-panel">
@@ -551,6 +556,7 @@ function ErrorShell({ message }: { message: string }) {
         <span>DevFlow API</span>
         <h1>团队数据暂时不可用</h1>
         <p>{message}</p>
+        <a href={signInHref}>Sign in with GitHub</a>
         <a href="/legacy-shell">打开旧壳备份</a>
       </section>
     </main>

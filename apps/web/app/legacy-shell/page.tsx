@@ -139,7 +139,7 @@ export default async function Page() {
     overview = await fetchTeamOverview({
       ...(cookieHeader ? { cookieHeader } : {}),
     })
-  } catch (error) {
+  } catch {
     return (
       <WebShell>
         <section className="web-panel web-panel--wide">
@@ -147,7 +147,10 @@ export default async function Page() {
             <span>Team Overview</span>
             <strong>团队数据暂时不可用</strong>
           </div>
-          <p>{error instanceof Error ? error.message : '无法连接 DevFlow API'}</p>
+          <p>无法加载团队数据，请稍后重试。</p>
+          <a className="button-link" href={`${apiBaseUrl}/api/auth/github/start`}>
+            Sign in with GitHub
+          </a>
         </section>
       </WebShell>
     )

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cookies } from 'next/headers'
 import { createWarnOnlyDefaultPolicy, resolveEffectivePolicy } from '@ai-devflow/shared'
 import Page from './page'
 import {
@@ -31,6 +32,7 @@ vi.mock('next/headers', () => ({
 }))
 
 const mockedFetchTeamOverview = vi.mocked(fetchTeamOverview)
+const mockedCookies = vi.mocked(cookies)
 const mockedFetchWorkRequests = vi.mocked(fetchWorkRequests)
 const mockedFetchGateCommands = vi.mocked(fetchGateCommands)
 const mockedEvaluateGateCommandSnapshot = vi.mocked(evaluateGateCommandSnapshot)
@@ -596,15 +598,21 @@ describe('web product shell page', () => {
     ).toBeInTheDocument()
   })
 
-  it('renders an error state when the API cannot be reached', async () => {
+  it('offers the normal GitHub sign-in route when an unauthenticated overview request fails', async () => {
+    mockedCookies.mockResolvedValueOnce({ get: vi.fn(() => undefined) } as never)
     mockedFetchTeamOverview.mockRejectedValue(
-      new Error('connect ECONNREFUSED internal-api.private:4310 API_TOKEN=private-value'),
+      new Error('DevFlow API /api/team/overview failed with 401 internal-api.private API_TOKEN=private-value'),
     )
 
     render(await Page({}))
 
     expect(screen.getByText('团队数据暂时不可用')).toBeInTheDocument()
     expect(screen.getByText('无法加载团队数据，请稍后重试。')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Sign in with GitHub/ })).toHaveAttribute(
+      'href',
+      'http://api.local/api/auth/github/start',
+    )
+    expect(mockedFetchTeamOverview).toHaveBeenCalledWith({})
     expect(document.body).not.toHaveTextContent('internal-api.private')
     expect(document.body).not.toHaveTextContent('private-value')
   })
