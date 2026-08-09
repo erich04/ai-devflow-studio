@@ -20,7 +20,11 @@ describe('opencode process manager', () => {
     const server = await manager.ensure({
       projectId: 'local-1',
       binaryPath: 'opencode',
-      env: { OPENAI_API_KEY: 'secret' },
+      env: {
+        OPENAI_API_KEY: 'secret',
+        OPENCODE_CLIENT: 'desktop',
+        OPENCODE_ENABLE_QUESTION_TOOL: 'true',
+      },
     })
 
     expect(server.baseUrl).toBe('http://127.0.0.1:4097')
@@ -30,6 +34,11 @@ describe('opencode process manager', () => {
       options: expect.objectContaining({
         cwd: '/tmp/devflow-opencode-serve-test',
         detached: process.platform !== 'win32',
+        env: {
+          OPENAI_API_KEY: 'secret',
+          OPENCODE_CLIENT: 'server',
+          OPENCODE_ENABLE_QUESTION_TOOL: 'false',
+        },
         stdio: ['ignore', 'ignore', 'ignore'],
       }),
     })

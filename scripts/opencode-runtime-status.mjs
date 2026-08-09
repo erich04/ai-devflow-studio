@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { basename } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 function evaluateSmokeGate(env) {
@@ -17,6 +18,25 @@ function evaluateSmokeGate(env) {
   }
 
   const apiKeyEnvName = env.DEVFLOW_OPENCODE_API_KEY_ENV ?? 'OPENAI_API_KEY'
+  const requestedReleaseProfile = env.DEVFLOW_OPENCODE_RELEASE_PROFILE
+  const resemblesV14ReleaseProfile =
+    env.DEVFLOW_OPENCODE_PROVIDER_ID === 'double' ||
+    env.DEVFLOW_OPENCODE_MODEL_ID === 'ark-code-latest' ||
+    apiKeyEnvName === 'ANTHROPIC_AUTH_TOKEN'
+  const v14ReleaseProfile =
+    requestedReleaseProfile === 'v1.4' &&
+    env.DEVFLOW_OPENCODE_PROVIDER_ID === 'double' &&
+    env.DEVFLOW_OPENCODE_MODEL_ID === 'ark-code-latest' &&
+    apiKeyEnvName === 'ANTHROPIC_AUTH_TOKEN'
+  if (
+    (requestedReleaseProfile !== undefined && !v14ReleaseProfile) ||
+    (requestedReleaseProfile === undefined && resemblesV14ReleaseProfile)
+  ) {
+    return {
+      mode: 'blocked',
+      message: 'The V1.4 opencode release smoke requires the exact candidate-owned Responses profile identity.',
+    }
+  }
   const missing = ['DEVFLOW_OPENCODE_PROVIDER_ID', 'DEVFLOW_OPENCODE_MODEL_ID', apiKeyEnvName].filter(
     (key) => !env[key],
   )
@@ -48,6 +68,11 @@ export function collectOpencodeRuntimeProbe(env = process.env) {
 
   const preflight = evaluateSmokeGate(env)
   const apiKeyEnvName = env.DEVFLOW_OPENCODE_API_KEY_ENV ?? 'OPENAI_API_KEY'
+  const v14ReleaseProfile =
+    env.DEVFLOW_OPENCODE_RELEASE_PROFILE === 'v1.4' &&
+    env.DEVFLOW_OPENCODE_PROVIDER_ID === 'double' &&
+    env.DEVFLOW_OPENCODE_MODEL_ID === 'ark-code-latest' &&
+    apiKeyEnvName === 'ANTHROPIC_AUTH_TOKEN'
 
   return {
     binaryPath,
@@ -60,6 +85,7 @@ export function collectOpencodeRuntimeProbe(env = process.env) {
     modelID: env.DEVFLOW_OPENCODE_MODEL_ID,
     apiKeyEnvName,
     apiKeyConfigured: Boolean(env[apiKeyEnvName]),
+    v14ReleaseProfile,
   }
 }
 
@@ -78,8 +104,8 @@ export function evaluateOpencodeRuntimeStatus(probe) {
       label: 'opencode binary',
       state: probe.binaryFound ? 'ready' : 'attention',
       detail: probe.binaryFound
-        ? `${probe.binaryPath} reports ${probe.version}.`
-        : `${probe.binaryPath} was not found or did not return a version.`,
+        ? `${basename(probe.binaryPath)} reports ${probe.version}.`
+        : `${basename(probe.binaryPath)} was not found or did not return a version.`,
     },
     {
       id: 'default-engine',
@@ -106,7 +132,9 @@ export function evaluateOpencodeRuntimeStatus(probe) {
       label: 'Provider profile',
       state: providerReady ? 'ready' : providerPartiallyConfigured ? 'attention' : 'pending',
       detail: providerReady
-        ? `Configured ${probe.providerID}/${probe.modelID} with key env ${probe.apiKeyEnvName}.`
+        ? probe.v14ReleaseProfile
+          ? `Configured ${probe.providerID}/${probe.modelID} with key env ${probe.apiKeyEnvName}; the candidate will apply its built-in Responses API release profile.`
+          : `Configured ${probe.providerID}/${probe.modelID} with key env ${probe.apiKeyEnvName}.`
         : providerPartiallyConfigured
           ? `Provider profile is incomplete: engine=${probe.engine ?? '<unset>'}, provider=${probe.providerID ?? '<unset>'}, model=${probe.modelID ?? '<unset>'}, keyEnv=${probe.apiKeyEnvName}, keyConfigured=${probe.apiKeyConfigured}.`
           : 'Provider profile is not configured; this is expected unless running the live smoke.',

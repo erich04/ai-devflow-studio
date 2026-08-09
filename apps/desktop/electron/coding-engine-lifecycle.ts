@@ -16,16 +16,20 @@ export class CodingEnginePermissionDiscoveryError extends Error {
   readonly code:
     | 'message_completed_without_permission'
     | 'permission_discovery_timed_out'
+    | 'provider_retry_observed'
 
   constructor(
     code:
       | 'message_completed_without_permission'
-      | 'permission_discovery_timed_out',
+      | 'permission_discovery_timed_out'
+      | 'provider_retry_observed',
   ) {
     super(
       code === 'message_completed_without_permission'
         ? 'opencode completed without requesting a managed permission'
-        : 'opencode permission discovery timed out while the provider message was pending',
+        : code === 'provider_retry_observed'
+          ? 'opencode reported a provider retry during managed permission discovery'
+          : 'opencode permission discovery timed out while the provider message was pending',
     )
     this.name = 'CodingEnginePermissionDiscoveryError'
     this.code = code

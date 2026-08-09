@@ -62,6 +62,15 @@ const releaseProfiles = {
       attemptCount: 1,
       automaticRetry: false,
       costCapUsd: null,
+      releaseProfile: 'v1.4',
+      providerApiMode: 'responses',
+      resolvedConfigPreflight: 'passed',
+      opencodeVersion: '1.18.15',
+      provider: 'double',
+      model: 'ark-code-latest',
+      keyEnvName: 'ANTHROPIC_AUTH_TOKEN',
+      providerRetryObserved: false,
+      diffEvidence: ['devflow-opencode-smoke.txt'],
     },
   },
 }
@@ -381,6 +390,43 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0
 }
 
+function isSafeRelativeEvidencePath(value) {
+  if (!isNonEmptyString(value)) {
+    return false
+  }
+  const trimmed = value.trim()
+  if (
+    trimmed.startsWith('/') ||
+    trimmed.startsWith('\\') ||
+    /^[A-Za-z]:[\\/]/.test(trimmed)
+  ) {
+    return false
+  }
+  const segments = trimmed.split(/[\\/]/)
+  return segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
+}
+
+function isValidProviderEgressEvidence(value) {
+  if (!isRecord(value)) {
+    return false
+  }
+  const armed = value.armedSegmentCount
+  const forwarded = value.forwardedRequestCount
+  const completed = value.completedResponseCount
+  return (
+    Number.isSafeInteger(armed) &&
+    armed >= 2 &&
+    armed <= 5 &&
+    forwarded === armed &&
+    completed === forwarded &&
+    value.blockedUncreditedRequestCount === 0 &&
+    value.blockedInvalidCount === 0 &&
+    value.failedSegmentCount === 0 &&
+    value.activeRequestCount === 0 &&
+    value.closed === true
+  )
+}
+
 function evaluateRealOpencodeRecord(snapshot) {
   const baseState = evidenceBaseState(snapshot.realOpencodeRecord, snapshot)
   if (baseState) {
@@ -396,7 +442,7 @@ function evaluateRealOpencodeRecord(snapshot) {
   const diffEvidenceValid =
     Array.isArray(value.diffEvidence) &&
     value.diffEvidence.length > 0 &&
-    value.diffEvidence.every(isNonEmptyString)
+    value.diffEvidence.every(isSafeRelativeEvidencePath)
   const requiredMetadataValid =
     isNonEmptyString(value.recordedAt) &&
     !Number.isNaN(Date.parse(value.recordedAt)) &&
@@ -415,7 +461,17 @@ function evaluateRealOpencodeRecord(snapshot) {
     expectedControls === undefined ||
     (value.attemptCount === expectedControls.attemptCount &&
       value.automaticRetry === expectedControls.automaticRetry &&
-      value.costCapUsd === expectedControls.costCapUsd)
+      value.costCapUsd === expectedControls.costCapUsd &&
+      value.releaseProfile === expectedControls.releaseProfile &&
+      value.providerApiMode === expectedControls.providerApiMode &&
+      value.resolvedConfigPreflight === expectedControls.resolvedConfigPreflight &&
+      value.opencodeVersion === expectedControls.opencodeVersion &&
+      value.provider === expectedControls.provider &&
+      value.model === expectedControls.model &&
+      value.keyEnvName === expectedControls.keyEnvName &&
+      value.providerRetryObserved === expectedControls.providerRetryObserved &&
+      JSON.stringify(value.diffEvidence) === JSON.stringify(expectedControls.diffEvidence) &&
+      isValidProviderEgressEvidence(value.egressGate))
   const ready = requiredMetadataValid && controlsValid && forbiddenFields.length === 0
 
   return {

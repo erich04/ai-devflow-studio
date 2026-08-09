@@ -7,7 +7,14 @@ import type {
   WorkflowRun,
 } from '../packages/shared/src/domain.ts'
 import type { CodingEngineApprovePermissionCompletedResult } from '../apps/desktop/electron/coding-engine.ts'
-import { evaluateOpencodeSmokePreflight } from './opencode-smoke-preflight'
+import type {
+  OpencodeProviderEgressGate,
+  OpencodeProviderEgressGateSnapshot,
+} from './opencode-provider-egress-gate.ts'
+import {
+  evaluateOpencodeSmokePreflight,
+  resolveOpencodeSmokeConfigContent,
+} from './opencode-smoke-preflight'
 import {
   assertCandidateIdentity,
   assertCleanCandidateStatus,
@@ -50,9 +57,11 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
     createOpencodeHttpCodingEngineAdapter,
   } = await import('../apps/desktop/electron/opencode-http-engine.ts')
   const { createOpencodeProcessManager } = await import('../apps/desktop/electron/opencode-process.ts')
+  const { createReleaseSmokeOpencodePermissionRules } = await import('../apps/desktop/electron/opencode-http-adapter.ts')
   const { createManagedCodingWorkspace, deleteManagedCodingWorkspace } = await import('../apps/desktop/electron/coding-runner.ts')
   const { runDependencyBootstrap } = await import('../apps/desktop/electron/dependency-bootstrap-runner.ts')
   const { runLocalTestCommand } = await import('../apps/desktop/electron/test-runner.ts')
+  const { createOpencodeProviderEgressGate } = await import('./opencode-provider-egress-gate.ts')
 
   const execFileAsync = promisify(execFile)
   const candidateRoot = process.cwd()
@@ -96,14 +105,17 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
     process.env,
     preflight.apiKeyEnvName,
     opencodeRuntimeRoot,
+    { includeApiKey: preflight.releaseProfile !== 'v1.4' },
   )
   const now = new Date().toISOString()
   let activeStage: OpencodeSmokeStage = 'setup'
   let processManager: ReturnType<typeof createOpencodeProcessManager> | undefined
+  let providerEgressGate: OpencodeProviderEgressGate | undefined
   let fixtureRepositoryReady = false
   let hasPrimaryError = false
   let primaryError: unknown
   let successChangedPaths: string[] | undefined
+  let successfulProviderEgress: OpencodeProviderEgressGateSnapshot | undefined
   const setupRepository = async () => {
     await execFileAsync('git', ['init', repoDir])
     await execFileAsync('git', ['config', 'user.email', 'devflow@example.com'], { cwd: repoDir })
@@ -129,6 +141,25 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
         mkdir(path.join(opencodeRuntimeRoot, name), { recursive: true }),
       ),
     )
+    if (preflight.releaseProfile === 'v1.4') {
+      providerEgressGate = await createOpencodeProviderEgressGate({
+        providerApiKey: process.env[preflight.apiKeyEnvName]!,
+      })
+      providerEgressGate.installClientCredential(
+        opencodeRuntimeEnv,
+        preflight.apiKeyEnvName,
+      )
+    }
+    const resolvedConfigContent = resolveOpencodeSmokeConfigContent(
+      preflight,
+      process.env.OPENCODE_CONFIG_CONTENT,
+      providerEgressGate?.baseUrl,
+    )
+    if (resolvedConfigContent) {
+      opencodeRuntimeEnv.OPENCODE_CONFIG_CONTENT = resolvedConfigContent
+    } else {
+      delete opencodeRuntimeEnv.OPENCODE_CONFIG_CONTENT
+    }
     await setupRepository()
     fixtureRepositoryReady = true
     const userInstruction =
@@ -201,9 +232,13 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
       apiKeyEnvName: preflight.apiKeyEnvName,
       processManager,
       runtimeEnv: opencodeRuntimeEnv,
-      permissionDiscoveryTimeoutMs: 120_000,
+      permissionDiscoveryTimeoutMs: 240_000,
+      ...(preflight.releaseProfile === 'v1.4'
+        ? { permissionRules: createReleaseSmokeOpencodePermissionRules() }
+        : {}),
     })
 
+    providerEgressGate?.allowInitialProviderStep()
     const started = await engine.start({
       id: 'coding-run-opencode-smoke',
       run,
@@ -224,6 +259,7 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
     let completed: CodingEngineApprovePermissionCompletedResult | undefined
     for (let approvalCount = 0; approvalCount < 4; approvalCount += 1) {
       assertOpencodeSmokePermission(permissionRequest)
+      await providerEgressGate?.allowNextProviderStep(permissionRequest.id)
       console.log(`opencode requested ${permissionRequest.permission}; approving once.`)
       const result = await engine.approvePermission({
         codingRun,
@@ -245,6 +281,7 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
     if (!completed) {
       throw new Error('opencode smoke exceeded the permission approval limit.')
     }
+    providerEgressGate?.assertPassingState()
 
     activeStage = 'diff_validation'
     assertOpencodeSmokeChangedPaths(completed.diff.changedPaths)
@@ -311,6 +348,8 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
 
     activeStage = 'runtime_cleanup'
     await processManager.stopAll()
+    await providerEgressGate?.close()
+    successfulProviderEgress = providerEgressGate?.snapshot()
     activeStage = 'workspace_cleanup'
     const deletedWorkspace = await deleteManagedCodingWorkspace(workspace)
     if (deletedWorkspace.cleanupStatus !== 'deleted') {
@@ -327,6 +366,22 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
     await processManager?.stopAll()
   } catch (cause) {
     safetyErrors.push(new Error('opencode smoke could not stop the managed runtime', { cause }))
+  }
+  try {
+    await providerEgressGate?.close()
+    const egressSnapshot = providerEgressGate?.snapshot()
+    if (
+      egressSnapshot &&
+      (egressSnapshot.blockedUncreditedRequestCount !== 0 ||
+        egressSnapshot.blockedInvalidCount !== 0 ||
+        egressSnapshot.failedSegmentCount !== 0 ||
+        egressSnapshot.activeRequestCount !== 0 ||
+        !egressSnapshot.closed)
+    ) {
+      throw new Error('opencode smoke provider egress integrity check failed')
+    }
+  } catch (cause) {
+    safetyErrors.push(new Error('opencode smoke could not close its provider egress gate', { cause }))
   }
   try {
     assertCleanCandidateStatus(await readGitStatus(candidateRoot))
@@ -360,6 +415,24 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
   }
   if (!successChangedPaths) {
     throw new Error('opencode smoke finished without a result')
+  }
+  if (preflight.releaseProfile === 'v1.4') {
+    if (!successfulProviderEgress) {
+      throw new Error('opencode smoke finished without provider egress evidence')
+    }
+    console.log(
+      [
+        'opencode provider egress passed',
+        `armed=${successfulProviderEgress.armedSegmentCount}`,
+        `forwarded=${successfulProviderEgress.forwardedRequestCount}`,
+        `completed=${successfulProviderEgress.completedResponseCount}`,
+        `blocked_uncredited=${successfulProviderEgress.blockedUncreditedRequestCount}`,
+        `blocked_invalid=${successfulProviderEgress.blockedInvalidCount}`,
+        `failed=${successfulProviderEgress.failedSegmentCount}`,
+        `active=${successfulProviderEgress.activeRequestCount}`,
+        `closed=${String(successfulProviderEgress.closed)}`,
+      ].join('; '),
+    )
   }
   console.log(`opencode smoke passed; changed paths: ${successChangedPaths.join(', ')}`)
 }

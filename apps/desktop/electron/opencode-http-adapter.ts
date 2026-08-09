@@ -1,7 +1,7 @@
 export type Fetcher = typeof fetch
 
 export type OpencodePermissionRule = {
-  permission: 'edit' | 'bash' | 'write' | 'patch'
+  permission: string
   pattern: string
   action: 'ask' | 'allow' | 'deny'
 }
@@ -28,6 +28,19 @@ export type OpencodePermission = {
   permission: string
   metadata?: Record<string, unknown>
   patterns?: string[]
+}
+
+export type OpencodeSessionStatus =
+  | { type: 'idle' | 'busy' }
+  | { type: 'retry'; attempt: number; next: number }
+
+export class OpencodeSessionStatusResponseError extends Error {
+  readonly code = 'invalid_status_response' as const
+
+  constructor() {
+    super('opencode returned an invalid session status response')
+    this.name = 'OpencodeSessionStatusResponseError'
+  }
 }
 
 export type OpencodeDiffFile = {
@@ -103,11 +116,26 @@ export class OpencodeMessageResponseError extends Error {
 }
 
 export function createDefaultOpencodePermissionRules(): OpencodePermissionRule[] {
-  return ['edit', 'bash', 'write', 'patch'].map((permission) => ({
-    permission: permission as OpencodePermissionRule['permission'],
-    pattern: '*',
-    action: 'ask',
-  }))
+  return [
+    { permission: 'question', pattern: '*', action: 'deny' },
+    { permission: 'task', pattern: '*', action: 'deny' },
+    ...['edit', 'bash', 'write', 'patch'].map((permission) => ({
+      permission,
+      pattern: '*',
+      action: 'ask' as const,
+    })),
+  ]
+}
+
+export function createReleaseSmokeOpencodePermissionRules(): OpencodePermissionRule[] {
+  return [
+    { permission: '*', pattern: '*', action: 'deny' },
+    ...['edit', 'bash'].map((permission) => ({
+      permission,
+      pattern: '*',
+      action: 'ask' as const,
+    })),
+  ]
 }
 
 export function buildOpencodeServeArgs(input: {
@@ -139,12 +167,13 @@ export async function createOpencodeSession(input: {
   directory: string
   title: string
   model: OpencodeSessionModel
+  permissionRules?: OpencodePermissionRule[]
   fetcher?: Fetcher
 }): Promise<OpencodeSession> {
   return postJson<OpencodeSession>(input.fetcher, input.baseUrl, withDirectory('/session', input.directory), {
     title: input.title,
     model: input.model,
-    permission: createDefaultOpencodePermissionRules(),
+    permission: input.permissionRules ?? createDefaultOpencodePermissionRules(),
   })
 }
 
@@ -176,12 +205,55 @@ export async function listOpencodePermissions(input: {
   baseUrl: string
   directory?: string
   fetcher?: Fetcher
+  signal?: AbortSignal
 }): Promise<OpencodePermission[]> {
   return getJson<OpencodePermission[]>(
     input.fetcher,
     input.baseUrl,
     input.directory ? withDirectory('/permission', input.directory) : '/permission',
+    input.signal,
   )
+}
+
+export async function getOpencodeSessionStatus(input: {
+  baseUrl: string
+  directory: string
+  sessionId: string
+  fetcher?: Fetcher
+  signal?: AbortSignal
+}): Promise<OpencodeSessionStatus | undefined> {
+  const response = await getJson<unknown>(
+    input.fetcher,
+    input.baseUrl,
+    withDirectory('/session/status', input.directory),
+    input.signal,
+  )
+  if (!isRecord(response)) {
+    throw new OpencodeSessionStatusResponseError()
+  }
+  if (!Object.prototype.hasOwnProperty.call(response, input.sessionId)) {
+    return undefined
+  }
+  const status = response[input.sessionId]
+  if (!isRecord(status) || typeof status.type !== 'string') {
+    throw new OpencodeSessionStatusResponseError()
+  }
+  if (status.type === 'idle' || status.type === 'busy') {
+    return { type: status.type }
+  }
+  if (
+    status.type !== 'retry' ||
+    !isNonNegativeSafeInteger(status.attempt) ||
+    !isNonNegativeSafeInteger(status.next) ||
+    typeof status.message !== 'string'
+  ) {
+    throw new OpencodeSessionStatusResponseError()
+  }
+  return {
+    type: 'retry',
+    attempt: status.attempt,
+    next: status.next,
+  }
 }
 
 export async function replyOpencodePermission(input: {
@@ -191,6 +263,7 @@ export async function replyOpencodePermission(input: {
   reply: 'once' | 'always' | 'reject'
   message: string
   fetcher?: Fetcher
+  signal?: AbortSignal
 }): Promise<boolean> {
   return postJson<boolean>(
     input.fetcher,
@@ -200,6 +273,7 @@ export async function replyOpencodePermission(input: {
       reply: input.reply,
       message: input.message,
     },
+    input.signal,
   )
 }
 
@@ -208,12 +282,14 @@ export async function abortOpencodeSession(input: {
   sessionId: string
   directory: string
   fetcher?: Fetcher
+  signal?: AbortSignal
 }): Promise<boolean> {
   return postJson<boolean>(
     input.fetcher,
     input.baseUrl,
     withDirectory(`/session/${input.sessionId}/abort`, input.directory),
     undefined,
+    input.signal,
   )
 }
 
@@ -265,9 +341,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-async function getJson<T>(fetcher: Fetcher | undefined, baseUrl: string, pathname: string): Promise<T> {
+async function getJson<T>(
+  fetcher: Fetcher | undefined,
+  baseUrl: string,
+  pathname: string,
+  signal?: AbortSignal,
+): Promise<T> {
   const response = await fetchOpencodeResponse(fetcher, baseUrl, pathname, {
     headers: { accept: 'application/json' },
+    ...(signal ? { signal } : {}),
   })
   return readJson<T>(response)
 }
@@ -277,11 +359,13 @@ async function postJson<T>(
   baseUrl: string,
   pathname: string,
   body: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   const response = await fetchOpencodeResponse(fetcher, baseUrl, pathname, {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    ...(signal ? { signal } : {}),
   })
   return readJson<T>(response)
 }
@@ -327,4 +411,8 @@ async function readJson<T>(response: Response): Promise<T> {
 
 function url(baseUrl: string, pathname: string): string {
   return `${baseUrl.replace(/\/$/, '')}${pathname}`
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }

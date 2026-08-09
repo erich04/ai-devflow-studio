@@ -15,6 +15,7 @@ type OpencodeRuntimeProbe = {
   modelID: string | undefined
   apiKeyEnvName: string
   apiKeyConfigured: boolean
+  v14ReleaseProfile: boolean
 }
 
 function probe(overrides: Partial<OpencodeRuntimeProbe> = {}): OpencodeRuntimeProbe {
@@ -29,6 +30,7 @@ function probe(overrides: Partial<OpencodeRuntimeProbe> = {}): OpencodeRuntimePr
     modelID: undefined,
     apiKeyEnvName: 'OPENAI_API_KEY',
     apiKeyConfigured: false,
+    v14ReleaseProfile: false,
     ...overrides,
   }
 }
@@ -67,6 +69,7 @@ describe('opencode runtime status', () => {
         modelID: 'ark-code-latest',
         apiKeyEnvName: 'ANTHROPIC_AUTH_TOKEN',
         apiKeyConfigured: true,
+        v14ReleaseProfile: true,
       }),
     )
 
@@ -77,7 +80,11 @@ describe('opencode runtime status', () => {
       }),
     )
     expect(formatOpencodeRuntimeStatusItems(items)).toContain('ANTHROPIC_AUTH_TOKEN')
+    expect(formatOpencodeRuntimeStatusItems(items)).toContain(
+      'built-in Responses API release profile',
+    )
     expect(formatOpencodeRuntimeStatusItems(items)).not.toContain('volcengine-secret')
+    expect(formatOpencodeRuntimeStatusItems(items)).not.toContain('/opt/homebrew/bin')
   })
 
   it('flags missing opencode binary as attention', () => {

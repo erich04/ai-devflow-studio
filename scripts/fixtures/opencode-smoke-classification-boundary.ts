@@ -19,10 +19,28 @@ async function main(): Promise<void> {
   if (permissionTimeout.code !== 'permission_discovery_timed_out') {
     throw new Error(`unexpected timeout classification: ${permissionTimeout.code}`)
   }
+  const providerRetry = createOpencodeSmokeStageError(
+    'engine_start',
+    new CodingEnginePermissionDiscoveryError('provider_retry_observed'),
+  )
+  if (providerRetry.code !== 'provider_retry_observed') {
+    throw new Error(`unexpected retry classification: ${providerRetry.code}`)
+  }
 
-  const { OpencodeMessageResponseError, sendOpencodeMessage } = await import(
+  const {
+    OpencodeMessageResponseError,
+    OpencodeSessionStatusResponseError,
+    sendOpencodeMessage,
+  } = await import(
     '../../apps/desktop/electron/opencode-http-adapter.js'
   )
+  const invalidStatus = createOpencodeSmokeStageError(
+    'engine_start',
+    new OpencodeSessionStatusResponseError(),
+  )
+  if (invalidStatus.code !== 'invalid_status_response') {
+    throw new Error(`unexpected status classification: ${invalidStatus.code}`)
+  }
   const providerFailure = createOpencodeSmokeStageError(
     'engine_start',
     new OpencodeMessageResponseError({

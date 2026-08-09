@@ -158,7 +158,11 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
         buildOpencodeServeArgs({ hostname: '127.0.0.1', port }),
         {
           cwd: runtimeRoot,
-          env: input.env,
+          env: {
+            ...input.env,
+            OPENCODE_CLIENT: 'server',
+            OPENCODE_ENABLE_QUESTION_TOOL: 'false',
+          },
           detached: platform !== 'win32',
           stdio: ['ignore', 'ignore', 'ignore'],
         },

@@ -3,7 +3,9 @@ import {
   abortOpencodeSession,
   buildOpencodeServeArgs,
   createDefaultOpencodePermissionRules,
+  createReleaseSmokeOpencodePermissionRules,
   createOpencodeSession,
+  getOpencodeSessionStatus,
   listOpencodeDiff,
   listOpencodePermissions,
   replyOpencodePermission,
@@ -14,6 +16,25 @@ import {
 } from './opencode-http-adapter'
 
 describe('opencode HTTP adapter', () => {
+  it('denies unsupported interactive and child-session tools while preserving managed asks', () => {
+    expect(createDefaultOpencodePermissionRules()).toEqual([
+      { permission: 'question', pattern: '*', action: 'deny' },
+      { permission: 'task', pattern: '*', action: 'deny' },
+      { permission: 'edit', pattern: '*', action: 'ask' },
+      { permission: 'bash', pattern: '*', action: 'ask' },
+      { permission: 'write', pattern: '*', action: 'ask' },
+      { permission: 'patch', pattern: '*', action: 'ask' },
+    ])
+  })
+
+  it('restricts release smoke tools to explicit managed permission steps', () => {
+    expect(createReleaseSmokeOpencodePermissionRules()).toEqual([
+      { permission: '*', pattern: '*', action: 'deny' },
+      { permission: 'edit', pattern: '*', action: 'ask' },
+      { permission: 'bash', pattern: '*', action: 'ask' },
+    ])
+  })
+
   it('creates sessions with ask permission rules and never uses skip-permissions flags', async () => {
     const session = {
       id: 'ses_test',
@@ -86,6 +107,85 @@ describe('opencode HTTP adapter', () => {
       'http://127.0.0.1:4097/session/ses_1/diff?directory=%2Ftmp%2Frepo',
     ])
     expect(JSON.parse(String(fetcher.calls[1]?.[1]?.body))).not.toHaveProperty('directory')
+  })
+
+  it('reads only the target session status and permanently discards retry details', async () => {
+    const fetcher = jsonFetcher({
+      'ses-other': { type: 'busy' },
+      'ses-1': {
+        type: 'retry',
+        attempt: 0,
+        next: 1_786_275_217_000,
+        message: 'RAW_RETRY_SECRET /private/tmp/secret-worktree',
+        action: {
+          reason: 'RAW_REASON',
+          provider: 'double',
+          title: 'RAW_TITLE',
+          message: 'RAW_ACTION_SECRET',
+          label: 'RAW_LABEL',
+        },
+      },
+    })
+
+    const status = await getOpencodeSessionStatus({
+      baseUrl: 'http://127.0.0.1:4097',
+      directory: '/private/tmp/secret-worktree',
+      sessionId: 'ses-1',
+      fetcher,
+    })
+
+    expect(status).toEqual({
+      type: 'retry',
+      attempt: 0,
+      next: 1_786_275_217_000,
+    })
+    expect(JSON.stringify(status)).not.toContain('RAW_RETRY_SECRET')
+    expect(JSON.stringify(status)).not.toContain('RAW_ACTION_SECRET')
+    expect(JSON.stringify(status)).not.toContain('/private/tmp/secret-worktree')
+    expect(String(fetcher.calls[0]?.[0])).toBe(
+      'http://127.0.0.1:4097/session/status?directory=%2Fprivate%2Ftmp%2Fsecret-worktree',
+    )
+  })
+
+  it('treats a missing target session status as an idle observation', async () => {
+    await expect(
+      getOpencodeSessionStatus({
+        baseUrl: 'http://127.0.0.1:4097',
+        directory: '/tmp/repo',
+        sessionId: 'ses-missing',
+        fetcher: jsonFetcher({
+          'ses-other': {
+            type: 'retry',
+            attempt: 1,
+            next: 2,
+            message: 'RAW_OTHER_SESSION_SENTINEL',
+          },
+        }),
+      }),
+    ).resolves.toBeUndefined()
+  })
+
+  it.each([
+    null,
+    [],
+    { 'ses-1': { type: 'retry', attempt: -1, next: 1, message: 'retry' } },
+    { 'ses-1': { type: 'retry', attempt: 1, next: -1, message: 'retry' } },
+    { 'ses-1': { type: 'retry', attempt: 1, next: 1, message: 42 } },
+    { 'ses-1': { type: 'unknown' } },
+  ])('fails closed on malformed target session status %#', async (body) => {
+    const error = await getOpencodeSessionStatus({
+      baseUrl: 'http://127.0.0.1:4097',
+      directory: '/private/tmp/secret-worktree',
+      sessionId: 'ses-1',
+      fetcher: jsonFetcher(body),
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({
+      name: 'OpencodeSessionStatusResponseError',
+      code: 'invalid_status_response',
+      message: 'opencode returned an invalid session status response',
+    })
+    expect(JSON.stringify(error)).not.toContain('/private/tmp/secret-worktree')
   })
 
   it('builds managed serve args without writing global auth or enabling unsafe permission bypass', () => {

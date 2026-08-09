@@ -107,7 +107,26 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
       cleanup: 'passed',
       redactionCheck: 'passed',
       ...(releaseSeries === '1.4'
-        ? { attemptCount: 1, automaticRetry: false, costCapUsd: null }
+        ? {
+            attemptCount: 1,
+            automaticRetry: false,
+            costCapUsd: null,
+            releaseProfile: 'v1.4',
+            providerApiMode: 'responses',
+            resolvedConfigPreflight: 'passed',
+            providerRetryObserved: false,
+            egressGate: {
+              armedSegmentCount: 2,
+              forwardedRequestCount: 2,
+              completedResponseCount: 2,
+              blockedUncreditedRequestCount: 0,
+              blockedInvalidCount: 0,
+              failedSegmentCount: 0,
+              activeRequestCount: 0,
+              closed: true,
+            },
+            opencodeVersion: '1.18.15',
+          }
         : {}),
     }),
     ...overrides,
@@ -254,6 +273,36 @@ describe('release signoff status', () => {
       { attemptCount: 2 },
       { automaticRetry: true },
       { costCapUsd: 20 },
+      { releaseProfile: 'ambient' },
+      { providerApiMode: 'chat-completions' },
+      { resolvedConfigPreflight: 'failed' },
+      { providerRetryObserved: true },
+      { provider: 'other' },
+      { model: 'other-model' },
+      { keyEnvName: 'OTHER_KEY' },
+      { opencodeVersion: '1.18.14' },
+      { diffEvidence: ['/private/tmp/devflow-opencode-smoke.txt'] },
+      { diffEvidence: ['../devflow-opencode-smoke.txt'] },
+      {
+        egressGate: {
+          ...(ready.realOpencodeRecord.value?.egressGate as Record<string, unknown>),
+          blockedUncreditedRequestCount: 1,
+        },
+      },
+      {
+        egressGate: {
+          ...(ready.realOpencodeRecord.value?.egressGate as Record<string, unknown>),
+          forwardedRequestCount: 3,
+        },
+      },
+      {
+        egressGate: {
+          ...(ready.realOpencodeRecord.value?.egressGate as Record<string, unknown>),
+          armedSegmentCount: 1,
+          forwardedRequestCount: 1,
+          completedResponseCount: 1,
+        },
+      },
     ]) {
       const items = evaluateReleaseSignoffSnapshot({
         ...ready,

@@ -64,7 +64,7 @@ describe('CodingRuntime', () => {
         directory: '/tmp/worktree',
         permission: createDefaultOpencodePermissionRules(),
       },
-      { info: {}, parts: [] },
+      deferredOpencodeMessage({ info: {}, parts: [] }),
       [{
         id: 'permission-cross-runtime',
         sessionID: 'ses-cross-runtime',
@@ -166,7 +166,7 @@ describe('CodingRuntime', () => {
         directory: '/tmp/worktree',
         permission: createDefaultOpencodePermissionRules(),
       },
-      { info: {}, parts: [] },
+      deferredOpencodeMessage({ info: {}, parts: [] }),
       [{
         id: 'permission-cross-runtime-rejected',
         sessionID: 'ses-cross-runtime-rejected',
@@ -3005,12 +3005,46 @@ function opencodeSequenceFetcher(
 ): Fetcher & { urls: string[] } {
   const queue = [...responses]
   const urls: string[] = []
+  let pendingMessage:
+    | {
+        body: object
+        resolve: (response: Response) => void
+      }
+    | undefined
   const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
-    urls.push(String(input))
-    return new Response(JSON.stringify(queue.shift()), { status: 200 })
+    const requestUrl = String(input)
+    urls.push(requestUrl)
+    const body = queue.shift()
+    if (requestUrl.includes('/message?') && isDeferredOpencodeMessage(body)) {
+      return await new Promise<Response>((resolve) => {
+        pendingMessage = { body, resolve }
+      })
+    }
+    const acknowledgedReply = requestUrl.includes('/permission/') &&
+      requestUrl.includes('/reply?') && body === true
+    const continuationWillComplete = acknowledgedReply &&
+      Array.isArray(queue[0]) && queue[0].length === 0
+    const acknowledgedAbort = requestUrl.includes('/abort?') && body === true
+    if (pendingMessage && (continuationWillComplete || acknowledgedAbort)) {
+      const current = pendingMessage
+      pendingMessage = undefined
+      current.resolve(new Response(JSON.stringify(current.body), { status: 200 }))
+    }
+    return new Response(JSON.stringify(body), { status: 200 })
   }) as unknown as Fetcher & { urls: string[] }
   fetcher.urls = urls
   return fetcher
+}
+
+const deferredOpencodeMessages = new WeakSet<object>()
+
+function deferredOpencodeMessage<T extends object>(response: T): T {
+  deferredOpencodeMessages.add(response)
+  return response
+}
+
+function isDeferredOpencodeMessage(value: unknown): value is object {
+  return typeof value === 'object' && value !== null && deferredOpencodeMessages.has(value)
 }
 
 function createSpyCodingEngine(engine: CodingAgentRun['engine']): CodingEngineAdapter {

@@ -20,15 +20,18 @@ state is determined by the release JSON files, the matching `release:status` mod
   - fake Coding Agent engine
   - no paid provider call
 - Release signoff adds a manual paid-provider smoke:
-  - `corepack pnpm opencode:status`
+  - `corepack pnpm --silent opencode:status`
+  - `corepack pnpm --silent opencode:release-preflight`
   - `DEVFLOW_RUN_OPENCODE_SMOKE=1 ... corepack pnpm --silent test:opencode-smoke`
 - The smoke must be run before creating the release tag.
 - For v1.3, the passing result must be written to `docs/releases/v1.3.0/real-opencode.json` and
   bound to the candidate commit `C`.
 - For v1.4, the passing result must be written to `docs/releases/v1.4.0/real-opencode.json`, bound
-  to candidate `C`, and record exactly one actual provider attempt, no automatic retry, and the
-  owner's explicit authorization without a hard provider cost cap.
-- A second actual provider invocation requires new explicit authorization.
+  to candidate `C`, and record exactly one candidate-bound top-level paid smoke invocation, no
+  uncredited provider request, and the owner's explicit authorization without a hard provider cost
+  cap.
+- A second top-level paid smoke invocation requires a substantive new candidate and new explicit
+  authorization.
 - Provider secrets must never be written to docs, logs, screenshots, PR descriptions, GitHub
   releases, team summaries, or smoke artifacts.
 
@@ -43,12 +46,15 @@ export DEVFLOW_CODING_ENGINE=opencode-http
 export DEVFLOW_OPENCODE_PROVIDER_ID=double
 export DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest
 export DEVFLOW_OPENCODE_API_KEY_ENV=ANTHROPIC_AUTH_TOKEN
+export DEVFLOW_OPENCODE_RELEASE_PROFILE=v1.4
 
-corepack pnpm opencode:status
+corepack pnpm --silent opencode:status
+corepack pnpm --silent opencode:release-preflight
 corepack pnpm --silent test:opencode-smoke
 
 unset ANTHROPIC_AUTH_TOKEN DEVFLOW_RUN_OPENCODE_SMOKE DEVFLOW_CODING_ENGINE
 unset DEVFLOW_OPENCODE_PROVIDER_ID DEVFLOW_OPENCODE_MODEL_ID DEVFLOW_OPENCODE_API_KEY_ENV
+unset DEVFLOW_OPENCODE_RELEASE_PROFILE
 ```
 
 If the local `opencode` binary is not on `PATH`, include:
@@ -57,13 +63,48 @@ If the local `opencode` binary is not on `PATH`, include:
 export DEVFLOW_OPENCODE_BIN=/opt/homebrew/bin/opencode
 ```
 
-Set `DEVFLOW_OPENCODE_BIN` before both commands. The v1.3 release profile is exactly
+Set `DEVFLOW_OPENCODE_BIN` before all three commands. The v1.3 release profile is exactly
 `double/ark-code-latest`, and its key environment name is exactly `ANTHROPIC_AUTH_TOKEN`.
 Do not substitute `ARK_API_KEY` in the v1.3 release record.
 
-The release-only invocation uses pnpm's `--silent` option solely to suppress pnpm's own lifecycle
-banner, which includes the local candidate working directory. The smoke script's output remains
+The V1.4 release invocation owns its exact provider configuration in candidate code. The exact
+identity is reported by `corepack pnpm --silent opencode:status`. For
+`double/ark-code-latest` with key environment name `ANTHROPIC_AUTH_TOKEN`, it replaces any ambient
+inline OpenCode configuration with the candidate-owned Responses API profile: package
+`@ai-sdk/openai`, base URL `https://ark.cn-beijing.volces.com/api/coding/v3`, and key reference
+`{env:ANTHROPIC_AUTH_TOKEN}`. The profile contains no key value and uses bounded provider transport
+timeouts. During the live invocation, candidate code replaces that base URL with a random loopback
+capability owned by a credential-owning provider egress gate. OpenCode receives only a one-run dummy
+credential; only the gate attaches the real token to a request, and it pins every forwarded request
+to the official Ark Responses endpoint.
+
+The release-only commands use pnpm's `--silent` option solely to suppress pnpm's own lifecycle
+banner, which includes the local candidate working directory. The status and smoke output remain
 visible and must still pass the absolute-path and secret redaction checks.
+
+The release preflight runs `opencode debug config --pure` with a fake credential, isolated storage,
+and the macOS network sandbox. It parses the resolved JSON only in memory, verifies the exact
+Responses package/base URL/model/timeout fields, deletes its temporary root, and prints only a fixed
+pass/fail summary. It never forwards the real provider credential.
+
+The managed process forces `OPENCODE_CLIENT=server` and disables the optional question-tool override;
+the session also denies `question` and `task` permissions because those interaction and child-session
+channels are not relayed by DevFlow. DevFlow polls the exact parent session status,
+permanently discards provider retry message/action details, and fails with the static
+`provider_retry_observed` code on the first observed retry. A 240-second permission-discovery
+deadline applies separately to the initial segment and every continuation segment, and covers
+permission and status requests that ignore cancellation. It is not a 240-second end-to-end smoke
+deadline. Either condition aborts the managed session and must complete verified cleanup before the
+smoke can finish.
+
+The release smoke uses a stricter tool profile: wildcard deny followed by `ask` for only
+`edit` and `bash`. The provider egress gate grants one request credit for the
+initial model step and at most one outstanding continuation credit after one or more explicit,
+unique managed permission approvals; credits never accumulate. The smoke waits for the source
+Responses stream to complete before replying to the permission. A second uncredited request is
+blocked locally and permanently marks the smoke failed. A pass
+requires every credited segment to produce one successful `response.completed` stream, zero blocked
+uncredited requests, zero invalid requests, zero failed segments, and no active connection at cleanup.
 
 ## Required Evidence To Record
 
@@ -98,14 +139,35 @@ at `docs/releases/v1.4.0/real-opencode.json` uses the same observed non-secret m
   "status": "passed",
   "attemptCount": 1,
   "automaticRetry": false,
-  "costCapUsd": null
+  "costCapUsd": null,
+  "releaseProfile": "v1.4",
+  "providerApiMode": "responses",
+  "resolvedConfigPreflight": "passed",
+  "providerRetryObserved": false,
+  "egressGate": {
+    "armedSegmentCount": 2,
+    "forwardedRequestCount": 2,
+    "completedResponseCount": 2,
+    "blockedUncreditedRequestCount": 0,
+    "blockedInvalidCount": 0,
+    "failedSegmentCount": 0,
+    "activeRequestCount": 0,
+    "closed": true
+  }
 }
 ```
 
-These values describe the authorization boundary, not an invented billed amount. `costCapUsd: null`
+These values describe the authorization boundary, not an invented billed amount. `attemptCount`
+counts the candidate-bound top-level smoke invocation. `automaticRetry: false` means the DevFlow
+launcher never repeats that invocation, the engine observes no retry status, and no uncredited
+request is forwarded to the provider. The
+engine also aborts when it first observes OpenCode enter provider retry state. Legitimate later
+model steps are separately credited only by an explicit managed permission approval. A passing run
+must observe zero locally blocked uncredited requests; otherwise it cannot record
+`automaticRetry: false`. `costCapUsd: null`
 explicitly records that this authorization does not impose a hard provider cost cap; it is not a
-missing or unknown field. Once the real provider invocation begins, a pass, failure, timeout, or
-provider error consumes the one attempt.
+missing or unknown field. Once the top-level paid smoke invocation begins, a pass, failure,
+timeout, or provider error consumes the one authorized invocation.
 
 Replace every placeholder with observed data from the run against `C`. `recordedAt` must be a valid
 date-time, and `diffEvidence` must contain at least one non-empty, repository-relative changed path.
@@ -120,7 +182,7 @@ The required field meanings are:
 | --- | --- |
 | Date/time | Local date/time of the live smoke |
 | Release candidate | Full SHA of candidate commit `C` |
-| opencode version | From `corepack pnpm opencode:status` |
+| opencode version | From `corepack pnpm --silent opencode:status` |
 | Provider | `double` |
 | Model | `ark-code-latest` |
 | Key handling | `ANTHROPIC_AUTH_TOKEN` name only, never its value |
@@ -147,9 +209,12 @@ version tag be created at that same `S` and tagged status be run.
 The release-only real smoke passes only when all are true:
 
 - The preflight required an explicit `DEVFLOW_RUN_OPENCODE_SMOKE=1`.
+- The no-network resolved-config preflight passed for the candidate-owned V1.4 Responses profile.
 - The engine was explicitly `DEVFLOW_CODING_ENGINE=opencode-http`.
 - `opencode serve` started and created a managed session.
 - DevFlow relayed at least one real permission request.
+- The credential-owning egress gate forwarded exactly one completed Responses request per explicitly
+  credited segment and observed no uncredited, invalid, failed, or active request at cleanup.
 - The run produced a redacted diff.
 - The smoke ran Test Evidence successfully.
 - Managed worktree cleanup completed with a deleted workspace; any cleanup failure fails the smoke.
@@ -167,6 +232,8 @@ and `testEvidence`, `cleanup`, and `redactionCheck` are exactly `passed`.
   live smoke.
 - Missing binary, wrong engine, missing provider/model/key configuration, or a blocked preflight is
   a failed release gate.
+- An observed provider retry (`provider_retry_observed`) is a failed release gate; do not wait for
+  or initiate a second top-level smoke invocation on the same candidate.
 - Exceeding the permission limit, producing no changed path, or missing `tool_call` / `tool_result`
   evidence is a failed release gate.
 - Dependency bootstrap failure, Test Evidence failure, incomplete worktree cleanup, secret/path

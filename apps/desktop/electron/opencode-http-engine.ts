@@ -17,6 +17,7 @@ import {
   createOpencodeSession,
   createDefaultOpencodePermissionRules,
   abortOpencodeSession,
+  getOpencodeSessionStatus,
   listOpencodeDiff,
   listOpencodePermissions,
   replyOpencodePermission,
@@ -24,6 +25,7 @@ import {
   OpencodeMessageResponseError,
   type Fetcher,
   type OpencodePermission,
+  type OpencodePermissionRule,
 } from './opencode-http-adapter.js'
 import { captureWorktreeDiff, type CapturedWorktreeDiff } from './coding-runner.js'
 import { createOpencodeProcessManager, type ManagedOpencodeServer } from './opencode-process.js'
@@ -46,6 +48,7 @@ export type OpencodeHttpCodingEngineConfig = {
   runtimeEnv?: NodeJS.ProcessEnv
   permissionPollMs?: number
   permissionDiscoveryTimeoutMs?: number
+  permissionRules?: OpencodePermissionRule[]
   startupCleanupTimeoutMs?: number
   resolveManagedDirectory?: (directory: string) => string
   captureWorktreeDiff?: (input: { worktreePath: string }) => Promise<CapturedWorktreeDiff>
@@ -91,7 +94,7 @@ export function createOpencodeHttpCodingEngineAdapter(
         directory: session.directory,
         messagePromise: session.messagePromise,
         phase,
-        settlementTimeoutMs: config.startupCleanupTimeoutMs ?? 5_000,
+        cleanupTimeoutMs: config.startupCleanupTimeoutMs ?? 5_000,
         ...fetcherOption(config.fetcher),
       }).then(
         () => {
@@ -175,6 +178,7 @@ export function createOpencodeHttpCodingEngineAdapter(
           directory,
           title: `DevFlow ${input.run.title}`,
           model: { providerID: config.providerID, id: config.modelID },
+          ...(config.permissionRules ? { permissionRules: config.permissionRules } : {}),
           ...fetcherOption(config.fetcher),
         })
         runtimeSession = {
@@ -197,7 +201,12 @@ export function createOpencodeHttpCodingEngineAdapter(
           if (sessions.get(input.id) !== runtimeSession) {
             throw new Error('opencode session ownership changed during startup')
           }
-          assertManagedOpencodeSession(session, directory, resolveManagedDirectory)
+          assertManagedOpencodeSession(
+            session,
+            directory,
+            resolveManagedDirectory,
+            config.permissionRules ?? createDefaultOpencodePermissionRules(),
+          )
           const messagePromise = sendOpencodeMessage({
             baseUrl: server.baseUrl,
             sessionId: session.id,
@@ -272,6 +281,7 @@ export function createOpencodeHttpCodingEngineAdapter(
           messagePromise: session.messagePromise,
           pollMs: config.permissionPollMs ?? 1_000,
           sessionId: session.sessionId,
+          timeoutMs: config.permissionDiscoveryTimeoutMs ?? 60_000,
           ...fetcherOption(config.fetcher),
         })
         if (continuation.kind === 'permission') {
@@ -407,28 +417,39 @@ async function cleanupOpencodeSession(input: {
   messagePromise?: OpencodeMessagePromise
   phase: 'startup' | 'continuation' | 'cancellation'
   sessionId: string
-  settlementTimeoutMs: number
+  cleanupTimeoutMs: number
 }): Promise<void> {
-  const aborted = await abortOpencodeSession({
-    baseUrl: input.baseUrl,
-    sessionId: input.sessionId,
-    directory: input.directory,
-    ...fetcherOption(input.fetcher),
+  const expiresAt = Date.now() + input.cleanupTimeoutMs
+  const aborted = await runBeforeCleanupDeadline({
+    expiresAt,
+    phase: input.phase,
+    operation: (signal) => abortOpencodeSession({
+      baseUrl: input.baseUrl,
+      sessionId: input.sessionId,
+      directory: input.directory,
+      ...fetcherOption(input.fetcher),
+      signal,
+    }),
   })
   if (aborted !== true) {
     throw new Error('opencode session abort was not acknowledged')
   }
 
-  await rejectSessionPermissions(input)
+  await rejectSessionPermissions({ ...input, expiresAt })
   if (input.messagePromise) {
-    await waitForSessionMessageCleanup(input.messagePromise, input.settlementTimeoutMs, input.phase)
-    await rejectSessionPermissions(input)
+    await waitForSessionMessageCleanup(input.messagePromise, expiresAt, input.phase)
+    await rejectSessionPermissions({ ...input, expiresAt })
   }
 
-  const remainingPermissions = await listOpencodePermissions({
-    baseUrl: input.baseUrl,
-    directory: input.directory,
-    ...fetcherOption(input.fetcher),
+  const remainingPermissions = await runBeforeCleanupDeadline({
+    expiresAt,
+    phase: input.phase,
+    operation: (signal) => listOpencodePermissions({
+      baseUrl: input.baseUrl,
+      directory: input.directory,
+      ...fetcherOption(input.fetcher),
+      signal,
+    }),
   })
   if (remainingPermissions.some((candidate) => candidate.sessionID === input.sessionId)) {
     throw new Error(`opencode ${input.phase} permission cleanup did not complete`)
@@ -440,20 +461,32 @@ async function rejectSessionPermissions(input: {
   directory: string
   fetcher?: Fetcher
   sessionId: string
+  expiresAt: number
+  phase: 'startup' | 'continuation' | 'cancellation'
 }): Promise<void> {
-  const permissions = await listOpencodePermissions({
-    baseUrl: input.baseUrl,
-    directory: input.directory,
-    ...fetcherOption(input.fetcher),
+  const permissions = await runBeforeCleanupDeadline({
+    expiresAt: input.expiresAt,
+    phase: input.phase,
+    operation: (signal) => listOpencodePermissions({
+      baseUrl: input.baseUrl,
+      directory: input.directory,
+      ...fetcherOption(input.fetcher),
+      signal,
+    }),
   })
   for (const permission of permissions.filter((candidate) => candidate.sessionID === input.sessionId)) {
-    const rejected = await replyOpencodePermission({
-      baseUrl: input.baseUrl,
-      requestId: permission.id,
-      directory: input.directory,
-      reply: 'reject',
-      message: 'Rejected during DevFlow session cleanup.',
-      ...fetcherOption(input.fetcher),
+    const rejected = await runBeforeCleanupDeadline({
+      expiresAt: input.expiresAt,
+      phase: input.phase,
+      operation: (signal) => replyOpencodePermission({
+        baseUrl: input.baseUrl,
+        requestId: permission.id,
+        directory: input.directory,
+        reply: 'reject',
+        message: 'Rejected during DevFlow session cleanup.',
+        ...fetcherOption(input.fetcher),
+        signal,
+      }),
     })
     if (rejected !== true) {
       throw new Error('opencode session permission rejection was not acknowledged')
@@ -463,13 +496,17 @@ async function rejectSessionPermissions(input: {
 
 async function waitForSessionMessageCleanup(
   messagePromise: OpencodeMessagePromise,
-  timeoutMs: number,
+  expiresAt: number,
   phase: 'startup' | 'continuation' | 'cancellation',
 ): Promise<void> {
+  const remaining = expiresAt - Date.now()
+  if (remaining <= 0) {
+    throw new Error(`opencode ${phase} cleanup timed out`)
+  }
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`opencode ${phase} message cleanup did not complete`))
-    }, timeoutMs)
+      reject(new Error(`opencode ${phase} cleanup timed out`))
+    }, remaining)
     void messagePromise.then(
       () => {
         clearTimeout(timer)
@@ -483,10 +520,38 @@ async function waitForSessionMessageCleanup(
   })
 }
 
+async function runBeforeCleanupDeadline<T>(input: {
+  expiresAt: number
+  operation: (signal: AbortSignal) => Promise<T>
+  phase: 'startup' | 'continuation' | 'cancellation'
+}): Promise<T> {
+  const remaining = input.expiresAt - Date.now()
+  if (remaining <= 0) {
+    throw new Error(`opencode ${input.phase} cleanup timed out`)
+  }
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new Error(`opencode ${input.phase} cleanup timed out`))
+    }, remaining)
+  })
+  try {
+    return await Promise.race([input.operation(controller.signal), deadline])
+  } finally {
+    if (timer) {
+      clearTimeout(timer)
+    }
+    controller.abort()
+  }
+}
+
 function assertManagedOpencodeSession(
   session: Awaited<ReturnType<typeof createOpencodeSession>>,
   directory: string,
   resolveManagedDirectory: (directory: string) => string,
+  expectedRules: OpencodePermissionRule[],
 ): void {
   let sessionDirectory: string
   try {
@@ -499,7 +564,6 @@ function assertManagedOpencodeSession(
   }
 
   const actualRules = session.permission ?? []
-  const expectedRules = createDefaultOpencodePermissionRules()
   const preservedRelayRules =
     actualRules.length === expectedRules.length &&
     actualRules.every((actual, index) => {
@@ -536,29 +600,59 @@ async function waitForNextPermissionOrMessage(input: {
   messagePromise: OpencodeRuntimeSession['messagePromise']
   pollMs: number
   sessionId: string
+  timeoutMs: number
 }): Promise<
   | { kind: 'message'; result: Awaited<OpencodeRuntimeSession['messagePromise']> }
   | { kind: 'permission'; permission: OpencodePermission }
 > {
-  const firstPermission = await findUnhandledPermission(input)
-  if (firstPermission) {
-    return { kind: 'permission', permission: firstPermission }
-  }
+  const expiresAt = Date.now() + input.timeoutMs
+  let settledMessage: Awaited<OpencodeRuntimeSession['messagePromise']> | undefined
+  void input.messagePromise.then((result) => {
+    settledMessage = result
+  })
 
-  while (true) {
+  while (Date.now() <= expiresAt) {
+    const firstPermission = await runBeforePermissionDeadline({
+      expiresAt,
+      operation: (signal) => findUnhandledPermission({ ...input, signal }),
+    })
+    await Promise.resolve()
+    if (settledMessage) {
+      return { kind: 'message', result: settledMessage }
+    }
+    if (firstPermission) {
+      return { kind: 'permission', permission: firstPermission }
+    }
+
+    const status = await runBeforePermissionDeadline({
+      expiresAt,
+      operation: (signal) => getOpencodeSessionStatus({
+        baseUrl: input.baseUrl,
+        directory: input.directory,
+        sessionId: input.sessionId,
+        ...fetcherOption(input.fetcher),
+        signal,
+      }),
+    })
+    await Promise.resolve()
+    if (settledMessage) {
+      return { kind: 'message', result: settledMessage }
+    }
+    if (status?.type === 'retry') {
+      throw new CodingEnginePermissionDiscoveryError('provider_retry_observed')
+    }
+
+    const waitMs = Math.max(0, Math.min(input.pollMs, expiresAt - Date.now()))
     const result = await Promise.race([
       input.messagePromise.then((messageResult) => ({ kind: 'message' as const, result: messageResult })),
-      new Promise<{ kind: 'tick' }>((resolve) => setTimeout(() => resolve({ kind: 'tick' }), input.pollMs)),
+      new Promise<{ kind: 'tick' }>((resolve) => setTimeout(() => resolve({ kind: 'tick' }), waitMs)),
     ])
     if (result.kind === 'message') {
       return result
     }
-
-    const permission = await findUnhandledPermission(input)
-    if (permission) {
-      return { kind: 'permission', permission }
-    }
   }
+
+  throw new CodingEnginePermissionDiscoveryError('permission_discovery_timed_out')
 }
 
 async function findUnhandledPermission(input: {
@@ -567,11 +661,13 @@ async function findUnhandledPermission(input: {
   fetcher?: Fetcher
   handledPermissionIds: Set<string>
   sessionId: string
+  signal?: AbortSignal
 }): Promise<OpencodePermission | undefined> {
   const permissions = await listOpencodePermissions({
     baseUrl: input.baseUrl,
     directory: input.directory,
     ...fetcherOption(input.fetcher),
+    ...(input.signal ? { signal: input.signal } : {}),
   })
   return permissions.find(
     (candidate) => candidate.sessionID === input.sessionId && !input.handledPermissionIds.has(candidate.id),
@@ -616,22 +712,50 @@ async function waitForPermission(input: {
   timeoutMs: number
 }): Promise<OpencodePermission> {
   const expiresAt = Date.now() + input.timeoutMs
+  let settledMessage:
+    | { kind: 'message-completed' }
+    | { kind: 'message-error'; error: unknown }
+    | undefined
   const messageSettlement = input.messagePromise.then((result) => {
-    if (result.ok) {
-      return { kind: 'message-completed' as const }
-    }
-    return { kind: 'message-error' as const, error: result.error }
+    const settlement = result.ok
+      ? { kind: 'message-completed' as const }
+      : { kind: 'message-error' as const, error: result.error }
+    settledMessage = settlement
+    return settlement
   })
   while (Date.now() <= expiresAt) {
-    const permissions = await listOpencodePermissions({
-      baseUrl: input.baseUrl,
-      directory: input.directory,
-      ...fetcherOption(input.fetcher),
+    const permissions = await runBeforePermissionDeadline({
+      expiresAt,
+      operation: (signal) => listOpencodePermissions({
+        baseUrl: input.baseUrl,
+        directory: input.directory,
+        ...fetcherOption(input.fetcher),
+        signal,
+      }),
     })
+    await Promise.resolve()
+    throwIfMessageSettled(settledMessage)
     const permission = permissions.find((candidate) => candidate.sessionID === input.sessionId)
     if (permission) {
       return permission
     }
+
+    const status = await runBeforePermissionDeadline({
+      expiresAt,
+      operation: (signal) => getOpencodeSessionStatus({
+        baseUrl: input.baseUrl,
+        directory: input.directory,
+        sessionId: input.sessionId,
+        ...fetcherOption(input.fetcher),
+        signal,
+      }),
+    })
+    await Promise.resolve()
+    throwIfMessageSettled(settledMessage)
+    if (status?.type === 'retry') {
+      throw new CodingEnginePermissionDiscoveryError('provider_retry_observed')
+    }
+
     const waitMs = Math.max(0, Math.min(input.pollMs, expiresAt - Date.now()))
     const next = await Promise.race([
       messageSettlement,
@@ -646,6 +770,47 @@ async function waitForPermission(input: {
   }
 
   throw new CodingEnginePermissionDiscoveryError('permission_discovery_timed_out')
+}
+
+function throwIfMessageSettled(
+  settlement:
+    | { kind: 'message-completed' }
+    | { kind: 'message-error'; error: unknown }
+    | undefined,
+): void {
+  if (!settlement) {
+    return
+  }
+  if (settlement.kind === 'message-error') {
+    throw settlement.error
+  }
+  throw new CodingEnginePermissionDiscoveryError('message_completed_without_permission')
+}
+
+async function runBeforePermissionDeadline<T>(input: {
+  expiresAt: number
+  operation: (signal: AbortSignal) => Promise<T>
+}): Promise<T> {
+  const remaining = input.expiresAt - Date.now()
+  if (remaining <= 0) {
+    throw new CodingEnginePermissionDiscoveryError('permission_discovery_timed_out')
+  }
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new CodingEnginePermissionDiscoveryError('permission_discovery_timed_out'))
+    }, remaining)
+  })
+  try {
+    return await Promise.race([input.operation(controller.signal), deadline])
+  } finally {
+    if (timer) {
+      clearTimeout(timer)
+    }
+    controller.abort()
+  }
 }
 
 function createStartResult(

@@ -226,6 +226,31 @@ Notes:
   `opencode smoke passed; changed paths: devflow-opencode-smoke.txt`, ran the fixture test evidence,
   and completed managed worktree cleanup.
 
+### 2026-08-09 V1.4 release update
+
+The historical Chat profile above remains a record of the earlier passing runs. The V1.4 release
+smoke now owns a candidate-bound profile using `@ai-sdk/openai` so OpenCode uses the Responses API,
+which is the current Volcengine recommendation for Coding Plan. It keeps the same provider ID,
+model ID, coding base URL, and environment-only key boundary; ambient OpenCode config cannot
+replace the candidate profile.
+
+The V1.4 managed process disables the question channel, and the session denies unsupported
+`question` and child-session `task` permissions. The adapter reads only the target parent entry from
+`/session/status`, discards retry `message` and `action` fields, and stops with the static
+`provider_retry_observed` classification on the first observed retry. A 240-second per-segment
+permission-discovery deadline covers both permission and status requests, even when an injected
+fetch implementation ignores cancellation; it restarts after an approved permission and is not an
+end-to-end smoke deadline. These changes distinguish a provider retry from an ordinary permission
+timeout without retaining provider text, secrets, or paths.
+
+For the release-only live run, OpenCode receives a dummy credential and a random loopback base URL.
+A candidate-owned credential egress gate is the only component that attaches the actual provider
+token to a request, pins upstream traffic to the official Ark Responses endpoint, and permits one
+request for the initial model step plus at most
+one outstanding continuation credit after one or more explicit managed permission approvals. It
+requires a successful `response.completed` SSE terminal event and proves that no uncredited request
+reached Ark before `automaticRetry: false` can be recorded.
+
 ## v0.9.2 Go Criteria
 
 Proceed from contract refresh to runtime hardening only when these are true:

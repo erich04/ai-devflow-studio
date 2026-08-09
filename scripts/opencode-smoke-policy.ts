@@ -29,6 +29,7 @@ export type OpencodeSmokeFailureCode =
   | OpencodeMessageResponseErrorCode
   | OpencodeHttpRequestErrorCode
   | CodingEnginePermissionDiscoveryError['code']
+  | 'invalid_status_response'
   | 'unclassified'
 
 const OPENCODE_MESSAGE_RESPONSE_ERROR_CODES = new Set<OpencodeMessageResponseErrorCode>([
@@ -48,6 +49,8 @@ const OPENCODE_HTTP_REQUEST_ERROR_CODES = new Set<OpencodeHttpRequestErrorCode>(
   'http_status_error',
   'invalid_json_response',
 ])
+
+const OPENCODE_SESSION_STATUS_ERROR_CODES = new Set(['invalid_status_response'] as const)
 
 export class OpencodeSmokeStageError extends Error {
   readonly stage: OpencodeSmokeStage
@@ -143,7 +146,30 @@ function classifyOpencodeSmokeError(error: unknown): {
         : { statusCode: httpRequestError.statusCode }),
     }
   }
+  const sessionStatusCode = opencodeSessionStatusErrorCode(error)
+  if (sessionStatusCode) {
+    return { code: sessionStatusCode }
+  }
   return { code: 'unclassified' }
+}
+
+function opencodeSessionStatusErrorCode(
+  error: unknown,
+): 'invalid_status_response' | undefined {
+  if (
+    typeof error !== 'object' ||
+    error === null ||
+    !('name' in error) ||
+    error.name !== 'OpencodeSessionStatusResponseError' ||
+    !('code' in error) ||
+    typeof error.code !== 'string' ||
+    !OPENCODE_SESSION_STATUS_ERROR_CODES.has(
+      error.code as 'invalid_status_response',
+    )
+  ) {
+    return undefined
+  }
+  return error.code as 'invalid_status_response'
 }
 
 function opencodeHttpRequestErrorDetails(error: unknown): {
@@ -227,7 +253,8 @@ function permissionDiscoveryErrorCode(
     return undefined
   }
   return error.code === 'message_completed_without_permission' ||
-    error.code === 'permission_discovery_timed_out'
+    error.code === 'permission_discovery_timed_out' ||
+    error.code === 'provider_retry_observed'
     ? error.code
     : undefined
 }
@@ -270,9 +297,13 @@ const OPENCODE_RUNTIME_ENV_ALLOWLIST = [
 export function buildOpencodeSmokeRuntimeEnv(
   source: NodeJS.ProcessEnv,
   apiKeyEnvName: string,
+  options: { includeApiKey?: boolean } = {},
 ): NodeJS.ProcessEnv {
   const runtimeEnv: NodeJS.ProcessEnv = {}
-  for (const name of [...OPENCODE_RUNTIME_ENV_ALLOWLIST, apiKeyEnvName]) {
+  const names = options.includeApiKey === false
+    ? OPENCODE_RUNTIME_ENV_ALLOWLIST
+    : [...OPENCODE_RUNTIME_ENV_ALLOWLIST, apiKeyEnvName]
+  for (const name of names) {
     const value = source[name]
     if (value !== undefined) {
       runtimeEnv[name] = value
@@ -285,8 +316,9 @@ export function buildIsolatedOpencodeSmokeRuntimeEnv(
   source: NodeJS.ProcessEnv,
   apiKeyEnvName: string,
   runtimeRoot: string,
+  options: { includeApiKey?: boolean } = {},
 ): NodeJS.ProcessEnv {
-  const runtimeEnv = buildOpencodeSmokeRuntimeEnv(source, apiKeyEnvName)
+  const runtimeEnv = buildOpencodeSmokeRuntimeEnv(source, apiKeyEnvName, options)
   delete runtimeEnv.OPENCODE_CONFIG
   return {
     ...runtimeEnv,

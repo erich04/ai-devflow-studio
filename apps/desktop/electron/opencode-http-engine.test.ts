@@ -539,7 +539,7 @@ describe('opencode HTTP coding engine', () => {
   it('fails immediately when opencode completes without requesting permission', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      successfulOpencodeMessage(),
+      immediateSuccessfulOpencodeMessage(),
       [],
       true,
       [],
@@ -579,6 +579,124 @@ describe('opencode HTTP coding engine', () => {
       'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
       'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
     ])
+  })
+
+  it('aborts on the first provider retry status without retaining raw retry details', async () => {
+    let resolveMessage: ((response: Response) => void) | undefined
+    const pendingMessage = new Promise<Response>((resolve) => {
+      resolveMessage = resolve
+    })
+    let abortCount = 0
+    let statusCount = 0
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+      const requestUrl = String(input)
+      if (requestUrl.includes('/message?')) {
+        return pendingMessage
+      }
+      if (requestUrl.includes('/session/status?')) {
+        statusCount += 1
+        return new Response(JSON.stringify({
+          'ses-1': {
+            type: 'retry',
+            attempt: 0,
+            next: Date.now() + 2_000,
+            message: 'RAW_RETRY_SECRET /private/tmp/secret-worktree',
+            action: { message: 'RAW_ACTION_SECRET' },
+          },
+        }), { status: 200 })
+      }
+      if (requestUrl.includes('/abort?')) {
+        abortCount += 1
+        resolveMessage?.(new Response(JSON.stringify(successfulOpencodeMessage()), { status: 200 }))
+        return new Response('true', { status: 200 })
+      }
+      if (requestUrl.includes('/permission?')) {
+        return new Response('[]', { status: 200 })
+      }
+      return new Response(JSON.stringify(managedOpencodeSession()), { status: 200 })
+    }) as unknown as Fetcher
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'double',
+      modelID: 'ark-code-latest',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 500,
+      startupCleanupTimeoutMs: 100,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    const failure = engine.start(startInput({ run, node, project, workspace }))
+
+    await expect(failure).rejects.toBeInstanceOf(CodingEnginePermissionDiscoveryError)
+    const caught = await failure.catch((error: unknown) => error)
+    expect(caught).toMatchObject({
+      code: 'provider_retry_observed',
+      message: 'opencode reported a provider retry during managed permission discovery',
+    })
+    expect(JSON.stringify(caught)).not.toContain('RAW_RETRY_SECRET')
+    expect(JSON.stringify(caught)).not.toContain('RAW_ACTION_SECRET')
+    expect(JSON.stringify(caught)).not.toContain('/private/tmp/secret-worktree')
+    expect(statusCount).toBe(1)
+    expect(abortCount).toBe(1)
+  })
+
+  it('continues through a busy target status and ignores an unrelated session retry', async () => {
+    let permissionPollCount = 0
+    let statusPollCount = 0
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+      const requestUrl = String(input)
+      if (requestUrl.includes('/message?')) {
+        return new Promise<Response>(() => undefined)
+      }
+      if (requestUrl.includes('/permission?')) {
+        permissionPollCount += 1
+        return new Response(JSON.stringify(permissionPollCount <= 2
+          ? []
+          : [{ id: 'perm-1', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'pwd' } }]), {
+          status: 200,
+        })
+      }
+      if (requestUrl.includes('/session/status?')) {
+        statusPollCount += 1
+        return new Response(JSON.stringify(statusPollCount === 1
+          ? { 'ses-1': { type: 'busy' } }
+          : {
+              'ses-other': {
+                type: 'retry',
+                attempt: 1,
+                next: Date.now() + 1_000,
+                message: 'UNRELATED_RETRY_SENTINEL',
+              },
+            }), { status: 200 })
+      }
+      return new Response(JSON.stringify(managedOpencodeSession()), { status: 200 })
+    }) as unknown as Fetcher
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'double',
+      modelID: 'ark-code-latest',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 100,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    const started = await engine.start(startInput({ run, node, project, workspace }))
+
+    expect(started.permissionRequest).toMatchObject({ id: 'perm-1', permission: 'bash' })
+    expect(permissionPollCount).toBe(3)
+    expect(statusPollCount).toBe(2)
   })
 
   it('times out a pending provider message and completes bounded startup cleanup', async () => {
@@ -621,10 +739,114 @@ describe('opencode HTTP coding engine', () => {
     expect(abortCount).toBe(1)
   })
 
+  it('enforces the absolute discovery deadline when a permission poll ignores abort', async () => {
+    let resolveMessage: ((response: Response) => void) | undefined
+    const pendingMessage = new Promise<Response>((resolve) => {
+      resolveMessage = resolve
+    })
+    let aborted = false
+    let abortCount = 0
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+      const requestUrl = String(input)
+      if (requestUrl.includes('/message?')) {
+        return pendingMessage
+      }
+      if (requestUrl.includes('/permission?')) {
+        if (!aborted) {
+          return new Promise<Response>(() => undefined)
+        }
+        return new Response('[]', { status: 200 })
+      }
+      if (requestUrl.includes('/abort?')) {
+        aborted = true
+        abortCount += 1
+        resolveMessage?.(new Response(JSON.stringify(successfulOpencodeMessage()), { status: 200 }))
+        return new Response('true', { status: 200 })
+      }
+      return new Response(JSON.stringify(managedOpencodeSession()), { status: 200 })
+    }) as unknown as Fetcher
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'double',
+      modelID: 'ark-code-latest',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 10,
+      startupCleanupTimeoutMs: 100,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    const startedAt = Date.now()
+    await expect(engine.start(startInput({ run, node, project, workspace }))).rejects.toMatchObject({
+      code: 'permission_discovery_timed_out',
+    })
+    expect(Date.now() - startedAt).toBeLessThan(500)
+    expect(abortCount).toBe(1)
+  }, 1_000)
+
+  it('enforces the absolute discovery deadline when a status poll ignores abort', async () => {
+    let resolveMessage: ((response: Response) => void) | undefined
+    const pendingMessage = new Promise<Response>((resolve) => {
+      resolveMessage = resolve
+    })
+    let aborted = false
+    let abortCount = 0
+    let statusSignal: AbortSignal | undefined
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
+      const requestUrl = String(input)
+      if (requestUrl.includes('/message?')) {
+        return pendingMessage
+      }
+      if (requestUrl.includes('/session/status?')) {
+        statusSignal = init?.signal ?? undefined
+        return new Promise<Response>(() => undefined)
+      }
+      if (requestUrl.includes('/permission?')) {
+        return new Response('[]', { status: 200 })
+      }
+      if (requestUrl.includes('/abort?')) {
+        aborted = true
+        abortCount += 1
+        resolveMessage?.(new Response(JSON.stringify(immediateSuccessfulOpencodeMessage()), { status: 200 }))
+        return new Response('true', { status: 200 })
+      }
+      return new Response(JSON.stringify(managedOpencodeSession()), { status: 200 })
+    }) as unknown as Fetcher
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'double',
+      modelID: 'ark-code-latest',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 10,
+      startupCleanupTimeoutMs: 100,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    const startedAt = Date.now()
+    await expect(engine.start(startInput({ run, node, project, workspace }))).rejects.toMatchObject({
+      code: 'permission_discovery_timed_out',
+    })
+    expect(Date.now() - startedAt).toBeLessThan(500)
+    expect(aborted).toBe(true)
+    expect(abortCount).toBe(1)
+    expect(statusSignal?.aborted).toBe(true)
+  }, 1_000)
+
   it('rejects only residual permissions from the failed startup session after abort', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      successfulOpencodeMessage(),
+      immediateSuccessfulOpencodeMessage(),
       [],
       true,
       [
@@ -705,12 +927,55 @@ describe('opencode HTTP coding engine', () => {
     const caught = await failure.catch((error: unknown) => error) as CodingEngineStartupCleanupError
     expect(caught.errors[0]).toMatchObject({ code: 'permission_discovery_timed_out' })
     expect(caught.errors[1]).toMatchObject({
-      message: 'opencode startup message cleanup did not complete',
+      message: 'opencode startup cleanup timed out',
     })
     expect(urls).toContain(
       'http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree',
     )
   })
+
+  it('bounds cleanup when the abort request ignores cancellation', async () => {
+    let abortCount = 0
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+      const requestUrl = String(input)
+      if (requestUrl.includes('/message?')) {
+        return new Promise<Response>(() => undefined)
+      }
+      if (requestUrl.includes('/permission?')) {
+        return new Response('[]', { status: 200 })
+      }
+      if (requestUrl.includes('/abort?')) {
+        abortCount += 1
+        return new Promise<Response>(() => undefined)
+      }
+      return new Response(JSON.stringify(managedOpencodeSession()), { status: 200 })
+    }) as unknown as Fetcher
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'double',
+      modelID: 'ark-code-latest',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 10,
+      startupCleanupTimeoutMs: 15,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    const startedAt = Date.now()
+    const failure = engine.start(startInput({ run, node, project, workspace }))
+
+    await expect(failure).rejects.toBeInstanceOf(CodingEngineStartupCleanupError)
+    const caught = await failure.catch((error: unknown) => error) as CodingEngineStartupCleanupError
+    expect(caught.errors[0]).toMatchObject({ code: 'permission_discovery_timed_out' })
+    expect(caught.errors[1]).toMatchObject({ message: 'opencode startup cleanup timed out' })
+    expect(Date.now() - startedAt).toBeLessThan(500)
+    expect(abortCount).toBe(1)
+  }, 1_000)
 
   it('coalesces cancellation with startup while permission discovery is still polling', async () => {
     let resolveMessage: ((response: Response) => void) | undefined
@@ -971,10 +1236,235 @@ describe('opencode HTTP coding engine', () => {
     expect(completedResult.diff.patch).toContain('+hello')
   })
 
+  it('aborts a continuation on the first provider retry without reading a diff', async () => {
+    let resolveMessage: ((response: Response) => void) | undefined
+    const pendingMessage = new Promise<Response>((resolve) => {
+      resolveMessage = resolve
+    })
+    let permissionPollCount = 0
+    let abortCount = 0
+    let diffCount = 0
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+      const requestUrl = String(input)
+      if (requestUrl.includes('/message?')) {
+        return pendingMessage
+      }
+      if (requestUrl.includes('/permission/perm-1/reply?')) {
+        return new Response('true', { status: 200 })
+      }
+      if (requestUrl.includes('/permission?')) {
+        permissionPollCount += 1
+        return new Response(JSON.stringify(permissionPollCount === 1
+          ? [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }]
+          : []), { status: 200 })
+      }
+      if (requestUrl.includes('/session/status?')) {
+        return new Response(JSON.stringify({
+          'ses-1': {
+            type: 'retry',
+            attempt: 1,
+            next: Date.now() + 2_000,
+            message: 'CONTINUATION_RETRY_SENTINEL',
+          },
+        }), { status: 200 })
+      }
+      if (requestUrl.includes('/abort?')) {
+        abortCount += 1
+        resolveMessage?.(new Response(JSON.stringify(immediateSuccessfulOpencodeMessage()), { status: 200 }))
+        return new Response('true', { status: 200 })
+      }
+      if (requestUrl.includes('/diff?')) {
+        diffCount += 1
+        return new Response('[]', { status: 200 })
+      }
+      return new Response(JSON.stringify(managedOpencodeSession()), { status: 200 })
+    }) as unknown as Fetcher
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'double',
+      modelID: 'ark-code-latest',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 100,
+      startupCleanupTimeoutMs: 100,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = await engine.start(startInput({ run, node, project, workspace }))
+
+    const failure = engine.approvePermission({
+      codingRun: started.codingRun,
+      workspace,
+      project,
+      request: started.permissionRequest,
+      now: '2026-06-17T00:00:01.000Z',
+    })
+
+    await expect(failure).rejects.toMatchObject({ code: 'provider_retry_observed' })
+    expect(abortCount).toBe(1)
+    expect(diffCount).toBe(0)
+  })
+
+  it('prefers a terminal provider error over a residual permission returned by the same poll', async () => {
+    let resolveMessage: ((response: Response) => void) | undefined
+    const pendingMessage = new Promise<Response>((resolve) => {
+      resolveMessage = resolve
+    })
+    const initialPermission = {
+      id: 'perm-1',
+      sessionID: 'ses-1',
+      permission: 'edit',
+      metadata: { filepath: 'src/app.ts' },
+    }
+    const residualPermission = {
+      id: 'perm-2',
+      sessionID: 'ses-1',
+      permission: 'bash',
+      metadata: { command: 'pwd' },
+    }
+    let permissionPollCount = 0
+    let abortCount = 0
+    let diffCount = 0
+    let residualRejectCount = 0
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+      const requestUrl = String(input)
+      if (requestUrl.includes('/message?')) {
+        return pendingMessage
+      }
+      if (requestUrl.includes('/permission/perm-1/reply?')) {
+        return new Response('true', { status: 200 })
+      }
+      if (requestUrl.includes('/permission/perm-2/reply?')) {
+        residualRejectCount += 1
+        return new Response('true', { status: 200 })
+      }
+      if (requestUrl.includes('/permission?')) {
+        permissionPollCount += 1
+        if (permissionPollCount === 1) {
+          return new Response(JSON.stringify([initialPermission]), { status: 200 })
+        }
+        if (permissionPollCount === 2) {
+          resolveMessage?.(new Response(JSON.stringify(providerErrorMessage(429)), { status: 200 }))
+          return new Response(JSON.stringify([residualPermission]), { status: 200 })
+        }
+        return new Response(JSON.stringify(permissionPollCount === 3 ? [residualPermission] : []), { status: 200 })
+      }
+      if (requestUrl.includes('/abort?')) {
+        abortCount += 1
+        return new Response('true', { status: 200 })
+      }
+      if (requestUrl.includes('/diff?')) {
+        diffCount += 1
+        return new Response('[]', { status: 200 })
+      }
+      return new Response(JSON.stringify(managedOpencodeSession()), { status: 200 })
+    }) as unknown as Fetcher
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'double',
+      modelID: 'ark-code-latest',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 100,
+      startupCleanupTimeoutMs: 100,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = await engine.start(startInput({ run, node, project, workspace }))
+
+    const failure = engine.approvePermission({
+      codingRun: started.codingRun,
+      workspace,
+      project,
+      request: started.permissionRequest,
+      now: '2026-06-17T00:00:01.000Z',
+    })
+
+    await expect(failure).rejects.toMatchObject({ code: 'provider_api_error', statusCode: 429 })
+    expect(abortCount).toBe(1)
+    expect(residualRejectCount).toBe(1)
+    expect(diffCount).toBe(0)
+  })
+
+  it('prefers a terminal provider error over a retry status returned by the same poll', async () => {
+    let resolveMessage: ((response: Response) => void) | undefined
+    const pendingMessage = new Promise<Response>((resolve) => {
+      resolveMessage = resolve
+    })
+    let permissionPollCount = 0
+    let abortCount = 0
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+      const requestUrl = String(input)
+      if (requestUrl.includes('/message?')) {
+        return pendingMessage
+      }
+      if (requestUrl.includes('/permission/perm-1/reply?')) {
+        return new Response('true', { status: 200 })
+      }
+      if (requestUrl.includes('/permission?')) {
+        permissionPollCount += 1
+        return new Response(JSON.stringify(permissionPollCount === 1
+          ? [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit' }]
+          : []), { status: 200 })
+      }
+      if (requestUrl.includes('/session/status?')) {
+        resolveMessage?.(new Response(JSON.stringify(providerErrorMessage(503)), { status: 200 }))
+        return new Response(JSON.stringify({
+          'ses-1': {
+            type: 'retry',
+            attempt: 1,
+            next: Date.now() + 2_000,
+            message: 'RETRY_STATUS_MUST_NOT_WIN',
+          },
+        }), { status: 200 })
+      }
+      if (requestUrl.includes('/abort?')) {
+        abortCount += 1
+        return new Response('true', { status: 200 })
+      }
+      return new Response(JSON.stringify(managedOpencodeSession()), { status: 200 })
+    }) as unknown as Fetcher
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'double',
+      modelID: 'ark-code-latest',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 100,
+      startupCleanupTimeoutMs: 100,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = await engine.start(startInput({ run, node, project, workspace }))
+
+    const failure = engine.approvePermission({
+      codingRun: started.codingRun,
+      workspace,
+      project,
+      request: started.permissionRequest,
+      now: '2026-06-17T00:00:01.000Z',
+    })
+
+    await expect(failure).rejects.toMatchObject({ code: 'provider_api_error', statusCode: 503 })
+    expect(abortCount).toBe(1)
+  })
+
   it('uses managed worktree diff when the opencode message stream closes after applying changes', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      new TypeError('fetch failed'),
+      deferredOpencodeMessage(new TypeError('fetch failed')),
       [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'new-file.txt' } }],
       true,
       [],
@@ -1016,7 +1506,7 @@ describe('opencode HTTP coding engine', () => {
   it('does not treat a semantic provider failure as completion even when a partial diff exists', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      {
+      deferredOpencodeMessage({
         info: {
           error: {
             name: 'APIError',
@@ -1028,7 +1518,7 @@ describe('opencode HTTP coding engine', () => {
           },
         },
         parts: [],
-      },
+      }),
       [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'new-file.txt' } }],
       true,
       [],
@@ -1077,7 +1567,7 @@ describe('opencode HTTP coding engine', () => {
   it('keeps a failed continuation session registered until cleanup can be retried', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      {
+      deferredOpencodeMessage({
         info: {
           error: {
             name: 'APIError',
@@ -1085,7 +1575,7 @@ describe('opencode HTTP coding engine', () => {
           },
         },
         parts: [],
-      },
+      }),
       [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit' }],
       true,
       [],
@@ -1184,14 +1674,19 @@ describe('opencode HTTP coding engine', () => {
     let permissionListCount = 0
     let abortCount = 0
     let replyCount = 0
+    let resolveMessage: ((response: Response) => void) | undefined
     const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
       const requestUrl = String(input)
       if (requestUrl.includes('/message?')) {
-        return new Response(JSON.stringify(successfulOpencodeMessage()), { status: 200 })
+        return await new Promise<Response>((resolve) => {
+          resolveMessage = resolve
+        })
       }
       if (requestUrl.includes('/abort?')) {
         abortCount += 1
         await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        resolveMessage?.(new Response(JSON.stringify(immediateSuccessfulOpencodeMessage()), { status: 200 }))
+        resolveMessage = undefined
         return new Response('true', { status: 200 })
       }
       if (requestUrl.includes('/permission/perm-1/reply?')) {
@@ -1470,14 +1965,39 @@ function sequenceFetcher(responses: unknown[]): Fetcher & { urls: string[]; bodi
   const queue = [...responses]
   const urls: string[] = []
   const bodies: string[] = []
+  let pendingMessage:
+    | {
+        body: unknown
+        reject: (error: unknown) => void
+        resolve: (response: Response) => void
+      }
+    | undefined
   const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
-    urls.push(String(input))
+    const requestUrl = String(input)
+    urls.push(requestUrl)
     if (init?.body) {
       bodies.push(String(init.body))
     }
     const body = queue.shift()
+    if (requestUrl.includes('/message?') && isDeferredOpencodeMessage(body)) {
+      return await new Promise<Response>((resolve, reject) => {
+        pendingMessage = { body, reject, resolve }
+      })
+    }
     if (body instanceof Error) {
       throw body
+    }
+    const acknowledgedReply = requestUrl.includes('/permission/') && requestUrl.includes('/reply?') && body === true
+    const continuationWillComplete = acknowledgedReply && Array.isArray(queue[0]) && queue[0].length === 0
+    const acknowledgedAbort = requestUrl.includes('/abort?') && body === true
+    if (pendingMessage && (continuationWillComplete || acknowledgedAbort)) {
+      const current = pendingMessage
+      pendingMessage = undefined
+      if (current.body instanceof Error) {
+        current.reject(current.body)
+      } else {
+        current.resolve(new Response(JSON.stringify(current.body), { status: 200 }))
+      }
     }
     return new Response(JSON.stringify(body), { status: 200 })
   }) as unknown as Fetcher & { urls: string[]; bodies: string[] }
@@ -1495,8 +2015,35 @@ function managedOpencodeSession(overrides: Partial<OpencodeSession> = {}): Openc
   }
 }
 
+const deferredSuccessfulMessages = new WeakSet<object>()
+
 function successfulOpencodeMessage() {
+  return deferredOpencodeMessage(immediateSuccessfulOpencodeMessage())
+}
+
+function immediateSuccessfulOpencodeMessage() {
   return { info: {}, parts: [] }
+}
+
+function providerErrorMessage(statusCode: number) {
+  return {
+    info: {
+      error: {
+        name: 'APIError',
+        data: { statusCode, isRetryable: statusCode >= 429 },
+      },
+    },
+    parts: [],
+  }
+}
+
+function deferredOpencodeMessage<T extends object>(response: T): T {
+  deferredSuccessfulMessages.add(response)
+  return response
+}
+
+function isDeferredOpencodeMessage(value: unknown): value is object {
+  return typeof value === 'object' && value !== null && deferredSuccessfulMessages.has(value)
 }
 
 function identityManagedDirectory(directory: string): string {

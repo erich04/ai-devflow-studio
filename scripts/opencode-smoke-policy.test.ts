@@ -190,6 +190,20 @@ describe('opencode smoke safety policy', () => {
     expect(runtimeEnv).not.toHaveProperty('OPENCODE_CONFIG')
   })
 
+  it('lets the release egress gate install a dummy key without first copying the real key', () => {
+    const runtimeEnv = buildIsolatedOpencodeSmokeRuntimeEnv(
+      {
+        PATH: '/usr/bin',
+        CUSTOM_PROVIDER_KEY: 'provider-secret',
+      },
+      'CUSTOM_PROVIDER_KEY',
+      join('devflow-smoke', 'runtime'),
+      { includeApiKey: false },
+    )
+
+    expect(runtimeEnv).not.toHaveProperty('CUSTOM_PROVIDER_KEY')
+  })
+
   it('preserves primary and integrity failures while redacting the provider key', () => {
     const providerKey = 'provider-key-that-must-not-appear'
     const failure = combineOpencodeSmokeFailures(

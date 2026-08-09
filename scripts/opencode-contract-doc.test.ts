@@ -40,6 +40,9 @@ describe('opencode runtime contract refresh documentation', () => {
     expect(markdown).toContain('ARK_API_KEY="<set in shell only; never commit>"')
     expect(markdown).toContain('https://ark.cn-beijing.volces.com/api/coding/v3')
     expect(markdown).toContain('@ai-sdk/openai-compatible')
+    expect(markdown).toContain('2026-08-09 V1.4 release update')
+    expect(markdown).toContain('@ai-sdk/openai` so OpenCode uses the Responses API')
+    expect(markdown).toContain('provider_retry_observed')
     expect(markdown).toContain('Do not write the provider key')
 
     for (const sentinel of forbiddenSecretSentinels) {
@@ -80,9 +83,19 @@ describe('opencode runtime contract refresh documentation', () => {
     expect(releaseGate).toContain('"costCapUsd": null')
     expect(releaseGate).toContain('does not impose a hard provider cost cap')
     expect(releaseGate).toContain('corepack pnpm --silent test:opencode-smoke')
+    expect(releaseGate).toContain('candidate-owned Responses API profile')
+    expect(releaseGate).toContain('provider_retry_observed')
+    expect(releaseGate).toContain('240-second permission-discovery')
+    expect(releaseGate).toContain('credential-owning provider egress gate')
+    expect(releaseGate).toContain('zero blocked')
+    expect(releaseGate).toContain('corepack pnpm --silent opencode:release-preflight')
+    expect(releaseGate).toContain('not a 240-second end-to-end smoke')
+    expect(releaseGate).toContain('"providerApiMode": "responses"')
+    expect(releaseGate).toContain('"resolvedConfigPreflight": "passed"')
+    expect(releaseGate).toContain('"blockedUncreditedRequestCount": 0')
     expect(v14ReleasePlan).toContain('corepack pnpm --silent test:opencode-smoke')
     expect(releaseGate).toContain(
-      'A second actual provider invocation requires new explicit authorization',
+      'A second top-level paid smoke invocation requires a substantive new candidate and new explicit',
     )
     for (const sentinel of forbiddenSecretSentinels) {
       expect(releaseGate).not.toContain(sentinel)
