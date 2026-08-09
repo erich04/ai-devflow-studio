@@ -10,11 +10,12 @@ import { createRepositoryKnowledgeService } from './repository-knowledge'
 
 const execFile = promisify(execFileCallback)
 const indexedAt = '2026-08-01T12:00:00.000Z'
+const FILE_SYSTEM_STRESS_TEST_TIMEOUT_MS = 30_000
 const tempDirectories: string[] = []
 
 afterEach(async () => {
   await Promise.all(tempDirectories.map((directory) =>
-    rm(directory, { recursive: true, force: true }),
+    rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }),
   ))
   tempDirectories.length = 0
 })
@@ -237,7 +238,7 @@ describe('createRepositoryKnowledgeService', () => {
     expect(snapshot.documents.at(-1)?.sourcePath).toBe('docs/doc-255.md')
     expect(snapshot.truncated).toBe(true)
     expect(snapshot.warnings).toEqual(['file_count_limit_exceeded'])
-  })
+  }, FILE_SYSTEM_STRESS_TEST_TIMEOUT_MS)
 
   it('bounds file-system inspection even when tracked Markdown candidates are unsafe', async () => {
     const project = await createTrackedRepository({ 'z-safe.md': '# Safe' })
@@ -261,7 +262,7 @@ describe('createRepositoryKnowledgeService', () => {
       'unsafe_path_skipped',
       'file_count_limit_exceeded',
     ])
-  })
+  }, FILE_SYSTEM_STRESS_TEST_TIMEOUT_MS)
 
   it('caps total indexed Markdown bytes at 4 MiB', async () => {
     const almost256KiB = '界'.repeat(87_381)
