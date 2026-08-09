@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import {
   CodingEngineContinuationCleanupError,
   CodingEnginePermissionDiscoveryError,
@@ -6,7 +7,7 @@ import {
 } from '../apps/desktop/electron/coding-engine-lifecycle'
 import { OpencodeMessageResponseError } from '../apps/desktop/electron/opencode-http-adapter'
 import type { CodingPermissionRequest } from '../packages/shared/src/domain'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   assertCleanCandidateStatus,
   assertCleanFixtureStatus,
@@ -22,6 +23,32 @@ import {
 } from './opencode-smoke-policy'
 
 describe('opencode smoke safety policy', () => {
+  it('classifies engine failures across the production script/module boundary', () => {
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        ['--import', 'tsx', resolve('scripts/fixtures/opencode-smoke-classification-boundary.ts')],
+        {
+          cwd: process.cwd(),
+          env: {
+            PATH: process.env.PATH,
+            HOME: process.env.HOME,
+            TMPDIR: process.env.TMPDIR,
+            USERPROFILE: process.env.USERPROFILE,
+            TEMP: process.env.TEMP,
+            TMP: process.env.TMP,
+            SystemRoot: process.env.SystemRoot,
+            ComSpec: process.env.ComSpec,
+            PATHEXT: process.env.PATHEXT,
+            WINDIR: process.env.WINDIR,
+          },
+          stdio: 'pipe',
+          timeout: 5_000,
+        },
+      ),
+    ).not.toThrow()
+  })
+
   it('allows only an exact pwd shell probe', () => {
     expect(() => assertOpencodeSmokePermission(permission({ permission: 'bash', command: 'pwd' }))).not.toThrow()
     expect(() => assertOpencodeSmokePermission(permission({ permission: 'bash', command: '/bin/pwd' }))).not.toThrow()
@@ -263,6 +290,27 @@ describe('opencode smoke safety policy', () => {
       message: 'opencode smoke failed; stage=permission_relay; code=provider_api_error; status=429; retryable=true; cleanup=failed',
     })
     expect(JSON.stringify(classified)).not.toContain('RAW_CONTINUATION_CLEANUP_DETAIL')
+  })
+
+  it('accepts only allowlisted structured error fields at the module boundary', () => {
+    expect(
+      createOpencodeSmokeStageError('engine_start', {
+        name: 'OpencodeHttpRequestError',
+        code: 'transport_error',
+        statusCode: 999,
+        rawBody: 'RAW_PROVIDER_BODY',
+      }),
+    ).toMatchObject({
+      code: 'transport_error',
+      statusCode: undefined,
+      message: 'opencode smoke failed; stage=engine_start; code=transport_error',
+    })
+    expect(
+      createOpencodeSmokeStageError('engine_start', {
+        name: 'OpencodeHttpRequestError',
+        code: 'RAW_UNTRUSTED_CODE',
+      }),
+    ).toMatchObject({ code: 'unclassified' })
   })
 })
 

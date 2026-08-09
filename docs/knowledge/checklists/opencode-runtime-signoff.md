@@ -17,7 +17,7 @@ Use this checklist only when intentionally validating the real opencode coding a
 - Set `DEVFLOW_CODING_ENGINE=opencode-http`.
 - Set the intended provider ID and model ID explicitly.
 - Set the provider API key through the configured env var, never inline in logs or documentation.
-- Run `corepack pnpm test:opencode-smoke`.
+- Run `corepack pnpm --silent test:opencode-smoke` so pnpm does not print the local candidate path.
 - Confirm the smoke starts `opencode serve`, creates a managed worktree, relays permissions, captures a redacted diff, runs worktree tests, and cleans up temporary smoke state.
 - Confirm permission requests are human-visible and unanswered requests reject by default.
 - Confirm smoke output does not print provider secrets.

@@ -20,6 +20,7 @@ describe('opencode smoke preflight', () => {
     expect(result.missing).toEqual(['DEVFLOW_CODING_ENGINE', 'OPENAI_API_KEY'])
     expect(result.message).toContain('Missing required DEVFLOW_CODING_ENGINE, OPENAI_API_KEY')
     expect(result.message).toContain('DEVFLOW_RUN_OPENCODE_SMOKE=1')
+    expect(result.message).toContain('corepack pnpm --silent test:opencode-smoke')
   })
 
   it('requires the explicit real opencode coding engine switch', () => {

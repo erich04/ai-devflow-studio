@@ -56,10 +56,15 @@ describe('opencode runtime contract refresh documentation', () => {
       join(process.cwd(), 'docs/plans/release-only-real-opencode-smoke.md'),
       'utf8',
     )
+    const v14ReleasePlan = readFileSync(
+      join(process.cwd(), 'docs/plans/v1.4-release-signoff.md'),
+      'utf8',
+    )
 
     expect(checklist).toContain('Keep live opencode smoke out of `corepack pnpm verify`')
     expect(checklist).toContain('For every future product release')
     expect(checklist).toContain('docs/plans/release-only-real-opencode-smoke.md')
+    expect(checklist).toContain('corepack pnpm --silent test:opencode-smoke')
 
     expect(releaseGate).toContain('Every future DevFlow Studio product release')
     expect(releaseGate).toContain('DEVFLOW_RUN_OPENCODE_SMOKE=1')
@@ -74,6 +79,8 @@ describe('opencode runtime contract refresh documentation', () => {
     expect(releaseGate).toContain('"automaticRetry": false')
     expect(releaseGate).toContain('"costCapUsd": null')
     expect(releaseGate).toContain('does not impose a hard provider cost cap')
+    expect(releaseGate).toContain('corepack pnpm --silent test:opencode-smoke')
+    expect(v14ReleasePlan).toContain('corepack pnpm --silent test:opencode-smoke')
     expect(releaseGate).toContain(
       'A second actual provider invocation requires new explicit authorization',
     )

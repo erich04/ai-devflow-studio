@@ -21,7 +21,7 @@ state is determined by the release JSON files, the matching `release:status` mod
   - no paid provider call
 - Release signoff adds a manual paid-provider smoke:
   - `corepack pnpm opencode:status`
-  - `DEVFLOW_RUN_OPENCODE_SMOKE=1 ... corepack pnpm test:opencode-smoke`
+  - `DEVFLOW_RUN_OPENCODE_SMOKE=1 ... corepack pnpm --silent test:opencode-smoke`
 - The smoke must be run before creating the release tag.
 - For v1.3, the passing result must be written to `docs/releases/v1.3.0/real-opencode.json` and
   bound to the candidate commit `C`.
@@ -45,7 +45,7 @@ export DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest
 export DEVFLOW_OPENCODE_API_KEY_ENV=ANTHROPIC_AUTH_TOKEN
 
 corepack pnpm opencode:status
-corepack pnpm test:opencode-smoke
+corepack pnpm --silent test:opencode-smoke
 
 unset ANTHROPIC_AUTH_TOKEN DEVFLOW_RUN_OPENCODE_SMOKE DEVFLOW_CODING_ENGINE
 unset DEVFLOW_OPENCODE_PROVIDER_ID DEVFLOW_OPENCODE_MODEL_ID DEVFLOW_OPENCODE_API_KEY_ENV
@@ -60,6 +60,10 @@ export DEVFLOW_OPENCODE_BIN=/opt/homebrew/bin/opencode
 Set `DEVFLOW_OPENCODE_BIN` before both commands. The v1.3 release profile is exactly
 `double/ark-code-latest`, and its key environment name is exactly `ANTHROPIC_AUTH_TOKEN`.
 Do not substitute `ARK_API_KEY` in the v1.3 release record.
+
+The release-only invocation uses pnpm's `--silent` option solely to suppress pnpm's own lifecycle
+banner, which includes the local candidate working directory. The smoke script's output remains
+visible and must still pass the absolute-path and secret redaction checks.
 
 ## Required Evidence To Record
 

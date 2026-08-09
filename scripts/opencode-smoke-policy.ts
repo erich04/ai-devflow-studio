@@ -1,13 +1,9 @@
 import type { CodingPermissionRequest } from '../packages/shared/src/domain.ts'
 import { redactSensitiveText } from '../packages/shared/src/redaction.ts'
-import {
-  CodingEngineContinuationCleanupError,
-  CodingEnginePermissionDiscoveryError,
-  CodingEngineStartupCleanupError,
-} from '../apps/desktop/electron/coding-engine-lifecycle.ts'
-import {
-  OpencodeMessageResponseError,
-  type OpencodeMessageResponseErrorCode,
+import type { CodingEnginePermissionDiscoveryError } from '../apps/desktop/electron/coding-engine-lifecycle.ts'
+import type {
+  OpencodeHttpRequestErrorCode,
+  OpencodeMessageResponseErrorCode,
 } from '../apps/desktop/electron/opencode-http-adapter.ts'
 import { join } from 'node:path'
 
@@ -31,8 +27,27 @@ export type OpencodeSmokeStage =
 
 export type OpencodeSmokeFailureCode =
   | OpencodeMessageResponseErrorCode
+  | OpencodeHttpRequestErrorCode
   | CodingEnginePermissionDiscoveryError['code']
   | 'unclassified'
+
+const OPENCODE_MESSAGE_RESPONSE_ERROR_CODES = new Set<OpencodeMessageResponseErrorCode>([
+  'provider_auth_error',
+  'provider_api_error',
+  'unknown_provider_error',
+  'output_length',
+  'message_aborted',
+  'structured_output',
+  'context_overflow',
+  'content_filter',
+  'invalid_message_response',
+])
+
+const OPENCODE_HTTP_REQUEST_ERROR_CODES = new Set<OpencodeHttpRequestErrorCode>([
+  'transport_error',
+  'http_status_error',
+  'invalid_json_response',
+])
 
 export class OpencodeSmokeStageError extends Error {
   readonly stage: OpencodeSmokeStage
@@ -70,10 +85,9 @@ export function createOpencodeSmokeStageError(
   stage: OpencodeSmokeStage,
   error: unknown,
 ): OpencodeSmokeStageError {
-  const cleanupFailed =
-    error instanceof CodingEngineStartupCleanupError ||
-    error instanceof CodingEngineContinuationCleanupError
-  const primaryError = cleanupFailed ? error.errors[0] : error
+  const cleanupErrors = codingEngineCleanupErrors(error)
+  const cleanupFailed = cleanupErrors !== undefined
+  const primaryError = cleanupErrors?.[0] ?? error
   const classification = classifyOpencodeSmokeError(primaryError)
   return new OpencodeSmokeStageError({
     stage,
@@ -83,22 +97,139 @@ export function createOpencodeSmokeStageError(
   })
 }
 
+function codingEngineCleanupErrors(error: unknown): readonly unknown[] | undefined {
+  if (
+    typeof error !== 'object' ||
+    error === null ||
+    !('name' in error) ||
+    (error.name !== 'CodingEngineStartupCleanupError' &&
+      error.name !== 'CodingEngineContinuationCleanupError') ||
+    !('errors' in error) ||
+    !Array.isArray(error.errors) ||
+    error.errors.length === 0
+  ) {
+    return undefined
+  }
+  return error.errors
+}
+
 function classifyOpencodeSmokeError(error: unknown): {
   code: OpencodeSmokeFailureCode
   statusCode?: number
   retryable?: boolean
 } {
-  if (error instanceof OpencodeMessageResponseError) {
+  const messageResponseError = opencodeMessageResponseErrorDetails(error)
+  if (messageResponseError) {
     return {
-      code: error.code,
-      ...(error.statusCode === undefined ? {} : { statusCode: error.statusCode }),
-      ...(error.retryable === undefined ? {} : { retryable: error.retryable }),
+      code: messageResponseError.code,
+      ...(messageResponseError.statusCode === undefined
+        ? {}
+        : { statusCode: messageResponseError.statusCode }),
+      ...(messageResponseError.retryable === undefined
+        ? {}
+        : { retryable: messageResponseError.retryable }),
     }
   }
-  if (error instanceof CodingEnginePermissionDiscoveryError) {
-    return { code: error.code }
+  const permissionDiscoveryCode = permissionDiscoveryErrorCode(error)
+  if (permissionDiscoveryCode) {
+    return { code: permissionDiscoveryCode }
+  }
+  const httpRequestError = opencodeHttpRequestErrorDetails(error)
+  if (httpRequestError) {
+    return {
+      code: httpRequestError.code,
+      ...(httpRequestError.statusCode === undefined
+        ? {}
+        : { statusCode: httpRequestError.statusCode }),
+    }
   }
   return { code: 'unclassified' }
+}
+
+function opencodeHttpRequestErrorDetails(error: unknown): {
+  code: OpencodeHttpRequestErrorCode
+  statusCode?: number
+} | undefined {
+  if (
+    typeof error !== 'object' ||
+    error === null ||
+    !('name' in error) ||
+    error.name !== 'OpencodeHttpRequestError' ||
+    !('code' in error) ||
+    typeof error.code !== 'string' ||
+    !OPENCODE_HTTP_REQUEST_ERROR_CODES.has(error.code as OpencodeHttpRequestErrorCode)
+  ) {
+    return undefined
+  }
+  const statusCode =
+    'statusCode' in error && isSafeHttpStatus(error.statusCode)
+      ? error.statusCode
+      : undefined
+  return {
+    code: error.code as OpencodeHttpRequestErrorCode,
+    ...(statusCode === undefined ? {} : { statusCode }),
+  }
+}
+
+function opencodeMessageResponseErrorDetails(error: unknown): {
+  code: OpencodeMessageResponseErrorCode
+  statusCode?: number
+  retryable?: boolean
+} | undefined {
+  if (
+    typeof error !== 'object' ||
+    error === null ||
+    !('name' in error) ||
+    error.name !== 'OpencodeMessageResponseError' ||
+    !('code' in error) ||
+    typeof error.code !== 'string' ||
+    !OPENCODE_MESSAGE_RESPONSE_ERROR_CODES.has(
+      error.code as OpencodeMessageResponseErrorCode,
+    )
+  ) {
+    return undefined
+  }
+  const statusCode =
+    'statusCode' in error &&
+    isSafeHttpStatus(error.statusCode)
+      ? error.statusCode
+      : undefined
+  const retryable =
+    'retryable' in error && typeof error.retryable === 'boolean'
+      ? error.retryable
+      : undefined
+  return {
+    code: error.code as OpencodeMessageResponseErrorCode,
+    ...(statusCode === undefined ? {} : { statusCode }),
+    ...(retryable === undefined ? {} : { retryable }),
+  }
+}
+
+function isSafeHttpStatus(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 100 &&
+    value <= 599
+  )
+}
+
+function permissionDiscoveryErrorCode(
+  error: unknown,
+): CodingEnginePermissionDiscoveryError['code'] | undefined {
+  if (
+    typeof error !== 'object' ||
+    error === null ||
+    !('name' in error) ||
+    error.name !== 'CodingEnginePermissionDiscoveryError' ||
+    !('code' in error)
+  ) {
+    return undefined
+  }
+  return error.code === 'message_completed_without_permission' ||
+    error.code === 'permission_discovery_timed_out'
+    ? error.code
+    : undefined
 }
 
 const OPENCODE_RUNTIME_ENV_ALLOWLIST = [

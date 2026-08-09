@@ -22,6 +22,7 @@ import {
 } from './opencode-http-engine'
 import {
   createDefaultOpencodePermissionRules,
+  OpencodeHttpRequestError,
   OpencodeMessageResponseError,
   type Fetcher,
   type OpencodeSession,
@@ -473,9 +474,15 @@ describe('opencode HTTP coding engine', () => {
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
 
-    await expect(engine.start(startInput({ run, node, project, workspace }))).rejects.toThrow(
-      'opencode /session/ses-1/message request failed',
-    )
+    const error = await engine
+      .start(startInput({ run, node, project, workspace }))
+      .catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(OpencodeHttpRequestError)
+    expect(error).toMatchObject({
+      code: 'transport_error',
+      message: 'opencode request failed',
+    })
     expect(fetcher.urls).toContain(
       'http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree',
     )
@@ -572,6 +579,46 @@ describe('opencode HTTP coding engine', () => {
       'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
       'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
     ])
+  })
+
+  it('times out a pending provider message and completes bounded startup cleanup', async () => {
+    let abortCount = 0
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+      const requestUrl = String(input)
+      if (requestUrl.includes('/message?')) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 20))
+        return new Response(JSON.stringify(successfulOpencodeMessage()), { status: 200 })
+      }
+      if (requestUrl.includes('/permission?')) {
+        return new Response('[]', { status: 200 })
+      }
+      if (requestUrl.includes('/abort?')) {
+        abortCount += 1
+        return new Response('true', { status: 200 })
+      }
+      return new Response(JSON.stringify(managedOpencodeSession()), { status: 200 })
+    }) as unknown as Fetcher
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 5,
+      startupCleanupTimeoutMs: 100,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    const failure = engine.start(startInput({ run, node, project, workspace }))
+
+    await expect(failure).rejects.toBeInstanceOf(CodingEnginePermissionDiscoveryError)
+    await expect(failure).rejects.toMatchObject({ code: 'permission_discovery_timed_out' })
+    expect(abortCount).toBe(1)
   })
 
   it('rejects only residual permissions from the failed startup session after abort', async () => {

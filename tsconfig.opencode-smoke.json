@@ -5,5 +5,9 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["scripts/opencode-smoke.ts", "scripts/opencode-smoke-preflight.ts"]
+  "include": [
+    "scripts/opencode-smoke.ts",
+    "scripts/opencode-smoke-preflight.ts",
+    "scripts/fixtures/opencode-smoke-classification-boundary.ts"
+  ]
 }

@@ -9,6 +9,7 @@ import {
   replyOpencodePermission,
   sendOpencodeMessage,
   type Fetcher,
+  OpencodeHttpRequestError,
   OpencodeMessageResponseError,
 } from './opencode-http-adapter'
 
@@ -110,8 +111,12 @@ describe('opencode HTTP adapter', () => {
       fetcher,
     }).catch((caught: unknown) => caught)
 
-    expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).toBe('opencode /session failed with 500')
+    expect(error).toBeInstanceOf(OpencodeHttpRequestError)
+    expect(error).toMatchObject({
+      code: 'http_status_error',
+      statusCode: 500,
+      message: 'opencode request failed',
+    })
     expect((error as Error).message).not.toContain('/private/tmp/secret-worktree')
     expect((error as Error).message).not.toContain('%2Fprivate%2Ftmp%2Fsecret-worktree')
     expect((error as Error).message).not.toContain('RAW_RESPONSE_SENTINEL')
@@ -131,11 +136,41 @@ describe('opencode HTTP adapter', () => {
       fetcher,
     }).catch((caught: unknown) => caught)
 
-    expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).toBe('opencode /session returned an invalid JSON response')
+    expect(error).toBeInstanceOf(OpencodeHttpRequestError)
+    expect(error).toMatchObject({
+      code: 'invalid_json_response',
+      statusCode: 200,
+      message: 'opencode request failed',
+    })
     expect((error as Error).message).not.toContain('RAW_SECRET_SENTINEL')
     expect((error as Error).message).not.toContain('/private/tmp/secret-worktree')
     expect((error as Error).message).not.toContain('%2Fprivate%2Ftmp%2Fsecret-worktree')
+  })
+
+  it('classifies response-body transport failures without exposing their cause', async () => {
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => {
+        throw new Error('RAW_BODY_TRANSPORT_SENTINEL')
+      },
+    })) as unknown as Fetcher
+
+    const error = await createOpencodeSession({
+      baseUrl: 'http://127.0.0.1:4097',
+      directory: '/private/tmp/secret-worktree',
+      title: 'DevFlow coding run',
+      model: { providerID: 'opencode', id: 'big-pickle' },
+      fetcher,
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(OpencodeHttpRequestError)
+    expect(error).toMatchObject({
+      code: 'transport_error',
+      statusCode: 200,
+      message: 'opencode request failed',
+    })
+    expect(JSON.stringify(error)).not.toContain('RAW_BODY_TRANSPORT_SENTINEL')
   })
 
   it('surfaces a provider error carried by a successful message response without exposing raw details', async () => {
@@ -285,8 +320,11 @@ describe('opencode HTTP adapter', () => {
 
     for (const request of requests) {
       const error = await request().catch((caught: unknown) => caught)
-      expect(error).toBeInstanceOf(Error)
-      expect((error as Error).message).toMatch(/^opencode \/[^?]+ request failed$/)
+      expect(error).toBeInstanceOf(OpencodeHttpRequestError)
+      expect(error).toMatchObject({
+        code: 'transport_error',
+        message: 'opencode request failed',
+      })
       expect((error as Error).message).not.toContain('RAW_NETWORK_SENTINEL')
       expect((error as Error).message).not.toContain(directory)
       expect((error as Error).message).not.toContain('%2Fprivate%2Ftmp%2Fsecret-worktree')

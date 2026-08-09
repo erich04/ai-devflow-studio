@@ -49,7 +49,7 @@ export function evaluateOpencodeSmokePreflight(
         'DEVFLOW_OPENCODE_PROVIDER_ID=openai \\',
         'DEVFLOW_OPENCODE_MODEL_ID=gpt-4.1-mini \\',
         `${apiKeyEnvName}="<redacted>" \\`,
-        'corepack pnpm test:opencode-smoke',
+        'corepack pnpm --silent test:opencode-smoke',
       ].join('\n'),
     }
   }

@@ -49,6 +49,26 @@ export type OpencodeMessageResponseErrorCode =
   | 'content_filter'
   | 'invalid_message_response'
 
+export type OpencodeHttpRequestErrorCode =
+  | 'transport_error'
+  | 'http_status_error'
+  | 'invalid_json_response'
+
+export class OpencodeHttpRequestError extends Error {
+  readonly code: OpencodeHttpRequestErrorCode
+  readonly statusCode: number | undefined
+
+  constructor(input: {
+    code: OpencodeHttpRequestErrorCode
+    statusCode?: number
+  }) {
+    super('opencode request failed')
+    this.name = 'OpencodeHttpRequestError'
+    this.code = input.code
+    this.statusCode = input.statusCode
+  }
+}
+
 const OPENCODE_MESSAGE_ERROR_CODES: Readonly<Record<string, OpencodeMessageResponseErrorCode>> = {
   ProviderAuthError: 'provider_auth_error',
   APIError: 'provider_api_error',
@@ -249,7 +269,7 @@ async function getJson<T>(fetcher: Fetcher | undefined, baseUrl: string, pathnam
   const response = await fetchOpencodeResponse(fetcher, baseUrl, pathname, {
     headers: { accept: 'application/json' },
   })
-  return readJson<T>(response, pathname)
+  return readJson<T>(response)
 }
 
 async function postJson<T>(
@@ -263,7 +283,7 @@ async function postJson<T>(
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
-  return readJson<T>(response, pathname)
+  return readJson<T>(response)
 }
 
 async function fetchOpencodeResponse(
@@ -275,25 +295,34 @@ async function fetchOpencodeResponse(
   try {
     return await (fetcher ?? fetch)(url(baseUrl, pathname), init)
   } catch {
-    throw new Error(`opencode ${safeEndpoint(pathname)} request failed`)
+    throw new OpencodeHttpRequestError({ code: 'transport_error' })
   }
 }
 
-async function readJson<T>(response: Response, pathname: string): Promise<T> {
-  const endpoint = safeEndpoint(pathname)
+async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    throw new Error(`opencode ${endpoint} failed with ${response.status}`)
+    throw new OpencodeHttpRequestError({
+      code: 'http_status_error',
+      statusCode: response.status,
+    })
+  }
+  let text: string
+  try {
+    text = await response.text()
+  } catch {
+    throw new OpencodeHttpRequestError({
+      code: 'transport_error',
+      statusCode: response.status,
+    })
   }
   try {
-    const text = await response.text()
     return (text ? JSON.parse(text) : undefined) as T
   } catch {
-    throw new Error(`opencode ${endpoint} returned an invalid JSON response`)
+    throw new OpencodeHttpRequestError({
+      code: 'invalid_json_response',
+      statusCode: response.status,
+    })
   }
-}
-
-function safeEndpoint(pathname: string): string {
-  return pathname.split('?', 1)[0] ?? pathname
 }
 
 function url(baseUrl: string, pathname: string): string {
