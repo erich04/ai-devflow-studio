@@ -15,6 +15,10 @@ import type { Socket } from 'node:net'
 
 const ARK_HOSTNAME = 'ark.cn-beijing.volces.com'
 const ARK_RESPONSES_PATH = '/api/coding/v3/responses'
+const MAX_PROVIDER_REQUEST_BYTES = 2 * 1024 * 1024
+
+type ReleaseProviderStep = 'bash' | 'edit' | 'complete'
+type ReleasePermission = Exclude<ReleaseProviderStep, 'complete'>
 
 type UpstreamRequester = (
   options: RequestOptions,
@@ -36,7 +40,7 @@ export type OpencodeProviderEgressGate = {
   baseUrl: string
   installClientCredential(env: NodeJS.ProcessEnv, apiKeyEnvName: string): void
   allowInitialProviderStep(): void
-  allowNextProviderStep(permissionId: string): Promise<void>
+  allowNextProviderStep(permissionId: string, permission: ReleasePermission): Promise<void>
   snapshot(): OpencodeProviderEgressGateSnapshot
   assertPassingState(): void
   close(): Promise<void>
@@ -69,6 +73,7 @@ export async function createOpencodeProviderEgressGate(input: {
   const sockets = new Set<Socket>()
   const upstreamRequests = new Set<ClientRequest>()
   let armed = false
+  let armedStep: ReleaseProviderStep | undefined
   let armedSegmentCount = 0
   let forwardedRequestCount = 0
   let completedResponseCount = 0
@@ -82,37 +87,69 @@ export async function createOpencodeProviderEgressGate(input: {
         promise: Promise<void>
         reject: (error: Error) => void
         resolve: () => void
+        step: ReleaseProviderStep
       }
     | undefined
   let initialArmCreated = false
+  let lastForwardedStep: ReleaseProviderStep | undefined
+  let lastCompletedStep: ReleaseProviderStep | undefined
+  let continuationClaimed = false
   const approvedPermissionIds = new Set<string>()
   let closed = false
   let closePromise: Promise<void> | undefined
   let notifyCloseProgress: () => void = () => undefined
+  const recordPolicyFailure = () => {
+    if (!providerFailureObserved) {
+      providerFailureObserved = true
+      failedSegmentCount += 1
+    }
+    armed = false
+    armedStep = undefined
+    pendingArm?.reject(new Error('opencode provider egress gate source segment failed'))
+    pendingArm = undefined
+  }
 
   const server = createServer((request, response) => {
     if (request.method !== 'POST' || request.url !== expectedPath) {
       blockedInvalidCount += 1
+      recordPolicyFailure()
       respondStatic(response, 404, 'provider egress route rejected')
       return
     }
     if (!matchesBearerCredential(request.headers.authorization, clientCredential)) {
       blockedInvalidCount += 1
+      recordPolicyFailure()
       respondStatic(response, 401, 'provider egress credential rejected')
       return
     }
-    if (!armed || activeRequestCount !== 0 || closed) {
+    if (providerFailureObserved) {
       blockedUncreditedRequestCount += 1
       respondStatic(response, 409, 'uncredited provider request blocked')
       return
     }
+    if (!armed || activeRequestCount !== 0 || closed) {
+      blockedUncreditedRequestCount += 1
+      recordPolicyFailure()
+      respondStatic(response, 409, 'uncredited provider request blocked')
+      return
+    }
 
+    const providerStep = armedStep
+    if (!providerStep) {
+      blockedInvalidCount += 1
+      recordPolicyFailure()
+      respondStatic(response, 409, 'provider egress step rejected')
+      return
+    }
     armed = false
-    forwardedRequestCount += 1
+    armedStep = undefined
     activeRequestCount += 1
+    lastForwardedStep = providerStep
+    continuationClaimed = false
     forwardProviderRequest({
       request,
       response,
+      providerStep,
       providerApiKey: input.providerApiKey,
       requestUpstream,
       headerTimeoutMs,
@@ -120,12 +157,20 @@ export async function createOpencodeProviderEgressGate(input: {
       absoluteTimeoutMs,
       upstreamRequests,
       upstreamAgent,
+      onForwarded: () => {
+        forwardedRequestCount += 1
+      },
+      onInvalidRequest: () => {
+        blockedInvalidCount += 1
+      },
       onCompletedResponse: () => {
         completedResponseCount += 1
+        lastCompletedStep = providerStep
         if (pendingArm) {
           const pending = pendingArm
           pendingArm = undefined
           armed = true
+          armedStep = pending.step
           pending.resolve()
         }
       },
@@ -199,10 +244,11 @@ export async function createOpencodeProviderEgressGate(input: {
       }
       initialArmCreated = true
       armed = true
+      armedStep = 'bash'
       armedSegmentCount += 1
     },
 
-    allowNextProviderStep(permissionId) {
+    allowNextProviderStep(permissionId, permission) {
       if (closed) {
         throw new Error('opencode provider egress gate is closed')
       }
@@ -212,22 +258,36 @@ export async function createOpencodeProviderEgressGate(input: {
       if (providerFailureObserved) {
         throw new Error('opencode provider egress gate source segment failed')
       }
+      const expectedPermission = lastForwardedStep === 'bash'
+        ? 'bash'
+        : lastForwardedStep === 'edit'
+          ? 'edit'
+          : undefined
+      if (!expectedPermission || permission !== expectedPermission || continuationClaimed) {
+        recordPolicyFailure()
+        throw new Error('opencode provider egress gate rejected an out-of-order permission approval')
+      }
       if (!permissionId || approvedPermissionIds.has(permissionId)) {
+        recordPolicyFailure()
         throw new Error('opencode provider egress gate rejected a repeated permission approval')
       }
       approvedPermissionIds.add(permissionId)
-      if (armed) {
-        return Promise.resolve()
-      }
+      continuationClaimed = true
+      const nextStep: ReleaseProviderStep = permission === 'bash' ? 'edit' : 'complete'
       if (pendingArm) {
-        return pendingArm.promise
+        recordPolicyFailure()
+        throw new Error('opencode provider egress gate already has a pending continuation')
       }
       if (armedSegmentCount >= 5) {
         throw new Error('opencode provider egress gate exceeded the provider step limit')
       }
       armedSegmentCount += 1
       if (activeRequestCount === 0) {
+        if (lastCompletedStep !== lastForwardedStep) {
+          throw new Error('opencode provider egress gate source segment failed')
+        }
         armed = true
+        armedStep = nextStep
         return Promise.resolve()
       }
       let resolvePending: (() => void) | undefined
@@ -239,6 +299,7 @@ export async function createOpencodeProviderEgressGate(input: {
       void promise.catch(() => undefined)
       pendingArm = {
         promise,
+        step: nextStep,
         resolve: () => resolvePending?.(),
         reject: (error) => rejectPending?.(error),
       }
@@ -256,10 +317,13 @@ export async function createOpencodeProviderEgressGate(input: {
       }
       if (
         armed ||
+        armedStep !== undefined ||
         pendingArm !== undefined ||
         activeRequestCount !== 0 ||
         failedSegmentCount !== 0 ||
         armedSegmentCount === 0 ||
+        lastCompletedStep !== 'complete' ||
+        armedSegmentCount !== 3 ||
         forwardedRequestCount !== armedSegmentCount ||
         completedResponseCount !== forwardedRequestCount
       ) {
@@ -273,6 +337,7 @@ export async function createOpencodeProviderEgressGate(input: {
       }
       closed = true
       armed = false
+      armedStep = undefined
       pendingArm?.reject(new Error('opencode provider egress gate closed before continuation activation'))
       pendingArm = undefined
       closePromise = new Promise<void>((resolve, reject) => {
@@ -321,6 +386,7 @@ export async function createOpencodeProviderEgressGate(input: {
 function forwardProviderRequest(input: {
   request: IncomingMessage
   response: ServerResponse
+  providerStep: ReleaseProviderStep
   providerApiKey: string
   requestUpstream: UpstreamRequester
   headerTimeoutMs: number
@@ -328,6 +394,8 @@ function forwardProviderRequest(input: {
   absoluteTimeoutMs: number
   upstreamRequests: Set<ClientRequest>
   upstreamAgent: HttpsAgent | undefined
+  onForwarded(): void
+  onInvalidRequest(): void
   onCompletedResponse(): void
   onFailedResponse(): void
   onSettled(): void
@@ -369,6 +437,16 @@ function forwardProviderRequest(input: {
     }
     upstreamResponse?.destroy()
     upstreamRequest?.destroy()
+    settle()
+  }
+
+  const rejectInvalidRequest = () => {
+    if (settled) return
+    input.onInvalidRequest()
+    recordFailed()
+    if (!input.response.headersSent) {
+      respondStatic(input.response, 400, 'provider egress request rejected')
+    }
     settle()
   }
 
@@ -414,46 +492,52 @@ function forwardProviderRequest(input: {
     response.pipe(input.response)
   }
 
-  try {
-    upstreamRequest = input.requestUpstream(
-      {
-        hostname: ARK_HOSTNAME,
-        port: 443,
-        method: 'POST',
-        path: ARK_RESPONSES_PATH,
-        servername: ARK_HOSTNAME,
-        rejectUnauthorized: true,
-        headers: buildUpstreamRequestHeaders(input.request.headers, input.providerApiKey),
-        ...(input.upstreamAgent ? { agent: input.upstreamAgent } : {}),
-      },
-      handleUpstreamResponse,
-    )
-  } catch {
-    fail()
-    return
-  }
-  input.upstreamRequests.add(upstreamRequest)
-  headerTimer = setTimeout(fail, input.headerTimeoutMs)
   absoluteTimer = setTimeout(fail, input.absoluteTimeoutMs)
-  upstreamRequest.once('error', fail)
-  input.request.once('aborted', fail)
-  input.request.once('error', fail)
   input.response.once('close', () => {
     if (!input.response.writableEnded && !responseCompleted) fail()
   })
-  try {
-    input.request.pipe(upstreamRequest)
-  } catch {
-    fail()
-  }
+  readReleaseProviderRequest(input.request, input.providerStep).then(
+    (body) => {
+      if (settled) return
+      try {
+        upstreamRequest = input.requestUpstream(
+          {
+            hostname: ARK_HOSTNAME,
+            port: 443,
+            method: 'POST',
+            path: ARK_RESPONSES_PATH,
+            servername: ARK_HOSTNAME,
+            rejectUnauthorized: true,
+            headers: buildUpstreamRequestHeaders(
+              input.request.headers,
+              input.providerApiKey,
+              body.byteLength,
+            ),
+            ...(input.upstreamAgent ? { agent: input.upstreamAgent } : {}),
+          },
+          handleUpstreamResponse,
+        )
+        input.onForwarded()
+        input.upstreamRequests.add(upstreamRequest)
+        headerTimer = setTimeout(fail, input.headerTimeoutMs)
+        upstreamRequest.once('error', fail)
+        upstreamRequest.end(body)
+      } catch {
+        fail()
+      }
+    },
+    rejectInvalidRequest,
+  )
 }
 
 function buildUpstreamRequestHeaders(
   headers: IncomingHttpHeaders,
   providerApiKey: string,
+  contentLength: number,
 ): Record<string, string | string[]> {
   const forwarded: Record<string, string | string[]> = {
     authorization: `Bearer ${providerApiKey}`,
+    'content-length': String(contentLength),
   }
   for (const [name, value] of Object.entries(headers)) {
     const lowerName = name.toLowerCase()
@@ -461,7 +545,6 @@ function buildUpstreamRequestHeaders(
       value !== undefined &&
       (lowerName === 'accept' ||
         lowerName === 'content-type' ||
-        lowerName === 'content-length' ||
         lowerName === 'user-agent' ||
         lowerName.startsWith('x-stainless-'))
     ) {
@@ -469,6 +552,89 @@ function buildUpstreamRequestHeaders(
     }
   }
   return forwarded
+}
+
+async function readReleaseProviderRequest(
+  request: IncomingMessage,
+  step: ReleaseProviderStep,
+): Promise<Buffer> {
+  if (!isJsonContentType(request.headers['content-type']) || request.headers['content-encoding'] !== undefined) {
+    throw new Error('invalid provider request')
+  }
+  const declaredLength = Number(request.headers['content-length'])
+  if (
+    request.headers['content-length'] !== undefined &&
+    (!Number.isSafeInteger(declaredLength) || declaredLength < 0 || declaredLength > MAX_PROVIDER_REQUEST_BYTES)
+  ) {
+    for await (const _chunk of request) {
+      // Drain without retaining an oversized body so the client receives the static rejection.
+    }
+    throw new Error('invalid provider request')
+  }
+  const chunks: Buffer[] = []
+  let totalBytes = 0
+  let tooLarge = false
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    totalBytes += buffer.byteLength
+    if (totalBytes > MAX_PROVIDER_REQUEST_BYTES) {
+      tooLarge = true
+      continue
+    }
+    chunks.push(buffer)
+  }
+  if (tooLarge) {
+    throw new Error('invalid provider request')
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)))
+  } catch {
+    throw new Error('invalid provider request')
+  }
+  if (!isRecord(parsed) || parsed.model !== 'ark-code-latest' || parsed.stream !== true) {
+    throw new Error('invalid provider request')
+  }
+  const tools = Array.isArray(parsed.tools) ? parsed.tools : undefined
+  if (!tools) {
+    throw new Error('invalid provider request')
+  }
+  const namedTools = tools.filter(isFunctionTool)
+  if (
+    namedTools.length !== tools.length ||
+    namedTools.filter((tool) => tool.name === 'bash').length !== 1 ||
+    namedTools.filter((tool) => tool.name === 'edit').length !== 1
+  ) {
+    throw new Error('invalid provider request')
+  }
+  const rewritten = { ...parsed }
+  if (step === 'complete') {
+    delete rewritten.tools
+    delete rewritten.tool_choice
+    delete rewritten.parallel_tool_calls
+  } else {
+    rewritten.tools = [namedTools.find((tool) => tool.name === step)!]
+    rewritten.tool_choice = 'required'
+    rewritten.parallel_tool_calls = false
+  }
+  return Buffer.from(JSON.stringify(rewritten))
+}
+
+function isJsonContentType(value: string | undefined): boolean {
+  if (typeof value !== 'string') return false
+  const [mediaType] = value.split(';', 1)
+  return mediaType?.trim().toLowerCase() === 'application/json'
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isFunctionTool(value: unknown): value is Record<string, unknown> & {
+  type: 'function'
+  name: string
+} {
+  return isRecord(value) && value.type === 'function' && typeof value.name === 'string'
 }
 
 function createResponsesEventObserver(): {

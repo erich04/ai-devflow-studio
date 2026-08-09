@@ -70,6 +70,7 @@ const releaseProfiles = {
       model: 'ark-code-latest',
       keyEnvName: 'ANTHROPIC_AUTH_TOKEN',
       providerRetryObserved: false,
+      permissionRelay: 'bash -> edit',
       diffEvidence: ['devflow-opencode-smoke.txt'],
     },
   },
@@ -415,8 +416,7 @@ function isValidProviderEgressEvidence(value) {
   const completed = value.completedResponseCount
   return (
     Number.isSafeInteger(armed) &&
-    armed >= 2 &&
-    armed <= 5 &&
+    armed === 3 &&
     forwarded === armed &&
     completed === forwarded &&
     value.blockedUncreditedRequestCount === 0 &&
@@ -470,6 +470,7 @@ function evaluateRealOpencodeRecord(snapshot) {
       value.model === expectedControls.model &&
       value.keyEnvName === expectedControls.keyEnvName &&
       value.providerRetryObserved === expectedControls.providerRetryObserved &&
+      value.permissionRelay === expectedControls.permissionRelay &&
       JSON.stringify(value.diffEvidence) === JSON.stringify(expectedControls.diffEvidence) &&
       isValidProviderEgressEvidence(value.egressGate))
   const ready = requiredMetadataValid && controlsValid && forbiddenFields.length === 0
@@ -483,7 +484,7 @@ function evaluateRealOpencodeRecord(snapshot) {
       : forbiddenFields.length > 0
         ? `Secret-bearing fields are forbidden in ${snapshot.realOpencodeRecord.path}: ${forbiddenFields.join(', ')}.`
         : !controlsValid
-          ? `${snapshot.realOpencodeRecord.path} must record one attempt, no automatic retry, and an explicit uncapped authorization.`
+          ? `${snapshot.realOpencodeRecord.path} must record one attempt, no automatic retry, exactly three provider segments, and an explicit uncapped authorization.`
         : `${snapshot.realOpencodeRecord.path} is missing required non-secret live-smoke metadata.`,
   }
 }

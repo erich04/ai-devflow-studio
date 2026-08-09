@@ -32,6 +32,250 @@ describe('opencode provider egress gate', () => {
     }).HTTPS_PROXY).toBe('http://https-proxy.invalid')
   })
 
+  it('enforces bash then edit then completion while discarding extra OpenCode tools', async () => {
+    const receivedBodies: Array<Record<string, unknown>> = []
+    const upstream = createServer((request, response) => {
+      const chunks: Buffer[] = []
+      request.on('data', (chunk: Buffer) => chunks.push(chunk))
+      request.on('end', () => {
+        receivedBodies.push(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        response.end('data: {"type":"response.completed"}\n\n')
+      })
+    })
+    upstream.listen(0, '127.0.0.1')
+    await once(upstream, 'listening')
+    cleanups.push(() => closeServer(upstream))
+    const address = upstream.address()
+    if (!address || typeof address === 'string') throw new Error('fixture server did not listen')
+
+    const gate = await createOpencodeProviderEgressGate({
+      providerApiKey: 'RAW_REAL_PROVIDER_KEY',
+      requestUpstream: (_options, onResponse) =>
+        httpRequest({ hostname: '127.0.0.1', port: address.port, method: 'POST' }, onResponse),
+    })
+    cleanups.push(() => gate.close())
+    const runtimeEnv: NodeJS.ProcessEnv = {}
+    gate.installClientCredential(runtimeEnv, 'ANTHROPIC_AUTH_TOKEN')
+
+    gate.allowInitialProviderStep()
+    await (await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())).text()
+    await gate.allowNextProviderStep('permission-bash', 'bash')
+    await (await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())).text()
+    await gate.allowNextProviderStep('permission-edit', 'edit')
+    await (await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())).text()
+
+    expect(receivedBodies).toHaveLength(3)
+    expect(receivedBodies.map((body) => body.tool_choice)).toEqual(['required', 'required', undefined])
+    expect(receivedBodies.map((body) => body.parallel_tool_calls)).toEqual([false, false, undefined])
+    expect(receivedBodies.map((body) => (
+      Array.isArray(body.tools)
+        ? body.tools.map((tool) => (tool as { name?: string }).name)
+        : []
+    ))).toEqual([['bash'], ['edit'], []])
+    expect(gate.snapshot()).toMatchObject({
+      armedSegmentCount: 3,
+      forwardedRequestCount: 3,
+      completedResponseCount: 3,
+      failedSegmentCount: 0,
+      blockedInvalidCount: 0,
+      activeRequestCount: 0,
+    })
+    expect(() => gate.assertPassingState()).not.toThrow()
+  })
+
+  it('permanently fails closed after an out-of-order release approval', async () => {
+    const upstream = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      response.end('data: {"type":"response.completed"}\n\n')
+    })
+    upstream.listen(0, '127.0.0.1')
+    await once(upstream, 'listening')
+    cleanups.push(() => closeServer(upstream))
+    const address = upstream.address()
+    if (!address || typeof address === 'string') throw new Error('fixture server did not listen')
+
+    const gate = await createOpencodeProviderEgressGate({
+      providerApiKey: 'RAW_REAL_PROVIDER_KEY',
+      requestUpstream: (_options, onResponse) =>
+        httpRequest({ hostname: '127.0.0.1', port: address.port, method: 'POST' }, onResponse),
+    })
+    cleanups.push(() => gate.close())
+    const runtimeEnv: NodeJS.ProcessEnv = {}
+    gate.installClientCredential(runtimeEnv, 'ANTHROPIC_AUTH_TOKEN')
+    gate.allowInitialProviderStep()
+    await (await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())).text()
+
+    await expect(
+      Promise.resolve().then(() => gate.allowNextProviderStep('permission-wrong', 'edit')),
+    ).rejects.toThrow('opencode provider egress gate rejected an out-of-order permission approval')
+    await expect(
+      Promise.resolve().then(() => gate.allowNextProviderStep('permission-late', 'bash')),
+    ).rejects.toThrow('opencode provider egress gate source segment failed')
+    const blocked = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
+
+    expect(blocked.status).toBe(409)
+    expect(gate.snapshot()).toMatchObject({
+      forwardedRequestCount: 1,
+      completedResponseCount: 1,
+      failedSegmentCount: 1,
+      blockedUncreditedRequestCount: 1,
+    })
+  })
+
+  it('revokes an already armed continuation when a later approval violates the release sequence', async () => {
+    let upstreamRequestCount = 0
+    const upstream = createServer((_request, response) => {
+      upstreamRequestCount += 1
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      response.end('data: {"type":"response.completed"}\n\n')
+    })
+    upstream.listen(0, '127.0.0.1')
+    await once(upstream, 'listening')
+    cleanups.push(() => closeServer(upstream))
+    const address = upstream.address()
+    if (!address || typeof address === 'string') throw new Error('fixture server did not listen')
+
+    const gate = await createOpencodeProviderEgressGate({
+      providerApiKey: 'RAW_REAL_PROVIDER_KEY',
+      requestUpstream: (_options, onResponse) =>
+        httpRequest({ hostname: '127.0.0.1', port: address.port, method: 'POST' }, onResponse),
+    })
+    cleanups.push(() => gate.close())
+    const runtimeEnv: NodeJS.ProcessEnv = {}
+    gate.installClientCredential(runtimeEnv, 'ANTHROPIC_AUTH_TOKEN')
+    gate.allowInitialProviderStep()
+    await (await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())).text()
+    await gate.allowNextProviderStep('permission-bash', 'bash')
+
+    await expect(
+      Promise.resolve().then(() => gate.allowNextProviderStep('permission-duplicate', 'bash')),
+    ).rejects.toThrow('opencode provider egress gate rejected an out-of-order permission approval')
+    const blocked = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
+
+    expect(blocked.status).toBe(409)
+    expect(upstreamRequestCount).toBe(1)
+    expect(gate.snapshot()).toMatchObject({
+      armedSegmentCount: 2,
+      forwardedRequestCount: 1,
+      completedResponseCount: 1,
+      failedSegmentCount: 1,
+      blockedUncreditedRequestCount: 1,
+    })
+  })
+
+  it.each([
+    ['malformed JSON', '{not-json'],
+    ['a missing bash tool', releaseRequestBody(['edit'])],
+    ['a duplicate bash tool', releaseRequestBody(['bash', 'bash', 'edit'])],
+    ['a duplicate edit tool', releaseRequestBody(['bash', 'edit', 'edit'])],
+    ['an oversized request', JSON.stringify({ padding: 'x'.repeat(2 * 1024 * 1024) })],
+  ])('rejects %s without forwarding or retaining sensitive body data', async (_name, body) => {
+    let upstreamRequestCount = 0
+    const gate = await createOpencodeProviderEgressGate({
+      providerApiKey: 'RAW_REAL_PROVIDER_KEY',
+      requestUpstream: () => {
+        upstreamRequestCount += 1
+        return httpRequest({ hostname: '127.0.0.1', port: 9 })
+      },
+    })
+    cleanups.push(() => gate.close())
+    const runtimeEnv: NodeJS.ProcessEnv = {}
+    gate.installClientCredential(runtimeEnv, 'ANTHROPIC_AUTH_TOKEN')
+    gate.allowInitialProviderStep()
+
+    const response = await sendThroughGate(gate.baseUrl, runtimeEnv, body)
+
+    expect(response.status).toBe(400)
+    expect(await response.text()).not.toContain('RAW_REAL_PROVIDER_KEY')
+    expect(upstreamRequestCount).toBe(0)
+    expect(gate.snapshot()).toMatchObject({
+      forwardedRequestCount: 0,
+      completedResponseCount: 0,
+      failedSegmentCount: 1,
+      blockedInvalidCount: 1,
+      activeRequestCount: 0,
+    })
+    expect(JSON.stringify(gate.snapshot())).not.toContain('padding')
+    expect(() => gate.assertPassingState()).toThrow()
+  })
+
+  it('rejects a continuation request that is missing the phase target tool', async () => {
+    let upstreamRequestCount = 0
+    const upstream = createServer((_request, response) => {
+      upstreamRequestCount += 1
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      response.end('data: {"type":"response.completed"}\n\n')
+    })
+    upstream.listen(0, '127.0.0.1')
+    await once(upstream, 'listening')
+    cleanups.push(() => closeServer(upstream))
+    const address = upstream.address()
+    if (!address || typeof address === 'string') throw new Error('fixture server did not listen')
+    const gate = await createOpencodeProviderEgressGate({
+      providerApiKey: 'RAW_REAL_PROVIDER_KEY',
+      requestUpstream: (_options, onResponse) =>
+        httpRequest({ hostname: '127.0.0.1', port: address.port, method: 'POST' }, onResponse),
+    })
+    cleanups.push(() => gate.close())
+    const runtimeEnv: NodeJS.ProcessEnv = {}
+    gate.installClientCredential(runtimeEnv, 'ANTHROPIC_AUTH_TOKEN')
+    gate.allowInitialProviderStep()
+    await (await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())).text()
+    await gate.allowNextProviderStep('permission-bash', 'bash')
+
+    const rejected = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody(['bash']))
+
+    expect(rejected.status).toBe(400)
+    expect(upstreamRequestCount).toBe(1)
+    expect(gate.snapshot()).toMatchObject({
+      armedSegmentCount: 2,
+      forwardedRequestCount: 1,
+      completedResponseCount: 1,
+      failedSegmentCount: 1,
+      blockedInvalidCount: 1,
+    })
+  })
+
+  it('rejects every continuation after the completion-only segment', async () => {
+    const upstream = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      response.end('data: {"type":"response.completed"}\n\n')
+    })
+    upstream.listen(0, '127.0.0.1')
+    await once(upstream, 'listening')
+    cleanups.push(() => closeServer(upstream))
+    const address = upstream.address()
+    if (!address || typeof address === 'string') throw new Error('fixture server did not listen')
+    const gate = await createOpencodeProviderEgressGate({
+      providerApiKey: 'RAW_REAL_PROVIDER_KEY',
+      requestUpstream: (_options, onResponse) =>
+        httpRequest({ hostname: '127.0.0.1', port: address.port, method: 'POST' }, onResponse),
+    })
+    cleanups.push(() => gate.close())
+    const runtimeEnv: NodeJS.ProcessEnv = {}
+    gate.installClientCredential(runtimeEnv, 'ANTHROPIC_AUTH_TOKEN')
+    gate.allowInitialProviderStep()
+    await (await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())).text()
+    await gate.allowNextProviderStep('permission-bash', 'bash')
+    await (await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())).text()
+    await gate.allowNextProviderStep('permission-edit', 'edit')
+    await (await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())).text()
+
+    await expect(
+      Promise.resolve().then(() => gate.allowNextProviderStep('permission-extra', 'edit')),
+    ).rejects.toThrow('opencode provider egress gate rejected an out-of-order permission approval')
+    const blocked = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
+    expect(blocked.status).toBe(409)
+    expect(gate.snapshot()).toMatchObject({
+      armedSegmentCount: 3,
+      forwardedRequestCount: 3,
+      completedResponseCount: 3,
+      failedSegmentCount: 1,
+      blockedUncreditedRequestCount: 1,
+    })
+  })
+
   it('streams one credentialed request per explicitly armed relay segment', async () => {
     const receivedBodies: string[] = []
     const upstream = createServer((request, response) => {
@@ -86,19 +330,29 @@ describe('opencode provider egress gate', () => {
     }
 
     gate.allowInitialProviderStep()
-    const first = await sendThroughGate(gate.baseUrl, runtimeEnv, '{"step":1}')
+    const first = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
     expect(first.status).toBe(200)
     expect(await first.text()).toBe(
       'data: {"type":"response.created"}\n\ndata: {"type":"response.completed"}\n\n',
     )
 
-    await gate.allowNextProviderStep('permission-1')
-    const second = await sendThroughGate(gate.baseUrl, runtimeEnv, '{"step":2}')
+    await gate.allowNextProviderStep('permission-1', 'bash')
+    const second = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
     expect(second.status).toBe(200)
     await second.text()
 
-    expect(receivedBodies).toEqual(['{"step":1}', '{"step":2}'])
-    expect(observedOptions).toHaveLength(2)
+    await gate.allowNextProviderStep('permission-2', 'edit')
+    const third = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
+    expect(third.status).toBe(200)
+    await third.text()
+
+    expect(receivedBodies).toHaveLength(3)
+    expect(receivedBodies.map((body) => JSON.parse(body).tool_choice)).toEqual([
+      'required',
+      'required',
+      undefined,
+    ])
+    expect(observedOptions).toHaveLength(3)
     expect(observedOptions[0]).toMatchObject({
       hostname: 'ark.cn-beijing.volces.com',
       method: 'POST',
@@ -109,10 +363,15 @@ describe('opencode provider egress gate', () => {
     expect(observedOptions[0]?.headers).toMatchObject({
       authorization: 'Bearer RAW_REAL_PROVIDER_KEY',
     })
+    for (const [index, options] of observedOptions.entries()) {
+      expect(options.headers).toMatchObject({
+        'content-length': String(Buffer.byteLength(receivedBodies[index]!, 'utf8')),
+      })
+    }
     expect(gate.snapshot()).toEqual({
-      armedSegmentCount: 2,
-      forwardedRequestCount: 2,
-      completedResponseCount: 2,
+      armedSegmentCount: 3,
+      forwardedRequestCount: 3,
+      completedResponseCount: 3,
       failedSegmentCount: 0,
       blockedUncreditedRequestCount: 0,
       blockedInvalidCount: 0,
@@ -131,6 +390,7 @@ describe('opencode provider egress gate', () => {
     let upstreamRequestCount = 0
     const upstream = createServer((_request, response) => {
       upstreamRequestCount += 1
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
       setTimeout(
         () => response.end('data: {"type":"response.completed"}\n\n'),
         20,
@@ -153,14 +413,21 @@ describe('opencode provider egress gate', () => {
     gate.allowInitialProviderStep()
 
     const [first, duplicate] = await Promise.all([
-      sendThroughGate(gate.baseUrl, runtimeEnv, '{"request":1}'),
-      sendThroughGate(gate.baseUrl, runtimeEnv, '{"request":2}'),
+      sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody()),
+      sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody()),
     ])
     expect([first.status, duplicate.status].sort()).toEqual([200, 409])
     await Promise.all([first.text(), duplicate.text()])
     expect(upstreamRequestCount).toBe(1)
     expect(gate.snapshot().forwardedRequestCount).toBe(1)
     expect(gate.snapshot().blockedUncreditedRequestCount).toBe(1)
+    await expect(
+      Promise.resolve().then(() => gate.allowNextProviderStep('permission-after-duplicate', 'bash')),
+    ).rejects.toThrow('opencode provider egress gate source segment failed')
+    const afterFailure = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
+    expect(afterFailure.status).toBe(409)
+    expect(upstreamRequestCount).toBe(1)
+    expect(gate.snapshot().failedSegmentCount).toBe(1)
     expect(() => gate.assertPassingState()).toThrow(
       'opencode provider egress gate detected an uncredited request',
     )
@@ -195,9 +462,9 @@ describe('opencode provider egress gate', () => {
     gate.installClientCredential(runtimeEnv, 'ANTHROPIC_AUTH_TOKEN')
     gate.allowInitialProviderStep()
 
-    const first = await sendThroughGate(gate.baseUrl, runtimeEnv, '{"request":1}')
+    const first = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
     let activated = false
-    const activation = gate.allowNextProviderStep('permission-1').then(() => {
+    const activation = gate.allowNextProviderStep('permission-1', 'bash').then(() => {
       activated = true
     })
     await Promise.resolve()
@@ -207,8 +474,11 @@ describe('opencode provider egress gate', () => {
     await activation
     expect(activated).toBe(true)
 
-    const second = await sendThroughGate(gate.baseUrl, runtimeEnv, '{"request":2}')
+    const second = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
     await second.text()
+    await gate.allowNextProviderStep('permission-2', 'edit')
+    const third = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
+    await third.text()
     expect(() => gate.assertPassingState()).not.toThrow()
   })
 
@@ -266,14 +536,14 @@ describe('opencode provider egress gate', () => {
     gate.installClientCredential(runtimeEnv, 'ANTHROPIC_AUTH_TOKEN')
     gate.allowInitialProviderStep()
 
-    const first = await sendThroughGate(gate.baseUrl, runtimeEnv, '{"request":1}')
-    const continuationActivation = gate.allowNextProviderStep('permission-from-partial-stream')
+    const first = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
+    const continuationActivation = gate.allowNextProviderStep('permission-from-partial-stream', 'bash')
     finishStream?.()
     await first.text()
     await expect(continuationActivation).rejects.toThrow(
       'opencode provider egress gate source segment failed',
     )
-    const retry = await sendThroughGate(gate.baseUrl, runtimeEnv, '{"request":2}')
+    const retry = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
 
     expect(retry.status).toBe(409)
     expect(upstreamRequestCount).toBe(1)
@@ -308,13 +578,13 @@ describe('opencode provider egress gate', () => {
     gate.installClientCredential(runtimeEnv, 'ANTHROPIC_AUTH_TOKEN')
     gate.allowInitialProviderStep()
 
-    const failed = await sendThroughGate(gate.baseUrl, runtimeEnv, '{"request":1}')
+    const failed = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
     await failed.text()
 
     await expect(
-      Promise.resolve().then(() => gate.allowNextProviderStep('permission-after-failure')),
+      Promise.resolve().then(() => gate.allowNextProviderStep('permission-after-failure', 'bash')),
     ).rejects.toThrow('opencode provider egress gate source segment failed')
-    const blocked = await sendThroughGate(gate.baseUrl, runtimeEnv, '{"request":2}')
+    const blocked = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
 
     expect(blocked.status).toBe(409)
     expect(upstreamRequestCount).toBe(1)
@@ -359,7 +629,7 @@ describe('opencode provider egress gate', () => {
     gate.installClientCredential(runtimeEnv, 'ANTHROPIC_AUTH_TOKEN')
     gate.allowInitialProviderStep()
 
-    const response = await sendThroughGate(gate.baseUrl, runtimeEnv, '{"request":1}')
+    const response = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
     await response.text()
 
     expect(gate.snapshot()).toMatchObject({
@@ -382,14 +652,14 @@ describe('opencode provider egress gate', () => {
     gate.installClientCredential(runtimeEnv, 'ANTHROPIC_AUTH_TOKEN')
     gate.allowInitialProviderStep()
 
-    const response = await sendThroughGate(gate.baseUrl, runtimeEnv, '{"request":1}')
+    const response = await sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody())
 
     expect(response.status).toBe(502)
     expect(await response.text()).not.toContain('RAW_SYNCHRONOUS_UPSTREAM_FAILURE')
     expect(gate.snapshot()).toMatchObject({
       activeRequestCount: 0,
       failedSegmentCount: 1,
-      forwardedRequestCount: 1,
+      forwardedRequestCount: 0,
       completedResponseCount: 0,
     })
   })
@@ -420,7 +690,7 @@ describe('opencode provider egress gate', () => {
     const runtimeEnv: NodeJS.ProcessEnv = {}
     gate.installClientCredential(runtimeEnv, 'ANTHROPIC_AUTH_TOKEN')
     gate.allowInitialProviderStep()
-    const request = sendThroughGate(gate.baseUrl, runtimeEnv, '{"request":1}').catch(() => undefined)
+    const request = sendThroughGate(gate.baseUrl, runtimeEnv, releaseRequestBody()).catch(() => undefined)
     await started
 
     await gate.close()
@@ -446,6 +716,31 @@ async function sendThroughGate(
       'content-type': 'application/json',
     },
     body,
+  })
+}
+
+function releaseRequestBody(
+  toolNames: Array<'bash' | 'edit' | 'write' | 'apply_patch' | 'read'> = [
+    'bash',
+    'edit',
+    'write',
+    'apply_patch',
+    'read',
+  ],
+): string {
+  const definitions = {
+    bash: { type: 'function', name: 'bash', description: 'Run a shell command.', parameters: { type: 'object' } },
+    edit: { type: 'function', name: 'edit', description: 'Edit a file.', parameters: { type: 'object' } },
+    write: { type: 'function', name: 'write', description: 'Write a file.', parameters: { type: 'object' } },
+    apply_patch: { type: 'function', name: 'apply_patch', description: 'Apply a patch.', parameters: { type: 'object' } },
+    read: { type: 'function', name: 'read', description: 'Read a file.', parameters: { type: 'object' } },
+  } as const
+  return JSON.stringify({
+    model: 'ark-code-latest',
+    input: [{ role: 'user', content: [{ type: 'input_text', text: 'fixture' }] }],
+    tools: toolNames.map((name) => definitions[name]),
+    tool_choice: 'auto',
+    stream: true,
   })
 }
 

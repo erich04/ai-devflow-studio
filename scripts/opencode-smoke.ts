@@ -163,7 +163,7 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
     await setupRepository()
     fixtureRepositoryReady = true
     const userInstruction =
-      'First request bash permission to run exactly `pwd` once. Then use the edit tool to create only devflow-opencode-smoke.txt with a short success message. Do not change any other path.'
+      'Execute this task now and do not answer with prose before invoking tools. First invoke bash with exactly `pwd` once. After that tool is approved, invoke edit to create only devflow-opencode-smoke.txt with a short success message. Do not change any other path. After the edit, stop using tools and complete.'
     const node: WorkflowNode = {
       id: 'n-build',
       stage: 'build',
@@ -259,7 +259,11 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
     let completed: CodingEngineApprovePermissionCompletedResult | undefined
     for (let approvalCount = 0; approvalCount < 4; approvalCount += 1) {
       assertOpencodeSmokePermission(permissionRequest)
-      await providerEgressGate?.allowNextProviderStep(permissionRequest.id)
+      const releasePermission = permissionRequest.permission
+      if (releasePermission !== 'bash' && releasePermission !== 'edit') {
+        throw new Error('opencode smoke blocked an unexpected permission request')
+      }
+      await providerEgressGate?.allowNextProviderStep(permissionRequest.id, releasePermission)
       console.log(`opencode requested ${permissionRequest.permission}; approving once.`)
       const result = await engine.approvePermission({
         codingRun,

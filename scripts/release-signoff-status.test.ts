@@ -101,7 +101,7 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
       model: 'ark-code-latest',
       keyEnvName: 'ANTHROPIC_AUTH_TOKEN',
       duration: '1m38s',
-      permissionRelay: 'bash -> edit -> bash',
+      permissionRelay: 'bash -> edit',
       diffEvidence: ['devflow-opencode-smoke.txt'],
       testEvidence: 'passed',
       cleanup: 'passed',
@@ -116,9 +116,9 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
             resolvedConfigPreflight: 'passed',
             providerRetryObserved: false,
             egressGate: {
-              armedSegmentCount: 2,
-              forwardedRequestCount: 2,
-              completedResponseCount: 2,
+              armedSegmentCount: 3,
+              forwardedRequestCount: 3,
+              completedResponseCount: 3,
               blockedUncreditedRequestCount: 0,
               blockedInvalidCount: 0,
               failedSegmentCount: 0,
@@ -281,6 +281,7 @@ describe('release signoff status', () => {
       { model: 'other-model' },
       { keyEnvName: 'OTHER_KEY' },
       { opencodeVersion: '1.18.14' },
+      { permissionRelay: 'bash -> edit -> bash' },
       { diffEvidence: ['/private/tmp/devflow-opencode-smoke.txt'] },
       { diffEvidence: ['../devflow-opencode-smoke.txt'] },
       {
@@ -292,15 +293,23 @@ describe('release signoff status', () => {
       {
         egressGate: {
           ...(ready.realOpencodeRecord.value?.egressGate as Record<string, unknown>),
-          forwardedRequestCount: 3,
+          forwardedRequestCount: 2,
         },
       },
       {
         egressGate: {
           ...(ready.realOpencodeRecord.value?.egressGate as Record<string, unknown>),
-          armedSegmentCount: 1,
-          forwardedRequestCount: 1,
-          completedResponseCount: 1,
+          armedSegmentCount: 2,
+          forwardedRequestCount: 2,
+          completedResponseCount: 2,
+        },
+      },
+      {
+        egressGate: {
+          ...(ready.realOpencodeRecord.value?.egressGate as Record<string, unknown>),
+          armedSegmentCount: 4,
+          forwardedRequestCount: 4,
+          completedResponseCount: 4,
         },
       },
     ]) {

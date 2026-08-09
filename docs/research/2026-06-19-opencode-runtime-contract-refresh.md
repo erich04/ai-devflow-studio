@@ -245,11 +245,12 @@ timeout without retaining provider text, secrets, or paths.
 
 For the release-only live run, OpenCode receives a dummy credential and a random loopback base URL.
 A candidate-owned credential egress gate is the only component that attaches the actual provider
-token to a request, pins upstream traffic to the official Ark Responses endpoint, and permits one
-request for the initial model step plus at most
-one outstanding continuation credit after one or more explicit managed permission approvals. It
-requires a successful `response.completed` SSE terminal event and proves that no uncredited request
-reached Ark before `automaticRetry: false` can be recorded.
+token to a request and pins upstream traffic to the official Ark Responses endpoint. It enforces
+exactly three segments—bash-only with required tool choice, edit-only with required tool choice, then
+completion-only with tools removed—and allows each continuation only after the exact preceding
+permission is approved. It requires a successful `response.completed` SSE terminal event for every
+segment and proves that no uncredited request reached Ark before `automaticRetry: false` can be
+recorded.
 
 ## v0.9.2 Go Criteria
 

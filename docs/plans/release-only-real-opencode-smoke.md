@@ -98,13 +98,17 @@ deadline. Either condition aborts the managed session and must complete verified
 smoke can finish.
 
 The release smoke uses a stricter tool profile: wildcard deny followed by `ask` for only
-`edit` and `bash`. The provider egress gate grants one request credit for the
-initial model step and at most one outstanding continuation credit after one or more explicit,
-unique managed permission approvals; credits never accumulate. The smoke waits for the source
-Responses stream to complete before replying to the permission. A second uncredited request is
-blocked locally and permanently marks the smoke failed. A pass
-requires every credited segment to produce one successful `response.completed` stream, zero blocked
-uncredited requests, zero invalid requests, zero failed segments, and no active connection at cleanup.
+`edit` and `bash`. The credential-owning gate enforces exactly three credited provider segments:
+bash-only, edit-only, and completion-only. Before forwarding each Responses request, it retains only
+the required tool for the first two segments, sets `tool_choice` to `required`, disables parallel
+tool calls, and removes all tools for the completion segment. The initial credit is bash-only; the
+unique approved bash permission activates edit-only, and the unique approved edit permission
+activates completion-only. Credits never accumulate. The smoke waits for the source Responses stream
+to complete before replying to its permission. An invalid approval sequence or uncredited request is
+blocked locally, revokes any outstanding credit, and permanently marks the smoke failed. A pass
+requires all three credited segments to produce one successful `response.completed` stream, with zero
+blocked uncredited requests, zero invalid requests, zero failed segments, and no active connection at
+cleanup.
 
 ## Required Evidence To Record
 
@@ -145,9 +149,9 @@ at `docs/releases/v1.4.0/real-opencode.json` uses the same observed non-secret m
   "resolvedConfigPreflight": "passed",
   "providerRetryObserved": false,
   "egressGate": {
-    "armedSegmentCount": 2,
-    "forwardedRequestCount": 2,
-    "completedResponseCount": 2,
+    "armedSegmentCount": 3,
+    "forwardedRequestCount": 3,
+    "completedResponseCount": 3,
     "blockedUncreditedRequestCount": 0,
     "blockedInvalidCount": 0,
     "failedSegmentCount": 0,
@@ -188,7 +192,7 @@ The required field meanings are:
 | Key handling | `ANTHROPIC_AUTH_TOKEN` name only, never its value |
 | Result | `passed` only after every criterion succeeds |
 | Duration | Approximate runtime |
-| Permission relay | Permission sequence, for example `bash -> edit -> bash` |
+| Permission relay | Exact V1.4 permission sequence `bash -> edit` |
 | Diff evidence | Changed path summary, repo-relative only |
 | Test evidence | passed/failed/timed_out |
 | Cleanup | managed worktree deleted or cleanup_failed |
@@ -212,9 +216,10 @@ The release-only real smoke passes only when all are true:
 - The no-network resolved-config preflight passed for the candidate-owned V1.4 Responses profile.
 - The engine was explicitly `DEVFLOW_CODING_ENGINE=opencode-http`.
 - `opencode serve` started and created a managed session.
-- DevFlow relayed at least one real permission request.
-- The credential-owning egress gate forwarded exactly one completed Responses request per explicitly
-  credited segment and observed no uncredited, invalid, failed, or active request at cleanup.
+- DevFlow relayed exactly two real permission requests in order: `bash -> edit`.
+- The credential-owning egress gate forwarded exactly the three credited bash-only, edit-only, and
+  completion-only Responses segments and observed no uncredited, invalid, failed, or active request
+  at cleanup.
 - The run produced a redacted diff.
 - The smoke ran Test Evidence successfully.
 - Managed worktree cleanup completed with a deleted workspace; any cleanup failure fails the smoke.
