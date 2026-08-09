@@ -2767,6 +2767,348 @@ describe('createLocalStore', () => {
     reopened.close()
   })
 
+  it('atomically preserves the first terminal Coding Agent transition', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const { completedAt: _completedAt, ...activeFields } = codingRun
+    const activeRun: CodingAgentRun = {
+      ...activeFields,
+      status: 'waiting_permission',
+      summary: 'Waiting for a permission decision.',
+    }
+    const cancelledRun: CodingAgentRun = {
+      ...activeRun,
+      status: 'cancelled',
+      summary: 'Cancelled first.',
+      completedAt: '2026-08-01T00:01:00.000Z',
+    }
+    const staleCompletedRun: CodingAgentRun = {
+      ...activeRun,
+      status: 'completed',
+      summary: 'This stale completion must not win.',
+      completedAt: '2026-08-01T00:02:00.000Z',
+    }
+    await store.saveCodingAgentRun(activeRun)
+
+    const cancelled = store.commitCodingAgentMutation({
+      expectedRun: activeRun,
+      expectedPendingPermissionRequestIds: [],
+      run: cancelledRun,
+    })
+    const staleCompletion = store.commitCodingAgentMutation({
+      expectedRun: activeRun,
+      expectedPendingPermissionRequestIds: [],
+      run: staleCompletedRun,
+    })
+
+    await expect(cancelled).resolves.toMatchObject({ committed: true, run: cancelledRun })
+    await expect(staleCompletion).resolves.toMatchObject({
+      committed: false,
+      reason: 'stale_run',
+      run: cancelledRun,
+    })
+    expect(await store.listCodingAgentRuns()).toEqual([cancelledRun])
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    expect(await reopened.listCodingAgentRuns()).toEqual([cancelledRun])
+    await expect(reopened.commitCodingAgentMutation({
+      expectedRun: cancelledRun,
+      expectedPendingPermissionRequestIds: [],
+      run: { ...cancelledRun, status: 'completed', summary: 'Terminal rewrite attempt.' },
+    })).resolves.toMatchObject({
+      committed: false,
+      reason: 'terminal_run',
+      run: cancelledRun,
+    })
+    expect(await reopened.listCodingAgentRuns()).toEqual([cancelledRun])
+    reopened.close()
+  })
+
+  it('atomically reserves only one active Coding Agent run per project', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const { completedAt: _completedAt, ...activeFields } = codingRun
+    const firstRun: CodingAgentRun = {
+      ...activeFields,
+      id: 'coding-run-reservation-1',
+      status: 'preparing',
+      summary: 'Preparing the first run.',
+    }
+    const secondRun: CodingAgentRun = {
+      ...activeFields,
+      id: 'coding-run-reservation-2',
+      status: 'preparing',
+      summary: 'Preparing the second run.',
+    }
+
+    const first = store.reserveCodingAgentRun(firstRun)
+    const second = store.reserveCodingAgentRun(secondRun)
+
+    await expect(first).resolves.toEqual({ reserved: true, run: firstRun })
+    await expect(second).resolves.toEqual({
+      reserved: false,
+      reason: 'active_run_exists',
+      run: firstRun,
+    })
+    expect(await store.listCodingAgentRuns()).toEqual([firstRun])
+    store.close()
+  })
+
+  it('atomically rejects a stale continuation bundle after terminalization', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const { completedAt: _completedAt, ...activeFields } = codingRun
+    const activeRun: CodingAgentRun = {
+      ...activeFields,
+      status: 'waiting_permission',
+      summary: 'Waiting for a permission decision.',
+    }
+    const cancelledRun: CodingAgentRun = {
+      ...activeRun,
+      status: 'cancelled',
+      summary: 'Cancelled first.',
+      completedAt: '2026-08-01T00:01:00.000Z',
+    }
+    const nextPermission: CodingPermissionRequest = {
+      ...permissionRequest,
+      id: 'permission-next',
+      status: 'pending',
+      requestedAt: '2026-08-01T00:02:00.000Z',
+      expiresAt: '2026-08-01T00:03:00.000Z',
+    }
+    const continuationEvent: CodingAgentEvent = {
+      ...codingEvent,
+      id: 'coding-event-next-permission',
+      sequence: 2,
+      metadata: { requestId: nextPermission.id },
+      timestamp: nextPermission.requestedAt,
+    }
+    await store.saveCodingAgentRun(activeRun)
+
+    const terminal = store.commitCodingAgentMutation({
+      expectedRun: activeRun,
+      expectedPendingPermissionRequestIds: [],
+      run: cancelledRun,
+    })
+    const staleContinuation = store.commitCodingAgentMutation({
+      expectedRun: activeRun,
+      expectedPendingPermissionRequestIds: [],
+      run: { ...activeRun, summary: 'Waiting for another permission.' },
+      events: [continuationEvent],
+      permissionRequests: [nextPermission],
+    })
+
+    await expect(terminal).resolves.toMatchObject({ committed: true })
+    await expect(staleContinuation).resolves.toMatchObject({
+      committed: false,
+      reason: 'stale_run',
+      run: cancelledRun,
+    })
+    expect(await store.listCodingPermissionRequests()).toEqual([])
+    expect(await store.listCodingAgentEvents()).toEqual([])
+    store.close()
+  })
+
+  it('detects a new pending permission even when the Coding Agent run JSON is unchanged', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const { completedAt: _completedAt, ...activeFields } = codingRun
+    const activeRun: CodingAgentRun = {
+      ...activeFields,
+      status: 'waiting_permission',
+      summary: 'Waiting for another permission.',
+    }
+    const nextPermission: CodingPermissionRequest = {
+      ...permissionRequest,
+      id: 'permission-next-same-run',
+      status: 'pending',
+      requestedAt: '2026-08-01T00:02:00.000Z',
+      expiresAt: '2026-08-01T00:03:00.000Z',
+    }
+    const timedOutRun: CodingAgentRun = {
+      ...activeRun,
+      status: 'timed_out',
+      summary: 'Timed out.',
+      completedAt: '2026-08-01T00:04:00.000Z',
+    }
+    await store.saveCodingAgentRun(activeRun)
+
+    const continuation = store.commitCodingAgentMutation({
+      expectedRun: activeRun,
+      expectedPendingPermissionRequestIds: [],
+      run: activeRun,
+      permissionRequests: [nextPermission],
+    })
+    const staleTimeout = store.commitCodingAgentMutation({
+      expectedRun: activeRun,
+      expectedPendingPermissionRequestIds: [],
+      run: timedOutRun,
+    })
+
+    await expect(continuation).resolves.toMatchObject({ committed: true })
+    await expect(staleTimeout).resolves.toMatchObject({
+      committed: false,
+      reason: 'stale_permission_set',
+      run: activeRun,
+    })
+    expect(await store.listCodingAgentRuns()).toEqual([activeRun])
+    expect(await store.listCodingPermissionRequests()).toEqual([nextPermission])
+    store.close()
+  })
+
+  it('atomically claims one pending Coding Agent permission decision', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const { completedAt: _completedAt, ...activeFields } = codingRun
+    const activeRun: CodingAgentRun = {
+      ...activeFields,
+      status: 'waiting_permission',
+      summary: 'Waiting for a permission decision.',
+    }
+    const pendingRequest: CodingPermissionRequest = {
+      ...permissionRequest,
+      status: 'pending',
+    }
+    const approvedRequest: CodingPermissionRequest = { ...pendingRequest, status: 'approved' }
+    const expiredRequest: CodingPermissionRequest = { ...pendingRequest, status: 'expired' }
+    const approvedDecision: CodingPermissionDecision = {
+      ...permissionDecision,
+      id: 'decision-approved',
+      decision: 'approved',
+    }
+    const expiredDecision: CodingPermissionDecision = {
+      ...permissionDecision,
+      id: 'decision-expired',
+      decision: 'expired',
+    }
+    await store.saveCodingAgentRun(activeRun)
+    await store.saveCodingPermissionRequest(pendingRequest)
+
+    const approved = store.commitCodingAgentMutation({
+      expectedRun: activeRun,
+      expectedPendingPermissionRequestIds: [pendingRequest.id],
+      expectedPermissionRequests: [pendingRequest],
+      permissionRequests: [approvedRequest],
+      permissionDecisions: [approvedDecision],
+    })
+    const expired = store.commitCodingAgentMutation({
+      expectedRun: activeRun,
+      expectedPendingPermissionRequestIds: [pendingRequest.id],
+      expectedPermissionRequests: [pendingRequest],
+      permissionRequests: [expiredRequest],
+      permissionDecisions: [expiredDecision],
+    })
+
+    await expect(approved).resolves.toMatchObject({ committed: true })
+    await expect(expired).resolves.toMatchObject({
+      committed: false,
+      reason: 'stale_permission_set',
+    })
+    expect(await store.listCodingPermissionRequests()).toEqual([approvedRequest])
+    expect(await store.listCodingPermissionDecisions()).toEqual([approvedDecision])
+    store.close()
+  })
+
+  it('enforces pending creation and one matching decision for permission settlement', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const { completedAt: _completedAt, ...activeFields } = codingRun
+    const activeRun: CodingAgentRun = {
+      ...activeFields,
+      status: 'waiting_permission',
+      summary: 'Waiting for a permission decision.',
+    }
+    const pendingRequest: CodingPermissionRequest = {
+      ...permissionRequest,
+      status: 'pending',
+    }
+    const approvedRequest: CodingPermissionRequest = { ...pendingRequest, status: 'approved' }
+    await store.saveCodingAgentRun(activeRun)
+    await store.saveCodingPermissionRequest(pendingRequest)
+
+    await expect(store.commitCodingAgentMutation({
+      expectedRun: activeRun,
+      expectedPendingPermissionRequestIds: [pendingRequest.id],
+      permissionRequests: [{ ...approvedRequest, id: 'permission-new-terminal' }],
+    })).rejects.toThrow('New Coding Agent permission requests must be pending and undecided')
+
+    await expect(store.commitCodingAgentMutation({
+      expectedRun: activeRun,
+      expectedPendingPermissionRequestIds: [pendingRequest.id],
+      expectedPermissionRequests: [pendingRequest],
+      permissionRequests: [approvedRequest],
+    })).rejects.toThrow('Settled Coding Agent permission requests require one matching decision')
+
+    await expect(store.commitCodingAgentMutation({
+      expectedRun: activeRun,
+      expectedPendingPermissionRequestIds: [pendingRequest.id],
+      expectedPermissionRequests: [pendingRequest],
+      permissionRequests: [approvedRequest],
+      permissionDecisions: [{
+        ...permissionDecision,
+        id: 'decision-mismatched',
+        decision: 'rejected',
+      }],
+    })).rejects.toThrow('Settled Coding Agent permission requests require one matching decision')
+
+    expect(await store.listCodingPermissionRequests()).toEqual([pendingRequest])
+    expect(await store.listCodingPermissionDecisions()).toEqual([])
+    store.close()
+  })
+
+  it('rejects reused provider permission IDs without reviving or crossing run authority', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const { completedAt: _completedAt, ...activeFields } = codingRun
+    const firstRun: CodingAgentRun = {
+      ...activeFields,
+      status: 'waiting_permission',
+      summary: 'Waiting for another permission.',
+    }
+    const secondRun: CodingAgentRun = {
+      ...activeFields,
+      id: 'coding-run-2',
+      projectId: 'project-2',
+      status: 'waiting_permission',
+      summary: 'Waiting in another project.',
+    }
+    const approvedRequest: CodingPermissionRequest = {
+      ...permissionRequest,
+      status: 'approved',
+    }
+    await store.saveCodingAgentRun(firstRun)
+    await store.saveCodingAgentRun(secondRun)
+    await store.saveCodingPermissionRequest(approvedRequest)
+
+    await expect(store.commitCodingAgentMutation({
+      expectedRun: firstRun,
+      expectedPendingPermissionRequestIds: [],
+      run: firstRun,
+      permissionRequests: [{ ...approvedRequest, status: 'pending' }],
+    })).resolves.toMatchObject({
+      committed: false,
+      reason: 'stale_permission_request',
+    })
+    await expect(store.commitCodingAgentMutation({
+      expectedRun: secondRun,
+      expectedPendingPermissionRequestIds: [],
+      run: secondRun,
+      permissionRequests: [{
+        ...approvedRequest,
+        codingRunId: secondRun.id,
+        runId: secondRun.runId,
+        nodeId: secondRun.nodeId,
+        status: 'pending',
+      }],
+    })).resolves.toMatchObject({
+      committed: false,
+      reason: 'stale_permission_request',
+    })
+    expect(await store.listCodingPermissionRequests()).toEqual([approvedRequest])
+    store.close()
+  })
+
   it('keeps the old fixed scope terminal without blocking a canonical save after re-pairing', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })

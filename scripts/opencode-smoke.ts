@@ -16,9 +16,11 @@ import {
   assertOpencodeSmokePermission,
   buildIsolatedOpencodeSmokeRuntimeEnv,
   combineOpencodeSmokeFailures,
+  createOpencodeSmokeStageError,
   opencodeSmokeErrorMessages,
   OPENCODE_SMOKE_MARKER,
   type CandidateGitIdentity,
+  type OpencodeSmokeStage,
 } from './opencode-smoke-policy.ts'
 
 type ReadyOpencodeSmokePreflight = Extract<
@@ -96,6 +98,7 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
     opencodeRuntimeRoot,
   )
   const now = new Date().toISOString()
+  let activeStage: OpencodeSmokeStage = 'setup'
   let processManager: ReturnType<typeof createOpencodeProcessManager> | undefined
   let fixtureRepositoryReady = false
   let hasPrimaryError = false
@@ -165,6 +168,7 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
       createdAt: now,
       updatedAt: now,
     }
+    activeStage = 'workspace_create'
     const workspace = await createManagedCodingWorkspace({
       project,
       codingRunId: 'coding-run-opencode-smoke',
@@ -188,6 +192,7 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
       worktreePath: '<managed-worktree-created-after-budget-approval>',
       branchName: '<managed-branch-created-after-budget-approval>',
     })
+    activeStage = 'engine_start'
     processManager = createOpencodeProcessManager()
     const engine = createOpencodeHttpCodingEngineAdapter({
       binaryPath: preflight.binaryPath,
@@ -212,6 +217,7 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
       ...briefContext,
       brief,
     })
+    activeStage = 'permission_relay'
     let codingRun = started.codingRun
     let permissionRequest = started.permissionRequest
     const codingEvents = [...started.events]
@@ -240,6 +246,7 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
       throw new Error('opencode smoke exceeded the permission approval limit.')
     }
 
+    activeStage = 'diff_validation'
     assertOpencodeSmokeChangedPaths(completed.diff.changedPaths)
     const markerPath = path.join(workspace.worktreePath, OPENCODE_SMOKE_MARKER)
     const markerContents = await readFile(markerPath, 'utf8')
@@ -277,6 +284,7 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
       throw new Error('opencode smoke leaked an absolute workspace path in tool metadata.')
     }
 
+    activeStage = 'dependency_bootstrap'
     const bootstrap = await runDependencyBootstrap({
       codingRunId: completed.codingRun.id,
       runId: completed.codingRun.runId,
@@ -291,6 +299,7 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
       throw new Error(`Dependency bootstrap did not pass: ${bootstrap.status} ${bootstrap.summary}`)
     }
 
+    activeStage = 'test_execution'
     const tests = await runLocalTestCommand({
       command: project.testCommand,
       cwd: workspace.worktreePath,
@@ -300,14 +309,16 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
       throw new Error(`opencode smoke tests did not pass: ${tests.summary}`)
     }
 
+    activeStage = 'runtime_cleanup'
     await processManager.stopAll()
+    activeStage = 'workspace_cleanup'
     const deletedWorkspace = await deleteManagedCodingWorkspace(workspace)
     if (deletedWorkspace.cleanupStatus !== 'deleted') {
       throw new Error(`Managed worktree cleanup did not complete: ${deletedWorkspace.cleanupStatus}`)
     }
     successChangedPaths = completed.diff.changedPaths
   } catch (error) {
-    primaryError = error
+    primaryError = createOpencodeSmokeStageError(activeStage, error)
     hasPrimaryError = true
   }
 

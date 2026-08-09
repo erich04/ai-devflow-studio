@@ -1,5 +1,14 @@
 import type { CodingPermissionRequest } from '../packages/shared/src/domain.ts'
 import { redactSensitiveText } from '../packages/shared/src/redaction.ts'
+import {
+  CodingEngineContinuationCleanupError,
+  CodingEnginePermissionDiscoveryError,
+  CodingEngineStartupCleanupError,
+} from '../apps/desktop/electron/coding-engine-lifecycle.ts'
+import {
+  OpencodeMessageResponseError,
+  type OpencodeMessageResponseErrorCode,
+} from '../apps/desktop/electron/opencode-http-adapter.ts'
 import { join } from 'node:path'
 
 export const OPENCODE_SMOKE_MARKER = 'devflow-opencode-smoke.txt'
@@ -7,6 +16,89 @@ export const OPENCODE_SMOKE_MARKER = 'devflow-opencode-smoke.txt'
 export type CandidateGitIdentity = {
   head: string
   branch: string
+}
+
+export type OpencodeSmokeStage =
+  | 'setup'
+  | 'workspace_create'
+  | 'engine_start'
+  | 'permission_relay'
+  | 'diff_validation'
+  | 'dependency_bootstrap'
+  | 'test_execution'
+  | 'runtime_cleanup'
+  | 'workspace_cleanup'
+
+export type OpencodeSmokeFailureCode =
+  | OpencodeMessageResponseErrorCode
+  | CodingEnginePermissionDiscoveryError['code']
+  | 'unclassified'
+
+export class OpencodeSmokeStageError extends Error {
+  readonly stage: OpencodeSmokeStage
+  readonly code: OpencodeSmokeFailureCode
+  readonly statusCode: number | undefined
+  readonly retryable: boolean | undefined
+  readonly cleanup: 'failed' | undefined
+
+  constructor(input: {
+    stage: OpencodeSmokeStage
+    code: OpencodeSmokeFailureCode
+    statusCode?: number
+    retryable?: boolean
+    cleanup?: 'failed'
+    cause: unknown
+  }) {
+    const details = [
+      `opencode smoke failed; stage=${input.stage}`,
+      `code=${input.code}`,
+      ...(input.statusCode === undefined ? [] : [`status=${input.statusCode}`]),
+      ...(input.retryable === undefined ? [] : [`retryable=${String(input.retryable)}`]),
+      ...(input.cleanup === undefined ? [] : [`cleanup=${input.cleanup}`]),
+    ]
+    super(details.join('; '), { cause: input.cause })
+    this.name = 'OpencodeSmokeStageError'
+    this.stage = input.stage
+    this.code = input.code
+    this.statusCode = input.statusCode
+    this.retryable = input.retryable
+    this.cleanup = input.cleanup
+  }
+}
+
+export function createOpencodeSmokeStageError(
+  stage: OpencodeSmokeStage,
+  error: unknown,
+): OpencodeSmokeStageError {
+  const cleanupFailed =
+    error instanceof CodingEngineStartupCleanupError ||
+    error instanceof CodingEngineContinuationCleanupError
+  const primaryError = cleanupFailed ? error.errors[0] : error
+  const classification = classifyOpencodeSmokeError(primaryError)
+  return new OpencodeSmokeStageError({
+    stage,
+    ...classification,
+    ...(cleanupFailed ? { cleanup: 'failed' as const } : {}),
+    cause: error,
+  })
+}
+
+function classifyOpencodeSmokeError(error: unknown): {
+  code: OpencodeSmokeFailureCode
+  statusCode?: number
+  retryable?: boolean
+} {
+  if (error instanceof OpencodeMessageResponseError) {
+    return {
+      code: error.code,
+      ...(error.statusCode === undefined ? {} : { statusCode: error.statusCode }),
+      ...(error.retryable === undefined ? {} : { retryable: error.retryable }),
+    }
+  }
+  if (error instanceof CodingEnginePermissionDiscoveryError) {
+    return { code: error.code }
+  }
+  return { code: 'unclassified' }
 }
 
 const OPENCODE_RUNTIME_ENV_ALLOWLIST = [

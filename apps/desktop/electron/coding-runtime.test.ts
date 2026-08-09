@@ -26,11 +26,20 @@ import type {
 } from '@ai-devflow/shared'
 import { estimateCodingRuntimeCost } from '@ai-devflow/shared'
 import { createFakeCodingEngineAdapter, type CodingEngineAdapter } from './coding-engine'
-import { CodingEngineStartupCleanupError } from './coding-engine-lifecycle'
+import {
+  CodingEngineContinuationCleanupError,
+  CodingEngineStartupCleanupError,
+} from './coding-engine-lifecycle'
 import { createCodingRuntime } from './coding-runtime'
+import type {
+  CodingAgentMutation,
+  CodingAgentMutationResult,
+  ReserveCodingAgentRunResult,
+} from './local-store'
 import { createOpencodeHttpCodingEngineAdapter } from './opencode-http-engine'
 import {
   createDefaultOpencodePermissionRules,
+  OpencodeMessageResponseError,
   type Fetcher,
 } from './opencode-http-adapter'
 
@@ -55,7 +64,7 @@ describe('CodingRuntime', () => {
         directory: '/tmp/worktree',
         permission: createDefaultOpencodePermissionRules(),
       },
-      {},
+      { info: {}, parts: [] },
       [{
         id: 'permission-cross-runtime',
         sessionID: 'ses-cross-runtime',
@@ -157,7 +166,7 @@ describe('CodingRuntime', () => {
         directory: '/tmp/worktree',
         permission: createDefaultOpencodePermissionRules(),
       },
-      {},
+      { info: {}, parts: [] },
       [{
         id: 'permission-cross-runtime-rejected',
         sessionID: 'ses-cross-runtime-rejected',
@@ -165,6 +174,14 @@ describe('CodingRuntime', () => {
         metadata: { filepath: 'devflow-opencode-smoke.txt' },
       }],
       true,
+      [{
+        id: 'permission-cross-runtime-rejected',
+        sessionID: 'ses-cross-runtime-rejected',
+        permission: 'edit',
+      }],
+      true,
+      [],
+      [],
     ])
     const engine = createOpencodeHttpCodingEngineAdapter({
       binaryPath: 'opencode',
@@ -227,6 +244,9 @@ describe('CodingRuntime', () => {
     const abortUrl =
       'http://127.0.0.1:4097/session/ses-cross-runtime-rejected/abort?directory=%2Ftmp%2Fworktree'
     expect(fetcher.urls).toContain(abortUrl)
+    expect(fetcher.urls).toContain(
+      'http://127.0.0.1:4097/permission/permission-cross-runtime-rejected/reply?directory=%2Ftmp%2Fworktree',
+    )
     expect(store.codingRuns.at(-1)?.status).toBe(expectedStatus)
     const requestCountAfterReject = fetcher.urls.length
     await engine.cancel({ codingRun: started.codingRun })
@@ -262,6 +282,295 @@ describe('CodingRuntime', () => {
     expect(store.codingEvents.map((event) => event.kind)).toEqual(['brief', 'permission'])
     expect(store.permissionRequests).toHaveLength(1)
     expect(await readFile(path.join(store.workspaces[0]!.worktreePath, 'package.json'), 'utf8')).toContain('fixture')
+  })
+
+  it('atomically reserves one run before concurrent starts can reach the coding engine', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const originalListCodingAgentRuns = store.listCodingAgentRuns.bind(store)
+    let initialReads = 0
+    let releaseInitialReads: (() => void) | undefined
+    const initialReadsReady = new Promise<void>((resolve) => {
+      releaseInitialReads = resolve
+    })
+    vi.spyOn(store, 'listCodingAgentRuns').mockImplementation(async (runId?: string) => {
+      if (!runId && initialReads < 2) {
+        initialReads += 1
+        if (initialReads === 2) {
+          releaseInitialReads?.()
+        }
+        await initialReadsReady
+        return []
+      }
+      return originalListCodingAgentRuns(runId)
+    })
+    const engine = createFakeCodingEngineAdapter()
+    const start = vi.spyOn(engine, 'start')
+    let idSequence = 0
+    const runtimeDependencies = {
+      store,
+      engine,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: (prefix = 'id') => `${prefix}-concurrent-start-${idSequence += 1}`,
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    }
+    const runtimeA = createCodingRuntime(runtimeDependencies)
+    const runtimeB = createCodingRuntime(runtimeDependencies)
+    const request = {
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Add the marker file.',
+    }
+
+    const results = await Promise.allSettled([
+      runtimeA.runCodingAgent(request),
+      runtimeB.runCodingAgent(request),
+    ])
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
+    expect(start).toHaveBeenCalledOnce()
+    expect(store.codingRuns).toHaveLength(1)
+    expect(store.workspaces).toHaveLength(1)
+    expect(store.permissionRequests).toHaveLength(1)
+  })
+
+  it('rolls back the provider session and workspace when the atomic startup bundle cannot persist', async () => {
+    const repo = await gitRepo()
+    const workspace = managedWorkspace({
+      id: 'workspace-startup-bundle-failure',
+      codingRunId: 'coding-run-startup-bundle-failure',
+      sourcePath: repo,
+      worktreePath: '/tmp/startup-bundle-failure-worktree',
+    })
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const originalCommitCodingAgentMutation = store.commitCodingAgentMutation.bind(store)
+    vi.spyOn(store, 'commitCodingAgentMutation').mockImplementation(async (mutation) => {
+      if (mutation.run?.status === 'waiting_permission') {
+        throw new Error('startup bundle persistence failed')
+      }
+      return originalCommitCodingAgentMutation(mutation)
+    })
+    const engine = createFakeCodingEngineAdapter()
+    const cancel = vi.spyOn(engine, 'cancel')
+    const deleteWorkspace = vi.fn(async (input: ManagedCodingWorkspace) => ({
+      ...input,
+      cleanupStatus: 'deleted' as const,
+      deletedAt: '2026-06-17T00:00:01.000Z',
+    }))
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      createWorkspace: async () => workspace,
+      deleteWorkspace,
+      idGenerator: fixedIds('coding-run-startup-bundle-failure'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    })
+
+    await expect(runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Start atomically.',
+    })).rejects.toThrow('startup bundle persistence failed')
+
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(deleteWorkspace).toHaveBeenCalledWith(workspace)
+    expect(store.permissionRequests).toHaveLength(0)
+    expect(store.codingEvents.some((event) => event.kind === 'brief' || event.kind === 'permission')).toBe(false)
+    expect(store.codingRuns).toEqual([
+      expect.objectContaining({
+        id: 'coding-run-startup-bundle-failure',
+        status: 'failed',
+        managedWorkspaceId: workspace.id,
+      }),
+    ])
+    expect(store.workspaces).toEqual([
+      expect.objectContaining({ id: workspace.id, cleanupStatus: 'deleted' }),
+    ])
+  })
+
+  it('cancels by the reserved run id when an engine returns a malformed startup identity', async () => {
+    const repo = await gitRepo()
+    const workspace = managedWorkspace({
+      id: 'workspace-malformed-startup',
+      codingRunId: 'coding-run-malformed-startup',
+      sourcePath: repo,
+      worktreePath: '/tmp/malformed-startup-worktree',
+    })
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const delegate = createFakeCodingEngineAdapter()
+    const engine: CodingEngineAdapter = {
+      ...delegate,
+      async start(input) {
+        const bundle = await delegate.start(input)
+        return {
+          ...bundle,
+          codingRun: { ...bundle.codingRun, id: 'unexpected-provider-run-id' },
+        }
+      },
+    }
+    const cancel = vi.spyOn(engine, 'cancel')
+    const deleteWorkspace = vi.fn(async (input: ManagedCodingWorkspace) => ({
+      ...input,
+      cleanupStatus: 'deleted' as const,
+      deletedAt: '2026-06-17T00:00:01.000Z',
+    }))
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      createWorkspace: async () => workspace,
+      deleteWorkspace,
+      idGenerator: fixedIds('coding-run-malformed-startup', 'malformed-failure-event'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    })
+
+    await expect(runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Reject malformed ownership.',
+    })).rejects.toThrow('Coding Agent mutation cannot change the run identity')
+
+    expect(cancel).toHaveBeenCalledWith({
+      codingRun: expect.objectContaining({ id: 'coding-run-malformed-startup' }),
+    })
+    expect(deleteWorkspace).toHaveBeenCalledWith(workspace)
+    expect(store.codingRuns).toEqual([
+      expect.objectContaining({ id: 'coding-run-malformed-startup', status: 'failed' }),
+    ])
+  })
+
+  it('links a recoverable workspace when its first registration and physical cleanup both fail', async () => {
+    const repo = await gitRepo()
+    const workspace = managedWorkspace({
+      id: 'workspace-registration-cleanup-failure',
+      codingRunId: 'coding-run-registration-cleanup-failure',
+      sourcePath: repo,
+      worktreePath: '/tmp/registration-cleanup-failure-worktree',
+    })
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const saveWorkspace = vi.spyOn(store, 'saveManagedCodingWorkspace')
+    saveWorkspace.mockRejectedValueOnce(new Error('workspace registration unavailable'))
+    const engine = createFakeCodingEngineAdapter()
+    const start = vi.spyOn(engine, 'start')
+    const deleteWorkspace = vi.fn(async () => {
+      throw new Error('worktree is still busy')
+    })
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      createWorkspace: async () => workspace,
+      deleteWorkspace,
+      idGenerator: fixedIds('coding-run-registration-cleanup-failure', 'cleanup-failure-event'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    })
+
+    await expect(runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Register the worktree safely.',
+    })).rejects.toThrow('coding workspace registration failed and cleanup did not complete')
+
+    expect(start).not.toHaveBeenCalled()
+    expect(deleteWorkspace).toHaveBeenCalledWith(workspace)
+    expect(saveWorkspace).toHaveBeenCalledTimes(2)
+    expect(store.workspaces).toEqual([
+      expect.objectContaining({
+        id: workspace.id,
+        cleanupStatus: 'cleanup_failed',
+        cleanupError: 'worktree is still busy',
+      }),
+    ])
+    expect(store.codingRuns).toEqual([
+      expect.objectContaining({
+        id: 'coding-run-registration-cleanup-failure',
+        status: 'preparing',
+        managedWorkspaceId: workspace.id,
+      }),
+    ])
+    expect(store.codingEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'error',
+        metadata: { sessionCleanupStatus: 'cleanup_failed' },
+      }),
+    ]))
+  })
+
+  it('cleans the workspace and terminalizes its reservation when workspace linking throws', async () => {
+    const repo = await gitRepo()
+    const workspace = managedWorkspace({
+      id: 'workspace-link-failure',
+      codingRunId: 'coding-run-link-failure',
+      sourcePath: repo,
+      worktreePath: '/tmp/workspace-link-failure-worktree',
+    })
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const originalCommitCodingAgentMutation = store.commitCodingAgentMutation.bind(store)
+    vi.spyOn(store, 'commitCodingAgentMutation').mockImplementation(async (mutation) => {
+      if (mutation.run?.status === 'preparing' && mutation.run.managedWorkspaceId) {
+        throw new Error('workspace link persistence failed')
+      }
+      return originalCommitCodingAgentMutation(mutation)
+    })
+    const engine = createFakeCodingEngineAdapter()
+    const start = vi.spyOn(engine, 'start')
+    const deleteWorkspace = vi.fn(async (input: ManagedCodingWorkspace) => ({
+      ...input,
+      cleanupStatus: 'deleted' as const,
+      deletedAt: '2026-06-17T00:00:01.000Z',
+    }))
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      createWorkspace: async () => workspace,
+      deleteWorkspace,
+      idGenerator: fixedIds('coding-run-link-failure', 'link-failure-event'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    })
+
+    await expect(runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Link the worktree safely.',
+    })).rejects.toThrow('workspace link persistence failed')
+
+    expect(start).not.toHaveBeenCalled()
+    expect(deleteWorkspace).toHaveBeenCalledWith(workspace)
+    expect(store.workspaces).toEqual([
+      expect.objectContaining({ id: workspace.id, cleanupStatus: 'deleted' }),
+    ])
+    expect(store.codingRuns).toEqual([
+      expect.objectContaining({ id: 'coding-run-link-failure', status: 'failed' }),
+    ])
   })
 
   it('removes and records a managed worktree when the coding engine fails to start safely', async () => {
@@ -310,7 +619,14 @@ describe('CodingRuntime', () => {
         cleanupStatus: 'deleted',
       }),
     ])
-    expect(store.codingRuns).toHaveLength(0)
+    expect(store.codingRuns).toEqual([
+      expect.objectContaining({
+        id: 'coding-run-start-failure',
+        status: 'failed',
+        managedWorkspaceId: workspace.id,
+        summary: 'Coding engine failed to start.',
+      }),
+    ])
   })
 
   it('retains a recoverable workspace when coding engine startup cleanup is incomplete', async () => {
@@ -357,7 +673,19 @@ describe('CodingRuntime', () => {
         cleanupError: 'Coding engine session cleanup did not complete; manual cleanup is required.',
       }),
     ])
-    expect(store.codingRuns).toHaveLength(0)
+    expect(store.codingRuns).toEqual([
+      expect.objectContaining({
+        id: 'coding-run-start-cleanup-failure',
+        status: 'preparing',
+        managedWorkspaceId: workspace.id,
+      }),
+    ])
+    expect(store.codingEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'error',
+        metadata: { sessionCleanupStatus: 'cleanup_failed' },
+      }),
+    ]))
   })
 
   it('blocks a paid coding run when no authoritative budget guard is configured', async () => {
@@ -1121,6 +1449,50 @@ describe('CodingRuntime', () => {
     expect(publisher.publishPermission).toHaveBeenCalledWith(store.permissionRequests[0])
   })
 
+  it('keeps durable startup state when UI and timeout notifications throw', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    const cancel = vi.spyOn(engine, 'cancel')
+    const notificationFailure = () => {
+      throw new Error('renderer notification unavailable')
+    }
+    const publisher = {
+      publishRunStatus: vi.fn(notificationFailure),
+      publishEvent: vi.fn(notificationFailure),
+      publishPermission: vi.fn(notificationFailure),
+    }
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      publisher,
+      schedulePermissionTimeout: vi.fn(notificationFailure),
+      scheduleRunTimeout: vi.fn(notificationFailure),
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-notification-failure'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    })
+
+    const result = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Persist before notifying.',
+    })
+
+    expect(result.codingRun.status).toBe('waiting_permission')
+    expect(cancel).not.toHaveBeenCalled()
+    expect(store.codingRuns).toEqual([result.codingRun])
+    expect(store.codingEvents).toHaveLength(2)
+    expect(store.permissionRequests).toHaveLength(1)
+    expect(store.workspaces).toEqual([expect.objectContaining({ cleanupStatus: 'active' })])
+  })
+
   it('recursively redacts Coding Agent event messages and metadata before storage and publish', async () => {
     const repo = await gitRepo()
     const store = new MemoryCodingStore({
@@ -1290,6 +1662,61 @@ describe('CodingRuntime', () => {
       status: 'timed_out',
     })
     expect(store.codingEvents.map((event) => event.kind)).toContain('cleanup')
+  })
+
+  it('retries timeout terminalization when an unchanged run gains a pending permission', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    let expireRun: (() => Promise<void>) | undefined
+    const runtime = createCodingRuntime({
+      store,
+      engine: createFakeCodingEngineAdapter(),
+      scheduleRunTimeout: (_codingRun, callback) => {
+        expireRun = callback
+      },
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-timeout-race'),
+      now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:02:00.000Z'),
+    })
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Add the marker file.',
+    })
+    const originalCommit = store.commitCodingAgentMutation.bind(store)
+    let injected = false
+    const commit = vi.spyOn(store, 'commitCodingAgentMutation').mockImplementation(async (mutation) => {
+      if (!injected && mutation.run?.status === 'timed_out') {
+        injected = true
+        const currentRequest = store.permissionRequests[0]!
+        store.permissionRequests.push({
+          ...currentRequest,
+          id: 'permission-arrived-during-timeout',
+          requestedAt: '2026-06-17T00:01:30.000Z',
+          expiresAt: '2026-06-17T00:02:30.000Z',
+        })
+        return {
+          committed: false,
+          reason: 'stale_permission_set' as const,
+          run: store.codingRuns.find((candidate) => candidate.id === started.codingRun.id)!,
+        }
+      }
+      return originalCommit(mutation)
+    })
+
+    await expireRun?.()
+
+    expect(commit.mock.calls.filter(([mutation]) => mutation.run?.status === 'timed_out')).toHaveLength(2)
+    expect(store.codingRuns.at(-1)?.status).toBe('timed_out')
+    expect(store.permissionRequests).toHaveLength(2)
+    expect(store.permissionRequests.every((request) => request.status === 'expired')).toBe(true)
+    expect(store.permissionDecisions).toHaveLength(2)
   })
 
   it('keeps a timed-out run recoverable when engine cancellation fails', async () => {
@@ -1577,6 +2004,391 @@ describe('CodingRuntime', () => {
     expect(publisher.publishPermission).toHaveBeenCalledWith(nextPermission)
   })
 
+  it('fails closed when the provider reuses a settled permission id for the next request', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    engine.engine = 'opencode-http'
+    const cancel = vi.spyOn(engine, 'cancel')
+    vi.spyOn(engine, 'approvePermission').mockImplementationOnce(async (input) => ({
+      codingRun: {
+        ...input.codingRun,
+        engine: 'opencode-http',
+        status: 'waiting_permission',
+        summary: 'opencode is waiting for another DevFlow permission relay.',
+      },
+      events: [],
+      permissionRequest: {
+        ...input.request,
+        status: 'pending',
+        requestedAt: '2026-06-17T00:01:00.000Z',
+        expiresAt: '2026-06-17T00:02:00.000Z',
+      },
+    }))
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      budgetGuard: createAllowingBudgetGuard(),
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-1', 'decision-1', 'failure-event-1', 'cleanup-event-1'),
+      now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:01:00.000Z'),
+    })
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'openai',
+      userInstruction: 'Add the marker file.',
+    })
+
+    await expect(runtime.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id,
+      codingRunId: started.codingRun.id,
+      decidedBy: 'user-1',
+      decision: 'approved',
+      comment: 'Approved first permission.',
+    })).rejects.toThrow('Coding Agent continuation could not be persisted safely.')
+
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(store.permissionRequests).toHaveLength(1)
+    expect(store.permissionRequests[0]!.status).toBe('approved')
+    expect(store.codingRuns.at(-1)?.status).toBe('failed')
+    expect(store.workspaces.at(-1)?.cleanupStatus).toBe('deleted')
+  })
+
+  it('fails the run and cleans its worktree when the engine fails after an approved permission', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    const providerFailure = new OpencodeMessageResponseError({
+      code: 'provider_api_error',
+      statusCode: 429,
+      retryable: true,
+    })
+    vi.spyOn(engine, 'approvePermission').mockRejectedValueOnce(providerFailure)
+    const cancel = vi.spyOn(engine, 'cancel')
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-1', 'decision-1', 'cleanup-event-1', 'failure-event-1'),
+      now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:01:00.000Z'),
+    })
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Add the marker file.',
+    })
+
+    await expect(runtime.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id,
+      codingRunId: started.codingRun.id,
+      decidedBy: 'user-1',
+      decision: 'approved',
+      comment: 'Approved from test.',
+    })).rejects.toBe(providerFailure)
+
+    expect(cancel).toHaveBeenCalledWith({ codingRun: started.codingRun })
+    expect(store.permissionRequests[0]?.status).toBe('approved')
+    expect(store.permissionDecisions).toHaveLength(1)
+    expect(store.codingRuns.at(-1)).toMatchObject({
+      status: 'failed',
+      summary: 'Coding engine failed after permission approval.',
+      completedAt: '2026-06-17T00:01:00.000Z',
+    })
+    expect(store.workspaces.at(-1)).toMatchObject({ cleanupStatus: 'deleted' })
+    expect(store.codingEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'error',
+        message: 'Coding engine failed after permission approval.',
+      }),
+      expect.objectContaining({ kind: 'cleanup' }),
+    ]))
+  })
+
+  it('retains the active run and worktree when continuation cleanup is not confirmed', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    const providerFailure = new OpencodeMessageResponseError({ code: 'provider_api_error' })
+    vi.spyOn(engine, 'approvePermission').mockRejectedValueOnce(providerFailure)
+    vi.spyOn(engine, 'cancel').mockRejectedValueOnce(new Error('RAW_CLEANUP_DETAIL'))
+    const deleteWorkspace = vi.fn()
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      deleteWorkspace,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-1', 'decision-1', 'failure-event-1'),
+      now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:01:00.000Z'),
+    })
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Add the marker file.',
+    })
+
+    const failure = runtime.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id,
+      codingRunId: started.codingRun.id,
+      decidedBy: 'user-1',
+      decision: 'approved',
+      comment: 'Approved from test.',
+    })
+
+    await expect(failure).rejects.toBeInstanceOf(CodingEngineContinuationCleanupError)
+    expect(deleteWorkspace).not.toHaveBeenCalled()
+    expect(store.codingRuns.at(-1)?.status).toBe('waiting_permission')
+    expect(store.workspaces.at(-1)?.cleanupStatus).toBe('active')
+    expect(store.codingEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'error',
+        message: 'Coding engine failed after permission approval and session cleanup did not complete.',
+        metadata: { sessionCleanupStatus: 'cleanup_failed' },
+      }),
+    ]))
+    expect(JSON.stringify(store.codingRuns)).not.toContain('RAW_CLEANUP_DETAIL')
+    expect(JSON.stringify(store.codingEvents)).not.toContain('RAW_CLEANUP_DETAIL')
+  })
+
+  it('does not overwrite a concurrently cancelled run with a stale approval failure', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    let rejectApproval: ((error: unknown) => void) | undefined
+    const approvePermission = vi.spyOn(engine, 'approvePermission').mockImplementationOnce(
+      () => new Promise((_, reject) => {
+        rejectApproval = reject
+      }),
+    )
+    const cancel = vi.spyOn(engine, 'cancel')
+    const deleteWorkspace = vi.fn(async (workspace: ManagedCodingWorkspace) => ({
+      ...workspace,
+      deletedAt: '2026-06-17T00:02:00.000Z',
+      cleanupStatus: 'deleted' as const,
+    }))
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      deleteWorkspace,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-1', 'decision-1', 'cancel-cleanup-event-1', 'cancel-status-event-1'),
+      now: sequenceNow(
+        '2026-06-17T00:00:00.000Z',
+        '2026-06-17T00:01:00.000Z',
+        '2026-06-17T00:02:00.000Z',
+      ),
+    })
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Add the marker file.',
+    })
+    const approval = runtime.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id,
+      codingRunId: started.codingRun.id,
+      decidedBy: 'user-1',
+      decision: 'approved',
+      comment: 'Approved from test.',
+    })
+    await vi.waitFor(() => expect(approvePermission).toHaveBeenCalledOnce())
+
+    await runtime.cancelCodingAgentRun({ codingRunId: started.codingRun.id })
+    const providerFailure = new CodingEngineContinuationCleanupError([
+      new OpencodeMessageResponseError({ code: 'provider_api_error' }),
+      new Error('session cleanup did not complete'),
+    ])
+    rejectApproval?.(providerFailure)
+    await expect(approval).rejects.toBe(providerFailure)
+
+    expect(store.codingRuns.at(-1)).toMatchObject({
+      status: 'cancelled',
+      summary: 'Coding Agent run cancelled by user.',
+    })
+    expect(deleteWorkspace).toHaveBeenCalledOnce()
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+
+  it('does not overwrite a concurrently cancelled run with a stale approval success', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    const originalApprovePermission = engine.approvePermission.bind(engine)
+    let pendingApprovalInput: Parameters<CodingEngineAdapter['approvePermission']>[0] | undefined
+    let resolveApproval: ((result: Awaited<ReturnType<CodingEngineAdapter['approvePermission']>>) => void) | undefined
+    const approvePermission = vi.spyOn(engine, 'approvePermission').mockImplementationOnce(
+      (input) => {
+        pendingApprovalInput = input
+        return new Promise((resolve) => {
+          resolveApproval = resolve
+        })
+      },
+    )
+    const cancel = vi.spyOn(engine, 'cancel')
+    const deleteWorkspace = vi.fn(async (workspace: ManagedCodingWorkspace) => ({
+      ...workspace,
+      deletedAt: '2026-06-17T00:02:00.000Z',
+      cleanupStatus: 'deleted' as const,
+    }))
+    const runTestCommand = vi.fn()
+    const completeWorkflowBuild = vi.fn()
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      deleteWorkspace,
+      runTestCommand,
+      completeWorkflowBuild,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-1', 'decision-1', 'cancel-cleanup-event-1', 'cancel-status-event-1'),
+      now: sequenceNow(
+        '2026-06-17T00:00:00.000Z',
+        '2026-06-17T00:01:00.000Z',
+        '2026-06-17T00:02:00.000Z',
+      ),
+    })
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Add the marker file.',
+    })
+    const approval = runtime.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id,
+      codingRunId: started.codingRun.id,
+      decidedBy: 'user-1',
+      decision: 'approved',
+      comment: 'Approved from test.',
+    })
+    await vi.waitFor(() => expect(approvePermission).toHaveBeenCalledOnce())
+
+    await runtime.cancelCodingAgentRun({ codingRunId: started.codingRun.id })
+    if (!pendingApprovalInput || !resolveApproval) {
+      throw new Error('approval test did not capture the pending engine request')
+    }
+    resolveApproval(await originalApprovePermission(pendingApprovalInput))
+    await expect(approval).resolves.toMatchObject({ status: 'approved' })
+
+    expect(store.codingRuns.at(-1)).toMatchObject({
+      status: 'cancelled',
+      summary: 'Coding Agent run cancelled by user.',
+    })
+    expect(store.diffArtifacts).toHaveLength(0)
+    expect(deleteWorkspace).toHaveBeenCalledOnce()
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(runTestCommand).not.toHaveBeenCalled()
+    expect(completeWorkflowBuild).not.toHaveBeenCalled()
+  })
+
+  it('does not overwrite a concurrently timed-out run with a stale approval success', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    const originalApprovePermission = engine.approvePermission.bind(engine)
+    let pendingApprovalInput: Parameters<CodingEngineAdapter['approvePermission']>[0] | undefined
+    let resolveApproval: ((result: Awaited<ReturnType<CodingEngineAdapter['approvePermission']>>) => void) | undefined
+    const approvePermission = vi.spyOn(engine, 'approvePermission').mockImplementationOnce(
+      (input) => {
+        pendingApprovalInput = input
+        return new Promise((resolve) => {
+          resolveApproval = resolve
+        })
+      },
+    )
+    const cancel = vi.spyOn(engine, 'cancel')
+    const deleteWorkspace = vi.fn(async (workspace: ManagedCodingWorkspace) => ({
+      ...workspace,
+      deletedAt: '2026-06-17T00:02:00.000Z',
+      cleanupStatus: 'deleted' as const,
+    }))
+    const runTestCommand = vi.fn()
+    const completeWorkflowBuild = vi.fn()
+    let expireRun: (() => Promise<void>) | undefined
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      deleteWorkspace,
+      runTestCommand,
+      completeWorkflowBuild,
+      scheduleRunTimeout: (_codingRun, callback) => {
+        expireRun = callback
+      },
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds(
+        'coding-run-1',
+        'decision-1',
+        'timeout-decision-1',
+        'timeout-cleanup-event-1',
+        'timeout-tool-event-1',
+        'timeout-status-event-1',
+      ),
+      now: sequenceNow(
+        '2026-06-17T00:00:00.000Z',
+        '2026-06-17T00:01:00.000Z',
+        '2026-06-17T00:02:00.000Z',
+      ),
+    })
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Add the marker file.',
+    })
+    const approval = runtime.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id,
+      codingRunId: started.codingRun.id,
+      decidedBy: 'user-1',
+      decision: 'approved',
+      comment: 'Approved from test.',
+    })
+    await vi.waitFor(() => expect(approvePermission).toHaveBeenCalledOnce())
+
+    await expireRun?.()
+    if (!pendingApprovalInput || !resolveApproval) {
+      throw new Error('approval test did not capture the pending engine request')
+    }
+    resolveApproval(await originalApprovePermission(pendingApprovalInput))
+    await expect(approval).resolves.toMatchObject({ status: 'approved' })
+
+    expect(store.codingRuns.at(-1)).toMatchObject({ status: 'timed_out' })
+    expect(store.diffArtifacts).toHaveLength(0)
+    expect(deleteWorkspace).toHaveBeenCalledOnce()
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(runTestCommand).not.toHaveBeenCalled()
+    expect(completeWorkflowBuild).not.toHaveBeenCalled()
+  })
+
   it('does not complete the workflow build when dependency bootstrap fails', async () => {
     const repo = await gitRepo()
     const store = new MemoryCodingStore({
@@ -1831,12 +2643,98 @@ describe('CodingRuntime', () => {
     expect(deleteWorkspace).toHaveBeenCalledWith(workspace)
     expect(store.workspaces.at(-1)).toMatchObject({ cleanupStatus: 'deleted' })
     expect(store.codingEvents.map((event) => event.kind)).toContain('cleanup')
-    expect(store.codingEvents.at(-1)).toMatchObject({
-      kind: 'status',
-      message: 'Coding Agent run cancelled by user.',
-    })
+    expect(store.codingEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'status',
+        message: 'Coding Agent run cancelled by user.',
+      }),
+    ]))
     expect(completeWorkflowBuild).not.toHaveBeenCalled()
   })
+
+  it('atomically rejects pending permissions when cancelling an active coding run', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-cancel-pending'),
+      now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:02:00.000Z'),
+    })
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Add the marker file.',
+    })
+
+    const cancelled = await runtime.cancelCodingAgentRun({ codingRunId: started.codingRun.id })
+
+    expect(cancelled.status).toBe('cancelled')
+    expect(store.permissionRequests).toEqual([
+      expect.objectContaining({ status: 'rejected' }),
+    ])
+    expect(store.permissionDecisions).toEqual([
+      expect.objectContaining({
+        decision: 'rejected',
+        decidedBy: 'devflow-cancel',
+      }),
+    ])
+    expect(store.codingEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'tool_result',
+        metadata: expect.objectContaining({
+          permissionRequestId: store.permissionRequests[0]!.id,
+          status: 'rejected',
+        }),
+      }),
+    ]))
+  })
+
+  it.each(['completed', 'failed', 'timed_out', 'interrupted', 'cancelled'] as const)(
+    'does not rewrite a terminal %s coding run as cancelled',
+    async (status) => {
+      const terminalRun = codingRun({
+        id: 'coding-run-terminal',
+        status,
+        completedAt: '2026-06-17T00:02:00.000Z',
+      })
+      const workspace = managedWorkspace({
+        id: 'workspace-terminal',
+        codingRunId: terminalRun.id,
+      })
+      const store = new MemoryCodingStore({
+        projects: [project('/tmp/repo')],
+        runs: [buildRun()],
+        codingRuns: [terminalRun],
+        workspaces: [workspace],
+      })
+      const engine = createFakeCodingEngineAdapter()
+      const cancel = vi.spyOn(engine, 'cancel')
+      const deleteWorkspace = vi.fn()
+      const runtime = createCodingRuntime({
+        store,
+        engine,
+        deleteWorkspace,
+        idGenerator: fixedIds('unexpected-event'),
+        now: fixedNow('2026-06-17T00:03:00.000Z'),
+      })
+
+      await expect(runtime.cancelCodingAgentRun({ codingRunId: terminalRun.id })).resolves.toEqual(terminalRun)
+
+      expect(store.codingRuns).toEqual([terminalRun])
+      expect(cancel).not.toHaveBeenCalled()
+      expect(deleteWorkspace).not.toHaveBeenCalled()
+      expect(store.codingEvents).toEqual([])
+    },
+  )
 })
 
 type StoreSeed = {
@@ -1918,6 +2816,99 @@ class MemoryCodingStore {
 
   async saveCodingAgentRun(run: CodingAgentRun) {
     upsert(this.codingRuns, run)
+  }
+
+  async reserveCodingAgentRun(run: CodingAgentRun): Promise<ReserveCodingAgentRunResult> {
+    const sameId = this.codingRuns.find((candidate) => candidate.id === run.id)
+    if (sameId) {
+      return { reserved: false, reason: 'run_id_exists', run: sameId }
+    }
+    const active = this.codingRuns.find(
+      (candidate) =>
+        candidate.projectId === run.projectId &&
+        ['queued', 'preparing', 'waiting_permission', 'bootstrapping', 'running', 'testing'].includes(candidate.status),
+    )
+    if (active) {
+      return { reserved: false, reason: 'active_run_exists', run: active }
+    }
+    upsert(this.codingRuns, run)
+    return { reserved: true, run }
+  }
+
+  async commitCodingAgentMutation(
+    mutation: CodingAgentMutation,
+  ): Promise<CodingAgentMutationResult> {
+    const currentRun = this.codingRuns.find((run) => run.id === mutation.expectedRun.id)
+    if (!currentRun) {
+      return { committed: false, reason: 'run_not_found', run: null }
+    }
+    if (JSON.stringify(currentRun) !== JSON.stringify(mutation.expectedRun)) {
+      return { committed: false, reason: 'stale_run', run: currentRun }
+    }
+    if (mutation.run && mutation.run.id !== currentRun.id) {
+      throw new Error('Coding Agent mutation cannot change the run identity')
+    }
+    if (
+      mutation.run &&
+      !['queued', 'preparing', 'waiting_permission', 'bootstrapping', 'running', 'testing'].includes(currentRun.status) &&
+      JSON.stringify(mutation.run) !== JSON.stringify(currentRun)
+    ) {
+      return { committed: false, reason: 'terminal_run', run: currentRun }
+    }
+    if (
+      mutation.run &&
+      (
+        mutation.run.runId !== currentRun.runId ||
+        mutation.run.nodeId !== currentRun.nodeId ||
+        mutation.run.projectId !== currentRun.projectId
+      )
+    ) {
+      throw new Error('Coding Agent mutation cannot change the run authority scope')
+    }
+    const expectedPendingIds = [...mutation.expectedPendingPermissionRequestIds].sort()
+    const currentPendingIds = this.permissionRequests
+      .filter((request) => request.codingRunId === currentRun.id && request.status === 'pending')
+      .map((request) => request.id)
+      .sort()
+    if (JSON.stringify(currentPendingIds) !== JSON.stringify(expectedPendingIds)) {
+      return { committed: false, reason: 'stale_permission_set', run: currentRun }
+    }
+    const expectedRequestsById = new Map(
+      (mutation.expectedPermissionRequests ?? []).map((request) => [request.id, request]),
+    )
+    for (const expectedRequest of expectedRequestsById.values()) {
+      const currentRequest = this.permissionRequests.find((request) => request.id === expectedRequest.id)
+      if (!currentRequest || JSON.stringify(currentRequest) !== JSON.stringify(expectedRequest)) {
+        return { committed: false, reason: 'stale_permission_request', run: currentRun }
+      }
+    }
+    const decisionsByRequestId = new Map<string, CodingPermissionDecision>()
+    for (const decision of mutation.permissionDecisions ?? []) {
+      if (decisionsByRequestId.has(decision.requestId)) {
+        throw new Error('Coding Agent mutation cannot record duplicate permission decisions')
+      }
+      decisionsByRequestId.set(decision.requestId, decision)
+    }
+    for (const request of mutation.permissionRequests ?? []) {
+      const currentRequest = this.permissionRequests.find((candidate) => candidate.id === request.id)
+      const expectedRequest = expectedRequestsById.get(request.id)
+      if (!expectedRequest ? Boolean(currentRequest) : currentRequest?.status !== 'pending' || request.status === 'pending') {
+        return { committed: false, reason: 'stale_permission_request', run: currentRun }
+      }
+      if (!expectedRequest) {
+        if (request.status !== 'pending' || decisionsByRequestId.has(request.id)) {
+          throw new Error('New Coding Agent permission requests must be pending and undecided')
+        }
+      } else if (decisionsByRequestId.get(request.id)?.decision !== request.status) {
+        throw new Error('Settled Coding Agent permission requests require one matching decision')
+      }
+    }
+    if (mutation.run) upsert(this.codingRuns, mutation.run)
+    for (const event of mutation.events ?? []) upsert(this.codingEvents, event)
+    for (const request of mutation.permissionRequests ?? []) upsert(this.permissionRequests, request)
+    for (const decision of mutation.permissionDecisions ?? []) upsert(this.permissionDecisions, decision)
+    for (const artifact of mutation.diffArtifacts ?? []) upsert(this.diffArtifacts, artifact)
+    return { committed: true, run: mutation.run ?? currentRun }
   }
 
   async saveCodingAgentEvent(event: CodingAgentEvent) {

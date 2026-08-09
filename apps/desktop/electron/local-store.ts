@@ -86,6 +86,38 @@ export type WorkflowMutation = {
   testEvidence?: readonly TestEvidence[]
 }
 
+export type CodingAgentMutation = {
+  expectedRun: CodingAgentRun
+  expectedPendingPermissionRequestIds: readonly string[]
+  run?: CodingAgentRun
+  expectedPermissionRequests?: readonly CodingPermissionRequest[]
+  permissionRequests?: readonly CodingPermissionRequest[]
+  permissionDecisions?: readonly CodingPermissionDecision[]
+  events?: readonly CodingAgentEvent[]
+  diffArtifacts?: readonly CodingDiffArtifact[]
+}
+
+export type CodingAgentMutationResult =
+  | { committed: true; run: CodingAgentRun }
+  | {
+      committed: false
+      reason: 'run_not_found'
+      run: null
+    }
+  | {
+      committed: false
+      reason: 'stale_run' | 'terminal_run' | 'stale_permission_request' | 'stale_permission_set'
+      run: CodingAgentRun
+    }
+
+export type ReserveCodingAgentRunResult =
+  | { reserved: true; run: CodingAgentRun }
+  | {
+      reserved: false
+      reason: 'active_run_exists' | 'run_id_exists'
+      run: CodingAgentRun
+    }
+
 export type WorkflowCreation = {
   run: WorkflowRun
   artifacts: readonly Artifact[]
@@ -440,6 +472,10 @@ export type LocalStore = {
   saveAgentTokenUsage(usage: AgentTokenUsage): Promise<void>
   listAgentTokenUsage(runId?: string): Promise<AgentTokenUsage[]>
   saveCodingAgentRun(run: CodingAgentRun): Promise<void>
+  reserveCodingAgentRun(run: CodingAgentRun): Promise<ReserveCodingAgentRunResult>
+  commitCodingAgentMutation(
+    mutation: CodingAgentMutation,
+  ): Promise<CodingAgentMutationResult>
   listCodingAgentRuns(runId?: string): Promise<CodingAgentRun[]>
   saveCodingAgentEvent(event: CodingAgentEvent): Promise<void>
   listCodingAgentEvents(codingRunId?: string): Promise<CodingAgentEvent[]>
@@ -1594,6 +1630,77 @@ function writeCodingAgentEvent(db: Database, event: CodingAgentEvent): void {
       safeEvent.sequence,
       JSON.stringify(safeEvent),
       safeEvent.timestamp,
+    ],
+  )
+}
+
+function writeCodingAgentRun(db: Database, run: CodingAgentRun): void {
+  db.run(
+    `
+    insert into coding_agent_runs (id, run_id, node_id, json, started_at, updated_at)
+    values (?, ?, ?, ?, ?, ?)
+    on conflict(id) do update set json = excluded.json, updated_at = excluded.updated_at
+    `,
+    [
+      run.id,
+      run.runId,
+      run.nodeId,
+      JSON.stringify(run),
+      run.startedAt,
+      run.completedAt ?? run.startedAt,
+    ],
+  )
+}
+
+function writeCodingPermissionRequest(db: Database, request: CodingPermissionRequest): void {
+  db.run(
+    `
+    insert into coding_permission_requests (id, coding_run_id, run_id, node_id, json, requested_at)
+    values (?, ?, ?, ?, ?, ?)
+    on conflict(id) do update set json = excluded.json, requested_at = excluded.requested_at
+    `,
+    [
+      request.id,
+      request.codingRunId,
+      request.runId,
+      request.nodeId,
+      JSON.stringify(request),
+      request.requestedAt,
+    ],
+  )
+}
+
+function writeCodingPermissionDecision(db: Database, decision: CodingPermissionDecision): void {
+  db.run(
+    `
+    insert into coding_permission_decisions (id, request_id, coding_run_id, json, decided_at)
+    values (?, ?, ?, ?, ?)
+    on conflict(id) do update set json = excluded.json, decided_at = excluded.decided_at
+    `,
+    [
+      decision.id,
+      decision.requestId,
+      decision.codingRunId,
+      JSON.stringify(decision),
+      decision.decidedAt,
+    ],
+  )
+}
+
+function writeCodingDiffArtifact(db: Database, artifact: CodingDiffArtifact): void {
+  db.run(
+    `
+    insert into coding_diff_artifacts (id, run_id, node_id, project_id, json, created_at)
+    values (?, ?, ?, ?, ?, ?)
+    on conflict(id) do update set json = excluded.json, created_at = excluded.created_at
+    `,
+    [
+      artifact.id,
+      artifact.runId,
+      artifact.nodeId,
+      artifact.projectId,
+      JSON.stringify(artifact),
+      artifact.createdAt,
     ],
   )
 }
@@ -4546,21 +4653,7 @@ class SqlJsLocalStore implements LocalStore {
   async saveCodingAgentRun(run: CodingAgentRun): Promise<void> {
     this.db.run('begin transaction')
     try {
-      this.db.run(
-        `
-        insert into coding_agent_runs (id, run_id, node_id, json, started_at, updated_at)
-        values (?, ?, ?, ?, ?, ?)
-        on conflict(id) do update set json = excluded.json, updated_at = excluded.updated_at
-        `,
-        [
-          run.id,
-          run.runId,
-          run.nodeId,
-          JSON.stringify(run),
-          run.startedAt,
-          run.completedAt ?? run.startedAt,
-        ],
-      )
+      writeCodingAgentRun(this.db, run)
       if (!isActiveCodingAgentRunStatus(run.status)) {
         this.enqueueCanonicalRemoteSyncOperation({
           kind: 'coding-agent-summary', localProjectId: run.projectId,
@@ -4574,6 +4667,197 @@ class SqlJsLocalStore implements LocalStore {
       throw error
     }
     await this.persist()
+  }
+
+  async reserveCodingAgentRun(run: CodingAgentRun): Promise<ReserveCodingAgentRunResult> {
+    if (!isActiveCodingAgentRunStatus(run.status)) {
+      throw new Error('Coding Agent reservation requires an active run status')
+    }
+    const existingRuns = selectJson<CodingAgentRun>(
+      this.db,
+      'select json from coding_agent_runs order by updated_at desc, started_at desc',
+    )
+    const sameId = existingRuns.find((candidate) => candidate.id === run.id)
+    if (sameId) {
+      return { reserved: false, reason: 'run_id_exists', run: sameId }
+    }
+    const active = existingRuns.find(
+      (candidate) => candidate.projectId === run.projectId && isActiveCodingAgentRunStatus(candidate.status),
+    )
+    if (active) {
+      return { reserved: false, reason: 'active_run_exists', run: active }
+    }
+    writeCodingAgentRun(this.db, run)
+    await this.persist()
+    return { reserved: true, run }
+  }
+
+  async commitCodingAgentMutation(
+    mutation: CodingAgentMutation,
+  ): Promise<CodingAgentMutationResult> {
+    const [currentRun] = selectJson<CodingAgentRun>(
+      this.db,
+      'select json from coding_agent_runs where id = ?',
+      [mutation.expectedRun.id],
+    )
+    if (!currentRun) {
+      return { committed: false, reason: 'run_not_found', run: null }
+    }
+    if (JSON.stringify(currentRun) !== JSON.stringify(mutation.expectedRun)) {
+      return { committed: false, reason: 'stale_run', run: currentRun }
+    }
+    if (mutation.run && mutation.run.id !== currentRun.id) {
+      throw new Error('Coding Agent mutation cannot change the run identity')
+    }
+    if (
+      mutation.run &&
+      !isActiveCodingAgentRunStatus(currentRun.status) &&
+      JSON.stringify(mutation.run) !== JSON.stringify(currentRun)
+    ) {
+      return { committed: false, reason: 'terminal_run', run: currentRun }
+    }
+    if (
+      mutation.run &&
+      (
+        mutation.run.runId !== currentRun.runId ||
+        mutation.run.nodeId !== currentRun.nodeId ||
+        mutation.run.projectId !== currentRun.projectId
+      )
+    ) {
+      throw new Error('Coding Agent mutation cannot change the run authority scope')
+    }
+
+    const expectedPendingIds = [...mutation.expectedPendingPermissionRequestIds].sort()
+    const currentPendingIds = selectJson<CodingPermissionRequest>(
+      this.db,
+      'select json from coding_permission_requests where coding_run_id = ?',
+      [currentRun.id],
+    )
+      .filter((request) => request.status === 'pending')
+      .map((request) => request.id)
+      .sort()
+    if (JSON.stringify(currentPendingIds) !== JSON.stringify(expectedPendingIds)) {
+      return { committed: false, reason: 'stale_permission_set', run: currentRun }
+    }
+
+    const expectedRequestsById = new Map(
+      (mutation.expectedPermissionRequests ?? []).map((request) => [request.id, request]),
+    )
+    for (const expectedRequest of expectedRequestsById.values()) {
+      if (expectedRequest.codingRunId !== currentRun.id) {
+        throw new Error('Coding Agent mutation permission request belongs to another run')
+      }
+      const [currentRequest] = selectJson<CodingPermissionRequest>(
+        this.db,
+        'select json from coding_permission_requests where id = ?',
+        [expectedRequest.id],
+      )
+      if (!currentRequest || JSON.stringify(currentRequest) !== JSON.stringify(expectedRequest)) {
+        return { committed: false, reason: 'stale_permission_request', run: currentRun }
+      }
+    }
+
+    const nextRun = mutation.run ?? currentRun
+    const decisionsByRequestId = new Map<string, CodingPermissionDecision>()
+    for (const decision of mutation.permissionDecisions ?? []) {
+      if (decisionsByRequestId.has(decision.requestId)) {
+        throw new Error('Coding Agent mutation cannot record duplicate permission decisions')
+      }
+      decisionsByRequestId.set(decision.requestId, decision)
+    }
+    for (const request of mutation.permissionRequests ?? []) {
+      if (
+        request.codingRunId !== currentRun.id ||
+        request.runId !== currentRun.runId ||
+        request.nodeId !== currentRun.nodeId
+      ) {
+        throw new Error('Coding Agent mutation permission request belongs to another run')
+      }
+      const [existingRequest] = selectJson<CodingPermissionRequest>(
+        this.db,
+        'select json from coding_permission_requests where id = ?',
+        [request.id],
+      )
+      const expectedRequest = expectedRequestsById.get(request.id)
+      if (!expectedRequest) {
+        if (existingRequest) {
+          return { committed: false, reason: 'stale_permission_request', run: currentRun }
+        }
+        if (request.status !== 'pending' || decisionsByRequestId.has(request.id)) {
+          throw new Error('New Coding Agent permission requests must be pending and undecided')
+        }
+      } else if (
+        !existingRequest ||
+        existingRequest.status !== 'pending' ||
+        request.status === 'pending' ||
+        request.codingRunId !== expectedRequest.codingRunId ||
+        request.runId !== expectedRequest.runId ||
+        request.nodeId !== expectedRequest.nodeId
+      ) {
+        return { committed: false, reason: 'stale_permission_request', run: currentRun }
+      } else if (decisionsByRequestId.get(request.id)?.decision !== request.status) {
+        throw new Error('Settled Coding Agent permission requests require one matching decision')
+      }
+    }
+    const mutatedRequestIds = new Set((mutation.permissionRequests ?? []).map((request) => request.id))
+    for (const decision of mutation.permissionDecisions ?? []) {
+      if (decision.codingRunId !== currentRun.id || !mutatedRequestIds.has(decision.requestId)) {
+        throw new Error('Coding Agent mutation permission decision belongs to another run')
+      }
+    }
+    for (const event of mutation.events ?? []) {
+      if (
+        event.codingRunId !== currentRun.id ||
+        event.runId !== currentRun.runId ||
+        event.nodeId !== currentRun.nodeId
+      ) {
+        throw new Error('Coding Agent mutation event belongs to another run')
+      }
+    }
+    for (const artifact of mutation.diffArtifacts ?? []) {
+      if (
+        artifact.runId !== currentRun.runId ||
+        artifact.nodeId !== currentRun.nodeId ||
+        artifact.projectId !== currentRun.projectId
+      ) {
+        throw new Error('Coding Agent mutation diff belongs to another workflow run or node')
+      }
+    }
+
+    this.db.run('begin transaction')
+    try {
+      if (mutation.run) {
+        writeCodingAgentRun(this.db, mutation.run)
+        if (
+          isActiveCodingAgentRunStatus(currentRun.status) &&
+          !isActiveCodingAgentRunStatus(mutation.run.status)
+        ) {
+          this.enqueueCanonicalRemoteSyncOperation({
+            kind: 'coding-agent-summary', localProjectId: mutation.run.projectId,
+            runId: mutation.run.runId, entityId: mutation.run.id,
+            createdAt: mutation.run.completedAt ?? mutation.run.startedAt,
+          })
+        }
+      }
+      for (const event of mutation.events ?? []) {
+        writeCodingAgentEvent(this.db, event)
+      }
+      for (const request of mutation.permissionRequests ?? []) {
+        writeCodingPermissionRequest(this.db, request)
+      }
+      for (const decision of mutation.permissionDecisions ?? []) {
+        writeCodingPermissionDecision(this.db, decision)
+      }
+      for (const artifact of mutation.diffArtifacts ?? []) {
+        writeCodingDiffArtifact(this.db, artifact)
+      }
+      this.db.run('commit')
+    } catch (error) {
+      this.db.run('rollback')
+      throw error
+    }
+    await this.persist()
+    return { committed: true, run: nextRun }
   }
 
   async listCodingAgentRuns(runId?: string): Promise<CodingAgentRun[]> {
@@ -4612,21 +4896,7 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveCodingPermissionRequest(request: CodingPermissionRequest): Promise<void> {
-    this.db.run(
-      `
-      insert into coding_permission_requests (id, coding_run_id, run_id, node_id, json, requested_at)
-      values (?, ?, ?, ?, ?, ?)
-      on conflict(id) do update set json = excluded.json, requested_at = excluded.requested_at
-      `,
-      [
-        request.id,
-        request.codingRunId,
-        request.runId,
-        request.nodeId,
-        JSON.stringify(request),
-        request.requestedAt,
-      ],
-    )
+    writeCodingPermissionRequest(this.db, request)
     await this.persist()
   }
 
@@ -4646,20 +4916,7 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveCodingPermissionDecision(decision: CodingPermissionDecision): Promise<void> {
-    this.db.run(
-      `
-      insert into coding_permission_decisions (id, request_id, coding_run_id, json, decided_at)
-      values (?, ?, ?, ?, ?)
-      on conflict(id) do update set json = excluded.json, decided_at = excluded.decided_at
-      `,
-      [
-        decision.id,
-        decision.requestId,
-        decision.codingRunId,
-        JSON.stringify(decision),
-        decision.decidedAt,
-      ],
-    )
+    writeCodingPermissionDecision(this.db, decision)
     await this.persist()
   }
 
@@ -4747,21 +5004,7 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveCodingDiffArtifact(artifact: CodingDiffArtifact): Promise<void> {
-    this.db.run(
-      `
-      insert into coding_diff_artifacts (id, run_id, node_id, project_id, json, created_at)
-      values (?, ?, ?, ?, ?, ?)
-      on conflict(id) do update set json = excluded.json, created_at = excluded.created_at
-      `,
-      [
-        artifact.id,
-        artifact.runId,
-        artifact.nodeId,
-        artifact.projectId,
-        JSON.stringify(artifact),
-        artifact.createdAt,
-      ],
-    )
+    writeCodingDiffArtifact(this.db, artifact)
     await this.persist()
   }
 
@@ -5137,6 +5380,8 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'saveAgentTrace',
   'saveAgentTokenUsage',
   'saveCodingAgentRun',
+  'reserveCodingAgentRun',
+  'commitCodingAgentMutation',
   'saveCodingAgentEvent',
   'saveCodingPermissionRequest',
   'saveCodingPermissionDecision',

@@ -38,6 +38,50 @@ export type OpencodeDiffFile = {
   status?: string
 }
 
+export type OpencodeMessageResponseErrorCode =
+  | 'provider_auth_error'
+  | 'provider_api_error'
+  | 'unknown_provider_error'
+  | 'output_length'
+  | 'message_aborted'
+  | 'structured_output'
+  | 'context_overflow'
+  | 'content_filter'
+  | 'invalid_message_response'
+
+const OPENCODE_MESSAGE_ERROR_CODES: Readonly<Record<string, OpencodeMessageResponseErrorCode>> = {
+  ProviderAuthError: 'provider_auth_error',
+  APIError: 'provider_api_error',
+  UnknownError: 'unknown_provider_error',
+  MessageOutputLengthError: 'output_length',
+  MessageAbortedError: 'message_aborted',
+  StructuredOutputError: 'structured_output',
+  ContextOverflowError: 'context_overflow',
+  ContentFilterError: 'content_filter',
+}
+
+export class OpencodeMessageResponseError extends Error {
+  readonly code: OpencodeMessageResponseErrorCode
+  readonly statusCode: number | undefined
+  readonly retryable: boolean | undefined
+
+  constructor(input: {
+    code: OpencodeMessageResponseErrorCode
+    statusCode?: number
+    retryable?: boolean
+  }) {
+    super(
+      input.code === 'invalid_message_response'
+        ? 'opencode returned an invalid message response'
+        : 'opencode provider message failed',
+    )
+    this.name = 'OpencodeMessageResponseError'
+    this.code = input.code
+    this.statusCode = input.statusCode
+    this.retryable = input.retryable
+  }
+}
+
 export function createDefaultOpencodePermissionRules(): OpencodePermissionRule[] {
   return ['edit', 'bash', 'write', 'patch'].map((permission) => ({
     permission: permission as OpencodePermissionRule['permission'],
@@ -92,7 +136,7 @@ export async function sendOpencodeMessage(input: {
   text: string
   fetcher?: Fetcher
 }): Promise<unknown> {
-  return postJson(
+  const response = await postJson<unknown>(
     input.fetcher,
     input.baseUrl,
     withDirectory(`/session/${input.sessionId}/message`, input.directory),
@@ -101,6 +145,11 @@ export async function sendOpencodeMessage(input: {
       parts: [{ type: 'text', text: input.text }],
     },
   )
+  const terminalError = opencodeMessageTerminalError(response)
+  if (terminalError) {
+    throw terminalError
+  }
+  return response
 }
 
 export async function listOpencodePermissions(input: {
@@ -163,6 +212,37 @@ export async function listOpencodeDiff(input: {
 
 function withDirectory(pathname: string, directory: string): string {
   return `${pathname}?directory=${encodeURIComponent(directory)}`
+}
+
+function opencodeMessageTerminalError(response: unknown): OpencodeMessageResponseError | undefined {
+  if (!isRecord(response) || !isRecord(response.info) || !Array.isArray(response.parts)) {
+    return new OpencodeMessageResponseError({ code: 'invalid_message_response' })
+  }
+  if (response.info.error === undefined) {
+    return undefined
+  }
+  if (!isRecord(response.info.error)) {
+    return new OpencodeMessageResponseError({ code: 'invalid_message_response' })
+  }
+  const error = response.info.error
+  if (typeof error.name !== 'string') {
+    return new OpencodeMessageResponseError({ code: 'invalid_message_response' })
+  }
+  const code = OPENCODE_MESSAGE_ERROR_CODES[error.name] ?? 'unknown_provider_error'
+  const data = isRecord(error.data) ? error.data : undefined
+  return new OpencodeMessageResponseError({
+    code,
+    ...(typeof data?.statusCode === 'number' && Number.isInteger(data.statusCode)
+      ? { statusCode: data.statusCode }
+      : {}),
+    ...(typeof data?.isRetryable === 'boolean'
+      ? { retryable: data.isRetryable }
+      : {}),
+  })
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 async function getJson<T>(fetcher: Fetcher | undefined, baseUrl: string, pathname: string): Promise<T> {

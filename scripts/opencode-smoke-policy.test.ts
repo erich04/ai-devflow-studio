@@ -1,4 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import {
+  CodingEngineContinuationCleanupError,
+  CodingEnginePermissionDiscoveryError,
+  CodingEngineStartupCleanupError,
+} from '../apps/desktop/electron/coding-engine-lifecycle'
+import { OpencodeMessageResponseError } from '../apps/desktop/electron/opencode-http-adapter'
 import type { CodingPermissionRequest } from '../packages/shared/src/domain'
 import { join } from 'node:path'
 import {
@@ -10,6 +16,7 @@ import {
   buildIsolatedOpencodeSmokeRuntimeEnv,
   buildOpencodeSmokeRuntimeEnv,
   combineOpencodeSmokeFailures,
+  createOpencodeSmokeStageError,
   opencodeSmokeErrorMessages,
   OPENCODE_SMOKE_MARKER,
 } from './opencode-smoke-policy'
@@ -176,6 +183,86 @@ describe('opencode smoke safety policy', () => {
     ).toEqual([
       '[REDACTED:local_absolute_path] failed with [REDACTED:env_secret_assignment]',
     ])
+  })
+
+  it.each([
+    [
+      new OpencodeMessageResponseError({
+        code: 'provider_api_error',
+        statusCode: 401,
+        retryable: false,
+      }),
+      {
+        stage: 'engine_start',
+        code: 'provider_api_error',
+        statusCode: 401,
+        retryable: false,
+        message: 'opencode smoke failed; stage=engine_start; code=provider_api_error; status=401; retryable=false',
+      },
+    ],
+    [
+      new CodingEnginePermissionDiscoveryError('message_completed_without_permission'),
+      {
+        stage: 'engine_start',
+        code: 'message_completed_without_permission',
+        message: 'opencode smoke failed; stage=engine_start; code=message_completed_without_permission',
+      },
+    ],
+    [
+      new CodingEnginePermissionDiscoveryError('permission_discovery_timed_out'),
+      {
+        stage: 'engine_start',
+        code: 'permission_discovery_timed_out',
+        message: 'opencode smoke failed; stage=engine_start; code=permission_discovery_timed_out',
+      },
+    ],
+    [
+      new CodingEngineStartupCleanupError([
+        new OpencodeMessageResponseError({
+          code: 'provider_api_error',
+          statusCode: 429,
+          retryable: true,
+        }),
+        new Error('RAW_PROVIDER_MESSAGE'),
+      ]),
+      {
+        stage: 'engine_start',
+        code: 'provider_api_error',
+        statusCode: 429,
+        retryable: true,
+        cleanup: 'failed',
+        message: 'opencode smoke failed; stage=engine_start; code=provider_api_error; status=429; retryable=true; cleanup=failed',
+      },
+    ],
+  ] as const)('classifies an engine-start failure using only allowlisted diagnostics', (failure, expected) => {
+    const classified = createOpencodeSmokeStageError('engine_start', failure)
+
+    expect(classified).toMatchObject(expected)
+    expect(JSON.stringify(classified)).not.toContain('RAW_PROVIDER_MESSAGE')
+    expect(opencodeSmokeErrorMessages(classified, 'provider-key')).toEqual([expected.message])
+  })
+
+  it('preserves a continuation provider code when permission-relay cleanup fails', () => {
+    const failure = new CodingEngineContinuationCleanupError([
+      new OpencodeMessageResponseError({
+        code: 'provider_api_error',
+        statusCode: 429,
+        retryable: true,
+      }),
+      new Error('RAW_CONTINUATION_CLEANUP_DETAIL'),
+    ])
+
+    const classified = createOpencodeSmokeStageError('permission_relay', failure)
+
+    expect(classified).toMatchObject({
+      stage: 'permission_relay',
+      code: 'provider_api_error',
+      statusCode: 429,
+      retryable: true,
+      cleanup: 'failed',
+      message: 'opencode smoke failed; stage=permission_relay; code=provider_api_error; status=429; retryable=true; cleanup=failed',
+    })
+    expect(JSON.stringify(classified)).not.toContain('RAW_CONTINUATION_CLEANUP_DETAIL')
   })
 })
 

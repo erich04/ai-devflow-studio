@@ -9,6 +9,7 @@ import {
   replyOpencodePermission,
   sendOpencodeMessage,
   type Fetcher,
+  OpencodeMessageResponseError,
 } from './opencode-http-adapter'
 
 describe('opencode HTTP adapter', () => {
@@ -40,9 +41,7 @@ describe('opencode HTTP adapter', () => {
   })
 
   it('sends text prompts, lists permissions, replies, aborts, and fetches diffs through stable endpoints', async () => {
-    const fetcher = jsonFetcher([
-      { id: 'per_1', sessionID: 'ses_1', permission: 'edit', metadata: { filepath: 'src/a.ts' } },
-    ])
+    const fetcher = jsonFetcher({ info: {}, parts: [] })
 
     await listOpencodePermissions({
       baseUrl: 'http://127.0.0.1:4097',
@@ -137,6 +136,115 @@ describe('opencode HTTP adapter', () => {
     expect((error as Error).message).not.toContain('RAW_SECRET_SENTINEL')
     expect((error as Error).message).not.toContain('/private/tmp/secret-worktree')
     expect((error as Error).message).not.toContain('%2Fprivate%2Ftmp%2Fsecret-worktree')
+  })
+
+  it('surfaces a provider error carried by a successful message response without exposing raw details', async () => {
+    const fetcher = jsonFetcher({
+      info: {
+        error: {
+          name: 'APIError',
+          data: {
+            message: 'RAW_PROVIDER_MESSAGE provider-key-value',
+            statusCode: 401,
+            isRetryable: false,
+            body: 'RAW_PROVIDER_BODY',
+            responseHeaders: { 'x-provider-debug': 'RAW_PROVIDER_HEADER' },
+            metadata: { requestId: 'RAW_PROVIDER_METADATA' },
+          },
+        },
+      },
+      parts: [],
+    })
+
+    const error = await sendOpencodeMessage({
+      baseUrl: 'http://127.0.0.1:4097',
+      sessionId: 'ses-1',
+      directory: '/private/tmp/secret-worktree',
+      model: { providerID: 'opencode', modelID: 'big-pickle' },
+      text: 'Change the code.',
+      fetcher,
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(OpencodeMessageResponseError)
+    expect(error).toMatchObject({
+      code: 'provider_api_error',
+      statusCode: 401,
+      retryable: false,
+      message: 'opencode provider message failed',
+    })
+    expect(JSON.stringify(error)).not.toContain('RAW_PROVIDER_MESSAGE')
+    expect(JSON.stringify(error)).not.toContain('RAW_PROVIDER_BODY')
+    expect(JSON.stringify(error)).not.toContain('RAW_PROVIDER_HEADER')
+    expect(JSON.stringify(error)).not.toContain('RAW_PROVIDER_METADATA')
+    expect(JSON.stringify(error)).not.toContain('provider-key-value')
+    expect(JSON.stringify(error)).not.toContain('/private/tmp/secret-worktree')
+  })
+
+  it.each([
+    ['ProviderAuthError', 'provider_auth_error'],
+    ['UnknownError', 'unknown_provider_error'],
+    ['MessageOutputLengthError', 'output_length'],
+    ['MessageAbortedError', 'message_aborted'],
+    ['StructuredOutputError', 'structured_output'],
+    ['ContextOverflowError', 'context_overflow'],
+    ['ContentFilterError', 'content_filter'],
+  ] as const)('classifies the %s terminal response without exposing its payload', async (name, code) => {
+    const fetcher = jsonFetcher({
+      info: {
+        error: {
+          name,
+          data: {
+            message: 'RAW_PROVIDER_MESSAGE provider-key-value',
+            body: 'RAW_PROVIDER_BODY',
+            responseHeaders: { 'x-provider-debug': 'RAW_PROVIDER_HEADER' },
+            metadata: { requestId: 'RAW_PROVIDER_METADATA' },
+          },
+        },
+      },
+      parts: [],
+    })
+
+    const error = await sendOpencodeMessage({
+      baseUrl: 'http://127.0.0.1:4097',
+      sessionId: 'ses-1',
+      directory: '/private/tmp/secret-worktree',
+      model: { providerID: 'opencode', modelID: 'big-pickle' },
+      text: 'Change the code.',
+      fetcher,
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(OpencodeMessageResponseError)
+    expect(error).toMatchObject({ code })
+    expect(JSON.stringify(error)).not.toContain('RAW_PROVIDER_MESSAGE')
+    expect(JSON.stringify(error)).not.toContain('RAW_PROVIDER_BODY')
+    expect(JSON.stringify(error)).not.toContain('RAW_PROVIDER_HEADER')
+    expect(JSON.stringify(error)).not.toContain('RAW_PROVIDER_METADATA')
+    expect(JSON.stringify(error)).not.toContain('provider-key-value')
+    expect(JSON.stringify(error)).not.toContain('/private/tmp/secret-worktree')
+  })
+
+  it('rejects malformed message success bodies without exposing their content', async () => {
+    const fetcher = jsonFetcher({
+      info: { unexpected: 'RAW_SECRET_SENTINEL' },
+      parts: 'not-an-array',
+    })
+
+    const error = await sendOpencodeMessage({
+      baseUrl: 'http://127.0.0.1:4097',
+      sessionId: 'ses-1',
+      directory: '/private/tmp/secret-worktree',
+      model: { providerID: 'opencode', modelID: 'big-pickle' },
+      text: 'Change the code.',
+      fetcher,
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(OpencodeMessageResponseError)
+    expect(error).toMatchObject({
+      code: 'invalid_message_response',
+      message: 'opencode returned an invalid message response',
+    })
+    expect(JSON.stringify(error)).not.toContain('RAW_SECRET_SENTINEL')
+    expect(JSON.stringify(error)).not.toContain('/private/tmp/secret-worktree')
   })
 
   it('reports transport failures without exposing query paths or raw fetch errors', async () => {

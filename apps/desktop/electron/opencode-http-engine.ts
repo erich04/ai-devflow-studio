@@ -8,7 +8,11 @@ import {
 import { realpathSync, statSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 import type { CodingEngineAdapter, CodingEngineStartInput } from './coding-engine.js'
-import { CodingEngineStartupCleanupError } from './coding-engine-lifecycle.js'
+import {
+  CodingEngineContinuationCleanupError,
+  CodingEnginePermissionDiscoveryError,
+  CodingEngineStartupCleanupError,
+} from './coding-engine-lifecycle.js'
 import {
   createOpencodeSession,
   createDefaultOpencodePermissionRules,
@@ -17,6 +21,7 @@ import {
   listOpencodePermissions,
   replyOpencodePermission,
   sendOpencodeMessage,
+  OpencodeMessageResponseError,
   type Fetcher,
   type OpencodePermission,
 } from './opencode-http-adapter.js'
@@ -41,21 +46,30 @@ export type OpencodeHttpCodingEngineConfig = {
   runtimeEnv?: NodeJS.ProcessEnv
   permissionPollMs?: number
   permissionDiscoveryTimeoutMs?: number
+  startupCleanupTimeoutMs?: number
   resolveManagedDirectory?: (directory: string) => string
   captureWorktreeDiff?: (input: { worktreePath: string }) => Promise<CapturedWorktreeDiff>
 }
 
+type OpencodeMessagePromise = Promise<
+  | { ok: true }
+  | { ok: false; error: unknown }
+>
+
 type OpencodeRuntimeSession = {
   baseUrl: string
+  cleanupPromise?: Promise<void>
   directory: string
   handledPermissionIds: Set<string>
-  messagePromise: Promise<
-    | { ok: true }
-    | { ok: false; error: unknown }
-  >
+  messagePromise: OpencodeMessagePromise
   nextEventSequence: number
   projectPath: string
   sessionId: string
+}
+
+type PendingOpencodeSession = {
+  cancelRequested: boolean
+  promise: Promise<OpencodeRuntimeSession>
 }
 
 export function createOpencodeHttpCodingEngineAdapter(
@@ -63,6 +77,51 @@ export function createOpencodeHttpCodingEngineAdapter(
 ): CodingEngineAdapter {
   const processManager = config.processManager ?? createOpencodeProcessManager()
   const sessions = new Map<string, OpencodeRuntimeSession>()
+  const pendingSessions = new Map<string, PendingOpencodeSession>()
+
+  function cleanupRegisteredSession(
+    codingRunId: string,
+    session: OpencodeRuntimeSession,
+    phase: 'startup' | 'continuation' | 'cancellation',
+  ): Promise<void> {
+    if (!session.cleanupPromise) {
+      const cleanupPromise = cleanupOpencodeSession({
+        baseUrl: session.baseUrl,
+        sessionId: session.sessionId,
+        directory: session.directory,
+        messagePromise: session.messagePromise,
+        phase,
+        settlementTimeoutMs: config.startupCleanupTimeoutMs ?? 5_000,
+        ...fetcherOption(config.fetcher),
+      }).then(
+        () => {
+          if (sessions.get(codingRunId) === session) {
+            sessions.delete(codingRunId)
+          }
+        },
+        (error: unknown) => {
+          if (session.cleanupPromise === cleanupPromise) {
+            delete session.cleanupPromise
+          }
+          throw error
+        },
+      )
+      session.cleanupPromise = cleanupPromise
+    }
+    return session.cleanupPromise
+  }
+
+  async function failForSessionCleanup(cleanupPromise: Promise<void>): Promise<never> {
+    try {
+      await cleanupPromise
+    } catch (cleanupError) {
+      throw new CodingEngineContinuationCleanupError([
+        new Error('opencode session cancellation interrupted permission continuation'),
+        cleanupError,
+      ])
+    }
+    throw new Error('opencode session was cancelled during permission continuation')
+  }
 
   return {
     engine: 'opencode-http',
@@ -85,67 +144,109 @@ export function createOpencodeHttpCodingEngineAdapter(
     async start(input) {
       const resolveManagedDirectory = config.resolveManagedDirectory ?? resolveManagedOpencodeDirectory
       const directory = resolveManagedDirectory(input.workspace.worktreePath)
-      const server = await processManager.ensure({
-        projectId: input.project.id,
-        binaryPath: config.binaryPath,
-        env: config.runtimeEnv ?? process.env,
+      if (sessions.has(input.id) || pendingSessions.has(input.id)) {
+        throw new Error('opencode session already exists for this coding run')
+      }
+      let resolvePendingSession: ((session: OpencodeRuntimeSession) => void) | undefined
+      let rejectPendingSession: ((error: unknown) => void) | undefined
+      const pendingSession = new Promise<OpencodeRuntimeSession>((resolve, reject) => {
+        resolvePendingSession = resolve
+        rejectPendingSession = reject
       })
-      const brief = input.brief
-      const session = await createOpencodeSession({
-        baseUrl: server.baseUrl,
-        directory,
-        title: `DevFlow ${input.run.title}`,
-        model: { providerID: config.providerID, id: config.modelID },
-        ...fetcherOption(config.fetcher),
-      })
+      void pendingSession.catch(() => undefined)
+      const pendingSessionState: PendingOpencodeSession = {
+        cancelRequested: false,
+        promise: pendingSession,
+      }
+      pendingSessions.set(input.id, pendingSessionState)
+      let runtimeSession: OpencodeRuntimeSession | undefined
       try {
-        assertManagedOpencodeSession(session, directory, resolveManagedDirectory)
-        const messagePromise = sendOpencodeMessage({
-          baseUrl: server.baseUrl,
-          sessionId: session.id,
-          directory,
-          model: { providerID: config.providerID, modelID: config.modelID },
-          text: brief.prompt,
-          ...fetcherOption(config.fetcher),
-        }).then(
-          () => ({ ok: true as const }),
-          (error: unknown) => ({ ok: false as const, error }),
-        )
-        const permission = await waitForPermission({
+        const server = await processManager.ensure({
+          projectId: input.project.id,
+          binaryPath: config.binaryPath,
+          env: config.runtimeEnv ?? process.env,
+        })
+        if (pendingSessionState.cancelRequested) {
+          throw new Error('opencode startup was cancelled before session creation')
+        }
+        const brief = input.brief
+        const session = await createOpencodeSession({
           baseUrl: server.baseUrl,
           directory,
-          messagePromise,
-          pollMs: config.permissionPollMs ?? 1_000,
-          sessionId: session.id,
-          timeoutMs: config.permissionDiscoveryTimeoutMs ?? 60_000,
+          title: `DevFlow ${input.run.title}`,
+          model: { providerID: config.providerID, id: config.modelID },
           ...fetcherOption(config.fetcher),
         })
-        sessions.set(input.id, {
+        runtimeSession = {
           baseUrl: server.baseUrl,
           directory,
-          handledPermissionIds: new Set([permission.id]),
-          messagePromise,
-          nextEventSequence: 4,
+          handledPermissionIds: new Set(),
+          messagePromise: Promise.resolve({ ok: true as const }),
+          nextEventSequence: 1,
           projectPath: input.project.path,
           sessionId: session.id,
-        })
-
-        return createStartResult(input, brief.prompt, session.id, permission, directory)
-      } catch (error) {
+        }
+        sessions.set(input.id, runtimeSession)
+        resolvePendingSession?.(runtimeSession)
+        await Promise.resolve()
         try {
-          const aborted = await abortOpencodeSession({
+          const preMessageCleanup = runtimeSession.cleanupPromise
+          if (preMessageCleanup) {
+            await failForSessionCleanup(preMessageCleanup)
+          }
+          if (sessions.get(input.id) !== runtimeSession) {
+            throw new Error('opencode session ownership changed during startup')
+          }
+          assertManagedOpencodeSession(session, directory, resolveManagedDirectory)
+          const messagePromise = sendOpencodeMessage({
             baseUrl: server.baseUrl,
             sessionId: session.id,
             directory,
+            model: { providerID: config.providerID, modelID: config.modelID },
+            text: brief.prompt,
+            ...fetcherOption(config.fetcher),
+          }).then(
+            () => ({ ok: true as const }),
+            (error: unknown) => ({ ok: false as const, error }),
+          )
+          runtimeSession.messagePromise = messagePromise
+          const permission = await waitForPermission({
+            baseUrl: server.baseUrl,
+            directory,
+            messagePromise,
+            pollMs: config.permissionPollMs ?? 1_000,
+            sessionId: session.id,
+            timeoutMs: config.permissionDiscoveryTimeoutMs ?? 60_000,
             ...fetcherOption(config.fetcher),
           })
-          if (aborted !== true) {
-            throw new Error('opencode session abort was not acknowledged')
+          const result = createStartResult(input, brief.prompt, session.id, permission, directory)
+          const cleanupPromise = runtimeSession.cleanupPromise
+          if (cleanupPromise) {
+            await failForSessionCleanup(cleanupPromise)
           }
-        } catch (cleanupError) {
-          throw new CodingEngineStartupCleanupError([error, cleanupError])
+          if (sessions.get(input.id) !== runtimeSession) {
+            throw new Error('opencode session ownership changed during startup')
+          }
+          runtimeSession.handledPermissionIds.add(permission.id)
+          runtimeSession.nextEventSequence = 4
+          return result
+        } catch (error) {
+          try {
+            await cleanupRegisteredSession(input.id, runtimeSession, 'startup')
+          } catch (cleanupError) {
+            throw new CodingEngineStartupCleanupError([error, cleanupError])
+          }
+          throw error
+        }
+      } catch (error) {
+        if (!runtimeSession) {
+          rejectPendingSession?.(error)
         }
         throw error
+      } finally {
+        if (pendingSessions.get(input.id) === pendingSessionState) {
+          pendingSessions.delete(input.id)
+        }
       }
     },
 
@@ -163,106 +264,223 @@ export function createOpencodeHttpCodingEngineAdapter(
         throw new Error('opencode permission reply was not acknowledged')
       }
       session.handledPermissionIds.add(input.request.id)
-      const continuation = await waitForNextPermissionOrMessage({
-        baseUrl: session.baseUrl,
-        directory: session.directory,
-        handledPermissionIds: session.handledPermissionIds,
-        messagePromise: session.messagePromise,
-        pollMs: config.permissionPollMs ?? 1_000,
-        sessionId: session.sessionId,
-        ...fetcherOption(config.fetcher),
-      })
-      if (continuation.kind === 'permission') {
-        session.handledPermissionIds.add(continuation.permission.id)
-        const eventSequence = session.nextEventSequence
-        session.nextEventSequence += 3
-        return createContinuationResult(
-          input.codingRun,
-          input.request,
-          input.now,
-          continuation.permission,
-          eventSequence,
-          session.directory,
-          session.projectPath,
-        )
-      }
-      const messageResult = continuation.result
-      const diffSource = await readOpencodeDiffSource({
-        baseUrl: session.baseUrl,
-        sessionId: session.sessionId,
-        worktreePath: session.directory,
-        captureDiff: config.captureWorktreeDiff ?? captureWorktreeDiff,
-        ...fetcherOption(config.fetcher),
-      })
-      if (!messageResult.ok && diffSource.changedPaths.length === 0 && diffSource.patch.trim().length === 0) {
-        throw messageResult.error
-      }
-      const diff = sanitizeCodingDiffArtifact({
-        id: `coding-diff-${input.codingRun.id}`,
-        runId: input.codingRun.runId,
-        nodeId: input.codingRun.nodeId,
-        projectId: input.project.id,
-        changedPaths: diffSource.changedPaths,
-        patch: diffSource.patch,
-        createdAt: input.now,
-      })
-      const codingRun: CodingAgentRun = {
-        ...input.codingRun,
-        status: 'completed',
-        summary: 'opencode completed the managed coding run and produced a redacted diff artifact.',
-        changedPaths: diff.changedPaths,
-        completedAt: input.now,
-        diffArtifactId: diff.id,
-        redacted: true,
-      }
-      const events: CodingAgentEvent[] = [
-        createToolResultEvent({
-          codingRun: input.codingRun,
-          request: input.request,
-          now: input.now,
-          sequence: session.nextEventSequence,
+      try {
+        const continuation = await waitForNextPermissionOrMessage({
+          baseUrl: session.baseUrl,
+          directory: session.directory,
+          handledPermissionIds: session.handledPermissionIds,
+          messagePromise: session.messagePromise,
+          pollMs: config.permissionPollMs ?? 1_000,
+          sessionId: session.sessionId,
+          ...fetcherOption(config.fetcher),
+        })
+        if (continuation.kind === 'permission') {
+          const eventSequence = session.nextEventSequence
+          const result = createContinuationResult(
+            input.codingRun,
+            input.request,
+            input.now,
+            continuation.permission,
+            eventSequence,
+            session.directory,
+            session.projectPath,
+          )
+          const cleanupPromise = session.cleanupPromise
+          if (cleanupPromise) {
+            await failForSessionCleanup(cleanupPromise)
+          }
+          session.handledPermissionIds.add(continuation.permission.id)
+          session.nextEventSequence += 3
+          return result
+        }
+        const messageResult = continuation.result
+        if (!messageResult.ok && messageResult.error instanceof OpencodeMessageResponseError) {
+          throw messageResult.error
+        }
+        const diffSource = await readOpencodeDiffSource({
+          baseUrl: session.baseUrl,
+          sessionId: session.sessionId,
+          worktreePath: session.directory,
+          captureDiff: config.captureWorktreeDiff ?? captureWorktreeDiff,
+          ...fetcherOption(config.fetcher),
+        })
+        if (!messageResult.ok) {
+          const hasNoCapturedDiff =
+            diffSource.changedPaths.length === 0 && diffSource.patch.trim().length === 0
+          if (hasNoCapturedDiff) {
+            throw messageResult.error
+          }
+        }
+        const diff = sanitizeCodingDiffArtifact({
+          id: `coding-diff-${input.codingRun.id}`,
+          runId: input.codingRun.runId,
+          nodeId: input.codingRun.nodeId,
+          projectId: input.project.id,
+          changedPaths: diffSource.changedPaths,
+          patch: diffSource.patch,
+          createdAt: input.now,
+        })
+        const codingRun: CodingAgentRun = {
+          ...input.codingRun,
           status: 'completed',
-          outputSummary: `DevFlow relay approved ${input.request.permission} permission; opencode completed after the tool action.`,
-        }),
-        {
-          id: `coding-event-${input.codingRun.id}-diff`,
-          codingRunId: codingRun.id,
-          runId: codingRun.runId,
-          nodeId: codingRun.nodeId,
-          sequence: session.nextEventSequence + 1,
-          kind: 'diff',
-          message: 'opencode completed and DevFlow captured a redacted worktree diff.',
-          timestamp: input.now,
-          metadata: { diffArtifactId: diff.id },
+          summary: 'opencode completed the managed coding run and produced a redacted diff artifact.',
+          changedPaths: diff.changedPaths,
+          completedAt: input.now,
+          diffArtifactId: diff.id,
           redacted: true,
-        },
-      ]
-      sessions.delete(input.codingRun.id)
-
-      return {
-        codingRun,
-        events,
-        diff,
+        }
+        const events: CodingAgentEvent[] = [
+          createToolResultEvent({
+            codingRun: input.codingRun,
+            request: input.request,
+            now: input.now,
+            sequence: session.nextEventSequence,
+            status: 'completed',
+            outputSummary: `DevFlow relay approved ${input.request.permission} permission; opencode completed after the tool action.`,
+          }),
+          {
+            id: `coding-event-${input.codingRun.id}-diff`,
+            codingRunId: codingRun.id,
+            runId: codingRun.runId,
+            nodeId: codingRun.nodeId,
+            sequence: session.nextEventSequence + 1,
+            kind: 'diff',
+            message: 'opencode completed and DevFlow captured a redacted worktree diff.',
+            timestamp: input.now,
+            metadata: { diffArtifactId: diff.id },
+            redacted: true,
+          },
+        ]
+        const result = {
+          codingRun,
+          events,
+          diff,
+        }
+        const cleanupPromise = session.cleanupPromise
+        if (cleanupPromise) {
+          await failForSessionCleanup(cleanupPromise)
+        }
+        if (sessions.get(input.codingRun.id) !== session) {
+          throw new Error('opencode session ownership changed during permission continuation')
+        }
+        sessions.delete(input.codingRun.id)
+        return result
+      } catch (error) {
+        if (error instanceof CodingEngineContinuationCleanupError) {
+          throw error
+        }
+        try {
+          await cleanupRegisteredSession(input.codingRun.id, session, 'continuation')
+        } catch (cleanupError) {
+          throw new CodingEngineContinuationCleanupError([error, cleanupError])
+        }
+        throw error
       }
     },
 
     async cancel(input) {
-      const session = sessions.get(input.codingRun.id)
+      let session = sessions.get(input.codingRun.id)
+      if (!session) {
+        const pendingSessionState = pendingSessions.get(input.codingRun.id)
+        if (!pendingSessionState) {
+          return
+        }
+        pendingSessionState.cancelRequested = true
+        try {
+          session = await pendingSessionState.promise
+        } catch {
+          return
+        }
+      }
       if (!session) {
         return
       }
-      const aborted = await abortOpencodeSession({
-        baseUrl: session.baseUrl,
-        sessionId: session.sessionId,
-        directory: session.directory,
-        ...fetcherOption(config.fetcher),
-      })
-      if (aborted !== true) {
-        throw new Error('opencode session abort was not acknowledged')
-      }
-      sessions.delete(input.codingRun.id)
+      await cleanupRegisteredSession(input.codingRun.id, session, 'cancellation')
     },
   }
+}
+
+async function cleanupOpencodeSession(input: {
+  baseUrl: string
+  directory: string
+  fetcher?: Fetcher
+  messagePromise?: OpencodeMessagePromise
+  phase: 'startup' | 'continuation' | 'cancellation'
+  sessionId: string
+  settlementTimeoutMs: number
+}): Promise<void> {
+  const aborted = await abortOpencodeSession({
+    baseUrl: input.baseUrl,
+    sessionId: input.sessionId,
+    directory: input.directory,
+    ...fetcherOption(input.fetcher),
+  })
+  if (aborted !== true) {
+    throw new Error('opencode session abort was not acknowledged')
+  }
+
+  await rejectSessionPermissions(input)
+  if (input.messagePromise) {
+    await waitForSessionMessageCleanup(input.messagePromise, input.settlementTimeoutMs, input.phase)
+    await rejectSessionPermissions(input)
+  }
+
+  const remainingPermissions = await listOpencodePermissions({
+    baseUrl: input.baseUrl,
+    directory: input.directory,
+    ...fetcherOption(input.fetcher),
+  })
+  if (remainingPermissions.some((candidate) => candidate.sessionID === input.sessionId)) {
+    throw new Error(`opencode ${input.phase} permission cleanup did not complete`)
+  }
+}
+
+async function rejectSessionPermissions(input: {
+  baseUrl: string
+  directory: string
+  fetcher?: Fetcher
+  sessionId: string
+}): Promise<void> {
+  const permissions = await listOpencodePermissions({
+    baseUrl: input.baseUrl,
+    directory: input.directory,
+    ...fetcherOption(input.fetcher),
+  })
+  for (const permission of permissions.filter((candidate) => candidate.sessionID === input.sessionId)) {
+    const rejected = await replyOpencodePermission({
+      baseUrl: input.baseUrl,
+      requestId: permission.id,
+      directory: input.directory,
+      reply: 'reject',
+      message: 'Rejected during DevFlow session cleanup.',
+      ...fetcherOption(input.fetcher),
+    })
+    if (rejected !== true) {
+      throw new Error('opencode session permission rejection was not acknowledged')
+    }
+  }
+}
+
+async function waitForSessionMessageCleanup(
+  messagePromise: OpencodeMessagePromise,
+  timeoutMs: number,
+  phase: 'startup' | 'continuation' | 'cancellation',
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`opencode ${phase} message cleanup did not complete`))
+    }, timeoutMs)
+    void messagePromise.then(
+      () => {
+        clearTimeout(timer)
+        resolve()
+      },
+      () => {
+        clearTimeout(timer)
+        resolve()
+      },
+    )
+  })
 }
 
 function assertManagedOpencodeSession(
@@ -398,9 +616,9 @@ async function waitForPermission(input: {
   timeoutMs: number
 }): Promise<OpencodePermission> {
   const expiresAt = Date.now() + input.timeoutMs
-  const messageFailure = input.messagePromise.then((result) => {
+  const messageSettlement = input.messagePromise.then((result) => {
     if (result.ok) {
-      return new Promise<never>(() => undefined)
+      return { kind: 'message-completed' as const }
     }
     return { kind: 'message-error' as const, error: result.error }
   })
@@ -416,15 +634,18 @@ async function waitForPermission(input: {
     }
     const waitMs = Math.max(0, Math.min(input.pollMs, expiresAt - Date.now()))
     const next = await Promise.race([
-      messageFailure,
+      messageSettlement,
       new Promise<{ kind: 'tick' }>((resolve) => setTimeout(() => resolve({ kind: 'tick' }), waitMs)),
     ])
     if (next.kind === 'message-error') {
       throw next.error
     }
+    if (next.kind === 'message-completed') {
+      throw new CodingEnginePermissionDiscoveryError('message_completed_without_permission')
+    }
   }
 
-  throw new Error(`Timed out waiting for opencode permission request for session ${input.sessionId}`)
+  throw new CodingEnginePermissionDiscoveryError('permission_discovery_timed_out')
 }
 
 function createStartResult(

@@ -40,8 +40,19 @@ import {
   deleteManagedCodingWorkspace,
   findActiveCodingRun,
 } from './coding-runner.js'
-import type { CodingEngineAdapter } from './coding-engine.js'
-import { CodingEngineStartupCleanupError } from './coding-engine-lifecycle.js'
+import type {
+  CodingEngineAdapter,
+  CodingEngineApprovePermissionResult,
+} from './coding-engine.js'
+import {
+  CodingEngineContinuationCleanupError,
+  CodingEngineStartupCleanupError,
+} from './coding-engine-lifecycle.js'
+import type {
+  CodingAgentMutation,
+  CodingAgentMutationResult,
+  ReserveCodingAgentRunResult,
+} from './local-store.js'
 
 const defaultKnowledgeDocuments: KnowledgeDocument[] = []
 const defaultKnowledgeChunks: KnowledgeChunk[] = []
@@ -57,6 +68,10 @@ export type CodingRuntimeStore = {
   saveTestEvidence(evidence: TestEvidence): Promise<void>
   listCodingAgentRuns(runId?: string): Promise<CodingAgentRun[]>
   saveCodingAgentRun(run: CodingAgentRun): Promise<void>
+  reserveCodingAgentRun(run: CodingAgentRun): Promise<ReserveCodingAgentRunResult>
+  commitCodingAgentMutation(
+    mutation: CodingAgentMutation,
+  ): Promise<CodingAgentMutationResult>
   saveCodingAgentEvent(event: CodingAgentEvent): Promise<void>
   listCodingAgentEvents(codingRunId?: string): Promise<CodingAgentEvent[]>
   saveCodingPermissionRequest(request: CodingPermissionRequest): Promise<void>
@@ -318,39 +333,76 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     return workspace
   }
 
+  function runBestEffortNotification(callback: () => void): void {
+    try {
+      callback()
+    } catch {
+      // Durable Coding Agent state must not be rolled back or misclassified by UI/timer notifications.
+    }
+  }
+
   async function saveEvents(events: CodingAgentEvent[]) {
     for (const event of events) {
       const safeEvent = redactCodingAgentEventForStorage(event)
       await deps.store.saveCodingAgentEvent(safeEvent)
-      deps.publisher?.publishEvent(safeEvent)
+      runBestEffortNotification(() => deps.publisher?.publishEvent(safeEvent))
     }
   }
 
   async function saveCodingRun(run: CodingAgentRun) {
     await deps.store.saveCodingAgentRun(run)
-    deps.publisher?.publishRunStatus(run)
+    runBestEffortNotification(() => deps.publisher?.publishRunStatus(run))
+  }
+
+  async function commitCodingAgentMutation(
+    mutation: CodingAgentMutation,
+  ): Promise<CodingAgentMutationResult> {
+    const safeEvents = mutation.events?.map((event) => redactCodingAgentEventForStorage(event))
+    const result = await deps.store.commitCodingAgentMutation({
+      ...mutation,
+      ...(safeEvents ? { events: safeEvents } : {}),
+    })
+    if (!result.committed) {
+      return result
+    }
+    if (mutation.run) {
+      runBestEffortNotification(() => deps.publisher?.publishRunStatus(mutation.run!))
+    }
+    for (const event of safeEvents ?? []) {
+      runBestEffortNotification(() => deps.publisher?.publishEvent(event))
+    }
+    for (const request of mutation.permissionRequests ?? []) {
+      publishPermissionRequest(request)
+    }
+    return result
+  }
+
+  function publishPermissionRequest(request: CodingPermissionRequest) {
+    runBestEffortNotification(() => deps.publisher?.publishPermission(request))
+    if (request.status === 'pending') {
+      runBestEffortNotification(() => {
+        deps.schedulePermissionTimeout?.(request, async () => {
+          const latest = (await deps.store.listCodingPermissionRequests(request.codingRunId)).find(
+            (candidate) => candidate.id === request.id,
+          )
+          if (!latest || latest.status !== 'pending') {
+            return
+          }
+          await replyCodingPermission({
+            requestId: request.id,
+            codingRunId: request.codingRunId,
+            decidedBy: 'devflow-timeout',
+            decision: 'expired',
+            comment: 'Permission request expired.',
+          })
+        })
+      })
+    }
   }
 
   async function savePermissionRequest(request: CodingPermissionRequest) {
     await deps.store.saveCodingPermissionRequest(request)
-    deps.publisher?.publishPermission(request)
-    if (request.status === 'pending') {
-      deps.schedulePermissionTimeout?.(request, async () => {
-        const latest = (await deps.store.listCodingPermissionRequests(request.codingRunId)).find(
-          (candidate) => candidate.id === request.id,
-        )
-        if (!latest || latest.status !== 'pending') {
-          return
-        }
-        await replyCodingPermission({
-          requestId: request.id,
-          codingRunId: request.codingRunId,
-          decidedBy: 'devflow-timeout',
-          decision: 'expired',
-          comment: 'Permission request expired.',
-        })
-      })
-    }
+    publishPermissionRequest(request)
   }
 
   async function nextSequence(codingRunId: string): Promise<number> {
@@ -612,68 +664,81 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     return redactSensitiveText(redactLocalAbsolutePaths(message).value).value.slice(0, 500)
   }
 
-  async function expirePendingPermissions(codingRunId: string, timestamp: string, comment: string) {
-    const pendingRequests = (await deps.store.listCodingPermissionRequests(codingRunId)).filter(
-      (request) => request.status === 'pending',
-    )
-    for (const request of pendingRequests) {
-      await savePermissionRequest({ ...request, status: 'expired' })
-      await deps.store.saveCodingPermissionDecision({
+  async function timeOutCodingRun(codingRunId: string, summary: string) {
+    let expectedRun = await findCodingRun(codingRunId)
+    if (!activeCodingStatuses.has(expectedRun.status)) {
+      return
+    }
+    const timestamp = now()
+    await deps.engine.cancel({ codingRun: expectedRun })
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (!activeCodingStatuses.has(expectedRun.status)) {
+        return
+      }
+      const pendingRequests = (await deps.store.listCodingPermissionRequests(codingRunId)).filter(
+        (request) => request.status === 'pending',
+      )
+      const expiredRequests = pendingRequests.map((request) => ({ ...request, status: 'expired' as const }))
+      const decisions: CodingPermissionDecision[] = pendingRequests.map((request) => ({
         id: idGenerator('coding-permission-decision'),
         requestId: request.id,
         codingRunId,
         decidedBy: 'devflow-timeout',
         decision: 'expired',
-        comment,
+        comment: summary,
         decidedAt: timestamp,
+      }))
+      const updated: CodingAgentRun = {
+        ...expectedRun,
+        status: 'timed_out',
+        summary,
+        completedAt: timestamp,
+      }
+      const toolResultEvents: CodingAgentEvent[] = []
+      let sequence = await nextSequence(updated.id)
+      for (const request of pendingRequests) {
+        toolResultEvents.push(
+          createRelayToolResultEvent({
+            codingRun: updated,
+            request,
+            timestamp,
+            sequence: sequence++,
+            decision: 'expired',
+            status: 'expired',
+            outputSummary: `DevFlow relay expired ${request.permission} permission; coding run timed out.`,
+          }),
+        )
+      }
+      const event: CodingAgentEvent = {
+        id: idGenerator('coding-event'),
+        codingRunId: updated.id,
+        runId: updated.runId,
+        nodeId: updated.nodeId,
+        sequence,
+        kind: 'status',
+        message: summary,
+        timestamp,
+        redacted: true,
+      }
+      const committed = await commitCodingAgentMutation({
+        expectedRun,
+        run: updated,
+        expectedPendingPermissionRequestIds: pendingRequests.map((request) => request.id),
+        expectedPermissionRequests: pendingRequests,
+        permissionRequests: expiredRequests,
+        permissionDecisions: decisions,
+        events: [...toolResultEvents, event],
       })
+      if (committed.committed) {
+        await cleanupWorkspaceForRun(updated, timestamp)
+        return
+      }
+      if (!committed.run) {
+        throw new Error(`Coding Agent run not found: ${codingRunId}`)
+      }
+      expectedRun = committed.run
     }
-    return pendingRequests
-  }
-
-  async function timeOutCodingRun(codingRunId: string, summary: string) {
-    const codingRun = await findCodingRun(codingRunId)
-    if (!activeCodingStatuses.has(codingRun.status)) {
-      return
-    }
-    const timestamp = now()
-    await deps.engine.cancel({ codingRun })
-    const expiredRequests = await expirePendingPermissions(codingRunId, timestamp, summary)
-    const updated: CodingAgentRun = {
-      ...codingRun,
-      status: 'timed_out',
-      summary,
-      completedAt: timestamp,
-    }
-    await cleanupWorkspaceForRun(updated, timestamp)
-    const toolResultEvents: CodingAgentEvent[] = []
-    let sequence = await nextSequence(updated.id)
-    for (const request of expiredRequests) {
-      toolResultEvents.push(
-        createRelayToolResultEvent({
-          codingRun: updated,
-          request,
-          timestamp,
-          sequence: sequence++,
-          decision: 'expired',
-          status: 'expired',
-          outputSummary: `DevFlow relay expired ${request.permission} permission; coding run timed out.`,
-        }),
-      )
-    }
-    const event: CodingAgentEvent = {
-      id: idGenerator('coding-event'),
-      codingRunId: updated.id,
-      runId: updated.runId,
-      nodeId: updated.nodeId,
-      sequence,
-      kind: 'status',
-      message: summary,
-      timestamp,
-      redacted: true,
-    }
-    await saveCodingRun(updated)
-    await saveEvents([...toolResultEvents, event])
+    throw new Error('Coding Agent timeout could not settle concurrent state changes')
   }
 
   async function replyCodingPermission(input: ReplyCodingPermissionRuntimeInput): Promise<CodingPermissionRequest> {
@@ -698,13 +763,21 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       decidedAt: timestamp,
     }
     const codingRun = await findCodingRun(input.codingRunId)
-
-    if (input.decision !== 'approved') {
-      await deps.engine.cancel({ codingRun })
+    if (!activeCodingStatuses.has(codingRun.status) || request.status !== 'pending') {
+      return request
     }
-
-    await savePermissionRequest(updatedRequest)
-    await deps.store.saveCodingPermissionDecision(decision)
+    const claimed = await commitCodingAgentMutation({
+      expectedRun: codingRun,
+      expectedPendingPermissionRequestIds: [request.id],
+      expectedPermissionRequests: [request],
+      permissionRequests: [updatedRequest],
+      permissionDecisions: [decision],
+    })
+    if (!claimed.committed) {
+      return (await deps.store.listCodingPermissionRequests(input.codingRunId)).find(
+        (candidate) => candidate.id === input.requestId,
+      ) ?? request
+    }
 
     if (input.decision === 'approved') {
       if (!codingRun.managedWorkspaceId) {
@@ -712,46 +785,161 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       }
       const workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
       const project = await findProject(codingRun.projectId)
-      const completed = await deps.engine.approvePermission({
-        request: updatedRequest,
-        codingRun,
-        workspace,
-        project,
-        now: timestamp,
-      })
+      let completed: CodingEngineApprovePermissionResult
+      try {
+        completed = await deps.engine.approvePermission({
+          request: updatedRequest,
+          codingRun,
+          workspace,
+          project,
+          now: timestamp,
+        })
+      } catch (error) {
+        const currentRun = await findCodingRun(codingRun.id)
+        if (!activeCodingStatuses.has(currentRun.status)) {
+          throw error
+        }
+        if (error instanceof CodingEngineContinuationCleanupError) {
+          await recordContinuationCleanupFailure(currentRun, timestamp)
+          throw error
+        }
+        try {
+          await deps.engine.cancel({ codingRun: currentRun })
+        } catch (cleanupError) {
+          await recordContinuationCleanupFailure(currentRun, timestamp)
+          throw new CodingEngineContinuationCleanupError([error, cleanupError])
+        }
+
+        const failedRun: CodingAgentRun = {
+          ...currentRun,
+          status: 'failed',
+          summary: 'Coding engine failed after permission approval.',
+          completedAt: timestamp,
+        }
+        const failedEvent: CodingAgentEvent = {
+          id: idGenerator('coding-event'),
+          codingRunId: failedRun.id,
+          runId: failedRun.runId,
+          nodeId: failedRun.nodeId,
+          sequence: await nextSequence(failedRun.id),
+          kind: 'error',
+          message: failedRun.summary,
+          timestamp,
+          redacted: true,
+        }
+        const committed = await commitCodingAgentMutation({
+          expectedRun: currentRun,
+          expectedPendingPermissionRequestIds: [],
+          run: failedRun,
+          events: [failedEvent],
+        })
+        if (committed.committed) {
+          await cleanupWorkspaceForRun(failedRun, timestamp)
+        }
+        throw error
+      }
       if ('permissionRequest' in completed) {
-        await saveCodingRun(completed.codingRun)
-        await saveEvents(completed.events)
-        await savePermissionRequest(completed.permissionRequest)
+        const continuationCommitted = await commitCodingAgentMutation({
+          expectedRun: codingRun,
+          expectedPendingPermissionRequestIds: [],
+          run: completed.codingRun,
+          events: completed.events,
+          permissionRequests: [completed.permissionRequest],
+        })
+        if (!continuationCommitted.committed) {
+          const persistenceError = new Error(
+            'Coding Agent continuation could not be persisted safely.',
+          )
+          try {
+            await deps.engine.cancel({ codingRun: completed.codingRun })
+          } catch (cleanupError) {
+            if (continuationCommitted.run && activeCodingStatuses.has(continuationCommitted.run.status)) {
+              await recordContinuationCleanupFailure(continuationCommitted.run, timestamp)
+            }
+            throw new CodingEngineContinuationCleanupError([persistenceError, cleanupError])
+          }
+          if (continuationCommitted.run && activeCodingStatuses.has(continuationCommitted.run.status)) {
+            const failed = await failActiveCodingRun(
+              continuationCommitted.run,
+              'Coding Agent continuation could not be persisted safely.',
+              timestamp,
+            )
+            if (failed.committed) {
+              await cleanupWorkspaceForRun(failed.run, timestamp)
+            }
+          }
+          throw persistenceError
+        }
         return updatedRequest
       }
-      await deps.store.saveCodingDiffArtifact(completed.diff)
-      await saveEvents(completed.events)
+      const { completedAt: engineCompletedAt, ...completedRunFields } = completed.codingRun
+      const bootstrappingRun: CodingAgentRun = {
+        ...completedRunFields,
+        status: 'bootstrapping',
+      }
+      const engineResultCommitted = await commitCodingAgentMutation({
+        expectedRun: codingRun,
+        expectedPendingPermissionRequestIds: [],
+        run: bootstrappingRun,
+        events: completed.events,
+        diffArtifacts: [completed.diff],
+      })
+      if (!engineResultCommitted.committed) {
+        return updatedRequest
+      }
       const bootstrapped = await runCodingBootstrap({
-        codingRun: completed.codingRun,
+        codingRun: bootstrappingRun,
         workspace,
         project,
         timestamp,
         ...(completed.bootstrapEvidence ? { engineBootstrapEvidence: completed.bootstrapEvidence } : {}),
       })
       if (!bootstrapped.canContinue) {
-        await saveCodingRun(bootstrapped.codingRun)
+        await commitCodingAgentMutation({
+          expectedRun: bootstrappingRun,
+          expectedPendingPermissionRequestIds: [],
+          run: bootstrapped.codingRun,
+        })
+        return updatedRequest
+      }
+      const { completedAt: _bootstrapCompletedAt, ...bootstrappedRunFields } = bootstrapped.codingRun
+      const testingRun: CodingAgentRun = {
+        ...bootstrappedRunFields,
+        status: 'testing',
+      }
+      const testingStarted = await commitCodingAgentMutation({
+        expectedRun: bootstrappingRun,
+        expectedPendingPermissionRequestIds: [],
+        run: testingRun,
+      })
+      if (!testingStarted.committed) {
         return updatedRequest
       }
       const tested = await runCodingTests({
-        codingRun: bootstrapped.codingRun,
+        codingRun: testingRun,
         workspace,
         project,
         timestamp,
       })
-
-      await saveCodingRun(tested.codingRun)
-      if (tested.codingRun.status === 'completed') {
+      const completedRun: CodingAgentRun = {
+        ...tested.codingRun,
+        status: 'completed',
+        completedAt: engineCompletedAt ?? timestamp,
+      }
+      const completionCommitted = await commitCodingAgentMutation({
+        expectedRun: testingRun,
+        expectedPendingPermissionRequestIds: [],
+        run: completedRun,
+      })
+      if (!completionCommitted.committed) {
+        return updatedRequest
+      }
+      if (completedRun.status === 'completed') {
         try {
           await deps.completeWorkflowBuild?.({
-            runId: tested.codingRun.runId,
-            nodeId: tested.codingRun.nodeId,
-            codingRunId: tested.codingRun.id,
+            runId: completedRun.runId,
+            nodeId: completedRun.nodeId,
+            codingRunId: completedRun.id,
             diffId: completed.diff.id,
             now: timestamp,
           })
@@ -766,6 +954,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         }
       }
     } else {
+      await deps.engine.cancel({ codingRun })
       const terminalStatus = input.decision === 'expired' ? 'timed_out' : 'interrupted'
       const sequence = await nextSequence(codingRun.id)
       const updatedRun: CodingAgentRun = {
@@ -804,12 +993,99 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             ? `DevFlow relay expired ${request.permission} permission; coding run timed out.`
             : `DevFlow relay rejected ${request.permission} permission; coding run interrupted.`,
       })
-      await cleanupWorkspaceForRun(updatedRun, timestamp)
-      await saveCodingRun(updatedRun)
-      await saveEvents([event, toolResultEvent])
+      const committed = await commitCodingAgentMutation({
+        expectedRun: codingRun,
+        expectedPendingPermissionRequestIds: [],
+        run: updatedRun,
+        events: [event, toolResultEvent],
+      })
+      if (committed.committed) {
+        await cleanupWorkspaceForRun(updatedRun, timestamp)
+      }
     }
 
     return updatedRequest
+  }
+
+  async function recordContinuationCleanupFailure(
+    codingRun: CodingAgentRun,
+    timestamp: string,
+  ): Promise<void> {
+    if (!activeCodingStatuses.has(codingRun.status)) {
+      return
+    }
+    const summary = 'Coding engine failed after permission approval and session cleanup did not complete.'
+    const event: CodingAgentEvent = {
+      id: idGenerator('coding-event'),
+      codingRunId: codingRun.id,
+      runId: codingRun.runId,
+      nodeId: codingRun.nodeId,
+      sequence: await nextSequence(codingRun.id),
+      kind: 'error',
+      message: summary,
+      timestamp,
+      metadata: { sessionCleanupStatus: 'cleanup_failed' },
+      redacted: true,
+    }
+    await commitCodingAgentMutation({
+      expectedRun: codingRun,
+      expectedPendingPermissionRequestIds: [],
+      events: [event],
+    })
+  }
+
+  async function failActiveCodingRun(
+    expectedRun: CodingAgentRun,
+    summary: string,
+    timestamp: string,
+  ): Promise<CodingAgentMutationResult> {
+    const failedRun: CodingAgentRun = {
+      ...expectedRun,
+      status: 'failed',
+      summary,
+      completedAt: timestamp,
+    }
+    const event: CodingAgentEvent = {
+      id: idGenerator('coding-event'),
+      codingRunId: failedRun.id,
+      runId: failedRun.runId,
+      nodeId: failedRun.nodeId,
+      sequence: await nextSequence(failedRun.id),
+      kind: 'error',
+      message: summary,
+      timestamp,
+      redacted: true,
+    }
+    return commitCodingAgentMutation({
+      expectedRun,
+      expectedPendingPermissionRequestIds: [],
+      run: failedRun,
+      events: [event],
+    })
+  }
+
+  async function recordActiveCleanupFailure(
+    expectedRun: CodingAgentRun,
+    timestamp: string,
+    summary: string,
+  ): Promise<void> {
+    const event: CodingAgentEvent = {
+      id: idGenerator('coding-event'),
+      codingRunId: expectedRun.id,
+      runId: expectedRun.runId,
+      nodeId: expectedRun.nodeId,
+      sequence: await nextSequence(expectedRun.id),
+      kind: 'error',
+      message: summary,
+      timestamp,
+      metadata: { sessionCleanupStatus: 'cleanup_failed' },
+      redacted: true,
+    }
+    await commitCodingAgentMutation({
+      expectedRun,
+      expectedPendingPermissionRequestIds: [],
+      events: [event],
+    })
   }
 
   return {
@@ -948,25 +1224,224 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           state: await deps.store.loadState(),
         }
       }
-      await deps.engine.ensure({ project })
-      const workspace = await createWorkspace({
-        project,
-        codingRunId,
+      const reservationTimestamp = now()
+      const reservationRun: CodingAgentRun = {
+        id: codingRunId,
         runId: run.id,
         nodeId: node.id,
-        ...(deps.worktreeRoot ? { worktreeRoot: deps.worktreeRoot } : {}),
-      })
+        projectId: project.id,
+        requestedBy: input.requestedBy,
+        providerId,
+        engine: configuredEngine,
+        status: 'preparing',
+        branchName: run.branchName,
+        userInstruction: input.userInstruction.trim(),
+        prompt: canonicalBrief.prompt,
+        summary: 'Preparing a managed Coding Agent run.',
+        changedPaths: [],
+        startedAt: reservationTimestamp,
+        runtimeCostSummary: estimatedCost,
+        budgetDecision,
+        redacted: true,
+      }
+      const reservation = await deps.store.reserveCodingAgentRun(reservationRun)
+      if (!reservation.reserved) {
+        throw new Error(`Coding Agent run already active for this project: ${reservation.run.id}`)
+      }
+      runBestEffortNotification(() => deps.publisher?.publishRunStatus(reservationRun))
+
+      try {
+        await deps.engine.ensure({ project })
+      } catch (error) {
+        await failActiveCodingRun(
+          reservationRun,
+          'Coding engine readiness failed before the managed run started.',
+          reservationTimestamp,
+        )
+        throw error
+      }
+
+      let workspace: ManagedCodingWorkspace
+      try {
+        workspace = await createWorkspace({
+          project,
+          codingRunId,
+          runId: run.id,
+          nodeId: node.id,
+          ...(deps.worktreeRoot ? { worktreeRoot: deps.worktreeRoot } : {}),
+        })
+      } catch (error) {
+        await failActiveCodingRun(
+          reservationRun,
+          'Managed coding workspace creation failed.',
+          reservationTimestamp,
+        )
+        throw error
+      }
+      const workspacePreparingRun: CodingAgentRun = {
+        ...reservationRun,
+        managedWorkspaceId: workspace.id,
+        branchName: workspace.branchName,
+      }
       try {
         await deps.store.saveManagedCodingWorkspace(workspace)
       } catch (error) {
-        const cleaned = await deleteWorkspace(workspace)
-        if ((cleaned.cleanupStatus ?? (cleaned.deletedAt ? 'deleted' : 'active')) !== 'deleted') {
+        let cleaned: ManagedCodingWorkspace
+        let cleanupFailure: unknown
+        try {
+          cleaned = await deleteWorkspace(workspace)
+        } catch (caughtCleanupFailure) {
+          cleanupFailure = caughtCleanupFailure
+          cleaned = {
+            ...workspace,
+            cleanupStatus: 'cleanup_failed',
+            cleanupError: cleanupErrorSummary(caughtCleanupFailure),
+          }
+        }
+        const cleanupStatus = cleaned.cleanupStatus ?? (cleaned.deletedAt ? 'deleted' : 'active')
+        if (cleanupStatus !== 'deleted' && !cleanupFailure) {
+          cleanupFailure = new Error('Managed coding workspace cleanup failed.')
+          cleaned = {
+            ...cleaned,
+            cleanupStatus: 'cleanup_failed',
+            cleanupError: cleaned.cleanupError ?? 'Managed coding workspace cleanup failed.',
+          }
+        }
+        let recoveryRun = reservationRun
+        let recoveryFailure: unknown
+        try {
+          await deps.store.saveManagedCodingWorkspace(cleaned)
+          const linked = await commitCodingAgentMutation({
+            expectedRun: reservationRun,
+            expectedPendingPermissionRequestIds: [],
+            run: workspacePreparingRun,
+          })
+          if (linked.committed) {
+            recoveryRun = workspacePreparingRun
+          } else {
+            recoveryFailure = new Error('Coding Agent reservation changed during workspace recovery.')
+          }
+        } catch (caughtRecoveryFailure) {
+          recoveryFailure = caughtRecoveryFailure
+        }
+        if (cleanupStatus !== 'deleted') {
+          await recordActiveCleanupFailure(
+            recoveryRun,
+            reservationTimestamp,
+            'Managed coding workspace registration and cleanup did not complete.',
+          )
           throw new AggregateError(
-            [error, new Error('Managed coding workspace cleanup failed.')],
+            [error, cleanupFailure, recoveryFailure].filter((failure) => failure !== undefined),
             'coding workspace registration failed and cleanup did not complete',
           )
         }
+        await failActiveCodingRun(
+          recoveryRun,
+          'Managed coding workspace registration failed.',
+          reservationTimestamp,
+        )
+        if (recoveryFailure) {
+          throw new AggregateError(
+            [error, recoveryFailure],
+            'coding workspace registration failed after physical cleanup',
+          )
+        }
         throw error
+      }
+      let workspaceLinked: CodingAgentMutationResult
+      try {
+        workspaceLinked = await commitCodingAgentMutation({
+          expectedRun: reservationRun,
+          expectedPendingPermissionRequestIds: [],
+          run: workspacePreparingRun,
+        })
+      } catch (linkError) {
+        let cleaned: ManagedCodingWorkspace
+        let cleanupFailure: unknown
+        try {
+          cleaned = await deleteWorkspace(workspace)
+        } catch (error) {
+          cleanupFailure = error
+          cleaned = {
+            ...workspace,
+            cleanupStatus: 'cleanup_failed',
+            cleanupError: cleanupErrorSummary(error),
+          }
+        }
+        let cleanupPersistenceFailure: unknown
+        try {
+          await deps.store.saveManagedCodingWorkspace(cleaned)
+        } catch (error) {
+          cleanupPersistenceFailure = error
+        }
+        const cleanupStatus = cleaned.cleanupStatus ?? (cleaned.deletedAt ? 'deleted' : 'active')
+        if (cleanupStatus === 'deleted') {
+          const currentRun = await findCodingRun(reservationRun.id)
+          if (activeCodingStatuses.has(currentRun.status)) {
+            await failActiveCodingRun(
+              currentRun,
+              'Managed coding workspace registration failed.',
+              reservationTimestamp,
+            )
+          }
+          if (cleanupPersistenceFailure) {
+            throw new AggregateError(
+              [linkError, cleanupPersistenceFailure],
+              'coding workspace link failed after physical cleanup',
+            )
+          }
+          throw linkError
+        }
+        let recoveryFailure: unknown
+        try {
+          const recovered = await commitCodingAgentMutation({
+            expectedRun: reservationRun,
+            expectedPendingPermissionRequestIds: [],
+            run: workspacePreparingRun,
+          })
+          if (recovered.committed) {
+            await recordActiveCleanupFailure(
+              workspacePreparingRun,
+              reservationTimestamp,
+              'Managed coding workspace registration and cleanup did not complete.',
+            )
+          } else {
+            recoveryFailure = new Error('Coding Agent reservation changed during workspace recovery.')
+          }
+        } catch (error) {
+          recoveryFailure = error
+        }
+        throw new AggregateError(
+          [linkError, cleanupFailure, cleanupPersistenceFailure, recoveryFailure].filter(
+            (failure) => failure !== undefined,
+          ),
+          'coding workspace link and cleanup did not complete',
+        )
+      }
+      if (!workspaceLinked.committed) {
+        let cleaned: ManagedCodingWorkspace
+        let cleanupFailure: unknown
+        try {
+          cleaned = await deleteWorkspace(workspace)
+        } catch (error) {
+          cleanupFailure = error
+          cleaned = {
+            ...workspace,
+            cleanupStatus: 'cleanup_failed',
+            cleanupError: cleanupErrorSummary(error),
+          }
+        }
+        await deps.store.saveManagedCodingWorkspace(cleaned)
+        if ((cleaned.cleanupStatus ?? (cleaned.deletedAt ? 'deleted' : 'active')) !== 'deleted') {
+          throw new AggregateError(
+            [
+              new Error('Coding Agent reservation changed before workspace registration completed'),
+              cleanupFailure ?? new Error('Managed coding workspace cleanup failed.'),
+            ],
+            'coding reservation changed and workspace cleanup did not complete',
+          )
+        }
+        throw new Error('Coding Agent reservation changed before workspace registration completed')
       }
       const engineBriefContext = {
         upstreamArtifacts: briefContext.upstreamArtifacts,
@@ -986,7 +1461,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           requestedBy: input.requestedBy,
           providerId,
           userInstruction: input.userInstruction,
-          now: now(),
+          now: reservationTimestamp,
           ...engineBriefContext,
           brief: canonicalBrief,
           ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
@@ -999,6 +1474,11 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             cleanupStatus: 'cleanup_failed',
             cleanupError: 'Coding engine session cleanup did not complete; manual cleanup is required.',
           })
+          await recordActiveCleanupFailure(
+            workspacePreparingRun,
+            reservationTimestamp,
+            'Coding engine failed to start and session cleanup did not complete.',
+          )
           throw error
         }
 
@@ -1017,25 +1497,82 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         }
         await deps.store.saveManagedCodingWorkspace(cleaned)
         if ((cleaned.cleanupStatus ?? (cleaned.deletedAt ? 'deleted' : 'active')) !== 'deleted') {
+          await recordActiveCleanupFailure(
+            workspacePreparingRun,
+            reservationTimestamp,
+            'Coding engine failed to start and workspace cleanup did not complete.',
+          )
           throw new AggregateError(
             [error, new Error('Managed coding workspace cleanup failed.')],
             'coding engine failed to start and workspace cleanup did not complete',
           )
         }
+        await failActiveCodingRun(
+          workspacePreparingRun,
+          'Coding engine failed to start.',
+          reservationTimestamp,
+        )
         throw error
       }
-      bundle.codingRun.runtimeCostSummary = estimatedCost
-      bundle.codingRun.budgetDecision = budgetDecision
-
-      await saveCodingRun(bundle.codingRun)
-      await saveEvents(bundle.events)
-      await savePermissionRequest(bundle.permissionRequest)
-      deps.scheduleRunTimeout?.(bundle.codingRun, async () => {
-        await timeOutCodingRun(bundle.codingRun.id, 'Coding Agent run timed out.')
+      let startupRun: CodingAgentRun
+      let bundleCommitted: CodingAgentMutationResult
+      try {
+        startupRun = {
+          ...bundle.codingRun,
+          runtimeCostSummary: estimatedCost,
+          budgetDecision,
+        }
+        bundleCommitted = await commitCodingAgentMutation({
+          expectedRun: workspacePreparingRun,
+          expectedPendingPermissionRequestIds: [],
+          run: startupRun,
+          events: bundle.events,
+          permissionRequests: [bundle.permissionRequest],
+        })
+      } catch (error) {
+        try {
+          await deps.engine.cancel({ codingRun: workspacePreparingRun })
+        } catch (cleanupError) {
+          await recordActiveCleanupFailure(
+            workspacePreparingRun,
+            reservationTimestamp,
+            'Coding engine started, but persistence and session cleanup did not complete.',
+          )
+          throw new CodingEngineContinuationCleanupError([error, cleanupError])
+        }
+        await cleanupWorkspaceForRun(workspacePreparingRun, reservationTimestamp)
+        await failActiveCodingRun(
+          workspacePreparingRun,
+          'Coding engine started, but its local run bundle could not be persisted.',
+          reservationTimestamp,
+        )
+        throw error
+      }
+      if (!bundleCommitted.committed) {
+        try {
+          await deps.engine.cancel({ codingRun: workspacePreparingRun })
+        } catch (cleanupError) {
+          await recordActiveCleanupFailure(
+            workspacePreparingRun,
+            reservationTimestamp,
+            'Coding engine started, but its reservation changed and session cleanup did not complete.',
+          )
+          throw new CodingEngineContinuationCleanupError([
+            new Error('Coding Agent startup bundle lost its reservation.'),
+            cleanupError,
+          ])
+        }
+        await cleanupWorkspaceForRun(workspacePreparingRun, reservationTimestamp)
+        throw new Error('Coding Agent startup bundle lost its reservation')
+      }
+      runBestEffortNotification(() => {
+        deps.scheduleRunTimeout?.(startupRun, async () => {
+          await timeOutCodingRun(startupRun.id, 'Coding Agent run timed out.')
+        })
       })
 
       return {
-        codingRun: bundle.codingRun,
+        codingRun: startupRun,
         state: await deps.store.loadState(),
       }
     },
@@ -1113,30 +1650,75 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     },
 
     async cancelCodingAgentRun(input) {
-      const codingRun = await findCodingRun(input.codingRunId)
-      await deps.engine.cancel({ codingRun })
+      let expectedRun = await findCodingRun(input.codingRunId)
+      if (!activeCodingStatuses.has(expectedRun.status)) {
+        return expectedRun
+      }
+      await deps.engine.cancel({ codingRun: expectedRun })
       const timestamp = now()
-      const updated: CodingAgentRun = {
-        ...codingRun,
-        status: 'cancelled',
-        summary: 'Coding Agent run cancelled by user.',
-        completedAt: timestamp,
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        if (!activeCodingStatuses.has(expectedRun.status)) {
+          return expectedRun
+        }
+        const pendingRequests = (await deps.store.listCodingPermissionRequests(expectedRun.id)).filter(
+          (request) => request.status === 'pending',
+        )
+        const rejectedRequests = pendingRequests.map((request) => ({ ...request, status: 'rejected' as const }))
+        const decisions: CodingPermissionDecision[] = pendingRequests.map((request) => ({
+          id: idGenerator('coding-permission-decision'),
+          requestId: request.id,
+          codingRunId: expectedRun.id,
+          decidedBy: 'devflow-cancel',
+          decision: 'rejected',
+          comment: 'Coding Agent run cancelled by user.',
+          decidedAt: timestamp,
+        }))
+        const updated: CodingAgentRun = {
+          ...expectedRun,
+          status: 'cancelled',
+          summary: 'Coding Agent run cancelled by user.',
+          completedAt: timestamp,
+        }
+        let sequence = await nextSequence(updated.id)
+        const toolResultEvents = pendingRequests.map((request) => createRelayToolResultEvent({
+          codingRun: updated,
+          request,
+          timestamp,
+          sequence: sequence++,
+          decision: 'rejected',
+          status: 'rejected',
+          outputSummary: `DevFlow cancelled ${request.permission} permission with the coding run.`,
+        }))
+        const event: CodingAgentEvent = {
+          id: idGenerator('coding-event'),
+          codingRunId: updated.id,
+          runId: updated.runId,
+          nodeId: updated.nodeId,
+          sequence,
+          kind: 'status',
+          message: 'Coding Agent run cancelled by user.',
+          timestamp,
+          redacted: true,
+        }
+        const committed = await commitCodingAgentMutation({
+          expectedRun,
+          run: updated,
+          expectedPendingPermissionRequestIds: pendingRequests.map((request) => request.id),
+          expectedPermissionRequests: pendingRequests,
+          permissionRequests: rejectedRequests,
+          permissionDecisions: decisions,
+          events: [...toolResultEvents, event],
+        })
+        if (committed.committed) {
+          await cleanupWorkspaceForRun(updated, timestamp)
+          return updated
+        }
+        if (!committed.run) {
+          throw new Error(`Coding Agent run not found: ${input.codingRunId}`)
+        }
+        expectedRun = committed.run
       }
-      const event: CodingAgentEvent = {
-        id: idGenerator('coding-event'),
-        codingRunId: updated.id,
-        runId: updated.runId,
-        nodeId: updated.nodeId,
-        sequence: await nextSequence(updated.id),
-        kind: 'status',
-        message: 'Coding Agent run cancelled by user.',
-        timestamp,
-        redacted: true,
-      }
-      await cleanupWorkspaceForRun(updated, timestamp)
-      await saveCodingRun(updated)
-      await saveEvents([event])
-      return updated
+      throw new Error('Coding Agent cancellation could not settle concurrent state changes')
     },
 
     replyCodingPermission,

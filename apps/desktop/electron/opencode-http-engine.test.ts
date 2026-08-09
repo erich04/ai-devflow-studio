@@ -1,11 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildCodingBrief, type LocalProject, type ManagedCodingWorkspace } from '@ai-devflow/shared'
+import {
+  buildCodingBrief,
+  type CodingAgentRun,
+  type LocalProject,
+  type ManagedCodingWorkspace,
+} from '@ai-devflow/shared'
 import { projects, runs } from '@ai-devflow/shared/fixtures'
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { CodingEngineApprovePermissionResult } from './coding-engine'
-import { CodingEngineStartupCleanupError } from './coding-engine-lifecycle'
+import type { CodingEngineAdapter, CodingEngineApprovePermissionResult } from './coding-engine'
+import {
+  CodingEngineContinuationCleanupError,
+  CodingEnginePermissionDiscoveryError,
+  CodingEngineStartupCleanupError,
+} from './coding-engine-lifecycle'
 import {
   createOpencodeHttpCodingEngineAdapter,
   resolveManagedOpencodeDirectory,
@@ -13,6 +22,7 @@ import {
 } from './opencode-http-engine'
 import {
   createDefaultOpencodePermissionRules,
+  OpencodeMessageResponseError,
   type Fetcher,
   type OpencodeSession,
 } from './opencode-http-adapter'
@@ -52,7 +62,7 @@ describe('opencode HTTP coding engine', () => {
       const canonical = await realpath(worktree)
       const fetcher = sequenceFetcher([
         managedOpencodeSession({ directory: canonical }),
-        {},
+        successfulOpencodeMessage(),
         [
           {
             id: 'perm-1',
@@ -93,7 +103,7 @@ describe('opencode HTTP coding engine', () => {
   it('creates a session, sends the DevFlow brief, and returns a relay permission request', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      {},
+      successfulOpencodeMessage(),
       [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
     ])
     const engine = createOpencodeHttpCodingEngineAdapter({
@@ -143,6 +153,9 @@ describe('opencode HTTP coding engine', () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession({ directory: '/tmp/candidate-repository' }),
       true,
+      [],
+      [],
+      [],
     ])
     const engine = createOpencodeHttpCodingEngineAdapter({
       binaryPath: 'opencode',
@@ -165,6 +178,9 @@ describe('opencode HTTP coding engine', () => {
     expect(fetcher.urls).toEqual([
       'http://127.0.0.1:4097/session?directory=%2Ftmp%2Fworktree',
       'http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
     ])
   })
 
@@ -172,6 +188,10 @@ describe('opencode HTTP coding engine', () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession({ directory: '/tmp/candidate-repository' }),
       false,
+      true,
+      [],
+      [],
+      [],
     ])
     const engine = createOpencodeHttpCodingEngineAdapter({
       binaryPath: 'opencode',
@@ -191,9 +211,31 @@ describe('opencode HTTP coding engine', () => {
     const failure = engine.start(startInput({ run, node, project, workspace }))
     await expect(failure).rejects.toBeInstanceOf(CodingEngineStartupCleanupError)
     await expect(failure).rejects.toThrow('coding engine startup failed and cleanup did not complete')
+    const retainedRun: CodingAgentRun = {
+      id: 'coding-run-1',
+      runId: run.id,
+      nodeId: node.id,
+      projectId: project.id,
+      requestedBy: 'u-erich',
+      providerId: 'openai',
+      engine: 'opencode-http',
+      status: 'preparing',
+      branchName: workspace.branchName,
+      userInstruction: 'Implement the build node.',
+      prompt: startInput({ run, node, project, workspace }).brief.prompt,
+      summary: 'Preparing a managed Coding Agent run.',
+      changedPaths: [],
+      startedAt: '2026-06-17T00:00:00.000Z',
+      redacted: true,
+    }
+    await expect(engine.cancel({ codingRun: retainedRun })).resolves.toBeUndefined()
     expect(fetcher.urls).toEqual([
       'http://127.0.0.1:4097/session?directory=%2Ftmp%2Fworktree',
       'http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
     ])
   })
 
@@ -206,6 +248,9 @@ describe('opencode HTTP coding engine', () => {
         ],
       }),
       true,
+      [],
+      [],
+      [],
     ])
     const engine = createOpencodeHttpCodingEngineAdapter({
       binaryPath: 'opencode',
@@ -228,13 +273,16 @@ describe('opencode HTTP coding engine', () => {
     expect(fetcher.urls).toEqual([
       'http://127.0.0.1:4097/session?directory=%2Ftmp%2Fworktree',
       'http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
     ])
   })
 
   it('records a redacted coding tool_call event from opencode permission metadata', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      {},
+      successfulOpencodeMessage(),
       [
         {
           id: 'perm-1',
@@ -292,7 +340,7 @@ describe('opencode HTTP coding engine', () => {
   it('redacts local absolute paths embedded in opencode tool command metadata', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      {},
+      successfulOpencodeMessage(),
       [
         {
           id: 'perm-1',
@@ -341,7 +389,7 @@ describe('opencode HTTP coding engine', () => {
   it('marks tool_call metadata as inferred when opencode permission metadata is empty', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      {},
+      successfulOpencodeMessage(),
       [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit' }],
     ])
     const engine = createOpencodeHttpCodingEngineAdapter({
@@ -375,7 +423,7 @@ describe('opencode HTTP coding engine', () => {
   it('normalizes relative metadata paths to portable separators', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      {},
+      successfulOpencodeMessage(),
       [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src\\app.ts' } }],
     ])
     const engine = createOpencodeHttpCodingEngineAdapter({
@@ -406,6 +454,9 @@ describe('opencode HTTP coding engine', () => {
       new Error('provider subscription expired'),
       [],
       true,
+      [],
+      [],
+      [],
     ])
     const engine = createOpencodeHttpCodingEngineAdapter({
       binaryPath: 'opencode',
@@ -430,10 +481,340 @@ describe('opencode HTTP coding engine', () => {
     )
   })
 
+  it('surfaces provider errors embedded in successful OpenCode message responses', async () => {
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(),
+      {
+        info: {
+          error: {
+            name: 'ProviderAuthError',
+            data: { providerID: 'openai', message: 'RAW_AUTH_MESSAGE provider-key-value' },
+          },
+        },
+        parts: [],
+      },
+      [],
+      true,
+      [],
+      [],
+      [],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 10_000,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    const failure = engine.start(startInput({ run, node, project, workspace }))
+
+    await expect(failure).rejects.toBeInstanceOf(OpencodeMessageResponseError)
+    await expect(failure).rejects.toMatchObject({
+      code: 'provider_auth_error',
+      message: 'opencode provider message failed',
+    })
+    const caught = await failure.catch((error: unknown) => error)
+    expect(JSON.stringify(caught)).not.toContain('RAW_AUTH_MESSAGE')
+    expect(JSON.stringify(caught)).not.toContain('provider-key-value')
+    expect(fetcher.urls).toContain(
+      'http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree',
+    )
+  })
+
+  it('fails immediately when opencode completes without requesting permission', async () => {
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(),
+      successfulOpencodeMessage(),
+      [],
+      true,
+      [],
+      [],
+      [],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 10_000,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    const startedAt = Date.now()
+    const failure = engine.start(startInput({ run, node, project, workspace }))
+
+    await expect(failure).rejects.toBeInstanceOf(CodingEnginePermissionDiscoveryError)
+    await expect(failure).rejects.toMatchObject({
+      code: 'message_completed_without_permission',
+      message: 'opencode completed without requesting a managed permission',
+    })
+    expect(Date.now() - startedAt).toBeLessThan(1_000)
+    expect(fetcher.urls).toEqual([
+      'http://127.0.0.1:4097/session?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/session/ses-1/message?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
+    ])
+  })
+
+  it('rejects only residual permissions from the failed startup session after abort', async () => {
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(),
+      successfulOpencodeMessage(),
+      [],
+      true,
+      [
+        { id: 'perm-other', sessionID: 'ses-other', permission: 'bash' },
+        { id: 'perm-residual', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'pwd' } },
+      ],
+      true,
+      [{ id: 'perm-other', sessionID: 'ses-other', permission: 'bash' }],
+      [{ id: 'perm-other', sessionID: 'ses-other', permission: 'bash' }],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 10_000,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    await expect(engine.start(startInput({ run, node, project, workspace }))).rejects.toMatchObject({
+      code: 'message_completed_without_permission',
+    })
+
+    expect(fetcher.urls.filter((url) => url.includes('/permission?'))).toHaveLength(4)
+    expect(fetcher.urls).toContain(
+      'http://127.0.0.1:4097/permission/perm-residual/reply?directory=%2Ftmp%2Fworktree',
+    )
+    expect(fetcher.urls).not.toContain(
+      'http://127.0.0.1:4097/permission/perm-other/reply?directory=%2Ftmp%2Fworktree',
+    )
+    expect(fetcher.bodies).toContain(JSON.stringify({
+      reply: 'reject',
+      message: 'Rejected during DevFlow session cleanup.',
+    }))
+  })
+
+  it('retains startup cleanup ownership when an aborted provider message never settles', async () => {
+    const urls: string[] = []
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+      const requestUrl = String(input)
+      urls.push(requestUrl)
+      if (requestUrl.includes('/message?')) {
+        return new Promise<Response>(() => undefined)
+      }
+      if (requestUrl.includes('/permission?')) {
+        return new Response('[]', { status: 200 })
+      }
+      if (requestUrl.includes('/abort?')) {
+        return new Response('true', { status: 200 })
+      }
+      return new Response(JSON.stringify(managedOpencodeSession()), { status: 200 })
+    }) as unknown as Fetcher
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 15,
+      startupCleanupTimeoutMs: 15,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    const failure = engine.start(startInput({ run, node, project, workspace }))
+
+    await expect(failure).rejects.toBeInstanceOf(CodingEngineStartupCleanupError)
+    const caught = await failure.catch((error: unknown) => error) as CodingEngineStartupCleanupError
+    expect(caught.errors[0]).toMatchObject({ code: 'permission_discovery_timed_out' })
+    expect(caught.errors[1]).toMatchObject({
+      message: 'opencode startup message cleanup did not complete',
+    })
+    expect(urls).toContain(
+      'http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree',
+    )
+  })
+
+  it('coalesces cancellation with startup while permission discovery is still polling', async () => {
+    let resolveMessage: ((response: Response) => void) | undefined
+    const pendingMessage = new Promise<Response>((resolve) => {
+      resolveMessage = resolve
+    })
+    let markPermissionPollStarted: (() => void) | undefined
+    const permissionPollStarted = new Promise<void>((resolve) => {
+      markPermissionPollStarted = resolve
+    })
+    let abortCount = 0
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+      const requestUrl = String(input)
+      if (requestUrl.includes('/message?')) {
+        return pendingMessage
+      }
+      if (requestUrl.includes('/abort?')) {
+        abortCount += 1
+        resolveMessage?.(new Response(JSON.stringify(successfulOpencodeMessage()), { status: 200 }))
+        return new Response('true', { status: 200 })
+      }
+      if (requestUrl.includes('/permission?')) {
+        markPermissionPollStarted?.()
+        return new Response('[]', { status: 200 })
+      }
+      return new Response(JSON.stringify(managedOpencodeSession()), { status: 200 })
+    }) as unknown as Fetcher
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 500,
+      startupCleanupTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const retainedRun: CodingAgentRun = {
+      id: 'coding-run-1',
+      runId: run.id,
+      nodeId: node.id,
+      projectId: project.id,
+      requestedBy: 'u-erich',
+      providerId: 'openai',
+      engine: 'opencode-http',
+      status: 'preparing',
+      branchName: workspace.branchName,
+      userInstruction: 'Implement the build node.',
+      prompt: startInput({ run, node, project, workspace }).brief.prompt,
+      summary: 'Preparing a managed Coding Agent run.',
+      changedPaths: [],
+      startedAt: '2026-06-17T00:00:00.000Z',
+      redacted: true,
+    }
+
+    const start = engine.start(startInput({ run, node, project, workspace }))
+    await permissionPollStarted
+    await expect(engine.cancel({ codingRun: retainedRun })).resolves.toBeUndefined()
+    await expect(start).rejects.toMatchObject({ code: 'message_completed_without_permission' })
+    const requestCountAfterCleanup = (fetcher as unknown as { mock: { calls: unknown[] } }).mock.calls.length
+    await expect(engine.cancel({ codingRun: retainedRun })).resolves.toBeUndefined()
+
+    expect(abortCount).toBe(1)
+    expect((fetcher as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(requestCountAfterCleanup)
+  })
+
+  it('waits for session creation and cancels before sending a startup message', async () => {
+    let resolveSession: ((response: Response) => void) | undefined
+    const pendingSession = new Promise<Response>((resolve) => {
+      resolveSession = resolve
+    })
+    let markSessionRequestStarted: (() => void) | undefined
+    const sessionRequestStarted = new Promise<void>((resolve) => {
+      markSessionRequestStarted = resolve
+    })
+    const urls: string[] = []
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+      const requestUrl = String(input)
+      urls.push(requestUrl)
+      if (requestUrl.endsWith('/session?directory=%2Ftmp%2Fworktree')) {
+        markSessionRequestStarted?.()
+        return pendingSession
+      }
+      if (requestUrl.includes('/abort?')) {
+        return new Response('true', { status: 200 })
+      }
+      if (requestUrl.includes('/permission?')) {
+        return new Response('[]', { status: 200 })
+      }
+      if (requestUrl.includes('/message?')) {
+        return new Response(JSON.stringify(successfulOpencodeMessage()), { status: 200 })
+      }
+      throw new Error('unexpected opencode test request')
+    }) as unknown as Fetcher
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const retainedRun: CodingAgentRun = {
+      id: 'coding-run-1',
+      runId: run.id,
+      nodeId: node.id,
+      projectId: project.id,
+      requestedBy: 'u-erich',
+      providerId: 'openai',
+      engine: 'opencode-http',
+      status: 'preparing',
+      branchName: workspace.branchName,
+      userInstruction: 'Implement the build node.',
+      prompt: startInput({ run, node, project, workspace }).brief.prompt,
+      summary: 'Preparing a managed Coding Agent run.',
+      changedPaths: [],
+      startedAt: '2026-06-17T00:00:00.000Z',
+      redacted: true,
+    }
+
+    const start = engine.start(startInput({ run, node, project, workspace }))
+    await sessionRequestStarted
+    let cancellationSettled = false
+    const cancellation = engine.cancel({ codingRun: retainedRun }).finally(() => {
+      cancellationSettled = true
+    })
+    await Promise.resolve()
+    expect(cancellationSettled).toBe(false)
+
+    resolveSession?.(new Response(JSON.stringify(managedOpencodeSession()), { status: 200 }))
+    await expect(cancellation).resolves.toBeUndefined()
+    await expect(start).rejects.toThrow('opencode session was cancelled during permission continuation')
+    expect(urls.some((url) => url.includes('/message?'))).toBe(false)
+    expect(urls.filter((url) => url.includes('/abort?'))).toHaveLength(1)
+  })
+
   it('replies to approved permissions and captures a redacted opencode diff', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      {},
+      successfulOpencodeMessage(),
       [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
       true,
       [],
@@ -504,7 +885,7 @@ describe('opencode HTTP coding engine', () => {
   it('falls back to managed worktree diff capture when opencode returns no diff files', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      {},
+      successfulOpencodeMessage(),
       [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'new-file.txt' } }],
       true,
       [],
@@ -585,10 +966,285 @@ describe('opencode HTTP coding engine', () => {
     expect(completedResult.diff.changedPaths).toEqual(['new-file.txt'])
   })
 
+  it('does not treat a semantic provider failure as completion even when a partial diff exists', async () => {
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(),
+      {
+        info: {
+          error: {
+            name: 'APIError',
+            data: {
+              message: 'RAW_PROVIDER_MESSAGE',
+              statusCode: 429,
+              isRetryable: true,
+            },
+          },
+        },
+        parts: [],
+      },
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'new-file.txt' } }],
+      true,
+      [],
+      true,
+      [],
+      [],
+      [],
+    ])
+    const captureWorktreeDiff = vi.fn(async () => ({
+      changedPaths: ['new-file.txt'],
+      patch: 'diff --git a/new-file.txt b/new-file.txt\n+partial\n',
+    }))
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      captureWorktreeDiff,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = await engine.start(startInput({ run, node, project, workspace }))
+
+    const failure = engine.approvePermission({
+      codingRun: started.codingRun,
+      workspace,
+      project,
+      request: started.permissionRequest,
+      now: '2026-06-17T00:00:01.000Z',
+    })
+
+    await expect(failure).rejects.toBeInstanceOf(OpencodeMessageResponseError)
+    await expect(failure).rejects.toMatchObject({ code: 'provider_api_error', statusCode: 429 })
+    await engine.cancel({ codingRun: started.codingRun })
+    expect(captureWorktreeDiff).not.toHaveBeenCalled()
+    expect(fetcher.urls.filter((url) => url.includes('/abort?'))).toHaveLength(1)
+    expect(fetcher.urls.some((url) => url.includes('/diff?'))).toBe(false)
+  })
+
+  it('keeps a failed continuation session registered until cleanup can be retried', async () => {
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(),
+      {
+        info: {
+          error: {
+            name: 'APIError',
+            data: { statusCode: 429, isRetryable: true },
+          },
+        },
+        parts: [],
+      },
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit' }],
+      true,
+      [],
+      false,
+      true,
+      [],
+      [],
+      [],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = await engine.start(startInput({ run, node, project, workspace }))
+
+    const failure = engine.approvePermission({
+      codingRun: started.codingRun,
+      workspace,
+      project,
+      request: started.permissionRequest,
+      now: '2026-06-17T00:00:01.000Z',
+    })
+
+    await expect(failure).rejects.toBeInstanceOf(CodingEngineContinuationCleanupError)
+    const caught = await failure.catch((error: unknown) => error) as CodingEngineContinuationCleanupError
+    expect(caught.errors[0]).toMatchObject({ code: 'provider_api_error', statusCode: 429 })
+    await engine.cancel({ codingRun: started.codingRun })
+    expect(fetcher.urls.filter((url) => url.includes('/abort?'))).toHaveLength(2)
+  })
+
+  it('retries residual permission cleanup before forgetting a cancelled session', async () => {
+    const residualPermission = {
+      id: 'perm-1',
+      sessionID: 'ses-1',
+      permission: 'edit',
+      metadata: { filepath: 'src/app.ts' },
+    }
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(),
+      successfulOpencodeMessage(),
+      [residualPermission],
+      true,
+      [residualPermission],
+      false,
+      true,
+      [residualPermission],
+      true,
+      [],
+      [],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = await engine.start(startInput({ run, node, project, workspace }))
+
+    await expect(engine.cancel({ codingRun: started.codingRun })).rejects.toThrow(
+      'opencode session permission rejection was not acknowledged',
+    )
+    await expect(engine.cancel({ codingRun: started.codingRun })).resolves.toBeUndefined()
+    const requestCountAfterCleanup = fetcher.urls.length
+    await expect(engine.cancel({ codingRun: started.codingRun })).resolves.toBeUndefined()
+
+    expect(fetcher.urls.filter((url) => url.includes('/abort?'))).toHaveLength(2)
+    expect(fetcher.urls.filter((url) => url.includes('/permission/perm-1/reply?'))).toHaveLength(2)
+    expect(fetcher.urls).toHaveLength(requestCountAfterCleanup)
+  })
+
+  it('coalesces concurrent cancellation cleanup for the same session', async () => {
+    const residualPermission = {
+      id: 'perm-1',
+      sessionID: 'ses-1',
+      permission: 'edit',
+      metadata: { filepath: 'src/app.ts' },
+    }
+    let permissionListCount = 0
+    let abortCount = 0
+    let replyCount = 0
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+      const requestUrl = String(input)
+      if (requestUrl.includes('/message?')) {
+        return new Response(JSON.stringify(successfulOpencodeMessage()), { status: 200 })
+      }
+      if (requestUrl.includes('/abort?')) {
+        abortCount += 1
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        return new Response('true', { status: 200 })
+      }
+      if (requestUrl.includes('/permission/perm-1/reply?')) {
+        replyCount += 1
+        return new Response(replyCount === 1 ? 'true' : 'false', { status: 200 })
+      }
+      if (requestUrl.includes('/permission?')) {
+        permissionListCount += 1
+        return new Response(JSON.stringify(permissionListCount <= 2 ? [residualPermission] : []), { status: 200 })
+      }
+      return new Response(JSON.stringify(managedOpencodeSession()), { status: 200 })
+    }) as unknown as Fetcher
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = await engine.start(startInput({ run, node, project, workspace }))
+
+    await expect(Promise.all([
+      engine.cancel({ codingRun: started.codingRun }),
+      engine.cancel({ codingRun: started.codingRun }),
+    ])).resolves.toEqual([undefined, undefined])
+
+    expect(abortCount).toBe(1)
+    expect(replyCount).toBe(1)
+  })
+
+  it('does not complete approval when cancellation starts while the result is being assembled', async () => {
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(),
+      successfulOpencodeMessage(),
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
+      true,
+      [],
+      [],
+      false,
+      true,
+      [],
+      [],
+      [],
+    ])
+    let cancellation: Promise<void> | undefined
+    let startedRun: Awaited<ReturnType<CodingEngineAdapter['start']>> | undefined
+    let engine: ReturnType<typeof createOpencodeHttpCodingEngineAdapter>
+    engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      captureWorktreeDiff: async () => {
+        const diff: { changedPaths: string[]; patch: string } = { changedPaths: [], patch: '' }
+        Object.defineProperty(diff, 'changedPaths', {
+          enumerable: true,
+          get() {
+            if (!cancellation && startedRun) {
+              cancellation = engine.cancel({ codingRun: startedRun.codingRun })
+              void cancellation.catch(() => undefined)
+            }
+            return []
+          },
+        })
+        return diff
+      },
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    startedRun = await engine.start(startInput({ run, node, project, workspace }))
+
+    await expect(engine.approvePermission({
+      codingRun: startedRun.codingRun,
+      workspace,
+      project,
+      request: startedRun.permissionRequest,
+      now: '2026-06-17T00:00:01.000Z',
+    })).rejects.toBeInstanceOf(CodingEngineContinuationCleanupError)
+    await expect(cancellation).rejects.toThrow('opencode session abort was not acknowledged')
+    await expect(engine.cancel({ codingRun: startedRun.codingRun })).resolves.toBeUndefined()
+    expect(fetcher.urls.filter((url) => url.includes('/abort?'))).toHaveLength(2)
+  })
+
   it('returns the next opencode permission instead of completing when a second request appears', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      {},
+      successfulOpencodeMessage(),
       [{ id: 'perm-bash', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'pwd' } }],
       true,
       [{ id: 'perm-edit', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'new-file.txt' } }],
@@ -635,9 +1291,13 @@ describe('opencode HTTP coding engine', () => {
   it('aborts the matching opencode session when cancelled', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      {},
+      successfulOpencodeMessage(),
       [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
       true,
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
+      true,
+      [],
+      [],
     ])
     const engine = createOpencodeHttpCodingEngineAdapter({
       binaryPath: 'opencode',
@@ -658,15 +1318,22 @@ describe('opencode HTTP coding engine', () => {
     await engine.cancel({ codingRun: started.codingRun })
 
     expect(fetcher.urls).toContain('http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree')
+    expect(fetcher.urls).toContain(
+      'http://127.0.0.1:4097/permission/perm-1/reply?directory=%2Ftmp%2Fworktree',
+    )
   })
 
   it('keeps the session registered until opencode acknowledges cancellation', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      {},
+      successfulOpencodeMessage(),
       [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
       {},
       true,
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
+      true,
+      [],
+      [],
     ])
     const engine = createOpencodeHttpCodingEngineAdapter({
       binaryPath: 'opencode',
@@ -695,10 +1362,14 @@ describe('opencode HTTP coding engine', () => {
   it('does not advance a permission when opencode rejects the reply acknowledgement', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
-      {},
+      successfulOpencodeMessage(),
       [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
       'false',
       true,
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit' }],
+      true,
+      [],
+      [],
     ])
     const engine = createOpencodeHttpCodingEngineAdapter({
       binaryPath: 'opencode',
@@ -775,6 +1446,10 @@ function managedOpencodeSession(overrides: Partial<OpencodeSession> = {}): Openc
     permission: createDefaultOpencodePermissionRules(),
     ...overrides,
   }
+}
+
+function successfulOpencodeMessage() {
+  return { info: {}, parts: [] }
 }
 
 function identityManagedDirectory(directory: string): string {
