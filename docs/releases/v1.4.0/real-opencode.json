@@ -1,0 +1,35 @@
+{
+  "targetVersion": "1.4.0",
+  "candidateSha": "b7986d4faec2f8f1bcc220a0341cb0686286209e",
+  "status": "passed",
+  "recordedAt": "2026-08-10T01:38:30.362Z",
+  "opencodeVersion": "1.18.15",
+  "provider": "double",
+  "model": "ark-code-latest",
+  "keyEnvName": "ANTHROPIC_AUTH_TOKEN",
+  "duration": "21.037s",
+  "permissionRelay": "bash -> edit",
+  "diffEvidence": [
+    "devflow-opencode-smoke.txt"
+  ],
+  "testEvidence": "passed",
+  "cleanup": "passed",
+  "redactionCheck": "passed",
+  "attemptCount": 1,
+  "automaticRetry": false,
+  "costCapUsd": null,
+  "releaseProfile": "v1.4",
+  "providerApiMode": "responses",
+  "resolvedConfigPreflight": "passed",
+  "providerRetryObserved": false,
+  "egressGate": {
+    "armedSegmentCount": 3,
+    "forwardedRequestCount": 3,
+    "completedResponseCount": 3,
+    "blockedUncreditedRequestCount": 0,
+    "blockedInvalidCount": 0,
+    "failedSegmentCount": 0,
+    "activeRequestCount": 0,
+    "closed": true
+  }
+}

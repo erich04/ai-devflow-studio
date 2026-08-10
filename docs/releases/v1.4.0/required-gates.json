@@ -1,0 +1,44 @@
+{
+  "targetVersion": "1.4.0",
+  "candidateSha": "b7986d4faec2f8f1bcc220a0341cb0686286209e",
+  "status": "passed",
+  "recordedAt": "2026-08-10T01:42:32.000Z",
+  "gates": {
+    "verify": "passed",
+    "windows-compatibility": "passed",
+    "e2e": "passed",
+    "electron-smoke": "passed",
+    "postgres-smoke": "passed",
+    "docker-smoke": "passed",
+    "docker-lifecycle-smoke": "passed",
+    "build": "passed",
+    "build-output-smoke": "passed",
+    "desktop-pilot-build": "passed",
+    "desktop-pilot-smoke": "passed"
+  },
+  "localMatrix": {
+    "candidateSha": "b7986d4faec2f8f1bcc220a0341cb0686286209e",
+    "result": "passed",
+    "worktreeCleanAfter": true
+  },
+  "verifyRun": {
+    "workflow": "Verify",
+    "event": "pull_request",
+    "runId": 31320603242,
+    "url": "https://github.com/erich04/ai-devflow-studio/actions/runs/31320603242",
+    "headSha": "b7986d4faec2f8f1bcc220a0341cb0686286209e",
+    "conclusion": "success",
+    "jobs": {
+      "macOS verify": "success",
+      "Windows compatibility": "success",
+      "Postgres integration": "success",
+      "Docker smoke": "success",
+      "Docker lifecycle smoke": "success"
+    }
+  },
+  "desktopArtifact": {
+    "version": "1.4.0",
+    "platform": "darwin-arm64",
+    "sha256": "5c0592e7c40ddc18fb7cd7e973489da999d0aee1cd1a07e2d54a09a39a812d6e"
+  }
+}
