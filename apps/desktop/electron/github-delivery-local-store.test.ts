@@ -12,6 +12,7 @@ import type {
   CodingAgentRun,
   CodingDiffArtifact,
   DesktopPairingCredential,
+  GitHubRepositoryBinding,
   ManagedCodingWorkspace,
   TestEvidence,
   WorkflowRun,
@@ -46,6 +47,21 @@ function createSources() {
       { projectId: 'team-project-1', userId: 'user-1', role: 'lead' },
     ],
     createdAt: '2026-08-11T09:55:00.000Z',
+  }
+  const repositoryBinding: GitHubRepositoryBinding = {
+    stateVersion: 1,
+    id: 'github-binding-1',
+    version: 3,
+    organizationId: pairing.organizationId,
+    teamProjectId: pairing.projectId,
+    installationId: '123456',
+    repositoryId: '987654321',
+    repository: 'erich04/ai-devflow-studio',
+    defaultBranch: 'main',
+    status: 'active',
+    validatedAt: '2026-08-11T09:56:00.000Z',
+    updatedAt: '2026-08-11T09:56:00.000Z',
+    redacted: true,
   }
   const run: WorkflowRun = {
     id: 'run-delivery-1',
@@ -160,7 +176,7 @@ function createSources() {
     redacted: true,
     updatedAt: '2026-08-11T10:25:00.000Z',
   }
-  return { pairing, run, codingRun, workspace, diffArtifact, testEvidence, prPackage }
+  return { pairing, repositoryBinding, run, codingRun, workspace, diffArtifact, testEvidence, prPackage }
 }
 
 async function saveSources(
@@ -168,6 +184,7 @@ async function saveSources(
   sources: ReturnType<typeof createSources>,
 ): Promise<void> {
   await store.saveDesktopPairingCredential(sources.pairing, 'encrypted-token')
+  await store.saveGitHubRepositoryBinding(sources.repositoryBinding)
   await store.saveRun(sources.run)
   await store.saveCodingAgentRun(sources.codingRun)
   await store.saveManagedCodingWorkspace(sources.workspace)
@@ -179,10 +196,7 @@ async function saveSources(
 async function createIntent(sources: ReturnType<typeof createSources>) {
   return createGitHubDeliveryIntent({
     id: 'delivery-intent-1',
-    organizationId: 'org-1',
-    teamProjectId: 'team-project-1',
-    repository: 'erich04/ai-devflow-studio',
-    defaultBranch: 'main',
+    repositoryBinding: sources.repositoryBinding,
     run: sources.run,
     prNodeId: 'run-delivery-1-pr',
     codingRun: sources.codingRun,
@@ -214,6 +228,10 @@ describe('GitHub Delivery Intent local persistence', () => {
       'local_project_id',
       'run_id',
       'node_id',
+      'repository_binding_id',
+      'repository_binding_version',
+      'installation_id',
+      'repository_id',
       'coding_run_id',
       'workspace_id',
       'diff_artifact_id',
@@ -252,6 +270,7 @@ describe('GitHub Delivery Intent local persistence', () => {
       first.commitGitHubDeliveryIntent({
         intent,
         expectedPairingCredential: sources.pairing,
+        expectedRepositoryBinding: sources.repositoryBinding,
         expectedRun: sources.run,
         expectedCodingRun: sources.codingRun,
         expectedWorkspace: sources.workspace,
@@ -262,6 +281,7 @@ describe('GitHub Delivery Intent local persistence', () => {
       first.commitGitHubDeliveryIntent({
         intent: replayIntent,
         expectedPairingCredential: sources.pairing,
+        expectedRepositoryBinding: sources.repositoryBinding,
         expectedRun: sources.run,
         expectedCodingRun: sources.codingRun,
         expectedWorkspace: sources.workspace,
@@ -284,6 +304,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     await expect(first.commitGitHubDeliveryIntent({
       intent: replayIntent,
       expectedPairingCredential: sources.pairing,
+      expectedRepositoryBinding: sources.repositoryBinding,
       expectedRun: sources.run,
       expectedCodingRun: sources.codingRun,
       expectedWorkspace: sources.workspace,
@@ -324,6 +345,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     await expect(store.commitGitHubDeliveryIntent({
       intent,
       expectedPairingCredential: sources.pairing,
+      expectedRepositoryBinding: sources.repositoryBinding,
       expectedRun: sources.run,
       expectedCodingRun: sources.codingRun,
       expectedWorkspace: sources.workspace,
@@ -348,6 +370,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     await expect(store.commitGitHubDeliveryIntent({
       intent,
       expectedPairingCredential: sources.pairing,
+      expectedRepositoryBinding: sources.repositoryBinding,
       expectedRun: sources.run,
       expectedCodingRun: sources.codingRun,
       expectedWorkspace: sources.workspace,
@@ -360,6 +383,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     await expect(store.commitGitHubDeliveryIntent({
       intent,
       expectedPairingCredential: sources.pairing,
+      expectedRepositoryBinding: sources.repositoryBinding,
       expectedRun: sources.run,
       expectedCodingRun: sources.codingRun,
       expectedWorkspace: sources.workspace,
@@ -377,10 +401,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     await store.saveArtifact(changedPackage)
     const secondIntent = await createGitHubDeliveryIntent({
       id: 'delivery-intent-2',
-      organizationId: sources.pairing.organizationId,
-      teamProjectId: sources.pairing.projectId,
-      repository: 'erich04/ai-devflow-studio',
-      defaultBranch: 'main',
+      repositoryBinding: sources.repositoryBinding,
       run: sources.run,
       prNodeId: 'run-delivery-1-pr',
       codingRun: sources.codingRun,
@@ -395,6 +416,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     await expect(store.commitGitHubDeliveryIntent({
       intent: secondIntent,
       expectedPairingCredential: changedSources.pairing,
+      expectedRepositoryBinding: changedSources.repositoryBinding,
       expectedRun: changedSources.run,
       expectedCodingRun: changedSources.codingRun,
       expectedWorkspace: changedSources.workspace,

@@ -753,6 +753,35 @@ describe('workflow command core', () => {
     expect(result.run.nodes.find((node) => node.id === 'run-build-transition-accept')?.status).toBe('running')
   })
 
+  it('attaches a PR Delivery Package without advancing and replays the exact package', () => {
+    const { run, evidence, prNodeId, artifact } = currentPr()
+    const command = {
+      type: 'attach_pr_package' as const,
+      nodeId: prNodeId,
+      artifactId: artifact.id,
+    }
+
+    const attached = applyWorkflowCommand({ run, command, evidence, now })
+    expect(attached.applied).toBe(true)
+    expect(attached.run.currentNodeId).toBe(prNodeId)
+    expect(attached.run.status).toBe('paused_at_gate')
+    expect(attached.run.version).toBe(run.version + 1)
+    expect(attached.run.nodes.find((node) => node.id === prNodeId)).toMatchObject({
+      status: 'running',
+      artifactIds: expect.arrayContaining([artifact.id]),
+    })
+
+    const replay = applyWorkflowCommand({
+      run: attached.run,
+      command,
+      evidence,
+      now: '2026-07-31T12:01:00.000Z',
+    })
+    expect(replay.applied).toBe(true)
+    expect(replay.run).toBe(attached.run)
+    expect(replay.run.version).toBe(attached.run.version)
+  })
+
   it('blocks PR completion when a newer matching test result is no longer passing', () => {
     const { run, evidence, prNodeId, artifact } = currentPr()
     const latestFailure: TestEvidence = {

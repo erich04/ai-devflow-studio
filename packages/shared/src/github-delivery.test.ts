@@ -7,7 +7,10 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from './domain'
-import { createGitHubDeliveryIntent } from './github-delivery'
+import {
+  createGitHubDeliveryIntent,
+  type GitHubRepositoryBinding,
+} from './github-delivery'
 
 const run: WorkflowRun = {
   id: 'run-1',
@@ -128,12 +131,25 @@ const diffArtifact: CodingDiffArtifact = {
   createdAt: '2026-08-11T10:18:00.000Z',
 }
 
-const baseInput = {
-  id: 'delivery-1',
+const repositoryBinding: GitHubRepositoryBinding = {
+  stateVersion: 1,
+  id: 'github-binding-1',
+  version: 3,
   organizationId: 'org-1',
   teamProjectId: 'team-project-1',
+  installationId: '123456',
+  repositoryId: '987654321',
   repository: 'Erich04/AI-DevFlow-Studio',
   defaultBranch: 'main',
+  status: 'active',
+  validatedAt: '2026-08-11T09:59:00.000Z',
+  updatedAt: '2026-08-11T09:59:00.000Z',
+  redacted: true,
+}
+
+const baseInput = {
+  id: 'delivery-1',
+  repositoryBinding,
   run,
   prNodeId: 'run-1-pr',
   codingRun,
@@ -167,6 +183,10 @@ describe('GitHub Delivery Intent', () => {
       runId: 'run-1',
       runVersion: 6,
       nodeId: 'run-1-pr',
+      repositoryBindingId: 'github-binding-1',
+      repositoryBindingVersion: 3,
+      installationId: '123456',
+      repositoryId: '987654321',
       codingRunId: 'coding-1',
       workspaceId: 'workspace-1',
       repository: 'erich04/ai-devflow-studio',
@@ -215,7 +235,10 @@ describe('GitHub Delivery Intent', () => {
   it('rejects an unsafe repository or a non-DevFlow publication branch', async () => {
     await expect(createGitHubDeliveryIntent({
       ...baseInput,
-      repository: 'https://github.com/erich04/ai-devflow-studio',
+      repositoryBinding: {
+        ...repositoryBinding,
+        repository: 'https://github.com/erich04/ai-devflow-studio',
+      },
     })).rejects.toThrow('GitHub repository must use owner/name format')
 
     await expect(createGitHubDeliveryIntent({

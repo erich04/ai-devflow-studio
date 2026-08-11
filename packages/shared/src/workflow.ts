@@ -560,7 +560,7 @@ export function createPrDraftArtifact(input: CreatePrDraftArtifactInput): Artifa
   ].join('\n')
 
   return {
-    id: `artifact-${input.run.id}-pr-draft`,
+    id: `artifact-${input.run.id}-pr-draft-v${input.run.version}`,
     runId: input.run.id,
     nodeId: prNode?.id ?? input.run.currentNodeId,
     kind: 'pr',

@@ -16,6 +16,7 @@ export type WorkflowCommand =
   | { type: 'approve_gate'; nodeId: string }
   | { type: 'complete_build'; nodeId: string; codingRunId: string; diffId: string }
   | { type: 'record_test_result'; nodeId: string; evidenceId: string; artifactId: string }
+  | { type: 'attach_pr_package'; nodeId: string; artifactId: string }
   | { type: 'complete_pr'; nodeId: string; artifactId: string }
   | { type: 'attach_acceptance_bundle'; nodeId: string; artifactId: string }
   | { type: 'approve_acceptance'; nodeId: string }
@@ -232,9 +233,9 @@ export function evaluateWorkflowCommand(input: EvaluateWorkflowCommandInput): Wo
     return nextBlocker ? { allowed: false, blockers: [nextBlocker] } : { allowed: true, blockers: [] }
   }
 
-  if (command.type === 'complete_pr') {
+  if (command.type === 'attach_pr_package' || command.type === 'complete_pr') {
     if (node.kind !== 'pr' || node.stage !== 'pr') {
-      return blocked('invalid_node_kind', 'complete_pr requires a PR node')
+      return blocked('invalid_node_kind', `${command.type} requires a PR node`)
     }
     if (node.status !== 'running') {
       return blocked('invalid_node_status', 'A PR node must be running before completion')
@@ -251,6 +252,9 @@ export function evaluateWorkflowCommand(input: EvaluateWorkflowCommandInput): Wo
     const deliveryBlockers = evaluateDeliveryEvidence(input)
     if (deliveryBlockers.length > 0) {
       return { allowed: false, blockers: deliveryBlockers }
+    }
+    if (command.type === 'attach_pr_package') {
+      return { allowed: true, blockers: [] }
     }
     const nextBlocker = evaluateNextNode(input.run, node)
     return nextBlocker ? { allowed: false, blockers: [nextBlocker] } : { allowed: true, blockers: [] }
@@ -440,6 +444,12 @@ export function applyWorkflowCommand(input: ApplyWorkflowCommandInput): Workflow
   const command = input.command
   const currentNode = input.run.nodes.find((node) => node.id === command.nodeId)!
   if (
+    command.type === 'attach_pr_package' &&
+    currentNode.artifactIds.includes(command.artifactId)
+  ) {
+    return { applied: true, run: input.run, blockers: [] }
+  }
+  if (
     command.type === 'attach_acceptance_bundle' &&
     currentNode.artifactIds.includes(command.artifactId)
   ) {
@@ -471,6 +481,25 @@ export function applyWorkflowCommand(input: ApplyWorkflowCommandInput): Workflow
     }
   }
   if (command.type === 'attach_acceptance_bundle') {
+    return {
+      applied: true,
+      blockers: [],
+      run: {
+        ...input.run,
+        version: input.run.version + 1,
+        updatedAt: input.now,
+        nodes: input.run.nodes.map((node) =>
+          node.id === currentNode.id
+            ? {
+                ...node,
+                artifactIds: unique([...node.artifactIds, command.artifactId]),
+              }
+            : node,
+        ),
+      },
+    }
+  }
+  if (command.type === 'attach_pr_package') {
     return {
       applied: true,
       blockers: [],
@@ -615,7 +644,7 @@ function evaluateDeliveryEvidence(input: EvaluateWorkflowCommandInput): Workflow
     return [blocker('test_report_missing', 'The latest passing test report must be attached')]
   }
 
-  if (input.command.type !== 'complete_pr') {
+  if (input.command.type !== 'complete_pr' && input.command.type !== 'attach_pr_package') {
     const prNode = input.run.nodes.find((node) => node.kind === 'pr' && node.stage === 'pr')
     const hasAttachedPrArtifact = input.evidence.artifacts.some(
       (artifact) =>

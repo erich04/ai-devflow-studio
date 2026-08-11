@@ -162,7 +162,7 @@ describe('delivery artifacts', () => {
     })
 
     expect(artifact).toMatchObject({
-      id: 'artifact-run-delivery-pr-draft',
+      id: `artifact-run-delivery-pr-draft-v${created.run.version}`,
       runId: 'run-delivery',
       nodeId: 'run-delivery-pr',
       kind: 'pr',
@@ -259,7 +259,7 @@ describe('delivery artifacts', () => {
       redacted: true,
     })
     expect(artifact.content).toContain('Raw Request: Fix webhook retry handling')
-    expect(artifact.content).toContain('PR Draft: artifact-run-delivery-pr-draft')
+    expect(artifact.content).toContain(`PR Draft: ${prDraft.id}`)
     expect(artifact.content).toContain('Changed Paths: src/webhook.ts, src/webhook.test.ts')
     expect(artifact.content).toContain('Tests: passed - Tests passed.')
     expect(artifact.content).toContain('Policy: warn')

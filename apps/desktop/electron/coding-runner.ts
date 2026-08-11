@@ -179,12 +179,52 @@ export async function commitManagedCodingWorkspace(
   }
 
   const baseCommitSha = input.workspace.baseCommitSha ?? currentHead
+  const expectedPaths = sortedUnique(input.expectedChangedPaths)
   if (currentHead !== baseCommitSha) {
-    throw new Error('Managed workspace contains an unrecorded commit')
+    const recoveryStatus = await worktreeStatus(input.workspace.worktreePath)
+    const parentCommitSha = (await execGit(
+      input.workspace.worktreePath,
+      ['rev-parse', '--verify', 'HEAD^'],
+    )).stdout.trim().toLowerCase()
+    const { stdout: changedOutput } = await execGit(input.workspace.worktreePath, [
+      '-c',
+      'core.quotePath=false',
+      'diff',
+      '--name-only',
+      '-z',
+      '--no-renames',
+      `${baseCommitSha}..${currentHead}`,
+      '--',
+    ])
+    const committedPaths = sortedUnique(
+      changedOutput.split('\0').filter((value) => value.length > 0),
+    )
+    const { stdout: messageOutput } = await execGit(
+      input.workspace.worktreePath,
+      ['log', '-1', '--format=%B'],
+    )
+    if (
+      recoveryStatus.length > 0 ||
+      parentCommitSha !== baseCommitSha ||
+      messageOutput.trim() !== deliveryCommitMessage(input.runId) ||
+      committedPaths.length !== expectedPaths.length ||
+      committedPaths.some((value, index) => value !== expectedPaths[index])
+    ) {
+      throw new Error('Managed workspace contains an unrecorded commit')
+    }
+    const workspace = {
+      ...input.workspace,
+      baseCommitSha,
+      headCommitSha: currentHead,
+    }
+    return {
+      workspace,
+      baseCommitSha,
+      expectedCommitSha: currentHead,
+    }
   }
   const entries = await worktreeStatus(input.workspace.worktreePath)
   const actualPaths = sortedUnique(entries.map((entry) => entry.path))
-  const expectedPaths = sortedUnique(input.expectedChangedPaths)
   if (
     actualPaths.length === 0 ||
     actualPaths.length !== expectedPaths.length ||
@@ -194,7 +234,7 @@ export async function commitManagedCodingWorkspace(
   }
 
   await execGit(input.workspace.worktreePath, ['add', '--', ...expectedPaths])
-  const commitMessage = `DevFlow delivery ${input.runId.replace(/[^A-Za-z0-9._-]/gu, '-').slice(0, 100)}`
+  const commitMessage = deliveryCommitMessage(input.runId)
   await execGit(input.workspace.worktreePath, [
     '-c',
     'user.name=AI DevFlow Studio',
@@ -504,6 +544,10 @@ async function worktreeStatus(repositoryPath: string): Promise<Array<{ status: s
 
 function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right))
+}
+
+function deliveryCommitMessage(runId: string): string {
+  return `DevFlow delivery ${runId.replace(/[^A-Za-z0-9._-]/gu, '-').slice(0, 100)}`
 }
 
 async function execGit(cwd: string, args: string[]) {

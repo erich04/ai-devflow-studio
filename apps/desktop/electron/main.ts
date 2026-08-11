@@ -1657,11 +1657,11 @@ function registerIpcHandlers() {
       message: 'PR draft artifact generated from trusted delivery evidence.',
       timestamp,
     }
-    const completed = await executeWorkflowCommandOrThrow(store, {
+    const attached = await executeWorkflowCommandOrThrow(store, {
       runId: run.id,
       expectedRunUpdatedAt: run.updatedAt,
       command: {
-        type: 'complete_pr',
+        type: 'attach_pr_package',
         nodeId: node.id,
         artifactId: artifact.id,
       },
@@ -1674,7 +1674,7 @@ function registerIpcHandlers() {
     wakeRemoteSyncOutbox()
 
     return {
-      run: completed.run,
+      run: attached.run,
       artifact,
       event,
       state: await store.loadState(),

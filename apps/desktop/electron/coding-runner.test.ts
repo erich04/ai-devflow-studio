@@ -97,6 +97,11 @@ describe('coding worktree manager', () => {
       expectedChangedPaths: ['delivery.txt'],
       runId: 'run-1',
     })
+    const recoveredAfterCommitBeforePersistence = await commitManagedCodingWorkspace({
+      workspace,
+      expectedChangedPaths: ['delivery.txt'],
+      runId: 'run-1',
+    })
     const replay = await commitManagedCodingWorkspace({
       workspace: committed.workspace,
       expectedChangedPaths: ['delivery.txt'],
@@ -115,6 +120,7 @@ describe('coding worktree manager', () => {
     expect(committed.baseCommitSha).toBe(workspace.baseCommitSha)
     expect(committed.expectedCommitSha).toMatch(/^[a-f0-9]{40}$/)
     expect(committed.expectedCommitSha).not.toBe(committed.baseCommitSha)
+    expect(recoveredAfterCommitBeforePersistence).toEqual(committed)
     expect(replay).toEqual(committed)
     expect(status).toBe('')
   })

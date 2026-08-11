@@ -18,6 +18,24 @@ export type GitHubDeliveryStatus =
   | 'recovery_required'
   | 'revoked'
 
+export type GitHubRepositoryBindingStatus = 'active' | 'stale' | 'revoked'
+
+export type GitHubRepositoryBinding = {
+  stateVersion: 1
+  id: string
+  version: number
+  organizationId: string
+  teamProjectId: string
+  installationId: string
+  repositoryId: string
+  repository: string
+  defaultBranch: string
+  status: GitHubRepositoryBindingStatus
+  validatedAt: string
+  updatedAt: string
+  redacted: true
+}
+
 export type GitHubDeliveryIntent = {
   stateVersion: 1
   id: string
@@ -27,6 +45,10 @@ export type GitHubDeliveryIntent = {
   runId: string
   runVersion: number
   nodeId: string
+  repositoryBindingId: string
+  repositoryBindingVersion: number
+  installationId: string
+  repositoryId: string
   codingRunId: string
   codingRunCompletedAt: string
   workspaceId: string
@@ -53,10 +75,7 @@ export type GitHubDeliveryIntent = {
 
 export type CreateGitHubDeliveryIntentInput = {
   id: string
-  organizationId: string
-  teamProjectId: string
-  repository: string
-  defaultBranch: string
+  repositoryBinding: GitHubRepositoryBinding
   run: WorkflowRun
   prNodeId: string
   codingRun: CodingAgentRun
@@ -84,6 +103,20 @@ function requireIdentifier(value: string, label: string): string {
     throw new Error(`${label} is invalid`)
   }
   return normalized
+}
+
+function requirePositiveVersion(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${label} is invalid`)
+  }
+  return value
+}
+
+function requireGitHubNumericId(value: string, label: string): string {
+  if (!/^[1-9][0-9]{0,19}$/u.test(value)) {
+    throw new Error(`${label} is invalid`)
+  }
+  return value
 }
 
 export function normalizeGitHubRepository(value: string): string {
@@ -166,6 +199,10 @@ function canonicalIntentMaterial(material: IntentDigestMaterial): string {
     runId: material.runId,
     runVersion: material.runVersion,
     nodeId: material.nodeId,
+    repositoryBindingId: material.repositoryBindingId,
+    repositoryBindingVersion: material.repositoryBindingVersion,
+    installationId: material.installationId,
+    repositoryId: material.repositoryId,
     codingRunId: material.codingRunId,
     codingRunCompletedAt: material.codingRunCompletedAt,
     workspaceId: material.workspaceId,
@@ -189,10 +226,39 @@ export async function createGitHubDeliveryIntent(
   input: CreateGitHubDeliveryIntentInput,
 ): Promise<GitHubDeliveryIntent> {
   const id = requireIdentifier(input.id, 'GitHub Delivery Intent id')
-  const organizationId = requireIdentifier(input.organizationId, 'Organization id')
-  const teamProjectId = requireIdentifier(input.teamProjectId, 'Team Project id')
-  const repository = normalizeGitHubRepository(input.repository)
-  const baseBranch = assertSafeGitHubBranch(input.defaultBranch)
+  const organizationId = requireIdentifier(
+    input.repositoryBinding.organizationId,
+    'Organization id',
+  )
+  const teamProjectId = requireIdentifier(
+    input.repositoryBinding.teamProjectId,
+    'Team Project id',
+  )
+  const repositoryBindingId = requireIdentifier(
+    input.repositoryBinding.id,
+    'GitHub repository binding id',
+  )
+  const repositoryBindingVersion = requirePositiveVersion(
+    input.repositoryBinding.version,
+    'GitHub repository binding version',
+  )
+  const installationId = requireGitHubNumericId(
+    input.repositoryBinding.installationId,
+    'GitHub App installation id',
+  )
+  const repositoryId = requireGitHubNumericId(
+    input.repositoryBinding.repositoryId,
+    'GitHub repository id',
+  )
+  if (
+    input.repositoryBinding.stateVersion !== 1 ||
+    input.repositoryBinding.status !== 'active' ||
+    input.repositoryBinding.redacted !== true
+  ) {
+    throw new Error('GitHub repository binding must be active and redacted')
+  }
+  const repository = normalizeGitHubRepository(input.repositoryBinding.repository)
+  const baseBranch = assertSafeGitHubBranch(input.repositoryBinding.defaultBranch)
   const baseCommitSha = assertFullGitCommitSha(input.baseCommitSha, 'Base commit')
   const expectedCommitSha = assertFullGitCommitSha(input.expectedCommitSha, 'Expected commit')
   if (baseCommitSha === expectedCommitSha) {
@@ -308,6 +374,10 @@ export async function createGitHubDeliveryIntent(
     runId: input.run.id,
     runVersion: input.run.version,
     nodeId: node.id,
+    repositoryBindingId,
+    repositoryBindingVersion,
+    installationId,
+    repositoryId,
     codingRunId: input.codingRun.id,
     codingRunCompletedAt: input.codingRun.completedAt,
     workspaceId: input.workspace.id,

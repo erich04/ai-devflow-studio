@@ -48,6 +48,7 @@ import {
   type GateCommandReceipt,
   type GateEnforcementDecision,
   type GitHubDeliveryIntent,
+  type GitHubRepositoryBinding,
   type PolicySnapshot,
   type ProviderCredentialMetadata,
   type RetryAttempt,
@@ -91,6 +92,7 @@ export type WorkflowMutation = {
 export type GitHubDeliveryIntentMutation = {
   intent: GitHubDeliveryIntent
   expectedPairingCredential: DesktopPairingCredential
+  expectedRepositoryBinding: GitHubRepositoryBinding
   expectedRun: WorkflowRun
   expectedCodingRun: CodingAgentRun
   expectedWorkspace: ManagedCodingWorkspace
@@ -487,6 +489,11 @@ export type LocalStore = {
     mutation: GitHubDeliveryIntentMutation,
   ): Promise<GitHubDeliveryIntentMutationResult>
   listGitHubDeliveryIntents(runId?: string): Promise<GitHubDeliveryIntent[]>
+  saveGitHubRepositoryBinding(
+    binding: GitHubRepositoryBinding,
+  ): Promise<GitHubRepositoryBinding>
+  getGitHubRepositoryBinding(teamProjectId: string): Promise<GitHubRepositoryBinding | null>
+  listGitHubRepositoryBindings(): Promise<GitHubRepositoryBinding[]>
   saveArtifact(artifact: Artifact): Promise<void>
   listArtifacts(runId?: string): Promise<Artifact[]>
   saveEvent(event: AgentEvent): Promise<void>
@@ -1158,6 +1165,38 @@ const schemaMigrations: readonly SchemaMigration[] = [
     version: 13,
     migrate(db) {
       db.run(`
+    create table if not exists github_repository_bindings (
+      id text primary key,
+      organization_id text not null,
+      team_project_id text not null,
+      installation_id text not null,
+      repository_id text not null,
+      version integer not null,
+      status text not null,
+      json text not null,
+      updated_at text not null,
+      check (length(trim(id)) > 0 and length(id) <= 200 and trim(id) = id),
+      check (length(trim(organization_id)) > 0 and length(organization_id) <= 200 and trim(organization_id) = organization_id),
+      check (length(trim(team_project_id)) > 0 and length(team_project_id) <= 200 and trim(team_project_id) = team_project_id),
+      check (installation_id glob '[1-9]*' and installation_id not glob '*[^0-9]*' and length(installation_id) <= 20),
+      check (repository_id glob '[1-9]*' and repository_id not glob '*[^0-9]*' and length(repository_id) <= 20),
+      check (version between 1 and 2147483647),
+      check (status in ('active', 'stale', 'revoked')),
+      check (json_valid(json)),
+      check (json_extract(json, '$.id') = id),
+      check (json_extract(json, '$.organizationId') = organization_id),
+      check (json_extract(json, '$.teamProjectId') = team_project_id),
+      check (json_extract(json, '$.installationId') = installation_id),
+      check (json_extract(json, '$.repositoryId') = repository_id),
+      check (json_extract(json, '$.version') = version),
+      check (json_extract(json, '$.status') = status),
+      check (json_extract(json, '$.redacted') = 1)
+    );
+
+    create unique index if not exists idx_github_repository_bindings_active_project
+      on github_repository_bindings(team_project_id)
+      where status = 'active';
+
     create table if not exists github_delivery_intents (
       id text primary key,
       organization_id text not null,
@@ -1165,6 +1204,10 @@ const schemaMigrations: readonly SchemaMigration[] = [
       local_project_id text not null,
       run_id text not null,
       node_id text not null,
+      repository_binding_id text not null,
+      repository_binding_version integer not null,
+      installation_id text not null,
+      repository_id text not null,
       coding_run_id text not null,
       workspace_id text not null,
       diff_artifact_id text not null,
@@ -1185,6 +1228,10 @@ const schemaMigrations: readonly SchemaMigration[] = [
       check (length(trim(local_project_id)) > 0 and length(local_project_id) <= 200 and trim(local_project_id) = local_project_id),
       check (length(trim(run_id)) > 0 and length(run_id) <= 200 and trim(run_id) = run_id),
       check (length(trim(node_id)) > 0 and length(node_id) <= 200 and trim(node_id) = node_id),
+      check (length(trim(repository_binding_id)) > 0 and length(repository_binding_id) <= 200 and trim(repository_binding_id) = repository_binding_id),
+      check (repository_binding_version between 1 and 2147483647),
+      check (installation_id glob '[1-9]*' and installation_id not glob '*[^0-9]*' and length(installation_id) <= 20),
+      check (repository_id glob '[1-9]*' and repository_id not glob '*[^0-9]*' and length(repository_id) <= 20),
       check (length(trim(coding_run_id)) > 0 and length(coding_run_id) <= 200 and trim(coding_run_id) = coding_run_id),
       check (length(trim(workspace_id)) > 0 and length(workspace_id) <= 200 and trim(workspace_id) = workspace_id),
       check (length(trim(diff_artifact_id)) > 0 and length(diff_artifact_id) <= 200 and trim(diff_artifact_id) = diff_artifact_id),
@@ -1217,6 +1264,10 @@ const schemaMigrations: readonly SchemaMigration[] = [
       check (json_extract(json, '$.localProjectId') = local_project_id),
       check (json_extract(json, '$.runId') = run_id),
       check (json_extract(json, '$.nodeId') = node_id),
+      check (json_extract(json, '$.repositoryBindingId') = repository_binding_id),
+      check (json_extract(json, '$.repositoryBindingVersion') = repository_binding_version),
+      check (json_extract(json, '$.installationId') = installation_id),
+      check (json_extract(json, '$.repositoryId') = repository_id),
       check (json_extract(json, '$.codingRunId') = coding_run_id),
       check (json_extract(json, '$.workspaceId') = workspace_id),
       check (json_extract(json, '$.diffArtifactId') = diff_artifact_id),
@@ -1860,11 +1911,12 @@ function writeGitHubDeliveryIntent(db: Database, intent: GitHubDeliveryIntent): 
     `
     insert into github_delivery_intents (
       id, organization_id, team_project_id, local_project_id,
-      run_id, node_id, coding_run_id, workspace_id,
+      run_id, node_id, repository_binding_id, repository_binding_version,
+      installation_id, repository_id, coding_run_id, workspace_id,
       diff_artifact_id, test_evidence_id, pr_package_artifact_id,
       base_commit_sha, expected_commit_sha, intent_digest, idempotency_key,
       status, state_version, json, created_at, updated_at
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     [
       intent.id,
@@ -1873,6 +1925,10 @@ function writeGitHubDeliveryIntent(db: Database, intent: GitHubDeliveryIntent): 
       intent.localProjectId,
       intent.runId,
       intent.nodeId,
+      intent.repositoryBindingId,
+      intent.repositoryBindingVersion,
+      intent.installationId,
+      intent.repositoryId,
       intent.codingRunId,
       intent.workspaceId,
       intent.diffArtifactId,
@@ -1887,6 +1943,40 @@ function writeGitHubDeliveryIntent(db: Database, intent: GitHubDeliveryIntent): 
       JSON.stringify(intent),
       intent.createdAt,
       intent.updatedAt,
+    ],
+  )
+}
+
+function writeGitHubRepositoryBinding(
+  db: Database,
+  binding: GitHubRepositoryBinding,
+): void {
+  db.run(
+    `
+    insert into github_repository_bindings (
+      id, organization_id, team_project_id, installation_id, repository_id,
+      version, status, json, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(id) do update set
+      organization_id = excluded.organization_id,
+      team_project_id = excluded.team_project_id,
+      installation_id = excluded.installation_id,
+      repository_id = excluded.repository_id,
+      version = excluded.version,
+      status = excluded.status,
+      json = excluded.json,
+      updated_at = excluded.updated_at
+    `,
+    [
+      binding.id,
+      binding.organizationId,
+      binding.teamProjectId,
+      binding.installationId,
+      binding.repositoryId,
+      binding.version,
+      binding.status,
+      JSON.stringify(binding),
+      binding.updatedAt,
     ],
   )
 }
@@ -4680,6 +4770,16 @@ class SqlJsLocalStore implements LocalStore {
     ) {
       throw new Error('GitHub Delivery Intent does not match the Desktop pairing scope')
     }
+    if (
+      mutation.expectedRepositoryBinding.id !== mutation.intent.repositoryBindingId ||
+      mutation.expectedRepositoryBinding.version !== mutation.intent.repositoryBindingVersion ||
+      mutation.expectedRepositoryBinding.installationId !== mutation.intent.installationId ||
+      mutation.expectedRepositoryBinding.repositoryId !== mutation.intent.repositoryId ||
+      mutation.expectedRepositoryBinding.organizationId !== mutation.intent.organizationId ||
+      mutation.expectedRepositoryBinding.teamProjectId !== mutation.intent.teamProjectId
+    ) {
+      throw new Error('GitHub Delivery Intent does not match the repository binding')
+    }
     const expectedTestEvidence = redactTestEvidenceForStorage(
       mutation.expectedTestEvidence,
     )
@@ -4688,10 +4788,7 @@ class SqlJsLocalStore implements LocalStore {
     }
     const canonicalIntent = await createGitHubDeliveryIntent({
       id: mutation.intent.id,
-      organizationId: mutation.intent.organizationId,
-      teamProjectId: mutation.intent.teamProjectId,
-      repository: mutation.intent.repository,
-      defaultBranch: mutation.intent.baseBranch,
+      repositoryBinding: mutation.expectedRepositoryBinding,
       run: expectedRun,
       prNodeId: mutation.intent.nodeId,
       codingRun: mutation.expectedCodingRun,
@@ -4745,6 +4842,11 @@ class SqlJsLocalStore implements LocalStore {
         this.db,
         "select json from desktop_pairing_credentials where id = 'default' limit 1",
       )[0]
+      const currentRepositoryBinding = selectJson<GitHubRepositoryBinding>(
+        this.db,
+        'select json from github_repository_bindings where id = ? limit 1',
+        [mutation.expectedRepositoryBinding.id],
+      )[0]
       const currentRun = readWorkflowRuns(this.db).find(
         (candidate) => candidate.id === expectedRun.id,
       )
@@ -4775,6 +4877,7 @@ class SqlJsLocalStore implements LocalStore {
       )[0]
       const sourceIsCurrent =
         JSON.stringify(currentPairing) === JSON.stringify(mutation.expectedPairingCredential) &&
+        JSON.stringify(currentRepositoryBinding) === JSON.stringify(mutation.expectedRepositoryBinding) &&
         JSON.stringify(currentRun) === JSON.stringify(expectedRun) &&
         JSON.stringify(currentCodingRun) === JSON.stringify(mutation.expectedCodingRun) &&
         JSON.stringify(currentWorkspace) === JSON.stringify(mutation.expectedWorkspace) &&
@@ -4831,6 +4934,54 @@ class SqlJsLocalStore implements LocalStore {
     return selectJson<GitHubDeliveryIntent>(
       this.db,
       'select json from github_delivery_intents order by created_at asc, id asc',
+    )
+  }
+
+  async saveGitHubRepositoryBinding(
+    binding: GitHubRepositoryBinding,
+  ): Promise<GitHubRepositoryBinding> {
+    const existing = selectJson<GitHubRepositoryBinding>(
+      this.db,
+      'select json from github_repository_bindings where id = ? limit 1',
+      [binding.id],
+    )[0]
+    if (existing) {
+      if (existing.version > binding.version) {
+        throw new Error('GitHub repository binding version cannot move backwards')
+      }
+      if (
+        existing.version === binding.version &&
+        JSON.stringify(existing) !== JSON.stringify(binding)
+      ) {
+        throw new Error('GitHub repository binding version conflicts with stored state')
+      }
+      if (JSON.stringify(existing) === JSON.stringify(binding)) {
+        return existing
+      }
+    }
+    writeGitHubRepositoryBinding(this.db, binding)
+    await this.persist()
+    return binding
+  }
+
+  async getGitHubRepositoryBinding(
+    teamProjectId: string,
+  ): Promise<GitHubRepositoryBinding | null> {
+    return selectJson<GitHubRepositoryBinding>(
+      this.db,
+      `select json from github_repository_bindings
+       where team_project_id = ?
+       order by case status when 'active' then 0 when 'stale' then 1 else 2 end,
+                version desc, updated_at desc
+       limit 1`,
+      [teamProjectId],
+    )[0] ?? null
+  }
+
+  async listGitHubRepositoryBindings(): Promise<GitHubRepositoryBinding[]> {
+    return selectJson<GitHubRepositoryBinding>(
+      this.db,
+      'select json from github_repository_bindings order by updated_at asc, id asc',
     )
   }
 
@@ -5616,6 +5767,7 @@ class SqlJsLocalStore implements LocalStore {
       managedCodingWorkspaces,
       dependencyBootstrapEvidence,
       codingDiffArtifacts,
+      githubRepositoryBindings,
       githubDeliveryIntents,
       retryAttempts,
       desktopPairingCredential,
@@ -5638,6 +5790,7 @@ class SqlJsLocalStore implements LocalStore {
       this.listManagedCodingWorkspaces(),
       this.listDependencyBootstrapEvidence(),
       this.listCodingDiffArtifacts(),
+      this.listGitHubRepositoryBindings(),
       this.listGitHubDeliveryIntents(),
       this.listRetryAttempts(),
       this.getDesktopPairingCredential(),
@@ -5662,6 +5815,7 @@ class SqlJsLocalStore implements LocalStore {
       managedCodingWorkspaces,
       dependencyBootstrapEvidence,
       codingDiffArtifacts,
+      githubRepositoryBindings,
       githubDeliveryIntents,
       retryAttempts,
       desktopPairingCredential,
@@ -5718,6 +5872,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'terminalizeGateCommandAcknowledgement',
   'commitWorkflowMutation',
   'commitGitHubDeliveryIntent',
+  'saveGitHubRepositoryBinding',
   'saveArtifact',
   'saveEvent',
   'saveTestEvidence',
