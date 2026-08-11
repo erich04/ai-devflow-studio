@@ -113,49 +113,9 @@ export function createGitHubDeliveryRuntime(
   async function prepareOnce(
     input: PrepareGitHubDeliveryInput,
   ): Promise<PrepareGitHubDeliveryResult> {
-    const activeIntents = (await deps.store.listGitHubDeliveryIntents(input.runId))
-      .filter((candidate) =>
-        candidate.runId === input.runId &&
-        candidate.nodeId === input.nodeId &&
-        ACTIVE_DELIVERY_STATUSES.has(candidate.status),
-      )
-    if (activeIntents.length > 1) {
-      throw new Error('Multiple active GitHub Delivery Intents violate local authority')
-    }
-    const activeIntent = activeIntents[0]
+    const activeIntent = await loadActiveIntent(deps.store, input)
     if (activeIntent) {
-      const replay = await resolveDeliverySource(deps.store, input, activeIntent)
-      const canonical = await createGitHubDeliveryIntent({
-        id: activeIntent.id,
-        repositoryBinding: replay.repositoryBinding,
-        run: replay.run,
-        prNodeId: replay.prNode.id,
-        codingRun: replay.codingRun,
-        workspace: replay.workspace,
-        diffArtifact: replay.diffArtifact,
-        prPackage: replay.prPackage,
-        testEvidence: replay.precommitTestEvidence as TestEvidence & {
-          sourceCommitSha: string
-        },
-        baseCommitSha: activeIntent.baseCommitSha,
-        expectedCommitSha: activeIntent.expectedCommitSha,
-        now: activeIntent.createdAt,
-      })
-      if (
-        canonical.intentDigest !== activeIntent.intentDigest ||
-        canonical.idempotencyKey !== activeIntent.idempotencyKey ||
-        canonical.testEvidenceId !== activeIntent.testEvidenceId
-      ) {
-        throw new Error('Existing GitHub Delivery Intent no longer matches its source authority')
-      }
-      return {
-        status: 'prepared',
-        replayed: true,
-        intent: activeIntent,
-        testEvidence: replay.precommitTestEvidence as TestEvidence & {
-          sourceCommitSha: string
-        },
-      }
+      return replayActiveIntent(deps.store, input, activeIntent)
     }
 
     const source = await resolveDeliverySource(deps.store, input)
@@ -244,6 +204,13 @@ export function createGitHubDeliveryRuntime(
       testEvidence,
       expectedPrPackage: source.prPackage,
     } satisfies GitHubDeliveryPreparationMutation)
+    if (!prepared.committed && prepared.reason === 'active_intent_exists') {
+      const winner = await loadActiveIntent(deps.store, input)
+      if (!winner) {
+        throw new Error('GitHub Delivery preparation winner could not be reloaded')
+      }
+      return replayActiveIntent(deps.store, input, winner)
+    }
     return settlePreparationResult(prepared, testEvidence)
   }
 
@@ -262,6 +229,60 @@ export function createGitHubDeliveryRuntime(
       inFlight.set(key, execution)
       return execution
     },
+  }
+}
+
+async function loadActiveIntent(
+  store: GitHubDeliveryRuntimeStore,
+  input: PrepareGitHubDeliveryInput,
+): Promise<GitHubDeliveryIntent | undefined> {
+  const activeIntents = (await store.listGitHubDeliveryIntents(input.runId))
+    .filter((candidate) =>
+      candidate.runId === input.runId &&
+      candidate.nodeId === input.nodeId &&
+      ACTIVE_DELIVERY_STATUSES.has(candidate.status),
+    )
+  if (activeIntents.length > 1) {
+    throw new Error('Multiple active GitHub Delivery Intents violate local authority')
+  }
+  return activeIntents[0]
+}
+
+async function replayActiveIntent(
+  store: GitHubDeliveryRuntimeStore,
+  input: PrepareGitHubDeliveryInput,
+  activeIntent: GitHubDeliveryIntent,
+): Promise<PrepareGitHubDeliveryResult> {
+  const replay = await resolveDeliverySource(store, input, activeIntent)
+  const testEvidence = replay.precommitTestEvidence as TestEvidence & {
+    sourceCommitSha: string
+  }
+  const canonical = await createGitHubDeliveryIntent({
+    id: activeIntent.id,
+    repositoryBinding: replay.repositoryBinding,
+    run: replay.run,
+    prNodeId: replay.prNode.id,
+    codingRun: replay.codingRun,
+    workspace: replay.workspace,
+    diffArtifact: replay.diffArtifact,
+    prPackage: replay.prPackage,
+    testEvidence,
+    baseCommitSha: activeIntent.baseCommitSha,
+    expectedCommitSha: activeIntent.expectedCommitSha,
+    now: activeIntent.createdAt,
+  })
+  if (
+    canonical.intentDigest !== activeIntent.intentDigest ||
+    canonical.idempotencyKey !== activeIntent.idempotencyKey ||
+    canonical.testEvidenceId !== activeIntent.testEvidenceId
+  ) {
+    throw new Error('Existing GitHub Delivery Intent no longer matches its source authority')
+  }
+  return {
+    status: 'prepared',
+    replayed: true,
+    intent: activeIntent,
+    testEvidence,
   }
 }
 

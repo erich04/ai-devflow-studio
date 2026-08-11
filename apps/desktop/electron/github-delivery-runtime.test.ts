@@ -13,6 +13,7 @@ import type {
   WorkflowRun,
 } from '@ai-devflow/shared'
 import { createGitHubDeliveryRuntime } from './github-delivery-runtime'
+import type { GitHubDeliveryPreparationMutationResult } from './local-store'
 
 const baseCommitSha = '0000000000000000000000000000000000000000'
 const expectedCommitSha = '1111111111111111111111111111111111111111'
@@ -228,7 +229,7 @@ function fakeStore(source: ReturnType<typeof fixture>) {
     commitGitHubDeliveryPreparation: vi.fn(async (mutation: {
       intent: GitHubDeliveryIntent
       testEvidence: TestEvidence
-    }) => {
+    }): Promise<GitHubDeliveryPreparationMutationResult> => {
       evidence.push(mutation.testEvidence)
       intents.push(mutation.intent)
       return { committed: true as const, replayed: false, intent: mutation.intent }
@@ -462,6 +463,52 @@ describe('GitHub Delivery preparation runtime', () => {
     expect(runTestCommand).toHaveBeenCalledTimes(1)
     expect(commitWorkspace).toHaveBeenCalledTimes(3)
     expect(store.commitGitHubDeliveryPreparation).toHaveBeenCalledTimes(1)
+  })
+
+  it('reloads and verifies the winning active intent when the final preparation CAS loses the race', async () => {
+    const source = fixture()
+    const store = fakeStore(source)
+    const committedWorkspace = {
+      ...source.workspace,
+      baseCommitSha,
+      headCommitSha: expectedCommitSha,
+    }
+    const commitWorkspace = vi.fn(async () => ({
+      workspace: committedWorkspace,
+      baseCommitSha,
+      expectedCommitSha,
+    }))
+    const runTestCommand = vi.fn(async () => ({
+      status: 'passed' as const,
+      exitCode: 0,
+      durationMs: 25,
+      stdout: 'ok',
+      stderr: '',
+      redacted: false,
+      summary: 'Tests passed.',
+    }))
+    store.commitGitHubDeliveryPreparation.mockImplementationOnce(async (mutation) => {
+      store.evidence.push(mutation.testEvidence)
+      store.intents.push(mutation.intent)
+      return { committed: false as const, reason: 'active_intent_exists' as const }
+    })
+    const runtime = createGitHubDeliveryRuntime({
+      store,
+      commitWorkspace,
+      runTestCommand,
+      now: () => '2026-08-11T13:10:00.000Z',
+      idGenerator: (prefix) => `${prefix}-1`,
+    })
+
+    await expect(runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' }))
+      .resolves.toMatchObject({
+        status: 'prepared',
+        replayed: true,
+        intent: { id: 'github-delivery-intent-1' },
+      })
+    expect(runTestCommand).toHaveBeenCalledTimes(1)
+    expect(store.commitGitHubDeliveryPreparation).toHaveBeenCalledTimes(1)
+    expect(store.listGitHubDeliveryIntents).toHaveBeenCalledTimes(2)
   })
 
   it('fails closed before tests when the workspace head CAS loses authority', async () => {
