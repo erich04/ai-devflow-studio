@@ -28,7 +28,9 @@ const delivery: GitHubDeliveryRequestView = {
   runId: 'run-1',
   runVersion: 7,
   nodeId: 'pr-1',
+  repositoryBindingId: 'binding-1',
   repositoryBindingVersion: 3,
+  repositoryId: '98765',
   repository: 'example/payments',
   status: 'approval_required',
   outcomeCode: null,
@@ -42,6 +44,10 @@ const delivery: GitHubDeliveryRequestView = {
   testEvidenceId: 'test-1',
   testEvidenceDigest: 'e'.repeat(64),
   packageDigest: 'f'.repeat(64),
+  changedPaths: [
+    'apps/web/app/GitHubDeliveryPanel.tsx',
+    'apps/web/app/lib/devflow-api.ts',
+  ],
   prTitle: 'Deliver the exact approved change',
   expiresAt: '2026-08-12T14:00:00.000Z',
   updatedAt: '2026-08-11T14:01:00.000Z',
@@ -70,7 +76,18 @@ describe('GitHubDeliveryPanel', () => {
     expect(screen.getByText('test-1')).toBeInTheDocument()
     expect(screen.getByText('b'.repeat(40))).toBeInTheDocument()
     expect(screen.getByText('e'.repeat(64))).toBeInTheDocument()
-    expect(screen.getByText('ffffffff…ffff')).toBeInTheDocument()
+    expect(screen.getByText('f'.repeat(64))).toBeInTheDocument()
+    expect(screen.getByText('c'.repeat(64))).toBeInTheDocument()
+    expect(screen.getByText('d'.repeat(64))).toBeInTheDocument()
+    expect(screen.getByText('a'.repeat(40))).toBeInTheDocument()
+    expect(screen.getByText('Intent revision 1')).toBeInTheDocument()
+    expect(screen.getByText('Binding version 3')).toBeInTheDocument()
+    expect(screen.getByText('binding-1')).toBeInTheDocument()
+    expect(screen.getByText('Repository ID 98765')).toBeInTheDocument()
+    expect(screen.getByText('delivery-1')).toBeInTheDocument()
+    expect(screen.getByText('pr-1')).toBeInTheDocument()
+    expect(screen.getByText('apps/web/app/GitHubDeliveryPanel.tsx')).toBeInTheDocument()
+    expect(screen.getByText('apps/web/app/lib/devflow-api.ts')).toBeInTheDocument()
     expect(document.body).not.toHaveTextContent('/Users/')
     expect(document.body).not.toHaveTextContent('API_TOKEN')
   })

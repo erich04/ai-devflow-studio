@@ -379,8 +379,36 @@ export function GitHubDeliveryPanel({
                 <dd>{delivery.prTitle}</dd>
               </div>
               <div>
+                <dt>Delivery request ID</dt>
+                <dd><code>{delivery.id}</code></dd>
+              </div>
+              <div>
                 <dt>Run</dt>
                 <dd>Run version {delivery.runVersion}</dd>
+              </div>
+              <div>
+                <dt>Run ID</dt>
+                <dd><code>{delivery.runId}</code></dd>
+              </div>
+              <div>
+                <dt>Workflow node</dt>
+                <dd><code>{delivery.nodeId}</code></dd>
+              </div>
+              <div>
+                <dt>Intent revision</dt>
+                <dd>Intent revision {delivery.intentRevision}</dd>
+              </div>
+              <div>
+                <dt>Repository binding</dt>
+                <dd>Binding version {delivery.repositoryBindingVersion}</dd>
+              </div>
+              <div>
+                <dt>Repository binding ID</dt>
+                <dd><code>{delivery.repositoryBindingId}</code></dd>
+              </div>
+              <div>
+                <dt>GitHub repository</dt>
+                <dd>Repository ID {delivery.repositoryId}</dd>
               </div>
               <div>
                 <dt>Base branch</dt>
@@ -391,12 +419,24 @@ export function GitHubDeliveryPanel({
                 <dd>{delivery.headBranch}</dd>
               </div>
               <div>
+                <dt>Base commit</dt>
+                <dd><code>{delivery.baseCommitSha}</code></dd>
+              </div>
+              <div>
                 <dt>Expected commit</dt>
                 <dd><code>{delivery.expectedCommitSha}</code></dd>
               </div>
               <div>
-                <dt>Package</dt>
-                <dd><code>{shortFingerprint(delivery.packageDigest)}</code></dd>
+                <dt>Intent digest</dt>
+                <dd><code>{delivery.intentDigest}</code></dd>
+              </div>
+              <div>
+                <dt>Diff source digest</dt>
+                <dd><code>{delivery.diffDigest}</code></dd>
+              </div>
+              <div>
+                <dt>PR package digest</dt>
+                <dd><code>{delivery.packageDigest}</code></dd>
               </div>
               <div>
                 <dt>Evidence version</dt>
@@ -405,6 +445,20 @@ export function GitHubDeliveryPanel({
               <div>
                 <dt>Evidence digest</dt>
                 <dd><code>{delivery.testEvidenceDigest}</code></dd>
+              </div>
+              <div>
+                <dt>Changed paths</dt>
+                <dd>
+                  <ul className="github-delivery-changed-paths">
+                    {delivery.changedPaths.map((path) => (
+                      <li key={path}><code>{path}</code></li>
+                    ))}
+                  </ul>
+                </dd>
+              </div>
+              <div>
+                <dt>Approval expires</dt>
+                <dd><time dateTime={delivery.expiresAt}>{delivery.expiresAt}</time></dd>
               </div>
             </dl>
             {delivery.status === 'approval_required' ? (
@@ -424,7 +478,7 @@ export function GitHubDeliveryPanel({
                       [delivery.id]: event.target.checked,
                     }))}
                   />
-                  <span>I reviewed this exact commit and evidence version.</span>
+                  <span>I reviewed this exact commit, intent, digests, changed paths, and evidence version.</span>
                 </label>
                 <div>
                   <button

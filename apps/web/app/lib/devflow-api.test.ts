@@ -72,7 +72,7 @@ function githubDeliveryRequest(overrides: Record<string, unknown> = {}) {
     diffDigest: 'e'.repeat(64),
     testEvidenceDigest: 'f'.repeat(64),
     packageDigest: '1'.repeat(64),
-    changedPaths: ['/Users/alice/private.ts'],
+    changedPaths: ['src/remote.ts'],
     prTitle: 'Deliver the exact approved change',
     prBody: 'API_TOKEN=must-not-reach-the-management-view',
     expiresAt: '2026-08-12T14:00:00.000Z',
@@ -134,7 +134,7 @@ describe('DevFlow web API client', () => {
       diffDigest: 'e'.repeat(64),
       testEvidenceDigest: 'f'.repeat(64),
       packageDigest: '1'.repeat(64),
-      changedPaths: ['/Users/alice/private.ts'],
+      changedPaths: ['src/remote.ts'],
       prTitle: 'Deliver the exact approved change',
       prBody: 'API_TOKEN=must-not-reach-the-management-view',
       expiresAt: '2026-08-12T14:00:00.000Z',
@@ -170,6 +170,9 @@ describe('DevFlow web API client', () => {
       testEvidenceDigest: 'f'.repeat(64),
       prTitle: 'Deliver the exact approved change',
       packageDigest: '1'.repeat(64),
+      intentDigest: 'c'.repeat(64),
+      diffDigest: 'e'.repeat(64),
+      changedPaths: ['src/remote.ts'],
     })])
     expect(JSON.stringify(deliveries)).not.toContain('API_TOKEN=must-not-reach')
     expect(JSON.stringify(deliveries)).not.toContain('/Users/alice')
@@ -200,7 +203,9 @@ describe('DevFlow web API client', () => {
       runId: 'run-1',
       runVersion: 7,
       nodeId: 'pr-1',
+      repositoryBindingId: 'binding-1',
       repositoryBindingVersion: 3,
+      repositoryId: '98765',
       repository: 'example/payments',
       status: 'approval_required',
       outcomeCode: null,
@@ -214,6 +219,7 @@ describe('DevFlow web API client', () => {
       testEvidenceId: 'test-1',
       testEvidenceDigest: 'e'.repeat(64),
       packageDigest: 'f'.repeat(64),
+      changedPaths: ['src/remote.ts'],
       prTitle: 'Deliver the exact approved change',
       expiresAt: '2026-08-12T14:00:00.000Z',
       updatedAt: '2026-08-11T14:01:00.000Z',
@@ -227,6 +233,26 @@ describe('DevFlow web API client', () => {
     expect(() => parseGitHubDeliveryRequestView({
       ...safeView,
       testEvidenceId: '/Users/alice/private-evidence',
+    }, 'p-payments')).toThrow('GitHub Delivery response was invalid.')
+    expect(() => parseGitHubDeliveryRequestView({
+      ...safeView,
+      repositoryBindingId: '/Users/alice/private-binding',
+    }, 'p-payments')).toThrow('GitHub Delivery response was invalid.')
+    expect(() => parseGitHubDeliveryRequestView({
+      ...safeView,
+      repositoryId: 'API_TOKEN=private',
+    }, 'p-payments')).toThrow('GitHub Delivery response was invalid.')
+    expect(() => parseGitHubDeliveryRequestView({
+      ...safeView,
+      changedPaths: ['/Users/alice/private.ts'],
+    }, 'p-payments')).toThrow('GitHub Delivery response was invalid.')
+    expect(() => parseGitHubDeliveryRequestView({
+      ...safeView,
+      changedPaths: ['src/z.ts', 'src/a.ts'],
+    }, 'p-payments')).toThrow('GitHub Delivery response was invalid.')
+    expect(() => parseGitHubDeliveryRequestView({
+      ...safeView,
+      changedPaths: ['src/API_TOKEN=private'],
     }, 'p-payments')).toThrow('GitHub Delivery response was invalid.')
     expect(() => parseGitHubDeliveryRequestView({
       ...safeView,

@@ -52,7 +52,9 @@ const delivery: GitHubDeliveryRequestView = {
   runId: 'run-1',
   runVersion: 7,
   nodeId: 'pr-1',
+  repositoryBindingId: 'binding-1',
   repositoryBindingVersion: 3,
+  repositoryId: '98765',
   repository: 'example/payments',
   status: 'approved',
   outcomeCode: null,
@@ -66,6 +68,7 @@ const delivery: GitHubDeliveryRequestView = {
   testEvidenceId: 'test-1',
   testEvidenceDigest: 'e'.repeat(64),
   packageDigest: 'f'.repeat(64),
+  changedPaths: ['apps/web/app/GitHubDeliveryPanel.tsx'],
   prTitle: 'Deliver the exact approved change',
   expiresAt: '2026-08-12T14:00:00.000Z',
   updatedAt: '2026-08-11T14:01:00.000Z',
@@ -223,6 +226,9 @@ describe('GitHub Delivery Web proxy', () => {
       expectedStateVersion: 2,
       cookieHeader: 'devflow_session=session-1',
     })
+    expect(payload.request.changedPaths).toEqual([
+      'apps/web/app/GitHubDeliveryPanel.tsx',
+    ])
     expect(JSON.stringify(payload)).not.toContain('/Users/')
   })
 

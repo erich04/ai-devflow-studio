@@ -469,7 +469,9 @@ describe('web product shell page', () => {
       runId: 'run-remote',
       runVersion: 7,
       nodeId: 'pr-remote',
+      repositoryBindingId: 'binding-remote',
       repositoryBindingVersion: 3,
+      repositoryId: '98765',
       repository: 'erich/remote-api',
       status: 'approval_required',
       outcomeCode: null,
@@ -483,6 +485,7 @@ describe('web product shell page', () => {
       testEvidenceId: 'evidence-remote-v1',
       testEvidenceDigest: 'e'.repeat(64),
       packageDigest: 'f'.repeat(64),
+      changedPaths: ['src/remote.ts'],
       prTitle: 'Deliver the exact remote change',
       expiresAt: '2026-08-12T14:00:00.000Z',
       updatedAt: '2026-08-11T14:01:00.000Z',
@@ -497,6 +500,10 @@ describe('web product shell page', () => {
     expect(screen.getByText('Deliver the exact remote change')).toBeInTheDocument()
     expect(screen.getByText('b'.repeat(40))).toBeInTheDocument()
     expect(screen.getByText('e'.repeat(64))).toBeInTheDocument()
+    expect(screen.getByText('c'.repeat(64))).toBeInTheDocument()
+    expect(screen.getByText('d'.repeat(64))).toBeInTheDocument()
+    expect(screen.getByText('f'.repeat(64))).toBeInTheDocument()
+    expect(screen.getByText('src/remote.ts')).toBeInTheDocument()
     expect(mockedFetchGitHubBinding).toHaveBeenCalledWith({
       projectId: 'p-remote',
       cookieHeader: 'devflow_session=session-1',

@@ -550,7 +550,9 @@ export type GitHubDeliveryRequestView = {
   runId: string
   runVersion: number
   nodeId: string
+  repositoryBindingId: string
   repositoryBindingVersion: number
+  repositoryId: string
   repository: string
   status: GitHubDeliveryStatus
   outcomeCode: string | null
@@ -564,6 +566,7 @@ export type GitHubDeliveryRequestView = {
   testEvidenceId: string
   testEvidenceDigest: string
   packageDigest: string
+  changedPaths: string[]
   prTitle: string
   expiresAt: string
   updatedAt: string
@@ -577,7 +580,9 @@ const githubDeliveryViewKeys = [
   'runId',
   'runVersion',
   'nodeId',
+  'repositoryBindingId',
   'repositoryBindingVersion',
+  'repositoryId',
   'repository',
   'status',
   'outcomeCode',
@@ -591,6 +596,7 @@ const githubDeliveryViewKeys = [
   'testEvidenceId',
   'testEvidenceDigest',
   'packageDigest',
+  'changedPaths',
   'prTitle',
   'expiresAt',
   'updatedAt',
@@ -600,6 +606,31 @@ export function parseGitHubDeliveryRequestView(
   value: unknown,
   expectedProjectId: string,
 ): GitHubDeliveryRequestView {
+  const changedPaths = Array.isArray(
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>).changedPaths
+      : undefined,
+  )
+    ? (value as Record<string, unknown>).changedPaths as unknown[]
+    : null
+  const canonicalChangedPaths = changedPaths?.every(
+    (path): path is string =>
+      typeof path === 'string' &&
+      path.length > 0 &&
+      path.length <= 500 &&
+      path.trim() === path &&
+      !path.startsWith('/') &&
+      !path.startsWith('~') &&
+      !path.includes('\\') &&
+      path.split('/').every(
+        (segment) => segment.length > 0 && segment !== '.' && segment !== '..',
+      ) &&
+      !redactSensitiveText(path).redacted,
+  )
+    ? [...new Set(changedPaths)].sort((left, right) =>
+        left.localeCompare(right),
+      )
+    : null
   if (
     !isExactRecord(value, githubDeliveryViewKeys) ||
     !isSafeIdentifier(value.id) ||
@@ -610,7 +641,10 @@ export function parseGitHubDeliveryRequestView(
     !isSafeIdentifier(value.runId) ||
     !isPositiveInteger(value.runVersion) ||
     !isSafeIdentifier(value.nodeId) ||
+    !isSafeIdentifier(value.repositoryBindingId) ||
     !isPositiveInteger(value.repositoryBindingVersion) ||
+    typeof value.repositoryId !== 'string' ||
+    !/^[1-9][0-9]{0,19}$/u.test(value.repositoryId) ||
     typeof value.repository !== 'string' ||
     normalizeGitHubRepository(value.repository) !== value.repository ||
     typeof value.status !== 'string' ||
@@ -618,6 +652,7 @@ export function parseGitHubDeliveryRequestView(
     (value.outcomeCode !== null &&
       (typeof value.outcomeCode !== 'string' || !githubDeliveryOutcomeCodes.has(value.outcomeCode))) ||
     !isPositiveInteger(value.expectedRunVersion) ||
+    value.expectedRunVersion !== value.runVersion ||
     typeof value.baseBranch !== 'string' ||
     assertSafeGitHubBranch(value.baseBranch) !== value.baseBranch ||
     typeof value.headBranch !== 'string' ||
@@ -630,6 +665,10 @@ export function parseGitHubDeliveryRequestView(
       (key) => typeof value[key] === 'string' && /^[a-f0-9]{64}$/u.test(value[key] as string),
     ) ||
     !isSafeIdentifier(value.testEvidenceId) ||
+    canonicalChangedPaths === null ||
+    canonicalChangedPaths.length === 0 ||
+    canonicalChangedPaths.length > 200 ||
+    JSON.stringify(canonicalChangedPaths) !== JSON.stringify(changedPaths) ||
     typeof value.prTitle !== 'string' ||
     value.prTitle.length === 0 ||
     value.prTitle.length > 256 ||
@@ -649,7 +688,9 @@ export function parseGitHubDeliveryRequestView(
     runId: value.runId,
     runVersion: value.runVersion,
     nodeId: value.nodeId,
+    repositoryBindingId: value.repositoryBindingId,
     repositoryBindingVersion: value.repositoryBindingVersion,
+    repositoryId: value.repositoryId,
     repository: value.repository,
     status: value.status as GitHubDeliveryStatus,
     outcomeCode: value.outcomeCode as string | null,
@@ -663,6 +704,7 @@ export function parseGitHubDeliveryRequestView(
     testEvidenceId: value.testEvidenceId,
     testEvidenceDigest: value.testEvidenceDigest as string,
     packageDigest: value.packageDigest as string,
+    changedPaths: canonicalChangedPaths,
     prTitle: value.prTitle,
     expiresAt: value.expiresAt,
     updatedAt: value.updatedAt,
@@ -684,7 +726,9 @@ function parseGitHubDeliveryRequest(
     runId: value.runId,
     runVersion: value.runVersion,
     nodeId: value.nodeId,
+    repositoryBindingId: value.repositoryBindingId,
     repositoryBindingVersion: value.repositoryBindingVersion,
+    repositoryId: value.repositoryId,
     repository: value.repository,
     status: value.status as GitHubDeliveryStatus,
     outcomeCode: value.outcomeCode as string | null,
@@ -698,6 +742,7 @@ function parseGitHubDeliveryRequest(
     testEvidenceId: value.testEvidenceId,
     testEvidenceDigest: value.testEvidenceDigest as string,
     packageDigest: value.packageDigest as string,
+    changedPaths: value.changedPaths,
     prTitle: value.prTitle,
     expiresAt: value.expiresAt,
     updatedAt: value.updatedAt,
