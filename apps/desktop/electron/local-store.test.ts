@@ -5700,6 +5700,51 @@ describe('createLocalStore', () => {
     second.close()
   })
 
+  it('compare-and-swaps the delivery commit onto an unchanged active workspace', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const baseCommitSha = '0000000000000000000000000000000000000000'
+    const headCommitSha = '1111111111111111111111111111111111111111'
+    const activeWorkspace: ManagedCodingWorkspace = {
+      ...workspace,
+      baseCommitSha,
+      cleanupStatus: 'active',
+    }
+    const committedWorkspace: ManagedCodingWorkspace = {
+      ...activeWorkspace,
+      headCommitSha,
+    }
+    await store.saveManagedCodingWorkspace(activeWorkspace)
+
+    await expect(store.commitManagedCodingWorkspaceHead({
+      expectedWorkspace: activeWorkspace,
+      workspace: committedWorkspace,
+    })).resolves.toEqual({
+      committed: true,
+      replayed: false,
+      workspace: committedWorkspace,
+    })
+    await expect(store.commitManagedCodingWorkspaceHead({
+      expectedWorkspace: activeWorkspace,
+      workspace: committedWorkspace,
+    })).resolves.toEqual({
+      committed: true,
+      replayed: true,
+      workspace: committedWorkspace,
+    })
+
+    await store.saveManagedCodingWorkspace({
+      ...committedWorkspace,
+      cleanupStatus: 'deleted',
+      deletedAt: '2026-08-11T13:00:00.000Z',
+    })
+    await expect(store.commitManagedCodingWorkspaceHead({
+      expectedWorkspace: committedWorkspace,
+      workspace: committedWorkspace,
+    })).resolves.toEqual({ committed: false, reason: 'source_stale' })
+    store.close()
+  })
+
   it('persists a budget-unavailable coding run without a managed workspace across reopen', async () => {
     const dbPath = await tempDbPath()
     const unavailableRun: CodingAgentRun = {

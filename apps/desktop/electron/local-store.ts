@@ -6,6 +6,7 @@ import { createRequire } from 'node:module'
 import initSqlJs, { type Database, type SqlJsStatic, type SqlValue } from 'sql.js'
 import {
   applyWorkflowCommand,
+  assertFullGitCommitSha,
   canApproveGateNow,
   createGitHubDeliveryIntent,
   createRemoteSyncIdempotencyKey,
@@ -112,6 +113,22 @@ export type GitHubDeliveryPreparationMutationResult =
   | {
       committed: false
       reason: 'source_stale' | 'id_conflict' | 'active_intent_exists'
+    }
+
+export type ManagedCodingWorkspaceHeadMutation = {
+  expectedWorkspace: ManagedCodingWorkspace
+  workspace: ManagedCodingWorkspace
+}
+
+export type ManagedCodingWorkspaceHeadMutationResult =
+  | {
+      committed: true
+      replayed: boolean
+      workspace: ManagedCodingWorkspace
+    }
+  | {
+      committed: false
+      reason: 'source_stale'
     }
 
 export type CodingAgentMutation = {
@@ -521,6 +538,9 @@ export type LocalStore = {
   saveCodingPermissionDecision(decision: CodingPermissionDecision): Promise<void>
   listCodingPermissionDecisions(codingRunId?: string): Promise<CodingPermissionDecision[]>
   saveManagedCodingWorkspace(workspace: ManagedCodingWorkspace): Promise<void>
+  commitManagedCodingWorkspaceHead(
+    mutation: ManagedCodingWorkspaceHeadMutation,
+  ): Promise<ManagedCodingWorkspaceHeadMutationResult>
   listManagedCodingWorkspaces(projectId?: string): Promise<ManagedCodingWorkspace[]>
   saveDependencyBootstrapEvidence(evidence: DependencyBootstrapEvidence): Promise<void>
   listDependencyBootstrapEvidence(codingRunId?: string): Promise<DependencyBootstrapEvidence[]>
@@ -5480,6 +5500,77 @@ class SqlJsLocalStore implements LocalStore {
     await this.persist()
   }
 
+  async commitManagedCodingWorkspaceHead(
+    mutation: ManagedCodingWorkspaceHeadMutation,
+  ): Promise<ManagedCodingWorkspaceHeadMutationResult> {
+    const expected = mutation.expectedWorkspace
+    const workspace = mutation.workspace
+    const immutableFields = [
+      'id',
+      'projectId',
+      'codingRunId',
+      'sourcePath',
+      'worktreePath',
+      'branchName',
+      'baseBranch',
+      'createdAt',
+      'deletedAt',
+      'cleanupStatus',
+      'cleanupError',
+    ] as const
+    if (
+      expected.cleanupStatus !== 'active' ||
+      expected.deletedAt ||
+      workspace.cleanupStatus !== 'active' ||
+      workspace.deletedAt ||
+      immutableFields.some((field) => expected[field] !== workspace[field])
+    ) {
+      throw new Error('Only an unchanged active managed workspace can record a delivery commit')
+    }
+    const baseCommitSha = assertFullGitCommitSha(
+      workspace.baseCommitSha ?? '',
+      'Managed workspace base commit',
+    )
+    const headCommitSha = assertFullGitCommitSha(
+      workspace.headCommitSha ?? '',
+      'Managed workspace head commit',
+    )
+    if (
+      baseCommitSha === headCommitSha ||
+      workspace.baseCommitSha !== baseCommitSha ||
+      workspace.headCommitSha !== headCommitSha ||
+      (expected.baseCommitSha !== undefined && expected.baseCommitSha !== baseCommitSha) ||
+      (expected.headCommitSha !== undefined && expected.headCommitSha !== headCommitSha)
+    ) {
+      throw new Error('Managed workspace delivery commit is not canonical')
+    }
+
+    const current = selectJson<ManagedCodingWorkspace>(
+      this.db,
+      'select json from managed_coding_workspaces where id = ? limit 1',
+      [expected.id],
+    )[0]
+    if (JSON.stringify(current) === JSON.stringify(workspace)) {
+      return { committed: true, replayed: true, workspace }
+    }
+    if (JSON.stringify(current) !== JSON.stringify(expected)) {
+      return { committed: false, reason: 'source_stale' }
+    }
+
+    const snapshot = this.db.export()
+    try {
+      this.db.run(
+        'update managed_coding_workspaces set json = ? where id = ?',
+        [JSON.stringify(workspace), workspace.id],
+      )
+      await this.persist()
+      return { committed: true, replayed: false, workspace }
+    } catch (error) {
+      this.restore(snapshot)
+      throw error
+    }
+  }
+
   async listManagedCodingWorkspaces(projectId?: string): Promise<ManagedCodingWorkspace[]> {
     if (projectId) {
       return selectJson<ManagedCodingWorkspace>(
@@ -5921,6 +6012,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'saveCodingPermissionRequest',
   'saveCodingPermissionDecision',
   'saveManagedCodingWorkspace',
+  'commitManagedCodingWorkspaceHead',
   'saveDependencyBootstrapEvidence',
   'saveCodingDiffArtifact',
   'saveProviderCredential',
