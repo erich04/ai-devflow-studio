@@ -238,6 +238,31 @@ function fakeStore(source: ReturnType<typeof fixture>) {
 }
 
 describe('GitHub Delivery preparation runtime', () => {
+  it('maps raw git failures to one fixed preparation error without retaining the cause', async () => {
+    const source = fixture()
+    const store = fakeStore(source)
+    const rawFailure = 'git -C /private/secret/worktree failed with TOKEN_SENTINEL'
+    const runtime = createGitHubDeliveryRuntime({
+      store,
+      commitWorkspace: vi.fn(async () => {
+        throw new Error(rawFailure)
+      }),
+      runTestCommand: vi.fn(),
+    })
+
+    const failure = await runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
+      .then(() => undefined, (error: unknown) => error)
+
+    expect(failure).toMatchObject({
+      name: 'GitHubDeliveryPreparationError',
+      code: 'preparation_failed',
+      message: 'GitHub Delivery preparation failed safely',
+    })
+    expect(JSON.stringify(failure)).not.toContain(rawFailure)
+    expect(JSON.stringify(failure)).not.toContain('/private/')
+    expect(failure).not.toHaveProperty('cause')
+  })
+
   it('commits, records the workspace head, retests the exact worktree, and atomically prepares an intent', async () => {
     const source = fixture()
     const store = fakeStore(source)
@@ -536,7 +561,10 @@ describe('GitHub Delivery preparation runtime', () => {
     })
 
     await expect(runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' }))
-      .rejects.toThrow('Managed workspace changed while recording its delivery commit')
+      .rejects.toMatchObject({
+        name: 'GitHubDeliveryPreparationError',
+        code: 'preparation_failed',
+      })
     expect(runTestCommand).not.toHaveBeenCalled()
     expect(store.commitGitHubDeliveryPreparation).not.toHaveBeenCalled()
   })

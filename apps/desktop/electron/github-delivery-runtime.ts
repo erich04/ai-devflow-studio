@@ -76,6 +76,15 @@ export type GitHubDeliveryRuntime = {
   prepare(input: PrepareGitHubDeliveryInput): Promise<PrepareGitHubDeliveryResult>
 }
 
+export class GitHubDeliveryPreparationError extends Error {
+  readonly code = 'preparation_failed'
+
+  constructor() {
+    super('GitHub Delivery preparation failed safely')
+    this.name = 'GitHubDeliveryPreparationError'
+  }
+}
+
 export type GitHubDeliveryRuntimeDeps = {
   store: GitHubDeliveryRuntimeStore
   commitWorkspace?: (
@@ -221,11 +230,18 @@ export function createGitHubDeliveryRuntime(
       if (existing) {
         return existing
       }
-      const execution = prepareOnce(input).finally(() => {
-        if (inFlight.get(key) === execution) {
-          inFlight.delete(key)
-        }
-      })
+      const execution = prepareOnce(input)
+        .catch((error: unknown) => {
+          if (error instanceof GitHubDeliveryPreparationError) {
+            throw error
+          }
+          throw new GitHubDeliveryPreparationError()
+        })
+        .finally(() => {
+          if (inFlight.get(key) === execution) {
+            inFlight.delete(key)
+          }
+        })
       inFlight.set(key, execution)
       return execution
     },
