@@ -171,7 +171,7 @@ describe('GitHub App client', () => {
     const client = makeClient(fetcher)
 
     await expect(
-      client.verifyRepository({ installationId, repositoryId, repository }),
+      client.verifyRepository({ installationId, repositoryId }),
     ).resolves.toEqual({
       installationId,
       repositoryId,
@@ -361,7 +361,7 @@ describe('GitHub App client', () => {
         }),
       )
     const error = await makeClient(fetcher)
-      .verifyRepository({ installationId, repositoryId, repository })
+      .verifyRepository({ installationId, repositoryId })
       .catch((reason: unknown) => reason)
     expect(error).toMatchObject({ code: 'github_repository_mismatch' })
     expect(String(error)).not.toContain(secretSentinel)

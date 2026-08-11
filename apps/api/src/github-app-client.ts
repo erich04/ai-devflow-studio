@@ -169,7 +169,7 @@ export type GitHubAppClient = {
   issueContentsWriteToken(
     input: GitHubRepositoryAuthority,
   ): Promise<GitHubRepositoryAccessToken>
-  verifyRepository(input: GitHubRepositoryContext): Promise<VerifiedGitHubRepository>
+  verifyRepository(input: GitHubRepositoryAuthority): Promise<VerifiedGitHubRepository>
   getBranchHead(
     input: GitHubRepositoryContext & { branch: string },
   ): Promise<GitHubBranchHead>
@@ -582,12 +582,12 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
   }
 
   const withInstallationToken = async <Result>(
-    context: NormalizedRepositoryContext,
+    authority: GitHubRepositoryAuthority,
     permission: InstallationPermission,
     level: InstallationPermissionLevel,
     operation: (token: string) => Promise<Result>,
   ): Promise<Result> => {
-    const grant = await mintInstallationToken(context, permission, level)
+    const grant = await mintInstallationToken(authority, permission, level)
     return operation(grant.token)
   }
 
@@ -839,10 +839,10 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
     },
 
     async verifyRepository(repositoryInput) {
-      const context = normalizeRepositoryContext(repositoryInput)
-      return withInstallationToken(context, 'contents', 'read', async (token) => {
+      const authority = normalizeAuthority(repositoryInput)
+      return withInstallationToken(authority, 'contents', 'read', async (token) => {
         const response = expectRecord(
-          await requestJson(`${githubApiBaseUrl}/repositories/${context.repositoryId}`, {
+          await requestJson(`${githubApiBaseUrl}/repositories/${authority.repositoryId}`, {
             method: 'GET',
             authorization: `Bearer ${token}`,
             expectedStatus: 200,
@@ -868,15 +868,15 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
           throw clientError('github_malformed_response')
         }
         if (
-          returnedId !== context.repositoryId ||
-          returnedRepository !== context.repository ||
+          returnedId !== authority.repositoryId ||
           archived ||
           disabled
         ) {
           throw clientError('github_repository_mismatch')
         }
         return {
-          ...context,
+          ...authority,
+          repository: returnedRepository,
           defaultBranch,
           private: isPrivate,
           visibility,
