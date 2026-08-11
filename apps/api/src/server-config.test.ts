@@ -314,6 +314,8 @@ describe('server listen config', () => {
       expect.arrayContaining([
         'DATABASE_URL',
         'DEVFLOW_DATABASE_URL',
+        'DEVFLOW_GITHUB_APP_ID',
+        'DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64',
         'DEVFLOW_WEB_APP_URL',
         'GITHUB_CLIENT_ID',
         'GITHUB_CLIENT_SECRET',
