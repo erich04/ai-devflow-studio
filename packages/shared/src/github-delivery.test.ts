@@ -70,8 +70,7 @@ const codingRun: CodingAgentRun = {
   changedPaths: ['src/z.ts', 'src/a.ts', 'src/a.ts'],
   startedAt: '2026-08-11T10:05:00.000Z',
   completedAt: '2026-08-11T10:20:00.000Z',
-      diffArtifactId: 'diff-1',
-      diffSourceDigest: '2222222222222222222222222222222222222222222222222222222222222222',
+  diffArtifactId: 'diff-1',
   testEvidenceId: 'test-1',
   redacted: true,
 }
@@ -216,8 +215,28 @@ describe('GitHub Delivery Intent', () => {
     })
     expect(intent.headBranch).not.toBe(run.branchName)
     expect(intent.intentDigest).toMatch(/^[a-f0-9]{64}$/)
-    expect(intent.idempotencyKey).toBe(`github-delivery:${intent.intentDigest}`)
+    expect(intent.idempotencyKey).toMatch(/^github-delivery:[a-f0-9]{64}$/u)
     expect(reordered.intentDigest).toBe(intent.intentDigest)
+    expect(reordered.idempotencyKey).toBe(intent.idempotencyKey)
+  })
+
+  it('keeps one logical delivery key when only commit-bound test execution metadata changes', async () => {
+    const first = await createGitHubDeliveryIntent(baseInput)
+    const retested = await createGitHubDeliveryIntent({
+      ...baseInput,
+      id: 'delivery-retested',
+      testEvidence: {
+        ...testEvidence,
+        id: 'delivery-test-retry',
+        durationMs: 275,
+        summary: 'The same expected commit passed a repeated test execution.',
+        createdAt: '2026-08-11T10:29:00.000Z',
+      },
+      now: '2026-08-11T10:32:00.000Z',
+    })
+
+    expect(retested.intentDigest).not.toBe(first.intentDigest)
+    expect(retested.idempotencyKey).toBe(first.idempotencyKey)
   })
 
   it('fails closed when Test Evidence is not for the exact expected commit', async () => {

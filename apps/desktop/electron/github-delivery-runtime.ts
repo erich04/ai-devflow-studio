@@ -29,12 +29,13 @@ import type {
 } from './local-store.js'
 import { runLocalTestCommand, type LocalTestCommandInput, type LocalTestCommandResult } from './test-runner.js'
 
-const ACTIVE_DELIVERY_STATUSES = new Set<GitHubDeliveryIntent['status']>([
+const REPLAYABLE_DELIVERY_STATUSES = new Set<GitHubDeliveryIntent['status']>([
   'approval_required',
   'approved',
   'publishing_branch',
   'branch_published',
   'creating_pr',
+  'completed',
   'recovery_required',
 ])
 
@@ -122,9 +123,9 @@ export function createGitHubDeliveryRuntime(
   async function prepareOnce(
     input: PrepareGitHubDeliveryInput,
   ): Promise<PrepareGitHubDeliveryResult> {
-    const activeIntent = await loadActiveIntent(deps.store, input)
-    if (activeIntent) {
-      return replayActiveIntent(deps.store, input, activeIntent)
+    const existingIntent = await loadExistingIntent(deps.store, input)
+    if (existingIntent) {
+      return replayActiveIntent(deps.store, input, existingIntent)
     }
 
     const source = await resolveDeliverySource(deps.store, input)
@@ -213,8 +214,11 @@ export function createGitHubDeliveryRuntime(
       testEvidence,
       expectedPrPackage: source.prPackage,
     } satisfies GitHubDeliveryPreparationMutation)
-    if (!prepared.committed && prepared.reason === 'active_intent_exists') {
-      const winner = await loadActiveIntent(deps.store, input)
+    if (
+      !prepared.committed &&
+      (prepared.reason === 'active_intent_exists' || prepared.reason === 'id_conflict')
+    ) {
+      const winner = await loadExistingIntent(deps.store, input)
       if (!winner) {
         throw new Error('GitHub Delivery preparation winner could not be reloaded')
       }
@@ -248,20 +252,26 @@ export function createGitHubDeliveryRuntime(
   }
 }
 
-async function loadActiveIntent(
+async function loadExistingIntent(
   store: GitHubDeliveryRuntimeStore,
   input: PrepareGitHubDeliveryInput,
 ): Promise<GitHubDeliveryIntent | undefined> {
-  const activeIntents = (await store.listGitHubDeliveryIntents(input.runId))
+  const scopedIntents = (await store.listGitHubDeliveryIntents(input.runId))
     .filter((candidate) =>
       candidate.runId === input.runId &&
-      candidate.nodeId === input.nodeId &&
-      ACTIVE_DELIVERY_STATUSES.has(candidate.status),
+      candidate.nodeId === input.nodeId,
     )
-  if (activeIntents.length > 1) {
-    throw new Error('Multiple active GitHub Delivery Intents violate local authority')
+  if (scopedIntents.length > 1) {
+    throw new Error('Multiple GitHub Delivery Intents violate local authority')
   }
-  return activeIntents[0]
+  const intent = scopedIntents[0]
+  if (!intent) {
+    return undefined
+  }
+  if (!REPLAYABLE_DELIVERY_STATUSES.has(intent.status)) {
+    throw new Error('A terminal GitHub Delivery Intent requires an explicit recovery action')
+  }
+  return intent
 }
 
 async function replayActiveIntent(

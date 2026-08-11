@@ -224,6 +224,19 @@ function canonicalIntentMaterial(material: IntentDigestMaterial): string {
   })
 }
 
+function canonicalLogicalDeliveryMaterial(material: IntentDigestMaterial): string {
+  return JSON.stringify({
+    organizationId: material.organizationId,
+    teamProjectId: material.teamProjectId,
+    localProjectId: material.localProjectId,
+    runId: material.runId,
+    nodeId: material.nodeId,
+    expectedCommitSha: material.expectedCommitSha,
+    baseBranch: material.baseBranch,
+    headBranch: material.headBranch,
+  })
+}
+
 export async function createGitHubDeliveryIntent(
   input: CreateGitHubDeliveryIntentInput,
 ): Promise<GitHubDeliveryIntent> {
@@ -416,12 +429,15 @@ export async function createGitHubDeliveryIntent(
     changedPaths,
   }
   const intentDigest = await sha256Hex(canonicalIntentMaterial(material))
+  const logicalDeliveryDigest = await sha256Hex(
+    canonicalLogicalDeliveryMaterial(material),
+  )
 
   return {
     id,
     ...material,
     intentDigest,
-    idempotencyKey: `github-delivery:${intentDigest}`,
+    idempotencyKey: `github-delivery:${logicalDeliveryDigest}`,
     status: 'approval_required',
     createdAt: input.now,
     updatedAt: input.now,

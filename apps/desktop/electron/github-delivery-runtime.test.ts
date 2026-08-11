@@ -421,6 +421,58 @@ describe('GitHub Delivery preparation runtime', () => {
     expect(store.commitGitHubDeliveryPreparation).not.toHaveBeenCalled()
   })
 
+  it('replays a completed intent after restart instead of preparing a second logical delivery', async () => {
+    const source = fixture()
+    const store = fakeStore(source)
+    const committedWorkspace = {
+      ...source.workspace,
+      baseCommitSha,
+      headCommitSha: expectedCommitSha,
+    }
+    const commitWorkspace = vi.fn(async () => ({
+      workspace: committedWorkspace,
+      baseCommitSha,
+      expectedCommitSha,
+    }))
+    const runTestCommand = vi.fn(async () => ({
+      status: 'passed' as const,
+      exitCode: 0,
+      durationMs: 25,
+      stdout: 'ok',
+      stderr: '',
+      redacted: false,
+      summary: 'Tests passed.',
+    }))
+    const runtime = createGitHubDeliveryRuntime({
+      store,
+      commitWorkspace,
+      runTestCommand,
+      now: () => '2026-08-11T13:10:00.000Z',
+      idGenerator: (prefix) => `${prefix}-1`,
+    })
+    const first = await runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
+    expect(first.status).toBe('prepared')
+    store.intents[0] = {
+      ...store.intents[0]!,
+      status: 'completed',
+      updatedAt: '2026-08-11T13:11:00.000Z',
+    }
+    commitWorkspace.mockClear()
+    runTestCommand.mockClear()
+    store.commitGitHubDeliveryPreparation.mockClear()
+
+    const replay = await runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
+
+    expect(replay).toMatchObject({
+      status: 'prepared',
+      replayed: true,
+      intent: { status: 'completed' },
+    })
+    expect(commitWorkspace).not.toHaveBeenCalled()
+    expect(runTestCommand).not.toHaveBeenCalled()
+    expect(store.commitGitHubDeliveryPreparation).not.toHaveBeenCalled()
+  })
+
   it('singleflights concurrent preparation for the same Run and PR node', async () => {
     const source = fixture()
     const store = fakeStore(source)

@@ -1272,7 +1272,11 @@ const schemaMigrations: readonly SchemaMigration[] = [
         length(intent_digest) = 64 and
         intent_digest not glob '*[^0-9a-f]*'
       ),
-      check (idempotency_key = 'github-delivery:' || intent_digest),
+      check (
+        length(idempotency_key) = 80 and
+        substr(idempotency_key, 1, 16) = 'github-delivery:' and
+        substr(idempotency_key, 17) not glob '*[^0-9a-f]*'
+      ),
       check (status in (
         'approval_required', 'approved', 'publishing_branch',
         'branch_published', 'creating_pr', 'completed', 'failed',
