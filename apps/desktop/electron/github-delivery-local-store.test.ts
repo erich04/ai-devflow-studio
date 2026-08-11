@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rename, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -593,10 +593,10 @@ describe('GitHub repository binding observation CAS', () => {
 })
 
 describe('GitHub Delivery Intent local persistence', () => {
-  it('migrates to schema 14 with metadata-only delivery and operator outcome tables', async () => {
+  it('migrates to schema 15 with immutable delivery series history and operator outcomes', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
-    expect(await store.getSchemaVersion()).toBe(14)
+    expect(await store.getSchemaVersion()).toBe(15)
     store.close()
 
     const SQL = await initSqlJs()
@@ -623,6 +623,8 @@ describe('GitHub Delivery Intent local persistence', () => {
       'expected_commit_sha',
       'intent_digest',
       'idempotency_key',
+      'delivery_series_key',
+      'delivery_attempt',
       'status',
       'state_version',
       'json',
@@ -631,6 +633,12 @@ describe('GitHub Delivery Intent local persistence', () => {
     ])
     expect(columns).not.toEqual(expect.arrayContaining([
       'token', 'secret', 'source_path', 'worktree_path', 'patch', 'stdout', 'stderr',
+    ]))
+    const intentIndexes = database.exec('pragma index_list(github_delivery_intents)')[0]
+      ?.values.map((row) => ({ name: String(row[1]), unique: Number(row[2]) })) ?? []
+    expect(intentIndexes).toEqual(expect.arrayContaining([
+      { name: 'idx_github_delivery_intents_idempotency', unique: 0 },
+      { name: 'idx_github_delivery_intents_active_scope', unique: 1 },
     ]))
     const outcomeColumns = database
       .exec('pragma table_info(github_delivery_operator_outcomes)')[0]
@@ -647,6 +655,54 @@ describe('GitHub Delivery Intent local persistence', () => {
       'token', 'secret', 'path', 'message', 'error', 'cause',
     ]))
     database.close()
+  })
+
+  it('preserves an existing v14 JSON series and non-first attempt during schema 15 migration', async () => {
+    const dbPath = await tempDbPath()
+    const sources = createSources()
+    const store = await createLocalStore({ dbPath })
+    await saveSources(store, sources)
+    const attemptTwo = await createGitHubDeliveryIntent({
+      id: 'delivery-intent-existing-attempt-2',
+      repositoryBinding: sources.repositoryBinding,
+      run: sources.run,
+      prNodeId: 'run-delivery-1-pr',
+      codingRun: sources.codingRun,
+      workspace: sources.workspace,
+      diffArtifact: sources.diffArtifact,
+      prPackage: sources.prPackage,
+      testEvidence: sources.testEvidence as TestEvidence & { sourceCommitSha: string },
+      baseCommitSha,
+      expectedCommitSha,
+      deliveryAttempt: 2,
+      now: '2026-08-11T10:31:00.000Z',
+    })
+    expect(attemptTwo.deliverySeriesKey).not.toBe(attemptTwo.idempotencyKey)
+    await expect(store.commitGitHubDeliveryPreparation({
+      intent: attemptTwo,
+      expectedProject: sources.project,
+      expectedPairingCredential: sources.pairing,
+      expectedRepositoryBinding: sources.repositoryBinding,
+      expectedRun: sources.run,
+      expectedCodingRun: sources.codingRun,
+      expectedWorkspace: sources.workspace,
+      expectedDiffArtifact: sources.diffArtifact,
+      testEvidence: sources.testEvidence,
+      expectedPrPackage: sources.prPackage,
+    })).resolves.toMatchObject({ committed: true })
+    store.close()
+
+    const SQL = await initSqlJs()
+    const database = new SQL.Database(await readFile(dbPath))
+    database.run("update schema_meta set value = '14' where key = 'schema_version'")
+    await writeFile(dbPath, database.export())
+    database.close()
+
+    const migrated = await createLocalStore({ dbPath })
+    await expect(migrated.getSchemaVersion()).resolves.toBe(15)
+    await expect(migrated.listGitHubDeliveryIntents(sources.run.id))
+      .resolves.toEqual([attemptTwo])
+    migrated.close()
   })
 
   it('does not stop or record an outcome for stale or terminal CAS input', async () => {
@@ -746,6 +802,30 @@ describe('GitHub Delivery Intent local persistence', () => {
       recordedAt: recovery.updatedAt,
       redacted: true,
     }])
+    reopened.close()
+  })
+
+  it('durably parks approval-waiting work in recovery without inventing approval or failure', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const sources = createSources()
+    await saveSources(store, sources)
+    const intent = await savePreparedIntent(store, sources)
+    const recovery = {
+      ...intent,
+      status: 'recovery_required' as const,
+      updatedAt: '2026-08-11T10:33:00.000Z',
+    }
+
+    await expect(store.commitGitHubDeliveryIntentStatus({
+      expectedIntent: intent,
+      intent: recovery,
+    })).resolves.toEqual({ committed: true, replayed: false, intent: recovery })
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.listGitHubDeliveryIntents(intent.runId)).resolves.toEqual([recovery])
+    await expect(reopened.listGitHubDeliveryOperatorOutcomes(intent.id)).resolves.toEqual([])
     reopened.close()
   })
 
@@ -966,6 +1046,198 @@ describe('GitHub Delivery Intent local persistence', () => {
       testEvidence: changedSources.testEvidence,
       expectedPrPackage: changedSources.prPackage,
     })).resolves.toEqual({ committed: false, reason: 'active_intent_exists' })
+    store.close()
+  })
+
+  it('atomically supersedes an approval-wait intent with an immutable material revision', async () => {
+    const sources = createSources()
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    await saveSources(store, sources)
+    const original = await savePreparedIntent(store, sources)
+    const changedPackage: Artifact = {
+      ...sources.prPackage,
+      summary: 'Materially revised delivery package.',
+      updatedAt: '2026-08-11T10:40:00.000Z',
+    }
+    const changedEvidence: TestEvidence = {
+      ...sources.testEvidence,
+      id: 'postcommit-test-delivery-revision-1',
+      createdAt: '2026-08-11T10:41:00.000Z',
+    }
+    await store.saveArtifact(changedPackage)
+    const revision = await createGitHubDeliveryIntent({
+      id: 'delivery-intent-revision-1',
+      repositoryBinding: sources.repositoryBinding,
+      run: sources.run,
+      prNodeId: original.nodeId,
+      codingRun: sources.codingRun,
+      workspace: sources.workspace,
+      diffArtifact: sources.diffArtifact,
+      prPackage: changedPackage,
+      testEvidence: changedEvidence as TestEvidence & { sourceCommitSha: string },
+      baseCommitSha,
+      expectedCommitSha,
+      deliveryAttempt: original.deliveryAttempt,
+      now: '2026-08-11T10:42:00.000Z',
+    })
+    expect(revision).toMatchObject({
+      deliverySeriesKey: original.deliverySeriesKey,
+      deliveryAttempt: original.deliveryAttempt,
+      idempotencyKey: original.idempotencyKey,
+    })
+    expect(revision.intentDigest).not.toBe(original.intentDigest)
+
+    await expect(store.commitGitHubDeliveryReplacement({
+      kind: 'revision',
+      expectedIntent: original,
+      intent: revision,
+      expectedProject: sources.project,
+      expectedPairingCredential: sources.pairing,
+      expectedRepositoryBinding: sources.repositoryBinding,
+      expectedRun: sources.run,
+      expectedCodingRun: sources.codingRun,
+      expectedWorkspace: sources.workspace,
+      expectedDiffArtifact: sources.diffArtifact,
+      testEvidence: changedEvidence,
+      expectedPrPackage: changedPackage,
+    })).resolves.toEqual({ committed: true, replayed: false, intent: revision })
+
+    await expect(store.listGitHubDeliveryIntents(sources.run.id)).resolves.toEqual([
+      { ...original, status: 'revoked', updatedAt: revision.createdAt },
+      revision,
+    ])
+    await expect(store.listTestEvidence(sources.run.id)).resolves.toEqual([
+      sources.testEvidence,
+      changedEvidence,
+    ])
+    store.close()
+  })
+
+  it('creates a new attempt after terminal failure without reopening the old intent', async () => {
+    const sources = createSources()
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    await saveSources(store, sources)
+    const original = await savePreparedIntent(store, sources)
+    const failed = {
+      ...original,
+      status: 'failed' as const,
+      updatedAt: '2026-08-11T10:33:00.000Z',
+    }
+    await expect(store.commitGitHubDeliveryIntentStatus({
+      expectedIntent: original,
+      intent: failed,
+    })).resolves.toMatchObject({ committed: true, replayed: false, intent: failed })
+    const retryEvidence: TestEvidence = {
+      ...sources.testEvidence,
+      id: 'postcommit-test-delivery-retry-2',
+      createdAt: '2026-08-11T10:34:00.000Z',
+    }
+    const retry = await createGitHubDeliveryIntent({
+      id: 'delivery-intent-attempt-2',
+      repositoryBinding: sources.repositoryBinding,
+      run: sources.run,
+      prNodeId: failed.nodeId,
+      codingRun: sources.codingRun,
+      workspace: sources.workspace,
+      diffArtifact: sources.diffArtifact,
+      prPackage: sources.prPackage,
+      testEvidence: retryEvidence as TestEvidence & { sourceCommitSha: string },
+      baseCommitSha,
+      expectedCommitSha,
+      deliveryAttempt: 2,
+      now: '2026-08-11T10:35:00.000Z',
+    })
+    expect(retry.deliverySeriesKey).toBe(failed.deliverySeriesKey)
+    expect(retry.idempotencyKey).not.toBe(failed.idempotencyKey)
+
+    await expect(store.commitGitHubDeliveryReplacement({
+      kind: 'retry',
+      expectedIntent: failed,
+      intent: retry,
+      expectedProject: sources.project,
+      expectedPairingCredential: sources.pairing,
+      expectedRepositoryBinding: sources.repositoryBinding,
+      expectedRun: sources.run,
+      expectedCodingRun: sources.codingRun,
+      expectedWorkspace: sources.workspace,
+      expectedDiffArtifact: sources.diffArtifact,
+      testEvidence: retryEvidence,
+      expectedPrPackage: sources.prPackage,
+    })).resolves.toEqual({ committed: true, replayed: false, intent: retry })
+    await expect(store.listGitHubDeliveryIntents(sources.run.id)).resolves.toEqual([
+      failed,
+      retry,
+    ])
+
+    await expect(store.commitGitHubDeliveryIntentStatus({
+      expectedIntent: original,
+      intent: { ...original, status: 'approved', updatedAt: retry.updatedAt },
+    })).resolves.toEqual({ committed: false, reason: 'source_stale' })
+    store.close()
+  })
+
+  it('starts a new delivery series at attempt one after repository rebind', async () => {
+    const sources = createSources()
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    await saveSources(store, sources)
+    const original = await savePreparedIntent(store, sources)
+    const revoked = {
+      ...original,
+      status: 'revoked' as const,
+      updatedAt: '2026-08-11T10:33:00.000Z',
+    }
+    await expect(store.commitGitHubDeliveryIntentStatus({
+      expectedIntent: original,
+      intent: revoked,
+    })).resolves.toMatchObject({ committed: true, intent: revoked })
+    const reboundBinding: GitHubRepositoryBinding = {
+      ...sources.repositoryBinding,
+      version: sources.repositoryBinding.version + 1,
+      updatedAt: '2026-08-11T10:34:00.000Z',
+      validatedAt: '2026-08-11T10:34:00.000Z',
+    }
+    await store.saveGitHubRepositoryBinding(reboundBinding)
+    const retryEvidence: TestEvidence = {
+      ...sources.testEvidence,
+      id: 'postcommit-test-delivery-rebound-1',
+      createdAt: '2026-08-11T10:35:00.000Z',
+    }
+    const rebound = await createGitHubDeliveryIntent({
+      id: 'delivery-intent-rebound-1',
+      repositoryBinding: reboundBinding,
+      run: sources.run,
+      prNodeId: revoked.nodeId,
+      codingRun: sources.codingRun,
+      workspace: sources.workspace,
+      diffArtifact: sources.diffArtifact,
+      prPackage: sources.prPackage,
+      testEvidence: retryEvidence as TestEvidence & { sourceCommitSha: string },
+      baseCommitSha,
+      expectedCommitSha,
+      deliveryAttempt: 1,
+      now: '2026-08-11T10:36:00.000Z',
+    })
+    expect(rebound.deliverySeriesKey).not.toBe(revoked.deliverySeriesKey)
+
+    await expect(store.commitGitHubDeliveryReplacement({
+      kind: 'retry',
+      expectedIntent: revoked,
+      intent: rebound,
+      expectedProject: sources.project,
+      expectedPairingCredential: sources.pairing,
+      expectedRepositoryBinding: reboundBinding,
+      expectedRun: sources.run,
+      expectedCodingRun: sources.codingRun,
+      expectedWorkspace: sources.workspace,
+      expectedDiffArtifact: sources.diffArtifact,
+      testEvidence: retryEvidence,
+      expectedPrPackage: sources.prPackage,
+    })).resolves.toEqual({ committed: true, replayed: false, intent: rebound })
+    expect(rebound.deliveryAttempt).toBe(1)
+    await expect(store.listGitHubDeliveryIntents(sources.run.id)).resolves.toEqual([
+      revoked,
+      rebound,
+    ])
     store.close()
   })
 

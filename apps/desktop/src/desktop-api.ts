@@ -38,8 +38,12 @@ import type {
   PrepareGitHubDeliveryInput,
   PrepareGitHubDeliveryResult,
   RefreshRepositoryKnowledgeInput,
+  ReviseGitHubDeliveryInput,
+  ReviseGitHubDeliveryResult,
   ResumeGitHubDeliveryInput,
   ResumeGitHubDeliveryResult,
+  RetryGitHubDeliveryInput,
+  RetryGitHubDeliveryResult,
   StopGitHubDeliveryInput,
   StopGitHubDeliveryResult,
   RetryRemoteSyncOperationInput,
@@ -226,6 +230,12 @@ export type DevFlowDesktopApi = {
   prepareGitHubDelivery: (
     input: PrepareGitHubDeliveryInput,
   ) => Promise<PrepareGitHubDeliveryResult>
+  reviseGitHubDelivery: (
+    input: ReviseGitHubDeliveryInput,
+  ) => Promise<ReviseGitHubDeliveryResult>
+  retryGitHubDelivery: (
+    input: RetryGitHubDeliveryInput,
+  ) => Promise<RetryGitHubDeliveryResult>
   resumeGitHubDelivery: (
     input: ResumeGitHubDeliveryInput,
   ) => Promise<ResumeGitHubDeliveryResult>

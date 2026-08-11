@@ -435,6 +435,152 @@ describe('GitHub Delivery processor', () => {
     })
   })
 
+  it('revises the existing logical request and invalidates its old approval before credential work', async () => {
+    const original = intent()
+    const revised = intent({
+      id: 'intent-revision-2',
+      intentDigest: 'intent-digest-revision-2',
+      testEvidenceId: 'test-revision-2',
+      testEvidenceCreatedAt: '2026-08-11T12:02:00.000Z',
+      testEvidenceDigest: 'test-digest-revision-2',
+      prPackageUpdatedAt: '2026-08-11T12:03:00.000Z',
+      createdAt: '2026-08-11T12:04:00.000Z',
+      updatedAt: '2026-08-11T12:04:00.000Z',
+    })
+    const approvedOriginal = request(original, {
+      stateVersion: 2,
+      intentRevision: 1,
+      status: 'approved',
+    })
+    const revisedRequest = request(revised, {
+      id: approvedOriginal.id,
+      stateVersion: 3,
+      intentRevision: 2,
+      status: 'approval_required',
+      updatedAt: revised.updatedAt,
+    })
+    const test = harness(revised)
+    test.remote.listInbox.mockResolvedValue([approvedOriginal])
+    test.remote.submit.mockResolvedValue({
+      request: revisedRequest,
+      outcomeCode: 'delivery_revised',
+      replayed: false,
+    })
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: revised.id,
+        remoteRequestId: approvedOriginal.id,
+        disposition: 'submitted',
+        outcomeCode: 'delivery_revised',
+      }],
+    })
+    expect(test.remote.submit).toHaveBeenCalledWith({
+      projectId: revised.teamProjectId,
+      intent: revised,
+      prTitle: 'Ship widgets',
+      prBody: '# Ship widgets',
+      expectedStateVersion: approvedOriginal.stateVersion,
+    })
+    expect(test.remote.getRecoverySnapshot).not.toHaveBeenCalled()
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.publisher.publish).not.toHaveBeenCalled()
+  })
+
+  it('keeps a local revision approval-waiting when its remote revision CAS loses a race', async () => {
+    const original = intent()
+    const revised = intent({
+      id: 'intent-revision-race',
+      intentDigest: 'intent-digest-revision-race',
+      testEvidenceId: 'test-revision-race',
+      testEvidenceDigest: 'test-digest-revision-race',
+      createdAt: '2026-08-11T12:04:00.000Z',
+      updatedAt: '2026-08-11T12:04:00.000Z',
+    })
+    const oldRequest = request(original, {
+      stateVersion: 1,
+      intentRevision: 1,
+      status: 'approval_required',
+    })
+    const test = harness(revised)
+    test.remote.listInbox.mockResolvedValue([oldRequest])
+    test.remote.submit.mockRejectedValue(new GitHubDeliveryRemoteError({
+      status: 409,
+      code: 'conflict',
+      operation: 'submit',
+      retryable: false,
+      outcomeCode: 'stale_version',
+    }))
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: revised.id,
+        remoteRequestId: oldRequest.id,
+        disposition: 'local_conflict',
+        outcomeCode: 'stale_intent',
+      }],
+    })
+    expect(test.current().status).toBe('approval_required')
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+  })
+
+  it('fails a local revision closed when more than one remote request claims its logical scope', async () => {
+    const original = intent()
+    const revised = intent({
+      id: 'intent-revision-ambiguous',
+      intentDigest: 'intent-digest-revision-ambiguous',
+      createdAt: '2026-08-11T12:04:00.000Z',
+      updatedAt: '2026-08-11T12:04:00.000Z',
+    })
+    const oldRequest = request(original, { status: 'approval_required' })
+    const test = harness(revised)
+    test.remote.listInbox.mockResolvedValue([
+      oldRequest,
+      { ...oldRequest, id: 'request-ambiguous-2' },
+    ])
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: revised.id,
+        remoteRequestId: oldRequest.id,
+        disposition: 'local_conflict',
+        outcomeCode: 'authority_mismatch',
+      }],
+    })
+    expect(test.remote.submit).not.toHaveBeenCalled()
+    expect(test.remote.getRecoverySnapshot).not.toHaveBeenCalled()
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+  })
+
+  it('does not revise a terminal remote predecessor or reuse any prior approval', async () => {
+    const original = intent()
+    const revised = intent({
+      id: 'intent-revision-after-terminal',
+      intentDigest: 'intent-digest-revision-after-terminal',
+      createdAt: '2026-08-11T12:04:00.000Z',
+      updatedAt: '2026-08-11T12:04:00.000Z',
+    })
+    const terminal = request(original, {
+      status: 'failed',
+      outcomeCode: 'pull_request_failed',
+    })
+    const test = harness(revised)
+    test.remote.listInbox.mockResolvedValue([terminal])
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: revised.id,
+        remoteRequestId: terminal.id,
+        disposition: 'local_conflict',
+        outcomeCode: 'authority_mismatch',
+      }],
+    })
+    expect(test.remote.submit).not.toHaveBeenCalled()
+    expect(test.remote.getRecoverySnapshot).not.toHaveBeenCalled()
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.publisher.publish).not.toHaveBeenCalled()
+  })
+
   it('refuses a remote request that reuses the local id with different authority', async () => {
     const source = intent()
     const test = harness(source)
@@ -757,6 +903,80 @@ describe('GitHub Delivery processor', () => {
     expect(test.current().status).toBe('recovery_required')
     expect(test.remote.listInbox).not.toHaveBeenCalled()
     expect(test.remote.getRecoverySnapshot).not.toHaveBeenCalled()
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.publisher.publish).not.toHaveBeenCalled()
+    expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
+  })
+
+  it('resumes a Stop before first submission by creating the same attempt without an approval', async () => {
+    const source = intent({ status: 'recovery_required' })
+    const submittedIntent = { ...source, status: 'approval_required' as const }
+    const submittedRequest = request(submittedIntent, {
+      status: 'approval_required',
+      outcomeCode: null,
+    })
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([])
+    test.remote.submit.mockResolvedValue({
+      request: submittedRequest,
+      outcomeCode: 'delivery_created',
+      replayed: false,
+    })
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: null,
+        disposition: 'recovery_required',
+        outcomeCode: 'explicit_resume_required',
+      }],
+    })
+    expect(test.remote.listInbox).not.toHaveBeenCalled()
+    expect(test.remote.submit).not.toHaveBeenCalled()
+
+    await expect(test.processor.resume({
+      intentId: source.id,
+      expectedUpdatedAt: source.updatedAt,
+    })).resolves.toEqual({
+      intentId: source.id,
+      remoteRequestId: submittedRequest.id,
+      disposition: 'submitted',
+      outcomeCode: 'delivery_created',
+    })
+    expect(test.remote.submit).toHaveBeenCalledWith({
+      projectId: source.teamProjectId,
+      intent: submittedIntent,
+      prTitle: 'Ship widgets',
+      prBody: '# Ship widgets',
+      expectedStateVersion: 0,
+    })
+    expect(test.current()).toEqual(source)
+    expect(test.remote.getRecoverySnapshot).not.toHaveBeenCalled()
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.publisher.publish).not.toHaveBeenCalled()
+    expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
+  })
+
+  it('resumes a Stop after submission by reconciling the same approval-wait request', async () => {
+    const source = intent({ status: 'recovery_required' })
+    const approvalRequired = request(source, {
+      status: 'approval_required',
+      outcomeCode: null,
+    })
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([approvalRequired])
+    test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(approvalRequired))
+
+    await expect(test.processor.resume({
+      intentId: source.id,
+      expectedUpdatedAt: source.updatedAt,
+    })).resolves.toEqual({
+      intentId: source.id,
+      remoteRequestId: approvalRequired.id,
+      disposition: 'waiting_for_approval',
+      outcomeCode: null,
+    })
+    expect(test.remote.submit).not.toHaveBeenCalled()
     expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
     expect(test.publisher.publish).not.toHaveBeenCalled()
     expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
@@ -1480,6 +1700,55 @@ describe('GitHub Delivery processor', () => {
     }] })
     expect(test.current().status).toBe('recovery_required')
     expect(JSON.stringify(result)).not.toContain('GitHub Delivery API')
+  })
+
+  it.each([
+    {
+      name: 'forbidden response',
+      error: new GitHubDeliveryRemoteError({
+        status: 403,
+        code: 'forbidden',
+        operation: 'inbox',
+        retryable: false,
+        outcomeCode: 'project_forbidden',
+      }),
+      outcomeCode: 'project_forbidden',
+    },
+    {
+      name: 'expired response without a terminal snapshot',
+      error: new GitHubDeliveryRemoteError({
+        status: 409,
+        code: 'conflict',
+        operation: 'inbox',
+        retryable: false,
+        outcomeCode: 'expired',
+      }),
+      outcomeCode: 'expired',
+    },
+    {
+      name: 'gone response without a terminal snapshot',
+      error: new GitHubDeliveryRemoteError({
+        status: 410,
+        code: 'gone',
+        operation: 'inbox',
+        retryable: false,
+      }),
+      outcomeCode: 'gone',
+    },
+  ])('does not invent terminal local state from a $name', async ({ error, outcomeCode }) => {
+    const source = intent()
+    const test = harness(source)
+    test.remote.listInbox.mockRejectedValue(error)
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: null,
+        disposition: 'recovery_required',
+        outcomeCode,
+      }],
+    })
+    expect(test.current().status).toBe('recovery_required')
   })
 
   it('atomically persists a typed operator outcome only for an exact publisher error', async () => {

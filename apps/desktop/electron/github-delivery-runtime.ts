@@ -23,6 +23,8 @@ import {
 import type {
   GitHubDeliveryPreparationMutation,
   GitHubDeliveryPreparationMutationResult,
+  GitHubDeliveryReplacementMutation,
+  GitHubDeliveryReplacementMutationResult,
   LocalStore,
   ManagedCodingWorkspaceHeadMutation,
   ManagedCodingWorkspaceHeadMutationResult,
@@ -58,12 +60,20 @@ type GitHubDeliveryRuntimeStore = Pick<
   | 'commitManagedCodingWorkspaceHead'
   | 'saveTestEvidence'
   | 'commitGitHubDeliveryPreparation'
+  | 'commitGitHubDeliveryReplacement'
 >
 
 export type PrepareGitHubDeliveryInput = {
   runId: string
   nodeId: string
 }
+
+export type ReviseGitHubDeliveryInput = {
+  intentId: string
+  expectedUpdatedAt: string
+}
+
+export type RetryGitHubDeliveryInput = ReviseGitHubDeliveryInput
 
 export type PrepareGitHubDeliveryResult =
   | {
@@ -79,6 +89,8 @@ export type PrepareGitHubDeliveryResult =
 
 export type GitHubDeliveryRuntime = {
   prepare(input: PrepareGitHubDeliveryInput): Promise<PrepareGitHubDeliveryResult>
+  revise(input: ReviseGitHubDeliveryInput): Promise<PrepareGitHubDeliveryResult>
+  retry(input: RetryGitHubDeliveryInput): Promise<PrepareGitHubDeliveryResult>
 }
 
 export class GitHubDeliveryPreparationError extends Error {
@@ -260,29 +272,202 @@ export function createGitHubDeliveryRuntime(
     return settlePreparationResult(prepared, testEvidence)
   }
 
+  async function replaceOnce(
+    kind: GitHubDeliveryReplacementMutation['kind'],
+    input: ReviseGitHubDeliveryInput,
+  ): Promise<PrepareGitHubDeliveryResult> {
+    const candidate = await loadIntentForReplacement(deps.store, kind, input)
+    const source = await resolveDeliverySource(deps.store, {
+      runId: candidate.runId,
+      nodeId: candidate.nodeId,
+    })
+    return workspaceCoordinator.runExclusive(source.workspace.id, () =>
+      replaceLocked(kind, input, source.workspace.id),
+    )
+  }
+
+  async function replaceLocked(
+    kind: GitHubDeliveryReplacementMutation['kind'],
+    input: ReviseGitHubDeliveryInput,
+    lockedWorkspaceId: string,
+  ): Promise<PrepareGitHubDeliveryResult> {
+    const expectedIntent = await loadIntentForReplacement(deps.store, kind, input)
+    const scopedInput = { runId: expectedIntent.runId, nodeId: expectedIntent.nodeId }
+    const source = await resolveDeliverySource(deps.store, scopedInput)
+    if (source.workspace.id !== lockedWorkspaceId) {
+      throw new Error('GitHub Delivery workspace authority changed before replacement')
+    }
+    const safety = validateTestCommandSafety(source.project.testCommand)
+    if (safety.level === 'blocked') {
+      throw new Error('GitHub Delivery Project test command is blocked')
+    }
+
+    const committed = await commitWorkspace({
+      workspace: source.workspace,
+      expectedDiffArtifact: source.diffArtifact,
+      runId: source.run.id,
+    })
+    const headCommit = await deps.store.commitManagedCodingWorkspaceHead({
+      expectedWorkspace: source.workspace,
+      workspace: committed.workspace,
+    } satisfies ManagedCodingWorkspaceHeadMutation)
+    if (!headCommit.committed) {
+      throw new Error('Managed workspace changed while recording its delivery commit')
+    }
+    const committedWorkspace = headCommit.workspace
+    await commitWorkspace({
+      workspace: committedWorkspace,
+      expectedDiffArtifact: source.diffArtifact,
+      runId: source.run.id,
+    })
+    const testResult = await runTestCommand({
+      command: safety.normalizedCommand,
+      cwd: committedWorkspace.worktreePath,
+      timeoutMs: testTimeoutMs,
+    })
+    await commitWorkspace({
+      workspace: committedWorkspace,
+      expectedDiffArtifact: source.diffArtifact,
+      runId: source.run.id,
+    })
+
+    const observedAt = now()
+    const observedTime = Date.parse(observedAt)
+    const expectedTime = Date.parse(expectedIntent.updatedAt)
+    if (!Number.isFinite(observedTime) || !Number.isFinite(expectedTime)) {
+      throw new Error('GitHub Delivery replacement timestamp is not monotonic')
+    }
+    const createdAt = new Date(Math.max(observedTime, expectedTime + 1)).toISOString()
+    const testEvidence = redactTestEvidenceForStorage({
+      id: idGenerator('github-delivery-test'),
+      runId: source.run.id,
+      nodeId: source.codingRun.nodeId,
+      projectId: source.project.id,
+      command: safety.normalizedCommand,
+      cwd: committedWorkspace.worktreePath,
+      status: testResult.status,
+      exitCode: testResult.exitCode,
+      durationMs: testResult.durationMs,
+      stdout: testResult.stdout,
+      stderr: testResult.stderr,
+      summary: testResult.summary,
+      redacted: testResult.redacted,
+      sourceCommitSha: committed.expectedCommitSha,
+      createdAt,
+    }) as TestEvidence & { sourceCommitSha: string }
+    if (testEvidence.status !== 'passed' || testEvidence.exitCode !== 0) {
+      await deps.store.saveTestEvidence(testEvidence)
+      return { status: 'tests_failed', testEvidence }
+    }
+
+    const createIntent = (deliveryAttempt: number, id: string) =>
+      createGitHubDeliveryIntent({
+        id,
+        repositoryBinding: source.repositoryBinding,
+        run: source.run,
+        prNodeId: source.prNode.id,
+        codingRun: source.codingRun,
+        workspace: committedWorkspace,
+        diffArtifact: source.diffArtifact,
+        prPackage: source.prPackage,
+        testEvidence,
+        baseCommitSha: committed.baseCommitSha,
+        expectedCommitSha: committed.expectedCommitSha,
+        deliveryAttempt,
+        now: createdAt,
+      })
+    const intentId = idGenerator('github-delivery-intent')
+    let intent: GitHubDeliveryIntent
+    if (kind === 'revision') {
+      intent = await createIntent(expectedIntent.deliveryAttempt, intentId)
+      if (intent.deliverySeriesKey !== expectedIntent.deliverySeriesKey) {
+        throw new Error('GitHub Delivery revision changed delivery series authority')
+      }
+    } else {
+      const firstAttemptCandidate = await createIntent(1, intentId)
+      if (firstAttemptCandidate.deliverySeriesKey === expectedIntent.deliverySeriesKey) {
+        const scopedIntents = (await deps.store.listGitHubDeliveryIntents(expectedIntent.runId))
+          .filter((candidate) =>
+            candidate.runId === expectedIntent.runId &&
+            candidate.nodeId === expectedIntent.nodeId &&
+            candidate.deliverySeriesKey === expectedIntent.deliverySeriesKey,
+          )
+        const nextAttempt = Math.max(
+          ...scopedIntents.map((candidate) => candidate.deliveryAttempt),
+        ) + 1
+        intent = await createIntent(nextAttempt, intentId)
+      } else {
+        intent = firstAttemptCandidate
+      }
+    }
+
+    const replaced = await deps.store.commitGitHubDeliveryReplacement({
+      kind,
+      expectedIntent,
+      intent,
+      expectedProject: source.project,
+      expectedPairingCredential: source.pairing,
+      expectedRepositoryBinding: source.repositoryBinding,
+      expectedRun: source.run,
+      expectedCodingRun: source.codingRun,
+      expectedWorkspace: committedWorkspace,
+      expectedDiffArtifact: source.diffArtifact,
+      testEvidence,
+      expectedPrPackage: source.prPackage,
+    } satisfies GitHubDeliveryReplacementMutation)
+    return settleReplacementResult(replaced, testEvidence)
+  }
+
+  function runSafely(
+    key: string,
+    operation: () => Promise<PrepareGitHubDeliveryResult>,
+  ): Promise<PrepareGitHubDeliveryResult> {
+    const existing = inFlight.get(key)
+    if (existing) return existing
+    const execution = operation()
+      .catch((error: unknown) => {
+        if (error instanceof GitHubDeliveryPreparationError) throw error
+        throw new GitHubDeliveryPreparationError()
+      })
+      .finally(() => {
+        if (inFlight.get(key) === execution) inFlight.delete(key)
+      })
+    inFlight.set(key, execution)
+    return execution
+  }
+
   return {
     prepare(input) {
       const key = `${input.runId}:${input.nodeId}`
-      const existing = inFlight.get(key)
-      if (existing) {
-        return existing
-      }
-      const execution = prepareOnce(input)
-        .catch((error: unknown) => {
-          if (error instanceof GitHubDeliveryPreparationError) {
-            throw error
-          }
-          throw new GitHubDeliveryPreparationError()
-        })
-        .finally(() => {
-          if (inFlight.get(key) === execution) {
-            inFlight.delete(key)
-          }
-        })
-      inFlight.set(key, execution)
-      return execution
+      return runSafely(key, () => prepareOnce(input))
+    },
+    revise(input) {
+      return runSafely(`intent:${input.intentId}`, () => replaceOnce('revision', input))
+    },
+    retry(input) {
+      return runSafely(`intent:${input.intentId}`, () => replaceOnce('retry', input))
     },
   }
+}
+
+async function loadIntentForReplacement(
+  store: GitHubDeliveryRuntimeStore,
+  kind: GitHubDeliveryReplacementMutation['kind'],
+  input: ReviseGitHubDeliveryInput,
+): Promise<GitHubDeliveryIntent> {
+  const matches = (await store.listGitHubDeliveryIntents())
+    .filter((candidate) => candidate.id === input.intentId)
+  if (matches.length !== 1 || matches[0]!.updatedAt !== input.expectedUpdatedAt) {
+    throw new Error('GitHub Delivery replacement authority is stale')
+  }
+  const intent = matches[0]!
+  const eligible = kind === 'revision'
+    ? intent.status === 'approval_required' || intent.status === 'approved'
+    : intent.status === 'failed' || intent.status === 'revoked'
+  if (!eligible) {
+    throw new Error('GitHub Delivery intent is not eligible for replacement')
+  }
+  return intent
 }
 
 async function loadExistingIntent(
@@ -294,17 +479,22 @@ async function loadExistingIntent(
       candidate.runId === input.runId &&
       candidate.nodeId === input.nodeId,
     )
-  if (scopedIntents.length > 1) {
-    throw new Error('Multiple GitHub Delivery Intents violate local authority')
-  }
-  const intent = scopedIntents[0]
-  if (!intent) {
+  if (scopedIntents.length === 0) {
     return undefined
   }
-  if (!REPLAYABLE_DELIVERY_STATUSES.has(intent.status)) {
-    throw new Error('A terminal GitHub Delivery Intent requires an explicit recovery action')
+  const automatic = scopedIntents.filter((candidate) =>
+    REPLAYABLE_DELIVERY_STATUSES.has(candidate.status) &&
+    candidate.status !== 'completed',
+  )
+  if (automatic.length > 1) {
+    throw new Error('Multiple active GitHub Delivery Intents violate local authority')
   }
-  return intent
+  if (automatic[0]) return automatic[0]
+  const completed = [...scopedIntents]
+    .reverse()
+    .find((candidate) => candidate.status === 'completed')
+  if (completed) return completed
+  throw new Error('A terminal GitHub Delivery Intent requires an explicit recovery action')
 }
 
 async function replayActiveIntent(
@@ -342,6 +532,7 @@ async function replayActiveIntent(
     testEvidence,
     baseCommitSha: activeIntent.baseCommitSha,
     expectedCommitSha: activeIntent.expectedCommitSha,
+    deliveryAttempt: activeIntent.deliveryAttempt,
     now: activeIntent.createdAt,
   })
   if (
@@ -365,6 +556,21 @@ function settlePreparationResult(
 ): PrepareGitHubDeliveryResult {
   if (!result.committed) {
     throw new Error(`GitHub Delivery preparation lost source authority: ${result.reason}`)
+  }
+  return {
+    status: 'prepared',
+    replayed: result.replayed,
+    intent: result.intent,
+    testEvidence,
+  }
+}
+
+function settleReplacementResult(
+  result: GitHubDeliveryReplacementMutationResult,
+  testEvidence: TestEvidence & { sourceCommitSha: string },
+): PrepareGitHubDeliveryResult {
+  if (!result.committed) {
+    throw new Error(`GitHub Delivery replacement lost source authority: ${result.reason}`)
   }
   return {
     status: 'prepared',

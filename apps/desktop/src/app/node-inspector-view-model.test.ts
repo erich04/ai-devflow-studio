@@ -352,6 +352,7 @@ describe('node inspector view model', () => {
       'reviseGitHubDelivery.label',
       'Revise GitHub Delivery',
     )
+    expect(viewModel.actionCatalog.reviseGitHubDelivery.disabledReasons).toEqual([])
   })
 
   it('offers only the explicit resume action when automatic recovery has stopped', () => {
@@ -371,7 +372,6 @@ describe('node inspector view model', () => {
   })
 
   it.each([
-    'approved',
     'publishing_branch',
     'branch_published',
     'creating_pr',
@@ -387,7 +387,7 @@ describe('node inspector view model', () => {
     expect(viewModel.nextAction.primaryActionId).toBeUndefined()
   })
 
-  it('offers an explicit Stop while an approved delivery waits for its next bounded phase', () => {
+  it('offers explicit Revise and Stop while an approved delivery remains pre-publication', () => {
     const prNode = findNode((candidate) => candidate.kind === 'pr')
     const viewModel = viewModelFor(prNode, {
       artifacts: [prDeliveryPackage(prNode.id)],
@@ -395,9 +395,12 @@ describe('node inspector view model', () => {
     })
 
     expect(viewModel.nextAction).toMatchObject({
-      title: 'GitHub Delivery 自动推进中',
+      title: 'GitHub Delivery 已批准',
+      primaryActionId: 'reviseGitHubDelivery',
       secondaryActionIds: ['stopGitHubDelivery'],
     })
+    expect(viewModel.nextAction.copy).toContain('旧审批失效')
+    expect(viewModel.actionCatalog.reviseGitHubDelivery.disabledReasons).toEqual([])
     expect(viewModel.actionCatalog.stopGitHubDelivery.label).toBe('Stop GitHub Delivery')
   })
 
@@ -411,12 +414,14 @@ describe('node inspector view model', () => {
     expect(viewModel.nextAction.copy).toContain('安全停止')
     expect(viewModel.nextAction.copy).toContain('不会自动重试')
     expect(viewModel.nextAction.copy).toContain('核对远端记录')
+    expect(viewModel.nextAction.copy).toContain('新的 Work Request/Run')
     expect(viewModel.nextAction.copy).not.toMatch(/授权.*消耗/)
     expect(viewModel.nextAction.primaryActionId).toBe('retryGitHubDelivery')
     expect(viewModel.actionCatalog).toHaveProperty(
       'retryGitHubDelivery.label',
       'Retry GitHub Delivery',
     )
+    expect(viewModel.actionCatalog.retryGitHubDelivery.disabledReasons).toEqual([])
   })
 
   it('retries a revoked delivery only through an explicit action with a live binding', () => {
@@ -432,7 +437,8 @@ describe('node inspector view model', () => {
       primaryActionId: 'retryGitHubDelivery',
       secondaryActionIds: [],
     })
-    expect(viewModel.nextAction.copy).toContain('新的 attempt 或 binding series')
+    expect(viewModel.nextAction.copy).toContain('精确远端终态')
+    expect(viewModel.nextAction.copy).toContain('新的 Work Request/Run')
   })
 
   it('treats a completed Draft PR as delivery evidence while workflow advancement catches up', () => {
@@ -462,6 +468,35 @@ describe('node inspector view model', () => {
     })
     expect(viewModel.nextAction.copy).toContain('Workflow')
     expect(viewModel.nextAction.primaryActionId).toBeUndefined()
+  })
+
+  it('selects the active immutable revision ahead of its same-timestamp revoked predecessor', () => {
+    const prNode = findNode((candidate) => candidate.kind === 'pr')
+    const replacedAt = '2026-08-11T13:00:00.000Z'
+    const predecessor = githubDeliveryIntent('revoked', {
+      id: 'github-delivery-intent-revision-1',
+      deliveryAttempt: 1,
+      createdAt: '2026-08-11T12:00:00.000Z',
+      updatedAt: replacedAt,
+    })
+    const revision = githubDeliveryIntent('approval_required', {
+      id: 'github-delivery-intent-revision-2',
+      deliveryAttempt: 1,
+      createdAt: replacedAt,
+      updatedAt: replacedAt,
+      intentDigest: 'f'.repeat(64),
+    })
+
+    expect(selectGitHubDeliveryIntentForInspector({
+      run,
+      node: prNode,
+      intents: [predecessor, revision],
+    })).toBe(revision)
+    expect(selectGitHubDeliveryIntentForInspector({
+      run,
+      node: prNode,
+      intents: [revision, predecessor],
+    })).toBe(revision)
   })
 
   it('selects the completed PR intent recorded on the Acceptance Run instead of a newer historical intent', () => {

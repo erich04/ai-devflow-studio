@@ -326,6 +326,109 @@ async function route(
 }
 
 describe('GitHub Delivery API integration', () => {
+  it('invalidates an approved revision before any credential can be issued', async () => {
+    const harness = createHarness()
+    const bindingResult = await route(
+      harness,
+      'PUT',
+      `/api/team/projects/${projectId}/github-repository-binding`,
+      ownerPrincipal,
+      {
+        installationId: '12345',
+        repositoryId: '98765',
+        expectedStateVersion: 0,
+      },
+    )
+    const repositoryBinding = (
+      bindingResult?.body as { binding: GitHubRepositoryBinding }
+    ).binding
+    const original = await createGitHubDeliveryIntent(
+      createIntentSource(repositoryBinding),
+    )
+    const submitPath = `/api/desktop/projects/${projectId}/github-deliveries`
+    const submitted = await route(harness, 'POST', submitPath, desktopPrincipal, {
+      intent: original,
+      prTitle: 'Deliver the exact approved commit',
+      prBody: 'Bound to passing Test Evidence.',
+      expectedStateVersion: 0,
+    })
+    const request = (submitted?.body as { request: GitHubDeliveryRequest }).request
+    await expect(route(
+      harness,
+      'POST',
+      `/api/team/projects/${projectId}/github-deliveries/${request.id}/approve`,
+      ownerPrincipal,
+      { expectedStateVersion: request.stateVersion },
+    )).resolves.toMatchObject({
+      status: 200,
+      body: { request: { stateVersion: 2, intentRevision: 1, status: 'approved' } },
+    })
+
+    const revisedSource = createIntentSource(repositoryBinding)
+    revisedSource.id = 'local-delivery-intent-revision-2'
+    revisedSource.now = '2026-08-11T10:01:00.000Z'
+    revisedSource.testEvidence = {
+      ...revisedSource.testEvidence,
+      id: 'test-evidence-revision-2',
+      createdAt: '2026-08-11T09:55:00.000Z',
+    }
+    revisedSource.prPackage = {
+      ...revisedSource.prPackage,
+      summary: 'Materially revised delivery package.',
+      content: '# Exact approved commit\n\nRevised evidence only.',
+      updatedAt: '2026-08-11T09:56:00.000Z',
+    }
+    const revisedIntent = await createGitHubDeliveryIntent(revisedSource)
+    expect(revisedIntent.deliverySeriesKey).toBe(original.deliverySeriesKey)
+    expect(revisedIntent.idempotencyKey).toBe(original.idempotencyKey)
+    expect(revisedIntent.intentDigest).not.toBe(original.intentDigest)
+
+    const revised = await route(harness, 'POST', submitPath, desktopPrincipal, {
+      intent: revisedIntent,
+      prTitle: 'Deliver the revised exact commit',
+      prBody: 'Bound to revised passing Test Evidence.',
+      expectedStateVersion: 2,
+    })
+    expect(revised).toMatchObject({
+      status: 200,
+      body: {
+        request: {
+          id: request.id,
+          localIntentId: revisedIntent.id,
+          stateVersion: 3,
+          intentRevision: 2,
+          status: 'approval_required',
+          intentDigest: revisedIntent.intentDigest,
+        },
+        outcomeCode: 'delivery_revised',
+        replayed: false,
+      },
+    })
+    const requestPath = `${submitPath}/${request.id}`
+    await expect(route(harness, 'GET', requestPath, desktopPrincipal))
+      .resolves.toMatchObject({
+        status: 200,
+        body: {
+          snapshot: {
+            request: { intentRevision: 2, status: 'approval_required' },
+            approval: null,
+            grant: null,
+          },
+        },
+      })
+    await expect(route(
+      harness,
+      'POST',
+      `${requestPath}/credential-grant`,
+      desktopPrincipal,
+      { expectedStateVersion: 3 },
+    )).resolves.toMatchObject({
+      status: 409,
+      body: { outcomeCode: 'approval_required', replayed: false },
+    })
+    expect(harness.effects.issueContentsWriteToken).not.toHaveBeenCalled()
+  })
+
   it('delivers one exact approved commit through separated Web/Desktop authority and replays its Draft PR without another provider effect', async () => {
     const harness = createHarness()
     const bindingPath = `/api/team/projects/${projectId}/github-repository-binding`

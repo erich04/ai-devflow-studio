@@ -230,6 +230,8 @@ export function Inspector({
   onRunCodingAgent,
   onCreatePrDraft,
   onPrepareGitHubDelivery,
+  onReviseGitHubDelivery,
+  onRetryGitHubDelivery,
   onResumeGitHubDelivery,
   onStopGitHubDelivery,
   onCreateAcceptanceBundle,
@@ -269,6 +271,8 @@ export function Inspector({
   onRunCodingAgent: () => void
   onCreatePrDraft: () => void
   onPrepareGitHubDelivery: () => void
+  onReviseGitHubDelivery: () => void
+  onRetryGitHubDelivery: () => void
   onResumeGitHubDelivery: () => void
   onStopGitHubDelivery: () => void
   onCreateAcceptanceBundle: () => void
@@ -341,10 +345,10 @@ export function Inspector({
     runCodingAgent: onRunCodingAgent,
     createPrDraft: onCreatePrDraft,
     prepareGitHubDelivery: onPrepareGitHubDelivery,
+    reviseGitHubDelivery: onReviseGitHubDelivery,
+    retryGitHubDelivery: onRetryGitHubDelivery,
     resumeGitHubDelivery: onResumeGitHubDelivery,
     stopGitHubDelivery: onStopGitHubDelivery,
-    reviseGitHubDelivery: () => undefined,
-    retryGitHubDelivery: () => undefined,
     createAcceptanceBundle: onCreateAcceptanceBundle,
   }
   const writeActionIds = new Set<InspectorActionId>([
@@ -353,6 +357,8 @@ export function Inspector({
     'runCodingAgent',
     'createPrDraft',
     'prepareGitHubDelivery',
+    'reviseGitHubDelivery',
+    'retryGitHubDelivery',
     'resumeGitHubDelivery',
     'stopGitHubDelivery',
     'createAcceptanceBundle',
@@ -377,7 +383,6 @@ export function Inspector({
       gate_permission_missing: !canApprove,
       starting_coding_agent: isStartingCodingAgent,
       team_project_binding_missing: !hasDeliveryProjectBinding,
-      delivery_action_unavailable: true,
     }[reason]
   }
   const isActionWriteLocked = (action: InspectorAction) => writeActionIds.has(action.id) && hasInspectorWriteLock
@@ -402,6 +407,12 @@ export function Inspector({
       }
       if (action.id === 'prepareGitHubDelivery') {
         return '准备中'
+      }
+      if (action.id === 'reviseGitHubDelivery') {
+        return '修订中'
+      }
+      if (action.id === 'retryGitHubDelivery') {
+        return '重试中'
       }
       if (action.id === 'resumeGitHubDelivery') {
         return '恢复中'
@@ -444,6 +455,8 @@ export function Inspector({
       case 'createPrDraft':
         return <GitPullRequest size={16} />
       case 'prepareGitHubDelivery':
+      case 'reviseGitHubDelivery':
+      case 'retryGitHubDelivery':
       case 'resumeGitHubDelivery':
         return <RefreshCw size={16} />
       case 'stopGitHubDelivery':

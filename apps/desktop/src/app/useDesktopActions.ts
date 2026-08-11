@@ -978,6 +978,94 @@ export function useDesktopActions(input: {
     }
   }
 
+  async function replaceSelectedGitHubDelivery(kind: 'revise' | 'retry') {
+    if (!selectedRun || !selectedGitHubDeliveryIntent) {
+      return
+    }
+    const node = selectedRun.nodes.find((candidate) => candidate.id === selectedRun.currentNodeId)
+    const eligible = kind === 'revise'
+      ? selectedGitHubDeliveryIntent.status === 'approval_required' ||
+        selectedGitHubDeliveryIntent.status === 'approved'
+      : selectedGitHubDeliveryIntent.status === 'failed' ||
+        selectedGitHubDeliveryIntent.status === 'revoked'
+    if (
+      !node ||
+      node.kind !== 'pr' ||
+      node.stage !== 'pr' ||
+      node.status !== 'running' ||
+      selectedGitHubDeliveryIntent.runId !== selectedRun.id ||
+      selectedGitHubDeliveryIntent.nodeId !== node.id ||
+      !eligible
+    ) {
+      setToast(kind === 'revise'
+        ? '只有当前 approval_required/approved GitHub Delivery 才能显式 Revise'
+        : '只有当前 failed/revoked GitHub Delivery 才能显式 Retry')
+      return
+    }
+    if (!desktopApi) {
+      setToast(browserPreviewWorkflowWriteMessage)
+      return
+    }
+    if (desktopPairing?.localProjectId !== selectedRun.projectId) {
+      setToast('当前 Local Project 与 Team Project 未绑定，不能修改 GitHub Delivery')
+      return
+    }
+    if (blockIfInspectorWriteInFlight()) {
+      return
+    }
+
+    const actionId = kind === 'revise'
+      ? 'reviseGitHubDelivery' as const
+      : 'retryGitHubDelivery' as const
+    const pending = startPendingInspectorAction(
+      actionId,
+      selectedRun,
+      node,
+      kind === 'revise'
+        ? '正在重新提交、复验并创建不可变 GitHub Delivery revision...'
+        : '正在重新提交、复验并创建新的 GitHub Delivery attempt...',
+    )
+    let replaced = false
+    try {
+      const input = {
+        intentId: selectedGitHubDeliveryIntent.id,
+        expectedUpdatedAt: selectedGitHubDeliveryIntent.updatedAt,
+      }
+      const result = kind === 'revise'
+        ? await desktopApi.reviseGitHubDelivery(input)
+        : await desktopApi.retryGitHubDelivery(input)
+      if (result.status === 'tests_failed') {
+        setToast('GitHub Delivery 复验失败；旧 intent 状态保持不变，不会提交新审批')
+      } else {
+        replaced = true
+        setToast(kind === 'revise'
+          ? 'GitHub Delivery revision 已创建；旧审批不可复用，请在 Web 重新审批'
+          : '新的 GitHub Delivery attempt 已创建；不会复用旧审批')
+      }
+    } catch {
+      setToast(kind === 'revise'
+        ? 'GitHub Delivery Revise 未完成；不会自动重试，请以刷新后的状态为准'
+        : 'GitHub Delivery Retry 未完成；若当前 pairing 无法证明旧终态，请重新认领新的 Work Request/Run')
+    } finally {
+      try {
+        applyLocalExecutionState(await desktopApi.loadState())
+      } catch {
+        if (replaced) {
+          setToast('GitHub Delivery 操作已返回，但本地状态刷新失败；请等待状态推送后再操作')
+        }
+      }
+      clearPendingInspectorAction(pending)
+    }
+  }
+
+  async function reviseSelectedGitHubDelivery() {
+    return replaceSelectedGitHubDelivery('revise')
+  }
+
+  async function retrySelectedGitHubDelivery() {
+    return replaceSelectedGitHubDelivery('retry')
+  }
+
   async function resumeSelectedGitHubDelivery() {
     if (!selectedRun || !selectedGitHubDeliveryIntent) {
       return
@@ -1199,6 +1287,8 @@ export function useDesktopActions(input: {
     deleteRun,
     generatePrDraft,
     prepareSelectedGitHubDelivery,
+    reviseSelectedGitHubDelivery,
+    retrySelectedGitHubDelivery,
     resumeSelectedGitHubDelivery,
     stopSelectedGitHubDelivery,
     generateAcceptanceBundle,

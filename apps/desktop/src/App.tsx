@@ -643,6 +643,8 @@ export function App() {
     deleteRun,
     generatePrDraft,
     prepareSelectedGitHubDelivery,
+    reviseSelectedGitHubDelivery,
+    retrySelectedGitHubDelivery,
     resumeSelectedGitHubDelivery,
     stopSelectedGitHubDelivery,
     generateAcceptanceBundle,
@@ -1137,6 +1139,8 @@ export function App() {
                   onRunCodingAgent={runCodingAgent}
                   onCreatePrDraft={generatePrDraft}
                   onPrepareGitHubDelivery={prepareSelectedGitHubDelivery}
+                  onReviseGitHubDelivery={reviseSelectedGitHubDelivery}
+                  onRetryGitHubDelivery={retrySelectedGitHubDelivery}
                   onResumeGitHubDelivery={resumeSelectedGitHubDelivery}
                   onStopGitHubDelivery={stopSelectedGitHubDelivery}
                   onCreateAcceptanceBundle={generateAcceptanceBundle}

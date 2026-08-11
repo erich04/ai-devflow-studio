@@ -40,6 +40,10 @@ const desktopApi: DevFlowDesktopApi = {
   createPrDraft: (input) => ipcRenderer.invoke(ipcChannels.createPrDraft, input),
   prepareGitHubDelivery: (input) =>
     ipcRenderer.invoke(ipcChannels.prepareGitHubDelivery, input),
+  reviseGitHubDelivery: (input) =>
+    ipcRenderer.invoke(ipcChannels.reviseGitHubDelivery, input),
+  retryGitHubDelivery: (input) =>
+    ipcRenderer.invoke(ipcChannels.retryGitHubDelivery, input),
   resumeGitHubDelivery: (input) =>
     ipcRenderer.invoke(ipcChannels.resumeGitHubDelivery, input),
   stopGitHubDelivery: (input) =>

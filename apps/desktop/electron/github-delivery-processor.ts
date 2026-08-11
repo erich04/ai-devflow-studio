@@ -222,7 +222,9 @@ export async function reconcileRemoteCompletedGitHubDeliveryIntents(
     let remoteRequestId: string | null = null
     try {
       const inbox = await deps.remote.listInbox(source.teamProjectId)
-      const candidates = inbox.filter((request) => request.localIntentId === source.id)
+      const candidates = inbox.filter((request) =>
+        referencesIntentOrLogicalScope(source, request),
+      )
       if (candidates.length === 0) continue
       const request = candidates[0]!
       remoteRequestId = request.id
@@ -483,9 +485,13 @@ async function processIntent(
       )
     }
     const inbox = await deps.remote.listInbox(intent.teamProjectId)
-    const candidates = inbox.filter((request) => request.localIntentId === intent.id)
+    const candidates = inbox.filter((request) =>
+      referencesIntentOrLogicalScope(intent, request),
+    )
     if (candidates.length === 0) {
-      if (intent.status !== 'approval_required') {
+      const resumesBeforeFirstSubmission =
+        explicitResume && intent.status === 'recovery_required'
+      if (intent.status !== 'approval_required' && !resumesBeforeFirstSubmission) {
         return safeResult(intent.id, null, 'local_conflict', 'remote_request_missing')
       }
       const artifacts = await deps.store.listArtifacts(intent.runId)
@@ -498,7 +504,9 @@ async function processIntent(
       }
       const submitted = await deps.remote.submit({
         projectId: intent.teamProjectId,
-        intent,
+        intent: resumesBeforeFirstSubmission
+          ? { ...intent, status: 'approval_required' }
+          : intent,
         prTitle: prPackage.title,
         prBody: prPackage.content,
         expectedStateVersion: 0,
@@ -513,7 +521,7 @@ async function processIntent(
         submitted.outcomeCode,
       )
     }
-    if (candidates.length !== 1 || !matchesAuthority(intent, candidates[0]!)) {
+    if (candidates.length !== 1) {
       return safeResult(
         intent.id,
         candidates[0]?.id ?? null,
@@ -523,6 +531,61 @@ async function processIntent(
     }
     const remoteRequest = candidates[0]!
     remoteRequestId = remoteRequest.id
+    if (!matchesAuthority(intent, remoteRequest)) {
+      if (!matchesRevisionLineage(intent, remoteRequest)) {
+        return safeResult(
+          intent.id,
+          remoteRequest.id,
+          'local_conflict',
+          'authority_mismatch',
+        )
+      }
+      if (!await verifyPreparedAuthority(deps, intent)) {
+        return safeResult(intent.id, remoteRequest.id, 'local_conflict', 'authority_mismatch')
+      }
+      const artifacts = await deps.store.listArtifacts(intent.runId)
+      const prPackage = artifacts.find((artifact) => artifact.id === intent.prPackageArtifactId)
+      if (!prPackage || prPackage.kind !== 'pr' || prPackage.redacted !== true) {
+        return safeResult(intent.id, remoteRequest.id, 'local_conflict', 'pr_package_missing')
+      }
+      let submitted: SubmitGitHubDeliveryResult
+      try {
+        submitted = await deps.remote.submit({
+          projectId: intent.teamProjectId,
+          intent,
+          prTitle: prPackage.title,
+          prBody: prPackage.content,
+          expectedStateVersion: remoteRequest.stateVersion,
+        })
+      } catch (error) {
+        if (
+          error instanceof GitHubDeliveryRemoteError &&
+          error.outcomeCode === 'stale_version'
+        ) {
+          return safeResult(
+            intent.id,
+            remoteRequest.id,
+            'local_conflict',
+            'stale_intent',
+          )
+        }
+        throw error
+      }
+      if (!matchesRevisionResponse(intent, remoteRequest, submitted.request)) {
+        return safeResult(
+          intent.id,
+          submitted.request.id,
+          'local_conflict',
+          'authority_mismatch',
+        )
+      }
+      return safeResult(
+        intent.id,
+        submitted.request.id,
+        'submitted',
+        submitted.outcomeCode,
+      )
+    }
     if (!await verifyPreparedAuthority(deps, intent)) {
       return safeResult(intent.id, remoteRequest.id, 'local_conflict', 'authority_mismatch')
     }
@@ -552,7 +615,7 @@ async function processIntent(
         persistedPublisherOutcomeCodes.has(failure.operatorOutcomeCode)
         ? failure.operatorOutcomeCode
         : undefined
-      if (failure.outcomeCode === 'binding_inactive' || failure.outcomeCode === 'expired' || failure.code === 'gone') {
+      if (failure.outcomeCode === 'binding_inactive') {
         const revoked = await transitionTo(deps, latest, 'revoked')
         return revoked
           ? safeResult(intent.id, remoteRequestId, 'revoked', failure.outcomeCode ?? failure.code)
@@ -573,10 +636,12 @@ async function processIntent(
           operatorOutcomeCode,
         )
       }
-      const failed = await transitionTo(deps, latest, 'failed')
-      return failed
-        ? safeResult(intent.id, remoteRequestId, 'failed', failure.outcomeCode ?? failure.code)
-        : safeResult(intent.id, remoteRequestId, 'local_conflict', 'stale_intent')
+      return requireRecovery(
+        deps,
+        latest,
+        remoteRequestId,
+        failure.outcomeCode ?? failure.code,
+      )
     }
     if (latest.status === 'completed' || latest.status === 'failed' || latest.status === 'revoked') {
       return safeResult(intent.id, remoteRequestId, 'failed', 'processor_failed')
@@ -1158,7 +1223,15 @@ async function requireRecovery(
 ): Promise<GitHubDeliveryProcessorResult> {
   if (source.status === 'approval_required') {
     if (!approvalValidated) {
-      return safeResult(source.id, requestId, 'recovery_required', outcomeCode)
+      const recovered = await transitionTo(
+        deps,
+        source,
+        'recovery_required',
+        operatorOutcomeCode,
+      )
+      return recovered
+        ? safeResult(source.id, requestId, 'recovery_required', outcomeCode)
+        : safeResult(source.id, requestId, 'local_conflict', 'stale_intent')
     }
     const approved = await transitionTo(deps, source, 'approved')
     if (!approved) return safeResult(source.id, requestId, 'local_conflict', 'stale_intent')
@@ -1359,6 +1432,63 @@ async function verifyPreparedAuthority(
     nodeId: expected.nodeId,
   })
   return prepared.status === 'prepared' && JSON.stringify(prepared.intent) === JSON.stringify(expected)
+}
+
+function referencesIntentOrLogicalScope(
+  intent: GitHubDeliveryIntent,
+  request: GitHubDeliveryRequestRecord,
+): boolean {
+  return request.localIntentId === intent.id || (
+    request.logicalIdempotencyKey === intent.idempotencyKey &&
+    request.organizationId === intent.organizationId &&
+    request.projectId === intent.teamProjectId &&
+    request.runId === intent.runId &&
+    request.nodeId === intent.nodeId &&
+    request.deliverySeriesKey === intent.deliverySeriesKey &&
+    request.deliveryAttempt === intent.deliveryAttempt
+  )
+}
+
+function matchesRevisionLineage(
+  intent: GitHubDeliveryIntent,
+  request: GitHubDeliveryRequestRecord,
+): boolean {
+  return (
+    intent.status === 'approval_required' &&
+    request.localIntentId !== intent.id &&
+    (request.status === 'approval_required' || request.status === 'approved') &&
+    request.organizationId === intent.organizationId &&
+    request.projectId === intent.teamProjectId &&
+    request.localProjectId === intent.localProjectId &&
+    request.runId === intent.runId &&
+    request.nodeId === intent.nodeId &&
+    request.repositoryBindingId === intent.repositoryBindingId &&
+    request.repositoryBindingVersion === intent.repositoryBindingVersion &&
+    request.installationId === intent.installationId &&
+    request.repositoryId === intent.repositoryId &&
+    request.repository === intent.repository &&
+    request.workspaceId === intent.workspaceId &&
+    request.deliverySeriesKey === intent.deliverySeriesKey &&
+    request.deliveryAttempt === intent.deliveryAttempt &&
+    request.logicalIdempotencyKey === intent.idempotencyKey &&
+    request.baseBranch === intent.baseBranch &&
+    request.headBranch === intent.headBranch
+  )
+}
+
+function matchesRevisionResponse(
+  intent: GitHubDeliveryIntent,
+  previous: GitHubDeliveryRequestRecord,
+  revised: GitHubDeliveryRequestRecord,
+): boolean {
+  return (
+    revised.id === previous.id &&
+    revised.stateVersion === previous.stateVersion + 1 &&
+    revised.intentRevision === previous.intentRevision + 1 &&
+    revised.status === 'approval_required' &&
+    revised.outcomeCode === null &&
+    matchesAuthority(intent, revised)
+  )
 }
 
 function matchesAuthority(

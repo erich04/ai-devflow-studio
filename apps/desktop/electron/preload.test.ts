@@ -21,6 +21,14 @@ await import('./preload')
 
 type ExposedDesktopApi = {
   prepareGitHubDelivery: (input: { runId: string; nodeId: string }) => Promise<unknown>
+  reviseGitHubDelivery: (input: {
+    intentId: string
+    expectedUpdatedAt: string
+  }) => Promise<unknown>
+  retryGitHubDelivery: (input: {
+    intentId: string
+    expectedUpdatedAt: string
+  }) => Promise<unknown>
   resumeGitHubDelivery: (input: {
     intentId: string
     expectedUpdatedAt: string
@@ -77,6 +85,25 @@ describe('Electron preload remote sync operator surface', () => {
     )
     expect(Object.keys(input).sort()).toEqual(['expectedUpdatedAt', 'intentId'])
     expect(JSON.stringify(input)).not.toMatch(/token|path|error|repository/i)
+  })
+
+  it.each([
+    ['revision', 'reviseGitHubDelivery', ipcChannels.reviseGitHubDelivery],
+    ['retry', 'retryGitHubDelivery', ipcChannels.retryGitHubDelivery],
+  ] as const)('forwards only the exact Intent CAS for GitHub Delivery %s', async (
+    _label,
+    method,
+    channel,
+  ) => {
+    const result = { status: 'prepared', intent: { id: 'intent-new' } }
+    const input = {
+      intentId: 'github-delivery-intent-1',
+      expectedUpdatedAt: '2026-08-11T12:34:56.000Z',
+    }
+    electron.invoke.mockResolvedValueOnce(result)
+    await expect(exposedApi[method](input)).resolves.toBe(result)
+    expect(electron.invoke).toHaveBeenCalledWith(channel, input)
+    expect(Object.keys(input).sort()).toEqual(['expectedUpdatedAt', 'intentId'])
   })
 
   it('forwards only the exact Intent CAS for an explicit GitHub Delivery Stop', async () => {

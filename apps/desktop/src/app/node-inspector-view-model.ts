@@ -54,7 +54,6 @@ export type InspectorActionDisabledReason =
   | 'gate_permission_missing'
   | 'starting_coding_agent'
   | 'team_project_binding_missing'
-  | 'delivery_action_unavailable'
 
 export type InspectorAction = {
   id: InspectorActionId
@@ -112,7 +111,13 @@ export function selectGitHubDeliveryIntentForInspector(input: {
   if (node.kind === 'pr') {
     return [...input.intents]
       .filter((intent) => intent.runId === run.id && intent.nodeId === node.id)
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+      .sort((left, right) =>
+        githubDeliveryInspectorPriority(right) - githubDeliveryInspectorPriority(left) ||
+        right.deliveryAttempt - left.deliveryAttempt ||
+        right.createdAt.localeCompare(left.createdAt) ||
+        right.updatedAt.localeCompare(left.updatedAt) ||
+        right.id.localeCompare(left.id),
+      )[0]
   }
 
   const prNodes = run.nodes.filter((candidate) => candidate.kind === 'pr' && candidate.stage === 'pr')
@@ -133,6 +138,12 @@ export function selectGitHubDeliveryIntentForInspector(input: {
   ))
 
   return canonicalIntents.length === 1 ? canonicalIntents[0] : undefined
+}
+
+function githubDeliveryInspectorPriority(intent: GitHubDeliveryIntent): number {
+  if (intent.status === 'completed') return 2
+  if (intent.status === 'failed' || intent.status === 'revoked') return 1
+  return 3
 }
 
 export type GateRequirementRow = {
@@ -726,19 +737,13 @@ function buildActionCatalog(
       id: 'reviseGitHubDelivery',
       label: 'Revise GitHub Delivery',
       variant: 'primary',
-      disabledReasons: [
-        ...(hasTeamProjectBinding ? [] : ['team_project_binding_missing'] as const),
-        'delivery_action_unavailable',
-      ],
+      disabledReasons: hasTeamProjectBinding ? [] : ['team_project_binding_missing'],
     },
     retryGitHubDelivery: {
       id: 'retryGitHubDelivery',
       label: 'Retry GitHub Delivery',
       variant: 'primary',
-      disabledReasons: [
-        ...(hasTeamProjectBinding ? [] : ['team_project_binding_missing'] as const),
-        'delivery_action_unavailable',
-      ],
+      disabledReasons: hasTeamProjectBinding ? [] : ['team_project_binding_missing'],
     },
     resumeGitHubDelivery: {
       id: 'resumeGitHubDelivery',
@@ -884,7 +889,7 @@ function buildNextAction(input: {
     if (input.githubDeliveryIntent?.status === 'failed') {
       return {
         title: '交付已安全停止',
-        copy: '交付已安全停止且不会自动重试。请核对远端记录与本地证据；显式 Retry 将创建新的 attempt 和请求，不会重开旧终态。',
+        copy: '交付已安全停止且不会自动重试。请核对远端记录；只有当前 pairing claimant 能证明精确远端终态时，显式 Retry 才会创建新 attempt，否则请重新认领新的 Work Request/Run。',
         primaryActionId: 'retryGitHubDelivery',
         secondaryActionIds: [],
       }
@@ -893,7 +898,7 @@ function buildNextAction(input: {
       if (input.hasTeamProjectBinding) {
         return {
           title: 'Retry GitHub Delivery',
-          copy: '显式 Retry 会由 Desktop main 根据当前 binding 创建新的 attempt 或 binding series；renderer 不能选择编号。',
+          copy: '显式 Retry 只会在当前 pairing claimant 证明精确远端终态后，由 Desktop main 创建新 attempt 或 binding series；否则请重新认领新的 Work Request/Run。',
           primaryActionId: 'retryGitHubDelivery',
           secondaryActionIds: [],
         }
@@ -909,6 +914,14 @@ function buildNextAction(input: {
         title: 'Draft PR 已创建',
         copy: '精确 commit 的 Draft PR 已记录为交付证据；后台处理器会确保 Workflow 推进到 Acceptance。',
         secondaryActionIds: [],
+      }
+    }
+    if (input.githubDeliveryIntent?.status === 'approved') {
+      return {
+        title: 'GitHub Delivery 已批准',
+        copy: '发布尚未开始；如材料改变，显式 Revise 会重新提交并复验不可变 revision，使旧审批失效。否则后台处理器会继续推进。',
+        primaryActionId: 'reviseGitHubDelivery',
+        secondaryActionIds: ['stopGitHubDelivery'],
       }
     }
     if (

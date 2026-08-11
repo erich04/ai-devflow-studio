@@ -71,7 +71,7 @@ import {
   type WorkflowRun,
   type WorkRequest,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 14
+export const CURRENT_SCHEMA_VERSION = 15
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -120,6 +120,32 @@ export type GitHubDeliveryPreparationMutationResult =
   | {
       committed: false
       reason: 'source_stale' | 'id_conflict' | 'active_intent_exists'
+    }
+
+export type GitHubDeliveryReplacementKind = 'revision' | 'retry'
+
+export type GitHubDeliveryReplacementMutation =
+  Omit<GitHubDeliveryPreparationMutation, 'intent'> & {
+    kind: GitHubDeliveryReplacementKind
+    expectedIntent: GitHubDeliveryIntent
+    intent: GitHubDeliveryIntent
+  }
+
+export type GitHubDeliveryReplacementMutationResult =
+  | {
+      committed: true
+      replayed: boolean
+      intent: GitHubDeliveryIntent
+    }
+  | {
+      committed: false
+      reason:
+        | 'source_stale'
+        | 'id_conflict'
+        | 'active_intent_exists'
+        | 'intent_stale'
+        | 'intent_ineligible'
+        | 'replacement_invalid'
     }
 
 export type CommitGitHubRepositoryBindingObservationInput = {
@@ -592,6 +618,9 @@ export type LocalStore = {
   commitGitHubDeliveryPreparation(
     mutation: GitHubDeliveryPreparationMutation,
   ): Promise<GitHubDeliveryPreparationMutationResult>
+  commitGitHubDeliveryReplacement(
+    mutation: GitHubDeliveryReplacementMutation,
+  ): Promise<GitHubDeliveryReplacementMutationResult>
   commitGitHubDeliveryIntentStatus(
     mutation: GitHubDeliveryIntentStatusMutation,
   ): Promise<GitHubDeliveryIntentStatusMutationResult>
@@ -1458,6 +1487,160 @@ const schemaMigrations: readonly SchemaMigration[] = [
       `)
     },
   },
+  {
+    version: 15,
+    migrate(db) {
+      db.run(`
+    alter table github_delivery_intents rename to github_delivery_intents_v14;
+
+    drop index idx_github_delivery_intents_run;
+    drop index idx_github_delivery_intents_status;
+    drop index idx_github_delivery_intents_active_scope;
+
+    create table github_delivery_intents (
+      id text primary key,
+      organization_id text not null,
+      team_project_id text not null,
+      local_project_id text not null,
+      run_id text not null,
+      node_id text not null,
+      repository_binding_id text not null,
+      repository_binding_version integer not null,
+      installation_id text not null,
+      repository_id text not null,
+      coding_run_id text not null,
+      workspace_id text not null,
+      diff_artifact_id text not null,
+      test_evidence_id text not null,
+      pr_package_artifact_id text not null,
+      base_commit_sha text not null,
+      expected_commit_sha text not null,
+      intent_digest text not null unique,
+      idempotency_key text not null,
+      delivery_series_key text not null,
+      delivery_attempt integer not null,
+      status text not null,
+      state_version integer not null,
+      json text not null,
+      created_at text not null,
+      updated_at text not null,
+      check (length(trim(id)) > 0 and length(id) <= 200 and trim(id) = id),
+      check (length(trim(organization_id)) > 0 and length(organization_id) <= 200 and trim(organization_id) = organization_id),
+      check (length(trim(team_project_id)) > 0 and length(team_project_id) <= 200 and trim(team_project_id) = team_project_id),
+      check (length(trim(local_project_id)) > 0 and length(local_project_id) <= 200 and trim(local_project_id) = local_project_id),
+      check (length(trim(run_id)) > 0 and length(run_id) <= 200 and trim(run_id) = run_id),
+      check (length(trim(node_id)) > 0 and length(node_id) <= 200 and trim(node_id) = node_id),
+      check (length(trim(repository_binding_id)) > 0 and length(repository_binding_id) <= 200 and trim(repository_binding_id) = repository_binding_id),
+      check (repository_binding_version between 1 and 2147483647),
+      check (installation_id glob '[1-9]*' and installation_id not glob '*[^0-9]*' and length(installation_id) <= 20),
+      check (repository_id glob '[1-9]*' and repository_id not glob '*[^0-9]*' and length(repository_id) <= 20),
+      check (length(trim(coding_run_id)) > 0 and length(coding_run_id) <= 200 and trim(coding_run_id) = coding_run_id),
+      check (length(trim(workspace_id)) > 0 and length(workspace_id) <= 200 and trim(workspace_id) = workspace_id),
+      check (length(trim(diff_artifact_id)) > 0 and length(diff_artifact_id) <= 200 and trim(diff_artifact_id) = diff_artifact_id),
+      check (length(trim(test_evidence_id)) > 0 and length(test_evidence_id) <= 200 and trim(test_evidence_id) = test_evidence_id),
+      check (length(trim(pr_package_artifact_id)) > 0 and length(pr_package_artifact_id) <= 200 and trim(pr_package_artifact_id) = pr_package_artifact_id),
+      check (
+        length(base_commit_sha) in (40, 64) and
+        base_commit_sha not glob '*[^0-9a-f]*'
+      ),
+      check (
+        length(expected_commit_sha) in (40, 64) and
+        expected_commit_sha not glob '*[^0-9a-f]*' and
+        expected_commit_sha <> base_commit_sha
+      ),
+      check (
+        length(intent_digest) = 64 and
+        intent_digest not glob '*[^0-9a-f]*'
+      ),
+      check (
+        length(idempotency_key) = 80 and
+        substr(idempotency_key, 1, 16) = 'github-delivery:' and
+        substr(idempotency_key, 17) not glob '*[^0-9a-f]*'
+      ),
+      check (
+        length(delivery_series_key) = 80 and
+        substr(delivery_series_key, 1, 16) = 'github-delivery:' and
+        substr(delivery_series_key, 17) not glob '*[^0-9a-f]*'
+      ),
+      check (delivery_attempt between 1 and 2147483647),
+      check (status in (
+        'approval_required', 'approved', 'publishing_branch',
+        'branch_published', 'creating_pr', 'completed', 'failed',
+        'recovery_required', 'revoked'
+      )),
+      check (state_version = 1),
+      check (json_valid(json)),
+      check (json_extract(json, '$.id') = id),
+      check (json_extract(json, '$.organizationId') = organization_id),
+      check (json_extract(json, '$.teamProjectId') = team_project_id),
+      check (json_extract(json, '$.localProjectId') = local_project_id),
+      check (json_extract(json, '$.runId') = run_id),
+      check (json_extract(json, '$.nodeId') = node_id),
+      check (json_extract(json, '$.repositoryBindingId') = repository_binding_id),
+      check (json_extract(json, '$.repositoryBindingVersion') = repository_binding_version),
+      check (json_extract(json, '$.installationId') = installation_id),
+      check (json_extract(json, '$.repositoryId') = repository_id),
+      check (json_extract(json, '$.codingRunId') = coding_run_id),
+      check (json_extract(json, '$.workspaceId') = workspace_id),
+      check (json_extract(json, '$.diffArtifactId') = diff_artifact_id),
+      check (json_extract(json, '$.testEvidenceId') = test_evidence_id),
+      check (json_extract(json, '$.prPackageArtifactId') = pr_package_artifact_id),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.intentDigest') = intent_digest),
+      check (json_extract(json, '$.idempotencyKey') = idempotency_key),
+      check (json_extract(json, '$.deliverySeriesKey') = delivery_series_key),
+      check (json_extract(json, '$.deliveryAttempt') = delivery_attempt),
+      check (json_extract(json, '$.status') = status),
+      check (json_extract(json, '$.redacted') = 1),
+      check (updated_at >= created_at)
+    );
+
+    insert into github_delivery_intents (
+      id, organization_id, team_project_id, local_project_id,
+      run_id, node_id, repository_binding_id, repository_binding_version,
+      installation_id, repository_id, coding_run_id, workspace_id,
+      diff_artifact_id, test_evidence_id, pr_package_artifact_id,
+      base_commit_sha, expected_commit_sha, intent_digest, idempotency_key,
+      delivery_series_key, delivery_attempt, status, state_version, json,
+      created_at, updated_at
+    )
+    select
+      id, organization_id, team_project_id, local_project_id,
+      run_id, node_id, repository_binding_id, repository_binding_version,
+      installation_id, repository_id, coding_run_id, workspace_id,
+      diff_artifact_id, test_evidence_id, pr_package_artifact_id,
+      base_commit_sha, expected_commit_sha, intent_digest, idempotency_key,
+      coalesce(json_extract(json, '$.deliverySeriesKey'), idempotency_key),
+      coalesce(json_extract(json, '$.deliveryAttempt'), 1),
+      status, state_version,
+      json_set(
+        json,
+        '$.deliverySeriesKey', coalesce(json_extract(json, '$.deliverySeriesKey'), idempotency_key),
+        '$.deliveryAttempt', coalesce(json_extract(json, '$.deliveryAttempt'), 1)
+      ),
+      created_at, updated_at
+    from github_delivery_intents_v14;
+
+    drop table github_delivery_intents_v14;
+
+    create index idx_github_delivery_intents_run
+      on github_delivery_intents(run_id, created_at, id);
+
+    create index idx_github_delivery_intents_status
+      on github_delivery_intents(status, updated_at, id);
+
+    create index idx_github_delivery_intents_idempotency
+      on github_delivery_intents(idempotency_key, created_at, id);
+
+    create unique index idx_github_delivery_intents_active_scope
+      on github_delivery_intents(run_id, node_id)
+      where status in (
+        'approval_required', 'approved', 'publishing_branch',
+        'branch_published', 'creating_pr', 'recovery_required'
+      );
+      `)
+    },
+  },
 ]
 
 function migrateSchema(db: Database) {
@@ -2063,7 +2246,15 @@ function selectGitHubDeliveryIntent(
 ): GitHubDeliveryIntent | null {
   return selectJson<GitHubDeliveryIntent>(
     db,
-    `select json from github_delivery_intents where ${column} = ? limit 1`,
+    `select json from github_delivery_intents
+     where ${column} = ?
+     order by
+       case when status in (
+         'approval_required', 'approved', 'publishing_branch',
+         'branch_published', 'creating_pr', 'recovery_required'
+       ) then 1 else 0 end desc,
+       updated_at desc, created_at desc, id desc
+     limit 1`,
     [value],
   )[0] ?? null
 }
@@ -2077,8 +2268,9 @@ function writeGitHubDeliveryIntent(db: Database, intent: GitHubDeliveryIntent): 
       installation_id, repository_id, coding_run_id, workspace_id,
       diff_artifact_id, test_evidence_id, pr_package_artifact_id,
       base_commit_sha, expected_commit_sha, intent_digest, idempotency_key,
-      status, state_version, json, created_at, updated_at
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      delivery_series_key, delivery_attempt, status, state_version, json,
+      created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     [
       intent.id,
@@ -2100,6 +2292,8 @@ function writeGitHubDeliveryIntent(db: Database, intent: GitHubDeliveryIntent): 
       intent.expectedCommitSha,
       intent.intentDigest,
       intent.idempotencyKey,
+      intent.deliverySeriesKey,
+      intent.deliveryAttempt,
       intent.status,
       intent.stateVersion,
       JSON.stringify(intent),
@@ -2185,7 +2379,7 @@ function writeGitHubDeliveryOperatorOutcome(
 const githubDeliveryStatusTransitions: Readonly<
   Record<GitHubDeliveryStatus, ReadonlySet<GitHubDeliveryStatus>>
 > = {
-  approval_required: new Set(['approved', 'failed', 'revoked']),
+  approval_required: new Set(['approved', 'failed', 'recovery_required', 'revoked']),
   approved: new Set(['publishing_branch', 'failed', 'recovery_required', 'revoked']),
   publishing_branch: new Set(['branch_published', 'failed', 'recovery_required', 'revoked']),
   branch_published: new Set(['creating_pr', 'failed', 'recovery_required', 'revoked']),
@@ -5212,6 +5406,7 @@ class SqlJsLocalStore implements LocalStore {
       },
       baseCommitSha: mutation.intent.baseCommitSha,
       expectedCommitSha: mutation.intent.expectedCommitSha,
+      deliveryAttempt: mutation.intent.deliveryAttempt,
       now: mutation.intent.createdAt,
     })
     if (JSON.stringify(canonicalIntent) !== JSON.stringify(mutation.intent)) {
@@ -5323,6 +5518,290 @@ class SqlJsLocalStore implements LocalStore {
         this.db.run('rollback')
         transactionOpen = false
         return { committed: false, reason: 'id_conflict' }
+      }
+
+      writeTestEvidence(this.db, expectedTestEvidence)
+      this.enqueueCanonicalRemoteSyncOperation({
+        kind: 'test-evidence-summary',
+        localProjectId: expectedTestEvidence.projectId,
+        runId: expectedTestEvidence.runId,
+        entityId: expectedTestEvidence.id,
+        createdAt: expectedTestEvidence.createdAt,
+      })
+      writeGitHubDeliveryIntent(this.db, mutation.intent)
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return { committed: true, replayed: false, intent: mutation.intent }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      throw error
+    }
+  }
+
+  async commitGitHubDeliveryReplacement(
+    mutation: GitHubDeliveryReplacementMutation,
+  ): Promise<GitHubDeliveryReplacementMutationResult> {
+    const expectedRun = normalizeWorkflowRunProgress(mutation.expectedRun)
+    const expectedTestEvidence = redactTestEvidenceForStorage(
+      mutation.testEvidence,
+    )
+    if (
+      mutation.expectedProject.id !== mutation.intent.localProjectId ||
+      mutation.expectedProject.id !== expectedRun.projectId ||
+      mutation.expectedWorkspace.sourcePath !== mutation.expectedProject.path
+    ) {
+      throw new Error('GitHub Delivery Intent does not match the Local Project source')
+    }
+    if (
+      mutation.expectedPairingCredential.organizationId !== mutation.intent.organizationId ||
+      mutation.expectedPairingCredential.projectId !== mutation.intent.teamProjectId ||
+      mutation.expectedPairingCredential.localProjectId !== mutation.intent.localProjectId
+    ) {
+      throw new Error('GitHub Delivery Intent does not match the Desktop pairing scope')
+    }
+    if (
+      mutation.expectedRepositoryBinding.id !== mutation.intent.repositoryBindingId ||
+      mutation.expectedRepositoryBinding.version !== mutation.intent.repositoryBindingVersion ||
+      mutation.expectedRepositoryBinding.installationId !== mutation.intent.installationId ||
+      mutation.expectedRepositoryBinding.repositoryId !== mutation.intent.repositoryId ||
+      mutation.expectedRepositoryBinding.organizationId !== mutation.intent.organizationId ||
+      mutation.expectedRepositoryBinding.teamProjectId !== mutation.intent.teamProjectId
+    ) {
+      throw new Error('GitHub Delivery Intent does not match the repository binding')
+    }
+    const testCommandSafety = validateTestCommandSafety(
+      mutation.expectedProject.testCommand,
+    )
+    if (
+      testCommandSafety.level === 'blocked' ||
+      expectedTestEvidence.command !== testCommandSafety.normalizedCommand
+    ) {
+      throw new Error('GitHub Delivery Test Evidence does not match the safe Project test command')
+    }
+    if (!expectedTestEvidence.sourceCommitSha) {
+      throw new Error('GitHub Delivery Test Evidence must be commit-bound')
+    }
+    if (
+      mutation.intent.id === mutation.expectedIntent.id ||
+      mutation.intent.runId !== mutation.expectedIntent.runId ||
+      mutation.intent.nodeId !== mutation.expectedIntent.nodeId ||
+      Date.parse(mutation.intent.createdAt) <= Date.parse(mutation.expectedIntent.updatedAt)
+    ) {
+      return { committed: false, reason: 'replacement_invalid' }
+    }
+    const canonicalIntent = await createGitHubDeliveryIntent({
+      id: mutation.intent.id,
+      repositoryBinding: mutation.expectedRepositoryBinding,
+      run: expectedRun,
+      prNodeId: mutation.intent.nodeId,
+      codingRun: mutation.expectedCodingRun,
+      workspace: mutation.expectedWorkspace,
+      diffArtifact: mutation.expectedDiffArtifact,
+      prPackage: mutation.expectedPrPackage,
+      testEvidence: expectedTestEvidence as TestEvidence & {
+        sourceCommitSha: string
+      },
+      baseCommitSha: mutation.intent.baseCommitSha,
+      expectedCommitSha: mutation.intent.expectedCommitSha,
+      deliveryAttempt: mutation.intent.deliveryAttempt,
+      now: mutation.intent.createdAt,
+    })
+    if (JSON.stringify(canonicalIntent) !== JSON.stringify(mutation.intent)) {
+      throw new Error('GitHub Delivery Intent is not canonical')
+    }
+
+    if (mutation.kind === 'revision') {
+      if (
+        !['approval_required', 'approved'].includes(mutation.expectedIntent.status)
+      ) {
+        return { committed: false, reason: 'intent_ineligible' }
+      }
+      if (
+        mutation.intent.deliverySeriesKey !== mutation.expectedIntent.deliverySeriesKey ||
+        mutation.intent.deliveryAttempt !== mutation.expectedIntent.deliveryAttempt ||
+        mutation.intent.idempotencyKey !== mutation.expectedIntent.idempotencyKey ||
+        mutation.intent.intentDigest === mutation.expectedIntent.intentDigest
+      ) {
+        return { committed: false, reason: 'replacement_invalid' }
+      }
+    } else {
+      if (!['failed', 'revoked'].includes(mutation.expectedIntent.status)) {
+        return { committed: false, reason: 'intent_ineligible' }
+      }
+      if (mutation.intent.deliverySeriesKey === mutation.expectedIntent.deliverySeriesKey) {
+        if (
+          mutation.intent.deliveryAttempt <= mutation.expectedIntent.deliveryAttempt ||
+          mutation.intent.idempotencyKey === mutation.expectedIntent.idempotencyKey
+        ) {
+          return { committed: false, reason: 'replacement_invalid' }
+        }
+      } else if (mutation.intent.deliveryAttempt !== 1) {
+        return { committed: false, reason: 'replacement_invalid' }
+      }
+    }
+
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+
+      const existingByDigest = selectGitHubDeliveryIntent(
+        this.db,
+        'intent_digest',
+        mutation.intent.intentDigest,
+      )
+      if (existingByDigest) {
+        this.db.run('rollback')
+        transactionOpen = false
+        if (
+          existingByDigest.id === mutation.intent.id &&
+          JSON.stringify(existingByDigest) === JSON.stringify(mutation.intent)
+        ) {
+          return { committed: true, replayed: true, intent: existingByDigest }
+        }
+        return { committed: false, reason: 'id_conflict' }
+      }
+
+      const currentExpected = selectGitHubDeliveryIntent(
+        this.db,
+        'id',
+        mutation.expectedIntent.id,
+      )
+      if (JSON.stringify(currentExpected) !== JSON.stringify(mutation.expectedIntent)) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'intent_stale' }
+      }
+      const currentPairing = selectJson<DesktopPairingCredential>(
+        this.db,
+        "select json from desktop_pairing_credentials where id = 'default' limit 1",
+      )[0]
+      const currentRepositoryBinding = selectJson<GitHubRepositoryBinding>(
+        this.db,
+        'select json from github_repository_bindings where id = ? limit 1',
+        [mutation.expectedRepositoryBinding.id],
+      )[0]
+      const currentProject = selectJson<LocalProject>(
+        this.db,
+        'select json from local_projects where id = ? limit 1',
+        [mutation.expectedProject.id],
+      )[0]
+      const currentRun = readWorkflowRuns(this.db).find(
+        (candidate) => candidate.id === expectedRun.id,
+      )
+      const currentCodingRun = selectJson<CodingAgentRun>(
+        this.db,
+        'select json from coding_agent_runs where id = ? limit 1',
+        [mutation.expectedCodingRun.id],
+      )[0]
+      const currentWorkspace = selectJson<ManagedCodingWorkspace>(
+        this.db,
+        'select json from managed_coding_workspaces where id = ? limit 1',
+        [mutation.expectedWorkspace.id],
+      )[0]
+      const currentDiffArtifact = selectJson<CodingDiffArtifact>(
+        this.db,
+        'select json from coding_diff_artifacts where id = ? limit 1',
+        [mutation.expectedDiffArtifact.id],
+      )[0]
+      const currentPrPackage = selectJson<Artifact>(
+        this.db,
+        'select json from artifacts where id = ? limit 1',
+        [mutation.expectedPrPackage.id],
+      )[0]
+      if (
+        JSON.stringify(currentProject) !== JSON.stringify(mutation.expectedProject) ||
+        JSON.stringify(currentPairing) !== JSON.stringify(mutation.expectedPairingCredential) ||
+        JSON.stringify(currentRepositoryBinding) !== JSON.stringify(mutation.expectedRepositoryBinding) ||
+        JSON.stringify(currentRun) !== JSON.stringify(expectedRun) ||
+        JSON.stringify(currentCodingRun) !== JSON.stringify(mutation.expectedCodingRun) ||
+        JSON.stringify(currentWorkspace) !== JSON.stringify(mutation.expectedWorkspace) ||
+        JSON.stringify(currentDiffArtifact) !== JSON.stringify(mutation.expectedDiffArtifact) ||
+        JSON.stringify(currentPrPackage) !== JSON.stringify(mutation.expectedPrPackage)
+      ) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'source_stale' }
+      }
+
+      const activeIntents = selectJson<GitHubDeliveryIntent>(
+        this.db,
+        `select json from github_delivery_intents
+         where run_id = ? and node_id = ? and status in (
+           'approval_required', 'approved', 'publishing_branch',
+           'branch_published', 'creating_pr', 'recovery_required'
+         ) order by updated_at desc, created_at desc, id desc`,
+        [mutation.intent.runId, mutation.intent.nodeId],
+      )
+      const expectedActiveIds = mutation.kind === 'revision'
+        ? [mutation.expectedIntent.id]
+        : []
+      if (
+        activeIntents.length !== expectedActiveIds.length ||
+        activeIntents.some((intent, index) => intent.id !== expectedActiveIds[index])
+      ) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'active_intent_exists' }
+      }
+
+      if (mutation.kind === 'retry' && mutation.intent.deliverySeriesKey === mutation.expectedIntent.deliverySeriesKey) {
+        const maximumAttempt = Number(this.db.exec(
+          `select max(delivery_attempt) from github_delivery_intents
+           where delivery_series_key = ?`,
+          [mutation.intent.deliverySeriesKey],
+        )[0]?.values[0]?.[0] ?? 0)
+        if (mutation.intent.deliveryAttempt !== maximumAttempt + 1) {
+          this.db.run('rollback')
+          transactionOpen = false
+          return { committed: false, reason: 'replacement_invalid' }
+        }
+      }
+
+      const existingById = selectGitHubDeliveryIntent(this.db, 'id', mutation.intent.id)
+      const existingTestEvidence = selectJson<TestEvidence>(
+        this.db,
+        'select json from test_evidence where id = ? limit 1',
+        [expectedTestEvidence.id],
+      )[0]
+      if (existingById || existingTestEvidence) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'id_conflict' }
+      }
+
+      if (mutation.kind === 'revision') {
+        const superseded: GitHubDeliveryIntent = {
+          ...mutation.expectedIntent,
+          status: 'revoked',
+          updatedAt: mutation.intent.createdAt,
+        }
+        this.db.run(
+          `update github_delivery_intents
+           set status = ?, json = ?, updated_at = ?
+           where id = ? and json = ?`,
+          [
+            superseded.status,
+            JSON.stringify(superseded),
+            superseded.updatedAt,
+            mutation.expectedIntent.id,
+            JSON.stringify(mutation.expectedIntent),
+          ],
+        )
+        if (this.db.getRowsModified() !== 1) {
+          this.db.run('rollback')
+          transactionOpen = false
+          return { committed: false, reason: 'intent_stale' }
+        }
       }
 
       writeTestEvidence(this.db, expectedTestEvidence)
@@ -6896,6 +7375,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'terminalizeGateCommandAcknowledgement',
   'commitWorkflowMutation',
   'commitGitHubDeliveryPreparation',
+  'commitGitHubDeliveryReplacement',
   'commitGitHubDeliveryIntentStatus',
   'commitGitHubDeliveryIntentCompletion',
   'stopGitHubDeliveryIntent',

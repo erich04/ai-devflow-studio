@@ -8,6 +8,8 @@ import {
   parseCreateAcceptanceBundleInput,
   parseCreatePrDraftInput,
   parsePrepareGitHubDeliveryInput,
+  parseReviseGitHubDeliveryInput,
+  parseRetryGitHubDeliveryInput,
   parseResumeGitHubDeliveryInput,
   parseStopGitHubDeliveryInput,
   parseCreateRunInput,
@@ -212,6 +214,8 @@ describe('IPC contract parsers', () => {
     expect(ipcChannels).toMatchObject({
       createPrDraft: 'devflow:pr-draft:create',
       prepareGitHubDelivery: 'devflow:github-delivery:prepare',
+      reviseGitHubDelivery: 'devflow:github-delivery:revise',
+      retryGitHubDelivery: 'devflow:github-delivery:retry',
       resumeGitHubDelivery: 'devflow:github-delivery:resume',
       stopGitHubDelivery: 'devflow:github-delivery:stop',
       createAcceptanceBundle: 'devflow:acceptance-bundle:create',
@@ -237,6 +241,27 @@ describe('IPC contract parsers', () => {
         expectedUpdatedAt: 'yesterday',
       }),
     ).toThrow(/expectedUpdatedAt/i)
+  })
+
+  it.each([
+    ['revision', parseReviseGitHubDeliveryInput],
+    ['retry', parseRetryGitHubDeliveryInput],
+  ])('accepts only an exact local Intent CAS for GitHub Delivery %s', (_label, parser) => {
+    const input = {
+      intentId: 'github-delivery-intent-1',
+      expectedUpdatedAt: '2026-08-11T12:34:56.000Z',
+    }
+    expect(parser(input)).toEqual(input)
+    for (const derived of [
+      { runId: 'renderer-run' },
+      { nodeId: 'renderer-node' },
+      { deliveryAttempt: 999 },
+      { deliverySeriesKey: 'renderer-series' },
+      { path: '/private/worktree' },
+      { token: 'renderer-token' },
+    ]) {
+      expect(() => parser({ ...input, ...derived })).toThrow(/unexpected field/i)
+    }
   })
 
   it('accepts only an exact local Intent CAS for GitHub Delivery Stop', () => {

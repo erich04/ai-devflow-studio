@@ -59,6 +59,8 @@ import {
   parseCreateAcceptanceBundleInput,
   parseCreatePrDraftInput,
   parsePrepareGitHubDeliveryInput,
+  parseReviseGitHubDeliveryInput,
+  parseRetryGitHubDeliveryInput,
   parseResumeGitHubDeliveryInput,
   parseStopGitHubDeliveryInput,
   parseCreateRunInput,
@@ -83,6 +85,8 @@ import {
   parseSubscribeCodingRunInput,
   parseValidateTestCommandInput,
   type PrepareGitHubDeliveryInput,
+  type ReviseGitHubDeliveryInput,
+  type RetryGitHubDeliveryInput,
   type ResumeGitHubDeliveryInput,
   type ResumeGitHubDeliveryResult,
   type StopGitHubDeliveryInput,
@@ -102,6 +106,10 @@ import {
   type GitHubDeliveryRuntime,
 } from './github-delivery-runtime.js'
 import { createGitHubDeliveryRemoteClient } from './github-delivery-remote-client.js'
+import {
+  GitHubDeliveryRetryAuthorityError,
+  assertGitHubDeliveryRetryAuthority,
+} from './github-delivery-retry-authority.js'
 import {
   GitHubRepositoryBindingSyncError,
   synchronizeGitHubRepositoryBinding,
@@ -521,6 +529,49 @@ async function prepareGitHubDelivery(input: PrepareGitHubDeliveryInput) {
       }
       const runtime = await getGitHubDeliveryRuntime()
       return runtime.prepare(input)
+    })
+  } finally {
+    await broadcastGitHubDeliveryState()
+  }
+}
+
+async function replaceGitHubDelivery(
+  kind: 'revise' | 'retry',
+  input: ReviseGitHubDeliveryInput | RetryGitHubDeliveryInput,
+) {
+  try {
+    return await runGitHubDeliveryExclusive(async (signal) => {
+      const context = await createCurrentGitHubDeliveryContext(signal)
+      if (!context) throw new GitHubRepositoryBindingSyncError()
+      const binding = await synchronizeGitHubRepositoryBinding({
+        store: context.store,
+        remote: context.remote,
+        expectedPairing: context.credential,
+      })
+      if (!binding || binding.status !== 'active') {
+        throw new GitHubRepositoryBindingSyncError()
+      }
+      if (kind === 'retry') {
+        const candidates = (await context.store.listGitHubDeliveryIntents()).filter(
+          (intent) =>
+            intent.id === input.intentId &&
+            intent.updatedAt === input.expectedUpdatedAt &&
+            intent.organizationId === context.credential.organizationId &&
+            intent.teamProjectId === context.credential.projectId &&
+            intent.localProjectId === context.localProjectId,
+        )
+        if (candidates.length !== 1) {
+          throw new GitHubDeliveryRetryAuthorityError()
+        }
+        const intent = candidates[0]!
+        assertGitHubDeliveryRetryAuthority({
+          intent,
+          binding,
+          requests: await context.remote.listInbox(intent.teamProjectId),
+        })
+      }
+      const runtime = await getGitHubDeliveryRuntime()
+      return runtime[kind](input)
     })
   } finally {
     await broadcastGitHubDeliveryState()
@@ -2201,6 +2252,22 @@ function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.prepareGitHubDelivery, async (_, payload: unknown) => {
     const input = parsePrepareGitHubDeliveryInput(payload)
     const result = await prepareGitHubDelivery(input)
+    wakeRemoteSyncOutbox()
+    wakeGitHubDeliveryScheduler()
+    return result
+  })
+
+  ipcMain.handle(ipcChannels.reviseGitHubDelivery, async (_, payload: unknown) => {
+    const input = parseReviseGitHubDeliveryInput(payload)
+    const result = await replaceGitHubDelivery('revise', input)
+    wakeRemoteSyncOutbox()
+    wakeGitHubDeliveryScheduler()
+    return result
+  })
+
+  ipcMain.handle(ipcChannels.retryGitHubDelivery, async (_, payload: unknown) => {
+    const input = parseRetryGitHubDeliveryInput(payload)
+    const result = await replaceGitHubDelivery('retry', input)
     wakeRemoteSyncOutbox()
     wakeGitHubDeliveryScheduler()
     return result

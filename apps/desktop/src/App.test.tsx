@@ -614,6 +614,12 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     prepareGitHubDelivery: vi.fn().mockRejectedValue(
       new Error('GitHub Delivery preparation is not configured for this test.'),
     ),
+    reviseGitHubDelivery: vi.fn().mockRejectedValue(
+      new Error('GitHub Delivery revision is not configured for this test.'),
+    ),
+    retryGitHubDelivery: vi.fn().mockRejectedValue(
+      new Error('GitHub Delivery retry is not configured for this test.'),
+    ),
     resumeGitHubDelivery: vi.fn().mockRejectedValue(
       new Error('GitHub Delivery recovery is not configured for this test.'),
     ),
@@ -2151,6 +2157,124 @@ describe('App', () => {
     expect(screen.getByTestId('github-delivery-panel')).toHaveTextContent('approval_required')
     expect(screen.getByTestId('github-delivery-panel')).toHaveTextContent(preparedIntent.expectedCommitSha)
     expect(api.createPrDraft).not.toHaveBeenCalled()
+  })
+
+  it('revises approval-wait material once using only the visible intent CAS', async () => {
+    const original = githubDeliveryIntentFixture('approval_required')
+    const revised = {
+      ...original,
+      id: 'github-delivery-intent-revision-2',
+      intentDigest: 'e'.repeat(64),
+      updatedAt: '2026-08-11T12:04:00.000Z',
+      createdAt: '2026-08-11T12:04:00.000Z',
+    }
+    const loadState = vi.fn()
+      .mockResolvedValueOnce(prDeliveryState(original))
+      .mockResolvedValue(prDeliveryState(revised))
+    const reviseGitHubDelivery = vi.fn().mockResolvedValue({
+      status: 'prepared',
+      replayed: false,
+      intent: revised,
+      testEvidence: {},
+    })
+    installDesktopApi({ loadState, reviseGitHubDelivery } as Partial<DevFlowDesktopApi>)
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    const button = within(screen.getByTestId('node-inspector')).getByRole(
+      'button',
+      { name: 'Revise GitHub Delivery' },
+    )
+    expect(button).not.toBeDisabled()
+    fireEvent.click(button)
+    fireEvent.click(button)
+
+    await waitFor(() => expect(reviseGitHubDelivery).toHaveBeenCalledTimes(1))
+    expect(reviseGitHubDelivery).toHaveBeenCalledWith({
+      intentId: original.id,
+      expectedUpdatedAt: original.updatedAt,
+    })
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
+  })
+
+  it('revises approved pre-publication material once using only the visible intent CAS', async () => {
+    const original = githubDeliveryIntentFixture('approved')
+    const revised = {
+      ...original,
+      id: 'github-delivery-approved-revision-2',
+      status: 'approval_required' as const,
+      intentDigest: 'd'.repeat(64),
+      updatedAt: '2026-08-11T12:04:00.000Z',
+      createdAt: '2026-08-11T12:04:00.000Z',
+    }
+    const loadState = vi.fn()
+      .mockResolvedValueOnce(prDeliveryState(original))
+      .mockResolvedValue(prDeliveryState(revised))
+    const reviseGitHubDelivery = vi.fn().mockResolvedValue({
+      status: 'prepared',
+      replayed: false,
+      intent: revised,
+      testEvidence: {},
+    })
+    installDesktopApi({ loadState, reviseGitHubDelivery } as Partial<DevFlowDesktopApi>)
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    const button = within(screen.getByTestId('node-inspector')).getByRole(
+      'button',
+      { name: 'Revise GitHub Delivery' },
+    )
+    expect(button).not.toBeDisabled()
+    fireEvent.click(button)
+    fireEvent.click(button)
+
+    await waitFor(() => expect(reviseGitHubDelivery).toHaveBeenCalledTimes(1))
+    expect(reviseGitHubDelivery).toHaveBeenCalledWith({
+      intentId: original.id,
+      expectedUpdatedAt: original.updatedAt,
+    })
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
+  })
+
+  it('retries a failed delivery once using only the visible terminal intent CAS', async () => {
+    const failed = githubDeliveryIntentFixture('failed')
+    const retry = {
+      ...failed,
+      id: 'github-delivery-intent-attempt-2',
+      status: 'approval_required' as const,
+      deliveryAttempt: 2,
+      idempotencyKey: 'github-delivery:retry-attempt-2',
+      intentDigest: 'f'.repeat(64),
+      updatedAt: '2026-08-11T12:04:00.000Z',
+      createdAt: '2026-08-11T12:04:00.000Z',
+    }
+    const loadState = vi.fn()
+      .mockResolvedValueOnce(prDeliveryState(failed))
+      .mockResolvedValue(prDeliveryState(retry))
+    const retryGitHubDelivery = vi.fn().mockResolvedValue({
+      status: 'prepared',
+      replayed: false,
+      intent: retry,
+      testEvidence: {},
+    })
+    installDesktopApi({ loadState, retryGitHubDelivery } as Partial<DevFlowDesktopApi>)
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    const button = within(screen.getByTestId('node-inspector')).getByRole(
+      'button',
+      { name: 'Retry GitHub Delivery' },
+    )
+    expect(button).not.toBeDisabled()
+    fireEvent.click(button)
+    fireEvent.click(button)
+
+    await waitFor(() => expect(retryGitHubDelivery).toHaveBeenCalledTimes(1))
+    expect(retryGitHubDelivery).toHaveBeenCalledWith({
+      intentId: failed.id,
+      expectedUpdatedAt: failed.updatedAt,
+    })
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
   })
 
   it('resumes recovery exactly once with the visible intent updatedAt CAS', async () => {

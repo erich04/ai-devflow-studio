@@ -13,7 +13,10 @@ import type {
   WorkflowRun,
 } from '@ai-devflow/shared'
 import { createGitHubDeliveryRuntime } from './github-delivery-runtime'
-import type { GitHubDeliveryPreparationMutationResult } from './local-store'
+import type {
+  GitHubDeliveryPreparationMutationResult,
+  GitHubDeliveryReplacementMutationResult,
+} from './local-store'
 import { createWorkspaceOperationCoordinator } from './workspace-operation-coordinator'
 
 const baseCommitSha = '0000000000000000000000000000000000000000'
@@ -235,10 +238,232 @@ function fakeStore(source: ReturnType<typeof fixture>) {
       intents.push(mutation.intent)
       return { committed: true as const, replayed: false, intent: mutation.intent }
     }),
+    commitGitHubDeliveryReplacement: vi.fn(async (mutation: {
+      kind: 'revision' | 'retry'
+      expectedIntent: GitHubDeliveryIntent
+      intent: GitHubDeliveryIntent
+      testEvidence: TestEvidence
+    }): Promise<GitHubDeliveryReplacementMutationResult> => {
+      const expectedIndex = intents.findIndex((intent) =>
+        JSON.stringify(intent) === JSON.stringify(mutation.expectedIntent),
+      )
+      if (expectedIndex < 0) {
+        return { committed: false as const, reason: 'intent_stale' as const }
+      }
+      if (mutation.kind === 'revision') {
+        intents[expectedIndex] = {
+          ...mutation.expectedIntent,
+          status: 'revoked',
+          updatedAt: mutation.intent.createdAt,
+        }
+      }
+      evidence.push(mutation.testEvidence)
+      intents.push(mutation.intent)
+      return { committed: true as const, replayed: false, intent: mutation.intent }
+    }),
   }
 }
 
 describe('GitHub Delivery preparation runtime', () => {
+  it('retests current material and replaces an approval with a new immutable revision', async () => {
+    const source = fixture()
+    const store = fakeStore(source)
+    const committedWorkspace = {
+      ...source.workspace,
+      baseCommitSha,
+      headCommitSha: expectedCommitSha,
+    }
+    const commitWorkspace = vi.fn(async () => ({
+      workspace: committedWorkspace,
+      baseCommitSha,
+      expectedCommitSha,
+    }))
+    const runTestCommand = vi.fn(async () => ({
+      status: 'passed' as const,
+      exitCode: 0,
+      durationMs: 25,
+      stdout: 'ok',
+      stderr: '',
+      redacted: false,
+      summary: 'Tests passed.',
+    }))
+    let clock = 0
+    let sequence = 0
+    const runtime = createGitHubDeliveryRuntime({
+      store,
+      commitWorkspace,
+      runTestCommand,
+      now: () => [
+        '2026-08-11T13:10:00.000Z',
+        '2026-08-11T13:12:00.000Z',
+      ][clock++]!,
+      idGenerator: (prefix) => `${prefix}-${++sequence}`,
+    })
+    const prepared = await runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
+    if (prepared.status !== 'prepared') throw new Error('Expected initial preparation')
+    source.prPackage = {
+      ...source.prPackage,
+      summary: 'Materially revised package.',
+      updatedAt: '2026-08-11T13:11:00.000Z',
+    }
+
+    const revised = await runtime.revise({
+      intentId: prepared.intent.id,
+      expectedUpdatedAt: prepared.intent.updatedAt,
+    })
+
+    expect(revised).toMatchObject({
+      status: 'prepared',
+      replayed: false,
+      intent: {
+        status: 'approval_required',
+        deliverySeriesKey: prepared.intent.deliverySeriesKey,
+        deliveryAttempt: prepared.intent.deliveryAttempt,
+        idempotencyKey: prepared.intent.idempotencyKey,
+      },
+    })
+    expect(store.intents).toHaveLength(2)
+    expect(store.intents[0]).toMatchObject({
+      id: prepared.intent.id,
+      status: 'revoked',
+    })
+    expect(store.commitGitHubDeliveryReplacement).toHaveBeenCalledTimes(1)
+    expect(runTestCommand).toHaveBeenCalledTimes(2)
+  })
+
+  it('retests a terminal delivery into the next attempt and replays only the new active intent', async () => {
+    const source = fixture()
+    const store = fakeStore(source)
+    const committedWorkspace = {
+      ...source.workspace,
+      baseCommitSha,
+      headCommitSha: expectedCommitSha,
+    }
+    const commitWorkspace = vi.fn(async () => ({
+      workspace: committedWorkspace,
+      baseCommitSha,
+      expectedCommitSha,
+    }))
+    const runTestCommand = vi.fn(async () => ({
+      status: 'passed' as const,
+      exitCode: 0,
+      durationMs: 25,
+      stdout: 'ok',
+      stderr: '',
+      redacted: false,
+      summary: 'Tests passed.',
+    }))
+    let clock = 0
+    let sequence = 0
+    const runtime = createGitHubDeliveryRuntime({
+      store,
+      commitWorkspace,
+      runTestCommand,
+      now: () => [
+        '2026-08-11T13:10:00.000Z',
+        '2026-08-11T13:12:00.000Z',
+      ][clock++]!,
+      idGenerator: (prefix) => `${prefix}-${++sequence}`,
+    })
+    const prepared = await runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
+    if (prepared.status !== 'prepared') throw new Error('Expected initial preparation')
+    const failed: GitHubDeliveryIntent = {
+      ...prepared.intent,
+      status: 'failed',
+      updatedAt: '2026-08-11T13:11:00.000Z',
+    }
+    store.intents[0] = failed
+
+    const retried = await runtime.retry({
+      intentId: failed.id,
+      expectedUpdatedAt: failed.updatedAt,
+    })
+
+    expect(retried).toMatchObject({
+      status: 'prepared',
+      replayed: false,
+      intent: {
+        deliverySeriesKey: failed.deliverySeriesKey,
+        deliveryAttempt: 2,
+      },
+    })
+    if (retried.status !== 'prepared') throw new Error('Expected retry preparation')
+    expect(retried.intent.idempotencyKey).not.toBe(failed.idempotencyKey)
+    expect(store.intents[0]).toEqual(failed)
+    expect(store.intents).toHaveLength(2)
+
+    runTestCommand.mockClear()
+    store.commitGitHubDeliveryReplacement.mockClear()
+    await expect(runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' }))
+      .resolves.toMatchObject({
+        status: 'prepared',
+        replayed: true,
+        intent: { id: retried.intent.id, deliveryAttempt: 2 },
+      })
+    expect(runTestCommand).not.toHaveBeenCalled()
+    expect(store.commitGitHubDeliveryReplacement).not.toHaveBeenCalled()
+  })
+
+  it('starts retry at attempt one when current repository authority creates a new series', async () => {
+    const source = fixture()
+    const store = fakeStore(source)
+    const committedWorkspace = {
+      ...source.workspace,
+      baseCommitSha,
+      headCommitSha: expectedCommitSha,
+    }
+    let clock = 0
+    let sequence = 0
+    const runtime = createGitHubDeliveryRuntime({
+      store,
+      commitWorkspace: vi.fn(async () => ({
+        workspace: committedWorkspace,
+        baseCommitSha,
+        expectedCommitSha,
+      })),
+      runTestCommand: vi.fn(async () => ({
+        status: 'passed' as const,
+        exitCode: 0,
+        durationMs: 25,
+        stdout: 'ok',
+        stderr: '',
+        redacted: false,
+        summary: 'Tests passed.',
+      })),
+      now: () => [
+        '2026-08-11T13:10:00.000Z',
+        '2026-08-11T13:13:00.000Z',
+      ][clock++]!,
+      idGenerator: (prefix) => `${prefix}-${++sequence}`,
+    })
+    const prepared = await runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
+    if (prepared.status !== 'prepared') throw new Error('Expected initial preparation')
+    const revoked: GitHubDeliveryIntent = {
+      ...prepared.intent,
+      status: 'revoked',
+      updatedAt: '2026-08-11T13:11:00.000Z',
+    }
+    store.intents[0] = revoked
+    source.binding = {
+      ...source.binding,
+      version: 2,
+      validatedAt: '2026-08-11T13:12:00.000Z',
+      updatedAt: '2026-08-11T13:12:00.000Z',
+    }
+
+    const rebound = await runtime.retry({
+      intentId: revoked.id,
+      expectedUpdatedAt: revoked.updatedAt,
+    })
+
+    expect(rebound).toMatchObject({
+      status: 'prepared',
+      intent: { deliveryAttempt: 1, repositoryBindingVersion: 2 },
+    })
+    if (rebound.status !== 'prepared') throw new Error('Expected rebound preparation')
+    expect(rebound.intent.deliverySeriesKey).not.toBe(revoked.deliverySeriesKey)
+  })
+
   it('maps raw git failures to one fixed preparation error without retaining the cause', async () => {
     const source = fixture()
     const store = fakeStore(source)

@@ -76,6 +76,8 @@ export const ipcChannels = {
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   createPrDraft: 'devflow:pr-draft:create',
   prepareGitHubDelivery: 'devflow:github-delivery:prepare',
+  reviseGitHubDelivery: 'devflow:github-delivery:revise',
+  retryGitHubDelivery: 'devflow:github-delivery:retry',
   resumeGitHubDelivery: 'devflow:github-delivery:resume',
   stopGitHubDelivery: 'devflow:github-delivery:stop',
   createAcceptanceBundle: 'devflow:acceptance-bundle:create',
@@ -190,6 +192,11 @@ export type ResumeGitHubDeliveryInput = {
   intentId: string
   expectedUpdatedAt: string
 }
+
+export type ReviseGitHubDeliveryInput = ResumeGitHubDeliveryInput
+export type RetryGitHubDeliveryInput = ResumeGitHubDeliveryInput
+export type ReviseGitHubDeliveryResult = PrepareGitHubDeliveryResult
+export type RetryGitHubDeliveryResult = PrepareGitHubDeliveryResult
 
 export type ResumeGitHubDeliveryResult = GitHubDeliveryProcessorResult
 
@@ -396,6 +403,12 @@ export type DevFlowDesktopApi = {
   prepareGitHubDelivery: (
     input: PrepareGitHubDeliveryInput,
   ) => Promise<PrepareGitHubDeliveryResult>
+  reviseGitHubDelivery: (
+    input: ReviseGitHubDeliveryInput,
+  ) => Promise<ReviseGitHubDeliveryResult>
+  retryGitHubDelivery: (
+    input: RetryGitHubDeliveryInput,
+  ) => Promise<RetryGitHubDeliveryResult>
   resumeGitHubDelivery: (
     input: ResumeGitHubDeliveryInput,
   ) => Promise<ResumeGitHubDeliveryResult>
@@ -656,46 +669,17 @@ export function parsePrepareGitHubDeliveryInput(
   )
 }
 
-export function parseResumeGitHubDeliveryInput(
+function parseExactGitHubDeliveryIntentInput(
   value: unknown,
+  payloadName: string,
 ): ResumeGitHubDeliveryInput {
   if (!isRecord(value)) {
-    throw new Error('Invalid resume GitHub delivery payload')
+    throw new Error(`Invalid ${payloadName}`)
   }
   rejectUnexpectedFields(
     value,
     ['intentId', 'expectedUpdatedAt'],
-    'resume GitHub delivery payload',
-  )
-  const intentId = readExactRequiredIdentifier(value, 'intentId')
-  const expectedUpdatedAt = value['expectedUpdatedAt']
-  if (
-    typeof expectedUpdatedAt !== 'string' ||
-    expectedUpdatedAt.length === 0 ||
-    expectedUpdatedAt.trim() !== expectedUpdatedAt
-  ) {
-    throw new Error('Invalid expectedUpdatedAt')
-  }
-  const parsedTimestamp = Date.parse(expectedUpdatedAt)
-  if (
-    !Number.isFinite(parsedTimestamp) ||
-    new Date(parsedTimestamp).toISOString() !== expectedUpdatedAt
-  ) {
-    throw new Error('Invalid expectedUpdatedAt')
-  }
-  return { intentId, expectedUpdatedAt }
-}
-
-export function parseStopGitHubDeliveryInput(
-  value: unknown,
-): StopGitHubDeliveryInput {
-  if (!isRecord(value)) {
-    throw new Error('Invalid stop GitHub delivery payload')
-  }
-  rejectUnexpectedFields(
-    value,
-    ['intentId', 'expectedUpdatedAt'],
-    'stop GitHub delivery payload',
+    payloadName,
   )
   const intentId = readExactRequiredIdentifier(value, 'intentId')
   if (
@@ -722,6 +706,42 @@ export function parseStopGitHubDeliveryInput(
     throw new Error('Invalid expectedUpdatedAt')
   }
   return { intentId, expectedUpdatedAt }
+}
+
+export function parseResumeGitHubDeliveryInput(
+  value: unknown,
+): ResumeGitHubDeliveryInput {
+  return parseExactGitHubDeliveryIntentInput(
+    value,
+    'resume GitHub delivery payload',
+  )
+}
+
+export function parseReviseGitHubDeliveryInput(
+  value: unknown,
+): ReviseGitHubDeliveryInput {
+  return parseExactGitHubDeliveryIntentInput(
+    value,
+    'revise GitHub delivery payload',
+  )
+}
+
+export function parseRetryGitHubDeliveryInput(
+  value: unknown,
+): RetryGitHubDeliveryInput {
+  return parseExactGitHubDeliveryIntentInput(
+    value,
+    'retry GitHub delivery payload',
+  )
+}
+
+export function parseStopGitHubDeliveryInput(
+  value: unknown,
+): StopGitHubDeliveryInput {
+  return parseExactGitHubDeliveryIntentInput(
+    value,
+    'stop GitHub delivery payload',
+  )
 }
 
 export function parseCreateAcceptanceBundleInput(

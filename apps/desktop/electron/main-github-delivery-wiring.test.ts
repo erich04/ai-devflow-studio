@@ -128,6 +128,31 @@ describe('Electron GitHub Delivery renderer boundary', () => {
     )
   })
 
+  it('serializes exact-CAS Revise and Retry before waking the delivery scheduler', () => {
+    const replacement = main.slice(
+      main.indexOf('async function replaceGitHubDelivery'),
+      main.indexOf('async function broadcastGitHubDeliveryState'),
+    )
+    const handlers = main.slice(
+      main.indexOf('ipcMain.handle(ipcChannels.prepareGitHubDelivery'),
+      main.indexOf('ipcMain.handle(ipcChannels.resumeGitHubDelivery'),
+    )
+    expect(replacement).toMatch(
+      /runGitHubDeliveryExclusive\(async \(signal\)[\s\S]*?synchronizeGitHubRepositoryBinding\([\s\S]*?runtime\[kind\]\(input\)/,
+    )
+    expect(replacement).toMatch(
+      /kind === 'retry'[\s\S]*?assertGitHubDeliveryRetryAuthority\([\s\S]*?runtime\[kind\]\(input\)/,
+    )
+    expect(replacement).toMatch(/finally \{[\s\S]*?broadcastGitHubDeliveryState\(\)/)
+    expect(handlers).toMatch(
+      /ipcMain\.handle\(ipcChannels\.reviseGitHubDelivery[\s\S]*?parseReviseGitHubDeliveryInput\(payload\)[\s\S]*?replaceGitHubDelivery\('revise', input\)[\s\S]*?wakeGitHubDeliveryScheduler\(\)/,
+    )
+    expect(handlers).toMatch(
+      /ipcMain\.handle\(ipcChannels\.retryGitHubDelivery[\s\S]*?parseRetryGitHubDeliveryInput\(payload\)[\s\S]*?replaceGitHubDelivery\('retry', input\)[\s\S]*?wakeGitHubDeliveryScheduler\(\)/,
+    )
+    expect(handlers).not.toMatch(/token|worktreePath|deliveryAttempt|deliverySeriesKey/)
+  })
+
   it('persists an exact Stop before aborting only its matching active fence and broadcasts state', () => {
     const stop = main.slice(
       main.indexOf('async function stopCurrentGitHubDelivery'),
