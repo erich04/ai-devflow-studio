@@ -852,6 +852,7 @@ export type LocalExecutionState = {
   managedCodingWorkspaces: ManagedCodingWorkspace[]
   dependencyBootstrapEvidence: DependencyBootstrapEvidence[]
   codingDiffArtifacts: CodingDiffArtifact[]
+  githubDeliveryIntents?: import('./github-delivery').GitHubDeliveryIntent[]
   retryAttempts?: import('./remediation').RetryAttempt[]
   desktopPairingCredential?: DesktopPairingCredential | null
   settings: LocalSettings
