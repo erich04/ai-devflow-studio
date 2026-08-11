@@ -90,9 +90,14 @@ describe('team database migration runner', () => {
         name: '0010_harden_gate_command_delivery',
         fileName: '0010_harden_gate_command_delivery.sql',
       },
+      {
+        version: 11,
+        name: '0011_github_delivery',
+        fileName: '0011_github_delivery.sql',
+      },
     ])
 
-    const [baseline, v14, workRequestHardening, gateCommandHardening] =
+    const [baseline, v14, workRequestHardening, gateCommandHardening, githubDelivery] =
       await readTeamMigrationCatalog()
     expect(baseline).toMatchObject({ version: 7, name: '0001_initial' })
     expect(baseline?.sql).toMatch(/^BEGIN;/)
@@ -113,6 +118,11 @@ describe('team database migration runner', () => {
     expect(gateCommandHardening?.sql).toContain(
       'CREATE TABLE released_work_request_claims',
     )
+    expect(githubDelivery).toMatchObject({
+      version: 11,
+      name: '0011_github_delivery',
+    })
+    expect(githubDelivery?.sql).toContain('CREATE TABLE github_delivery_requests')
   })
 
   it('orders the v10 Gate backfill before validation and keeps its SQL function atomic', async () => {

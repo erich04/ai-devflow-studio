@@ -18,7 +18,7 @@ const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(10)
+    expect(TEAM_SCHEMA_VERSION).toBe(11)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -55,6 +55,12 @@ describe('team database schema', () => {
       'gate_command_receipts',
       'gate_command_acknowledgements',
       'released_work_request_claims',
+      'github_repository_bindings',
+      'github_delivery_requests',
+      'github_delivery_approvals',
+      'github_delivery_credential_grants',
+      'github_branch_publications',
+      'github_pull_request_outcomes',
     ])
 
     expect(teamTableDefinitions.map((table) => table.name)).toEqual(requiredTeamTableNames)
@@ -169,6 +175,12 @@ describe('team database schema', () => {
       'gate_command_receipts',
       'gate_command_acknowledgements',
       'released_work_request_claims',
+      'github_repository_bindings',
+      'github_delivery_requests',
+      'github_delivery_approvals',
+      'github_delivery_credential_grants',
+      'github_branch_publications',
+      'github_pull_request_outcomes',
     ])
 
     for (const tableName of requiredTeamTableNames.filter((name) => !v14TableNames.has(name))) {
@@ -203,12 +215,18 @@ describe('team database schema', () => {
         name: '0010_harden_gate_command_delivery',
         fileName: '0010_harden_gate_command_delivery.sql',
       },
+      {
+        version: 11,
+        name: '0011_github_delivery',
+        fileName: '0011_github_delivery.sql',
+      },
     ])
 
     const migrations = await readTeamMigrationCatalog()
     const migrationV8 = migrations.find((candidate) => candidate.version === 8)
     const migrationV9 = migrations.find((candidate) => candidate.version === 9)
     const migrationV10 = migrations.find((candidate) => candidate.version === 10)
+    const migrationV11 = migrations.find((candidate) => candidate.version === 11)
     expect(migrationChecksum(migrationV8?.sql ?? '')).toBe(
       '630b28be579566ceeafd52353c30394d8182f256c1b787ec3780bb44c94992e5',
     )
@@ -242,6 +260,152 @@ describe('team database schema', () => {
     expect(migrationChecksum(migrationV10?.sql ?? '')).toBe(
       '1de25f1b785f0b0c384d8bc5475040563812f9c8dd38f5b486aeb807296ae312',
     )
+    for (const tableName of [
+      'github_repository_bindings',
+      'github_delivery_requests',
+      'github_delivery_approvals',
+      'github_delivery_credential_grants',
+      'github_branch_publications',
+      'github_pull_request_outcomes',
+    ]) {
+      expect(migrationV11?.sql).toContain(`CREATE TABLE ${tableName}`)
+    }
+    expect(migrationV11?.sql).toContain('github_repository_bindings_one_active_project')
+    expect(migrationV11?.sql).toContain('github_repository_bindings_one_active_repository')
+    expect(migrationV11?.sql).toContain('github_delivery_requests_logical_key_unique')
+    expect(migrationV11?.sql).toContain('github_delivery_requests_one_active_target')
+    expect(migrationChecksum(migrationV11?.sql ?? '')).toBe(
+      'babe7ec7201be5ab9202334138535a251f7c345f4761c0c03543e66c200805a9',
+    )
+    expect(migrationV11?.sql).not.toMatch(
+      /\b(?:token|token_hash|private_key|credential|worktree_path|raw_diff|stdout|stderr)\s+(?:text|jsonb|bytea)\b/i,
+    )
+  })
+
+  it('defines GitHub delivery authority without persisting credentials or local execution data', () => {
+    const bindings = teamTableDefinitions.find(
+      (table) => table.name === 'github_repository_bindings',
+    )
+    const requests = teamTableDefinitions.find(
+      (table) => table.name === 'github_delivery_requests',
+    )
+    const approvals = teamTableDefinitions.find(
+      (table) => table.name === 'github_delivery_approvals',
+    )
+    const grants = teamTableDefinitions.find(
+      (table) => table.name === 'github_delivery_credential_grants',
+    )
+    const publications = teamTableDefinitions.find(
+      (table) => table.name === 'github_branch_publications',
+    )
+    const outcomes = teamTableDefinitions.find(
+      (table) => table.name === 'github_pull_request_outcomes',
+    )
+
+    expect(bindings?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        'id',
+        'version',
+        'organization_id',
+        'project_id',
+        'installation_id',
+        'repository_id',
+        'full_name',
+        'default_branch',
+        'status',
+        'configured_by_user_id',
+      ]),
+    )
+    expect(requests?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        'id',
+        'state_version',
+        'intent_revision',
+        'organization_id',
+        'project_id',
+        'run_id',
+        'node_id',
+        'binding_id',
+        'binding_version',
+        'requested_by_token_id',
+        'status',
+        'expected_run_version',
+        'head_branch',
+        'base_branch',
+        'expected_commit_sha',
+        'intent_digest',
+        'logical_idempotency_key',
+        'diff_digest',
+        'test_evidence_digest',
+        'package_digest',
+        'pr_title',
+        'pr_body',
+      ]),
+    )
+    expect(approvals?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        'id',
+        'request_id',
+        'intent_revision',
+        'intent_digest',
+        'approved_by_user_id',
+        'approved_role',
+        'auth_kind',
+        'approved_at',
+      ]),
+    )
+    expect(grants?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        'id',
+        'request_id',
+        'intent_revision',
+        'approval_id',
+        'issued_to_token_id',
+        'requested_at',
+        'credential_expires_at',
+        'status',
+      ]),
+    )
+    expect(publications?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        'id',
+        'request_id',
+        'intent_revision',
+        'grant_id',
+        'status',
+        'verified_head_sha',
+        'reported_at',
+        'verified_at',
+      ]),
+    )
+    expect(outcomes?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        'id',
+        'request_id',
+        'intent_revision',
+        'publication_id',
+        'status',
+        'pull_request_number',
+        'safe_url',
+        'draft',
+        'head_sha',
+      ]),
+    )
+
+    for (const table of [bindings, requests, approvals, grants, publications, outcomes]) {
+      expect(table?.columns.map((column) => column.name)).not.toEqual(
+        expect.arrayContaining([
+          'token',
+          'token_hash',
+          'private_key',
+          'credential',
+          'worktree_path',
+          'raw_diff',
+          'stdout',
+          'stderr',
+        ]),
+      )
+    }
   })
 
   it('defines bounded Work Request, idempotency, audit, and Gate delivery records', () => {
