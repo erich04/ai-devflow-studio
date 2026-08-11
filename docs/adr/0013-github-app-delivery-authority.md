@@ -8,8 +8,8 @@ Date: 2026-08-11
 
 DevFlow currently uses a GitHub OAuth App only to establish browser identity. It requests
 `read:user user:email`, reads the profile, and discards the access token. V1.5 needs narrowly scoped
-write authority for one repository so Desktop can publish one expected commit and create one Draft
-pull request after explicit human approval.
+write authority for one repository so Desktop can publish one expected commit and the API can create
+one Draft pull request after explicit signed Web approval.
 
 The alternatives are:
 
@@ -29,16 +29,18 @@ Use a GitHub App installation for V1.5 delivery.
 - Postgres stores only the Project-to-installation/repository binding and redacted audit metadata.
 - The existing GitHub OAuth App remains identity-only with `read:user user:email`; its access token
   is not persisted or reused for delivery.
-- After exact Delivery Approval, paired Desktop main requests an installation access token through
-  the authenticated API.
-- The API narrows the installation access token to one repository and the minimum repository
-  permissions: `Contents: write` and `Pull requests: write`.
+- A live lead or owner approves the exact redacted Delivery Request through a signed browser session;
+  Desktop bearer authority cannot approve its own request.
+- After that decision, paired Desktop main requests an installation access token through the
+  authenticated API.
+- The API narrows the Desktop installation access token to one repository and `Contents: write`.
 - The token lifetime is no more than one hour. Desktop main holds it only in memory for the active
   attempt and clears it after use.
 - The renderer never receives the private key, installation access token, authorization header,
   credential helper, or raw git command.
-- Desktop main publishes only the approved expected commit to the approved namespaced branch and
-  creates only a Draft pull request.
+- Desktop main publishes only the approved expected commit to the approved namespaced branch.
+- The API independently reads the remote branch head and, only after it matches the expected commit,
+  uses API-held `Pull requests: write` App authority to create only a Draft pull request.
 - DevFlow will never merge or auto-merge, never force-push, never delete a remote branch, never
   publish a tag, and never widen permissions as part of V1.5.
 
@@ -46,15 +48,17 @@ Use a GitHub App installation for V1.5 delivery.
 
 | Fact or action | Authority |
 | --- | --- |
-| Full local Run, managed worktree, expected commit, approval, attempt, result | Desktop SQLite / Electron main |
-| Organization, membership, Project repository, GitHub App installation binding, revocation | API/Postgres |
+| Full local Run, managed worktree, expected commit, local attempt, result | Desktop SQLite / Electron main |
+| Redacted Delivery Request, lead/owner approval, organization, membership, Project repository, GitHub App installation binding, revocation | API/Postgres |
 | App private key and installation-token minting | API process configuration |
-| Short-lived installation token use for git/GitHub | Electron main memory |
+| Short-lived Contents token use for exact git push | Electron main memory |
+| Remote-head verification and Draft pull-request creation | API process |
 | Published branch and Draft pull request | GitHub |
 | Workflow stage advance and Acceptance | Canonical local Run after evidence checks |
 
 An installation access token proves GitHub capability, not human intent. Delivery Approval remains a
-separate, immutable local record tied to the exact Delivery Intent.
+separate, immutable Team decision tied to the exact redacted Delivery Request and mirrored into the
+local attempt before publication.
 
 ## Failure And Recovery Rules
 
@@ -81,8 +85,8 @@ Costs and limitations:
 - Self-hosted operators must create and install a GitHub App and configure its private key.
 - The API must implement JWT signing, installation discovery/binding, token minting, and redacted
   error handling.
-- V1.5 does not attribute the remote write to an individual GitHub user token; the local Delivery
-  Approval and Team audit provide the human attribution.
+- V1.5 does not attribute the remote write to an individual GitHub user token; the signed Web
+  Delivery Approval and Team audit provide the human attribution.
 - Token revocation is not instantaneous for a token already minted, so short lifetime, single-use
   attempt handling, and local cancellation remain important.
 
