@@ -3,6 +3,7 @@ import type {
   Artifact,
   BudgetGuardDecision,
   CodingDiffArtifact,
+  GitHubDeliveryPackageSource,
   RunStatus,
   TestEvidence,
   WorkflowEdge,
@@ -70,6 +71,7 @@ export type CreatePrDraftArtifactInput = {
   artifacts: Artifact[]
   codingDiffs: CodingDiffArtifact[]
   testEvidence: TestEvidence[]
+  deliverySource: GitHubDeliveryPackageSource
   enforcement?: GateEnforcementDecision
   budgetDecision?: BudgetGuardDecision
   agentReviewSummaries?: string[]
@@ -526,7 +528,11 @@ export function createPrDraftArtifact(input: CreatePrDraftArtifactInput): Artifa
   const design = input.artifacts.find((artifact) => artifact.kind === 'design')
   const changedPaths = unique(input.codingDiffs.flatMap((diff) => diff.changedPaths)).map(redactDeliveryText)
   const latestTest = latestByTimestamp(input.testEvidence, (evidence) => evidence.createdAt)
-  const compareUrl = safeCompareUrl(input.project.repository, input.project.defaultBranch, input.run.branchName)
+  const compareUrl = safeCompareUrl(
+    input.project.repository,
+    input.project.defaultBranch,
+    input.deliverySource.headBranch,
+  )
   const title = redactDeliveryText(input.run.title)
   const request = redactDeliveryText(rawRequest?.content ?? input.run.request)
   const designSummary = redactDeliveryText(design?.summary ?? 'No design artifact linked.')
@@ -569,6 +575,7 @@ export function createPrDraftArtifact(input: CreatePrDraftArtifactInput): Artifa
     content,
     redacted: true,
     updatedAt: input.now,
+    githubDeliverySource: input.deliverySource,
   }
 }
 

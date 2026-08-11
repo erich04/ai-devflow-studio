@@ -187,6 +187,17 @@ export type Artifact = {
   content: string
   redacted: boolean
   updatedAt: string
+  githubDeliverySource?: GitHubDeliveryPackageSource
+}
+
+export type GitHubDeliveryPackageSource = {
+  stateVersion: 1
+  codingRunId: string
+  workspaceId: string
+  diffArtifactId: string
+  diffSourceDigest: string
+  testEvidenceId: string
+  headBranch: string
 }
 
 export type AgentEvent = {
@@ -824,6 +835,7 @@ export type CodingDiffArtifact = {
   projectId: string
   changedPaths: string[]
   patch: string
+  sourceDigest?: string
   truncated: boolean
   redacted: boolean
   createdAt: string

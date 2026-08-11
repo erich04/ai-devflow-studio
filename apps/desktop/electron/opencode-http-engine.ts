@@ -6,6 +6,7 @@ import {
   type CodingPermissionRequest,
 } from '@ai-devflow/shared'
 import { realpathSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { isAbsolute, relative, resolve } from 'node:path'
 import type { CodingEngineAdapter, CodingEngineStartInput } from './coding-engine.js'
 import {
@@ -328,6 +329,7 @@ export function createOpencodeHttpCodingEngineAdapter(
           projectId: input.project.id,
           changedPaths: diffSource.changedPaths,
           patch: diffSource.patch,
+          sourceDigest: createHash('sha256').update(diffSource.patch, 'utf8').digest('hex'),
           createdAt: input.now,
         })
         const codingRun: CodingAgentRun = {

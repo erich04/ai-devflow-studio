@@ -121,6 +121,15 @@ describe('delivery artifacts', () => {
     redacted: true,
     createdAt: '2026-06-21T16:30:00.000Z',
   }
+  const deliverySource = {
+    stateVersion: 1 as const,
+    codingRunId: 'coding-run-1',
+    workspaceId: 'workspace-1',
+    diffArtifactId: codingDiff.id,
+    diffSourceDigest: '2222222222222222222222222222222222222222222222222222222222222222',
+    testEvidenceId: testEvidence.id,
+    headBranch: 'devflow/run-delivery-build-coding-run-1',
+  }
   const enforcement: GateEnforcementDecision = {
     status: 'warn',
     blocksApproval: false,
@@ -155,6 +164,7 @@ describe('delivery artifacts', () => {
       artifacts: created.artifacts,
       codingDiffs: [codingDiff],
       testEvidence: [testEvidence],
+      deliverySource,
       enforcement,
       budgetDecision: budget,
       agentReviewSummaries: ['No blocking risks.'],
@@ -167,12 +177,15 @@ describe('delivery artifacts', () => {
       nodeId: 'run-delivery-pr',
       kind: 'pr',
       redacted: true,
+      githubDeliverySource: deliverySource,
     })
     expect(artifact.content).toContain(
       'Request: Fix webhook retry handling and archive the delivery evidence.',
     )
     expect(artifact.content).not.toContain('Request: Ship webhook retry')
-    expect(artifact.content).toContain('Compare: https://github.com/erich/payments-api/compare/main...ai%2Fwebhook-retry')
+    expect(artifact.content).toContain(
+      'Compare: https://github.com/erich/payments-api/compare/main...devflow%2Frun-delivery-build-coding-run-1',
+    )
     expect(artifact.content).toContain('src/webhook.ts')
     expect(artifact.content).toContain('Test Evidence: passed - Tests passed.')
     expect(artifact.content).toContain('Policy: warn')
@@ -188,6 +201,7 @@ describe('delivery artifacts', () => {
       artifacts: created.artifacts,
       codingDiffs: [codingDiff],
       testEvidence: [testEvidence],
+      deliverySource,
       now: '2026-06-21T16:35:00.000Z',
     })
 
@@ -210,6 +224,7 @@ describe('delivery artifacts', () => {
       artifacts,
       codingDiffs: [codingDiff],
       testEvidence: [testEvidence],
+      deliverySource,
       now: '2026-06-21T16:35:00.000Z',
     })
     const acceptanceArtifact = createAcceptanceEvidenceBundleArtifact({
@@ -235,6 +250,7 @@ describe('delivery artifacts', () => {
       artifacts: created.artifacts,
       codingDiffs: [codingDiff],
       testEvidence: [testEvidence],
+      deliverySource,
       enforcement,
       budgetDecision: budget,
       agentReviewSummaries: ['No blocking risks.'],

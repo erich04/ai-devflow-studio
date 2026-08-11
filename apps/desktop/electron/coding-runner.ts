@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
@@ -90,7 +90,7 @@ export type CapturedWorktreeDiff = {
 
 export type CommitManagedCodingWorkspaceInput = {
   workspace: ManagedCodingWorkspace
-  expectedChangedPaths: string[]
+  expectedDiffArtifact: CodingDiffArtifact
   runId: string
 }
 
@@ -156,21 +156,45 @@ export async function commitManagedCodingWorkspace(
   if (input.workspace.cleanupStatus !== 'active' || input.workspace.deletedAt) {
     throw new Error('Only an active managed workspace can be committed for delivery')
   }
+  if (
+    !input.workspace.baseCommitSha ||
+    !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(input.workspace.baseCommitSha)
+  ) {
+    throw new Error('Managed workspace is missing its recorded base commit')
+  }
+  if (
+    input.expectedDiffArtifact.runId !== input.runId ||
+    input.expectedDiffArtifact.projectId !== input.workspace.projectId ||
+    input.expectedDiffArtifact.truncated ||
+    !input.expectedDiffArtifact.sourceDigest ||
+    !/^[a-f0-9]{64}$/.test(input.expectedDiffArtifact.sourceDigest)
+  ) {
+    throw new Error('Managed workspace reviewed Coding Diff is not delivery-safe')
+  }
 
   const currentBranchName = await currentBranch(input.workspace.worktreePath)
   if (currentBranchName !== input.workspace.branchName) {
     throw new Error('Managed workspace branch changed before delivery commit')
   }
   const currentHead = await currentCommit(input.workspace.worktreePath)
+  const baseCommitSha = input.workspace.baseCommitSha
+  const expectedPaths = sortedUnique(input.expectedDiffArtifact.changedPaths)
 
   if (input.workspace.headCommitSha) {
-    if (!input.workspace.baseCommitSha || currentHead !== input.workspace.headCommitSha) {
+    if (currentHead !== input.workspace.headCommitSha) {
       throw new Error('Managed workspace expected commit changed after delivery preparation')
     }
     const replayStatus = await worktreeStatus(input.workspace.worktreePath)
     if (replayStatus.length > 0) {
       throw new Error('Managed workspace changed after delivery commit')
     }
+    const replayPatch = await committedPatch(
+      input.workspace.worktreePath,
+      baseCommitSha,
+      currentHead,
+      expectedPaths,
+    )
+    assertReviewedDiff(input.expectedDiffArtifact, expectedPaths, replayPatch)
     return {
       workspace: input.workspace as CommitManagedCodingWorkspaceResult['workspace'],
       baseCommitSha: input.workspace.baseCommitSha,
@@ -178,8 +202,6 @@ export async function commitManagedCodingWorkspace(
     }
   }
 
-  const baseCommitSha = input.workspace.baseCommitSha ?? currentHead
-  const expectedPaths = sortedUnique(input.expectedChangedPaths)
   if (currentHead !== baseCommitSha) {
     const recoveryStatus = await worktreeStatus(input.workspace.worktreePath)
     const parentCommitSha = (await execGit(
@@ -199,6 +221,12 @@ export async function commitManagedCodingWorkspace(
     const committedPaths = sortedUnique(
       changedOutput.split('\0').filter((value) => value.length > 0),
     )
+    const recoveryPatch = await committedPatch(
+      input.workspace.worktreePath,
+      baseCommitSha,
+      currentHead,
+      expectedPaths,
+    )
     const { stdout: messageOutput } = await execGit(
       input.workspace.worktreePath,
       ['log', '-1', '--format=%B'],
@@ -212,6 +240,7 @@ export async function commitManagedCodingWorkspace(
     ) {
       throw new Error('Managed workspace contains an unrecorded commit')
     }
+    assertReviewedDiff(input.expectedDiffArtifact, committedPaths, recoveryPatch)
     const workspace = {
       ...input.workspace,
       baseCommitSha,
@@ -223,8 +252,10 @@ export async function commitManagedCodingWorkspace(
       expectedCommitSha: currentHead,
     }
   }
-  const entries = await worktreeStatus(input.workspace.worktreePath)
-  const actualPaths = sortedUnique(entries.map((entry) => entry.path))
+  const reviewedDiff = await captureWorktreeDiff({
+    worktreePath: input.workspace.worktreePath,
+  })
+  const actualPaths = sortedUnique(reviewedDiff.changedPaths)
   if (
     actualPaths.length === 0 ||
     actualPaths.length !== expectedPaths.length ||
@@ -232,6 +263,7 @@ export async function commitManagedCodingWorkspace(
   ) {
     throw new Error('Managed workspace changed paths do not match reviewed Coding evidence')
   }
+  assertReviewedDiff(input.expectedDiffArtifact, actualPaths, reviewedDiff.patch)
 
   await execGit(input.workspace.worktreePath, ['add', '--', ...expectedPaths])
   const commitMessage = deliveryCommitMessage(input.runId)
@@ -271,6 +303,40 @@ export async function commitManagedCodingWorkspace(
     workspace,
     baseCommitSha,
     expectedCommitSha,
+  }
+}
+
+async function committedPatch(
+  worktreePath: string,
+  baseCommitSha: string,
+  headCommitSha: string,
+  changedPaths: string[],
+): Promise<string> {
+  const { stdout } = await execGit(worktreePath, [
+    'diff',
+    '--no-ext-diff',
+    `${baseCommitSha}..${headCommitSha}`,
+    '--',
+    ...changedPaths,
+  ])
+  return stdout
+}
+
+function assertReviewedDiff(
+  expected: CodingDiffArtifact,
+  actualPaths: string[],
+  rawPatch: string,
+): void {
+  const expectedPaths = sortedUnique(expected.changedPaths)
+  if (
+    actualPaths.length !== expectedPaths.length ||
+    actualPaths.some((value, index) => value !== expectedPaths[index])
+  ) {
+    throw new Error('Managed workspace changed paths do not match reviewed Coding evidence')
+  }
+  const sourceDigest = createHash('sha256').update(rawPatch, 'utf8').digest('hex')
+  if (sourceDigest !== expected.sourceDigest) {
+    throw new Error('Managed workspace contents do not match reviewed Coding evidence')
   }
 }
 
@@ -456,6 +522,7 @@ export async function completeFakeCodingRun(
     projectId: input.project.id,
     changedPaths: capturedDiff.changedPaths,
     patch: capturedDiff.patch,
+    sourceDigest: createHash('sha256').update(capturedDiff.patch, 'utf8').digest('hex'),
     createdAt: now,
   })
   const bootstrapEvidence: DependencyBootstrapEvidence = {

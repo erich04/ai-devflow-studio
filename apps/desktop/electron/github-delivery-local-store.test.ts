@@ -154,6 +154,7 @@ function createSources() {
     projectId: run.projectId,
     changedPaths: ['src/delivery.ts'],
     patch: '+ private local patch',
+    sourceDigest: '2222222222222222222222222222222222222222222222222222222222222222',
     truncated: false,
     redacted: true,
     createdAt: '2026-08-11T10:18:00.000Z',
@@ -185,6 +186,15 @@ function createSources() {
     content: '# Ship a tested change\n\nEvidence metadata only.',
     redacted: true,
     updatedAt: '2026-08-11T10:25:00.000Z',
+    githubDeliverySource: {
+      stateVersion: 1,
+      codingRunId: codingRun.id,
+      workspaceId: workspace.id,
+      diffArtifactId: diffArtifact.id,
+      diffSourceDigest: diffArtifact.sourceDigest!,
+      testEvidenceId: codingRun.testEvidenceId!,
+      headBranch: workspace.branchName,
+    },
   }
   return { project, pairing, repositoryBinding, run, codingRun, workspace, diffArtifact, testEvidence, prPackage }
 }

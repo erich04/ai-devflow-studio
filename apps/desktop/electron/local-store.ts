@@ -5537,9 +5537,10 @@ class SqlJsLocalStore implements LocalStore {
     )
     if (
       baseCommitSha === headCommitSha ||
+      expected.baseCommitSha === undefined ||
       workspace.baseCommitSha !== baseCommitSha ||
       workspace.headCommitSha !== headCommitSha ||
-      (expected.baseCommitSha !== undefined && expected.baseCommitSha !== baseCommitSha) ||
+      expected.baseCommitSha !== baseCommitSha ||
       (expected.headCommitSha !== undefined && expected.headCommitSha !== headCommitSha)
     ) {
       throw new Error('Managed workspace delivery commit is not canonical')

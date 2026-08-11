@@ -2,9 +2,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { CodingAgentRun, LocalProject } from '@ai-devflow/shared'
+import { sanitizeCodingDiffArtifact } from '@ai-devflow/shared'
+import type { CodingAgentRun, CodingDiffArtifact, LocalProject, ManagedCodingWorkspace } from '@ai-devflow/shared'
 import {
   createFakeCodingRunBundle,
   createManagedCodingWorkspace,
@@ -91,20 +93,21 @@ describe('coding worktree manager', () => {
       worktreeRoot: await tempDir('devflow-worktrees-'),
     })
     await writeFile(path.join(workspace.worktreePath, 'delivery.txt'), 'reviewed\n')
+    const expectedDiffArtifact = await reviewedDiff(workspace, 'run-1', 'node-build')
 
     const committed = await commitManagedCodingWorkspace({
       workspace,
-      expectedChangedPaths: ['delivery.txt'],
+      expectedDiffArtifact,
       runId: 'run-1',
     })
     const recoveredAfterCommitBeforePersistence = await commitManagedCodingWorkspace({
       workspace,
-      expectedChangedPaths: ['delivery.txt'],
+      expectedDiffArtifact,
       runId: 'run-1',
     })
     const replay = await commitManagedCodingWorkspace({
       workspace: committed.workspace,
-      expectedChangedPaths: ['delivery.txt'],
+      expectedDiffArtifact,
       runId: 'run-1',
     })
     const { stdout: status } = await execFileAsync(
@@ -136,12 +139,64 @@ describe('coding worktree manager', () => {
     })
     await writeFile(path.join(workspace.worktreePath, 'reviewed.txt'), 'reviewed\n')
     await writeFile(path.join(workspace.worktreePath, 'unexpected.txt'), 'unexpected\n')
+    const expectedDiffArtifact: CodingDiffArtifact = {
+      id: 'diff-reviewed-only',
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: workspace.projectId,
+      changedPaths: ['reviewed.txt'],
+      patch: '',
+      sourceDigest: createHash('sha256').update('', 'utf8').digest('hex'),
+      truncated: false,
+      redacted: true,
+      createdAt: '2026-08-11T13:00:00.000Z',
+    }
 
     await expect(commitManagedCodingWorkspace({
       workspace,
-      expectedChangedPaths: ['reviewed.txt'],
+      expectedDiffArtifact,
       runId: 'run-1',
     })).rejects.toThrow('Managed workspace changed paths do not match reviewed Coding evidence')
+  })
+
+  it('refuses a same-path content change after the Coding Diff was reviewed', async () => {
+    const repo = await gitRepo()
+    const workspace = await createManagedCodingWorkspace({
+      project: project(repo),
+      codingRunId: 'coding-run-1',
+      runId: 'run-1',
+      nodeId: 'node-build',
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+    })
+    await writeFile(path.join(workspace.worktreePath, 'delivery.txt'), 'reviewed\n')
+    const expectedDiffArtifact = await reviewedDiff(workspace, 'run-1', 'node-build')
+    await writeFile(path.join(workspace.worktreePath, 'delivery.txt'), 'changed after review\n')
+
+    await expect(commitManagedCodingWorkspace({
+      workspace,
+      expectedDiffArtifact,
+      runId: 'run-1',
+    })).rejects.toThrow('Managed workspace contents do not match reviewed Coding evidence')
+  })
+
+  it('refuses delivery commits from legacy workspaces without a recorded base SHA', async () => {
+    const repo = await gitRepo()
+    const workspace = await createManagedCodingWorkspace({
+      project: project(repo),
+      codingRunId: 'coding-run-1',
+      runId: 'run-1',
+      nodeId: 'node-build',
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+    })
+    await writeFile(path.join(workspace.worktreePath, 'delivery.txt'), 'reviewed\n')
+    const expectedDiffArtifact = await reviewedDiff(workspace, 'run-1', 'node-build')
+    const { baseCommitSha: _baseCommitSha, ...legacyWorkspace } = workspace
+
+    await expect(commitManagedCodingWorkspace({
+      workspace: legacyWorkspace,
+      expectedDiffArtifact,
+      runId: 'run-1',
+    })).rejects.toThrow('Managed workspace is missing its recorded base commit')
   })
 })
 
@@ -260,6 +315,24 @@ async function tempDir(prefix: string) {
   const dir = await mkdtemp(path.join(os.tmpdir(), prefix))
   tempDirs.push(dir)
   return dir
+}
+
+async function reviewedDiff(
+  workspace: ManagedCodingWorkspace,
+  runId: string,
+  nodeId: string,
+): Promise<CodingDiffArtifact> {
+  const captured = await captureWorktreeDiff({ worktreePath: workspace.worktreePath })
+  return sanitizeCodingDiffArtifact({
+    id: `diff-${workspace.id}`,
+    runId,
+    nodeId,
+    projectId: workspace.projectId,
+    changedPaths: captured.changedPaths,
+    patch: captured.patch,
+    sourceDigest: createHash('sha256').update(captured.patch, 'utf8').digest('hex'),
+    createdAt: '2026-08-11T13:00:00.000Z',
+  })
 }
 
 async function gitRepo() {

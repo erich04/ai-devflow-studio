@@ -73,6 +73,7 @@ export type RawCodingDiffArtifact = {
   projectId: string
   changedPaths: string[]
   patch: string
+  sourceDigest?: string
   createdAt: string
 }
 
@@ -252,6 +253,9 @@ export function selectDependencyBootstrap(
 }
 
 export function sanitizeCodingDiffArtifact(input: RawCodingDiffArtifact): CodingDiffArtifact {
+  if (input.sourceDigest !== undefined && !/^[a-f0-9]{64}$/.test(input.sourceDigest)) {
+    throw new Error('Coding Diff source digest must be a lowercase SHA-256 digest')
+  }
   const filteredPaths = input.changedPaths.filter(isRepoRelativePath).slice(0, MAX_REMOTE_CHANGED_PATHS)
   const redactedPatch = redactDiffAddedLines(input.patch)
   const truncated = redactedPatch.value.length > MAX_DIFF_CHARS
@@ -267,6 +271,7 @@ export function sanitizeCodingDiffArtifact(input: RawCodingDiffArtifact): Coding
     projectId: input.projectId,
     changedPaths: filteredPaths,
     patch,
+    ...(input.sourceDigest ? { sourceDigest: input.sourceDigest } : {}),
     truncated,
     redacted: redactedPatch.redacted,
     createdAt: input.createdAt,

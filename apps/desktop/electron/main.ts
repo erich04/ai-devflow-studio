@@ -1619,6 +1619,7 @@ function registerIpcHandlers() {
       testEvidence,
       agentReviews,
       codingRuns,
+      managedWorkspaces,
       existingEvents,
       enforcement,
     ] = await Promise.all([
@@ -1628,12 +1629,68 @@ function registerIpcHandlers() {
       store.listTestEvidence(run.id),
       store.listAgentReviews(run.id),
       store.listCodingAgentRuns(run.id),
+      store.listManagedCodingWorkspaces(run.projectId),
       store.listEvents(run.id),
       evaluateLocalGateEnforcement({ runId: run.id, nodeId: node.id }),
     ])
-    const latestCodingRun = [...codingRuns].sort((left, right) =>
-      (right.completedAt ?? right.startedAt).localeCompare(left.completedAt ?? left.startedAt),
-    )[0]
+    const deliverySources = codingRuns.flatMap((codingRun) => {
+      if (
+        codingRun.status !== 'completed' ||
+        !codingRun.completedAt ||
+        !codingRun.managedWorkspaceId ||
+        !codingRun.diffArtifactId ||
+        !codingRun.testEvidenceId
+      ) {
+        return []
+      }
+      const buildNode = run.nodes.find((candidate) => candidate.id === codingRun.nodeId)
+      const workspace = managedWorkspaces.find(
+        (candidate) => candidate.id === codingRun.managedWorkspaceId,
+      )
+      const diff = codingDiffs.find((candidate) => candidate.id === codingRun.diffArtifactId)
+      const test = testEvidence.find((candidate) => candidate.id === codingRun.testEvidenceId)
+      if (
+        !buildNode ||
+        buildNode.kind !== 'task' ||
+        buildNode.stage !== 'build' ||
+        buildNode.status !== 'success' ||
+        !workspace ||
+        workspace.cleanupStatus !== 'active' ||
+        workspace.deletedAt ||
+        workspace.codingRunId !== codingRun.id ||
+        workspace.projectId !== run.projectId ||
+        !diff ||
+        !diff.sourceDigest ||
+        diff.truncated ||
+        diff.runId !== run.id ||
+        diff.nodeId !== codingRun.nodeId ||
+        diff.projectId !== run.projectId ||
+        !test ||
+        test.runId !== run.id ||
+        test.nodeId !== codingRun.nodeId ||
+        test.projectId !== run.projectId
+      ) {
+        return []
+      }
+      return [{ codingRun, workspace, diff, test }]
+    })
+    if (deliverySources.length !== 1) {
+      throw new Error('PR Delivery Package requires exactly one complete managed coding source')
+    }
+    const deliverySource = deliverySources[0]
+    if (!deliverySource) {
+      throw new Error('PR Delivery Package source resolution failed')
+    }
+    const {
+      codingRun: deliveryCodingRun,
+      workspace: deliveryWorkspace,
+      diff: deliveryDiff,
+      test: deliveryTest,
+    } = deliverySource
+    const deliveryDiffSourceDigest = deliveryDiff.sourceDigest
+    if (!deliveryDiffSourceDigest) {
+      throw new Error('PR Delivery Package source is missing its reviewed diff digest')
+    }
     const timestamp = new Date().toISOString()
     const artifact = createPrDraftArtifact({
       run,
@@ -1641,10 +1698,19 @@ function registerIpcHandlers() {
       artifacts,
       codingDiffs,
       testEvidence,
+      deliverySource: {
+        stateVersion: 1,
+        codingRunId: deliveryCodingRun.id,
+        workspaceId: deliveryWorkspace.id,
+        diffArtifactId: deliveryDiff.id,
+        diffSourceDigest: deliveryDiffSourceDigest,
+        testEvidenceId: deliveryTest.id,
+        headBranch: deliveryWorkspace.branchName,
+      },
       agentReviewSummaries: agentReviews.map((review) => review.summary),
       enforcement: enforcement.decision,
-      ...(latestCodingRun?.budgetDecision
-        ? { budgetDecision: latestCodingRun.budgetDecision }
+      ...(deliveryCodingRun.budgetDecision
+        ? { budgetDecision: deliveryCodingRun.budgetDecision }
         : {}),
       now: timestamp,
     })

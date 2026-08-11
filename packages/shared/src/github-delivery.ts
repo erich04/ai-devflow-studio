@@ -58,6 +58,7 @@ export type GitHubDeliveryIntent = {
   baseCommitSha: string
   expectedCommitSha: string
   diffArtifactId: string
+  diffSourceDigest: string
   testEvidenceId: string
   testEvidenceCreatedAt: string
   testEvidenceDigest: string
@@ -212,6 +213,7 @@ function canonicalIntentMaterial(material: IntentDigestMaterial): string {
     baseCommitSha: material.baseCommitSha,
     expectedCommitSha: material.expectedCommitSha,
     diffArtifactId: material.diffArtifactId,
+    diffSourceDigest: material.diffSourceDigest,
     testEvidenceId: material.testEvidenceId,
     testEvidenceCreatedAt: material.testEvidenceCreatedAt,
     testEvidenceDigest: material.testEvidenceDigest,
@@ -317,6 +319,9 @@ export async function createGitHubDeliveryIntent(
     input.diffArtifact.nodeId !== input.codingRun.nodeId ||
     input.diffArtifact.projectId !== input.run.projectId ||
     input.diffArtifact.redacted !== true ||
+    input.diffArtifact.truncated ||
+    !input.diffArtifact.sourceDigest ||
+    !/^[a-f0-9]{64}$/.test(input.diffArtifact.sourceDigest) ||
     codingChangedPaths.length !== diffChangedPaths.length ||
     codingChangedPaths.some((value, index) => value !== diffChangedPaths[index])
   ) {
@@ -344,6 +349,19 @@ export async function createGitHubDeliveryIntent(
   ) {
     throw new Error('GitHub delivery requires the current redacted PR Delivery Package')
   }
+  const packageSource = input.prPackage.githubDeliverySource
+  if (
+    !packageSource ||
+    packageSource.stateVersion !== 1 ||
+    packageSource.codingRunId !== input.codingRun.id ||
+    packageSource.workspaceId !== input.workspace.id ||
+    packageSource.diffArtifactId !== input.diffArtifact.id ||
+    packageSource.diffSourceDigest !== input.diffArtifact.sourceDigest ||
+    packageSource.testEvidenceId !== input.codingRun.testEvidenceId ||
+    packageSource.headBranch !== headBranch
+  ) {
+    throw new Error('PR Delivery Package does not match the managed coding source')
+  }
   const changedPaths = diffChangedPaths
   const testEvidenceDigest = await sha256Hex(JSON.stringify({
     id: input.testEvidence.id,
@@ -364,6 +382,7 @@ export async function createGitHubDeliveryIntent(
     title: input.prPackage.title,
     summary: input.prPackage.summary,
     content: input.prPackage.content,
+    githubDeliverySource: packageSource,
     updatedAt: input.prPackage.updatedAt,
   }))
   const material: IntentDigestMaterial = {
@@ -387,6 +406,7 @@ export async function createGitHubDeliveryIntent(
     baseCommitSha,
     expectedCommitSha,
     diffArtifactId: input.diffArtifact.id,
+    diffSourceDigest: input.diffArtifact.sourceDigest,
     testEvidenceId: input.testEvidence.id,
     testEvidenceCreatedAt: input.testEvidence.createdAt,
     testEvidenceDigest,

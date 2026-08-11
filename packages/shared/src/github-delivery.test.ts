@@ -70,7 +70,8 @@ const codingRun: CodingAgentRun = {
   changedPaths: ['src/z.ts', 'src/a.ts', 'src/a.ts'],
   startedAt: '2026-08-11T10:05:00.000Z',
   completedAt: '2026-08-11T10:20:00.000Z',
-  diffArtifactId: 'diff-1',
+      diffArtifactId: 'diff-1',
+      diffSourceDigest: '2222222222222222222222222222222222222222222222222222222222222222',
   testEvidenceId: 'test-1',
   redacted: true,
 }
@@ -99,6 +100,15 @@ const prPackage: Artifact = {
   content: '# Ship delivery intent\n\nEvidence only.',
   redacted: true,
   updatedAt: '2026-08-11T10:25:00.000Z',
+  githubDeliverySource: {
+    stateVersion: 1,
+    codingRunId: codingRun.id,
+    workspaceId: workspace.id,
+    diffArtifactId: 'diff-1',
+    diffSourceDigest: '2222222222222222222222222222222222222222222222222222222222222222',
+    testEvidenceId: codingRun.testEvidenceId!,
+    headBranch: workspace.branchName,
+  },
 }
 
 const testEvidence = {
@@ -126,6 +136,7 @@ const diffArtifact: CodingDiffArtifact = {
   projectId: run.projectId,
   changedPaths: ['src/a.ts', 'src/z.ts'],
   patch: '+ redacted patch',
+  sourceDigest: '2222222222222222222222222222222222222222222222222222222222222222',
   truncated: false,
   redacted: true,
   createdAt: '2026-08-11T10:18:00.000Z',
@@ -194,7 +205,8 @@ describe('GitHub Delivery Intent', () => {
       headBranch: 'devflow/run-1-build-coding-1',
       baseCommitSha: '0000000000000000000000000000000000000000',
       expectedCommitSha: '1111111111111111111111111111111111111111',
-      diffArtifactId: 'diff-1',
+    diffArtifactId: 'diff-1',
+    diffSourceDigest: '2222222222222222222222222222222222222222222222222222222222222222',
       testEvidenceId: 'delivery-test-1',
       prPackageArtifactId: 'artifact-run-1-pr-draft',
       changedPaths: ['src/a.ts', 'src/z.ts'],
@@ -218,6 +230,19 @@ describe('GitHub Delivery Intent', () => {
     })).rejects.toThrow('Test Evidence is not bound to the expected commit')
   })
 
+  it('fails closed when the PR Delivery Package points at another coding source', async () => {
+    await expect(createGitHubDeliveryIntent({
+      ...baseInput,
+      prPackage: {
+        ...prPackage,
+        githubDeliverySource: {
+          ...prPackage.githubDeliverySource!,
+          codingRunId: 'coding-other',
+        },
+      },
+    })).rejects.toThrow('PR Delivery Package does not match the managed coding source')
+  })
+
   it('changes the intent digest when commit-bound Test Evidence changes', async () => {
     const original = await createGitHubDeliveryIntent(baseInput)
     const changed = await createGitHubDeliveryIntent({
@@ -229,6 +254,25 @@ describe('GitHub Delivery Intent', () => {
     })
 
     expect(changed.testEvidenceDigest).not.toBe(original.testEvidenceDigest)
+    expect(changed.intentDigest).not.toBe(original.intentDigest)
+  })
+
+  it('changes the intent digest when the reviewed raw diff digest changes', async () => {
+    const original = await createGitHubDeliveryIntent(baseInput)
+    const changedDigest = '3333333333333333333333333333333333333333333333333333333333333333'
+    const changed = await createGitHubDeliveryIntent({
+      ...baseInput,
+      diffArtifact: { ...diffArtifact, sourceDigest: changedDigest },
+      prPackage: {
+        ...prPackage,
+        githubDeliverySource: {
+          ...prPackage.githubDeliverySource!,
+          diffSourceDigest: changedDigest,
+        },
+      },
+    })
+
+    expect(changed.diffSourceDigest).toBe(changedDigest)
     expect(changed.intentDigest).not.toBe(original.intentDigest)
   })
 
