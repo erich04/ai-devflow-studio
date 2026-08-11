@@ -125,7 +125,12 @@ export function createGitHubDeliveryRuntime(
   ): Promise<PrepareGitHubDeliveryResult> {
     const existingIntent = await loadExistingIntent(deps.store, input)
     if (existingIntent) {
-      return replayActiveIntent(deps.store, input, existingIntent)
+      return replayActiveIntent(
+        deps.store,
+        input,
+        existingIntent,
+        commitWorkspace,
+      )
     }
 
     const source = await resolveDeliverySource(deps.store, input)
@@ -222,7 +227,7 @@ export function createGitHubDeliveryRuntime(
       if (!winner) {
         throw new Error('GitHub Delivery preparation winner could not be reloaded')
       }
-      return replayActiveIntent(deps.store, input, winner)
+      return replayActiveIntent(deps.store, input, winner, commitWorkspace)
     }
     return settlePreparationResult(prepared, testEvidence)
   }
@@ -278,8 +283,22 @@ async function replayActiveIntent(
   store: GitHubDeliveryRuntimeStore,
   input: PrepareGitHubDeliveryInput,
   activeIntent: GitHubDeliveryIntent,
+  verifyWorkspace: (
+    input: CommitManagedCodingWorkspaceInput,
+  ) => Promise<CommitManagedCodingWorkspaceResult>,
 ): Promise<PrepareGitHubDeliveryResult> {
   const replay = await resolveDeliverySource(store, input, activeIntent)
+  const verifiedWorkspace = await verifyWorkspace({
+    workspace: replay.workspace,
+    expectedDiffArtifact: replay.diffArtifact,
+    runId: replay.run.id,
+  })
+  if (
+    verifiedWorkspace.baseCommitSha !== activeIntent.baseCommitSha ||
+    verifiedWorkspace.expectedCommitSha !== activeIntent.expectedCommitSha
+  ) {
+    throw new Error('Existing GitHub Delivery workspace no longer matches its approved commit')
+  }
   const testEvidence = replay.precommitTestEvidence as TestEvidence & {
     sourceCommitSha: string
   }

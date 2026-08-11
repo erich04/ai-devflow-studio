@@ -376,7 +376,7 @@ describe('GitHub Delivery preparation runtime', () => {
     expect(runTestCommand).toHaveBeenCalledTimes(1)
   })
 
-  it('replays an exact active intent without another commit, test, or evidence write', async () => {
+  it('replays an exact active intent after re-verifying git without another test or evidence write', async () => {
     const source = fixture()
     const store = fakeStore(source)
     const committedWorkspace = {
@@ -415,7 +415,7 @@ describe('GitHub Delivery preparation runtime', () => {
     const replay = await runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
 
     expect(replay).toMatchObject({ status: 'prepared', replayed: true })
-    expect(commitWorkspace).not.toHaveBeenCalled()
+    expect(commitWorkspace).toHaveBeenCalledTimes(1)
     expect(runTestCommand).not.toHaveBeenCalled()
     expect(store.saveTestEvidence).not.toHaveBeenCalled()
     expect(store.commitGitHubDeliveryPreparation).not.toHaveBeenCalled()
@@ -468,7 +468,52 @@ describe('GitHub Delivery preparation runtime', () => {
       replayed: true,
       intent: { status: 'completed' },
     })
-    expect(commitWorkspace).not.toHaveBeenCalled()
+    expect(commitWorkspace).toHaveBeenCalledTimes(1)
+    expect(runTestCommand).not.toHaveBeenCalled()
+    expect(store.commitGitHubDeliveryPreparation).not.toHaveBeenCalled()
+  })
+
+  it('fails a replay when the real managed worktree no longer matches the approved commit', async () => {
+    const source = fixture()
+    const store = fakeStore(source)
+    const committedWorkspace = {
+      ...source.workspace,
+      baseCommitSha,
+      headCommitSha: expectedCommitSha,
+    }
+    const commitWorkspace = vi.fn(async () => ({
+      workspace: committedWorkspace,
+      baseCommitSha,
+      expectedCommitSha,
+    }))
+    const runTestCommand = vi.fn(async () => ({
+      status: 'passed' as const,
+      exitCode: 0,
+      durationMs: 25,
+      stdout: 'ok',
+      stderr: '',
+      redacted: false,
+      summary: 'Tests passed.',
+    }))
+    const runtime = createGitHubDeliveryRuntime({
+      store,
+      commitWorkspace,
+      runTestCommand,
+      now: () => '2026-08-11T13:10:00.000Z',
+      idGenerator: (prefix) => `${prefix}-1`,
+    })
+    await runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
+    commitWorkspace.mockRejectedValueOnce(
+      new Error('git -C /private/changed/worktree reported a dirty tree'),
+    )
+    runTestCommand.mockClear()
+    store.commitGitHubDeliveryPreparation.mockClear()
+
+    await expect(runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' }))
+      .rejects.toMatchObject({
+        name: 'GitHubDeliveryPreparationError',
+        code: 'preparation_failed',
+      })
     expect(runTestCommand).not.toHaveBeenCalled()
     expect(store.commitGitHubDeliveryPreparation).not.toHaveBeenCalled()
   })
