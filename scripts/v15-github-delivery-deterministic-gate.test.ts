@@ -6,6 +6,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import type {
+  AgentReviewResult,
   Artifact,
   CodingAgentRun,
   CodingDiffArtifact,
@@ -683,6 +684,16 @@ async function approveRequest(
 }
 
 describe('V1.5 deterministic GitHub Delivery gate', () => {
+  it('is exposed as the canonical package-level V1.5 delivery gate', async () => {
+    const rootPackage = JSON.parse(
+      await readFile(path.resolve(process.cwd(), 'package.json'), 'utf8'),
+    ) as { scripts?: Record<string, string> }
+
+    expect(rootPackage.scripts?.['test:v15-github-delivery']).toBe(
+      'vitest run scripts/v15-github-delivery-deterministic-gate.test.ts',
+    )
+  })
+
   it('read-only reconciles a remote-completed/local-uncommitted crash after binding revocation', async () => {
     const harness = await createGateHarness()
     const binding = await configureRepository(harness)
@@ -968,17 +979,139 @@ describe('V1.5 deterministic GitHub Delivery gate', () => {
       publisherPushCalls: 1,
     })
 
-    const completedRun = await restartedStore.getRun(runId)
-    expect(completedRun).toMatchObject({
+    const deliveredRun = await restartedStore.getRun(runId)
+    expect(deliveredRun).toMatchObject({
       currentNodeId: `${runId}-accept`,
       status: 'paused_at_gate',
       pullRequestUrl: `https://github.com/${repositoryName}/pull/42`,
     })
-    expect(completedRun?.nodes.find((node) => node.id === prNodeId)).toMatchObject({
+    expect(deliveredRun?.nodes.find((node) => node.id === prNodeId)).toMatchObject({
       status: 'success',
     })
+    const acceptanceNodeId = `${runId}-accept`
+    const acceptanceArtifact: Artifact = {
+      id: 'artifact-acceptance-v15-gate',
+      runId,
+      nodeId: acceptanceNodeId,
+      kind: 'acceptance',
+      title: 'Acceptance: deterministic V1.5 delivery',
+      summary: 'The exact PR and GitHub Delivery evidence are ready for acceptance.',
+      content: 'Offline deterministic acceptance evidence.',
+      redacted: true,
+      updatedAt: '2026-08-11T12:10:00.000Z',
+    }
+    const workflow = createWorkflowRuntime(restartedStore)
+    await expect(workflow.execute({
+      runId,
+      command: {
+        type: 'attach_acceptance_bundle',
+        nodeId: acceptanceNodeId,
+        artifactId: acceptanceArtifact.id,
+      },
+      candidates: { artifacts: [acceptanceArtifact] },
+      now: acceptanceArtifact.updatedAt,
+    })).resolves.toMatchObject({
+      applied: true,
+      run: {
+        status: 'paused_at_gate',
+        currentNodeId: acceptanceNodeId,
+      },
+    })
+    const acceptanceReview: AgentReviewResult = {
+      id: 'review-acceptance-v15-gate',
+      requestId: 'review-request-acceptance-v15-gate',
+      runId,
+      nodeId: acceptanceNodeId,
+      projectId: localProjectId,
+      runtime: 'electron',
+      providerId: 'offline-gate',
+      model: 'deterministic',
+      conclusion: 'The exact delivered commit is ready for acceptance.',
+      summary: 'No blocking evidence gaps remain.',
+      risks: [],
+      missingEvidence: [],
+      suggestedTests: [],
+      knowledgeReferences: [],
+      policyFindings: [],
+      confidence: 1,
+      gateAdvisory: {
+        id: 'advisory-acceptance-v15-gate',
+        runId,
+        nodeId: acceptanceNodeId,
+        level: 'info',
+        blocksApproval: false,
+        summary: 'Acceptance can proceed.',
+        missingEvidence: [],
+        riskCount: 0,
+        createdAt: '2026-08-11T12:10:30.000Z',
+      },
+      createdAt: '2026-08-11T12:10:30.000Z',
+    }
+    await restartedStore.saveAgentReview(acceptanceReview)
+    const accepted = await workflow.execute({
+      runId,
+      command: { type: 'approve_acceptance', nodeId: acceptanceNodeId },
+      approval: {
+        roleAllowed: true,
+        policy: { blocksApproval: false },
+        review: 'required',
+        budget: 'required',
+      },
+      budgetDecision: {
+        status: 'allowed',
+        blocksRun: false,
+        currentSpendUsd: 0,
+        projectedCostUsd: 0,
+        reason: 'The offline deterministic gate has no provider spend.',
+      },
+      now: '2026-08-11T12:11:00.000Z',
+    })
+    expect(accepted).toMatchObject({
+      applied: true,
+      run: {
+        status: 'completed',
+        currentNodeId: acceptanceNodeId,
+        pullRequestUrl: `https://github.com/${repositoryName}/pull/42`,
+      },
+    })
+    if (!accepted.applied) throw new Error('Expected Acceptance approval to complete the Run')
+    expect(accepted.run.nodes.find((node) => node.id === prNodeId)).toMatchObject({
+      status: 'success',
+    })
+    expect(accepted.run.nodes.find((node) => node.id === acceptanceNodeId)).toMatchObject({
+      status: 'success',
+      artifactIds: [acceptanceArtifact.id],
+    })
+    const durableDelivery = (await restartedStore.listGitHubDeliveryIntents(runId))[0]
+    expect(durableDelivery).toMatchObject({
+      status: 'completed',
+      completion: {
+        remoteRequestId: request.id,
+        pullRequestId: '456789',
+        pullRequestNumber: 42,
+        pullRequestUrl: `https://github.com/${repositoryName}/pull/42`,
+        draft: true,
+        redacted: true,
+      },
+    })
+    const providerCountsAtCompletion = harness.counts()
     await expect(restartedRuntime.processor.recoverAndAdvance()).resolves.toEqual({
       results: [],
+    })
+    expect({
+      credentialProviderCalls:
+        harness.counts().credentialProviderCalls -
+        providerCountsAtCompletion.credentialProviderCalls,
+      publisherPushCalls:
+        harness.counts().publisherPushCalls -
+        providerCountsAtCompletion.publisherPushCalls,
+      pullRequestProviderCalls:
+        harness.counts().pullRequestProviderCalls -
+        providerCountsAtCompletion.pullRequestProviderCalls,
+    }).toEqual({
+      credentialProviderCalls: 0,
+      publisherPushCalls: 0,
+      pullRequestProviderCalls: 0,
     })
 
     const remoteSnapshot = await harness.remote.getRecoverySnapshot({

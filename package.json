@@ -16,6 +16,7 @@
     "typecheck:opencode-smoke": "tsc --noEmit -p tsconfig.opencode-smoke.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:v15-github-delivery": "vitest run scripts/v15-github-delivery-deterministic-gate.test.ts",
     "test:cross-platform": "node scripts/check-cross-platform.mjs",
     "test:postgres-smoke": "node scripts/postgres-smoke.mjs",
     "test:docker-smoke": "tsx scripts/docker-smoke.mjs",

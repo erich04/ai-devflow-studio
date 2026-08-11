@@ -35,7 +35,8 @@ type ReleaseSignoffSnapshot = {
   releaseTagTarget: string | null
   walkthroughEvidence: EvidenceRecord
   requiredGateRecord: EvidenceRecord
-  realOpencodeRecord: EvidenceRecord
+  realOpencodeRecord?: EvidenceRecord
+  githubSandboxRecord?: EvidenceRecord
 }
 
 const currentRootVersion = JSON.parse(readFileSync('package.json', 'utf8')).version
@@ -56,6 +57,7 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
   const releaseSeries = targetVersion.split('.').slice(0, 2).join('.')
   const profile = releaseProfileFor(targetVersion)
   const evidencePaths = releaseEvidencePaths(targetVersion)
+  const releaseEvidencePath = evidencePaths.githubSandbox ?? evidencePaths.realOpencode
 
   return {
     mode: 'pre-tag',
@@ -65,7 +67,7 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
     changedFilesFromCandidate: [
       evidencePaths.walkthrough,
       evidencePaths.requiredGates,
-      evidencePaths.realOpencode,
+      releaseEvidencePath,
       `docs/guides/devflow-studio-v${releaseSeries}-walkthrough-result-2026-07-31.md`,
     ],
     packageVersions: Object.fromEntries(packagePaths.map((path) => [path, targetVersion])),
@@ -91,45 +93,101 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
       status: 'passed',
       gates: Object.fromEntries((profile?.requiredGateIds ?? []).map((gate) => [gate, 'passed'])),
     }),
-    realOpencodeRecord: record(evidencePaths.realOpencode, {
-      targetVersion,
-      candidateSha,
-      status: 'passed',
-      recordedAt: '2026-07-31T12:00:00.000Z',
-      opencodeVersion: '1.17.5',
-      provider: 'double',
-      model: 'ark-code-latest',
-      keyEnvName: 'ANTHROPIC_AUTH_TOKEN',
-      duration: '1m38s',
-      permissionRelay: 'bash -> edit',
-      diffEvidence: ['devflow-opencode-smoke.txt'],
-      testEvidence: 'passed',
-      cleanup: 'passed',
-      redactionCheck: 'passed',
-      ...(releaseSeries === '1.4'
-        ? {
-            attemptCount: 1,
+    ...(releaseSeries === '1.5'
+      ? {
+          githubSandboxRecord: record(releaseEvidencePath, {
+            targetVersion,
+            candidateSha,
+            status: 'passed',
+            recordedAt: '2026-08-11T12:00:00.000Z',
+            repository: 'devflow/release-sandbox',
+            repositoryVisibility: 'private',
+            appSlug: 'devflow-release-sandbox',
+            installationIdSuffix: '4321',
+            repositoryIdSuffix: '8765',
+            bindingVersion: 1,
+            deliverySeriesKey: `github-delivery:${'a'.repeat(64)}`,
+            deliveryAttempt: 1,
+            intentRevision: 1,
+            expectedCommitSha: 'e'.repeat(40),
+            remoteHeadSha: 'e'.repeat(40),
+            baseBranch: 'main',
+            headBranch: 'devflow/v1.5-release',
+            pullRequestNumber: 17,
+            pullRequestUrl: 'https://github.com/devflow/release-sandbox/pull/17',
+            draft: true,
+            merged: false,
+            approvalRole: 'owner',
+            approvalAuthKind: 'session_cookie',
+            workRequestCount: 1,
+            canonicalRunCount: 1,
+            credentialGrantCount: 1,
+            branchPublicationCount: 1,
+            draftPullRequestCount: 1,
             automaticRetry: false,
-            costCapUsd: null,
-            releaseProfile: 'v1.4',
-            providerApiMode: 'responses',
-            resolvedConfigPreflight: 'passed',
-            providerRetryObserved: false,
-            egressGate: {
-              armedSegmentCount: 3,
-              forwardedRequestCount: 3,
-              completedResponseCount: 3,
-              blockedUncreditedRequestCount: 0,
-              blockedInvalidCount: 0,
-              failedSegmentCount: 0,
-              activeRequestCount: 0,
-              closed: true,
-            },
-            opencodeVersion: '1.18.15',
-          }
-        : {}),
-    }),
+            acceptanceStatus: 'completed',
+            restartRecovery: 'passed',
+            bindingRevocation: 'passed',
+            postRevocationGrant: 'blocked',
+            redactionCheck: 'passed',
+            cleanup: 'passed',
+            cleanupMethod: 'external-operator-no-merge',
+          }),
+        }
+      : {
+          realOpencodeRecord: record(releaseEvidencePath, {
+            targetVersion,
+            candidateSha,
+            status: 'passed',
+            recordedAt: '2026-07-31T12:00:00.000Z',
+            opencodeVersion: '1.17.5',
+            provider: 'double',
+            model: 'ark-code-latest',
+            keyEnvName: 'ANTHROPIC_AUTH_TOKEN',
+            duration: '1m38s',
+            permissionRelay: 'bash -> edit',
+            diffEvidence: ['devflow-opencode-smoke.txt'],
+            testEvidence: 'passed',
+            cleanup: 'passed',
+            redactionCheck: 'passed',
+            ...(releaseSeries === '1.4'
+              ? {
+                  attemptCount: 1,
+                  automaticRetry: false,
+                  costCapUsd: null,
+                  releaseProfile: 'v1.4',
+                  providerApiMode: 'responses',
+                  resolvedConfigPreflight: 'passed',
+                  providerRetryObserved: false,
+                  egressGate: {
+                    armedSegmentCount: 3,
+                    forwardedRequestCount: 3,
+                    completedResponseCount: 3,
+                    blockedUncreditedRequestCount: 0,
+                    blockedInvalidCount: 0,
+                    failedSegmentCount: 0,
+                    activeRequestCount: 0,
+                    closed: true,
+                  },
+                  opencodeVersion: '1.18.15',
+                }
+              : {}),
+          }),
+        }),
     ...overrides,
+  }
+}
+
+function v15SnapshotWithSandbox(
+  sandboxOverrides: Record<string, unknown>,
+): ReleaseSignoffSnapshot {
+  const ready = snapshot({ targetVersion: '1.5.0' })
+  return {
+    ...ready,
+    githubSandboxRecord: record(ready.githubSandboxRecord!.path, {
+      ...ready.githubSandboxRecord!.value,
+      ...sandboxOverrides,
+    }),
   }
 }
 
@@ -207,6 +265,251 @@ describe('release signoff status', () => {
     ])
   })
 
+  it('defines the exact v1.5 release profile and GitHub sandbox evidence path', () => {
+    expect(releaseProfileFor('1.5.0')?.requiredDocPaths).toEqual([
+      'docs/product/prd/v1.5-github-delivery-prd.md',
+      'docs/plans/v1.5-github-delivery.md',
+      'docs/adr/0013-github-app-delivery-authority.md',
+      'docs/guides/devflow-studio-v1.5-walkthrough.md',
+      'docs/guides/devflow-studio-self-hosted-pilot.md',
+    ])
+    expect(releaseProfileFor('1.5.0')?.requiredGateIds).toEqual([
+      'verify',
+      'windows-compatibility',
+      'v15-github-delivery-deterministic',
+      'e2e',
+      'electron-smoke',
+      'postgres-smoke',
+      'docker-smoke',
+      'docker-lifecycle-smoke',
+      'build',
+      'build-output-smoke',
+      'desktop-pilot-build',
+      'desktop-pilot-smoke',
+      'v15-github-delivery-packaged-smoke',
+      'github-sandbox-draft-pr',
+    ])
+    expect(releaseEvidencePaths('1.5.0')).toEqual({
+      walkthrough: 'docs/releases/v1.5.0/walkthrough.json',
+      requiredGates: 'docs/releases/v1.5.0/required-gates.json',
+      githubSandbox: 'docs/releases/v1.5.0/github-sandbox.json',
+    })
+  })
+
+  it('collects v1.5 GitHub sandbox evidence without touching paid OpenCode configuration', () => {
+    const env = {
+      DEVFLOW_RELEASE_TARGET_VERSION: '1.5.0',
+      DEVFLOW_RELEASE_GITHUB_SANDBOX_RECORD: 'package.json',
+    } as NodeJS.ProcessEnv
+    Object.defineProperty(env, 'DEVFLOW_RELEASE_OPENCODE_RECORD', {
+      get() {
+        throw new Error('v1.5 must not read paid OpenCode configuration')
+      },
+    })
+
+    const collected = collectReleaseSignoffSnapshot('pre-tag', env)
+
+    expect(collected.githubSandboxRecord.path).toBe('package.json')
+    expect(collected).not.toHaveProperty('realOpencodeRecord')
+  })
+
+  it('accepts one candidate-bound private GitHub sandbox Draft PR for v1.5', () => {
+    const ready = snapshot({ targetVersion: '1.5.0' })
+    Object.defineProperty(ready, 'realOpencodeRecord', {
+      get() {
+        throw new Error('v1.5 must not evaluate paid OpenCode evidence')
+      },
+    })
+    const items = evaluateReleaseSignoffSnapshot(ready)
+
+    expect(items.every((item) => item.state === 'ready')).toBe(true)
+    expect(items).toContainEqual(
+      expect.objectContaining({ id: 'github-sandbox', state: 'ready' }),
+    )
+    expect(items.some((item) => item.id === 'real-opencode')).toBe(false)
+  })
+
+  it('rejects secret-bearing GitHub sandbox evidence', () => {
+    for (const secretFields of [
+      { installationToken: 'must-not-be-recorded' },
+      { privateKey: 'must-not-be-recorded' },
+      { authorizationHeader: 'must-not-be-recorded' },
+      { nested: { credential: 'must-not-be-recorded' } },
+    ]) {
+      const items = evaluateReleaseSignoffSnapshot(
+        v15SnapshotWithSandbox(secretFields),
+      )
+
+      expect(items).toContainEqual(
+        expect.objectContaining({
+          id: 'github-sandbox',
+          state: 'attention',
+          detail: expect.stringContaining('Secret-bearing fields'),
+        }),
+      )
+    }
+  })
+
+  it('rejects absolute filesystem paths in GitHub sandbox metadata', () => {
+    const items = evaluateReleaseSignoffSnapshot(
+      v15SnapshotWithSandbox({ repository: '/Users/alice/private/release-sandbox' }),
+    )
+
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        id: 'github-sandbox',
+        state: 'attention',
+        detail: expect.stringContaining('safe repository and refs'),
+      }),
+    )
+  })
+
+  it('rejects a GitHub sandbox remote head that differs from the expected commit', () => {
+    const items = evaluateReleaseSignoffSnapshot(
+      v15SnapshotWithSandbox({ remoteHeadSha: 'f'.repeat(40) }),
+    )
+
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        id: 'github-sandbox',
+        state: 'attention',
+        detail: expect.stringContaining('exact expected commit and remote head'),
+      }),
+    )
+  })
+
+  it('rejects duplicate GitHub sandbox lifecycle counts', () => {
+    for (const countField of [
+      'workRequestCount',
+      'canonicalRunCount',
+      'credentialGrantCount',
+      'branchPublicationCount',
+      'draftPullRequestCount',
+    ]) {
+      const items = evaluateReleaseSignoffSnapshot(
+        v15SnapshotWithSandbox({ [countField]: 2 }),
+      )
+
+      expect(items).toContainEqual(
+        expect.objectContaining({
+          id: 'github-sandbox',
+          state: 'attention',
+          detail: expect.stringContaining('exactly one'),
+        }),
+      )
+    }
+  })
+
+  it('requires exact private-repository identity metadata for the GitHub sandbox', () => {
+    for (const invalidMetadata of [
+      { recordedAt: 'not-a-timestamp' },
+      { repository: 'devflow/release-sandbox/extra' },
+      { repositoryVisibility: 'public' },
+      { appSlug: 'DevFlow App' },
+      { installationIdSuffix: '321' },
+      { repositoryIdSuffix: '98765' },
+      { bindingVersion: 0 },
+      { deliverySeriesKey: 'github-delivery:not-a-digest' },
+      { deliveryAttempt: 0 },
+      { intentRevision: 0 },
+      { baseBranch: 'main branch' },
+      { headBranch: 'feature/v1.5-release' },
+      { pullRequestNumber: 0 },
+      { pullRequestUrl: 'https://example.com/devflow/release-sandbox/pull/17' },
+    ]) {
+      const items = evaluateReleaseSignoffSnapshot(
+        v15SnapshotWithSandbox(invalidMetadata),
+      )
+
+      expect(items).toContainEqual(
+        expect.objectContaining({
+          id: 'github-sandbox',
+          state: 'attention',
+          detail: expect.stringContaining('private-repository identity metadata'),
+        }),
+      )
+    }
+  })
+
+  it('requires exact approval, Draft, Acceptance, recovery, revocation, and cleanup outcomes', () => {
+    for (const invalidOutcome of [
+      { draft: false },
+      { merged: true },
+      { approvalRole: 'member' },
+      { approvalAuthKind: 'desktop_bearer' },
+      { automaticRetry: true },
+      { acceptanceStatus: 'building' },
+      { restartRecovery: 'failed' },
+      { bindingRevocation: 'failed' },
+      { postRevocationGrant: 'issued' },
+      { redactionCheck: 'failed' },
+      { cleanup: 'failed' },
+      { cleanupMethod: 'remote-branch-deletion' },
+    ]) {
+      const items = evaluateReleaseSignoffSnapshot(
+        v15SnapshotWithSandbox(invalidOutcome),
+      )
+
+      expect(items).toContainEqual(
+        expect.objectContaining({
+          id: 'github-sandbox',
+          state: 'attention',
+          detail: expect.stringContaining('approved Draft and completed lifecycle'),
+        }),
+      )
+    }
+  })
+
+  it('whitelists only v1.5 walkthrough, gates, sandbox, and dated-result files in C..S', () => {
+    const ready = snapshot({ targetVersion: '1.5.0' })
+    const withPaidOpenCode = evaluateReleaseSignoffSnapshot({
+      ...ready,
+      changedFilesFromCandidate: [
+        ...ready.changedFilesFromCandidate!,
+        'docs/releases/v1.5.0/real-opencode.json',
+      ],
+    })
+    const withoutSandbox = evaluateReleaseSignoffSnapshot({
+      ...ready,
+      changedFilesFromCandidate: ready.changedFilesFromCandidate!.filter(
+        (path) => path !== 'docs/releases/v1.5.0/github-sandbox.json',
+      ),
+    })
+
+    for (const items of [withPaidOpenCode, withoutSandbox]) {
+      expect(items).toContainEqual(
+        expect.objectContaining({ id: 'signoff-contents', state: 'attention' }),
+      )
+    }
+  })
+
+  it('does not let relocated v1.5 records redefine the C..S whitelist', () => {
+    const ready = snapshot({ targetVersion: '1.5.0' })
+
+    for (const [recordKey, originalPath] of [
+      ['walkthroughEvidence', ready.walkthroughEvidence.path],
+      ['requiredGateRecord', ready.requiredGateRecord.path],
+      ['githubSandboxRecord', ready.githubSandboxRecord!.path],
+    ] as const) {
+      const relocatedPath = `tmp/${originalPath.split('/').at(-1)}`
+      const relocatedRecord = {
+        ...ready[recordKey]!,
+        path: relocatedPath,
+      }
+      const items = evaluateReleaseSignoffSnapshot({
+        ...ready,
+        [recordKey]: relocatedRecord,
+        changedFilesFromCandidate: ready.changedFilesFromCandidate!.map((path) =>
+          path === originalPath ? relocatedPath : path,
+        ),
+      })
+
+      expect(items).toContainEqual(
+        expect.objectContaining({ id: 'signoff-contents', state: 'attention' }),
+      )
+    }
+  })
+
   it('evaluates v1.4 docs and gates against the v1.4 profile', () => {
     const ready = snapshot({ targetVersion: '1.4.0' })
     const items = evaluateReleaseSignoffSnapshot({
@@ -241,15 +544,15 @@ describe('release signoff status', () => {
   })
 
   it('rejects an unknown release series instead of falling back to a known profile', () => {
-    expect(releaseProfileFor('1.5.0')).toBeNull()
+    expect(releaseProfileFor('1.6.0')).toBeNull()
 
-    const items = evaluateReleaseSignoffSnapshot(snapshot({ targetVersion: '1.5.0' }))
+    const items = evaluateReleaseSignoffSnapshot(snapshot({ targetVersion: '1.6.0' }))
 
     expect(items).toContainEqual(
       expect.objectContaining({
         id: 'release-profile',
         state: 'attention',
-        detail: expect.stringContaining('1.5.0'),
+        detail: expect.stringContaining('1.6.0'),
       }),
     )
   })

@@ -82,4 +82,22 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(guide).toContain('installation access token')
     expect(guide).toContain('Desktop main memory')
   })
+
+  it('defines one candidate-bound V1.5 walkthrough without reusing paid-provider authority', () => {
+    const walkthrough = read('docs/guides/devflow-studio-v1.5-walkthrough.md')
+
+    expect(walkthrough).toContain('Status: Stable operator procedure; no result claimed')
+    expect(walkthrough).toContain('dedicated private GitHub sandbox repository')
+    expect(walkthrough).toContain('one canonical Run')
+    expect(walkthrough).toContain('one Draft pull request')
+    expect(walkthrough).toContain('Revise')
+    expect(walkthrough).toContain('Resume')
+    expect(walkthrough).toContain('Retry')
+    expect(walkthrough).toContain('Run becomes `completed`')
+    expect(walkthrough).toContain('binding revocation')
+    expect(walkthrough).toContain('docs/releases/v1.5.0/github-sandbox.json')
+    expect(walkthrough).toContain(
+      'V1.5 does not authorize or require another paid OpenCode provider smoke',
+    )
+  })
 })

@@ -32,10 +32,28 @@ export const requiredGateIds = [
   'build-output-smoke',
 ]
 
+const realOpencodeEvidence = {
+  kind: 'real-opencode',
+  pathKey: 'realOpencode',
+  snapshotKey: 'realOpencodeRecord',
+  fileName: 'real-opencode.json',
+  envName: 'DEVFLOW_RELEASE_OPENCODE_RECORD',
+}
+
+const githubSandboxEvidence = {
+  kind: 'github-sandbox',
+  pathKey: 'githubSandbox',
+  snapshotKey: 'githubSandboxRecord',
+  fileName: 'github-sandbox.json',
+  envName: 'DEVFLOW_RELEASE_GITHUB_SANDBOX_RECORD',
+  canonicalSignoffPaths: true,
+}
+
 const releaseProfiles = {
   '1.3': {
     requiredDocPaths,
     requiredGateIds,
+    evidence: realOpencodeEvidence,
   },
   '1.4': {
     requiredDocPaths: [
@@ -73,6 +91,33 @@ const releaseProfiles = {
       permissionRelay: 'bash -> edit',
       diffEvidence: ['devflow-opencode-smoke.txt'],
     },
+    evidence: realOpencodeEvidence,
+  },
+  '1.5': {
+    requiredDocPaths: [
+      'docs/product/prd/v1.5-github-delivery-prd.md',
+      'docs/plans/v1.5-github-delivery.md',
+      'docs/adr/0013-github-app-delivery-authority.md',
+      'docs/guides/devflow-studio-v1.5-walkthrough.md',
+      'docs/guides/devflow-studio-self-hosted-pilot.md',
+    ],
+    requiredGateIds: [
+      'verify',
+      'windows-compatibility',
+      'v15-github-delivery-deterministic',
+      'e2e',
+      'electron-smoke',
+      'postgres-smoke',
+      'docker-smoke',
+      'docker-lifecycle-smoke',
+      'build',
+      'build-output-smoke',
+      'desktop-pilot-build',
+      'desktop-pilot-smoke',
+      'v15-github-delivery-packaged-smoke',
+      'github-sandbox-draft-pr',
+    ],
+    evidence: githubSandboxEvidence,
   },
 }
 
@@ -129,14 +174,15 @@ export function parseReleaseMode(args) {
 
 export function releaseEvidencePaths(targetVersion, env = process.env) {
   const releaseDir = `docs/releases/v${targetVersion}`
+  const evidence = releaseProfileFor(targetVersion)?.evidence ?? realOpencodeEvidence
 
   return {
     walkthrough:
       env.DEVFLOW_RELEASE_WALKTHROUGH_RECORD?.trim() || `${releaseDir}/walkthrough.json`,
     requiredGates:
       env.DEVFLOW_RELEASE_GATE_RECORD?.trim() || `${releaseDir}/required-gates.json`,
-    realOpencode:
-      env.DEVFLOW_RELEASE_OPENCODE_RECORD?.trim() || `${releaseDir}/real-opencode.json`,
+    [evidence.pathKey]:
+      env[evidence.envName]?.trim() || `${releaseDir}/${evidence.fileName}`,
   }
 }
 
@@ -192,6 +238,7 @@ export function collectReleaseSignoffSnapshot(mode, env = process.env) {
 
   const targetVersion = resolveTargetVersion(env)
   const releaseProfile = releaseProfileFor(targetVersion)
+  const releaseEvidence = releaseProfile?.evidence ?? realOpencodeEvidence
   const packageVersions = Object.fromEntries(
     packagePaths.map((path) => [path, readPackageVersion(path)]),
   )
@@ -245,7 +292,9 @@ export function collectReleaseSignoffSnapshot(mode, env = process.env) {
     releaseTagTarget,
     walkthroughEvidence: collectWalkthroughEvidence(evidencePaths.walkthrough),
     requiredGateRecord: readEvidenceRecord(evidencePaths.requiredGates),
-    realOpencodeRecord: readEvidenceRecord(evidencePaths.realOpencode),
+    [releaseEvidence.snapshotKey]: readEvidenceRecord(
+      evidencePaths[releaseEvidence.pathKey],
+    ),
   }
 }
 
@@ -373,6 +422,7 @@ function findForbiddenEvidenceFields(value, parentPath = '') {
     'apikeyvalue',
     'authorization',
     'credential',
+    'installationtoken',
     'password',
     'providertoken',
     'secret',
@@ -382,7 +432,17 @@ function findForbiddenEvidenceFields(value, parentPath = '') {
   return Object.entries(value).flatMap(([key, nestedValue]) => {
     const normalizedKey = key.replaceAll('-', '').replaceAll('_', '').toLowerCase()
     const fieldPath = parentPath ? `${parentPath}.${key}` : key
-    const current = forbiddenNames.has(normalizedKey) ? [fieldPath] : []
+    const hasForbiddenSuffix = [
+      'authorization',
+      'authorizationheader',
+      'credential',
+      'password',
+      'privatekey',
+      'secret',
+      'token',
+    ].some((suffix) => normalizedKey.endsWith(suffix))
+    const current =
+      forbiddenNames.has(normalizedKey) || hasForbiddenSuffix ? [fieldPath] : []
     return [...current, ...findForbiddenEvidenceFields(nestedValue, fieldPath)]
   })
 }
@@ -489,6 +549,150 @@ function evaluateRealOpencodeRecord(snapshot) {
   }
 }
 
+function evaluateGitHubSandboxRecord(snapshot) {
+  const baseState = evidenceBaseState(snapshot.githubSandboxRecord, snapshot)
+  if (baseState) {
+    return {
+      id: 'github-sandbox',
+      label: 'GitHub sandbox Draft PR',
+      ...baseState,
+    }
+  }
+
+  const forbiddenFields = findForbiddenEvidenceFields(snapshot.githubSandboxRecord.value)
+  if (forbiddenFields.length > 0) {
+    return {
+      id: 'github-sandbox',
+      label: 'GitHub sandbox Draft PR',
+      state: 'attention',
+      detail: `Secret-bearing fields are forbidden in ${snapshot.githubSandboxRecord.path}: ${forbiddenFields.join(', ')}.`,
+    }
+  }
+  const value = snapshot.githubSandboxRecord.value
+  const safeRepositoryAndRefs = [
+    value.repository,
+    value.baseBranch,
+    value.headBranch,
+  ].every(isSafeRelativeEvidencePath)
+  if (!safeRepositoryAndRefs) {
+    return {
+      id: 'github-sandbox',
+      label: 'GitHub sandbox Draft PR',
+      state: 'attention',
+      detail: `${snapshot.githubSandboxRecord.path} must contain a safe repository and refs without absolute or traversal paths.`,
+    }
+  }
+  const expectedCommitSha = value.expectedCommitSha
+  const remoteHeadSha = value.remoteHeadSha
+  const exactRemoteHead =
+    typeof expectedCommitSha === 'string' &&
+    /^[0-9a-f]{40}$/.test(expectedCommitSha) &&
+    typeof remoteHeadSha === 'string' &&
+    /^[0-9a-f]{40}$/.test(remoteHeadSha) &&
+    remoteHeadSha === expectedCommitSha
+  if (!exactRemoteHead) {
+    return {
+      id: 'github-sandbox',
+      label: 'GitHub sandbox Draft PR',
+      state: 'attention',
+      detail: `${snapshot.githubSandboxRecord.path} must bind the exact expected commit and remote head to the same full SHA.`,
+    }
+  }
+  const singleLifecycleCounts = [
+    'workRequestCount',
+    'canonicalRunCount',
+    'credentialGrantCount',
+    'branchPublicationCount',
+    'draftPullRequestCount',
+  ].every((field) => value[field] === 1)
+  if (!singleLifecycleCounts) {
+    return {
+      id: 'github-sandbox',
+      label: 'GitHub sandbox Draft PR',
+      state: 'attention',
+      detail: `${snapshot.githubSandboxRecord.path} must record exactly one Work Request, canonical Run, credential grant, branch publication, and Draft PR.`,
+    }
+  }
+  const positiveInteger = (candidate) => Number.isSafeInteger(candidate) && candidate > 0
+  const safeGitRef = (candidate) =>
+    isSafeRelativeEvidencePath(candidate) &&
+    /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(candidate) &&
+    !candidate.includes('..') &&
+    !candidate.includes('//') &&
+    !candidate.endsWith('.') &&
+    !candidate.endsWith('/')
+  const repositoryValid =
+    typeof value.repository === 'string' &&
+    /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value.repository)
+  const pullRequestIdentityValid =
+    positiveInteger(value.pullRequestNumber) &&
+    value.pullRequestUrl ===
+      `https://github.com/${value.repository}/pull/${value.pullRequestNumber}`
+  const identityMetadataValid =
+    isNonEmptyString(value.recordedAt) &&
+    !Number.isNaN(Date.parse(value.recordedAt)) &&
+    repositoryValid &&
+    value.repositoryVisibility === 'private' &&
+    typeof value.appSlug === 'string' &&
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.appSlug) &&
+    typeof value.installationIdSuffix === 'string' &&
+    /^\d{4}$/.test(value.installationIdSuffix) &&
+    typeof value.repositoryIdSuffix === 'string' &&
+    /^\d{4}$/.test(value.repositoryIdSuffix) &&
+    positiveInteger(value.bindingVersion) &&
+    typeof value.deliverySeriesKey === 'string' &&
+    /^github-delivery:[0-9a-f]{64}$/.test(value.deliverySeriesKey) &&
+    positiveInteger(value.deliveryAttempt) &&
+    positiveInteger(value.intentRevision) &&
+    safeGitRef(value.baseBranch) &&
+    safeGitRef(value.headBranch) &&
+    value.headBranch.startsWith('devflow/') &&
+    pullRequestIdentityValid
+  if (!identityMetadataValid) {
+    return {
+      id: 'github-sandbox',
+      label: 'GitHub sandbox Draft PR',
+      state: 'attention',
+      detail: `${snapshot.githubSandboxRecord.path} is missing required private-repository identity metadata.`,
+    }
+  }
+  const lifecycleControlsValid =
+    value.draft === true &&
+    value.merged === false &&
+    (value.approvalRole === 'owner' || value.approvalRole === 'lead') &&
+    value.approvalAuthKind === 'session_cookie' &&
+    value.automaticRetry === false &&
+    value.acceptanceStatus === 'completed' &&
+    value.restartRecovery === 'passed' &&
+    value.bindingRevocation === 'passed' &&
+    value.postRevocationGrant === 'blocked' &&
+    value.redactionCheck === 'passed' &&
+    value.cleanup === 'passed' &&
+    value.cleanupMethod === 'external-operator-no-merge'
+  if (!lifecycleControlsValid) {
+    return {
+      id: 'github-sandbox',
+      label: 'GitHub sandbox Draft PR',
+      state: 'attention',
+      detail: `${snapshot.githubSandboxRecord.path} must record an approved Draft and completed lifecycle with no merge or automatic retry.`,
+    }
+  }
+
+  return {
+    id: 'github-sandbox',
+    label: 'GitHub sandbox Draft PR',
+    state: 'ready',
+    detail: `Private sandbox Draft PR passed for ${snapshot.candidateSha}.`,
+  }
+}
+
+function evaluateProfileEvidence(snapshot) {
+  const evidence = releaseProfileFor(snapshot.targetVersion)?.evidence ?? realOpencodeEvidence
+  return evidence.kind === 'github-sandbox'
+    ? evaluateGitHubSandboxRecord(snapshot)
+    : evaluateRealOpencodeRecord(snapshot)
+}
+
 function evaluateReleaseTag(snapshot) {
   const tag = `v${snapshot.targetVersion}`
 
@@ -520,10 +724,23 @@ function evaluateReleaseTag(snapshot) {
 
 function evaluateSignoffContents(snapshot) {
   const walkthroughPath = snapshot.walkthroughEvidence.value?.evidencePath
+  const evidence = releaseProfileFor(snapshot.targetVersion)?.evidence ?? realOpencodeEvidence
+  const releaseEvidenceRecord = snapshot[evidence.snapshotKey]
+  const releaseDir = `docs/releases/v${snapshot.targetVersion}`
+  const evidenceRecordPaths =
+    evidence.canonicalSignoffPaths === true
+      ? [
+          `${releaseDir}/walkthrough.json`,
+          `${releaseDir}/required-gates.json`,
+          `${releaseDir}/${evidence.fileName}`,
+        ]
+      : [
+          snapshot.walkthroughEvidence.path,
+          snapshot.requiredGateRecord.path,
+          releaseEvidenceRecord.path,
+        ]
   const expectedFiles = [
-    snapshot.walkthroughEvidence.path,
-    snapshot.requiredGateRecord.path,
-    snapshot.realOpencodeRecord.path,
+    ...evidenceRecordPaths,
     ...(typeof walkthroughPath === 'string' ? [walkthroughPath] : []),
   ]
   const actualFiles = snapshot.changedFilesFromCandidate
@@ -636,7 +853,7 @@ export function evaluateReleaseSignoffSnapshot(snapshot) {
     evaluateSignoffContents(snapshot),
     evaluateWalkthroughEvidence(snapshot),
     evaluateRequiredGateRecord(snapshot),
-    evaluateRealOpencodeRecord(snapshot),
+    evaluateProfileEvidence(snapshot),
     evaluateReleaseTag(snapshot),
   ]
 }
