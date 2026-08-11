@@ -34,6 +34,7 @@ export type GitHubAppClientErrorCode =
   | 'github_request_rejected'
   | 'github_response_too_large'
   | 'github_scope_mismatch'
+  | 'github_timeout'
   | 'github_unauthorized'
   | 'github_unavailable'
   | 'github_validation_failed'
@@ -51,6 +52,7 @@ const safeErrorMessages: Record<GitHubAppClientErrorCode, string> = {
   github_request_rejected: 'GitHub rejected the request',
   github_response_too_large: 'GitHub returned a response larger than the safe limit',
   github_scope_mismatch: 'GitHub returned authority outside the requested repository scope',
+  github_timeout: 'GitHub did not complete the request before the safe deadline',
   github_unauthorized: 'GitHub did not accept the supplied App authority',
   github_unavailable: 'GitHub is temporarily unavailable',
   github_validation_failed: 'GitHub could not validate the requested operation',
@@ -65,7 +67,8 @@ export class GitHubAppClientError extends Error {
     super(safeErrorMessages[code])
     this.name = 'GitHubAppClientError'
     this.code = code
-    this.retryable = code === 'github_rate_limited' || code === 'github_unavailable'
+    this.retryable =
+      code === 'github_rate_limited' || code === 'github_timeout' || code === 'github_unavailable'
     if (status !== undefined) {
       this.status = status
     }
@@ -99,6 +102,7 @@ export type CreateGitHubAppClientInput = {
   fetcher: typeof fetch
   clock: () => Date
   signJwt: (claims: GitHubAppJwtClaims) => Promise<string> | string
+  requestTimeoutMs?: number
 }
 
 export type GitHubRepositoryAuthority = {
@@ -131,6 +135,7 @@ export type GitHubBranchHead = {
 }
 
 export type GitHubDraftPullRequest = {
+  id: string
   number: number
   url: string
   repository: string
@@ -140,6 +145,7 @@ export type GitHubDraftPullRequest = {
   state: 'open'
   draft: true
   marker: string
+  createdAt: string
 }
 
 export type GitHubDraftPullRequestIdentity = GitHubRepositoryContext & {
@@ -170,9 +176,6 @@ export type GitHubAppClient = {
   findDraftPullRequest(
     input: GitHubDraftPullRequestIdentity,
   ): Promise<GitHubDraftPullRequest | null>
-  createDraftPullRequest(
-    input: CreateGitHubDraftPullRequestInput,
-  ): Promise<GitHubDraftPullRequest>
   findOrCreateDraftPullRequest(
     input: CreateGitHubDraftPullRequestInput,
   ): Promise<GitHubDraftPullRequestResolution>
@@ -264,6 +267,14 @@ function normalizeRepository(value: string): string {
 function normalizeBranch(value: string): string {
   try {
     return assertSafeGitHubBranch(value)
+  } catch {
+    throw clientError('github_invalid_request')
+  }
+}
+
+function normalizeDeliveryBranch(value: string): string {
+  try {
+    return assertSafeGitHubBranch(value, { requireDeliveryNamespace: true })
   } catch {
     throw clientError('github_invalid_request')
   }
@@ -418,6 +429,14 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
   ) {
     throw clientError('github_invalid_request')
   }
+  const requestTimeoutMs = input.requestTimeoutMs ?? 30_000
+  if (
+    !Number.isSafeInteger(requestTimeoutMs) ||
+    requestTimeoutMs < 10 ||
+    requestTimeoutMs > 120_000
+  ) {
+    throw clientError('github_invalid_request')
+  }
 
   const requestJson = async (
     url: string,
@@ -428,25 +447,44 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
       expectedStatus: number
     },
   ): Promise<unknown> => {
-    let response: Response
-    try {
-      response = await input.fetcher(url, {
-        method: request.method,
-        headers: safeHeaders(request.authorization, request.body !== undefined),
-        ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
-      })
-    } catch {
-      throw clientError('github_unavailable')
-    }
+    const controller = new AbortController()
+    let timedOut = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const operation = (async () => {
+      let response: Response
+      try {
+        response = await input.fetcher(url, {
+          method: request.method,
+          headers: safeHeaders(request.authorization, request.body !== undefined),
+          signal: controller.signal,
+          ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
+        })
+      } catch {
+        throw clientError(timedOut ? 'github_timeout' : 'github_unavailable')
+      }
 
-    if (!(response instanceof Response)) {
-      throw clientError('github_malformed_response')
+      if (!(response instanceof Response)) {
+        throw clientError('github_malformed_response')
+      }
+      if (response.status !== request.expectedStatus) {
+        await response.body?.cancel().catch(() => undefined)
+        throw statusError(response.status)
+      }
+      return readBoundedJson(response)
+    })()
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true
+        controller.abort()
+        reject(clientError('github_timeout'))
+      }, requestTimeoutMs)
+    })
+    try {
+      return await Promise.race([operation, deadline])
+    } finally {
+      if (timer) clearTimeout(timer)
+      controller.abort()
     }
-    if (response.status !== request.expectedStatus) {
-      await response.body?.cancel().catch(() => undefined)
-      throw statusError(response.status)
-    }
-    return readBoundedJson(response)
   }
 
   const signAppJwt = async (): Promise<string> => {
@@ -558,6 +596,7 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
     identity: NormalizedDraftIdentity,
   ): GitHubDraftPullRequest => {
     const response = expectRecord(value)
+    const id = parseResponseNumericId(response['id'])
     const number = response['number']
     if (!Number.isSafeInteger(number) || typeof number !== 'number' || number < 1) {
       throw clientError('github_malformed_response')
@@ -604,6 +643,11 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
     }
 
     const rawUrl = expectString(response['html_url'])
+    const rawCreatedAt = expectString(response['created_at'])
+    const createdAtMs = Date.parse(rawCreatedAt)
+    if (!Number.isFinite(createdAtMs)) {
+      throw clientError('github_malformed_response')
+    }
     let parsedUrl: URL
     try {
       parsedUrl = new URL(rawUrl)
@@ -625,6 +669,7 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
     }
 
     return {
+      id,
       number,
       url: parsedUrl.toString(),
       repository: identity.repository,
@@ -634,6 +679,7 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
       state: 'open',
       draft: true,
       marker: identity.marker,
+      createdAt: new Date(createdAtMs).toISOString(),
     }
   }
 
@@ -644,7 +690,7 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
     return {
       ...context,
       baseBranch: normalizeBranch(delivery.baseBranch),
-      headBranch: normalizeBranch(delivery.headBranch),
+      headBranch: normalizeDeliveryBranch(delivery.headBranch),
       expectedHeadSha: normalizeCommitSha(delivery.expectedHeadSha),
       marker: createGitHubDeliveryMarker(delivery.idempotencyKey),
     }
@@ -688,7 +734,7 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
       throw clientError('github_invalid_request')
     }
     const url = new URL(`${githubApiBaseUrl}/repos/${identity.repository}/pulls`)
-    url.searchParams.set('state', 'open')
+    url.searchParams.set('state', 'all')
     url.searchParams.set('base', identity.baseBranch)
     url.searchParams.set('head', `${owner}:${identity.headBranch}`)
     url.searchParams.set('per_page', String(maxPullRequestsPerLookup))
@@ -774,6 +820,7 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
       'github_rate_limited',
       'github_request_rejected',
       'github_response_too_large',
+      'github_timeout',
       'github_unavailable',
       'github_validation_failed',
     ].includes(error.code)
@@ -872,13 +919,6 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
       const identity = normalizeDraftIdentity(delivery)
       return withInstallationToken(identity, 'pull_requests', 'write', (token) =>
         findDraftWithToken(identity, token),
-      )
-    },
-
-    async createDraftPullRequest(delivery) {
-      const normalized = normalizeDraftInput(delivery)
-      return withInstallationToken(normalized, 'pull_requests', 'write', (token) =>
-        createDraftWithToken(normalized, token),
       )
     },
 

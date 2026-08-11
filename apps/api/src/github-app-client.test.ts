@@ -38,10 +38,12 @@ function tokenResponse(
 
 function pullRequestResponse(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    id: 987,
     number: 17,
     html_url: `https://github.com/${repository}/pull/17`,
     state: 'open',
     draft: true,
+    created_at: now,
     body: `Delivery package\n\n${marker}`,
     head: {
       ref: headBranch,
@@ -218,6 +220,7 @@ describe('GitHub App client', () => {
 
     const result = await client.findDraftPullRequest(deliveryInput())
     expect(result).toEqual({
+      id: '987',
       number: 17,
       url: `https://github.com/${repository}/pull/17`,
       repository,
@@ -227,11 +230,12 @@ describe('GitHub App client', () => {
       state: 'open',
       draft: true,
       marker,
+      createdAt: now,
     })
     expect(JSON.stringify(result)).not.toContain(internalToken)
     const listUrl = new URL(String(fetcher.mock.calls[1]?.[0]))
     expect(listUrl.pathname).toBe(`/repos/${repository}/pulls`)
-    expect(listUrl.searchParams.get('state')).toBe('open')
+    expect(listUrl.searchParams.get('state')).toBe('all')
     expect(listUrl.searchParams.get('base')).toBe(baseBranch)
     expect(listUrl.searchParams.get('head')).toBe(`erich04:${headBranch}`)
   })
@@ -240,19 +244,23 @@ describe('GitHub App client', () => {
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(tokenResponse('pull_requests', 'write'))
+      .mockResolvedValueOnce(Response.json([]))
       .mockResolvedValueOnce(Response.json(pullRequestResponse(), { status: 201 }))
     const client = makeClient(fetcher)
 
     await expect(
-      client.createDraftPullRequest({
+      client.findOrCreateDraftPullRequest({
         ...deliveryInput(),
         title: 'Deliver the approved change',
         body: 'Delivery package',
       }),
-    ).resolves.toMatchObject({ number: 17, draft: true, marker })
+    ).resolves.toMatchObject({
+      disposition: 'created',
+      pullRequest: { number: 17, draft: true, marker },
+    })
 
-    expect(fetcher).toHaveBeenCalledTimes(2)
-    const [url, init] = fetcher.mock.calls[1]!
+    expect(fetcher).toHaveBeenCalledTimes(3)
+    const [url, init] = fetcher.mock.calls[2]!
     expect(url).toBe(`https://api.github.com/repos/${repository}/pulls`)
     expect(init?.method).toBe('POST')
     expect(JSON.parse(String(init?.body))).toEqual({
@@ -307,6 +315,33 @@ describe('GitHub App client', () => {
     await expect(client.findDraftPullRequest(deliveryInput())).rejects.toMatchObject({
       code: 'github_pull_request_conflict',
     })
+  })
+
+  it('rejects a non-DevFlow head branch before issuing authority', async () => {
+    const fetcher = vi.fn()
+    await expect(
+      makeClient(fetcher).findDraftPullRequest({
+        ...deliveryInput(),
+        headBranch: 'feature/unmanaged',
+      }),
+    ).rejects.toMatchObject({ code: 'github_invalid_request' })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('treats a closed matching PR as a conflict instead of creating a duplicate', async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(tokenResponse('pull_requests', 'write'))
+      .mockResolvedValueOnce(Response.json([pullRequestResponse({ state: 'closed' })]))
+
+    await expect(
+      makeClient(fetcher).findOrCreateDraftPullRequest({
+        ...deliveryInput(),
+        title: 'Do not duplicate a closed delivery',
+        body: 'Delivery package',
+      }),
+    ).rejects.toMatchObject({ code: 'github_pull_request_conflict' })
+    expect(fetcher).toHaveBeenCalledTimes(2)
   })
 
   it('fails closed on a mismatched or unavailable repository binding', async () => {
@@ -428,10 +463,28 @@ describe('GitHub App client', () => {
     expect(JSON.stringify(signerError)).not.toContain(secretSentinel)
   })
 
+  it('bounds a fetcher that ignores AbortSignal with a safe typed timeout', async () => {
+    let signal: AbortSignal | undefined
+    const client = createGitHubAppClient({
+      appId: '789',
+      fetcher: vi.fn(async (_url, init) => {
+        signal = init?.signal ?? undefined
+        return new Promise<Response>(() => undefined)
+      }),
+      clock: () => new Date(now),
+      signJwt: async () => `app-jwt-${'j'.repeat(32)}`,
+      requestTimeoutMs: 10,
+    })
+
+    await expect(
+      client.issueContentsWriteToken({ installationId, repositoryId }),
+    ).rejects.toMatchObject({ code: 'github_timeout', retryable: true })
+    expect(signal?.aborted).toBe(true)
+  })
+
   it('exposes no merge, force-push, tag, branch-delete, or arbitrary request API', () => {
     const client = makeClient(vi.fn())
     expect(Object.keys(client).sort()).toEqual([
-      'createDraftPullRequest',
       'findDraftPullRequest',
       'findOrCreateDraftPullRequest',
       'getBranchHead',
