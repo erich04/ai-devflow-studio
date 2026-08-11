@@ -666,6 +666,7 @@ export type TestEvidence = {
   stderr: string
   summary: string
   redacted: boolean
+  sourceCommitSha?: string
   createdAt: string
 }
 
@@ -773,6 +774,8 @@ export type ManagedCodingWorkspace = {
   worktreePath: string
   branchName: string
   baseBranch: string
+  baseCommitSha?: string
+  headCommitSha?: string
   createdAt: string
   deletedAt?: string
   cleanupStatus?: 'active' | 'deleted' | 'cleanup_failed'

@@ -88,6 +88,21 @@ export type CapturedWorktreeDiff = {
   patch: string
 }
 
+export type CommitManagedCodingWorkspaceInput = {
+  workspace: ManagedCodingWorkspace
+  expectedChangedPaths: string[]
+  runId: string
+}
+
+export type CommitManagedCodingWorkspaceResult = {
+  workspace: ManagedCodingWorkspace & {
+    baseCommitSha: string
+    headCommitSha: string
+  }
+  baseCommitSha: string
+  expectedCommitSha: string
+}
+
 export function findActiveCodingRun(
   runs: CodingAgentRun[],
   projectId: string,
@@ -112,6 +127,7 @@ export async function createManagedCodingWorkspace(
   }
 
   const baseBranch = await currentBranch(input.project.path)
+  const baseCommitSha = await currentCommit(input.project.path)
   const branchName = safeBranchName(`devflow/${input.runId}-${input.nodeId}-${input.codingRunId}`)
   const root = input.worktreeRoot ?? path.join(os.tmpdir(), 'devflow-coding-worktrees')
   const workspaceId = `workspace-${input.codingRunId}`
@@ -128,8 +144,93 @@ export async function createManagedCodingWorkspace(
     worktreePath,
     branchName,
     baseBranch,
+    baseCommitSha,
     createdAt: new Date().toISOString(),
     cleanupStatus: 'active',
+  }
+}
+
+export async function commitManagedCodingWorkspace(
+  input: CommitManagedCodingWorkspaceInput,
+): Promise<CommitManagedCodingWorkspaceResult> {
+  if (input.workspace.cleanupStatus !== 'active' || input.workspace.deletedAt) {
+    throw new Error('Only an active managed workspace can be committed for delivery')
+  }
+
+  const currentBranchName = await currentBranch(input.workspace.worktreePath)
+  if (currentBranchName !== input.workspace.branchName) {
+    throw new Error('Managed workspace branch changed before delivery commit')
+  }
+  const currentHead = await currentCommit(input.workspace.worktreePath)
+
+  if (input.workspace.headCommitSha) {
+    if (!input.workspace.baseCommitSha || currentHead !== input.workspace.headCommitSha) {
+      throw new Error('Managed workspace expected commit changed after delivery preparation')
+    }
+    const replayStatus = await worktreeStatus(input.workspace.worktreePath)
+    if (replayStatus.length > 0) {
+      throw new Error('Managed workspace changed after delivery commit')
+    }
+    return {
+      workspace: input.workspace as CommitManagedCodingWorkspaceResult['workspace'],
+      baseCommitSha: input.workspace.baseCommitSha,
+      expectedCommitSha: input.workspace.headCommitSha,
+    }
+  }
+
+  const baseCommitSha = input.workspace.baseCommitSha ?? currentHead
+  if (currentHead !== baseCommitSha) {
+    throw new Error('Managed workspace contains an unrecorded commit')
+  }
+  const entries = await worktreeStatus(input.workspace.worktreePath)
+  const actualPaths = sortedUnique(entries.map((entry) => entry.path))
+  const expectedPaths = sortedUnique(input.expectedChangedPaths)
+  if (
+    actualPaths.length === 0 ||
+    actualPaths.length !== expectedPaths.length ||
+    actualPaths.some((value, index) => value !== expectedPaths[index])
+  ) {
+    throw new Error('Managed workspace changed paths do not match reviewed Coding evidence')
+  }
+
+  await execGit(input.workspace.worktreePath, ['add', '--', ...expectedPaths])
+  const commitMessage = `DevFlow delivery ${input.runId.replace(/[^A-Za-z0-9._-]/gu, '-').slice(0, 100)}`
+  await execGit(input.workspace.worktreePath, [
+    '-c',
+    'user.name=AI DevFlow Studio',
+    '-c',
+    'user.email=devflow@localhost',
+    '-c',
+    'core.hooksPath=/dev/null',
+    'commit',
+    '--no-gpg-sign',
+    '--no-verify',
+    '-m',
+    commitMessage,
+  ])
+
+  const expectedCommitSha = await currentCommit(input.workspace.worktreePath)
+  const parentCommitSha = (await execGit(
+    input.workspace.worktreePath,
+    ['rev-parse', '--verify', 'HEAD^'],
+  )).stdout.trim().toLowerCase()
+  if (parentCommitSha !== baseCommitSha) {
+    throw new Error('Managed workspace delivery commit is not directly based on the recorded base')
+  }
+  const finalStatus = await worktreeStatus(input.workspace.worktreePath)
+  if (finalStatus.length > 0) {
+    throw new Error('Managed workspace was not clean after delivery commit')
+  }
+
+  const workspace = {
+    ...input.workspace,
+    baseCommitSha,
+    headCommitSha: expectedCommitSha,
+  }
+  return {
+    workspace,
+    baseCommitSha,
+    expectedCommitSha,
   }
 }
 
@@ -383,6 +484,26 @@ async function currentBranch(repositoryPath: string): Promise<string> {
   const { stdout } = await execGit(repositoryPath, ['branch', '--show-current'])
   const branch = stdout.trim()
   return branch || 'HEAD'
+}
+
+async function currentCommit(repositoryPath: string): Promise<string> {
+  const { stdout } = await execGit(repositoryPath, ['rev-parse', '--verify', 'HEAD'])
+  return stdout.trim().toLowerCase()
+}
+
+async function worktreeStatus(repositoryPath: string): Promise<Array<{ status: string; path: string }>> {
+  const { stdout } = await execGit(repositoryPath, [
+    '-c',
+    'core.quotePath=false',
+    'status',
+    '--porcelain=v1',
+    '--untracked-files=all',
+  ])
+  return parsePorcelainStatus(stdout)
+}
+
+function sortedUnique(values: string[]): string[] {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right))
 }
 
 async function execGit(cwd: string, args: string[]) {

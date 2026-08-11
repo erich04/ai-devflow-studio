@@ -1,0 +1,340 @@
+import type {
+  Artifact,
+  CodingAgentRun,
+  CodingDiffArtifact,
+  ManagedCodingWorkspace,
+  TestEvidence,
+  WorkflowRun,
+} from './domain'
+
+export type GitHubDeliveryStatus =
+  | 'approval_required'
+  | 'approved'
+  | 'publishing_branch'
+  | 'branch_published'
+  | 'creating_pr'
+  | 'completed'
+  | 'failed'
+  | 'recovery_required'
+  | 'revoked'
+
+export type GitHubDeliveryIntent = {
+  stateVersion: 1
+  id: string
+  organizationId: string
+  teamProjectId: string
+  localProjectId: string
+  runId: string
+  runVersion: number
+  nodeId: string
+  codingRunId: string
+  codingRunCompletedAt: string
+  workspaceId: string
+  repository: string
+  baseBranch: string
+  headBranch: string
+  baseCommitSha: string
+  expectedCommitSha: string
+  diffArtifactId: string
+  testEvidenceId: string
+  testEvidenceCreatedAt: string
+  testEvidenceDigest: string
+  prPackageArtifactId: string
+  prPackageUpdatedAt: string
+  prPackageDigest: string
+  changedPaths: string[]
+  intentDigest: string
+  idempotencyKey: string
+  status: GitHubDeliveryStatus
+  createdAt: string
+  updatedAt: string
+  redacted: true
+}
+
+export type CreateGitHubDeliveryIntentInput = {
+  id: string
+  organizationId: string
+  teamProjectId: string
+  repository: string
+  defaultBranch: string
+  run: WorkflowRun
+  prNodeId: string
+  codingRun: CodingAgentRun
+  workspace: ManagedCodingWorkspace
+  diffArtifact: CodingDiffArtifact
+  prPackage: Artifact
+  testEvidence: TestEvidence & { sourceCommitSha: string }
+  baseCommitSha: string
+  expectedCommitSha: string
+  now: string
+}
+
+type IntentDigestMaterial = Omit<
+  GitHubDeliveryIntent,
+  'id' | 'intentDigest' | 'idempotencyKey' | 'status' | 'createdAt' | 'updatedAt' | 'redacted'
+>
+
+const gitShaPattern = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u
+const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u
+const safeRefCharacters = /^[A-Za-z0-9._/-]+$/u
+
+function requireIdentifier(value: string, label: string): string {
+  const normalized = value.trim()
+  if (!normalized || normalized.length > 200 || normalized !== value) {
+    throw new Error(`${label} is invalid`)
+  }
+  return normalized
+}
+
+export function normalizeGitHubRepository(value: string): string {
+  if (!repositoryPattern.test(value)) {
+    throw new Error('GitHub repository must use owner/name format')
+  }
+  const [owner, repository] = value.split('/')
+  if (!owner || !repository || owner === '.' || owner === '..' || repository === '.' || repository === '..') {
+    throw new Error('GitHub repository must use owner/name format')
+  }
+  return `${owner.toLowerCase()}/${repository.toLowerCase()}`
+}
+
+export function assertSafeGitHubBranch(value: string, options: { requireDeliveryNamespace?: boolean } = {}): string {
+  if (
+    !value ||
+    value.length > 200 ||
+    !safeRefCharacters.test(value) ||
+    value.startsWith('/') ||
+    value.endsWith('/') ||
+    value.startsWith('.') ||
+    value.endsWith('.') ||
+    value.endsWith('.lock') ||
+    value.includes('..') ||
+    value.includes('//') ||
+    value.includes('@{')
+  ) {
+    throw new Error('GitHub branch is invalid')
+  }
+  if (options.requireDeliveryNamespace && !value.startsWith('devflow/')) {
+    throw new Error('GitHub delivery branch must use the devflow/ namespace')
+  }
+  return value
+}
+
+export function assertFullGitCommitSha(value: string, label: string): string {
+  const normalized = value.toLowerCase()
+  if (!gitShaPattern.test(normalized)) {
+    throw new Error(`${label} must be a full Git commit SHA`)
+  }
+  return normalized
+}
+
+function normalizeChangedPaths(paths: string[]): string[] {
+  const normalized = new Set<string>()
+  for (const value of paths) {
+    const path = value.trim()
+    if (
+      !path ||
+      path !== value ||
+      path.length > 500 ||
+      path.startsWith('/') ||
+      path.startsWith('~') ||
+      path.includes('\\') ||
+      path.split('/').some((segment) => !segment || segment === '.' || segment === '..')
+    ) {
+      throw new Error('GitHub delivery changed path is unsafe')
+    }
+    normalized.add(path)
+  }
+  if (normalized.size === 0 || normalized.size > 200) {
+    throw new Error('GitHub delivery requires bounded changed paths')
+  }
+  return [...normalized].sort((left, right) => left.localeCompare(right))
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+function canonicalIntentMaterial(material: IntentDigestMaterial): string {
+  return JSON.stringify({
+    stateVersion: material.stateVersion,
+    organizationId: material.organizationId,
+    teamProjectId: material.teamProjectId,
+    localProjectId: material.localProjectId,
+    runId: material.runId,
+    runVersion: material.runVersion,
+    nodeId: material.nodeId,
+    codingRunId: material.codingRunId,
+    codingRunCompletedAt: material.codingRunCompletedAt,
+    workspaceId: material.workspaceId,
+    repository: material.repository,
+    baseBranch: material.baseBranch,
+    headBranch: material.headBranch,
+    baseCommitSha: material.baseCommitSha,
+    expectedCommitSha: material.expectedCommitSha,
+    diffArtifactId: material.diffArtifactId,
+    testEvidenceId: material.testEvidenceId,
+    testEvidenceCreatedAt: material.testEvidenceCreatedAt,
+    testEvidenceDigest: material.testEvidenceDigest,
+    prPackageArtifactId: material.prPackageArtifactId,
+    prPackageUpdatedAt: material.prPackageUpdatedAt,
+    prPackageDigest: material.prPackageDigest,
+    changedPaths: material.changedPaths,
+  })
+}
+
+export async function createGitHubDeliveryIntent(
+  input: CreateGitHubDeliveryIntentInput,
+): Promise<GitHubDeliveryIntent> {
+  const id = requireIdentifier(input.id, 'GitHub Delivery Intent id')
+  const organizationId = requireIdentifier(input.organizationId, 'Organization id')
+  const teamProjectId = requireIdentifier(input.teamProjectId, 'Team Project id')
+  const repository = normalizeGitHubRepository(input.repository)
+  const baseBranch = assertSafeGitHubBranch(input.defaultBranch)
+  const baseCommitSha = assertFullGitCommitSha(input.baseCommitSha, 'Base commit')
+  const expectedCommitSha = assertFullGitCommitSha(input.expectedCommitSha, 'Expected commit')
+  if (baseCommitSha === expectedCommitSha) {
+    throw new Error('GitHub delivery expected commit must differ from its base')
+  }
+
+  const node = input.run.nodes.find((candidate) => candidate.id === input.prNodeId)
+  const buildNode = input.run.nodes.find((candidate) => candidate.id === input.codingRun.nodeId)
+  if (
+    !node ||
+    input.run.currentNodeId !== node.id ||
+    node.kind !== 'pr' ||
+    node.stage !== 'pr' ||
+    node.status !== 'running'
+  ) {
+    throw new Error('GitHub delivery requires the current running PR node')
+  }
+  if (input.codingRun.runId !== input.run.id || input.codingRun.projectId !== input.run.projectId) {
+    throw new Error('Coding Agent run does not belong to the delivery Run')
+  }
+  if (!buildNode || buildNode.kind !== 'task' || buildNode.stage !== 'build' || buildNode.status !== 'success') {
+    throw new Error('GitHub delivery requires a successful build task for the Coding Agent run')
+  }
+  if (
+    input.codingRun.status !== 'completed' ||
+    !input.codingRun.managedWorkspaceId ||
+    !input.codingRun.diffArtifactId ||
+    !input.codingRun.testEvidenceId ||
+    !input.codingRun.completedAt
+  ) {
+    throw new Error('GitHub delivery requires a completed Coding Agent run with diff and Test Evidence')
+  }
+  if (
+    input.workspace.id !== input.codingRun.managedWorkspaceId ||
+    input.workspace.projectId !== input.run.projectId ||
+    input.workspace.codingRunId !== input.codingRun.id ||
+    input.workspace.baseBranch !== baseBranch ||
+    input.workspace.baseCommitSha?.toLowerCase() !== baseCommitSha ||
+    input.workspace.headCommitSha?.toLowerCase() !== expectedCommitSha ||
+    input.workspace.cleanupStatus !== 'active' ||
+    input.workspace.deletedAt
+  ) {
+    throw new Error('GitHub delivery requires the active managed workspace for the Coding Agent run')
+  }
+  const headBranch = assertSafeGitHubBranch(input.workspace.branchName, {
+    requireDeliveryNamespace: true,
+  })
+  if (input.codingRun.branchName !== headBranch) {
+    throw new Error('Coding Agent run and managed workspace branch do not match')
+  }
+  const codingChangedPaths = normalizeChangedPaths(input.codingRun.changedPaths)
+  const diffChangedPaths = normalizeChangedPaths(input.diffArtifact.changedPaths)
+  if (
+    input.diffArtifact.id !== input.codingRun.diffArtifactId ||
+    input.diffArtifact.runId !== input.run.id ||
+    input.diffArtifact.nodeId !== input.codingRun.nodeId ||
+    input.diffArtifact.projectId !== input.run.projectId ||
+    input.diffArtifact.redacted !== true ||
+    codingChangedPaths.length !== diffChangedPaths.length ||
+    codingChangedPaths.some((value, index) => value !== diffChangedPaths[index])
+  ) {
+    throw new Error('Coding Diff Artifact does not match the completed Coding Agent run')
+  }
+  if (
+    input.testEvidence.runId !== input.run.id ||
+    input.testEvidence.nodeId !== input.codingRun.nodeId ||
+    input.testEvidence.projectId !== input.run.projectId ||
+    input.testEvidence.status !== 'passed' ||
+    input.testEvidence.exitCode !== 0 ||
+    input.testEvidence.redacted !== true
+  ) {
+    throw new Error('GitHub delivery requires passing Coding Agent Test Evidence')
+  }
+  if (input.testEvidence.sourceCommitSha.toLowerCase() !== expectedCommitSha) {
+    throw new Error('Test Evidence is not bound to the expected commit')
+  }
+  if (
+    input.prPackage.runId !== input.run.id ||
+    input.prPackage.nodeId !== node.id ||
+    input.prPackage.kind !== 'pr' ||
+    input.prPackage.redacted !== true ||
+    !node.artifactIds.includes(input.prPackage.id)
+  ) {
+    throw new Error('GitHub delivery requires the current redacted PR Delivery Package')
+  }
+  const changedPaths = diffChangedPaths
+  const testEvidenceDigest = await sha256Hex(JSON.stringify({
+    id: input.testEvidence.id,
+    runId: input.testEvidence.runId,
+    nodeId: input.testEvidence.nodeId,
+    projectId: input.testEvidence.projectId,
+    command: input.testEvidence.command,
+    status: input.testEvidence.status,
+    exitCode: input.testEvidence.exitCode,
+    durationMs: input.testEvidence.durationMs,
+    summary: input.testEvidence.summary,
+    redacted: input.testEvidence.redacted,
+    sourceCommitSha: input.testEvidence.sourceCommitSha.toLowerCase(),
+    createdAt: input.testEvidence.createdAt,
+  }))
+  const prPackageDigest = await sha256Hex(JSON.stringify({
+    id: input.prPackage.id,
+    title: input.prPackage.title,
+    summary: input.prPackage.summary,
+    content: input.prPackage.content,
+    updatedAt: input.prPackage.updatedAt,
+  }))
+  const material: IntentDigestMaterial = {
+    stateVersion: 1,
+    organizationId,
+    teamProjectId,
+    localProjectId: input.run.projectId,
+    runId: input.run.id,
+    runVersion: input.run.version,
+    nodeId: node.id,
+    codingRunId: input.codingRun.id,
+    codingRunCompletedAt: input.codingRun.completedAt,
+    workspaceId: input.workspace.id,
+    repository,
+    baseBranch,
+    headBranch,
+    baseCommitSha,
+    expectedCommitSha,
+    diffArtifactId: input.diffArtifact.id,
+    testEvidenceId: input.testEvidence.id,
+    testEvidenceCreatedAt: input.testEvidence.createdAt,
+    testEvidenceDigest,
+    prPackageArtifactId: input.prPackage.id,
+    prPackageUpdatedAt: input.prPackage.updatedAt,
+    prPackageDigest,
+    changedPaths,
+  }
+  const intentDigest = await sha256Hex(canonicalIntentMaterial(material))
+
+  return {
+    id,
+    ...material,
+    intentDigest,
+    idempotencyKey: `github-delivery:${intentDigest}`,
+    status: 'approval_required',
+    createdAt: input.now,
+    updatedAt: input.now,
+    redacted: true,
+  }
+}

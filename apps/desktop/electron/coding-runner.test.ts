@@ -9,6 +9,7 @@ import {
   createFakeCodingRunBundle,
   createManagedCodingWorkspace,
   captureWorktreeDiff,
+  commitManagedCodingWorkspace,
   completeFakeCodingRun,
   deleteManagedCodingWorkspace,
   findActiveCodingRun,
@@ -78,6 +79,63 @@ describe('coding worktree manager', () => {
       cleanupStatus: 'deleted',
     })
     await expect(readFile(path.join(workspace.worktreePath, 'package.json'), 'utf8')).rejects.toThrow()
+  })
+
+  it('commits only the reviewed changed paths and replays the same clean expected commit', async () => {
+    const repo = await gitRepo()
+    const workspace = await createManagedCodingWorkspace({
+      project: project(repo),
+      codingRunId: 'coding-run-1',
+      runId: 'run-1',
+      nodeId: 'node-build',
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+    })
+    await writeFile(path.join(workspace.worktreePath, 'delivery.txt'), 'reviewed\n')
+
+    const committed = await commitManagedCodingWorkspace({
+      workspace,
+      expectedChangedPaths: ['delivery.txt'],
+      runId: 'run-1',
+    })
+    const replay = await commitManagedCodingWorkspace({
+      workspace: committed.workspace,
+      expectedChangedPaths: ['delivery.txt'],
+      runId: 'run-1',
+    })
+    const { stdout: status } = await execFileAsync(
+      'git',
+      ['-C', workspace.worktreePath, 'status', '--porcelain=v1'],
+    )
+
+    expect(committed.workspace).toMatchObject({
+      id: workspace.id,
+      baseCommitSha: workspace.baseCommitSha,
+      headCommitSha: committed.expectedCommitSha,
+    })
+    expect(committed.baseCommitSha).toBe(workspace.baseCommitSha)
+    expect(committed.expectedCommitSha).toMatch(/^[a-f0-9]{40}$/)
+    expect(committed.expectedCommitSha).not.toBe(committed.baseCommitSha)
+    expect(replay).toEqual(committed)
+    expect(status).toBe('')
+  })
+
+  it('refuses to commit unreviewed paths from a managed worktree', async () => {
+    const repo = await gitRepo()
+    const workspace = await createManagedCodingWorkspace({
+      project: project(repo),
+      codingRunId: 'coding-run-1',
+      runId: 'run-1',
+      nodeId: 'node-build',
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+    })
+    await writeFile(path.join(workspace.worktreePath, 'reviewed.txt'), 'reviewed\n')
+    await writeFile(path.join(workspace.worktreePath, 'unexpected.txt'), 'unexpected\n')
+
+    await expect(commitManagedCodingWorkspace({
+      workspace,
+      expectedChangedPaths: ['reviewed.txt'],
+      runId: 'run-1',
+    })).rejects.toThrow('Managed workspace changed paths do not match reviewed Coding evidence')
   })
 })
 
