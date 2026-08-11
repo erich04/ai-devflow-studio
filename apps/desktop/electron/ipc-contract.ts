@@ -12,6 +12,7 @@ import type {
   DesktopPairingCredential,
   GateEnforcementDecision,
   GateOverrideDecision,
+  GitHubDeliveryIntent,
   LocalExecutionState,
   LocalSettings,
   LocalProject,
@@ -73,6 +74,7 @@ export const ipcChannels = {
   deleteRun: 'devflow:run:delete',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   createPrDraft: 'devflow:pr-draft:create',
+  prepareGitHubDelivery: 'devflow:github-delivery:prepare',
   createAcceptanceBundle: 'devflow:acceptance-bundle:create',
   approveGate: 'devflow:gate:approve',
   saveGateOverride: 'devflow:gate:override:save',
@@ -166,6 +168,22 @@ export type CreatePrDraftResult = {
   event: AgentEvent
   state: LocalExecutionState
 }
+
+export type PrepareGitHubDeliveryInput = CreatePrDraftInput
+
+export type PrepareGitHubDeliveryResult =
+  | {
+      status: 'prepared'
+      replayed: boolean
+      intent: GitHubDeliveryIntent
+      testEvidence: TestEvidence
+      state: LocalExecutionState
+    }
+  | {
+      status: 'tests_failed'
+      testEvidence: TestEvidence
+      state: LocalExecutionState
+    }
 
 export type CreateAcceptanceBundleInput = {
   runId: string
@@ -345,6 +363,9 @@ export type DevFlowDesktopApi = {
   deleteRun: (input: DeleteRunInput) => Promise<DeleteRunResult>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
+  prepareGitHubDelivery: (
+    input: PrepareGitHubDeliveryInput,
+  ) => Promise<PrepareGitHubDeliveryResult>
   createAcceptanceBundle: (
     input: CreateAcceptanceBundleInput,
   ) => Promise<CreateAcceptanceBundleResult>
@@ -588,6 +609,15 @@ function parseDeliveryArtifactCommandInput(
 
 export function parseCreatePrDraftInput(value: unknown): CreatePrDraftInput {
   return parseDeliveryArtifactCommandInput(value, 'create PR draft payload')
+}
+
+export function parsePrepareGitHubDeliveryInput(
+  value: unknown,
+): PrepareGitHubDeliveryInput {
+  return parseDeliveryArtifactCommandInput(
+    value,
+    'prepare GitHub delivery payload',
+  )
 }
 
 export function parseCreateAcceptanceBundleInput(

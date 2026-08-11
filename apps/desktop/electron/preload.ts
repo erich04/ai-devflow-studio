@@ -38,6 +38,8 @@ const desktopApi: DevFlowDesktopApi = {
   completeWorkflowAgentNode: (input) =>
     ipcRenderer.invoke(ipcChannels.completeWorkflowAgentNode, input),
   createPrDraft: (input) => ipcRenderer.invoke(ipcChannels.createPrDraft, input),
+  prepareGitHubDelivery: (input) =>
+    ipcRenderer.invoke(ipcChannels.prepareGitHubDelivery, input),
   createAcceptanceBundle: (input) =>
     ipcRenderer.invoke(ipcChannels.createAcceptanceBundle, input),
   approveGate: (input) => ipcRenderer.invoke(ipcChannels.approveGate, input),

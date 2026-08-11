@@ -7,6 +7,7 @@ import {
   parseCancelCodingAgentRunInput,
   parseCreateAcceptanceBundleInput,
   parseCreatePrDraftInput,
+  parsePrepareGitHubDeliveryInput,
   parseCreateRunInput,
   parseDeleteRunInput,
   parseCompleteWorkflowAgentNodeInput,
@@ -208,12 +209,14 @@ describe('IPC contract parsers', () => {
     expect(ipcChannels).not.toHaveProperty('saveEvent')
     expect(ipcChannels).toMatchObject({
       createPrDraft: 'devflow:pr-draft:create',
+      prepareGitHubDelivery: 'devflow:github-delivery:prepare',
       createAcceptanceBundle: 'devflow:acceptance-bundle:create',
     })
   })
 
   it.each([
     ['PR draft', parseCreatePrDraftInput],
+    ['GitHub delivery preparation', parsePrepareGitHubDeliveryInput],
     ['acceptance bundle', parseCreateAcceptanceBundleInput],
   ])('accepts a minimal %s command payload', (_label, parser) => {
     expect(
@@ -226,6 +229,7 @@ describe('IPC contract parsers', () => {
 
   it.each([
     ['PR draft', parseCreatePrDraftInput],
+    ['GitHub delivery preparation', parsePrepareGitHubDeliveryInput],
     ['acceptance bundle', parseCreateAcceptanceBundleInput],
   ])('fails closed for renderer-supplied delivery data in %s commands', (_label, parser) => {
     for (const field of ['run', 'artifact', 'event', 'evidence', 'projectId']) {

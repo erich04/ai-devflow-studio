@@ -58,6 +58,7 @@ import {
   parseProjectGitStatusInput,
   parseCreateAcceptanceBundleInput,
   parseCreatePrDraftInput,
+  parsePrepareGitHubDeliveryInput,
   parseCreateRunInput,
   parseCompleteWorkflowAgentNodeInput,
   parseListAgentReviewsInput,
@@ -85,6 +86,10 @@ import { createDesktopWorkRequestService } from './work-request-service.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
 import { createCodingEngineAdapterFromEnv } from './coding-engine.js'
 import { createCodingRuntime } from './coding-runtime.js'
+import {
+  createGitHubDeliveryRuntime,
+  type GitHubDeliveryRuntime,
+} from './github-delivery-runtime.js'
 import { deleteManagedCodingWorkspace as removeManagedCodingWorkspaceDirectory } from './coding-runner.js'
 import { createOpencodeProcessManager } from './opencode-process.js'
 import { stopOpencodeWithRetry } from './opencode-shutdown.js'
@@ -150,6 +155,7 @@ let gateCommandSchedulerPromise:
   | Promise<ReturnType<typeof createGateCommandScheduler>>
   | undefined
 let gateCommandCycleAbortController: AbortController | undefined
+let githubDeliveryRuntimePromise: Promise<GitHubDeliveryRuntime> | undefined
 const codingPermissionTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 const codingRunTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 const gitStatusWatchers = new Map<
@@ -192,6 +198,18 @@ function getStore() {
     dbPath: path.join(userDataPath, 'devflow.sqlite'),
   })
   return storePromise
+}
+
+function getGitHubDeliveryRuntime() {
+  githubDeliveryRuntimePromise ??= getStore().then((store) =>
+    createGitHubDeliveryRuntime({
+      store,
+      runTestCommand: runLocalTestCommand,
+      testTimeoutMs: DEFAULT_TEST_TIMEOUT_MS,
+      idGenerator: (prefix) => `${prefix}-${randomUUID()}`,
+    }),
+  )
+  return githubDeliveryRuntimePromise
 }
 
 async function executeWorkflowCommandOrThrow(
@@ -1743,6 +1761,20 @@ function registerIpcHandlers() {
       run: attached.run,
       artifact,
       event,
+      state: await store.loadState(),
+    }
+  })
+
+  ipcMain.handle(ipcChannels.prepareGitHubDelivery, async (_, payload: unknown) => {
+    const input = parsePrepareGitHubDeliveryInput(payload)
+    const [runtime, store] = await Promise.all([
+      getGitHubDeliveryRuntime(),
+      getStore(),
+    ])
+    const result = await runtime.prepare(input)
+    wakeRemoteSyncOutbox()
+    return {
+      ...result,
       state: await store.loadState(),
     }
   })

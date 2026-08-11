@@ -20,6 +20,7 @@ vi.mock('electron', () => ({
 await import('./preload')
 
 type ExposedDesktopApi = {
+  prepareGitHubDelivery: (input: { runId: string; nodeId: string }) => Promise<unknown>
   retryRemoteSyncOperation: (input: { operationId: string }) => Promise<unknown>
   loadRepositoryKnowledge: (input: { projectId: string }) => Promise<unknown>
   refreshRepositoryKnowledge: (input: { projectId: string }) => Promise<unknown>
@@ -35,6 +36,19 @@ type ExposedDesktopApi = {
 const exposedApi = electron.exposeInMainWorld.mock.calls[0]?.[1] as ExposedDesktopApi
 
 describe('Electron preload remote sync operator surface', () => {
+  it('forwards only Run and PR node identifiers for GitHub Delivery preparation', async () => {
+    const result = { status: 'prepared', intent: { id: 'intent-1' } }
+    const input = { runId: 'run-1', nodeId: 'run-1-pr' }
+    electron.invoke.mockResolvedValueOnce(result)
+
+    await expect(exposedApi.prepareGitHubDelivery(input)).resolves.toBe(result)
+    expect(electron.invoke).toHaveBeenCalledWith(
+      ipcChannels.prepareGitHubDelivery,
+      input,
+    )
+    expect(Object.keys(input).sort()).toEqual(['nodeId', 'runId'])
+  })
+
   it('forwards identifier-only retry commands without exposing enqueue or upload methods', async () => {
     const state = { remoteSyncOperations: [] }
     electron.invoke.mockResolvedValueOnce(state)
