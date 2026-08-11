@@ -1,6 +1,9 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import type { GitHubDeliveryIntent } from '@ai-devflow/shared'
+import type {
+  GitHubDeliveryIntent,
+  GitHubDeliveryOperatorOutcome,
+} from '@ai-devflow/shared'
 import { GitHubDeliveryPanel } from './GitHubDeliveryPanel'
 
 function intent(
@@ -23,6 +26,8 @@ function intent(
     codingRunId: 'coding-run-1',
     codingRunCompletedAt: '2026-08-11T11:30:00.000Z',
     workspaceId: 'workspace-1',
+    deliverySeriesKey: `github-delivery:${'e'.repeat(64)}`,
+    deliveryAttempt: 1,
     repository: 'erich/ai-devflow-studio',
     baseBranch: 'main',
     headBranch: 'devflow/run-1',
@@ -48,6 +53,42 @@ function intent(
 }
 
 describe('GitHubDeliveryPanel', () => {
+  it('shows only an exact safe local operator outcome after restart', () => {
+    const recoveryIntent = intent('recovery_required')
+    const outcome: GitHubDeliveryOperatorOutcome = {
+      stateVersion: 1,
+      intentId: recoveryIntent.id,
+      intentUpdatedAt: recoveryIntent.updatedAt,
+      outcomeCode: 'operation_cancelled',
+      recordedAt: recoveryIntent.updatedAt,
+      redacted: true,
+    }
+    const { rerender } = render(
+      <GitHubDeliveryPanel
+        intent={recoveryIntent}
+        operatorOutcome={outcome}
+        hasExactPrPackage
+      />,
+    )
+
+    expect(screen.getByTestId('github-delivery-panel')).toHaveTextContent(
+      'operation_cancelled',
+    )
+    rerender(
+      <GitHubDeliveryPanel
+        intent={{
+          ...recoveryIntent,
+          updatedAt: '2026-08-11T12:03:00.000Z',
+        }}
+        operatorOutcome={outcome}
+        hasExactPrPackage
+      />,
+    )
+    expect(screen.getByTestId('github-delivery-panel')).not.toHaveTextContent(
+      'operation_cancelled',
+    )
+  })
+
   it('shows the exact delivery evidence while keeping token and local-path material out', () => {
     render(<GitHubDeliveryPanel intent={intent('approval_required')} hasExactPrPackage />)
 
@@ -59,6 +100,8 @@ describe('GitHubDeliveryPanel', () => {
     expect(panel).toHaveTextContent('devflow/run-1')
     expect(panel).toHaveTextContent('2'.repeat(40))
     expect(panel).toHaveTextContent('runVersion 12')
+    expect(panel).toHaveTextContent(`github-delivery:${'e'.repeat(64)}`)
+    expect(panel).toHaveTextContent('attempt 1')
     expect(panel).toHaveTextContent('a'.repeat(64))
     expect(panel).toHaveTextContent('b'.repeat(64))
     expect(panel).toHaveTextContent('c'.repeat(64))
@@ -103,6 +146,8 @@ describe('GitHubDeliveryPanel', () => {
     expect(panel).toHaveTextContent('交付已安全停止')
     expect(panel).toHaveTextContent('不会自动重试')
     expect(panel).toHaveTextContent('核对远端记录')
+    expect(panel).toHaveTextContent('显式 Retry')
+    expect(panel).toHaveTextContent('新的 attempt')
     expect(panel).not.toHaveTextContent(/授权.*消耗/)
   })
 })

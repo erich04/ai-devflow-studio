@@ -37,6 +37,8 @@ function intent(): GitHubDeliveryIntent {
     codingRunId: workspace.codingRunId,
     codingRunCompletedAt: '2026-08-11T13:01:00.000Z',
     workspaceId: workspace.id,
+    deliverySeriesKey: `github-delivery:${'7'.repeat(64)}`,
+    deliveryAttempt: 1,
     repository: 'owner/repository',
     baseBranch: workspace.baseBranch,
     headBranch: workspace.branchName,

@@ -77,6 +77,7 @@ export const ipcChannels = {
   createPrDraft: 'devflow:pr-draft:create',
   prepareGitHubDelivery: 'devflow:github-delivery:prepare',
   resumeGitHubDelivery: 'devflow:github-delivery:resume',
+  stopGitHubDelivery: 'devflow:github-delivery:stop',
   createAcceptanceBundle: 'devflow:acceptance-bundle:create',
   approveGate: 'devflow:gate:approve',
   saveGateOverride: 'devflow:gate:override:save',
@@ -191,6 +192,28 @@ export type ResumeGitHubDeliveryInput = {
 }
 
 export type ResumeGitHubDeliveryResult = GitHubDeliveryProcessorResult
+
+export type StopGitHubDeliveryInput = {
+  intentId: string
+  expectedUpdatedAt: string
+}
+
+export type StopGitHubDeliveryResult =
+  | {
+      intentId: string
+      disposition: 'stopped'
+      outcomeCode: 'operation_cancelled'
+    }
+  | {
+      intentId: string
+      disposition: 'local_conflict'
+      outcomeCode: 'intent_not_found' | 'stale_intent' | 'stop_unavailable'
+    }
+  | {
+      intentId: string
+      disposition: 'already_terminal'
+      outcomeCode: 'intent_terminal'
+    }
 
 export type CreateAcceptanceBundleInput = {
   runId: string
@@ -376,6 +399,9 @@ export type DevFlowDesktopApi = {
   resumeGitHubDelivery: (
     input: ResumeGitHubDeliveryInput,
   ) => Promise<ResumeGitHubDeliveryResult>
+  stopGitHubDelivery: (
+    input: StopGitHubDeliveryInput,
+  ) => Promise<StopGitHubDeliveryResult>
   createAcceptanceBundle: (
     input: CreateAcceptanceBundleInput,
   ) => Promise<CreateAcceptanceBundleResult>
@@ -642,7 +668,52 @@ export function parseResumeGitHubDeliveryInput(
     'resume GitHub delivery payload',
   )
   const intentId = readExactRequiredIdentifier(value, 'intentId')
-  const expectedUpdatedAt = readRequiredString(value, 'expectedUpdatedAt')
+  const expectedUpdatedAt = value['expectedUpdatedAt']
+  if (
+    typeof expectedUpdatedAt !== 'string' ||
+    expectedUpdatedAt.length === 0 ||
+    expectedUpdatedAt.trim() !== expectedUpdatedAt
+  ) {
+    throw new Error('Invalid expectedUpdatedAt')
+  }
+  const parsedTimestamp = Date.parse(expectedUpdatedAt)
+  if (
+    !Number.isFinite(parsedTimestamp) ||
+    new Date(parsedTimestamp).toISOString() !== expectedUpdatedAt
+  ) {
+    throw new Error('Invalid expectedUpdatedAt')
+  }
+  return { intentId, expectedUpdatedAt }
+}
+
+export function parseStopGitHubDeliveryInput(
+  value: unknown,
+): StopGitHubDeliveryInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid stop GitHub delivery payload')
+  }
+  rejectUnexpectedFields(
+    value,
+    ['intentId', 'expectedUpdatedAt'],
+    'stop GitHub delivery payload',
+  )
+  const intentId = readExactRequiredIdentifier(value, 'intentId')
+  if (
+    intentId.startsWith('~') ||
+    intentId.includes('/') ||
+    intentId.includes('\\') ||
+    /[\u0000-\u001f\u007f]/u.test(intentId)
+  ) {
+    throw new Error('Invalid intentId')
+  }
+  const expectedUpdatedAt = value['expectedUpdatedAt']
+  if (
+    typeof expectedUpdatedAt !== 'string' ||
+    expectedUpdatedAt.length === 0 ||
+    expectedUpdatedAt.trim() !== expectedUpdatedAt
+  ) {
+    throw new Error('Invalid expectedUpdatedAt')
+  }
   const parsedTimestamp = Date.parse(expectedUpdatedAt)
   if (
     !Number.isFinite(parsedTimestamp) ||

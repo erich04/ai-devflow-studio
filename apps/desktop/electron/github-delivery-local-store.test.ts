@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -231,11 +231,372 @@ async function createIntent(sources: ReturnType<typeof createSources>) {
   })
 }
 
-describe('GitHub Delivery Intent local persistence', () => {
-  it('migrates to schema 13 with a metadata-only delivery table', async () => {
+async function savePreparedIntent(
+  store: Awaited<ReturnType<typeof createLocalStore>>,
+  sources: ReturnType<typeof createSources>,
+) {
+  const intent = await createIntent(sources)
+  const result = await store.commitGitHubDeliveryPreparation({
+    intent,
+    expectedProject: sources.project,
+    expectedPairingCredential: sources.pairing,
+    expectedRepositoryBinding: sources.repositoryBinding,
+    expectedRun: sources.run,
+    expectedCodingRun: sources.codingRun,
+    expectedWorkspace: sources.workspace,
+    expectedDiffArtifact: sources.diffArtifact,
+    testEvidence: sources.testEvidence,
+    expectedPrPackage: sources.prPackage,
+  })
+  expect(result).toMatchObject({ committed: true })
+  return intent
+}
+
+describe('GitHub repository binding observation CAS', () => {
+  it('persists the first observation and replays only identical state', async () => {
+    const dbPath = await tempDbPath()
+    const sources = createSources()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(sources.pairing, 'encrypted-token')
+
+    await expect(
+      store.commitGitHubRepositoryBindingObservation({
+        expectedPairing: sources.pairing,
+        binding: sources.repositoryBinding,
+      }),
+    ).resolves.toEqual({
+      committed: true,
+      replayed: false,
+      binding: sources.repositoryBinding,
+    })
+    await expect(
+      store.commitGitHubRepositoryBindingObservation({
+        expectedPairing: sources.pairing,
+        binding: sources.repositoryBinding,
+      }),
+    ).resolves.toEqual({
+      committed: true,
+      replayed: true,
+      binding: sources.repositoryBinding,
+    })
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(
+      reopened.getGitHubRepositoryBinding(sources.pairing.projectId),
+    ).resolves.toEqual(sources.repositoryBinding)
+    reopened.close()
+  })
+
+  it('accepts a same-ID higher version including revoked state', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const sources = createSources()
+    await store.saveDesktopPairingCredential(sources.pairing, 'encrypted-token')
+    await store.commitGitHubRepositoryBindingObservation({
+      expectedPairing: sources.pairing,
+      binding: sources.repositoryBinding,
+    })
+    const revoked: GitHubRepositoryBinding = {
+      ...sources.repositoryBinding,
+      version: sources.repositoryBinding.version + 1,
+      status: 'revoked',
+      updatedAt: '2026-08-11T10:00:00.000Z',
+    }
+
+    await expect(
+      store.commitGitHubRepositoryBindingObservation({
+        expectedPairing: sources.pairing,
+        binding: revoked,
+      }),
+    ).resolves.toEqual({ committed: true, replayed: false, binding: revoked })
+    await expect(
+      store.getGitHubRepositoryBinding(sources.pairing.projectId),
+    ).resolves.toEqual(revoked)
+    store.close()
+  })
+
+  it.each([
+    [
+      'lower version',
+      (binding: GitHubRepositoryBinding) => ({
+        ...binding,
+        version: binding.version - 1,
+      }),
+    ],
+    [
+      'same-version changed content',
+      (binding: GitHubRepositoryBinding) => ({
+        ...binding,
+        defaultBranch: 'develop',
+      }),
+    ],
+    [
+      'different binding ID',
+      (binding: GitHubRepositoryBinding) => ({
+        ...binding,
+        id: 'github-binding-other',
+      }),
+    ],
+  ])(
+    'rejects conflicting %s observations without changing cached authority',
+    async (_label, change) => {
+      const store = await createLocalStore({ dbPath: await tempDbPath() })
+      const sources = createSources()
+      await store.saveDesktopPairingCredential(
+        sources.pairing,
+        'encrypted-token',
+      )
+      await store.commitGitHubRepositoryBindingObservation({
+        expectedPairing: sources.pairing,
+        binding: sources.repositoryBinding,
+      })
+
+      await expect(
+        store.commitGitHubRepositoryBindingObservation({
+          expectedPairing: sources.pairing,
+          binding: change(sources.repositoryBinding),
+        }),
+      ).resolves.toEqual({ committed: false, reason: 'binding_conflict' })
+      await expect(
+        store.getGitHubRepositoryBinding(sources.pairing.projectId),
+      ).resolves.toEqual(sources.repositoryBinding)
+      store.close()
+    },
+  )
+
+  it('clears the exact Project cache on a null observation and replays an empty cache', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const sources = createSources()
+    await store.saveDesktopPairingCredential(sources.pairing, 'encrypted-token')
+    await store.commitGitHubRepositoryBindingObservation({
+      expectedPairing: sources.pairing,
+      binding: sources.repositoryBinding,
+    })
+
+    await expect(
+      store.commitGitHubRepositoryBindingObservation({
+        expectedPairing: sources.pairing,
+        binding: null,
+      }),
+    ).resolves.toEqual({ committed: true, replayed: false, binding: null })
+    await expect(
+      store.getGitHubRepositoryBinding(sources.pairing.projectId),
+    ).resolves.toBeNull()
+    await expect(
+      store.commitGitHubRepositoryBindingObservation({
+        expectedPairing: sources.pairing,
+        binding: null,
+      }),
+    ).resolves.toEqual({ committed: true, replayed: true, binding: null })
+    store.close()
+  })
+
+  it('rejects a fetch-to-commit pairing race and preserves the prior cache', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const sources = createSources()
+    await store.saveDesktopPairingCredential(sources.pairing, 'encrypted-token')
+    await store.saveGitHubRepositoryBinding(sources.repositoryBinding)
+    await store.saveDesktopPairingCredential(
+      { ...sources.pairing, tokenId: 'desktop-token-rotated' },
+      'rotated-encrypted-token',
+    )
+
+    await expect(
+      store.commitGitHubRepositoryBindingObservation({
+        expectedPairing: sources.pairing,
+        binding: {
+          ...sources.repositoryBinding,
+          version: sources.repositoryBinding.version + 1,
+          updatedAt: '2026-08-11T10:00:00.000Z',
+        },
+      }),
+    ).resolves.toEqual({ committed: false, reason: 'pairing_scope_mismatch' })
+    await expect(
+      store.getGitHubRepositoryBinding(sources.pairing.projectId),
+    ).resolves.toEqual(sources.repositoryBinding)
+    store.close()
+  })
+
+  it.each([
+    [
+      'secret field',
+      { ...createSources().repositoryBinding, token: 'ghs_secret' },
+    ],
+    [
+      'local path field',
+      { ...createSources().repositoryBinding, path: '/private/repo' },
+    ],
+    [
+      'malformed repository',
+      { ...createSources().repositoryBinding, repository: 'Example/Project' },
+    ],
+  ])(
+    'rejects a %s before it can reach local persistence',
+    async (_label, binding) => {
+      const store = await createLocalStore({ dbPath: await tempDbPath() })
+      const sources = createSources()
+      await store.saveDesktopPairingCredential(
+        sources.pairing,
+        'encrypted-token',
+      )
+
+      await expect(
+        store.commitGitHubRepositoryBindingObservation({
+          expectedPairing: sources.pairing,
+          binding: binding as GitHubRepositoryBinding,
+        }),
+      ).resolves.toEqual({ committed: false, reason: 'invalid_input' })
+      await expect(
+        store.getGitHubRepositoryBinding(sources.pairing.projectId),
+      ).resolves.toBeNull()
+      store.close()
+    },
+  )
+
+  it.each([
+    [
+      'revoked binding',
+      (source: GitHubRepositoryBinding) => ({
+        ...source,
+        version: source.version + 1,
+        status: 'revoked' as const,
+        updatedAt: '2026-08-11T10:00:00.000Z',
+      }),
+    ],
+    [
+      'active binding update',
+      (source: GitHubRepositoryBinding) => ({
+        ...source,
+        version: source.version + 1,
+        updatedAt: '2026-08-11T10:00:00.000Z',
+      }),
+    ],
+    ['null binding', () => null],
+  ])(
+    'atomically terminalizes a cold-start nonterminal intent after %s',
+    async (_label, observe) => {
+      const dbPath = await tempDbPath()
+      const sources = createSources()
+      const first = await createLocalStore({ dbPath })
+      await saveSources(first, sources)
+      const intent = await savePreparedIntent(first, sources)
+      first.close()
+
+      const reopened = await createLocalStore({ dbPath })
+      const observation = observe(sources.repositoryBinding)
+      await expect(
+        reopened.commitGitHubRepositoryBindingObservation({
+          expectedPairing: sources.pairing,
+          binding: observation,
+        }),
+      ).resolves.toMatchObject({ committed: true, binding: observation })
+      const [terminalized] = await reopened.listGitHubDeliveryIntents()
+      expect(terminalized).toMatchObject({
+        id: intent.id,
+        status: 'revoked',
+      })
+      expect(Date.parse(terminalized!.updatedAt)).toBeGreaterThan(
+        Date.parse(intent.updatedAt),
+      )
+      reopened.close()
+    },
+  )
+
+  it('keeps a nonterminal intent automatic when the active authority still matches', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const sources = createSources()
+    await saveSources(store, sources)
+    const intent = await savePreparedIntent(store, sources)
+
+    await expect(
+      store.commitGitHubRepositoryBindingObservation({
+        expectedPairing: sources.pairing,
+        binding: sources.repositoryBinding,
+      }),
+    ).resolves.toEqual({
+      committed: true,
+      replayed: true,
+      binding: sources.repositoryBinding,
+    })
+    await expect(store.listGitHubDeliveryIntents()).resolves.toEqual([intent])
+    store.close()
+  })
+
+  it('atomically revokes the prior pairing authority before replacing the default credential', async () => {
+    const dbPath = await tempDbPath()
+    const sources = createSources()
+    const store = await createLocalStore({ dbPath })
+    await saveSources(store, sources)
+    const intent = await savePreparedIntent(store, sources)
+    const replacement: DesktopPairingCredential = {
+      ...sources.pairing,
+      tokenId: 'desktop-token-2',
+      organizationId: 'org-2',
+      projectId: 'team-project-2',
+      userId: 'user-2',
+      authAccountId: 'auth-account-2',
+      projectMemberships: [
+        { projectId: 'team-project-2', userId: 'user-2', role: 'lead' },
+      ],
+      createdAt: '2026-08-11T11:00:00.000Z',
+    }
+
+    await store.saveDesktopPairingCredential(
+      replacement,
+      'replacement-encrypted-token',
+    )
+
+    await expect(store.getDesktopPairingCredential()).resolves.toEqual(replacement)
+    const [terminalized] = await store.listGitHubDeliveryIntents(intent.runId)
+    expect(terminalized).toMatchObject({ id: intent.id, status: 'revoked' })
+    expect(Date.parse(terminalized!.updatedAt)).toBeGreaterThan(
+      Date.parse(intent.updatedAt),
+    )
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getDesktopPairingCredential()).resolves.toEqual(replacement)
+    await expect(reopened.listGitHubDeliveryIntents(intent.runId)).resolves.toEqual([
+      terminalized,
+    ])
+    reopened.close()
+  })
+
+  it('restores the prior pairing and nonterminal intent when replacement persistence fails', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
-    expect(await store.getSchemaVersion()).toBe(13)
+    const sources = createSources()
+    await saveSources(store, sources)
+    const intent = await savePreparedIntent(store, sources)
+    const replacement: DesktopPairingCredential = {
+      ...sources.pairing,
+      tokenId: 'desktop-token-replacement',
+      createdAt: '2026-08-11T11:00:00.000Z',
+    }
+    await rename(dbPath, `${dbPath}.backup`)
+    await mkdir(dbPath)
+
+    await expect(
+      store.saveDesktopPairingCredential(
+        replacement,
+        'replacement-encrypted-token',
+      ),
+    ).rejects.toThrow()
+    await expect(store.getDesktopPairingCredential()).resolves.toEqual(
+      sources.pairing,
+    )
+    await expect(store.listGitHubDeliveryIntents(intent.runId)).resolves.toEqual([
+      intent,
+    ])
+    store.close()
+  })
+})
+
+describe('GitHub Delivery Intent local persistence', () => {
+  it('migrates to schema 14 with metadata-only delivery and operator outcome tables', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    expect(await store.getSchemaVersion()).toBe(14)
     store.close()
 
     const SQL = await initSqlJs()
@@ -271,7 +632,121 @@ describe('GitHub Delivery Intent local persistence', () => {
     expect(columns).not.toEqual(expect.arrayContaining([
       'token', 'secret', 'source_path', 'worktree_path', 'patch', 'stdout', 'stderr',
     ]))
+    const outcomeColumns = database
+      .exec('pragma table_info(github_delivery_operator_outcomes)')[0]
+      ?.values.map((row) => String(row[1])) ?? []
+    expect(outcomeColumns).toEqual([
+      'intent_id',
+      'intent_updated_at',
+      'outcome_code',
+      'state_version',
+      'json',
+      'recorded_at',
+    ])
+    expect(outcomeColumns).not.toEqual(expect.arrayContaining([
+      'token', 'secret', 'path', 'message', 'error', 'cause',
+    ]))
     database.close()
+  })
+
+  it('does not stop or record an outcome for stale or terminal CAS input', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const sources = createSources()
+    await saveSources(store, sources)
+    const intent = await savePreparedIntent(store, sources)
+
+    await expect(store.stopGitHubDeliveryIntent({
+      intentId: intent.id,
+      expectedUpdatedAt: '2026-08-11T10:30:00.000Z',
+      updatedAt: '2026-08-11T10:32:00.000Z',
+    })).resolves.toEqual({ committed: false, reason: 'source_stale' })
+    await expect(store.listGitHubDeliveryIntents(intent.runId)).resolves.toEqual([intent])
+    await expect(store.listGitHubDeliveryOperatorOutcomes()).resolves.toEqual([])
+
+    const failedIntent = {
+      ...intent,
+      status: 'failed' as const,
+      updatedAt: '2026-08-11T10:33:00.000Z',
+    }
+    await expect(store.commitGitHubDeliveryIntentStatus({
+      expectedIntent: intent,
+      intent: failedIntent,
+    })).resolves.toMatchObject({ committed: true, intent: failedIntent })
+    await expect(store.stopGitHubDeliveryIntent({
+      intentId: intent.id,
+      expectedUpdatedAt: failedIntent.updatedAt,
+      updatedAt: '2026-08-11T10:34:00.000Z',
+    })).resolves.toEqual({ committed: false, reason: 'intent_terminal' })
+    await expect(store.listGitHubDeliveryOperatorOutcomes()).resolves.toEqual([])
+    store.close()
+  })
+
+  it('rolls back both Stop status and operator outcome when persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const sources = createSources()
+    await saveSources(store, sources)
+    const intent = await savePreparedIntent(store, sources)
+    await rename(dbPath, `${dbPath}.backup`)
+    await mkdir(dbPath)
+
+    await expect(store.stopGitHubDeliveryIntent({
+      intentId: intent.id,
+      expectedUpdatedAt: intent.updatedAt,
+      updatedAt: '2026-08-11T10:32:00.000Z',
+    })).rejects.toThrow()
+    await expect(store.listGitHubDeliveryIntents(intent.runId)).resolves.toEqual([intent])
+    await expect(store.listGitHubDeliveryOperatorOutcomes()).resolves.toEqual([])
+    store.close()
+  })
+
+  it('atomically persists a closed publisher outcome with recovery-required status', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const sources = createSources()
+    await saveSources(store, sources)
+    const intent = await savePreparedIntent(store, sources)
+    const approved = {
+      ...intent,
+      status: 'approved' as const,
+      updatedAt: '2026-08-11T10:32:00.000Z',
+    }
+    await store.commitGitHubDeliveryIntentStatus({
+      expectedIntent: intent,
+      intent: approved,
+    })
+    const recovery = {
+      ...approved,
+      status: 'recovery_required' as const,
+      updatedAt: '2026-08-11T10:33:00.000Z',
+    }
+
+    await expect(store.commitGitHubDeliveryIntentStatus({
+      expectedIntent: approved,
+      intent: recovery,
+      operatorOutcomeCode: 'remote_unavailable',
+    })).resolves.toMatchObject({ committed: true, intent: recovery })
+    await expect(store.stopGitHubDeliveryIntent({
+      intentId: intent.id,
+      expectedUpdatedAt: recovery.updatedAt,
+      updatedAt: '2026-08-11T10:34:00.000Z',
+    })).resolves.toEqual({ committed: false, reason: 'intent_terminal' })
+    await expect(store.listGitHubDeliveryOperatorOutcomes(intent.id)).resolves.toMatchObject([{
+      outcomeCode: 'remote_unavailable',
+      intentUpdatedAt: recovery.updatedAt,
+    }])
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.listGitHubDeliveryOperatorOutcomes(intent.id)).resolves.toEqual([{
+      stateVersion: 1,
+      intentId: intent.id,
+      intentUpdatedAt: recovery.updatedAt,
+      outcomeCode: 'remote_unavailable',
+      recordedAt: recovery.updatedAt,
+      redacted: true,
+    }])
+    reopened.close()
   })
 
   it('atomically persists, replays, and restores the exact source-bound intent', async () => {
@@ -531,6 +1006,90 @@ describe('GitHub Delivery Intent local persistence', () => {
 
     const reopened = await createLocalStore({ dbPath })
     expect(await reopened.listGitHubDeliveryIntents(sources.run.id)).toEqual([approved])
+    reopened.close()
+  })
+
+  it('stops an approval-wait delivery by exact CAS and records only a safe local outcome', async () => {
+    const dbPath = await tempDbPath()
+    const sources = createSources()
+    const store = await createLocalStore({ dbPath })
+    await saveSources(store, sources)
+    const intent = await savePreparedIntent(store, sources)
+    const stoppedAt = '2026-08-11T10:32:00.000Z'
+    const stoppedIntent = {
+      ...intent,
+      status: 'recovery_required' as const,
+      updatedAt: stoppedAt,
+    }
+    const outcome = {
+      stateVersion: 1 as const,
+      intentId: intent.id,
+      intentUpdatedAt: stoppedAt,
+      outcomeCode: 'operation_cancelled' as const,
+      recordedAt: stoppedAt,
+      redacted: true as const,
+    }
+
+    await expect(store.stopGitHubDeliveryIntent({
+      intentId: intent.id,
+      expectedUpdatedAt: intent.updatedAt,
+      updatedAt: stoppedAt,
+    })).resolves.toEqual({
+      committed: true,
+      replayed: false,
+      intent: stoppedIntent,
+      outcome,
+    })
+    await expect(store.stopGitHubDeliveryIntent({
+      intentId: intent.id,
+      expectedUpdatedAt: intent.updatedAt,
+      updatedAt: stoppedAt,
+    })).resolves.toEqual({
+      committed: true,
+      replayed: true,
+      intent: stoppedIntent,
+      outcome,
+    })
+    await expect(store.loadState()).resolves.toMatchObject({
+      githubDeliveryIntents: [stoppedIntent],
+      githubDeliveryOperatorOutcomes: [outcome],
+    })
+    expect(JSON.stringify(outcome)).not.toMatch(
+      /token|\/Users\/|\/private\/managed|worktree|patch/i,
+    )
+    store.close()
+
+    const SQL = await initSqlJs()
+    const database = new SQL.Database(await readFile(dbPath))
+    const columns = database
+      .exec('pragma table_info(github_delivery_operator_outcomes)')[0]
+      ?.values.map((row) => String(row[1])) ?? []
+    expect(columns).toEqual([
+      'intent_id',
+      'intent_updated_at',
+      'outcome_code',
+      'state_version',
+      'json',
+      'recorded_at',
+    ])
+    const outcomeJson = String(
+      database.exec('select json from github_delivery_operator_outcomes')[0]
+        ?.values[0]?.[0],
+    )
+    expect(outcomeJson).toBe(JSON.stringify(outcome))
+    expect(outcomeJson).not.toMatch(
+      /token|\/Users\/|\/private\/managed|worktree|patch/i,
+    )
+    database.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.listGitHubDeliveryOperatorOutcomes(intent.id)).resolves.toEqual([
+      outcome,
+    ])
+    await expect(reopened.loadState()).resolves.toMatchObject({
+      githubDeliveryIntents: [stoppedIntent],
+      githubDeliveryOperatorOutcomes: [outcome],
+    })
     reopened.close()
   })
 

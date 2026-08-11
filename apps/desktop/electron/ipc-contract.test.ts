@@ -9,6 +9,7 @@ import {
   parseCreatePrDraftInput,
   parsePrepareGitHubDeliveryInput,
   parseResumeGitHubDeliveryInput,
+  parseStopGitHubDeliveryInput,
   parseCreateRunInput,
   parseDeleteRunInput,
   parseCompleteWorkflowAgentNodeInput,
@@ -212,6 +213,7 @@ describe('IPC contract parsers', () => {
       createPrDraft: 'devflow:pr-draft:create',
       prepareGitHubDelivery: 'devflow:github-delivery:prepare',
       resumeGitHubDelivery: 'devflow:github-delivery:resume',
+      stopGitHubDelivery: 'devflow:github-delivery:stop',
       createAcceptanceBundle: 'devflow:acceptance-bundle:create',
     })
   })
@@ -235,6 +237,31 @@ describe('IPC contract parsers', () => {
         expectedUpdatedAt: 'yesterday',
       }),
     ).toThrow(/expectedUpdatedAt/i)
+  })
+
+  it('accepts only an exact local Intent CAS for GitHub Delivery Stop', () => {
+    const input = {
+      intentId: 'github-delivery-intent-1',
+      expectedUpdatedAt: '2026-08-11T12:34:56.000Z',
+    }
+
+    expect(parseStopGitHubDeliveryInput(input)).toEqual(input)
+    expect(() => parseStopGitHubDeliveryInput({
+      ...input,
+      token: 'renderer-must-never-send-a-token',
+    })).toThrow(/unexpected field/i)
+    expect(() => parseStopGitHubDeliveryInput({
+      ...input,
+      expectedUpdatedAt: 'yesterday',
+    })).toThrow(/expectedUpdatedAt/i)
+    expect(() => parseStopGitHubDeliveryInput({
+      ...input,
+      expectedUpdatedAt: ` ${input.expectedUpdatedAt}`,
+    })).toThrow(/expectedUpdatedAt/i)
+    expect(() => parseStopGitHubDeliveryInput({
+      ...input,
+      intentId: '/Users/alice/private-intent',
+    })).toThrow(/intentId/i)
   })
 
   it.each([

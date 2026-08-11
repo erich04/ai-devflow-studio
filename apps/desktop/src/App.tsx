@@ -120,6 +120,7 @@ export function App() {
     dependencyBootstrapEvidence,
     codingDiffArtifacts,
     githubDeliveryIntents,
+    githubDeliveryOperatorOutcomes,
     retryAttempts,
     remoteSyncOperations,
     providerIdDraft,
@@ -335,6 +336,16 @@ export function App() {
       intents: githubDeliveryIntents,
     }),
     [githubDeliveryIntents, selectedNode, selectedRun],
+  )
+  const selectedGitHubDeliveryOperatorOutcome = useMemo(
+    () => selectedGitHubDeliveryIntent
+      ? githubDeliveryOperatorOutcomes.find(
+          (outcome) =>
+            outcome.intentId === selectedGitHubDeliveryIntent.id &&
+            outcome.intentUpdatedAt === selectedGitHubDeliveryIntent.updatedAt,
+        )
+      : undefined,
+    [githubDeliveryOperatorOutcomes, selectedGitHubDeliveryIntent],
   )
   const hasSelectedLocalProjectBinding = Boolean(
     selectedLocalProject && desktopPairing?.localProjectId === selectedLocalProject.id,
@@ -633,6 +644,7 @@ export function App() {
     generatePrDraft,
     prepareSelectedGitHubDelivery,
     resumeSelectedGitHubDelivery,
+    stopSelectedGitHubDelivery,
     generateAcceptanceBundle,
     toggleMcp,
     redactPreview,
@@ -1126,8 +1138,14 @@ export function App() {
                   onCreatePrDraft={generatePrDraft}
                   onPrepareGitHubDelivery={prepareSelectedGitHubDelivery}
                   onResumeGitHubDelivery={resumeSelectedGitHubDelivery}
+                  onStopGitHubDelivery={stopSelectedGitHubDelivery}
                   onCreateAcceptanceBundle={generateAcceptanceBundle}
                   selectedGitHubDeliveryIntent={selectedGitHubDeliveryIntent}
+                  {...(selectedGitHubDeliveryOperatorOutcome
+                    ? {
+                        selectedGitHubDeliveryOperatorOutcome,
+                      }
+                    : {})}
                   isRunningTests={isRunningTests}
                   isRunningAgentReview={isRunningAgentReview}
                   isStartingCodingAgent={isStartingCodingAgent}

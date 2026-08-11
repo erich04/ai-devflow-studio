@@ -14,7 +14,7 @@ describe('Electron GitHub Delivery renderer boundary', () => {
 
     expect(handler).not.toContain('store.loadState()')
     expect(handler).toMatch(
-      /const result = await runtime\.prepare\(input\)[\s\S]*?return result/,
+      /const result = await prepareGitHubDelivery\(input\)/,
     )
 
     const resultContract = contract.slice(
@@ -27,7 +27,7 @@ describe('Electron GitHub Delivery renderer boundary', () => {
 
   it('builds one bounded processor cycle from the atomic project-bound pairing bundle', () => {
     const cycle = main.slice(
-      main.indexOf('async function createCurrentGitHubDeliveryProcessor'),
+      main.indexOf('async function createCurrentGitHubDeliveryContext'),
       main.indexOf('async function processAvailableGitHubDeliveries'),
     )
 
@@ -37,14 +37,54 @@ describe('Electron GitHub Delivery renderer boundary', () => {
       /getDesktopPairingCredentialBundle\(\)[\s\S]*?decryptCredential\(bundle\.encryptedToken\)[\s\S]*?createGitHubDeliveryRemoteClient\([\s\S]*?authToken[\s\S]*?signal/,
     )
     expect(cycle).toMatch(
-      /createGitHubGitPublisher\([\s\S]*?signal[\s\S]*?createGitHubDeliveryProcessor\([\s\S]*?maxIntentsPerCycle: 1/,
+      /createCurrentGitHubDeliveryProcessor[\s\S]*?synchronizeGitHubRepositoryBinding\([\s\S]*?status !== 'active'[\s\S]*?createActiveGitHubDeliveryProcessor/,
+    )
+    expect(cycle).not.toContain('saveGitHubRepositoryBinding(')
+    expect(cycle).toMatch(
+      /createActiveGitHubDeliveryProcessor[\s\S]*?createGitHubGitPublisher\([\s\S]*?signal[\s\S]*?createGitHubDeliveryProcessor\([\s\S]*?maxIntentsPerCycle: 1/,
+    )
+  })
+
+  it('freshly synchronizes repository authority inside the exclusive Prepare operation', () => {
+    const preparation = main.slice(
+      main.indexOf('async function prepareGitHubDelivery'),
+      main.indexOf('async function broadcastGitHubDeliveryState'),
+    )
+
+    expect(main).toContain("from './github-repository-binding-sync.js'")
+    expect(preparation).toMatch(
+      /runGitHubDeliveryExclusive\(async \(signal\)[\s\S]*?createCurrentGitHubDeliveryContext\(signal\)[\s\S]*?synchronizeGitHubRepositoryBinding\([\s\S]*?binding\.status !== 'active'[\s\S]*?runtime\.prepare\(input\)/,
+    )
+    expect(preparation).not.toContain('getGitHubRepositoryBinding(')
+    expect(preparation).not.toContain('saveGitHubRepositoryBinding(')
+    expect(preparation).toMatch(
+      /finally \{[\s\S]*?broadcastGitHubDeliveryState\(\)/,
+    )
+  })
+
+  it('settles immutable local and remote completion before repository authority can revoke pending state', () => {
+    const cycle = main.slice(
+      main.indexOf('async function processAvailableGitHubDeliveries'),
+      main.indexOf('function safeGitHubDeliveryResult'),
+    )
+
+    expect(main).toContain('reconcileCompletedGitHubDeliveryIntents')
+    expect(main).toContain('reconcileRemoteCompletedGitHubDeliveryIntents')
+    expect(cycle).toMatch(
+      /reconcileCompletedGitHubDeliveryIntents\([\s\S]*?createCurrentGitHubDeliveryContext\(signal\)[\s\S]*?reconcileRemoteCompletedGitHubDeliveryIntents\([\s\S]*?synchronizeGitHubRepositoryBinding\(/,
+    )
+    expect(cycle.indexOf('reconcileRemoteCompletedGitHubDeliveryIntents')).toBeLessThan(
+      cycle.indexOf('synchronizeGitHubRepositoryBinding'),
+    )
+    expect(cycle).toMatch(
+      /if \(!binding \|\| binding\.status !== 'active'\) return/,
     )
   })
 
   it('serializes scheduler and manual recovery behind one abortable operation boundary', () => {
     const exclusive = main.slice(
       main.indexOf('async function runGitHubDeliveryExclusive'),
-      main.indexOf('async function createCurrentGitHubDeliveryProcessor'),
+      main.indexOf('async function createCurrentGitHubDeliveryContext'),
     )
 
     expect(exclusive).toContain('githubDeliveryOperationQueue')
@@ -88,6 +128,31 @@ describe('Electron GitHub Delivery renderer boundary', () => {
     )
   })
 
+  it('persists an exact Stop before aborting only its matching active fence and broadcasts state', () => {
+    const stop = main.slice(
+      main.indexOf('async function stopCurrentGitHubDelivery'),
+      main.indexOf('async function getGitHubDeliveryScheduler'),
+    )
+    const handler = main.slice(
+      main.indexOf('ipcMain.handle(ipcChannels.stopGitHubDelivery'),
+      main.indexOf('ipcMain.handle(ipcChannels.createAcceptanceBundle'),
+    )
+
+    expect(main).toMatch(
+      /onIntentOperationChange:[\s\S]*?githubDeliveryActiveIntentOperation = active/,
+    )
+    expect(stop).toMatch(
+      /stopGitHubDelivery\([\s\S]*?stopIntent:[\s\S]*?stopGitHubDeliveryIntent[\s\S]*?getActiveOperation/,
+    )
+    expect(stop).not.toContain('runGitHubDeliveryExclusive')
+    expect(handler).toMatch(/parseStopGitHubDeliveryInput\(payload\)/)
+    expect(handler).toMatch(/stopCurrentGitHubDelivery\(input\)/)
+    expect(stop).toMatch(
+      /finally \{[\s\S]*?broadcastGitHubDeliveryState\(\)/,
+    )
+    expect(stop).not.toMatch(/token|worktreePath|encryptedToken|rawError/)
+  })
+
   it('starts after app readiness, wakes on authority changes, and drains safely before quit', () => {
     const ready = main.slice(main.indexOf('app.whenReady()'))
     expect(ready).toMatch(
@@ -103,6 +168,23 @@ describe('Electron GitHub Delivery renderer boundary', () => {
     const beforeQuit = main.slice(main.indexOf("app.on('before-quit'"))
     expect(beforeQuit).toMatch(
       /githubDeliveryStopping = true[\s\S]*?githubDeliveryScheduler\?\.stop\(\)[\s\S]*?githubDeliveryOperationAbortController\?\.abort\(\)[\s\S]*?waitForGitHubDeliveryCleanup\(\)/,
+    )
+  })
+
+  it('serializes a pairing replacement behind the active GitHub Delivery operation', () => {
+    const pairing = main.slice(
+      main.indexOf('ipcMain.handle(ipcChannels.pairDesktop'),
+      main.indexOf('ipcMain.handle(ipcChannels.loadRemoteSnapshot'),
+    )
+
+    expect(pairing).toMatch(
+      /exchangeDesktopPairingCode[\s\S]*?githubDeliveryOperationAbortController\?\.abort\(\)[\s\S]*?runGitHubDeliveryExclusive\(async \(\)[\s\S]*?saveDesktopPairingCredential/,
+    )
+    expect(pairing.indexOf('runGitHubDeliveryExclusive')).toBeLessThan(
+      pairing.indexOf('saveDesktopPairingCredential'),
+    )
+    expect(pairing).toMatch(
+      /runGitHubDeliveryExclusive[\s\S]*?saveDesktopPairingCredential[\s\S]*?resetRemoteSyncClient/,
     )
   })
 })

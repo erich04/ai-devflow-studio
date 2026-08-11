@@ -1,10 +1,38 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { GitHubDeliveryIntent } from '@ai-devflow/shared'
+import type {
+  GitHubDeliveryIntent,
+  GitHubRepositoryBinding,
+} from '@ai-devflow/shared'
+import {
+  GitHubGitPublisherError,
+  type GitHubGitPublisherErrorCode,
+} from './github-git-publisher'
 import { createGitHubDeliveryRemoteClient } from './github-delivery-remote-client'
 
 const now = '2026-08-11T15:00:00.000Z'
 const projectId = 'project-a'
 const requestId = 'delivery-1'
+
+function repositoryBinding(
+  overrides: Partial<GitHubRepositoryBinding> = {},
+): GitHubRepositoryBinding {
+  return {
+    stateVersion: 1,
+    id: 'binding-1',
+    version: 2,
+    organizationId: 'org-a',
+    teamProjectId: projectId,
+    installationId: '12345',
+    repositoryId: '98765',
+    repository: 'example/project',
+    defaultBranch: 'main',
+    status: 'active',
+    validatedAt: '2026-08-11T14:55:00.000Z',
+    updatedAt: now,
+    redacted: true,
+    ...overrides,
+  }
+}
 
 function deliveryIntent(
   overrides: Partial<GitHubDeliveryIntent> = {},
@@ -25,6 +53,8 @@ function deliveryIntent(
     codingRunId: 'coding-1',
     codingRunCompletedAt: '2026-08-11T13:55:00.000Z',
     workspaceId: 'workspace-1',
+    deliverySeriesKey: `github-delivery:${'2'.repeat(64)}`,
+    deliveryAttempt: 1,
     repository: 'example/project',
     baseBranch: 'main',
     headBranch: 'devflow/run-1-pr-1',
@@ -80,6 +110,8 @@ function deliveryRequest(overrides: Record<string, unknown> = {}) {
     baseCommitSha: 'a'.repeat(40),
     expectedCommitSha: 'b'.repeat(40),
     intentDigest: 'c'.repeat(64),
+    deliverySeriesKey: `github-delivery:${'2'.repeat(64)}`,
+    deliveryAttempt: 1,
     logicalIdempotencyKey: `github-delivery:${'d'.repeat(64)}`,
     diffDigest: 'e'.repeat(64),
     testEvidenceDigest: 'f'.repeat(64),
@@ -193,6 +225,114 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('GitHub Delivery remote client', () => {
+  it.each(['active', 'revoked'] as const)(
+    'reads a strict %s repository binding with Desktop Bearer authority',
+    async (status) => {
+      const expected = repositoryBinding({ status })
+      const fetcher = vi.fn(async () => jsonResponse({ binding: expected }))
+      const client = createGitHubDeliveryRemoteClient({
+        apiBaseUrl: 'https://api.devflow.test',
+        authToken: 'desktop-secret-token',
+        fetcher,
+      })
+
+      await expect(client.getRepositoryBinding(projectId)).resolves.toEqual(
+        expected,
+      )
+      expect(fetcher).toHaveBeenCalledWith(
+        'https://api.devflow.test/api/desktop/projects/project-a/github-repository-binding',
+        expect.objectContaining({
+          method: 'GET',
+          credentials: 'omit',
+          redirect: 'error',
+          referrerPolicy: 'no-referrer',
+          headers: {
+            accept: 'application/json',
+            authorization: 'Bearer desktop-secret-token',
+          },
+        }),
+      )
+    },
+  )
+
+  it('accepts the exact null repository-binding observation', async () => {
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () => jsonResponse({ binding: null })),
+    })
+
+    await expect(client.getRepositoryBinding(projectId)).resolves.toBeNull()
+  })
+
+  it.each([
+    ['unknown secret field', { ...repositoryBinding(), token: 'ghs_secret' }],
+    [
+      'unknown local path field',
+      { ...repositoryBinding(), path: '/private/repo' },
+    ],
+    [
+      'cross-project scope',
+      repositoryBinding({ teamProjectId: 'project-other' }),
+    ],
+    [
+      'non-canonical repository',
+      repositoryBinding({ repository: 'Example/Project' }),
+    ],
+    ['unsafe branch', repositoryBinding({ defaultBranch: '../main' })],
+    ['invalid version', repositoryBinding({ version: 0 })],
+    [
+      'timestamp regression',
+      repositoryBinding({
+        validatedAt: '2026-08-11T15:01:00.000Z',
+        updatedAt: now,
+      }),
+    ],
+  ])('rejects a malformed repository binding: %s', async (_label, binding) => {
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () => jsonResponse({ binding })),
+    })
+
+    const error = await client
+      .getRepositoryBinding(projectId)
+      .catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({
+      code: 'invalid_response',
+      operation: 'repository_binding',
+      retryable: true,
+    })
+    expect(`${String(error)} ${JSON.stringify(error)}`).not.toMatch(
+      /ghs_secret|\/private\/repo/u,
+    )
+  })
+
+  it('returns only a safe repository-binding error when the API is unavailable', async () => {
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () => {
+        throw new Error('private upstream details')
+      }),
+    })
+
+    const error = await client
+      .getRepositoryBinding(projectId)
+      .catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({
+      code: 'remote_unavailable',
+      operation: 'repository_binding',
+      retryable: true,
+      operatorOutcomeCode: null,
+    })
+    expect(`${String(error)} ${JSON.stringify(error)}`).not.toContain(
+      'private upstream details',
+    )
+  })
+
   it('submits an exact intent with Desktop Bearer authority and returns a strict redacted request', async () => {
     const intent = deliveryIntent()
     const fetcher = vi.fn(async () =>
@@ -237,6 +377,37 @@ describe('GitHub Delivery remote client', () => {
         },
       }),
     )
+  })
+
+  it('rejects a response from a different immutable delivery attempt', async () => {
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () =>
+        jsonResponse(
+          {
+            request: deliveryRequest({ deliveryAttempt: 2 }),
+            outcomeCode: 'delivery_created',
+            replayed: false,
+          },
+          201,
+        ),
+      ),
+    })
+
+    await expect(
+      client.submit({
+        projectId,
+        intent: deliveryIntent(),
+        prTitle: 'Deliver the approved change',
+        prBody: 'Bound to exact evidence.',
+        expectedStateVersion: 0,
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_response',
+      operation: 'submit',
+      retryable: true,
+    })
   })
 
   it('lists the paired project inbox with the exact GET response envelope', async () => {
@@ -329,6 +500,61 @@ describe('GitHub Delivery remote client', () => {
     expect(JSON.stringify(result)).not.toContain(ephemeralToken)
     expect(JSON.stringify(result)).not.toContain('token')
   })
+
+  it.each([
+    ['operation_cancelled', true],
+    ['remote_branch_diverged', true],
+    ['remote_unavailable', true],
+    ['push_result_unknown', true],
+    ['publisher_cleanup_failed', true],
+    ['workspace_dirty', false],
+    ['workspace_mismatch', false],
+    ['repository_mismatch', false],
+    ['invalid_delivery_source', false],
+  ] satisfies Array<[GitHubGitPublisherErrorCode, boolean]>) (
+    'preserves the safe publisher outcome %s without raw git output',
+    async (code, retryable) => {
+      const fetcher = vi.fn(async () =>
+        jsonResponse({
+          request: deliveryRequest({ stateVersion: 4, status: 'publishing_branch' }),
+          grant: credentialGrant(),
+          credential: {
+            grantId: 'grant-1',
+            username: 'x-access-token',
+            token: 'ghs_ephemeral_desktop_only',
+            expiresAt: '2026-08-11T16:00:00.000Z',
+            repositoryId: '98765',
+            canonicalHttpsUrl: 'https://github.com/example/project.git',
+          },
+          outcomeCode: 'grant_finalized',
+          replayed: false,
+        }),
+      )
+      const client = createGitHubDeliveryRemoteClient({
+        apiBaseUrl: 'https://api.devflow.test',
+        authToken: 'desktop-secret-token',
+        fetcher,
+      })
+
+      const error = await client.withCredentialGrant(
+        { projectId, requestId, expectedStateVersion: 3 },
+        async () => {
+          throw new GitHubGitPublisherError(code)
+        },
+      ).catch((caught: unknown) => caught)
+
+      expect(error).toMatchObject({
+        name: 'GitHubDeliveryRemoteError',
+        code,
+        operation: 'credential_grant',
+        retryable,
+        outcomeCode: null,
+        operatorOutcomeCode: code,
+      })
+      expect(JSON.stringify(error)).not.toContain('ghs_ephemeral_desktop_only')
+      expect(JSON.stringify(error)).not.toContain('/Users/')
+    },
+  )
 
   it('reports a bounded publisher outcome and accepts only API-verified branch state', async () => {
     const fetcher = vi.fn(async () =>

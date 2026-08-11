@@ -1,7 +1,10 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import type { GitHubDeliveryIntent } from '@ai-devflow/shared'
+import type { Artifact, GitHubDeliveryIntent, WorkflowRun } from '@ai-devflow/shared'
 import {
   createGitHubDeliveryProcessor,
+  reconcileCompletedGitHubDeliveryIntents,
+  reconcileRemoteCompletedGitHubDeliveryIntents,
   type GitHubDeliveryProcessorDeps,
 } from './github-delivery-processor.js'
 import type {
@@ -13,13 +16,14 @@ import type {
   GitHubPullRequestOutcomeRecord,
 } from './github-delivery-remote-client.js'
 import { GitHubDeliveryRemoteError } from './github-delivery-remote-client.js'
+import { GitHubGitPublisherError } from './github-git-publisher.js'
 
 const sha = 'a'.repeat(40)
 const baseSha = 'b'.repeat(40)
 const initialTime = '2026-08-11T12:00:00.000Z'
 
 function intent(overrides: Partial<GitHubDeliveryIntent> = {}): GitHubDeliveryIntent {
-  return {
+  const source: GitHubDeliveryIntent = {
     stateVersion: 1,
     id: 'intent-1',
     organizationId: 'org-1',
@@ -35,6 +39,8 @@ function intent(overrides: Partial<GitHubDeliveryIntent> = {}): GitHubDeliveryIn
     codingRunId: 'coding-1',
     codingRunCompletedAt: '2026-08-11T11:00:00.000Z',
     workspaceId: 'workspace-1',
+    deliverySeriesKey: `github-delivery:${'c'.repeat(64)}`,
+    deliveryAttempt: 1,
     repository: 'acme/widgets',
     baseBranch: 'main',
     headBranch: 'devflow/run-1-pr',
@@ -47,7 +53,7 @@ function intent(overrides: Partial<GitHubDeliveryIntent> = {}): GitHubDeliveryIn
     testEvidenceDigest: 'test-digest',
     prPackageArtifactId: 'artifact-pr-1',
     prPackageUpdatedAt: '2026-08-11T11:20:00.000Z',
-    prPackageDigest: 'package-digest',
+    prPackageDigest: '',
     changedPaths: ['src/widget.ts'],
     intentDigest: 'intent-digest',
     idempotencyKey: 'github-delivery:key',
@@ -56,6 +62,99 @@ function intent(overrides: Partial<GitHubDeliveryIntent> = {}): GitHubDeliveryIn
     updatedAt: initialTime,
     redacted: true,
     ...overrides,
+  }
+  if (overrides.prPackageDigest === undefined) {
+    source.prPackageDigest = packageDigest(packageArtifact(source))
+  }
+  return source
+}
+
+function packageArtifact(source: GitHubDeliveryIntent): Artifact {
+  return {
+    id: source.prPackageArtifactId,
+    runId: source.runId,
+    nodeId: source.nodeId,
+    kind: 'pr',
+    title: 'Ship widgets',
+    summary: 'Package',
+    content: '# Ship widgets',
+    redacted: true,
+    updatedAt: source.prPackageUpdatedAt,
+    githubDeliverySource: {
+      stateVersion: 1,
+      codingRunId: source.codingRunId,
+      workspaceId: source.workspaceId,
+      diffArtifactId: source.diffArtifactId,
+      diffSourceDigest: source.diffSourceDigest,
+      testEvidenceId: source.testEvidenceId,
+      headBranch: source.headBranch,
+    },
+  }
+}
+
+function packageDigest(artifact: Artifact): string {
+  return createHash('sha256').update(JSON.stringify({
+    id: artifact.id,
+    title: artifact.title,
+    summary: artifact.summary,
+    content: artifact.content,
+    githubDeliverySource: artifact.githubDeliverySource,
+    updatedAt: artifact.updatedAt,
+  }), 'utf8').digest('hex')
+}
+
+function pendingPrRun(source: GitHubDeliveryIntent): WorkflowRun {
+  return {
+    id: source.runId,
+    version: source.runVersion,
+    title: 'Ship widgets',
+    request: 'Ship the approved widget change.',
+    projectId: source.localProjectId,
+    creatorId: 'user-1',
+    status: 'paused_at_gate',
+    currentNodeId: source.nodeId,
+    branchName: 'ai/non-authoritative-plan',
+    createdAt: initialTime,
+    updatedAt: initialTime,
+    nodes: [{
+      id: source.nodeId,
+      stage: 'pr',
+      title: 'PR',
+      subtitle: 'Deliver',
+      kind: 'pr',
+      status: 'running',
+      ownerId: 'user-1',
+      requiredRole: 'member',
+      retryCount: 0,
+      artifactIds: [source.prPackageArtifactId],
+    }],
+    edges: [],
+  }
+}
+
+function completedIntent(): GitHubDeliveryIntent & {
+  status: 'completed'
+  completion: NonNullable<GitHubDeliveryIntent['completion']>
+} {
+  const recordedAt = '2026-08-11T12:10:02.000Z'
+  const source = intent()
+  return {
+    ...source,
+    status: 'completed',
+    completion: {
+      stateVersion: 1,
+      remoteRequestId: 'request-1',
+      publicationId: 'publication-1',
+      pullRequestOutcomeId: 'pull-request-outcome-1',
+      pullRequestId: '303',
+      pullRequestNumber: 42,
+      pullRequestUrl: 'https://github.com/acme/widgets/pull/42',
+      providerCreatedAt: '2026-08-11T12:10:00.000Z',
+      recordedAt,
+      draft: true,
+      redacted: true,
+    },
+    updatedAt: recordedAt,
   }
 }
 
@@ -82,6 +181,8 @@ function request(
     repository: source.repository,
     codingRunId: source.codingRunId,
     workspaceId: source.workspaceId,
+    deliverySeriesKey: source.deliverySeriesKey,
+    deliveryAttempt: source.deliveryAttempt,
     diffArtifactId: source.diffArtifactId,
     testEvidenceId: source.testEvidenceId,
     prPackageArtifactId: source.prPackageArtifactId,
@@ -218,35 +319,29 @@ function snapshot(
   }
 }
 
-function harness(source = intent(), maxIntentsPerCycle?: number) {
+function harness(
+  source = intent(),
+  limits?: number | {
+    maxIntentsPerCycle?: number
+    maxIntentsScannedPerCycle?: number
+    onIntentOperationChange?: (
+      active: { intentId: string; expectedUpdatedAt: string } | null,
+    ) => void | Promise<void>
+  },
+) {
   let current = source
   const store = {
     listGitHubDeliveryIntents: vi.fn(async () => [current]),
-    listArtifacts: vi.fn(async () => [{
-      id: source.prPackageArtifactId,
-      runId: source.runId,
-      nodeId: source.nodeId,
-      kind: 'pr',
-      title: 'Ship widgets',
-      summary: 'Package',
-      content: '# Ship widgets',
-      redacted: true,
-      updatedAt: source.prPackageUpdatedAt,
-    }]),
+    listArtifacts: vi.fn(async () => [packageArtifact(source)]),
     listManagedCodingWorkspaces: vi.fn(async () => [{
       id: source.workspaceId,
       projectId: source.localProjectId,
       worktreePath: '/private/managed/worktree',
       headCommitSha: source.expectedCommitSha,
       cleanupStatus: 'active',
-      deletedAt: null,
+      deletedAt: null as string | null | undefined,
     }]),
-    getRun: vi.fn(async () => ({
-      id: source.runId,
-      updatedAt: initialTime,
-      nodes: [{ id: source.nodeId, status: 'running' }],
-      pullRequestUrl: undefined,
-    })),
+    getRun: vi.fn(async () => pendingPrRun(source)),
     commitGitHubDeliveryIntentStatus: vi.fn(async ({ expectedIntent, intent: next }) => {
       if (current !== expectedIntent) return { committed: false as const, reason: 'source_stale' as const }
       current = next
@@ -269,7 +364,7 @@ function harness(source = intent(), maxIntentsPerCycle?: number) {
   const publisher = { publish: vi.fn() }
   const workflow = { execute: vi.fn() }
   const preparationRuntime = {
-    prepare: vi.fn(async () => ({
+    prepare: vi.fn(async (_input: { runId: string }) => ({
       status: 'prepared' as const,
       replayed: true,
       intent: current,
@@ -286,7 +381,15 @@ function harness(source = intent(), maxIntentsPerCycle?: number) {
     workflow,
     preparationRuntime,
     workspaceCoordinator,
-    maxIntentsPerCycle,
+    maxIntentsPerCycle: typeof limits === 'number'
+      ? limits
+      : limits?.maxIntentsPerCycle,
+    maxIntentsScannedPerCycle: typeof limits === 'number'
+      ? undefined
+      : limits?.maxIntentsScannedPerCycle,
+    onIntentOperationChange: typeof limits === 'number'
+      ? undefined
+      : limits?.onIntentOperationChange,
     now: (() => {
       let tick = 0
       return () => new Date(Date.parse(initialTime) + (++tick * 60_000)).toISOString()
@@ -453,7 +556,7 @@ describe('GitHub Delivery processor', () => {
       source.workspaceId,
       expect.any(Function),
     )
-    expect(test.preparationRuntime.prepare).toHaveBeenCalledTimes(10)
+    expect(test.preparationRuntime.prepare).toHaveBeenCalledTimes(9)
     expect(test.remote.reportBranchPublication).toHaveBeenCalledWith({
       projectId: source.teamProjectId,
       requestId: approvedRequest.id,
@@ -473,6 +576,57 @@ describe('GitHub Delivery processor', () => {
     )
     expect(JSON.stringify(result)).not.toContain('secret-ephemeral-token')
     expect(JSON.stringify(result)).not.toContain('/private/managed/worktree')
+  })
+
+  it('rejects a managed workspace carrying any non-empty deletion timestamp', async () => {
+    const source = intent({ status: 'approved' })
+    const approvedRequest = request(source, { stateVersion: 2, status: 'approved' })
+    const publishingRequest = request(source, {
+      stateVersion: 4,
+      status: 'publishing_branch',
+    })
+    const test = harness(source)
+    test.store.listManagedCodingWorkspaces.mockResolvedValue([{
+      id: source.workspaceId,
+      projectId: source.localProjectId,
+      worktreePath: '/private/managed/worktree',
+      headCommitSha: source.expectedCommitSha,
+      cleanupStatus: 'active',
+      deletedAt: '2026-08-11T12:00:30.000Z',
+    }])
+    test.remote.listInbox.mockResolvedValue([approvedRequest])
+    test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(approvedRequest, {
+      approval: approval(source, approvedRequest),
+    }))
+    test.remote.withCredentialGrant.mockImplementation(async (_input, callback) => ({
+      request: publishingRequest,
+      grant: grant({ version: 2 }),
+      outcomeCode: 'grant_finalized',
+      replayed: false,
+      publisherResult: await callback({
+        grantId: 'grant-1',
+        username: 'x-access-token',
+        token: 'secret-ephemeral-token',
+        expiresAt: '2026-08-11T13:00:00.000Z',
+        repositoryId: source.repositoryId,
+        canonicalHttpsUrl: `https://github.com/${source.repository}.git`,
+        repository: source.repository,
+        headBranch: source.headBranch,
+        expectedCommitSha: source.expectedCommitSha,
+      }),
+    }))
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: approvedRequest.id,
+        disposition: 'recovery_required',
+        outcomeCode: 'processor_failed',
+      }],
+    })
+    expect(test.publisher.publish).not.toHaveBeenCalled()
+    expect(JSON.stringify(test.current())).not.toContain('secret-ephemeral-token')
+    expect(JSON.stringify(test.current())).not.toContain('/private/managed/worktree')
   })
 
   it('requires an explicit, current resume after recovering an issued grant with no publication', async () => {
@@ -578,6 +732,64 @@ describe('GitHub Delivery processor', () => {
       requestId: recoveryRequest.id,
       expectedStateVersion: 5,
     }, expect.any(Function))
+  })
+
+  it('never reissues a credential from background recovery after local state requires explicit resume', async () => {
+    const source = intent({ status: 'recovery_required' })
+    const approvedRequest = request(source, {
+      stateVersion: 2,
+      status: 'approved',
+    })
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([approvedRequest])
+    test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(approvedRequest, {
+      approval: approval(source, approvedRequest),
+    }))
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: null,
+        disposition: 'recovery_required',
+        outcomeCode: 'explicit_resume_required',
+      }],
+    })
+    expect(test.current().status).toBe('recovery_required')
+    expect(test.remote.listInbox).not.toHaveBeenCalled()
+    expect(test.remote.getRecoverySnapshot).not.toHaveBeenCalled()
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.publisher.publish).not.toHaveBeenCalled()
+    expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
+  })
+
+  it('never creates a pull request from background recovery even when the remote branch is already verified', async () => {
+    const source = intent({ status: 'recovery_required' })
+    const publishedRequest = request(source, {
+      stateVersion: 6,
+      status: 'branch_published',
+    })
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([publishedRequest])
+    test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(publishedRequest, {
+      approval: approval(source, publishedRequest),
+      grant: grant({ status: 'consumed', consumedAt: initialTime }),
+      publication: publication(),
+    }))
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: null,
+        disposition: 'recovery_required',
+        outcomeCode: 'explicit_resume_required',
+      }],
+    })
+    expect(test.current().status).toBe('recovery_required')
+    expect(test.remote.listInbox).not.toHaveBeenCalled()
+    expect(test.remote.getRecoverySnapshot).not.toHaveBeenCalled()
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.publisher.publish).not.toHaveBeenCalled()
+    expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
   })
 
   it('accepts a replacement issued grant alongside a prior recovery publication only on resume', async () => {
@@ -930,6 +1142,323 @@ describe('GitHub Delivery processor', () => {
     expect(test.current().status).toBe('completed')
   })
 
+  it('leaves evidence-only remote completion to the bounded read-only reconciler', async () => {
+    const source = intent({ status: 'recovery_required' })
+    const completedRequest = request(source, {
+      stateVersion: 8,
+      status: 'completed',
+      outcomeCode: 'draft_pr_created',
+    })
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([completedRequest])
+    test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(completedRequest, {
+      approval: approval(source, completedRequest),
+      grant: grant({ status: 'consumed', consumedAt: '2026-08-11T12:01:00.000Z' }),
+      publication: publication(),
+      pullRequest: pullRequest({ providerCreatedAt: '2026-08-11T12:02:00.000Z' }),
+    }))
+    test.workflow.execute.mockResolvedValue({ applied: true, blockers: [], run: {} })
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: null,
+        disposition: 'recovery_required',
+        outcomeCode: 'explicit_resume_required',
+      }],
+    })
+    expect(test.current().status).toBe('recovery_required')
+    expect(test.remote.listInbox).not.toHaveBeenCalled()
+    expect(test.remote.getRecoverySnapshot).not.toHaveBeenCalled()
+    expect(test.workflow.execute).not.toHaveBeenCalled()
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.publisher.publish).not.toHaveBeenCalled()
+    expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
+  })
+
+  it.each(['creating_pr', 'recovery_required'] as const)(
+    'read-only reconciles a remote completion from local %s without current binding or provider writes',
+    async (status) => {
+      const source = intent({ status })
+      const completedRequest = request(source, {
+        stateVersion: 8,
+        status: 'completed',
+        outcomeCode: 'draft_pr_created',
+      })
+      const test = harness(source)
+      test.preparationRuntime.prepare.mockRejectedValue(
+        new Error('the current repository binding is revoked'),
+      )
+      test.remote.listInbox.mockResolvedValue([completedRequest])
+      test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(completedRequest, {
+        approval: approval(source, completedRequest),
+        grant: grant({
+          status: 'consumed',
+          consumedAt: '2026-08-11T12:01:00.000Z',
+        }),
+        publication: publication(),
+        pullRequest: pullRequest({ providerCreatedAt: '2026-08-11T12:02:00.000Z' }),
+      }))
+      test.workflow.execute.mockResolvedValue({ applied: true, blockers: [], run: {} })
+
+      await expect(reconcileRemoteCompletedGitHubDeliveryIntents({
+        store: test.store,
+        remote: test.remote,
+        workflow: test.workflow,
+        now: () => '2026-08-11T12:03:00.000Z',
+        maxIntentsPerCycle: 1,
+        maxIntentsScannedPerCycle: 1,
+      })).resolves.toEqual({
+        results: [{
+          intentId: source.id,
+          remoteRequestId: completedRequest.id,
+          disposition: 'workflow_advanced',
+          outcomeCode: 'draft_pr_created',
+        }],
+      })
+      expect(test.current().status).toBe('completed')
+      expect(test.store.commitGitHubDeliveryIntentCompletion).toHaveBeenCalledTimes(1)
+      expect(test.workflow.execute).toHaveBeenCalledTimes(1)
+      expect(test.preparationRuntime.prepare).not.toHaveBeenCalled()
+      expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+      expect(test.publisher.publish).not.toHaveBeenCalled()
+      expect(test.remote.reportBranchPublication).not.toHaveBeenCalled()
+      expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rejects remote completion reconciliation across delivery attempts before snapshot access', async () => {
+    const source = intent({ status: 'recovery_required' })
+    const completedRequest = {
+      ...request(source, {
+        stateVersion: 8,
+        status: 'completed',
+        outcomeCode: 'draft_pr_created',
+      }),
+      deliveryAttempt: source.deliveryAttempt + 1,
+    }
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([completedRequest])
+
+    await expect(reconcileRemoteCompletedGitHubDeliveryIntents({
+      store: test.store,
+      remote: test.remote,
+      workflow: test.workflow,
+      maxIntentsPerCycle: 1,
+      maxIntentsScannedPerCycle: 1,
+    })).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: completedRequest.id,
+        disposition: 'local_conflict',
+        outcomeCode: 'authority_mismatch',
+      }],
+    })
+    expect(test.remote.getRecoverySnapshot).not.toHaveBeenCalled()
+    expect(test.store.commitGitHubDeliveryIntentCompletion).not.toHaveBeenCalled()
+    expect(test.workflow.execute).not.toHaveBeenCalled()
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
+  })
+
+  it('rejects a remote completion whose consumed grant and publication chain disagree', async () => {
+    const source = intent({ status: 'creating_pr' })
+    const completedRequest = request(source, {
+      stateVersion: 8,
+      status: 'completed',
+      outcomeCode: 'draft_pr_created',
+    })
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([completedRequest])
+    test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(completedRequest, {
+      approval: approval(source, completedRequest),
+      grant: grant({
+        id: 'grant-current',
+        status: 'consumed',
+        consumedAt: '2026-08-11T12:01:00.000Z',
+      }),
+      publication: publication({ grantId: 'grant-different' }),
+      pullRequest: pullRequest({ providerCreatedAt: '2026-08-11T12:02:00.000Z' }),
+    }))
+
+    await expect(reconcileRemoteCompletedGitHubDeliveryIntents({
+      store: test.store,
+      remote: test.remote,
+      workflow: test.workflow,
+      maxIntentsPerCycle: 1,
+      maxIntentsScannedPerCycle: 1,
+    })).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: completedRequest.id,
+        disposition: 'local_conflict',
+        outcomeCode: 'completion_evidence_invalid',
+      }],
+    })
+    expect(test.store.commitGitHubDeliveryIntentCompletion).not.toHaveBeenCalled()
+    expect(test.workflow.execute).not.toHaveBeenCalled()
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
+  })
+
+  it('leaves a non-completed remote request untouched in the read-only completion seam', async () => {
+    const source = intent({ status: 'recovery_required' })
+    const approvedRequest = request(source, {
+      stateVersion: 2,
+      status: 'approved',
+    })
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([approvedRequest])
+
+    await expect(reconcileRemoteCompletedGitHubDeliveryIntents({
+      store: test.store,
+      remote: test.remote,
+      workflow: test.workflow,
+      maxIntentsPerCycle: 1,
+      maxIntentsScannedPerCycle: 1,
+    })).resolves.toEqual({ results: [] })
+    expect(test.remote.getRecoverySnapshot).not.toHaveBeenCalled()
+    expect(test.store.commitGitHubDeliveryIntentCompletion).not.toHaveBeenCalled()
+    expect(test.workflow.execute).not.toHaveBeenCalled()
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
+  })
+
+  it('reconciles a durable completed intent into Workflow without remote or active-binding authority', async () => {
+    const source = completedIntent()
+    const test = harness(source)
+    test.preparationRuntime.prepare.mockRejectedValue(
+      new Error('the current repository binding is revoked'),
+    )
+    test.workflow.execute.mockResolvedValue({
+      applied: true,
+      blockers: [],
+      run: {
+        ...pendingPrRun(source),
+        pullRequestUrl: source.completion.pullRequestUrl,
+      },
+    })
+
+    await expect(reconcileCompletedGitHubDeliveryIntents({
+      store: test.store,
+      workflow: test.workflow,
+      now: () => '2026-08-11T12:11:00.000Z',
+      maxIntentsPerCycle: 1,
+    })).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: source.completion.remoteRequestId,
+        disposition: 'workflow_advanced',
+        outcomeCode: 'draft_pr_created',
+      }],
+    })
+    expect(test.workflow.execute).toHaveBeenCalledWith({
+      runId: source.runId,
+      command: {
+        type: 'complete_pr',
+        nodeId: source.nodeId,
+        artifactId: source.prPackageArtifactId,
+      },
+      now: '2026-08-11T12:11:00.000Z',
+      expectedRunUpdatedAt: initialTime,
+    })
+    expect(test.preparationRuntime.prepare).not.toHaveBeenCalled()
+    expect(test.remote.listInbox).not.toHaveBeenCalled()
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.publisher.publish).not.toHaveBeenCalled()
+    expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
+  })
+
+  it('background-reconciles a local completion without consulting current binding authority', async () => {
+    const source = completedIntent()
+    const test = harness(source)
+    test.preparationRuntime.prepare.mockRejectedValue(
+      new Error('the current repository binding is revoked'),
+    )
+    test.workflow.execute.mockResolvedValue({ applied: true, blockers: [], run: {} })
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: source.completion.remoteRequestId,
+        disposition: 'workflow_advanced',
+        outcomeCode: 'draft_pr_created',
+      }],
+    })
+    expect(test.workflow.execute).toHaveBeenCalledTimes(1)
+    expect(test.preparationRuntime.prepare).not.toHaveBeenCalled()
+    expect(test.remote.listInbox).not.toHaveBeenCalled()
+  })
+
+  it('rejects completed reconciliation when the immutable PR package was changed', async () => {
+    const source = completedIntent()
+    const test = harness(source)
+    test.store.listArtifacts.mockResolvedValue([{
+      ...packageArtifact(source),
+      content: '# Tampered package',
+    }])
+
+    await expect(reconcileCompletedGitHubDeliveryIntents({
+      store: test.store,
+      workflow: test.workflow,
+      maxIntentsPerCycle: 1,
+    })).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: source.completion.remoteRequestId,
+        disposition: 'local_conflict',
+        outcomeCode: 'authority_mismatch',
+      }],
+    })
+    expect(test.workflow.execute).not.toHaveBeenCalled()
+  })
+
+  it('rejects completed reconciliation when the Workflow run no longer matches the intent', async () => {
+    const source = completedIntent()
+    const test = harness(source)
+    test.store.getRun.mockResolvedValue({
+      ...pendingPrRun(source),
+      version: source.runVersion + 1,
+    })
+
+    await expect(reconcileCompletedGitHubDeliveryIntents({
+      store: test.store,
+      workflow: test.workflow,
+      maxIntentsPerCycle: 1,
+    })).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: source.completion.remoteRequestId,
+        disposition: 'local_conflict',
+        outcomeCode: 'authority_mismatch',
+      }],
+    })
+    expect(test.workflow.execute).not.toHaveBeenCalled()
+  })
+
+  it('rejects completed reconciliation when completion evidence is noncanonical', async () => {
+    const source = completedIntent()
+    source.completion = {
+      ...source.completion,
+      pullRequestUrl: 'https://github.com/acme/widgets/pull/43',
+    }
+    const test = harness(source)
+
+    await expect(reconcileCompletedGitHubDeliveryIntents({
+      store: test.store,
+      workflow: test.workflow,
+      maxIntentsPerCycle: 1,
+    })).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: source.completion.remoteRequestId,
+        disposition: 'local_conflict',
+        outcomeCode: 'authority_mismatch',
+      }],
+    })
+    expect(test.workflow.execute).not.toHaveBeenCalled()
+  })
+
   it('turns a retryable remote error into durable recovery without exposing its message', async () => {
     const source = intent({ status: 'approved' })
     const approvedRequest = request(source, { status: 'approved', stateVersion: 2 })
@@ -951,6 +1480,123 @@ describe('GitHub Delivery processor', () => {
     }] })
     expect(test.current().status).toBe('recovery_required')
     expect(JSON.stringify(result)).not.toContain('GitHub Delivery API')
+  })
+
+  it('atomically persists a typed operator outcome only for an exact publisher error', async () => {
+    const source = intent({ status: 'approved' })
+    const approvedRequest = request(source, { stateVersion: 2, status: 'approved' })
+    const publishingRequest = request(source, {
+      stateVersion: 4,
+      status: 'publishing_branch',
+    })
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([approvedRequest])
+    test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(approvedRequest, {
+      approval: approval(source, approvedRequest),
+    }))
+    test.remote.withCredentialGrant.mockImplementation(async (_input, callback) => {
+      try {
+        return {
+          request: publishingRequest,
+          grant: grant({ version: 2 }),
+          outcomeCode: 'grant_finalized',
+          replayed: false,
+          publisherResult: await callback({
+            grantId: 'grant-1',
+            username: 'x-access-token',
+            token: 'secret-ephemeral-token',
+            expiresAt: '2026-08-11T13:00:00.000Z',
+            repositoryId: source.repositoryId,
+            canonicalHttpsUrl: `https://github.com/${source.repository}.git`,
+            repository: source.repository,
+            headBranch: source.headBranch,
+            expectedCommitSha: source.expectedCommitSha,
+          }),
+        }
+      } catch (error) {
+        if (!(error instanceof GitHubGitPublisherError)) throw error
+        throw new GitHubDeliveryRemoteError({
+          status: null,
+          code: error.code,
+          operation: 'credential_grant',
+          retryable: false,
+          operatorOutcomeCode: error.code,
+        })
+      }
+    })
+    test.publisher.publish.mockRejectedValue(
+      new GitHubGitPublisherError('workspace_dirty'),
+    )
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: approvedRequest.id,
+        disposition: 'recovery_required',
+        outcomeCode: 'workspace_dirty',
+      }],
+    })
+    expect(test.store.commitGitHubDeliveryIntentStatus.mock.calls.map(
+      ([mutation]) => ({
+        status: mutation.intent.status,
+        operatorOutcomeCode: mutation.operatorOutcomeCode,
+      }),
+    )).toEqual([
+      { status: 'publishing_branch', operatorOutcomeCode: undefined },
+      { status: 'recovery_required', operatorOutcomeCode: 'workspace_dirty' },
+    ])
+  })
+
+  it('never persists an operator outcome for a generic remote-unavailable API error', async () => {
+    const source = intent({ status: 'approved' })
+    const approvedRequest = request(source, { stateVersion: 2, status: 'approved' })
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([approvedRequest])
+    test.remote.getRecoverySnapshot.mockRejectedValue(new GitHubDeliveryRemoteError({
+      status: null,
+      code: 'remote_unavailable',
+      operation: 'recovery_snapshot',
+      retryable: true,
+    }))
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toMatchObject({
+      results: [{
+        disposition: 'recovery_required',
+        outcomeCode: 'remote_unavailable',
+      }],
+    })
+    expect(test.store.commitGitHubDeliveryIntentStatus).toHaveBeenCalledTimes(1)
+    expect(test.store.commitGitHubDeliveryIntentStatus.mock.calls[0]?.[0]).not.toHaveProperty(
+      'operatorOutcomeCode',
+    )
+  })
+
+  it('does not mistake a credential API failure for a publisher outcome', async () => {
+    const source = intent({ status: 'approved' })
+    const approvedRequest = request(source, { stateVersion: 2, status: 'approved' })
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([approvedRequest])
+    test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(approvedRequest, {
+      approval: approval(source, approvedRequest),
+    }))
+    test.remote.withCredentialGrant.mockRejectedValue(new GitHubDeliveryRemoteError({
+      status: null,
+      code: 'remote_unavailable',
+      operation: 'credential_grant',
+      retryable: true,
+    }))
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toMatchObject({
+      results: [{
+        disposition: 'recovery_required',
+        outcomeCode: 'remote_unavailable',
+      }],
+    })
+    const recoveryMutation = test.store.commitGitHubDeliveryIntentStatus.mock.calls.find(
+      ([mutation]) => mutation.intent.status === 'recovery_required',
+    )?.[0]
+    expect(recoveryMutation).toBeDefined()
+    expect(recoveryMutation).not.toHaveProperty('operatorOutcomeCode')
   })
 
   it('discards an unexpected raw error and persists recovery from an approved local state', async () => {
@@ -992,6 +1638,459 @@ describe('GitHub Delivery processor', () => {
       }],
     })
     expect(test.remote.submit).not.toHaveBeenCalled()
+  })
+
+  it('does not let an older passive approval wait consume the bounded actionable-write budget', async () => {
+    const approved = intent({
+      id: 'intent-approved-newer',
+      runId: 'run-approved-newer',
+      nodeId: 'run-approved-newer-pr',
+      status: 'approved',
+      createdAt: '2026-08-11T12:01:00.000Z',
+    })
+    const waiting = intent({
+      id: 'intent-waiting-older',
+      runId: 'run-waiting-older',
+      nodeId: 'run-waiting-older-pr',
+      status: 'approval_required',
+      createdAt: initialTime,
+    })
+    const waitingRequest = request(waiting, {
+      id: 'request-waiting-older',
+      status: 'approval_required',
+    })
+    const approvedRequest = request(approved, {
+      id: 'request-approved-newer',
+      stateVersion: 2,
+      status: 'approved',
+    })
+    const test = harness(approved, 1)
+    test.store.listGitHubDeliveryIntents.mockImplementation(async () => [
+      waiting,
+      test.current(),
+    ])
+    test.preparationRuntime.prepare.mockImplementation(async ({ runId: selectedRunId }) => ({
+      status: 'prepared' as const,
+      replayed: true,
+      intent: selectedRunId === waiting.runId ? waiting : test.current(),
+      testEvidence: {},
+    }))
+    test.remote.listInbox.mockResolvedValue([waitingRequest, approvedRequest])
+    test.remote.getRecoverySnapshot.mockImplementation(async ({ requestId }) =>
+      requestId === waitingRequest.id
+        ? snapshot(waitingRequest)
+        : snapshot(approvedRequest, {
+            approval: approval(approved, approvedRequest),
+          }),
+    )
+    test.remote.withCredentialGrant.mockRejectedValue(
+      new Error('bounded provider failure'),
+    )
+
+    const result = await test.processor.recoverAndAdvance()
+
+    expect(result.results).toEqual([
+      {
+        intentId: waiting.id,
+        remoteRequestId: waitingRequest.id,
+        disposition: 'waiting_for_approval',
+        outcomeCode: null,
+      },
+      {
+        intentId: approved.id,
+        remoteRequestId: approvedRequest.id,
+        disposition: 'recovery_required',
+        outcomeCode: 'processor_failed',
+      },
+    ])
+    expect(test.remote.withCredentialGrant).toHaveBeenCalledTimes(1)
+    expect(test.current().status).toBe('recovery_required')
+  })
+
+  it('does not let an older manual recovery consume the bounded actionable-write budget', async () => {
+    const approved = intent({
+      id: 'intent-approved-after-recovery',
+      runId: 'run-approved-after-recovery',
+      nodeId: 'run-approved-after-recovery-pr',
+      status: 'approved',
+      createdAt: '2026-08-11T12:01:00.000Z',
+    })
+    const manualRecovery = intent({
+      id: 'intent-manual-recovery-older',
+      runId: 'run-manual-recovery-older',
+      nodeId: 'run-manual-recovery-older-pr',
+      status: 'recovery_required',
+      createdAt: initialTime,
+    })
+    const recoveryRequest = request(manualRecovery, {
+      id: 'request-manual-recovery-older',
+      stateVersion: 2,
+      status: 'approved',
+    })
+    const approvedRequest = request(approved, {
+      id: 'request-approved-after-recovery',
+      stateVersion: 2,
+      status: 'approved',
+    })
+    const test = harness(approved, 1)
+    test.store.listGitHubDeliveryIntents.mockImplementation(async () => [
+      manualRecovery,
+      test.current(),
+    ])
+    test.preparationRuntime.prepare.mockImplementation(async ({ runId: selectedRunId }) => ({
+      status: 'prepared' as const,
+      replayed: true,
+      intent: selectedRunId === manualRecovery.runId
+        ? manualRecovery
+        : test.current(),
+      testEvidence: {},
+    }))
+    test.remote.listInbox.mockResolvedValue([recoveryRequest, approvedRequest])
+    test.remote.getRecoverySnapshot.mockImplementation(async ({ requestId }) =>
+      requestId === recoveryRequest.id
+        ? snapshot(recoveryRequest, {
+            approval: approval(manualRecovery, recoveryRequest),
+          })
+        : snapshot(approvedRequest, {
+            approval: approval(approved, approvedRequest),
+          }),
+    )
+    test.remote.withCredentialGrant.mockRejectedValue(
+      new Error('bounded provider failure'),
+    )
+
+    const result = await test.processor.recoverAndAdvance()
+
+    expect(result.results).toEqual([
+      {
+        intentId: manualRecovery.id,
+        remoteRequestId: null,
+        disposition: 'recovery_required',
+        outcomeCode: 'explicit_resume_required',
+      },
+      {
+        intentId: approved.id,
+        remoteRequestId: approvedRequest.id,
+        disposition: 'recovery_required',
+        outcomeCode: 'processor_failed',
+      },
+    ])
+    expect(test.remote.withCredentialGrant).toHaveBeenCalledTimes(1)
+    expect(test.current().status).toBe('recovery_required')
+  })
+
+  it('bounds passive scans while rotating to newer actionable work across cycles', async () => {
+    const approved = intent({
+      id: 'intent-approved-after-bounded-scans',
+      runId: 'run-approved-after-bounded-scans',
+      nodeId: 'run-approved-after-bounded-scans-pr',
+      status: 'approved',
+      createdAt: '2026-08-11T12:02:00.000Z',
+    })
+    const firstWaiting = intent({
+      id: 'intent-first-waiting',
+      runId: 'run-first-waiting',
+      nodeId: 'run-first-waiting-pr',
+      status: 'approval_required',
+      createdAt: initialTime,
+    })
+    const secondWaiting = intent({
+      id: 'intent-second-waiting',
+      runId: 'run-second-waiting',
+      nodeId: 'run-second-waiting-pr',
+      status: 'approval_required',
+      createdAt: '2026-08-11T12:01:00.000Z',
+    })
+    const firstRequest = request(firstWaiting, {
+      id: 'request-first-waiting',
+      status: 'approval_required',
+    })
+    const secondRequest = request(secondWaiting, {
+      id: 'request-second-waiting',
+      status: 'approval_required',
+    })
+    const approvedRequest = request(approved, {
+      id: 'request-approved-after-bounded-scans',
+      stateVersion: 2,
+      status: 'approved',
+    })
+    const test = harness(approved, {
+      maxIntentsPerCycle: 1,
+      maxIntentsScannedPerCycle: 1,
+    })
+    test.store.listGitHubDeliveryIntents.mockImplementation(async () => [
+      firstWaiting,
+      secondWaiting,
+      test.current(),
+    ])
+    test.preparationRuntime.prepare.mockImplementation(async ({ runId: selectedRunId }) => ({
+      status: 'prepared' as const,
+      replayed: true,
+      intent: selectedRunId === firstWaiting.runId
+        ? firstWaiting
+        : selectedRunId === secondWaiting.runId
+          ? secondWaiting
+          : test.current(),
+      testEvidence: {},
+    }))
+    test.remote.listInbox.mockResolvedValue([
+      firstRequest,
+      secondRequest,
+      approvedRequest,
+    ])
+    test.remote.getRecoverySnapshot.mockImplementation(async ({ requestId }) => {
+      if (requestId === firstRequest.id) return snapshot(firstRequest)
+      if (requestId === secondRequest.id) return snapshot(secondRequest)
+      return snapshot(approvedRequest, {
+        approval: approval(approved, approvedRequest),
+      })
+    })
+    test.remote.withCredentialGrant.mockRejectedValue(
+      new Error('bounded provider failure'),
+    )
+
+    const firstCycle = await test.processor.recoverAndAdvance()
+    const secondCycle = await test.processor.recoverAndAdvance()
+    const thirdCycle = await test.processor.recoverAndAdvance()
+
+    expect(firstCycle.results.map((result) => result.intentId)).toEqual([firstWaiting.id])
+    expect(secondCycle.results.map((result) => result.intentId)).toEqual([secondWaiting.id])
+    expect(thirdCycle.results).toEqual([{
+      intentId: approved.id,
+      remoteRequestId: approvedRequest.id,
+      disposition: 'recovery_required',
+      outcomeCode: 'processor_failed',
+    }])
+    expect(test.remote.getRecoverySnapshot).toHaveBeenCalledTimes(3)
+    expect(test.remote.withCredentialGrant).toHaveBeenCalledTimes(1)
+  })
+
+  it('fences each of two processed intents with its exact source version', async () => {
+    const first = intent({
+      id: 'intent-fence-first',
+      runId: 'run-fence-first',
+      nodeId: 'run-fence-first-pr',
+      createdAt: initialTime,
+      updatedAt: '2026-08-11T12:00:10.000Z',
+    })
+    const second = intent({
+      id: 'intent-fence-second',
+      runId: 'run-fence-second',
+      nodeId: 'run-fence-second-pr',
+      createdAt: '2026-08-11T12:01:00.000Z',
+      updatedAt: '2026-08-11T12:01:10.000Z',
+    })
+    const firstRequest = request(first, {
+      id: 'request-fence-first',
+      status: 'approval_required',
+    })
+    const secondRequest = request(second, {
+      id: 'request-fence-second',
+      status: 'approval_required',
+    })
+    const operations: Array<{
+      intentId: string
+      expectedUpdatedAt: string
+    } | null> = []
+    const test = harness(first, {
+      maxIntentsPerCycle: 1,
+      onIntentOperationChange: (active) => {
+        operations.push(active)
+      },
+    })
+    test.store.listGitHubDeliveryIntents.mockResolvedValue([first, second])
+    test.preparationRuntime.prepare.mockImplementation(async ({ runId: selectedRunId }) => ({
+      status: 'prepared' as const,
+      replayed: true,
+      intent: selectedRunId === first.runId ? first : second,
+      testEvidence: {},
+    }))
+    test.remote.listInbox.mockResolvedValue([firstRequest, secondRequest])
+    test.remote.getRecoverySnapshot.mockImplementation(async ({ requestId }) =>
+      requestId === firstRequest.id
+        ? snapshot(firstRequest)
+        : snapshot(secondRequest),
+    )
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [
+        {
+          intentId: first.id,
+          remoteRequestId: firstRequest.id,
+          disposition: 'waiting_for_approval',
+          outcomeCode: null,
+        },
+        {
+          intentId: second.id,
+          remoteRequestId: secondRequest.id,
+          disposition: 'waiting_for_approval',
+          outcomeCode: null,
+        },
+      ],
+    })
+    expect(operations).toEqual([
+      { intentId: first.id, expectedUpdatedAt: first.updatedAt },
+      null,
+      { intentId: second.id, expectedUpdatedAt: second.updatedAt },
+      null,
+    ])
+  })
+
+  it('rejects a Stop CAS between the intent snapshot and active-fence registration', async () => {
+    const source = intent()
+    const stopped = {
+      ...source,
+      status: 'recovery_required' as const,
+      updatedAt: '2026-08-11T12:00:30.000Z',
+    }
+    let stopCommitted = false
+    const operations: Array<{
+      intentId: string
+      expectedUpdatedAt: string
+    } | null> = []
+    const test = harness(source, {
+      onIntentOperationChange: (active) => {
+        operations.push(active)
+        if (active) stopCommitted = true
+      },
+    })
+    test.store.listGitHubDeliveryIntents.mockImplementation(async () => [
+      stopCommitted ? stopped : source,
+    ])
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: null,
+        disposition: 'local_conflict',
+        outcomeCode: 'stale_intent',
+      }],
+    })
+    expect(operations).toEqual([
+      { intentId: source.id, expectedUpdatedAt: source.updatedAt },
+      null,
+    ])
+    expect(test.remote.listInbox).not.toHaveBeenCalled()
+    expect(test.remote.submit).not.toHaveBeenCalled()
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
+  })
+
+  it('clears the active intent fence in finally when processing escapes unexpectedly', async () => {
+    const source = intent({ status: 'approved' })
+    const operations: Array<{
+      intentId: string
+      expectedUpdatedAt: string
+    } | null> = []
+    const test = harness(source, {
+      onIntentOperationChange: (active) => {
+        operations.push(active)
+      },
+    })
+    let intentReads = 0
+    test.store.listGitHubDeliveryIntents.mockImplementation(async () => {
+      intentReads += 1
+      if (intentReads === 1) return [source]
+      throw new Error('unexpected local reload failure')
+    })
+    test.remote.listInbox.mockRejectedValue(new Error('bounded remote failure'))
+
+    await expect(test.processor.recoverAndAdvance()).rejects.toThrow(
+      'unexpected local reload failure',
+    )
+    expect(operations).toEqual([
+      { intentId: source.id, expectedUpdatedAt: source.updatedAt },
+      null,
+    ])
+  })
+
+  it('fails closed before processing when active-fence registration throws', async () => {
+    const source = intent()
+    const operations: Array<{
+      intentId: string
+      expectedUpdatedAt: string
+    } | null> = []
+    const test = harness(source, {
+      onIntentOperationChange: (active) => {
+        operations.push(active)
+        if (active) throw new Error('active fence unavailable')
+      },
+    })
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: null,
+        disposition: 'local_conflict',
+        outcomeCode: 'processor_failed',
+      }],
+    })
+    expect(operations).toEqual([
+      { intentId: source.id, expectedUpdatedAt: source.updatedAt },
+      null,
+    ])
+    expect(test.remote.listInbox).not.toHaveBeenCalled()
+    expect(test.remote.submit).not.toHaveBeenCalled()
+  })
+
+  it('does not replace a settled processor result when fence cleanup throws', async () => {
+    const source = intent()
+    const waitingRequest = request(source, { status: 'approval_required' })
+    const operations: Array<{
+      intentId: string
+      expectedUpdatedAt: string
+    } | null> = []
+    const test = harness(source, {
+      onIntentOperationChange: (active) => {
+        operations.push(active)
+        if (active === null) throw new Error('fence cleanup failed')
+      },
+    })
+    test.remote.listInbox.mockResolvedValue([waitingRequest])
+    test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(waitingRequest))
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: waitingRequest.id,
+        disposition: 'waiting_for_approval',
+        outcomeCode: null,
+      }],
+    })
+    expect(operations).toEqual([
+      { intentId: source.id, expectedUpdatedAt: source.updatedAt },
+      null,
+    ])
+  })
+
+  it('fences an explicit resume with the exact caller-visible intent version', async () => {
+    const source = intent({ status: 'recovery_required' })
+    const waitingRequest = request(source, { status: 'approval_required' })
+    const operations: Array<{
+      intentId: string
+      expectedUpdatedAt: string
+    } | null> = []
+    const test = harness(source, {
+      onIntentOperationChange: (active) => {
+        operations.push(active)
+      },
+    })
+    test.remote.listInbox.mockResolvedValue([waitingRequest])
+    test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(waitingRequest))
+
+    await expect(test.processor.resume({
+      intentId: source.id,
+      expectedUpdatedAt: source.updatedAt,
+    })).resolves.toEqual({
+      intentId: source.id,
+      remoteRequestId: waitingRequest.id,
+      disposition: 'waiting_for_approval',
+      outcomeCode: null,
+    })
+    expect(operations).toEqual([
+      { intentId: source.id, expectedUpdatedAt: source.updatedAt },
+      null,
+    ])
   })
 
   it('bounds actionable work without letting older terminal history starve the cycle', async () => {

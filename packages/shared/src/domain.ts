@@ -865,6 +865,7 @@ export type LocalExecutionState = {
   dependencyBootstrapEvidence: DependencyBootstrapEvidence[]
   codingDiffArtifacts: CodingDiffArtifact[]
   githubDeliveryIntents?: import('./github-delivery').GitHubDeliveryIntent[]
+  githubDeliveryOperatorOutcomes?: import('./github-delivery').GitHubDeliveryOperatorOutcome[]
   githubRepositoryBindings?: import('./github-delivery').GitHubRepositoryBinding[]
   retryAttempts?: import('./remediation').RetryAttempt[]
   desktopPairingCredential?: DesktopPairingCredential | null

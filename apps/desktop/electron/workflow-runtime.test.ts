@@ -629,6 +629,8 @@ describe('workflow runtime', () => {
       codingRunId: codingRun.id,
       codingRunCompletedAt: codingRun.completedAt!,
       workspaceId: codingRun.managedWorkspaceId!,
+      deliverySeriesKey: `github-delivery:${'7'.repeat(64)}`,
+      deliveryAttempt: 1,
       repository: 'owner/repository',
       baseBranch: 'main',
       headBranch: 'devflow/runtime-full',

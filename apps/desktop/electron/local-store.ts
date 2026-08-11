@@ -7,6 +7,7 @@ import initSqlJs, { type Database, type SqlJsStatic, type SqlValue } from 'sql.j
 import {
   applyWorkflowCommand,
   assertFullGitCommitSha,
+  assertSafeGitHubBranch,
   canApproveGateNow,
   createGitHubDeliveryCompletion,
   createGitHubDeliveryIntent,
@@ -14,6 +15,7 @@ import {
   createRemoteSyncOperation,
   createWorkflowRunFromRequest,
   isActiveCodingAgentRunStatus,
+  normalizeGitHubRepository,
   REMOTE_SYNC_CLAIM_LEASE_MS,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
@@ -52,6 +54,8 @@ import {
   type GateEnforcementDecision,
   type GitHubDeliveryIntent,
   type GitHubDeliveryCompletion,
+  type GitHubDeliveryOperatorOutcome,
+  type GitHubDeliveryOperatorOutcomeCode,
   type GitHubDeliveryStatus,
   type GitHubRepositoryBinding,
   type PolicySnapshot,
@@ -67,7 +71,7 @@ import {
   type WorkflowRun,
   type WorkRequest,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 13
+export const CURRENT_SCHEMA_VERSION = 14
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -118,9 +122,26 @@ export type GitHubDeliveryPreparationMutationResult =
       reason: 'source_stale' | 'id_conflict' | 'active_intent_exists'
     }
 
+export type CommitGitHubRepositoryBindingObservationInput = {
+  expectedPairing: DesktopPairingCredential
+  binding: GitHubRepositoryBinding | null
+}
+
+export type CommitGitHubRepositoryBindingObservationResult =
+  | {
+      committed: true
+      replayed: boolean
+      binding: GitHubRepositoryBinding | null
+    }
+  | {
+      committed: false
+      reason: 'invalid_input' | 'pairing_scope_mismatch' | 'binding_conflict'
+    }
+
 export type GitHubDeliveryIntentStatusMutation = {
   expectedIntent: GitHubDeliveryIntent
   intent: GitHubDeliveryIntent
+  operatorOutcomeCode?: GitHubDeliveryOperatorOutcomeCode
 }
 
 export type GitHubDeliveryIntentStatusMutationResult =
@@ -144,6 +165,24 @@ export type GitHubDeliveryIntentCompletionMutation = {
 
 export type GitHubDeliveryIntentCompletionMutationResult =
   GitHubDeliveryIntentStatusMutationResult
+
+export type StopGitHubDeliveryIntentInput = {
+  intentId: string
+  expectedUpdatedAt: string
+  updatedAt: string
+}
+
+export type StopGitHubDeliveryIntentResult =
+  | {
+      committed: true
+      replayed: boolean
+      intent: GitHubDeliveryIntent
+      outcome: GitHubDeliveryOperatorOutcome
+    }
+  | {
+      committed: false
+      reason: 'intent_not_found' | 'source_stale' | 'intent_terminal'
+    }
 
 export type ManagedCodingWorkspaceHeadMutation = {
   expectedWorkspace: ManagedCodingWorkspace
@@ -560,6 +599,15 @@ export type LocalStore = {
     mutation: GitHubDeliveryIntentCompletionMutation,
   ): Promise<GitHubDeliveryIntentCompletionMutationResult>
   listGitHubDeliveryIntents(runId?: string): Promise<GitHubDeliveryIntent[]>
+  listGitHubDeliveryOperatorOutcomes(
+    intentId?: string,
+  ): Promise<GitHubDeliveryOperatorOutcome[]>
+  stopGitHubDeliveryIntent(
+    input: StopGitHubDeliveryIntentInput,
+  ): Promise<StopGitHubDeliveryIntentResult>
+  commitGitHubRepositoryBindingObservation(
+    input: CommitGitHubRepositoryBindingObservationInput,
+  ): Promise<CommitGitHubRepositoryBindingObservationResult>
   saveGitHubRepositoryBinding(
     binding: GitHubRepositoryBinding,
   ): Promise<GitHubRepositoryBinding>
@@ -1377,6 +1425,39 @@ const schemaMigrations: readonly SchemaMigration[] = [
       `)
     },
   },
+  {
+    version: 14,
+    migrate(db) {
+      db.run(`
+    create table if not exists github_delivery_operator_outcomes (
+      intent_id text primary key,
+      intent_updated_at text not null,
+      outcome_code text not null,
+      state_version integer not null,
+      json text not null,
+      recorded_at text not null,
+      check (length(trim(intent_id)) > 0 and length(intent_id) <= 200 and trim(intent_id) = intent_id),
+      check (outcome_code in (
+        'invalid_delivery_source', 'operation_cancelled',
+        'publisher_cleanup_failed', 'remote_branch_diverged',
+        'remote_unavailable', 'repository_mismatch', 'push_result_unknown',
+        'workspace_dirty', 'workspace_mismatch'
+      )),
+      check (state_version = 1),
+      check (json_valid(json)),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.intentId') = intent_id),
+      check (json_extract(json, '$.intentUpdatedAt') = intent_updated_at),
+      check (json_extract(json, '$.outcomeCode') = outcome_code),
+      check (json_extract(json, '$.recordedAt') = recorded_at),
+      check (json_extract(json, '$.redacted') = 1)
+    );
+
+    create index if not exists idx_github_delivery_operator_outcomes_recorded
+      on github_delivery_operator_outcomes(recorded_at, intent_id);
+      `)
+    },
+  },
 ]
 
 function migrateSchema(db: Database) {
@@ -2028,6 +2109,79 @@ function writeGitHubDeliveryIntent(db: Database, intent: GitHubDeliveryIntent): 
   )
 }
 
+const gitHubDeliveryOperatorOutcomeCodes: ReadonlySet<
+  GitHubDeliveryOperatorOutcomeCode
+> = new Set([
+  'invalid_delivery_source',
+  'operation_cancelled',
+  'publisher_cleanup_failed',
+  'remote_branch_diverged',
+  'remote_unavailable',
+  'repository_mismatch',
+  'push_result_unknown',
+  'workspace_dirty',
+  'workspace_mismatch',
+])
+
+function createGitHubDeliveryOperatorOutcome(
+  intent: GitHubDeliveryIntent,
+  outcomeCode: GitHubDeliveryOperatorOutcomeCode,
+): GitHubDeliveryOperatorOutcome {
+  if (
+    intent.status !== 'recovery_required' ||
+    !gitHubDeliveryOperatorOutcomeCodes.has(outcomeCode) ||
+    !isCanonicalIsoTimestamp(intent.updatedAt)
+  ) {
+    throw new Error('GitHub Delivery operator outcome is invalid')
+  }
+  return {
+    stateVersion: 1,
+    intentId: intent.id,
+    intentUpdatedAt: intent.updatedAt,
+    outcomeCode,
+    recordedAt: intent.updatedAt,
+    redacted: true,
+  }
+}
+
+function selectGitHubDeliveryOperatorOutcome(
+  db: Database,
+  intentId: string,
+): GitHubDeliveryOperatorOutcome | null {
+  return selectJson<GitHubDeliveryOperatorOutcome>(
+    db,
+    'select json from github_delivery_operator_outcomes where intent_id = ? limit 1',
+    [intentId],
+  )[0] ?? null
+}
+
+function writeGitHubDeliveryOperatorOutcome(
+  db: Database,
+  outcome: GitHubDeliveryOperatorOutcome,
+): void {
+  db.run(
+    `
+    insert into github_delivery_operator_outcomes (
+      intent_id, intent_updated_at, outcome_code, state_version, json, recorded_at
+    ) values (?, ?, ?, ?, ?, ?)
+    on conflict(intent_id) do update set
+      intent_updated_at = excluded.intent_updated_at,
+      outcome_code = excluded.outcome_code,
+      state_version = excluded.state_version,
+      json = excluded.json,
+      recorded_at = excluded.recorded_at
+    `,
+    [
+      outcome.intentId,
+      outcome.intentUpdatedAt,
+      outcome.outcomeCode,
+      outcome.stateVersion,
+      JSON.stringify(outcome),
+      outcome.recordedAt,
+    ],
+  )
+}
+
 const githubDeliveryStatusTransitions: Readonly<
   Record<GitHubDeliveryStatus, ReadonlySet<GitHubDeliveryStatus>>
 > = {
@@ -2142,6 +2296,84 @@ function writeGitHubRepositoryBinding(
       JSON.stringify(binding),
       binding.updatedAt,
     ],
+  )
+}
+
+const GITHUB_REPOSITORY_BINDING_KEYS = [
+  'stateVersion',
+  'id',
+  'version',
+  'organizationId',
+  'teamProjectId',
+  'installationId',
+  'repositoryId',
+  'repository',
+  'defaultBranch',
+  'status',
+  'validatedAt',
+  'updatedAt',
+  'redacted',
+] as const
+
+function isCanonicalGitHubRepositoryBinding(
+  binding: GitHubRepositoryBinding,
+): boolean {
+  const actualKeys = Object.keys(binding).sort()
+  const expectedKeys = [...GITHUB_REPOSITORY_BINDING_KEYS].sort()
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    actualKeys.some((key, index) => key !== expectedKeys[index]) ||
+    binding.stateVersion !== 1 ||
+    !isNonEmptyIdentifier(binding.id) ||
+    binding.id.length > 200 ||
+    !Number.isSafeInteger(binding.version) ||
+    binding.version < 1 ||
+    binding.version > 2_147_483_647 ||
+    !isNonEmptyIdentifier(binding.organizationId) ||
+    binding.organizationId.length > 200 ||
+    !isNonEmptyIdentifier(binding.teamProjectId) ||
+    binding.teamProjectId.length > 200 ||
+    !/^[1-9][0-9]{0,19}$/u.test(binding.installationId) ||
+    !/^[1-9][0-9]{0,19}$/u.test(binding.repositoryId) ||
+    (binding.status !== 'active' &&
+      binding.status !== 'stale' &&
+      binding.status !== 'revoked') ||
+    !isCanonicalIsoTimestamp(binding.validatedAt) ||
+    !isCanonicalIsoTimestamp(binding.updatedAt) ||
+    Date.parse(binding.updatedAt) < Date.parse(binding.validatedAt) ||
+    binding.redacted !== true
+  ) {
+    return false
+  }
+  try {
+    return (
+      normalizeGitHubRepository(binding.repository) === binding.repository &&
+      assertSafeGitHubBranch(binding.defaultBranch) === binding.defaultBranch
+    )
+  } catch {
+    return false
+  }
+}
+
+function isCanonicalBindingObservationInput(
+  input: CommitGitHubRepositoryBindingObservationInput,
+): boolean {
+  const pairing = input.expectedPairing
+  if (
+    !isNonEmptyIdentifier(pairing.tokenId) ||
+    !isNonEmptyIdentifier(pairing.organizationId) ||
+    !isNonEmptyIdentifier(pairing.projectId) ||
+    !isNonEmptyIdentifier(pairing.localProjectId) ||
+    !isNonEmptyIdentifier(pairing.userId) ||
+    !isCanonicalIsoTimestamp(pairing.createdAt)
+  ) {
+    return false
+  }
+  return (
+    input.binding === null ||
+    (isCanonicalGitHubRepositoryBinding(input.binding) &&
+      input.binding.organizationId === pairing.organizationId &&
+      input.binding.teamProjectId === pairing.projectId)
   )
 }
 
@@ -5123,6 +5355,12 @@ class SqlJsLocalStore implements LocalStore {
     mutation: GitHubDeliveryIntentStatusMutation,
   ): Promise<GitHubDeliveryIntentStatusMutationResult> {
     assertGitHubDeliveryIntentStatusMutation(mutation)
+    const operatorOutcome = mutation.operatorOutcomeCode === undefined
+      ? null
+      : createGitHubDeliveryOperatorOutcome(
+          mutation.intent,
+          mutation.operatorOutcomeCode,
+        )
     const current = selectGitHubDeliveryIntent(this.db, 'id', mutation.expectedIntent.id)
     if (!current) {
       return { committed: false, reason: 'intent_not_found' }
@@ -5156,6 +5394,9 @@ class SqlJsLocalStore implements LocalStore {
         this.db.run('rollback')
         transactionOpen = false
         return { committed: false, reason: 'source_stale' }
+      }
+      if (operatorOutcome) {
+        writeGitHubDeliveryOperatorOutcome(this.db, operatorOutcome)
       }
       this.db.run('commit')
       transactionOpen = false
@@ -5240,6 +5481,279 @@ class SqlJsLocalStore implements LocalStore {
       this.db,
       'select json from github_delivery_intents order by created_at asc, id asc',
     )
+  }
+
+  async listGitHubDeliveryOperatorOutcomes(
+    intentId?: string,
+  ): Promise<GitHubDeliveryOperatorOutcome[]> {
+    if (intentId) {
+      return selectJson<GitHubDeliveryOperatorOutcome>(
+        this.db,
+        'select json from github_delivery_operator_outcomes where intent_id = ? limit 1',
+        [intentId],
+      )
+    }
+    return selectJson<GitHubDeliveryOperatorOutcome>(
+      this.db,
+      'select json from github_delivery_operator_outcomes order by recorded_at asc, intent_id asc',
+    )
+  }
+
+  async stopGitHubDeliveryIntent(
+    input: StopGitHubDeliveryIntentInput,
+  ): Promise<StopGitHubDeliveryIntentResult> {
+    if (
+      !isNonEmptyIdentifier(input.intentId) ||
+      input.intentId.length > 200 ||
+      input.intentId.startsWith('~') ||
+      input.intentId.includes('/') ||
+      input.intentId.includes('\\') ||
+      /[\u0000-\u001f\u007f]/u.test(input.intentId) ||
+      !isCanonicalIsoTimestamp(input.expectedUpdatedAt) ||
+      !isCanonicalIsoTimestamp(input.updatedAt) ||
+      Date.parse(input.updatedAt) <= Date.parse(input.expectedUpdatedAt)
+    ) {
+      throw new Error('GitHub Delivery Stop CAS input is invalid')
+    }
+
+    const current = selectGitHubDeliveryIntent(this.db, 'id', input.intentId)
+    if (!current) {
+      return { committed: false, reason: 'intent_not_found' }
+    }
+    const existingOutcome = selectGitHubDeliveryOperatorOutcome(
+      this.db,
+      current.id,
+    )
+    if (
+      current.status === 'recovery_required' &&
+      current.updatedAt === input.updatedAt &&
+      existingOutcome?.intentUpdatedAt === current.updatedAt &&
+      existingOutcome.recordedAt === current.updatedAt &&
+      existingOutcome.outcomeCode === 'operation_cancelled' &&
+      existingOutcome.stateVersion === 1 &&
+      existingOutcome.redacted === true
+    ) {
+      return {
+        committed: true,
+        replayed: true,
+        intent: current,
+        outcome: existingOutcome,
+      }
+    }
+    if (
+      current.status === 'completed' ||
+      current.status === 'failed' ||
+      current.status === 'revoked' ||
+      current.status === 'recovery_required'
+    ) {
+      return { committed: false, reason: 'intent_terminal' }
+    }
+    if (current.updatedAt !== input.expectedUpdatedAt) {
+      return { committed: false, reason: 'source_stale' }
+    }
+
+    const intent: GitHubDeliveryIntent = {
+      ...current,
+      status: 'recovery_required',
+      updatedAt: input.updatedAt,
+    }
+    const outcome = createGitHubDeliveryOperatorOutcome(
+      intent,
+      'operation_cancelled',
+    )
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      this.db.run(
+        `update github_delivery_intents
+         set status = 'recovery_required', json = ?, updated_at = ?
+         where id = ? and status = ? and updated_at = ?`,
+        [
+          JSON.stringify(intent),
+          intent.updatedAt,
+          current.id,
+          current.status,
+          current.updatedAt,
+        ],
+      )
+      if (this.db.getRowsModified() !== 1) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'source_stale' }
+      }
+      writeGitHubDeliveryOperatorOutcome(this.db, outcome)
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return { committed: true, replayed: false, intent, outcome }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      throw error
+    }
+  }
+
+  async commitGitHubRepositoryBindingObservation(
+    input: CommitGitHubRepositoryBindingObservationInput,
+  ): Promise<CommitGitHubRepositoryBindingObservationResult> {
+    if (!isCanonicalBindingObservationInput(input)) {
+      return { committed: false, reason: 'invalid_input' }
+    }
+
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      const currentPairing = selectJson<DesktopPairingCredential>(
+        this.db,
+        "select json from desktop_pairing_credentials where id = 'default' limit 1",
+      )[0]
+      if (
+        JSON.stringify(currentPairing) !==
+        JSON.stringify(input.expectedPairing)
+      ) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'pairing_scope_mismatch' }
+      }
+
+      const existingForProject = selectJson<GitHubRepositoryBinding>(
+        this.db,
+        'select json from github_repository_bindings where team_project_id = ? order by id asc',
+        [input.expectedPairing.projectId],
+      )
+      let bindingChanged = false
+      if (input.binding === null) {
+        this.db.run(
+          'delete from github_repository_bindings where team_project_id = ?',
+          [input.expectedPairing.projectId],
+        )
+        bindingChanged = existingForProject.length > 0
+      } else {
+        const existingById = selectJson<GitHubRepositoryBinding>(
+          this.db,
+          'select json from github_repository_bindings where id = ? limit 1',
+          [input.binding.id],
+        )[0]
+        if (
+          existingForProject.length > 1 ||
+          existingForProject.some(
+            (candidate) =>
+              candidate.id !== input.binding!.id ||
+              candidate.organizationId !==
+                input.expectedPairing.organizationId,
+          ) ||
+          (existingById !== undefined &&
+            (existingById.organizationId !==
+              input.expectedPairing.organizationId ||
+              existingById.teamProjectId !== input.expectedPairing.projectId))
+        ) {
+          this.db.run('rollback')
+          transactionOpen = false
+          return { committed: false, reason: 'binding_conflict' }
+        }
+
+        const existing = existingForProject[0]
+        if (
+          existing &&
+          (existing.version > input.binding.version ||
+            (existing.version === input.binding.version &&
+              JSON.stringify(existing) !== JSON.stringify(input.binding)))
+        ) {
+          this.db.run('rollback')
+          transactionOpen = false
+          return { committed: false, reason: 'binding_conflict' }
+        }
+        bindingChanged =
+          !existing || JSON.stringify(existing) !== JSON.stringify(input.binding)
+        if (bindingChanged) {
+          writeGitHubRepositoryBinding(this.db, input.binding)
+        }
+      }
+
+      const activeIntents = selectJson<GitHubDeliveryIntent>(
+        this.db,
+        `select json from github_delivery_intents
+         where organization_id = ? and team_project_id = ? and local_project_id = ?
+           and status in (
+             'approval_required', 'approved', 'publishing_branch',
+             'branch_published', 'creating_pr', 'recovery_required'
+           )
+         order by created_at asc, id asc`,
+        [
+          input.expectedPairing.organizationId,
+          input.expectedPairing.projectId,
+          input.expectedPairing.localProjectId!,
+        ],
+      )
+      const intentsToRevoke = activeIntents.filter(
+        (intent) =>
+          input.binding === null ||
+          input.binding.status !== 'active' ||
+          intent.repositoryBindingId !== input.binding.id ||
+          intent.repositoryBindingVersion !== input.binding.version,
+      )
+      for (const intent of intentsToRevoke) {
+        const authorityObservedAt = input.binding
+          ? Date.parse(input.binding.updatedAt)
+          : 0
+        const revoked: GitHubDeliveryIntent = {
+          ...intent,
+          status: 'revoked',
+          updatedAt: new Date(
+            Math.max(
+              Date.now(),
+              Date.parse(intent.updatedAt) + 1,
+              authorityObservedAt,
+            ),
+          ).toISOString(),
+        }
+        assertGitHubDeliveryIntentStatusMutation({
+          expectedIntent: intent,
+          intent: revoked,
+        })
+        this.db.run(
+          `update github_delivery_intents
+           set status = 'revoked', json = ?, updated_at = ?
+           where id = ? and status = ? and updated_at = ?`,
+          [
+            JSON.stringify(revoked),
+            revoked.updatedAt,
+            intent.id,
+            intent.status,
+            intent.updatedAt,
+          ],
+        )
+        if (this.db.getRowsModified() !== 1) {
+          throw new Error('GitHub Delivery authority convergence failed.')
+        }
+      }
+
+      this.db.run('commit')
+      transactionOpen = false
+      const replayed = !bindingChanged && intentsToRevoke.length === 0
+      if (!replayed) await this.persist()
+      return { committed: true, replayed, binding: input.binding }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      throw error
+    }
   }
 
   async saveGitHubRepositoryBinding(
@@ -6001,24 +6515,89 @@ class SqlJsLocalStore implements LocalStore {
     credential: DesktopPairingCredential,
     encryptedToken: string,
   ): Promise<DesktopPairingCredential> {
-    this.db.run(
-      `
-      insert into desktop_pairing_credentials (id, json, encrypted_token, updated_at)
-      values (?, ?, ?, ?)
-      on conflict(id) do update set
-        json = excluded.json,
-        encrypted_token = excluded.encrypted_token,
-        updated_at = excluded.updated_at
-      `,
-      [
-        'default',
-        JSON.stringify(credential),
-        encryptedToken,
-        credential.createdAt,
-      ],
-    )
-    await this.persist()
-    return credential
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      const current = selectJson<DesktopPairingCredential>(
+        this.db,
+        "select json from desktop_pairing_credentials where id = 'default' limit 1",
+      )[0]
+      if (current && JSON.stringify(current) !== JSON.stringify(credential)) {
+        const activeIntents = selectJson<GitHubDeliveryIntent>(
+          this.db,
+          `select json from github_delivery_intents
+           where status in (
+             'approval_required', 'approved', 'publishing_branch',
+             'branch_published', 'creating_pr', 'recovery_required'
+           )
+           order by created_at asc, id asc`,
+        )
+        for (const intent of activeIntents) {
+          const revokedAt = new Date(
+            Math.max(
+              Date.parse(credential.createdAt),
+              Date.parse(intent.updatedAt) + 1,
+            ),
+          ).toISOString()
+          const revoked: GitHubDeliveryIntent = {
+            ...intent,
+            status: 'revoked',
+            updatedAt: revokedAt,
+          }
+          assertGitHubDeliveryIntentStatusMutation({
+            expectedIntent: intent,
+            intent: revoked,
+          })
+          this.db.run(
+            `update github_delivery_intents
+             set status = 'revoked', json = ?, updated_at = ?
+             where id = ? and status = ? and updated_at = ?`,
+            [
+              JSON.stringify(revoked),
+              revoked.updatedAt,
+              intent.id,
+              intent.status,
+              intent.updatedAt,
+            ],
+          )
+          if (this.db.getRowsModified() !== 1) {
+            throw new Error('Desktop pairing authority convergence failed.')
+          }
+        }
+      }
+      this.db.run(
+        `
+        insert into desktop_pairing_credentials (id, json, encrypted_token, updated_at)
+        values (?, ?, ?, ?)
+        on conflict(id) do update set
+          json = excluded.json,
+          encrypted_token = excluded.encrypted_token,
+          updated_at = excluded.updated_at
+        `,
+        [
+          'default',
+          JSON.stringify(credential),
+          encryptedToken,
+          credential.createdAt,
+        ],
+      )
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return credential
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      throw error
+    }
   }
 
   async getDesktopPairingCredential(): Promise<DesktopPairingCredential | null> {
@@ -6211,6 +6790,7 @@ class SqlJsLocalStore implements LocalStore {
       codingDiffArtifacts,
       githubRepositoryBindings,
       githubDeliveryIntents,
+      githubDeliveryOperatorOutcomes,
       retryAttempts,
       desktopPairingCredential,
       settings,
@@ -6234,6 +6814,7 @@ class SqlJsLocalStore implements LocalStore {
       this.listCodingDiffArtifacts(),
       this.listGitHubRepositoryBindings(),
       this.listGitHubDeliveryIntents(),
+      this.listGitHubDeliveryOperatorOutcomes(),
       this.listRetryAttempts(),
       this.getDesktopPairingCredential(),
       this.getSettings(),
@@ -6259,6 +6840,7 @@ class SqlJsLocalStore implements LocalStore {
       codingDiffArtifacts,
       githubRepositoryBindings,
       githubDeliveryIntents,
+      githubDeliveryOperatorOutcomes,
       retryAttempts,
       desktopPairingCredential,
       settings,
@@ -6316,6 +6898,8 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'commitGitHubDeliveryPreparation',
   'commitGitHubDeliveryIntentStatus',
   'commitGitHubDeliveryIntentCompletion',
+  'stopGitHubDeliveryIntent',
+  'commitGitHubRepositoryBindingObservation',
   'saveGitHubRepositoryBinding',
   'saveArtifact',
   'saveEvent',

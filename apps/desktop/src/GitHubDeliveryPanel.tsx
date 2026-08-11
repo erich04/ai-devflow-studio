@@ -1,4 +1,7 @@
-import type { GitHubDeliveryIntent } from '@ai-devflow/shared'
+import type {
+  GitHubDeliveryIntent,
+  GitHubDeliveryOperatorOutcome,
+} from '@ai-devflow/shared'
 
 const statusCopy: Record<GitHubDeliveryIntent['status'], string> = {
   approval_required:
@@ -14,7 +17,7 @@ const statusCopy: Record<GitHubDeliveryIntent['status'], string> = {
   completed:
     'Draft PR 已创建并记录为交付证据；Workflow 会自动推进到 Acceptance。',
   failed:
-    '交付已安全停止且不会自动重试。请核对远端记录与本地证据，确认实际结果后再继续。',
+    '交付已安全停止且不会自动重试。请核对远端记录与本地证据；显式 Retry 会创建新的 attempt，绝不会重开旧请求。',
   recovery_required:
     '自动恢复已停止。只有显式 Resume 才会按当前 intent updatedAt 继续。',
   revoked:
@@ -35,14 +38,22 @@ const statusTone: Record<GitHubDeliveryIntent['status'], string> = {
 
 export function GitHubDeliveryPanel({
   intent,
+  operatorOutcome,
   hasExactPrPackage,
   surface = 'pr',
 }: {
   intent: GitHubDeliveryIntent | undefined
+  operatorOutcome?: GitHubDeliveryOperatorOutcome
   hasExactPrPackage: boolean
   surface?: 'pr' | 'acceptance'
 }) {
   const isAcceptanceEvidenceMissing = surface === 'acceptance' && !intent
+  const exactOperatorOutcome =
+    intent &&
+    operatorOutcome?.intentId === intent.id &&
+    operatorOutcome.intentUpdatedAt === intent.updatedAt
+      ? operatorOutcome
+      : undefined
 
   return (
     <section className="github-delivery-panel" data-testid="github-delivery-panel">
@@ -92,6 +103,14 @@ export function GitHubDeliveryPanel({
               <dd><code>runVersion {intent.runVersion}</code></dd>
             </div>
             <div>
+              <dt>Delivery series</dt>
+              <dd><code>{intent.deliverySeriesKey}</code></dd>
+            </div>
+            <div>
+              <dt>Delivery attempt</dt>
+              <dd><code>attempt {intent.deliveryAttempt}</code></dd>
+            </div>
+            <div>
               <dt>Diff source digest</dt>
               <dd><code>{intent.diffSourceDigest}</code></dd>
             </div>
@@ -111,6 +130,12 @@ export function GitHubDeliveryPanel({
               <dt>Intent updatedAt</dt>
               <dd><time dateTime={intent.updatedAt}>{intent.updatedAt}</time></dd>
             </div>
+            {exactOperatorOutcome ? (
+              <div>
+                <dt>Operator outcome</dt>
+                <dd><code>{exactOperatorOutcome.outcomeCode}</code></dd>
+              </div>
+            ) : null}
           </dl>
           {intent.status === 'completed' && intent.completion ? (
             <a

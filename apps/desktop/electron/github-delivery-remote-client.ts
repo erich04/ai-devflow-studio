@@ -4,11 +4,17 @@ import {
   normalizeGitHubRepository,
   type GitHubDeliveryIntent,
   type GitHubDeliveryStatus,
+  type GitHubRepositoryBinding,
 } from '@ai-devflow/shared'
+import {
+  GitHubGitPublisherError,
+  type GitHubGitPublisherErrorCode,
+} from './github-git-publisher.js'
 
 type Fetcher = typeof fetch
 
 export type GitHubDeliveryRemoteOperation =
+  | 'repository_binding'
   | 'submit'
   | 'inbox'
   | 'recovery_snapshot'
@@ -34,6 +40,7 @@ export type GitHubDeliveryRemoteErrorCode =
   | 'invalid_response'
   | 'response_too_large'
   | 'publisher_failed'
+  | GitHubGitPublisherErrorCode
 
 export type GitHubDeliveryRejectionOutcome =
   | 'authentication_forbidden'
@@ -70,7 +77,23 @@ const safeErrorMessages: Record<GitHubDeliveryRemoteErrorCode, string> = {
   invalid_response: 'The GitHub Delivery API returned an invalid response.',
   response_too_large: 'The GitHub Delivery API response exceeded the safe limit.',
   publisher_failed: 'The exact GitHub commit could not be published.',
+  invalid_delivery_source: 'The approved GitHub delivery source is invalid.',
+  operation_cancelled: 'GitHub delivery publication was cancelled safely.',
+  publisher_cleanup_failed: 'GitHub delivery credential cleanup failed safely.',
+  remote_branch_diverged: 'The remote delivery branch points to a different commit.',
+  repository_mismatch: 'The local Git remote does not match the approved repository.',
+  push_result_unknown: 'The exact Git push result requires reconciliation.',
+  workspace_dirty: 'The managed workspace changed after delivery approval.',
+  workspace_mismatch: 'The managed workspace HEAD does not match the approved commit.',
 }
+
+const retryablePublisherErrors = new Set<GitHubGitPublisherErrorCode>([
+  'operation_cancelled',
+  'publisher_cleanup_failed',
+  'remote_branch_diverged',
+  'remote_unavailable',
+  'push_result_unknown',
+])
 
 export class GitHubDeliveryRemoteError extends Error {
   readonly status: number | null
@@ -78,6 +101,7 @@ export class GitHubDeliveryRemoteError extends Error {
   readonly operation: GitHubDeliveryRemoteOperation
   readonly retryable: boolean
   readonly outcomeCode: GitHubDeliveryRejectionOutcome | null
+  readonly operatorOutcomeCode: GitHubGitPublisherErrorCode | null
 
   constructor(input: {
     status: number | null
@@ -85,6 +109,7 @@ export class GitHubDeliveryRemoteError extends Error {
     operation: GitHubDeliveryRemoteOperation
     retryable: boolean
     outcomeCode?: GitHubDeliveryRejectionOutcome | null
+    operatorOutcomeCode?: GitHubGitPublisherErrorCode | null
   }) {
     super(safeErrorMessages[input.code])
     this.name = 'GitHubDeliveryRemoteError'
@@ -93,6 +118,7 @@ export class GitHubDeliveryRemoteError extends Error {
     this.operation = input.operation
     this.retryable = input.retryable
     this.outcomeCode = input.outcomeCode ?? null
+    this.operatorOutcomeCode = input.operatorOutcomeCode ?? null
   }
 
   toJSON(): {
@@ -102,6 +128,7 @@ export class GitHubDeliveryRemoteError extends Error {
     operation: GitHubDeliveryRemoteOperation
     retryable: boolean
     outcomeCode: GitHubDeliveryRejectionOutcome | null
+    operatorOutcomeCode: GitHubGitPublisherErrorCode | null
   } {
     return {
       name: 'GitHubDeliveryRemoteError',
@@ -110,6 +137,7 @@ export class GitHubDeliveryRemoteError extends Error {
       operation: this.operation,
       retryable: this.retryable,
       outcomeCode: this.outcomeCode,
+      operatorOutcomeCode: this.operatorOutcomeCode,
     }
   }
 }
@@ -153,6 +181,8 @@ export type GitHubDeliveryRequestRecord = {
   baseCommitSha: string
   expectedCommitSha: string
   intentDigest: string
+  deliverySeriesKey: string
+  deliveryAttempt: number
   logicalIdempotencyKey: string
   diffDigest: string
   testEvidenceDigest: string
@@ -392,6 +422,8 @@ const requestKeys = [
   'baseCommitSha',
   'expectedCommitSha',
   'intentDigest',
+  'deliverySeriesKey',
+  'deliveryAttempt',
   'logicalIdempotencyKey',
   'diffDigest',
   'testEvidenceDigest',
@@ -401,6 +433,22 @@ const requestKeys = [
   'prBody',
   'expiresAt',
   'createdAt',
+  'updatedAt',
+  'redacted',
+] as const
+
+const repositoryBindingKeys = [
+  'stateVersion',
+  'id',
+  'version',
+  'organizationId',
+  'teamProjectId',
+  'installationId',
+  'repositoryId',
+  'repository',
+  'defaultBranch',
+  'status',
+  'validatedAt',
   'updatedAt',
   'redacted',
 ] as const
@@ -421,6 +469,8 @@ const deliveryIntentKeys = [
   'codingRunId',
   'codingRunCompletedAt',
   'workspaceId',
+  'deliverySeriesKey',
+  'deliveryAttempt',
   'repository',
   'baseBranch',
   'headBranch',
@@ -705,6 +755,49 @@ function isFullSha(value: unknown): value is string {
   }
 }
 
+function parseRepositoryBinding(value: unknown): GitHubRepositoryBinding | null {
+  if (!isRecord(value) || !hasExactKeys(value, repositoryBindingKeys)) {
+    return null
+  }
+  if (
+    value.stateVersion !== 1 ||
+    !isIdentifier(value.id) ||
+    !isPositiveInteger(value.version) ||
+    !isIdentifier(value.organizationId) ||
+    !isIdentifier(value.teamProjectId) ||
+    typeof value.installationId !== 'string' ||
+    !numericGitHubIdPattern.test(value.installationId) ||
+    typeof value.repositoryId !== 'string' ||
+    !numericGitHubIdPattern.test(value.repositoryId) ||
+    !isCanonicalRepository(value.repository) ||
+    !isSafeBranch(value.defaultBranch) ||
+    (value.status !== 'active' &&
+      value.status !== 'stale' &&
+      value.status !== 'revoked') ||
+    !isCanonicalDate(value.validatedAt) ||
+    !isCanonicalDate(value.updatedAt) ||
+    Date.parse(value.updatedAt) < Date.parse(value.validatedAt) ||
+    value.redacted !== true
+  ) {
+    return null
+  }
+  return {
+    stateVersion: 1,
+    id: value.id,
+    version: value.version,
+    organizationId: value.organizationId,
+    teamProjectId: value.teamProjectId,
+    installationId: value.installationId,
+    repositoryId: value.repositoryId,
+    repository: value.repository,
+    defaultBranch: value.defaultBranch,
+    status: value.status,
+    validatedAt: value.validatedAt,
+    updatedAt: value.updatedAt,
+    redacted: true,
+  }
+}
+
 function parseRequest(value: unknown): GitHubDeliveryRequestRecord | null {
   if (!isRecord(value) || !hasExactKeys(value, requestKeys)) return null
   const changedPaths = Array.isArray(value.changedPaths)
@@ -734,6 +827,9 @@ function parseRequest(value: unknown): GitHubDeliveryRequestRecord | null {
     value.baseCommitSha === value.expectedCommitSha ||
     typeof value.intentDigest !== 'string' ||
     !sha256Pattern.test(value.intentDigest) ||
+    typeof value.deliverySeriesKey !== 'string' ||
+    !/^github-delivery:[a-f0-9]{64}$/u.test(value.deliverySeriesKey) ||
+    !isPositiveInteger(value.deliveryAttempt) ||
     typeof value.logicalIdempotencyKey !== 'string' ||
     !/^github-delivery:[a-f0-9]{64}$/u.test(value.logicalIdempotencyKey) ||
     typeof value.diffDigest !== 'string' ||
@@ -783,6 +879,7 @@ function parseSubmitIntent(value: unknown): GitHubDeliveryIntent | null {
     !intentDateKeys.every((key) => isCanonicalDate(value[key])) ||
     !isPositiveInteger(value.runVersion) ||
     !isPositiveInteger(value.repositoryBindingVersion) ||
+    !isPositiveInteger(value.deliveryAttempt) ||
     typeof value.installationId !== 'string' ||
     !numericGitHubIdPattern.test(value.installationId) ||
     typeof value.repositoryId !== 'string' ||
@@ -801,6 +898,8 @@ function parseSubmitIntent(value: unknown): GitHubDeliveryIntent | null {
     !sha256Pattern.test(value.prPackageDigest) ||
     typeof value.intentDigest !== 'string' ||
     !sha256Pattern.test(value.intentDigest) ||
+    typeof value.deliverySeriesKey !== 'string' ||
+    !/^github-delivery:[a-f0-9]{64}$/u.test(value.deliverySeriesKey) ||
     typeof value.idempotencyKey !== 'string' ||
     !/^github-delivery:[a-f0-9]{64}$/u.test(value.idempotencyKey) ||
     changedPaths === null ||
@@ -1110,6 +1209,7 @@ function invalid(
   status: number | null,
   retryable: boolean,
   outcomeCode: GitHubDeliveryRejectionOutcome | null = null,
+  operatorOutcomeCode: GitHubGitPublisherErrorCode | null = null,
 ): GitHubDeliveryRemoteError {
   return new GitHubDeliveryRemoteError({
     status,
@@ -1117,6 +1217,7 @@ function invalid(
     operation,
     retryable,
     outcomeCode,
+    operatorOutcomeCode,
   })
 }
 
@@ -1429,6 +1530,8 @@ function parseSubmitResult(
     request.projectId !== input.projectId ||
     request.localIntentId !== input.intent.id ||
     request.intentDigest !== input.intent.intentDigest ||
+    request.deliverySeriesKey !== input.intent.deliverySeriesKey ||
+    request.deliveryAttempt !== input.intent.deliveryAttempt ||
     request.logicalIdempotencyKey !== input.intent.idempotencyKey ||
     request.status !== 'approval_required' ||
     request.prTitle !== input.prTitle ||
@@ -1523,6 +1626,46 @@ export function createGitHubDeliveryRemoteClient(
   const fetcher = options.fetcher ?? fetch
 
   return {
+    async getRepositoryBinding(
+      projectId: string,
+    ): Promise<GitHubRepositoryBinding | null> {
+      const operation = 'repository_binding'
+      if (!isIdentifier(projectId)) {
+        throw invalid(operation, 'invalid_request', null, false)
+      }
+      const pathname = `/api/desktop/projects/${encodeURIComponent(projectId)}/github-repository-binding`
+      const { response, body } = await requestRemoteJson({
+        fetcher,
+        url: `${apiBaseUrl}${pathname}`,
+        operation,
+        timeoutMs,
+        signal: options.signal,
+        init: {
+          method: 'GET',
+          credentials: 'omit',
+          redirect: 'error',
+          referrerPolicy: 'no-referrer',
+          headers: {
+            accept: 'application/json',
+            authorization: `Bearer ${authToken}`,
+          },
+        },
+      })
+      if (
+        response.status !== 200 ||
+        !isRecord(body) ||
+        !hasExactKeys(body, ['binding'])
+      ) {
+        throw invalid(operation, 'invalid_response', response.status, true)
+      }
+      if (body.binding === null) return null
+      const binding = parseRepositoryBinding(body.binding)
+      if (!binding || binding.teamProjectId !== projectId) {
+        throw invalid(operation, 'invalid_response', response.status, true)
+      }
+      return binding
+    },
+
     async submit(
       input: SubmitGitHubDeliveryInput,
     ): Promise<SubmitGitHubDeliveryResult> {
@@ -1706,7 +1849,17 @@ export function createGitHubDeliveryRemoteClient(
           headBranch: request.headBranch,
           expectedCommitSha: request.expectedCommitSha,
         })
-      } catch {
+      } catch (error) {
+        if (error instanceof GitHubGitPublisherError) {
+          throw invalid(
+            operation,
+            error.code,
+            null,
+            retryablePublisherErrors.has(error.code),
+            null,
+            error.code,
+          )
+        }
         throw invalid(operation, 'publisher_failed', null, false)
       }
       if (

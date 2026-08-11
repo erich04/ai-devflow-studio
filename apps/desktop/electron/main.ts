@@ -60,6 +60,7 @@ import {
   parseCreatePrDraftInput,
   parsePrepareGitHubDeliveryInput,
   parseResumeGitHubDeliveryInput,
+  parseStopGitHubDeliveryInput,
   parseCreateRunInput,
   parseCompleteWorkflowAgentNodeInput,
   parseListAgentReviewsInput,
@@ -81,8 +82,11 @@ import {
   parseSettingsInput,
   parseSubscribeCodingRunInput,
   parseValidateTestCommandInput,
+  type PrepareGitHubDeliveryInput,
   type ResumeGitHubDeliveryInput,
   type ResumeGitHubDeliveryResult,
+  type StopGitHubDeliveryInput,
+  type StopGitHubDeliveryResult,
 } from './ipc-contract.js'
 import {
   createRemoteSyncClient,
@@ -98,7 +102,17 @@ import {
   type GitHubDeliveryRuntime,
 } from './github-delivery-runtime.js'
 import { createGitHubDeliveryRemoteClient } from './github-delivery-remote-client.js'
-import { createGitHubDeliveryProcessor } from './github-delivery-processor.js'
+import {
+  GitHubRepositoryBindingSyncError,
+  synchronizeGitHubRepositoryBinding,
+} from './github-repository-binding-sync.js'
+import {
+  createGitHubDeliveryProcessor,
+  reconcileCompletedGitHubDeliveryIntents,
+  reconcileRemoteCompletedGitHubDeliveryIntents,
+  type GitHubDeliveryActiveIntentOperation,
+} from './github-delivery-processor.js'
+import { stopGitHubDelivery } from './github-delivery-stop.js'
 import { createGitHubDeliveryScheduler } from './github-delivery-scheduler.js'
 import {
   GITHUB_GIT_PUBLISHER_REQUIRED_CREDENTIAL_LIFETIME_MS,
@@ -180,6 +194,9 @@ let githubDeliverySchedulerPromise:
   | undefined
 let githubDeliveryOperationQueue: Promise<void> = Promise.resolve()
 let githubDeliveryOperationAbortController: AbortController | undefined
+let githubDeliveryActiveIntentOperation:
+  | GitHubDeliveryActiveIntentOperation
+  | null = null
 let githubDeliveryStopping = false
 let githubDeliveryRuntimePromise: Promise<GitHubDeliveryRuntime> | undefined
 let managedWorkspaceCleanupPromise:
@@ -375,7 +392,7 @@ async function runGitHubDeliveryExclusive<T>(
   }
 }
 
-async function createCurrentGitHubDeliveryProcessor(signal: AbortSignal) {
+async function createCurrentGitHubDeliveryContext(signal: AbortSignal) {
   const store = await getStore()
   const bundle = await store.getDesktopPairingCredentialBundle()
   const credential = bundle?.credential
@@ -390,6 +407,9 @@ async function createCurrentGitHubDeliveryProcessor(signal: AbortSignal) {
   if (
     !bundle ||
     !credential ||
+    typeof localProjectId !== 'string' ||
+    localProjectId.length === 0 ||
+    localProjectId.trim() !== localProjectId ||
     exactScopeFields.some(
       (value) =>
         typeof value !== 'string' ||
@@ -405,7 +425,24 @@ async function createCurrentGitHubDeliveryProcessor(signal: AbortSignal) {
     return null
   }
 
-  const scopedStore = {
+  const authToken = decryptCredential(bundle.encryptedToken)
+  const remote = createGitHubDeliveryRemoteClient({
+    apiBaseUrl: resolveRemoteApiBaseUrl(),
+    authToken,
+    signal,
+  })
+  return { store, credential, localProjectId, remote }
+}
+
+type CurrentGitHubDeliveryContext = NonNullable<
+  Awaited<ReturnType<typeof createCurrentGitHubDeliveryContext>>
+>
+
+function createScopedGitHubDeliveryStore(
+  context: CurrentGitHubDeliveryContext,
+) {
+  const { store, credential, localProjectId } = context
+  return {
     listGitHubDeliveryIntents: async (runId?: string) =>
       (await store.listGitHubDeliveryIntents(runId)).filter(
         (intent) =>
@@ -431,12 +468,14 @@ async function createCurrentGitHubDeliveryProcessor(signal: AbortSignal) {
       mutation: Parameters<LocalStore['commitGitHubDeliveryIntentCompletion']>[0],
     ) => store.commitGitHubDeliveryIntentCompletion(mutation),
   }
-  const authToken = decryptCredential(bundle.encryptedToken)
-  const remote = createGitHubDeliveryRemoteClient({
-    apiBaseUrl: resolveRemoteApiBaseUrl(),
-    authToken,
-    signal,
-  })
+}
+
+async function createActiveGitHubDeliveryProcessor(
+  signal: AbortSignal,
+  context: CurrentGitHubDeliveryContext,
+) {
+  const { store, remote } = context
+  const scopedStore = createScopedGitHubDeliveryStore(context)
   const publisher = createGitHubGitPublisher({ signal })
   return createGitHubDeliveryProcessor({
     store: scopedStore,
@@ -446,9 +485,46 @@ async function createCurrentGitHubDeliveryProcessor(signal: AbortSignal) {
     preparationRuntime: await getGitHubDeliveryRuntime(),
     workspaceCoordinator: workspaceOperationCoordinator,
     maxIntentsPerCycle: 1,
+    onIntentOperationChange: (active) => {
+      githubDeliveryActiveIntentOperation = active
+    },
     minimumCredentialLifetimeMs:
       GITHUB_GIT_PUBLISHER_REQUIRED_CREDENTIAL_LIFETIME_MS,
   })
+}
+
+async function createCurrentGitHubDeliveryProcessor(signal: AbortSignal) {
+  const context = await createCurrentGitHubDeliveryContext(signal)
+  if (!context) return null
+  const { store, credential, remote } = context
+  const binding = await synchronizeGitHubRepositoryBinding({
+    store,
+    remote,
+    expectedPairing: credential,
+  })
+  if (!binding || binding.status !== 'active') return null
+  return createActiveGitHubDeliveryProcessor(signal, context)
+}
+
+async function prepareGitHubDelivery(input: PrepareGitHubDeliveryInput) {
+  try {
+    return await runGitHubDeliveryExclusive(async (signal) => {
+      const context = await createCurrentGitHubDeliveryContext(signal)
+      if (!context) throw new GitHubRepositoryBindingSyncError()
+      const binding = await synchronizeGitHubRepositoryBinding({
+        store: context.store,
+        remote: context.remote,
+        expectedPairing: context.credential,
+      })
+      if (!binding || binding.status !== 'active') {
+        throw new GitHubRepositoryBindingSyncError()
+      }
+      const runtime = await getGitHubDeliveryRuntime()
+      return runtime.prepare(input)
+    })
+  } finally {
+    await broadcastGitHubDeliveryState()
+  }
 }
 
 async function broadcastGitHubDeliveryState(): Promise<void> {
@@ -463,8 +539,31 @@ async function broadcastGitHubDeliveryState(): Promise<void> {
 async function processAvailableGitHubDeliveries(): Promise<void> {
   try {
     await runGitHubDeliveryExclusive(async (signal) => {
-      const processor = await createCurrentGitHubDeliveryProcessor(signal)
-      if (processor) await processor.recoverAndAdvance()
+      const store = await getStore()
+      const workflow = createWorkflowRuntime(store)
+      await reconcileCompletedGitHubDeliveryIntents({
+        store,
+        workflow,
+      })
+
+      const context = await createCurrentGitHubDeliveryContext(signal)
+      if (!context) return
+      const scopedStore = createScopedGitHubDeliveryStore(context)
+      await reconcileRemoteCompletedGitHubDeliveryIntents({
+        store: scopedStore,
+        remote: context.remote,
+        workflow,
+      })
+
+      const binding = await synchronizeGitHubRepositoryBinding({
+        store,
+        remote: context.remote,
+        expectedPairing: context.credential,
+      })
+      if (!binding || binding.status !== 'active') return
+
+      const processor = await createActiveGitHubDeliveryProcessor(signal, context)
+      await processor.recoverAndAdvance()
     })
   } finally {
     await broadcastGitHubDeliveryState()
@@ -507,6 +606,66 @@ async function resumeGitHubDelivery(
         }
       }
     })
+  } finally {
+    await broadcastGitHubDeliveryState()
+  }
+}
+
+async function stopCurrentGitHubDelivery(
+  input: StopGitHubDeliveryInput,
+): Promise<StopGitHubDeliveryResult> {
+  try {
+    const store = await getStore()
+    const [credential, intents] = await Promise.all([
+      store.getDesktopPairingCredential(),
+      store.listGitHubDeliveryIntents(),
+    ])
+    const intent = intents.find((candidate) => candidate.id === input.intentId)
+    if (
+      !credential?.localProjectId ||
+      !intent ||
+      intent.organizationId !== credential.organizationId ||
+      intent.teamProjectId !== credential.projectId ||
+      intent.localProjectId !== credential.localProjectId
+    ) {
+      return {
+        intentId: input.intentId,
+        disposition: 'local_conflict',
+        outcomeCode: 'intent_not_found',
+      }
+    }
+    const expectedTimestamp = Date.parse(input.expectedUpdatedAt)
+    const updatedAt = new Date(
+      Math.max(Date.now(), expectedTimestamp + 1),
+    ).toISOString()
+    return await stopGitHubDelivery({
+      input,
+      updatedAt,
+      stopIntent: (stopInput) =>
+        store.stopGitHubDeliveryIntent(stopInput),
+      getActiveOperation: () => {
+        const active = githubDeliveryActiveIntentOperation
+        const controller = githubDeliveryOperationAbortController
+        if (!active || !controller) return null
+        return {
+          ...active,
+          abort: () => {
+            if (
+              githubDeliveryActiveIntentOperation === active &&
+              githubDeliveryOperationAbortController === controller
+            ) {
+              controller.abort()
+            }
+          },
+        }
+      },
+    })
+  } catch {
+    return {
+      intentId: input.intentId,
+      disposition: 'local_conflict',
+      outcomeCode: 'stop_unavailable',
+    }
   } finally {
     await broadcastGitHubDeliveryState()
   }
@@ -1510,21 +1669,26 @@ function registerIpcHandlers() {
       ...credential,
       localProjectId: input.localProjectId,
     }
-    const store = await getStore()
-    await store.saveDesktopPairingCredential(boundCredential, encryptCredential(token))
-    resetRemoteSyncClient()
-    const retryAt = new Date().toISOString()
-    for (const operation of await store.listRemoteSyncOperations()) {
-      if (
-        operation.localProjectId === input.localProjectId &&
-        operation.organizationId === null &&
-        operation.teamProjectId === null &&
-        operation.status === 'terminal' &&
-        operation.lastErrorCode === 'pairing_required'
-      ) {
-        await store.retryRemoteSyncOperation({ id: operation.id, updatedAt: retryAt })
+    const encryptedToken = encryptCredential(token)
+    githubDeliveryOperationAbortController?.abort()
+    await runGitHubDeliveryExclusive(async () => {
+      await findProject(input.localProjectId)
+      const store = await getStore()
+      await store.saveDesktopPairingCredential(boundCredential, encryptedToken)
+      resetRemoteSyncClient()
+      const retryAt = new Date().toISOString()
+      for (const operation of await store.listRemoteSyncOperations()) {
+        if (
+          operation.localProjectId === input.localProjectId &&
+          operation.organizationId === null &&
+          operation.teamProjectId === null &&
+          operation.status === 'terminal' &&
+          operation.lastErrorCode === 'pairing_required'
+        ) {
+          await store.retryRemoteSyncOperation({ id: operation.id, updatedAt: retryAt })
+        }
       }
-    }
+    })
     wakeRemoteSyncOutbox()
     wakeGateCommandScheduler()
     wakeGitHubDeliveryScheduler()
@@ -2036,8 +2200,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.prepareGitHubDelivery, async (_, payload: unknown) => {
     const input = parsePrepareGitHubDeliveryInput(payload)
-    const runtime = await getGitHubDeliveryRuntime()
-    const result = await runtime.prepare(input)
+    const result = await prepareGitHubDelivery(input)
     wakeRemoteSyncOutbox()
     wakeGitHubDeliveryScheduler()
     return result
@@ -2046,6 +2209,11 @@ function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.resumeGitHubDelivery, async (_, payload: unknown) => {
     const input = parseResumeGitHubDeliveryInput(payload)
     return resumeGitHubDelivery(input)
+  })
+
+  ipcMain.handle(ipcChannels.stopGitHubDelivery, async (_, payload: unknown) => {
+    const input = parseStopGitHubDeliveryInput(payload)
+    return stopCurrentGitHubDelivery(input)
   })
 
   ipcMain.handle(ipcChannels.createAcceptanceBundle, async (_, payload: unknown) => {

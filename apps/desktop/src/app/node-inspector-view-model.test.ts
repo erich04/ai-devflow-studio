@@ -52,6 +52,8 @@ function githubDeliveryIntent(
     codingRunId: 'coding-run-1',
     codingRunCompletedAt: '2026-08-11T11:30:00.000Z',
     workspaceId: 'workspace-1',
+    deliverySeriesKey: `github-delivery:${'e'.repeat(64)}`,
+    deliveryAttempt: 1,
     repository: 'erich/ai-devflow-studio',
     baseBranch: 'main',
     headBranch: 'devflow/run-1',
@@ -341,10 +343,15 @@ describe('node inspector view model', () => {
 
     expect(viewModel.nextAction).toMatchObject({
       title: '等待 Web 审批',
-      secondaryActionIds: [],
+      primaryActionId: 'reviseGitHubDelivery',
+      secondaryActionIds: ['stopGitHubDelivery'],
     })
     expect(viewModel.nextAction.copy).toContain('lead/owner')
-    expect(viewModel.nextAction.primaryActionId).toBeUndefined()
+    expect(viewModel.nextAction.copy).toContain('新 intent revision')
+    expect(viewModel.actionCatalog).toHaveProperty(
+      'reviseGitHubDelivery.label',
+      'Revise GitHub Delivery',
+    )
   })
 
   it('offers only the explicit resume action when automatic recovery has stopped', () => {
@@ -380,6 +387,20 @@ describe('node inspector view model', () => {
     expect(viewModel.nextAction.primaryActionId).toBeUndefined()
   })
 
+  it('offers an explicit Stop while an approved delivery waits for its next bounded phase', () => {
+    const prNode = findNode((candidate) => candidate.kind === 'pr')
+    const viewModel = viewModelFor(prNode, {
+      artifacts: [prDeliveryPackage(prNode.id)],
+      githubDeliveryIntent: githubDeliveryIntent('approved'),
+    })
+
+    expect(viewModel.nextAction).toMatchObject({
+      title: 'GitHub Delivery 自动推进中',
+      secondaryActionIds: ['stopGitHubDelivery'],
+    })
+    expect(viewModel.actionCatalog.stopGitHubDelivery.label).toBe('Stop GitHub Delivery')
+  })
+
   it('describes failed delivery without inferring whether authorization was consumed', () => {
     const prNode = findNode((candidate) => candidate.kind === 'pr')
     const viewModel = viewModelFor(prNode, {
@@ -391,6 +412,27 @@ describe('node inspector view model', () => {
     expect(viewModel.nextAction.copy).toContain('不会自动重试')
     expect(viewModel.nextAction.copy).toContain('核对远端记录')
     expect(viewModel.nextAction.copy).not.toMatch(/授权.*消耗/)
+    expect(viewModel.nextAction.primaryActionId).toBe('retryGitHubDelivery')
+    expect(viewModel.actionCatalog).toHaveProperty(
+      'retryGitHubDelivery.label',
+      'Retry GitHub Delivery',
+    )
+  })
+
+  it('retries a revoked delivery only through an explicit action with a live binding', () => {
+    const prNode = findNode((candidate) => candidate.kind === 'pr')
+    const viewModel = viewModelFor(prNode, {
+      artifacts: [prDeliveryPackage(prNode.id)],
+      githubDeliveryIntent: githubDeliveryIntent('revoked'),
+      hasTeamProjectBinding: true,
+    })
+
+    expect(viewModel.nextAction).toMatchObject({
+      title: 'Retry GitHub Delivery',
+      primaryActionId: 'retryGitHubDelivery',
+      secondaryActionIds: [],
+    })
+    expect(viewModel.nextAction.copy).toContain('新的 attempt 或 binding series')
   })
 
   it('treats a completed Draft PR as delivery evidence while workflow advancement catches up', () => {
@@ -514,18 +556,21 @@ describe('node inspector view model', () => {
   })
 
   it.each([
-    ['failed', '交付已安全停止', '不会自动重试'],
-    ['revoked', 'GitHub 授权已撤销', '重新绑定'],
-  ] as const)('shows a safe operator next step for %s delivery', (status, title, guidance) => {
+    ['failed', true, '交付已安全停止', '不会自动重试', 'retryGitHubDelivery'],
+    ['revoked', false, 'GitHub 授权已撤销', '重新绑定', undefined],
+  ] as const)(
+    'shows a safe operator next step for %s delivery',
+    (status, hasTeamProjectBinding, title, guidance, primaryActionId) => {
     const prNode = findNode((candidate) => candidate.kind === 'pr')
     const viewModel = viewModelFor(prNode, {
       artifacts: [prDeliveryPackage(prNode.id)],
       githubDeliveryIntent: githubDeliveryIntent(status),
+      hasTeamProjectBinding,
     })
 
     expect(viewModel.nextAction.title).toBe(title)
     expect(viewModel.nextAction.copy).toContain(guidance)
-    expect(viewModel.nextAction.primaryActionId).toBeUndefined()
+    expect(viewModel.nextAction.primaryActionId).toBe(primaryActionId)
   })
 
   it('keeps build budget guidance neutral until a concrete budget decision is available', () => {

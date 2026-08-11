@@ -8,6 +8,7 @@ import {
   GitPullRequest,
   Play,
   RefreshCw,
+  Square,
 } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import type * as React from 'react'
@@ -20,6 +21,7 @@ import {
   type GateEnforcementDecision,
   type GateOverrideDecision,
   type GitHubDeliveryIntent,
+  type GitHubDeliveryOperatorOutcome,
   type KnowledgeDocument,
   type KnowledgeEntity,
   type KnowledgeGovernanceCheck,
@@ -229,8 +231,10 @@ export function Inspector({
   onCreatePrDraft,
   onPrepareGitHubDelivery,
   onResumeGitHubDelivery,
+  onStopGitHubDelivery,
   onCreateAcceptanceBundle,
   selectedGitHubDeliveryIntent,
+  selectedGitHubDeliveryOperatorOutcome,
   isRunningTests,
   isRunningAgentReview,
   isStartingCodingAgent,
@@ -266,8 +270,10 @@ export function Inspector({
   onCreatePrDraft: () => void
   onPrepareGitHubDelivery: () => void
   onResumeGitHubDelivery: () => void
+  onStopGitHubDelivery: () => void
   onCreateAcceptanceBundle: () => void
   selectedGitHubDeliveryIntent: GitHubDeliveryIntent | undefined
+  selectedGitHubDeliveryOperatorOutcome?: GitHubDeliveryOperatorOutcome
   isRunningTests: boolean
   isRunningAgentReview: boolean
   isStartingCodingAgent: boolean
@@ -336,6 +342,9 @@ export function Inspector({
     createPrDraft: onCreatePrDraft,
     prepareGitHubDelivery: onPrepareGitHubDelivery,
     resumeGitHubDelivery: onResumeGitHubDelivery,
+    stopGitHubDelivery: onStopGitHubDelivery,
+    reviseGitHubDelivery: () => undefined,
+    retryGitHubDelivery: () => undefined,
     createAcceptanceBundle: onCreateAcceptanceBundle,
   }
   const writeActionIds = new Set<InspectorActionId>([
@@ -345,6 +354,7 @@ export function Inspector({
     'createPrDraft',
     'prepareGitHubDelivery',
     'resumeGitHubDelivery',
+    'stopGitHubDelivery',
     'createAcceptanceBundle',
   ])
   const hasPendingInspectorAction = Boolean(pendingInspectorAction)
@@ -367,6 +377,7 @@ export function Inspector({
       gate_permission_missing: !canApprove,
       starting_coding_agent: isStartingCodingAgent,
       team_project_binding_missing: !hasDeliveryProjectBinding,
+      delivery_action_unavailable: true,
     }[reason]
   }
   const isActionWriteLocked = (action: InspectorAction) => writeActionIds.has(action.id) && hasInspectorWriteLock
@@ -394,6 +405,9 @@ export function Inspector({
       }
       if (action.id === 'resumeGitHubDelivery') {
         return '恢复中'
+      }
+      if (action.id === 'stopGitHubDelivery') {
+        return '停止中'
       }
     }
     if (action.id === 'openKnowledgeReview' && isRunningAgentReview) {
@@ -432,6 +446,8 @@ export function Inspector({
       case 'prepareGitHubDelivery':
       case 'resumeGitHubDelivery':
         return <RefreshCw size={16} />
+      case 'stopGitHubDelivery':
+        return <Square size={16} />
       case 'createAcceptanceBundle':
         return <ClipboardCheck size={16} />
     }
@@ -584,6 +600,9 @@ export function Inspector({
       <span className="panel-label">Delivery Handoff</span>
       <GitHubDeliveryPanel
         intent={selectedGitHubDeliveryIntent}
+        {...(selectedGitHubDeliveryOperatorOutcome
+          ? { operatorOutcome: selectedGitHubDeliveryOperatorOutcome }
+          : {})}
         surface={selectedNode.kind === 'acceptance' ? 'acceptance' : 'pr'}
         hasExactPrPackage={artifacts.some((artifact) => (
           artifact.kind === 'pr' &&

@@ -12,6 +12,7 @@ import {
   type Artifact,
   type DesktopPairingCredential,
   type GitHubDeliveryIntent,
+  type GitHubDeliveryOperatorOutcome,
   type RepositoryKnowledgeSnapshot,
   type RemoteSyncOperation,
   validateTestCommandSafety,
@@ -236,6 +237,8 @@ function githubDeliveryIntentFixture(
     codingRunId: 'coding-run-1',
     codingRunCompletedAt: '2026-08-11T11:30:00.000Z',
     workspaceId: 'workspace-1',
+    deliverySeriesKey: `github-delivery:${'e'.repeat(64)}`,
+    deliveryAttempt: 1,
     repository: 'erich/ai-devflow-studio',
     baseBranch: 'main',
     headBranch: 'devflow/run-1',
@@ -260,7 +263,10 @@ function githubDeliveryIntentFixture(
   }
 }
 
-function prDeliveryState(intent?: GitHubDeliveryIntent) {
+function prDeliveryState(
+  intent?: GitHubDeliveryIntent,
+  operatorOutcomes: GitHubDeliveryOperatorOutcome[] = [],
+) {
   const artifact = prDeliveryPackageFixture()
   const run = fixtureRunAtCurrentNode('n-pr')
   const linkedRun = {
@@ -276,6 +282,7 @@ function prDeliveryState(intent?: GitHubDeliveryIntent) {
     runs: [linkedRun],
     artifacts: [artifact],
     githubDeliveryIntents: intent ? [intent] : [],
+    githubDeliveryOperatorOutcomes: operatorOutcomes,
     desktopPairingCredential: fixturePairingCredential,
   })
 }
@@ -609,6 +616,9 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     ),
     resumeGitHubDelivery: vi.fn().mockRejectedValue(
       new Error('GitHub Delivery recovery is not configured for this test.'),
+    ),
+    stopGitHubDelivery: vi.fn().mockRejectedValue(
+      new Error('GitHub Delivery Stop is not configured for this test.'),
     ),
     createAcceptanceBundle: vi.fn().mockImplementation(async ({ runId, nodeId }) => {
       const timestamp = '2026-06-15T00:07:00.000Z'
@@ -2183,6 +2193,90 @@ describe('App', () => {
     expect(api.prepareGitHubDelivery).not.toHaveBeenCalled()
   })
 
+  it('stops an active delivery exactly once with the visible intent updatedAt CAS', async () => {
+    const activeIntent = githubDeliveryIntentFixture('approved')
+    const stoppedIntent = {
+      ...activeIntent,
+      status: 'recovery_required' as const,
+      updatedAt: '2026-08-11T12:04:00.000Z',
+    }
+    const loadState = vi.fn()
+      .mockResolvedValueOnce(prDeliveryState(activeIntent))
+      .mockResolvedValue(prDeliveryState(stoppedIntent))
+    const stopGitHubDelivery = vi.fn().mockResolvedValue({
+      intentId: activeIntent.id,
+      disposition: 'stopped',
+      outcomeCode: 'operation_cancelled',
+    })
+    installDesktopApi({
+      loadState,
+      stopGitHubDelivery,
+    } as Partial<DevFlowDesktopApi>)
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    const stopButton = within(screen.getByTestId('node-inspector')).getByRole(
+      'button',
+      { name: 'Stop GitHub Delivery' },
+    )
+
+    fireEvent.click(stopButton)
+    fireEvent.click(stopButton)
+
+    await waitFor(() => expect(stopGitHubDelivery).toHaveBeenCalledTimes(1))
+    expect(stopGitHubDelivery).toHaveBeenCalledWith({
+      intentId: activeIntent.id,
+      expectedUpdatedAt: activeIntent.updatedAt,
+    })
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
+    expect(screen.getByTestId('github-delivery-panel')).toHaveTextContent('recovery_required')
+  })
+
+  it('restores the safe Stop outcome from local state after a cold restart', async () => {
+    const recoveryIntent = githubDeliveryIntentFixture('recovery_required')
+    const outcome: GitHubDeliveryOperatorOutcome = {
+      stateVersion: 1,
+      intentId: recoveryIntent.id,
+      intentUpdatedAt: recoveryIntent.updatedAt,
+      outcomeCode: 'operation_cancelled',
+      recordedAt: recoveryIntent.updatedAt,
+      redacted: true,
+    }
+    const loadState = vi.fn().mockResolvedValue(
+      prDeliveryState(recoveryIntent, [outcome]),
+    )
+    installDesktopApi({ loadState } as Partial<DevFlowDesktopApi>)
+
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    const panel = screen.getByTestId('github-delivery-panel')
+    expect(panel).toHaveTextContent('operation_cancelled')
+    expect(panel).not.toHaveTextContent(/token|\/Users\/|worktree|raw error/i)
+  })
+
+  it('does not render an unknown raw Stop outcome', async () => {
+    const activeIntent = githubDeliveryIntentFixture('approved')
+    const loadState = vi.fn().mockResolvedValue(prDeliveryState(activeIntent))
+    const stopGitHubDelivery = vi.fn().mockResolvedValue({
+      intentId: activeIntent.id,
+      disposition: 'local_conflict',
+      outcomeCode: 'API_TOKEN=private /Users/alice/repository',
+    })
+    installDesktopApi({ loadState, stopGitHubDelivery } as Partial<DevFlowDesktopApi>)
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop GitHub Delivery' }))
+
+    await waitFor(() => expect(stopGitHubDelivery).toHaveBeenCalledTimes(1))
+    const toast = screen.getByTestId('toast')
+    expect(toast).toHaveTextContent('stop_outcome_unavailable')
+    expect(toast).not.toHaveTextContent('/Users/')
+    expect(toast).not.toHaveTextContent('API_TOKEN')
+    expect(toast).not.toHaveTextContent('private')
+  })
+
   it('reports a stale local Resume conflict as not accepted', async () => {
     const recoveryIntent = githubDeliveryIntentFixture('recovery_required')
     const loadState = vi.fn().mockResolvedValue(prDeliveryState(recoveryIntent))
@@ -2204,6 +2298,52 @@ describe('App', () => {
     expect(toast).toHaveTextContent('本地状态已变化')
     expect(toast).toHaveTextContent('Resume 未被接受')
     expect(toast).not.toHaveTextContent('Resume 已接受')
+  })
+
+  it('shows a safe typed publisher outcome when Resume remains in recovery', async () => {
+    const recoveryIntent = githubDeliveryIntentFixture('recovery_required')
+    const loadState = vi.fn().mockResolvedValue(prDeliveryState(recoveryIntent))
+    const resumeGitHubDelivery = vi.fn().mockResolvedValue({
+      intentId: recoveryIntent.id,
+      remoteRequestId: 'delivery-request-1',
+      disposition: 'recovery_required',
+      outcomeCode: 'workspace_dirty',
+    })
+    installDesktopApi({ loadState, resumeGitHubDelivery } as Partial<DevFlowDesktopApi>)
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Resume GitHub Delivery' }))
+
+    await waitFor(() => expect(resumeGitHubDelivery).toHaveBeenCalledTimes(1))
+    const toast = screen.getByTestId('toast')
+    expect(toast).toHaveTextContent('workspace_dirty')
+    expect(toast).toHaveTextContent('managed workspace')
+    expect(toast).not.toHaveTextContent('/Users/')
+    expect(toast).not.toHaveTextContent('API_TOKEN')
+  })
+
+  it('does not render an unknown raw publisher outcome', async () => {
+    const recoveryIntent = githubDeliveryIntentFixture('recovery_required')
+    const loadState = vi.fn().mockResolvedValue(prDeliveryState(recoveryIntent))
+    const resumeGitHubDelivery = vi.fn().mockResolvedValue({
+      intentId: recoveryIntent.id,
+      remoteRequestId: 'delivery-request-1',
+      disposition: 'recovery_required',
+      outcomeCode: 'API_TOKEN=private /Users/alice/repository',
+    })
+    installDesktopApi({ loadState, resumeGitHubDelivery } as Partial<DevFlowDesktopApi>)
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Resume GitHub Delivery' }))
+
+    await waitFor(() => expect(resumeGitHubDelivery).toHaveBeenCalledTimes(1))
+    const toast = screen.getByTestId('toast')
+    expect(toast).toHaveTextContent('publisher_outcome_unavailable')
+    expect(toast).not.toHaveTextContent('/Users/')
+    expect(toast).not.toHaveTextContent('API_TOKEN')
+    expect(toast).not.toHaveTextContent('private')
   })
 
   it('refreshes after an ambiguous Resume failure without exposing raw token or worktree details', async () => {

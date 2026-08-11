@@ -33,7 +33,10 @@ export type InspectorActionId =
   | 'runCodingAgent'
   | 'createPrDraft'
   | 'prepareGitHubDelivery'
+  | 'reviseGitHubDelivery'
+  | 'retryGitHubDelivery'
   | 'resumeGitHubDelivery'
+  | 'stopGitHubDelivery'
   | 'createAcceptanceBundle'
 
 export type PendingInspectorActionId = InspectorActionId | 'saveGateOverride'
@@ -51,6 +54,7 @@ export type InspectorActionDisabledReason =
   | 'gate_permission_missing'
   | 'starting_coding_agent'
   | 'team_project_binding_missing'
+  | 'delivery_action_unavailable'
 
 export type InspectorAction = {
   id: InspectorActionId
@@ -718,11 +722,35 @@ function buildActionCatalog(
       variant: 'primary',
       disabledReasons: hasTeamProjectBinding ? [] : ['team_project_binding_missing'],
     },
+    reviseGitHubDelivery: {
+      id: 'reviseGitHubDelivery',
+      label: 'Revise GitHub Delivery',
+      variant: 'primary',
+      disabledReasons: [
+        ...(hasTeamProjectBinding ? [] : ['team_project_binding_missing'] as const),
+        'delivery_action_unavailable',
+      ],
+    },
+    retryGitHubDelivery: {
+      id: 'retryGitHubDelivery',
+      label: 'Retry GitHub Delivery',
+      variant: 'primary',
+      disabledReasons: [
+        ...(hasTeamProjectBinding ? [] : ['team_project_binding_missing'] as const),
+        'delivery_action_unavailable',
+      ],
+    },
     resumeGitHubDelivery: {
       id: 'resumeGitHubDelivery',
       label: 'Resume GitHub Delivery',
       variant: 'primary',
       disabledReasons: hasTeamProjectBinding ? [] : ['team_project_binding_missing'],
+    },
+    stopGitHubDelivery: {
+      id: 'stopGitHubDelivery',
+      label: 'Stop GitHub Delivery',
+      variant: 'ghost',
+      disabledReasons: [],
     },
     createAcceptanceBundle: {
       id: 'createAcceptanceBundle',
@@ -856,11 +884,20 @@ function buildNextAction(input: {
     if (input.githubDeliveryIntent?.status === 'failed') {
       return {
         title: '交付已安全停止',
-        copy: '交付已安全停止且不会自动重试。请核对远端记录与本地证据，确认实际结果后再按受控流程继续。',
+        copy: '交付已安全停止且不会自动重试。请核对远端记录与本地证据；显式 Retry 将创建新的 attempt 和请求，不会重开旧终态。',
+        primaryActionId: 'retryGitHubDelivery',
         secondaryActionIds: [],
       }
     }
     if (input.githubDeliveryIntent?.status === 'revoked') {
+      if (input.hasTeamProjectBinding) {
+        return {
+          title: 'Retry GitHub Delivery',
+          copy: '显式 Retry 会由 Desktop main 根据当前 binding 创建新的 attempt 或 binding series；renderer 不能选择编号。',
+          primaryActionId: 'retryGitHubDelivery',
+          secondaryActionIds: [],
+        }
+      }
       return {
         title: 'GitHub 授权已撤销',
         copy: 'Desktop 不会继续远端写入。由 owner 在 Web 重新绑定 GitHub App 后，再开始新的受控交付。',
@@ -881,7 +918,7 @@ function buildNextAction(input: {
       return {
         title: 'GitHub Delivery 自动推进中',
         copy: '审批已经生效，受限后台处理器会继续发布精确 commit 并创建 Draft PR；无需再次点击。',
-        secondaryActionIds: [],
+        secondaryActionIds: ['stopGitHubDelivery'],
       }
     }
     if (input.githubDeliveryIntent?.status === 'recovery_required') {
@@ -895,8 +932,9 @@ function buildNextAction(input: {
     if (input.githubDeliveryIntent?.status === 'approval_required') {
       return {
         title: '等待 Web 审批',
-        copy: 'GitHub Delivery 已准备完成，正在等待 Web Team Console 的 lead/owner 显式批准；Desktop 不会代替审批。',
-        secondaryActionIds: [],
+        copy: 'GitHub Delivery 已准备完成，正在等待 Web Team Console 的 lead/owner 显式批准；如材料改变，显式 Revise 会创建新 intent revision 并使旧审批失效。',
+        primaryActionId: 'reviseGitHubDelivery',
+        secondaryActionIds: ['stopGitHubDelivery'],
       }
     }
     if (hasExactPrDeliveryPackage(input.artifacts)) {

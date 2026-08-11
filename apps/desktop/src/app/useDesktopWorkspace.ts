@@ -19,6 +19,7 @@ import {
   type DependencyBootstrapEvidence,
   type DesktopPairingCredential,
   type GitHubDeliveryIntent,
+  type GitHubDeliveryOperatorOutcome,
   type LocalExecutionState,
   type LocalProject,
   type ManagedCodingWorkspace,
@@ -107,6 +108,7 @@ export type DesktopWorkspaceState = {
   dependencyBootstrapEvidence: DependencyBootstrapEvidence[]
   codingDiffArtifacts: CodingDiffArtifact[]
   githubDeliveryIntents: GitHubDeliveryIntent[]
+  githubDeliveryOperatorOutcomes: GitHubDeliveryOperatorOutcome[]
   retryAttempts: RetryAttempt[]
   remoteSyncOperations: RemoteSyncOperation[]
   providerIdDraft: string
@@ -165,6 +167,9 @@ export type DesktopWorkspaceSetters = {
   setDependencyBootstrapEvidence: Dispatch<SetStateAction<DependencyBootstrapEvidence[]>>
   setCodingDiffArtifacts: Dispatch<SetStateAction<CodingDiffArtifact[]>>
   setGitHubDeliveryIntents: Dispatch<SetStateAction<GitHubDeliveryIntent[]>>
+  setGitHubDeliveryOperatorOutcomes: Dispatch<
+    SetStateAction<GitHubDeliveryOperatorOutcome[]>
+  >
   setRetryAttempts: Dispatch<SetStateAction<RetryAttempt[]>>
   setProviderIdDraft: Dispatch<SetStateAction<string>>
   setProviderBaseUrlDraft: Dispatch<SetStateAction<string>>
@@ -241,6 +246,8 @@ export function useDesktopWorkspace(input: {
   const [dependencyBootstrapEvidence, setDependencyBootstrapEvidence] = useState<DependencyBootstrapEvidence[]>([])
   const [codingDiffArtifacts, setCodingDiffArtifacts] = useState<CodingDiffArtifact[]>([])
   const [githubDeliveryIntents, setGitHubDeliveryIntents] = useState<GitHubDeliveryIntent[]>([])
+  const [githubDeliveryOperatorOutcomes, setGitHubDeliveryOperatorOutcomes] =
+    useState<GitHubDeliveryOperatorOutcome[]>([])
   const [retryAttempts, setRetryAttempts] = useState<RetryAttempt[]>([])
   const [remoteSyncOperations, setRemoteSyncOperations] = useState<RemoteSyncOperation[]>([])
   const [providerIdDraft, setProviderIdDraft] = useState(input.defaultReviewProviderDraft.providerId)
@@ -397,6 +404,7 @@ export function useDesktopWorkspace(input: {
     setDependencyBootstrapEvidence(state.dependencyBootstrapEvidence)
     setCodingDiffArtifacts(state.codingDiffArtifacts)
     setGitHubDeliveryIntents(state.githubDeliveryIntents ?? [])
+    setGitHubDeliveryOperatorOutcomes(state.githubDeliveryOperatorOutcomes ?? [])
     setRetryAttempts(state.retryAttempts ?? [])
     setRemoteSyncOperations(state.remoteSyncOperations ?? [])
     setDesktopPairing(state.desktopPairingCredential ?? null)
@@ -607,6 +615,7 @@ export function useDesktopWorkspace(input: {
     dependencyBootstrapEvidence,
     codingDiffArtifacts,
     githubDeliveryIntents,
+    githubDeliveryOperatorOutcomes,
     retryAttempts,
     remoteSyncOperations,
     providerIdDraft,
@@ -665,6 +674,7 @@ export function useDesktopWorkspace(input: {
     setDependencyBootstrapEvidence,
     setCodingDiffArtifacts,
     setGitHubDeliveryIntents,
+    setGitHubDeliveryOperatorOutcomes,
     setRetryAttempts,
     setProviderIdDraft,
     setProviderBaseUrlDraft,

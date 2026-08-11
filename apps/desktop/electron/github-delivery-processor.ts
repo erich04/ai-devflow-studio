@@ -1,8 +1,14 @@
+import { createHash } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import {
   createGitHubDeliveryCompletion,
+  type Artifact,
   type GitHubDeliveryIntent,
 } from '@ai-devflow/shared'
-import type { GitHubGitPublisher } from './github-git-publisher.js'
+import {
+  type GitHubGitPublisher,
+  type GitHubGitPublisherErrorCode,
+} from './github-git-publisher.js'
 import type {
   CreateGitHubDraftPullRequestInput,
   CreateGitHubDraftPullRequestResult,
@@ -54,6 +60,24 @@ type ProcessorStore = Pick<
   | 'commitGitHubDeliveryIntentCompletion'
 >
 
+type CompletedReconciliationStore = Pick<
+  LocalStore,
+  | 'listGitHubDeliveryIntents'
+  | 'listArtifacts'
+  | 'getRun'
+>
+
+type RemoteCompletedReconciliationStore = CompletedReconciliationStore & Pick<
+  LocalStore,
+  'commitGitHubDeliveryIntentCompletion'
+>
+
+type CompletedWorkflowDeps = {
+  store: CompletedReconciliationStore
+  workflow: WorkflowRuntime
+  now?: () => string
+}
+
 type ProcessorRemote = {
   submit(input: SubmitGitHubDeliveryInput): Promise<SubmitGitHubDeliveryResult>
   listInbox(projectId: string): Promise<GitHubDeliveryRequestRecord[]>
@@ -88,7 +112,42 @@ export type GitHubDeliveryProcessorDeps = {
   workspaceCoordinator: WorkspaceOperationCoordinator
   now?: () => string
   maxIntentsPerCycle?: number
+  maxIntentsScannedPerCycle?: number
   minimumCredentialLifetimeMs?: number
+  onIntentOperationChange?: (
+    active: GitHubDeliveryActiveIntentOperation | null,
+  ) => void | Promise<void>
+}
+
+export type GitHubDeliveryActiveIntentOperation = Readonly<{
+  intentId: string
+  expectedUpdatedAt: string
+}>
+
+const persistedPublisherOutcomeCodes: ReadonlySet<GitHubGitPublisherErrorCode> = new Set([
+  'invalid_delivery_source',
+  'operation_cancelled',
+  'publisher_cleanup_failed',
+  'remote_branch_diverged',
+  'remote_unavailable',
+  'repository_mismatch',
+  'push_result_unknown',
+  'workspace_dirty',
+  'workspace_mismatch',
+])
+
+export type ReconcileCompletedGitHubDeliveryIntentsDeps =
+  CompletedWorkflowDeps & {
+    maxIntentsPerCycle?: number
+  }
+
+export type ReconcileRemoteCompletedGitHubDeliveryIntentsDeps = {
+  store: RemoteCompletedReconciliationStore
+  remote: Pick<ProcessorRemote, 'listInbox' | 'getRecoverySnapshot'>
+  workflow: WorkflowRuntime
+  now?: () => string
+  maxIntentsPerCycle?: number
+  maxIntentsScannedPerCycle?: number
 }
 
 export type ResumeGitHubDeliveryInput = {
@@ -101,27 +160,229 @@ export type GitHubDeliveryProcessor = {
   resume(input: ResumeGitHubDeliveryInput): Promise<GitHubDeliveryProcessorResult>
 }
 
+export async function reconcileCompletedGitHubDeliveryIntents(
+  deps: ReconcileCompletedGitHubDeliveryIntentsDeps,
+): Promise<GitHubDeliveryProcessorSummary> {
+  const maxIntentsPerCycle = validateCycleBound(deps.maxIntentsPerCycle ?? 20)
+  const completed = [...await deps.store.listGitHubDeliveryIntents()]
+    .filter((intent): intent is GitHubDeliveryIntent & {
+      status: 'completed'
+      completion: NonNullable<GitHubDeliveryIntent['completion']>
+    } => intent.status === 'completed' && intent.completion !== undefined)
+    .sort((left, right) =>
+      left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+    )
+  const results: GitHubDeliveryProcessorResult[] = []
+  for (const intent of completed) {
+    if (results.length >= maxIntentsPerCycle) break
+    if (await workflowAlreadyAdvanced(deps, intent)) continue
+    try {
+      results.push(await advanceWorkflow(
+        deps,
+        intent,
+        intent.completion.remoteRequestId,
+      ))
+    } catch {
+      results.push(safeResult(
+        intent.id,
+        intent.completion.remoteRequestId,
+        'failed',
+        'processor_failed',
+      ))
+    }
+  }
+  return { results }
+}
+
+export async function reconcileRemoteCompletedGitHubDeliveryIntents(
+  deps: ReconcileRemoteCompletedGitHubDeliveryIntentsDeps,
+): Promise<GitHubDeliveryProcessorSummary> {
+  const maxIntentsPerCycle = validateCycleBound(deps.maxIntentsPerCycle ?? 20)
+  const maxIntentsScannedPerCycle = validateScanBound(
+    deps.maxIntentsScannedPerCycle ??
+      Math.min(1_000, Math.max(maxIntentsPerCycle, maxIntentsPerCycle * 20)),
+  )
+  const eligible = [...await deps.store.listGitHubDeliveryIntents()]
+    .filter((intent) =>
+      intent.status === 'creating_pr' || intent.status === 'recovery_required',
+    )
+    .sort((left, right) =>
+      left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+    )
+  const results: GitHubDeliveryProcessorResult[] = []
+  let scanned = 0
+  for (const source of eligible) {
+    if (
+      results.length >= maxIntentsPerCycle ||
+      scanned >= maxIntentsScannedPerCycle
+    ) {
+      break
+    }
+    scanned += 1
+    let remoteRequestId: string | null = null
+    try {
+      const inbox = await deps.remote.listInbox(source.teamProjectId)
+      const candidates = inbox.filter((request) => request.localIntentId === source.id)
+      if (candidates.length === 0) continue
+      const request = candidates[0]!
+      remoteRequestId = request.id
+      if (candidates.length !== 1 || !matchesAuthority(source, request)) {
+        results.push(safeResult(
+          source.id,
+          request.id,
+          'local_conflict',
+          'authority_mismatch',
+        ))
+        continue
+      }
+      if (request.status !== 'completed') continue
+      if (!await verifyPendingWorkflowAuthority(deps, source)) {
+        results.push(safeResult(
+          source.id,
+          request.id,
+          'local_conflict',
+          'authority_mismatch',
+        ))
+        continue
+      }
+      const snapshot = await deps.remote.getRecoverySnapshot({
+        projectId: source.teamProjectId,
+        requestId: request.id,
+      })
+      if (!matchesExactRemoteCompletion(source, request, snapshot)) {
+        results.push(safeResult(
+          source.id,
+          request.id,
+          'local_conflict',
+          'completion_evidence_invalid',
+        ))
+        continue
+      }
+      const completion = buildCompletion(
+        deps,
+        source,
+        snapshot.request,
+        snapshot.publication!.id,
+        snapshot.pullRequest!,
+      )
+      if (!completion) {
+        results.push(safeResult(
+          source.id,
+          request.id,
+          'local_conflict',
+          'completion_evidence_invalid',
+        ))
+        continue
+      }
+      const completed = {
+        ...source,
+        status: 'completed' as const,
+        completion,
+        updatedAt: completion.recordedAt,
+      }
+      const committed = await deps.store.commitGitHubDeliveryIntentCompletion({
+        expectedIntent: source,
+        intent: completed,
+      })
+      if (!committed.committed) {
+        results.push(safeResult(
+          source.id,
+          request.id,
+          'local_conflict',
+          'stale_intent',
+        ))
+        continue
+      }
+      results.push(await advanceWorkflow(
+        deps,
+        committed.intent as GitHubDeliveryIntent & {
+          status: 'completed'
+          completion: typeof completion
+        },
+        request.id,
+      ))
+    } catch (error) {
+      results.push(safeResult(
+        source.id,
+        remoteRequestId,
+        'failed',
+        error instanceof GitHubDeliveryRemoteError
+          ? error.outcomeCode ?? error.code
+          : 'processor_failed',
+      ))
+    }
+  }
+  return { results }
+}
+
+function validateCycleBound(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 100) {
+    throw new Error('GitHub Delivery cycle bound must be between 1 and 100')
+  }
+  return value
+}
+
+function validateScanBound(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 1_000) {
+    throw new Error('GitHub Delivery scan bound must be between 1 and 1000')
+  }
+  return value
+}
+
+function consumesActionableBudget(
+  source: GitHubDeliveryIntent,
+  result: GitHubDeliveryProcessorResult,
+): boolean {
+  if (result.disposition === 'waiting_for_approval') return false
+  return !(
+    source.status === 'recovery_required' &&
+    result.disposition === 'recovery_required'
+  )
+}
+
 export function createGitHubDeliveryProcessor(
   deps: GitHubDeliveryProcessorDeps,
 ): GitHubDeliveryProcessor {
-  const maxIntentsPerCycle = deps.maxIntentsPerCycle ?? 20
+  const maxIntentsPerCycle = validateCycleBound(deps.maxIntentsPerCycle ?? 20)
+  const maxIntentsScannedPerCycle = validateScanBound(
+    deps.maxIntentsScannedPerCycle ??
+      Math.min(1_000, Math.max(maxIntentsPerCycle, maxIntentsPerCycle * 20)),
+  )
   const minimumCredentialLifetimeMs = deps.minimumCredentialLifetimeMs ?? 300_000
-  if (!Number.isSafeInteger(maxIntentsPerCycle) || maxIntentsPerCycle < 1 || maxIntentsPerCycle > 100) {
-    throw new Error('GitHub Delivery cycle bound must be between 1 and 100')
-  }
   if (!Number.isSafeInteger(minimumCredentialLifetimeMs) || minimumCredentialLifetimeMs < 1) {
     throw new Error('GitHub Delivery credential lifetime margin is invalid')
   }
+  let nextScanOffset = 0
   return {
     async recoverAndAdvance() {
       const intents = [...await deps.store.listGitHubDeliveryIntents()]
+        .filter((intent) => intent.status !== 'failed' && intent.status !== 'revoked')
         .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+      const start = intents.length === 0 ? 0 : nextScanOffset % intents.length
+      const ordered = [...intents.slice(start), ...intents.slice(0, start)]
       const results: GitHubDeliveryProcessorResult[] = []
-      for (const intent of intents) {
-        if (results.length >= maxIntentsPerCycle) break
-        if (intent.status === 'failed' || intent.status === 'revoked') continue
-        if (intent.status === 'completed' && await workflowAlreadyAdvanced(deps, intent)) continue
-        results.push(await processIntent(deps, intent, false, minimumCredentialLifetimeMs))
+      let actionable = 0
+      let scanned = 0
+      let visited = 0
+      for (const intent of ordered) {
+        if (actionable >= maxIntentsPerCycle) break
+        if (scanned >= maxIntentsScannedPerCycle) break
+        visited += 1
+        scanned += 1
+        if (intent.status === 'completed' && await workflowAlreadyAdvanced(deps, intent)) {
+          continue
+        }
+        const result = await processIntentWithFence(
+          deps,
+          intent,
+          false,
+          minimumCredentialLifetimeMs,
+        )
+        results.push(result)
+        if (consumesActionableBudget(intent, result)) actionable += 1
+      }
+      if (intents.length > 0 && visited > 0) {
+        nextScanOffset = (start + visited) % intents.length
       }
       return { results }
     },
@@ -132,8 +393,66 @@ export function createGitHubDeliveryProcessor(
       if (!intent || intent.updatedAt !== input.expectedUpdatedAt) {
         return safeResult(input.intentId, null, 'local_conflict', 'stale_intent')
       }
-      return processIntent(deps, intent, true, minimumCredentialLifetimeMs)
+      return processIntentWithFence(
+        deps,
+        intent,
+        true,
+        minimumCredentialLifetimeMs,
+      )
     },
+  }
+}
+
+async function processIntentWithFence(
+  deps: GitHubDeliveryProcessorDeps,
+  intent: GitHubDeliveryIntent,
+  explicitResume: boolean,
+  minimumCredentialLifetimeMs: number,
+): Promise<GitHubDeliveryProcessorResult> {
+  const notify = deps.onIntentOperationChange
+  if (!notify) {
+    return processIntent(deps, intent, explicitResume, minimumCredentialLifetimeMs)
+  }
+  try {
+    await notify(Object.freeze({
+      intentId: intent.id,
+      expectedUpdatedAt: intent.updatedAt,
+    }))
+  } catch {
+    try {
+      await notify(null)
+    } catch {
+      // Registration failed closed; cleanup cannot make it safe to process.
+    }
+    return safeResult(
+      intent.id,
+      intent.completion?.remoteRequestId ?? null,
+      'local_conflict',
+      'processor_failed',
+    )
+  }
+  try {
+    const current = await reloadIntent(deps, intent.id)
+    if (!current || !isDeepStrictEqual(current, intent)) {
+      return safeResult(
+        intent.id,
+        intent.completion?.remoteRequestId ?? null,
+        'local_conflict',
+        'stale_intent',
+      )
+    }
+    return await processIntent(
+      deps,
+      intent,
+      explicitResume,
+      minimumCredentialLifetimeMs,
+    )
+  } finally {
+    try {
+      await notify(null)
+    } catch {
+      // Clearing observability must not replace the settled processor result.
+    }
   }
 }
 
@@ -145,6 +464,14 @@ async function processIntent(
 ): Promise<GitHubDeliveryProcessorResult> {
   let remoteRequestId: string | null = intent.completion?.remoteRequestId ?? null
   try {
+    if (intent.status === 'recovery_required' && !explicitResume) {
+      return safeResult(
+        intent.id,
+        null,
+        'recovery_required',
+        'explicit_resume_required',
+      )
+    }
     if (intent.status === 'completed') {
       return advanceWorkflow(
         deps,
@@ -219,25 +546,47 @@ async function processIntent(
     )
   } catch (error) {
     const latest = await reloadIntent(deps, intent.id) ?? intent
-    if (error instanceof GitHubDeliveryRemoteError) {
-      if (error.outcomeCode === 'binding_inactive' || error.outcomeCode === 'expired' || error.code === 'gone') {
+    const failure = error
+    if (failure instanceof GitHubDeliveryRemoteError) {
+      const operatorOutcomeCode = failure.operatorOutcomeCode !== null &&
+        persistedPublisherOutcomeCodes.has(failure.operatorOutcomeCode)
+        ? failure.operatorOutcomeCode
+        : undefined
+      if (failure.outcomeCode === 'binding_inactive' || failure.outcomeCode === 'expired' || failure.code === 'gone') {
         const revoked = await transitionTo(deps, latest, 'revoked')
         return revoked
-          ? safeResult(intent.id, remoteRequestId, 'revoked', error.outcomeCode ?? error.code)
+          ? safeResult(intent.id, remoteRequestId, 'revoked', failure.outcomeCode ?? failure.code)
           : safeResult(intent.id, remoteRequestId, 'local_conflict', 'stale_intent')
       }
-      if (error.retryable || error.code === 'conflict' || error.code === 'publisher_failed') {
-        return requireRecovery(deps, latest, remoteRequestId, error.outcomeCode ?? error.code)
+      if (
+        operatorOutcomeCode !== undefined ||
+        failure.retryable ||
+        failure.code === 'conflict' ||
+        failure.code === 'publisher_failed'
+      ) {
+        return requireRecovery(
+          deps,
+          latest,
+          remoteRequestId,
+          failure.outcomeCode ?? failure.code,
+          false,
+          operatorOutcomeCode,
+        )
       }
       const failed = await transitionTo(deps, latest, 'failed')
       return failed
-        ? safeResult(intent.id, remoteRequestId, 'failed', error.outcomeCode ?? error.code)
+        ? safeResult(intent.id, remoteRequestId, 'failed', failure.outcomeCode ?? failure.code)
         : safeResult(intent.id, remoteRequestId, 'local_conflict', 'stale_intent')
     }
     if (latest.status === 'completed' || latest.status === 'failed' || latest.status === 'revoked') {
       return safeResult(intent.id, remoteRequestId, 'failed', 'processor_failed')
     }
-    return requireRecovery(deps, latest, remoteRequestId, 'processor_failed')
+    return requireRecovery(
+      deps,
+      latest,
+      remoteRequestId,
+      'processor_failed',
+    )
   }
 }
 
@@ -312,6 +661,15 @@ async function advanceRecovered(
   }
   if (request.status === 'completed') {
     return completeFromRemote(deps, source, snapshot)
+  }
+  if (source.status === 'recovery_required' && !explicitResume) {
+    return requireRecovery(
+      deps,
+      source,
+      request.id,
+      'explicit_resume_required',
+      snapshot.approval !== null,
+    )
   }
   if (
     request.status === 'branch_published' ||
@@ -397,7 +755,7 @@ async function advanceRecovered(
           workspace.projectId === source.localProjectId &&
           workspace.headCommitSha === source.expectedCommitSha &&
           workspace.cleanupStatus === 'active' &&
-          workspace.deletedAt === null
+          !workspace.deletedAt
         ))
         const workspace = matchingWorkspaces[0]
         if (!workspace || matchingWorkspaces.length !== 1) {
@@ -553,37 +911,21 @@ async function persistCompletionAndAdvance(
   publicationId: string,
   pullRequest: NonNullable<GitHubDeliveryRecoverySnapshot['pullRequest']>,
 ): Promise<GitHubDeliveryProcessorResult> {
-  if (
-    pullRequest.status !== 'completed' ||
-    pullRequest.pullRequestId === null ||
-    pullRequest.pullRequestNumber === null ||
-    pullRequest.safeUrl === null ||
-    pullRequest.providerCreatedAt === null
-  ) {
+  const completion = buildCompletion(
+    deps,
+    source,
+    request,
+    publicationId,
+    pullRequest,
+  )
+  if (!completion) {
     return requireRecovery(deps, source, request.id, 'completion_evidence_invalid')
   }
-  const recordedAt = timestampAfter(deps, source.updatedAt, pullRequest.providerCreatedAt)
-  const completion = createGitHubDeliveryCompletion({
-    intent: source,
-    remoteRequestId: request.id,
-    publicationId,
-    pullRequestOutcomeId: pullRequest.id,
-    pullRequestId: pullRequest.pullRequestId,
-    pullRequestNumber: pullRequest.pullRequestNumber,
-    pullRequestUrl: pullRequest.safeUrl,
-    repository: source.repository,
-    baseBranch: source.baseBranch,
-    headBranch: source.headBranch,
-    headSha: source.expectedCommitSha,
-    draft: true,
-    providerCreatedAt: pullRequest.providerCreatedAt,
-    recordedAt,
-  })
   const completed: GitHubDeliveryIntent & { status: 'completed'; completion: typeof completion } = {
     ...source,
     status: 'completed',
     completion,
-    updatedAt: recordedAt,
+    updatedAt: completion.recordedAt,
   }
   const committed = await deps.store.commitGitHubDeliveryIntentCompletion({
     expectedIntent: source,
@@ -599,8 +941,51 @@ async function persistCompletionAndAdvance(
   )
 }
 
+function buildCompletion(
+  deps: { now?: () => string },
+  source: GitHubDeliveryIntent,
+  request: GitHubDeliveryRequestRecord,
+  publicationId: string,
+  pullRequest: NonNullable<GitHubDeliveryRecoverySnapshot['pullRequest']>,
+): NonNullable<GitHubDeliveryIntent['completion']> | null {
+  if (
+    pullRequest.status !== 'completed' ||
+    pullRequest.pullRequestId === null ||
+    pullRequest.pullRequestNumber === null ||
+    pullRequest.safeUrl === null ||
+    pullRequest.providerCreatedAt === null
+  ) {
+    return null
+  }
+  try {
+    const recordedAt = timestampAfter(
+      deps,
+      source.updatedAt,
+      pullRequest.providerCreatedAt,
+    )
+    return createGitHubDeliveryCompletion({
+      intent: source,
+      remoteRequestId: request.id,
+      publicationId,
+      pullRequestOutcomeId: pullRequest.id,
+      pullRequestId: pullRequest.pullRequestId,
+      pullRequestNumber: pullRequest.pullRequestNumber,
+      pullRequestUrl: pullRequest.safeUrl,
+      repository: source.repository,
+      baseBranch: source.baseBranch,
+      headBranch: source.headBranch,
+      headSha: source.expectedCommitSha,
+      draft: true,
+      providerCreatedAt: pullRequest.providerCreatedAt,
+      recordedAt,
+    })
+  } catch {
+    return null
+  }
+}
+
 async function advanceWorkflow(
-  deps: GitHubDeliveryProcessorDeps,
+  deps: CompletedWorkflowDeps,
   source: GitHubDeliveryIntent & { status: 'completed'; completion: NonNullable<GitHubDeliveryIntent['completion']> },
   requestId: string,
 ): Promise<GitHubDeliveryProcessorResult> {
@@ -609,7 +994,7 @@ async function advanceWorkflow(
   if (workflowMatchesCompletion(run, source)) {
     return safeResult(source.id, requestId, 'workflow_advanced', 'draft_pr_created')
   }
-  if (!await verifyPreparedAuthority(deps, source)) {
+  if (!await verifyCompletedWorkflowAuthority(deps, source, run)) {
     return safeResult(source.id, requestId, 'local_conflict', 'authority_mismatch')
   }
   const workflowResult = await deps.workflow.execute({
@@ -632,7 +1017,7 @@ async function advanceWorkflow(
 }
 
 async function workflowAlreadyAdvanced(
-  deps: GitHubDeliveryProcessorDeps,
+  deps: Pick<CompletedWorkflowDeps, 'store'>,
   source: GitHubDeliveryIntent,
 ): Promise<boolean> {
   if (source.status !== 'completed' || !source.completion) return false
@@ -651,12 +1036,125 @@ function workflowMatchesCompletion(
   return prNode?.status === 'success' && run.pullRequestUrl === source.completion.pullRequestUrl
 }
 
+async function verifyCompletedWorkflowAuthority(
+  deps: Pick<CompletedWorkflowDeps, 'store'>,
+  source: GitHubDeliveryIntent & {
+    status: 'completed'
+    completion: NonNullable<GitHubDeliveryIntent['completion']>
+  },
+  run: NonNullable<Awaited<ReturnType<CompletedReconciliationStore['getRun']>>>,
+): Promise<boolean> {
+  const completion = source.completion
+  if (
+    source.updatedAt !== completion.recordedAt ||
+    !await matchesPendingWorkflowAuthority(deps, source, run)
+  ) {
+    return false
+  }
+  try {
+    const recordedAt = Date.parse(completion.recordedAt)
+    if (!Number.isFinite(recordedAt)) return false
+    const { completion: _completion, ...intentWithoutCompletion } = source
+    const canonical = createGitHubDeliveryCompletion({
+      intent: {
+        ...intentWithoutCompletion,
+        status: 'creating_pr',
+        updatedAt: new Date(recordedAt - 1).toISOString(),
+      },
+      remoteRequestId: completion.remoteRequestId,
+      publicationId: completion.publicationId,
+      pullRequestOutcomeId: completion.pullRequestOutcomeId,
+      pullRequestId: completion.pullRequestId,
+      pullRequestNumber: completion.pullRequestNumber,
+      pullRequestUrl: completion.pullRequestUrl,
+      repository: source.repository,
+      baseBranch: source.baseBranch,
+      headBranch: source.headBranch,
+      headSha: source.expectedCommitSha,
+      draft: true,
+      providerCreatedAt: completion.providerCreatedAt,
+      recordedAt: completion.recordedAt,
+    })
+    return JSON.stringify(canonical) === JSON.stringify(completion)
+  } catch {
+    return false
+  }
+}
+
+async function verifyPendingWorkflowAuthority(
+  deps: Pick<CompletedWorkflowDeps, 'store'>,
+  source: GitHubDeliveryIntent,
+): Promise<boolean> {
+  const run = await deps.store.getRun(source.runId)
+  return Boolean(run && await matchesPendingWorkflowAuthority(
+    deps,
+    source,
+    run,
+  ))
+}
+
+async function matchesPendingWorkflowAuthority(
+  deps: Pick<CompletedWorkflowDeps, 'store'>,
+  source: GitHubDeliveryIntent,
+  run: NonNullable<Awaited<ReturnType<CompletedReconciliationStore['getRun']>>>,
+): Promise<boolean> {
+  const prNode = run.nodes.find((node) => node.id === source.nodeId)
+  if (
+    source.redacted !== true ||
+    run.id !== source.runId ||
+    run.projectId !== source.localProjectId ||
+    run.version !== source.runVersion ||
+    run.currentNodeId !== source.nodeId ||
+    run.pullRequestUrl !== undefined ||
+    !prNode ||
+    prNode.kind !== 'pr' ||
+    prNode.stage !== 'pr' ||
+    prNode.status !== 'running' ||
+    !prNode.artifactIds.includes(source.prPackageArtifactId)
+  ) {
+    return false
+  }
+  const packages = (await deps.store.listArtifacts(source.runId)).filter(
+    (artifact) => artifact.id === source.prPackageArtifactId,
+  )
+  return packages.length === 1 && matchesCompletedPackage(source, packages[0]!)
+}
+
+function matchesCompletedPackage(
+  source: GitHubDeliveryIntent,
+  artifact: Artifact,
+): boolean {
+  if (
+    artifact.runId !== source.runId ||
+    artifact.nodeId !== source.nodeId ||
+    artifact.kind !== 'pr' ||
+    artifact.redacted !== true ||
+    artifact.updatedAt !== source.prPackageUpdatedAt
+  ) {
+    return false
+  }
+  const material = JSON.stringify({
+    id: artifact.id,
+    title: artifact.title,
+    summary: artifact.summary,
+    content: artifact.content,
+    githubDeliverySource: artifact.githubDeliverySource,
+    updatedAt: artifact.updatedAt,
+  })
+  return sha256Hex(material) === source.prPackageDigest
+}
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
 async function requireRecovery(
   deps: GitHubDeliveryProcessorDeps,
   source: GitHubDeliveryIntent,
   requestId: string | null,
   outcomeCode: string | null,
   approvalValidated = false,
+  operatorOutcomeCode?: GitHubGitPublisherErrorCode,
 ): Promise<GitHubDeliveryProcessorResult> {
   if (source.status === 'approval_required') {
     if (!approvalValidated) {
@@ -666,12 +1164,22 @@ async function requireRecovery(
     if (!approved) return safeResult(source.id, requestId, 'local_conflict', 'stale_intent')
     const publishing = await transitionTo(deps, approved, 'publishing_branch')
     if (!publishing) return safeResult(source.id, requestId, 'local_conflict', 'stale_intent')
-    const recovered = await transitionTo(deps, publishing, 'recovery_required')
+    const recovered = await transitionTo(
+      deps,
+      publishing,
+      'recovery_required',
+      operatorOutcomeCode,
+    )
     return recovered
       ? safeResult(source.id, requestId, 'recovery_required', outcomeCode)
       : safeResult(source.id, requestId, 'local_conflict', 'stale_intent')
   }
-  const local = await transitionTo(deps, source, 'recovery_required')
+  const local = await transitionTo(
+    deps,
+    source,
+    'recovery_required',
+    operatorOutcomeCode,
+  )
   return local
     ? safeResult(source.id, requestId, 'recovery_required', outcomeCode)
     : safeResult(source.id, requestId, 'local_conflict', 'stale_intent')
@@ -698,6 +1206,7 @@ async function transitionTo(
   deps: GitHubDeliveryProcessorDeps,
   source: GitHubDeliveryIntent,
   target: GitHubDeliveryIntent['status'],
+  operatorOutcomeCode?: GitHubGitPublisherErrorCode,
 ): Promise<GitHubDeliveryIntent | null> {
   if (source.status === target) return source
   let current = source
@@ -716,6 +1225,9 @@ async function transitionTo(
       committed = await deps.store.commitGitHubDeliveryIntentStatus({
         expectedIntent: current,
         intent: next,
+        ...(status === 'recovery_required' && operatorOutcomeCode !== undefined
+          ? { operatorOutcomeCode }
+          : {}),
       })
     } catch {
       return null
@@ -727,7 +1239,7 @@ async function transitionTo(
 }
 
 function timestampAfter(
-  deps: GitHubDeliveryProcessorDeps,
+  deps: { now?: () => string },
   ...timestamps: string[]
 ): string {
   const supplied = Date.parse(deps.now?.() ?? new Date().toISOString())
@@ -804,6 +1316,40 @@ function matchesSnapshotAuthority(
   )
 }
 
+function matchesExactRemoteCompletion(
+  intent: GitHubDeliveryIntent,
+  inboxRequest: GitHubDeliveryRequestRecord,
+  snapshot: GitHubDeliveryRecoverySnapshot,
+): boolean {
+  const { request, approval, grant, publication, pullRequest } = snapshot
+  return (
+    isDeepStrictEqual(request, inboxRequest) &&
+    matchesAuthority(intent, request) &&
+    matchesSnapshotAuthority(intent, snapshot) &&
+    request.status === 'completed' &&
+    request.outcomeCode === 'draft_pr_created' &&
+    approval !== null &&
+    grant !== null &&
+    grant.status === 'consumed' &&
+    grant.consumedAt !== null &&
+    publication !== null &&
+    publication.status === 'verified' &&
+    publication.outcomeCode === 'branch_verified' &&
+    publication.verifiedHeadSha === intent.expectedCommitSha &&
+    publication.verifiedAt !== null &&
+    publication.grantId === grant.id &&
+    pullRequest !== null &&
+    pullRequest.status === 'completed' &&
+    pullRequest.outcomeCode === 'draft_pr_created' &&
+    pullRequest.pullRequestId !== null &&
+    pullRequest.pullRequestNumber !== null &&
+    pullRequest.safeUrl !== null &&
+    pullRequest.providerCreatedAt !== null &&
+    pullRequest.draft === true &&
+    pullRequest.publicationId === publication.id
+  )
+}
+
 async function verifyPreparedAuthority(
   deps: GitHubDeliveryProcessorDeps,
   expected: GitHubDeliveryIntent,
@@ -835,6 +1381,8 @@ function matchesAuthority(
     request.repository === intent.repository &&
     request.codingRunId === intent.codingRunId &&
     request.workspaceId === intent.workspaceId &&
+    request.deliverySeriesKey === intent.deliverySeriesKey &&
+    request.deliveryAttempt === intent.deliveryAttempt &&
     request.diffArtifactId === intent.diffArtifactId &&
     request.testEvidenceId === intent.testEvidenceId &&
     request.prPackageArtifactId === intent.prPackageArtifactId &&

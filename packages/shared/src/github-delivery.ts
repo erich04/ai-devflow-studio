@@ -18,6 +18,26 @@ export type GitHubDeliveryStatus =
   | 'recovery_required'
   | 'revoked'
 
+export type GitHubDeliveryOperatorOutcomeCode =
+  | 'invalid_delivery_source'
+  | 'operation_cancelled'
+  | 'publisher_cleanup_failed'
+  | 'remote_branch_diverged'
+  | 'remote_unavailable'
+  | 'repository_mismatch'
+  | 'push_result_unknown'
+  | 'workspace_dirty'
+  | 'workspace_mismatch'
+
+export type GitHubDeliveryOperatorOutcome = {
+  stateVersion: 1
+  intentId: string
+  intentUpdatedAt: string
+  outcomeCode: GitHubDeliveryOperatorOutcomeCode
+  recordedAt: string
+  redacted: true
+}
+
 const terminalGitHubDeliveryStatuses: ReadonlySet<GitHubDeliveryStatus> = new Set([
   'completed',
   'failed',

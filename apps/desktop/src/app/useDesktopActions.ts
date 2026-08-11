@@ -33,6 +33,43 @@ const prDraftMissingBindingMessage =
 const browserPreviewWorkflowWriteMessage =
   '浏览器预览不执行工作流推进，请在 Electron 应用中继续'
 
+const safePublisherOutcomeCopy = {
+  invalid_delivery_source: 'approved delivery source is invalid',
+  operation_cancelled: 'publication was cancelled safely',
+  publisher_cleanup_failed: 'credential cleanup failed safely',
+  remote_branch_diverged: 'remote delivery branch points to another commit',
+  remote_unavailable: 'remote GitHub branch is unavailable',
+  repository_mismatch: 'local Git remote does not match the approved repository',
+  push_result_unknown: 'exact push result requires reconciliation',
+  workspace_dirty: 'managed workspace changed after approval',
+  workspace_mismatch: 'managed workspace HEAD does not match the approved commit',
+} as const
+
+function formatSafePublisherOutcome(value: string | null): string {
+  if (
+    value &&
+    Object.prototype.hasOwnProperty.call(safePublisherOutcomeCopy, value)
+  ) {
+    const code = value as keyof typeof safePublisherOutcomeCopy
+    return `${code}: ${safePublisherOutcomeCopy[code]}`
+  }
+  return 'publisher_outcome_unavailable'
+}
+
+const safeStopOutcomes = new Set([
+  'intent_not_found',
+  'intent_terminal',
+  'operation_cancelled',
+  'stale_intent',
+  'stop_unavailable',
+])
+
+function formatSafeStopOutcome(value: unknown): string {
+  return typeof value === 'string' && safeStopOutcomes.has(value)
+    ? value
+    : 'stop_outcome_unavailable'
+}
+
 function prDraftFailureMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : ''
   const knownBindingFailures = [
@@ -984,7 +1021,9 @@ export function useDesktopActions(input: {
       })
       resumed = true
       if (result.disposition === 'recovery_required') {
-        setToast('GitHub Delivery 仍需恢复；自动处理保持停止')
+        setToast(
+          `GitHub Delivery 仍需恢复；自动处理保持停止（${formatSafePublisherOutcome(result.outcomeCode)}）`,
+        )
       } else if (result.disposition === 'local_conflict') {
         setToast('GitHub Delivery 本地状态已变化（stale/local conflict）；Resume 未被接受，请以刷新后的状态为准')
       } else if (result.disposition === 'failed' || result.disposition === 'revoked') {
@@ -1000,6 +1039,74 @@ export function useDesktopActions(input: {
       } catch {
         if (resumed) {
           setToast('GitHub Delivery Resume 已返回，但本地状态刷新失败；请等待状态推送后再操作')
+        }
+      }
+      clearPendingInspectorAction(pending)
+    }
+  }
+
+  async function stopSelectedGitHubDelivery() {
+    if (!selectedRun || !selectedGitHubDeliveryIntent) {
+      return
+    }
+    const node = selectedRun.nodes.find((candidate) => candidate.id === selectedRun.currentNodeId)
+    const stoppableStatuses: ReadonlySet<GitHubDeliveryIntent['status']> = new Set([
+      'approval_required',
+      'approved',
+      'publishing_branch',
+      'branch_published',
+      'creating_pr',
+    ])
+    if (
+      !node ||
+      node.kind !== 'pr' ||
+      node.stage !== 'pr' ||
+      node.status !== 'running' ||
+      selectedGitHubDeliveryIntent.runId !== selectedRun.id ||
+      selectedGitHubDeliveryIntent.nodeId !== node.id ||
+      !stoppableStatuses.has(selectedGitHubDeliveryIntent.status)
+    ) {
+      setToast('只有当前活动 GitHub Delivery 才能显式 Stop')
+      return
+    }
+    if (!desktopApi) {
+      setToast(browserPreviewWorkflowWriteMessage)
+      return
+    }
+    if (blockIfInspectorWriteInFlight()) {
+      return
+    }
+
+    const pending = startPendingInspectorAction(
+      'stopGitHubDelivery',
+      selectedRun,
+      node,
+      '正在按精确 intent 版本停止 GitHub Delivery...',
+    )
+    let stopped = false
+    try {
+      const result = await desktopApi.stopGitHubDelivery({
+        intentId: selectedGitHubDeliveryIntent.id,
+        expectedUpdatedAt: selectedGitHubDeliveryIntent.updatedAt,
+      })
+      stopped = result.disposition === 'stopped'
+      if (result.disposition === 'stopped') {
+        setToast('GitHub Delivery 已安全停止（operation_cancelled）；scheduler 不会自动续跑')
+      } else if (result.disposition === 'already_terminal') {
+        setToast('GitHub Delivery 已是终态（intent_terminal）；Stop 未改变状态')
+      } else {
+        setToast(
+          `GitHub Delivery Stop 未被接受（${formatSafeStopOutcome(result.outcomeCode)}）；请以刷新后的状态为准`,
+        )
+      }
+    } catch {
+      setToast('GitHub Delivery Stop 响应未完成；请以刷新后的本地持久化状态为准')
+    } finally {
+      try {
+        applyLocalExecutionState(await desktopApi.loadState())
+      } catch {
+        if (stopped) {
+          setToast('GitHub Delivery Stop 已返回，但本地状态刷新失败；请等待状态推送后再操作')
         }
       }
       clearPendingInspectorAction(pending)
@@ -1093,6 +1200,7 @@ export function useDesktopActions(input: {
     generatePrDraft,
     prepareSelectedGitHubDelivery,
     resumeSelectedGitHubDelivery,
+    stopSelectedGitHubDelivery,
     generateAcceptanceBundle,
     toggleMcp,
     redactPreview,
