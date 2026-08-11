@@ -76,6 +76,8 @@ describe('self-hosted Docker deployment files', () => {
     expect(envExample).toContain('DEVFLOW_WEB_APP_URL=')
     expect(envExample).toContain('GITHUB_CLIENT_ID=\n')
     expect(envExample).toContain('GITHUB_CLIENT_SECRET=\n')
+    expect(envExample).toContain('DEVFLOW_GITHUB_APP_ID=\n')
+    expect(envExample).toContain('DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64=\n')
     expect(envExample).not.toContain('POSTGRES_PASSWORD=devflow')
     expect(envExample).not.toContain('replace-this')
     expect(envExample).not.toContain('ghp_')
@@ -114,6 +116,10 @@ describe('self-hosted Docker deployment files', () => {
     expect(compose).toContain('GITHUB_CLIENT_ID:?')
     expect(compose).toContain('GITHUB_CLIENT_SECRET:?')
     expect(compose).toContain('GITHUB_OAUTH_REDIRECT_URI:?')
+    expect(compose).toContain('DEVFLOW_GITHUB_APP_ID: ${DEVFLOW_GITHUB_APP_ID:-}')
+    expect(compose).toContain(
+      'DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64: ${DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64:-}',
+    )
     expect(compose).toContain('DEVFLOW_WEB_APP_URL:')
     expect(compose).not.toContain('POSTGRES_PASSWORD:-devflow')
     expect(compose).not.toContain('replace-this-devflow-session-secret')
