@@ -1459,6 +1459,22 @@ export function createSeedGitHubDeliveryRepository(
     if (request.requestedByTokenId !== principal.authentication.tokenRecordId) {
       return githubDeliveryRejection('project_forbidden')
     }
+    if (publication.status === 'verifying') {
+      if (!hasCurrentBinding(request)) {
+        return githubDeliveryRejection('binding_inactive')
+      }
+      const runAuthority = await canonicalRequestAuthority(request)
+      if (runAuthority === 'claimant_forbidden') {
+        return githubDeliveryRejection('project_forbidden')
+      }
+      if (runAuthority === 'stale') {
+        return githubDeliveryRejection('invalid_state')
+      }
+      const approval = currentApproval(request)
+      if (!approval || !approvalMatchesRequest(approval, request)) {
+        return githubDeliveryRejection('approval_required')
+      }
+    }
     try {
       if (
         publication.status !== 'verifying' &&
@@ -1796,6 +1812,22 @@ export function createSeedGitHubDeliveryRepository(
     }
     if (request.requestedByTokenId !== principal.authentication.tokenRecordId) {
       return githubDeliveryRejection('project_forbidden')
+    }
+    if (pullRequest.status === 'creating') {
+      if (!hasCurrentBinding(request)) {
+        return githubDeliveryRejection('binding_inactive')
+      }
+      const runAuthority = await canonicalRequestAuthority(request)
+      if (runAuthority === 'claimant_forbidden') {
+        return githubDeliveryRejection('project_forbidden')
+      }
+      if (runAuthority === 'stale') {
+        return githubDeliveryRejection('invalid_state')
+      }
+      const approval = currentApproval(request)
+      if (!approval || !approvalMatchesRequest(approval, request)) {
+        return githubDeliveryRejection('approval_required')
+      }
     }
     if (
       pullRequest.status !== 'creating' &&

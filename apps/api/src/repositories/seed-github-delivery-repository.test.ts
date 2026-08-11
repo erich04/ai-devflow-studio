@@ -1098,6 +1098,43 @@ describe('seed GitHub Delivery repository', () => {
     })
   })
 
+  it('rechecks canonical Run authority after remote branch lookup and before finalization', async () => {
+    const harness = createHarness()
+    const issued = await createIssuedGrant(harness)
+    const reported = await harness.repository.recordGitHubBranchPublicationReport(
+      {
+        projectId: 'project-a',
+        requestId: issued.request.id,
+        grantId: issued.grant.id,
+        expectedStateVersion: issued.request.stateVersion,
+        expectedGrantVersion: issued.grant.version,
+        reportedOutcomeCode: 'pushed',
+      },
+      desktopPrincipal,
+    )
+    if (!reported.ok) throw new Error('fixture publication report failed')
+    harness.setCanonicalRunAuthority({ runVersion: 8 })
+
+    await expect(
+      harness.repository.finalizeGitHubBranchPublication(
+        {
+          projectId: 'project-a',
+          requestId: issued.request.id,
+          publicationId: reported.publication.id,
+          expectedStateVersion: reported.request.stateVersion,
+          expectedPublicationVersion: reported.publication.version,
+          verification: {
+            status: 'verified',
+            verifiedHeadSha: shaB,
+            verifiedAt: '2026-08-11T10:01:01.000Z',
+            outcomeCode: 'branch_verified',
+          },
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'invalid_state' })
+  })
+
   it('records exactly one matching Draft pull request outcome without merge authority', async () => {
     const harness = createHarness()
     const verified = await createVerifiedPublication(harness)
@@ -1233,5 +1270,47 @@ describe('seed GitHub Delivery repository', () => {
         outcomeCode: null,
       },
     })
+  })
+
+  it('rechecks canonical Run authority after GitHub PR creation and before finalization', async () => {
+    const harness = createHarness()
+    const verified = await createVerifiedPublication(harness)
+    const reserved = await harness.repository.reserveGitHubDraftPullRequest(
+      {
+        projectId: 'project-a',
+        requestId: verified.request.id,
+        publicationId: verified.publication.id,
+        expectedStateVersion: verified.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+    if (!reserved.ok) throw new Error('fixture PR reservation failed')
+    harness.setCanonicalRunAuthority({ currentNodeId: 'acceptance-1' })
+
+    await expect(
+      harness.repository.finalizeGitHubDraftPullRequest(
+        {
+          projectId: 'project-a',
+          requestId: verified.request.id,
+          pullRequestOutcomeId: reserved.pullRequest.id,
+          expectedStateVersion: reserved.request.stateVersion,
+          expectedPullRequestVersion: reserved.pullRequest.version,
+          outcome: {
+            status: 'completed',
+            pullRequestId: '456789',
+            pullRequestNumber: 42,
+            safeUrl: 'https://github.com/example/project/pull/42',
+            draft: true,
+            repository: 'example/project',
+            baseBranch: 'main',
+            headBranch: 'devflow/run-1-pr-1',
+            headSha: shaB,
+            providerCreatedAt: '2026-08-11T10:01:02.000Z',
+            outcomeCode: 'draft_pr_created',
+          },
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'invalid_state' })
   })
 })
