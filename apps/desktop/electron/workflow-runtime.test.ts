@@ -12,6 +12,7 @@ import {
   type Artifact,
   type CodingAgentRun,
   type CodingDiffArtifact,
+  type GitHubDeliveryIntent,
   type TestEvidence,
   type WorkflowApprovalEvidence,
 } from '@ai-devflow/shared'
@@ -432,7 +433,19 @@ describe('workflow runtime', () => {
     }
     const store = await createStore()
     await store.saveRun(created.run)
-    const runtime = createWorkflowRuntime(store)
+    let deliveryIntents: GitHubDeliveryIntent[] = []
+    const runtimeStore = new Proxy(store, {
+      get(target, property) {
+        if (property === 'listGitHubDeliveryIntents') {
+          return async (runId?: string) => deliveryIntents.filter(
+            (intent) => runId === undefined || intent.runId === runId,
+          )
+        }
+        const value = Reflect.get(target, property)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    const runtime = createWorkflowRuntime(runtimeStore)
 
     const clarification = clarificationCandidate(created.run.id, ids.clarify)
     await executeApplied(runtime, {
@@ -590,6 +603,66 @@ describe('workflow runtime', () => {
       redacted: true,
       updatedAt: '2026-07-31T12:08:00.000Z',
     }
+    const attachedPr = await executeApplied(runtime, {
+      runId: created.run.id,
+      command: {
+        type: 'attach_pr_package',
+        nodeId: ids.pr,
+        artifactId: prArtifact.id,
+      },
+      candidates: { artifacts: [prArtifact] },
+      now: '2026-07-31T12:08:00.000Z',
+    })
+    deliveryIntents = [{
+      stateVersion: 1,
+      id: 'delivery-intent-runtime-full',
+      organizationId: 'org-1',
+      teamProjectId: 'team-project-1',
+      localProjectId: attachedPr.run.projectId,
+      runId: attachedPr.run.id,
+      runVersion: attachedPr.run.version,
+      nodeId: ids.pr,
+      repositoryBindingId: 'binding-1',
+      repositoryBindingVersion: 1,
+      installationId: '123',
+      repositoryId: '456',
+      codingRunId: codingRun.id,
+      codingRunCompletedAt: codingRun.completedAt!,
+      workspaceId: codingRun.managedWorkspaceId!,
+      repository: 'owner/repository',
+      baseBranch: 'main',
+      headBranch: 'devflow/runtime-full',
+      baseCommitSha: '0'.repeat(40),
+      expectedCommitSha: '1'.repeat(40),
+      diffArtifactId: codingDiff.id,
+      diffSourceDigest: '2'.repeat(64),
+      testEvidenceId: testEvidence.id,
+      testEvidenceCreatedAt: testEvidence.createdAt,
+      testEvidenceDigest: '3'.repeat(64),
+      prPackageArtifactId: prArtifact.id,
+      prPackageUpdatedAt: prArtifact.updatedAt,
+      prPackageDigest: '4'.repeat(64),
+      changedPaths: codingRun.changedPaths,
+      intentDigest: '5'.repeat(64),
+      idempotencyKey: `github-delivery:${'6'.repeat(64)}`,
+      status: 'completed',
+      completion: {
+        stateVersion: 1,
+        remoteRequestId: 'remote-delivery-runtime-full',
+        publicationId: 'publication-runtime-full',
+        pullRequestOutcomeId: 'pr-outcome-runtime-full',
+        pullRequestId: '789',
+        pullRequestNumber: 42,
+        pullRequestUrl: 'https://github.com/owner/repository/pull/42',
+        providerCreatedAt: '2026-07-31T12:08:30.000Z',
+        recordedAt: '2026-07-31T12:09:00.000Z',
+        draft: true,
+        redacted: true,
+      },
+      createdAt: '2026-07-31T12:08:00.000Z',
+      updatedAt: '2026-07-31T12:09:00.000Z',
+      redacted: true,
+    }]
     await executeApplied(runtime, {
       runId: created.run.id,
       command: {
@@ -597,8 +670,7 @@ describe('workflow runtime', () => {
         nodeId: ids.pr,
         artifactId: prArtifact.id,
       },
-      candidates: { artifacts: [prArtifact] },
-      now: '2026-07-31T12:08:00.000Z',
+      now: '2026-07-31T12:10:00.000Z',
     })
 
     const acceptanceArtifact: Artifact = {
@@ -610,7 +682,7 @@ describe('workflow runtime', () => {
       summary: 'All delivery evidence is present.',
       content: 'Ready for final approval.',
       redacted: true,
-      updatedAt: '2026-07-31T12:09:00.000Z',
+      updatedAt: '2026-07-31T12:11:00.000Z',
     }
     await executeApplied(runtime, {
       runId: created.run.id,
@@ -620,7 +692,7 @@ describe('workflow runtime', () => {
         artifactId: acceptanceArtifact.id,
       },
       candidates: { artifacts: [acceptanceArtifact] },
-      now: '2026-07-31T12:09:00.000Z',
+      now: '2026-07-31T12:11:00.000Z',
     })
 
     const review: AgentReviewResult = {
@@ -649,9 +721,9 @@ describe('workflow runtime', () => {
         summary: 'Acceptance can proceed.',
         missingEvidence: [],
         riskCount: 0,
-        createdAt: '2026-07-31T12:10:00.000Z',
+        createdAt: '2026-07-31T12:11:30.000Z',
       },
-      createdAt: '2026-07-31T12:10:00.000Z',
+      createdAt: '2026-07-31T12:11:30.000Z',
     }
     await store.saveAgentReview(review)
     const completed = await executeApplied(runtime, {
@@ -670,23 +742,27 @@ describe('workflow runtime', () => {
         projectedCostUsd: 0.1,
         reason: 'Within budget.',
       },
-      now: '2026-07-31T12:11:00.000Z',
+      now: '2026-07-31T12:12:00.000Z',
     })
-    expect(completed.run).toMatchObject({ status: 'completed', version: 10 })
-    expect((await store.getRun(created.run.id))?.version).toBe(10)
+    expect(completed.run).toMatchObject({
+      status: 'completed',
+      version: 11,
+      pullRequestUrl: 'https://github.com/owner/repository/pull/42',
+    })
+    expect((await store.getRun(created.run.id))?.version).toBe(11)
 
     const afterTerminal = await runtime.execute({
       runId: created.run.id,
       command: { type: 'approve_acceptance', nodeId: ids.accept },
       approval: allowedApproval,
-      now: '2026-07-31T12:12:00.000Z',
+      now: '2026-07-31T12:13:00.000Z',
     })
     expect(afterTerminal.applied).toBe(false)
     expect(afterTerminal.blockers.map((blocker) => blocker.code)).toEqual([
       'run_terminal',
     ])
-    expect(afterTerminal.run?.version).toBe(10)
-    expect((await store.getRun(created.run.id))?.version).toBe(10)
+    expect(afterTerminal.run?.version).toBe(11)
+    expect((await store.getRun(created.run.id))?.version).toBe(11)
     store.close()
   })
 })

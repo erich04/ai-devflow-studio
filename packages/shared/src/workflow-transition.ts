@@ -9,6 +9,7 @@ import type {
   WorkflowNode,
   WorkflowRun,
 } from './domain'
+import type { GitHubDeliveryIntent } from './github-delivery'
 import type { GateEnforcementDecision } from './enforcement'
 
 export type WorkflowCommand =
@@ -34,6 +35,7 @@ export type WorkflowEvidenceSnapshot = {
   codingDiffs: readonly CodingDiffArtifact[]
   testEvidence: readonly TestEvidence[]
   agentReviews: readonly AgentReviewResult[]
+  githubDeliveryIntents?: readonly GitHubDeliveryIntent[]
   approval?: WorkflowApprovalEvidence
   budgetDecision?: BudgetGuardDecision
 }
@@ -64,6 +66,7 @@ export type WorkflowBlockerCode =
   | 'test_result_not_terminal'
   | 'latest_test_not_passed'
   | 'pr_artifact_missing'
+  | 'github_delivery_incomplete'
   | 'acceptance_artifact_missing'
   | 'evidence_scope_mismatch'
 
@@ -255,6 +258,12 @@ export function evaluateWorkflowCommand(input: EvaluateWorkflowCommandInput): Wo
     }
     if (command.type === 'attach_pr_package') {
       return { allowed: true, blockers: [] }
+    }
+    if (!node.artifactIds.includes(artifact.id)) {
+      return blocked(
+        'pr_artifact_missing',
+        'The approved PR Delivery Package must already be attached',
+      )
     }
     const nextBlocker = evaluateNextNode(input.run, node)
     return nextBlocker ? { allowed: false, blockers: [nextBlocker] } : { allowed: true, blockers: [] }
@@ -554,6 +563,12 @@ export function applyWorkflowCommand(input: ApplyWorkflowCommandInput): Workflow
     currentNodeId: nextNode.id,
     status: runStatusForCurrentNode(nextNode),
     updatedAt: input.now,
+    ...(command.type === 'complete_pr'
+      ? {
+          pullRequestUrl: matchingCompletedGitHubDeliveries(input)[0]!
+            .completion!.pullRequestUrl,
+        }
+      : {}),
     nodes: input.run.nodes.map((node) => {
       if (node.id === currentNode.id) {
         return {
@@ -658,7 +673,46 @@ function evaluateDeliveryEvidence(input: EvaluateWorkflowCommandInput): Workflow
       return [blocker('pr_artifact_missing', 'An attached PR artifact is required')]
     }
   }
+  if (input.command.type !== 'attach_pr_package') {
+    const completedDeliveries = matchingCompletedGitHubDeliveries(input)
+    if (completedDeliveries.length !== 1) {
+      return [
+        blocker(
+          'github_delivery_incomplete',
+          'Exactly one completed GitHub Draft PR delivery is required',
+        ),
+      ]
+    }
+  }
   return []
+}
+
+function matchingCompletedGitHubDeliveries(
+  input: EvaluateWorkflowCommandInput,
+): GitHubDeliveryIntent[] {
+  const prNode = input.run.nodes.find((node) => node.kind === 'pr' && node.stage === 'pr')
+  if (!prNode) return []
+  const prArtifact = input.evidence.artifacts.find((artifact) => (
+    artifact.runId === input.run.id &&
+    artifact.nodeId === prNode.id &&
+    artifact.kind === 'pr' &&
+    prNode.artifactIds.includes(artifact.id) &&
+    (input.command.type !== 'complete_pr' || artifact.id === input.command.artifactId)
+  ))
+  if (!prArtifact) return []
+  return (input.evidence.githubDeliveryIntents ?? []).filter((intent) => (
+    intent.status === 'completed' &&
+    intent.completion?.draft === true &&
+    intent.completion.redacted === true &&
+    intent.runId === input.run.id &&
+    intent.localProjectId === input.run.projectId &&
+    intent.nodeId === prNode.id &&
+    intent.prPackageArtifactId === prArtifact.id &&
+    intent.redacted === true &&
+    (input.command.type !== 'complete_pr' || intent.runVersion === input.run.version) &&
+    (input.command.type === 'complete_pr' ||
+      input.run.pullRequestUrl === intent.completion.pullRequestUrl)
+  ))
 }
 
 function baseBlockers(run: WorkflowRun, command: WorkflowCommand): WorkflowBlocker[] {

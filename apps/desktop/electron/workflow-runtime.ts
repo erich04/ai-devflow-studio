@@ -60,6 +60,7 @@ export type WorkflowRuntimeStore = Pick<
   | 'listCodingDiffArtifacts'
   | 'listTestEvidence'
   | 'listAgentReviews'
+  | 'listGitHubDeliveryIntents'
   | 'commitWorkflowMutation'
 >
 
@@ -149,13 +150,21 @@ export function createWorkflowRuntime(store: WorkflowRuntimeStore): WorkflowRunt
         }
       }
 
-      const [artifacts, codingRuns, codingDiffs, testEvidence, agentReviews] =
+      const [
+        artifacts,
+        codingRuns,
+        codingDiffs,
+        testEvidence,
+        agentReviews,
+        githubDeliveryIntents,
+      ] =
         await Promise.all([
           store.listArtifacts(run.id),
           store.listCodingAgentRuns(run.id),
           store.listCodingDiffArtifacts(run.id),
           store.listTestEvidence(run.id),
           store.listAgentReviews(run.id),
+          store.listGitHubDeliveryIntents(run.id),
         ])
       const result = applyWorkflowCommand({
         run,
@@ -167,6 +176,7 @@ export function createWorkflowRuntime(store: WorkflowRuntimeStore): WorkflowRunt
           codingDiffs,
           testEvidence: mergeById(testEvidence, candidates.testEvidence),
           agentReviews,
+          githubDeliveryIntents,
           ...(input.approval ? { approval: input.approval } : {}),
           ...(input.budgetDecision
             ? { budgetDecision: input.budgetDecision }

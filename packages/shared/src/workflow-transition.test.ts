@@ -7,6 +7,7 @@ import {
   type Artifact,
   type CodingAgentRun,
   type CodingDiffArtifact,
+  type GitHubDeliveryIntent,
   type TestEvidence,
   type WorkflowEvidenceSnapshot,
 } from './index'
@@ -238,7 +239,7 @@ function currentTest(status: TestEvidence['status']) {
   return { run: completedBuild.run, evidence, testNodeId, testEvidence, artifact }
 }
 
-function currentPr() {
+function currentUnattachedPr() {
   const test = currentTest('passed')
   const completedTest = applyWorkflowCommand({
     run: test.run,
@@ -272,6 +273,81 @@ function currentPr() {
   }
 
   return { run: completedTest.run, evidence, prNodeId, artifact }
+}
+
+function currentPr() {
+  const prepared = currentUnattachedPr()
+  const attached = applyWorkflowCommand({
+    run: prepared.run,
+    command: {
+      type: 'attach_pr_package',
+      nodeId: prepared.prNodeId,
+      artifactId: prepared.artifact.id,
+    },
+    evidence: prepared.evidence,
+    now,
+  })
+  if (!attached.applied) {
+    throw new Error('Expected PR package fixture to attach')
+  }
+  const intent: GitHubDeliveryIntent = {
+    stateVersion: 1,
+    id: 'delivery-intent-workflow-1',
+    organizationId: 'org-1',
+    teamProjectId: 'team-project-1',
+    localProjectId: attached.run.projectId,
+    runId: attached.run.id,
+    runVersion: attached.run.version,
+    nodeId: prepared.prNodeId,
+    repositoryBindingId: 'binding-1',
+    repositoryBindingVersion: 1,
+    installationId: '123',
+    repositoryId: '456',
+    codingRunId: prepared.evidence.codingRuns[0]!.id,
+    codingRunCompletedAt: now,
+    workspaceId: 'workspace-1',
+    repository: 'owner/repository',
+    baseBranch: 'main',
+    headBranch: 'devflow/run-build-transition',
+    baseCommitSha: '0'.repeat(40),
+    expectedCommitSha: '1'.repeat(40),
+    diffArtifactId: prepared.evidence.codingDiffs[0]!.id,
+    diffSourceDigest: '2'.repeat(64),
+    testEvidenceId: prepared.evidence.testEvidence[0]!.id,
+    testEvidenceCreatedAt: now,
+    testEvidenceDigest: '3'.repeat(64),
+    prPackageArtifactId: prepared.artifact.id,
+    prPackageUpdatedAt: prepared.artifact.updatedAt,
+    prPackageDigest: '4'.repeat(64),
+    changedPaths: ['src/change.ts'],
+    intentDigest: '5'.repeat(64),
+    idempotencyKey: `github-delivery:${'6'.repeat(64)}`,
+    status: 'completed',
+    completion: {
+      stateVersion: 1,
+      remoteRequestId: 'remote-delivery-1',
+      publicationId: 'publication-1',
+      pullRequestOutcomeId: 'pull-request-outcome-1',
+      pullRequestId: '789',
+      pullRequestNumber: 42,
+      pullRequestUrl: 'https://github.com/owner/repository/pull/42',
+      providerCreatedAt: '2026-07-31T11:59:00.000Z',
+      recordedAt: now,
+      draft: true,
+      redacted: true,
+    },
+    createdAt: '2026-07-31T11:58:00.000Z',
+    updatedAt: now,
+    redacted: true,
+  }
+  return {
+    ...prepared,
+    run: attached.run,
+    evidence: {
+      ...prepared.evidence,
+      githubDeliveryIntents: [intent],
+    },
+  }
 }
 
 function currentAcceptance() {
@@ -753,8 +829,26 @@ describe('workflow command core', () => {
     expect(result.run.nodes.find((node) => node.id === 'run-build-transition-accept')?.status).toBe('running')
   })
 
-  it('attaches a PR Delivery Package without advancing and replays the exact package', () => {
+  it('does not complete a PR from the local package without a completed GitHub Delivery', () => {
     const { run, evidence, prNodeId, artifact } = currentPr()
+    const decision = evaluateWorkflowCommand({
+      run,
+      command: {
+        type: 'complete_pr',
+        nodeId: prNodeId,
+        artifactId: artifact.id,
+      },
+      evidence: { ...evidence, githubDeliveryIntents: [] },
+    })
+
+    expect(decision.allowed).toBe(false)
+    expect(decision.blockers.map((item) => item.code)).toEqual([
+      'github_delivery_incomplete',
+    ])
+  })
+
+  it('attaches a PR Delivery Package without advancing and replays the exact package', () => {
+    const { run, evidence, prNodeId, artifact } = currentUnattachedPr()
     const command = {
       type: 'attach_pr_package' as const,
       nodeId: prNodeId,
