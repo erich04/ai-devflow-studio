@@ -27,6 +27,7 @@ import {
   resolveDevFlowRuntimeFlags,
   type DevFlowSessionHeaders,
   type GateCommand,
+  type GitHubRepositoryBinding,
   type NodeStatus,
   type WorkRequest,
   type WorkflowNode,
@@ -36,16 +37,20 @@ import {
   fetchTeamOverview,
   fetchWorkRequests,
   fetchGateCommands,
+  fetchGitHubDeliveryRequests,
+  fetchGitHubRepositoryBinding,
   evaluateGateCommandSnapshot,
   resolveDevFlowPublicApiBaseUrl,
   runKnowledgeReview,
   saveEnforcementPolicy,
   type TeamOverviewResponse,
   type GateCommandEvaluationSnapshot,
+  type GitHubDeliveryRequestView,
 } from './lib/devflow-api'
 import { PairingCodePanel } from './PairingCodePanel'
 import { WorkRequestPanel } from './WorkRequestPanel'
 import { GateCommandPanel } from './GateCommandPanel'
+import { GitHubDeliveryPanel } from './GitHubDeliveryPanel'
 import { selectGateCommandTarget } from './gate-command-view-model'
 
 type StatusTone = 'done' | 'run' | 'gate' | 'warn' | 'idle' | 'fail'
@@ -137,6 +142,9 @@ export default async function Page({ searchParams }: PageProps) {
   let workRequests: WorkRequest[] = []
   let workRequestLoadFailed = false
   let gateCommands: GateCommand[] = []
+  let githubBinding: GitHubRepositoryBinding | null = null
+  let githubDeliveries: GitHubDeliveryRequestView[] = []
+  let githubDeliveryLoadFailed = false
   if (activeProject) {
     try {
       workRequests = await fetchWorkRequests({
@@ -155,6 +163,24 @@ export default async function Page({ searchParams }: PageProps) {
         })
       } catch {
         gateCommands = []
+      }
+      try {
+        const [loadedBinding, loadedDeliveries] = await Promise.all([
+          fetchGitHubRepositoryBinding({
+            projectId: activeProject.id,
+            cookieHeader,
+          }),
+          fetchGitHubDeliveryRequests({
+            projectId: activeProject.id,
+            cookieHeader,
+          }),
+        ])
+        githubBinding = loadedBinding
+        githubDeliveries = loadedDeliveries
+      } catch {
+        githubBinding = null
+        githubDeliveries = []
+        githubDeliveryLoadFailed = true
       }
     }
   }
@@ -360,6 +386,32 @@ export default async function Page({ searchParams }: PageProps) {
               key={activeProject.id}
               projectId={activeProject.id}
               initialWorkRequests={workRequests}
+            />
+          )
+        ) : null}
+
+        {activeProject && cookieHeader ? (
+          githubDeliveryLoadFailed ? (
+            <section
+              className="github-delivery-panel"
+              id="github-delivery"
+              aria-label="GitHub Delivery"
+            >
+              <div className="studio-section-heading compact">
+                <div>
+                  <span>Controlled publication</span>
+                  <h2>GitHub Delivery 暂时不可用</h2>
+                  <p>无法安全加载仓库绑定和发布请求；未授予任何发布权限。</p>
+                </div>
+              </div>
+            </section>
+          ) : (
+            <GitHubDeliveryPanel
+              key={`github-delivery-${activeProject.id}`}
+              projectId={activeProject.id}
+              projectName={activeProject.name}
+              initialBinding={githubBinding}
+              initialDeliveries={githubDeliveries}
             />
           )
         ) : null}

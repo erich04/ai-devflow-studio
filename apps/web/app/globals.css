@@ -1048,6 +1048,227 @@ button {
   font-size: 11px;
 }
 
+.github-delivery-panel {
+  max-width: 1320px;
+  margin: 14px auto;
+  padding: 20px;
+  border: 1px solid var(--studio-line);
+  border-radius: 14px;
+  background: var(--studio-surface);
+}
+
+.github-delivery-panel .studio-section-heading p {
+  margin: 6px 0 0;
+  color: var(--studio-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.github-binding-card,
+.github-delivery-card {
+  border: 1px solid var(--studio-line);
+  border-radius: 9px;
+  background: var(--studio-surface-soft);
+}
+
+.github-binding-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+}
+
+.github-binding-card div,
+.github-delivery-card header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.github-binding-card span,
+.github-binding-card small,
+.github-delivery-card small,
+.github-delivery-card header > span {
+  color: var(--studio-muted);
+  font-size: 11px;
+}
+
+.github-binding-card span,
+.github-delivery-card header > span {
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.github-binding-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.github-binding-form > label:not(.github-confirmation) {
+  display: grid;
+  gap: 6px;
+}
+
+.github-binding-form label > span,
+.github-confirmation span {
+  color: var(--studio-muted);
+  font-size: 11px;
+}
+
+.github-binding-form label > span {
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.github-binding-form input:not([type='checkbox']) {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--studio-line);
+  border-radius: 8px;
+  background: var(--studio-surface-soft);
+  color: var(--studio-text);
+  font: inherit;
+}
+
+.github-binding-form .github-confirmation {
+  grid-column: 1 / -1;
+}
+
+.github-confirmation {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  line-height: 1.45;
+}
+
+.github-confirmation input {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.github-binding-form button,
+.github-binding-revocation button,
+.github-delivery-decision button {
+  min-height: 38px;
+  border-color: var(--studio-teal);
+  background: var(--studio-teal);
+  color: white;
+  cursor: pointer;
+}
+
+.github-binding-revocation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--studio-red) 30%, var(--studio-line));
+  border-radius: 9px;
+}
+
+.github-binding-revocation button,
+.github-delivery-decision button:nth-child(2) {
+  border-color: var(--studio-red);
+  background: var(--studio-surface);
+  color: var(--studio-red);
+}
+
+.github-delivery-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.github-delivery-list > p,
+.github-delivery-panel > p[role='status'] {
+  margin: 0;
+  color: var(--studio-muted);
+  font-size: 12px;
+}
+
+.github-delivery-panel > p[role='status'] {
+  margin-top: 12px;
+}
+
+.github-delivery-card {
+  padding: 12px;
+}
+
+.github-delivery-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.github-delivery-card dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.github-delivery-card dl div {
+  min-width: 0;
+}
+
+.github-delivery-card dt {
+  color: var(--studio-muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.github-delivery-card dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.github-delivery-decision {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--studio-line);
+}
+
+.github-delivery-authority-note {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--studio-line);
+  color: var(--studio-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.github-delivery-decision > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.github-binding-form button:disabled,
+.github-binding-revocation button:disabled,
+.github-delivery-decision button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.github-delivery-panel input:focus-visible,
+.github-delivery-panel button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--studio-teal) 30%, transparent);
+  outline-offset: 2px;
+}
+
 .studio-gate-action button {
   width: 100%;
   background: var(--studio-teal);
@@ -1347,8 +1568,14 @@ button {
   .studio-grid,
   .studio-support-grid,
   .studio-selection,
-  .work-request-panel {
+  .work-request-panel,
+  .github-binding-form {
     grid-template-columns: 1fr;
+  }
+
+  .github-binding-revocation {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .studio-selection > section {

@@ -10,16 +10,23 @@ import {
   createTeamProject,
   createRuntimeBudgetApproval,
   createGateCommand,
+  configureGitHubRepositoryBinding,
+  decideGitHubDeliveryRequest,
   createWorkRequest,
   fetchWorkRequests,
   fetchGateCommands,
+  fetchGitHubDeliveryRequests,
+  fetchGitHubRepositoryBinding,
+  revokeGitHubRepositoryBinding,
   evaluateGateCommandSnapshot,
   resolveDevFlowPublicApiBaseUrl,
   resolveDevFlowApiBaseUrl,
   loadRuntimeBudgetPolicy,
+  parseGitHubDeliveryRequestView,
   runKnowledgeReview,
   saveRuntimeBudgetPolicy,
   saveEnforcementPolicy,
+  GitHubDeliveryApiError,
 } from './devflow-api'
 
 const organizationPolicy = createWarnOnlyDefaultPolicy({ organizationId: 'org-demo' })
@@ -30,7 +37,345 @@ const enforcementPolicies = {
   gateOverrides: [],
 }
 
+function githubDeliveryRequest(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'delivery-1',
+    stateVersion: 2,
+    intentRevision: 1,
+    organizationId: 'org-demo',
+    projectId: 'p-payments',
+    requestedByUserId: 'u-desktop',
+    localIntentId: 'intent-1',
+    localProjectId: 'local-project-1',
+    runId: 'run-1',
+    runVersion: 7,
+    nodeId: 'pr-1',
+    repositoryBindingId: 'binding-1',
+    repositoryBindingVersion: 3,
+    installationId: '12345',
+    repositoryId: '98765',
+    repository: 'example/payments',
+    codingRunId: 'coding-1',
+    workspaceId: 'workspace-1',
+    diffArtifactId: 'diff-1',
+    testEvidenceId: 'test-1',
+    prPackageArtifactId: 'package-1',
+    status: 'approval_required',
+    outcomeCode: null,
+    expectedRunVersion: 7,
+    baseBranch: 'main',
+    headBranch: 'devflow/run-1-pr-1',
+    baseCommitSha: 'a'.repeat(40),
+    expectedCommitSha: 'b'.repeat(40),
+    intentDigest: 'c'.repeat(64),
+    logicalIdempotencyKey: `github-delivery:${'d'.repeat(64)}`,
+    diffDigest: 'e'.repeat(64),
+    testEvidenceDigest: 'f'.repeat(64),
+    packageDigest: '1'.repeat(64),
+    changedPaths: ['/Users/alice/private.ts'],
+    prTitle: 'Deliver the exact approved change',
+    prBody: 'API_TOKEN=must-not-reach-the-management-view',
+    expiresAt: '2026-08-12T14:00:00.000Z',
+    createdAt: '2026-08-11T14:00:00.000Z',
+    updatedAt: '2026-08-11T14:01:00.000Z',
+    redacted: true,
+    ...overrides,
+  }
+}
+
 describe('DevFlow web API client', () => {
+  it('loads project-scoped GitHub Delivery management data as a safe projection', async () => {
+    const binding = {
+      stateVersion: 1,
+      id: 'binding-1',
+      version: 3,
+      organizationId: 'org-demo',
+      teamProjectId: 'p-payments',
+      installationId: '12345',
+      repositoryId: '98765',
+      repository: 'example/payments',
+      defaultBranch: 'main',
+      status: 'active',
+      validatedAt: '2026-08-11T14:00:00.000Z',
+      updatedAt: '2026-08-11T14:00:00.000Z',
+      redacted: true,
+    }
+    const request = {
+      id: 'delivery-1',
+      stateVersion: 2,
+      intentRevision: 1,
+      organizationId: 'org-demo',
+      projectId: 'p-payments',
+      requestedByUserId: 'u-desktop',
+      localIntentId: 'intent-1',
+      localProjectId: 'local-project-1',
+      runId: 'run-1',
+      runVersion: 7,
+      nodeId: 'pr-1',
+      repositoryBindingId: 'binding-1',
+      repositoryBindingVersion: 3,
+      installationId: '12345',
+      repositoryId: '98765',
+      repository: 'example/payments',
+      codingRunId: 'coding-1',
+      workspaceId: 'workspace-1',
+      diffArtifactId: 'diff-1',
+      testEvidenceId: 'test-1',
+      prPackageArtifactId: 'package-1',
+      status: 'approval_required',
+      outcomeCode: null,
+      expectedRunVersion: 7,
+      baseBranch: 'main',
+      headBranch: 'devflow/run-1-pr-1',
+      baseCommitSha: 'a'.repeat(40),
+      expectedCommitSha: 'b'.repeat(40),
+      intentDigest: 'c'.repeat(64),
+      logicalIdempotencyKey: `github-delivery:${'d'.repeat(64)}`,
+      diffDigest: 'e'.repeat(64),
+      testEvidenceDigest: 'f'.repeat(64),
+      packageDigest: '1'.repeat(64),
+      changedPaths: ['/Users/alice/private.ts'],
+      prTitle: 'Deliver the exact approved change',
+      prBody: 'API_TOKEN=must-not-reach-the-management-view',
+      expiresAt: '2026-08-12T14:00:00.000Z',
+      createdAt: '2026-08-11T14:00:00.000Z',
+      updatedAt: '2026-08-11T14:01:00.000Z',
+      redacted: true,
+    }
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ binding }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ requests: [request] }), { status: 200 }))
+
+    await expect(fetchGitHubRepositoryBinding({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      projectId: 'p-payments',
+      cookieHeader: 'devflow_session=session-1',
+    })).resolves.toMatchObject({ repository: 'example/payments', version: 3 })
+    const deliveries = await fetchGitHubDeliveryRequests({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      projectId: 'p-payments',
+      cookieHeader: 'devflow_session=session-1',
+    })
+
+    expect(deliveries).toEqual([expect.objectContaining({
+      id: 'delivery-1',
+      projectId: 'p-payments',
+      stateVersion: 2,
+      runVersion: 7,
+      expectedCommitSha: 'b'.repeat(40),
+      testEvidenceId: 'test-1',
+      testEvidenceDigest: 'f'.repeat(64),
+      prTitle: 'Deliver the exact approved change',
+      packageDigest: '1'.repeat(64),
+    })])
+    expect(JSON.stringify(deliveries)).not.toContain('API_TOKEN=must-not-reach')
+    expect(JSON.stringify(deliveries)).not.toContain('/Users/alice')
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'http://api.local/api/team/projects/p-payments/github-repository-binding',
+      {
+        cache: 'no-store',
+        headers: { accept: 'application/json', cookie: 'devflow_session=session-1' },
+      },
+    )
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      'http://api.local/api/team/projects/p-payments/github-deliveries',
+      {
+        cache: 'no-store',
+        headers: { accept: 'application/json', cookie: 'devflow_session=session-1' },
+      },
+    )
+  })
+
+  it('strictly parses only the nested renderer-safe GitHub Delivery projection', () => {
+    const safeView = {
+      id: 'delivery-1',
+      stateVersion: 2,
+      intentRevision: 1,
+      projectId: 'p-payments',
+      runId: 'run-1',
+      runVersion: 7,
+      nodeId: 'pr-1',
+      repositoryBindingVersion: 3,
+      repository: 'example/payments',
+      status: 'approval_required',
+      outcomeCode: null,
+      expectedRunVersion: 7,
+      baseBranch: 'main',
+      headBranch: 'devflow/run-1-pr-1',
+      baseCommitSha: 'a'.repeat(40),
+      expectedCommitSha: 'b'.repeat(40),
+      intentDigest: 'c'.repeat(64),
+      diffDigest: 'd'.repeat(64),
+      testEvidenceId: 'test-1',
+      testEvidenceDigest: 'e'.repeat(64),
+      packageDigest: 'f'.repeat(64),
+      prTitle: 'Deliver the exact approved change',
+      expiresAt: '2026-08-12T14:00:00.000Z',
+      updatedAt: '2026-08-11T14:01:00.000Z',
+    }
+
+    expect(parseGitHubDeliveryRequestView(safeView, 'p-payments')).toEqual(safeView)
+    expect(() => parseGitHubDeliveryRequestView({
+      ...safeView,
+      prBody: 'must never become renderer data',
+    }, 'p-payments')).toThrow('GitHub Delivery response was invalid.')
+    expect(() => parseGitHubDeliveryRequestView({
+      ...safeView,
+      testEvidenceId: '/Users/alice/private-evidence',
+    }, 'p-payments')).toThrow('GitHub Delivery response was invalid.')
+    expect(() => parseGitHubDeliveryRequestView({
+      ...safeView,
+      prTitle: 'API_TOKEN=private',
+    }, 'p-payments')).toThrow('GitHub Delivery response was invalid.')
+  })
+
+  it('returns typed provider-unavailable feedback when GitHub binding validation is unavailable', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      error: 'service_unavailable',
+      message: 'internal provider host must not escape',
+      code: 'github_delivery_unavailable',
+      retryable: false,
+      phase: 'binding',
+    }), { status: 503 }))
+
+    const failure = await configureGitHubRepositoryBinding({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      projectId: 'p-payments',
+      installationId: '12345',
+      repositoryId: '98765',
+      expectedStateVersion: 0,
+      cookieHeader: 'devflow_session=session-1',
+    }).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(GitHubDeliveryApiError)
+    expect(failure).toMatchObject({
+      status: 503,
+      feedbackCode: 'provider_unavailable',
+      retryable: false,
+    })
+    expect(String(failure)).not.toContain('internal provider host')
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/team/projects/p-payments/github-repository-binding',
+      {
+        method: 'PUT',
+        cache: 'no-store',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          cookie: 'devflow_session=session-1',
+        },
+        body: JSON.stringify({
+          installationId: '12345',
+          repositoryId: '98765',
+          expectedStateVersion: 0,
+        }),
+      },
+    )
+  })
+
+  it('revokes only the exact project binding version through the distinct endpoint', async () => {
+    const revokedBinding = {
+      stateVersion: 1,
+      id: 'binding-1',
+      version: 4,
+      organizationId: 'org-demo',
+      teamProjectId: 'p-payments',
+      installationId: '12345',
+      repositoryId: '98765',
+      repository: 'example/payments',
+      defaultBranch: 'main',
+      status: 'revoked',
+      validatedAt: '2026-08-11T14:00:00.000Z',
+      updatedAt: '2026-08-11T15:00:00.000Z',
+      redacted: true,
+    }
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      binding: revokedBinding,
+      outcomeCode: 'binding_revoked',
+      replayed: false,
+    }), { status: 200 }))
+
+    await expect(revokeGitHubRepositoryBinding({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      projectId: 'p-payments',
+      expectedStateVersion: 3,
+      cookieHeader: 'devflow_session=session-1',
+    })).resolves.toEqual({
+      binding: revokedBinding,
+      outcomeCode: 'binding_revoked',
+      replayed: false,
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/team/projects/p-payments/github-repository-binding/revoke',
+      {
+        method: 'POST',
+        cache: 'no-store',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          cookie: 'devflow_session=session-1',
+        },
+        body: JSON.stringify({ expectedStateVersion: 3 }),
+      },
+    )
+  })
+
+  it('records only an exact version-bound GitHub Delivery decision', async () => {
+    const approved = githubDeliveryRequest({ stateVersion: 3, status: 'approved' })
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      request: approved,
+      approval: {
+        id: 'approval-1',
+        requestId: 'delivery-1',
+        redacted: true,
+      },
+      outcomeCode: 'delivery_approved',
+      replayed: false,
+    }), { status: 200 }))
+
+    await expect(decideGitHubDeliveryRequest({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      projectId: 'p-payments',
+      requestId: 'delivery-1',
+      decision: 'approve',
+      expectedStateVersion: 2,
+      cookieHeader: 'devflow_session=session-1',
+    })).resolves.toMatchObject({
+      request: { id: 'delivery-1', stateVersion: 3, status: 'approved' },
+      outcomeCode: 'delivery_approved',
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/team/projects/p-payments/github-deliveries/delivery-1/approve',
+      {
+        method: 'POST',
+        cache: 'no-store',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          cookie: 'devflow_session=session-1',
+        },
+        body: JSON.stringify({ expectedStateVersion: 2 }),
+      },
+    )
+    expect(JSON.stringify(await decideGitHubDeliveryRequest({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      projectId: 'p-payments',
+      requestId: 'delivery-1',
+      decision: 'approve',
+      expectedStateVersion: 2,
+      cookieHeader: 'devflow_session=session-1',
+    }))).not.toContain('must-not-reach')
+  })
+
   it('resolves the API base URL from server or public env', () => {
     expect(resolveDevFlowApiBaseUrl({ DEVFLOW_INTERNAL_API_BASE_URL: 'http://api:4310' })).toBe(
       'http://api:4310',

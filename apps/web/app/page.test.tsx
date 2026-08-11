@@ -6,6 +6,8 @@ import Page from './page'
 import {
   evaluateGateCommandSnapshot,
   fetchGateCommands,
+  fetchGitHubDeliveryRequests,
+  fetchGitHubRepositoryBinding,
   fetchTeamOverview,
   fetchWorkRequests,
 } from './lib/devflow-api'
@@ -16,6 +18,8 @@ vi.mock('./lib/devflow-api', () => ({
   fetchTeamOverview: vi.fn(),
   fetchWorkRequests: vi.fn(),
   fetchGateCommands: vi.fn(),
+  fetchGitHubDeliveryRequests: vi.fn(),
+  fetchGitHubRepositoryBinding: vi.fn(),
   evaluateGateCommandSnapshot: vi.fn(),
   resolveDevFlowApiBaseUrl: vi.fn(() => 'http://api.local'),
   resolveDevFlowPublicApiBaseUrl: vi.fn(() => 'http://api.local'),
@@ -35,6 +39,8 @@ const mockedFetchTeamOverview = vi.mocked(fetchTeamOverview)
 const mockedCookies = vi.mocked(cookies)
 const mockedFetchWorkRequests = vi.mocked(fetchWorkRequests)
 const mockedFetchGateCommands = vi.mocked(fetchGateCommands)
+const mockedFetchGitHubDeliveries = vi.mocked(fetchGitHubDeliveryRequests)
+const mockedFetchGitHubBinding = vi.mocked(fetchGitHubRepositoryBinding)
 const mockedEvaluateGateCommandSnapshot = vi.mocked(evaluateGateCommandSnapshot)
 const organizationPolicy = createWarnOnlyDefaultPolicy({ organizationId: 'org-demo' })
 
@@ -243,6 +249,8 @@ const overview: TeamOverviewResponse = {
 beforeEach(() => {
   mockedFetchWorkRequests.mockResolvedValue([])
   mockedFetchGateCommands.mockResolvedValue([])
+  mockedFetchGitHubBinding.mockResolvedValue(null)
+  mockedFetchGitHubDeliveries.mockResolvedValue([])
   mockedEvaluateGateCommandSnapshot.mockResolvedValue({
     status: 'pass',
     blocksApproval: false,
@@ -431,6 +439,69 @@ describe('web product shell page', () => {
     expect(screen.getByRole('region', { name: 'Work Requests' })).toBeInTheDocument()
     expect(screen.getByText('Prepare remote rollout')).toBeInTheDocument()
     expect(mockedFetchWorkRequests).toHaveBeenCalledWith({
+      projectId: 'p-remote',
+      cookieHeader: 'devflow_session=session-1',
+    })
+  })
+
+  it('loads and renders safe GitHub Delivery management for the selected project', async () => {
+    mockedFetchTeamOverview.mockResolvedValue(overview)
+    mockedFetchGitHubBinding.mockResolvedValueOnce({
+      stateVersion: 1,
+      id: 'binding-remote',
+      version: 3,
+      organizationId: 'org-demo',
+      teamProjectId: 'p-remote',
+      installationId: '12345',
+      repositoryId: '98765',
+      repository: 'erich/remote-api',
+      defaultBranch: 'main',
+      status: 'active',
+      validatedAt: '2026-08-11T14:00:00.000Z',
+      updatedAt: '2026-08-11T14:00:00.000Z',
+      redacted: true,
+    })
+    mockedFetchGitHubDeliveries.mockResolvedValueOnce([{
+      id: 'delivery-remote',
+      stateVersion: 2,
+      intentRevision: 1,
+      projectId: 'p-remote',
+      runId: 'run-remote',
+      runVersion: 7,
+      nodeId: 'pr-remote',
+      repositoryBindingVersion: 3,
+      repository: 'erich/remote-api',
+      status: 'approval_required',
+      outcomeCode: null,
+      expectedRunVersion: 7,
+      baseBranch: 'main',
+      headBranch: 'devflow/run-remote-pr-remote',
+      baseCommitSha: 'a'.repeat(40),
+      expectedCommitSha: 'b'.repeat(40),
+      intentDigest: 'c'.repeat(64),
+      diffDigest: 'd'.repeat(64),
+      testEvidenceId: 'evidence-remote-v1',
+      testEvidenceDigest: 'e'.repeat(64),
+      packageDigest: 'f'.repeat(64),
+      prTitle: 'Deliver the exact remote change',
+      expiresAt: '2026-08-12T14:00:00.000Z',
+      updatedAt: '2026-08-11T14:01:00.000Z',
+    }])
+
+    render(await Page({
+      searchParams: Promise.resolve({ projectId: 'p-remote' }),
+    }))
+
+    expect(screen.getByRole('region', { name: 'GitHub Delivery' })).toBeInTheDocument()
+    expect(screen.getByText('Remote API · p-remote')).toBeInTheDocument()
+    expect(screen.getByText('Deliver the exact remote change')).toBeInTheDocument()
+    expect(screen.getByText('b'.repeat(40))).toBeInTheDocument()
+    expect(screen.getByText('e'.repeat(64))).toBeInTheDocument()
+    expect(mockedFetchGitHubBinding).toHaveBeenCalledWith({
+      projectId: 'p-remote',
+      cookieHeader: 'devflow_session=session-1',
+    })
+    expect(mockedFetchGitHubDeliveries).toHaveBeenCalledWith({
       projectId: 'p-remote',
       cookieHeader: 'devflow_session=session-1',
     })
