@@ -80,9 +80,9 @@ describe('product roadmap source of truth', () => {
     expect(markdown).toContain('### v2.1: Evaluated Retrieval And Memory')
     expect(markdown).toContain('### v2.2: Multi-Agent And Execution Tenancy')
     expect(markdown).toContain('## 2.x Completion Gate')
-    expect(markdown).toContain(
-      '**Next concrete action** is to write and approve the scoped V1.5 GitHub Delivery PRD.',
-    )
+    expect(markdown).toContain('The scoped V1.5 contract and authority decision are now approved')
+    expect(markdown).toContain('v1.5-github-delivery-prd.md')
+    expect(markdown).toContain('0013-github-app-delivery-authority.md')
     expect(markdown).toContain('Public SaaS, billing, enterprise SSO')
     expect(markdown).not.toContain('### v1.6 Candidate:')
     expect(markdown).not.toContain('### v1.7 Candidate:')

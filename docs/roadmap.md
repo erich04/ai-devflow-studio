@@ -96,9 +96,13 @@ after a scoped PRD and the required architecture decisions are approved.
 
 ### Now — Define V1.5 And Close The 1.x Contract
 
-**Next concrete action** is to write and approve the scoped V1.5 GitHub Delivery PRD.
+The scoped V1.5 contract and authority decision are now approved for implementation:
 
-- Decide GitHub App versus scoped user token through an ADR before implementation.
+- `docs/product/prd/v1.5-github-delivery-prd.md`
+- `docs/adr/0013-github-app-delivery-authority.md`
+- `docs/plans/v1.5-github-delivery.md`
+
+- Implement the GitHub App decision through vertical, evidence-backed slices.
 - Define repository/project binding, credential ownership, idempotency, retries, redacted audit
   evidence, and explicit publication authority.
 - Keep `v1.4.0` and its release evidence immutable.
