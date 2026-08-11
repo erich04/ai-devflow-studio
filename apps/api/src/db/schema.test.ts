@@ -275,8 +275,19 @@ describe('team database schema', () => {
     expect(migrationV11?.sql).toContain('github_delivery_requests_logical_key_unique')
     expect(migrationV11?.sql).toContain('github_delivery_requests_one_active_target')
     expect(migrationV11?.sql).toContain("strpos(current_item.value #>> '{}', chr(92)) > 0")
+    expect(migrationV11?.sql).toContain("'github_delivery_approve'")
+    expect(migrationV11?.sql).toContain("'github_credential_grant'")
+    expect(migrationV11?.sql).toContain(
+      'FOREIGN KEY (request_id, intent_revision, approval_id, repository_id)',
+    )
+    expect(migrationV11?.sql).toContain(
+      'FOREIGN KEY (request_id, intent_revision, grant_id)',
+    )
+    expect(migrationV11?.sql).toContain(
+      "WHERE status IN ('issuing', 'issued', 'recovery_required')",
+    )
     expect(migrationChecksum(migrationV11?.sql ?? '')).toBe(
-      '3c0f98100a3d987551c5604f33102d59a7cd101a4f45456432d40b3f7dffd4d3',
+      'd2a6720360c76b68005f36817ce5de6423883ff4628cd0e98055a4c0f58ccbbb',
     )
     expect(migrationV11?.sql).not.toMatch(
       /\b(?:token|token_hash|private_key|credential|worktree_path|raw_diff|stdout|stderr)\s+(?:text|jsonb|bytea)\b/i,

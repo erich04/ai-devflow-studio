@@ -195,6 +195,33 @@ CREATE UNIQUE INDEX github_delivery_requests_one_active_target
 CREATE INDEX github_delivery_requests_desktop_inbox
   ON github_delivery_requests (organization_id, project_id, status, created_at);
 
+ALTER TABLE collaboration_idempotency
+  DROP CONSTRAINT collaboration_idempotency_operation_kind_check;
+
+ALTER TABLE collaboration_idempotency
+  ADD CONSTRAINT collaboration_idempotency_operation_kind_check CHECK (
+    operation_kind IN (
+      'work_request_create', 'work_request_claim', 'work_request_materialize',
+      'work_request_release', 'gate_command_create', 'gate_command_receipt',
+      'gate_command_acknowledge', 'github_binding_upsert', 'github_binding_revoke',
+      'github_delivery_submit', 'github_delivery_revise', 'github_delivery_approve',
+      'github_delivery_reject', 'github_delivery_grant', 'github_branch_publication',
+      'github_pull_request_create'
+    )
+  );
+
+ALTER TABLE collaboration_audit_events
+  DROP CONSTRAINT collaboration_audit_events_record_kind_check;
+
+ALTER TABLE collaboration_audit_events
+  ADD CONSTRAINT collaboration_audit_events_record_kind_check CHECK (
+    record_kind IN (
+      'work_request', 'gate_command', 'gate_receipt', 'gate_acknowledgement',
+      'github_binding', 'github_delivery', 'github_delivery_approval',
+      'github_credential_grant', 'github_branch_publication', 'github_pull_request'
+    )
+  );
+
 CREATE TABLE github_delivery_approvals (
   id text PRIMARY KEY,
   request_id text NOT NULL REFERENCES github_delivery_requests(id) ON DELETE CASCADE,
@@ -231,7 +258,9 @@ CREATE TABLE github_delivery_approvals (
   ),
   CONSTRAINT github_delivery_approvals_revision_unique UNIQUE (request_id, intent_revision),
   CONSTRAINT github_delivery_approvals_request_revision_unique
-    UNIQUE (request_id, intent_revision, id)
+    UNIQUE (request_id, intent_revision, id),
+  CONSTRAINT github_delivery_approvals_repository_revision_unique
+    UNIQUE (request_id, intent_revision, id, repository_id)
 );
 
 CREATE TABLE github_delivery_credential_grants (
@@ -274,13 +303,15 @@ CREATE TABLE github_delivery_credential_grants (
   ),
   CONSTRAINT github_delivery_grants_attempt_unique UNIQUE (request_id, intent_revision, attempt),
   CONSTRAINT github_delivery_grants_approval_revision_fk
-    FOREIGN KEY (request_id, intent_revision, approval_id)
-    REFERENCES github_delivery_approvals(request_id, intent_revision, id)
+    FOREIGN KEY (request_id, intent_revision, approval_id, repository_id)
+    REFERENCES github_delivery_approvals(request_id, intent_revision, id, repository_id),
+  CONSTRAINT github_delivery_grants_request_revision_unique
+    UNIQUE (request_id, intent_revision, id)
 );
 
 CREATE UNIQUE INDEX github_delivery_grants_one_active
   ON github_delivery_credential_grants (request_id, intent_revision)
-  WHERE status IN ('issuing', 'issued', 'consumed', 'recovery_required');
+  WHERE status IN ('issuing', 'issued', 'recovery_required');
 
 CREATE TABLE github_branch_publications (
   id text PRIMARY KEY,
@@ -302,9 +333,12 @@ CREATE TABLE github_branch_publications (
       OR (status = 'verified' AND outcome_code = 'branch_verified'
         AND verified_at IS NOT NULL
         AND verified_head_sha ~ '^[a-f0-9]{40}([a-f0-9]{24})?$')
-      OR (status IN ('conflict', 'recovery_required', 'failed')
-        AND outcome_code IS NOT NULL AND verified_at IS NOT NULL))
+      OR (status = 'conflict' AND outcome_code IS NOT NULL AND verified_at IS NOT NULL)
+      OR (status IN ('recovery_required', 'failed') AND outcome_code IS NOT NULL))
   ),
+  CONSTRAINT github_branch_publications_grant_revision_fk
+    FOREIGN KEY (request_id, intent_revision, grant_id)
+    REFERENCES github_delivery_credential_grants(request_id, intent_revision, id),
   CONSTRAINT github_branch_publications_revision_unique UNIQUE (request_id, intent_revision),
   CONSTRAINT github_branch_publications_request_revision_unique
     UNIQUE (request_id, intent_revision, id)
