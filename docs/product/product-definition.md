@@ -207,50 +207,28 @@ Expected deployment shape:
 
 Public SaaS, billing, enterprise SSO, and large organization administration are not near-term product goals.
 
-## Current Product Status
+## Product Baseline Scope
 
-`v1.3.0` is the released baseline. Its immutable release evidence remains under
-`docs/releases/v1.3.0/`, and its tag resolves to the V1.3 signoff commit. Historical V1.3
-walkthroughs, release records, and closeout plans are not rewritten by current candidate work.
+Release status and future milestones live only in the [Roadmap](../roadmap.md).
 
-The V1.3 baseline provides:
+This Product Definition owns the durable product shape, users, workflow, evidence model, governance
+rules, and non-goals. It intentionally does not restate the active version sequence.
 
-- One trusted workflow command boundary for Clarify, Design, Build, Test, PR, and Acceptance.
-- Main-process canonical reload and atomic persistence for Run, Artifact, Event, and Test Evidence.
-- Evidence-gated stage order, including latest-Test, Diff, PR Draft, Acceptance Bundle, policy,
-  review, budget, and role checks.
-- Explicit Local Project ↔ Team Project binding, canonical remote ownership, and local-first sync.
-- Known-workspace path redaction and an explicitly gated deterministic fake provider path.
-- Runnable API/Worker build-output smoke and expanded Verify/Release automation.
-- Clear unpaired-PR guidance and compatibility with the documented GitHub OAuth environment names.
+The released product baseline provides:
 
-V1.4 scoped implementation is complete at `5b64354`, and candidate-bound signoff is in preparation.
-The implemented V1.4 boundary adds:
+- One trusted workflow command path for Clarify, Design, Build, Test, PR, and Acceptance.
+- Main-process canonical writes and durable local persistence for Run, Artifact, Event, Test
+  Evidence, Agent Review, Coding activity, policy, budget, and sync state.
+- Explicit Local Project ↔ Team Project binding, authenticated collaboration intent, Desktop-owned
+  canonical Run execution, and redacted Team projections.
+- Managed Coding worktrees, explicit permission relay, diff/test evidence, cost visibility, and
+  bounded cleanup/recovery semantics.
+- Knowledge Governance, bounded repository Markdown context, durable sync outbox recovery, and
+  reproducible self-hosted pilot lifecycle validation.
 
-- fail-closed paid Coding and Knowledge Review decisions before provider initialization;
-- signed browser sessions and project-bound Desktop Bearer authentication for Team writes;
-- a durable metadata-only sync outbox with restart recovery, bounded backoff, and manual retry;
-- bounded local repository Markdown indexing for Electron Gate, Review, and Coding context while
-  API Review truthfully reports knowledge provenance `none`;
-- versioned Web Work Requests and Gate Commands without creating a second workflow authority; and
-- reproducible unsigned Web/API/Desktop pilot artifacts with fresh deploy, retained upgrade,
-  failed-upgrade recovery, bounded V1.3 API read rollback, and packaged Desktop smoke coverage.
-
-Version alignment occurs during candidate formation. V1.4 is not signed or released until one
-frozen candidate `C` passes the complete local and remote gate matrix, a candidate-bound Computer
-Use walkthrough, and the separately authorized single paid-provider smoke; an evidence-only child
-`S` then passes pre-tag and tagged status and the tag-triggered Release publishes its artifacts.
-
-The product remains broader than V1.4. Real GitHub branch/PR publication, real Skills/MCP execution,
-general multi-Desktop conflict handling, signed/notarized installers, and auto-update remain later
-work. The self-hosted pilot is not a managed public SaaS product.
-
-The [`2026-07-25` walkthrough](../guides/devflow-studio-v1.3-walkthrough-result-2026-07-25.md)
-remains the historical failed baseline, not current acceptance evidence.
-
-The [`2026-08-01` V1.4 walkthrough](../guides/devflow-studio-v1.4-walkthrough-result-2026-08-01.md)
-is development-tree evidence. It does not substitute for the new candidate-bound walkthrough and
-formal signoff.
+Historical PRDs, plans, walkthroughs, release records, and candidate evidence remain immutable
+records of what was proposed or verified at that time. They do not compete with the Roadmap for
+current release or priority truth.
 
 ## Non-Goals
 

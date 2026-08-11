@@ -8,6 +8,10 @@ const productDefinition = readFileSync(
   join(process.cwd(), 'docs/product/product-definition.md'),
   'utf8',
 )
+const currentProductPrd = readFileSync(
+  join(process.cwd(), 'docs/product/prd/current-product-prd.md'),
+  'utf8',
+)
 const pilotGuide = readFileSync(
   join(process.cwd(), 'docs/guides/devflow-studio-self-hosted-pilot.md'),
   'utf8',
@@ -24,40 +28,60 @@ const plan = readFileSync(
   join(process.cwd(), 'docs/plans/v1.4-pilot-trust-boundary.md'),
   'utf8',
 )
+const releaseSignoffPlan = readFileSync(
+  join(process.cwd(), 'docs/plans/v1.4-release-signoff.md'),
+  'utf8',
+)
 
 describe('v1.4 pilot trust boundary contract', () => {
-  it('records the released v1.3 baseline and the executable v1.4 scope', () => {
-    expect(roadmap).toContain('`v1.3.0` is the released baseline')
+  it('records the released v1.4 baseline while preserving the executable v1.4 contract', () => {
+    expect(roadmap).toContain('`v1.4.0` is the released baseline')
+    expect(roadmap).toContain('docs/releases/v1.4.0/')
     expect(roadmap).toContain('v1.4-pilot-trust-boundary-prd.md')
     expect(roadmap).toContain('v1.4-pilot-trust-boundary.md')
     expect(roadmap).toContain('durable sync outbox')
-    expect(roadmap).toContain(
-      'V1.4 scoped implementation complete at `5b64354`; candidate preparation in progress',
-    )
-    expect(roadmap).toContain('Version alignment occurs during V1.4 candidate formation')
-    expect(prd).toContain(
-      'Status: Implementation complete; candidate formation and formal signoff pending',
+    expect(roadmap).not.toContain('V1.4 scoped implementation complete at `5b64354`')
+    expect(roadmap).not.toContain('Version alignment occurs during V1.4 candidate formation')
+    expect(prd).toContain('## Product Outcome')
+    expect(prd).toContain('## Release Musts')
+    expect(prd).toContain('Lifecycle: Released as `v1.4.0`')
+    expect(plan).toContain('Lifecycle: Completed and released as `v1.4.0`')
+    expect(releaseSignoffPlan).toContain(
+      'Lifecycle: Completed; `v1.4.0` was signed off, tagged, and published',
     )
   })
 
-  it('keeps current entry points truthful during v1.4 candidate preparation', () => {
-    expect(readme).toContain('V1.4 candidate preparation')
+  it('delegates current release and future milestone truth to the roadmap', () => {
+    expect(readme).toContain('Current release and roadmap status')
+    expect(readme).toContain('[Roadmap](docs/roadmap.md)')
+    expect(readme).not.toContain('V1.4 candidate preparation')
     expect(readme).toContain('Paid Coding and Knowledge Review runtimes fail closed')
     expect(readme).toContain('Durable redacted sync uses a persisted outbox')
     expect(readme).not.toContain('fail-closed paid-runtime hardening remains open')
 
-    expect(productDefinition).toContain('V1.4 scoped implementation is complete')
-    expect(productDefinition).toContain('candidate-bound signoff is in preparation')
+    expect(productDefinition).toContain('Release status and future milestones live only in the')
+    expect(productDefinition).toContain('[Roadmap](../roadmap.md)')
+    expect(productDefinition).not.toContain('V1.4 scoped implementation is complete')
+    expect(productDefinition).not.toContain('candidate-bound signoff is in preparation')
     expect(productDefinition).not.toContain('Production auth and paid-budget trust remain v1.4 work')
     expect(productDefinition).not.toContain(
       'Repository knowledge indexing, complete Web management paths',
+    )
+
+    expect(currentProductPrd).toContain('Runtime Operations and Collaboration')
+    expect(currentProductPrd).toContain('remain evidence-promoted backlog items')
+    expect(currentProductPrd).toContain('Only the Roadmap owns current release and milestone status')
+    expect(currentProductPrd).not.toContain('roadmap candidates move into implementation')
+    expect(currentProductPrd).not.toContain(
+      'Roadmap and release-signoff documents may carry milestone status separately',
     )
 
     expect(roadmap).toContain('V1.4 API Review knowledge provenance remains `none`')
     expect(roadmap).not.toContain(
       'Connect repository Markdown indexing to the real Electron, API Review',
     )
-    expect(pilotGuide).toContain('Version alignment occurs during V1.4 candidate formation')
+    expect(pilotGuide).toContain('Release and milestone status are maintained in the Roadmap')
+    expect(pilotGuide).not.toContain('Version alignment occurs during V1.4 candidate formation')
   })
 
   it('defines a stable v1.4 operator walkthrough without claiming a result', () => {

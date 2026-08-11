@@ -1,15 +1,24 @@
 # AI DevFlow Studio Roadmap
 
-This roadmap is the source of truth for completed milestones and future product planning. ADRs
-record architectural decisions; `CONTEXT.md` records domain language; this file tracks what has been
-completed and what should come next.
+This roadmap is the single source of truth for major-version charters, the current release, the
+active priority, milestone sequencing, completed milestones, and explicitly deferred product work.
+
+PRDs define a milestone outcome, plans define implementation and verification, ADRs record
+architectural decisions, and release evidence proves what shipped.
+
+None of those files creates a parallel roadmap. Research and proposals do not change product
+sequence until this file promotes them.
 
 ## Documentation Map
 
 Use these files by responsibility:
 
-- `docs/roadmap.md`: completed milestones, current project progress, next milestones, and long-term product planning.
+- `docs/roadmap.md`: the only version-planning entrypoint; it owns version-line goals, current
+  release truth, milestone order, completion gates, and deferred scope.
+- `docs/product/prd/`: user-facing milestone contracts. A PRD does not assign roadmap priority by
+  itself.
 - `docs/plans/`: executable milestone plans that are checked against the current codebase before implementation.
+- `docs/releases/`: immutable candidate-bound evidence for releases that actually shipped.
 - `CONTEXT.md`: stable domain language and ubiquitous terms such as Run, Gate, Artifact, Skill, MCP Server, Knowledge Base, and Test Evidence.
 - `docs/adr/`: accepted architecture decisions and tradeoffs. ADRs explain why a direction was chosen; they do not track delivery progress.
 - `docs/engineering/`: operational engineering practice, test strategy, demo/smoke reproduction, and lessons learned from recurring failure modes.
@@ -19,61 +28,103 @@ Use these files by responsibility:
 
 ## Product North Star
 
-DevFlow Studio's product direction is a **small-team self-hosted AI DevFlow workbench**: a team can
-run its own API/Web/Postgres stack, connect local Electron clients, let developers use real local
-Agent runtimes, and give leads a governed, auditable view of evidence, policy, cost, and delivery
-state without uploading raw repository content or provider secrets.
+DevFlow Studio is a **small-team self-hosted AI DevFlow workbench**. Its deterministic outer
+Workflow governs identity, policy, cost, evidence, and human Gates.
 
-The v1.x line should stay anchored to that team-pilot product shape:
+The 2.x line adds a DevFlow-native, observable, and evaluable Agent Runtime inside that governed
+delivery model.
 
-- **v1.0** proved the minimum team pilot foundation: authenticated Web, Desktop pairing,
-  redacted sync, and Docker Compose.
-- **v1.0.x** hardens the team connection layer: pairing/token negative paths, audit entries,
-  token revoke/rotation, backup/restore guidance, and later multi-Desktop concurrency checks.
-- **v1.1 Runtime Cost + Budget Guard** adds project/run/user/provider cost summaries and lead
-  approval before real provider usage exceeds configured budget thresholds.
-- **v1.3-v1.7** should complete the request-to-delivery workflow and pilot trust boundary before
-  broad operations or platform expansion: request intake, workflow advancement, PR draft handoff,
-  acceptance evidence, auth/budget hardening, GitHub delivery integration, runtime operations, and
-  light collaboration hardening.
-- **v2.0** is the earliest reasonable point to revisit managed/public SaaS, billing, hosted
-  multi-tenancy, and managed credentials.
+Desktop remains the authority for private repository execution and full-fidelity local evidence.
+API/Postgres remains the authority for team identity, policy, collaboration intent, and redacted
+projections.
 
-Keep these out of the near-term path unless a later roadmap explicitly promotes them: public SaaS,
-billing, enterprise SSO, automatic cloud deployment, signed installers, auto-update, HoneyAI bridge,
-multi-agent orchestration, real MCP execution, and full RAG/vector retrieval. The
-**Next concrete action** is V1.4 candidate preparation and candidate-bound verification. GitHub
-delivery and operations expansion wait until V1.4 formal signoff is complete.
+Product evolution must deepen Agent capability without weakening those authority and redaction
+rules.
 
-## Current Status
+### Invariants Across Version Lines
 
-`v1.3.0` is the released baseline. The annotated tag resolves to signoff commit
-`06f3cc321300e3751aaa41c67f66d70cfaf6ebe4`, whose evidence is stored under
-`docs/releases/v1.3.0/`. The formal paired walkthrough and the single authorized real-opencode
-smoke are recorded in `docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-31.md`.
+- Workflow, Run, Gate, and Evidence remain the deterministic outer control model.
+- Electron main owns local source execution, local credentials, and complete local runtime state.
+- API/Postgres owns team identity, policy, collaboration commands, and redacted projections.
+- An Agent, Tool, Skill, MCP Server, retrieval result, or Memory record cannot bypass a human Gate.
+- Default CI remains deterministic and no-cost. Real-provider signoff remains explicit and bounded.
+- Knowledge Retrieval and Agent Memory do not automatically become Governance Evidence.
+- The 2.x execution-tenancy goal means organization/project/user/session isolation inside the
+  self-hosted product; it does not imply public SaaS or hosted shared infrastructure.
 
-The tag-triggered Release run exposed an annotated-tag shallow-fetch conflict before checkout. The
-release assets were recovered from the successful pre-tag run at the same signoff SHA, and
-`b7b879c` fixed the workflow for future tags without moving `v1.3.0`. The post-fix `main` Verify run
-passed macOS, Windows, Postgres, and Docker jobs.
+## Major Version Charters
+
+| Version line | Core question | Included scope | Completion definition | Status |
+| --- | --- | --- | --- | --- |
+| 0.x | Engineering foundation | Real Electron execution, durable local state, team sync, Knowledge Governance, Gate policy, a managed external Coding Agent Adapter, runtime observability, and release discipline. | Fake and explicitly authorized real Coding paths can execute in managed worktrees, preserve auditable evidence, obey human Gates, sync only redacted summaries, and pass reproducible verification. | Completed at v0.9.0. |
+| 1.x | Governed self-hosted delivery | Authenticated team pilot, Desktop pairing, project scope, policy and budget controls, durable sync, repository knowledge, Web collaboration commands, reproducible lifecycle, and human-approved GitHub delivery. | One authenticated Work Request becomes one canonical local Run, reaches tested and evidence-backed delivery, and publishes a branch and pull request only after explicit human approval. V1.5 is the final planned 1.x feature milestone. | In progress; v1.4.0 released and v1.5 planned. |
+| 2.x | DevFlow-native Agent Runtime | A bounded first-party Agent loop, native Tool and MCP execution, trajectory and evaluation, scoped Context and Memory, evaluated RAG, Multi-Agent orchestration, and tenant-scoped execution. | Benchmarked scenarios demonstrate bounded single- and Multi-Agent execution, native MCP/tool use, evaluated retrieval and Memory, failure recovery, tenant isolation, and auditable trajectories while Workflow and Gate authority remains intact. | Planned after the 1.x completion gate. |
+
+The version lines are finite product contracts, not an instruction to keep adding versions. A line
+ends when its completion gate passes; remaining ideas move to maintenance, evidence-promoted work,
+or a separately approved future charter.
+
+## Current Release
+
+`v1.4.0` is the released baseline. Its annotated tag resolves to signoff commit
+`e746843c1943755c50c8fb060bdf533b06442232`, whose direct parent is candidate
+`b7986d4faec2f8f1bcc220a0341cb0686286209e`.
+
+Immutable release evidence is stored under `docs/releases/v1.4.0/`. All first-party package
+manifests report `1.4.0`.
+
+The candidate-bound local matrix, exact-SHA CI, packaged Desktop Computer Use walkthrough, and the
+single explicitly authorized real OpenCode provider smoke passed.
+
+The published [GitHub Release](https://github.com/erich04/ai-devflow-studio/releases/tag/v1.4.0)
+contains the signoff-bound release artifacts.
 
 | Layer | Current status |
 | --- | --- |
-| Released baseline | `v1.3.0` signed, tagged, and published |
-| Development branch | V1.4 scoped implementation complete at `5b64354`; candidate preparation in progress |
-| Package metadata | Version alignment occurs during V1.4 candidate formation |
-| V1.4 contract | `docs/product/prd/v1.4-pilot-trust-boundary-prd.md` |
-| V1.4 execution | `docs/plans/v1.4-pilot-trust-boundary.md` |
+| Released baseline | `v1.4.0` signed off, tagged, and published |
+| Release evidence | `docs/releases/v1.4.0/` |
+| V1.4 product contract | `docs/product/prd/v1.4-pilot-trust-boundary-prd.md` |
+| V1.4 execution history | `docs/plans/v1.4-pilot-trust-boundary.md` and `docs/plans/v1.4-release-signoff.md` |
+| Active version line | 1.x governed self-hosted delivery |
+| Next scoped milestone | V1.5 GitHub Delivery Integration |
+| Later version line | 2.x DevFlow-native Agent Runtime |
 
-V1.3 provides the complete local request-to-delivery workflow, canonical main-process writes,
-paired project-bound sync, local-first merge, evidence-gated Acceptance, explicit fake/no-cost
-runtime boundaries, redaction, runnable API/Worker outputs, and expanded release automation.
+No V1.5 or 2.x implementation is claimed by this roadmap update. Their implementation starts only
+after a scoped PRD and the required architecture decisions are approved.
 
-V1.4 scoped implementation has closed the planned pilot trust gaps: paid-runtime fail-closed
-decisions, durable sync outbox, real repository knowledge integration, authenticated Web management
-paths, and reproducible unsigned pilot lifecycle artifacts. Candidate preparation is now reconciling
-release tooling and documentation before version alignment and candidate-bound verification. No
-V1.4 signoff, tag, or Release is claimed yet. Real GitHub delivery remains V1.5.
+## Now / Next / Later
+
+### Now — Define V1.5 And Close The 1.x Contract
+
+**Next concrete action** is to write and approve the scoped V1.5 GitHub Delivery PRD.
+
+- Decide GitHub App versus scoped user token through an ADR before implementation.
+- Define repository/project binding, credential ownership, idempotency, retries, redacted audit
+  evidence, and explicit publication authority.
+- Keep `v1.4.0` and its release evidence immutable.
+- Do not start 2.x implementation in parallel with the V1.5 delivery closure.
+
+### Next — V1.5 GitHub Delivery And 1.x Closure
+
+- Use the canonical managed worktree and expected local commit as the source for branch publication
+  and GitHub compare.
+- Use the PR Delivery Package only for pull-request title, body, evidence links, and review context.
+- Require explicit human approval before branch publication or pull-request creation.
+- Never silently push, merge, force-push, or broaden repository scope.
+- Make retry and recovery idempotent and auditable.
+- Verify the complete authenticated Work Request -> local Run -> implementation -> Test Evidence ->
+  human-approved GitHub pull-request path.
+
+After V1.5, do not add another planned 1.x feature milestone. New 1.x work is limited to release
+defects, security fixes, dependency maintenance, or hardening justified by real pilot evidence.
+
+### Later — DevFlow-Native Agent Runtime
+
+The 2.x line starts only after the 1.x completion gate. It keeps the deterministic Workflow and
+human Gates as the outer authority.
+
+Agent reasoning, Tool/MCP execution, Memory, and trajectory semantics then move into a DevFlow-owned
+runtime.
 
 ## Completed Milestones
 
@@ -362,81 +413,174 @@ V1.4 signoff, tag, or Release is claimed yet. Real GitHub delivery remains V1.5.
   post-release `main` without moving the tag.
 - Kept PR delivery as a human-readable artifact; real GitHub publication remains V1.5.
 
+### v1.4: Pilot Trust Boundary
+
+- Released `v1.4.0`; its annotated tag resolves to signoff commit
+  `e746843c1943755c50c8fb060bdf533b06442232`, whose direct parent is candidate
+  `b7986d4faec2f8f1bcc220a0341cb0686286209e`.
+- Made real paid Coding and Knowledge Review runtime decisions fail closed on missing, invalid,
+  unauthenticated, out-of-scope, or unavailable budget authority.
+- Added a durable sync outbox for redacted team projections with bounded backoff, restart recovery,
+  immutable project scope, idempotent delivery, and operator-visible recovery state.
+- Integrated bounded local repository Markdown into Gate, Review, and Coding context without
+  implicitly uploading repository content. V1.4 API Review knowledge provenance remains `none`.
+- Completed authenticated Web Work Request, Run selection, Desktop pairing, and Gate Command paths
+  without creating a second workflow authority.
+- Added reproducible unsigned pilot deploy, retained-data upgrade, failed-upgrade recovery, bounded
+  rollback, and packaged Desktop validation.
+- Passed the candidate-bound local matrix, exact-SHA CI, packaged Desktop Computer Use walkthrough,
+  and one explicitly authorized real OpenCode smoke without automatic retry.
+- Preserved the scoped contract and execution history in
+  `docs/product/prd/v1.4-pilot-trust-boundary-prd.md`,
+  `docs/plans/v1.4-pilot-trust-boundary.md`, and `docs/plans/v1.4-release-signoff.md`.
+- See immutable release evidence under `docs/releases/v1.4.0/`.
+
 ## Planned Milestones
 
-### v1.4 Candidate: Pilot Trust Boundary (implementation complete; candidate preparation)
+### v1.5: GitHub Delivery Integration
 
-- Real paid Coding and Knowledge Review runtimes now fail closed on missing, invalid,
-  unauthenticated, out-of-scope, or unavailable budget decisions, with redacted audit evidence.
-- Durable remote-sync now uses an outbox with bounded backoff, restart recovery, immutable project scope,
-  and operator-visible retry/recovery state.
-- Repository Markdown indexing supplies bounded local context to Electron Gate, Knowledge Review,
-  and Coding paths. V1.4 API Review knowledge provenance remains `none`; raw Desktop repository
-  content is not uploaded implicitly.
-- Unsigned identity headers stay out of pilot/production paths with negative-path and configuration
-  coverage.
-- Web request intake, Gate actions, Desktop pairing, and explicit run selection are implemented.
-- Reproducible unsigned Electron/Web/API pilot packages have deploy, upgrade, failed-upgrade
-  recovery, bounded rollback, and packaged Desktop smoke coverage.
-- Candidate signoff follows `docs/product/prd/v1.4-pilot-trust-boundary-prd.md`,
-  `docs/plans/v1.4-pilot-trust-boundary.md`.
+- Add project-to-repository delivery settings. Use the canonical managed worktree and expected local
+  commit as the source for branch publication and GitHub compare.
+- Use the PR Delivery Package as the source for Draft PR title, body, evidence links, and review
+  context; it is a handoff artifact, not source or Git identity.
+- Decide GitHub App versus scoped user token before implementation, and keep credentials inside the
+  existing Team/Desktop credential model.
+- Require explicit human approval for branch publication and pull-request creation.
+- Keep push/create operations idempotent, auditable, recoverable, and bound to the expected project,
+  repository, branch, commit, and evidence version.
+- Provide and verify a minimum operator path to revoke delivery credentials. Richer credential
+  administration UX remains evidence-promoted maintenance work.
+- Never silently merge, force-push, widen repository permissions, or treat GitHub state as authority
+  over the canonical local Run.
+- Write and approve a scoped V1.5 PRD and the required credential/authority ADR before product code.
 
-### v1.5 Candidate: GitHub Delivery Integration
+## 1.x Completion Gate
 
-- Add project-to-repository delivery settings and use the v1.3 PR draft artifact as the source for
-  GitHub compare/PR creation.
-- Decide GitHub App vs scoped user token before implementation, and keep credentials inside the
-  existing team/Desktop credential boundary.
-- Do not silently push or merge. Human approval remains required for branch publication and PR
-  creation.
+The 1.x product line is complete when a non-maintainer can follow documented operator steps and take
+one authenticated Work Request through one canonical local Run.
 
-### v1.6 Candidate: Runtime Operations Hardening
+That Run must reach governed local implementation, Test Evidence, human-approved GitHub Draft PR
+publication, and Acceptance without ad hoc maintainer assistance.
 
-- Add self-hosted operations hardening after the delivery flow closes: backup/restore guidance,
-  token-revocation UX, selected auth/pairing negative-path smoke coverage, and cleanup/recovery
-  notes for self-hosted pilots.
-- Keep release-only real opencode provider smoke as the paid-runtime signoff gate.
+The gate also requires verified redaction, explicit publication authority, bounded recovery,
+revocable credentials, deterministic default CI, and no open P0/P1 defects in the core path.
 
-### v1.7 Candidate: Collaboration Hardening
+After that gate, 1.x defaults to maintenance; it does not automatically produce a V1.6 or V1.7
+feature milestone.
 
-- Add small-team collaboration checks after the single-user delivery loop is coherent: 2-3 Desktop
-  clients, basic conflict visibility, audit review, and member administration improvements.
-- Do not treat 10-person concurrency as a v1.3-v1.5 requirement.
+## 2.x Planned Milestones
 
-## Deferred / Not Yet Started
+The following milestones define outcomes, not pre-approved implementation designs. Each milestone
+requires a scoped PRD and the necessary ADRs before product code begins.
 
+### v2.0: Native Agent Runtime Foundation
+
+- Add a bounded first-party Agent loop with explicit success, failure, cancellation, timeout,
+  budget, and step-limit stop reasons.
+- Persist checkpoint, resume, and an auditable trajectory without exposing hidden reasoning.
+- Add a native Tool registry/executor and bounded MCP discovery, schema validation, lifecycle,
+  permission, deadline, cancellation, and audit behavior for explicitly accepted scenarios.
+- Define and enforce the execution scopes required by those scenarios without weakening existing
+  organization, project, credential, or Desktop authority boundaries.
+- Establish a reproducible scenario dataset and single-Agent quality/cost/latency baseline.
+- Keep Workflow and human Gate authority outside the non-deterministic Agent loop.
+
+V2.0 exits when one DevFlow-owned Agent completes benchmarked work through native Tool/MCP
+execution, resumes from a checkpoint, stops deterministically, and produces an auditable trajectory.
+
+### v2.1: Evaluated Retrieval And Memory
+
+- Extend the existing lexical baseline with vector retrieval, hybrid ranking, reranking, citations,
+  and retrieval evaluation.
+- Add short-term and long-term Agent Memory with tenant, user, project, and session scope.
+- Define authority, conflict, version, retention, expiry, promotion, deletion, and audit semantics.
+- Keep Workflow State, repository Knowledge, and Agent Memory as distinct product concepts.
+- Track retrieval quality and citation faithfulness with a versioned evaluation corpus rather than
+  treating a vector database as completion.
+
+V2.1 exits when retrieval and Memory improve defined benchmark outcomes over the lexical/no-Memory
+baseline without citation, privacy, or cross-tenant isolation regressions.
+
+### v2.2: Multi-Agent And Execution Tenancy
+
+- Add one bounded supervisor and a small number of specialist Agents; do not create an open-ended
+  Agent swarm.
+- Use a dependency-aware task graph, scoped Context, evidence-based handoff, join, cycle detection,
+  termination, cancellation propagation, and shared budget.
+- Add capability-scoped delegation, bounded resource controls, execution isolation, and
+  cross-tenant negative-path tests; the PRD and ADRs choose the concrete mechanism.
+- Attribute failures and compare selected Multi-Agent scenarios against the V2.0 single-Agent
+  baseline for quality, cost, latency, and human intervention.
+
+V2.2 exits only when Multi-Agent execution measurably beats the single-Agent baseline on selected
+tasks without violating cost, termination, evidence, or tenant-isolation constraints.
+
+## 2.x Completion Gate
+
+The 2.x line is complete when documented, repeatable scenarios cover a bounded native Agent loop,
+accepted native MCP execution, evaluated RAG and Memory, and justified Multi-Agent coordination.
+
+Those scenarios must also prove execution tenancy, failure recovery, and auditable trajectories
+inside the existing Workflow/Gate authority model.
+
+After V2.2, the default is real pilot use, interview/demo documentation, security and dependency
+maintenance, and evidence-driven fixes.
+
+There is no automatic V2.3. Any public SaaS or substantially different product direction requires a
+separately approved future major-version charter.
+
+## Evidence-Promoted Maintenance Backlog
+
+These items receive a version only when pilot evidence, a release risk, or a security requirement
+promotes them. They no longer reserve automatic V1.6/V1.7 milestones:
+
+- Backup/restore and rollback guidance beyond the verified V1.4 lifecycle.
+- Credential-revocation administration beyond the minimum verified 1.x operator path, plus member
+  administration and audit-review UX.
+- Additional authentication and pairing negative-path smoke coverage.
+- Two-to-three Desktop conflict visibility and collaboration recovery.
+- Windows real-OpenCode managed-worktree validation.
+- Signed/notarized installers, auto-update, and broader public distribution.
+
+## Explicitly Deferred
+
+- Public SaaS, billing, enterprise SSO, hosted shared-infrastructure multi-tenancy, and managed
+  provider credentials.
+- Automatic cloud deployment and large-organization administration or 10+ client concurrency.
 - HoneyAI adapter or execution-engine bridge.
-- Multi-agent orchestration.
-- Real MCP process management, permissions audit, and tool-call telemetry beyond the current
-  opencode permission-backed Tool / Skill Timeline.
-- MCP policy enforcement and Skill/MCP runtime execution.
-- RAG/vector retrieval provider integration.
-- Repository file watcher, in-app Markdown editor, and remote knowledge synchronization.
-- Signed/notarized Electron installers, Windows installer signing, auto-update, and public release
-  distribution.
-- Public SaaS onboarding, billing, hosted multi-tenancy, and managed credentials.
-- Windows real-opencode smoke for managed worktree path handling and dependency bootstrap once the
-  macOS manual runtime path is promoted from local signoff to release validation.
-- Signed/public distribution automation beyond the current Verify and Release workflows.
+- Repository file watcher, in-app Markdown editor, and implicit remote Knowledge synchronization.
+- Replacing GitHub, CI, issue trackers, or human delivery accountability.
 
-## Knowledge Roadmap Notes
+## Knowledge Evolution
 
-The Knowledge roadmap is intentionally tracked here even though v0.2 does not implement it. It is a
-core long-term differentiator for DevFlow Studio: the product should eventually connect workflow
-execution with team standards, review policy, testing rules, and project memory.
+Knowledge is a cross-version capability rather than a parallel roadmap:
 
-The expected source model is:
+- v0.4 introduced Git/Markdown governance, chunks, lexical retrieval, citations, and the rule that a
+  retrieval hit is not Governance Evidence.
+- v1.4 connected bounded real repository Markdown to local Gate, Review, and Coding context without
+  implicitly uploading raw repository content.
+- v2.1 will add evaluated hybrid retrieval and Agent Memory while preserving Knowledge provenance,
+  authority, redaction, and deletion semantics.
 
-- Markdown in Git remains the source of truth.
-- DevFlow indexes and visualizes knowledge instead of replacing the repository.
-- Agents and human Gates use indexed knowledge as review context.
-- Evidence produced during a Run can link back to the standards it satisfies.
+Markdown in Git remains the reviewable source of truth for team standards and reusable Knowledge.
+DevFlow indexes and cites it rather than silently replacing it.
+
+Agents and human Gates may use retrieved Knowledge as context, but evidence and policy still decide
+whether a standard is satisfied.
 
 ## Tracking Policy
 
-- Use this file for milestone planning, completed-phase summaries, and future product direction.
-- Use ADRs for architectural decisions and tradeoffs.
-- Use `CONTEXT.md` for stable domain language.
-- Use `docs/research/` for investigations and comparison notes.
-- When a planned milestone is completed, move its summary into `Completed Milestones` and add the
-  next concrete milestone under `Planned Milestones`.
+- Do not create a parallel roadmap. Use this file for all version-line goals, current release truth,
+  milestone sequencing, completion gates, and explicitly deferred product work.
+- Use scoped PRDs for user-facing milestone outcomes and `docs/plans/` for implementation and
+  verification. Neither receives roadmap priority until this file lists the work under Now, Next, or
+  Later.
+- Use ADRs for architectural decisions, `CONTEXT.md` for stable domain language, and
+  `docs/research/` for investigations and comparison notes.
+- Keep exactly one `Current Release` and one active `Now` priority.
+- When a release publishes, update `Current Release`, `Completed Milestones`, and `Now` in the first
+  post-release documentation change without moving or rewriting the release tag/evidence.
+- When a planned milestone completes, move its durable summary into `Completed Milestones`; do not
+  leave candidate language in the current-release section.
+- A proposal, PRD, plan, ADR, or research note not promoted by this file does not change product
+  sequence.

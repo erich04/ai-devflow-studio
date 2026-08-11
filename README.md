@@ -8,17 +8,10 @@ DevFlow turns an AI-assisted code change into a governed delivery flow with loca
 
 _A real Electron workbench showing the six-stage workflow, local repository controls, Gate Enforcement, knowledge evidence, and agent actions._
 
-> **V1.4 candidate preparation:** `v1.3.0` remains the released baseline. V1.4 scoped
-> implementation is complete at `5b64354`, while candidate-bound verification and formal signoff
-> are still in progress. Version alignment occurs during V1.4 candidate formation; a package label
-> alone is not release evidence.
->
-> The V1.3 release remains recorded under `docs/releases/v1.3.0/`. V1.4 becomes signed and released
-> only after its candidate `C`, evidence-only child `S`, tagged status, and tag-triggered Release all
-> pass the [V1.4 signoff plan](docs/plans/v1.4-release-signoff.md).
->
-> The [2026-08-01 V1.4 walkthrough result](docs/guides/devflow-studio-v1.4-walkthrough-result-2026-08-01.md)
-> is development evidence, not candidate-bound release evidence.
+> **Current release and roadmap status:** the [Roadmap](docs/roadmap.md) is the single source of
+> truth for the released baseline, active milestone, major-version charters, and future sequence.
+> Immutable candidate-bound proof remains under `docs/releases/`; package labels and this README do
+> not substitute for that evidence.
 
 ## Why It Exists
 
@@ -168,7 +161,7 @@ The [roadmap](docs/roadmap.md) is the source of truth for milestone status, plan
 | Product positioning and user workflow | [Product Definition](docs/product/product-definition.md) |
 | Current status and future priorities | [Roadmap](docs/roadmap.md) |
 | Complete hands-on product tour | [Full feature walkthrough](docs/guides/devflow-studio-full-feature-walkthrough.md) |
-| Current V1.4 candidate walkthrough | [v1.4 Walkthrough](docs/guides/devflow-studio-v1.4-walkthrough.md) |
+| V1.4 operator walkthrough | [v1.4 Walkthrough](docs/guides/devflow-studio-v1.4-walkthrough.md) |
 | Self-hosted API/Web/Postgres pilot | [Self-Hosted Pilot](docs/guides/devflow-studio-self-hosted-pilot.md) |
 | Windows source and ZIP validation | [Windows ZIP Smoke Guide](docs/guides/windows-zip-smoke.md) |
 | Test layers and quality gates | [Testing Strategy](docs/engineering/testing-strategy.md) |

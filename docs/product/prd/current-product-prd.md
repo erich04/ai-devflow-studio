@@ -268,9 +268,9 @@ preserving the evidence needed for human review.
 
 ## Further Notes
 
-- Future scoped PRDs should be written for GitHub Delivery Integration, Runtime Operations
-  Hardening, and Collaboration Hardening before those roadmap candidates move into implementation.
+- GitHub Delivery requires a scoped PRD before implementation. Runtime Operations and Collaboration
+  Hardening remain evidence-promoted backlog items unless the Roadmap assigns milestone priority.
 - UI refactor work should preserve the Evidence Chain as the center of gravity: current stage,
   blocking reason, next action, and evidence status must stay visible.
-- Roadmap and release-signoff documents may carry milestone status separately from this PRD. This
-  PRD describes the current product baseline and should be updated when the product boundary changes.
+- Only the Roadmap owns current release and milestone status. Release-signoff documents retain
+  historical execution and evidence, while this PRD describes the current product baseline.
