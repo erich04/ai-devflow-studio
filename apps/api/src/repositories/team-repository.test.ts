@@ -4,6 +4,7 @@ import {
   type GateOverrideDecision,
 } from '@ai-devflow/shared'
 import type { RequestPrincipal } from '../auth/request-auth'
+import type { GitHubDeliverySessionPrincipal } from './github-delivery-contract'
 import { createSeedTeamRepository } from './team-repository'
 import { evaluateTeamGateEnforcement } from './team-gate-enforcement'
 
@@ -36,6 +37,18 @@ const gateDesktopPrincipal: RequestPrincipal = {
     kind: 'desktop_bearer',
     tokenRecordId: 'desktop-token-team-repository-gate',
   },
+}
+
+const githubOwnerPrincipal: GitHubDeliverySessionPrincipal = {
+  session: {
+    source: 'authenticated',
+    authAccountId: 'acct-demo-u-erich',
+    organizationId: 'org-demo',
+    userId: 'u-erich',
+    role: 'owner',
+    projectMemberships: [],
+  },
+  authentication: { kind: 'session_cookie', tokenRecordId: null },
 }
 
 async function materializeSeedGateRun(
@@ -78,6 +91,33 @@ async function materializeSeedGateRun(
 
 describe('seed team repository', () => {
   const syncContext = { organizationId: 'org-demo', userId: 'u-erich' }
+
+  it('exposes GitHub Delivery repository authority through the unified Team repository', async () => {
+    const repository = createSeedTeamRepository()
+
+    await expect(
+      repository.upsertGitHubRepositoryBinding(
+        {
+          projectId: 'p-payments',
+          installationId: '12345',
+          repositoryId: '98765',
+          repository: 'example/project',
+          defaultBranch: 'main',
+          verifiedAt: '2026-08-11T15:00:00.000Z',
+          expectedStateVersion: 0,
+        },
+        githubOwnerPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      outcomeCode: 'binding_created',
+      binding: {
+        teamProjectId: 'p-payments',
+        repository: 'example/project',
+        redacted: true,
+      },
+    })
+  })
 
   it('loads Gate enforcement inputs sequentially for transaction-backed repositories', async () => {
     const source = createSeedTeamRepository()

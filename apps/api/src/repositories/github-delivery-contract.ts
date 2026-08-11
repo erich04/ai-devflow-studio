@@ -1,11 +1,18 @@
 import { createHash } from 'node:crypto'
-import type {
-  GitHubDeliveryIntent,
-  GitHubDeliveryStatus,
-  GitHubRepositoryBinding,
-  Role,
+import {
+  assertFullGitCommitSha,
+  assertSafeGitHubBranch,
+  normalizeGitHubRepository,
+  redactSensitiveText,
+  toTeamStoredNodeId,
+  type GitHubDeliveryIntent,
+  type GitHubDeliveryStatus,
+  type GitHubRepositoryBinding,
+  type Role,
 } from '@ai-devflow/shared'
 import type { RequestPrincipal } from '../auth/request-auth'
+
+export const GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS = 2 * 60 * 1_000
 
 export type GitHubDeliverySessionPrincipal = RequestPrincipal & {
   authentication: { kind: 'session_cookie'; tokenRecordId: null }
@@ -119,6 +126,189 @@ export type CreateOrReviseGitHubDeliveryRequestInput = {
   expectedStateVersion: number
 }
 
+export type GitHubDeliveryIntentValidationAuthority = {
+  organizationId: string
+  projectId: string
+  binding: {
+    id: string
+    version: number
+    installationId: string
+    repositoryId: string
+    repository: string
+    defaultBranch: string
+  }
+}
+
+function sha256Text(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
+function isSafeDeliveryIdentifier(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 200 &&
+    value.trim() === value &&
+    !/[\u0000-\u001f\u007f/\\]/u.test(value) &&
+    !value.startsWith('~') &&
+    !redactSensitiveText(value).redacted
+  )
+}
+
+function expectedIntentDigest(intent: GitHubDeliveryIntent): string {
+  return sha256Text(JSON.stringify({
+    stateVersion: intent.stateVersion,
+    organizationId: intent.organizationId,
+    teamProjectId: intent.teamProjectId,
+    localProjectId: intent.localProjectId,
+    runId: intent.runId,
+    runVersion: intent.runVersion,
+    nodeId: intent.nodeId,
+    repositoryBindingId: intent.repositoryBindingId,
+    repositoryBindingVersion: intent.repositoryBindingVersion,
+    installationId: intent.installationId,
+    repositoryId: intent.repositoryId,
+    codingRunId: intent.codingRunId,
+    codingRunCompletedAt: intent.codingRunCompletedAt,
+    workspaceId: intent.workspaceId,
+    repository: intent.repository,
+    baseBranch: intent.baseBranch,
+    headBranch: intent.headBranch,
+    baseCommitSha: intent.baseCommitSha,
+    expectedCommitSha: intent.expectedCommitSha,
+    diffArtifactId: intent.diffArtifactId,
+    diffSourceDigest: intent.diffSourceDigest,
+    testEvidenceId: intent.testEvidenceId,
+    testEvidenceCreatedAt: intent.testEvidenceCreatedAt,
+    testEvidenceDigest: intent.testEvidenceDigest,
+    prPackageArtifactId: intent.prPackageArtifactId,
+    prPackageUpdatedAt: intent.prPackageUpdatedAt,
+    prPackageDigest: intent.prPackageDigest,
+    changedPaths: intent.changedPaths,
+  }))
+}
+
+function expectedLogicalDeliveryKey(intent: GitHubDeliveryIntent): string {
+  return `github-delivery:${sha256Text(JSON.stringify({
+    organizationId: intent.organizationId,
+    teamProjectId: intent.teamProjectId,
+    localProjectId: intent.localProjectId,
+    runId: intent.runId,
+    nodeId: intent.nodeId,
+    repositoryBindingId: intent.repositoryBindingId,
+    repositoryBindingVersion: intent.repositoryBindingVersion,
+    workspaceId: intent.workspaceId,
+  }))}`
+}
+
+export function normalizeGitHubDeliveryRequestIntent(
+  input: CreateOrReviseGitHubDeliveryRequestInput,
+  authority: GitHubDeliveryIntentValidationAuthority,
+): GitHubDeliveryIntent | null {
+  try {
+    const intent = input.intent
+    const repository = normalizeGitHubRepository(intent.repository)
+    const baseBranch = assertSafeGitHubBranch(intent.baseBranch)
+    const headBranch = assertSafeGitHubBranch(intent.headBranch, {
+      requireDeliveryNamespace: true,
+    })
+    const baseCommitSha = assertFullGitCommitSha(intent.baseCommitSha, 'Base commit')
+    const expectedCommitSha = assertFullGitCommitSha(
+      intent.expectedCommitSha,
+      'Expected commit',
+    )
+    const changedPaths = [...new Set(intent.changedPaths)].sort((left, right) =>
+      left.localeCompare(right),
+    )
+    const safePaths =
+      changedPaths.length > 0 &&
+      changedPaths.length <= 200 &&
+      changedPaths.every(
+        (path) =>
+          path.length > 0 &&
+          path.length <= 500 &&
+          path.trim() === path &&
+          !path.startsWith('/') &&
+          !path.startsWith('~') &&
+          !path.includes('\\') &&
+          !redactSensitiveText(path).redacted &&
+          path
+            .split('/')
+            .every((segment) => segment && segment !== '.' && segment !== '..'),
+      )
+    const digest = (value: string) => /^[a-f0-9]{64}$/u.test(value)
+    const titleRedaction = redactSensitiveText(input.prTitle)
+    const bodyRedaction = redactSensitiveText(input.prBody)
+    const validTitle =
+      input.prTitle.length > 0 &&
+      input.prTitle.length <= 256 &&
+      input.prTitle.trim() === input.prTitle &&
+      !/[\u0000-\u001f\u007f]/u.test(input.prTitle) &&
+      !titleRedaction.redacted
+    const validBody =
+      input.prBody.length > 0 &&
+      input.prBody.length <= 20_000 &&
+      !input.prBody.includes('\u0000') &&
+      !bodyRedaction.redacted
+    const normalizedIntent: GitHubDeliveryIntent = {
+      ...intent,
+      repository,
+      baseBranch,
+      headBranch,
+      baseCommitSha,
+      expectedCommitSha,
+      changedPaths,
+    }
+    if (
+      intent.stateVersion !== 1 ||
+      intent.redacted !== true ||
+      intent.status !== 'approval_required' ||
+      ![
+        intent.id,
+        intent.localProjectId,
+        intent.runId,
+        intent.nodeId,
+        intent.repositoryBindingId,
+        intent.codingRunId,
+        intent.workspaceId,
+        intent.diffArtifactId,
+        intent.testEvidenceId,
+        intent.prPackageArtifactId,
+      ].every(isSafeDeliveryIdentifier) ||
+      intent.organizationId !== authority.organizationId ||
+      intent.teamProjectId !== authority.projectId ||
+      intent.repositoryBindingId !== authority.binding.id ||
+      intent.repositoryBindingVersion !== authority.binding.version ||
+      intent.installationId !== authority.binding.installationId ||
+      intent.repositoryId !== authority.binding.repositoryId ||
+      repository !== authority.binding.repository ||
+      baseBranch !== authority.binding.defaultBranch ||
+      baseCommitSha === expectedCommitSha ||
+      !Number.isSafeInteger(input.expectedStateVersion) ||
+      input.expectedStateVersion < 0 ||
+      !Number.isSafeInteger(intent.runVersion) ||
+      intent.runVersion < 1 ||
+      !digest(intent.intentDigest) ||
+      !digest(intent.diffSourceDigest) ||
+      !digest(intent.testEvidenceDigest) ||
+      !digest(intent.prPackageDigest) ||
+      !/^github-delivery:[a-f0-9]{64}$/u.test(intent.idempotencyKey) ||
+      intent.intentDigest !== expectedIntentDigest(normalizedIntent) ||
+      intent.idempotencyKey !== expectedLogicalDeliveryKey(normalizedIntent) ||
+      !safePaths ||
+      changedPaths.some((path, index) => path !== intent.changedPaths[index]) ||
+      !validTitle ||
+      !validBody
+    ) {
+      return null
+    }
+    toTeamStoredNodeId(intent.runId, intent.nodeId)
+    return normalizedIntent
+  } catch {
+    return null
+  }
+}
+
 export type GitHubDeliveryRequestMutationResult =
   | {
       ok: true
@@ -198,6 +388,7 @@ export type GitHubCredentialGrant = {
   outcomeCode:
     | 'credential_issue_failed'
     | 'credential_expired'
+    | 'credential_superseded'
     | 'binding_revoked'
     | null
   redacted: true
@@ -386,6 +577,14 @@ export type GitHubPullRequestMutationResult =
     }
   | GitHubDeliveryRejectionResult
 
+export type GitHubDeliveryRecoverySnapshot = {
+  request: GitHubDeliveryRequest
+  approval: GitHubDeliveryApproval | null
+  grant: GitHubCredentialGrant | null
+  publication: GitHubBranchPublication | null
+  pullRequest: GitHubPullRequestOutcome | null
+}
+
 export type GitHubDeliveryRejectionCode =
   | 'authentication_forbidden'
   | 'project_forbidden'
@@ -441,6 +640,11 @@ export type GitHubDeliveryRepository = {
     projectId: string,
     principal: GitHubDeliveryDesktopPrincipal,
   ): Promise<GitHubDeliveryRequest[]>
+  getGitHubDeliveryRecoverySnapshot(
+    projectId: string,
+    requestId: string,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubDeliveryRecoverySnapshot | null>
   listGitHubDeliveryRequests(
     projectId: string,
     principal: GitHubDeliverySessionPrincipal,

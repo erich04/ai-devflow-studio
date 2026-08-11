@@ -76,6 +76,7 @@ import type {
 } from './team-repository'
 import { createPostgresWorkRequestRepository } from './postgres-work-request-repository'
 import { createPostgresGateCommandRepository } from './postgres-gate-command-repository'
+import { createPostgresGitHubDeliveryRepository } from './postgres-github-delivery-repository'
 import { evaluateTeamGateEnforcement } from './team-gate-enforcement'
 import { preflightGateCommand } from './gate-command-preflight'
 import { collaborationRunLockKey } from './collaboration-run-lock'
@@ -997,6 +998,7 @@ export function createPostgresTeamRepository(
   options: PostgresTeamRepositoryOptions = {},
 ): TeamRepository {
   const workRequestRepository = createPostgresWorkRequestRepository(db)
+  const githubDeliveryRepository = createPostgresGitHubDeliveryRepository(db)
   const gateCommandRepository = createPostgresGateCommandRepository(db, {
     async resolvePreflight({ tx, command, principal, identity }) {
       if (principal.session.source !== 'authenticated') return null
@@ -1446,6 +1448,7 @@ export function createPostgresTeamRepository(
   return {
     ...workRequestRepository,
     ...gateCommandRepository,
+    ...githubDeliveryRepository,
     async getAuthenticatedIdentity(input) {
       return loadAuthenticatedIdentity(input)
     },

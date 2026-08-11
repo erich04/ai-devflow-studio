@@ -9,6 +9,7 @@ import {
 } from '@ai-devflow/shared'
 import {
   CanonicalRunRequiredError,
+  createSeedTeamRepository,
   RemoteChildSummaryConflictError,
   RemoteRunSummaryConflictError,
   type RunsBundle,
@@ -422,6 +423,7 @@ function createRepository(): TeamRepository & GateCommandRepository {
   const runtimeBudgetApprovals = overview.runtimeBudgetApprovals
 
   return {
+    ...createSeedTeamRepository(),
     getAuthenticatedIdentity: vi.fn(async () => null),
     resolveBrowserSession: vi.fn(async () => null),
     resolveOrBootstrapGitHubIdentity: vi.fn(async () => ({

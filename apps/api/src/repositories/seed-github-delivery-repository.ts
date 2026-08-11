@@ -14,7 +14,9 @@ import {
   cloneGitHubRepositoryBinding,
   cloneGitHubPullRequestOutcome,
   fingerprintGitHubDeliveryRequest,
+  GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS,
   githubDeliveryRejection,
+  normalizeGitHubDeliveryRequestIntent,
   type CreateOrReviseGitHubDeliveryRequestInput,
   type DecideGitHubDeliveryRequestInput,
   type FinalizeGitHubCredentialGrantInput,
@@ -34,6 +36,7 @@ import {
   type GitHubDeliveryDesktopAuthorityLookup,
   type GitHubDeliveryProjectRole,
   type GitHubDeliveryReadPrincipal,
+  type GitHubDeliveryRecoverySnapshot,
   type GitHubDeliveryRepository,
   type GitHubDeliveryRequest,
   type GitHubDeliveryRequestMutationResult,
@@ -49,6 +52,7 @@ import {
 } from './github-delivery-contract'
 
 type MaybePromise<T> = T | Promise<T>
+const MAX_CREDENTIAL_GRANT_ATTEMPTS = 3
 
 export type SeedGitHubDeliveryRepositoryOptions = {
   resolveProjectRole(
@@ -491,88 +495,18 @@ export function createSeedGitHubDeliveryRepository(
     principal: GitHubDeliveryDesktopPrincipal,
     binding: InternalRepositoryBinding,
   ): GitHubDeliveryIntent | null {
-    const intent = input.intent
-    try {
-      const expectedRepository = normalizeGitHubRepository(intent.repository)
-      const expectedBaseBranch = assertSafeGitHubBranch(intent.baseBranch)
-      const expectedHeadBranch = assertSafeGitHubBranch(intent.headBranch, {
-        requireDeliveryNamespace: true,
-      })
-      const baseCommitSha = assertFullGitCommitSha(
-        intent.baseCommitSha,
-        'Base commit',
-      )
-      const expectedCommitSha = assertFullGitCommitSha(
-        intent.expectedCommitSha,
-        'Expected commit',
-      )
-      const validDigest = (value: string) => /^[a-f0-9]{64}$/u.test(value)
-      const changedPaths = [...new Set(intent.changedPaths)].sort((left, right) =>
-        left.localeCompare(right),
-      )
-      const safePaths =
-        changedPaths.length > 0 &&
-        changedPaths.length <= 200 &&
-        changedPaths.every(
-          (path) =>
-            path.length > 0 &&
-            path.length <= 500 &&
-            path.trim() === path &&
-            !path.startsWith('/') &&
-            !path.startsWith('~') &&
-            !path.includes('\\') &&
-            path
-              .split('/')
-              .every((segment) => segment && segment !== '.' && segment !== '..'),
-        )
-      const validTitle =
-        input.prTitle.length > 0 &&
-        input.prTitle.length <= 256 &&
-        input.prTitle.trim() === input.prTitle &&
-        !/[\u0000-\u001f\u007f]/u.test(input.prTitle)
-      const validBody =
-        input.prBody.length > 0 &&
-        input.prBody.length <= 20_000 &&
-        !input.prBody.includes('\u0000')
-      if (
-        intent.stateVersion !== 1 ||
-        intent.redacted !== true ||
-        intent.status !== 'approval_required' ||
-        intent.organizationId !== principal.session.organizationId ||
-        intent.teamProjectId !== input.projectId ||
-        intent.repositoryBindingId !== binding.id ||
-        intent.repositoryBindingVersion !== binding.version ||
-        intent.installationId !== binding.installationId ||
-        intent.repositoryId !== binding.repositoryId ||
-        expectedRepository !== binding.repository ||
-        expectedBaseBranch !== binding.defaultBranch ||
-        baseCommitSha === expectedCommitSha ||
-        !Number.isSafeInteger(intent.runVersion) ||
-        intent.runVersion < 1 ||
-        !validDigest(intent.intentDigest) ||
-        !validDigest(intent.diffSourceDigest) ||
-        !validDigest(intent.testEvidenceDigest) ||
-        !validDigest(intent.prPackageDigest) ||
-        !/^github-delivery:[a-f0-9]{64}$/u.test(intent.idempotencyKey) ||
-        !safePaths ||
-        changedPaths.some((path, index) => path !== intent.changedPaths[index]) ||
-        !validTitle ||
-        !validBody
-      ) {
-        return null
-      }
-      return {
-        ...intent,
-        repository: expectedRepository,
-        baseBranch: expectedBaseBranch,
-        headBranch: expectedHeadBranch,
-        baseCommitSha,
-        expectedCommitSha,
-        changedPaths,
-      }
-    } catch {
-      return null
-    }
+    return normalizeGitHubDeliveryRequestIntent(input, {
+      organizationId: principal.session.organizationId,
+      projectId: input.projectId,
+      binding: {
+        id: binding.id,
+        version: binding.version,
+        installationId: binding.installationId,
+        repositoryId: binding.repositoryId,
+        repository: binding.repository,
+        defaultBranch: binding.defaultBranch,
+      },
+    })
   }
 
   function assignIntent(
@@ -673,13 +607,16 @@ export function createSeedGitHubDeliveryRepository(
         return githubDeliveryRejection('intent_conflict')
       }
       const at = timestamp()
+      const maximumExpiry =
+        Date.parse(existing.createdAt) + 24 * 60 * 60 * 1_000
+      if (Date.parse(at) >= maximumExpiry) {
+        return githubDeliveryRejection('expired')
+      }
       existing.stateVersion += 1
       existing.intentRevision += 1
       existing.status = 'approval_required'
       existing.outcomeCode = null
-      existing.expiresAt = new Date(
-        Date.parse(at) + 24 * 60 * 60 * 1_000,
-      ).toISOString()
+      existing.expiresAt = new Date(maximumExpiry).toISOString()
       existing.updatedAt = at
       assignIntent(existing, intent, input)
       audit(
@@ -791,6 +728,36 @@ export function createSeedGitHubDeliveryRepository(
           request.requestedByTokenId === principal.authentication.tokenRecordId,
       )
       .map(cloneGitHubDeliveryRequest)
+  }
+
+  async function getGitHubDeliveryRecoverySnapshot(
+    projectId: string,
+    requestId: string,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubDeliveryRecoverySnapshot | null> {
+    if (!(await hasDesktopAuthority(principal, projectId))) return null
+    const request = findRequest(
+      requestId,
+      principal.session.organizationId,
+      projectId,
+    )
+    if (
+      !request ||
+      request.requestedByTokenId !== principal.authentication.tokenRecordId
+    ) {
+      return null
+    }
+    const approval = currentApproval(request)
+    const grant = currentGrant(request)
+    const publication = currentPublication(request)
+    const pullRequest = currentPullRequest(request)
+    return {
+      request: cloneGitHubDeliveryRequest(request),
+      approval: approval ? cloneGitHubDeliveryApproval(approval) : null,
+      grant: grant ? cloneGitHubCredentialGrant(grant) : null,
+      publication: publication ? cloneGitHubBranchPublication(publication) : null,
+      pullRequest: pullRequest ? cloneGitHubPullRequestOutcome(pullRequest) : null,
+    }
   }
 
   async function listGitHubDeliveryRequests(
@@ -1046,12 +1013,41 @@ export function createSeedGitHubDeliveryRepository(
       return githubDeliveryRejection('invalid_state')
     }
     const existingGrant = currentGrant(request)
+    const existingPublication = currentPublication(request)
+    const at = timestamp()
+    const staleIssuingGrant = Boolean(
+      existingGrant?.status === 'issuing' &&
+        request.status === 'publishing_branch' &&
+        Date.parse(at) >=
+          Date.parse(existingGrant.requestedAt) +
+            GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS,
+    )
+    const replacingLostIssuedCredential = Boolean(
+      existingGrant?.status === 'issued' &&
+        request.status === 'publishing_branch',
+    )
+    const consumedPublicationRecovery = Boolean(
+      existingGrant?.status === 'consumed' &&
+        existingPublication?.grantId === existingGrant.id &&
+        ['recovery_required', 'conflict'].includes(existingPublication.status) &&
+        request.status === 'recovery_required',
+    )
     const retrying = Boolean(
       existingGrant &&
-        ['failed', 'recovery_required', 'expired'].includes(
+        (['failed', 'recovery_required', 'expired'].includes(
           existingGrant.status,
-        ),
+        ) ||
+          staleIssuingGrant ||
+          replacingLostIssuedCredential ||
+          consumedPublicationRecovery),
     )
+    if (
+      retrying &&
+      existingGrant &&
+      existingGrant.attempt >= MAX_CREDENTIAL_GRANT_ATTEMPTS
+    ) {
+      return githubDeliveryRejection('grant_conflict')
+    }
     if (
       existingGrant &&
       !retrying &&
@@ -1072,11 +1068,12 @@ export function createSeedGitHubDeliveryRepository(
     if (
       (!retrying && request.status !== 'approved') ||
       (retrying &&
-        !['failed', 'recovery_required'].includes(request.status))
+        !['failed', 'recovery_required', 'publishing_branch'].includes(
+          request.status,
+        ))
     ) {
       return githubDeliveryRejection('approval_required')
     }
-    const at = timestamp()
     if (Date.parse(at) >= Date.parse(request.expiresAt)) {
       return githubDeliveryRejection('expired')
     }
@@ -1097,9 +1094,19 @@ export function createSeedGitHubDeliveryRepository(
       return githubDeliveryRejection('approval_required')
     }
     if (existingGrant && retrying) {
+      if (staleIssuingGrant) {
+        existingGrant.version += 1
+        existingGrant.status = 'failed'
+        existingGrant.outcomeCode = 'credential_issue_failed'
+      }
       if (existingGrant.status === 'recovery_required') {
         existingGrant.version += 1
         existingGrant.status = 'failed'
+      }
+      if (replacingLostIssuedCredential) {
+        existingGrant.version += 1
+        existingGrant.status = 'failed'
+        existingGrant.outcomeCode = 'credential_superseded'
       }
     }
 
@@ -1855,14 +1862,14 @@ export function createSeedGitHubDeliveryRepository(
       return githubDeliveryRejection('pull_request_conflict')
     }
 
+    const at = timestamp()
     if (input.outcome.status === 'completed') {
       const validated = validateCompletedPullRequest(request, input.outcome)
       const publication = publications.get(pullRequest.publicationId)
       if (
         !validated ||
         !publication?.verifiedAt ||
-        Date.parse(validated.providerCreatedAt) <
-          Date.parse(publication.verifiedAt)
+        Date.parse(validated.providerCreatedAt) > Date.parse(at)
       ) {
         return githubDeliveryRejection('pull_request_conflict')
       }
@@ -1881,9 +1888,10 @@ export function createSeedGitHubDeliveryRepository(
       request.status = input.outcome.status
       request.outcomeCode = 'pull_request_failed'
     }
+    pullRequest.recordedAt = at
     pullRequest.version += 1
     request.stateVersion += 1
-    request.updatedAt = timestamp()
+    request.updatedAt = at
     audit(principal, input.projectId, 'github_pull_request_create', pullRequest.id, input.outcome.status === 'completed' ? 'pull_request_completed' : 'pull_request_failed', [request.id, pullRequest.version], request.updatedAt)
     return {
       ok: true,
@@ -1904,6 +1912,7 @@ export function createSeedGitHubDeliveryRepository(
     revokeGitHubRepositoryBinding,
     createOrReviseGitHubDeliveryRequest,
     listGitHubDeliveryInbox,
+    getGitHubDeliveryRecoverySnapshot,
     listGitHubDeliveryRequests,
     decideGitHubDeliveryRequest,
     reserveGitHubCredentialGrant,

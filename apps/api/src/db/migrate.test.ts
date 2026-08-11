@@ -123,6 +123,7 @@ describe('team database migration runner', () => {
       name: '0011_github_delivery',
     })
     expect(githubDelivery?.sql).toContain('CREATE TABLE github_delivery_requests')
+    expect(githubDelivery?.sql).toContain('provider_created_at <= recorded_at')
   })
 
   it('orders the v10 Gate backfill before validation and keeps its SQL function atomic', async () => {

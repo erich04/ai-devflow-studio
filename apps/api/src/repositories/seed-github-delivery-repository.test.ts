@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type { GitHubDeliveryIntent } from '@ai-devflow/shared'
 import type { RequestPrincipal } from '../auth/request-auth'
@@ -51,12 +52,61 @@ const shaB = 'b'.repeat(40)
 const digestA = 'a'.repeat(64)
 const digestB = 'b'.repeat(64)
 const digestC = 'c'.repeat(64)
-const digestD = 'd'.repeat(64)
+
+function sha256Text(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
+function expectedIntentDigest(intent: GitHubDeliveryIntent): string {
+  return sha256Text(JSON.stringify({
+    stateVersion: intent.stateVersion,
+    organizationId: intent.organizationId,
+    teamProjectId: intent.teamProjectId,
+    localProjectId: intent.localProjectId,
+    runId: intent.runId,
+    runVersion: intent.runVersion,
+    nodeId: intent.nodeId,
+    repositoryBindingId: intent.repositoryBindingId,
+    repositoryBindingVersion: intent.repositoryBindingVersion,
+    installationId: intent.installationId,
+    repositoryId: intent.repositoryId,
+    codingRunId: intent.codingRunId,
+    codingRunCompletedAt: intent.codingRunCompletedAt,
+    workspaceId: intent.workspaceId,
+    repository: intent.repository,
+    baseBranch: intent.baseBranch,
+    headBranch: intent.headBranch,
+    baseCommitSha: intent.baseCommitSha,
+    expectedCommitSha: intent.expectedCommitSha,
+    diffArtifactId: intent.diffArtifactId,
+    diffSourceDigest: intent.diffSourceDigest,
+    testEvidenceId: intent.testEvidenceId,
+    testEvidenceCreatedAt: intent.testEvidenceCreatedAt,
+    testEvidenceDigest: intent.testEvidenceDigest,
+    prPackageArtifactId: intent.prPackageArtifactId,
+    prPackageUpdatedAt: intent.prPackageUpdatedAt,
+    prPackageDigest: intent.prPackageDigest,
+    changedPaths: intent.changedPaths,
+  }))
+}
+
+function expectedLogicalDeliveryKey(intent: GitHubDeliveryIntent): string {
+  return `github-delivery:${sha256Text(JSON.stringify({
+    organizationId: intent.organizationId,
+    teamProjectId: intent.teamProjectId,
+    localProjectId: intent.localProjectId,
+    runId: intent.runId,
+    nodeId: intent.nodeId,
+    repositoryBindingId: intent.repositoryBindingId,
+    repositoryBindingVersion: intent.repositoryBindingVersion,
+    workspaceId: intent.workspaceId,
+  }))}`
+}
 
 function deliveryIntent(
   overrides: Partial<GitHubDeliveryIntent> = {},
 ): GitHubDeliveryIntent {
-  return {
+  const intent: GitHubDeliveryIntent = {
     stateVersion: 1,
     id: 'local-intent-1',
     organizationId: 'org-a',
@@ -86,7 +136,7 @@ function deliveryIntent(
     prPackageUpdatedAt: '2026-08-11T09:57:00.000Z',
     prPackageDigest: digestC,
     changedPaths: ['apps/api/src/example.ts'],
-    intentDigest: digestD,
+    intentDigest: 'd'.repeat(64),
     idempotencyKey: `github-delivery:${'e'.repeat(64)}`,
     status: 'approval_required',
     createdAt: '2026-08-11T09:58:00.000Z',
@@ -94,6 +144,13 @@ function deliveryIntent(
     redacted: true,
     ...overrides,
   }
+  if (!Object.hasOwn(overrides, 'intentDigest')) {
+    intent.intentDigest = expectedIntentDigest(intent)
+  }
+  if (!Object.hasOwn(overrides, 'idempotencyKey')) {
+    intent.idempotencyKey = expectedLogicalDeliveryKey(intent)
+  }
+  return intent
 }
 
 function createHarness() {
@@ -557,6 +614,143 @@ describe('seed GitHub Delivery repository', () => {
     ).resolves.toMatchObject({ ok: false, outcomeCode: 'binding_inactive' })
   })
 
+  it('returns one redacted recovery snapshot for the exact paired Desktop claimant', async () => {
+    const harness = createHarness()
+    const issued = await createIssuedGrant(harness)
+
+    await expect(
+      harness.repository.getGitHubDeliveryRecoverySnapshot(
+        'project-a',
+        issued.request.id,
+        desktopPrincipal,
+      ),
+    ).resolves.toEqual({
+      request: issued.request,
+      approval: expect.objectContaining({
+        requestId: issued.request.id,
+        redacted: true,
+      }),
+      grant: issued.grant,
+      publication: null,
+      pullRequest: null,
+    })
+    const snapshot = await harness.repository.getGitHubDeliveryRecoverySnapshot(
+      'project-a',
+      issued.request.id,
+      desktopPrincipal,
+    )
+    expect(JSON.stringify(snapshot)).not.toMatch(
+      /authorization|access.token|private.key|raw.response|workspace.path|stdout|stderr/i,
+    )
+  })
+
+  it('reserves one bounded replacement credential after an issued response is lost', async () => {
+    const harness = createHarness()
+    const issued = await createIssuedGrant(harness)
+
+    const replacement = await harness.repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: issued.request.id,
+        expectedStateVersion: issued.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+
+    expect(replacement).toMatchObject({
+      ok: true,
+      replayed: false,
+      outcomeCode: 'grant_reserved',
+      request: { status: 'publishing_branch' },
+      grant: { attempt: 2, status: 'issuing', redacted: true },
+    })
+    expect(harness.repository.inspectForTests().grants).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: issued.grant.id,
+          status: 'failed',
+          outcomeCode: 'credential_superseded',
+        }),
+      ]),
+    )
+  })
+
+  it('fails closed after three credential attempts for one approved intent revision', async () => {
+    const harness = createHarness()
+    const first = await createIssuedGrant(harness)
+    const second = await harness.repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: first.request.id,
+        expectedStateVersion: first.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+    if (!second.ok) throw new Error('fixture second grant reservation failed')
+    const secondIssued = await harness.repository.finalizeGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: first.request.id,
+        grantId: second.grant.id,
+        expectedStateVersion: second.request.stateVersion,
+        expectedGrantVersion: second.grant.version,
+        outcome: {
+          status: 'issued',
+          issuedAt: '2026-08-11T10:00:02.000Z',
+          credentialExpiresAt: '2026-08-11T10:45:02.000Z',
+          repositoryId: '98765',
+          permission: 'contents:write',
+          repositoryCount: 1,
+        },
+      },
+      desktopPrincipal,
+    )
+    if (!secondIssued.ok) throw new Error('fixture second grant finalization failed')
+    const third = await harness.repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: first.request.id,
+        expectedStateVersion: secondIssued.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+    if (!third.ok) throw new Error('fixture third grant reservation failed')
+    const thirdIssued = await harness.repository.finalizeGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: first.request.id,
+        grantId: third.grant.id,
+        expectedStateVersion: third.request.stateVersion,
+        expectedGrantVersion: third.grant.version,
+        outcome: {
+          status: 'issued',
+          issuedAt: '2026-08-11T10:00:03.000Z',
+          credentialExpiresAt: '2026-08-11T10:45:03.000Z',
+          repositoryId: '98765',
+          permission: 'contents:write',
+          repositoryCount: 1,
+        },
+      },
+      desktopPrincipal,
+    )
+    if (!thirdIssued.ok) throw new Error('fixture third grant finalization failed')
+
+    await expect(
+      harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: first.request.id,
+          expectedStateVersion: thirdIssued.request.stateVersion,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      outcomeCode: 'grant_conflict',
+      replayed: false,
+    })
+  })
+
   it('creates, replays, and revises one logical delivery intent with CAS', async () => {
     const harness = createHarness()
     await createBinding(harness)
@@ -590,7 +784,7 @@ describe('seed GitHub Delivery repository', () => {
         outcomeCode: null,
         repository: 'example/project',
         expectedCommitSha: shaB,
-        intentDigest: digestD,
+        intentDigest: input.intent.intentDigest,
         redacted: true,
       },
     })
@@ -607,7 +801,6 @@ describe('seed GitHub Delivery repository', () => {
         intent: deliveryIntent({
           testEvidenceId: 'test-2',
           testEvidenceDigest: 'f'.repeat(64),
-          intentDigest: '1'.repeat(64),
         }),
         expectedStateVersion: 1,
       },
@@ -624,11 +817,113 @@ describe('seed GitHub Delivery repository', () => {
         status: 'approval_required',
         testEvidenceId: 'test-2',
         testEvidenceDigest: 'f'.repeat(64),
-        intentDigest: '1'.repeat(64),
+        intentDigest: deliveryIntent({
+          testEvidenceId: 'test-2',
+          testEvidenceDigest: 'f'.repeat(64),
+        }).intentDigest,
       },
     })
     expect(JSON.stringify(revised)).not.toMatch(
       /authorization|access.token|private.key|raw.response|workspace.path|stdout|stderr/i,
+    )
+  })
+
+  it('does not extend a delivery request beyond its original 24-hour lifetime', async () => {
+    const harness = createHarness()
+    await createBinding(harness)
+    const input = {
+      projectId: 'project-a',
+      intent: deliveryIntent(),
+      prTitle: 'Deliver the reviewed change',
+      prBody: 'Bound to passing Test Evidence.',
+      expectedStateVersion: 0,
+    }
+    const created = await harness.repository.createOrReviseGitHubDeliveryRequest(
+      input,
+      desktopPrincipal,
+    )
+    if (!created.ok) throw new Error('fixture delivery create failed')
+    expect(created.request.expiresAt).toBe('2026-08-12T10:00:00.000Z')
+
+    harness.setTime('2026-08-12T09:59:00.000Z')
+    const revised = await harness.repository.createOrReviseGitHubDeliveryRequest(
+      {
+        ...input,
+        intent: deliveryIntent({
+          testEvidenceId: 'test-2',
+          testEvidenceDigest: 'f'.repeat(64),
+        }),
+        expectedStateVersion: created.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+    expect(revised).toMatchObject({
+      ok: true,
+      request: { stateVersion: 2, expiresAt: '2026-08-12T10:00:00.000Z' },
+    })
+
+    harness.setTime('2026-08-12T10:00:00.000Z')
+    await expect(
+      harness.repository.createOrReviseGitHubDeliveryRequest(
+        {
+          ...input,
+          intent: deliveryIntent({
+            testEvidenceId: 'test-3',
+            testEvidenceDigest: '2'.repeat(64),
+          }),
+          expectedStateVersion: 2,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'expired' })
+  })
+
+  it.each([
+    [
+      'a tampered intent digest',
+      deliveryIntent({ intentDigest: '0'.repeat(64) }),
+      'Deliver the reviewed change',
+      'Bound to passing Test Evidence.',
+    ],
+    [
+      'a local path disguised as an identifier',
+      deliveryIntent({ workspaceId: '/Users/example/private/worktree' }),
+      'Deliver the reviewed change',
+      'Bound to passing Test Evidence.',
+    ],
+    [
+      'credential material in a changed path',
+      deliveryIntent({
+        changedPaths: ['fixtures/ghp_123456789012345678901234.txt'],
+      }),
+      'Deliver the reviewed change',
+      'Bound to passing Test Evidence.',
+    ],
+    [
+      'credential material in PR copy',
+      deliveryIntent(),
+      'Deliver the reviewed change',
+      'Read /Users/example/private/repo with ghp_123456789012345678901234.',
+    ],
+  ])('rejects %s before Seed persistence', async (_label, intent, prTitle, prBody) => {
+    const harness = createHarness()
+    await createBinding(harness)
+
+    await expect(
+      harness.repository.createOrReviseGitHubDeliveryRequest(
+        {
+          projectId: 'project-a',
+          intent,
+          prTitle,
+          prBody,
+          expectedStateVersion: 0,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'invalid_state' })
+    expect(harness.repository.inspectForTests().requests).toEqual([])
+    expect(JSON.stringify(harness.repository.inspectForTests())).not.toMatch(
+      /ghp_123456789012345678901234|\/Users\/example\/private/u,
     )
   })
 
@@ -667,7 +962,7 @@ describe('seed GitHub Delivery repository', () => {
         requestId: created.request.id,
         intentRevision: 1,
         requestStateVersion: 1,
-        intentDigest: digestD,
+        intentDigest: input.intent.intentDigest,
         approvedByUserId: 'user-lead',
         approvedRole: 'lead',
         authenticationKind: 'session_cookie',
@@ -682,7 +977,6 @@ describe('seed GitHub Delivery repository', () => {
         intent: deliveryIntent({
           prPackageArtifactId: 'package-2',
           prPackageDigest: '2'.repeat(64),
-          intentDigest: '3'.repeat(64),
         }),
         expectedStateVersion: 2,
       },
@@ -700,7 +994,7 @@ describe('seed GitHub Delivery repository', () => {
     expect(inspection.approvals).toHaveLength(1)
     expect(inspection.approvals[0]).toMatchObject({
       intentRevision: 1,
-      intentDigest: digestD,
+      intentDigest: input.intent.intentDigest,
       approvedByUserId: 'user-lead',
     })
   })
@@ -794,7 +1088,6 @@ describe('seed GitHub Delivery repository', () => {
           projectId: 'project-a',
           intent: deliveryIntent({
             prPackageDigest: '2'.repeat(64),
-            intentDigest: '3'.repeat(64),
           }),
           prTitle: 'Revised after grant',
           prBody: 'This must not replace an approved publication attempt.',
@@ -889,6 +1182,101 @@ describe('seed GitHub Delivery repository', () => {
       { id: first.grant.id, status: 'failed', attempt: 1 },
       { status: 'issuing', attempt: 2 },
     ])
+  })
+
+  it('leases an issuing credential reservation and recovers it with one new attempt', async () => {
+    const harness = createHarness()
+    const approved = await createApprovedDelivery(harness)
+    const first = await harness.repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: approved.request.id,
+        expectedStateVersion: approved.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+    if (!first.ok) throw new Error('fixture grant reservation failed')
+
+    harness.setTime('2026-08-11T10:01:59.999Z')
+    await expect(
+      harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: approved.request.id,
+          expectedStateVersion: first.request.stateVersion,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toEqual({ ...first, replayed: true })
+
+    harness.setTime('2026-08-11T10:02:00.000Z')
+    const recovered = await harness.repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: approved.request.id,
+        expectedStateVersion: first.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+    expect(recovered).toMatchObject({
+      ok: true,
+      replayed: false,
+      request: { stateVersion: 4, status: 'publishing_branch' },
+      grant: { attempt: 2, status: 'issuing' },
+    })
+    expect(harness.repository.inspectForTests().grants).toMatchObject([
+      {
+        id: first.grant.id,
+        version: 2,
+        status: 'failed',
+        outcomeCode: 'credential_issue_failed',
+      },
+      { attempt: 2, status: 'issuing' },
+    ])
+
+    await expect(
+      harness.repository.finalizeGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: approved.request.id,
+          grantId: first.grant.id,
+          expectedStateVersion: first.request.stateVersion,
+          expectedGrantVersion: first.grant.version,
+          outcome: {
+            status: 'recovery_required',
+            outcomeCode: 'credential_issue_failed',
+          },
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'stale_version' })
+  })
+
+  it('fails closed when an issuing credential outlives its delivery request', async () => {
+    const harness = createHarness()
+    const approved = await createApprovedDelivery(harness)
+    const first = await harness.repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: approved.request.id,
+        expectedStateVersion: approved.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+    if (!first.ok) throw new Error('fixture grant reservation failed')
+    harness.setTime('2026-08-12T10:00:00.000Z')
+
+    await expect(
+      harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: approved.request.id,
+          expectedStateVersion: first.request.stateVersion,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'expired' })
+    expect(harness.repository.inspectForTests().grants).toHaveLength(1)
   })
 
   it('accepts a one-hour installation token issued after approval delay', async () => {
@@ -1098,6 +1486,58 @@ describe('seed GitHub Delivery repository', () => {
     })
   })
 
+  it('reserves a new credential attempt after a consumed publication enters recovery', async () => {
+    const harness = createHarness()
+    const issued = await createIssuedGrant(harness)
+    harness.setTime('2026-08-11T10:01:00.000Z')
+    const reported = await harness.repository.recordGitHubBranchPublicationReport(
+      {
+        projectId: 'project-a',
+        requestId: issued.request.id,
+        grantId: issued.grant.id,
+        expectedStateVersion: issued.request.stateVersion,
+        expectedGrantVersion: issued.grant.version,
+        reportedOutcomeCode: 'unknown',
+      },
+      desktopPrincipal,
+    )
+    if (!reported.ok) throw new Error('fixture publication report failed')
+    const recovery = await harness.repository.finalizeGitHubBranchPublication(
+      {
+        projectId: 'project-a',
+        requestId: issued.request.id,
+        publicationId: reported.publication.id,
+        expectedStateVersion: reported.request.stateVersion,
+        expectedPublicationVersion: reported.publication.version,
+        verification: {
+          status: 'recovery_required',
+          verifiedHeadSha: null,
+          verifiedAt: null,
+          outcomeCode: 'branch_verification_failed',
+        },
+      },
+      desktopPrincipal,
+    )
+    if (!recovery.ok) throw new Error('fixture publication recovery failed')
+
+    harness.setTime('2026-08-11T10:02:00.000Z')
+    await expect(
+      harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: issued.request.id,
+          expectedStateVersion: recovery.request.stateVersion,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      replayed: false,
+      request: { status: 'publishing_branch', outcomeCode: null },
+      grant: { attempt: 2, status: 'issuing' },
+    })
+  })
+
   it('rechecks canonical Run authority after remote branch lookup and before finalization', async () => {
     const harness = createHarness()
     const issued = await createIssuedGrant(harness)
@@ -1187,7 +1627,7 @@ describe('seed GitHub Delivery repository', () => {
           baseBranch: 'main',
           headBranch: 'devflow/run-1-pr-1',
           headSha: shaB,
-          providerCreatedAt: '2026-08-11T10:01:02.000Z',
+          providerCreatedAt: '2026-08-11T09:50:00.000Z',
           outcomeCode: 'draft_pr_created',
         },
       },
@@ -1210,6 +1650,8 @@ describe('seed GitHub Delivery repository', () => {
         safeUrl: 'https://github.com/example/project/pull/42',
         draft: true,
         headSha: shaB,
+        providerCreatedAt: '2026-08-11T09:50:00.000Z',
+        recordedAt: '2026-08-11T10:00:00.000Z',
         outcomeCode: 'draft_pr_created',
       },
     })
@@ -1218,6 +1660,47 @@ describe('seed GitHub Delivery repository', () => {
         'deleteGitHubBranch' in harness.repository ||
         'closeGitHubPullRequest' in harness.repository,
     ).toBe(false)
+  })
+
+  it('rejects a Draft PR creation timestamp later than the API observation', async () => {
+    const harness = createHarness()
+    const verified = await createVerifiedPublication(harness)
+    const reserved = await harness.repository.reserveGitHubDraftPullRequest(
+      {
+        projectId: 'project-a',
+        requestId: verified.request.id,
+        publicationId: verified.publication.id,
+        expectedStateVersion: verified.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+    if (!reserved.ok) throw new Error('fixture PR reservation failed')
+
+    await expect(
+      harness.repository.finalizeGitHubDraftPullRequest(
+        {
+          projectId: 'project-a',
+          requestId: verified.request.id,
+          pullRequestOutcomeId: reserved.pullRequest.id,
+          expectedStateVersion: reserved.request.stateVersion,
+          expectedPullRequestVersion: reserved.pullRequest.version,
+          outcome: {
+            status: 'completed',
+            pullRequestId: '456789',
+            pullRequestNumber: 42,
+            safeUrl: 'https://github.com/example/project/pull/42',
+            draft: true,
+            repository: 'example/project',
+            baseBranch: 'main',
+            headBranch: 'devflow/run-1-pr-1',
+            headSha: shaB,
+            providerCreatedAt: '2026-08-11T10:00:00.001Z',
+            outcomeCode: 'draft_pr_created',
+          },
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'pull_request_conflict' })
   })
 
   it('reuses the same Draft PR outcome row for explicit reconciliation', async () => {

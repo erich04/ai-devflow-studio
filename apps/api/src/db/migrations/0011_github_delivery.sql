@@ -384,7 +384,8 @@ CREATE TABLE github_pull_request_outcomes (
         AND pull_request_id IS NOT NULL
         AND pull_request_number > 0
         AND safe_url ~ '^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*$'
-        AND provider_created_at IS NOT NULL)
+        AND provider_created_at IS NOT NULL
+        AND provider_created_at <= recorded_at)
       OR (status IN ('recovery_required', 'failed') AND outcome_code IS NOT NULL))
   ),
   CONSTRAINT github_pull_request_outcomes_revision_unique UNIQUE (request_id, intent_revision),

@@ -57,8 +57,10 @@ import {
 } from '@ai-devflow/shared/fixtures'
 import type { WorkRequestRepository } from './work-request-contract'
 import type { GateCommandRepository } from './gate-command-contract'
+import type { GitHubDeliveryRepository } from './github-delivery-contract'
 import { createSeedWorkRequestRepository } from './seed-work-request-repository'
 import { createSeedGateCommandRepository } from './seed-gate-command-repository'
+import { createSeedGitHubDeliveryRepository } from './seed-github-delivery-repository'
 import { preflightGateCommand } from './gate-command-preflight'
 import { evaluateTeamGateEnforcement } from './team-gate-enforcement'
 
@@ -177,7 +179,9 @@ export type TeamProjectCreateInput = {
   testCommand?: string
 }
 
-export type TeamRepository = WorkRequestRepository & GateCommandRepository & {
+export type TeamRepository = WorkRequestRepository &
+  GateCommandRepository &
+  GitHubDeliveryRepository & {
   getAuthenticatedIdentity(input: {
     provider: AuthProvider
     providerAccountId: string
@@ -578,10 +582,64 @@ export function createSeedTeamRepository(): TeamRepository {
       )
     },
   })
+  const githubDeliveryRepository = createSeedGitHubDeliveryRepository({
+    resolveProjectRole({ organizationId, projectId, userId }) {
+      if (projectOrganizationIds.get(projectId) !== organizationId) return null
+      return members.find((member) => member.id === userId)?.role ?? null
+    },
+    desktopTokenStillAuthorized({
+      organizationId,
+      projectId,
+      userId,
+      tokenRecordId,
+    }) {
+      return [...desktopTokenSessions.values()].some(
+        (record) =>
+          record.tokenRecordId === tokenRecordId &&
+          record.session.organizationId === organizationId &&
+          record.session.userId === userId &&
+          record.session.projectMemberships.some(
+            (membership) =>
+              membership.projectId === projectId &&
+              membership.userId === userId,
+          ),
+      )
+    },
+    async resolveCanonicalRunAuthority({ organizationId, projectId, runId }) {
+      const run = syncedRuns.find(
+        (candidate) =>
+          candidate.id === runId &&
+          candidate.projectId === projectId &&
+          runOrganizationIds.get(candidate.id) === organizationId,
+      )
+      const currentNode = run?.nodes.find(
+        (node) => node.id === run.currentNodeId,
+      )
+      if (!run || currentNode?.kind !== 'pr' || currentNode.status !== 'running') {
+        return null
+      }
+      const claim =
+        await workRequestRepository.resolveMaterializedWorkRequestClaim({
+          organizationId,
+          projectId,
+          runId,
+        })
+      if (!claim) return null
+      return {
+        organizationId,
+        projectId,
+        runId,
+        runVersion: run.version,
+        currentNodeId: run.currentNodeId,
+        materializedByTokenRecordId: claim.claimedByTokenId,
+      }
+    },
+  })
 
   repository = {
     ...workRequestRepository,
     ...gateCommandRepository,
+    ...githubDeliveryRepository,
     async getAuthenticatedIdentity(input) {
       if (input.provider !== 'github' || !input.providerAccountId.startsWith('demo:')) {
         return null
