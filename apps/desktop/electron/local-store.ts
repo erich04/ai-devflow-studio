@@ -20,6 +20,7 @@ import {
   redactCodingAgentEventForStorage,
   redactSensitiveText,
   redactTestEvidenceForStorage,
+  validateTestCommandSafety,
   sanitizeRemoteSyncErrorMessage,
   parseGateCommandRecord,
   parseGateCommandAcknowledgementRecord,
@@ -89,19 +90,20 @@ export type WorkflowMutation = {
   testEvidence?: readonly TestEvidence[]
 }
 
-export type GitHubDeliveryIntentMutation = {
+export type GitHubDeliveryPreparationMutation = {
   intent: GitHubDeliveryIntent
+  expectedProject: LocalProject
   expectedPairingCredential: DesktopPairingCredential
   expectedRepositoryBinding: GitHubRepositoryBinding
   expectedRun: WorkflowRun
   expectedCodingRun: CodingAgentRun
   expectedWorkspace: ManagedCodingWorkspace
   expectedDiffArtifact: CodingDiffArtifact
-  expectedTestEvidence: TestEvidence
+  testEvidence: TestEvidence
   expectedPrPackage: Artifact
 }
 
-export type GitHubDeliveryIntentMutationResult =
+export type GitHubDeliveryPreparationMutationResult =
   | {
       committed: true
       replayed: boolean
@@ -485,9 +487,9 @@ export type LocalStore = {
   commitWorkflowMutation(
     mutation: WorkflowMutation,
   ): Promise<WorkflowMutationCommitResult>
-  commitGitHubDeliveryIntent(
-    mutation: GitHubDeliveryIntentMutation,
-  ): Promise<GitHubDeliveryIntentMutationResult>
+  commitGitHubDeliveryPreparation(
+    mutation: GitHubDeliveryPreparationMutation,
+  ): Promise<GitHubDeliveryPreparationMutationResult>
   listGitHubDeliveryIntents(runId?: string): Promise<GitHubDeliveryIntent[]>
   saveGitHubRepositoryBinding(
     binding: GitHubRepositoryBinding,
@@ -4759,10 +4761,17 @@ class SqlJsLocalStore implements LocalStore {
     }
   }
 
-  async commitGitHubDeliveryIntent(
-    mutation: GitHubDeliveryIntentMutation,
-  ): Promise<GitHubDeliveryIntentMutationResult> {
+  async commitGitHubDeliveryPreparation(
+    mutation: GitHubDeliveryPreparationMutation,
+  ): Promise<GitHubDeliveryPreparationMutationResult> {
     const expectedRun = normalizeWorkflowRunProgress(mutation.expectedRun)
+    if (
+      mutation.expectedProject.id !== mutation.intent.localProjectId ||
+      mutation.expectedProject.id !== expectedRun.projectId ||
+      mutation.expectedWorkspace.sourcePath !== mutation.expectedProject.path
+    ) {
+      throw new Error('GitHub Delivery Intent does not match the Local Project source')
+    }
     if (
       mutation.expectedPairingCredential.organizationId !== mutation.intent.organizationId ||
       mutation.expectedPairingCredential.projectId !== mutation.intent.teamProjectId ||
@@ -4781,8 +4790,17 @@ class SqlJsLocalStore implements LocalStore {
       throw new Error('GitHub Delivery Intent does not match the repository binding')
     }
     const expectedTestEvidence = redactTestEvidenceForStorage(
-      mutation.expectedTestEvidence,
+      mutation.testEvidence,
     )
+    const testCommandSafety = validateTestCommandSafety(
+      mutation.expectedProject.testCommand,
+    )
+    if (
+      testCommandSafety.level === 'blocked' ||
+      expectedTestEvidence.command !== testCommandSafety.normalizedCommand
+    ) {
+      throw new Error('GitHub Delivery Test Evidence does not match the safe Project test command')
+    }
     if (!expectedTestEvidence.sourceCommitSha) {
       throw new Error('GitHub Delivery Test Evidence must be commit-bound')
     }
@@ -4847,6 +4865,11 @@ class SqlJsLocalStore implements LocalStore {
         'select json from github_repository_bindings where id = ? limit 1',
         [mutation.expectedRepositoryBinding.id],
       )[0]
+      const currentProject = selectJson<LocalProject>(
+        this.db,
+        'select json from local_projects where id = ? limit 1',
+        [mutation.expectedProject.id],
+      )[0]
       const currentRun = readWorkflowRuns(this.db).find(
         (candidate) => candidate.id === expectedRun.id,
       )
@@ -4865,7 +4888,7 @@ class SqlJsLocalStore implements LocalStore {
         'select json from coding_diff_artifacts where id = ? limit 1',
         [mutation.expectedDiffArtifact.id],
       )[0]
-      const currentTestEvidence = selectJson<TestEvidence>(
+      const existingTestEvidence = selectJson<TestEvidence>(
         this.db,
         'select json from test_evidence where id = ? limit 1',
         [expectedTestEvidence.id],
@@ -4876,20 +4899,19 @@ class SqlJsLocalStore implements LocalStore {
         [mutation.expectedPrPackage.id],
       )[0]
       const sourceIsCurrent =
+        JSON.stringify(currentProject) === JSON.stringify(mutation.expectedProject) &&
         JSON.stringify(currentPairing) === JSON.stringify(mutation.expectedPairingCredential) &&
         JSON.stringify(currentRepositoryBinding) === JSON.stringify(mutation.expectedRepositoryBinding) &&
         JSON.stringify(currentRun) === JSON.stringify(expectedRun) &&
         JSON.stringify(currentCodingRun) === JSON.stringify(mutation.expectedCodingRun) &&
         JSON.stringify(currentWorkspace) === JSON.stringify(mutation.expectedWorkspace) &&
         JSON.stringify(currentDiffArtifact) === JSON.stringify(mutation.expectedDiffArtifact) &&
-        JSON.stringify(currentTestEvidence) === JSON.stringify(expectedTestEvidence) &&
         JSON.stringify(currentPrPackage) === JSON.stringify(mutation.expectedPrPackage)
       if (!sourceIsCurrent) {
         this.db.run('rollback')
         transactionOpen = false
         return { committed: false, reason: 'source_stale' }
       }
-
       const activeIntent = selectJson<GitHubDeliveryIntent>(
         this.db,
         `select json from github_delivery_intents
@@ -4904,7 +4926,20 @@ class SqlJsLocalStore implements LocalStore {
         transactionOpen = false
         return { committed: false, reason: 'active_intent_exists' }
       }
+      if (existingTestEvidence) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'id_conflict' }
+      }
 
+      writeTestEvidence(this.db, expectedTestEvidence)
+      this.enqueueCanonicalRemoteSyncOperation({
+        kind: 'test-evidence-summary',
+        localProjectId: expectedTestEvidence.projectId,
+        runId: expectedTestEvidence.runId,
+        entityId: expectedTestEvidence.id,
+        createdAt: expectedTestEvidence.createdAt,
+      })
       writeGitHubDeliveryIntent(this.db, mutation.intent)
       this.db.run('commit')
       transactionOpen = false
@@ -5871,7 +5906,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'recordGateCommandAcknowledgement',
   'terminalizeGateCommandAcknowledgement',
   'commitWorkflowMutation',
-  'commitGitHubDeliveryIntent',
+  'commitGitHubDeliveryPreparation',
   'saveGitHubRepositoryBinding',
   'saveArtifact',
   'saveEvent',

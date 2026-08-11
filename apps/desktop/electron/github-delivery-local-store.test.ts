@@ -13,6 +13,7 @@ import type {
   CodingDiffArtifact,
   DesktopPairingCredential,
   GitHubRepositoryBinding,
+  LocalProject,
   ManagedCodingWorkspace,
   TestEvidence,
   WorkflowRun,
@@ -35,11 +36,20 @@ async function tempDbPath(): Promise<string> {
 }
 
 function createSources() {
+  const project: LocalProject = {
+    id: 'local-project-1',
+    name: 'Delivery fixture',
+    path: '/private/source/never-persist-in-delivery',
+    packageManager: 'pnpm',
+    testCommand: 'corepack pnpm test',
+    createdAt: '2026-08-11T09:50:00.000Z',
+    updatedAt: '2026-08-11T09:50:00.000Z',
+  }
   const pairing: DesktopPairingCredential = {
     tokenId: 'desktop-token-1',
     organizationId: 'org-1',
     projectId: 'team-project-1',
-    localProjectId: 'local-project-1',
+    localProjectId: project.id,
     userId: 'user-1',
     role: 'lead',
     authAccountId: 'auth-account-1',
@@ -153,7 +163,7 @@ function createSources() {
     runId: run.id,
     nodeId: codingRun.nodeId,
     projectId: run.projectId,
-    command: 'pnpm test',
+    command: 'corepack pnpm test',
     cwd: workspace.worktreePath,
     status: 'passed',
     exitCode: 0,
@@ -176,20 +186,20 @@ function createSources() {
     redacted: true,
     updatedAt: '2026-08-11T10:25:00.000Z',
   }
-  return { pairing, repositoryBinding, run, codingRun, workspace, diffArtifact, testEvidence, prPackage }
+  return { project, pairing, repositoryBinding, run, codingRun, workspace, diffArtifact, testEvidence, prPackage }
 }
 
 async function saveSources(
   store: Awaited<ReturnType<typeof createLocalStore>>,
   sources: ReturnType<typeof createSources>,
 ): Promise<void> {
+  await store.upsertProject(sources.project)
   await store.saveDesktopPairingCredential(sources.pairing, 'encrypted-token')
   await store.saveGitHubRepositoryBinding(sources.repositoryBinding)
   await store.saveRun(sources.run)
   await store.saveCodingAgentRun(sources.codingRun)
   await store.saveManagedCodingWorkspace(sources.workspace)
   await store.saveCodingDiffArtifact(sources.diffArtifact)
-  await store.saveTestEvidence(sources.testEvidence)
   await store.saveArtifact(sources.prPackage)
 }
 
@@ -267,26 +277,28 @@ describe('GitHub Delivery Intent local persistence', () => {
       updatedAt: '2026-08-11T11:00:00.000Z',
     }
     const [created, replayed] = await Promise.all([
-      first.commitGitHubDeliveryIntent({
+      first.commitGitHubDeliveryPreparation({
         intent,
+        expectedProject: sources.project,
         expectedPairingCredential: sources.pairing,
         expectedRepositoryBinding: sources.repositoryBinding,
         expectedRun: sources.run,
         expectedCodingRun: sources.codingRun,
         expectedWorkspace: sources.workspace,
         expectedDiffArtifact: sources.diffArtifact,
-        expectedTestEvidence: sources.testEvidence,
+        testEvidence: sources.testEvidence,
         expectedPrPackage: sources.prPackage,
       }),
-      first.commitGitHubDeliveryIntent({
+      first.commitGitHubDeliveryPreparation({
         intent: replayIntent,
+        expectedProject: sources.project,
         expectedPairingCredential: sources.pairing,
         expectedRepositoryBinding: sources.repositoryBinding,
         expectedRun: sources.run,
         expectedCodingRun: sources.codingRun,
         expectedWorkspace: sources.workspace,
         expectedDiffArtifact: sources.diffArtifact,
-        expectedTestEvidence: sources.testEvidence,
+        testEvidence: sources.testEvidence,
         expectedPrPackage: sources.prPackage,
       }),
     ])
@@ -301,21 +313,23 @@ describe('GitHub Delivery Intent local persistence', () => {
       ...sources.prPackage,
       summary: 'The source changed after the intent was persisted.',
     })
-    await expect(first.commitGitHubDeliveryIntent({
+    await expect(first.commitGitHubDeliveryPreparation({
       intent: replayIntent,
+      expectedProject: sources.project,
       expectedPairingCredential: sources.pairing,
       expectedRepositoryBinding: sources.repositoryBinding,
       expectedRun: sources.run,
       expectedCodingRun: sources.codingRun,
       expectedWorkspace: sources.workspace,
       expectedDiffArtifact: sources.diffArtifact,
-      expectedTestEvidence: sources.testEvidence,
+      testEvidence: sources.testEvidence,
       expectedPrPackage: sources.prPackage,
     })).resolves.toEqual({ committed: true, replayed: true, intent })
     first.close()
 
     const reopened = await createLocalStore({ dbPath })
     expect(await reopened.listGitHubDeliveryIntents(sources.run.id)).toEqual([intent])
+    expect(await reopened.listTestEvidence(sources.run.id)).toEqual([sources.testEvidence])
     expect((await reopened.loadState()).githubDeliveryIntents).toEqual([intent])
     await expect(reopened.deleteRun(sources.run.id)).rejects.toThrow(
       'Run is bound to a GitHub Delivery Intent.',
@@ -342,18 +356,57 @@ describe('GitHub Delivery Intent local persistence', () => {
     await saveSources(store, sources)
     await store.saveArtifact({ ...sources.prPackage, summary: 'Changed after approval input.' })
 
-    await expect(store.commitGitHubDeliveryIntent({
+    await expect(store.commitGitHubDeliveryPreparation({
       intent,
+      expectedProject: sources.project,
       expectedPairingCredential: sources.pairing,
       expectedRepositoryBinding: sources.repositoryBinding,
       expectedRun: sources.run,
       expectedCodingRun: sources.codingRun,
       expectedWorkspace: sources.workspace,
       expectedDiffArtifact: sources.diffArtifact,
-      expectedTestEvidence: sources.testEvidence,
+      testEvidence: sources.testEvidence,
       expectedPrPackage: sources.prPackage,
     })).resolves.toEqual({ committed: false, reason: 'source_stale' })
     expect(await store.listGitHubDeliveryIntents()).toEqual([])
+    store.close()
+  })
+
+  it('rejects an untrusted Project source or test command before writing evidence', async () => {
+    const dbPath = await tempDbPath()
+    const sources = createSources()
+    const intent = await createIntent(sources)
+    const store = await createLocalStore({ dbPath })
+    await saveSources(store, sources)
+
+    await expect(store.commitGitHubDeliveryPreparation({
+      intent,
+      expectedProject: { ...sources.project, path: '/private/other-source' },
+      expectedPairingCredential: sources.pairing,
+      expectedRepositoryBinding: sources.repositoryBinding,
+      expectedRun: sources.run,
+      expectedCodingRun: sources.codingRun,
+      expectedWorkspace: sources.workspace,
+      expectedDiffArtifact: sources.diffArtifact,
+      testEvidence: sources.testEvidence,
+      expectedPrPackage: sources.prPackage,
+    })).rejects.toThrow('does not match the Local Project source')
+
+    await expect(store.commitGitHubDeliveryPreparation({
+      intent,
+      expectedProject: { ...sources.project, testCommand: 'rm -rf /private/other-source' },
+      expectedPairingCredential: sources.pairing,
+      expectedRepositoryBinding: sources.repositoryBinding,
+      expectedRun: sources.run,
+      expectedCodingRun: sources.codingRun,
+      expectedWorkspace: sources.workspace,
+      expectedDiffArtifact: sources.diffArtifact,
+      testEvidence: sources.testEvidence,
+      expectedPrPackage: sources.prPackage,
+    })).rejects.toThrow('does not match the safe Project test command')
+
+    expect(await store.listTestEvidence(sources.run.id)).toEqual([])
+    expect(await store.listGitHubDeliveryIntents(sources.run.id)).toEqual([])
     store.close()
   })
 
@@ -367,28 +420,30 @@ describe('GitHub Delivery Intent local persistence', () => {
       { ...sources.pairing, projectId: 'other-team-project' },
       'encrypted-other-token',
     )
-    await expect(store.commitGitHubDeliveryIntent({
+    await expect(store.commitGitHubDeliveryPreparation({
       intent,
+      expectedProject: sources.project,
       expectedPairingCredential: sources.pairing,
       expectedRepositoryBinding: sources.repositoryBinding,
       expectedRun: sources.run,
       expectedCodingRun: sources.codingRun,
       expectedWorkspace: sources.workspace,
       expectedDiffArtifact: sources.diffArtifact,
-      expectedTestEvidence: sources.testEvidence,
+      testEvidence: sources.testEvidence,
       expectedPrPackage: sources.prPackage,
     })).resolves.toEqual({ committed: false, reason: 'source_stale' })
 
     await store.saveDesktopPairingCredential(sources.pairing, 'encrypted-token')
-    await expect(store.commitGitHubDeliveryIntent({
+    await expect(store.commitGitHubDeliveryPreparation({
       intent,
+      expectedProject: sources.project,
       expectedPairingCredential: sources.pairing,
       expectedRepositoryBinding: sources.repositoryBinding,
       expectedRun: sources.run,
       expectedCodingRun: sources.codingRun,
       expectedWorkspace: sources.workspace,
       expectedDiffArtifact: sources.diffArtifact,
-      expectedTestEvidence: sources.testEvidence,
+      testEvidence: sources.testEvidence,
       expectedPrPackage: sources.prPackage,
     })).resolves.toMatchObject({ committed: true, replayed: false })
 
@@ -413,15 +468,16 @@ describe('GitHub Delivery Intent local persistence', () => {
       expectedCommitSha,
       now: '2026-08-11T10:41:00.000Z',
     })
-    await expect(store.commitGitHubDeliveryIntent({
+    await expect(store.commitGitHubDeliveryPreparation({
       intent: secondIntent,
+      expectedProject: changedSources.project,
       expectedPairingCredential: changedSources.pairing,
       expectedRepositoryBinding: changedSources.repositoryBinding,
       expectedRun: changedSources.run,
       expectedCodingRun: changedSources.codingRun,
       expectedWorkspace: changedSources.workspace,
       expectedDiffArtifact: changedSources.diffArtifact,
-      expectedTestEvidence: changedSources.testEvidence,
+      testEvidence: changedSources.testEvidence,
       expectedPrPackage: changedSources.prPackage,
     })).resolves.toEqual({ committed: false, reason: 'active_intent_exists' })
     store.close()
