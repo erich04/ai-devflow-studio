@@ -1,0 +1,858 @@
+import { createHash } from 'node:crypto'
+import type {
+  GitHubDeliveryIntent,
+  GitHubDeliveryStatus,
+  GitHubRepositoryBinding,
+  Role,
+} from '@ai-devflow/shared'
+import type { RequestPrincipal } from '../auth/request-auth'
+
+export type GitHubDeliverySessionPrincipal = RequestPrincipal & {
+  authentication: { kind: 'session_cookie'; tokenRecordId: null }
+}
+
+export type GitHubDeliveryDesktopPrincipal = RequestPrincipal & {
+  authentication: { kind: 'desktop_bearer'; tokenRecordId: string }
+}
+
+export type GitHubDeliveryReadPrincipal =
+  | GitHubDeliverySessionPrincipal
+  | GitHubDeliveryDesktopPrincipal
+
+export type GitHubDeliveryAuthorityLookup = {
+  organizationId: string
+  projectId: string
+  userId: string
+}
+
+export type GitHubDeliveryDesktopAuthorityLookup =
+  GitHubDeliveryAuthorityLookup & {
+    tokenRecordId: string
+  }
+
+export type GitHubDeliveryCanonicalRunAuthorityLookup = {
+  organizationId: string
+  projectId: string
+  runId: string
+}
+
+export type GitHubDeliveryCanonicalRunAuthority =
+  GitHubDeliveryCanonicalRunAuthorityLookup & {
+    runVersion: number
+    currentNodeId: string
+    materializedByTokenRecordId: string
+  }
+
+export type UpsertGitHubRepositoryBindingInput = {
+  projectId: string
+  installationId: string
+  repositoryId: string
+  repository: string
+  defaultBranch: string
+  verifiedAt: string
+  expectedStateVersion: number
+}
+
+export type RevokeGitHubRepositoryBindingInput = {
+  projectId: string
+  expectedStateVersion: number
+}
+
+export type GitHubDeliveryOutcomeCode =
+  | 'approval_rejected'
+  | 'binding_revoked'
+  | 'credential_issue_failed'
+  | 'credential_expired'
+  | 'branch_conflict'
+  | 'branch_verification_failed'
+  | 'draft_pr_created'
+  | 'pull_request_failed'
+
+export type GitHubDeliveryRequest = {
+  id: string
+  stateVersion: number
+  intentRevision: number
+  organizationId: string
+  projectId: string
+  requestedByUserId: string
+  localIntentId: string
+  localProjectId: string
+  runId: string
+  runVersion: number
+  nodeId: string
+  repositoryBindingId: string
+  repositoryBindingVersion: number
+  installationId: string
+  repositoryId: string
+  repository: string
+  codingRunId: string
+  workspaceId: string
+  diffArtifactId: string
+  testEvidenceId: string
+  prPackageArtifactId: string
+  status: GitHubDeliveryStatus
+  outcomeCode: GitHubDeliveryOutcomeCode | null
+  expectedRunVersion: number
+  baseBranch: string
+  headBranch: string
+  baseCommitSha: string
+  expectedCommitSha: string
+  intentDigest: string
+  logicalIdempotencyKey: string
+  diffDigest: string
+  testEvidenceDigest: string
+  packageDigest: string
+  changedPaths: string[]
+  prTitle: string
+  prBody: string
+  expiresAt: string
+  createdAt: string
+  updatedAt: string
+  redacted: true
+}
+
+export type CreateOrReviseGitHubDeliveryRequestInput = {
+  projectId: string
+  intent: GitHubDeliveryIntent
+  prTitle: string
+  prBody: string
+  expectedStateVersion: number
+}
+
+export type GitHubDeliveryRequestMutationResult =
+  | {
+      ok: true
+      responseStatus: 200 | 201
+      outcomeCode: 'delivery_created' | 'delivery_revised'
+      replayed: boolean
+      request: GitHubDeliveryRequest
+    }
+  | GitHubDeliveryRejectionResult
+
+export type GitHubDeliveryApproval = {
+  id: string
+  requestId: string
+  intentRevision: number
+  requestStateVersion: number
+  intentDigest: string
+  repositoryBindingId: string
+  repositoryBindingVersion: number
+  runId: string
+  runVersion: number
+  nodeId: string
+  repositoryId: string
+  baseBranch: string
+  headBranch: string
+  expectedCommitSha: string
+  testEvidenceDigest: string
+  packageDigest: string
+  approvedByUserId: string
+  approvedRole: 'lead' | 'owner'
+  authenticationKind: 'session_cookie'
+  approvedAt: string
+  redacted: true
+}
+
+export type DecideGitHubDeliveryRequestInput = {
+  projectId: string
+  requestId: string
+  decision: 'approve' | 'reject'
+  expectedStateVersion: number
+}
+
+export type GitHubDeliveryDecisionResult =
+  | {
+      ok: true
+      responseStatus: 200
+      outcomeCode: 'delivery_approved' | 'delivery_rejected'
+      replayed: boolean
+      request: GitHubDeliveryRequest
+      approval: GitHubDeliveryApproval | null
+    }
+  | GitHubDeliveryRejectionResult
+
+export type GitHubCredentialGrantStatus =
+  | 'issuing'
+  | 'issued'
+  | 'consumed'
+  | 'failed'
+  | 'recovery_required'
+  | 'expired'
+  | 'revoked'
+
+export type GitHubCredentialGrant = {
+  id: string
+  version: number
+  requestId: string
+  intentRevision: number
+  approvalId: string
+  attempt: number
+  repositoryId: string
+  permission: 'contents:write'
+  repositoryCount: 1
+  status: GitHubCredentialGrantStatus
+  requestedAt: string
+  issuedAt: string | null
+  credentialExpiresAt: string | null
+  consumedAt: string | null
+  outcomeCode:
+    | 'credential_issue_failed'
+    | 'credential_expired'
+    | 'binding_revoked'
+    | null
+  redacted: true
+}
+
+export type ReserveGitHubCredentialGrantInput = {
+  projectId: string
+  requestId: string
+  expectedStateVersion: number
+}
+
+export type FinalizeGitHubCredentialGrantInput = {
+  projectId: string
+  requestId: string
+  grantId: string
+  expectedStateVersion: number
+  expectedGrantVersion: number
+  outcome:
+    | {
+        status: 'issued'
+        issuedAt: string
+        credentialExpiresAt: string
+        repositoryId: string
+        permission: 'contents:write'
+        repositoryCount: 1
+      }
+    | {
+        status: 'failed' | 'recovery_required'
+        outcomeCode: 'credential_issue_failed'
+      }
+}
+
+export type GitHubCredentialGrantMutationResult =
+  | {
+      ok: true
+      responseStatus: 200 | 201
+      outcomeCode: 'grant_reserved' | 'grant_finalized'
+      replayed: boolean
+      request: GitHubDeliveryRequest
+      grant: GitHubCredentialGrant
+    }
+  | GitHubDeliveryRejectionResult
+
+export type GitHubBranchPublication = {
+  id: string
+  version: number
+  requestId: string
+  intentRevision: number
+  grantId: string
+  status: 'verifying' | 'verified' | 'conflict' | 'recovery_required' | 'failed'
+  reportedOutcomeCode: 'pushed' | 'already_present' | 'unknown'
+  verifiedHeadSha: string | null
+  reportedAt: string
+  verifiedAt: string | null
+  outcomeCode:
+    | 'branch_verified'
+    | 'branch_conflict'
+    | 'branch_verification_failed'
+    | null
+  redacted: true
+}
+
+export type RecordGitHubBranchPublicationReportInput = {
+  projectId: string
+  requestId: string
+  grantId: string
+  expectedStateVersion: number
+  expectedGrantVersion: number
+  reportedOutcomeCode: GitHubBranchPublication['reportedOutcomeCode']
+}
+
+export type FinalizeGitHubBranchPublicationInput = {
+  projectId: string
+  requestId: string
+  publicationId: string
+  expectedStateVersion: number
+  expectedPublicationVersion: number
+  verification:
+    | {
+        status: 'verified'
+        verifiedHeadSha: string
+        verifiedAt: string
+        outcomeCode: 'branch_verified'
+      }
+    | {
+        status: 'conflict'
+        verifiedHeadSha: string | null
+        verifiedAt: string
+        outcomeCode: 'branch_conflict'
+      }
+    | {
+        status: 'failed' | 'recovery_required'
+        verifiedHeadSha: string | null
+        verifiedAt: string | null
+        outcomeCode: 'branch_verification_failed'
+      }
+}
+
+export type GitHubBranchPublicationReportResult =
+  | {
+      ok: true
+      responseStatus: 201
+      outcomeCode: 'publication_reported'
+      replayed: boolean
+      request: GitHubDeliveryRequest
+      grant: GitHubCredentialGrant
+      publication: GitHubBranchPublication
+    }
+  | GitHubDeliveryRejectionResult
+
+export type GitHubBranchPublicationFinalizationResult =
+  | {
+      ok: true
+      responseStatus: 200
+      outcomeCode: 'publication_verified' | 'publication_failed'
+      replayed: boolean
+      request: GitHubDeliveryRequest
+      publication: GitHubBranchPublication
+    }
+  | GitHubDeliveryRejectionResult
+
+export type GitHubPullRequestOutcome = {
+  id: string
+  version: number
+  requestId: string
+  intentRevision: number
+  publicationId: string
+  status: 'creating' | 'completed' | 'recovery_required' | 'failed'
+  pullRequestId: string | null
+  pullRequestNumber: number | null
+  safeUrl: string | null
+  draft: true
+  headBranch: string
+  baseBranch: string
+  headSha: string
+  providerCreatedAt: string | null
+  recordedAt: string
+  outcomeCode: 'draft_pr_created' | 'pull_request_failed' | null
+  redacted: true
+}
+
+export type ReserveGitHubDraftPullRequestInput = {
+  projectId: string
+  requestId: string
+  publicationId: string
+  expectedStateVersion: number
+}
+
+export type FinalizeGitHubDraftPullRequestInput = {
+  projectId: string
+  requestId: string
+  pullRequestOutcomeId: string
+  expectedStateVersion: number
+  expectedPullRequestVersion: number
+  outcome:
+    | {
+        status: 'completed'
+        pullRequestId: string
+        pullRequestNumber: number
+        safeUrl: string
+        draft: true
+        repository: string
+        baseBranch: string
+        headBranch: string
+        headSha: string
+        providerCreatedAt: string
+        outcomeCode: 'draft_pr_created'
+      }
+    | {
+        status: 'failed' | 'recovery_required'
+        outcomeCode: 'pull_request_failed'
+      }
+}
+
+export type GitHubPullRequestMutationResult =
+  | {
+      ok: true
+      responseStatus: 200 | 201
+      outcomeCode:
+        | 'pull_request_reserved'
+        | 'pull_request_completed'
+        | 'pull_request_failed'
+      replayed: boolean
+      request: GitHubDeliveryRequest
+      pullRequest: GitHubPullRequestOutcome
+    }
+  | GitHubDeliveryRejectionResult
+
+export type GitHubDeliveryRejectionCode =
+  | 'authentication_forbidden'
+  | 'project_forbidden'
+  | 'role_forbidden'
+  | 'not_found'
+  | 'stale_version'
+  | 'binding_inactive'
+  | 'binding_conflict'
+  | 'invalid_state'
+  | 'intent_conflict'
+  | 'approval_required'
+  | 'approval_conflict'
+  | 'grant_conflict'
+  | 'publication_conflict'
+  | 'pull_request_conflict'
+  | 'expired'
+
+export type GitHubDeliveryRejectionResult = {
+  ok: false
+  responseStatus: 403 | 404 | 409 | 410
+  outcomeCode: GitHubDeliveryRejectionCode
+  replayed: boolean
+}
+
+export type GitHubRepositoryBindingMutationResult =
+  | {
+      ok: true
+      responseStatus: 200 | 201
+      outcomeCode: 'binding_created' | 'binding_updated' | 'binding_revoked'
+      replayed: boolean
+      binding: GitHubRepositoryBinding
+    }
+  | GitHubDeliveryRejectionResult
+
+export type GitHubDeliveryRepository = {
+  getGitHubRepositoryBinding(
+    projectId: string,
+    principal: GitHubDeliveryReadPrincipal,
+  ): Promise<GitHubRepositoryBinding | null>
+  upsertGitHubRepositoryBinding(
+    input: UpsertGitHubRepositoryBindingInput,
+    principal: GitHubDeliverySessionPrincipal,
+  ): Promise<GitHubRepositoryBindingMutationResult>
+  revokeGitHubRepositoryBinding(
+    input: RevokeGitHubRepositoryBindingInput,
+    principal: GitHubDeliverySessionPrincipal,
+  ): Promise<GitHubRepositoryBindingMutationResult>
+  createOrReviseGitHubDeliveryRequest(
+    input: CreateOrReviseGitHubDeliveryRequestInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubDeliveryRequestMutationResult>
+  listGitHubDeliveryInbox(
+    projectId: string,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubDeliveryRequest[]>
+  listGitHubDeliveryRequests(
+    projectId: string,
+    principal: GitHubDeliverySessionPrincipal,
+  ): Promise<GitHubDeliveryRequest[]>
+  decideGitHubDeliveryRequest(
+    input: DecideGitHubDeliveryRequestInput,
+    principal: GitHubDeliverySessionPrincipal,
+  ): Promise<GitHubDeliveryDecisionResult>
+  reserveGitHubCredentialGrant(
+    input: ReserveGitHubCredentialGrantInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubCredentialGrantMutationResult>
+  finalizeGitHubCredentialGrant(
+    input: FinalizeGitHubCredentialGrantInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubCredentialGrantMutationResult>
+  recordGitHubBranchPublicationReport(
+    input: RecordGitHubBranchPublicationReportInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubBranchPublicationReportResult>
+  finalizeGitHubBranchPublication(
+    input: FinalizeGitHubBranchPublicationInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubBranchPublicationFinalizationResult>
+  reserveGitHubDraftPullRequest(
+    input: ReserveGitHubDraftPullRequestInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubPullRequestMutationResult>
+  finalizeGitHubDraftPullRequest(
+    input: FinalizeGitHubDraftPullRequestInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubPullRequestMutationResult>
+}
+
+export type GitHubDeliveryProjectRole = Role | null
+
+export function githubDeliveryRejection(
+  outcomeCode: GitHubDeliveryRejectionCode,
+): GitHubDeliveryRejectionResult {
+  const responseStatus: Record<
+    GitHubDeliveryRejectionCode,
+    403 | 404 | 409 | 410
+  > = {
+    authentication_forbidden: 403,
+    project_forbidden: 403,
+    role_forbidden: 403,
+    not_found: 404,
+    stale_version: 409,
+    binding_inactive: 409,
+    binding_conflict: 409,
+    invalid_state: 409,
+    intent_conflict: 409,
+    approval_required: 409,
+    approval_conflict: 409,
+    grant_conflict: 409,
+    publication_conflict: 409,
+    pull_request_conflict: 409,
+    expired: 410,
+  }
+  return {
+    ok: false,
+    responseStatus: responseStatus[outcomeCode],
+    outcomeCode,
+    replayed: false,
+  }
+}
+
+export function githubDeliveryRejectionMessage(
+  outcomeCode: GitHubDeliveryRejectionCode,
+): string {
+  switch (outcomeCode) {
+    case 'authentication_forbidden':
+      return 'This authentication method cannot perform that GitHub Delivery operation.'
+    case 'project_forbidden':
+      return 'Project access required.'
+    case 'role_forbidden':
+      return 'Lead or owner authority is required.'
+    case 'not_found':
+      return 'GitHub Delivery record not found.'
+    case 'stale_version':
+      return 'GitHub Delivery state changed; refresh before retrying.'
+    case 'binding_inactive':
+      return 'The Project GitHub repository binding is not active.'
+    case 'binding_conflict':
+      return 'The GitHub repository binding conflicts with current Project state.'
+    case 'invalid_state':
+      return 'The GitHub Delivery request is invalid.'
+    case 'intent_conflict':
+      return 'The logical Delivery Intent conflicts with durable publication state.'
+    case 'approval_required':
+      return 'A current lead or owner approval is required.'
+    case 'approval_conflict':
+      return 'The Delivery approval conflicts with current intent state.'
+    case 'grant_conflict':
+      return 'The credential grant conflicts with current delivery state.'
+    case 'publication_conflict':
+      return 'The published branch does not match the approved commit.'
+    case 'pull_request_conflict':
+      return 'The Draft pull request does not match the approved delivery.'
+    case 'expired':
+      return 'The GitHub Delivery request expired.'
+  }
+}
+
+export function cloneGitHubRepositoryBinding(
+  binding: GitHubRepositoryBinding,
+): GitHubRepositoryBinding {
+  const {
+    stateVersion,
+    id,
+    version,
+    organizationId,
+    teamProjectId,
+    installationId,
+    repositoryId,
+    repository,
+    defaultBranch,
+    status,
+    validatedAt,
+    updatedAt,
+    redacted,
+  } = binding
+  return {
+    stateVersion,
+    id,
+    version,
+    organizationId,
+    teamProjectId,
+    installationId,
+    repositoryId,
+    repository,
+    defaultBranch,
+    status,
+    validatedAt,
+    updatedAt,
+    redacted,
+  }
+}
+
+export function cloneGitHubDeliveryRequest(
+  request: GitHubDeliveryRequest,
+): GitHubDeliveryRequest {
+  const {
+    id,
+    stateVersion,
+    intentRevision,
+    organizationId,
+    projectId,
+    requestedByUserId,
+    localIntentId,
+    localProjectId,
+    runId,
+    runVersion,
+    nodeId,
+    repositoryBindingId,
+    repositoryBindingVersion,
+    installationId,
+    repositoryId,
+    repository,
+    codingRunId,
+    workspaceId,
+    diffArtifactId,
+    testEvidenceId,
+    prPackageArtifactId,
+    status,
+    outcomeCode,
+    expectedRunVersion,
+    baseBranch,
+    headBranch,
+    baseCommitSha,
+    expectedCommitSha,
+    intentDigest,
+    logicalIdempotencyKey,
+    diffDigest,
+    testEvidenceDigest,
+    packageDigest,
+    changedPaths,
+    prTitle,
+    prBody,
+    expiresAt,
+    createdAt,
+    updatedAt,
+    redacted,
+  } = request
+  return {
+    id,
+    stateVersion,
+    intentRevision,
+    organizationId,
+    projectId,
+    requestedByUserId,
+    localIntentId,
+    localProjectId,
+    runId,
+    runVersion,
+    nodeId,
+    repositoryBindingId,
+    repositoryBindingVersion,
+    installationId,
+    repositoryId,
+    repository,
+    codingRunId,
+    workspaceId,
+    diffArtifactId,
+    testEvidenceId,
+    prPackageArtifactId,
+    status,
+    outcomeCode,
+    expectedRunVersion,
+    baseBranch,
+    headBranch,
+    baseCommitSha,
+    expectedCommitSha,
+    intentDigest,
+    logicalIdempotencyKey,
+    diffDigest,
+    testEvidenceDigest,
+    packageDigest,
+    changedPaths: [...changedPaths],
+    prTitle,
+    prBody,
+    expiresAt,
+    createdAt,
+    updatedAt,
+    redacted,
+  }
+}
+
+export function cloneGitHubDeliveryApproval(
+  approval: GitHubDeliveryApproval,
+): GitHubDeliveryApproval {
+  const {
+    id,
+    requestId,
+    intentRevision,
+    requestStateVersion,
+    intentDigest,
+    repositoryBindingId,
+    repositoryBindingVersion,
+    runId,
+    runVersion,
+    nodeId,
+    repositoryId,
+    baseBranch,
+    headBranch,
+    expectedCommitSha,
+    testEvidenceDigest,
+    packageDigest,
+    approvedByUserId,
+    approvedRole,
+    authenticationKind,
+    approvedAt,
+    redacted,
+  } = approval
+  return {
+    id,
+    requestId,
+    intentRevision,
+    requestStateVersion,
+    intentDigest,
+    repositoryBindingId,
+    repositoryBindingVersion,
+    runId,
+    runVersion,
+    nodeId,
+    repositoryId,
+    baseBranch,
+    headBranch,
+    expectedCommitSha,
+    testEvidenceDigest,
+    packageDigest,
+    approvedByUserId,
+    approvedRole,
+    authenticationKind,
+    approvedAt,
+    redacted,
+  }
+}
+
+export function cloneGitHubCredentialGrant(
+  grant: GitHubCredentialGrant,
+): GitHubCredentialGrant {
+  const {
+    id,
+    version,
+    requestId,
+    intentRevision,
+    approvalId,
+    attempt,
+    repositoryId,
+    permission,
+    repositoryCount,
+    status,
+    requestedAt,
+    issuedAt,
+    credentialExpiresAt,
+    consumedAt,
+    outcomeCode,
+    redacted,
+  } = grant
+  return {
+    id,
+    version,
+    requestId,
+    intentRevision,
+    approvalId,
+    attempt,
+    repositoryId,
+    permission,
+    repositoryCount,
+    status,
+    requestedAt,
+    issuedAt,
+    credentialExpiresAt,
+    consumedAt,
+    outcomeCode,
+    redacted,
+  }
+}
+
+export function cloneGitHubBranchPublication(
+  publication: GitHubBranchPublication,
+): GitHubBranchPublication {
+  const {
+    id,
+    version,
+    requestId,
+    intentRevision,
+    grantId,
+    status,
+    reportedOutcomeCode,
+    verifiedHeadSha,
+    reportedAt,
+    verifiedAt,
+    outcomeCode,
+    redacted,
+  } = publication
+  return {
+    id,
+    version,
+    requestId,
+    intentRevision,
+    grantId,
+    status,
+    reportedOutcomeCode,
+    verifiedHeadSha,
+    reportedAt,
+    verifiedAt,
+    outcomeCode,
+    redacted,
+  }
+}
+
+export function cloneGitHubPullRequestOutcome(
+  pullRequest: GitHubPullRequestOutcome,
+): GitHubPullRequestOutcome {
+  const {
+    id,
+    version,
+    requestId,
+    intentRevision,
+    publicationId,
+    status,
+    pullRequestId,
+    pullRequestNumber,
+    safeUrl,
+    draft,
+    headBranch,
+    baseBranch,
+    headSha,
+    providerCreatedAt,
+    recordedAt,
+    outcomeCode,
+    redacted,
+  } = pullRequest
+  return {
+    id,
+    version,
+    requestId,
+    intentRevision,
+    publicationId,
+    status,
+    pullRequestId,
+    pullRequestNumber,
+    safeUrl,
+    draft,
+    headBranch,
+    baseBranch,
+    headSha,
+    providerCreatedAt,
+    recordedAt,
+    outcomeCode,
+    redacted,
+  }
+}
+
+export function fingerprintGitHubDeliveryRequest(
+  input: Pick<
+    CreateOrReviseGitHubDeliveryRequestInput,
+    'intent' | 'prTitle' | 'prBody'
+  >,
+): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify([
+        'github_delivery_request',
+        input.intent.intentDigest,
+        input.intent.idempotencyKey,
+        input.prTitle,
+        input.prBody,
+      ]),
+      'utf8',
+    )
+    .digest('hex')
+}
