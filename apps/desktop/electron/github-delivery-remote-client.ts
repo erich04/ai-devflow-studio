@@ -1219,6 +1219,14 @@ const serviceFailurePhases = new Set([
   'pull_request',
 ])
 
+const servicePhaseByOperation: Partial<
+  Record<GitHubDeliveryRemoteOperation, string>
+> = {
+  credential_grant: 'credential',
+  branch_publication: 'publication',
+  draft_pull_request: 'pull_request',
+}
+
 function routeErrorForStatus(status: number): string | null {
   switch (status) {
     case 400:
@@ -1239,6 +1247,7 @@ function routeErrorForStatus(status: number): string | null {
 function parseServiceFailureRetryable(
   body: unknown,
   status: number,
+  operation: GitHubDeliveryRemoteOperation,
 ): boolean | null {
   if (
     !isRecord(body) ||
@@ -1256,7 +1265,8 @@ function parseServiceFailureRetryable(
   const code = body.code as keyof typeof serviceFailureStatuses
   if (
     serviceFailureStatuses[code] !== status ||
-    routeErrorForStatus(status) !== body.error
+    routeErrorForStatus(status) !== body.error ||
+    servicePhaseByOperation[operation] !== body.phase
   ) {
     return null
   }
@@ -1311,7 +1321,11 @@ async function throwHttpError(
     ) {
       outcomeCode = body.outcomeCode as GitHubDeliveryRejectionOutcome
     } else {
-      serviceRetryable = parseServiceFailureRetryable(body, response.status)
+      serviceRetryable = parseServiceFailureRetryable(
+        body,
+        response.status,
+        operation,
+      )
     }
   } catch (error) {
     if (signal?.aborted) throw new Error('github_delivery_request_aborted')

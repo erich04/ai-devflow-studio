@@ -475,6 +475,7 @@ describe('GitHub Delivery remote client', () => {
       code: 'github_delivery_state_conflict',
       retryable: true,
       phase: 'credential',
+      operation: 'credential_grant',
       expectedCode: 'conflict',
     },
     {
@@ -483,6 +484,7 @@ describe('GitHub Delivery remote client', () => {
       code: 'github_delivery_state_conflict',
       retryable: false,
       phase: 'publication',
+      operation: 'branch_publication',
       expectedCode: 'conflict',
     },
     {
@@ -491,11 +493,12 @@ describe('GitHub Delivery remote client', () => {
       code: 'github_authentication_failed',
       retryable: false,
       phase: 'credential',
+      operation: 'credential_grant',
       expectedCode: 'service_unavailable',
     },
   ])(
     'preserves the trusted service retryability contract for $code ($retryable)',
-    async ({ status, error, code, retryable, phase, expectedCode }) => {
+    async ({ status, error, code, retryable, phase, operation, expectedCode }) => {
       const rawMessage =
         'GitHub failure leaked Authorization: Bearer remote-secret /Users/alice/private'
       const client = createGitHubDeliveryRemoteClient({
@@ -515,15 +518,28 @@ describe('GitHub Delivery remote client', () => {
         ),
       })
 
-      const remoteError = await client
-        .listInbox(projectId)
-        .catch((caught: unknown) => caught)
+      const remoteError = await (operation === 'branch_publication'
+        ? client.reportBranchPublication({
+            projectId,
+            requestId,
+            grantId: 'grant-1',
+            expectedStateVersion: 3,
+            expectedGrantVersion: 1,
+            reportedOutcomeCode: 'pushed',
+          })
+        : client.withCredentialGrant(
+            { projectId, requestId, expectedStateVersion: 2 },
+            async () => {
+              throw new Error('publisher must not run for a failed credential request')
+            },
+          )
+      ).catch((caught: unknown) => caught)
 
       expect(remoteError).toMatchObject({
         name: 'GitHubDeliveryRemoteError',
         status,
         code: expectedCode,
-        operation: 'inbox',
+        operation,
         retryable,
         outcomeCode: null,
       })
@@ -563,6 +579,18 @@ describe('GitHub Delivery remote client', () => {
           502,
         ),
       )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: 'conflict',
+            message: secretMessage,
+            code: 'github_delivery_state_conflict',
+            retryable: true,
+            phase: 'credential',
+          },
+          409,
+        ),
+      )
     const client = createGitHubDeliveryRemoteClient({
       apiBaseUrl: 'https://api.devflow.test',
       authToken: 'desktop-secret-token',
@@ -573,6 +601,9 @@ describe('GitHub Delivery remote client', () => {
       .listInbox(projectId)
       .catch((caught: unknown) => caught)
     const inconsistentStatus = await client
+      .listInbox(projectId)
+      .catch((caught: unknown) => caught)
+    const inconsistentPhase = await client
       .listInbox(projectId)
       .catch((caught: unknown) => caught)
 
@@ -586,8 +617,13 @@ describe('GitHub Delivery remote client', () => {
       code: 'service_unavailable',
       retryable: true,
     })
+    expect(inconsistentPhase).toMatchObject({
+      status: 409,
+      code: 'conflict',
+      retryable: false,
+    })
     expect(
-      `${String(extraField)} ${JSON.stringify(extraField)} ${String(inconsistentStatus)} ${JSON.stringify(inconsistentStatus)}`,
+      `${String(extraField)} ${JSON.stringify(extraField)} ${String(inconsistentStatus)} ${JSON.stringify(inconsistentStatus)} ${String(inconsistentPhase)} ${JSON.stringify(inconsistentPhase)}`,
     ).not.toContain(secretMessage)
   })
 
