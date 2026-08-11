@@ -468,6 +468,129 @@ describe('GitHub Delivery remote client', () => {
     expect(`${String(error)} ${JSON.stringify(error)}`).not.toContain(rawMessage)
   })
 
+  it.each([
+    {
+      status: 409,
+      error: 'conflict',
+      code: 'github_delivery_state_conflict',
+      retryable: true,
+      phase: 'credential',
+      expectedCode: 'conflict',
+    },
+    {
+      status: 409,
+      error: 'conflict',
+      code: 'github_delivery_state_conflict',
+      retryable: false,
+      phase: 'publication',
+      expectedCode: 'conflict',
+    },
+    {
+      status: 502,
+      error: 'bad_gateway',
+      code: 'github_authentication_failed',
+      retryable: false,
+      phase: 'credential',
+      expectedCode: 'service_unavailable',
+    },
+  ])(
+    'preserves the trusted service retryability contract for $code ($retryable)',
+    async ({ status, error, code, retryable, phase, expectedCode }) => {
+      const rawMessage =
+        'GitHub failure leaked Authorization: Bearer remote-secret /Users/alice/private'
+      const client = createGitHubDeliveryRemoteClient({
+        apiBaseUrl: 'https://api.devflow.test',
+        authToken: 'desktop-secret-token',
+        fetcher: vi.fn(async () =>
+          jsonResponse(
+            {
+              error,
+              message: rawMessage,
+              code,
+              retryable,
+              phase,
+            },
+            status,
+          ),
+        ),
+      })
+
+      const remoteError = await client
+        .listInbox(projectId)
+        .catch((caught: unknown) => caught)
+
+      expect(remoteError).toMatchObject({
+        name: 'GitHubDeliveryRemoteError',
+        status,
+        code: expectedCode,
+        operation: 'inbox',
+        retryable,
+        outcomeCode: null,
+      })
+      expect(`${String(remoteError)} ${JSON.stringify(remoteError)}`).not.toContain(
+        rawMessage,
+      )
+    },
+  )
+
+  it('does not trust malformed or secret-bearing service error envelopes', async () => {
+    const secretMessage =
+      'Authorization: Bearer remote-secret at /Users/alice/private'
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: 'conflict',
+            message: secretMessage,
+            code: 'github_delivery_state_conflict',
+            retryable: true,
+            phase: 'credential',
+            token: 'ghs_must-not-be-trusted',
+          },
+          409,
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: 'bad_gateway',
+            message: secretMessage,
+            code: 'github_timeout',
+            retryable: false,
+            phase: 'credential',
+          },
+          502,
+        ),
+      )
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher,
+    })
+
+    const extraField = await client
+      .listInbox(projectId)
+      .catch((caught: unknown) => caught)
+    const inconsistentStatus = await client
+      .listInbox(projectId)
+      .catch((caught: unknown) => caught)
+
+    expect(extraField).toMatchObject({
+      status: 409,
+      code: 'conflict',
+      retryable: false,
+    })
+    expect(inconsistentStatus).toMatchObject({
+      status: 502,
+      code: 'service_unavailable',
+      retryable: true,
+    })
+    expect(
+      `${String(extraField)} ${JSON.stringify(extraField)} ${String(inconsistentStatus)} ${JSON.stringify(inconsistentStatus)}`,
+    ).not.toContain(secretMessage)
+  })
+
   it('enforces its own bounded timeout and sanitizes the aborted fetch failure', async () => {
     vi.useFakeTimers()
     try {
@@ -725,6 +848,30 @@ describe('GitHub Delivery remote client', () => {
     ).resolves.toEqual(snapshot)
   })
 
+  it('recovers a replacement grant after an earlier publication required reconciliation', async () => {
+    const snapshot = {
+      request: deliveryRequest({ stateVersion: 6, status: 'publishing_branch' }),
+      approval: approval(),
+      grant: credentialGrant({ id: 'grant-2', version: 1, attempt: 2 }),
+      publication: branchPublication({
+        status: 'recovery_required',
+        verifiedHeadSha: null,
+        verifiedAt: null,
+        outcomeCode: 'branch_verification_failed',
+      }),
+      pullRequest: null,
+    }
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () => jsonResponse({ snapshot })),
+    })
+
+    await expect(
+      client.getRecoverySnapshot({ projectId, requestId }),
+    ).resolves.toEqual(snapshot)
+  })
+
   it('parses the bounded credential-superseded recovery outcome', async () => {
     const snapshot = {
       request: deliveryRequest({
@@ -803,6 +950,18 @@ describe('GitHub Delivery remote client', () => {
           approval: approval(),
           grant: credentialGrant({ status: 'consumed', consumedAt: now }),
           publication: branchPublication({ grantId: 'grant-other' }),
+          pullRequest: null,
+        },
+      },
+    ],
+    [
+      'cross-grant publication outside the narrow replacement window',
+      {
+        snapshot: {
+          request: deliveryRequest({ status: 'publishing_branch' }),
+          approval: approval(),
+          grant: credentialGrant({ id: 'grant-2', attempt: 2 }),
+          publication: branchPublication(),
           pullRequest: null,
         },
       },

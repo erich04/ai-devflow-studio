@@ -1032,6 +1032,15 @@ function parseRecoverySnapshot(
     snapshot.pullRequest === null
       ? null
       : parsePullRequestOutcome(snapshot.pullRequest)
+  const publicationReferencesRecoverablePriorGrant = Boolean(
+    publication !== null &&
+      grant !== null &&
+      publication.grantId !== grant.id &&
+      request?.status === 'publishing_branch' &&
+      grant.status === 'issued' &&
+      (publication.status === 'recovery_required' || publication.status === 'conflict') &&
+      pullRequest === null,
+  )
   if (
     !request ||
     (snapshot.approval !== null && !approval) ||
@@ -1066,7 +1075,8 @@ function parseRecoverySnapshot(
       (grant === null ||
         publication.requestId !== request.id ||
         publication.intentRevision !== request.intentRevision ||
-        publication.grantId !== grant.id ||
+        (publication.grantId !== grant.id &&
+          !publicationReferencesRecoverablePriorGrant) ||
         (publication.status === 'verified' &&
           publication.verifiedHeadSha !== request.expectedCommitSha))) ||
     (pullRequest !== null &&
@@ -1181,6 +1191,78 @@ const rejectionOutcomes = new Set<GitHubDeliveryRejectionOutcome>([
   'expired',
 ])
 
+const serviceFailureStatuses = {
+  github_authentication_failed: 502,
+  github_conflict: 409,
+  github_forbidden: 502,
+  github_invalid_request: 400,
+  github_malformed_response: 502,
+  github_not_found: 404,
+  github_pull_request_conflict: 409,
+  github_rate_limited: 503,
+  github_repository_mismatch: 409,
+  github_request_rejected: 502,
+  github_response_too_large: 502,
+  github_scope_mismatch: 409,
+  github_timeout: 503,
+  github_unauthorized: 502,
+  github_unavailable: 503,
+  github_validation_failed: 400,
+  github_delivery_state_conflict: 409,
+  github_delivery_unavailable: 503,
+} as const
+
+const serviceFailurePhases = new Set([
+  'binding',
+  'credential',
+  'publication',
+  'pull_request',
+])
+
+function routeErrorForStatus(status: number): string | null {
+  switch (status) {
+    case 400:
+      return 'bad_request'
+    case 404:
+      return 'not_found'
+    case 409:
+      return 'conflict'
+    case 502:
+      return 'bad_gateway'
+    case 503:
+      return 'service_unavailable'
+    default:
+      return null
+  }
+}
+
+function parseServiceFailureRetryable(
+  body: unknown,
+  status: number,
+): boolean | null {
+  if (
+    !isRecord(body) ||
+    !hasExactKeys(body, ['error', 'message', 'code', 'retryable', 'phase']) ||
+    typeof body.error !== 'string' ||
+    typeof body.message !== 'string' ||
+    typeof body.code !== 'string' ||
+    typeof body.retryable !== 'boolean' ||
+    typeof body.phase !== 'string' ||
+    !serviceFailurePhases.has(body.phase) ||
+    !Object.prototype.hasOwnProperty.call(serviceFailureStatuses, body.code)
+  ) {
+    return null
+  }
+  const code = body.code as keyof typeof serviceFailureStatuses
+  if (
+    serviceFailureStatuses[code] !== status ||
+    routeErrorForStatus(status) !== body.error
+  ) {
+    return null
+  }
+  return body.retryable
+}
+
 function classifyHttpStatus(status: number): GitHubDeliveryRemoteErrorCode {
   if (status >= 500) return 'service_unavailable'
   switch (status) {
@@ -1215,6 +1297,7 @@ async function throwHttpError(
   signal?: AbortSignal,
 ): Promise<never> {
   let outcomeCode: GitHubDeliveryRejectionOutcome | null = null
+  let serviceRetryable: boolean | null = null
   try {
     const body = await readBoundedJson(response, operation, signal)
     if (
@@ -1227,6 +1310,8 @@ async function throwHttpError(
       typeof body.replayed === 'boolean'
     ) {
       outcomeCode = body.outcomeCode as GitHubDeliveryRejectionOutcome
+    } else {
+      serviceRetryable = parseServiceFailureRetryable(body, response.status)
     }
   } catch (error) {
     if (signal?.aborted) throw new Error('github_delivery_request_aborted')
@@ -1242,7 +1327,7 @@ async function throwHttpError(
     operation,
     classifyHttpStatus(response.status),
     response.status,
-    isRetryableHttpStatus(response.status),
+    serviceRetryable ?? isRetryableHttpStatus(response.status),
     outcomeCode,
   )
 }
