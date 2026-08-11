@@ -17,7 +17,7 @@ AS $function$
         OR char_length(current_item.value #>> '{}') NOT BETWEEN 1 AND 500
         OR btrim(current_item.value #>> '{}') <> current_item.value #>> '{}'
         OR left(current_item.value #>> '{}', 1) IN ('/', '~')
-        OR current_item.value #>> '{}' LIKE '%\%'
+        OR strpos(current_item.value #>> '{}', chr(92)) > 0
         OR current_item.value #>> '{}' ~ '(^|/)(\.|\.\.)(/|$)'
         OR previous_item.value #>> '{}' >= current_item.value #>> '{}'
     )

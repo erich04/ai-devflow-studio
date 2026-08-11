@@ -274,8 +274,9 @@ describe('team database schema', () => {
     expect(migrationV11?.sql).toContain('github_repository_bindings_one_active_repository')
     expect(migrationV11?.sql).toContain('github_delivery_requests_logical_key_unique')
     expect(migrationV11?.sql).toContain('github_delivery_requests_one_active_target')
+    expect(migrationV11?.sql).toContain("strpos(current_item.value #>> '{}', chr(92)) > 0")
     expect(migrationChecksum(migrationV11?.sql ?? '')).toBe(
-      'babe7ec7201be5ab9202334138535a251f7c345f4761c0c03543e66c200805a9',
+      '3c0f98100a3d987551c5604f33102d59a7cd101a4f45456432d40b3f7dffd4d3',
     )
     expect(migrationV11?.sql).not.toMatch(
       /\b(?:token|token_hash|private_key|credential|worktree_path|raw_diff|stdout|stderr)\s+(?:text|jsonb|bytea)\b/i,
