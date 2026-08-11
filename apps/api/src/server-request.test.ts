@@ -34,6 +34,15 @@ const projectLeadSession: AuthenticatedSession = {
   ],
 }
 
+const projectOwnerSession: AuthenticatedSession = {
+  source: 'authenticated',
+  organizationId: 'org-demo',
+  userId: 'u-api-owner',
+  role: 'owner',
+  authAccountId: 'acct-api-owner',
+  projectMemberships: [],
+}
+
 const authenticatedWithoutProject: AuthenticatedSession = {
   source: 'authenticated',
   organizationId: 'org-demo',
@@ -791,6 +800,76 @@ describe('API HTTP authentication boundary', () => {
       authentication: {
         kind: 'desktop_bearer',
         tokenRecordId: 'desktop-token-record-gate',
+      },
+    })
+  })
+
+  it('routes GitHub Delivery through the unified signed-cookie boundary', async () => {
+    const repository = createSeedTeamRepository()
+    const getGitHubRepositoryBinding = vi.spyOn(
+      repository,
+      'getGitHubRepositoryBinding',
+    )
+    const sessionSecret = 'server-request-test-secret'
+    const cookie = createSessionCookie(
+      { authAccountId: projectLeadSession.authAccountId },
+      sessionSecret,
+    ).split(';')[0]
+    vi.spyOn(repository, 'resolveBrowserSession').mockResolvedValue(
+      projectLeadSession,
+    )
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'GET',
+        pathname: '/api/team/projects/p-payments/github-repository-binding',
+        headers: { cookie },
+      },
+      { repository, sessionSecret },
+    )
+
+    expect(result).toEqual({ status: 200, body: { binding: null } })
+    expect(getGitHubRepositoryBinding).toHaveBeenCalledWith(
+      'p-payments',
+      {
+        session: projectLeadSession,
+        authentication: { kind: 'session_cookie', tokenRecordId: null },
+      },
+    )
+  })
+
+  it('keeps GitHub Delivery routes visible with a fixed unavailable result when the App is not configured', async () => {
+    const repository = createSeedTeamRepository()
+    const sessionSecret = 'server-request-test-secret'
+    const cookie = createSessionCookie(
+      { authAccountId: projectOwnerSession.authAccountId },
+      sessionSecret,
+    ).split(';')[0]
+    vi.spyOn(repository, 'resolveBrowserSession').mockResolvedValue(
+      projectOwnerSession,
+    )
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'PUT',
+        pathname: '/api/team/projects/p-payments/github-repository-binding',
+        headers: { cookie },
+        body: {
+          installationId: '12345',
+          repositoryId: '98765',
+          expectedStateVersion: 0,
+        },
+      },
+      { repository, sessionSecret },
+    )
+
+    expect(result).toEqual({
+      status: 503,
+      body: {
+        error: 'service_unavailable',
+        message: 'The GitHub delivery operation could not be completed safely.',
+        code: 'github_delivery_unavailable',
+        retryable: true,
+        phase: 'binding',
       },
     })
   })

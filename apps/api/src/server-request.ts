@@ -7,7 +7,12 @@ import {
   SESSION_COOKIE_NAME,
 } from './auth/session-cookie'
 import type { GitHubOAuthClient } from './auth/github-oauth'
+import {
+  GitHubDeliveryServiceError,
+  type GitHubDeliveryService,
+} from './github-delivery-service'
 import type { TeamRepository } from './repositories/team-repository'
+import { resolveGitHubDeliveryRoute } from './routes/github-delivery-routes'
 import { resolveTeamRoute, type ApiRouteResult } from './routes/team-routes'
 
 export type ApiRouteRequest = {
@@ -23,6 +28,7 @@ export type ApiRouteRequestOptions = {
   sessionSecret: string
   devAuthEnabled?: boolean
   githubOAuth?: GitHubOAuthClient
+  githubDeliveryService?: GitHubDeliveryService
   postAuthRedirectUrl?: string
   secureCookies?: boolean
 }
@@ -57,6 +63,31 @@ function authenticationUnavailable(): ApiRouteResult {
 
 function hasHeader(headers: IncomingHttpHeaders, name: string): boolean {
   return Object.keys(headers).some((headerName) => headerName.toLowerCase() === name)
+}
+
+function unavailableGitHubDelivery(
+  phase: GitHubDeliveryServiceError['phase'],
+): never {
+  throw new GitHubDeliveryServiceError({
+    code: 'github_delivery_unavailable',
+    retryable: true,
+    phase,
+  })
+}
+
+const unavailableGitHubDeliveryService: GitHubDeliveryService = {
+  async configureRepositoryBinding() {
+    return unavailableGitHubDelivery('binding')
+  },
+  async issueCredentialGrant() {
+    return unavailableGitHubDelivery('credential')
+  },
+  async verifyBranchPublication() {
+    return unavailableGitHubDelivery('publication')
+  },
+  async createDraftPullRequest() {
+    return unavailableGitHubDelivery('pull_request')
+  },
 }
 
 export async function resolveApiRouteRequest(
@@ -111,6 +142,18 @@ export async function resolveApiRouteRequest(
         }
       : null
   }
+
+  const githubDeliveryResult = await resolveGitHubDeliveryRoute(
+    request.method,
+    request.pathname,
+    options.repository,
+    options.githubDeliveryService ?? unavailableGitHubDeliveryService,
+    {
+      body: request.body,
+      principal,
+    },
+  )
+  if (githubDeliveryResult) return githubDeliveryResult
 
   return resolveTeamRoute(request.method, request.pathname, options.repository, {
     auth: {

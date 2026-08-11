@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createGitHubOAuthClient } from './auth/github-oauth'
+import { createGitHubAppClientFromEnv } from './github-app-auth'
+import { createGitHubDeliveryService } from './github-delivery-service'
 import { resolveServerRuntimeConfig } from './server-config'
 import { createTeamRepositoryRuntime } from './repositories/repository-runtime'
 import {
@@ -13,6 +15,18 @@ const { devAuthEnabled, host, port, secureCookies, sessionSecret, webAppUrl } =
 const repositoryRuntime = await createTeamRepositoryRuntime()
 const repository = repositoryRuntime.repository
 const githubOAuth = createGitHubOAuthClient.fromEnv()
+const githubAppClient = createGitHubAppClientFromEnv({
+  env: process.env,
+  fetcher: fetch,
+  clock: () => new Date(),
+})
+const githubDeliveryService = githubAppClient
+  ? createGitHubDeliveryService({
+      repository,
+      client: githubAppClient,
+      clock: () => new Date(),
+    })
+  : undefined
 
 function sendJson(
   response: ServerResponse,
@@ -112,6 +126,7 @@ const server = createServer(async (request, response) => {
         postAuthRedirectUrl: webAppUrl,
         secureCookies,
         ...(githubOAuth ? { githubOAuth } : {}),
+        ...(githubDeliveryService ? { githubDeliveryService } : {}),
       },
     )
   } catch (error) {
