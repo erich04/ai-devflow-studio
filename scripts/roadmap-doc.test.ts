@@ -51,6 +51,25 @@ describe('product roadmap source of truth', () => {
     }
   })
 
+  it('separates one-shot model work, the Agent Runtime, and coding executors', () => {
+    const markdown = readFileSync(roadmapPath, 'utf8')
+    const executionModel = markdown.match(
+      /## 2\.x Agent Execution Model[\s\S]*?(?=\n## 2\.x Planned Milestones)/u,
+    )?.[0]
+
+    expect(executionModel).toBeDefined()
+    expect(executionModel).toContain('Single-Call LLM Operation')
+    expect(executionModel).toContain('DevFlow Agent Runtime')
+    expect(executionModel).toContain('Coding Executor')
+    expect(executionModel).toContain('deterministic Workflow remains the outer authority')
+    expect(executionModel).toContain('OpenCode')
+    expect(executionModel).toContain('DevFlow-owned Coding Agent')
+    expect(executionModel).toContain('additional CLI adapters')
+    expect(executionModel).toContain('implementation candidates, not committed integrations')
+    expect(executionModel).toContain('does not by itself satisfy the V2.2 Multi-Agent claim')
+    expect(executionModel).toContain('explicitly evolves ADR 0009')
+  })
+
   it('defines finite 1.x and 2.x lines with the Agent Runtime direction', () => {
     const markdown = readFileSync(roadmapPath, 'utf8')
 

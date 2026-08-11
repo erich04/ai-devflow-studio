@@ -58,7 +58,7 @@ rules.
 | --- | --- | --- | --- | --- |
 | 0.x | Engineering foundation | Real Electron execution, durable local state, team sync, Knowledge Governance, Gate policy, a managed external Coding Agent Adapter, runtime observability, and release discipline. | Fake and explicitly authorized real Coding paths can execute in managed worktrees, preserve auditable evidence, obey human Gates, sync only redacted summaries, and pass reproducible verification. | Completed at v0.9.0. |
 | 1.x | Governed self-hosted delivery | Authenticated team pilot, Desktop pairing, project scope, policy and budget controls, durable sync, repository knowledge, Web collaboration commands, reproducible lifecycle, and human-approved GitHub delivery. | One authenticated Work Request becomes one canonical local Run, reaches tested and evidence-backed delivery, and publishes a branch and pull request only after explicit human approval. V1.5 is the final planned 1.x feature milestone. | In progress; v1.4.0 released and v1.5 planned. |
-| 2.x | DevFlow-native Agent Runtime | A bounded first-party Agent loop, native Tool and MCP execution, trajectory and evaluation, scoped Context and Memory, evaluated RAG, Multi-Agent orchestration, and tenant-scoped execution. | Benchmarked scenarios demonstrate bounded single- and Multi-Agent execution, native MCP/tool use, evaluated retrieval and Memory, failure recovery, tenant isolation, and auditable trajectories while Workflow and Gate authority remains intact. | Planned after the 1.x completion gate. |
+| 2.x | DevFlow-native Agent Runtime | A bounded first-party Agent loop, native Tool and MCP execution, pluggable Coding Executors, trajectory and evaluation, scoped Context and Memory, evaluated RAG, Multi-Agent orchestration, and tenant-scoped execution. | Benchmarked scenarios demonstrate bounded single- and Multi-Agent execution, native and delegated coding, MCP/tool use, evaluated retrieval and Memory, failure recovery, tenant isolation, and auditable trajectories while Workflow and Gate authority remains intact. | Planned after the 1.x completion gate. |
 
 The version lines are finite product contracts, not an instruction to keep adding versions. A line
 ends when its completion gate passes; remaining ideas move to maintenance, evidence-promoted work,
@@ -123,8 +123,11 @@ defects, security fixes, dependency maintenance, or hardening justified by real 
 The 2.x line starts only after the 1.x completion gate. It keeps the deterministic Workflow and
 human Gates as the outer authority.
 
-Agent reasoning, Tool/MCP execution, Memory, and trajectory semantics then move into a DevFlow-owned
-runtime.
+DevFlow-owned orchestration, native Tool/MCP execution, Memory, and trajectory semantics then move
+into a first-party runtime.
+
+Single-Call LLM Operations remain available for narrow work, while code changes route through
+approved Coding Executors.
 
 ## Completed Milestones
 
@@ -468,6 +471,63 @@ revocable credentials, deterministic default CI, and no open P0/P1 defects in th
 After that gate, 1.x defaults to maintenance; it does not automatically produce a V1.6 or V1.7
 feature milestone.
 
+## 2.x Agent Execution Model
+
+This model explains how deterministic workflow control, bounded model use, autonomous Agent work,
+and code-changing execution fit together.
+
+It is the stable 2.x direction, not a claim that the current V1.4 runtime already implements every
+layer.
+
+| Layer | Owns | Use it when | Product posture |
+| --- | --- | --- | --- |
+| Deterministic Workflow | Run state, identity, policy, budget, Evidence, human Gates, and whether an operation may start or advance. | Every governed delivery path. | Exists in 1.x and remains the outer control plane in 2.x. |
+| Single-Call LLM Operation | One bounded provider request with assembled Context and a validated result; it has no autonomous Tool loop. | The input is already sufficient for a narrow summary, classification, review, or artifact generation. | Current Knowledge Review is an example: a persisted trace and Artifact do not make it an iterative Agent loop. |
+| DevFlow Agent Runtime | A bounded observe, decide, act, checkpoint, evaluation, and stop loop. | The task must explore, react to Tool/MCP results, revise a plan, or choose an approved executor. | Planned for V2.0 and owned by DevFlow. It is neither the Workflow nor a Coding Executor. |
+| Coding Executor | Scoped repository reads and changes, commands, tests, and structured diff/test/terminal results. | Approved work must inspect or modify code. | OpenCode is the current external executor. A later DevFlow-owned Coding Agent implements the same executor contract. |
+
+The deterministic Workflow remains the outer authority. It establishes scope, policy, budget, and
+human approval before work starts, then persists accepted Evidence and controls stage transitions.
+
+The Agent Runtime may select only capabilities already allowed for that Run. Neither the Runtime nor
+a Coding Executor may publish, merge, widen scope, or bypass a human Gate by itself.
+
+### Routing Rules
+
+1. Use a Single-Call LLM Operation when the bounded input already contains enough information and
+   no autonomous exploration or Tool iteration is required.
+2. Use the DevFlow Agent Runtime when the next step depends on observations, retrieval, Tool/MCP
+   results, checkpointed state, or iterative evaluation.
+3. Use a Coding Executor when approved work must inspect or modify a repository, run commands, or
+   produce test and diff Evidence.
+4. Return executor events and results to the Agent Runtime for evaluation and to the deterministic
+   Workflow for Evidence, policy re-checks, and human Gate decisions.
+
+In 1.x, the governed coding path invokes the existing `CodingEngineAdapter` directly. In 2.x, the
+Agent Runtime may select an executor only from the capability- and policy-approved set for the
+current Run.
+
+### Executor Adoption
+
+- First, V2.0 adds the DevFlow Agent Runtime while retaining OpenCode as the first external Coding
+  Executor. DevFlow owns orchestration, Context, Tool/MCP policy, checkpoints, evaluation, and routing.
+- Next, V2.0 adds a deliberately narrow DevFlow-owned Coding Agent behind the same executor contract.
+  It proves a native code loop without claiming immediate feature parity with OpenCode.
+- Later, additional CLI adapters may be evaluated behind that contract. Codex CLI and Kimi Code are
+  implementation candidates, not committed integrations.
+- Executor selection must be capability-based, policy-bound, observable, cancellable, and measured
+  against the same quality, latency, cost, intervention, and recovery scenarios.
+
+OpenCode remains an external Agent Runtime. DevFlow evaluates only adapter-exposed events, diffs,
+Test Evidence, and terminal results; it does not claim OpenCode's private internal trajectory.
+
+Delegating from one DevFlow Agent to OpenCode does not by itself satisfy the V2.2 Multi-Agent claim.
+That claim requires DevFlow-owned coordination, handoff, termination, and comparative evaluation.
+
+Before native Coding Agent implementation, approve an ADR that explicitly evolves ADR 0009 and the
+current `CONTEXT.md` external-only Coding Agent definitions. The Roadmap does not silently supersede
+accepted architecture decisions.
+
 ## 2.x Planned Milestones
 
 The following milestones define outcomes, not pre-approved implementation designs. Each milestone
@@ -478,6 +538,13 @@ requires a scoped PRD and the necessary ADRs before product code begins.
 - Add a bounded first-party Agent loop with explicit success, failure, cancellation, timeout,
   budget, and step-limit stop reasons.
 - Persist checkpoint, resume, and an auditable trajectory without exposing hidden reasoning.
+- Evolve the current `CodingEngineAdapter` interface into one Coding Executor contract for
+  capabilities, scoped requests, permission and Tool events, cancellation, test/diff Evidence, and
+  terminal results.
+- Retain OpenCode as the first external Coding Executor behind the current adapter seam.
+- Add one deliberately narrow DevFlow-owned Coding Agent to prove native repository Tool use,
+  test feedback, repair, and deterministic stopping without claiming OpenCode feature parity.
+- Approve the ADR that evolves ADR 0009 and `CONTEXT.md` before implementing the native Coding Agent.
 - Add a native Tool registry/executor and bounded MCP discovery, schema validation, lifecycle,
   permission, deadline, cancellation, and audit behavior for explicitly accepted scenarios.
 - Define and enforce the execution scopes required by those scenarios without weakening existing
@@ -487,6 +554,10 @@ requires a scoped PRD and the necessary ADRs before product code begins.
 
 V2.0 exits when one DevFlow-owned Agent completes benchmarked work through native Tool/MCP
 execution, resumes from a checkpoint, stops deterministically, and produces an auditable trajectory.
+
+The same Runtime must complete governed coding scenarios through both OpenCode and the narrow
+DevFlow-owned Coding Agent, with comparable structured events, cancellation, Evidence, and Gate
+behavior.
 
 ### v2.1: Evaluated Retrieval And Memory
 
@@ -522,6 +593,9 @@ accepted native MCP execution, evaluated RAG and Memory, and justified Multi-Age
 
 Those scenarios must also prove execution tenancy, failure recovery, and auditable trajectories
 inside the existing Workflow/Gate authority model.
+
+Native and delegated Coding Executors must use the same governed contract rather than creating
+separate delivery authorities.
 
 After V2.2, the default is real pilot use, interview/demo documentation, security and dependency
 maintenance, and evidence-driven fixes.
