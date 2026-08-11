@@ -1,0 +1,496 @@
+import { createHash } from 'node:crypto'
+import { describe, expect, it, vi } from 'vitest'
+import type {
+  Artifact,
+  CodingAgentRun,
+  CodingDiffArtifact,
+  DesktopPairingCredential,
+  GitHubDeliveryIntent,
+  GitHubRepositoryBinding,
+  LocalProject,
+  ManagedCodingWorkspace,
+  TestEvidence,
+  WorkflowRun,
+} from '@ai-devflow/shared'
+import { createGitHubDeliveryRuntime } from './github-delivery-runtime'
+
+const baseCommitSha = '0000000000000000000000000000000000000000'
+const expectedCommitSha = '1111111111111111111111111111111111111111'
+
+function fixture() {
+  const project: LocalProject = {
+    id: 'local-project-1',
+    name: 'Delivery fixture',
+    path: '/private/local/source',
+    packageManager: 'pnpm',
+    testCommand: 'pnpm test',
+    createdAt: '2026-08-11T13:00:00.000Z',
+    updatedAt: '2026-08-11T13:00:00.000Z',
+  }
+  const pairing: DesktopPairingCredential = {
+    tokenId: 'desktop-token-1',
+    organizationId: 'org-1',
+    projectId: 'team-project-1',
+    localProjectId: project.id,
+    userId: 'user-1',
+    role: 'lead',
+    authAccountId: 'account-1',
+    projectMemberships: [
+      { projectId: 'team-project-1', userId: 'user-1', role: 'lead' },
+    ],
+    createdAt: '2026-08-11T13:00:00.000Z',
+  }
+  const binding: GitHubRepositoryBinding = {
+    stateVersion: 1,
+    id: 'binding-1',
+    version: 1,
+    organizationId: pairing.organizationId,
+    teamProjectId: pairing.projectId,
+    installationId: '12345',
+    repositoryId: '98765',
+    repository: 'erich04/ai-devflow-studio',
+    defaultBranch: 'main',
+    status: 'active',
+    validatedAt: '2026-08-11T13:00:00.000Z',
+    updatedAt: '2026-08-11T13:00:00.000Z',
+    redacted: true,
+  }
+  const packageId = 'artifact-run-1-pr-draft-v6'
+  const run: WorkflowRun = {
+    id: 'run-1',
+    version: 7,
+    title: 'Ship a tested change',
+    request: 'Publish the reviewed managed-worktree commit.',
+    projectId: project.id,
+    creatorId: 'user-1',
+    status: 'testing',
+    currentNodeId: 'run-1-pr',
+    branchName: 'ai/non-authoritative-plan',
+    createdAt: '2026-08-11T13:00:00.000Z',
+    updatedAt: '2026-08-11T13:06:00.000Z',
+    nodes: [
+      {
+        id: 'run-1-build',
+        stage: 'build',
+        title: 'Build',
+        subtitle: 'Implement',
+        kind: 'task',
+        status: 'success',
+        ownerId: 'user-1',
+        requiredRole: 'member',
+        retryCount: 0,
+        artifactIds: ['diff-1'],
+      },
+      {
+        id: 'run-1-pr',
+        stage: 'pr',
+        title: 'PR',
+        subtitle: 'Deliver',
+        kind: 'pr',
+        status: 'running',
+        ownerId: 'user-1',
+        requiredRole: 'member',
+        retryCount: 0,
+        artifactIds: [packageId],
+      },
+    ],
+    edges: [],
+  }
+  const codingRun: CodingAgentRun = {
+    id: 'coding-1',
+    runId: run.id,
+    nodeId: 'run-1-build',
+    projectId: project.id,
+    requestedBy: 'user-1',
+    providerId: 'fake',
+    engine: 'fake',
+    status: 'completed',
+    managedWorkspaceId: 'workspace-1',
+    branchName: 'devflow/run-1-build-coding-1',
+    userInstruction: 'Implement.',
+    prompt: 'redacted',
+    summary: 'Completed.',
+    changedPaths: ['src/delivery.ts'],
+    startedAt: '2026-08-11T13:01:00.000Z',
+    completedAt: '2026-08-11T13:04:00.000Z',
+    diffArtifactId: 'diff-1',
+    testEvidenceId: 'precommit-test-1',
+    redacted: true,
+  }
+  const workspace: ManagedCodingWorkspace = {
+    id: 'workspace-1',
+    projectId: project.id,
+    codingRunId: codingRun.id,
+    sourcePath: project.path,
+    worktreePath: '/private/local/worktree',
+    branchName: codingRun.branchName,
+    baseBranch: binding.defaultBranch,
+    baseCommitSha,
+    createdAt: '2026-08-11T13:00:30.000Z',
+    cleanupStatus: 'active',
+  }
+  const rawPatch = 'diff --git a/src/delivery.ts b/src/delivery.ts\n+reviewed\n'
+  const sourceDigest = createHash('sha256').update(rawPatch, 'utf8').digest('hex')
+  const diff: CodingDiffArtifact = {
+    id: 'diff-1',
+    runId: run.id,
+    nodeId: codingRun.nodeId,
+    projectId: project.id,
+    changedPaths: [...codingRun.changedPaths],
+    patch: '+[REDACTED]',
+    sourceDigest,
+    truncated: false,
+    redacted: true,
+    createdAt: '2026-08-11T13:03:00.000Z',
+  }
+  const precommitTest: TestEvidence = {
+    id: 'precommit-test-1',
+    runId: run.id,
+    nodeId: codingRun.nodeId,
+    projectId: project.id,
+    command: 'pnpm test',
+    cwd: workspace.worktreePath,
+    status: 'passed',
+    exitCode: 0,
+    durationMs: 10,
+    stdout: '',
+    stderr: '',
+    summary: 'Precommit tests passed.',
+    redacted: true,
+    createdAt: '2026-08-11T13:03:30.000Z',
+  }
+  const prPackage: Artifact = {
+    id: packageId,
+    runId: run.id,
+    nodeId: 'run-1-pr',
+    kind: 'pr',
+    title: 'PR Draft: Ship a tested change',
+    summary: 'Bounded delivery package.',
+    content: '# Ship a tested change\n\nEvidence only.',
+    redacted: true,
+    updatedAt: '2026-08-11T13:05:00.000Z',
+    githubDeliverySource: {
+      stateVersion: 1,
+      codingRunId: codingRun.id,
+      workspaceId: workspace.id,
+      diffArtifactId: diff.id,
+      diffSourceDigest: sourceDigest,
+      testEvidenceId: precommitTest.id,
+      headBranch: workspace.branchName,
+    },
+  }
+  return {
+    project,
+    pairing,
+    binding,
+    run,
+    codingRun,
+    workspace,
+    diff,
+    precommitTest,
+    prPackage,
+  }
+}
+
+function fakeStore(source: ReturnType<typeof fixture>) {
+  let workspace = source.workspace
+  const intents: GitHubDeliveryIntent[] = []
+  const evidence = [source.precommitTest]
+  return {
+    intents,
+    evidence,
+    setWorkspace(next: ManagedCodingWorkspace) {
+      workspace = next
+    },
+    getRun: vi.fn(async () => source.run),
+    listProjects: vi.fn(async () => [source.project]),
+    getDesktopPairingCredential: vi.fn(async () => source.pairing),
+    getGitHubRepositoryBinding: vi.fn(async () => source.binding),
+    listArtifacts: vi.fn(async () => [source.prPackage]),
+    listCodingAgentRuns: vi.fn(async () => [source.codingRun]),
+    listManagedCodingWorkspaces: vi.fn(async () => [workspace]),
+    listCodingDiffArtifacts: vi.fn(async () => [source.diff]),
+    listTestEvidence: vi.fn(async () => [...evidence]),
+    listGitHubDeliveryIntents: vi.fn(async () => [...intents]),
+    commitManagedCodingWorkspaceHead: vi.fn(async (mutation: {
+      expectedWorkspace: ManagedCodingWorkspace
+      workspace: ManagedCodingWorkspace
+    }) => {
+      if (JSON.stringify(workspace) !== JSON.stringify(mutation.expectedWorkspace)) {
+        return { committed: false as const, reason: 'source_stale' as const }
+      }
+      workspace = mutation.workspace
+      return { committed: true as const, replayed: false, workspace }
+    }),
+    saveTestEvidence: vi.fn(async (test: TestEvidence) => {
+      evidence.push(test)
+    }),
+    commitGitHubDeliveryPreparation: vi.fn(async (mutation: {
+      intent: GitHubDeliveryIntent
+      testEvidence: TestEvidence
+    }) => {
+      evidence.push(mutation.testEvidence)
+      intents.push(mutation.intent)
+      return { committed: true as const, replayed: false, intent: mutation.intent }
+    }),
+  }
+}
+
+describe('GitHub Delivery preparation runtime', () => {
+  it('commits, records the workspace head, retests the exact worktree, and atomically prepares an intent', async () => {
+    const source = fixture()
+    const store = fakeStore(source)
+    const callOrder: string[] = []
+    const committedWorkspace = {
+      ...source.workspace,
+      baseCommitSha,
+      headCommitSha: expectedCommitSha,
+    }
+    const commitWorkspace = vi.fn(async () => {
+      callOrder.push('verify-workspace')
+      return {
+        workspace: committedWorkspace,
+        baseCommitSha,
+        expectedCommitSha,
+      }
+    })
+    const runTestCommand = vi.fn(async () => {
+      callOrder.push('run-tests')
+      return {
+        status: 'passed' as const,
+        exitCode: 0,
+        durationMs: 25,
+        stdout: 'ok',
+        stderr: '',
+        redacted: false,
+        summary: 'Tests passed.',
+      }
+    })
+    store.commitManagedCodingWorkspaceHead.mockImplementationOnce(async () => {
+      callOrder.push('commit-head')
+      store.setWorkspace(committedWorkspace)
+      return { committed: true, replayed: false, workspace: committedWorkspace }
+    })
+    store.commitGitHubDeliveryPreparation.mockImplementationOnce(async (mutation) => {
+      callOrder.push('commit-preparation')
+      store.evidence.push(mutation.testEvidence)
+      store.intents.push(mutation.intent)
+      return { committed: true, replayed: false, intent: mutation.intent }
+    })
+
+    const runtime = createGitHubDeliveryRuntime({
+      store,
+      commitWorkspace,
+      runTestCommand,
+      now: () => '2026-08-11T13:10:00.000Z',
+      idGenerator: (prefix) => `${prefix}-1`,
+      testTimeoutMs: 120_000,
+    })
+    const result = await runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
+
+    expect(result).toMatchObject({ status: 'prepared', replayed: false })
+    if (result.status !== 'prepared') {
+      throw new Error('Expected a prepared GitHub Delivery Intent')
+    }
+    expect(result.intent.expectedCommitSha).toBe(expectedCommitSha)
+    expect(result.testEvidence.sourceCommitSha).toBe(expectedCommitSha)
+    expect(runTestCommand).toHaveBeenCalledWith({
+      command: source.project.testCommand,
+      cwd: source.workspace.worktreePath,
+      timeoutMs: 120_000,
+    })
+    expect(commitWorkspace).toHaveBeenCalledTimes(3)
+    expect(callOrder).toEqual([
+      'verify-workspace',
+      'commit-head',
+      'verify-workspace',
+      'run-tests',
+      'verify-workspace',
+      'commit-preparation',
+    ])
+  })
+
+  it('persists commit-bound failed tests without creating a delivery intent or retrying', async () => {
+    const source = fixture()
+    const store = fakeStore(source)
+    const committedWorkspace = {
+      ...source.workspace,
+      baseCommitSha,
+      headCommitSha: expectedCommitSha,
+    }
+    const commitWorkspace = vi.fn(async () => ({
+      workspace: committedWorkspace,
+      baseCommitSha,
+      expectedCommitSha,
+    }))
+    const runTestCommand = vi.fn(async () => ({
+      status: 'failed' as const,
+      exitCode: 1,
+      durationMs: 20,
+      stdout: '',
+      stderr: 'failed',
+      redacted: false,
+      summary: 'Tests failed.',
+    }))
+    const runtime = createGitHubDeliveryRuntime({
+      store,
+      commitWorkspace,
+      runTestCommand,
+      now: () => '2026-08-11T13:10:00.000Z',
+      idGenerator: (prefix) => `${prefix}-1`,
+      testTimeoutMs: 120_000,
+    })
+
+    const result = await runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
+
+    expect(result).toMatchObject({ status: 'tests_failed' })
+    expect(store.saveTestEvidence).toHaveBeenCalledTimes(1)
+    expect(store.commitGitHubDeliveryPreparation).not.toHaveBeenCalled()
+    expect(store.intents).toEqual([])
+    expect(runTestCommand).toHaveBeenCalledTimes(1)
+  })
+
+  it('replays an exact active intent without another commit, test, or evidence write', async () => {
+    const source = fixture()
+    const store = fakeStore(source)
+    const committedWorkspace = {
+      ...source.workspace,
+      baseCommitSha,
+      headCommitSha: expectedCommitSha,
+    }
+    const commitWorkspace = vi.fn(async () => ({
+      workspace: committedWorkspace,
+      baseCommitSha,
+      expectedCommitSha,
+    }))
+    const runTestCommand = vi.fn(async () => ({
+      status: 'passed' as const,
+      exitCode: 0,
+      durationMs: 25,
+      stdout: 'ok',
+      stderr: '',
+      redacted: false,
+      summary: 'Tests passed.',
+    }))
+    const runtime = createGitHubDeliveryRuntime({
+      store,
+      commitWorkspace,
+      runTestCommand,
+      now: () => '2026-08-11T13:10:00.000Z',
+      idGenerator: (prefix) => `${prefix}-1`,
+    })
+    const first = await runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
+    expect(first.status).toBe('prepared')
+    commitWorkspace.mockClear()
+    runTestCommand.mockClear()
+    store.saveTestEvidence.mockClear()
+    store.commitGitHubDeliveryPreparation.mockClear()
+
+    const replay = await runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
+
+    expect(replay).toMatchObject({ status: 'prepared', replayed: true })
+    expect(commitWorkspace).not.toHaveBeenCalled()
+    expect(runTestCommand).not.toHaveBeenCalled()
+    expect(store.saveTestEvidence).not.toHaveBeenCalled()
+    expect(store.commitGitHubDeliveryPreparation).not.toHaveBeenCalled()
+  })
+
+  it('singleflights concurrent preparation for the same Run and PR node', async () => {
+    const source = fixture()
+    const store = fakeStore(source)
+    const committedWorkspace = {
+      ...source.workspace,
+      baseCommitSha,
+      headCommitSha: expectedCommitSha,
+    }
+    const commitWorkspace = vi.fn(async () => ({
+      workspace: committedWorkspace,
+      baseCommitSha,
+      expectedCommitSha,
+    }))
+    let markTestStarted!: () => void
+    const testStarted = new Promise<void>((resolve) => {
+      markTestStarted = resolve
+    })
+    let finishTest!: (result: {
+      status: 'passed'
+      exitCode: 0
+      durationMs: number
+      stdout: string
+      stderr: string
+      redacted: boolean
+      summary: string
+    }) => void
+    const testFinished = new Promise<{
+      status: 'passed'
+      exitCode: 0
+      durationMs: number
+      stdout: string
+      stderr: string
+      redacted: boolean
+      summary: string
+    }>((resolve) => {
+      finishTest = resolve
+    })
+    const runTestCommand = vi.fn(() => {
+      markTestStarted()
+      return testFinished
+    })
+    const runtime = createGitHubDeliveryRuntime({
+      store,
+      commitWorkspace,
+      runTestCommand,
+      now: () => '2026-08-11T13:10:00.000Z',
+      idGenerator: (prefix) => `${prefix}-1`,
+    })
+
+    const first = runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
+    await testStarted
+    const second = runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
+    expect(second).toBe(first)
+    finishTest({
+      status: 'passed',
+      exitCode: 0,
+      durationMs: 25,
+      stdout: 'ok',
+      stderr: '',
+      redacted: false,
+      summary: 'Tests passed.',
+    })
+
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2)
+    expect(runTestCommand).toHaveBeenCalledTimes(1)
+    expect(commitWorkspace).toHaveBeenCalledTimes(3)
+    expect(store.commitGitHubDeliveryPreparation).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails closed before tests when the workspace head CAS loses authority', async () => {
+    const source = fixture()
+    const store = fakeStore(source)
+    const committedWorkspace = {
+      ...source.workspace,
+      baseCommitSha,
+      headCommitSha: expectedCommitSha,
+    }
+    const commitWorkspace = vi.fn(async () => ({
+      workspace: committedWorkspace,
+      baseCommitSha,
+      expectedCommitSha,
+    }))
+    store.commitManagedCodingWorkspaceHead.mockResolvedValueOnce({
+      committed: false,
+      reason: 'source_stale',
+    })
+    const runTestCommand = vi.fn()
+    const runtime = createGitHubDeliveryRuntime({
+      store,
+      commitWorkspace,
+      runTestCommand,
+    })
+
+    await expect(runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' }))
+      .rejects.toThrow('Managed workspace changed while recording its delivery commit')
+    expect(runTestCommand).not.toHaveBeenCalled()
+    expect(store.commitGitHubDeliveryPreparation).not.toHaveBeenCalled()
+  })
+})
