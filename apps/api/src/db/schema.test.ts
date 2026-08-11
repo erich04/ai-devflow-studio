@@ -296,7 +296,7 @@ describe('team database schema', () => {
       "WHERE status IN ('issuing', 'issued', 'recovery_required')",
     )
     expect(migrationChecksum(migrationV11?.sql ?? '')).toBe(
-      'b76ee790d83a9977783ce1d593a719d0998f8f5bdd5131503374dd5421c4f637',
+      '999174b7b188947963a23640620f0a4c325afe9485a5f9e3ce63b282a4b15198',
     )
     expect(migrationV11?.sql).not.toMatch(
       /\b(?:token|token_hash|private_key|credential|worktree_path|raw_diff|stdout|stderr)\s+(?:text|jsonb|bytea)\b/i,
