@@ -77,6 +77,10 @@ CREATE UNIQUE INDEX github_repository_bindings_one_active_repository
   ON github_repository_bindings (organization_id, repository_id)
   WHERE status = 'active';
 
+ALTER TABLE workflow_runs
+  ADD CONSTRAINT github_delivery_workflow_runs_scope_unique
+  UNIQUE (organization_id, project_id, id);
+
 CREATE TABLE github_delivery_requests (
   id text PRIMARY KEY,
   state_version integer NOT NULL DEFAULT 1,
@@ -87,7 +91,7 @@ CREATE TABLE github_delivery_requests (
   requested_by_token_id text NOT NULL REFERENCES desktop_tokens(id),
   local_intent_id text NOT NULL,
   local_project_id text NOT NULL,
-  run_id text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  run_id text NOT NULL,
   run_version integer NOT NULL,
   node_id text NOT NULL,
   binding_id text NOT NULL REFERENCES github_repository_bindings(id),
@@ -181,6 +185,9 @@ CREATE TABLE github_delivery_requests (
   CONSTRAINT github_delivery_requests_binding_scope_fk
     FOREIGN KEY (organization_id, project_id, binding_id)
     REFERENCES github_repository_bindings(organization_id, project_id, id),
+  CONSTRAINT github_delivery_requests_run_scope_fk
+    FOREIGN KEY (organization_id, project_id, run_id)
+    REFERENCES workflow_runs(organization_id, project_id, id) ON DELETE CASCADE,
   CONSTRAINT github_delivery_requests_logical_key_unique
     UNIQUE (organization_id, project_id, logical_idempotency_key)
 );

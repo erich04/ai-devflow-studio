@@ -274,6 +274,15 @@ describe('team database schema', () => {
     expect(migrationV11?.sql).toContain('github_repository_bindings_one_active_repository')
     expect(migrationV11?.sql).toContain('github_delivery_requests_logical_key_unique')
     expect(migrationV11?.sql).toContain('github_delivery_requests_one_active_target')
+    expect(migrationV11?.sql).toContain(
+      'github_delivery_workflow_runs_scope_unique',
+    )
+    expect(migrationV11?.sql).toContain(
+      'FOREIGN KEY (organization_id, project_id, run_id)',
+    )
+    expect(migrationV11?.sql).toContain(
+      'REFERENCES workflow_runs(organization_id, project_id, id)',
+    )
     expect(migrationV11?.sql).toContain("strpos(current_item.value #>> '{}', chr(92)) > 0")
     expect(migrationV11?.sql).toContain("'github_delivery_approve'")
     expect(migrationV11?.sql).toContain("'github_credential_grant'")
@@ -287,7 +296,7 @@ describe('team database schema', () => {
       "WHERE status IN ('issuing', 'issued', 'recovery_required')",
     )
     expect(migrationChecksum(migrationV11?.sql ?? '')).toBe(
-      'd2a6720360c76b68005f36817ce5de6423883ff4628cd0e98055a4c0f58ccbbb',
+      'b76ee790d83a9977783ce1d593a719d0998f8f5bdd5131503374dd5421c4f637',
     )
     expect(migrationV11?.sql).not.toMatch(
       /\b(?:token|token_hash|private_key|credential|worktree_path|raw_diff|stdout|stderr)\s+(?:text|jsonb|bytea)\b/i,
