@@ -8,6 +8,7 @@ import {
   applyWorkflowCommand,
   assertFullGitCommitSha,
   canApproveGateNow,
+  createGitHubDeliveryCompletion,
   createGitHubDeliveryIntent,
   createRemoteSyncIdempotencyKey,
   createRemoteSyncOperation,
@@ -50,6 +51,7 @@ import {
   type GateCommandReceipt,
   type GateEnforcementDecision,
   type GitHubDeliveryIntent,
+  type GitHubDeliveryCompletion,
   type GitHubDeliveryStatus,
   type GitHubRepositoryBinding,
   type PolicySnapshot,
@@ -131,6 +133,17 @@ export type GitHubDeliveryIntentStatusMutationResult =
       committed: false
       reason: 'intent_not_found' | 'source_stale'
     }
+
+export type GitHubDeliveryIntentCompletionMutation = {
+  expectedIntent: GitHubDeliveryIntent
+  intent: GitHubDeliveryIntent & {
+    status: 'completed'
+    completion: GitHubDeliveryCompletion
+  }
+}
+
+export type GitHubDeliveryIntentCompletionMutationResult =
+  GitHubDeliveryIntentStatusMutationResult
 
 export type ManagedCodingWorkspaceHeadMutation = {
   expectedWorkspace: ManagedCodingWorkspace
@@ -543,6 +556,9 @@ export type LocalStore = {
   commitGitHubDeliveryIntentStatus(
     mutation: GitHubDeliveryIntentStatusMutation,
   ): Promise<GitHubDeliveryIntentStatusMutationResult>
+  commitGitHubDeliveryIntentCompletion(
+    mutation: GitHubDeliveryIntentCompletionMutation,
+  ): Promise<GitHubDeliveryIntentCompletionMutationResult>
   listGitHubDeliveryIntents(runId?: string): Promise<GitHubDeliveryIntent[]>
   saveGitHubRepositoryBinding(
     binding: GitHubRepositoryBinding,
@@ -2019,13 +2035,12 @@ const githubDeliveryStatusTransitions: Readonly<
   approved: new Set(['publishing_branch', 'failed', 'recovery_required', 'revoked']),
   publishing_branch: new Set(['branch_published', 'failed', 'recovery_required', 'revoked']),
   branch_published: new Set(['creating_pr', 'failed', 'recovery_required', 'revoked']),
-  creating_pr: new Set(['completed', 'failed', 'recovery_required', 'revoked']),
+  creating_pr: new Set(['failed', 'recovery_required', 'revoked']),
   recovery_required: new Set([
     'approved',
     'publishing_branch',
     'branch_published',
     'creating_pr',
-    'completed',
     'failed',
     'revoked',
   ]),
@@ -2058,6 +2073,41 @@ function assertGitHubDeliveryIntentStatusMutation(
   }
   if (!githubDeliveryStatusTransitions[expected.status].has(intent.status)) {
     throw new Error('GitHub Delivery Intent status transition is invalid')
+  }
+}
+
+function assertGitHubDeliveryIntentCompletionMutation(
+  mutation: GitHubDeliveryIntentCompletionMutation,
+): void {
+  const expected = mutation.expectedIntent
+  const intent = mutation.intent
+  const canonicalCompletion = createGitHubDeliveryCompletion({
+    intent: expected,
+    remoteRequestId: intent.completion.remoteRequestId,
+    publicationId: intent.completion.publicationId,
+    pullRequestOutcomeId: intent.completion.pullRequestOutcomeId,
+    pullRequestId: intent.completion.pullRequestId,
+    pullRequestNumber: intent.completion.pullRequestNumber,
+    pullRequestUrl: intent.completion.pullRequestUrl,
+    repository: expected.repository,
+    baseBranch: expected.baseBranch,
+    headBranch: expected.headBranch,
+    headSha: expected.expectedCommitSha,
+    draft: intent.completion.draft,
+    providerCreatedAt: intent.completion.providerCreatedAt,
+    recordedAt: intent.completion.recordedAt,
+  })
+  if (
+    intent.updatedAt !== canonicalCompletion.recordedAt ||
+    JSON.stringify(intent.completion) !== JSON.stringify(canonicalCompletion) ||
+    JSON.stringify(intent) !== JSON.stringify({
+      ...expected,
+      status: 'completed',
+      completion: canonicalCompletion,
+      updatedAt: canonicalCompletion.recordedAt,
+    })
+  ) {
+    throw new Error('GitHub Delivery Intent completion mutation is invalid')
   }
 }
 
@@ -5124,6 +5174,60 @@ class SqlJsLocalStore implements LocalStore {
     }
   }
 
+  async commitGitHubDeliveryIntentCompletion(
+    mutation: GitHubDeliveryIntentCompletionMutation,
+  ): Promise<GitHubDeliveryIntentCompletionMutationResult> {
+    assertGitHubDeliveryIntentCompletionMutation(mutation)
+    const current = selectGitHubDeliveryIntent(this.db, 'id', mutation.expectedIntent.id)
+    if (!current) {
+      return { committed: false, reason: 'intent_not_found' }
+    }
+    if (JSON.stringify(current) === JSON.stringify(mutation.intent)) {
+      return { committed: true, replayed: true, intent: current }
+    }
+    if (JSON.stringify(current) !== JSON.stringify(mutation.expectedIntent)) {
+      return { committed: false, reason: 'source_stale' }
+    }
+
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      this.db.run(
+        `update github_delivery_intents
+         set status = 'completed', json = ?, updated_at = ?
+         where id = ? and status = ? and updated_at = ?`,
+        [
+          JSON.stringify(mutation.intent),
+          mutation.intent.updatedAt,
+          mutation.expectedIntent.id,
+          mutation.expectedIntent.status,
+          mutation.expectedIntent.updatedAt,
+        ],
+      )
+      if (this.db.getRowsModified() !== 1) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'source_stale' }
+      }
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return { committed: true, replayed: false, intent: mutation.intent }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      throw error
+    }
+  }
+
   async listGitHubDeliveryIntents(runId?: string): Promise<GitHubDeliveryIntent[]> {
     if (runId) {
       return selectJson<GitHubDeliveryIntent>(
@@ -6211,6 +6315,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'commitWorkflowMutation',
   'commitGitHubDeliveryPreparation',
   'commitGitHubDeliveryIntentStatus',
+  'commitGitHubDeliveryIntentCompletion',
   'saveGitHubRepositoryBinding',
   'saveArtifact',
   'saveEvent',

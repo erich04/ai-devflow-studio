@@ -30,6 +30,20 @@ export function isTerminalGitHubDeliveryStatus(status: GitHubDeliveryStatus): bo
 
 export type GitHubRepositoryBindingStatus = 'active' | 'stale' | 'revoked'
 
+export type GitHubDeliveryCompletion = {
+  stateVersion: 1
+  remoteRequestId: string
+  publicationId: string
+  pullRequestOutcomeId: string
+  pullRequestId: string
+  pullRequestNumber: number
+  pullRequestUrl: string
+  providerCreatedAt: string
+  recordedAt: string
+  draft: true
+  redacted: true
+}
+
 export type GitHubRepositoryBinding = {
   stateVersion: 1
   id: string
@@ -79,6 +93,7 @@ export type GitHubDeliveryIntent = {
   intentDigest: string
   idempotencyKey: string
   status: GitHubDeliveryStatus
+  completion?: GitHubDeliveryCompletion
   createdAt: string
   updatedAt: string
   redacted: true
@@ -101,8 +116,32 @@ export type CreateGitHubDeliveryIntentInput = {
 
 type IntentDigestMaterial = Omit<
   GitHubDeliveryIntent,
-  'id' | 'intentDigest' | 'idempotencyKey' | 'status' | 'createdAt' | 'updatedAt' | 'redacted'
+  | 'id'
+  | 'intentDigest'
+  | 'idempotencyKey'
+  | 'status'
+  | 'completion'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'redacted'
 >
+
+export type CreateGitHubDeliveryCompletionInput = {
+  intent: GitHubDeliveryIntent
+  remoteRequestId: string
+  publicationId: string
+  pullRequestOutcomeId: string
+  pullRequestId: string
+  pullRequestNumber: number
+  pullRequestUrl: string
+  repository: string
+  baseBranch: string
+  headBranch: string
+  headSha: string
+  draft: true
+  providerCreatedAt: string
+  recordedAt: string
+}
 
 const gitShaPattern = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u
 const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u
@@ -118,6 +157,14 @@ function requireIdentifier(value: string, label: string): string {
 
 function requirePositiveVersion(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${label} is invalid`)
+  }
+  return value
+}
+
+function requireTimestamp(value: string, label: string): string {
+  const milliseconds = Date.parse(value)
+  if (!Number.isFinite(milliseconds) || new Date(milliseconds).toISOString() !== value) {
     throw new Error(`${label} is invalid`)
   }
   return value
@@ -161,6 +208,80 @@ export function assertSafeGitHubBranch(value: string, options: { requireDelivery
     throw new Error('GitHub delivery branch must use the devflow/ namespace')
   }
   return value
+}
+
+export function createGitHubDeliveryCompletion(
+  input: CreateGitHubDeliveryCompletionInput,
+): GitHubDeliveryCompletion {
+  if (
+    input.intent.status !== 'creating_pr' &&
+    input.intent.status !== 'recovery_required'
+  ) {
+    throw new Error('GitHub Delivery completion requires a PR creation state')
+  }
+  const repository = normalizeGitHubRepository(input.repository)
+  const baseBranch = assertSafeGitHubBranch(input.baseBranch)
+  const headBranch = assertSafeGitHubBranch(input.headBranch, {
+    requireDeliveryNamespace: true,
+  })
+  const headSha = assertFullGitCommitSha(input.headSha, 'GitHub pull request head')
+  if (
+    repository !== input.intent.repository ||
+    baseBranch !== input.intent.baseBranch ||
+    headBranch !== input.intent.headBranch ||
+    headSha !== input.intent.expectedCommitSha ||
+    input.draft !== true
+  ) {
+    throw new Error('GitHub Delivery completion does not match the approved intent')
+  }
+  const pullRequestNumber = requirePositiveVersion(
+    input.pullRequestNumber,
+    'GitHub pull request number',
+  )
+  const pullRequestId = requireGitHubNumericId(input.pullRequestId, 'GitHub pull request id')
+  let pullRequestUrl: URL
+  try {
+    pullRequestUrl = new URL(input.pullRequestUrl)
+  } catch {
+    throw new Error('GitHub pull request URL is invalid')
+  }
+  const expectedPath = `/${repository}/pull/${pullRequestNumber}`
+  if (
+    pullRequestUrl.protocol !== 'https:' ||
+    pullRequestUrl.hostname.toLowerCase() !== 'github.com' ||
+    pullRequestUrl.port !== '' ||
+    pullRequestUrl.username !== '' ||
+    pullRequestUrl.password !== '' ||
+    pullRequestUrl.search !== '' ||
+    pullRequestUrl.hash !== '' ||
+    pullRequestUrl.pathname.toLowerCase() !== expectedPath.toLowerCase()
+  ) {
+    throw new Error('GitHub pull request URL is invalid')
+  }
+  const providerCreatedAt = requireTimestamp(
+    input.providerCreatedAt,
+    'GitHub pull request creation timestamp',
+  )
+  const recordedAt = requireTimestamp(input.recordedAt, 'GitHub Delivery completion timestamp')
+  if (recordedAt < providerCreatedAt || recordedAt <= input.intent.updatedAt) {
+    throw new Error('GitHub Delivery completion timestamp is invalid')
+  }
+  return {
+    stateVersion: 1,
+    remoteRequestId: requireIdentifier(input.remoteRequestId, 'GitHub Delivery request id'),
+    publicationId: requireIdentifier(input.publicationId, 'GitHub branch publication id'),
+    pullRequestOutcomeId: requireIdentifier(
+      input.pullRequestOutcomeId,
+      'GitHub pull request outcome id',
+    ),
+    pullRequestId,
+    pullRequestNumber,
+    pullRequestUrl: pullRequestUrl.toString(),
+    providerCreatedAt,
+    recordedAt,
+    draft: true,
+    redacted: true,
+  }
 }
 
 export function assertFullGitCommitSha(value: string, label: string): string {

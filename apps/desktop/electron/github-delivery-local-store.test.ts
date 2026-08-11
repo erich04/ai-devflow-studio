@@ -4,6 +4,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import initSqlJs from 'sql.js'
 import {
+  createGitHubDeliveryCompletion,
   createGitHubDeliveryIntent,
   redactTestEvidenceForStorage,
 } from '@ai-devflow/shared'
@@ -593,5 +594,76 @@ describe('GitHub Delivery Intent local persistence', () => {
       },
     })).rejects.toThrow('timestamp is invalid')
     store.close()
+  })
+
+  it('atomically records the exact Draft PR completion and rejects generic completion', async () => {
+    const dbPath = await tempDbPath()
+    const sources = createSources()
+    const intent = await createIntent(sources)
+    const store = await createLocalStore({ dbPath })
+    await saveSources(store, sources)
+    const prepared = await store.commitGitHubDeliveryPreparation({
+      intent,
+      expectedProject: sources.project,
+      expectedPairingCredential: sources.pairing,
+      expectedRepositoryBinding: sources.repositoryBinding,
+      expectedRun: sources.run,
+      expectedCodingRun: sources.codingRun,
+      expectedWorkspace: sources.workspace,
+      expectedDiffArtifact: sources.diffArtifact,
+      testEvidence: sources.testEvidence,
+      expectedPrPackage: sources.prPackage,
+    })
+    if (!prepared.committed) throw new Error('Fixture delivery intent must be persisted')
+
+    const approved = { ...intent, status: 'approved' as const, updatedAt: '2026-08-11T10:32:00.000Z' }
+    const publishing = { ...approved, status: 'publishing_branch' as const, updatedAt: '2026-08-11T10:33:00.000Z' }
+    const published = { ...publishing, status: 'branch_published' as const, updatedAt: '2026-08-11T10:34:00.000Z' }
+    const creating = { ...published, status: 'creating_pr' as const, updatedAt: '2026-08-11T10:35:00.000Z' }
+    await store.commitGitHubDeliveryIntentStatus({ expectedIntent: intent, intent: approved })
+    await store.commitGitHubDeliveryIntentStatus({ expectedIntent: approved, intent: publishing })
+    await store.commitGitHubDeliveryIntentStatus({ expectedIntent: publishing, intent: published })
+    await store.commitGitHubDeliveryIntentStatus({ expectedIntent: published, intent: creating })
+
+    await expect(store.commitGitHubDeliveryIntentStatus({
+      expectedIntent: creating,
+      intent: { ...creating, status: 'completed', updatedAt: '2026-08-11T10:36:00.000Z' },
+    })).rejects.toThrow('transition is invalid')
+
+    const completion = createGitHubDeliveryCompletion({
+      intent: creating,
+      remoteRequestId: 'remote-delivery-1',
+      publicationId: 'publication-1',
+      pullRequestOutcomeId: 'pull-request-outcome-1',
+      pullRequestId: '123456789',
+      pullRequestNumber: 42,
+      pullRequestUrl: 'https://github.com/erich04/ai-devflow-studio/pull/42',
+      repository: creating.repository,
+      baseBranch: creating.baseBranch,
+      headBranch: creating.headBranch,
+      headSha: creating.expectedCommitSha,
+      draft: true,
+      providerCreatedAt: '2026-08-11T10:35:30.000Z',
+      recordedAt: '2026-08-11T10:36:00.000Z',
+    })
+    const completed = {
+      ...creating,
+      status: 'completed' as const,
+      completion,
+      updatedAt: completion.recordedAt,
+    }
+    await expect(store.commitGitHubDeliveryIntentCompletion({
+      expectedIntent: creating,
+      intent: completed,
+    })).resolves.toEqual({ committed: true, replayed: false, intent: completed })
+    await expect(store.commitGitHubDeliveryIntentCompletion({
+      expectedIntent: creating,
+      intent: completed,
+    })).resolves.toEqual({ committed: true, replayed: true, intent: completed })
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    expect(await reopened.listGitHubDeliveryIntents(sources.run.id)).toEqual([completed])
+    reopened.close()
   })
 })

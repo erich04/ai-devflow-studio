@@ -8,6 +8,7 @@ import type {
   WorkflowRun,
 } from './domain'
 import {
+  createGitHubDeliveryCompletion,
   createGitHubDeliveryIntent,
   isTerminalGitHubDeliveryStatus,
   type GitHubRepositoryBinding,
@@ -179,6 +180,55 @@ describe('GitHub Delivery Intent', () => {
     expect(isTerminalGitHubDeliveryStatus('completed')).toBe(true)
     expect(isTerminalGitHubDeliveryStatus('failed')).toBe(true)
     expect(isTerminalGitHubDeliveryStatus('revoked')).toBe(true)
+  })
+
+  it('accepts only a scoped Draft PR completion for the exact approved commit', async () => {
+    const prepared = await createGitHubDeliveryIntent(baseInput)
+    const intent = {
+      ...prepared,
+      status: 'creating_pr' as const,
+      updatedAt: '2026-08-11T10:40:00.000Z',
+    }
+    const completion = createGitHubDeliveryCompletion({
+      intent,
+      remoteRequestId: 'remote-delivery-1',
+      publicationId: 'publication-1',
+      pullRequestOutcomeId: 'pr-outcome-1',
+      pullRequestId: '123456789',
+      pullRequestNumber: 42,
+      pullRequestUrl: 'https://github.com/erich04/ai-devflow-studio/pull/42',
+      repository: intent.repository,
+      baseBranch: intent.baseBranch,
+      headBranch: intent.headBranch,
+      headSha: intent.expectedCommitSha,
+      draft: true,
+      providerCreatedAt: '2026-08-11T10:40:30.000Z',
+      recordedAt: '2026-08-11T10:41:00.000Z',
+    })
+
+    expect(completion).toMatchObject({
+      pullRequestNumber: 42,
+      draft: true,
+      redacted: true,
+    })
+    expect(JSON.stringify(completion)).not.toContain(intent.intentDigest)
+
+    expect(() => createGitHubDeliveryCompletion({
+      intent,
+      remoteRequestId: 'remote-delivery-1',
+      publicationId: 'publication-1',
+      pullRequestOutcomeId: 'pr-outcome-1',
+      pullRequestId: '123456789',
+      pullRequestNumber: 42,
+      pullRequestUrl: 'https://github.com/erich04/other/pull/42',
+      repository: intent.repository,
+      baseBranch: intent.baseBranch,
+      headBranch: intent.headBranch,
+      headSha: intent.expectedCommitSha,
+      draft: true,
+      providerCreatedAt: '2026-08-11T10:40:30.000Z',
+      recordedAt: '2026-08-11T10:41:00.000Z',
+    })).toThrow('pull request URL is invalid')
   })
   it('binds the managed branch, expected commit, passing test, and PR package into one stable intent', async () => {
     const intent = await createGitHubDeliveryIntent(baseInput)
