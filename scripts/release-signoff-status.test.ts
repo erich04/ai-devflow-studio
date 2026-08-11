@@ -91,6 +91,36 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
       targetVersion,
       candidateSha,
       status: 'passed',
+      ...(releaseSeries === '1.5'
+        ? {
+            recordedAt: '2026-08-11T12:00:00.000Z',
+            localMatrix: {
+              candidateSha,
+              result: 'passed',
+              worktreeCleanAfter: true,
+            },
+            verifyRun: {
+              workflow: 'Verify',
+              event: 'pull_request',
+              runId: 123456,
+              url: 'https://github.com/devflow/ai-devflow-studio/actions/runs/123456',
+              headSha: candidateSha,
+              conclusion: 'success',
+              jobs: {
+                'macOS verify': 'success',
+                'Windows compatibility': 'success',
+                'Postgres integration': 'success',
+                'Docker smoke': 'success',
+                'Docker lifecycle smoke': 'success',
+              },
+            },
+            desktopArtifact: {
+              version: targetVersion,
+              platform: 'darwin-arm64',
+              sha256: '9'.repeat(64),
+            },
+          }
+        : {}),
       gates: Object.fromEntries((profile?.requiredGateIds ?? []).map((gate) => [gate, 'passed'])),
     }),
     ...(releaseSeries === '1.5'
@@ -109,6 +139,10 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
             deliverySeriesKey: `github-delivery:${'a'.repeat(64)}`,
             deliveryAttempt: 1,
             intentRevision: 1,
+            intentDigest: 'b'.repeat(64),
+            runVersion: 3,
+            testEvidenceDigest: 'c'.repeat(64),
+            prPackageDigest: 'd'.repeat(64),
             expectedCommitSha: 'e'.repeat(40),
             remoteHeadSha: 'e'.repeat(40),
             baseBranch: 'main',
@@ -359,7 +393,7 @@ describe('release signoff status', () => {
       expect.objectContaining({
         id: 'github-sandbox',
         state: 'attention',
-        detail: expect.stringContaining('safe repository and refs'),
+        detail: expect.stringContaining('Local absolute paths are forbidden'),
       }),
     )
   })
@@ -412,6 +446,10 @@ describe('release signoff status', () => {
       { deliverySeriesKey: 'github-delivery:not-a-digest' },
       { deliveryAttempt: 0 },
       { intentRevision: 0 },
+      { intentDigest: 'not-a-digest' },
+      { runVersion: 0 },
+      { testEvidenceDigest: 'not-a-digest' },
+      { prPackageDigest: 'not-a-digest' },
       { baseBranch: 'main branch' },
       { headBranch: 'feature/v1.5-release' },
       { pullRequestNumber: 0 },
@@ -428,6 +466,86 @@ describe('release signoff status', () => {
           detail: expect.stringContaining('private-repository identity metadata'),
         }),
       )
+    }
+  })
+
+  it('requires exact candidate, CI, and packaged Desktop metadata in the v1.5 gate record', () => {
+    const ready = snapshot({ targetVersion: '1.5.0' })
+    const validRecord = ready.requiredGateRecord.value!
+    const invalidRecords = [
+      { ...validRecord, recordedAt: 'not-a-timestamp' },
+      {
+        ...validRecord,
+        localMatrix: { candidateSha, result: 'failed', worktreeCleanAfter: true },
+      },
+      {
+        ...validRecord,
+        verifyRun: {
+          ...(validRecord.verifyRun as Record<string, unknown>),
+          headSha: 'f'.repeat(40),
+        },
+      },
+      {
+        ...validRecord,
+        desktopArtifact: {
+          version: '1.4.0',
+          platform: 'darwin-arm64',
+          sha256: '9'.repeat(64),
+        },
+      },
+      {
+        ...validRecord,
+        desktopArtifact: {
+          version: '1.5.0',
+          platform: 'darwin-arm64',
+          sha256: 'short',
+        },
+      },
+    ]
+
+    for (const value of invalidRecords) {
+      const items = evaluateReleaseSignoffSnapshot({
+        ...ready,
+        requiredGateRecord: record(ready.requiredGateRecord.path, value),
+      })
+      expect(items).toContainEqual(
+        expect.objectContaining({ id: 'required-gates', state: 'attention' }),
+      )
+    }
+  })
+
+  it('rejects secret-bearing fields and local absolute paths in every v1.5 evidence record', () => {
+    const ready = snapshot({ targetVersion: '1.5.0' })
+    const cases: Array<Partial<ReleaseSignoffSnapshot>> = [
+      {
+        walkthroughEvidence: record(ready.walkthroughEvidence.path, {
+          ...ready.walkthroughEvidence.value,
+          nested: { authorization: 'must-not-be-recorded' },
+        }),
+      },
+      {
+        requiredGateRecord: record(ready.requiredGateRecord.path, {
+          ...ready.requiredGateRecord.value,
+          diagnosticPath: '/Users/alice/private/release.log',
+        }),
+      },
+      {
+        githubSandboxRecord: record(ready.githubSandboxRecord!.path, {
+          ...ready.githubSandboxRecord!.value,
+          notes: 'file:///private/tmp/release-output',
+        }),
+      },
+    ]
+
+    for (const overrides of cases) {
+      const items = evaluateReleaseSignoffSnapshot({ ...ready, ...overrides })
+      expect(
+        items.some(
+          (item) =>
+            ['dated-walkthrough', 'required-gates', 'github-sandbox'].includes(item.id) &&
+            item.state === 'attention',
+        ),
+      ).toBe(true)
     }
   })
 

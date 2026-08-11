@@ -96,6 +96,16 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(walkthrough).toContain('Run becomes `completed`')
     expect(walkthrough).toContain('binding revocation')
     expect(walkthrough).toContain('docs/releases/v1.5.0/github-sandbox.json')
+    expect(walkthrough).toContain('"desktopArtifact"')
+    expect(walkthrough).toContain('"intentDigest"')
+    expect(walkthrough).toContain('"runVersion"')
+    expect(walkthrough).toContain('"testEvidenceDigest"')
+    expect(walkthrough).toContain('"prPackageDigest"')
+    expect(walkthrough).toContain('git rev-parse S^1')
+    expect(walkthrough).toContain('git diff --name-only C..S')
+    expect(walkthrough).toContain('release:status -- --mode=pre-tag')
+    expect(walkthrough).toContain('release:status -- --mode=tagged')
+    expect(walkthrough).toContain('git tag -a v1.5.0 S')
     expect(walkthrough).toContain(
       'V1.5 does not authorize or require another paid OpenCode provider smoke',
     )

@@ -359,6 +359,18 @@ function evaluateWalkthroughEvidence(snapshot) {
   }
 
   const value = snapshot.walkthroughEvidence.value
+  const safetyIssue = evidenceSafetyIssue(
+    snapshot.walkthroughEvidence.path,
+    value,
+  )
+  if (safetyIssue) {
+    return {
+      id: 'dated-walkthrough',
+      label: 'Dated Computer Use walkthrough',
+      state: 'attention',
+      detail: safetyIssue,
+    }
+  }
   const releaseSeries = releaseSeriesFor(snapshot.targetVersion)
   const expectedPath = `docs/guides/devflow-studio-v${releaseSeries ?? 'unknown'}-walkthrough-result-${value.date}.md`
   const validDate = typeof value.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
@@ -388,22 +400,77 @@ function evaluateRequiredGateRecord(snapshot) {
     }
   }
 
-  const gates = snapshot.requiredGateRecord.value.gates
+  const value = snapshot.requiredGateRecord.value
+  const safetyIssue = evidenceSafetyIssue(snapshot.requiredGateRecord.path, value)
+  if (safetyIssue) {
+    return {
+      id: 'required-gates',
+      label: 'Required deterministic gates',
+      state: 'attention',
+      detail: safetyIssue,
+    }
+  }
+  const gates = value.gates
   const profileGateIds = releaseProfileFor(snapshot.targetVersion)?.requiredGateIds ?? []
   const missingOrFailed =
     isRecord(gates) === false
       ? profileGateIds
       : profileGateIds.filter((gate) => gates[gate] !== 'passed')
 
+  const v15MetadataValid =
+    releaseSeriesFor(snapshot.targetVersion) !== '1.5' ||
+    isValidV15GateMetadata(value, snapshot)
   return {
     id: 'required-gates',
     label: 'Required deterministic gates',
-    state: missingOrFailed.length === 0 ? 'ready' : 'attention',
+    state: missingOrFailed.length === 0 && v15MetadataValid ? 'ready' : 'attention',
     detail:
-      missingOrFailed.length === 0
+      missingOrFailed.length > 0
+        ? `Missing or non-passing gates: ${missingOrFailed.join(', ')}.`
+        : v15MetadataValid
         ? `All required gates passed for ${snapshot.candidateSha}.`
-        : `Missing or non-passing gates: ${missingOrFailed.join(', ')}.`,
+        : `${snapshot.requiredGateRecord.path} must bind the clean local matrix, exact-SHA Verify run, and packaged Desktop artifact digest to ${snapshot.candidateSha}.`,
   }
+}
+
+function isValidV15GateMetadata(value, snapshot) {
+  const localMatrix = value.localMatrix
+  const verifyRun = value.verifyRun
+  const desktopArtifact = value.desktopArtifact
+  const expectedJobs = [
+    'macOS verify',
+    'Windows compatibility',
+    'Postgres integration',
+    'Docker smoke',
+    'Docker lifecycle smoke',
+  ]
+  return (
+    isNonEmptyString(value.recordedAt) &&
+    !Number.isNaN(Date.parse(value.recordedAt)) &&
+    isRecord(localMatrix) &&
+    localMatrix.candidateSha === snapshot.candidateSha &&
+    localMatrix.result === 'passed' &&
+    localMatrix.worktreeCleanAfter === true &&
+    isRecord(verifyRun) &&
+    verifyRun.workflow === 'Verify' &&
+    (verifyRun.event === 'pull_request' || verifyRun.event === 'workflow_dispatch') &&
+    Number.isSafeInteger(verifyRun.runId) &&
+    verifyRun.runId > 0 &&
+    typeof verifyRun.url === 'string' &&
+    /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/[1-9]\d*$/.test(
+      verifyRun.url,
+    ) &&
+    verifyRun.headSha === snapshot.candidateSha &&
+    verifyRun.conclusion === 'success' &&
+    isRecord(verifyRun.jobs) &&
+    expectedJobs.every((job) => verifyRun.jobs[job] === 'success') &&
+    isRecord(desktopArtifact) &&
+    desktopArtifact.version === snapshot.targetVersion &&
+    typeof desktopArtifact.platform === 'string' &&
+    /^(?:darwin|linux|win32)-(?:arm64|x64)$/.test(desktopArtifact.platform) &&
+    typeof desktopArtifact.sha256 === 'string' &&
+    /^[0-9a-f]{64}$/.test(desktopArtifact.sha256)
+  )
 }
 
 function findForbiddenEvidenceFields(value, parentPath = '') {
@@ -445,6 +512,45 @@ function findForbiddenEvidenceFields(value, parentPath = '') {
       forbiddenNames.has(normalizedKey) || hasForbiddenSuffix ? [fieldPath] : []
     return [...current, ...findForbiddenEvidenceFields(nestedValue, fieldPath)]
   })
+}
+
+function findUnsafeEvidenceValues(value, parentPath = '') {
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) =>
+      findUnsafeEvidenceValues(item, `${parentPath}[${index}]`),
+    )
+  }
+  if (isRecord(value)) {
+    return Object.entries(value).flatMap(([key, nestedValue]) =>
+      findUnsafeEvidenceValues(
+        nestedValue,
+        parentPath ? `${parentPath}.${key}` : key,
+      ),
+    )
+  }
+  if (typeof value !== 'string') {
+    return []
+  }
+  const trimmed = value.trim()
+  const unsafe =
+    /^file:\/\//i.test(trimmed) ||
+    trimmed.startsWith('/') ||
+    trimmed.startsWith('\\') ||
+    /^[A-Za-z]:[\\/]/.test(trimmed) ||
+    /(?:^|[\s"'(=])\/(?!\/)/.test(value)
+  return unsafe ? [parentPath || '<root>'] : []
+}
+
+function evidenceSafetyIssue(recordPath, value) {
+  const forbiddenFields = findForbiddenEvidenceFields(value)
+  if (forbiddenFields.length > 0) {
+    return `Secret-bearing fields are forbidden in ${recordPath}: ${forbiddenFields.join(', ')}.`
+  }
+  const unsafeValues = findUnsafeEvidenceValues(value)
+  if (unsafeValues.length > 0) {
+    return `Local absolute paths are forbidden in ${recordPath}: ${unsafeValues.join(', ')}.`
+  }
+  return null
 }
 
 function isNonEmptyString(value) {
@@ -559,13 +665,16 @@ function evaluateGitHubSandboxRecord(snapshot) {
     }
   }
 
-  const forbiddenFields = findForbiddenEvidenceFields(snapshot.githubSandboxRecord.value)
-  if (forbiddenFields.length > 0) {
+  const safetyIssue = evidenceSafetyIssue(
+    snapshot.githubSandboxRecord.path,
+    snapshot.githubSandboxRecord.value,
+  )
+  if (safetyIssue) {
     return {
       id: 'github-sandbox',
       label: 'GitHub sandbox Draft PR',
       state: 'attention',
-      detail: `Secret-bearing fields are forbidden in ${snapshot.githubSandboxRecord.path}: ${forbiddenFields.join(', ')}.`,
+      detail: safetyIssue,
     }
   }
   const value = snapshot.githubSandboxRecord.value
@@ -644,6 +753,13 @@ function evaluateGitHubSandboxRecord(snapshot) {
     /^github-delivery:[0-9a-f]{64}$/.test(value.deliverySeriesKey) &&
     positiveInteger(value.deliveryAttempt) &&
     positiveInteger(value.intentRevision) &&
+    typeof value.intentDigest === 'string' &&
+    /^[0-9a-f]{64}$/.test(value.intentDigest) &&
+    positiveInteger(value.runVersion) &&
+    typeof value.testEvidenceDigest === 'string' &&
+    /^[0-9a-f]{64}$/.test(value.testEvidenceDigest) &&
+    typeof value.prPackageDigest === 'string' &&
+    /^[0-9a-f]{64}$/.test(value.prPackageDigest) &&
     safeGitRef(value.baseBranch) &&
     safeGitRef(value.headBranch) &&
     value.headBranch.startsWith('devflow/') &&

@@ -94,3 +94,145 @@ The JSON and dated result record only bounded non-secret metadata. They must not
 raw HTTP/git/provider output, source content, prompts, patches, local paths, or any credential value.
 V1.5 does not authorize or require another paid OpenCode provider smoke; the V1.4 paid-smoke record
 remains immutable and candidate-bound to V1.4.
+
+Use these exact record shapes. Replace angle-bracket placeholders with observed non-secret values;
+do not add convenience fields containing local diagnostics or credentials.
+
+`docs/releases/v1.5.0/walkthrough.json`:
+
+```json
+{
+  "targetVersion": "1.5.0",
+  "candidateSha": "<C-full-40-hex-SHA>",
+  "status": "passed",
+  "date": "YYYY-MM-DD",
+  "method": "computer-use",
+  "evidencePath": "docs/guides/devflow-studio-v1.5-walkthrough-result-YYYY-MM-DD.md",
+  "evidenceExists": true
+}
+```
+
+`docs/releases/v1.5.0/required-gates.json`:
+
+```json
+{
+  "targetVersion": "1.5.0",
+  "candidateSha": "<C-full-40-hex-SHA>",
+  "status": "passed",
+  "recordedAt": "<ISO-8601 timestamp>",
+  "gates": {
+    "verify": "passed",
+    "windows-compatibility": "passed",
+    "v15-github-delivery-deterministic": "passed",
+    "e2e": "passed",
+    "electron-smoke": "passed",
+    "postgres-smoke": "passed",
+    "docker-smoke": "passed",
+    "docker-lifecycle-smoke": "passed",
+    "build": "passed",
+    "build-output-smoke": "passed",
+    "desktop-pilot-build": "passed",
+    "desktop-pilot-smoke": "passed",
+    "v15-github-delivery-packaged-smoke": "passed",
+    "github-sandbox-draft-pr": "passed"
+  },
+  "localMatrix": {
+    "candidateSha": "<C-full-40-hex-SHA>",
+    "result": "passed",
+    "worktreeCleanAfter": true
+  },
+  "verifyRun": {
+    "workflow": "Verify",
+    "event": "workflow_dispatch",
+    "runId": 123456789,
+    "url": "https://github.com/erich04/ai-devflow-studio/actions/runs/123456789",
+    "headSha": "<C-full-40-hex-SHA>",
+    "conclusion": "success",
+    "jobs": {
+      "macOS verify": "success",
+      "Windows compatibility": "success",
+      "Postgres integration": "success",
+      "Docker smoke": "success",
+      "Docker lifecycle smoke": "success"
+    }
+  },
+  "desktopArtifact": {
+    "version": "1.5.0",
+    "platform": "darwin-arm64",
+    "sha256": "<64-hex packaged-artifact SHA-256>"
+  }
+}
+```
+
+`docs/releases/v1.5.0/github-sandbox.json`:
+
+```json
+{
+  "targetVersion": "1.5.0",
+  "candidateSha": "<C-full-40-hex-SHA>",
+  "status": "passed",
+  "recordedAt": "<ISO-8601 timestamp>",
+  "repository": "erich04/ai-devflow-studio-v15-sandbox",
+  "repositoryVisibility": "private",
+  "appSlug": "<lowercase-hyphenated-app-slug>",
+  "installationIdSuffix": "<exactly-4-digits>",
+  "repositoryIdSuffix": "<exactly-4-digits>",
+  "bindingVersion": 1,
+  "deliverySeriesKey": "github-delivery:<64-hex>",
+  "deliveryAttempt": 1,
+  "intentRevision": 1,
+  "intentDigest": "<64-hex>",
+  "runVersion": 1,
+  "testEvidenceDigest": "<64-hex>",
+  "prPackageDigest": "<64-hex>",
+  "expectedCommitSha": "<40-hex sandbox source commit>",
+  "remoteHeadSha": "<same-40-hex sandbox source commit>",
+  "baseBranch": "main",
+  "headBranch": "devflow/<safe-branch-name>",
+  "pullRequestNumber": 1,
+  "pullRequestUrl": "https://github.com/erich04/ai-devflow-studio-v15-sandbox/pull/1",
+  "draft": true,
+  "merged": false,
+  "approvalRole": "owner",
+  "approvalAuthKind": "session_cookie",
+  "workRequestCount": 1,
+  "canonicalRunCount": 1,
+  "credentialGrantCount": 1,
+  "branchPublicationCount": 1,
+  "draftPullRequestCount": 1,
+  "automaticRetry": false,
+  "acceptanceStatus": "completed",
+  "restartRecovery": "passed",
+  "bindingRevocation": "passed",
+  "postRevocationGrant": "blocked",
+  "redactionCheck": "passed",
+  "cleanup": "passed",
+  "cleanupMethod": "external-operator-no-merge"
+}
+```
+
+The dated result must say `Status: Passed` and record `C`, the packaged artifact platform and
+SHA-256, Team schema v12, Desktop schema v15, exact-SHA Verify URL, non-secret sandbox/App identity,
+series/attempt/revision and digests, lifecycle counts, approval role/auth kind, expected/remote SHA,
+Draft URL and state, completed Acceptance, restart zero-repeat observations, revocation result,
+redaction scan, cleanup, and any non-sensitive setup correction. It must not record `S`, because the
+dated result itself participates in calculating `S`.
+
+## Candidate, Signoff, And Tag Sequence
+
+1. Commit every ordinary product, test, workflow, version, and documentation change. With a clean
+   worktree, record that commit as `C`; push it and complete the local matrix, exact-SHA Verify run,
+   packaged smoke, and private-sandbox walkthrough without changing `C`.
+2. Add only the four evidence files above, then create one commit `S`. Require
+   `git rev-parse S^1` to equal `C`, and require `git diff --name-only C..S` to list exactly those
+   four paths.
+3. On `S`, run `corepack pnpm release:status -- --mode=pre-tag`. Do not move `C`, amend `S`, or add
+   another evidence commit after it passes.
+4. Preserve both original commits when integrating the release branch; squash and rebase are
+   forbidden. Create the annotated tag with
+   `git tag -a v1.5.0 S -m "AI DevFlow Studio v1.5.0"`.
+5. Before pushing the tag, check out `S` and run
+   `corepack pnpm release:status -- --mode=tagged`. Push the annotated tag only after it passes, then
+   verify the tag-triggered Release workflow and all published assets.
+6. Make the first post-release documentation commit without moving the tag: set Current Release to
+   `v1.5.0`, mark 1.x complete, and make the V2.0 contract/ADR the next action.
