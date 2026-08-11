@@ -95,10 +95,21 @@ describe('team database migration runner', () => {
         name: '0011_github_delivery',
         fileName: '0011_github_delivery.sql',
       },
+      {
+        version: 12,
+        name: '0012_github_delivery_attempts',
+        fileName: '0012_github_delivery_attempts.sql',
+      },
     ])
 
-    const [baseline, v14, workRequestHardening, gateCommandHardening, githubDelivery] =
-      await readTeamMigrationCatalog()
+    const [
+      baseline,
+      v14,
+      workRequestHardening,
+      gateCommandHardening,
+      githubDelivery,
+      githubDeliveryAttempts,
+    ] = await readTeamMigrationCatalog()
     expect(baseline).toMatchObject({ version: 7, name: '0001_initial' })
     expect(baseline?.sql).toMatch(/^BEGIN;/)
     expect(migrationChecksum(baseline?.sql ?? '')).toMatch(/^[a-f0-9]{64}$/)
@@ -124,6 +135,15 @@ describe('team database migration runner', () => {
     })
     expect(githubDelivery?.sql).toContain('CREATE TABLE github_delivery_requests')
     expect(githubDelivery?.sql).toContain('provider_created_at <= recorded_at')
+    expect(githubDeliveryAttempts).toMatchObject({
+      version: 12,
+      name: '0012_github_delivery_attempts',
+    })
+    expect(githubDeliveryAttempts?.sql).toContain('ADD COLUMN delivery_series_key text')
+    expect(githubDeliveryAttempts?.sql).toContain('ADD COLUMN delivery_attempt integer')
+    expect(githubDeliveryAttempts?.sql).toContain(
+      'UNIQUE (organization_id, project_id, delivery_series_key, delivery_attempt)',
+    )
   })
 
   it('orders the v10 Gate backfill before validation and keeps its SQL function atomic', async () => {

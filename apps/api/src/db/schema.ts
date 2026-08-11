@@ -690,6 +690,8 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('base_commit_sha', 'text'),
       column('expected_commit_sha', 'text'),
       column('intent_digest', 'text'),
+      column('delivery_series_key', 'text'),
+      column('delivery_attempt', 'integer'),
       column('logical_idempotency_key', 'text'),
       column('diff_digest', 'text'),
       column('test_evidence_digest', 'text'),

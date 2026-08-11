@@ -101,6 +101,8 @@ function expectedIntentDigest(intent: GitHubDeliveryIntent): string {
     codingRunId: intent.codingRunId,
     codingRunCompletedAt: intent.codingRunCompletedAt,
     workspaceId: intent.workspaceId,
+    deliverySeriesKey: intent.deliverySeriesKey,
+    deliveryAttempt: intent.deliveryAttempt,
     repository: intent.repository,
     baseBranch: intent.baseBranch,
     headBranch: intent.headBranch,
@@ -118,7 +120,7 @@ function expectedIntentDigest(intent: GitHubDeliveryIntent): string {
   }))
 }
 
-function expectedLogicalDeliveryKey(intent: GitHubDeliveryIntent): string {
+function expectedDeliverySeriesKey(intent: GitHubDeliveryIntent): string {
   return `github-delivery:${sha256Text(JSON.stringify({
     organizationId: intent.organizationId,
     teamProjectId: intent.teamProjectId,
@@ -128,6 +130,13 @@ function expectedLogicalDeliveryKey(intent: GitHubDeliveryIntent): string {
     repositoryBindingId: intent.repositoryBindingId,
     repositoryBindingVersion: intent.repositoryBindingVersion,
     workspaceId: intent.workspaceId,
+  }))}`
+}
+
+function expectedLogicalDeliveryKey(intent: GitHubDeliveryIntent): string {
+  return `github-delivery:${sha256Text(JSON.stringify({
+    deliverySeriesKey: intent.deliverySeriesKey,
+    deliveryAttempt: intent.deliveryAttempt,
   }))}`
 }
 
@@ -150,6 +159,8 @@ function deliveryIntent(
     codingRunId: 'coding-1',
     codingRunCompletedAt: '2026-08-11T09:55:00.000Z',
     workspaceId: 'workspace-1',
+    deliverySeriesKey: `github-delivery:${'f'.repeat(64)}`,
+    deliveryAttempt: 1,
     repository: 'example/project',
     baseBranch: 'main',
     headBranch: 'devflow/run-1-pr-1',
@@ -171,6 +182,9 @@ function deliveryIntent(
     updatedAt: '2026-08-11T09:58:00.000Z',
     redacted: true,
     ...overrides,
+  }
+  if (!Object.hasOwn(overrides, 'deliverySeriesKey')) {
+    intent.deliverySeriesKey = expectedDeliverySeriesKey(intent)
   }
   if (!Object.hasOwn(overrides, 'intentDigest')) {
     intent.intentDigest = expectedIntentDigest(intent)
@@ -201,6 +215,8 @@ const deliveryRequestRow = {
   repository_full_name: 'example/project',
   coding_run_id: 'coding-1',
   workspace_id: 'workspace-1',
+  delivery_series_key: expectedDeliverySeriesKey(deliveryIntent()),
+  delivery_attempt: 1,
   diff_artifact_id: 'diff-1',
   test_evidence_id: 'test-1',
   pr_package_artifact_id: 'package-1',
@@ -736,6 +752,7 @@ describe('Postgres GitHub Delivery repository', () => {
         case 'canonical-authority':
           return [canonicalAuthority()]
         case 'delivery-logical-lock':
+        case 'delivery-series-latest':
         case 'delivery-active-target':
         case 'idempotency-read':
           return []
@@ -795,6 +812,8 @@ describe('Postgres GitHub Delivery repository', () => {
       ({ sql }) => marker(sql) === 'delivery-create',
     )
     expect(insert?.sql).toMatch(/requested_by_token_id/i)
+    expect(insert?.sql).not.toMatch(/state_version\s*,\s*state_version/i)
+    expect(insert?.params).toHaveLength(37)
     expect(insert?.params).toContain('desktop-token-1')
     expect(insert?.params).toContain('2026-08-12T10:00:00.000Z')
     const safeIdempotency = db.calls.find(
@@ -803,6 +822,96 @@ describe('Postgres GitHub Delivery repository', () => {
     expect(String(safeIdempotency?.params.at(-1))).not.toContain(
       'apps/api/src/example.ts',
     )
+  })
+
+  it('creates only the next Postgres delivery attempt after the previous request is terminal', async () => {
+    const firstIntent = deliveryIntent()
+    const terminalRequest = {
+      ...deliveryRequestRow,
+      delivery_series_key: firstIntent.deliverySeriesKey,
+      delivery_attempt: 1,
+      status: 'revoked',
+      outcome_code: 'approval_rejected',
+    }
+    const createDb = (
+      nextIntent: GitHubDeliveryIntent,
+      nextRequestId: string,
+    ) => new FakeGitHubDeliveryDb((sql) => {
+      switch (marker(sql)) {
+        case 'project-lock':
+        case 'audit-insert':
+        case 'idempotency-insert':
+          return []
+        case 'bearer-identity':
+          return [bearerIdentity()]
+        case 'binding-lock':
+          return [bindingRow]
+        case 'canonical-authority':
+          return [canonicalAuthority()]
+        case 'delivery-logical-lock':
+        case 'delivery-active-target':
+        case 'idempotency-read':
+          return []
+        case 'delivery-series-latest':
+          return [terminalRequest]
+        case 'delivery-create':
+          return [{
+            ...deliveryRequestRow,
+            id: nextRequestId,
+            local_intent_id: nextIntent.id,
+            delivery_series_key: nextIntent.deliverySeriesKey,
+            delivery_attempt: nextIntent.deliveryAttempt,
+            intent_digest: nextIntent.intentDigest,
+            logical_idempotency_key: nextIntent.idempotencyKey,
+          }]
+        default:
+          throw new Error(`Unexpected query: ${sql}`)
+      }
+    })
+    const submit = (
+      db: FakeGitHubDeliveryDb,
+      intent: GitHubDeliveryIntent,
+    ) => createPostgresGitHubDeliveryRepository(db, {
+      now: () => new Date(now),
+      createId: () => 'github-delivery-next',
+    }).createOrReviseGitHubDeliveryRequest(
+      {
+        projectId: 'project-a',
+        intent,
+        prTitle: 'Deliver the reviewed change',
+        prBody: 'Bound to passing Test Evidence.',
+        expectedStateVersion: 0,
+      },
+      desktopPrincipal,
+    )
+
+    const skippedIntent = deliveryIntent({
+      id: 'local-intent-3',
+      deliveryAttempt: 3,
+    })
+    const skippedDb = createDb(skippedIntent, 'github-delivery-3')
+    await expect(submit(skippedDb, skippedIntent)).resolves.toMatchObject({
+      ok: false,
+      outcomeCode: 'intent_conflict',
+    })
+    expect(skippedDb.markers()).not.toContain('delivery-create')
+
+    const nextIntent = deliveryIntent({
+      id: 'local-intent-2',
+      deliveryAttempt: 2,
+    })
+    const nextDb = createDb(nextIntent, 'github-delivery-2')
+    await expect(submit(nextDb, nextIntent)).resolves.toMatchObject({
+      ok: true,
+      responseStatus: 201,
+      request: {
+        id: 'github-delivery-2',
+        deliverySeriesKey: nextIntent.deliverySeriesKey,
+        deliveryAttempt: 2,
+        intentRevision: 1,
+        status: 'approval_required',
+      },
+    })
   })
 
   it('rejects delivery when the canonical PR node is no longer running', async () => {

@@ -220,6 +220,11 @@ describe('team database schema', () => {
         name: '0011_github_delivery',
         fileName: '0011_github_delivery.sql',
       },
+      {
+        version: 12,
+        name: '0012_github_delivery_attempts',
+        fileName: '0012_github_delivery_attempts.sql',
+      },
     ])
 
     const migrations = await readTeamMigrationCatalog()
@@ -227,6 +232,7 @@ describe('team database schema', () => {
     const migrationV9 = migrations.find((candidate) => candidate.version === 9)
     const migrationV10 = migrations.find((candidate) => candidate.version === 10)
     const migrationV11 = migrations.find((candidate) => candidate.version === 11)
+    const migrationV12 = migrations.find((candidate) => candidate.version === 12)
     expect(migrationChecksum(migrationV8?.sql ?? '')).toBe(
       '630b28be579566ceeafd52353c30394d8182f256c1b787ec3780bb44c94992e5',
     )
@@ -301,6 +307,12 @@ describe('team database schema', () => {
     expect(migrationV11?.sql).not.toMatch(
       /\b(?:token|token_hash|private_key|credential|worktree_path|raw_diff|stdout|stderr)\s+(?:text|jsonb|bytea)\b/i,
     )
+    expect(migrationV12?.sql).toContain('ADD COLUMN delivery_series_key text')
+    expect(migrationV12?.sql).toContain('ADD COLUMN delivery_attempt integer')
+    expect(migrationV12?.sql).toContain(
+      'UNIQUE (organization_id, project_id, delivery_series_key, delivery_attempt)',
+    )
+    expect(migrationV12?.sql).not.toMatch(/^\s*(?:DELETE FROM|TRUNCATE TABLE)\b/im)
   })
 
   it('defines GitHub delivery authority without persisting credentials or local execution data', () => {
@@ -355,6 +367,8 @@ describe('team database schema', () => {
         'base_branch',
         'expected_commit_sha',
         'intent_digest',
+        'delivery_series_key',
+        'delivery_attempt',
         'logical_idempotency_key',
         'diff_digest',
         'test_evidence_digest',

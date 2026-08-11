@@ -76,6 +76,8 @@ export type GitHubDeliveryIntent = {
   codingRunId: string
   codingRunCompletedAt: string
   workspaceId: string
+  deliverySeriesKey: string
+  deliveryAttempt: number
   repository: string
   baseBranch: string
   headBranch: string
@@ -111,6 +113,7 @@ export type CreateGitHubDeliveryIntentInput = {
   testEvidence: TestEvidence & { sourceCommitSha: string }
   baseCommitSha: string
   expectedCommitSha: string
+  deliveryAttempt?: number
   now: string
 }
 
@@ -124,6 +127,11 @@ type IntentDigestMaterial = Omit<
   | 'createdAt'
   | 'updatedAt'
   | 'redacted'
+>
+
+type DeliverySeriesMaterial = Omit<
+  IntentDigestMaterial,
+  'deliverySeriesKey' | 'deliveryAttempt'
 >
 
 export type CreateGitHubDeliveryCompletionInput = {
@@ -338,6 +346,8 @@ function canonicalIntentMaterial(material: IntentDigestMaterial): string {
     codingRunId: material.codingRunId,
     codingRunCompletedAt: material.codingRunCompletedAt,
     workspaceId: material.workspaceId,
+    deliverySeriesKey: material.deliverySeriesKey,
+    deliveryAttempt: material.deliveryAttempt,
     repository: material.repository,
     baseBranch: material.baseBranch,
     headBranch: material.headBranch,
@@ -355,7 +365,7 @@ function canonicalIntentMaterial(material: IntentDigestMaterial): string {
   })
 }
 
-function canonicalLogicalDeliveryMaterial(material: IntentDigestMaterial): string {
+function canonicalDeliverySeriesMaterial(material: DeliverySeriesMaterial): string {
   return JSON.stringify({
     organizationId: material.organizationId,
     teamProjectId: material.teamProjectId,
@@ -529,7 +539,7 @@ export async function createGitHubDeliveryIntent(
     githubDeliverySource: packageSource,
     updatedAt: input.prPackage.updatedAt,
   }))
-  const material: IntentDigestMaterial = {
+  const seriesMaterial: DeliverySeriesMaterial = {
     stateVersion: 1,
     organizationId,
     teamProjectId,
@@ -559,16 +569,29 @@ export async function createGitHubDeliveryIntent(
     prPackageDigest,
     changedPaths,
   }
+  const deliverySeriesDigest = await sha256Hex(
+    canonicalDeliverySeriesMaterial(seriesMaterial),
+  )
+  const deliverySeriesKey = `github-delivery:${deliverySeriesDigest}`
+  const deliveryAttempt = requirePositiveVersion(
+    input.deliveryAttempt ?? 1,
+    'GitHub Delivery attempt',
+  )
+  const material: IntentDigestMaterial = {
+    ...seriesMaterial,
+    deliverySeriesKey,
+    deliveryAttempt,
+  }
   const intentDigest = await sha256Hex(canonicalIntentMaterial(material))
-  const logicalDeliveryDigest = await sha256Hex(
-    canonicalLogicalDeliveryMaterial(material),
+  const attemptIdempotencyDigest = await sha256Hex(
+    JSON.stringify({ deliverySeriesKey, deliveryAttempt }),
   )
 
   return {
     id,
     ...material,
     intentDigest,
-    idempotencyKey: `github-delivery:${logicalDeliveryDigest}`,
+    idempotencyKey: `github-delivery:${attemptIdempotencyDigest}`,
     status: 'approval_required',
     createdAt: input.now,
     updatedAt: input.now,

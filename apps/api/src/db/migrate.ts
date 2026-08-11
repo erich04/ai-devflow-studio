@@ -46,6 +46,11 @@ export const teamMigrationCatalog = [
     name: '0011_github_delivery',
     fileName: '0011_github_delivery.sql',
   },
+  {
+    version: 12,
+    name: '0012_github_delivery_attempts',
+    fileName: '0012_github_delivery_attempts.sql',
+  },
 ] as const
 
 export function splitSqlStatements(sql: string): string[] {

@@ -526,6 +526,8 @@ export function createSeedGitHubDeliveryRepository(
     request.repository = intent.repository
     request.codingRunId = intent.codingRunId
     request.workspaceId = intent.workspaceId
+    request.deliverySeriesKey = intent.deliverySeriesKey
+    request.deliveryAttempt = intent.deliveryAttempt
     request.diffArtifactId = intent.diffArtifactId
     request.testEvidenceId = intent.testEvidenceId
     request.prPackageArtifactId = intent.prPackageArtifactId
@@ -639,6 +641,25 @@ export function createSeedGitHubDeliveryRepository(
     if (input.expectedStateVersion !== 0) {
       return githubDeliveryRejection('stale_version')
     }
+    const seriesAttempts = [...requestsByLogicalKey.values()]
+      .filter(
+        (request) =>
+          request.organizationId === principal.session.organizationId &&
+          request.projectId === input.projectId &&
+          request.deliverySeriesKey === intent.deliverySeriesKey,
+      )
+      .sort((left, right) => right.deliveryAttempt - left.deliveryAttempt)
+    const previousAttempt = seriesAttempts[0]
+    if (
+      (intent.deliveryAttempt === 1 && previousAttempt !== undefined) ||
+      (intent.deliveryAttempt > 1 &&
+        (!previousAttempt ||
+          previousAttempt.deliveryAttempt !== intent.deliveryAttempt - 1 ||
+          (previousAttempt.status !== 'failed' &&
+            previousAttempt.status !== 'revoked')))
+    ) {
+      return githubDeliveryRejection('intent_conflict')
+    }
     const competing = [...requestsByLogicalKey.values()].some(
       (request) =>
         request.organizationId === principal.session.organizationId &&
@@ -670,6 +691,8 @@ export function createSeedGitHubDeliveryRepository(
       repository: intent.repository,
       codingRunId: intent.codingRunId,
       workspaceId: intent.workspaceId,
+      deliverySeriesKey: intent.deliverySeriesKey,
+      deliveryAttempt: intent.deliveryAttempt,
       diffArtifactId: intent.diffArtifactId,
       testEvidenceId: intent.testEvidenceId,
       prPackageArtifactId: intent.prPackageArtifactId,

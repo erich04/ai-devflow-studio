@@ -72,6 +72,8 @@ function request(overrides: Partial<GitHubDeliveryRequest> = {}): GitHubDelivery
     baseCommitSha: 'a'.repeat(40),
     expectedCommitSha,
     intentDigest: 'c'.repeat(64),
+    deliverySeriesKey: `github-delivery:${'2'.repeat(64)}`,
+    deliveryAttempt: 1,
     logicalIdempotencyKey: `github-delivery:${'d'.repeat(64)}`,
     diffDigest: 'e'.repeat(64),
     testEvidenceDigest: 'f'.repeat(64),

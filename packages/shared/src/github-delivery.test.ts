@@ -317,6 +317,22 @@ describe('GitHub Delivery Intent', () => {
     expect(revised.idempotencyKey).toBe(first.idempotencyKey)
   })
 
+  it('uses a new idempotency key for an explicit terminal retry without changing its delivery series', async () => {
+    const first = await createGitHubDeliveryIntent(baseInput)
+    const retry = await createGitHubDeliveryIntent({
+      ...baseInput,
+      id: 'delivery-terminal-retry',
+      deliveryAttempt: 2,
+      now: '2026-08-11T10:35:00.000Z',
+    })
+
+    expect(first.deliveryAttempt).toBe(1)
+    expect(retry.deliveryAttempt).toBe(2)
+    expect(retry.deliverySeriesKey).toBe(first.deliverySeriesKey)
+    expect(retry.idempotencyKey).not.toBe(first.idempotencyKey)
+    expect(retry.intentDigest).not.toBe(first.intentDigest)
+  })
+
   it('fails closed when Test Evidence is not for the exact expected commit', async () => {
     await expect(createGitHubDeliveryIntent({
       ...baseInput,

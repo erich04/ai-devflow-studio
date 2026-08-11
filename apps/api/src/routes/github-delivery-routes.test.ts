@@ -122,6 +122,8 @@ function deliveryRequest(
     baseCommitSha: 'a'.repeat(40),
     expectedCommitSha: 'b'.repeat(40),
     intentDigest: 'c'.repeat(64),
+    deliverySeriesKey: `github-delivery:${'2'.repeat(64)}`,
+    deliveryAttempt: 1,
     logicalIdempotencyKey: `github-delivery:${'d'.repeat(64)}`,
     diffDigest: 'e'.repeat(64),
     testEvidenceDigest: 'f'.repeat(64),
@@ -185,6 +187,8 @@ function deliveryIntent(
     codingRunId: 'coding-1',
     codingRunCompletedAt: '2026-08-11T13:55:00.000Z',
     workspaceId: 'workspace-1',
+    deliverySeriesKey: `github-delivery:${'2'.repeat(64)}`,
+    deliveryAttempt: 1,
     repository: 'example/project',
     baseBranch: 'main',
     headBranch: 'devflow/run-1-pr-1',
@@ -452,6 +456,48 @@ describe('GitHub Delivery routes', () => {
       'project-a',
       cookieOwner,
     )
+  })
+
+  it('returns the exact redacted Project binding to the paired Desktop bearer only', async () => {
+    const harness = createHarness()
+    vi.mocked(harness.repository.getGitHubRepositoryBinding).mockResolvedValue({
+      ...binding({ version: 2, status: 'revoked' }),
+      privateKey: 'do-not-return',
+      localPath: '/private/repository',
+    } as unknown as GitHubRepositoryBinding)
+
+    const result = await resolveGitHubDeliveryRoute(
+      'GET',
+      '/api/desktop/projects/project-a/github-repository-binding',
+      harness.repository,
+      harness.service,
+      { principal: desktopMember },
+    )
+
+    expect(result).toEqual({
+      status: 200,
+      body: { binding: binding({ version: 2, status: 'revoked' }) },
+    })
+    expect(JSON.stringify(result)).not.toMatch(
+      /privateKey|localPath|private\/repository/u,
+    )
+    expect(harness.repository.getGitHubRepositoryBinding).toHaveBeenCalledWith(
+      'project-a',
+      desktopMember,
+    )
+
+    vi.mocked(
+      harness.repository.getGitHubRepositoryBinding,
+    ).mockResolvedValue(null)
+    await expect(
+      resolveGitHubDeliveryRoute(
+        'GET',
+        '/api/desktop/projects/project-a/github-repository-binding',
+        harness.repository,
+        harness.service,
+        { principal: desktopMember },
+      ),
+    ).resolves.toEqual({ status: 200, body: { binding: null } })
   })
 
   it('revokes a binding through a distinct owner-only action', async () => {
@@ -913,6 +959,11 @@ describe('GitHub Delivery routes', () => {
     ] as const
     const desktopRoutes = [
       [
+        'GET',
+        '/api/desktop/projects/project-a/github-repository-binding',
+        undefined,
+      ],
+      [
         'POST',
         '/api/desktop/projects/project-a/github-deliveries',
         {
@@ -1180,6 +1231,10 @@ describe('GitHub Delivery routes', () => {
     })
     for (const [principal, pathname] of [
       [noProjectCookie, '/api/team/projects/project-a/github-deliveries'],
+      [
+        noProjectDesktop,
+        '/api/desktop/projects/project-a/github-repository-binding',
+      ],
       [
         noProjectDesktop,
         '/api/desktop/projects/project-a/github-deliveries/inbox',

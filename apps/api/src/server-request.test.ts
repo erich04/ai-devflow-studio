@@ -837,6 +837,76 @@ describe('API HTTP authentication boundary', () => {
     )
   })
 
+  it('routes repository-binding sync only through the exact paired Desktop bearer scope', async () => {
+    const repository = createSeedTeamRepository()
+    const getGitHubRepositoryBinding = vi.spyOn(
+      repository,
+      'getGitHubRepositoryBinding',
+    )
+    vi.spyOn(repository, 'resolveDesktopTokenSession').mockResolvedValue({
+      tokenRecordId: 'desktop-token-record-binding',
+      session: projectMemberSession,
+    })
+
+    const paired = await resolveApiRouteRequest(
+      {
+        method: 'GET',
+        pathname: '/api/desktop/projects/p-payments/github-repository-binding',
+        headers: { authorization: 'Bearer paired-desktop-secret' },
+      },
+      { repository, sessionSecret: 'server-request-test-secret' },
+    )
+
+    expect(paired).toEqual({ status: 200, body: { binding: null } })
+    expect(getGitHubRepositoryBinding).toHaveBeenCalledWith('p-payments', {
+      session: projectMemberSession,
+      authentication: {
+        kind: 'desktop_bearer',
+        tokenRecordId: 'desktop-token-record-binding',
+      },
+    })
+
+    const sessionSecret = 'server-request-test-secret'
+    const cookie = createSessionCookie(
+      { authAccountId: projectLeadSession.authAccountId },
+      sessionSecret,
+    ).split(';')[0]
+    vi.spyOn(repository, 'resolveBrowserSession').mockResolvedValue(
+      projectLeadSession,
+    )
+    await expect(
+      resolveApiRouteRequest(
+        {
+          method: 'GET',
+          pathname: '/api/desktop/projects/p-payments/github-repository-binding',
+          headers: { cookie },
+        },
+        { repository, sessionSecret },
+      ),
+    ).resolves.toMatchObject({
+      status: 403,
+      body: { outcomeCode: 'authentication_forbidden' },
+    })
+
+    vi.spyOn(repository, 'resolveDesktopTokenSession').mockResolvedValue({
+      tokenRecordId: 'desktop-token-record-binding',
+      session: authenticatedWithoutProject,
+    })
+    await expect(
+      resolveApiRouteRequest(
+        {
+          method: 'GET',
+          pathname: '/api/desktop/projects/p-payments/github-repository-binding',
+          headers: { authorization: 'Bearer paired-desktop-secret' },
+        },
+        { repository, sessionSecret },
+      ),
+    ).resolves.toMatchObject({
+      status: 403,
+      body: { outcomeCode: 'project_forbidden' },
+    })
+  })
+
   it('keeps GitHub Delivery routes visible with a fixed unavailable result when the App is not configured', async () => {
     const repository = createSeedTeamRepository()
     const sessionSecret = 'server-request-test-secret'

@@ -73,6 +73,8 @@ function expectedIntentDigest(intent: GitHubDeliveryIntent): string {
     codingRunId: intent.codingRunId,
     codingRunCompletedAt: intent.codingRunCompletedAt,
     workspaceId: intent.workspaceId,
+    deliverySeriesKey: intent.deliverySeriesKey,
+    deliveryAttempt: intent.deliveryAttempt,
     repository: intent.repository,
     baseBranch: intent.baseBranch,
     headBranch: intent.headBranch,
@@ -90,7 +92,7 @@ function expectedIntentDigest(intent: GitHubDeliveryIntent): string {
   }))
 }
 
-function expectedLogicalDeliveryKey(intent: GitHubDeliveryIntent): string {
+function expectedDeliverySeriesKey(intent: GitHubDeliveryIntent): string {
   return `github-delivery:${sha256Text(JSON.stringify({
     organizationId: intent.organizationId,
     teamProjectId: intent.teamProjectId,
@@ -100,6 +102,13 @@ function expectedLogicalDeliveryKey(intent: GitHubDeliveryIntent): string {
     repositoryBindingId: intent.repositoryBindingId,
     repositoryBindingVersion: intent.repositoryBindingVersion,
     workspaceId: intent.workspaceId,
+  }))}`
+}
+
+function expectedLogicalDeliveryKey(intent: GitHubDeliveryIntent): string {
+  return `github-delivery:${sha256Text(JSON.stringify({
+    deliverySeriesKey: intent.deliverySeriesKey,
+    deliveryAttempt: intent.deliveryAttempt,
   }))}`
 }
 
@@ -122,6 +131,8 @@ function deliveryIntent(
     codingRunId: 'coding-1',
     codingRunCompletedAt: '2026-08-11T09:55:00.000Z',
     workspaceId: 'workspace-1',
+    deliverySeriesKey: `github-delivery:${'f'.repeat(64)}`,
+    deliveryAttempt: 1,
     repository: 'example/project',
     baseBranch: 'main',
     headBranch: 'devflow/run-1-pr-1',
@@ -143,6 +154,9 @@ function deliveryIntent(
     updatedAt: '2026-08-11T09:58:00.000Z',
     redacted: true,
     ...overrides,
+  }
+  if (!Object.hasOwn(overrides, 'deliverySeriesKey')) {
+    intent.deliverySeriesKey = expectedDeliverySeriesKey(intent)
   }
   if (!Object.hasOwn(overrides, 'intentDigest')) {
     intent.intentDigest = expectedIntentDigest(intent)
@@ -826,6 +840,89 @@ describe('seed GitHub Delivery repository', () => {
     expect(JSON.stringify(revised)).not.toMatch(
       /authorization|access.token|private.key|raw.response|workspace.path|stdout|stderr/i,
     )
+  })
+
+  it('creates only the next delivery attempt after a rejected request without regressing the terminal request', async () => {
+    const harness = createHarness()
+    await createBinding(harness)
+    const first = await harness.repository.createOrReviseGitHubDeliveryRequest(
+      {
+        projectId: 'project-a',
+        intent: deliveryIntent(),
+        prTitle: 'Deliver the reviewed change',
+        prBody: 'Bound to passing Test Evidence.',
+        expectedStateVersion: 0,
+      },
+      desktopPrincipal,
+    )
+    if (!first.ok) throw new Error('fixture delivery create failed')
+    const rejected = await harness.repository.decideGitHubDeliveryRequest(
+      {
+        projectId: 'project-a',
+        requestId: first.request.id,
+        decision: 'reject',
+        expectedStateVersion: first.request.stateVersion,
+      },
+      leadPrincipal,
+    )
+    if (!rejected.ok) throw new Error('fixture delivery rejection failed')
+
+    const skippedAttempt = deliveryIntent({
+      id: 'local-intent-3',
+      deliveryAttempt: 3,
+    })
+    await expect(
+      harness.repository.createOrReviseGitHubDeliveryRequest(
+        {
+          projectId: 'project-a',
+          intent: skippedAttempt,
+          prTitle: 'Deliver the reviewed change',
+          prBody: 'Bound to passing Test Evidence.',
+          expectedStateVersion: 0,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'intent_conflict' })
+
+    const nextAttempt = deliveryIntent({
+      id: 'local-intent-2',
+      deliveryAttempt: 2,
+    })
+    const retried = await harness.repository.createOrReviseGitHubDeliveryRequest(
+      {
+        projectId: 'project-a',
+        intent: nextAttempt,
+        prTitle: 'Deliver the reviewed change',
+        prBody: 'Bound to passing Test Evidence.',
+        expectedStateVersion: 0,
+      },
+      desktopPrincipal,
+    )
+
+    expect(retried).toMatchObject({
+      ok: true,
+      responseStatus: 201,
+      outcomeCode: 'delivery_created',
+      request: {
+        id: expect.not.stringMatching(first.request.id),
+        deliverySeriesKey: nextAttempt.deliverySeriesKey,
+        deliveryAttempt: 2,
+        intentRevision: 1,
+        status: 'approval_required',
+      },
+    })
+    expect(harness.repository.inspectForTests().requests).toEqual([
+      expect.objectContaining({
+        id: first.request.id,
+        deliveryAttempt: 1,
+        status: 'revoked',
+        outcomeCode: 'approval_rejected',
+      }),
+      expect.objectContaining({
+        deliveryAttempt: 2,
+        status: 'approval_required',
+      }),
+    ])
   })
 
   it('does not extend a delivery request beyond its original 24-hour lifetime', async () => {

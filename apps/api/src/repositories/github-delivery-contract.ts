@@ -94,6 +94,8 @@ export type GitHubDeliveryRequest = {
   repository: string
   codingRunId: string
   workspaceId: string
+  deliverySeriesKey: string
+  deliveryAttempt: number
   diffArtifactId: string
   testEvidenceId: string
   prPackageArtifactId: string
@@ -171,6 +173,8 @@ function expectedIntentDigest(intent: GitHubDeliveryIntent): string {
     codingRunId: intent.codingRunId,
     codingRunCompletedAt: intent.codingRunCompletedAt,
     workspaceId: intent.workspaceId,
+    deliverySeriesKey: intent.deliverySeriesKey,
+    deliveryAttempt: intent.deliveryAttempt,
     repository: intent.repository,
     baseBranch: intent.baseBranch,
     headBranch: intent.headBranch,
@@ -188,7 +192,7 @@ function expectedIntentDigest(intent: GitHubDeliveryIntent): string {
   }))
 }
 
-function expectedLogicalDeliveryKey(intent: GitHubDeliveryIntent): string {
+function expectedDeliverySeriesKey(intent: GitHubDeliveryIntent): string {
   return `github-delivery:${sha256Text(JSON.stringify({
     organizationId: intent.organizationId,
     teamProjectId: intent.teamProjectId,
@@ -198,6 +202,13 @@ function expectedLogicalDeliveryKey(intent: GitHubDeliveryIntent): string {
     repositoryBindingId: intent.repositoryBindingId,
     repositoryBindingVersion: intent.repositoryBindingVersion,
     workspaceId: intent.workspaceId,
+  }))}`
+}
+
+function expectedLogicalDeliveryKey(intent: GitHubDeliveryIntent): string {
+  return `github-delivery:${sha256Text(JSON.stringify({
+    deliverySeriesKey: intent.deliverySeriesKey,
+    deliveryAttempt: intent.deliveryAttempt,
   }))}`
 }
 
@@ -288,12 +299,16 @@ export function normalizeGitHubDeliveryRequestIntent(
       input.expectedStateVersion < 0 ||
       !Number.isSafeInteger(intent.runVersion) ||
       intent.runVersion < 1 ||
+      !Number.isSafeInteger(intent.deliveryAttempt) ||
+      intent.deliveryAttempt < 1 ||
       !digest(intent.intentDigest) ||
       !digest(intent.diffSourceDigest) ||
       !digest(intent.testEvidenceDigest) ||
       !digest(intent.prPackageDigest) ||
+      !/^github-delivery:[a-f0-9]{64}$/u.test(intent.deliverySeriesKey) ||
       !/^github-delivery:[a-f0-9]{64}$/u.test(intent.idempotencyKey) ||
       intent.intentDigest !== expectedIntentDigest(normalizedIntent) ||
+      intent.deliverySeriesKey !== expectedDeliverySeriesKey(normalizedIntent) ||
       intent.idempotencyKey !== expectedLogicalDeliveryKey(normalizedIntent) ||
       !safePaths ||
       changedPaths.some((path, index) => path !== intent.changedPaths[index]) ||
@@ -806,6 +821,8 @@ export function cloneGitHubDeliveryRequest(
     repository,
     codingRunId,
     workspaceId,
+    deliverySeriesKey,
+    deliveryAttempt,
     diffArtifactId,
     testEvidenceId,
     prPackageArtifactId,
@@ -848,6 +865,8 @@ export function cloneGitHubDeliveryRequest(
     repository,
     codingRunId,
     workspaceId,
+    deliverySeriesKey,
+    deliveryAttempt,
     diffArtifactId,
     testEvidenceId,
     prPackageArtifactId,

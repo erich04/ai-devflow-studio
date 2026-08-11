@@ -57,6 +57,8 @@ const deliveryIntentKeys = [
   'codingRunId',
   'codingRunCompletedAt',
   'workspaceId',
+  'deliverySeriesKey',
+  'deliveryAttempt',
   'repository',
   'baseBranch',
   'headBranch',
@@ -194,6 +196,8 @@ function parseDeliveryIntent(value: unknown): GitHubDeliveryIntent | null {
     (value.runVersion as number) < 1 ||
     !Number.isSafeInteger(value.repositoryBindingVersion) ||
     (value.repositoryBindingVersion as number) < 1 ||
+    !Number.isSafeInteger(value.deliveryAttempt) ||
+    (value.deliveryAttempt as number) < 1 ||
     typeof value.installationId !== 'string' ||
     !numericGitHubIdPattern.test(value.installationId) ||
     typeof value.repositoryId !== 'string' ||
@@ -220,6 +224,8 @@ function parseDeliveryIntent(value: unknown): GitHubDeliveryIntent | null {
     !sha256Pattern.test(value.prPackageDigest) ||
     typeof value.intentDigest !== 'string' ||
     !sha256Pattern.test(value.intentDigest) ||
+    typeof value.deliverySeriesKey !== 'string' ||
+    !/^github-delivery:[a-f0-9]{64}$/u.test(value.deliverySeriesKey) ||
     typeof value.idempotencyKey !== 'string' ||
     !/^github-delivery:[a-f0-9]{64}$/u.test(value.idempotencyKey) ||
     !intentIdentifierKeys.every(
@@ -497,6 +503,9 @@ async function resolveGitHubDeliveryRouteUnchecked(
   const bindingMatch = pathname.match(
     /^\/api\/team\/projects\/([^/]+)\/github-repository-binding$/,
   )
+  const desktopBindingMatch = pathname.match(
+    /^\/api\/desktop\/projects\/([^/]+)\/github-repository-binding$/,
+  )
   const revokeMatch = pathname.match(
     /^\/api\/team\/projects\/([^/]+)\/github-repository-binding\/revoke$/,
   )
@@ -526,6 +535,8 @@ async function resolveGitHubDeliveryRouteUnchecked(
   )
   const isBindingRoute =
     bindingMatch !== null && (method === 'GET' || method === 'PUT')
+  const isDesktopBindingRoute =
+    desktopBindingMatch !== null && method === 'GET'
   const isRevokeRoute = revokeMatch !== null && method === 'POST'
   const isDeliveryListRoute = deliveryListMatch !== null && method === 'GET'
   const isDecisionRoute = decisionMatch !== null && method === 'POST'
@@ -537,6 +548,7 @@ async function resolveGitHubDeliveryRouteUnchecked(
   const isPublicationRoute = publicationMatch !== null && method === 'POST'
   const isPullRequestRoute = pullRequestMatch !== null && method === 'POST'
   const isDesktopRoute =
+    isDesktopBindingRoute ||
     isSubmitRoute ||
     isInboxRoute ||
     isRecoveryRoute ||
@@ -545,6 +557,7 @@ async function resolveGitHubDeliveryRouteUnchecked(
     isPullRequestRoute
   if (
     !isBindingRoute &&
+    !isDesktopBindingRoute &&
     !isRevokeRoute &&
     !isDeliveryListRoute &&
     !isDecisionRoute &&
@@ -570,23 +583,25 @@ async function resolveGitHubDeliveryRouteUnchecked(
   const projectId = decodeIdentifier(
     (isBindingRoute
       ? bindingMatch?.[1]
-      : isRevokeRoute
-        ? revokeMatch?.[1]
-        : isDeliveryListRoute
-          ? deliveryListMatch?.[1]
-          : isDecisionRoute
-            ? decisionMatch?.[1]
-            : isSubmitRoute
-              ? submitMatch?.[1]
-              : isInboxRoute
-                ? inboxMatch?.[1]
-                : isRecoveryRoute
-                  ? recoveryMatch?.[1]
-                  : isCredentialRoute
-                    ? credentialMatch?.[1]
-                    : isPublicationRoute
-                      ? publicationMatch?.[1]
-                      : pullRequestMatch?.[1]) ?? '',
+      : isDesktopBindingRoute
+        ? desktopBindingMatch?.[1]
+        : isRevokeRoute
+          ? revokeMatch?.[1]
+          : isDeliveryListRoute
+            ? deliveryListMatch?.[1]
+            : isDecisionRoute
+              ? decisionMatch?.[1]
+              : isSubmitRoute
+                ? submitMatch?.[1]
+                : isInboxRoute
+                  ? inboxMatch?.[1]
+                  : isRecoveryRoute
+                    ? recoveryMatch?.[1]
+                    : isCredentialRoute
+                      ? credentialMatch?.[1]
+                      : isPublicationRoute
+                        ? publicationMatch?.[1]
+                        : pullRequestMatch?.[1]) ?? '',
   )
   if (projectId === null) {
     return badRequest('Invalid GitHub Delivery route identifier.')
@@ -606,11 +621,32 @@ async function resolveGitHubDeliveryRouteUnchecked(
     }
   }
   if (
-    (isInboxRoute || isRecoveryRoute || isDeliveryListRoute ||
+    (isDesktopBindingRoute ||
+      isInboxRoute ||
+      isRecoveryRoute ||
+      isDeliveryListRoute ||
       (isBindingRoute && method === 'GET')) &&
     !isEmptyBody(options.body)
   ) {
     return badRequest('GitHub Delivery read input must be empty.')
+  }
+  if (isDesktopBindingRoute) {
+    const binding = await repository.getGitHubRepositoryBinding(
+      projectId,
+      principal as GitHubDeliveryDesktopPrincipal,
+    )
+    if (binding === null) return { status: 200, body: { binding: null } }
+    if (
+      binding.organizationId !== principal.session.organizationId ||
+      binding.teamProjectId !== projectId ||
+      binding.redacted !== true
+    ) {
+      throw new Error('GitHub Delivery repository returned an out-of-scope binding.')
+    }
+    return {
+      status: 200,
+      body: { binding: cloneGitHubRepositoryBinding(binding) },
+    }
   }
   if (isSubmitRoute) {
     const parsed = parseSubmitInput(options.body)
@@ -637,6 +673,8 @@ async function resolveGitHubDeliveryRouteUnchecked(
       result.request.projectId !== projectId ||
       result.request.localIntentId !== parsed.intent.id ||
       result.request.intentDigest !== parsed.intent.intentDigest ||
+      result.request.deliverySeriesKey !== parsed.intent.deliverySeriesKey ||
+      result.request.deliveryAttempt !== parsed.intent.deliveryAttempt ||
       result.request.logicalIdempotencyKey !== parsed.intent.idempotencyKey ||
       result.request.status !== 'approval_required' ||
       result.request.redacted !== true

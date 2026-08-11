@@ -122,6 +122,8 @@ type DeliveryRequestRow = {
   repository_full_name: string
   coding_run_id: string
   workspace_id: string
+  delivery_series_key: string
+  delivery_attempt: number
   diff_artifact_id: string
   test_evidence_id: string
   pr_package_artifact_id: string
@@ -309,6 +311,8 @@ const deliveryRequestColumns = `
   github_delivery_requests.repository_full_name,
   github_delivery_requests.coding_run_id,
   github_delivery_requests.workspace_id,
+  github_delivery_requests.delivery_series_key,
+  github_delivery_requests.delivery_attempt,
   github_delivery_requests.diff_artifact_id,
   github_delivery_requests.test_evidence_id,
   github_delivery_requests.pr_package_artifact_id,
@@ -468,6 +472,8 @@ function mapDeliveryRequestRow(row: DeliveryRequestRow): GitHubDeliveryRequest {
     repository: row.repository_full_name,
     codingRunId: row.coding_run_id,
     workspaceId: row.workspace_id,
+    deliverySeriesKey: row.delivery_series_key,
+    deliveryAttempt: row.delivery_attempt,
     diffArtifactId: row.diff_artifact_id,
     testEvidenceId: row.test_evidence_id,
     prPackageArtifactId: row.pr_package_artifact_id,
@@ -1170,6 +1176,28 @@ export function createPostgresGitHubDeliveryRepository(
         FOR UPDATE
       `,
       [identity.organizationId, identity.projectId, logicalIdempotencyKey],
+    )
+    return row ?? null
+  }
+
+  async function lockLatestDeliverySeriesAttempt(
+    tx: TeamDbTransactionClient,
+    identity: VerifiedIdentity,
+    deliverySeriesKey: string,
+  ): Promise<DeliveryRequestRow | null> {
+    const [row] = await tx.query<DeliveryRequestRow>(
+      `
+        /* github_delivery:delivery-series-latest */
+        SELECT ${deliveryRequestColumns}
+        FROM github_delivery_requests
+        WHERE organization_id = $1
+          AND project_id = $2
+          AND delivery_series_key = $3
+        ORDER BY delivery_attempt DESC
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [identity.organizationId, identity.projectId, deliverySeriesKey],
     )
     return row ?? null
   }
@@ -1994,6 +2022,24 @@ export function createPostgresGitHubDeliveryRepository(
       if (input.expectedStateVersion !== 0) {
         return finalize(githubDeliveryRejection('stale_version'), 0)
       }
+      const previousAttempt = await lockLatestDeliverySeriesAttempt(
+        tx,
+        identity,
+        intent.deliverySeriesKey,
+      )
+      if (
+        (intent.deliveryAttempt === 1 && previousAttempt !== null) ||
+        (intent.deliveryAttempt > 1 &&
+          (!previousAttempt ||
+            previousAttempt.delivery_attempt !== intent.deliveryAttempt - 1 ||
+            (previousAttempt.status !== 'failed' &&
+              previousAttempt.status !== 'revoked')))
+      ) {
+        return finalize(
+          githubDeliveryRejection('intent_conflict'),
+          previousAttempt?.state_version ?? null,
+        )
+      }
       const [competing] = await tx.query<{ id: string }>(
         `
           /* github_delivery:delivery-active-target */
@@ -2039,6 +2085,8 @@ export function createPostgresGitHubDeliveryRepository(
             repository_full_name,
             coding_run_id,
             workspace_id,
+            delivery_series_key,
+            delivery_attempt,
             diff_artifact_id,
             test_evidence_id,
             pr_package_artifact_id,
@@ -2064,8 +2112,9 @@ export function createPostgresGitHubDeliveryRepository(
           VALUES (
             $1, 1, 1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
             $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-            'approval_required', NULL, $21, $22, $23, $24, $25, $26,
-            $27, $28, $29, $30, $31::jsonb, $32, $33, $34, $35, $35
+            $21, $22, 'approval_required', NULL, $23, $24, $25, $26,
+            $27, $28, $29, $30, $31, $32, $33::jsonb, $34, $35,
+            $36, $37, $37
           )
           RETURNING ${deliveryRequestColumns}
         `,
@@ -2087,6 +2136,8 @@ export function createPostgresGitHubDeliveryRepository(
           intent.repository,
           intent.codingRunId,
           intent.workspaceId,
+          intent.deliverySeriesKey,
+          intent.deliveryAttempt,
           intent.diffArtifactId,
           intent.testEvidenceId,
           intent.prPackageArtifactId,

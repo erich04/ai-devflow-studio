@@ -306,6 +306,8 @@ function currentPr() {
     codingRunId: prepared.evidence.codingRuns[0]!.id,
     codingRunCompletedAt: now,
     workspaceId: 'workspace-1',
+    deliverySeriesKey: `github-delivery:${'7'.repeat(64)}`,
+    deliveryAttempt: 1,
     repository: 'owner/repository',
     baseBranch: 'main',
     headBranch: 'devflow/run-build-transition',
