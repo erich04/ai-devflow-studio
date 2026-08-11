@@ -1,9 +1,13 @@
 import { spawn } from 'node:child_process'
-import { createHmac } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const rootDir = fileURLToPath(new URL('..', import.meta.url))
+const requireFromApi = createRequire(new URL('../apps/api/package.json', import.meta.url))
+const { Pool } = requireFromApi('pg')
 const apiUrl = 'http://127.0.0.1:4322'
 const databaseUrl = process.env.DEVFLOW_DATABASE_URL ?? process.env.DATABASE_URL
 const sessionSecret = 'devflow-postgres-smoke-hmac-key-non-production-32-plus'
@@ -273,6 +277,17 @@ async function putJson(pathname, body, sessionHeaders = ownerSessionHeaders) {
   )
 }
 
+async function putJsonBody(pathname, body, sessionHeaders) {
+  return readJson(
+    await fetch(`${apiUrl}${pathname}`, {
+      method: 'PUT',
+      headers: jsonHeaders(sessionHeaders),
+      body: JSON.stringify(body),
+    }),
+    pathname,
+  )
+}
+
 async function expectPostRejected(pathname, body, sessionHeaders, expectedStatus, label) {
   const response = await fetch(`${apiUrl}${pathname}`, {
     method: 'POST',
@@ -299,6 +314,780 @@ async function fetchOverview(label = '/api/team/overview', sessionHeaders = owne
 function expect(condition, message) {
   if (!condition) {
     throw new Error(message)
+  }
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(',')}]`
+  }
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function sha256Hex(value) {
+  return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
+function migrationChecksum(sql) {
+  return sha256Hex(sql.replace(/\r\n/g, '\n'))
+}
+
+function createRedactedGitHubDeliveryIntent({ binding, runId, nodeId, now }) {
+  const deliverySeriesKey = `github-delivery:${sha256Hex(
+    JSON.stringify({
+      organizationId: 'org-demo',
+      teamProjectId: 'p-payments',
+      localProjectId: `local-project-${runId}`,
+      runId,
+      nodeId,
+      repositoryBindingId: binding.id,
+      repositoryBindingVersion: binding.version,
+      workspaceId: `workspace-${runId}`,
+    }),
+  )}`
+  const deliveryAttempt = 1
+  const material = {
+    stateVersion: 1,
+    organizationId: 'org-demo',
+    teamProjectId: 'p-payments',
+    localProjectId: `local-project-${runId}`,
+    runId,
+    runVersion: 3,
+    nodeId,
+    repositoryBindingId: binding.id,
+    repositoryBindingVersion: binding.version,
+    installationId: binding.installationId,
+    repositoryId: binding.repositoryId,
+    codingRunId: `coding-${runId}`,
+    codingRunCompletedAt: now,
+    workspaceId: `workspace-${runId}`,
+    deliverySeriesKey,
+    deliveryAttempt,
+    repository: binding.repository,
+    baseBranch: binding.defaultBranch,
+    headBranch: `devflow/${runId}`,
+    baseCommitSha: 'a'.repeat(40),
+    expectedCommitSha: 'b'.repeat(40),
+    diffArtifactId: `diff-${runId}`,
+    diffSourceDigest: 'c'.repeat(64),
+    testEvidenceId: `test-${runId}`,
+    testEvidenceCreatedAt: now,
+    testEvidenceDigest: 'd'.repeat(64),
+    prPackageArtifactId: `package-${runId}`,
+    prPackageUpdatedAt: now,
+    prPackageDigest: 'e'.repeat(64),
+    changedPaths: ['apps/api/src/github-delivery-smoke.ts'],
+  }
+  const intentDigest = sha256Hex(JSON.stringify(material))
+  const idempotencyKey = `github-delivery:${sha256Hex(
+    JSON.stringify({ deliverySeriesKey, deliveryAttempt }),
+  )}`
+  return {
+    id: `intent-${runId}`,
+    ...material,
+    intentDigest,
+    idempotencyKey,
+    status: 'approval_required',
+    createdAt: now,
+    updatedAt: now,
+    redacted: true,
+  }
+}
+
+async function prepareRetainedV11DeliveryFixture() {
+  const migrations = [
+    { version: 7, name: '0001_initial', fileName: '0001_initial.sql' },
+    {
+      version: 8,
+      name: '0008_v14_work_authority',
+      fileName: '0008_v14_work_authority.sql',
+    },
+    {
+      version: 9,
+      name: '0009_harden_work_request_timeline',
+      fileName: '0009_harden_work_request_timeline.sql',
+    },
+    {
+      version: 10,
+      name: '0010_harden_gate_command_delivery',
+      fileName: '0010_harden_gate_command_delivery.sql',
+    },
+    {
+      version: 11,
+      name: '0011_github_delivery',
+      fileName: '0011_github_delivery.sql',
+    },
+  ]
+  const loadedMigrations = await Promise.all(
+    migrations.map(async (migration) => ({
+      ...migration,
+      sql: await readFile(
+        new URL(
+          `../apps/api/src/db/migrations/${migration.fileName}`,
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    })),
+  )
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    application_name: 'ai-devflow-postgres-smoke-v11-fixture',
+    statement_timeout: 10_000,
+  })
+  const connection = await pool.connect()
+  let transactionOpen = false
+  const retainedRequestId = 'github-delivery-retained-v11'
+  const retainedLogicalKey = `github-delivery:${'1'.repeat(64)}`
+
+  try {
+    const state = await connection.query(`
+      SELECT
+        to_regclass('public.schema_meta')::text AS schema_meta_table,
+        to_regclass('public.team_schema_migrations')::text AS migration_history_table
+    `)
+    expect(
+      state.rows[0]?.schema_meta_table === null &&
+        state.rows[0]?.migration_history_table === null,
+      'Postgres GitHub Delivery smoke requires a fresh empty database.',
+    )
+
+    for (const migration of loadedMigrations) {
+      if (migration.version === 7) {
+        await connection.query(migration.sql)
+        await connection.query(`
+          CREATE TABLE team_schema_migrations (
+            version integer PRIMARY KEY,
+            name text NOT NULL,
+            checksum text NOT NULL,
+            adopted boolean NOT NULL DEFAULT false,
+            applied_at timestamptz NOT NULL DEFAULT now()
+          )
+        `)
+      } else {
+        await connection.query('BEGIN')
+        transactionOpen = true
+        await connection.query(migration.sql)
+        await connection.query(
+          `INSERT INTO schema_meta (key, value) VALUES ('schema_version', $1)
+           ON CONFLICT (key) DO UPDATE
+           SET value = excluded.value, updated_at = now()`,
+          [String(migration.version)],
+        )
+      }
+
+      await connection.query(
+        `INSERT INTO team_schema_migrations (version, name, checksum, adopted)
+         VALUES ($1, $2, $3, false)`,
+        [migration.version, migration.name, migrationChecksum(migration.sql)],
+      )
+      if (transactionOpen) {
+        await connection.query('COMMIT')
+        transactionOpen = false
+      }
+    }
+
+    const schemaVersion = await connection.query(
+      "SELECT value FROM schema_meta WHERE key = 'schema_version'",
+    )
+    expect(
+      schemaVersion.rows[0]?.value === '11',
+      'Retained-data fixture did not stop at Team schema v11.',
+    )
+
+    const createdAt = new Date(Date.now() - 60_000).toISOString()
+    const expiresAt = new Date(Date.parse(createdAt) + 23 * 60 * 60 * 1_000).toISOString()
+    await connection.query('BEGIN')
+    transactionOpen = true
+    await connection.query(
+      `INSERT INTO organizations (id, name, slug, created_at, updated_at)
+       VALUES ('org-retained-v11', 'Retained V11', 'retained-v11', $1, $1)`,
+      [createdAt],
+    )
+    await connection.query(
+      `INSERT INTO users (
+         id, organization_id, name, email, avatar_url, role, avatar_initials,
+         focus, created_at, updated_at
+       ) VALUES (
+         'user-retained-v11', 'org-retained-v11', 'Retained Owner',
+         'retained-v11@example.invalid', NULL, 'owner', 'RO',
+         'Migration retention', $1, $1
+       )`,
+      [createdAt],
+    )
+    await connection.query(
+      `INSERT INTO projects (
+         id, organization_id, name, slug, description, repository,
+         default_branch, health, knowledge_base_path, test_command,
+         created_at, updated_at
+       ) VALUES (
+         'project-retained-v11', 'org-retained-v11', 'Retained V11 Project',
+         'retained-v11-project', 'Migration retention fixture',
+         'example/retained-v11', 'main', 'on_track', 'docs/knowledge',
+         'pnpm test', $1, $1
+       )`,
+      [createdAt],
+    )
+    await connection.query(
+      `INSERT INTO desktop_tokens (
+         id, organization_id, project_id, user_id, token_hash, created_at
+       ) VALUES (
+         'desktop-token-retained-v11', 'org-retained-v11',
+         'project-retained-v11', 'user-retained-v11',
+         'sha256:retained-v11-token-metadata', $1
+       )`,
+      [createdAt],
+    )
+    await connection.query(
+      `INSERT INTO workflow_runs (
+         id, run_version, organization_id, project_id, creator_id, data_origin,
+         title, request, status, current_node_id, branch_name, created_at, updated_at
+       ) VALUES (
+         'run-retained-v11', 3, 'org-retained-v11', 'project-retained-v11',
+         'user-retained-v11', 'remote', 'Retained V11 Run',
+         'Retain this delivery through v12.', 'failed',
+         'run-retained-v11:node-pr', 'devflow/retained-v11', $1, $1
+       )`,
+      [createdAt],
+    )
+    await connection.query(
+      `INSERT INTO github_repository_bindings (
+         id, version, organization_id, project_id, installation_id,
+         repository_id, full_name, default_branch, status,
+         configured_by_user_id, updated_by_user_id, validated_at,
+         revoked_at, created_at, updated_at
+       ) VALUES (
+         'github-binding-retained-v11', 1, 'org-retained-v11',
+         'project-retained-v11', '12345', '98765', 'example/retained-v11',
+         'main', 'active', 'user-retained-v11', 'user-retained-v11',
+         $1, NULL, $1, $1
+       )`,
+      [createdAt],
+    )
+    await connection.query(
+      `INSERT INTO github_delivery_requests (
+         id, state_version, intent_revision, organization_id, project_id,
+         requested_by_user_id, requested_by_token_id, local_intent_id,
+         local_project_id, run_id, run_version, node_id, binding_id,
+         binding_version, installation_id, repository_id, repository_full_name,
+         coding_run_id, workspace_id, diff_artifact_id, test_evidence_id,
+         pr_package_artifact_id, status, outcome_code, expected_run_version,
+         base_branch, head_branch, base_commit_sha, expected_commit_sha,
+         intent_digest, logical_idempotency_key, diff_digest,
+         test_evidence_digest, package_digest, changed_paths, pr_title, pr_body,
+         expires_at, created_at, updated_at
+       ) VALUES (
+         $1, 7, 2, 'org-retained-v11', 'project-retained-v11',
+         'user-retained-v11', 'desktop-token-retained-v11',
+         'local-intent-retained-v11', 'local-project-retained-v11',
+         'run-retained-v11', 3, 'node-pr', 'github-binding-retained-v11',
+         1, '12345', '98765', 'example/retained-v11',
+         'coding-run-retained-v11', 'workspace-retained-v11',
+         'diff-retained-v11', 'test-evidence-retained-v11',
+         'pr-package-retained-v11', 'failed', 'pull_request_failed', 3,
+         'main', 'devflow/retained-v11', $2, $3, $4, $5, $6, $7, $8,
+         '["src/retained-v11.ts"]'::jsonb,
+         'Retained V11 delivery', 'Retained redacted delivery body.',
+         $9, $10, $10
+       )`,
+      [
+        retainedRequestId,
+        'a'.repeat(40),
+        'b'.repeat(40),
+        '2'.repeat(64),
+        retainedLogicalKey,
+        '3'.repeat(64),
+        '4'.repeat(64),
+        '5'.repeat(64),
+        expiresAt,
+        createdAt,
+      ],
+    )
+    await connection.query('COMMIT')
+    transactionOpen = false
+
+    const retained = await connection.query(
+      `SELECT to_jsonb(retained) AS snapshot
+       FROM github_delivery_requests AS retained
+       WHERE id = $1`,
+      [retainedRequestId],
+    )
+    const snapshotBeforeV12 = retained.rows[0]?.snapshot
+    expect(snapshotBeforeV12, 'Populated v11 GitHub Delivery row was not retained.')
+    return {
+      retainedRequestId,
+      retainedLogicalKey,
+      snapshotBeforeV12,
+    }
+  } catch (error) {
+    if (transactionOpen) {
+      await connection.query('ROLLBACK').catch(() => undefined)
+    }
+    throw error
+  } finally {
+    connection.release()
+    await pool.end()
+  }
+}
+
+async function assertRetainedV11DeliveryAfterV12(fixture) {
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    application_name: 'ai-devflow-postgres-smoke-v12-assertion',
+    statement_timeout: 10_000,
+  })
+  const connection = await pool.connect()
+  let transactionOpen = false
+  try {
+    const schemaVersion = await connection.query(
+      "SELECT value FROM schema_meta WHERE key = 'schema_version'",
+    )
+    expect(
+      schemaVersion.rows[0]?.value === '12',
+      'Team database did not migrate the retained fixture to schema v12.',
+    )
+    const retained = await connection.query(
+      `SELECT to_jsonb(retained) AS snapshot
+       FROM github_delivery_requests AS retained
+       WHERE id = $1`,
+      [fixture.retainedRequestId],
+    )
+    const migratedRow = retained.rows[0]?.snapshot
+    expect(migratedRow, 'V11 GitHub Delivery row was lost during v12 migration.')
+    expect(
+      migratedRow.delivery_series_key === fixture.retainedLogicalKey &&
+        migratedRow.delivery_attempt === 1,
+      'V12 did not backfill delivery series identity from the v11 logical key.',
+    )
+    const retainedRowWithoutV12Fields = { ...migratedRow }
+    delete retainedRowWithoutV12Fields.delivery_series_key
+    delete retainedRowWithoutV12Fields.delivery_attempt
+    expect(
+      stableJson(retainedRowWithoutV12Fields) ===
+        stableJson(fixture.snapshotBeforeV12),
+      'V12 migration changed retained v11 GitHub Delivery fields.',
+    )
+
+    await connection.query('BEGIN')
+    transactionOpen = true
+    let uniquenessError
+    try {
+      await connection.query(
+        `INSERT INTO github_delivery_requests
+         SELECT (
+           jsonb_populate_record(
+             NULL::github_delivery_requests,
+             to_jsonb(source) || jsonb_build_object(
+               'id', 'github-delivery-retained-v11-duplicate',
+               'logical_idempotency_key', $2::text
+             )
+           )
+         ).*
+         FROM github_delivery_requests AS source
+         WHERE source.id = $1`,
+        [fixture.retainedRequestId, `github-delivery:${'9'.repeat(64)}`],
+      )
+    } catch (error) {
+      uniquenessError = error
+    }
+    expect(
+      uniquenessError?.code === '23505' &&
+        uniquenessError?.constraint ===
+          'github_delivery_requests_series_attempt_unique',
+      'V12 did not enforce unique deliverySeriesKey/deliveryAttempt identity.',
+    )
+    await connection.query('ROLLBACK')
+    transactionOpen = false
+  } finally {
+    if (transactionOpen) {
+      await connection.query('ROLLBACK').catch(() => undefined)
+    }
+    connection.release()
+    await pool.end()
+  }
+}
+
+function collectJsonFieldNames(value, names = new Set()) {
+  if (Array.isArray(value)) {
+    for (const item of value) collectJsonFieldNames(item, names)
+    return names
+  }
+  if (!value || typeof value !== 'object') return names
+  for (const [key, child] of Object.entries(value)) {
+    names.add(key)
+    collectJsonFieldNames(child, names)
+  }
+  return names
+}
+
+async function assertGitHubDeliveryDatabaseState({
+  requestId,
+  bindingId,
+  runId,
+  nodeId,
+  credentialLeakNeedles,
+}) {
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    application_name: 'ai-devflow-postgres-smoke-github-assertions',
+    statement_timeout: 10_000,
+  })
+  const connection = await pool.connect()
+  try {
+    const tableCountsResult = await connection.query(
+      `SELECT
+         (SELECT count(*)::integer
+          FROM github_repository_bindings WHERE id = $1) AS bindings,
+         (SELECT count(*)::integer
+          FROM github_delivery_requests WHERE id = $2) AS requests,
+         (SELECT count(*)::integer
+          FROM github_delivery_approvals WHERE request_id = $2) AS approvals,
+         (SELECT count(*)::integer
+          FROM github_delivery_credential_grants WHERE request_id = $2) AS grants,
+         (SELECT count(*)::integer
+          FROM github_branch_publications WHERE request_id = $2) AS publications,
+         (SELECT count(*)::integer
+          FROM github_pull_request_outcomes WHERE request_id = $2) AS pull_requests`,
+      [bindingId, requestId],
+    )
+    expect(
+      stableJson(tableCountsResult.rows[0]) ===
+        stableJson({
+          bindings: 1,
+          requests: 1,
+          approvals: 1,
+          grants: 1,
+          publications: 1,
+          pull_requests: 1,
+        }),
+      `GitHub Delivery durable counts were not exact: ${stableJson(
+        tableCountsResult.rows[0],
+      )}`,
+    )
+
+    const candidateAuthority = await connection.query(
+      `/* github_delivery:candidate-authority-smoke */
+       SELECT
+         delivery.status AS delivery_status,
+         delivery.state_version,
+         delivery.outcome_code AS delivery_outcome_code,
+         delivery.requested_by_user_id,
+         delivery.requested_by_token_id,
+         delivery.run_version AS delivery_run_version,
+         delivery.node_id AS delivery_node_id,
+         run.run_version AS canonical_run_version,
+         run.current_node_id,
+         run.creator_id,
+         run.data_origin,
+         node.stage AS node_stage,
+         node.kind AS node_kind,
+         node.status AS node_status,
+         work_request.status AS work_request_status,
+         work_request.claimed_by_token_id,
+         approval.approved_by_user_id,
+         approval.approved_role,
+         approval.auth_kind,
+         binding.status AS binding_status,
+         credential_grant.status AS grant_status,
+         credential_grant.version AS grant_version,
+         publication.status AS publication_status,
+         publication.version AS publication_version,
+         publication.verified_head_sha,
+         pull_request.status AS pull_request_status,
+         pull_request.version AS pull_request_version,
+         pull_request.draft,
+         pull_request.head_sha
+       FROM github_delivery_requests AS delivery
+       JOIN workflow_runs AS run
+         ON run.organization_id = delivery.organization_id
+        AND run.project_id = delivery.project_id
+        AND run.id = delivery.run_id
+       JOIN workflow_nodes AS node
+         ON node.run_id = run.id
+        AND node.id = run.current_node_id
+       JOIN work_requests AS work_request
+         ON work_request.organization_id = run.organization_id
+        AND work_request.project_id = run.project_id
+        AND work_request.claimed_run_id = run.id
+       JOIN github_repository_bindings AS binding
+         ON binding.id = delivery.binding_id
+       JOIN github_delivery_approvals AS approval
+         ON approval.request_id = delivery.id
+        AND approval.intent_revision = delivery.intent_revision
+       JOIN github_delivery_credential_grants AS credential_grant
+         ON credential_grant.request_id = delivery.id
+        AND credential_grant.intent_revision = delivery.intent_revision
+       JOIN github_branch_publications AS publication
+         ON publication.request_id = delivery.id
+        AND publication.intent_revision = delivery.intent_revision
+       JOIN github_pull_request_outcomes AS pull_request
+         ON pull_request.request_id = delivery.id
+        AND pull_request.intent_revision = delivery.intent_revision
+       WHERE delivery.id = $1`,
+      [requestId],
+    )
+    expect(
+      candidateAuthority.rows.length === 1,
+      'GitHub Delivery candidate authority did not resolve exactly once.',
+    )
+    const authority = candidateAuthority.rows[0]
+    expect(
+      authority.delivery_status === 'completed' &&
+        authority.state_version === 8 &&
+        authority.delivery_outcome_code === 'draft_pr_created' &&
+        authority.delivery_run_version === 3 &&
+        authority.canonical_run_version === 3 &&
+        authority.delivery_node_id === nodeId &&
+        authority.current_node_id === `${runId}:${nodeId}` &&
+        authority.creator_id === authority.requested_by_user_id &&
+        authority.data_origin === 'remote' &&
+        authority.node_stage === 'pr' &&
+        authority.node_kind === 'pr' &&
+        authority.node_status === 'running' &&
+        authority.work_request_status === 'materialized' &&
+        authority.claimed_by_token_id === authority.requested_by_token_id &&
+        authority.approved_by_user_id === 'u-erich' &&
+        authority.approved_role === 'owner' &&
+        authority.auth_kind === 'session_cookie' &&
+        authority.binding_status === 'revoked' &&
+        authority.grant_status === 'consumed' &&
+        authority.grant_version === 3 &&
+        authority.publication_status === 'verified' &&
+        authority.publication_version === 2 &&
+        authority.verified_head_sha === githubExpectedCommitSha &&
+        authority.pull_request_status === 'completed' &&
+        authority.pull_request_version === 2 &&
+        authority.draft === true &&
+        authority.head_sha === githubExpectedCommitSha,
+      `GitHub Delivery candidate authority was incomplete: ${stableJson(
+        authority,
+      )}`,
+    )
+
+    const expectedGitHubOperationCounts = {
+      github_binding_revoke: 1,
+      github_binding_upsert: 1,
+      github_branch_publication: 2,
+      github_delivery_approve: 1,
+      github_delivery_grant: 3,
+      github_delivery_submit: 1,
+      github_pull_request_create: 2,
+    }
+    const idempotencyCounts = await connection.query(
+      `SELECT operation_kind, count(*)::integer AS count
+       FROM collaboration_idempotency
+       WHERE organization_id = 'org-demo'
+         AND project_id = 'p-payments'
+         AND operation_kind LIKE 'github_%'
+       GROUP BY operation_kind
+       ORDER BY operation_kind`,
+    )
+    const auditCounts = await connection.query(
+      `SELECT action, count(*)::integer AS count
+       FROM collaboration_audit_events
+       WHERE organization_id = 'org-demo'
+         AND project_id = 'p-payments'
+         AND action LIKE 'github_%'
+       GROUP BY action
+       ORDER BY action`,
+    )
+    const countsByOperation = (rows, key) =>
+      Object.fromEntries(rows.map((row) => [row[key], row.count]))
+    expect(
+      stableJson(countsByOperation(idempotencyCounts.rows, 'operation_kind')) ===
+        stableJson(expectedGitHubOperationCounts),
+      `GitHub Delivery idempotency counts were not exact: ${stableJson(
+        idempotencyCounts.rows,
+      )}`,
+    )
+    expect(
+      stableJson(countsByOperation(auditCounts.rows, 'action')) ===
+        stableJson(expectedGitHubOperationCounts),
+      `GitHub Delivery audit counts were not exact: ${stableJson(
+        auditCounts.rows,
+      )}`,
+    )
+
+    const expectedOutcomeCounts = {
+      binding_created: 1,
+      binding_inactive: 1,
+      binding_revoked: 1,
+      delivery_approved: 1,
+      delivery_created: 1,
+      grant_finalized: 1,
+      grant_reserved: 1,
+      publication_reported: 1,
+      publication_verified: 1,
+      pull_request_completed: 1,
+      pull_request_reserved: 1,
+    }
+    const idempotencyOutcomeCounts = await connection.query(
+      `SELECT outcome_code, count(*)::integer AS count
+       FROM collaboration_idempotency
+       WHERE organization_id = 'org-demo'
+         AND project_id = 'p-payments'
+         AND operation_kind LIKE 'github_%'
+       GROUP BY outcome_code
+       ORDER BY outcome_code`,
+    )
+    const auditOutcomeCounts = await connection.query(
+      `SELECT outcome_code, count(*)::integer AS count
+       FROM collaboration_audit_events
+       WHERE organization_id = 'org-demo'
+         AND project_id = 'p-payments'
+         AND action LIKE 'github_%'
+       GROUP BY outcome_code
+       ORDER BY outcome_code`,
+    )
+    expect(
+      stableJson(
+        countsByOperation(idempotencyOutcomeCounts.rows, 'outcome_code'),
+      ) === stableJson(expectedOutcomeCounts) &&
+        stableJson(countsByOperation(auditOutcomeCounts.rows, 'outcome_code')) ===
+          stableJson(expectedOutcomeCounts),
+      'GitHub Delivery audit/idempotency outcomes were not exact.',
+    )
+    const auditIdempotencyPairs = await connection.query(
+      `SELECT count(*)::integer AS count
+       FROM collaboration_idempotency AS idempotency
+       JOIN collaboration_audit_events AS audit
+         ON audit.organization_id = idempotency.organization_id
+        AND audit.project_id = idempotency.project_id
+        AND audit.actor_user_id = idempotency.actor_user_id
+        AND audit.action = idempotency.operation_kind
+        AND audit.outcome_code = idempotency.outcome_code
+        AND audit.request_fingerprint = idempotency.request_fingerprint
+       WHERE idempotency.organization_id = 'org-demo'
+         AND idempotency.project_id = 'p-payments'
+         AND idempotency.operation_kind LIKE 'github_%'`,
+    )
+    expect(
+      auditIdempotencyPairs.rows[0]?.count === 11,
+      'GitHub Delivery audit/idempotency fingerprints were not one-to-one.',
+    )
+
+    const persistedRecords = await connection.query(
+      `SELECT 'binding' AS kind, to_jsonb(binding) AS record
+       FROM github_repository_bindings AS binding WHERE binding.id = $1
+       UNION ALL
+       SELECT 'request', to_jsonb(delivery)
+       FROM github_delivery_requests AS delivery WHERE delivery.id = $2
+       UNION ALL
+       SELECT 'approval', to_jsonb(approval)
+       FROM github_delivery_approvals AS approval WHERE approval.request_id = $2
+       UNION ALL
+       SELECT 'grant', to_jsonb(credential_grant)
+       FROM github_delivery_credential_grants AS credential_grant
+       WHERE credential_grant.request_id = $2
+       UNION ALL
+       SELECT 'publication', to_jsonb(publication)
+       FROM github_branch_publications AS publication WHERE publication.request_id = $2
+       UNION ALL
+       SELECT 'pull_request', to_jsonb(pull_request)
+       FROM github_pull_request_outcomes AS pull_request WHERE pull_request.request_id = $2
+       UNION ALL
+       SELECT 'idempotency', to_jsonb(idempotency)
+       FROM collaboration_idempotency AS idempotency
+       WHERE idempotency.organization_id = 'org-demo'
+         AND idempotency.project_id = 'p-payments'
+         AND idempotency.operation_kind LIKE 'github_%'
+       UNION ALL
+       SELECT 'audit', to_jsonb(audit)
+       FROM collaboration_audit_events AS audit
+       WHERE audit.organization_id = 'org-demo'
+         AND audit.project_id = 'p-payments'
+         AND audit.action LIKE 'github_%'`,
+      [bindingId, requestId],
+    )
+    expect(
+      persistedRecords.rows.length === 28,
+      `GitHub Delivery persistence scan expected 28 records, received ${persistedRecords.rows.length}.`,
+    )
+    const persistedJson = JSON.stringify(persistedRecords.rows)
+    for (const needle of credentialLeakNeedles) {
+      expect(
+        typeof needle !== 'string' ||
+          needle.length === 0 ||
+          !persistedJson.includes(needle),
+        'GitHub Delivery persistence retained a copy-once credential.',
+      )
+    }
+    const lowerPersistedJson = persistedJson.toLowerCase()
+    for (const fragment of [
+      '-----begin private key-----',
+      'github_pat_',
+      'x-access-token:',
+      '/users/',
+      '/private/',
+      'file://',
+      '\\users\\',
+    ]) {
+      expect(
+        !lowerPersistedJson.includes(fragment),
+        `GitHub Delivery persistence retained forbidden data: ${fragment}`,
+      )
+    }
+    const forbiddenJsonFieldNames = new Set([
+      'authorization',
+      'credential',
+      'privatekey',
+      'rawpath',
+      'token',
+    ])
+    const allowedTokenMetadataFields = new Set([
+      'auth_token_record_id',
+      'issued_to_token_id',
+      'requested_by_token_id',
+    ])
+    for (const fieldName of collectJsonFieldNames(persistedRecords.rows)) {
+      const normalizedFieldName = fieldName
+        .toLowerCase()
+        .replace(/[^a-z0-9]/gu, '')
+      expect(
+        !forbiddenJsonFieldNames.has(normalizedFieldName),
+        `GitHub Delivery persistence retained forbidden JSON field ${fieldName}.`,
+      )
+      expect(
+        !fieldName.toLowerCase().includes('token') ||
+          allowedTokenMetadataFields.has(fieldName),
+        `GitHub Delivery persistence retained non-metadata token field ${fieldName}.`,
+      )
+    }
+
+    const forbiddenColumns = await connection.query(
+      `SELECT table_name, column_name
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = ANY($1::text[])
+         AND lower(regexp_replace(column_name, '[^a-z0-9]', '', 'g')) = ANY($2::text[])
+       ORDER BY table_name, column_name`,
+      [
+        [
+          'github_repository_bindings',
+          'github_delivery_requests',
+          'github_delivery_approvals',
+          'github_delivery_credential_grants',
+          'github_branch_publications',
+          'github_pull_request_outcomes',
+        ],
+        [...forbiddenJsonFieldNames],
+      ],
+    )
+    expect(
+      forbiddenColumns.rows.length === 0,
+      `GitHub Delivery tables exposed credential-bearing columns: ${stableJson(
+        forbiddenColumns.rows,
+      )}`,
+    )
+  } finally {
+    connection.release()
+    await pool.end()
   }
 }
 
@@ -406,7 +1195,14 @@ const suffix = Date.now()
 const runId = `run-postgres-smoke-${suffix}`
 const pairedRunId = `run-postgres-paired-smoke-${suffix}`
 const gateRunId = `run-postgres-gate-smoke-${suffix}`
+const githubRunId = `run-postgres-github-smoke-${suffix}`
 const gateNodeId = 'n-design-gate'
+const githubPrNodeId = 'n-pr-delivery'
+const githubInstallationId = '12345'
+const githubRepositoryId = '98765'
+const githubRepository = 'example/project'
+const githubExpectedCommitSha = 'b'.repeat(40)
+const githubEphemeralCredential = 'ghs_postgres_smoke_ephemeral_1234567890'
 const evidenceId = `evidence-postgres-smoke-${suffix}`
 const remoteReviewId = `agent-review-postgres-smoke-${suffix}`
 const timestamp = new Date().toISOString()
@@ -416,22 +1212,42 @@ const completedTimestamp = new Date(Date.now() + 1_000).toISOString()
 let api
 
 try {
+  const retainedV11Fixture = await prepareRetainedV11DeliveryFixture()
   await run(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'db:setup'], {
     DEVFLOW_DATABASE_URL: databaseUrl,
   })
+  await assertRetainedV11DeliveryAfterV12(retainedV11Fixture)
   await run(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'db:seed'], {
     DEVFLOW_DATABASE_URL: databaseUrl,
     DEVFLOW_ENABLE_DEMO_DATA: 'true',
   })
 
-  api = spawnService('api-postgres', ['pnpm', '--filter', '@ai-devflow/api', 'dev'], {
-    DEVFLOW_DATABASE_URL: databaseUrl,
-    DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
-    DEVFLOW_REQUIRE_AUTH: 'true',
-    DEVFLOW_SESSION_SECRET: sessionSecret,
-    DEV_AUTH_ENABLED: 'true',
-    PORT: '4322',
-  })
+  api = spawnService(
+    'api-postgres',
+    [
+      'pnpm',
+      '--filter',
+      '@ai-devflow/api',
+      'exec',
+      'tsx',
+      'src/test-fixtures/postgres-github-delivery-server.ts',
+    ],
+    {
+      DEVFLOW_DATABASE_URL: databaseUrl,
+      DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
+      DEVFLOW_REQUIRE_AUTH: 'true',
+      DEVFLOW_SESSION_SECRET: sessionSecret,
+      DEVFLOW_POSTGRES_SMOKE_GITHUB_INSTALLATION_ID: githubInstallationId,
+      DEVFLOW_POSTGRES_SMOKE_GITHUB_REPOSITORY_ID: githubRepositoryId,
+      DEVFLOW_POSTGRES_SMOKE_GITHUB_REPOSITORY: githubRepository,
+      DEVFLOW_POSTGRES_SMOKE_GITHUB_EXPECTED_HEAD_SHA:
+        githubExpectedCommitSha,
+      DEVFLOW_POSTGRES_SMOKE_GITHUB_EPHEMERAL_CREDENTIAL:
+        githubEphemeralCredential,
+      DEV_AUTH_ENABLED: 'true',
+      PORT: '4322',
+    },
+  )
   await waitForServer(`${apiUrl}/health`)
 
   const initialOverview = await fetchOverview()
@@ -696,6 +1512,304 @@ try {
     ],
     'Postgres Gate vertical smoke responses',
   )
+
+  const githubWorkRequest = await postJson(
+    '/api/team/projects/p-payments/work-requests',
+    {
+      projectId: 'p-payments',
+      title: 'Postgres GitHub Delivery smoke',
+      request: 'Publish one exact redacted commit as a Draft pull request.',
+      idempotencyKey: `work-request:create:${githubRunId}`,
+      expiresAt: null,
+    },
+    pilotSessionHeaders,
+  )
+  expect(
+    githubWorkRequest.workRequest?.status === 'open' &&
+      githubWorkRequest.workRequest.version === 1,
+    'GitHub Delivery smoke did not create its canonical Work Request.',
+  )
+  const githubClaim = await postJsonWithBearer(
+    `/api/desktop/work-requests/${githubWorkRequest.workRequest.id}/claim`,
+    {
+      workRequestId: githubWorkRequest.workRequest.id,
+      expectedVersion: 1,
+      runId: githubRunId,
+      idempotencyKey: `work-request:claim:${githubRunId}`,
+    },
+    gateDesktopPairing.token,
+  )
+  expect(
+    githubClaim.workRequest?.status === 'claim_pending' &&
+      githubClaim.workRequest.version === 2,
+    'GitHub Delivery smoke did not bind its Work Request to Desktop bearer authority.',
+  )
+  const githubMaterialization = await postJsonWithBearer(
+    `/api/desktop/work-requests/${githubWorkRequest.workRequest.id}/materialized`,
+    {
+      workRequestId: githubWorkRequest.workRequest.id,
+      expectedVersion: 2,
+      runId: githubRunId,
+      idempotencyKey: `work-request:materialize:${githubRunId}`,
+    },
+    gateDesktopPairing.token,
+  )
+  expect(
+    githubMaterialization.workRequest?.status === 'materialized' &&
+      githubMaterialization.workRequest.version === 3,
+    'GitHub Delivery smoke did not materialize its canonical Work Request.',
+  )
+  const githubIntentTimestamp = new Date().toISOString()
+  const githubRunProjection = await postJsonWithBearer(
+    '/api/sync/run-summary',
+    {
+      kind: 'run',
+      runId: githubRunId,
+      version: 3,
+      projectId: 'p-payments',
+      title: 'Postgres GitHub Delivery exact commit',
+      status: 'paused_at_gate',
+      currentNodeId: githubPrNodeId,
+      currentNode: {
+        id: githubPrNodeId,
+        stage: 'pr',
+        kind: 'pr',
+        status: 'running',
+        requiredRole: 'member',
+      },
+      branchName: `devflow/${githubRunId}`,
+      updatedAt: githubIntentTimestamp,
+    },
+    gateDesktopPairing.token,
+  )
+  expect(
+    githubRunProjection?.accepted === true,
+    'GitHub Delivery smoke did not persist the current running PR node.',
+  )
+
+  const githubBinding = await putJsonBody(
+    '/api/team/projects/p-payments/github-repository-binding',
+    {
+      installationId: githubInstallationId,
+      repositoryId: githubRepositoryId,
+      expectedStateVersion: 0,
+    },
+    pilotSessionHeaders,
+  )
+  expect(
+    githubBinding.outcomeCode === 'binding_created' &&
+      githubBinding.binding?.status === 'active' &&
+      githubBinding.binding.repository === githubRepository &&
+      githubBinding.binding.redacted === true,
+    'GitHub Delivery smoke did not persist one active verified repository binding.',
+  )
+  const githubIntent = createRedactedGitHubDeliveryIntent({
+    binding: githubBinding.binding,
+    runId: githubRunId,
+    nodeId: githubPrNodeId,
+    now: githubIntentTimestamp,
+  })
+  const githubSubmissionBody = {
+    intent: githubIntent,
+    prTitle: 'Postgres GitHub Delivery exact commit',
+    prBody: 'Bound to the canonical running PR node and passing evidence digest.',
+    expectedStateVersion: 0,
+  }
+  const githubSubmission = await postJsonWithBearer(
+    '/api/desktop/projects/p-payments/github-deliveries',
+    githubSubmissionBody,
+    gateDesktopPairing.token,
+  )
+  expect(
+    githubSubmission.outcomeCode === 'delivery_created' &&
+      githubSubmission.request?.status === 'approval_required' &&
+      githubSubmission.request.stateVersion === 1 &&
+      githubSubmission.request.deliverySeriesKey ===
+        githubIntent.deliverySeriesKey &&
+      githubSubmission.request.deliveryAttempt === 1 &&
+      githubSubmission.request.redacted === true,
+    'GitHub Delivery smoke did not persist the exact redacted Delivery Request.',
+  )
+  const githubRequestId = githubSubmission.request.id
+  const githubApprovalPath =
+    `/api/team/projects/p-payments/github-deliveries/${githubRequestId}/approve`
+  const githubApproval = await postJson(
+    githubApprovalPath,
+    { expectedStateVersion: 1 },
+    pilotSessionHeaders,
+  )
+  expect(
+    githubApproval.outcomeCode === 'delivery_approved' &&
+      githubApproval.request?.status === 'approved' &&
+      githubApproval.request.stateVersion === 2 &&
+      githubApproval.approval?.approvedRole === 'owner' &&
+      githubApproval.approval.authenticationKind === 'session_cookie' &&
+      githubApproval.approval.approvedByUserId === 'u-erich' &&
+      githubApproval.approval.redacted === true,
+    'GitHub Delivery smoke did not persist signed owner approval.',
+  )
+  const githubApprovalReplay = await postJson(
+    githubApprovalPath,
+    { expectedStateVersion: 1 },
+    pilotSessionHeaders,
+  )
+  expect(
+    githubApprovalReplay.replayed === true &&
+      githubApprovalReplay.approval?.id === githubApproval.approval.id,
+    'GitHub Delivery signed approval was not idempotent.',
+  )
+
+  const githubRequestPath =
+    `/api/desktop/projects/p-payments/github-deliveries/${githubRequestId}`
+  const githubCredential = await postJsonWithBearer(
+    `${githubRequestPath}/credential-grant`,
+    { expectedStateVersion: 2 },
+    gateDesktopPairing.token,
+  )
+  expect(
+    githubCredential.outcomeCode === 'grant_finalized' &&
+      githubCredential.request?.stateVersion === 4 &&
+      githubCredential.request.status === 'publishing_branch' &&
+      githubCredential.grant?.version === 2 &&
+      githubCredential.grant.status === 'issued' &&
+      githubCredential.grant.permission === 'contents:write' &&
+      githubCredential.grant.repositoryCount === 1 &&
+      githubCredential.grant.redacted === true &&
+      githubCredential.credential?.token === githubEphemeralCredential,
+    'GitHub Delivery smoke did not reserve and finalize bounded credential metadata.',
+  )
+  expect(
+    !JSON.stringify(githubCredential.grant).includes(githubEphemeralCredential),
+    'GitHub credential metadata retained the ephemeral credential.',
+  )
+  const githubIssuedSnapshot = await getJsonWithBearer(
+    githubRequestPath,
+    gateDesktopPairing.token,
+  )
+  expectNoCredentialLeak(
+    githubIssuedSnapshot,
+    [githubEphemeralCredential, gateDesktopPairing.token],
+    'GitHub issued recovery snapshot',
+  )
+
+  const githubPublication = await postJsonWithBearer(
+    `${githubRequestPath}/branch-publication`,
+    {
+      grantId: githubCredential.grant.id,
+      expectedStateVersion: 4,
+      expectedGrantVersion: 2,
+      reportedOutcomeCode: 'pushed',
+    },
+    gateDesktopPairing.token,
+  )
+  expect(
+    githubPublication.outcomeCode === 'publication_verified' &&
+      githubPublication.request?.stateVersion === 6 &&
+      githubPublication.request.status === 'branch_published' &&
+      githubPublication.publication?.version === 2 &&
+      githubPublication.publication.status === 'verified' &&
+      githubPublication.publication.verifiedHeadSha ===
+        githubExpectedCommitSha &&
+      githubPublication.publication.outcomeCode === 'branch_verified' &&
+      githubPublication.publication.redacted === true,
+    'GitHub Delivery smoke did not independently finalize the exact remote head.',
+  )
+
+  const githubPullRequestBody = {
+    publicationId: githubPublication.publication.id,
+    expectedStateVersion: 6,
+  }
+  const githubPullRequest = await postJsonWithBearer(
+    `${githubRequestPath}/draft-pull-request`,
+    githubPullRequestBody,
+    gateDesktopPairing.token,
+  )
+  expect(
+    githubPullRequest.outcomeCode === 'pull_request_completed' &&
+      githubPullRequest.request?.stateVersion === 8 &&
+      githubPullRequest.request.status === 'completed' &&
+      githubPullRequest.request.outcomeCode === 'draft_pr_created' &&
+      githubPullRequest.pullRequest?.version === 2 &&
+      githubPullRequest.pullRequest.status === 'completed' &&
+      githubPullRequest.pullRequest.draft === true &&
+      githubPullRequest.pullRequest.headSha === githubExpectedCommitSha &&
+      githubPullRequest.pullRequest.safeUrl ===
+        `https://github.com/${githubRepository}/pull/42` &&
+      githubPullRequest.pullRequest.outcomeCode === 'draft_pr_created' &&
+      githubPullRequest.pullRequest.redacted === true,
+    'GitHub Delivery smoke did not reserve and finalize one Draft PR outcome.',
+  )
+  const githubPullRequestReplay = await postJsonWithBearer(
+    `${githubRequestPath}/draft-pull-request`,
+    githubPullRequestBody,
+    gateDesktopPairing.token,
+  )
+  expect(
+    githubPullRequestReplay.replayed === true &&
+      githubPullRequestReplay.pullRequest?.id ===
+        githubPullRequest.pullRequest.id,
+    'GitHub Draft PR finalization was not idempotent.',
+  )
+  const githubRecoverySnapshot = await getJsonWithBearer(
+    githubRequestPath,
+    gateDesktopPairing.token,
+  )
+  expect(
+    githubRecoverySnapshot.snapshot?.request?.status === 'completed' &&
+      githubRecoverySnapshot.snapshot.request.stateVersion === 8 &&
+      githubRecoverySnapshot.snapshot.approval?.id ===
+        githubApproval.approval.id &&
+      githubRecoverySnapshot.snapshot.grant?.status === 'consumed' &&
+      githubRecoverySnapshot.snapshot.publication?.status === 'verified' &&
+      githubRecoverySnapshot.snapshot.pullRequest?.status === 'completed',
+    'GitHub Delivery recovery snapshot did not return the completed durable chain.',
+  )
+  expectNoCredentialLeak(
+    githubRecoverySnapshot,
+    [
+      githubEphemeralCredential,
+      gateDesktopPairing.token,
+      pilotSessionCookie,
+      sessionSecret,
+    ],
+    'GitHub completed recovery snapshot',
+  )
+
+  const githubBindingRevocation = await postJson(
+    '/api/team/projects/p-payments/github-repository-binding/revoke',
+    { expectedStateVersion: githubBinding.binding.version },
+    pilotSessionHeaders,
+  )
+  expect(
+    githubBindingRevocation.outcomeCode === 'binding_revoked' &&
+      githubBindingRevocation.binding?.status === 'revoked' &&
+      githubBindingRevocation.binding.version ===
+        githubBinding.binding.version + 1,
+    'GitHub Delivery smoke did not revoke the Project repository binding.',
+  )
+  const blockedCredentialGrant = await postJsonResult(
+    `${githubRequestPath}/credential-grant`,
+    { expectedStateVersion: 8 },
+    { authorization: `Bearer ${gateDesktopPairing.token}` },
+  )
+  expect(
+    blockedCredentialGrant.status === 409 &&
+      blockedCredentialGrant.body?.outcomeCode === 'binding_inactive',
+    'Revoked GitHub repository binding did not block a new credential grant.',
+  )
+  await assertGitHubDeliveryDatabaseState({
+    requestId: githubRequestId,
+    bindingId: githubBinding.binding.id,
+    runId: githubRunId,
+    nodeId: githubPrNodeId,
+    credentialLeakNeedles: [
+      githubEphemeralCredential,
+      gateDesktopPairing.token,
+      gatePairingCode.code,
+      pilotSessionCookie,
+      sessionSecret,
+    ],
+  })
 
   const concurrentGatePayload = {
     projectId: 'p-payments',
