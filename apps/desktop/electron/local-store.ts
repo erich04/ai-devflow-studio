@@ -50,6 +50,7 @@ import {
   type GateCommandReceipt,
   type GateEnforcementDecision,
   type GitHubDeliveryIntent,
+  type GitHubDeliveryStatus,
   type GitHubRepositoryBinding,
   type PolicySnapshot,
   type ProviderCredentialMetadata,
@@ -113,6 +114,22 @@ export type GitHubDeliveryPreparationMutationResult =
   | {
       committed: false
       reason: 'source_stale' | 'id_conflict' | 'active_intent_exists'
+    }
+
+export type GitHubDeliveryIntentStatusMutation = {
+  expectedIntent: GitHubDeliveryIntent
+  intent: GitHubDeliveryIntent
+}
+
+export type GitHubDeliveryIntentStatusMutationResult =
+  | {
+      committed: true
+      replayed: boolean
+      intent: GitHubDeliveryIntent
+    }
+  | {
+      committed: false
+      reason: 'intent_not_found' | 'source_stale'
     }
 
 export type ManagedCodingWorkspaceHeadMutation = {
@@ -523,6 +540,9 @@ export type LocalStore = {
   commitGitHubDeliveryPreparation(
     mutation: GitHubDeliveryPreparationMutation,
   ): Promise<GitHubDeliveryPreparationMutationResult>
+  commitGitHubDeliveryIntentStatus(
+    mutation: GitHubDeliveryIntentStatusMutation,
+  ): Promise<GitHubDeliveryIntentStatusMutationResult>
   listGitHubDeliveryIntents(runId?: string): Promise<GitHubDeliveryIntent[]>
   saveGitHubRepositoryBinding(
     binding: GitHubRepositoryBinding,
@@ -1990,6 +2010,55 @@ function writeGitHubDeliveryIntent(db: Database, intent: GitHubDeliveryIntent): 
       intent.updatedAt,
     ],
   )
+}
+
+const githubDeliveryStatusTransitions: Readonly<
+  Record<GitHubDeliveryStatus, ReadonlySet<GitHubDeliveryStatus>>
+> = {
+  approval_required: new Set(['approved', 'failed', 'revoked']),
+  approved: new Set(['publishing_branch', 'failed', 'recovery_required', 'revoked']),
+  publishing_branch: new Set(['branch_published', 'failed', 'recovery_required', 'revoked']),
+  branch_published: new Set(['creating_pr', 'failed', 'recovery_required', 'revoked']),
+  creating_pr: new Set(['completed', 'failed', 'recovery_required', 'revoked']),
+  recovery_required: new Set([
+    'approved',
+    'publishing_branch',
+    'branch_published',
+    'creating_pr',
+    'completed',
+    'failed',
+    'revoked',
+  ]),
+  completed: new Set(),
+  failed: new Set(),
+  revoked: new Set(),
+}
+
+function assertGitHubDeliveryIntentStatusMutation(
+  mutation: GitHubDeliveryIntentStatusMutation,
+): void {
+  const expected = mutation.expectedIntent
+  const intent = mutation.intent
+  const expectedShape = {
+    ...expected,
+    status: intent.status,
+    updatedAt: intent.updatedAt,
+  }
+  if (JSON.stringify(intent) !== JSON.stringify(expectedShape)) {
+    throw new Error('GitHub Delivery Intent status mutation may only change status and updatedAt')
+  }
+  const expectedUpdatedAt = Date.parse(expected.updatedAt)
+  const updatedAt = Date.parse(intent.updatedAt)
+  if (
+    !Number.isFinite(expectedUpdatedAt) ||
+    !Number.isFinite(updatedAt) ||
+    updatedAt <= expectedUpdatedAt
+  ) {
+    throw new Error('GitHub Delivery Intent status mutation timestamp is invalid')
+  }
+  if (!githubDeliveryStatusTransitions[expected.status].has(intent.status)) {
+    throw new Error('GitHub Delivery Intent status transition is invalid')
+  }
 }
 
 function writeGitHubRepositoryBinding(
@@ -4883,22 +4952,6 @@ class SqlJsLocalStore implements LocalStore {
         transactionOpen = false
         return { committed: true, replayed: true, intent: existingByDigest }
       }
-      const existingByKey = selectGitHubDeliveryIntent(
-        this.db,
-        'idempotency_key',
-        mutation.intent.idempotencyKey,
-      )
-      const existingById = selectGitHubDeliveryIntent(
-        this.db,
-        'id',
-        mutation.intent.id,
-      )
-      if (existingByKey || existingById) {
-        this.db.run('rollback')
-        transactionOpen = false
-        return { committed: false, reason: 'id_conflict' }
-      }
-
       const currentPairing = selectJson<DesktopPairingCredential>(
         this.db,
         "select json from desktop_pairing_credentials where id = 'default' limit 1",
@@ -4969,6 +5022,21 @@ class SqlJsLocalStore implements LocalStore {
         transactionOpen = false
         return { committed: false, reason: 'active_intent_exists' }
       }
+      const existingByKey = selectGitHubDeliveryIntent(
+        this.db,
+        'idempotency_key',
+        mutation.intent.idempotencyKey,
+      )
+      const existingById = selectGitHubDeliveryIntent(
+        this.db,
+        'id',
+        mutation.intent.id,
+      )
+      if (existingByKey || existingById) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'id_conflict' }
+      }
       if (existingTestEvidence) {
         this.db.run('rollback')
         transactionOpen = false
@@ -4984,6 +5052,61 @@ class SqlJsLocalStore implements LocalStore {
         createdAt: expectedTestEvidence.createdAt,
       })
       writeGitHubDeliveryIntent(this.db, mutation.intent)
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return { committed: true, replayed: false, intent: mutation.intent }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      throw error
+    }
+  }
+
+  async commitGitHubDeliveryIntentStatus(
+    mutation: GitHubDeliveryIntentStatusMutation,
+  ): Promise<GitHubDeliveryIntentStatusMutationResult> {
+    assertGitHubDeliveryIntentStatusMutation(mutation)
+    const current = selectGitHubDeliveryIntent(this.db, 'id', mutation.expectedIntent.id)
+    if (!current) {
+      return { committed: false, reason: 'intent_not_found' }
+    }
+    if (JSON.stringify(current) === JSON.stringify(mutation.intent)) {
+      return { committed: true, replayed: true, intent: current }
+    }
+    if (JSON.stringify(current) !== JSON.stringify(mutation.expectedIntent)) {
+      return { committed: false, reason: 'source_stale' }
+    }
+
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      this.db.run(
+        `update github_delivery_intents
+         set status = ?, json = ?, updated_at = ?
+         where id = ? and status = ? and updated_at = ?`,
+        [
+          mutation.intent.status,
+          JSON.stringify(mutation.intent),
+          mutation.intent.updatedAt,
+          mutation.expectedIntent.id,
+          mutation.expectedIntent.status,
+          mutation.expectedIntent.updatedAt,
+        ],
+      )
+      if (this.db.getRowsModified() !== 1) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'source_stale' }
+      }
       this.db.run('commit')
       transactionOpen = false
       await this.persist()
@@ -6085,6 +6208,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'terminalizeGateCommandAcknowledgement',
   'commitWorkflowMutation',
   'commitGitHubDeliveryPreparation',
+  'commitGitHubDeliveryIntentStatus',
   'saveGitHubRepositoryBinding',
   'saveArtifact',
   'saveEvent',

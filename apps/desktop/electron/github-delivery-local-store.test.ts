@@ -492,4 +492,106 @@ describe('GitHub Delivery Intent local persistence', () => {
     })).resolves.toEqual({ committed: false, reason: 'active_intent_exists' })
     store.close()
   })
+
+  it('CAS-transitions only the delivery lifecycle and survives restart', async () => {
+    const dbPath = await tempDbPath()
+    const sources = createSources()
+    const intent = await createIntent(sources)
+    const store = await createLocalStore({ dbPath })
+    await saveSources(store, sources)
+    const prepared = await store.commitGitHubDeliveryPreparation({
+      intent,
+      expectedProject: sources.project,
+      expectedPairingCredential: sources.pairing,
+      expectedRepositoryBinding: sources.repositoryBinding,
+      expectedRun: sources.run,
+      expectedCodingRun: sources.codingRun,
+      expectedWorkspace: sources.workspace,
+      expectedDiffArtifact: sources.diffArtifact,
+      testEvidence: sources.testEvidence,
+      expectedPrPackage: sources.prPackage,
+    })
+    if (!prepared.committed) throw new Error('Fixture delivery intent must be persisted')
+
+    const approved = {
+      ...intent,
+      status: 'approved' as const,
+      updatedAt: '2026-08-11T10:32:00.000Z',
+    }
+    await expect(store.commitGitHubDeliveryIntentStatus({
+      expectedIntent: intent,
+      intent: approved,
+    })).resolves.toEqual({ committed: true, replayed: false, intent: approved })
+    await expect(store.commitGitHubDeliveryIntentStatus({
+      expectedIntent: intent,
+      intent: approved,
+    })).resolves.toEqual({ committed: true, replayed: true, intent: approved })
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    expect(await reopened.listGitHubDeliveryIntents(sources.run.id)).toEqual([approved])
+    reopened.close()
+  })
+
+  it('rejects stale, regressive, and authority-mutating delivery transitions', async () => {
+    const dbPath = await tempDbPath()
+    const sources = createSources()
+    const intent = await createIntent(sources)
+    const store = await createLocalStore({ dbPath })
+    await saveSources(store, sources)
+    const prepared = await store.commitGitHubDeliveryPreparation({
+      intent,
+      expectedProject: sources.project,
+      expectedPairingCredential: sources.pairing,
+      expectedRepositoryBinding: sources.repositoryBinding,
+      expectedRun: sources.run,
+      expectedCodingRun: sources.codingRun,
+      expectedWorkspace: sources.workspace,
+      expectedDiffArtifact: sources.diffArtifact,
+      testEvidence: sources.testEvidence,
+      expectedPrPackage: sources.prPackage,
+    })
+    if (!prepared.committed) throw new Error('Fixture delivery intent must be persisted')
+
+    const approved = {
+      ...intent,
+      status: 'approved' as const,
+      updatedAt: '2026-08-11T10:32:00.000Z',
+    }
+    const failed = {
+      ...approved,
+      status: 'failed' as const,
+      updatedAt: '2026-08-11T10:33:00.000Z',
+    }
+    await store.commitGitHubDeliveryIntentStatus({ expectedIntent: intent, intent: approved })
+
+    await expect(store.commitGitHubDeliveryIntentStatus({
+      expectedIntent: intent,
+      intent: { ...intent, status: 'failed', updatedAt: '2026-08-11T10:34:00.000Z' },
+    })).resolves.toEqual({ committed: false, reason: 'source_stale' })
+
+    await expect(store.commitGitHubDeliveryIntentStatus({
+      expectedIntent: approved,
+      intent: { ...failed, expectedCommitSha: '3333333333333333333333333333333333333333' },
+    })).rejects.toThrow('may only change status and updatedAt')
+
+    await store.commitGitHubDeliveryIntentStatus({ expectedIntent: approved, intent: failed })
+    await expect(store.commitGitHubDeliveryIntentStatus({
+      expectedIntent: failed,
+      intent: {
+        ...failed,
+        status: 'creating_pr',
+        updatedAt: '2026-08-11T10:34:00.000Z',
+      },
+    })).rejects.toThrow('transition is invalid')
+    await expect(store.commitGitHubDeliveryIntentStatus({
+      expectedIntent: failed,
+      intent: {
+        ...failed,
+        status: 'failed',
+        updatedAt: '2026-08-11T10:32:00.000Z',
+      },
+    })).rejects.toThrow('timestamp is invalid')
+    store.close()
+  })
 })
