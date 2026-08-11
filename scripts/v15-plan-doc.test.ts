@@ -64,4 +64,22 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(roadmap).toContain('0013-github-app-delivery-authority.md')
     expect(roadmap).toContain('v1.5-github-delivery.md')
   })
+
+  it('documents the bounded GitHub App setup and recoverable operator path', () => {
+    const guide = read('docs/guides/devflow-studio-self-hosted-pilot.md')
+
+    expect(guide).toContain('## Configure GitHub Delivery')
+    expect(guide).toContain('DEVFLOW_GITHUB_APP_ID')
+    expect(guide).toContain('DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64')
+    expect(guide).toContain('Contents: write')
+    expect(guide).toContain('Pull requests: write')
+    expect(guide).toContain('selected repositories')
+    expect(guide).toContain('approval_required')
+    expect(guide).toContain('recovery_required')
+    expect(guide).toContain('creating_pr')
+    expect(guide).toContain('never force-push')
+    expect(guide).toContain('never merge')
+    expect(guide).toContain('installation access token')
+    expect(guide).toContain('Desktop main memory')
+  })
 })

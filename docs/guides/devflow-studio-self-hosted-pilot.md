@@ -80,10 +80,76 @@ The pilot API owns this explicit configuration surface:
 - Runtime gates: `DEVFLOW_ENABLE_DEMO_DATA` and `DEVFLOW_ENABLE_FAKE_RUNTIME`; both must be `false`
   in pilot.
 - Login: `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `GITHUB_OAUTH_REDIRECT_URI`.
+- GitHub Delivery: `DEVFLOW_GITHUB_APP_ID` and
+  `DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64`. Both may remain blank when GitHub Delivery is disabled;
+  partial configuration is rejected.
 
 Unknown `DEVFLOW_*` or `DEV_AUTH_*` names are rejected in pilot so misspelled safety settings do
 not silently pass. Compose passes only the variables above. The Web runtime allowlist is
 `DEVFLOW_INTERNAL_API_BASE_URL`, `DEVFLOW_PUBLIC_API_BASE_URL`, `HOSTNAME`, and `PORT`.
+
+## Configure GitHub Delivery
+
+GitHub Delivery uses a separate GitHub App. The OAuth App above remains identity-only with
+`read:user user:email`; do not widen it, persist its access token, or substitute a personal access
+token. Create one GitHub App for the self-hosted installation, configure it for selected repositories
+only, and grant only these repository permissions:
+
+- Metadata: read (GitHub grants this baseline permission to installed Apps).
+- Contents: write, so Desktop can publish one approved commit to one `devflow/` branch.
+- Pull requests: write, so the API can create one Draft pull request after verifying the branch.
+
+No webhook is required for the V1.5 polling flow. Install the App only on repositories that may be
+bound to a DevFlow Project. Keep the App private key in the API operator boundary, encode the PEM as
+base64 without line wrapping, and set:
+
+```dotenv
+DEVFLOW_GITHUB_APP_ID=<numeric-app-id>
+DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64=<base64-encoded-private-key-pem>
+```
+
+Never paste the private key or an installation access token into Web, Desktop, a database, a log,
+or source control. The API mints a repository-scoped installation access token for at most one
+hour. Its `Contents: write` copy exists only in Desktop main memory while one publication attempt is
+active. `Pull requests: write` authority stays inside the API process.
+
+After the stack is ready:
+
+1. Sign in with the existing GitHub OAuth identity, select the intended Team Project, and open
+   **GitHub Delivery**.
+2. Enter the numeric installation id and repository id, review the exact Project, check the
+   confirmation box, and configure the binding. The API resolves the canonical `owner/repository`
+   and default branch from GitHub; Web cannot supply those authority facts.
+3. In Desktop, create the redacted PR Delivery Package, then prepare GitHub Delivery. Desktop makes
+   or verifies one managed-worktree commit, reruns the configured Test command against that exact
+   commit, and submits a request in `approval_required`.
+4. In Web, review the exact repository, base/head branches, commit, Run/evidence versions, and PR
+   title. A live lead or owner must check the distinct confirmation and approve. Desktop bearer
+   authority cannot approve its own request.
+5. Leave Desktop running. Its scheduler obtains the short-lived token, publishes only the approved
+   SHA without force, and reports the result. The API independently verifies the remote head before
+   creating one Draft pull request. Only durable Draft evidence advances the Run to Acceptance.
+6. To disable publication, use the version-bound **Revoke repository binding** action. Revocation
+   blocks a new credential grant; it does not delete a branch, close a pull request, or rewrite
+   GitHub history.
+
+### GitHub Delivery recovery
+
+| Durable state | Meaning | Safe operator action |
+| --- | --- | --- |
+| `approval_required` | No remote write is authorized. | Review the exact request in Web and approve or reject it. |
+| `publishing_branch` | A bounded credential/push attempt is active or its result is ambiguous. | Let Desktop reconcile the exact remote SHA. If Desktop shows an explicit recovery action, use it once; do not push manually or force the branch. |
+| `branch_published` | GitHub contains the approved commit and the API verified it. | Keep Desktop/API available so Draft creation can continue. |
+| `creating_pr` | Draft creation or lookup is active or ambiguous. | Resume once; DevFlow first searches for the exact head/base/commit marker and never creates a blind duplicate. |
+| `recovery_required` | A typed conflict, timeout, revoked binding, or ambiguous external result needs attention. | Read the redacted outcome, restore provider/binding authority or resolve the named remote conflict, then use the explicit Desktop resume action. |
+| `completed` | The exact branch and Draft pull request are durable evidence. | Continue Acceptance. The managed worktree can be cleaned only through the normal terminal cleanup path. |
+
+DevFlow will never force-push, delete a remote branch, or publish a tag; it will never merge or
+auto-merge, close a pull request, or silently widen GitHub App permissions. If a remote `devflow/`
+branch contains a different SHA, treat it as a conflict: inspect it in GitHub, preserve the evidence,
+and prepare a new
+version-bound Delivery Intent after resolving the source state. Do not repair a delivery by editing
+SQLite/Postgres rows or replaying raw REST/git commands.
 
 ## Run The Stack
 
