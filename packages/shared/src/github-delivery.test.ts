@@ -296,6 +296,27 @@ describe('GitHub Delivery Intent', () => {
     expect(retested.idempotencyKey).toBe(first.idempotencyKey)
   })
 
+  it('keeps one logical delivery key when the managed workspace advances to a newly tested commit', async () => {
+    const first = await createGitHubDeliveryIntent(baseInput)
+    const nextCommitSha = '2222222222222222222222222222222222222222'
+    const revised = await createGitHubDeliveryIntent({
+      ...baseInput,
+      id: 'delivery-revised-commit',
+      workspace: { ...workspace, headCommitSha: nextCommitSha },
+      testEvidence: {
+        ...testEvidence,
+        id: 'delivery-test-revised-commit',
+        sourceCommitSha: nextCommitSha,
+        createdAt: '2026-08-11T10:33:00.000Z',
+      },
+      expectedCommitSha: nextCommitSha,
+      now: '2026-08-11T10:34:00.000Z',
+    })
+
+    expect(revised.intentDigest).not.toBe(first.intentDigest)
+    expect(revised.idempotencyKey).toBe(first.idempotencyKey)
+  })
+
   it('fails closed when Test Evidence is not for the exact expected commit', async () => {
     await expect(createGitHubDeliveryIntent({
       ...baseInput,

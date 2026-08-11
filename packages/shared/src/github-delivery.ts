@@ -362,9 +362,9 @@ function canonicalLogicalDeliveryMaterial(material: IntentDigestMaterial): strin
     localProjectId: material.localProjectId,
     runId: material.runId,
     nodeId: material.nodeId,
-    expectedCommitSha: material.expectedCommitSha,
-    baseBranch: material.baseBranch,
-    headBranch: material.headBranch,
+    repositoryBindingId: material.repositoryBindingId,
+    repositoryBindingVersion: material.repositoryBindingVersion,
+    workspaceId: material.workspaceId,
   })
 }
 
