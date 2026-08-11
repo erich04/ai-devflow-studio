@@ -1,4 +1,5 @@
 import { WORK_REQUEST_ID_MAX_LENGTH } from '@ai-devflow/shared'
+import type { GitHubDeliveryProcessorResult } from './github-delivery-processor.js'
 import type {
   AgentEvent,
   AgentProviderConfig,
@@ -75,6 +76,7 @@ export const ipcChannels = {
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   createPrDraft: 'devflow:pr-draft:create',
   prepareGitHubDelivery: 'devflow:github-delivery:prepare',
+  resumeGitHubDelivery: 'devflow:github-delivery:resume',
   createAcceptanceBundle: 'devflow:acceptance-bundle:create',
   approveGate: 'devflow:gate:approve',
   saveGateOverride: 'devflow:gate:override:save',
@@ -182,6 +184,13 @@ export type PrepareGitHubDeliveryResult =
       status: 'tests_failed'
       testEvidence: TestEvidence
     }
+
+export type ResumeGitHubDeliveryInput = {
+  intentId: string
+  expectedUpdatedAt: string
+}
+
+export type ResumeGitHubDeliveryResult = GitHubDeliveryProcessorResult
 
 export type CreateAcceptanceBundleInput = {
   runId: string
@@ -364,6 +373,9 @@ export type DevFlowDesktopApi = {
   prepareGitHubDelivery: (
     input: PrepareGitHubDeliveryInput,
   ) => Promise<PrepareGitHubDeliveryResult>
+  resumeGitHubDelivery: (
+    input: ResumeGitHubDeliveryInput,
+  ) => Promise<ResumeGitHubDeliveryResult>
   createAcceptanceBundle: (
     input: CreateAcceptanceBundleInput,
   ) => Promise<CreateAcceptanceBundleResult>
@@ -616,6 +628,29 @@ export function parsePrepareGitHubDeliveryInput(
     value,
     'prepare GitHub delivery payload',
   )
+}
+
+export function parseResumeGitHubDeliveryInput(
+  value: unknown,
+): ResumeGitHubDeliveryInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid resume GitHub delivery payload')
+  }
+  rejectUnexpectedFields(
+    value,
+    ['intentId', 'expectedUpdatedAt'],
+    'resume GitHub delivery payload',
+  )
+  const intentId = readExactRequiredIdentifier(value, 'intentId')
+  const expectedUpdatedAt = readRequiredString(value, 'expectedUpdatedAt')
+  const parsedTimestamp = Date.parse(expectedUpdatedAt)
+  if (
+    !Number.isFinite(parsedTimestamp) ||
+    new Date(parsedTimestamp).toISOString() !== expectedUpdatedAt
+  ) {
+    throw new Error('Invalid expectedUpdatedAt')
+  }
+  return { intentId, expectedUpdatedAt }
 }
 
 export function parseCreateAcceptanceBundleInput(

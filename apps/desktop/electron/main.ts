@@ -59,6 +59,7 @@ import {
   parseCreateAcceptanceBundleInput,
   parseCreatePrDraftInput,
   parsePrepareGitHubDeliveryInput,
+  parseResumeGitHubDeliveryInput,
   parseCreateRunInput,
   parseCompleteWorkflowAgentNodeInput,
   parseListAgentReviewsInput,
@@ -80,8 +81,14 @@ import {
   parseSettingsInput,
   parseSubscribeCodingRunInput,
   parseValidateTestCommandInput,
+  type ResumeGitHubDeliveryInput,
+  type ResumeGitHubDeliveryResult,
 } from './ipc-contract.js'
-import { createRemoteSyncClient, type RemoteSyncClient } from './remote-sync.js'
+import {
+  createRemoteSyncClient,
+  resolveRemoteApiBaseUrl,
+  type RemoteSyncClient,
+} from './remote-sync.js'
 import { createDesktopWorkRequestService } from './work-request-service.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
 import { createCodingEngineAdapterFromEnv } from './coding-engine.js'
@@ -90,6 +97,13 @@ import {
   createGitHubDeliveryRuntime,
   type GitHubDeliveryRuntime,
 } from './github-delivery-runtime.js'
+import { createGitHubDeliveryRemoteClient } from './github-delivery-remote-client.js'
+import { createGitHubDeliveryProcessor } from './github-delivery-processor.js'
+import { createGitHubDeliveryScheduler } from './github-delivery-scheduler.js'
+import {
+  GITHUB_GIT_PUBLISHER_REQUIRED_CREDENTIAL_LIFETIME_MS,
+  createGitHubGitPublisher,
+} from './github-git-publisher.js'
 import { createManagedWorkspaceCleanupService } from './managed-workspace-cleanup.js'
 import { createWorkspaceOperationCoordinator } from './workspace-operation-coordinator.js'
 import { createOpencodeProcessManager } from './opencode-process.js'
@@ -139,6 +153,8 @@ if (configuredUserDataDirectory) {
 }
 const DEFAULT_TEST_TIMEOUT_MS = 120_000
 const GATE_COMMAND_CYCLE_TIMEOUT_MS = 30_000
+const GITHUB_DELIVERY_OPERATION_TIMEOUT_MS = 15 * 60_000
+const GITHUB_DELIVERY_QUIT_GRACE_MS = 5_000
 const INITIAL_THEME = parseInitialTheme(process.env['DEVFLOW_INITIAL_THEME'])
 const DEFAULT_CODING_RUN_TIMEOUT_MS = 10 * 60_000
 const runtimeFlags = resolveDevFlowRuntimeFlags(process.env)
@@ -156,6 +172,15 @@ let gateCommandSchedulerPromise:
   | Promise<ReturnType<typeof createGateCommandScheduler>>
   | undefined
 let gateCommandCycleAbortController: AbortController | undefined
+let githubDeliveryScheduler:
+  | ReturnType<typeof createGitHubDeliveryScheduler>
+  | undefined
+let githubDeliverySchedulerPromise:
+  | Promise<ReturnType<typeof createGitHubDeliveryScheduler>>
+  | undefined
+let githubDeliveryOperationQueue: Promise<void> = Promise.resolve()
+let githubDeliveryOperationAbortController: AbortController | undefined
+let githubDeliveryStopping = false
 let githubDeliveryRuntimePromise: Promise<GitHubDeliveryRuntime> | undefined
 let managedWorkspaceCleanupPromise:
   | Promise<ReturnType<typeof createManagedWorkspaceCleanupService>>
@@ -314,6 +339,220 @@ function wakeRemoteSyncOutbox(): void {
     .catch(() => {
       console.warn('[remote-sync-outbox] Unable to wake the delivery scheduler.')
     })
+}
+
+async function runGitHubDeliveryExclusive<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const previousOperation = githubDeliveryOperationQueue
+  let releaseOperation!: () => void
+  const operationGate = new Promise<void>((resolve) => {
+    releaseOperation = resolve
+  })
+  githubDeliveryOperationQueue = previousOperation.then(() => operationGate)
+  await previousOperation
+
+  if (githubDeliveryStopping) {
+    releaseOperation()
+    throw new Error('GitHub Delivery operations have stopped.')
+  }
+
+  const operationAbortController = new AbortController()
+  githubDeliveryOperationAbortController = operationAbortController
+  const operationTimeout = setTimeout(() => {
+    operationAbortController.abort()
+  }, GITHUB_DELIVERY_OPERATION_TIMEOUT_MS)
+  try {
+    return await operation(operationAbortController.signal)
+  } finally {
+    clearTimeout(operationTimeout)
+    if (
+      githubDeliveryOperationAbortController === operationAbortController
+    ) {
+      githubDeliveryOperationAbortController = undefined
+    }
+    releaseOperation()
+  }
+}
+
+async function createCurrentGitHubDeliveryProcessor(signal: AbortSignal) {
+  const store = await getStore()
+  const bundle = await store.getDesktopPairingCredentialBundle()
+  const credential = bundle?.credential
+  const localProjectId = credential?.localProjectId
+  const exactScopeFields = [
+    credential?.tokenId,
+    credential?.organizationId,
+    credential?.projectId,
+    localProjectId,
+    credential?.userId,
+  ]
+  if (
+    !bundle ||
+    !credential ||
+    exactScopeFields.some(
+      (value) =>
+        typeof value !== 'string' ||
+        value.length === 0 ||
+        value.trim() !== value,
+    ) ||
+    !credential.projectMemberships.some(
+      (membership) =>
+        membership.projectId === credential.projectId &&
+        membership.userId === credential.userId,
+    )
+  ) {
+    return null
+  }
+
+  const scopedStore = {
+    listGitHubDeliveryIntents: async (runId?: string) =>
+      (await store.listGitHubDeliveryIntents(runId)).filter(
+        (intent) =>
+          intent.organizationId === credential.organizationId &&
+          intent.teamProjectId === credential.projectId &&
+          intent.localProjectId === localProjectId,
+      ),
+    listArtifacts: (runId?: string) => store.listArtifacts(runId),
+    listManagedCodingWorkspaces: async (projectId?: string) => {
+      if (projectId && projectId !== localProjectId) return []
+      return (await store.listManagedCodingWorkspaces(localProjectId)).filter(
+        (workspace) => workspace.projectId === localProjectId,
+      )
+    },
+    getRun: async (runId: string) => {
+      const run = await store.getRun(runId)
+      return run?.projectId === localProjectId ? run : null
+    },
+    commitGitHubDeliveryIntentStatus: (
+      mutation: Parameters<LocalStore['commitGitHubDeliveryIntentStatus']>[0],
+    ) => store.commitGitHubDeliveryIntentStatus(mutation),
+    commitGitHubDeliveryIntentCompletion: (
+      mutation: Parameters<LocalStore['commitGitHubDeliveryIntentCompletion']>[0],
+    ) => store.commitGitHubDeliveryIntentCompletion(mutation),
+  }
+  const authToken = decryptCredential(bundle.encryptedToken)
+  const remote = createGitHubDeliveryRemoteClient({
+    apiBaseUrl: resolveRemoteApiBaseUrl(),
+    authToken,
+    signal,
+  })
+  const publisher = createGitHubGitPublisher({ signal })
+  return createGitHubDeliveryProcessor({
+    store: scopedStore,
+    remote,
+    publisher,
+    workflow: createWorkflowRuntime(store),
+    preparationRuntime: await getGitHubDeliveryRuntime(),
+    workspaceCoordinator: workspaceOperationCoordinator,
+    maxIntentsPerCycle: 1,
+    minimumCredentialLifetimeMs:
+      GITHUB_GIT_PUBLISHER_REQUIRED_CREDENTIAL_LIFETIME_MS,
+  })
+}
+
+async function broadcastGitHubDeliveryState(): Promise<void> {
+  try {
+    const store = await getStore()
+    broadcastToRenderers(ipcChannels.localStateUpdated, await store.loadState())
+  } catch {
+    console.warn('[github-delivery] Unable to broadcast the latest local state.')
+  }
+}
+
+async function processAvailableGitHubDeliveries(): Promise<void> {
+  try {
+    await runGitHubDeliveryExclusive(async (signal) => {
+      const processor = await createCurrentGitHubDeliveryProcessor(signal)
+      if (processor) await processor.recoverAndAdvance()
+    })
+  } finally {
+    await broadcastGitHubDeliveryState()
+  }
+}
+
+function safeGitHubDeliveryResult(
+  result: ResumeGitHubDeliveryResult,
+): ResumeGitHubDeliveryResult {
+  return {
+    intentId: result.intentId,
+    remoteRequestId: result.remoteRequestId,
+    disposition: result.disposition,
+    outcomeCode: result.outcomeCode,
+  }
+}
+
+async function resumeGitHubDelivery(
+  input: ResumeGitHubDeliveryInput,
+): Promise<ResumeGitHubDeliveryResult> {
+  try {
+    return await runGitHubDeliveryExclusive(async (signal) => {
+      try {
+        const processor = await createCurrentGitHubDeliveryProcessor(signal)
+        if (!processor) {
+          return {
+            intentId: input.intentId,
+            remoteRequestId: null,
+            disposition: 'local_conflict',
+            outcomeCode: 'pairing_required',
+          }
+        }
+        return safeGitHubDeliveryResult(await processor.resume(input))
+      } catch {
+        return {
+          intentId: input.intentId,
+          remoteRequestId: null,
+          disposition: 'recovery_required',
+          outcomeCode: 'processor_unavailable',
+        }
+      }
+    })
+  } finally {
+    await broadcastGitHubDeliveryState()
+  }
+}
+
+async function getGitHubDeliveryScheduler() {
+  if (githubDeliveryScheduler) return githubDeliveryScheduler
+
+  githubDeliverySchedulerPromise ??= Promise.resolve().then(() => {
+    githubDeliveryScheduler = createGitHubDeliveryScheduler({
+      recoverAndAdvance: processAvailableGitHubDeliveries,
+      onError: () => {
+        console.warn('[github-delivery] A recovery cycle failed and will be retried.')
+      },
+    })
+    return githubDeliveryScheduler
+  })
+
+  try {
+    return await githubDeliverySchedulerPromise
+  } finally {
+    githubDeliverySchedulerPromise = undefined
+  }
+}
+
+function wakeGitHubDeliveryScheduler(): void {
+  if (githubDeliveryStopping) return
+  void getGitHubDeliveryScheduler()
+    .then((scheduler) => scheduler.wake())
+    .catch(() => {
+      console.warn('[github-delivery] Unable to wake the recovery scheduler.')
+    })
+}
+
+async function waitForGitHubDeliveryCleanup(): Promise<void> {
+  let cleanupTimeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      githubDeliveryOperationQueue,
+      new Promise<void>((resolve) => {
+        cleanupTimeout = setTimeout(resolve, GITHUB_DELIVERY_QUIT_GRACE_MS)
+      }),
+    ])
+  } finally {
+    if (cleanupTimeout) clearTimeout(cleanupTimeout)
+  }
 }
 
 function freezeGateCommandBinding(
@@ -1288,6 +1527,7 @@ function registerIpcHandlers() {
     }
     wakeRemoteSyncOutbox()
     wakeGateCommandScheduler()
+    wakeGitHubDeliveryScheduler()
     return { credential: boundCredential }
   })
 
@@ -1312,6 +1552,7 @@ function registerIpcHandlers() {
       } finally {
         wakeRemoteSyncOutbox()
         wakeGateCommandScheduler()
+        wakeGitHubDeliveryScheduler()
       }
     },
   )
@@ -1798,7 +2039,13 @@ function registerIpcHandlers() {
     const runtime = await getGitHubDeliveryRuntime()
     const result = await runtime.prepare(input)
     wakeRemoteSyncOutbox()
+    wakeGitHubDeliveryScheduler()
     return result
+  })
+
+  ipcMain.handle(ipcChannels.resumeGitHubDelivery, async (_, payload: unknown) => {
+    const input = parseResumeGitHubDeliveryInput(payload)
+    return resumeGitHubDelivery(input)
   })
 
   ipcMain.handle(ipcChannels.createAcceptanceBundle, async (_, payload: unknown) => {
@@ -2171,6 +2418,11 @@ if (hasSingleInstanceLock) {
       .catch(() => {
         console.warn('[gate-command] Unable to start the processing scheduler.')
       })
+    void getGitHubDeliveryScheduler()
+      .then((scheduler) => scheduler.start())
+      .catch(() => {
+        console.warn('[github-delivery] Unable to start the recovery scheduler.')
+      })
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -2191,13 +2443,21 @@ app.on('before-quit', (event) => {
     return
   }
   event.preventDefault()
+  githubDeliveryStopping = true
   gateCommandCycleAbortController?.abort()
   gateCommandScheduler?.stop()
   remoteSyncOutboxScheduler?.stop()
-  quitCleanupPromise ??= stopOpencodeWithRetry(opencodeProcessManager)
-    .catch(() => {
+  githubDeliveryScheduler?.stop()
+  githubDeliveryOperationAbortController?.abort()
+  quitCleanupPromise ??= Promise.all([
+    stopOpencodeWithRetry(opencodeProcessManager).catch(() => {
       console.warn('[opencode] Unable to complete managed runtime cleanup before quit.')
-    })
+    }),
+    waitForGitHubDeliveryCleanup().catch(() => {
+      console.warn('[github-delivery] Unable to confirm operation cleanup before quit.')
+    }),
+  ])
+    .then(() => undefined)
     .finally(() => {
       quitCleanupComplete = true
       app.quit()

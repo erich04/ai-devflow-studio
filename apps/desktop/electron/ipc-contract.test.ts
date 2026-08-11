@@ -8,6 +8,7 @@ import {
   parseCreateAcceptanceBundleInput,
   parseCreatePrDraftInput,
   parsePrepareGitHubDeliveryInput,
+  parseResumeGitHubDeliveryInput,
   parseCreateRunInput,
   parseDeleteRunInput,
   parseCompleteWorkflowAgentNodeInput,
@@ -210,8 +211,30 @@ describe('IPC contract parsers', () => {
     expect(ipcChannels).toMatchObject({
       createPrDraft: 'devflow:pr-draft:create',
       prepareGitHubDelivery: 'devflow:github-delivery:prepare',
+      resumeGitHubDelivery: 'devflow:github-delivery:resume',
       createAcceptanceBundle: 'devflow:acceptance-bundle:create',
     })
+  })
+
+  it('keeps GitHub Delivery recovery bound to an exact local Intent version', () => {
+    const input = {
+      intentId: 'github-delivery-intent-1',
+      expectedUpdatedAt: '2026-08-11T12:34:56.000Z',
+    }
+
+    expect(parseResumeGitHubDeliveryInput(input)).toEqual(input)
+    expect(() =>
+      parseResumeGitHubDeliveryInput({
+        ...input,
+        token: 'renderer-must-never-send-a-token',
+      }),
+    ).toThrow(/unexpected field/i)
+    expect(() =>
+      parseResumeGitHubDeliveryInput({
+        ...input,
+        expectedUpdatedAt: 'yesterday',
+      }),
+    ).toThrow(/expectedUpdatedAt/i)
   })
 
   it.each([

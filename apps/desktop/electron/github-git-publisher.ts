@@ -12,10 +12,15 @@ import { terminateProcessTree } from './opencode-process.js'
 const maximumGitOutputCharacters = 64 * 1_024
 const localGitTimeoutMs = 15_000
 const networkGitTimeoutMs = 120_000
+export const GITHUB_GIT_PUBLISHER_WALL_CLOCK_BUDGET_MS =
+  3 * localGitTimeoutMs + 2 * networkGitTimeoutMs + 15_000
+export const GITHUB_GIT_PUBLISHER_REQUIRED_CREDENTIAL_LIFETIME_MS =
+  GITHUB_GIT_PUBLISHER_WALL_CLOCK_BUDGET_MS + 30_000
 const credentialPattern = /^[A-Za-z0-9._-]{16,8192}$/u
 
 export type GitHubGitPublisherErrorCode =
   | 'invalid_delivery_source'
+  | 'operation_cancelled'
   | 'publisher_cleanup_failed'
   | 'remote_branch_diverged'
   | 'remote_unavailable'
@@ -26,6 +31,7 @@ export type GitHubGitPublisherErrorCode =
 
 const safeMessages: Record<GitHubGitPublisherErrorCode, string> = {
   invalid_delivery_source: 'GitHub delivery source is invalid',
+  operation_cancelled: 'GitHub delivery publication was cancelled safely',
   publisher_cleanup_failed: 'GitHub delivery credential cleanup failed safely',
   remote_branch_diverged: 'The remote delivery branch points to a different commit',
   remote_unavailable: 'The remote GitHub branch could not be inspected',
@@ -54,6 +60,7 @@ export type GitCommandInput = {
   args: string[]
   env: Record<string, string>
   timeoutMs: number
+  signal?: AbortSignal
 }
 
 export type GitCommandResult = { stdout: string }
@@ -83,6 +90,7 @@ export type CreateGitHubGitPublisherDependencies = {
   runGit?: RunGitCommand
   platform?: NodeJS.Platform
   nodeExecutable?: string
+  signal?: AbortSignal
 }
 
 function publisherError(code: GitHubGitPublisherErrorCode): GitHubGitPublisherError {
@@ -99,9 +107,14 @@ function appendBounded(previous: string, chunk: string): string {
 
 const runGitCommand: RunGitCommand = (input) =>
   new Promise((resolve, reject) => {
+    if (input.signal?.aborted) {
+      reject(publisherError('operation_cancelled'))
+      return
+    }
     let stdout = ''
     let settled = false
-    let timedOut = false
+    let forcedErrorCode: GitHubGitPublisherErrorCode | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
     const child = spawn('git', input.args, {
       cwd: input.cwd,
       detached: true,
@@ -110,35 +123,50 @@ const runGitCommand: RunGitCommand = (input) =>
       windowsHide: true,
     })
 
-    const settle = (result?: GitCommandResult) => {
+    const onAbort = () => terminateAndSettle('operation_cancelled')
+    const settle = (
+      result?: GitCommandResult,
+      errorCode: GitHubGitPublisherErrorCode = 'push_result_unknown',
+    ) => {
       if (settled) return
       settled = true
-      clearTimeout(timer)
+      if (timer) clearTimeout(timer)
+      input.signal?.removeEventListener('abort', onAbort)
       if (result) resolve(result)
-      else reject(publisherError('push_result_unknown'))
+      else reject(publisherError(errorCode))
     }
 
-    const timer = setTimeout(() => {
-      timedOut = true
-      void terminateProcessTree(child, { timeoutMs: 500, forceTimeoutMs: 1_000 }).then(
-        () => settle(),
-        () => settle(),
+    function terminateAndSettle(errorCode: GitHubGitPublisherErrorCode) {
+      if (settled || forcedErrorCode) return
+      forcedErrorCode = errorCode
+      void terminateProcessTree(child, {
+        timeoutMs: 500,
+        forceTimeoutMs: 1_000,
+      }).then(
+        () => settle(undefined, errorCode),
+        () => settle(undefined, errorCode),
       )
-    }, input.timeoutMs)
+    }
+
+    timer = setTimeout(() => terminateAndSettle('push_result_unknown'), input.timeoutMs)
+    input.signal?.addEventListener('abort', onAbort, { once: true })
+    if (input.signal?.aborted) onAbort()
 
     child.stdout?.on('data', (chunk: Buffer) => {
       try {
         stdout = appendBounded(stdout, chunk.toString('utf8'))
       } catch {
-        void terminateProcessTree(child, { timeoutMs: 250, forceTimeoutMs: 1_000 }).finally(
-          () => settle(),
-        )
+        terminateAndSettle('push_result_unknown')
       }
     })
     child.stderr?.on('data', () => undefined)
-    child.once('error', () => settle())
+    child.once('error', () => {
+      if (forcedErrorCode) return
+      settle()
+    })
     child.once('close', (code) => {
-      if (timedOut || code !== 0) settle()
+      if (forcedErrorCode) return
+      if (code !== 0) settle()
       else settle({ stdout })
     })
   })
@@ -291,14 +319,23 @@ export function createGitHubGitPublisher(
   const runGit = dependencies.runGit ?? runGitCommand
   const platform = dependencies.platform ?? process.platform
   const nodeExecutable = dependencies.nodeExecutable ?? process.execPath
+  const signal = dependencies.signal
+
+  const throwIfAborted = () => {
+    if (signal?.aborted) throw publisherError('operation_cancelled')
+  }
 
   const runSafe = async (
     command: GitCommandInput,
     errorCode: GitHubGitPublisherErrorCode,
   ): Promise<GitCommandResult> => {
+    throwIfAborted()
     try {
-      return await runGit(command)
+      const result = await runGit(command)
+      throwIfAborted()
+      return result
     } catch (error) {
+      if (signal?.aborted) throw publisherError('operation_cancelled')
       if (error instanceof GitHubGitPublisherError) throw error
       throw publisherError(errorCode)
     }
@@ -306,6 +343,7 @@ export function createGitHubGitPublisher(
 
   return {
     async publish(rawInput) {
+      throwIfAborted()
       const input = normalizeInput(rawInput)
       const localEnvironment = baseGitEnvironment()
       const localCommand = (args: string[]) =>
@@ -315,6 +353,7 @@ export function createGitHubGitPublisher(
             args,
             env: localEnvironment,
             timeoutMs: localGitTimeoutMs,
+            ...(signal ? { signal } : {}),
           },
           'workspace_mismatch',
         )
@@ -344,11 +383,13 @@ export function createGitHubGitPublisher(
             args,
             env: networkEnvironment,
             timeoutMs: networkGitTimeoutMs,
+            ...(signal ? { signal } : {}),
           },
           code,
         )
 
       try {
+        throwIfAborted()
         const remote = await networkCommand(
           [
             'ls-remote',
@@ -363,6 +404,7 @@ export function createGitHubGitPublisher(
           throw publisherError('remote_branch_diverged')
         }
         if (!remoteHead) {
+          throwIfAborted()
           await networkCommand(
             [
               'push',
@@ -374,6 +416,7 @@ export function createGitHubGitPublisher(
             'push_result_unknown',
           )
         }
+        throwIfAborted()
         return {
           outcome: remoteHead ? 'already_present' : 'pushed',
           expectedCommitSha: input.expectedCommitSha,
