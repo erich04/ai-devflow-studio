@@ -18,7 +18,7 @@ const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(11)
+    expect(TEAM_SCHEMA_VERSION).toBe(12)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
