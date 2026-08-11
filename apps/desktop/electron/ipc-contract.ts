@@ -177,12 +177,10 @@ export type PrepareGitHubDeliveryResult =
       replayed: boolean
       intent: GitHubDeliveryIntent
       testEvidence: TestEvidence
-      state: LocalExecutionState
     }
   | {
       status: 'tests_failed'
       testEvidence: TestEvidence
-      state: LocalExecutionState
     }
 
 export type CreateAcceptanceBundleInput = {

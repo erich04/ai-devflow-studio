@@ -1795,16 +1795,10 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.prepareGitHubDelivery, async (_, payload: unknown) => {
     const input = parsePrepareGitHubDeliveryInput(payload)
-    const [runtime, store] = await Promise.all([
-      getGitHubDeliveryRuntime(),
-      getStore(),
-    ])
+    const runtime = await getGitHubDeliveryRuntime()
     const result = await runtime.prepare(input)
     wakeRemoteSyncOutbox()
-    return {
-      ...result,
-      state: await store.loadState(),
-    }
+    return result
   })
 
   ipcMain.handle(ipcChannels.createAcceptanceBundle, async (_, payload: unknown) => {
