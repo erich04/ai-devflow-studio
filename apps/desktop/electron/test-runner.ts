@@ -12,6 +12,7 @@ import {
   type ProjectFileSnapshot,
   type TestEvidenceStatus,
 } from '@ai-devflow/shared'
+import { terminateProcessTree } from './opencode-process.js'
 
 const PROJECT_FILES = [
   'package.json',
@@ -157,7 +158,7 @@ function appendBounded(previous: string, chunk: string): string {
 export function runLocalTestCommand(input: LocalTestCommandInput): Promise<LocalTestCommandResult> {
   const startedAt = Date.now()
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let stdout = ''
     let stderr = ''
     let didTimeout = false
@@ -166,28 +167,30 @@ export function runLocalTestCommand(input: LocalTestCommandInput): Promise<Local
     const child = spawn(input.command, {
       cwd: input.cwd,
       shell: true,
+      detached: true,
       env: createLocalCommandEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
     const timer = setTimeout(() => {
       didTimeout = true
-      child.kill('SIGTERM')
+      void terminateProcessTree(child, {
+        timeoutMs: 250,
+        forceTimeoutMs: 1_000,
+      }).then(
+        () => settle(null),
+        () => {
+          if (settled) {
+            return
+          }
+          settled = true
+          clearTimeout(timer)
+          reject(new Error('Test process cleanup failed safely'))
+        },
+      )
     }, input.timeoutMs)
 
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout = appendBounded(stdout, chunk.toString('utf8'))
-    })
-
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr = appendBounded(stderr, chunk.toString('utf8'))
-    })
-
-    child.on('error', (error) => {
-      stderr = appendBounded(stderr, error.message)
-    })
-
-    child.on('close', (code) => {
+    const settle = (code: number | null) => {
       if (settled) {
         return
       }
@@ -216,6 +219,25 @@ export function runLocalTestCommand(input: LocalTestCommandInput): Promise<Local
         redacted: redactedStdout.redacted || redactedStderr.redacted,
         summary,
       })
+    }
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout = appendBounded(stdout, chunk.toString('utf8'))
+    })
+
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr = appendBounded(stderr, chunk.toString('utf8'))
+    })
+
+    child.on('error', (error) => {
+      stderr = appendBounded(stderr, error.message)
+    })
+
+    child.on('close', (code) => {
+      if (didTimeout) {
+        return
+      }
+      settle(code)
     })
   })
 }

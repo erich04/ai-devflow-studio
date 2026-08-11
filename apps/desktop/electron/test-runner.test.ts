@@ -105,4 +105,45 @@ describe('runLocalTestCommand', () => {
     expect(result.exitCode).toBe(2)
     expect(result.stderr).toContain('boom')
   })
+
+  it('bounds timeout and terminates the entire test process group', async () => {
+    if (process.platform === 'win32') {
+      return
+    }
+    const projectPath = await makeProject({
+      'package.json': JSON.stringify({ name: 'timeout-fixture' }),
+      'hang.js': [
+        "console.log(`TEST_CHILD_PID:${process.pid}`)",
+        "process.on('SIGTERM', () => {})",
+        "process.on('SIGHUP', () => {})",
+        "process.on('SIGINT', () => {})",
+        'setInterval(() => {}, 1000)',
+      ].join(';'),
+    })
+
+    const startedAt = Date.now()
+    const result = await runLocalTestCommand({
+      command: 'node hang.js',
+      cwd: projectPath,
+      timeoutMs: 25,
+    })
+    const durationMs = Date.now() - startedAt
+    const childPid = Number(/TEST_CHILD_PID:(\d+)/u.exec(result.stdout)?.[1])
+    let childAlive = false
+    if (Number.isSafeInteger(childPid) && childPid > 0) {
+      try {
+        process.kill(childPid, 0)
+        childAlive = true
+      } catch {
+        childAlive = false
+      }
+      if (childAlive) {
+        process.kill(childPid, 'SIGKILL')
+      }
+    }
+
+    expect(result.status).toBe('timed_out')
+    expect(durationMs).toBeLessThan(2_000)
+    expect(childAlive).toBe(false)
+  })
 })
