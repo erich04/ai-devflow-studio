@@ -1,6 +1,7 @@
 import {
   redactLocalAbsolutePaths,
   redactSensitiveText,
+  isTerminalGitHubDeliveryStatus,
   type GitHubDeliveryIntent,
   type ManagedCodingWorkspace,
 } from '@ai-devflow/shared'
@@ -47,7 +48,10 @@ export function createManagedWorkspaceCleanupService(input: {
         return workspace
       }
       const retained = (await input.store.listGitHubDeliveryIntents())
-        .some((candidate) => candidate.workspaceId === workspace.id)
+        .some((candidate) => (
+          candidate.workspaceId === workspace.id &&
+          !isTerminalGitHubDeliveryStatus(candidate.status)
+        ))
       if (retained) {
         throw new Error('Managed workspace is retained by GitHub Delivery')
       }

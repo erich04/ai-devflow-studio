@@ -5760,7 +5760,9 @@ class SqlJsLocalStore implements LocalStore {
     }
     const hasDeliveryIntent = selectStringColumn(
       this.db,
-      'select id from github_delivery_intents where workspace_id = ? limit 1',
+      `select id from github_delivery_intents
+       where workspace_id = ? and status not in ('completed', 'failed', 'revoked')
+       limit 1`,
       [expected.id],
     ).length > 0
     if (hasDeliveryIntent) {

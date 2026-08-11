@@ -18,6 +18,16 @@ export type GitHubDeliveryStatus =
   | 'recovery_required'
   | 'revoked'
 
+const terminalGitHubDeliveryStatuses: ReadonlySet<GitHubDeliveryStatus> = new Set([
+  'completed',
+  'failed',
+  'revoked',
+])
+
+export function isTerminalGitHubDeliveryStatus(status: GitHubDeliveryStatus): boolean {
+  return terminalGitHubDeliveryStatuses.has(status)
+}
+
 export type GitHubRepositoryBindingStatus = 'active' | 'stale' | 'revoked'
 
 export type GitHubRepositoryBinding = {

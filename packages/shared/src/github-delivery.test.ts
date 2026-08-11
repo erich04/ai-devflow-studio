@@ -9,6 +9,7 @@ import type {
 } from './domain'
 import {
   createGitHubDeliveryIntent,
+  isTerminalGitHubDeliveryStatus,
   type GitHubRepositoryBinding,
 } from './github-delivery'
 
@@ -173,6 +174,12 @@ const baseInput = {
 }
 
 describe('GitHub Delivery Intent', () => {
+  it('distinguishes recoverable delivery work from terminal outcomes', () => {
+    expect(isTerminalGitHubDeliveryStatus('recovery_required')).toBe(false)
+    expect(isTerminalGitHubDeliveryStatus('completed')).toBe(true)
+    expect(isTerminalGitHubDeliveryStatus('failed')).toBe(true)
+    expect(isTerminalGitHubDeliveryStatus('revoked')).toBe(true)
+  })
   it('binds the managed branch, expected commit, passing test, and PR package into one stable intent', async () => {
     const intent = await createGitHubDeliveryIntent(baseInput)
     const reordered = await createGitHubDeliveryIntent({

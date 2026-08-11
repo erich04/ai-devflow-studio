@@ -113,4 +113,36 @@ describe('managed workspace cleanup service', () => {
       workspace: deletedWorkspace,
     })
   })
+
+  it('releases the workspace after its Delivery Intent reaches a terminal status', async () => {
+    const deletedWorkspace: ManagedCodingWorkspace = {
+      ...workspace,
+      deletedAt: '2026-08-11T13:03:00.000Z',
+      cleanupStatus: 'deleted',
+    }
+    const terminalIntent: GitHubDeliveryIntent = {
+      ...intent(),
+      status: 'completed',
+      updatedAt: '2026-08-11T13:02:00.000Z',
+    }
+    const store = {
+      listManagedCodingWorkspaces: vi.fn(async () => [workspace]),
+      listGitHubDeliveryIntents: vi.fn(async () => [terminalIntent]),
+      commitManagedCodingWorkspaceCleanup: vi.fn(async () => ({
+        committed: true as const,
+        replayed: false,
+        workspace: deletedWorkspace,
+      })),
+    }
+    const deleteWorkspace = vi.fn(async () => deletedWorkspace)
+    const cleanup = createManagedWorkspaceCleanupService({
+      store,
+      coordinator: createWorkspaceOperationCoordinator(),
+      deleteWorkspace,
+    })
+
+    await expect(cleanup({ workspaceId: workspace.id, projectId: workspace.projectId }))
+      .resolves.toEqual(deletedWorkspace)
+    expect(deleteWorkspace).toHaveBeenCalledOnce()
+  })
 })
