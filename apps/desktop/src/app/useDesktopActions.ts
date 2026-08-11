@@ -8,6 +8,7 @@ import {
   validateTestCommandSafety,
   type CodingPermissionDecision,
   type GateEnforcementDecision,
+  type GitHubDeliveryIntent,
   type ManagedCodingWorkspace,
   type TeamMember,
   type ThemePreference,
@@ -26,9 +27,9 @@ import type { DesktopWorkspaceSetters, DesktopWorkspaceState } from './useDeskto
 import type { PendingInspectorAction, PendingInspectorActionId } from './node-inspector-view-model'
 
 const prDraftBindingFailureMessage =
-  '当前 Local Project 与 Team Project 的绑定已失效，请重新绑定后再生成 PR Draft'
+  '当前 Local Project 与 Team Project 的绑定已失效，请重新绑定后再生成 PR Delivery Package'
 const prDraftMissingBindingMessage =
-  '请先将当前 Local Project 绑定到 Team Project，再生成 PR Draft'
+  '请先将当前 Local Project 绑定到 Team Project，再生成 PR Delivery Package'
 const browserPreviewWorkflowWriteMessage =
   '浏览器预览不执行工作流推进，请在 Electron 应用中继续'
 
@@ -60,6 +61,7 @@ export function useDesktopActions(input: {
   pendingCodingPermission: DesktopWorkspaceState['codingPermissionRequests'][number] | undefined
   latestCodingRun: DesktopWorkspaceState['codingRuns'][number] | undefined
   selectedManagedWorkspace: ManagedCodingWorkspace | undefined
+  selectedGitHubDeliveryIntent?: GitHubDeliveryIntent
   gateEnforcementDecision: GateEnforcementDecision | null
   applyLocalExecutionState: (state: import('@ai-devflow/shared').LocalExecutionState) => void
 }) {
@@ -74,6 +76,7 @@ export function useDesktopActions(input: {
     pendingCodingPermission,
     latestCodingRun,
     selectedManagedWorkspace,
+    selectedGitHubDeliveryIntent,
     applyLocalExecutionState,
   } = input
   const {
@@ -152,6 +155,8 @@ export function useDesktopActions(input: {
   const { selectedLocalProject, isTestCommandDirty } = derived
   const eventsRef = useRef(events)
   eventsRef.current = events
+  const pendingInspectorActionRef = useRef(pendingInspectorAction)
+  pendingInspectorActionRef.current = pendingInspectorAction
 
   function samePendingInspectorAction(
     current: PendingInspectorAction | null,
@@ -172,17 +177,21 @@ export function useDesktopActions(input: {
     message: string,
   ): PendingInspectorAction {
     const pending: PendingInspectorAction = { actionId, runId: run.id, nodeId: node.id }
+    pendingInspectorActionRef.current = pending
     setPendingInspectorAction(pending)
     setToast(message)
     return pending
   }
 
   function clearPendingInspectorAction(pending: PendingInspectorAction) {
+    if (samePendingInspectorAction(pendingInspectorActionRef.current, pending)) {
+      pendingInspectorActionRef.current = null
+    }
     setPendingInspectorAction((current) => (samePendingInspectorAction(current, pending) ? null : current))
   }
 
   function hasInspectorWriteInFlight(): boolean {
-    return Boolean(pendingInspectorAction) || isRunningAgentReview || isStartingCodingAgent || isRunningTests
+    return Boolean(pendingInspectorActionRef.current) || isRunningAgentReview || isStartingCodingAgent || isRunningTests
   }
 
   function blockIfInspectorWriteInFlight(): boolean {
@@ -833,7 +842,7 @@ export function useDesktopActions(input: {
       node.stage !== 'pr' ||
       node.status !== 'running'
     ) {
-      setToast('只能为当前 PR 节点生成 PR Draft')
+      setToast('只能为当前 PR 节点生成 PR Delivery Package')
       return
     }
     if (!desktopApi) {
@@ -848,7 +857,7 @@ export function useDesktopActions(input: {
       return
     }
 
-    const pending = startPendingInspectorAction('createPrDraft', selectedRun, node, '正在生成 PR Draft...')
+    const pending = startPendingInspectorAction('createPrDraft', selectedRun, node, '正在生成 PR Delivery Package...')
     try {
       const result = await desktopApi.createPrDraft({
         runId: selectedRun.id,
@@ -857,10 +866,142 @@ export function useDesktopActions(input: {
       applyLocalExecutionState(result.state)
       setSelectedRunId(result.run.id)
       setSelectedNodeId(result.run.currentNodeId)
-      setToast('PR Draft 已生成')
+      setToast('PR Delivery Package 已生成；请显式 Prepare GitHub Delivery')
     } catch (error) {
       setToast(prDraftFailureMessage(error))
     } finally {
+      clearPendingInspectorAction(pending)
+    }
+  }
+
+  async function prepareSelectedGitHubDelivery() {
+    if (!selectedRun) {
+      return
+    }
+    const node = selectedRun.nodes.find((candidate) => candidate.id === selectedRun.currentNodeId)
+    if (!node || node.kind !== 'pr' || node.stage !== 'pr' || node.status !== 'running') {
+      setToast('只能为当前运行中的 PR 节点准备 GitHub Delivery')
+      return
+    }
+    const exactPackage = artifacts.find((artifact) => (
+      artifact.runId === selectedRun.id &&
+      artifact.nodeId === node.id &&
+      artifact.kind === 'pr' &&
+      artifact.redacted === true &&
+      artifact.githubDeliverySource?.stateVersion === 1 &&
+      node.artifactIds.includes(artifact.id)
+    ))
+    if (!exactPackage) {
+      setToast('请先生成并附加精确且已脱敏的 PR Delivery Package')
+      return
+    }
+    if (!desktopApi) {
+      setToast(browserPreviewWorkflowWriteMessage)
+      return
+    }
+    if (desktopPairing?.localProjectId !== selectedRun.projectId) {
+      setToast('请先将当前 Local Project 绑定到 Team Project，再准备 GitHub Delivery')
+      return
+    }
+    if (blockIfInspectorWriteInFlight()) {
+      return
+    }
+
+    const pending = startPendingInspectorAction(
+      'prepareGitHubDelivery',
+      selectedRun,
+      node,
+      '正在准备精确 GitHub Delivery...',
+    )
+    let prepared = false
+    try {
+      const result = await desktopApi.prepareGitHubDelivery({
+        runId: selectedRun.id,
+        nodeId: node.id,
+      })
+      prepared = true
+      if (result.status === 'tests_failed') {
+        setToast('GitHub Delivery 准备测试未通过；未开始远端交付')
+      } else if (result.replayed) {
+        setToast('已复核现有 GitHub Delivery Intent；不会重复创建远端请求')
+      } else {
+        setToast('GitHub Delivery 已准备，等待 Web lead/owner 显式审批')
+      }
+    } catch {
+      setToast('GitHub Delivery 准备失败；未开始新的远端交付，请检查绑定、交付包与测试证据')
+    } finally {
+      try {
+        applyLocalExecutionState(await desktopApi.loadState())
+      } catch {
+        if (prepared) {
+          setToast('GitHub Delivery 命令已返回，但本地状态刷新失败；请等待状态推送或重新打开当前 Run')
+        }
+      }
+      clearPendingInspectorAction(pending)
+    }
+  }
+
+  async function resumeSelectedGitHubDelivery() {
+    if (!selectedRun || !selectedGitHubDeliveryIntent) {
+      return
+    }
+    const node = selectedRun.nodes.find((candidate) => candidate.id === selectedRun.currentNodeId)
+    if (
+      !node ||
+      node.kind !== 'pr' ||
+      node.stage !== 'pr' ||
+      node.status !== 'running' ||
+      selectedGitHubDeliveryIntent.runId !== selectedRun.id ||
+      selectedGitHubDeliveryIntent.nodeId !== node.id ||
+      selectedGitHubDeliveryIntent.status !== 'recovery_required'
+    ) {
+      setToast('只有当前 recovery_required GitHub Delivery 才能显式 Resume')
+      return
+    }
+    if (!desktopApi) {
+      setToast(browserPreviewWorkflowWriteMessage)
+      return
+    }
+    if (desktopPairing?.localProjectId !== selectedRun.projectId) {
+      setToast('当前 Local Project 与 Team Project 未绑定，不能恢复 GitHub Delivery')
+      return
+    }
+    if (blockIfInspectorWriteInFlight()) {
+      return
+    }
+
+    const pending = startPendingInspectorAction(
+      'resumeGitHubDelivery',
+      selectedRun,
+      node,
+      '正在按精确 intent 版本恢复 GitHub Delivery...',
+    )
+    let resumed = false
+    try {
+      const result = await desktopApi.resumeGitHubDelivery({
+        intentId: selectedGitHubDeliveryIntent.id,
+        expectedUpdatedAt: selectedGitHubDeliveryIntent.updatedAt,
+      })
+      resumed = true
+      if (result.disposition === 'recovery_required') {
+        setToast('GitHub Delivery 仍需恢复；自动处理保持停止')
+      } else if (result.disposition === 'local_conflict') {
+        setToast('GitHub Delivery 本地状态已变化（stale/local conflict）；Resume 未被接受，请以刷新后的状态为准')
+      } else if (result.disposition === 'failed' || result.disposition === 'revoked') {
+        setToast('GitHub Delivery 已安全停止，不会自动重试')
+      } else {
+        setToast('GitHub Delivery Resume 已接受，后续状态将由本地处理器刷新')
+      }
+    } catch {
+      setToast('GitHub Delivery Resume 响应未完成；不会自动重试，请以刷新后的本地持久化状态为准')
+    } finally {
+      try {
+        applyLocalExecutionState(await desktopApi.loadState())
+      } catch {
+        if (resumed) {
+          setToast('GitHub Delivery Resume 已返回，但本地状态刷新失败；请等待状态推送后再操作')
+        }
+      }
       clearPendingInspectorAction(pending)
     }
   }
@@ -950,6 +1091,8 @@ export function useDesktopActions(input: {
     createRun,
     deleteRun,
     generatePrDraft,
+    prepareSelectedGitHubDelivery,
+    resumeSelectedGitHubDelivery,
     generateAcceptanceBundle,
     toggleMcp,
     redactPreview,

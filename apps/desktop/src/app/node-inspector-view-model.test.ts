@@ -1,12 +1,80 @@
 import { describe, expect, it } from 'vitest'
-import type { WorkflowNode } from '@ai-devflow/shared'
+import type { Artifact, GitHubDeliveryIntent, WorkflowNode } from '@ai-devflow/shared'
 import { artifacts as fixtureArtifacts, runs as fixtureRuns } from '@ai-devflow/shared/fixtures'
 import {
   buildNodeInspectorViewModel,
   resolveInspectorTabForSearchResult,
+  selectGitHubDeliveryIntentForInspector,
 } from './node-inspector-view-model'
 
 const run = fixtureRuns[0]!
+
+function prDeliveryPackage(nodeId: string): Artifact {
+  return {
+    id: 'artifact-pr-delivery-package',
+    runId: run.id,
+    nodeId,
+    kind: 'pr',
+    title: 'PR Delivery Package',
+    summary: 'Redacted package bound to the reviewed coding source.',
+    content: 'Safe delivery summary.',
+    redacted: true,
+    updatedAt: '2026-08-11T12:00:00.000Z',
+    githubDeliverySource: {
+      stateVersion: 1,
+      codingRunId: 'coding-run-1',
+      workspaceId: 'workspace-1',
+      diffArtifactId: 'diff-1',
+      diffSourceDigest: 'a'.repeat(64),
+      testEvidenceId: 'test-evidence-1',
+      headBranch: 'devflow/run-1',
+    },
+  }
+}
+
+function githubDeliveryIntent(
+  status: GitHubDeliveryIntent['status'],
+  overrides: Partial<GitHubDeliveryIntent> = {},
+): GitHubDeliveryIntent {
+  return {
+    stateVersion: 1,
+    id: 'github-delivery-intent-1',
+    organizationId: 'org-demo',
+    teamProjectId: run.projectId,
+    localProjectId: run.projectId,
+    runId: run.id,
+    runVersion: run.version,
+    nodeId: 'n-pr',
+    repositoryBindingId: 'github-binding-1',
+    repositoryBindingVersion: 3,
+    installationId: '12345',
+    repositoryId: '98765',
+    codingRunId: 'coding-run-1',
+    codingRunCompletedAt: '2026-08-11T11:30:00.000Z',
+    workspaceId: 'workspace-1',
+    repository: 'erich/ai-devflow-studio',
+    baseBranch: 'main',
+    headBranch: 'devflow/run-1',
+    baseCommitSha: '1'.repeat(40),
+    expectedCommitSha: '2'.repeat(40),
+    diffArtifactId: 'diff-1',
+    diffSourceDigest: 'a'.repeat(64),
+    testEvidenceId: 'test-evidence-1',
+    testEvidenceCreatedAt: '2026-08-11T11:45:00.000Z',
+    testEvidenceDigest: 'b'.repeat(64),
+    prPackageArtifactId: 'artifact-pr-delivery-package',
+    prPackageUpdatedAt: '2026-08-11T12:00:00.000Z',
+    prPackageDigest: 'c'.repeat(64),
+    changedPaths: ['apps/desktop/src/App.tsx'],
+    intentDigest: 'd'.repeat(64),
+    idempotencyKey: 'github-delivery:v1:fixture',
+    status,
+    createdAt: '2026-08-11T12:01:00.000Z',
+    updatedAt: '2026-08-11T12:02:00.000Z',
+    redacted: true,
+    ...overrides,
+  }
+}
 
 function findNode(predicate: (node: WorkflowNode) => boolean): WorkflowNode {
   const node = run.nodes.find(predicate)
@@ -248,6 +316,216 @@ describe('node inspector view model', () => {
     expect(viewModelFor(buildNode).actions.map((action) => action.id)).not.toContain('approveGate')
     expect(viewModelFor(testNode).actions.map((action) => action.id)).not.toContain('approveGate')
     expect(viewModelFor(prNode).actions.map((action) => action.id)).not.toContain('approveGate')
+  })
+
+  it('requires an explicit GitHub Delivery preparation after the exact PR package is attached', () => {
+    const prNode = findNode((candidate) => candidate.kind === 'pr')
+    const prPackage = prDeliveryPackage(prNode.id)
+
+    const viewModel = viewModelFor(prNode, { artifacts: [prPackage] })
+
+    expect(viewModel.nextAction).toMatchObject({
+      title: 'Prepare GitHub Delivery',
+      primaryActionId: 'prepareGitHubDelivery',
+      secondaryActionIds: [],
+    })
+    expect(viewModel.actions.map((action) => action.id)).not.toContain('createPrDraft')
+  })
+
+  it('waits for an explicit Web lead or owner approval after preparation', () => {
+    const prNode = findNode((candidate) => candidate.kind === 'pr')
+    const viewModel = viewModelFor(prNode, {
+      artifacts: [prDeliveryPackage(prNode.id)],
+      githubDeliveryIntent: githubDeliveryIntent('approval_required'),
+    })
+
+    expect(viewModel.nextAction).toMatchObject({
+      title: '等待 Web 审批',
+      secondaryActionIds: [],
+    })
+    expect(viewModel.nextAction.copy).toContain('lead/owner')
+    expect(viewModel.nextAction.primaryActionId).toBeUndefined()
+  })
+
+  it('offers only the explicit resume action when automatic recovery has stopped', () => {
+    const prNode = findNode((candidate) => candidate.kind === 'pr')
+    const viewModel = viewModelFor(prNode, {
+      artifacts: [prDeliveryPackage(prNode.id)],
+      githubDeliveryIntent: githubDeliveryIntent('recovery_required'),
+    })
+
+    expect(viewModel.nextAction).toMatchObject({
+      title: '恢复 GitHub Delivery',
+      primaryActionId: 'resumeGitHubDelivery',
+      secondaryActionIds: [],
+    })
+    expect(viewModel.nextAction.copy).toContain('显式 Resume')
+    expect(viewModel.actions.map((action) => action.id)).not.toContain('prepareGitHubDelivery')
+  })
+
+  it.each([
+    'approved',
+    'publishing_branch',
+    'branch_published',
+    'creating_pr',
+  ] as const)('leaves %s delivery progress to the bounded background processor', (status) => {
+    const prNode = findNode((candidate) => candidate.kind === 'pr')
+    const viewModel = viewModelFor(prNode, {
+      artifacts: [prDeliveryPackage(prNode.id)],
+      githubDeliveryIntent: githubDeliveryIntent(status),
+    })
+
+    expect(viewModel.nextAction.title).toBe('GitHub Delivery 自动推进中')
+    expect(viewModel.nextAction.copy).toContain('无需再次点击')
+    expect(viewModel.nextAction.primaryActionId).toBeUndefined()
+  })
+
+  it('describes failed delivery without inferring whether authorization was consumed', () => {
+    const prNode = findNode((candidate) => candidate.kind === 'pr')
+    const viewModel = viewModelFor(prNode, {
+      artifacts: [prDeliveryPackage(prNode.id)],
+      githubDeliveryIntent: githubDeliveryIntent('failed'),
+    })
+
+    expect(viewModel.nextAction.copy).toContain('安全停止')
+    expect(viewModel.nextAction.copy).toContain('不会自动重试')
+    expect(viewModel.nextAction.copy).toContain('核对远端记录')
+    expect(viewModel.nextAction.copy).not.toMatch(/授权.*消耗/)
+  })
+
+  it('treats a completed Draft PR as delivery evidence while workflow advancement catches up', () => {
+    const prNode = findNode((candidate) => candidate.kind === 'pr')
+    const viewModel = viewModelFor(prNode, {
+      artifacts: [prDeliveryPackage(prNode.id)],
+      githubDeliveryIntent: githubDeliveryIntent('completed', {
+        completion: {
+          stateVersion: 1,
+          remoteRequestId: 'delivery-request-1',
+          publicationId: 'publication-1',
+          pullRequestOutcomeId: 'pull-request-outcome-1',
+          pullRequestId: '123456',
+          pullRequestNumber: 17,
+          pullRequestUrl: 'https://github.com/erich/ai-devflow-studio/pull/17',
+          providerCreatedAt: '2026-08-11T12:03:00.000Z',
+          recordedAt: '2026-08-11T12:03:01.000Z',
+          draft: true,
+          redacted: true,
+        },
+      }),
+    })
+
+    expect(viewModel.nextAction).toMatchObject({
+      title: 'Draft PR 已创建',
+      secondaryActionIds: [],
+    })
+    expect(viewModel.nextAction.copy).toContain('Workflow')
+    expect(viewModel.nextAction.primaryActionId).toBeUndefined()
+  })
+
+  it('selects the completed PR intent recorded on the Acceptance Run instead of a newer historical intent', () => {
+    const acceptanceNode = findNode((candidate) => candidate.kind === 'acceptance')
+    const pullRequestUrl = 'https://github.com/erich/ai-devflow-studio/pull/17'
+    const prPackageArtifactId = 'artifact-pr-delivery-package'
+    const acceptanceRun = {
+      ...run,
+      pullRequestUrl,
+      nodes: run.nodes.map((node) => (
+        node.kind === 'pr'
+          ? { ...node, artifactIds: [...node.artifactIds, prPackageArtifactId] }
+          : node
+      )),
+    }
+    const canonicalIntent = githubDeliveryIntent('completed', {
+      prPackageArtifactId,
+      completion: {
+        stateVersion: 1,
+        remoteRequestId: 'delivery-request-1',
+        publicationId: 'publication-1',
+        pullRequestOutcomeId: 'pull-request-outcome-1',
+        pullRequestId: '123456',
+        pullRequestNumber: 17,
+        pullRequestUrl,
+        providerCreatedAt: '2026-08-11T12:03:00.000Z',
+        recordedAt: '2026-08-11T12:03:01.000Z',
+        draft: true,
+        redacted: true,
+      },
+    })
+    const newerHistoricalIntent = githubDeliveryIntent('completed', {
+      id: 'github-delivery-intent-historical',
+      prPackageArtifactId,
+      updatedAt: '2026-08-11T13:00:00.000Z',
+      completion: {
+        ...canonicalIntent.completion!,
+        pullRequestId: '654321',
+        pullRequestNumber: 18,
+        pullRequestUrl: 'https://github.com/erich/ai-devflow-studio/pull/18',
+      },
+    })
+
+    expect(selectGitHubDeliveryIntentForInspector({
+      run: acceptanceRun,
+      node: acceptanceNode,
+      intents: [newerHistoricalIntent, canonicalIntent],
+    })).toBe(canonicalIntent)
+  })
+
+  it('fails closed when more than one PR intent claims the Acceptance Run Draft URL', () => {
+    const acceptanceNode = findNode((candidate) => candidate.kind === 'acceptance')
+    const pullRequestUrl = 'https://github.com/erich/ai-devflow-studio/pull/17'
+    const prPackageArtifactId = 'artifact-pr-delivery-package'
+    const acceptanceRun = {
+      ...run,
+      pullRequestUrl,
+      nodes: run.nodes.map((node) => (
+        node.kind === 'pr'
+          ? { ...node, artifactIds: [...node.artifactIds, prPackageArtifactId] }
+          : node
+      )),
+    }
+    const canonicalIntent = githubDeliveryIntent('completed', {
+      prPackageArtifactId,
+      completion: {
+        stateVersion: 1,
+        remoteRequestId: 'delivery-request-1',
+        publicationId: 'publication-1',
+        pullRequestOutcomeId: 'pull-request-outcome-1',
+        pullRequestId: '123456',
+        pullRequestNumber: 17,
+        pullRequestUrl,
+        providerCreatedAt: '2026-08-11T12:03:00.000Z',
+        recordedAt: '2026-08-11T12:03:01.000Z',
+        draft: true,
+        redacted: true,
+      },
+    })
+    const conflictingIntent = {
+      ...canonicalIntent,
+      id: 'github-delivery-intent-conflict',
+      expectedCommitSha: '3'.repeat(40),
+      intentDigest: 'e'.repeat(64),
+    }
+
+    expect(selectGitHubDeliveryIntentForInspector({
+      run: acceptanceRun,
+      node: acceptanceNode,
+      intents: [canonicalIntent, conflictingIntent],
+    })).toBeUndefined()
+  })
+
+  it.each([
+    ['failed', '交付已安全停止', '不会自动重试'],
+    ['revoked', 'GitHub 授权已撤销', '重新绑定'],
+  ] as const)('shows a safe operator next step for %s delivery', (status, title, guidance) => {
+    const prNode = findNode((candidate) => candidate.kind === 'pr')
+    const viewModel = viewModelFor(prNode, {
+      artifacts: [prDeliveryPackage(prNode.id)],
+      githubDeliveryIntent: githubDeliveryIntent(status),
+    })
+
+    expect(viewModel.nextAction.title).toBe(title)
+    expect(viewModel.nextAction.copy).toContain(guidance)
+    expect(viewModel.nextAction.primaryActionId).toBeUndefined()
   })
 
   it('keeps build budget guidance neutral until a concrete budget decision is available', () => {

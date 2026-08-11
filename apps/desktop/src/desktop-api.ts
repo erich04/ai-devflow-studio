@@ -35,7 +35,11 @@ import type {
   LoadRepositoryKnowledgeInput,
   MaterializeWorkRequestInput,
   MaterializeWorkRequestResult,
+  PrepareGitHubDeliveryInput,
+  PrepareGitHubDeliveryResult,
   RefreshRepositoryKnowledgeInput,
+  ResumeGitHubDeliveryInput,
+  ResumeGitHubDeliveryResult,
   RetryRemoteSyncOperationInput,
 } from '../electron/ipc-contract'
 
@@ -217,6 +221,12 @@ export type DevFlowDesktopApi = {
   deleteRun: (input: DeleteRunInput) => Promise<DeleteRunResult>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
+  prepareGitHubDelivery: (
+    input: PrepareGitHubDeliveryInput,
+  ) => Promise<PrepareGitHubDeliveryResult>
+  resumeGitHubDelivery: (
+    input: ResumeGitHubDeliveryInput,
+  ) => Promise<ResumeGitHubDeliveryResult>
   createAcceptanceBundle: (
     input: CreateAcceptanceBundleInput,
   ) => Promise<CreateAcceptanceBundleResult>

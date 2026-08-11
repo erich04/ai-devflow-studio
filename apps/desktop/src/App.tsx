@@ -38,7 +38,10 @@ import {
   type SearchResultItem,
   matchesQuery,
 } from './app/desktop-view-model'
-import { resolveInspectorTabForSearchResult } from './app/node-inspector-view-model'
+import {
+  resolveInspectorTabForSearchResult,
+  selectGitHubDeliveryIntentForInspector,
+} from './app/node-inspector-view-model'
 import { useDesktopActions } from './app/useDesktopActions'
 import { useDesktopWorkspace } from './app/useDesktopWorkspace'
 import { useWorkRequestInbox } from './app/useWorkRequestInbox'
@@ -116,6 +119,7 @@ export function App() {
     managedCodingWorkspaces,
     dependencyBootstrapEvidence,
     codingDiffArtifacts,
+    githubDeliveryIntents,
     retryAttempts,
     remoteSyncOperations,
     providerIdDraft,
@@ -324,6 +328,14 @@ export function App() {
   const selectedRun = scopedRuns.find((run) => run.id === selectedRunId) ?? scopedRuns[0]
   const selectedNode =
     selectedRun?.nodes.find((node) => node.id === selectedNodeId) ?? selectedRun?.nodes[0]
+  const selectedGitHubDeliveryIntent = useMemo(
+    () => selectGitHubDeliveryIntentForInspector({
+      run: selectedRun,
+      node: selectedNode,
+      intents: githubDeliveryIntents,
+    }),
+    [githubDeliveryIntents, selectedNode, selectedRun],
+  )
   const hasSelectedLocalProjectBinding = Boolean(
     selectedLocalProject && desktopPairing?.localProjectId === selectedLocalProject.id,
   )
@@ -619,6 +631,8 @@ export function App() {
     createRun,
     deleteRun,
     generatePrDraft,
+    prepareSelectedGitHubDelivery,
+    resumeSelectedGitHubDelivery,
     generateAcceptanceBundle,
     toggleMcp,
     redactPreview,
@@ -633,6 +647,9 @@ export function App() {
     pendingCodingPermission,
     latestCodingRun,
     selectedManagedWorkspace,
+    ...(selectedGitHubDeliveryIntent
+      ? { selectedGitHubDeliveryIntent }
+      : {}),
     gateEnforcementDecision: gateEnforcement.decision,
     applyLocalExecutionState,
   })
@@ -1107,7 +1124,10 @@ export function App() {
                   onOpenKnowledgeReference={openKnowledgeReference}
                   onRunCodingAgent={runCodingAgent}
                   onCreatePrDraft={generatePrDraft}
+                  onPrepareGitHubDelivery={prepareSelectedGitHubDelivery}
+                  onResumeGitHubDelivery={resumeSelectedGitHubDelivery}
                   onCreateAcceptanceBundle={generateAcceptanceBundle}
+                  selectedGitHubDeliveryIntent={selectedGitHubDeliveryIntent}
                   isRunningTests={isRunningTests}
                   isRunningAgentReview={isRunningAgentReview}
                   isStartingCodingAgent={isStartingCodingAgent}

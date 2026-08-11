@@ -19,6 +19,7 @@ import {
   type DataOrigin,
   type GateEnforcementDecision,
   type GateOverrideDecision,
+  type GitHubDeliveryIntent,
   type KnowledgeDocument,
   type KnowledgeEntity,
   type KnowledgeGovernanceCheck,
@@ -35,6 +36,7 @@ import {
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import { GateEnforcementPanel } from '../GateEnforcementPanel'
+import { GitHubDeliveryPanel } from '../GitHubDeliveryPanel'
 import {
   buildWorkflowBoard,
   currentRunPhaseCopy,
@@ -225,7 +227,10 @@ export function Inspector({
   onOpenKnowledgeReference,
   onRunCodingAgent,
   onCreatePrDraft,
+  onPrepareGitHubDelivery,
+  onResumeGitHubDelivery,
   onCreateAcceptanceBundle,
+  selectedGitHubDeliveryIntent,
   isRunningTests,
   isRunningAgentReview,
   isStartingCodingAgent,
@@ -259,7 +264,10 @@ export function Inspector({
   onOpenKnowledgeReference: (referenceId: string, documentId?: string) => void
   onRunCodingAgent: () => void
   onCreatePrDraft: () => void
+  onPrepareGitHubDelivery: () => void
+  onResumeGitHubDelivery: () => void
   onCreateAcceptanceBundle: () => void
+  selectedGitHubDeliveryIntent: GitHubDeliveryIntent | undefined
   isRunningTests: boolean
   isRunningAgentReview: boolean
   isStartingCodingAgent: boolean
@@ -297,6 +305,9 @@ export function Inspector({
     isLoadingGateEnforcement,
     canApprove,
     hasTeamProjectBinding: hasDeliveryProjectBinding,
+    ...(selectedGitHubDeliveryIntent
+      ? { githubDeliveryIntent: selectedGitHubDeliveryIntent }
+      : {}),
   })
   const focusedArtifactId =
     supportContext?.focusTarget === 'artifact' &&
@@ -323,6 +334,8 @@ export function Inspector({
     approveGate: onApprove,
     runCodingAgent: onRunCodingAgent,
     createPrDraft: onCreatePrDraft,
+    prepareGitHubDelivery: onPrepareGitHubDelivery,
+    resumeGitHubDelivery: onResumeGitHubDelivery,
     createAcceptanceBundle: onCreateAcceptanceBundle,
   }
   const writeActionIds = new Set<InspectorActionId>([
@@ -330,6 +343,8 @@ export function Inspector({
     'approveGate',
     'runCodingAgent',
     'createPrDraft',
+    'prepareGitHubDelivery',
+    'resumeGitHubDelivery',
     'createAcceptanceBundle',
   ])
   const hasPendingInspectorAction = Boolean(pendingInspectorAction)
@@ -374,6 +389,12 @@ export function Inspector({
       if (action.id === 'completeAgent' || action.id === 'createPrDraft' || action.id === 'createAcceptanceBundle') {
         return '生成中'
       }
+      if (action.id === 'prepareGitHubDelivery') {
+        return '准备中'
+      }
+      if (action.id === 'resumeGitHubDelivery') {
+        return '恢复中'
+      }
     }
     if (action.id === 'openKnowledgeReview' && isRunningAgentReview) {
       return '审查中'
@@ -408,6 +429,9 @@ export function Inspector({
         return <Code2 size={16} />
       case 'createPrDraft':
         return <GitPullRequest size={16} />
+      case 'prepareGitHubDelivery':
+      case 'resumeGitHubDelivery':
+        return <RefreshCw size={16} />
       case 'createAcceptanceBundle':
         return <ClipboardCheck size={16} />
     }
@@ -558,9 +582,18 @@ export function Inspector({
   const renderDeliveryHandoff = () => (
     <div className="handoff-bundle" data-testid="delivery-handoff">
       <span className="panel-label">Delivery Handoff</span>
+      <GitHubDeliveryPanel
+        intent={selectedGitHubDeliveryIntent}
+        surface={selectedNode.kind === 'acceptance' ? 'acceptance' : 'pr'}
+        hasExactPrPackage={artifacts.some((artifact) => (
+          artifact.kind === 'pr' &&
+          artifact.redacted === true &&
+          artifact.githubDeliverySource?.stateVersion === 1
+        ))}
+      />
       <article className="mini-card">
         <div className="compact-row">
-          <strong>PR Draft</strong>
+          <strong>PR Delivery Package</strong>
           <span className="pill soft">{artifacts.some((artifact) => artifact.kind === 'pr') ? 'ready' : 'pending'}</span>
         </div>
         <p className="meta">汇总 diff、tests、policy、budget、review，作为 PR Delivery Gate 的交付摘要。</p>

@@ -9,7 +9,9 @@ import {
   createWarnOnlyDefaultPolicy,
   indexKnowledgeSources,
   resolveEffectivePolicy,
+  type Artifact,
   type DesktopPairingCredential,
+  type GitHubDeliveryIntent,
   type RepositoryKnowledgeSnapshot,
   type RemoteSyncOperation,
   validateTestCommandSafety,
@@ -187,6 +189,93 @@ function localStateAtCurrentNode(nodeId: string) {
   return desktopState({
     projects: [localProject],
     runs: [fixtureRunAtCurrentNode(nodeId)],
+    desktopPairingCredential: fixturePairingCredential,
+  })
+}
+
+function prDeliveryPackageFixture(): Artifact {
+  return {
+    id: 'artifact-pr-delivery-package',
+    runId: fixtureRuns[0]!.id,
+    nodeId: 'n-pr',
+    kind: 'pr',
+    title: 'PR Delivery Package',
+    summary: 'Redacted package bound to the reviewed coding source.',
+    content: 'Safe delivery summary.',
+    redacted: true,
+    updatedAt: '2026-08-11T12:00:00.000Z',
+    githubDeliverySource: {
+      stateVersion: 1,
+      codingRunId: 'coding-run-1',
+      workspaceId: 'workspace-1',
+      diffArtifactId: 'diff-1',
+      diffSourceDigest: 'a'.repeat(64),
+      testEvidenceId: 'test-evidence-1',
+      headBranch: 'devflow/run-1',
+    },
+  }
+}
+
+function githubDeliveryIntentFixture(
+  status: GitHubDeliveryIntent['status'],
+  overrides: Partial<GitHubDeliveryIntent> = {},
+): GitHubDeliveryIntent {
+  return {
+    stateVersion: 1,
+    id: 'github-delivery-intent-1',
+    organizationId: 'org-demo',
+    teamProjectId: fixtureRuns[0]!.projectId,
+    localProjectId: fixtureRuns[0]!.projectId,
+    runId: fixtureRuns[0]!.id,
+    runVersion: fixtureRuns[0]!.version,
+    nodeId: 'n-pr',
+    repositoryBindingId: 'binding-1',
+    repositoryBindingVersion: 4,
+    installationId: '12345',
+    repositoryId: '98765',
+    codingRunId: 'coding-run-1',
+    codingRunCompletedAt: '2026-08-11T11:30:00.000Z',
+    workspaceId: 'workspace-1',
+    repository: 'erich/ai-devflow-studio',
+    baseBranch: 'main',
+    headBranch: 'devflow/run-1',
+    baseCommitSha: '1'.repeat(40),
+    expectedCommitSha: '2'.repeat(40),
+    diffArtifactId: 'diff-1',
+    diffSourceDigest: 'a'.repeat(64),
+    testEvidenceId: 'test-evidence-1',
+    testEvidenceCreatedAt: '2026-08-11T11:45:00.000Z',
+    testEvidenceDigest: 'b'.repeat(64),
+    prPackageArtifactId: 'artifact-pr-delivery-package',
+    prPackageUpdatedAt: '2026-08-11T12:00:00.000Z',
+    prPackageDigest: 'c'.repeat(64),
+    changedPaths: ['apps/desktop/src/App.tsx'],
+    intentDigest: 'd'.repeat(64),
+    idempotencyKey: 'github-delivery:v1:fixture',
+    status,
+    createdAt: '2026-08-11T12:01:00.000Z',
+    updatedAt: '2026-08-11T12:02:00.000Z',
+    redacted: true,
+    ...overrides,
+  }
+}
+
+function prDeliveryState(intent?: GitHubDeliveryIntent) {
+  const artifact = prDeliveryPackageFixture()
+  const run = fixtureRunAtCurrentNode('n-pr')
+  const linkedRun = {
+    ...run,
+    nodes: run.nodes.map((node) => (
+      node.id === 'n-pr'
+        ? { ...node, artifactIds: [...new Set([...node.artifactIds, artifact.id])] }
+        : node
+    )),
+  }
+  return desktopState({
+    projects: [localProject],
+    runs: [linkedRun],
+    artifacts: [artifact],
+    githubDeliveryIntents: intent ? [intent] : [],
     desktopPairingCredential: fixturePairingCredential,
   })
 }
@@ -464,6 +553,15 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         content: 'Compare: https://github.com/erich/payments-api/compare/main...ai/payment-retry',
         redacted: true,
         updatedAt: timestamp,
+        githubDeliverySource: {
+          stateVersion: 1 as const,
+          codingRunId: 'coding-run-1',
+          workspaceId: 'workspace-1',
+          diffArtifactId: 'diff-1',
+          diffSourceDigest: 'a'.repeat(64),
+          testEvidenceId: 'test-evidence-1',
+          headBranch: 'devflow/run-1',
+        },
       }
       const event = {
         id: `event-${artifact.id}`,
@@ -474,22 +572,19 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         message: 'PR draft generated.',
         timestamp,
       }
-      const acceptanceNode = deliveryRun.nodes.find((node) => node.kind === 'acceptance')
       deliveryRun = {
         ...deliveryRun,
         status: 'paused_at_gate',
-        currentNodeId: acceptanceNode?.id ?? nodeId,
+        currentNodeId: nodeId,
+        version: deliveryRun.version + 1,
         updatedAt: timestamp,
         nodes: deliveryRun.nodes.map((node) => {
           if (node.id === nodeId) {
             return {
               ...node,
-              status: 'success' as const,
+              status: 'running' as const,
               artifactIds: [...node.artifactIds, artifact.id],
             }
-          }
-          if (node.id === acceptanceNode?.id) {
-            return { ...node, status: 'running' as const }
           }
           return node
         }),
@@ -509,6 +604,12 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         }),
       }
     }),
+    prepareGitHubDelivery: vi.fn().mockRejectedValue(
+      new Error('GitHub Delivery preparation is not configured for this test.'),
+    ),
+    resumeGitHubDelivery: vi.fn().mockRejectedValue(
+      new Error('GitHub Delivery recovery is not configured for this test.'),
+    ),
     createAcceptanceBundle: vi.fn().mockImplementation(async ({ runId, nodeId }) => {
       const timestamp = '2026-06-15T00:07:00.000Z'
       const artifact = {
@@ -1723,7 +1824,7 @@ describe('App', () => {
     )
   })
 
-  it('generates PR draft and acceptance bundle artifacts from the inspector', async () => {
+  it('generates the PR Delivery Package without advancing to Acceptance', async () => {
     const api = installDesktopApi({
       loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-pr')),
       loadRemoteSnapshot: vi.fn().mockResolvedValue({
@@ -1754,23 +1855,16 @@ describe('App', () => {
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /生成 PR Draft/ }))
+      fireEvent.click(screen.getByRole('button', { name: /生成 PR Delivery Package/ }))
     })
 
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('业务验收')
-    fireEvent.click(screen.getByTestId('flow-node-n-pr'))
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('创建 PR')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Prepare GitHub Delivery')
     fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /Artifacts/ }))
     expect(await screen.findByText(/PR Draft:/)).toBeInTheDocument()
     expect(screen.getByText(/Compare:/)).not.toBeNull()
-
-    fireEvent.click(screen.getByTestId('flow-node-n-accept'))
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /生成验收证据包/ }))
-    })
-
-    fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /Artifacts/ }))
-    expect(await screen.findByText(/Acceptance Bundle:/)).toBeInTheDocument()
-    expect(screen.getByText(/PR Draft:/)).toBeInTheDocument()
+    expect(screen.getByTestId('flow-node-n-pr')).toHaveTextContent('当前步骤')
+    expect(screen.getByTestId('flow-node-n-accept')).toHaveTextContent('等待中')
   })
 
   it('delegates paired project resolution to the trusted PR draft command', async () => {
@@ -1830,7 +1924,7 @@ describe('App', () => {
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /生成 PR Draft/ }))
+      fireEvent.click(screen.getByRole('button', { name: /生成 PR Delivery Package/ }))
     })
 
     expect(api.createPrDraft).toHaveBeenCalledWith({
@@ -1892,7 +1986,7 @@ describe('App', () => {
 
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     const inspector = screen.getByTestId('node-inspector')
-    const action = within(inspector).getByRole('button', { name: /生成 PR Draft/ })
+    const action = within(inspector).getByRole('button', { name: /生成 PR Delivery Package/ })
 
     expect(action).toBeDisabled()
     expect(inspector).toHaveTextContent('先绑定当前 Local Project 与 Team Project')
@@ -1915,7 +2009,7 @@ describe('App', () => {
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     const inspector = screen.getByTestId('node-inspector')
 
-    expect(within(inspector).getByRole('button', { name: /生成 PR Draft/ })).toBeDisabled()
+    expect(within(inspector).getByRole('button', { name: /生成 PR Delivery Package/ })).toBeDisabled()
     expect(inspector).toHaveTextContent('先绑定当前 Local Project 与 Team Project')
     expect(api.createPrDraft).not.toHaveBeenCalled()
   })
@@ -1932,10 +2026,10 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: /生成 PR Draft/ }))
+    fireEvent.click(screen.getByRole('button', { name: /生成 PR Delivery Package/ }))
 
     const toast = await screen.findByTestId('toast')
-    expect(toast).toHaveTextContent('当前 Local Project 与 Team Project 的绑定已失效，请重新绑定后再生成 PR Draft')
+    expect(toast).toHaveTextContent('当前 Local Project 与 Team Project 的绑定已失效，请重新绑定后再生成 PR Delivery Package')
     expect(toast).not.toHaveTextContent('Error invoking remote method')
   })
 
@@ -1947,11 +2041,11 @@ describe('App', () => {
 
     expect(api.createPrDraft).not.toHaveBeenCalled()
     expect(screen.getByTestId('pr-draft-action-toast')).toHaveTextContent(
-      '请先将当前 Local Project 绑定到 Team Project，再生成 PR Draft',
+      '请先将当前 Local Project 绑定到 Team Project，再生成 PR Delivery Package',
     )
   })
 
-  it('routes the current PR node primary CTA to PR draft generation', async () => {
+  it('routes the current PR node primary CTA to PR Delivery Package generation', async () => {
     const api = installDesktopApi({
       loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-pr')),
       loadRemoteSnapshot: vi.fn().mockResolvedValue({
@@ -1981,19 +2075,305 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     const inspector = screen.getByTestId('node-inspector')
-    expect(inspector).toHaveTextContent('生成 PR Draft')
+    expect(inspector).toHaveTextContent('生成 PR Delivery Package')
     await act(async () => {
-      fireEvent.click(within(inspector).getByRole('button', { name: /生成 PR Draft/ }))
+      fireEvent.click(within(inspector).getByRole('button', { name: /生成 PR Delivery Package/ }))
     })
 
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('业务验收')
-    fireEvent.click(screen.getByTestId('flow-node-n-pr'))
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Prepare GitHub Delivery')
     fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /Artifacts/ }))
     expect(await screen.findByText(/PR Draft:/)).toBeInTheDocument()
     expect(api.createPrDraft).toHaveBeenCalledWith({
       runId: fixtureRuns[0]!.id,
       nodeId: 'n-pr',
     })
+  })
+
+  it('keeps PR package creation separate from explicit GitHub Delivery preparation', async () => {
+    const preparedIntent = githubDeliveryIntentFixture('approval_required')
+    const initialState = prDeliveryState()
+    const preparedState = prDeliveryState(preparedIntent)
+    const loadState = vi.fn()
+      .mockResolvedValueOnce(initialState)
+      .mockResolvedValue(preparedState)
+    const prepareGitHubDelivery = vi.fn().mockResolvedValue({
+      status: 'prepared',
+      replayed: false,
+      intent: preparedIntent,
+      testEvidence: {
+        id: preparedIntent.testEvidenceId,
+        runId: preparedIntent.runId,
+        nodeId: 'n-build',
+        projectId: preparedIntent.localProjectId,
+        command: 'pnpm test',
+        cwd: '[redacted-local-path]',
+        status: 'passed',
+        exitCode: 0,
+        durationMs: 1234,
+        stdout: 'tests passed',
+        stderr: '',
+        summary: 'Tests passed.',
+        redacted: true,
+        sourceCommitSha: preparedIntent.expectedCommitSha,
+        createdAt: preparedIntent.testEvidenceCreatedAt,
+      },
+    })
+    const api = installDesktopApi({
+      loadState,
+      prepareGitHubDelivery,
+    } as Partial<DevFlowDesktopApi>)
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    const inspector = screen.getByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('Prepare GitHub Delivery')
+    expect(within(inspector).queryByRole('button', { name: '生成 PR Delivery Package' })).not.toBeInTheDocument()
+
+    const prepareButton = within(inspector).getByRole('button', { name: 'Prepare GitHub Delivery' })
+    expect(prepareButton).not.toBeDisabled()
+    fireEvent.click(prepareButton)
+
+    await waitFor(() => expect(prepareGitHubDelivery).toHaveBeenCalledWith({
+      runId: fixtureRuns[0]!.id,
+      nodeId: 'n-pr',
+    }))
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
+    expect(screen.getByTestId('github-delivery-panel')).toHaveTextContent('approval_required')
+    expect(screen.getByTestId('github-delivery-panel')).toHaveTextContent(preparedIntent.expectedCommitSha)
+    expect(api.createPrDraft).not.toHaveBeenCalled()
+  })
+
+  it('resumes recovery exactly once with the visible intent updatedAt CAS', async () => {
+    const recoveryIntent = githubDeliveryIntentFixture('recovery_required')
+    const advancedIntent = {
+      ...recoveryIntent,
+      status: 'approved' as const,
+      updatedAt: '2026-08-11T12:04:00.000Z',
+    }
+    const loadState = vi.fn()
+      .mockResolvedValueOnce(prDeliveryState(recoveryIntent))
+      .mockResolvedValue(prDeliveryState(advancedIntent))
+    const resumeGitHubDelivery = vi.fn().mockResolvedValue({
+      intentId: recoveryIntent.id,
+      remoteRequestId: 'delivery-request-1',
+      disposition: 'advanced',
+      outcomeCode: null,
+    })
+    const api = installDesktopApi({
+      loadState,
+      resumeGitHubDelivery,
+    } as Partial<DevFlowDesktopApi>)
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    const inspector = screen.getByTestId('node-inspector')
+    const resumeButton = within(inspector).getByRole('button', { name: 'Resume GitHub Delivery' })
+    expect(inspector).toHaveTextContent('recovery_required')
+
+    fireEvent.click(resumeButton)
+    fireEvent.click(resumeButton)
+
+    await waitFor(() => expect(resumeGitHubDelivery).toHaveBeenCalledTimes(1))
+    expect(resumeGitHubDelivery).toHaveBeenCalledWith({
+      intentId: recoveryIntent.id,
+      expectedUpdatedAt: recoveryIntent.updatedAt,
+    })
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
+    expect(screen.getByTestId('github-delivery-panel')).toHaveTextContent('approved')
+    expect(api.prepareGitHubDelivery).not.toHaveBeenCalled()
+  })
+
+  it('reports a stale local Resume conflict as not accepted', async () => {
+    const recoveryIntent = githubDeliveryIntentFixture('recovery_required')
+    const loadState = vi.fn().mockResolvedValue(prDeliveryState(recoveryIntent))
+    const resumeGitHubDelivery = vi.fn().mockResolvedValue({
+      intentId: recoveryIntent.id,
+      remoteRequestId: 'delivery-request-1',
+      disposition: 'local_conflict',
+      outcomeCode: null,
+    })
+    installDesktopApi({ loadState, resumeGitHubDelivery } as Partial<DevFlowDesktopApi>)
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Resume GitHub Delivery' }))
+
+    await waitFor(() => expect(resumeGitHubDelivery).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
+    const toast = screen.getByTestId('toast')
+    expect(toast).toHaveTextContent('本地状态已变化')
+    expect(toast).toHaveTextContent('Resume 未被接受')
+    expect(toast).not.toHaveTextContent('Resume 已接受')
+  })
+
+  it('refreshes after an ambiguous Resume failure without exposing raw token or worktree details', async () => {
+    const recoveryIntent = githubDeliveryIntentFixture('recovery_required')
+    const loadState = vi.fn().mockResolvedValue(prDeliveryState(recoveryIntent))
+    const resumeGitHubDelivery = vi.fn().mockRejectedValue(
+      new Error('ghs_secret_token failed in /Users/erich/.devflow/worktrees/run-1'),
+    )
+    installDesktopApi({ loadState, resumeGitHubDelivery } as Partial<DevFlowDesktopApi>)
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Resume GitHub Delivery' }))
+
+    await waitFor(() => expect(resumeGitHubDelivery).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
+    const toast = screen.getByTestId('toast')
+    expect(toast).toHaveTextContent('不会自动重试')
+    expect(toast).not.toHaveTextContent('ghs_secret_token')
+    expect(toast).not.toHaveTextContent('/Users/erich')
+  })
+
+  it('shows the safe Draft PR completion and leaves workflow advancement to the processor', async () => {
+    const completedIntent = githubDeliveryIntentFixture('completed', {
+      completion: {
+        stateVersion: 1,
+        remoteRequestId: 'delivery-request-1',
+        publicationId: 'publication-1',
+        pullRequestOutcomeId: 'pull-request-outcome-1',
+        pullRequestId: '123456',
+        pullRequestNumber: 17,
+        pullRequestUrl: 'https://github.com/erich/ai-devflow-studio/pull/17',
+        providerCreatedAt: '2026-08-11T12:03:00.000Z',
+        recordedAt: '2026-08-11T12:03:01.000Z',
+        draft: true,
+        redacted: true,
+      },
+    })
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(prDeliveryState(completedIntent)),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    const inspector = screen.getByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('Draft PR 已创建')
+    expect(within(inspector).getByRole('link', { name: 'Open Draft PR #17' })).toHaveAttribute(
+      'href',
+      completedIntent.completion?.pullRequestUrl,
+    )
+    expect(within(inspector).queryByRole('button', { name: 'Prepare GitHub Delivery' })).not.toBeInTheDocument()
+    expect(within(inspector).queryByRole('button', { name: 'Resume GitHub Delivery' })).not.toBeInTheDocument()
+  })
+
+  it('carries the completed PR delivery evidence into Acceptance for the same Run', async () => {
+    const prPackage = prDeliveryPackageFixture()
+    const pullRequestUrl = 'https://github.com/erich/ai-devflow-studio/pull/17'
+    const completedIntent = githubDeliveryIntentFixture('completed', {
+      completion: {
+        stateVersion: 1,
+        remoteRequestId: 'delivery-request-1',
+        publicationId: 'publication-1',
+        pullRequestOutcomeId: 'pull-request-outcome-1',
+        pullRequestId: '123456',
+        pullRequestNumber: 17,
+        pullRequestUrl,
+        providerCreatedAt: '2026-08-11T12:03:00.000Z',
+        recordedAt: '2026-08-11T12:03:01.000Z',
+        draft: true,
+        redacted: true,
+      },
+    })
+    const acceptanceRun = fixtureRunAtCurrentNode('n-accept')
+    const acceptanceRunWithDelivery = {
+      ...acceptanceRun,
+      pullRequestUrl,
+      nodes: acceptanceRun.nodes.map((node) => (
+        node.id === 'n-pr'
+          ? { ...node, artifactIds: [...new Set([...node.artifactIds, prPackage.id])] }
+          : node
+      )),
+    }
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [acceptanceRunWithDelivery],
+        artifacts: [prPackage],
+        githubDeliveryIntents: [completedIntent],
+        desktopPairingCredential: fixturePairingCredential,
+      })),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    const inspector = screen.getByTestId('node-inspector')
+    const panel = within(inspector).getByTestId('github-delivery-panel')
+    expect(inspector).toHaveTextContent('业务验收')
+    expect(panel).toHaveTextContent('completed')
+    expect(panel).toHaveTextContent(completedIntent.expectedCommitSha)
+    expect(panel).not.toHaveTextContent('package_required')
+    expect(within(panel).getByRole('link', { name: 'Open Draft PR #17' })).toHaveAttribute(
+      'href',
+      completedIntent.completion?.pullRequestUrl,
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('flow-node-n-build'))
+    })
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('本地实现')
+    expect(screen.queryByTestId('github-delivery-panel')).not.toBeInTheDocument()
+  })
+
+  it('fails closed in Acceptance when the recorded Draft URL has ambiguous delivery evidence', async () => {
+    const prPackage = prDeliveryPackageFixture()
+    const pullRequestUrl = 'https://github.com/erich/ai-devflow-studio/pull/17'
+    const canonicalIntent = githubDeliveryIntentFixture('completed', {
+      completion: {
+        stateVersion: 1,
+        remoteRequestId: 'delivery-request-1',
+        publicationId: 'publication-1',
+        pullRequestOutcomeId: 'pull-request-outcome-1',
+        pullRequestId: '123456',
+        pullRequestNumber: 17,
+        pullRequestUrl,
+        providerCreatedAt: '2026-08-11T12:03:00.000Z',
+        recordedAt: '2026-08-11T12:03:01.000Z',
+        draft: true,
+        redacted: true,
+      },
+    })
+    const conflictingIntent = {
+      ...canonicalIntent,
+      id: 'github-delivery-intent-conflict',
+      expectedCommitSha: '3'.repeat(40),
+      intentDigest: 'e'.repeat(64),
+    }
+    const acceptanceRun = fixtureRunAtCurrentNode('n-accept')
+    const acceptanceRunWithDelivery = {
+      ...acceptanceRun,
+      pullRequestUrl,
+      nodes: acceptanceRun.nodes.map((node) => (
+        node.id === 'n-pr'
+          ? { ...node, artifactIds: [...new Set([...node.artifactIds, prPackage.id])] }
+          : node
+      )),
+    }
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [acceptanceRunWithDelivery],
+        artifacts: [prPackage],
+        githubDeliveryIntents: [canonicalIntent, conflictingIntent],
+        desktopPairingCredential: fixturePairingCredential,
+      })),
+    })
+    render(<App />)
+
+    const panel = await screen.findByTestId('github-delivery-panel')
+    expect(panel).toHaveTextContent('evidence_unavailable')
+    expect(panel).toHaveTextContent('无法唯一确认')
+    expect(panel).not.toHaveTextContent('package_required')
+    expect(panel).not.toHaveTextContent(canonicalIntent.expectedCommitSha)
+    expect(panel).not.toHaveTextContent(conflictingIntent.expectedCommitSha)
+    expect(within(panel).queryByRole('link')).not.toBeInTheDocument()
+    expect(within(screen.getByTestId('node-inspector')).queryByRole('button', {
+      name: 'Prepare GitHub Delivery',
+    })).not.toBeInTheDocument()
+    expect(within(screen.getByTestId('node-inspector')).queryByRole('button', {
+      name: 'Resume GitHub Delivery',
+    })).not.toBeInTheDocument()
   })
 
   it('does not generate a PR draft for a future workflow node', async () => {
@@ -2003,7 +2383,7 @@ describe('App', () => {
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /生成 PR Draft/ }))
+      fireEvent.click(screen.getByRole('button', { name: /生成 PR Delivery Package/ }))
     })
 
     expect(api.createPrDraft).not.toHaveBeenCalled()

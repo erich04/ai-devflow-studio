@@ -4,9 +4,11 @@ import {
   type AgentReviewResult,
   type Artifact,
   type GateEnforcementDecision,
+  type GitHubDeliveryIntent,
   type NodeStage,
   type PolicySnapshot,
   type WorkflowNode,
+  type WorkflowRun,
 } from '@ai-devflow/shared'
 
 export type BoardNodeKind = 'Task' | 'Gate' | 'Review' | 'Delivery'
@@ -30,6 +32,8 @@ export type InspectorActionId =
   | 'approveGate'
   | 'runCodingAgent'
   | 'createPrDraft'
+  | 'prepareGitHubDelivery'
+  | 'resumeGitHubDelivery'
   | 'createAcceptanceBundle'
 
 export type PendingInspectorActionId = InspectorActionId | 'saveGateOverride'
@@ -89,6 +93,42 @@ export type StatusDescriptor = {
   summary: string
   nextAction: string
   impact: string
+}
+
+export function selectGitHubDeliveryIntentForInspector(input: {
+  run: WorkflowRun | undefined
+  node: WorkflowNode | undefined
+  intents: readonly GitHubDeliveryIntent[]
+}): GitHubDeliveryIntent | undefined {
+  const { run, node } = input
+  if (!run || !node || (node.kind !== 'pr' && node.kind !== 'acceptance')) {
+    return undefined
+  }
+
+  if (node.kind === 'pr') {
+    return [...input.intents]
+      .filter((intent) => intent.runId === run.id && intent.nodeId === node.id)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+  }
+
+  const prNodes = run.nodes.filter((candidate) => candidate.kind === 'pr' && candidate.stage === 'pr')
+  if (prNodes.length !== 1 || !run.pullRequestUrl) {
+    return undefined
+  }
+  const prNode = prNodes[0]!
+  const canonicalIntents = input.intents.filter((intent) => (
+    intent.runId === run.id &&
+    intent.localProjectId === run.projectId &&
+    intent.nodeId === prNode.id &&
+    intent.status === 'completed' &&
+    intent.redacted === true &&
+    intent.completion?.draft === true &&
+    intent.completion.redacted === true &&
+    intent.completion.pullRequestUrl === run.pullRequestUrl &&
+    prNode.artifactIds.includes(intent.prPackageArtifactId)
+  ))
+
+  return canonicalIntents.length === 1 ? canonicalIntents[0] : undefined
 }
 
 export type GateRequirementRow = {
@@ -538,9 +578,9 @@ export function buildStatusDescriptors(input: {
   if (nodeType === 'pr') {
     return [
       nodeStatus(),
-      artifactStatus('pr-draft', 'PR Draft', 'pr', '还没有 PR Draft。', 'PR Draft 已生成。', '点击顶部“生成 PR Draft”。', 'Delivery draft'),
+      artifactStatus('pr-draft', 'PR Delivery Package', 'pr', '还没有 PR Delivery Package。', 'PR Delivery Package 已生成。', '点击顶部“生成 PR Delivery Package”。', 'Delivery package'),
       testEvidenceStatus(false),
-      artifactStatus('handoff-evidence', 'Handoff readiness', 'diff', '还没有实现 diff 可用于交付摘要。', '已有实现 diff 可汇总到 handoff。', '先完成 build/test，再生成 PR Draft。', 'Delivery evidence'),
+      artifactStatus('handoff-evidence', 'Handoff readiness', 'diff', '还没有实现 diff 可用于交付摘要。', '已有实现 diff 可汇总到 handoff。', '先完成 build/test，再生成 PR Delivery Package。', 'Delivery evidence'),
     ]
   }
 
@@ -668,8 +708,20 @@ function buildActionCatalog(
     },
     createPrDraft: {
       id: 'createPrDraft',
-      label: '生成 PR Draft',
+      label: '生成 PR Delivery Package',
       variant: 'ghost',
+      disabledReasons: hasTeamProjectBinding ? [] : ['team_project_binding_missing'],
+    },
+    prepareGitHubDelivery: {
+      id: 'prepareGitHubDelivery',
+      label: 'Prepare GitHub Delivery',
+      variant: 'primary',
+      disabledReasons: hasTeamProjectBinding ? [] : ['team_project_binding_missing'],
+    },
+    resumeGitHubDelivery: {
+      id: 'resumeGitHubDelivery',
+      label: 'Resume GitHub Delivery',
+      variant: 'primary',
       disabledReasons: hasTeamProjectBinding ? [] : ['team_project_binding_missing'],
     },
     createAcceptanceBundle: {
@@ -688,6 +740,21 @@ function hasTestArtifact(artifacts: Artifact[]): boolean {
 function hasAcceptanceArtifact(artifacts: Artifact[]): boolean {
   return artifacts.some((artifact) => artifact.kind === 'acceptance')
 }
+
+function hasExactPrDeliveryPackage(artifacts: Artifact[]): boolean {
+  return artifacts.some((artifact) => (
+    artifact.kind === 'pr' &&
+    artifact.redacted === true &&
+    artifact.githubDeliverySource?.stateVersion === 1
+  ))
+}
+
+const automaticallyAdvancingDeliveryStatuses: ReadonlySet<GitHubDeliveryIntent['status']> = new Set([
+  'approved',
+  'publishing_branch',
+  'branch_published',
+  'creating_pr',
+])
 
 function buildGateSecondaryActionIds(input: {
   node: WorkflowNode
@@ -710,6 +777,7 @@ function buildNextAction(input: {
   node: WorkflowNode
   isSelectedCurrentNode: boolean
   artifacts: Artifact[]
+  githubDeliveryIntent?: GitHubDeliveryIntent
   latestAgentReview: AgentReviewResult | undefined
   canApprove: boolean
   hasTeamProjectBinding: boolean
@@ -785,11 +853,65 @@ function buildNextAction(input: {
   }
 
   if (node.kind === 'pr') {
+    if (input.githubDeliveryIntent?.status === 'failed') {
+      return {
+        title: '交付已安全停止',
+        copy: '交付已安全停止且不会自动重试。请核对远端记录与本地证据，确认实际结果后再按受控流程继续。',
+        secondaryActionIds: [],
+      }
+    }
+    if (input.githubDeliveryIntent?.status === 'revoked') {
+      return {
+        title: 'GitHub 授权已撤销',
+        copy: 'Desktop 不会继续远端写入。由 owner 在 Web 重新绑定 GitHub App 后，再开始新的受控交付。',
+        secondaryActionIds: [],
+      }
+    }
+    if (input.githubDeliveryIntent?.status === 'completed') {
+      return {
+        title: 'Draft PR 已创建',
+        copy: '精确 commit 的 Draft PR 已记录为交付证据；后台处理器会确保 Workflow 推进到 Acceptance。',
+        secondaryActionIds: [],
+      }
+    }
+    if (
+      input.githubDeliveryIntent &&
+      automaticallyAdvancingDeliveryStatuses.has(input.githubDeliveryIntent.status)
+    ) {
+      return {
+        title: 'GitHub Delivery 自动推进中',
+        copy: '审批已经生效，受限后台处理器会继续发布精确 commit 并创建 Draft PR；无需再次点击。',
+        secondaryActionIds: [],
+      }
+    }
+    if (input.githubDeliveryIntent?.status === 'recovery_required') {
+      return {
+        title: '恢复 GitHub Delivery',
+        copy: '自动恢复已安全停止；只有显式 Resume 才会按当前 intent 版本继续，并且不会隐式批准。',
+        primaryActionId: 'resumeGitHubDelivery',
+        secondaryActionIds: [],
+      }
+    }
+    if (input.githubDeliveryIntent?.status === 'approval_required') {
+      return {
+        title: '等待 Web 审批',
+        copy: 'GitHub Delivery 已准备完成，正在等待 Web Team Console 的 lead/owner 显式批准；Desktop 不会代替审批。',
+        secondaryActionIds: [],
+      }
+    }
+    if (hasExactPrDeliveryPackage(input.artifacts)) {
+      return {
+        title: 'Prepare GitHub Delivery',
+        copy: '交付包已经绑定到精确 coding source。显式准备会提交并复验该 commit，但不会代替 Web 审批。',
+        primaryActionId: 'prepareGitHubDelivery',
+        secondaryActionIds: [],
+      }
+    }
     return {
-      title: '生成 PR Draft',
+      title: '生成 PR Delivery Package',
       copy: input.hasTeamProjectBinding
-        ? '汇总当前 Run 的产物和证据，生成可检查的 PR 草稿。'
-        : '先绑定当前 Local Project 与 Team Project，再生成带有正确仓库归属的 PR Draft。',
+        ? '汇总当前 Run 的产物和证据，生成绑定到精确 coding source 的已脱敏交付包。'
+        : '先绑定当前 Local Project 与 Team Project，再生成带有正确仓库归属的交付包。',
       primaryActionId: 'createPrDraft',
       secondaryActionIds: [],
     }
@@ -827,6 +949,7 @@ export function buildNodeInspectorViewModel(input: {
   requestedTab: string
   isSelectedCurrentNode: boolean
   artifacts: Artifact[]
+  githubDeliveryIntent?: GitHubDeliveryIntent
   events: AgentEvent[]
   latestAgentReview: AgentReviewResult | undefined
   policySnapshot: PolicySnapshot | null
@@ -853,7 +976,11 @@ export function buildNodeInspectorViewModel(input: {
     addAction('runCodingAgent')
   }
   if (input.node.kind === 'pr') {
-    addAction('createPrDraft')
+    if (input.githubDeliveryIntent?.status === 'recovery_required') {
+      addAction('resumeGitHubDelivery')
+    } else if (!input.githubDeliveryIntent) {
+      addAction(hasExactPrDeliveryPackage(input.artifacts) ? 'prepareGitHubDelivery' : 'createPrDraft')
+    }
   }
   if (input.node.kind === 'acceptance') {
     addAction('createAcceptanceBundle')

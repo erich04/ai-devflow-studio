@@ -2775,6 +2775,53 @@ code {
   gap: 8px;
 }
 
+.github-delivery-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.github-delivery-status-copy {
+  margin: 0;
+}
+
+.github-delivery-evidence {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.github-delivery-evidence > div {
+  display: grid;
+  gap: 3px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.github-delivery-evidence dt {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+
+.github-delivery-evidence dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.github-delivery-evidence code,
+.github-delivery-evidence time {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .status-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 136px;
