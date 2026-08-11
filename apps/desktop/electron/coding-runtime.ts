@@ -219,6 +219,10 @@ export type CodingRuntimeDeps = {
   knowledgeChunks?: KnowledgeChunk[]
   createWorkspace?: typeof createManagedCodingWorkspace
   deleteWorkspace?: typeof deleteManagedCodingWorkspace
+  cleanupWorkspace?: (input: {
+    workspaceId: string
+    projectId?: string
+  }) => Promise<ManagedCodingWorkspace>
 }
 
 export type CodingRuntime = {
@@ -620,18 +624,24 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     }
 
     let cleaned: ManagedCodingWorkspace
-    try {
-      cleaned = await deleteWorkspace(workspace)
-    } catch (error) {
-      cleaned = {
-        ...workspace,
-        deletedAt: timestamp,
-        cleanupStatus: 'cleanup_failed',
-        cleanupError: cleanupErrorSummary(error),
+    if (deps.cleanupWorkspace) {
+      cleaned = await deps.cleanupWorkspace({
+        workspaceId: workspace.id,
+        projectId: workspace.projectId,
+      })
+    } else {
+      try {
+        cleaned = await deleteWorkspace(workspace)
+      } catch (error) {
+        cleaned = {
+          ...workspace,
+          deletedAt: timestamp,
+          cleanupStatus: 'cleanup_failed',
+          cleanupError: cleanupErrorSummary(error),
+        }
       }
+      await deps.store.saveManagedCodingWorkspace(cleaned)
     }
-
-    await deps.store.saveManagedCodingWorkspace(cleaned)
     const status = cleaned.cleanupStatus ?? (cleaned.deletedAt ? 'deleted' : 'active')
     const event: CodingAgentEvent = {
       id: idGenerator('coding-event'),
@@ -1733,6 +1743,12 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
 
     async deleteManagedWorktree(input) {
       const workspace = await findWorkspace(input.workspaceId)
+      if (deps.cleanupWorkspace) {
+        return deps.cleanupWorkspace({
+          workspaceId: workspace.id,
+          projectId: workspace.projectId,
+        })
+      }
       const deleted = await deleteWorkspace(workspace)
       await deps.store.saveManagedCodingWorkspace(deleted)
       return deleted

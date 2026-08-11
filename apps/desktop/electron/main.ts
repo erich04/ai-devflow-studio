@@ -90,7 +90,8 @@ import {
   createGitHubDeliveryRuntime,
   type GitHubDeliveryRuntime,
 } from './github-delivery-runtime.js'
-import { deleteManagedCodingWorkspace as removeManagedCodingWorkspaceDirectory } from './coding-runner.js'
+import { createManagedWorkspaceCleanupService } from './managed-workspace-cleanup.js'
+import { createWorkspaceOperationCoordinator } from './workspace-operation-coordinator.js'
 import { createOpencodeProcessManager } from './opencode-process.js'
 import { stopOpencodeWithRetry } from './opencode-shutdown.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
@@ -156,6 +157,10 @@ let gateCommandSchedulerPromise:
   | undefined
 let gateCommandCycleAbortController: AbortController | undefined
 let githubDeliveryRuntimePromise: Promise<GitHubDeliveryRuntime> | undefined
+let managedWorkspaceCleanupPromise:
+  | Promise<ReturnType<typeof createManagedWorkspaceCleanupService>>
+  | undefined
+const workspaceOperationCoordinator = createWorkspaceOperationCoordinator()
 const codingPermissionTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 const codingRunTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 const gitStatusWatchers = new Map<
@@ -207,9 +212,20 @@ function getGitHubDeliveryRuntime() {
       runTestCommand: runLocalTestCommand,
       testTimeoutMs: DEFAULT_TEST_TIMEOUT_MS,
       idGenerator: (prefix) => `${prefix}-${randomUUID()}`,
+      workspaceCoordinator: workspaceOperationCoordinator,
     }),
   )
   return githubDeliveryRuntimePromise
+}
+
+function getManagedWorkspaceCleanup() {
+  managedWorkspaceCleanupPromise ??= getStore().then((store) =>
+    createManagedWorkspaceCleanupService({
+      store,
+      coordinator: workspaceOperationCoordinator,
+    }),
+  )
+  return managedWorkspaceCleanupPromise
 }
 
 async function executeWorkflowCommandOrThrow(
@@ -587,7 +603,14 @@ async function assertNoActiveCodingAgentForRun(store: LocalStore, runId: string)
   }
 }
 
+async function assertNoGitHubDeliveryIntentForRun(store: LocalStore, runId: string) {
+  if ((await store.listGitHubDeliveryIntents(runId)).length > 0) {
+    throw new Error('Run is bound to a GitHub Delivery Intent.')
+  }
+}
+
 async function cleanupManagedWorktreesForRun(store: LocalStore, runId: string) {
+  await assertNoGitHubDeliveryIntentForRun(store, runId)
   const codingRuns = await store.listCodingAgentRuns(runId)
   const codingRunIds = new Set(codingRuns.map((run) => run.id))
   if (codingRunIds.size === 0) {
@@ -599,7 +622,10 @@ async function cleanupManagedWorktreesForRun(store: LocalStore, runId: string) {
   )
 
   for (const workspace of workspaces) {
-    const result = await removeManagedCodingWorkspaceDirectory(workspace)
+    const result = await (await getManagedWorkspaceCleanup())({
+      workspaceId: workspace.id,
+      projectId: workspace.projectId,
+    })
     if (result.cleanupStatus === 'cleanup_failed') {
       throw new Error(
         result.cleanupError
@@ -677,6 +703,7 @@ async function createCodingRuntimeForRequest(
         now,
       })
     },
+    cleanupWorkspace: async (input) => (await getManagedWorkspaceCleanup())(input),
     runTestCommand: runLocalTestCommand,
     runDependencyBootstrap: ({ codingRun, project, workspace, previousDependencyHash, timestamp }) =>
       runDependencyBootstrap({
@@ -1525,6 +1552,7 @@ function registerIpcHandlers() {
     }
 
     await assertNoActiveCodingAgentForRun(store, input.runId)
+    await assertNoGitHubDeliveryIntentForRun(store, input.runId)
 
     const remote = input.deleteRemote
       ? await (await getRemoteSyncClient()).deleteRun({ runId: input.runId })

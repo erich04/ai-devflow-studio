@@ -14,6 +14,7 @@ import type {
 } from '@ai-devflow/shared'
 import { createGitHubDeliveryRuntime } from './github-delivery-runtime'
 import type { GitHubDeliveryPreparationMutationResult } from './local-store'
+import { createWorkspaceOperationCoordinator } from './workspace-operation-coordinator'
 
 const baseCommitSha = '0000000000000000000000000000000000000000'
 const expectedCommitSha = '1111111111111111111111111111111111111111'
@@ -587,6 +588,80 @@ describe('GitHub Delivery preparation runtime', () => {
     expect(store.commitGitHubDeliveryPreparation).toHaveBeenCalledTimes(1)
   })
 
+  it('holds the shared workspace lock through tests and final intent persistence', async () => {
+    const source = fixture()
+    const store = fakeStore(source)
+    const coordinator = createWorkspaceOperationCoordinator()
+    const committedWorkspace = {
+      ...source.workspace,
+      baseCommitSha,
+      headCommitSha: expectedCommitSha,
+    }
+    const commitWorkspace = vi.fn(async () => ({
+      workspace: committedWorkspace,
+      baseCommitSha,
+      expectedCommitSha,
+    }))
+    let markTestStarted!: () => void
+    const testStarted = new Promise<void>((resolve) => {
+      markTestStarted = resolve
+    })
+    let finishTest!: (result: {
+      status: 'passed'
+      exitCode: 0
+      durationMs: number
+      stdout: string
+      stderr: string
+      redacted: boolean
+      summary: string
+    }) => void
+    const testFinished = new Promise<{
+      status: 'passed'
+      exitCode: 0
+      durationMs: number
+      stdout: string
+      stderr: string
+      redacted: boolean
+      summary: string
+    }>((resolve) => {
+      finishTest = resolve
+    })
+    const runtime = createGitHubDeliveryRuntime({
+      store,
+      workspaceCoordinator: coordinator,
+      commitWorkspace,
+      runTestCommand: vi.fn(() => {
+        markTestStarted()
+        return testFinished
+      }),
+      now: () => '2026-08-11T13:10:00.000Z',
+      idGenerator: (prefix) => `${prefix}-1`,
+    })
+
+    const preparation = runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' })
+    await testStarted
+    let cleanupEntered = false
+    const cleanup = coordinator.runExclusive(source.workspace.id, async () => {
+      cleanupEntered = true
+    })
+    await Promise.resolve()
+    expect(cleanupEntered).toBe(false)
+    finishTest({
+      status: 'passed',
+      exitCode: 0,
+      durationMs: 25,
+      stdout: 'ok',
+      stderr: '',
+      redacted: false,
+      summary: 'Tests passed.',
+    })
+
+    await preparation
+    await cleanup
+    expect(cleanupEntered).toBe(true)
+    expect(store.commitGitHubDeliveryPreparation).toHaveBeenCalledTimes(1)
+  })
+
   it('reloads and verifies the winning active intent when the final preparation CAS loses the race', async () => {
     const source = fixture()
     const store = fakeStore(source)
@@ -630,7 +705,7 @@ describe('GitHub Delivery preparation runtime', () => {
       })
     expect(runTestCommand).toHaveBeenCalledTimes(1)
     expect(store.commitGitHubDeliveryPreparation).toHaveBeenCalledTimes(1)
-    expect(store.listGitHubDeliveryIntents).toHaveBeenCalledTimes(2)
+    expect(store.listGitHubDeliveryIntents).toHaveBeenCalledTimes(3)
   })
 
   it('fails closed before tests when the workspace head CAS loses authority', async () => {

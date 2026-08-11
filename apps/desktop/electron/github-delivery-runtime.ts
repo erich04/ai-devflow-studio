@@ -28,6 +28,10 @@ import type {
   ManagedCodingWorkspaceHeadMutationResult,
 } from './local-store.js'
 import { runLocalTestCommand, type LocalTestCommandInput, type LocalTestCommandResult } from './test-runner.js'
+import {
+  createWorkspaceOperationCoordinator,
+  type WorkspaceOperationCoordinator,
+} from './workspace-operation-coordinator.js'
 
 const REPLAYABLE_DELIVERY_STATUSES = new Set<GitHubDeliveryIntent['status']>([
   'approval_required',
@@ -95,6 +99,7 @@ export type GitHubDeliveryRuntimeDeps = {
   now?: () => string
   idGenerator?: (prefix: string) => string
   testTimeoutMs?: number
+  workspaceCoordinator?: WorkspaceOperationCoordinator
 }
 
 type ResolvedDeliverySource = {
@@ -118,13 +123,30 @@ export function createGitHubDeliveryRuntime(
   const now = deps.now ?? (() => new Date().toISOString())
   const idGenerator = deps.idGenerator ?? ((prefix: string) => `${prefix}-${randomUUID()}`)
   const testTimeoutMs = deps.testTimeoutMs ?? 120_000
+  const workspaceCoordinator = deps.workspaceCoordinator ??
+    createWorkspaceOperationCoordinator()
   const inFlight = new Map<string, Promise<PrepareGitHubDeliveryResult>>()
 
   async function prepareOnce(
     input: PrepareGitHubDeliveryInput,
   ): Promise<PrepareGitHubDeliveryResult> {
+    const candidateIntent = await loadExistingIntent(deps.store, input)
+    const candidateWorkspaceId = candidateIntent?.workspaceId ??
+      (await resolveDeliverySource(deps.store, input)).workspace.id
+    return workspaceCoordinator.runExclusive(candidateWorkspaceId, () =>
+      prepareLocked(input, candidateWorkspaceId),
+    )
+  }
+
+  async function prepareLocked(
+    input: PrepareGitHubDeliveryInput,
+    lockedWorkspaceId: string,
+  ): Promise<PrepareGitHubDeliveryResult> {
     const existingIntent = await loadExistingIntent(deps.store, input)
     if (existingIntent) {
+      if (existingIntent.workspaceId !== lockedWorkspaceId) {
+        throw new Error('GitHub Delivery workspace authority changed before preparation')
+      }
       return replayActiveIntent(
         deps.store,
         input,
@@ -134,6 +156,9 @@ export function createGitHubDeliveryRuntime(
     }
 
     const source = await resolveDeliverySource(deps.store, input)
+    if (source.workspace.id !== lockedWorkspaceId) {
+      throw new Error('GitHub Delivery workspace authority changed before preparation')
+    }
     const safety = validateTestCommandSafety(source.project.testCommand)
     if (safety.level === 'blocked') {
       throw new Error('GitHub Delivery Project test command is blocked')
@@ -226,6 +251,9 @@ export function createGitHubDeliveryRuntime(
       const winner = await loadExistingIntent(deps.store, input)
       if (!winner) {
         throw new Error('GitHub Delivery preparation winner could not be reloaded')
+      }
+      if (winner.workspaceId !== lockedWorkspaceId) {
+        throw new Error('GitHub Delivery preparation winner changed workspace authority')
       }
       return replayActiveIntent(deps.store, input, winner, commitWorkspace)
     }

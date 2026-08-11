@@ -2737,6 +2737,34 @@ describe('CodingRuntime', () => {
   )
 })
 
+describe('managed workspace cleanup delegation', () => {
+  it('routes explicit worktree deletion through the injected coordinated cleanup service', async () => {
+    const workspace = managedWorkspace({ id: 'workspace-delivery-safe' })
+    const deleted: ManagedCodingWorkspace = {
+      ...workspace,
+      deletedAt: '2026-08-11T14:00:00.000Z',
+      cleanupStatus: 'deleted',
+    }
+    const store = new MemoryCodingStore({ workspaces: [workspace] })
+    const cleanupWorkspace = vi.fn(async () => deleted)
+    const deleteWorkspace = vi.fn()
+    const runtime = createCodingRuntime({
+      store,
+      engine: createFakeCodingEngineAdapter(),
+      cleanupWorkspace,
+      deleteWorkspace,
+    })
+
+    await expect(runtime.deleteManagedWorktree({ workspaceId: workspace.id }))
+      .resolves.toEqual(deleted)
+    expect(cleanupWorkspace).toHaveBeenCalledWith({
+      workspaceId: workspace.id,
+      projectId: workspace.projectId,
+    })
+    expect(deleteWorkspace).not.toHaveBeenCalled()
+  })
+})
+
 type StoreSeed = {
   projects?: LocalProject[]
   runs?: WorkflowRun[]

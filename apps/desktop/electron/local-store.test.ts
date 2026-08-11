@@ -5745,6 +5745,56 @@ describe('createLocalStore', () => {
     store.close()
   })
 
+  it('does not let an old cleanup snapshot erase a delivery commit head', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const baseCommitSha = '0000000000000000000000000000000000000000'
+    const headCommitSha = '1111111111111111111111111111111111111111'
+    const initialWorkspace: ManagedCodingWorkspace = {
+      ...workspace,
+      baseCommitSha,
+      cleanupStatus: 'active',
+    }
+    const committedWorkspace: ManagedCodingWorkspace = {
+      ...initialWorkspace,
+      headCommitSha,
+    }
+    await store.saveManagedCodingWorkspace(initialWorkspace)
+    await store.commitManagedCodingWorkspaceHead({
+      expectedWorkspace: initialWorkspace,
+      workspace: committedWorkspace,
+    })
+    const staleCleanup: ManagedCodingWorkspace = {
+      ...initialWorkspace,
+      deletedAt: '2026-08-11T13:00:00.000Z',
+      cleanupStatus: 'deleted',
+    }
+
+    await expect(store.commitManagedCodingWorkspaceCleanup({
+      expectedWorkspace: initialWorkspace,
+      workspace: staleCleanup,
+    })).resolves.toEqual({ committed: false, reason: 'source_stale' })
+    expect(await store.listManagedCodingWorkspaces(initialWorkspace.projectId))
+      .toEqual([committedWorkspace])
+
+    const currentCleanup: ManagedCodingWorkspace = {
+      ...committedWorkspace,
+      deletedAt: '2026-08-11T13:00:01.000Z',
+      cleanupStatus: 'deleted',
+    }
+    await expect(store.commitManagedCodingWorkspaceCleanup({
+      expectedWorkspace: committedWorkspace,
+      workspace: currentCleanup,
+    })).resolves.toEqual({
+      committed: true,
+      replayed: false,
+      workspace: currentCleanup,
+    })
+    expect(await store.listManagedCodingWorkspaces(initialWorkspace.projectId))
+      .toEqual([currentCleanup])
+    store.close()
+  })
+
   it('persists a budget-unavailable coding run without a managed workspace across reopen', async () => {
     const dbPath = await tempDbPath()
     const unavailableRun: CodingAgentRun = {

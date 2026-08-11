@@ -131,6 +131,22 @@ export type ManagedCodingWorkspaceHeadMutationResult =
       reason: 'source_stale'
     }
 
+export type ManagedCodingWorkspaceCleanupMutation = {
+  expectedWorkspace: ManagedCodingWorkspace
+  workspace: ManagedCodingWorkspace
+}
+
+export type ManagedCodingWorkspaceCleanupMutationResult =
+  | {
+      committed: true
+      replayed: boolean
+      workspace: ManagedCodingWorkspace
+    }
+  | {
+      committed: false
+      reason: 'source_stale' | 'delivery_intent_exists'
+    }
+
 export type CodingAgentMutation = {
   expectedRun: CodingAgentRun
   expectedPendingPermissionRequestIds: readonly string[]
@@ -541,6 +557,9 @@ export type LocalStore = {
   commitManagedCodingWorkspaceHead(
     mutation: ManagedCodingWorkspaceHeadMutation,
   ): Promise<ManagedCodingWorkspaceHeadMutationResult>
+  commitManagedCodingWorkspaceCleanup(
+    mutation: ManagedCodingWorkspaceCleanupMutation,
+  ): Promise<ManagedCodingWorkspaceCleanupMutationResult>
   listManagedCodingWorkspaces(projectId?: string): Promise<ManagedCodingWorkspace[]>
   saveDependencyBootstrapEvidence(evidence: DependencyBootstrapEvidence): Promise<void>
   listDependencyBootstrapEvidence(codingRunId?: string): Promise<DependencyBootstrapEvidence[]>
@@ -5576,6 +5595,69 @@ class SqlJsLocalStore implements LocalStore {
     }
   }
 
+  async commitManagedCodingWorkspaceCleanup(
+    mutation: ManagedCodingWorkspaceCleanupMutation,
+  ): Promise<ManagedCodingWorkspaceCleanupMutationResult> {
+    const expected = mutation.expectedWorkspace
+    const workspace = mutation.workspace
+    const immutableFields = [
+      'id',
+      'projectId',
+      'codingRunId',
+      'sourcePath',
+      'worktreePath',
+      'branchName',
+      'baseBranch',
+      'baseCommitSha',
+      'headCommitSha',
+      'createdAt',
+    ] as const
+    if (
+      expected.cleanupStatus === 'deleted' ||
+      workspace.cleanupStatus === 'active' ||
+      !workspace.deletedAt ||
+      !Number.isFinite(Date.parse(workspace.deletedAt)) ||
+      immutableFields.some((field) => expected[field] !== workspace[field]) ||
+      (workspace.cleanupStatus === 'deleted' && workspace.cleanupError !== undefined) ||
+      (workspace.cleanupStatus === 'cleanup_failed' && !workspace.cleanupError?.trim())
+    ) {
+      throw new Error('Managed workspace cleanup transition is invalid')
+    }
+
+    const current = selectJson<ManagedCodingWorkspace>(
+      this.db,
+      'select json from managed_coding_workspaces where id = ? limit 1',
+      [expected.id],
+    )[0]
+    if (JSON.stringify(current) === JSON.stringify(workspace)) {
+      return { committed: true, replayed: true, workspace }
+    }
+    if (JSON.stringify(current) !== JSON.stringify(expected)) {
+      return { committed: false, reason: 'source_stale' }
+    }
+    const hasDeliveryIntent = selectStringColumn(
+      this.db,
+      'select id from github_delivery_intents where workspace_id = ? limit 1',
+      [expected.id],
+    ).length > 0
+    if (hasDeliveryIntent) {
+      return { committed: false, reason: 'delivery_intent_exists' }
+    }
+
+    const snapshot = this.db.export()
+    try {
+      this.db.run(
+        'update managed_coding_workspaces set json = ? where id = ?',
+        [JSON.stringify(workspace), workspace.id],
+      )
+      await this.persist()
+      return { committed: true, replayed: false, workspace }
+    } catch (error) {
+      this.restore(snapshot)
+      throw error
+    }
+  }
+
   async listManagedCodingWorkspaces(projectId?: string): Promise<ManagedCodingWorkspace[]> {
     if (projectId) {
       return selectJson<ManagedCodingWorkspace>(
@@ -6018,6 +6100,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'saveCodingPermissionDecision',
   'saveManagedCodingWorkspace',
   'commitManagedCodingWorkspaceHead',
+  'commitManagedCodingWorkspaceCleanup',
   'saveDependencyBootstrapEvidence',
   'saveCodingDiffArtifact',
   'saveProviderCredential',
