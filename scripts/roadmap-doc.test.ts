@@ -80,11 +80,33 @@ describe('product roadmap source of truth', () => {
     expect(markdown).toContain('### v2.1: Evaluated Retrieval And Memory')
     expect(markdown).toContain('### v2.2: Multi-Agent And Execution Tenancy')
     expect(markdown).toContain('## 2.x Completion Gate')
-    expect(markdown).toContain('The scoped V1.5 contract and authority decision are now approved')
+    expect(markdown).toContain('The scoped contract, authority decision, and seven implementation slices are complete')
     expect(markdown).toContain('v1.5-github-delivery-prd.md')
     expect(markdown).toContain('0013-github-app-delivery-authority.md')
     expect(markdown).toContain('Public SaaS, billing, enterprise SSO')
     expect(markdown).not.toContain('### v1.6 Candidate:')
     expect(markdown).not.toContain('### v1.7 Candidate:')
+  })
+
+  it('records V1.5 as implemented but not released while the 1.x gate is open', () => {
+    const markdown = readFileSync(roadmapPath, 'utf8')
+    const currentRelease = markdown.match(
+      /## Current Release[\s\S]*?(?=\n## Now \/ Next \/ Later)/u,
+    )?.[0]
+    const priorities = markdown.match(
+      /## Now \/ Next \/ Later[\s\S]*?(?=\n## Completed Milestones)/u,
+    )?.[0]
+
+    expect(currentRelease).toContain('`v1.4.0` is the released baseline')
+    expect(currentRelease).toContain('V1.5 implementation is complete')
+    expect(currentRelease).toContain('release and 1.x completion gate remain pending')
+    expect(currentRelease).not.toContain('No V1.5 or 2.x implementation is claimed')
+    expect(priorities).toContain('### Now — Close V1.5 And The 1.x Completion Gate')
+    expect(priorities).toContain('### Next — Freeze, Sign Off, And Publish V1.5')
+    expect(priorities).toContain('real private GitHub sandbox')
+    expect(markdown).toContain('### v1.5: GitHub Delivery Integration — Implemented, Release Pending')
+    expect(markdown).toContain('2.x implementation remains blocked')
+    expect(markdown).not.toContain('v1.5 planned')
+    expect(markdown).not.toContain('Decide GitHub App versus scoped user token before implementation')
   })
 })

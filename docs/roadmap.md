@@ -57,7 +57,7 @@ rules.
 | Version line | Core question | Included scope | Completion definition | Status |
 | --- | --- | --- | --- | --- |
 | 0.x | Engineering foundation | Real Electron execution, durable local state, team sync, Knowledge Governance, Gate policy, a managed external Coding Agent Adapter, runtime observability, and release discipline. | Fake and explicitly authorized real Coding paths can execute in managed worktrees, preserve auditable evidence, obey human Gates, sync only redacted summaries, and pass reproducible verification. | Completed at v0.9.0. |
-| 1.x | Governed self-hosted delivery | Authenticated team pilot, Desktop pairing, project scope, policy and budget controls, durable sync, repository knowledge, Web collaboration commands, reproducible lifecycle, and human-approved GitHub delivery. | One authenticated Work Request becomes one canonical local Run, reaches tested and evidence-backed delivery, and publishes a branch and pull request only after explicit human approval. V1.5 is the final planned 1.x feature milestone. | In progress; v1.4.0 released and v1.5 planned. |
+| 1.x | Governed self-hosted delivery | Authenticated team pilot, Desktop pairing, project scope, policy and budget controls, durable sync, repository knowledge, Web collaboration commands, reproducible lifecycle, and human-approved GitHub delivery. | One authenticated Work Request becomes one canonical local Run, reaches tested and evidence-backed delivery, and publishes a branch and pull request only after explicit human approval. V1.5 is the final planned 1.x feature milestone. | Release pending; v1.4.0 is released, V1.5 implementation is complete, and its candidate-bound completion gate is in progress. |
 | 2.x | DevFlow-native Agent Runtime | A bounded first-party Agent loop, native Tool and MCP execution, pluggable Coding Executors, trajectory and evaluation, scoped Context and Memory, evaluated RAG, Multi-Agent orchestration, and tenant-scoped execution. | Benchmarked scenarios demonstrate bounded single- and Multi-Agent execution, native and delegated coding, MCP/tool use, evaluated retrieval and Memory, failure recovery, tenant isolation, and auditable trajectories while Workflow and Gate authority remains intact. | Planned after the 1.x completion gate. |
 
 The version lines are finite product contracts, not an instruction to keep adding versions. A line
@@ -71,7 +71,7 @@ or a separately approved future charter.
 `b7986d4faec2f8f1bcc220a0341cb0686286209e`.
 
 Immutable release evidence is stored under `docs/releases/v1.4.0/`. All first-party package
-manifests report `1.4.0`.
+manifests at that release commit report `1.4.0`.
 
 The candidate-bound local matrix, exact-SHA CI, packaged Desktop Computer Use walkthrough, and the
 single explicitly authorized real OpenCode provider smoke passed.
@@ -86,38 +86,42 @@ contains the signoff-bound release artifacts.
 | V1.4 product contract | `docs/product/prd/v1.4-pilot-trust-boundary-prd.md` |
 | V1.4 execution history | `docs/plans/v1.4-pilot-trust-boundary.md` and `docs/plans/v1.4-release-signoff.md` |
 | Active version line | 1.x governed self-hosted delivery |
-| Next scoped milestone | V1.5 GitHub Delivery Integration |
-| Later version line | 2.x DevFlow-native Agent Runtime |
+| Active milestone | V1.5 GitHub Delivery implementation complete; release/signoff in progress |
+| Next release gate | Candidate-bound lifecycle, packaged Desktop, exact-SHA CI, and private GitHub sandbox evidence |
+| Later version line | 2.x DevFlow-native Agent Runtime, blocked until the 1.x completion gate passes |
 
-No V1.5 or 2.x implementation is claimed by this roadmap update. Their implementation starts only
-after a scoped PRD and the required architecture decisions are approved.
+V1.5 implementation is complete: an exact local Delivery Intent can receive a separate signed Web
+approval, obtain a repository-scoped GitHub App credential in Electron main, publish only the
+approved commit, and create or reconcile one Draft pull request with restart, revocation, Revise,
+Resume, Retry, and Stop semantics. The V1.5 release and 1.x completion gate remain pending until the
+candidate-bound release matrix and real private GitHub sandbox walkthrough pass. No V1.5 release or
+2.x implementation is claimed yet. The 2.x implementation remains blocked until that gate passes.
 
 ## Now / Next / Later
 
-### Now — Define V1.5 And Close The 1.x Contract
+### Now — Close V1.5 And The 1.x Completion Gate
 
-The scoped V1.5 contract and authority decision are now approved for implementation:
+The scoped contract, authority decision, and seven implementation slices are complete:
 
 - `docs/product/prd/v1.5-github-delivery-prd.md`
 - `docs/adr/0013-github-app-delivery-authority.md`
 - `docs/plans/v1.5-github-delivery.md`
 
-- Implement the GitHub App decision through vertical, evidence-backed slices.
-- Define repository/project binding, credential ownership, idempotency, retries, redacted audit
-  evidence, and explicit publication authority.
+- Finish the current-schema lifecycle gate and the packaged Desktop GitHub Delivery gate.
+- Refresh living product/operator documentation and align all six package manifests to `1.5.0`.
+- Keep default verification offline, deterministic, secret-free, and explicit about the V1.5 gates.
 - Keep `v1.4.0` and its release evidence immutable.
 - Do not start 2.x implementation in parallel with the V1.5 delivery closure.
 
-### Next — V1.5 GitHub Delivery And 1.x Closure
+### Next — Freeze, Sign Off, And Publish V1.5
 
-- Use the canonical managed worktree and expected local commit as the source for branch publication
-  and GitHub compare.
-- Use the PR Delivery Package only for pull-request title, body, evidence links, and review context.
-- Require explicit human approval before branch publication or pull-request creation.
-- Never silently push, merge, force-push, or broaden repository scope.
-- Make retry and recovery idempotent and auditable.
-- Verify the complete authenticated Work Request -> local Run -> implementation -> Test Evidence ->
-  human-approved GitHub pull-request path.
+- Freeze a clean candidate `C` after every ordinary product, test, workflow, version, and document
+  change is committed.
+- Run the full local matrix and exact-`C` Verify workflow, then complete one separately authorized
+  real private GitHub sandbox Draft-PR walkthrough.
+- Create direct-child signoff `S` containing only the four candidate-bound V1.5 evidence files.
+- Preserve `C` and `S`, publish an annotated `v1.5.0` tag at `S`, and verify the GitHub Release and
+  assets before declaring the 1.x completion gate passed.
 
 After V1.5, do not add another planned 1.x feature milestone. New 1.x work is limited to release
 defects, security fixes, dependency maintenance, or hardening justified by real pilot evidence.
@@ -442,24 +446,28 @@ approved Coding Executors.
   `docs/plans/v1.4-pilot-trust-boundary.md`, and `docs/plans/v1.4-release-signoff.md`.
 - See immutable release evidence under `docs/releases/v1.4.0/`.
 
-## Planned Milestones
+## Implemented Milestone Awaiting Release
 
-### v1.5: GitHub Delivery Integration
+### v1.5: GitHub Delivery Integration — Implemented, Release Pending
 
-- Add project-to-repository delivery settings. Use the canonical managed worktree and expected local
+- Added project-to-repository delivery settings. The canonical managed worktree and expected local
   commit as the source for branch publication and GitHub compare.
-- Use the PR Delivery Package as the source for Draft PR title, body, evidence links, and review
+- Uses the PR Delivery Package as the source for Draft PR title, body, evidence links, and review
   context; it is a handoff artifact, not source or Git identity.
-- Decide GitHub App versus scoped user token before implementation, and keep credentials inside the
-  existing Team/Desktop credential model.
-- Require explicit human approval for branch publication and pull-request creation.
-- Keep push/create operations idempotent, auditable, recoverable, and bound to the expected project,
+- Adopted a GitHub App while retaining identity-only OAuth; App credentials remain inside the
+  existing Team/Desktop credential boundary.
+- Requires explicit human approval for branch publication and pull-request creation.
+- Keeps push/create operations idempotent, auditable, recoverable, and bound to the expected project,
   repository, branch, commit, and evidence version.
-- Provide and verify a minimum operator path to revoke delivery credentials. Richer credential
+- Provides and verifies a minimum operator path to revoke delivery credentials. Richer credential
   administration UX remains evidence-promoted maintenance work.
-- Never silently merge, force-push, widen repository permissions, or treat GitHub state as authority
+- Never silently merges, force-pushes, widens repository permissions, or treats GitHub state as authority
   over the canonical local Run.
-- Write and approve a scoped V1.5 PRD and the required credential/authority ADR before product code.
+- Preserves explicit Revise, Resume, Retry, and Stop behavior without reusing an older approval or
+  allowing background scheduling to resume manual recovery.
+
+The implementation is not the release claim. Candidate-bound local, packaged, CI, and private
+GitHub sandbox evidence must still pass before V1.5 and the 1.x line can be marked complete.
 
 ## 1.x Completion Gate
 
