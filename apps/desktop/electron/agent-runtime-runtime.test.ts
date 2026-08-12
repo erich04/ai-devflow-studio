@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createWorkflowRunFromRequest } from '@ai-devflow/shared'
 import { createDesktopAgentRuntime } from './agent-runtime-runtime'
 import { createLocalStore } from './local-store'
+import { createNativeToolRegistry } from './native-tool-registry'
+import { createAcceptedNativeToolRegistrations } from './native-tools'
 
 const tempDirs: string[] = []
 
@@ -74,12 +76,8 @@ describe('Desktop Agent Runtime', () => {
     store.close()
   })
 
-  it('derives authority in Electron main and completes a deterministic no-side-effect runtime', async () => {
+  it('derives authority in Electron main and completes one durable native Tool runtime', async () => {
     const { store, run, project } = await runtimeFixture()
-    const executeFakeAction = vi.fn(async () => ({
-      resultDigest: 'd'.repeat(64),
-      evaluationSummary: 'The deterministic fake observation satisfied the scenario.',
-    }))
     const runtime = createDesktopAgentRuntime({
       store,
       clock: tickingClock(
@@ -87,9 +85,12 @@ describe('Desktop Agent Runtime', () => {
         '2026-08-12T20:30:01.000Z',
         '2026-08-12T20:30:02.000Z',
         '2026-08-12T20:30:03.000Z',
+        '2026-08-12T20:30:04.000Z',
+        '2026-08-12T20:30:05.000Z',
+        '2026-08-12T20:30:06.000Z',
+        '2026-08-12T20:30:07.000Z',
       ),
       createId: () => 'agent-runtime-main-1',
-      executeFakeAction,
     })
 
     const started = await runtime.start({ runId: run.id, nodeId: run.currentNodeId })
@@ -110,8 +111,13 @@ describe('Desktop Agent Runtime', () => {
     await runtime.advance(started.runtime.id)
     await runtime.advance(started.runtime.id)
     const completed = await runtime.advance(started.runtime.id)
+    const toolAudits = await store.listAgentRuntimeToolAudits(started.runtime.id)
+    const capabilityGrants = await store.listAgentRuntimeCapabilityGrants(started.runtime.id)
 
-    expect(completed.runtime).toMatchObject({ status: 'terminal', stopReason: 'success' })
+    expect(
+      completed.runtime,
+      JSON.stringify({ toolAudits, capabilityGrants }),
+    ).toMatchObject({ status: 'terminal', stopReason: 'success' })
     expect(completed.terminalSummary).toMatchObject({ stopReason: 'success', redacted: true })
     expect(completed.events.map((event) => event.type)).toEqual([
       'runtime_started',
@@ -127,7 +133,13 @@ describe('Desktop Agent Runtime', () => {
       'evaluation_recorded',
       'runtime_stopped',
     ])
-    expect(executeFakeAction).toHaveBeenCalledTimes(1)
+    expect(toolAudits).toMatchObject([
+      { status: 'started', toolId: 'scenario.evaluate', resultDigest: null },
+      { status: 'succeeded', toolId: 'scenario.evaluate' },
+    ])
+    expect(capabilityGrants).toMatchObject([
+      { status: 'consumed', capabilityId: 'scenario.evaluate' },
+    ])
     store.close()
   })
 
@@ -217,6 +229,52 @@ describe('Desktop Agent Runtime', () => {
       (event) => event.type === 'action_requested',
     )
     expect(requestedEvents).toHaveLength(1)
+    store.close()
+  })
+
+  it('accepts one already-audited native Tool result after a pre-commit crash without re-execution', async () => {
+    const { store, run } = await runtimeFixture()
+    let beforeCommitCount = 0
+    const first = createDesktopAgentRuntime({
+      store,
+      clock: tickingClock(
+        '2026-08-12T20:30:00.000Z',
+        '2026-08-12T20:30:01.000Z',
+        '2026-08-12T20:30:02.000Z',
+        '2026-08-12T20:30:03.000Z',
+        '2026-08-12T20:30:04.000Z',
+        '2026-08-12T20:30:05.000Z',
+        '2026-08-12T20:30:06.000Z',
+        '2026-08-12T20:30:07.000Z',
+      ),
+      createId: () => 'agent-runtime-native-result-crash-1',
+      fault: (point) => {
+        if (point === 'before_commit' && ++beforeCommitCount === 4) {
+          throw new Error('injected-after-native-tool-before-runtime-commit')
+        }
+      },
+    })
+    const started = await first.start({ runId: run.id, nodeId: run.currentNodeId })
+    await first.advance(started.runtime.id)
+    await first.advance(started.runtime.id)
+    await expect(first.advance(started.runtime.id)).rejects.toThrow(
+      'injected-after-native-tool-before-runtime-commit',
+    )
+    expect(await store.getAgentRuntime(started.runtime.id)).toMatchObject({
+      status: 'waiting_action',
+    })
+    expect(await store.listAgentRuntimeToolAudits(started.runtime.id)).toHaveLength(2)
+    expect(await store.listAgentRuntimeCapabilityGrants(started.runtime.id)).toHaveLength(1)
+
+    const restarted = createDesktopAgentRuntime({
+      store,
+      clock: tickingClock('2026-08-12T20:30:08.000Z'),
+    })
+    const [recovered] = await restarted.recover()
+
+    expect(recovered?.runtime).toMatchObject({ status: 'terminal', stopReason: 'success' })
+    expect(await store.listAgentRuntimeToolAudits(started.runtime.id)).toHaveLength(2)
+    expect(await store.listAgentRuntimeCapabilityGrants(started.runtime.id)).toHaveLength(1)
     store.close()
   })
 
@@ -358,6 +416,75 @@ describe('Desktop Agent Runtime', () => {
     expect(cancelled.runtime).toMatchObject({ status: 'terminal', stopReason: 'cancelled' })
     expect(cancelled.runtime.acceptedActionIds).toEqual([])
     expect(cancelled.events.map((event) => event.type)).not.toContain('action_result')
+    store.close()
+  })
+
+  it('aborts an in-flight native Tool when Runtime cancellation wins the checkpoint race', async () => {
+    const { store, run, project } = await runtimeFixture()
+    let releaseTool!: (value: { passed: boolean; failures: string[] }) => void
+    const toolResult = new Promise<{ passed: boolean; failures: string[] }>((resolve) => {
+      releaseTool = resolve
+    })
+    const registrations = createAcceptedNativeToolRegistrations({
+      resolveLocalProject: async (localProjectId) =>
+        localProjectId === project.id ? project : null,
+      resolveManagedWorkspace: async () => null,
+    }).map((registration) =>
+      registration.definition.id === 'scenario.evaluate'
+        ? { ...registration, handler: vi.fn(async () => toolResult) }
+        : registration,
+    )
+    const nativeToolRegistry = createNativeToolRegistry({
+      tools: registrations,
+      clock: tickingClock(
+        '2026-08-12T20:30:04.000Z',
+        '2026-08-12T20:30:05.000Z',
+        '2026-08-12T20:30:06.000Z',
+        '2026-08-12T20:30:07.000Z',
+      ),
+      persistence: {
+        reserveGrant: async (grant) => {
+          const result = await store.reserveAgentRuntimeCapabilityGrant(grant)
+          return { reserved: result.reserved }
+        },
+        beginExecution: async (input) => {
+          const result = await store.beginAgentRuntimeToolExecution(input)
+          return { consumed: result.consumed }
+        },
+        appendAudit: (audit) => store.appendAgentRuntimeToolAudit(audit),
+      },
+    })
+    const runtime = createDesktopAgentRuntime({
+      store,
+      nativeToolRegistry,
+      clock: tickingClock(
+        '2026-08-12T20:30:00.000Z',
+        '2026-08-12T20:30:01.000Z',
+        '2026-08-12T20:30:02.000Z',
+        '2026-08-12T20:30:04.000Z',
+        '2026-08-12T20:30:05.000Z',
+      ),
+      createId: () => 'agent-runtime-native-cancel-race-1',
+    })
+    const started = await runtime.start({ runId: run.id, nodeId: run.currentNodeId })
+    await runtime.advance(started.runtime.id)
+    await runtime.advance(started.runtime.id)
+
+    const lateAdvance = runtime.advance(started.runtime.id)
+    await vi.waitFor(() =>
+      expect(
+        registrations.find((item) => item.definition.id === 'scenario.evaluate')?.handler,
+      ).toHaveBeenCalledTimes(1),
+    )
+    const cancelled = await runtime.cancel(started.runtime.id)
+    releaseTool({ passed: true, failures: [] })
+
+    await expect(lateAdvance).resolves.toEqual(cancelled)
+    expect(cancelled.runtime).toMatchObject({ status: 'terminal', stopReason: 'cancelled' })
+    expect(await store.listAgentRuntimeToolAudits(started.runtime.id)).toMatchObject([
+      { status: 'started' },
+      { status: 'cancelled', code: 'cancelled' },
+    ])
     store.close()
   })
 })

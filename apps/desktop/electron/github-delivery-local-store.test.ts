@@ -26,6 +26,7 @@ const baseCommitSha = '0000000000000000000000000000000000000000'
 const expectedCommitSha = '1111111111111111111111111111111111111111'
 let tempDirs: string[] = []
 const dropAgentRuntimeSchemaSql = `
+  drop table if exists agent_runtime_tool_audits;
   drop table if exists agent_runtime_terminal_summaries;
   drop table if exists agent_runtime_capability_grants;
   drop table if exists agent_runtime_evaluations;
@@ -726,7 +727,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(18)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(19)
     await expect(migrated.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])
 
     const v2Check: GitHubDeliveryRevocationCheck = {
@@ -756,10 +757,10 @@ describe('GitHub Delivery Intent local persistence', () => {
     verified.close()
   })
 
-  it('keeps schema 17 revocation checks isolated after migrating through schema 18', async () => {
+  it('keeps schema 17 revocation checks isolated after migrating through schema 19', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
-    expect(await store.getSchemaVersion()).toBe(18)
+    expect(await store.getSchemaVersion()).toBe(19)
     store.close()
 
     const SQL = await initSqlJs()
@@ -1117,7 +1118,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     store.close()
   })
 
-  it('preserves an existing v14 JSON series and non-first attempt through schema 18', async () => {
+  it('preserves an existing v14 JSON series and non-first attempt through schema 19', async () => {
     const dbPath = await tempDbPath()
     const sources = createSources()
     const store = await createLocalStore({ dbPath })
@@ -1160,7 +1161,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(18)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(19)
     await expect(migrated.listGitHubDeliveryIntents(sources.run.id))
       .resolves.toEqual([attemptTwo])
     migrated.close()
@@ -1183,7 +1184,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(18)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(19)
     await expect(migrated.listGitHubDeliveryIntents(sources.run.id))
       .resolves.toEqual([completed])
     await expect(migrated.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])

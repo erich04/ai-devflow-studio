@@ -104,7 +104,7 @@ describe('product roadmap source of truth', () => {
     expect(currentRelease).toContain('The finite 1.x product line is complete')
     expect(currentRelease).not.toContain('release and 1.x completion gate remain pending')
     expect(priorities).toContain('### Now — Implement V2.0 Native Agent Runtime')
-    expect(priorities).toContain('### Next — Add Native Tool And Trusted MCP Execution')
+    expect(priorities).toContain('### Next — Add Trusted Local MCP Execution')
     expect(markdown).not.toContain('current V1.4 runtime already implements every layer')
     expect(currentRelease).toContain('real private GitHub sandbox')
     expect(markdown).toContain('### v1.5: GitHub Delivery Integration')

@@ -1,5 +1,6 @@
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -7,6 +8,10 @@ import { _electron as electron } from '@playwright/test'
 import { resolveDesktopExecutablePath } from './desktop-pilot-artifact.mjs'
 
 const rootDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const requireFromDesktop = createRequire(
+  path.join(rootDirectory, 'apps', 'desktop', 'package.json'),
+)
+const initSqlJs = requireFromDesktop('sql.js')
 const artifactDirectory = path.join(rootDirectory, 'out', 'desktop-pilot')
 const artifactIndex = JSON.parse(
   await readFile(path.join(artifactDirectory, 'artifact-index.json'), 'utf8'),
@@ -148,6 +153,40 @@ try {
   ) {
     throw new Error('Packaged Agent Runtime was not restored exactly after restart.')
   }
+  await electronApp.close()
+  electronApp = undefined
+
+  const SQL = await initSqlJs({
+    locateFile: (file) => requireFromDesktop.resolve(`sql.js/dist/${file}`),
+  })
+  const database = new SQL.Database(await readFile(storePath))
+  const schemaVersion = Number(
+    database.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0],
+  )
+  const nativeToolAudit = database.exec(
+    `select tool_id,
+            sum(case when status = 'started' then 1 else 0 end),
+            sum(case when status = 'succeeded' then 1 else 0 end),
+            count(*),
+            sum(case when result_digest is not null then 1 else 0 end)
+       from agent_runtime_tool_audits
+      where runtime_id = ?
+      group by tool_id`,
+    [runtimeBeforeRestart.runtime.id],
+  )[0]?.values[0]
+  database.close()
+  if (schemaVersion !== 19) {
+    throw new Error(`Packaged Desktop did not initialize schema 19: ${schemaVersion}`)
+  }
+  if (
+    nativeToolAudit?.[0] !== 'scenario.evaluate' ||
+    Number(nativeToolAudit[1]) !== 1 ||
+    Number(nativeToolAudit[2]) !== 1 ||
+    Number(nativeToolAudit[3]) !== 2 ||
+    Number(nativeToolAudit[4]) !== 1
+  ) {
+    throw new Error('Packaged Agent Runtime did not persist one exact bounded Native Tool audit.')
+  }
 
   console.log(
     JSON.stringify(
@@ -162,6 +201,12 @@ try {
           stopReason: runtimeAfterRestart.runtime.stopReason,
           acceptedActionCount: runtimeAfterRestart.terminalSummary.acceptedActionCount,
           restartDuplicateEffects: 0,
+          nativeToolAudit: {
+            toolId: nativeToolAudit[0],
+            started: Number(nativeToolAudit[1]),
+            succeeded: Number(nativeToolAudit[2]),
+            durableRecords: Number(nativeToolAudit[3]),
+          },
         },
       },
       null,

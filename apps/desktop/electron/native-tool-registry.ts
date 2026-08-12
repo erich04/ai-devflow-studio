@@ -43,6 +43,33 @@ export type NativeToolRegistration = {
 
 export type NativeToolCapabilityGrant = object
 
+export type NativeToolCapabilityGrantRecord = {
+  stateVersion: 1
+  id: string
+  runtimeId: string
+  capabilityId: string
+  capabilityVersion: number
+  requestDigest: string
+  permissionClass: NativeToolPermissionClass
+  resourceKind: NativeToolResourceScope['kind']
+  resourceId: string
+  status: 'active' | 'consumed' | 'denied' | 'expired' | 'cancelled'
+  grantedAt: string
+  expiresAt: string
+  settledAt: string | null
+}
+
+export type NativeToolRegistryPersistence = {
+  reserveGrant(
+    grant: NativeToolCapabilityGrantRecord,
+  ): Promise<{ reserved: boolean }>
+  beginExecution(input: {
+    expectedGrant: NativeToolCapabilityGrantRecord
+    audit: NativeToolAuditRecord
+  }): Promise<{ consumed: boolean }>
+  appendAudit(audit: NativeToolAuditRecord): Promise<void>
+}
+
 export type NativeToolAuditStatus =
   | 'started'
   | 'succeeded'
@@ -89,6 +116,17 @@ export type NativeToolExecutionErrorCode =
   | 'deadline_exceeded'
   | 'cancelled'
   | 'handler_failed'
+  | 'audit_failed'
+
+const auditIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u
+const auditToolIdentifierPattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u
+const digestPattern = /^[a-f0-9]{64}$/u
+const failureCodes: NativeToolExecutionErrorCode[] = [
+  'invalid_output',
+  'result_too_large',
+  'redaction_failed',
+  'handler_failed',
+]
 
 export class NativeToolExecutionError extends Error {
   readonly code: NativeToolExecutionErrorCode
@@ -113,6 +151,7 @@ type GrantRecord = {
   sideEffectClass: NativeToolDefinition['sideEffectClass']
   resourceScope: NativeToolResourceScope
   remainingCalls: number
+  durableGrant: NativeToolCapabilityGrantRecord
 }
 
 type ActiveExecution = {
@@ -129,6 +168,10 @@ export type NativeToolRegistry = {
     permission: NativeToolPermission
     resourceScope: NativeToolResourceScope
     callLimit: number
+  }): Promise<NativeToolCapabilityGrant>
+  restoreGrant(input: {
+    runtime: AgentRuntimeState
+    durableGrant: NativeToolCapabilityGrantRecord
   }): NativeToolCapabilityGrant
   execute(input: {
     grant: NativeToolCapabilityGrant
@@ -178,6 +221,122 @@ function canonicalTimestamp(value: string): number {
   return timestamp
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function hasExactAuditKeys(value: Record<string, unknown>): boolean {
+  const expected = [
+    'stateVersion',
+    'id',
+    'runtimeId',
+    'actionId',
+    'grantId',
+    'organizationId',
+    'projectId',
+    'userId',
+    'sessionId',
+    'localProjectId',
+    'toolId',
+    'toolVersion',
+    'permissionClass',
+    'sideEffectClass',
+    'resourceKind',
+    'resourceId',
+    'status',
+    'code',
+    'inputDigest',
+    'resultDigest',
+    'resultBytes',
+    'redactionState',
+    'createdAt',
+  ].sort()
+  const keys = Object.keys(value).sort()
+  return keys.length === expected.length && keys.every((key, index) => key === expected[index])
+}
+
+export function parseNativeToolAuditRecord(value: unknown): NativeToolAuditRecord {
+  try {
+    if (
+      !isPlainRecord(value) ||
+      !hasExactAuditKeys(value) ||
+      value.stateVersion !== 1 ||
+      ![value.id, value.runtimeId, value.actionId, value.grantId, value.userId, value.sessionId,
+        value.localProjectId, value.resourceId].every(
+        (item) => typeof item === 'string' && auditIdentifierPattern.test(item),
+      ) ||
+      !(
+        (value.organizationId === null && value.projectId === null) ||
+        (typeof value.organizationId === 'string' &&
+          auditIdentifierPattern.test(value.organizationId) &&
+          typeof value.projectId === 'string' &&
+          auditIdentifierPattern.test(value.projectId))
+      ) ||
+      typeof value.toolId !== 'string' ||
+      value.toolId.length > 200 ||
+      !auditToolIdentifierPattern.test(value.toolId) ||
+      !Number.isInteger(value.toolVersion) ||
+      Number(value.toolVersion) < 1 ||
+      Number(value.toolVersion) > 2_147_483_647 ||
+      !['read', 'edit', 'execute'].includes(String(value.permissionClass)) ||
+      !['none', 'workspace_write', 'local_process'].includes(String(value.sideEffectClass)) ||
+      !['local_project', 'managed_workspace'].includes(String(value.resourceKind)) ||
+      (value.resourceKind === 'local_project' && value.resourceId !== value.localProjectId) ||
+      !['started', 'succeeded', 'failed', 'cancelled', 'timeout'].includes(String(value.status)) ||
+      typeof value.inputDigest !== 'string' ||
+      !digestPattern.test(value.inputDigest) ||
+      typeof value.createdAt !== 'string'
+    ) {
+      throw new Error('invalid')
+    }
+    canonicalTimestamp(value.createdAt)
+    const status = value.status as NativeToolAuditStatus
+    const code = value.code as NativeToolExecutionErrorCode | null
+    const resultDigest = value.resultDigest
+    const resultBytes = value.resultBytes
+    const redactionState = value.redactionState
+    const validResult =
+      typeof resultDigest === 'string' &&
+      digestPattern.test(resultDigest) &&
+      Number.isInteger(resultBytes) &&
+      Number(resultBytes) >= 0 &&
+      Number(resultBytes) <= 256 * 1_024
+    const validTerminalShape =
+      (status === 'started' &&
+        code === null &&
+        resultDigest === null &&
+        resultBytes === null &&
+        redactionState === 'not_recorded') ||
+      (status === 'succeeded' &&
+        code === null &&
+        validResult &&
+        (redactionState === 'passed' || redactionState === 'applied')) ||
+      (status === 'failed' &&
+        failureCodes.includes(code as NativeToolExecutionErrorCode) &&
+        resultDigest === null &&
+        resultBytes === null &&
+        (code === 'redaction_failed'
+          ? redactionState === 'failed'
+          : redactionState === 'not_recorded')) ||
+      (status === 'cancelled' &&
+        code === 'cancelled' &&
+        resultDigest === null &&
+        resultBytes === null &&
+        redactionState === 'not_recorded') ||
+      (status === 'timeout' &&
+        code === 'deadline_exceeded' &&
+        resultDigest === null &&
+        resultBytes === null &&
+        redactionState === 'not_recorded')
+    if (!validTerminalShape) throw new Error('invalid')
+    return clone(value as NativeToolAuditRecord)
+  } catch {
+    throw new Error('invalid_native_tool_audit')
+  }
+}
+
 function exactScope(left: AgentRuntimeScope, right: AgentRuntimeScope): boolean {
   return canonicalJson(left) === canonicalJson(right)
 }
@@ -187,6 +346,15 @@ function exactAuthority(
   right: AgentRuntimeState['authority'],
 ): boolean {
   return canonicalJson(left) === canonicalJson(right)
+}
+
+function compatibleResourceScope(
+  definition: NativeToolDefinition,
+  resourceScope: NativeToolResourceScope,
+): boolean {
+  return definition.sideEffectClass === 'workspace_write'
+    ? resourceScope.kind === 'managed_workspace'
+    : resourceScope.kind === 'local_project'
 }
 
 function clone<T>(value: T): T {
@@ -205,6 +373,7 @@ export function createNativeToolRegistry(input: {
   clock?: () => string
   createId?: () => string
   redactResult?: (value: unknown) => { value: unknown; redacted: boolean }
+  persistence?: NativeToolRegistryPersistence
 }): NativeToolRegistry {
   const clock = input.clock ?? (() => new Date().toISOString())
   const createId = input.createId ?? (() => `native-tool-${randomUUID()}`)
@@ -226,7 +395,7 @@ export function createNativeToolRegistry(input: {
     return { value, timestamp: canonicalTimestamp(value) }
   }
 
-  function appendAudit(
+  async function appendAudit(
     grant: GrantRecord,
     runtimeId: string,
     actionId: string,
@@ -235,8 +404,9 @@ export function createNativeToolRegistry(input: {
     code: NativeToolExecutionErrorCode | null,
     result?: { digest: string; bytes: number },
     redactionState: NativeToolAuditRecord['redactionState'] = 'not_recorded',
-  ) {
-    auditRecords.push({
+    persistenceMode: 'begin' | 'append' = 'append',
+  ): Promise<void> {
+    const audit: NativeToolAuditRecord = {
       stateVersion: 1,
       id: createId(),
       runtimeId,
@@ -263,11 +433,52 @@ export function createNativeToolRegistry(input: {
       resultBytes: result?.bytes ?? null,
       redactionState,
       createdAt: now().value,
-    })
+    }
+    try {
+      if (input.persistence && persistenceMode === 'begin') {
+        const begun = await input.persistence.beginExecution({
+          expectedGrant: grant.durableGrant,
+          audit,
+        })
+        if (!begun.consumed) throw new NativeToolExecutionError('invalid_grant')
+      } else if (input.persistence) {
+        await input.persistence.appendAudit(audit)
+      }
+    } catch (error) {
+      if (error instanceof NativeToolExecutionError) throw error
+      throw new NativeToolExecutionError('audit_failed')
+    }
+    auditRecords.push(audit)
   }
 
   function fail(code: NativeToolExecutionErrorCode): never {
     throw new NativeToolExecutionError(code)
+  }
+
+  function installCapability(input: {
+    runtime: AgentRuntimeState
+    tool: NativeToolRegistration
+    resourceScope: NativeToolResourceScope
+    durableGrant: NativeToolCapabilityGrantRecord
+    permission: NativeToolPermission
+  }): NativeToolCapabilityGrant {
+    const capability = Object.freeze(Object.create(null)) as NativeToolCapabilityGrant
+    grants.set(capability, {
+      id: input.durableGrant.id,
+      runtimeId: input.runtime.id,
+      runtimeScope: clone(input.runtime.scope),
+      runtimeAuthority: clone(input.runtime.authority),
+      contextDigest: input.runtime.contextDigest,
+      capabilitySetDigest: input.runtime.capabilitySetDigest,
+      toolId: input.durableGrant.capabilityId,
+      toolVersion: input.durableGrant.capabilityVersion,
+      permission: clone(input.permission),
+      sideEffectClass: input.tool.definition.sideEffectClass,
+      resourceScope: clone(input.resourceScope),
+      remainingCalls: 1,
+      durableGrant: clone(input.durableGrant),
+    })
+    return capability
   }
 
   return {
@@ -275,9 +486,10 @@ export function createNativeToolRegistry(input: {
       return [...tools.values()].map(({ definition }) => clone(definition))
     },
 
-    issueGrant({ runtime, toolId, toolVersion, permission, resourceScope, callLimit }) {
+    async issueGrant({ runtime, toolId, toolVersion, permission, resourceScope, callLimit }) {
       const tool = tools.get(`${toolId}@${toolVersion}`)
-      const current = now().timestamp
+      const granted = now()
+      const current = granted.timestamp
       const decidedAt = canonicalTimestamp(permission.decidedAt)
       const expiresAt = canonicalTimestamp(permission.expiresAt)
       const runtimeDeadline = canonicalTimestamp(runtime.deadline)
@@ -294,29 +506,101 @@ export function createNativeToolRegistry(input: {
         decidedAt > current ||
         expiresAt <= current ||
         expiresAt > runtimeDeadline ||
-        !Number.isInteger(callLimit) ||
-        callLimit < 1 ||
-        callLimit > runtime.bounds.maxToolCalls - runtime.counters.toolCalls ||
-        resourceScope.localProjectId !== runtime.scope.localProjectId
+        callLimit !== 1 ||
+        runtime.counters.toolCalls < 1 ||
+        runtime.counters.toolCalls > runtime.bounds.maxToolCalls ||
+        resourceScope.localProjectId !== runtime.scope.localProjectId ||
+        !compatibleResourceScope(tool.definition, resourceScope)
       ) {
         throw new Error('invalid_native_tool_grant')
       }
-      const capability = Object.freeze(Object.create(null)) as NativeToolCapabilityGrant
-      grants.set(capability, {
-        id: createId(),
+      const grantId = createId()
+      const durableGrant: NativeToolCapabilityGrantRecord = {
+        stateVersion: 1,
+        id: grantId,
         runtimeId: runtime.id,
-        runtimeScope: clone(runtime.scope),
-        runtimeAuthority: clone(runtime.authority),
-        contextDigest: runtime.contextDigest,
-        capabilitySetDigest: runtime.capabilitySetDigest,
-        toolId,
-        toolVersion,
-        permission: clone(permission),
-        sideEffectClass: tool.definition.sideEffectClass,
-        resourceScope: clone(resourceScope),
-        remainingCalls: callLimit,
+        capabilityId: toolId,
+        capabilityVersion: toolVersion,
+        requestDigest: runtime.activeAction.requestDigest,
+        permissionClass: permission.permissionClass,
+        resourceKind: resourceScope.kind,
+        resourceId:
+          resourceScope.kind === 'managed_workspace'
+            ? resourceScope.workspaceId
+            : resourceScope.localProjectId,
+        status: 'active',
+        grantedAt: granted.value,
+        expiresAt: permission.expiresAt,
+        settledAt: null,
+      }
+      if (input.persistence) {
+        try {
+          const reserved = await input.persistence.reserveGrant(durableGrant)
+          if (!reserved.reserved) throw new Error('not_reserved')
+        } catch {
+          throw new Error('invalid_native_tool_grant')
+        }
+      }
+      return installCapability({
+        runtime,
+        tool,
+        resourceScope,
+        durableGrant,
+        permission,
       })
-      return capability
+    },
+
+    restoreGrant({ runtime, durableGrant }) {
+      const tool = tools.get(`${durableGrant.capabilityId}@${durableGrant.capabilityVersion}`)
+      const resourceScope: NativeToolResourceScope =
+        durableGrant.resourceKind === 'managed_workspace'
+          ? {
+              kind: 'managed_workspace',
+              localProjectId: runtime.scope.localProjectId,
+              workspaceId: durableGrant.resourceId,
+            }
+          : {
+              kind: 'local_project',
+              localProjectId: durableGrant.resourceId,
+            }
+      if (
+        !tool ||
+        durableGrant.stateVersion !== 1 ||
+        !auditIdentifierPattern.test(durableGrant.id) ||
+        durableGrant.runtimeId !== runtime.id ||
+        !digestPattern.test(durableGrant.requestDigest) ||
+        durableGrant.status !== 'active' ||
+        durableGrant.settledAt !== null ||
+        runtime.status !== 'waiting_action' ||
+        runtime.stopReason !== null ||
+        runtime.activeAction?.kind !== 'tool' ||
+        runtime.activeAction.capabilityId !== durableGrant.capabilityId ||
+        runtime.activeAction.capabilityVersion !== durableGrant.capabilityVersion ||
+        runtime.activeAction.requestDigest !== durableGrant.requestDigest ||
+        durableGrant.permissionClass !== tool.definition.permissionClass ||
+        !['local_project', 'managed_workspace'].includes(durableGrant.resourceKind) ||
+        !auditIdentifierPattern.test(durableGrant.resourceId) ||
+        canonicalTimestamp(durableGrant.grantedAt) > now().timestamp ||
+        durableGrant.grantedAt < runtime.updatedAt ||
+        canonicalTimestamp(durableGrant.expiresAt) <= canonicalTimestamp(durableGrant.grantedAt) ||
+        canonicalTimestamp(durableGrant.expiresAt) > canonicalTimestamp(runtime.deadline) ||
+        resourceScope.localProjectId !== runtime.scope.localProjectId ||
+        !compatibleResourceScope(tool.definition, resourceScope)
+      ) {
+        throw new Error('invalid_native_tool_grant')
+      }
+      return installCapability({
+        runtime,
+        tool,
+        resourceScope,
+        durableGrant,
+        permission: {
+          decision: 'approved',
+          permissionClass: tool.definition.permissionClass,
+          decidedAt: durableGrant.grantedAt,
+          expiresAt: durableGrant.expiresAt,
+        },
+      })
     },
 
     async execute({ grant, runtime, actionId, input: toolInput, signal }) {
@@ -350,9 +634,6 @@ export function createNativeToolRegistry(input: {
       const inputDigest = digestNativeToolValue(toolInput)
       if (inputDigest !== runtime.activeAction.requestDigest) fail('action_mismatch')
 
-      record.remainingCalls -= 1
-      appendAudit(record, runtime.id, actionId, inputDigest, 'started', null)
-
       const active: ActiveExecution = {
         controller: new AbortController(),
         abortCode: 'cancelled',
@@ -376,26 +657,37 @@ export function createNativeToolRegistry(input: {
         if (active.controller.signal.aborted) rejectAbort()
         else active.controller.signal.addEventListener('abort', rejectAbort, { once: true })
       })
-      const handled = Promise.resolve().then(() =>
-        tool.handler({
-          runtime: clone(runtime),
-          resourceScope: clone(record.resourceScope),
-          signal: active.controller.signal,
-          input: clone(toolInput),
-        }),
-      )
-
       try {
+        await appendAudit(
+          record,
+          runtime.id,
+          actionId,
+          inputDigest,
+          'started',
+          null,
+          undefined,
+          'not_recorded',
+          'begin',
+        )
+        record.remainingCalls -= 1
+        const handled = Promise.resolve().then(() =>
+          tool.handler({
+            runtime: clone(runtime),
+            resourceScope: clone(record.resourceScope),
+            signal: active.controller.signal,
+            input: clone(toolInput),
+          }),
+        )
         const rawValue = await Promise.race([handled, aborted])
         if (!validateNativeToolValue(tool.definition.outputSchema, rawValue)) {
-          appendAudit(record, runtime.id, actionId, inputDigest, 'failed', 'invalid_output')
+          await appendAudit(record, runtime.id, actionId, inputDigest, 'failed', 'invalid_output')
           fail('invalid_output')
         }
         let redaction: { value: unknown; redacted: boolean }
         try {
           redaction = redactResult(rawValue)
         } catch {
-          appendAudit(
+          await appendAudit(
             record,
             runtime.id,
             actionId,
@@ -409,7 +701,7 @@ export function createNativeToolRegistry(input: {
         }
         const value = redaction.value
         if (!validateNativeToolValue(tool.definition.outputSchema, value)) {
-          appendAudit(
+          await appendAudit(
             record,
             runtime.id,
             actionId,
@@ -425,7 +717,7 @@ export function createNativeToolRegistry(input: {
         try {
           serialized = canonicalJson(value)
         } catch {
-          appendAudit(record, runtime.id, actionId, inputDigest, 'failed', 'invalid_output')
+          await appendAudit(record, runtime.id, actionId, inputDigest, 'failed', 'invalid_output')
           fail('invalid_output')
         }
         const resultBytes = Buffer.byteLength(serialized, 'utf8')
@@ -433,11 +725,11 @@ export function createNativeToolRegistry(input: {
           resultBytes > tool.definition.maxResultBytes ||
           resultBytes > runtime.bounds.maxToolResultBytes
         ) {
-          appendAudit(record, runtime.id, actionId, inputDigest, 'failed', 'result_too_large')
+          await appendAudit(record, runtime.id, actionId, inputDigest, 'failed', 'result_too_large')
           fail('result_too_large')
         }
         const resultDigest = createHash('sha256').update(serialized, 'utf8').digest('hex')
-        appendAudit(
+        await appendAudit(
           record,
           runtime.id,
           actionId,
@@ -451,13 +743,13 @@ export function createNativeToolRegistry(input: {
       } catch (error) {
         if (error instanceof NativeToolExecutionError) {
           if (error.code === 'cancelled') {
-            appendAudit(record, runtime.id, actionId, inputDigest, 'cancelled', error.code)
+            await appendAudit(record, runtime.id, actionId, inputDigest, 'cancelled', error.code)
           } else if (error.code === 'deadline_exceeded') {
-            appendAudit(record, runtime.id, actionId, inputDigest, 'timeout', error.code)
+            await appendAudit(record, runtime.id, actionId, inputDigest, 'timeout', error.code)
           }
           throw error
         }
-        appendAudit(record, runtime.id, actionId, inputDigest, 'failed', 'handler_failed')
+        await appendAudit(record, runtime.id, actionId, inputDigest, 'failed', 'handler_failed')
         throw new NativeToolExecutionError('handler_failed')
       } finally {
         clearTimeout(timeout)

@@ -82,8 +82,8 @@ describe('V2.0 Native Agent Runtime contract', () => {
     }
 
     expect(roadmap).toContain('### Now — Implement V2.0 Native Agent Runtime')
-    expect(roadmap).toContain('Slice 1 shared runtime kernel and Slice 2 durable Desktop runtime are complete')
-    expect(roadmap).toContain('### Next — Add Native Tool And Trusted MCP Execution')
+    expect(roadmap).toContain('Slices 1–3 are complete')
+    expect(roadmap).toContain('### Next — Add Trusted Local MCP Execution')
   })
 
   it('provides an executable TDD slice plan before product code starts', () => {
@@ -111,7 +111,8 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(plan).toContain('OpenCode and native executor parity')
     expect(plan).toContain('V2.0 completion evidence')
     expect(plan).toContain('| Slice 2 | Complete |')
-    expect(plan).toContain('| Slice 3 | Next |')
+    expect(plan).toContain('| Slice 3 | Complete |')
+    expect(plan).toContain('Desktop schema 19')
   })
 
   it('adds stable V2.0 domain language without redefining workflow authority', () => {

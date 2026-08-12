@@ -11,9 +11,13 @@ retroactive TDD rewrites unless it is touched.
   contract without inventing expiry evidence for legacy issued credentials, followed by the
   v13-to-v14 bounded provider retry boundary, and the v14-to-v15 verified publication adoption
   authority without changing legacy grant-backed publications.
-- Electron/SQLite uses Desktop schema v18. Local-store tests must prove a fresh v18 database, the
-  Desktop schema 17-to-18 retained upgrade with no invented Runtime rows, rollback on migration
-  failure, and refusal of a newer unknown schema.
+- Electron/SQLite uses Desktop schema v19. Local-store tests must prove a fresh v19 database, the
+  Desktop schema 17-to-18 retained Runtime upgrade, the 18-to-19 metadata-only Native Tool audit
+  upgrade with no invented grant or audit rows, rollback on migration failure, and refusal of a
+  newer unknown schema.
+- The packaged Desktop pilot must execute exactly one `scenario.evaluate` Native Tool, persist one
+  started and one succeeded metadata-only audit, and retain one accepted action after cold restart
+  without another grant, Tool call, or audit record.
 
 ## Test Layers
 

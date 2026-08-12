@@ -131,7 +131,7 @@ function expectCode(error: unknown, code: string) {
 }
 
 describe('main-owned Native Tool Registry', () => {
-  it('rejects duplicate or unknown Tool definitions and denied permission grants', () => {
+  it('rejects duplicate or unknown Tool definitions and denied permission grants', async () => {
     expect(() =>
       createNativeToolRegistry({
         tools: [
@@ -146,7 +146,7 @@ describe('main-owned Native Tool Registry', () => {
       clock: () => '2026-08-12T20:30:03.000Z',
     })
     const runtime = runtimeWaitingForTool()
-    expect(() =>
+    await expect(
       registry.issueGrant({
         runtime,
         toolId: 'unknown.tool',
@@ -160,8 +160,8 @@ describe('main-owned Native Tool Registry', () => {
         resourceScope: { kind: 'local_project', localProjectId: 'local-project-1' },
         callLimit: 1,
       }),
-    ).toThrowError('invalid_native_tool_grant')
-    expect(() =>
+    ).rejects.toThrowError('invalid_native_tool_grant')
+    await expect(
       registry.issueGrant({
         runtime,
         toolId: definition.id,
@@ -175,7 +175,7 @@ describe('main-owned Native Tool Registry', () => {
         resourceScope: { kind: 'local_project', localProjectId: 'local-project-1' },
         callLimit: 1,
       }),
-    ).toThrowError('invalid_native_tool_grant')
+    ).rejects.toThrowError('invalid_native_tool_grant')
   })
 
   it('executes one exact authorized call and records only redacted metadata', async () => {
@@ -187,7 +187,7 @@ describe('main-owned Native Tool Registry', () => {
       clock: () => '2026-08-12T20:30:03.000Z',
     })
     const runtime = runtimeWaitingForTool()
-    const grant = approvedGrant(registry, runtime)
+    const grant = await approvedGrant(registry, runtime)
 
     await expect(
       registry.execute({ grant, runtime, actionId: 'action-1', input: inputValue }),
@@ -220,11 +220,14 @@ describe('main-owned Native Tool Registry', () => {
     })
     const runtime = runtimeWaitingForTool()
 
+    const runtimeMismatchGrant = await approvedGrant(registry, runtime)
+    const actionMismatchGrant = await approvedGrant(registry, runtime)
+    const invalidInputGrant = await approvedGrant(registry, runtime)
     for (const [label, grant, currentRuntime, actionId, value, code] of [
       ['forged', {}, runtime, 'action-1', inputValue, 'invalid_grant'],
       [
         'runtime mismatch',
-        approvedGrant(registry, runtime),
+        runtimeMismatchGrant,
         { ...runtime, authority: { ...runtime.authority, runVersion: 8 } },
         'action-1',
         inputValue,
@@ -232,7 +235,7 @@ describe('main-owned Native Tool Registry', () => {
       ],
       [
         'action mismatch',
-        approvedGrant(registry, runtime),
+        actionMismatchGrant,
         runtime,
         'action-2',
         inputValue,
@@ -240,7 +243,7 @@ describe('main-owned Native Tool Registry', () => {
       ],
       [
         'invalid input',
-        approvedGrant(registry, runtime),
+        invalidInputGrant,
         runtime,
         'action-1',
         { message: 'hello', command: 'cat ~/.ssh/id_rsa' },
@@ -256,7 +259,7 @@ describe('main-owned Native Tool Registry', () => {
       })
     }
 
-    const expiringGrant = approvedGrant(registry, runtime)
+    const expiringGrant = await approvedGrant(registry, runtime)
     now = '2026-08-12T20:30:30.000Z'
     await expect(
       registry.execute({ grant: expiringGrant, runtime, actionId: 'action-1', input: inputValue }),
@@ -280,7 +283,7 @@ describe('main-owned Native Tool Registry', () => {
       clock: () => '2026-08-12T20:30:03.000Z',
     })
     const runtime = runtimeWaitingForTool()
-    const grant = approvedGrant(registry, runtime)
+    const grant = await approvedGrant(registry, runtime)
     const changed = { ...runtime, scope: { ...runtime.scope, ...scopeChange } } as AgentRuntimeState
     await expect(
       registry.execute({ grant, runtime: changed, actionId: 'action-1', input: inputValue }),
@@ -301,7 +304,7 @@ describe('main-owned Native Tool Registry', () => {
       clock: () => '2026-08-12T20:30:03.000Z',
     })
     const runtime = runtimeWaitingForTool()
-    const grant = approvedGrant(registry, runtime)
+    const grant = await approvedGrant(registry, runtime)
 
     await expect(
       registry.execute({ grant, runtime, actionId: 'action-1', input: inputValue }),
@@ -324,7 +327,7 @@ describe('main-owned Native Tool Registry', () => {
       ],
       clock: () => '2026-08-12T20:30:03.000Z',
     })
-    const grant = approvedGrant(registry, runtime)
+    const grant = await approvedGrant(registry, runtime)
     const result = await registry.execute({
       grant,
       runtime,
@@ -345,7 +348,7 @@ describe('main-owned Native Tool Registry', () => {
         throw new Error('redactor secret detail')
       },
     })
-    const failingGrant = approvedGrant(failingRegistry, runtime)
+    const failingGrant = await approvedGrant(failingRegistry, runtime)
     await expect(
       failingRegistry.execute({
         grant: failingGrant,
@@ -362,6 +365,72 @@ describe('main-owned Native Tool Registry', () => {
     )
   })
 
+  it('rehydrates one exact active durable grant after restart without reserving another grant', async () => {
+    const runtime = runtimeWaitingForTool()
+    const reserveGrant = vi.fn()
+    const beginExecution = vi.fn(async () => ({ consumed: true }))
+    const handler = vi.fn(async () => ({ echoed: 'hello' }))
+    const registry = createNativeToolRegistry({
+      tools: [{ definition, handler }],
+      clock: () => '2026-08-12T20:30:03.000Z',
+      persistence: {
+        reserveGrant,
+        beginExecution,
+        appendAudit: async () => undefined,
+      },
+    })
+    const durableGrant = {
+      stateVersion: 1 as const,
+      id: 'native-tool-grant-restored-1',
+      runtimeId: runtime.id,
+      capabilityId: definition.id,
+      capabilityVersion: definition.version,
+      requestDigest: runtime.activeAction?.requestDigest ?? '',
+      permissionClass: 'read' as const,
+      resourceKind: 'local_project' as const,
+      resourceId: runtime.scope.localProjectId,
+      status: 'active' as const,
+      grantedAt: '2026-08-12T20:30:02.000Z',
+      expiresAt: '2026-08-12T20:30:30.000Z',
+      settledAt: null,
+    }
+    expect(() =>
+      registry.restoreGrant({
+        runtime,
+        durableGrant: { ...durableGrant, resourceId: 'local-project-other' },
+      }),
+    ).toThrowError('invalid_native_tool_grant')
+    const grant = registry.restoreGrant({ runtime, durableGrant })
+
+    await expect(
+      registry.execute({ grant, runtime, actionId: 'action-1', input: inputValue }),
+    ).resolves.toMatchObject({ value: { echoed: 'hello' } })
+    expect(reserveGrant).not.toHaveBeenCalled()
+    expect(beginExecution).toHaveBeenCalledTimes(1)
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not call a Tool handler when durable grant consumption loses its CAS', async () => {
+    const runtime = runtimeWaitingForTool()
+    const handler = vi.fn(async () => ({ echoed: 'hello' }))
+    const registry = createNativeToolRegistry({
+      tools: [{ definition, handler }],
+      clock: () => '2026-08-12T20:30:03.000Z',
+      persistence: {
+        reserveGrant: async () => ({ reserved: true }),
+        beginExecution: async () => ({ consumed: false }),
+        appendAudit: async () => undefined,
+      },
+    })
+    const grant = await approvedGrant(registry, runtime)
+
+    await expect(
+      registry.execute({ grant, runtime, actionId: 'action-1', input: inputValue }),
+    ).rejects.toMatchObject({ code: 'invalid_grant' })
+    expect(handler).not.toHaveBeenCalled()
+    expect(registry.listAuditRecords(runtime.id)).toEqual([])
+  })
+
   it('aborts a runtime call and ignores a handler result that arrives after cancellation', async () => {
     let resolveHandler!: (value: { echoed: string }) => void
     const handlerResult = new Promise<{ echoed: string }>((resolve) => {
@@ -372,7 +441,7 @@ describe('main-owned Native Tool Registry', () => {
       clock: () => '2026-08-12T20:30:03.000Z',
     })
     const runtime = runtimeWaitingForTool()
-    const grant = approvedGrant(registry, runtime)
+    const grant = await approvedGrant(registry, runtime)
     const execution = registry.execute({
       grant,
       runtime,
@@ -402,7 +471,7 @@ describe('main-owned Native Tool Registry', () => {
         clock: () => '2026-08-12T20:30:03.000Z',
       })
       const runtime = runtimeWaitingForTool()
-      const grant = approvedGrant(registry, runtime)
+      const grant = await approvedGrant(registry, runtime)
       const execution = registry.execute({
         grant,
         runtime,

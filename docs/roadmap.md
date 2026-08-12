@@ -89,12 +89,13 @@ contains the signoff-bound release artifacts.
 | Completed version line | 1.x governed self-hosted delivery |
 | Active version line | 2.x DevFlow-native Agent Runtime |
 | Active milestone | V2.0 Native Agent Runtime implementation |
-| Next gate | Slice 3 Native Tool Registry with scoped capabilities and packaged execution evidence |
+| Next gate | Slice 4 trusted local stdio MCP with the same capability and audit boundary |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
 restart with zero repeated remote effects, Acceptance, and a versioned credential-revocation proof.
-V2.0 implementation is active. Slice 1 shared runtime kernel and Slice 2 durable Desktop runtime are complete; native Tool, MCP, and Coding side effects are not yet implemented.
+V2.0 implementation is active. Slices 1–3 are complete: the shared kernel, durable Desktop Runtime,
+and main-owned Native Tool boundary are implemented; trusted MCP and Coding Executor work remain.
 
 ## Now / Next / Later
 
@@ -114,12 +115,14 @@ contract and executable slice plan:
   parser, and evaluation metrics without performing I/O.
 - Slice 2 added Desktop schema 18, atomic trajectory/checkpoint persistence, strict IPC, startup
   recovery, cancellation fencing, and a packaged no-side-effect Runtime restart probe.
-- Continue with Slice 3 while preserving Workflow/Gate authority, local evidence boundaries, and
+- Slice 3 added Desktop schema 19, immutable Tool definitions, opaque one-shot grants, bounded
+  repository read/workspace edit/saved-test/scenario Tools, durable metadata-only audit, restart
+  reconciliation, and a packaged Native Tool probe with zero repeat execution.
+- Continue with Slice 4 while preserving Workflow/Gate authority, local evidence boundaries, and
   deterministic no-cost default verification.
 
-### Next — Add Native Tool And Trusted MCP Execution
+### Next — Add Trusted Local MCP Execution
 
-- Implement Slice 3's main-owned Native Tool Registry and opaque scoped capability grants.
 - Implement Slice 4's trusted local stdio MCP installation without treating Team display metadata
   as process-spawn authority.
 - Then place OpenCode and one deliberately narrow DevFlow-owned Coding Agent behind the common

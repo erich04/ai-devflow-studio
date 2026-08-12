@@ -112,7 +112,7 @@ async function invoke(
     tools: registrations,
     clock: () => '2026-08-12T20:30:03.000Z',
   })
-  const grant = registry.issueGrant({
+  const grant = await registry.issueGrant({
     runtime,
     toolId,
     toolVersion: definition.version,

@@ -13,8 +13,57 @@ import type {
   AgentRuntimeTerminalSummary,
   LocalStore,
 } from './local-store.js'
+import {
+  createNativeToolRegistry,
+  digestNativeToolValue,
+  type NativeToolAuditRecord,
+  type NativeToolRegistry,
+} from './native-tool-registry.js'
+import { createAcceptedNativeToolRegistrations } from './native-tools.js'
 
 const DEFAULT_RUNTIME_WALL_TIME_MS = 10 * 60_000
+const NATIVE_RUNTIME_TOOL_ID = 'scenario.evaluate'
+const NATIVE_RUNTIME_TOOL_VERSION = 1
+const NATIVE_RUNTIME_SCENARIO_INPUT = {
+  scenarioJson: JSON.stringify({
+    stateVersion: 1,
+    id: 'desktop-native-tool-runtime',
+    version: 1,
+    name: 'Desktop Native Tool Runtime',
+    objective: 'Evaluate one bounded, isolated Native Tool action.',
+    executorKind: 'native',
+    expected: {
+      stopReason: 'success',
+      maxSteps: 1,
+      requiredEventTypes: ['runtime_started', 'runtime_stopped'],
+      evidenceKinds: ['native_tool_audit'],
+      cleanupStatus: 'completed',
+    },
+    metricDimensions: [
+      'quality',
+      'cost',
+      'latency',
+      'human_intervention',
+      'recovery',
+      'isolation',
+    ],
+  }),
+  observationJson: JSON.stringify({
+    stopReason: 'success',
+    steps: 1,
+    eventTypes: ['runtime_started', 'runtime_stopped'],
+    evidenceKinds: ['native_tool_audit'],
+    cleanupStatus: 'completed',
+    metrics: {
+      qualityPassed: true,
+      costUsd: 0,
+      latencyMs: 0,
+      humanInterventions: 0,
+      recoverySucceeded: true,
+      isolationViolations: 0,
+    },
+  }),
+}
 
 export type DesktopAgentRuntimeSnapshot = {
   runtime: AgentRuntimeState
@@ -33,6 +82,7 @@ export type CreateDesktopAgentRuntimeInput = {
   store: LocalStore
   clock?: () => string
   createId?: () => string
+  nativeToolRegistry?: NativeToolRegistry
   executeFakeAction?: (input: {
     runtimeId: string
     actionId: string
@@ -59,12 +109,139 @@ export function createDesktopAgentRuntime(
 ): DesktopAgentRuntime {
   const clock = input.clock ?? (() => new Date().toISOString())
   const createId = input.createId ?? (() => `agent-runtime-${randomUUID()}`)
-  const executeFakeAction =
-    input.executeFakeAction ??
-    (async ({ runtimeId, actionId }: { runtimeId: string; actionId: string }) => ({
-      resultDigest: sha256(`${runtimeId}:${actionId}:deterministic-fake-result`),
-      evaluationSummary: 'The deterministic fake observation satisfied the scenario.',
-    }))
+  const executeFakeAction = input.executeFakeAction
+  const nativeToolRegistry = executeFakeAction
+    ? null
+    : input.nativeToolRegistry ?? createNativeToolRegistry({
+        tools: createAcceptedNativeToolRegistrations({
+          resolveLocalProject: async (localProjectId) =>
+            (await input.store.listProjects()).find((project) => project.id === localProjectId) ?? null,
+          resolveManagedWorkspace: async (workspaceId) =>
+            (await input.store.listManagedCodingWorkspaces()).find(
+              (workspace) => workspace.id === workspaceId,
+            ) ?? null,
+        }),
+        clock,
+        persistence: {
+          reserveGrant: async (grant) => {
+            const result = await input.store.reserveAgentRuntimeCapabilityGrant(grant)
+            return { reserved: result.reserved }
+          },
+          beginExecution: async (execution) => {
+            const result = await input.store.beginAgentRuntimeToolExecution(execution)
+            return { consumed: result.consumed }
+          },
+          appendAudit: (audit) => input.store.appendAgentRuntimeToolAudit(audit),
+        },
+      })
+  const nativeCapabilitySetDigest = nativeToolRegistry
+    ? digestNativeToolValue(nativeToolRegistry.listDefinitions())
+    : sha256('runtime.fake.observe@1')
+
+  function failureResult(code: string) {
+    return {
+      outcome: 'failure' as const,
+      resultDigest: sha256(`native-tool-failure:${code}`),
+      resultBytes: 0,
+      tokens: 0,
+      costUsd: 0,
+      evaluation: 'failure' as const,
+      evaluationSummary: `The bounded Native Tool action failed closed: ${code}.`,
+    }
+  }
+
+  async function executeNativeAction(runtime: AgentRuntimeState) {
+    const action = runtime.activeAction
+    if (!nativeToolRegistry || action?.kind !== 'tool') {
+      return failureResult('invalid_native_tool_action')
+    }
+    const audits = await input.store.listAgentRuntimeToolAudits(runtime.id)
+    const actionAudits = audits.filter(
+      (audit) =>
+        audit.actionId === action.id &&
+        audit.toolId === action.capabilityId &&
+        audit.toolVersion === action.capabilityVersion &&
+        audit.inputDigest === action.requestDigest,
+    )
+    const terminalAudit = actionAudits.find((audit) => audit.status !== 'started')
+    if (terminalAudit?.status === 'succeeded') {
+      return {
+        outcome: 'success' as const,
+        resultDigest: terminalAudit.resultDigest!,
+        resultBytes: terminalAudit.resultBytes!,
+        tokens: 0,
+        costUsd: 0,
+        evaluation: 'success' as const,
+        evaluationSummary: 'Recovered the exact durable Native Tool result.',
+      }
+    }
+    if (terminalAudit) return failureResult(terminalAudit.code ?? terminalAudit.status)
+
+    const startedAudit = actionAudits.find((audit) => audit.status === 'started')
+    if (startedAudit) {
+      const interrupted: NativeToolAuditRecord = {
+        ...startedAudit,
+        id: `native-tool-audit-${randomUUID()}`,
+        status: 'failed',
+        code: 'handler_failed',
+        resultDigest: null,
+        resultBytes: null,
+        redactionState: 'not_recorded',
+        createdAt: canonicalNow(clock),
+      }
+      await input.store.appendAgentRuntimeToolAudit(interrupted)
+      return failureResult('interrupted_after_durable_start')
+    }
+
+    const durableGrants = await input.store.listAgentRuntimeCapabilityGrants(runtime.id)
+    const activeGrant = durableGrants.find(
+      (grant) =>
+        grant.status === 'active' &&
+        grant.capabilityId === action.capabilityId &&
+        grant.capabilityVersion === action.capabilityVersion &&
+        grant.requestDigest === action.requestDigest,
+    )
+    const resourceScope = {
+      kind: 'local_project' as const,
+      localProjectId: runtime.scope.localProjectId,
+    }
+    try {
+      const grant = activeGrant
+        ? nativeToolRegistry.restoreGrant({ runtime, durableGrant: activeGrant })
+        : await nativeToolRegistry.issueGrant({
+            runtime,
+            toolId: action.capabilityId,
+            toolVersion: action.capabilityVersion,
+            permission: {
+              decision: 'approved',
+              permissionClass: 'execute',
+              decidedAt: canonicalNow(clock),
+              expiresAt: runtime.deadline,
+            },
+            resourceScope,
+            callLimit: 1,
+          })
+      const result = await nativeToolRegistry.execute({
+        grant,
+        runtime,
+        actionId: action.id,
+        input: NATIVE_RUNTIME_SCENARIO_INPUT,
+      })
+      const value = result.value as { passed?: unknown }
+      if (value.passed !== true) return failureResult('scenario_failed')
+      return {
+        outcome: 'success' as const,
+        resultDigest: result.resultDigest,
+        resultBytes: result.resultBytes,
+        tokens: 0,
+        costUsd: 0,
+        evaluation: 'success' as const,
+        evaluationSummary: 'The deterministic Native Tool scenario satisfied every bound.',
+      }
+    } catch {
+      return failureResult('execution_failed')
+    }
+  }
 
   async function snapshot(runtime: AgentRuntimeState): Promise<DesktopAgentRuntimeSnapshot> {
     return {
@@ -133,6 +310,7 @@ export function createDesktopAgentRuntime(
       })
     } else if (runtime.status === 'running') {
       const actionId = `${runtime.id}-step-${runtime.counters.steps + 1}`
+      const nativeAction = nativeToolRegistry !== null
       transition = requestAgentAction({
         runtime,
         expectedCheckpointVersion: runtime.checkpointVersion,
@@ -140,34 +318,36 @@ export function createDesktopAgentRuntime(
         action: {
           id: actionId,
           kind: 'tool',
-          capabilityId: 'runtime.fake.observe',
-          capabilityVersion: 1,
-          requestDigest: sha256(
-            `${runtime.id}:${runtime.checkpointVersion}:${runtime.lastObservationDigest}`,
-          ),
+          capabilityId: nativeAction ? NATIVE_RUNTIME_TOOL_ID : 'runtime.fake.observe',
+          capabilityVersion: nativeAction ? NATIVE_RUNTIME_TOOL_VERSION : 1,
+          requestDigest: nativeAction
+            ? digestNativeToolValue(NATIVE_RUNTIME_SCENARIO_INPUT)
+            : sha256(`${runtime.id}:${runtime.checkpointVersion}:${runtime.lastObservationDigest}`),
           requiresPermission: false,
         },
       })
     } else if (runtime.status === 'waiting_action' && runtime.activeAction) {
-      const result = await executeFakeAction({
-        runtimeId: runtime.id,
-        actionId: runtime.activeAction.id,
-        requestDigest: runtime.activeAction.requestDigest,
-      })
+      const result = executeFakeAction
+        ? await executeFakeAction({
+            runtimeId: runtime.id,
+            actionId: runtime.activeAction.id,
+            requestDigest: runtime.activeAction.requestDigest,
+          }).then((value) => ({
+            outcome: 'success' as const,
+            resultDigest: value.resultDigest,
+            resultBytes: 0,
+            tokens: 0,
+            costUsd: 0,
+            evaluation: 'success' as const,
+            evaluationSummary: value.evaluationSummary,
+          }))
+        : await executeNativeAction(runtime)
       transition = acceptAgentActionResult({
         runtime,
         expectedCheckpointVersion: runtime.checkpointVersion,
         actionId: runtime.activeAction.id,
         requestDigest: runtime.activeAction.requestDigest,
-        result: {
-          outcome: 'success',
-          resultDigest: result.resultDigest,
-          resultBytes: 0,
-          tokens: 0,
-          costUsd: 0,
-          evaluation: 'success',
-          evaluationSummary: result.evaluationSummary,
-        },
+        result,
         now: canonicalNow(clock),
       })
     } else {
@@ -230,7 +410,7 @@ export function createDesktopAgentRuntime(
         contextDigest: sha256(
           JSON.stringify({ runId: run.id, nodeId, runVersion: run.version }),
         ),
-        capabilitySetDigest: sha256('runtime.fake.observe@1'),
+        capabilitySetDigest: nativeCapabilitySetDigest,
         bounds: {
           maxSteps: 1,
           maxWallTimeMs: DEFAULT_RUNTIME_WALL_TIME_MS,
@@ -271,6 +451,7 @@ export function createDesktopAgentRuntime(
       const runtime = await input.store.getAgentRuntime(runtimeId)
       if (!runtime) throw new Error('Desktop Agent Runtime was not found')
       if (runtime.status === 'terminal') return snapshot(runtime)
+      nativeToolRegistry?.cancelRuntime(runtimeId)
       const transition = cancelAgentRuntime({
         runtime,
         expectedCheckpointVersion: runtime.checkpointVersion,

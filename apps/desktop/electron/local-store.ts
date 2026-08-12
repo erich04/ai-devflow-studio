@@ -5,6 +5,11 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import initSqlJs, { type Database, type SqlJsStatic, type SqlValue } from 'sql.js'
 import {
+  parseNativeToolAuditRecord,
+  type NativeToolCapabilityGrantRecord,
+  type NativeToolAuditRecord,
+} from './native-tool-registry.js'
+import {
   applyWorkflowCommand,
   assertFullGitCommitSha,
   assertSafeGitHubBranch,
@@ -83,7 +88,7 @@ import {
   type WorkflowRun,
   type WorkRequest,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 18
+export const CURRENT_SCHEMA_VERSION = 19
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -617,6 +622,16 @@ export type AgentRuntimeTerminalSummary = {
   redacted: true
 }
 
+export type AgentRuntimeCapabilityGrant = NativeToolCapabilityGrantRecord
+
+export type ReserveAgentRuntimeCapabilityGrantResult =
+  | { reserved: true; grant: AgentRuntimeCapabilityGrant }
+  | { reserved: false; reason: 'invalid_grant' | 'runtime_stale' | 'grant_exists' }
+
+export type BeginAgentRuntimeToolExecutionResult =
+  | { consumed: true }
+  | { consumed: false; reason: 'invalid_input' | 'grant_stale' }
+
 export type LocalStore = {
   upsertProject(project: LocalProject): Promise<void>
   listProjects(): Promise<LocalProject[]>
@@ -650,6 +665,16 @@ export type LocalStore = {
   getAgentRuntimeTerminalSummary(
     runtimeId: string,
   ): Promise<AgentRuntimeTerminalSummary | null>
+  reserveAgentRuntimeCapabilityGrant(
+    grant: AgentRuntimeCapabilityGrant,
+  ): Promise<ReserveAgentRuntimeCapabilityGrantResult>
+  beginAgentRuntimeToolExecution(input: {
+    expectedGrant: AgentRuntimeCapabilityGrant
+    audit: NativeToolAuditRecord
+  }): Promise<BeginAgentRuntimeToolExecutionResult>
+  appendAgentRuntimeToolAudit(audit: NativeToolAuditRecord): Promise<void>
+  listAgentRuntimeToolAudits(runtimeId?: string): Promise<NativeToolAuditRecord[]>
+  listAgentRuntimeCapabilityGrants(runtimeId?: string): Promise<AgentRuntimeCapabilityGrant[]>
   createWorkflow(
     creation: WorkflowCreation,
   ): Promise<WorkflowCreationResult>
@@ -2014,6 +2039,109 @@ const schemaMigrations: readonly SchemaMigration[] = [
       `)
     },
   },
+  {
+    version: 19,
+    migrate(db) {
+      db.run(`
+    alter table agent_runtime_capability_grants
+      add column permission_class text check (permission_class in ('read', 'edit', 'execute'));
+    alter table agent_runtime_capability_grants
+      add column resource_kind text check (resource_kind in ('local_project', 'managed_workspace'));
+    alter table agent_runtime_capability_grants
+      add column resource_id text check (
+        resource_id is null or
+        (length(trim(resource_id)) > 0 and length(resource_id) <= 200 and trim(resource_id) = resource_id)
+      );
+
+    create table agent_runtime_tool_audits (
+      id text primary key,
+      runtime_id text not null,
+      action_id text not null,
+      grant_id text not null,
+      organization_id text,
+      team_project_id text,
+      user_id text not null,
+      session_id text not null,
+      local_project_id text not null,
+      tool_id text not null,
+      tool_version integer not null,
+      permission_class text not null,
+      side_effect_class text not null,
+      resource_kind text not null,
+      resource_id text not null,
+      status text not null,
+      code text,
+      input_digest text not null,
+      result_digest text,
+      result_bytes integer,
+      redaction_state text not null,
+      state_version integer not null,
+      json text not null,
+      created_at text not null,
+      foreign key (runtime_id) references agent_runtimes(id) on delete cascade,
+      foreign key (grant_id) references agent_runtime_capability_grants(id) on delete cascade,
+      check (length(trim(id)) > 0 and length(id) <= 200 and trim(id) = id),
+      check (length(trim(action_id)) > 0 and length(action_id) <= 200 and trim(action_id) = action_id),
+      check (
+        (organization_id is null and team_project_id is null) or
+        (organization_id is not null and team_project_id is not null)
+      ),
+      check (length(trim(user_id)) > 0 and length(user_id) <= 200 and trim(user_id) = user_id),
+      check (length(trim(session_id)) > 0 and length(session_id) <= 200 and trim(session_id) = session_id),
+      check (length(trim(local_project_id)) > 0 and length(local_project_id) <= 200 and trim(local_project_id) = local_project_id),
+      check (length(trim(tool_id)) > 0 and length(tool_id) <= 200 and trim(tool_id) = tool_id),
+      check (tool_version between 1 and 2147483647),
+      check (permission_class in ('read', 'edit', 'execute')),
+      check (side_effect_class in ('none', 'workspace_write', 'local_process')),
+      check (resource_kind in ('local_project', 'managed_workspace')),
+      check (length(trim(resource_id)) > 0 and length(resource_id) <= 200 and trim(resource_id) = resource_id),
+      check (status in ('started', 'succeeded', 'failed', 'cancelled', 'timeout')),
+      check (code is null or code in (
+        'invalid_output', 'result_too_large', 'redaction_failed',
+        'handler_failed', 'deadline_exceeded', 'cancelled'
+      )),
+      check (length(input_digest) = 64 and input_digest not glob '*[^0-9a-f]*'),
+      check (result_digest is null or (length(result_digest) = 64 and result_digest not glob '*[^0-9a-f]*')),
+      check (result_bytes is null or result_bytes between 0 and 262144),
+      check (redaction_state in ('not_recorded', 'passed', 'applied', 'failed')),
+      check (state_version = 1),
+      check (json_valid(json)),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.id') = id),
+      check (json_extract(json, '$.runtimeId') = runtime_id),
+      check (json_extract(json, '$.actionId') = action_id),
+      check (json_extract(json, '$.grantId') = grant_id),
+      check (json_extract(json, '$.organizationId') is organization_id),
+      check (json_extract(json, '$.projectId') is team_project_id),
+      check (json_extract(json, '$.userId') = user_id),
+      check (json_extract(json, '$.sessionId') = session_id),
+      check (json_extract(json, '$.localProjectId') = local_project_id),
+      check (json_extract(json, '$.toolId') = tool_id),
+      check (json_extract(json, '$.toolVersion') = tool_version),
+      check (json_extract(json, '$.permissionClass') = permission_class),
+      check (json_extract(json, '$.sideEffectClass') = side_effect_class),
+      check (json_extract(json, '$.resourceKind') = resource_kind),
+      check (json_extract(json, '$.resourceId') = resource_id),
+      check (json_extract(json, '$.status') = status),
+      check (json_extract(json, '$.code') is code),
+      check (json_extract(json, '$.inputDigest') = input_digest),
+      check (json_extract(json, '$.resultDigest') is result_digest),
+      check (json_extract(json, '$.resultBytes') is result_bytes),
+      check (json_extract(json, '$.redactionState') = redaction_state),
+      check (json_extract(json, '$.createdAt') = created_at)
+    );
+
+    create unique index idx_agent_runtime_tool_audits_started
+      on agent_runtime_tool_audits(grant_id) where status = 'started';
+
+    create unique index idx_agent_runtime_tool_audits_terminal
+      on agent_runtime_tool_audits(grant_id) where status <> 'started';
+
+    create index idx_agent_runtime_tool_audits_runtime
+      on agent_runtime_tool_audits(runtime_id, created_at, id);
+      `)
+    },
+  },
 ]
 
 function migrateSchema(db: Database) {
@@ -2115,6 +2243,124 @@ function parseStoredAgentCheckpoint(value: unknown): AgentCheckpoint {
   } catch {
     throw new Error('Stored Agent Runtime checkpoint is invalid')
   }
+}
+
+function parseAgentRuntimeCapabilityGrant(value: unknown): AgentRuntimeCapabilityGrant {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('invalid_agent_runtime_capability_grant')
+  }
+  const grant = value as Record<string, unknown>
+  const expectedKeys = [
+    'stateVersion',
+    'id',
+    'runtimeId',
+    'capabilityId',
+    'capabilityVersion',
+    'requestDigest',
+    'permissionClass',
+    'resourceKind',
+    'resourceId',
+    'status',
+    'grantedAt',
+    'expiresAt',
+    'settledAt',
+  ].sort()
+  const keys = Object.keys(grant).sort()
+  if (
+    keys.length !== expectedKeys.length ||
+    !keys.every((key, index) => key === expectedKeys[index]) ||
+    grant.stateVersion !== 1 ||
+    !isNonEmptyIdentifier(grant.id) ||
+    grant.id.length > 200 ||
+    !isNonEmptyIdentifier(grant.runtimeId) ||
+    grant.runtimeId.length > 200 ||
+    !isNonEmptyIdentifier(grant.capabilityId) ||
+    grant.capabilityId.length > 200 ||
+    !Number.isInteger(grant.capabilityVersion) ||
+    Number(grant.capabilityVersion) < 1 ||
+    Number(grant.capabilityVersion) > 2_147_483_647 ||
+    typeof grant.requestDigest !== 'string' ||
+    !/^[a-f0-9]{64}$/u.test(grant.requestDigest) ||
+    !['read', 'edit', 'execute'].includes(String(grant.permissionClass)) ||
+    !['local_project', 'managed_workspace'].includes(String(grant.resourceKind)) ||
+    !isNonEmptyIdentifier(grant.resourceId) ||
+    grant.resourceId.length > 200 ||
+    !['active', 'consumed', 'denied', 'expired', 'cancelled'].includes(String(grant.status)) ||
+    !isCanonicalIsoTimestamp(grant.grantedAt) ||
+    !isCanonicalIsoTimestamp(grant.expiresAt) ||
+    Date.parse(grant.expiresAt) <= Date.parse(grant.grantedAt) ||
+    !(
+      (grant.status === 'active' && grant.settledAt === null) ||
+      (grant.status !== 'active' &&
+        isCanonicalIsoTimestamp(grant.settledAt) &&
+        Date.parse(grant.settledAt) >= Date.parse(grant.grantedAt))
+    )
+  ) {
+    throw new Error('invalid_agent_runtime_capability_grant')
+  }
+  return JSON.parse(JSON.stringify(grant)) as AgentRuntimeCapabilityGrant
+}
+
+function sameNativeToolAuditIdentity(
+  started: NativeToolAuditRecord,
+  terminal: NativeToolAuditRecord,
+): boolean {
+  return (
+    started.runtimeId === terminal.runtimeId &&
+    started.actionId === terminal.actionId &&
+    started.grantId === terminal.grantId &&
+    started.organizationId === terminal.organizationId &&
+    started.projectId === terminal.projectId &&
+    started.userId === terminal.userId &&
+    started.sessionId === terminal.sessionId &&
+    started.localProjectId === terminal.localProjectId &&
+    started.toolId === terminal.toolId &&
+    started.toolVersion === terminal.toolVersion &&
+    started.permissionClass === terminal.permissionClass &&
+    started.sideEffectClass === terminal.sideEffectClass &&
+    started.resourceKind === terminal.resourceKind &&
+    started.resourceId === terminal.resourceId &&
+    started.inputDigest === terminal.inputDigest
+  )
+}
+
+function writeNativeToolAudit(db: Database, value: NativeToolAuditRecord): void {
+  const audit = parseNativeToolAuditRecord(value)
+  db.run(
+    `insert into agent_runtime_tool_audits (
+       id, runtime_id, action_id, grant_id, organization_id, team_project_id,
+       user_id, session_id, local_project_id, tool_id, tool_version,
+       permission_class, side_effect_class, resource_kind, resource_id,
+       status, code, input_digest, result_digest, result_bytes,
+       redaction_state, state_version, json, created_at
+     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      audit.id,
+      audit.runtimeId,
+      audit.actionId,
+      audit.grantId,
+      audit.organizationId,
+      audit.projectId,
+      audit.userId,
+      audit.sessionId,
+      audit.localProjectId,
+      audit.toolId,
+      audit.toolVersion,
+      audit.permissionClass,
+      audit.sideEffectClass,
+      audit.resourceKind,
+      audit.resourceId,
+      audit.status,
+      audit.code,
+      audit.inputDigest,
+      audit.resultDigest,
+      audit.resultBytes,
+      audit.redactionState,
+      audit.stateVersion,
+      JSON.stringify(audit),
+      audit.createdAt,
+    ],
+  )
 }
 
 function selectAgentRuntime(
@@ -4116,6 +4362,209 @@ class SqlJsLocalStore implements LocalStore {
       throw new Error('Stored Agent Runtime terminal summary is invalid')
     }
     return value
+  }
+
+  async reserveAgentRuntimeCapabilityGrant(
+    grantValue: AgentRuntimeCapabilityGrant,
+  ): Promise<ReserveAgentRuntimeCapabilityGrantResult> {
+    let grant: AgentRuntimeCapabilityGrant
+    try {
+      grant = parseAgentRuntimeCapabilityGrant(grantValue)
+    } catch {
+      return { reserved: false, reason: 'invalid_grant' }
+    }
+    if (grant.status !== 'active') return { reserved: false, reason: 'invalid_grant' }
+    const runtime = selectAgentRuntime(this.db, grant.runtimeId)
+    if (
+      !runtime ||
+      runtime.status !== 'waiting_action' ||
+      runtime.stopReason !== null ||
+      runtime.activeAction?.kind !== 'tool' ||
+      runtime.activeAction.capabilityId !== grant.capabilityId ||
+      runtime.activeAction.capabilityVersion !== grant.capabilityVersion ||
+      runtime.activeAction.requestDigest !== grant.requestDigest ||
+      grant.grantedAt < runtime.updatedAt ||
+      grant.expiresAt > runtime.deadline
+    ) {
+      return { reserved: false, reason: 'runtime_stale' }
+    }
+    if (
+      this.db.exec(
+        `select 1 from agent_runtime_capability_grants
+         where id = ? or (runtime_id = ? and capability_id = ? and status = 'active') limit 1`,
+        [grant.id, grant.runtimeId, grant.capabilityId],
+      )[0]
+    ) {
+      return { reserved: false, reason: 'grant_exists' }
+    }
+    this.db.run(
+      `insert into agent_runtime_capability_grants (
+         id, runtime_id, capability_id, capability_version, request_digest,
+         permission_class, resource_kind, resource_id,
+         status, granted_at, expires_at, settled_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        grant.id,
+        grant.runtimeId,
+        grant.capabilityId,
+        grant.capabilityVersion,
+        grant.requestDigest,
+        grant.permissionClass,
+        grant.resourceKind,
+        grant.resourceId,
+        grant.status,
+        grant.grantedAt,
+        grant.expiresAt,
+        grant.settledAt,
+      ],
+    )
+    await this.persist()
+    return { reserved: true, grant }
+  }
+
+  async beginAgentRuntimeToolExecution(input: {
+    expectedGrant: AgentRuntimeCapabilityGrant
+    audit: NativeToolAuditRecord
+  }): Promise<BeginAgentRuntimeToolExecutionResult> {
+    let grant: AgentRuntimeCapabilityGrant
+    let audit: NativeToolAuditRecord
+    try {
+      grant = parseAgentRuntimeCapabilityGrant(input.expectedGrant)
+      audit = parseNativeToolAuditRecord(input.audit)
+    } catch {
+      return { consumed: false, reason: 'invalid_input' }
+    }
+    const runtime = selectAgentRuntime(this.db, grant.runtimeId)
+    if (
+      grant.status !== 'active' ||
+      audit.status !== 'started' ||
+      audit.grantId !== grant.id ||
+      audit.runtimeId !== grant.runtimeId ||
+      audit.toolId !== grant.capabilityId ||
+      audit.toolVersion !== grant.capabilityVersion ||
+      audit.inputDigest !== grant.requestDigest ||
+      audit.permissionClass !== grant.permissionClass ||
+      audit.resourceKind !== grant.resourceKind ||
+      audit.resourceId !== grant.resourceId ||
+      audit.createdAt < grant.grantedAt ||
+      audit.createdAt >= grant.expiresAt ||
+      !runtime ||
+      runtime.status !== 'waiting_action' ||
+      runtime.stopReason !== null ||
+      runtime.activeAction?.id !== audit.actionId ||
+      runtime.activeAction.capabilityId !== grant.capabilityId ||
+      runtime.activeAction.capabilityVersion !== grant.capabilityVersion ||
+      runtime.activeAction.requestDigest !== grant.requestDigest ||
+      runtime.scope.organizationId !== audit.organizationId ||
+      runtime.scope.projectId !== audit.projectId ||
+      runtime.scope.userId !== audit.userId ||
+      runtime.scope.sessionId !== audit.sessionId ||
+      runtime.scope.localProjectId !== audit.localProjectId
+    ) {
+      return { consumed: false, reason: 'grant_stale' }
+    }
+
+    this.db.run('begin transaction')
+    try {
+      this.db.run(
+        `update agent_runtime_capability_grants
+         set status = 'consumed', settled_at = ?
+         where id = ? and runtime_id = ? and capability_id = ? and capability_version = ?
+           and request_digest = ? and permission_class = ? and resource_kind = ? and resource_id = ?
+           and status = 'active' and granted_at = ? and expires_at = ?
+           and settled_at is null and expires_at > ?`,
+        [
+          audit.createdAt,
+          grant.id,
+          grant.runtimeId,
+          grant.capabilityId,
+          grant.capabilityVersion,
+          grant.requestDigest,
+          grant.permissionClass,
+          grant.resourceKind,
+          grant.resourceId,
+          grant.grantedAt,
+          grant.expiresAt,
+          audit.createdAt,
+        ],
+      )
+      if (this.db.getRowsModified() !== 1) {
+        this.db.run('rollback')
+        return { consumed: false, reason: 'grant_stale' }
+      }
+      writeNativeToolAudit(this.db, audit)
+      this.db.run('commit')
+    } catch (error) {
+      this.db.run('rollback')
+      throw error
+    }
+    await this.persist()
+    return { consumed: true }
+  }
+
+  async appendAgentRuntimeToolAudit(value: NativeToolAuditRecord): Promise<void> {
+    const audit = parseNativeToolAuditRecord(value)
+    if (audit.status === 'started') throw new Error('invalid_native_tool_audit')
+    const startedValue = selectJson<unknown>(
+      this.db,
+      `select json from agent_runtime_tool_audits
+       where grant_id = ? and status = 'started' limit 1`,
+      [audit.grantId],
+    )[0]
+    if (startedValue === undefined) throw new Error('invalid_native_tool_audit')
+    const started = parseNativeToolAuditRecord(startedValue)
+    if (!sameNativeToolAuditIdentity(started, audit) || audit.createdAt < started.createdAt) {
+      throw new Error('invalid_native_tool_audit')
+    }
+    writeNativeToolAudit(this.db, audit)
+    await this.persist()
+  }
+
+  async listAgentRuntimeToolAudits(runtimeId?: string): Promise<NativeToolAuditRecord[]> {
+    if (runtimeId !== undefined && (!isNonEmptyIdentifier(runtimeId) || runtimeId.length > 200)) {
+      throw new Error('Invalid Agent Runtime id')
+    }
+    return selectJson<unknown>(
+      this.db,
+      runtimeId === undefined
+        ? 'select json from agent_runtime_tool_audits order by created_at asc, id asc'
+        : 'select json from agent_runtime_tool_audits where runtime_id = ? order by created_at asc, id asc',
+      runtimeId === undefined ? [] : [runtimeId],
+    ).map(parseNativeToolAuditRecord)
+  }
+
+  async listAgentRuntimeCapabilityGrants(
+    runtimeId?: string,
+  ): Promise<AgentRuntimeCapabilityGrant[]> {
+    if (runtimeId !== undefined && (!isNonEmptyIdentifier(runtimeId) || runtimeId.length > 200)) {
+      throw new Error('Invalid Agent Runtime id')
+    }
+    const result = this.db.exec(
+      `select id, runtime_id, capability_id, capability_version, request_digest,
+              permission_class, resource_kind, resource_id,
+              status, granted_at, expires_at, settled_at
+       from agent_runtime_capability_grants
+       ${runtimeId === undefined ? '' : 'where runtime_id = ?'}
+       order by granted_at asc, id asc`,
+      runtimeId === undefined ? [] : [runtimeId],
+    )[0]
+    return (result?.values ?? []).map((row) =>
+      parseAgentRuntimeCapabilityGrant({
+        stateVersion: 1,
+        id: String(row[0]),
+        runtimeId: String(row[1]),
+        capabilityId: String(row[2]),
+        capabilityVersion: Number(row[3]),
+        requestDigest: String(row[4]),
+        permissionClass: String(row[5]),
+        resourceKind: String(row[6]),
+        resourceId: String(row[7]),
+        status: String(row[8]),
+        grantedAt: String(row[9]),
+        expiresAt: String(row[10]),
+        settledAt: row[11] === null ? null : String(row[11]),
+      }),
+    )
   }
 
   async commitAgentRuntimeTransition(
@@ -8326,6 +8775,9 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'retryRemoteSyncOperation',
   'recoverInterruptedRemoteSyncOperations',
   'commitAgentRuntimeTransition',
+  'reserveAgentRuntimeCapabilityGrant',
+  'beginAgentRuntimeToolExecution',
+  'appendAgentRuntimeToolAudit',
   'createWorkflow',
   'materializeClaimedWorkRequest',
   'markWorkRequestMaterializationAcknowledged',
