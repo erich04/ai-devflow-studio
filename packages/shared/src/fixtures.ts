@@ -691,13 +691,23 @@ Second version. Covers all primary modules and the cross-module delivery flow.
 title: PR Review Readiness Checklist
 category: review_checklist
 ownerId: u-ling
-tags: pr, review, gate
-summary: Pull requests should link design, test evidence, reviewer decisions, and rollout notes.
+tags: pr, review, gate, github-delivery
+summary: PR review should bind the delivery package, exact approved commit, verified Draft, evidence, and Acceptance decision.
 ---
 
 # PR Review Readiness Checklist
 
-Pull requests should link design, test evidence, reviewer decisions, and rollout notes.
+Pull requests should link design, Test Evidence, reviewer decisions, and rollout notes.
+
+- Confirm the metadata-only PR Delivery Package matches the reviewed coding source.
+- Confirm the Delivery Intent binds the canonical managed worktree, expected commit, repository
+  binding, Run version, evidence digests, and package digest.
+- Confirm the redacted Delivery Request has a separate signed Web approval for its exact revision.
+- Confirm the verified remote head equals the approved expected commit and the matching pull request
+  remains Draft.
+- Confirm no credential, local path, raw output, patch, or source content entered durable evidence.
+- Acceptance may cite the Draft pull request and completion evidence, but must never merge, close,
+  force-push, delete the branch, or publish a tag.
 `,
   },
   {
@@ -707,8 +717,8 @@ Pull requests should link design, test evidence, reviewer decisions, and rollout
 title: Electron Demo Readiness Checklist
 category: review_checklist
 ownerId: u-erich
-tags: electron, demo, smoke, local
-summary: Electron demos should prove the real DevFlow app path, expected renderer port, preload boundary, and local persistence path.
+tags: electron, demo, smoke, local, github-delivery
+summary: Electron demos should prove Desktop schema v15, production boundaries, governed GitHub Delivery, restart recovery, and credential containment.
 ---
 
 # Electron Demo Readiness Checklist
@@ -720,9 +730,29 @@ Before using the desktop app for a demo or signoff, confirm the real Electron pa
 - Confirm Electron launched \`apps/desktop\`, not \`default_app.asar\`.
 - Confirm the intended desktop renderer is listening on \`127.0.0.1:5173\`.
 - Clear stale DevFlow listeners on \`5173\` before trusting a demo run.
+- Confirm the local SQLite database reports Desktop schema v15 and refuses an unknown newer schema.
 - Open the Workbench and select a Gate node to confirm Inspector state is live.
 - Use \`corepack pnpm test:electron-smoke\` for automated signoff of preload, main process, SQLite, and local execution behavior.
+- For V1.5 GitHub Delivery, prepare the Delivery Intent from the canonical managed worktree and one
+  expected tested commit; never trust renderer-supplied source, repository, branch, or commit data.
+- Confirm a separate signed Web lead/owner approves the exact redacted Delivery Request before
+  Electron main requests a publication credential.
+- Confirm Electron main publishes without force and the canonical Run records the verified remote
+  head and one matching Draft pull request before Acceptance.
+- Verify **Revise** creates a new pre-publication revision and invalidates approval.
+- Verify **Resume** continues the same \`recovery_required\` attempt.
+- Verify **Retry** creates the next attempt only after the exact predecessor is proven terminal.
+- Verify **Stop** parks the exact active attempt without claiming remote rollback.
+- Run \`corepack pnpm test:v15-github-delivery-packaged-smoke\` to exercise the packaged
+  main/preload/renderer path, local fake API, local bare remote, crash/restart reconciliation, and
+  credential non-persistence without an external GitHub write.
+- Confirm the GitHub App private key stays in the API and the short-lived token stays only in
+  Electron main memory; it must not reach the renderer, SQLite, logs, evidence, or error payloads.
+- Confirm GitHub Delivery and Acceptance never merge, force-push, delete a branch, publish a tag, or
+  otherwise mutate the Draft pull request.
 - Treat port conflicts or a default Electron welcome page as environment failures that must be fixed before signoff.
+- This checklist does not authorize paid-provider smoke; packaged GitHub Delivery verification uses
+  no model-provider request.
 `,
   },
   {
@@ -732,26 +762,46 @@ Before using the desktop app for a demo or signoff, confirm the real Electron pa
 title: Postgres Smoke Readiness Checklist
 category: review_checklist
 ownerId: u-erich
-tags: postgres, api, smoke, policy
-summary: Postgres smoke should run against an explicit clean database and cover migration, policy, override, sync, and redacted overview behavior.
+tags: postgres, api, smoke, policy, github-delivery
+summary: Postgres smoke should prove Team schema v12, retained migration, governed GitHub Delivery, policy, sync, and redaction.
 ---
 
 # Postgres Smoke Readiness Checklist
 
-Use this checklist when API, repository, migration, policy, override, sync, or manager summary code
-changes.
+Use this checklist when API, repository, migration, policy, override, sync, GitHub Delivery, or
+manager-summary code changes.
 
 - Set \`DEVFLOW_DATABASE_URL\` explicitly before running Postgres smoke.
-- Prefer a disposable clean database for release-style signoff.
-- Run the migration/setup path before smoke if the database is new.
+- Prove a disposable fresh database reaches Team schema v12.
+- Prove a populated v11-to-v12 migration retains exact repository binding, Delivery Request,
+  approval, publication, recovery, and audit data.
+- Prove a failed v11-to-v12 migration rolls back transactionally and succeeds once on explicit
+  retry without duplicating rows.
 - Verify seeded team data can be read through the API repository boundary.
 - Verify policy save/read and enforcement evaluation behavior.
 - Verify override rejection for owner, member, and conflicted lead cases.
 - Verify accepted lead override audit behavior.
 - Verify stale policy version rejection.
 - Verify approval-like sync summaries are rejected as a Gate enforcement bypass.
-- Verify overview responses remain redacted and do not expose local paths, raw logs, prompts, patches, or secrets.
+- Verify an owner can configure and revoke one verified GitHub App repository binding, while a member
+  or mismatched Project cannot.
+- Verify one redacted Delivery Request preserves series/attempt/revision identity and rejects local
+  paths, raw output, patches, source content, and credentials.
+- Verify a signed Web approval by a lead or owner is bound to the exact request revision; paired
+  Desktop Bearer authority cannot approve its own request.
+- Verify credential grant preconditions, expiry, scope, claimant, and binding version. The GitHub App
+  private key and issued token must never become durable Postgres evidence.
+- Verify the API independently confirms the expected commit as remote head before it creates or
+  reconciles one Draft pull request.
+- Verify revocation blocks a new credential grant and that replay/restart paths do not duplicate the
+  request, publication, Draft pull request, or audit result.
+- Verify overview and Delivery Request responses remain redacted and do not expose local paths, raw
+  logs, prompts, patches, source content, private keys, or tokens.
+- Run \`DEVFLOW_DATABASE_URL=postgres://... corepack pnpm test:postgres-smoke\` and retain its exact
+  candidate-bound result.
 - Remember that \`corepack pnpm verify\` intentionally excludes Postgres smoke.
+- This checklist does not authorize paid-provider smoke; Postgres and GitHub Delivery persistence
+  verification requires no model-provider request.
 `,
   },
   {
@@ -767,7 +817,9 @@ summary: Real opencode runtime signoff must be explicit, env-gated, permission-a
 
 # opencode Runtime Signoff Checklist
 
-Use this checklist only when intentionally validating the real opencode coding adapter.
+Use this checklist only when intentionally validating the real opencode coding adapter under a
+release contract that explicitly requires it and after separate candidate-bound authorization. This
+checklist does not grant provider-spend authority by itself.
 
 - Keep the deterministic fake engine as the default daily verification path.
 - Confirm local opencode is installed and compatible with the adapter under test.
@@ -785,9 +837,10 @@ Use this checklist only when intentionally validating the real opencode coding a
 - Confirm permission requests are human-visible and unanswered requests reject by default.
 - Confirm smoke output does not print provider secrets.
 - Keep live opencode smoke out of \`corepack pnpm verify\` and default CI.
-- For every future product release, run the live provider smoke once before the release tag and record
-  the evidence in the release signoff note. Use \`docs/plans/release-only-real-opencode-smoke.md\` as
-  the required evidence template.
+- A future product release runs live provider smoke only when its own release contract explicitly
+  requires it and separate candidate-bound authorization has been recorded.
+- V1.5 does not require or authorize another paid-provider smoke. Preserve the V1.4 paid-smoke record
+  as immutable V1.4 evidence.
 `,
   },
   {

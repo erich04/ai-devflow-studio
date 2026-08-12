@@ -28,7 +28,7 @@ Before using the desktop app for a demo or signoff, confirm the real Electron pa
 - Verify **Resume** continues the same `recovery_required` attempt.
 - Verify **Retry** creates the next attempt only after the exact predecessor is proven terminal.
 - Verify **Stop** parks the exact active attempt without claiming remote rollback.
-- Run `corepack pnpm v15-github-delivery-packaged-smoke` to exercise the packaged
+- Run `corepack pnpm test:v15-github-delivery-packaged-smoke` to exercise the packaged
   main/preload/renderer path, local fake API, local bare remote, crash/restart reconciliation, and
   credential non-persistence without an external GitHub write.
 - Confirm the GitHub App private key stays in the API and the short-lived token stays only in

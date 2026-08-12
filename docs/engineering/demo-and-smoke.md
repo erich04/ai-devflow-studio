@@ -75,7 +75,7 @@ Suggested path:
 corepack pnpm test:e2e
 corepack pnpm test:electron-smoke
 corepack pnpm test:v15-github-delivery
-corepack pnpm v15-github-delivery-packaged-smoke
+corepack pnpm test:v15-github-delivery-packaged-smoke
 ```
 
 For Postgres, use a disposable clean database or an intentional populated v11 fixture:

@@ -63,7 +63,7 @@ The V1.5 candidate-bound gates are:
 
 ```bash
 corepack pnpm test:v15-github-delivery
-corepack pnpm v15-github-delivery-packaged-smoke
+corepack pnpm test:v15-github-delivery-packaged-smoke
 DEVFLOW_DATABASE_URL=postgres://... corepack pnpm test:postgres-smoke
 corepack pnpm test:docker-lifecycle-smoke
 ```

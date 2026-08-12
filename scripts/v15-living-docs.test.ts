@@ -65,7 +65,7 @@ describe('V1.5 living documentation truth', () => {
       expect(markdown).toContain('Team schema v12')
       expect(markdown).toContain('Desktop schema v15')
       expect(markdown).toContain('corepack pnpm test:v15-github-delivery')
-      expect(markdown).toContain('corepack pnpm v15-github-delivery-packaged-smoke')
+      expect(markdown).toContain('corepack pnpm test:v15-github-delivery-packaged-smoke')
       expect(markdown).toContain('corepack pnpm test:postgres-smoke')
       expect(markdown).toContain('corepack pnpm test:docker-lifecycle-smoke')
       expect(markdown).toContain('private GitHub sandbox')
@@ -99,7 +99,7 @@ describe('V1.5 living documentation truth', () => {
     expect(postgres).toContain('does not authorize paid-provider smoke')
 
     expect(electron).toContain('Desktop schema v15')
-    expect(electron).toContain('corepack pnpm v15-github-delivery-packaged-smoke')
+    expect(electron).toContain('corepack pnpm test:v15-github-delivery-packaged-smoke')
     expect(electron).toContain('V1.5 GitHub Delivery')
     expect(electron).toContain('Revise')
     expect(electron).toContain('Resume')
