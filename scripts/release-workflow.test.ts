@@ -40,6 +40,10 @@ describe('GitHub release workflow', () => {
     expect(workflow).toContain('corepack pnpm test:e2e')
     expect(workflow).toContain('corepack pnpm test:electron-smoke')
     expect(workflow).toContain('corepack pnpm test:postgres-smoke')
+    expect(workflow).toContain('corepack pnpm test:v15-github-delivery')
+    expect(workflow).toContain(
+      'corepack pnpm test:v15-github-delivery-packaged-smoke',
+    )
     expect(workflow).toContain('corepack pnpm test:docker-smoke')
     expect(workflow).toContain('corepack pnpm test:docker-lifecycle-smoke')
     expect(workflow).toContain('corepack pnpm build:desktop-pilot')
@@ -86,11 +90,13 @@ describe('GitHub release workflow', () => {
     expect(artifactsJob).not.toContain('-desktop-electron.tar.gz')
   })
 
-  it('bounds Docker smoke jobs so a stuck daemon cannot consume the release runner forever', () => {
+  it('bounds Postgres delivery and Docker smoke jobs so a stuck daemon cannot consume the release runner forever', () => {
     const workflow = readWorkflow(releaseWorkflowPath)
+    const postgresJob = jobBlock(workflow, 'postgres-integration')
     const dockerJob = jobBlock(workflow, 'docker-smoke')
     const lifecycleJob = jobBlock(workflow, 'docker-lifecycle-smoke')
 
+    expect(postgresJob).toContain('timeout-minutes: 30')
     expect(dockerJob).toContain('timeout-minutes: 30')
     expect(lifecycleJob).toContain('timeout-minutes: 45')
   })
@@ -115,6 +121,7 @@ describe('GitHub verify workflow', () => {
     expect(existsSync(verifyWorkflowPath)).toBe(true)
 
     const workflow = readWorkflow(verifyWorkflowPath)
+    const postgresJob = jobBlock(workflow, 'postgres-integration')
 
     expect(workflow).toContain('corepack pnpm verify')
     expect(workflow).toContain('corepack pnpm build')
@@ -122,11 +129,16 @@ describe('GitHub verify workflow', () => {
     expect(workflow).toContain('corepack pnpm test:e2e')
     expect(workflow).toContain('corepack pnpm test:electron-smoke')
     expect(workflow).toContain('corepack pnpm test:postgres-smoke')
+    expect(workflow).toContain('corepack pnpm test:v15-github-delivery')
+    expect(workflow).toContain(
+      'corepack pnpm test:v15-github-delivery-packaged-smoke',
+    )
     expect(workflow).toContain('corepack pnpm test:docker-smoke')
     expect(workflow).toContain('corepack pnpm test:docker-lifecycle-smoke')
     expect(workflow).toContain('corepack pnpm build:desktop-pilot')
     expect(workflow).toContain('corepack pnpm test:desktop-pilot-smoke')
     expect(workflow).not.toContain('DEVFLOW_RUN_OPENCODE_SMOKE=1')
     expect(workflow).not.toContain('test:opencode-smoke')
+    expect(postgresJob).toContain('timeout-minutes: 30')
   })
 })

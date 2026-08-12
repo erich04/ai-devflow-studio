@@ -60,6 +60,7 @@ jobs:
   postgres-integration:
     name: Postgres integration
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
@@ -76,6 +77,8 @@ jobs:
           --health-retries 5
     env:
       DEVFLOW_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devflow_ci
+      DEVFLOW_PACKAGED_SMOKE_DATABASE_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/devflow_ci
+      DEVFLOW_PACKAGED_SMOKE_NETWORK_MODE: offline
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -89,6 +92,10 @@ jobs:
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm test:postgres-smoke
+      - run: corepack pnpm test:v15-github-delivery
+      - run: node scripts/ensure-electron-install.mjs
+      - run: corepack pnpm build:desktop-pilot
+      - run: xvfb-run -a corepack pnpm test:v15-github-delivery-packaged-smoke
 
   docker-smoke:
     name: Docker smoke

@@ -29,6 +29,7 @@
     "test:e2e": "node scripts/e2e.mjs",
     "test:electron-smoke": "node scripts/electron-smoke.mjs",
     "test:desktop-pilot-smoke": "node scripts/desktop-pilot-smoke.mjs",
+    "test:v15-github-delivery-packaged-smoke": "node scripts/v15-github-delivery-packaged-smoke.mjs",
     "visual:desktop": "node scripts/capture-desktop-visuals.mjs",
     "verify": "corepack pnpm typecheck && corepack pnpm test && corepack pnpm test:cross-platform",
     "verify:demo": "corepack pnpm verify && corepack pnpm test:e2e && corepack pnpm test:electron-smoke",
