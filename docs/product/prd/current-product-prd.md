@@ -1,7 +1,7 @@
 # DevFlow Studio Current Product PRD
 
-Status: Current product baseline  
-Last updated: 2026-07-31
+Status: Current implemented baseline; V1.5 release signoff pending
+Last updated: 2026-08-11
 
 ## Source Documents
 
@@ -9,6 +9,8 @@ Last updated: 2026-07-31
 - [`Product Details`](../details/README.md)
 - [`Roadmap`](../../roadmap.md)
 - [`v1.3 Delivery Flow Completion`](../../plans/v1.3-delivery-flow-completion.md)
+- [`V1.5 GitHub Delivery PRD`](./v1.5-github-delivery-prd.md)
+- [`GitHub App Delivery Authority`](../../adr/0013-github-app-delivery-authority.md)
 - [`Domain Context`](../../../CONTEXT.md)
 
 ## Problem Statement
@@ -108,6 +110,20 @@ preserving the evidence needed for human review.
     execution is visible without exposing raw data.
 30. As a small team, I want a self-hosted deployment path, so that we can validate DevFlow without
     waiting for public SaaS readiness.
+31. As a developer, I want Desktop to prepare one immutable Delivery Intent from the canonical
+    managed worktree and expected commit, so that GitHub never receives stale or unrelated code.
+32. As a lead or owner, I want to approve one exact redacted Delivery Request through a signed Web
+    session, so that Desktop bearer authority cannot approve its own remote write.
+33. As an owner, I want to configure and revoke one verified GitHub App repository binding per Team
+    Project, so that delivery authority is narrow and independently revocable.
+34. As a developer, I want one approved commit published without force to one `devflow/` branch and
+    represented by one Draft pull request, so that delivery is exact and reviewable.
+35. As a developer, I want explicit Revise, Resume, Retry, and Stop actions with distinct semantics,
+    so that recovery never silently reuses approval or creates another logical delivery.
+36. As an Acceptance reviewer, I want the exact remote head and Draft pull-request evidence in the
+    canonical Run before completion, so that a PR handoff artifact alone is insufficient.
+37. As an operator, I want restart reconciliation and revocation to avoid duplicate credentials,
+    pushes, or pull requests, so that ambiguous remote effects remain bounded.
 
 ## Core Requirements
 
@@ -168,12 +184,30 @@ preserving the evidence needed for human review.
 - Fake engines remain available for deterministic automated verification; real provider paths remain
   explicit and signoff-oriented.
 
+### Governed GitHub Delivery
+
+- Desktop derives a Delivery Intent from the canonical managed worktree, expected commit, active
+  repository binding, Run/node/version, Test Evidence, changed paths, and PR Delivery Package.
+- API/Postgres owns the redacted Delivery Request, signed lead/owner approval, GitHub App binding,
+  credential-grant metadata, remote verification, Draft pull-request result, and audit.
+- The GitHub App private key remains in the API process. A repository-scoped, short-lived Contents
+  token exists only in Electron main memory for one active publication attempt.
+- The API independently verifies the approved expected commit as the remote branch head before it
+  creates or reconciles one Draft pull request.
+- Revise creates a new pre-publication intent revision and invalidates approval. Resume continues
+  one `recovery_required` attempt. Retry creates the next attempt only after the current pairing
+  claimant proves the exact remote predecessor `failed` or `revoked`. Stop parks the exact active
+  attempt for explicit recovery.
+- DevFlow never merges, force-pushes, deletes remote branches, publishes tags, broadens GitHub App
+  scope, or treats GitHub as Workflow authority.
+
 ### Team Console And Self-Hosted Pilot
 
 - Web Team Console shows redacted delivery health, active Runs, Gate status, evidence coverage,
   Agent Review summaries, Test Evidence, policy state, budget state, and Desktop pairing.
 - API backend owns authenticated team state, project membership, policy persistence, budget
-  persistence, pairing, and redacted sync ingestion.
+  persistence, pairing, GitHub repository bindings, Delivery Requests, signed approvals, and
+  redacted sync ingestion.
 - Unsigned identity headers are off by default and rejected for browser origins; networked Team writes
   use signed session Cookies or paired Desktop Bearer Tokens.
 - Only a canonical Run Summary can advance remote Run status/current Node. Prior active Nodes settle,
@@ -185,14 +219,18 @@ preserving the evidence needed for human review.
 - The deployment target is a self-hosted small-team pilot with Desktop, Web, API, Postgres, and
   Docker Compose.
 
-### PR Draft And Acceptance Handoff
+### PR Delivery And Acceptance
 
-- PR stage creates a PR draft artifact from request, design, changed paths, tests, policy, budget,
-  and Agent Review evidence.
+- PR stage creates a metadata-only PR Delivery Package from request, design, changed paths, tests,
+  policy, budget, and Agent Review evidence.
+- Desktop prepares an immutable Delivery Intent, and Team creates a redacted Delivery Request for
+  separate signed Web approval before any GitHub write.
+- After approval, Desktop publishes only the expected commit and API creates or reconciles one Draft
+  pull request after independently verifying the remote head.
 - Acceptance stage creates an evidence bundle that references the original request, PR draft, diff,
-  tests, policy, budget, and review summaries.
-- Real GitHub PR creation, pushing, merging, and branch publication require a future scoped PRD and
-  explicit human approval.
+  tests, policy, budget, review summaries, Delivery Intent, exact remote head, and Draft URL.
+- Acceptance rejects a handoff-only PR artifact when GitHub Delivery is enabled. Acceptance never
+  merges, closes, or mutates the pull request.
 
 ## Implementation Decisions
 
@@ -205,7 +243,8 @@ preserving the evidence needed for human review.
 - Keep self-hosted team pilot as the current deployment shape.
 - Keep public SaaS, billing, enterprise SSO, and managed multi-tenancy out of the near-term product
   path.
-- Keep PR draft handoff separate from real GitHub PR creation until delivery evidence is stable.
+- Keep the PR Delivery Package separate from source/repository authority and require the governed
+  GitHub Delivery state machine for a real Draft pull request.
 - Keep policy, tests, Knowledge Review, budget, and Agent traces visible around the delivery
   workflow instead of hiding them in separate admin-only screens.
 - Keep deterministic fake runtime paths available for CI and local verification.
@@ -220,11 +259,16 @@ preserving the evidence needed for human review.
 - Desktop UI tests should cover New Run intake, active Run selection, Inspector actions, Gate
   enforcement explanations, PR draft generation, and acceptance bundle generation.
 - API and Postgres tests should cover authenticated team state, pairing, policy persistence, budget
-  evaluation, sync ingestion, and rejection of unsafe approval-like sync writes.
+  evaluation, sync ingestion, GitHub App binding/revocation, Delivery Request approval, credential
+  grants, remote verification, Draft completion, and rejection of unsafe approval-like writes.
 - Web tests should cover team overview, Evidence Chain visibility, latest active Run display,
   policy/budget controls, and redacted summary rendering.
 - Cross-platform checks should preserve Windows compatibility for path handling and static runtime
   boundaries, even when full Electron smoke remains macOS-local.
+- Deterministic GitHub Delivery tests should use fake GitHub clients and local bare remotes; packaged
+  Desktop smoke should prove restart reconciliation without external writes.
+- Real GitHub validation should use one explicitly authorized private sandbox, one candidate, one
+  Draft pull request, no automatic retry, and no merge.
 - Real provider and real opencode smoke should stay explicit release/signoff paths, not default CI
   requirements.
 
@@ -245,13 +289,19 @@ preserving the evidence needed for human review.
 - Web Team Console can show redacted project and Run delivery health.
 - Runtime budget policy and approval state are visible where paid provider usage is relevant.
 - PR Draft and Acceptance Evidence Bundle artifacts can be generated from accumulated evidence.
+- One exact Delivery Intent can become one separately approved Delivery Request, one verified remote
+  branch head, and one Draft pull request without leaking credentials or local paths.
+- Revise, Resume, Retry, and Stop preserve immutable history and cannot reuse stale approval.
+- Revocation blocks a new credential grant, and restart reconciliation does not repeat remote
+  effects.
 - The product remains explainable as a self-hosted small-team AI delivery workbench.
 
 ## Out Of Scope
 
 - Generic chat assistant behavior.
 - Fully autonomous code merge or deployment.
-- Real GitHub PR creation, branch push, or merge in the current baseline.
+- Pull-request merge, auto-merge, branch deletion, force-push, tag publication, issue automation,
+  or deployment through GitHub Delivery.
 - Public SaaS onboarding.
 - Billing and subscription management.
 - Enterprise SSO.
@@ -268,8 +318,11 @@ preserving the evidence needed for human review.
 
 ## Further Notes
 
-- GitHub Delivery requires a scoped PRD before implementation. Runtime Operations and Collaboration
-  Hardening remain evidence-promoted backlog items unless the Roadmap assigns milestone priority.
+- V1.5 implementation is complete, but v1.4.0 remains the current release.
+- V1.5 release and the 1.x completion gate remain pending until the Roadmap's candidate-bound
+  completion evidence passes.
+- Runtime Operations and Collaboration Hardening remain evidence-promoted backlog items unless the
+  Roadmap assigns milestone priority.
 - UI refactor work should preserve the Evidence Chain as the center of gravity: current stage,
   blocking reason, next action, and evidence status must stay visible.
 - Only the Roadmap owns current release and milestone status. Release-signoff documents retain

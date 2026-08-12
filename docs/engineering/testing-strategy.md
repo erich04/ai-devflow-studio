@@ -1,27 +1,53 @@
 # DevFlow Studio Testing Strategy
 
-DevFlow Studio follows a TDD-style discipline for new behavior: write the smallest failing test for the contract first, implement the minimum code to pass, then refactor under the same tests. Older fixture-driven UI does not need retroactive TDD rewrites unless it is touched.
+DevFlow Studio follows a TDD discipline for new behavior: write the smallest failing contract test,
+implement only enough to pass, then refactor under the same tests. Fixture-driven UI does not need
+retroactive TDD rewrites unless it is touched.
+
+## Current Persistence Baseline
+
+- Team/API/Postgres uses Team schema v12. Migration tests must prove both a fresh v12 database and a
+  populated v11-to-v12 upgrade without losing GitHub Delivery identity or evidence.
+- Electron/SQLite uses Desktop schema v15. Local-store tests must prove a fresh v15 database,
+  retained upgrades, rollback on migration failure, and refusal of a newer unknown schema.
 
 ## Test Layers
 
-- **Shared domain logic**: use Vitest unit tests in `packages/shared/src/*.test.ts` before changing policy, knowledge, command safety, remote sync, or coding contracts.
-- **Electron main/preload**: add IPC parser, local-store, runtime, or smoke coverage for any filesystem, shell, SQLite, credential, or write-path change.
-- **API/Postgres**: route tests cover request contracts and authorization; `test:postgres-smoke` covers real migration, persistence, policy evaluation, override audit, and sync paths.
-- **React desktop/web**: component tests cover visible UI state and user actions; browser E2E covers core workbench and team-console flows.
-- **Smoke tests**: Electron smoke proves real preload/main/SQLite behavior; Postgres smoke proves real team backend behavior.
+- **Shared domain logic**: Vitest unit tests in `packages/shared/src/*.test.ts` cover policy,
+  knowledge, command safety, sync, delivery state, redaction, and Acceptance contracts.
+- **Electron main/preload**: parser, local-store, runtime, IPC, and smoke tests cover filesystem,
+  shell, SQLite, credential, publication, restart reconciliation, and guarded write paths. Renderer
+  tests must prove it receives delivery status but no GitHub App credential.
+- **API/Postgres**: route and repository tests cover request validation, role/session authority,
+  repository binding, Delivery Request approval, credential grants, remote verification, Draft
+  completion, revocation, audit, and redaction.
+- **Desktop/Web UI**: component tests cover visible state and explicit user actions; browser E2E
+  covers the Workbench and Team Console paths.
+- **Deterministic GitHub Delivery**: fake GitHub clients and local bare remotes prove exact-commit,
+  no-force publication and Draft reconciliation without an external write.
+- **Packaged Desktop**: the packaged smoke exercises production main/preload/renderer boundaries,
+  local SQLite, a local fake API, a local bare remote, crash/restart reconciliation, and credential
+  non-persistence.
+- **Fresh systems and lifecycle**: Postgres and Docker smokes prove current migrations, real service
+  wiring, retained-volume upgrades, transactional retry, and bounded rollback.
+- **Private sandbox**: one explicitly authorized private GitHub sandbox validates real GitHub App
+  authentication and one Draft pull request for the frozen candidate only.
 
 ## Required Gates By Change Type
 
-- Shared policy or governance rule: failing shared unit test, `typecheck`, `test`.
-- Gate approval or override write path: shared/unit test plus Electron or API smoke coverage.
-- Desktop local execution or coding runtime: Electron runtime/unit test and `test:electron-smoke`.
-- Team API or Postgres persistence: route/repository test and `test:postgres-smoke`.
-- User-visible workflow UI: React test and, when it affects a demo path, browser E2E.
-- Cross-platform local execution code: `test:cross-platform`.
+- Shared policy, governance, or delivery transition: failing shared unit test, `typecheck`, and
+  relevant integration test.
+- Gate approval, Delivery Request approval, or override write path: shared/unit test plus Electron or
+  API authorization coverage.
+- Desktop execution or publication: Electron runtime/unit coverage and packaged Desktop smoke.
+- Team API, migration, or Postgres persistence: route/repository coverage and Postgres smoke.
+- Compose, upgrade, backup, or rollback behavior: Docker lifecycle smoke.
+- User-visible workflow UI: component test and browser E2E when it affects the operator path.
+- Cross-platform local execution: cross-platform tests.
 
-## Default Verification
+## Verification Commands
 
-Run before signing off:
+The normal local quality gates remain:
 
 ```bash
 corepack pnpm typecheck
@@ -33,10 +59,25 @@ corepack pnpm build
 corepack pnpm verify
 ```
 
-Run when Postgres behavior changes:
+The V1.5 candidate-bound gates are:
 
 ```bash
+corepack pnpm test:v15-github-delivery
+corepack pnpm v15-github-delivery-packaged-smoke
 DEVFLOW_DATABASE_URL=postgres://... corepack pnpm test:postgres-smoke
+corepack pnpm test:docker-lifecycle-smoke
 ```
 
-`verify` intentionally excludes Postgres because it needs an external database.
+`verify` intentionally excludes Postgres, Docker lifecycle, packaged Desktop, and the real private
+GitHub sandbox because they require dedicated environments or credentials. Their results must be
+recorded separately against the same frozen candidate.
+
+## External-Cost And Remote-Write Boundary
+
+The deterministic and packaged V1.5 gates use local fakes and local bare remotes. A real private
+GitHub sandbox run is a separately authorized release-only gate: one candidate, one approved branch,
+one Draft pull request, no automatic retry, and never merge.
+
+This strategy does not authorize paid-provider smoke. V1.5 GitHub Delivery verification requires no
+paid model request, and routine test commands must not call OpenCode or another paid provider unless
+a separate, explicit, candidate-bound authorization exists.

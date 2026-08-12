@@ -37,7 +37,9 @@ The UI should:
 
 ### Completed
 
-The Run has final acceptance.
+The Run has final Acceptance. When GitHub Delivery is enabled, the canonical Run also contains the
+verified remote head and matching Draft pull-request completion; completion must never merge or
+otherwise mutate that pull request.
 
 The UI should:
 
@@ -55,6 +57,19 @@ The UI should:
 - Show where the failure occurred.
 - Preserve partial evidence.
 - Offer retry or remediation only through explicit user action.
+
+### GitHub Delivery Recovery
+
+A recoverable Delivery Request remains visible with one explicit operator action:
+
+- Revise creates a new pre-publication Delivery Intent revision and invalidates prior approval.
+- Resume continues the same `recovery_required` attempt and remote identity.
+- Retry creates a new attempt only after the exact remote predecessor is proven `failed` or
+  `revoked` by the current pairing claimant.
+- Stop parks the exact active attempt for manual recovery without claiming remote rollback.
+
+These actions preserve immutable history and never merge, force-push, delete a branch, or reuse a
+stale approval.
 
 ## UI Refactor Anchors
 
@@ -79,7 +94,8 @@ These are product gaps, not necessarily immediate implementation tasks:
 - Review provider setup flow.
 - Runtime budget administration UX.
 - Team collaboration and conflict visibility.
-- GitHub delivery integration after PR draft is stable.
+- Deeper GitHub Delivery conflict visibility and operator ergonomics after the governed Draft path
+  is released.
 
 ## Out Of Scope For The UI Refactor
 
@@ -93,4 +109,4 @@ Unless explicitly promoted by a future plan, the UI refactor should not introduc
 - Signed installer or auto-update flows.
 - Real MCP process execution.
 - Full RAG/vector retrieval provider integration.
-- Autonomous push, merge, or PR creation.
+- Autonomous publication, Delivery Request approval, pull-request merge, or deployment.

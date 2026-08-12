@@ -13,6 +13,12 @@ Evidence Chain is the core product metaphor for the UI refactor.
 6. Missing evidence should become an actionable remediation path, not passive warning text.
 7. A reviewer should be able to answer: what was requested, what changed, what was tested, what did
    the agents conclude, what policy applied, who approved, and what remains risky.
+8. GitHub Delivery must preserve the PR Delivery Package, immutable Delivery Intent, redacted
+   Delivery Request, exact signed approval, credential-grant metadata, verified remote head, Draft
+   pull-request completion, recovery actions, and Acceptance decision as linked evidence.
+9. Revise, Resume, Retry, and Stop must append history with distinct series/attempt/revision identity;
+   they must never overwrite prior evidence, reuse stale approval, or silently repeat a remote
+   effect.
 
 ## Trust And Redaction Boundaries
 
@@ -24,6 +30,7 @@ Never sync these raw values to the team by default:
 - Patch bodies.
 - Provider secrets.
 - API keys or tokens.
+- GitHub App private keys, installation tokens, or credential payloads.
 - Unredacted local command output.
 - External-directory access details.
 
@@ -35,4 +42,11 @@ Safe team summaries may include:
 - Agent Review conclusion, advisory level, missing evidence count, and risk count.
 - Policy and budget rollups.
 - Gate decisions and override reasons.
+- GitHub App repository binding identity and revocation state without credentials.
+- Delivery Request status, approval identity, series/attempt/revision, and recovery action history.
+- Expected commit, verified remote branch head, and Draft pull-request URL when repository-relative
+  and safe.
 
+GitHub Delivery evidence proves a bounded Draft handoff; it never authorizes merge. Acceptance may
+reference that completion but must never merge, close, force-push, delete a branch, publish a tag,
+or expose credentials.

@@ -13,9 +13,10 @@ A small team can take a software change request from intake to delivery using De
 3. Design the solution.
 4. Run AI-assisted implementation locally.
 5. Produce test and review evidence.
-6. Draft delivery artifacts.
-7. Approve or reject each Gate with policy-aware context.
-8. Sync redacted summaries to the team view.
+6. Assemble a PR Delivery Package and exact Delivery Intent.
+7. Approve or reject each Gate and Delivery Request with policy-aware context.
+8. Publish one approved commit as a GitHub Draft pull request.
+9. Sync redacted summaries to the team view and complete Acceptance.
 
 The product should keep developers in control of local execution while giving leads and managers enough evidence to govern risk, cost, and delivery readiness.
 
@@ -30,6 +31,7 @@ Uses the Electron desktop client to:
 - Execute local tests.
 - Run Coding Agent tasks in a managed worktree.
 - Review diffs, permission requests, evidence, and runtime traces.
+- Prepare, Revise, Resume, Retry, or Stop a GitHub Delivery through explicit actions.
 - Sync redacted summaries to the team backend.
 
 ### Tech Lead / Reviewer
@@ -40,6 +42,7 @@ Uses Desktop and Web views to:
 - Inspect Knowledge Review output.
 - Evaluate policy warnings or blockers.
 - Approve Gates or explicit overrides.
+- Approve or reject one exact redacted Delivery Request through a signed Web session.
 - Check delivery evidence before implementation, PR, or acceptance.
 
 ### Team Manager / Project Owner
@@ -49,6 +52,7 @@ Uses Web Team Console to:
 - See project overview and recent Runs.
 - Track policy state, cost, evidence, and risk.
 - Manage team-facing workflow settings such as policies and budget controls.
+- Configure or revoke a Project's verified GitHub App repository binding.
 
 ## Core Product Workflow
 
@@ -71,12 +75,13 @@ DevFlow Studio models delivery as a six-stage workflow:
    - Capture Test Evidence with command, result, duration, and redacted output.
 
 5. PR
-   - Assemble a PR draft or delivery handoff artifact.
-   - Link diff, test, policy, and review evidence.
+   - Assemble a metadata-only PR Delivery Package and immutable Delivery Intent.
+   - Require a signed lead/owner approval for the exact redacted Delivery Request.
+   - Publish the approved expected commit and create or reconcile one Draft pull request.
 
 6. Accept
    - Final human Gate for business acceptance.
-   - Preserve audit trail and evidence bundle.
+   - Require durable GitHub Delivery completion, preserve the audit trail, and never merge.
 
 ## Main Product Modules
 
@@ -92,6 +97,8 @@ Core responsibilities:
 - Coding Agent runtime orchestration.
 - Knowledge Review execution.
 - Gate approval and override actions through guarded write paths.
+- Commit-bound Delivery Intent preparation and explicit Revise, Resume, Retry, and Stop actions.
+- Repository-scoped GitHub publication from Electron main with an in-memory installation token.
 - Local SQLite persistence.
 - Redacted team sync.
 
@@ -105,6 +112,7 @@ Core responsibilities:
 - Project and Run summaries.
 - Policy, budget, and delivery status.
 - Pairing code creation for Desktop connection.
+- GitHub App repository binding/revocation and exact Delivery Request approval.
 - Redacted evidence and review summaries.
 
 ### API Backend
@@ -117,6 +125,8 @@ Core responsibilities:
 - Project membership.
 - Pairing and authenticated sync.
 - Policy and budget persistence.
+- GitHub App authority, redacted Delivery Requests, approvals, credential-grant metadata, remote-head
+  verification, and Draft pull-request creation.
 - Postgres-backed team state.
 - Redacted overview responses.
 
@@ -131,6 +141,8 @@ Core responsibilities:
 - Knowledge governance rules.
 - Budget guard evaluation.
 - Remediation and delivery summaries.
+- Delivery Intent/Request validation, series/attempt/revision identity, and Acceptance evidence
+  requirements.
 - Redaction-safe data contracts.
 
 ## Agent Boundaries
@@ -160,6 +172,21 @@ Coding Agent runs must preserve:
 
 Skills and MCP are team capability surfaces, not substitutes for Gate approval. They may help standardize work, but they do not bypass workflow policy or evidence requirements.
 
+## GitHub Delivery Boundary
+
+Desktop derives an immutable Delivery Intent from the canonical managed worktree, expected commit,
+repository binding, Run version, Test Evidence, and PR Delivery Package. API/Postgres stores the
+redacted Delivery Request and a separate signed lead/owner approval. A GitHub App supplies
+repository-scoped, short-lived authority: Desktop main receives only Contents write capability for
+the exact push, while the API verifies the remote head and creates or reconciles one Draft pull
+request.
+
+Revise replaces changed pre-publication material and invalidates approval. Resume continues the
+same `recovery_required` attempt. Retry creates a new attempt only after the current claimant proves
+the exact remote predecessor terminal. Stop parks the exact active attempt for manual recovery.
+DevFlow never merges, force-pushes, deletes a branch, publishes a tag, or lets GitHub replace the
+canonical local Run.
+
 ## Evidence Model
 
 DevFlow Studio treats evidence as the core product primitive.
@@ -173,7 +200,9 @@ Important evidence types:
 - Knowledge Review artifacts.
 - Gate approval and override decisions.
 - Runtime cost and budget decisions.
-- PR draft and acceptance bundle artifacts.
+- PR Delivery Package and acceptance bundle artifacts.
+- Delivery Intent, Delivery Request, signed approval, verified remote head, and Draft pull-request
+  completion metadata.
 
 Evidence shown to the team must be redacted. Local raw execution details stay local unless explicitly summarized through a safe contract.
 
@@ -212,7 +241,11 @@ Public SaaS, billing, enterprise SSO, and large organization administration are 
 Release status and future milestones live only in the [Roadmap](../roadmap.md).
 
 This Product Definition owns the durable product shape, users, workflow, evidence model, governance
-rules, and non-goals. It intentionally does not restate the active version sequence.
+rules, and non-goals. The Roadmap remains authoritative for release status and sequencing.
+
+V1.5 implementation is complete in the current development line; v1.4.0 remains the current release.
+V1.5 release signoff and the 1.x completion gate remain pending until all candidate-bound
+local, CI, packaged Desktop, Postgres, lifecycle, and private GitHub sandbox evidence passes.
 
 The released product baseline provides:
 
@@ -225,6 +258,10 @@ The released product baseline provides:
   bounded cleanup/recovery semantics.
 - Knowledge Governance, bounded repository Markdown context, durable sync outbox recovery, and
   reproducible self-hosted pilot lifecycle validation.
+
+The implemented V1.5 extension adds commit-bound Delivery Intent preparation, redacted Delivery
+Requests and signed approval, GitHub App repository authority, idempotent branch/Draft publication,
+bounded recovery, and Acceptance evidence. This implementation statement is not a release claim.
 
 Historical PRDs, plans, walkthroughs, release records, and candidate evidence remain immutable
 records of what was proposed or verified at that time. They do not compete with the Roadmap for

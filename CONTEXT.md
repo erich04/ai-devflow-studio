@@ -42,9 +42,67 @@ as reusable team knowledge.
 
 ## PR Delivery Package
 
-A handoff artifact that summarizes the original request, solution design, changed paths, test
-evidence, policy state, and review summary so the work can become a pull request later.
-_Avoid_: automatic merge, automatic repository upload.
+A metadata-only handoff artifact that summarizes the original request, solution design, changed
+paths, Test Evidence, policy state, and review context. GitHub Delivery may use its title, body, and
+evidence references, but the package is never the source of code, repository identity, branch
+authority, or credentials.
+
+## GitHub Repository Binding
+
+The non-secret Team Project record that binds one Project to one verified GitHub App installation,
+repository, default branch, and binding version. An owner configures or revokes it through Web. The
+API resolves repository facts from GitHub rather than trusting renderer-supplied names.
+
+## GitHub Delivery
+
+The V1.5 governed path that publishes one expected commit from the canonical managed worktree to one
+approved `devflow/` branch and creates or reconciles one Draft pull request. It requires a separate
+signed Web approval and never merges, force-pushes, deletes a branch, publishes a tag, or makes
+GitHub authoritative for the local Run.
+
+## Delivery Series
+
+The stable identity for delivery of one Run/PR target from one managed workspace under one
+repository binding. A repository rebind creates a new series only after the prior remote request is
+proven terminal to the current pairing claimant.
+
+## Delivery Attempt
+
+One immutable publication attempt within a Delivery Series. Retry is allowed only after the exact
+remote predecessor is proven `failed` or `revoked`; it creates the next attempt and a new request and
+idempotency key. A completed attempt never reopens.
+
+## Delivery Intent
+
+The immutable local Desktop record binding the managed workspace, expected commit, repository
+binding, Run/node/version, Test Evidence, changed paths, and PR Delivery Package digests. A
+pre-publication material change uses Revise to create a new intent revision in the same series and
+attempt and invalidates the older approval.
+
+## Delivery Request
+
+The redacted API/Postgres projection of one Delivery Intent. It is scoped to the paired Project and
+current claimant and carries the durable approval, publication, recovery, and Draft pull-request
+state without local paths, raw output, patches, source content, or credentials.
+
+## Delivery Approval
+
+An immutable lead/owner decision made through a signed Web session against one exact Delivery
+Request revision. Desktop Bearer authority cannot approve its own request, and changed material,
+attempt, or binding requires a new approval.
+
+## GitHub Delivery Recovery Action
+
+One explicit operator action chosen from Revise, Resume, Retry, or Stop. Revise replaces changed
+pre-publication material; Resume continues the same `recovery_required` attempt; Retry creates a new
+attempt only after proven remote terminal authority; Stop parks the exact active attempt for manual
+recovery. Background scheduling cannot silently perform these decisions.
+
+## GitHub Delivery Completion
+
+The redacted durable evidence that one expected commit is the verified remote branch head and one
+matching pull request remains Draft. Only this evidence can advance the PR node toward Acceptance;
+it never authorizes merge.
 
 ## Skill
 
@@ -352,8 +410,8 @@ duration, and redacted output.
 ## Data Origin
 
 The source class for data shown in the app. `seed` is fixture/demo data, `local` is Electron SQLite
-state, `remote` is future team backend state, and `adapter` is reserved for future external execution
-engine snapshots such as a HoneyAI bridge.
+state, `remote` is authenticated API/Postgres team state, and `adapter` is an external execution
+engine projection such as an OpenCode Coding Agent result.
 
 ## Local Settings
 
@@ -363,8 +421,9 @@ available.
 
 ## Remote State
 
-Team-shared state that will be owned by the backend in v0.3, including shared Runs, projects,
-members, costs, Gate decisions, and manager dashboard summaries.
+Team-shared state owned by API/Postgres, including identity, Projects, redacted Run projections,
+policy, budget, collaboration commands, repository bindings, Delivery Requests, approvals, audit,
+and manager summaries. Remote State does not own local source execution or complete local evidence.
 
 ## Cross-Platform Desktop
 

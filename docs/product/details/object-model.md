@@ -7,7 +7,8 @@ The team boundary for users, projects, policy, and shared visibility.
 ## Project
 
 A team-visible software project. It has a repository mapping, default branch, health state, optional
-test command, policy settings, budget settings, and Desktop pairing credentials.
+test command, policy settings, budget settings, Desktop pairing credentials, and an optional
+verified GitHub App repository binding.
 
 ## Local Project
 
@@ -77,6 +78,43 @@ Gate Advisory.
 A local implementation attempt hosted by the managed coding runtime. DevFlow owns context assembly,
 permission relay, managed worktree isolation, diff capture, test evidence, runtime trace, cleanup
 state, and redacted summary sync. The external coding engine owns actual code generation.
+
+## PR Delivery Package
+
+A metadata-only handoff artifact containing request, design, changed-path, Test Evidence, policy,
+budget, and Agent Review summaries. It is not source code, repository identity, branch authority, or
+a credential container.
+
+## Delivery Intent
+
+An immutable local record derived from the canonical managed worktree and bound to one expected
+commit, repository binding, Run/node/version, Test Evidence, changed paths, and PR Delivery Package
+digest. Revise creates a new pre-publication revision and invalidates prior approval.
+
+## Delivery Request
+
+The redacted API/Postgres projection of one Delivery Intent. It owns the signed approval,
+publication state, recovery state, and Draft pull-request result without syncing local paths, raw
+output, patches, source content, or credentials.
+
+## Delivery Attempt
+
+One immutable publication attempt in a stable Delivery Series. Resume continues the same attempt;
+Retry may create the next attempt only after the exact predecessor is proven terminal; Stop parks
+the active attempt. A completed attempt never reopens.
+
+## GitHub App Repository Binding
+
+The owner-managed, versioned relationship between one Project and one verified GitHub App
+installation/repository/default branch. Revocation blocks new credential grants. The private key
+remains in the API process, and the short-lived repository-scoped token exists only in Electron main
+memory during publication.
+
+## GitHub Delivery Completion
+
+The durable proof that the approved expected commit is the verified remote branch head and that one
+matching Draft pull request exists. It is required before GitHub-enabled Acceptance. Completion must
+never merge, close, or otherwise mutate the pull request.
 
 ## Policy
 

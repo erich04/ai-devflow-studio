@@ -66,11 +66,12 @@ Required evidence:
 - Command safety feedback before execution.
 - Clear failed, timed out, or passed state.
 
-## 6. PR Draft
+## 6. PR Delivery
 
 User intent:
 
-- Produce a handoff artifact that can become a pull request later.
+- Turn one tested commit in the canonical managed worktree into one separately approved GitHub
+  Draft pull request without transferring source or repository authority into a handoff artifact.
 
 Required evidence:
 
@@ -80,11 +81,27 @@ Required evidence:
 - Latest test evidence.
 - Policy and budget status.
 - Agent Review summary.
-- Safe compare URL when repository mapping is safe.
+- Metadata-only PR Delivery Package.
+- Immutable Delivery Intent bound to the expected commit, repository binding, Run/node/version,
+  Test Evidence, changed paths, and package digest.
+- Redacted Delivery Request and immutable signed Web approval for its exact revision.
+- Verified remote branch head and matching Draft pull-request completion.
+
+Authority and recovery:
+
+- A verified GitHub App repository binding supplies narrow, revocable repository authority.
+- The GitHub App private key remains in the API process. Electron main holds a short-lived,
+  repository-scoped Contents token only for the active publication attempt; the renderer never
+  receives it.
+- Revise creates a new pre-publication intent revision and invalidates approval.
+- Resume continues the same `recovery_required` attempt without creating a new remote identity.
+- Retry creates a new attempt only after the current claimant proves the predecessor terminal.
+- Stop parks the exact active attempt for explicit operator recovery.
 
 Non-goal:
 
-- v1.3 does not create real GitHub PRs, push branches, or merge code.
+- GitHub Delivery never merges, force-pushes, deletes a branch, publishes a tag, or makes GitHub the
+  authority for the local Run.
 
 ## 7. Acceptance
 
@@ -95,7 +112,9 @@ User intent:
 Required evidence:
 
 - Acceptance evidence bundle.
-- PR draft reference.
+- PR Delivery Package, Delivery Intent, Delivery Request approval, verified remote head, and Draft
+  pull-request reference.
 - Diff/test/policy/budget/review summary.
 - Final Gate decision through the normal enforcement path.
-
+- Acceptance may record signoff after delivery completion but must never merge, close, or otherwise
+  mutate the pull request.

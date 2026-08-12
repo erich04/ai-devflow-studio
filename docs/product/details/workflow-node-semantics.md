@@ -40,8 +40,8 @@ Do not force every Node card to show the same `产物 / 证据 / 轨迹` set.
 | Gate | `kind=gate` | Can the Run continue, and why or why not? | `条件` / `证据` / `结论` |
 | Runtime Build | `kind=task` or build-stage runtime task | What changed and how was it executed? | `Diff` / `测试` / `轨迹` |
 | Test | `kind=test` | What test result is available? | `测试结果` / `证据` / `轨迹` |
-| PR Delivery | `kind=pr` | What will be handed off to code review? | `PR Draft` / `证据` / `Handoff` |
-| Acceptance | `kind=acceptance` | Is the delivery accepted by the business flow? | `验收包` / `证据` / `结论` |
+| PR Delivery | `kind=pr` | Did one approved expected commit become one verified Draft pull request? | `Delivery Request` / `Draft` / `证据` |
+| Acceptance | `kind=acceptance` | Is the verified delivery accepted by the business flow? | `验收包` / `GitHub Delivery` / `结论` |
 
 When a preferred summary item has no data and is not central to the Node type, the card may hide or
 de-emphasize it. When the item is central, show the empty state clearly.
@@ -87,11 +87,19 @@ Inspector tabs should follow Node semantics rather than a single universal layou
 | Review | Status, Knowledge Review, References, Evidence, Trace |
 | Runtime Build | Status, Coding Agent state, Diff, Test Evidence, Trace |
 | Test | Status, test command, Test Evidence, failure details, rerun action |
-| PR Delivery | Status, PR Draft, accumulated Evidence, Handoff |
-| Acceptance | Status, Acceptance Bundle, Evidence, final Decision |
+| PR Delivery | Status, PR Delivery Package, Delivery Intent/Request, approval, recovery action, verified remote head, Draft pull request |
+| Acceptance | Status, Acceptance Bundle, GitHub Delivery completion, Evidence, final Decision |
 
 The Board should stay compact. Detailed blockers, policy rules, raw trace, and remediation actions
 belong in Inspector.
+
+The PR Delivery Inspector must keep Revise, Resume, Retry, and Stop distinct: Revise creates a new
+pre-publication intent revision and invalidates approval; Resume continues the same
+`recovery_required` attempt; Retry creates a new attempt only after the predecessor is proven
+terminal; Stop parks the exact active attempt. The GitHub App binding and signed Web approval are
+authority inputs, while the verified remote head and Draft pull request are completion evidence.
+GitHub Delivery must never merge, force-push, delete a branch, publish a tag, or let Acceptance
+mutate the pull request.
 
 ## Implementation Boundary
 
@@ -104,4 +112,3 @@ Preferred implementation direction:
 - Add renderer view-model logic that maps Node type and related resources into card summaries.
 - Keep shared contracts, IPC payloads, and persistence schemas stable unless a product requirement
 cannot be expressed with the existing links.
-

@@ -16,8 +16,12 @@ Required screen areas:
 - Agent Workbench and runtime timeline.
 - Tests view.
 - Team sync controls.
+- GitHub Delivery controls and status for Prepare, Revise, Resume, Retry, and Stop.
 
-Desktop owns local execution. It can show private details that should not sync raw to the team.
+Desktop owns local execution. Electron main derives the Delivery Intent from the canonical managed
+worktree and holds the short-lived repository-scoped GitHub App installation token only during an
+active publication attempt. The renderer receives status, never credentials. Desktop can show
+private details that should not sync raw to the team, and GitHub Delivery must never merge.
 
 ## Web Team Console
 
@@ -33,6 +37,9 @@ Required screen areas:
 - Runtime Budget summary.
 - Policy / Warnings summary.
 - Desktop pairing entry point.
+- GitHub App repository binding and revocation controls for an owner.
+- Delivery Request review and exact-revision approval for a lead or owner.
+- Draft pull-request completion and Acceptance evidence.
 - Link to legacy shell while the product shell is being refined.
 
 Web should emphasize redacted delivery health, not raw local execution.
@@ -50,6 +57,10 @@ Required responsibilities:
 - Redacted sync ingestion.
 - Policy and budget persistence.
 - Agent Review execution against team state.
+- GitHub App private-key authority, repository binding/revocation, and narrow credential-grant
+  metadata.
+- Redacted Delivery Request persistence, signed Web approval, remote-head verification, and Draft
+  pull-request creation or reconciliation.
 
 ## Shared Domain Core
 
@@ -64,4 +75,5 @@ Required responsibilities:
 - Knowledge governance.
 - Budget guard logic.
 - Redaction-safe contracts.
-
+- Delivery series/attempt/revision validation, action transitions, and GitHub-enabled Acceptance
+  evidence requirements.
