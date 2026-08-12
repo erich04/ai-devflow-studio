@@ -1028,6 +1028,9 @@ export function createSeedGitHubDeliveryRepository(
     if (request.requestedByTokenId !== principal.authentication.tokenRecordId) {
       return githubDeliveryRejection('project_forbidden')
     }
+    if (!hasCurrentBinding(request)) {
+      return githubDeliveryRejection('binding_inactive')
+    }
     const runAuthority = await canonicalRequestAuthority(request)
     if (runAuthority === 'claimant_forbidden') {
       return githubDeliveryRejection('project_forbidden')
@@ -1099,18 +1102,6 @@ export function createSeedGitHubDeliveryRepository(
     }
     if (Date.parse(at) >= Date.parse(request.expiresAt)) {
       return githubDeliveryRejection('expired')
-    }
-    const binding = bindingsByProject.get(
-      scope(request.organizationId, request.projectId),
-    )
-    if (
-      !binding ||
-      binding.status !== 'active' ||
-      binding.id !== request.repositoryBindingId ||
-      binding.version !== request.repositoryBindingVersion ||
-      binding.repositoryId !== request.repositoryId
-    ) {
-      return githubDeliveryRejection('binding_inactive')
     }
     const approval = currentApproval(request)
     if (!approval || !approvalMatchesRequest(approval, request)) {

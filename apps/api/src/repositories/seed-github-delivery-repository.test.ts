@@ -628,6 +628,35 @@ describe('seed GitHub Delivery repository', () => {
     ).resolves.toMatchObject({ ok: false, outcomeCode: 'binding_inactive' })
   })
 
+  it('rejects a post-revocation credential probe before grant reservation or provider issuance', async () => {
+    const harness = createHarness()
+    const approved = await createApprovedDelivery(harness)
+    await harness.repository.revokeGitHubRepositoryBinding(
+      { projectId: 'project-a', expectedStateVersion: 1 },
+      ownerPrincipal,
+    )
+    const revokedRequest = harness.repository
+      .inspectForTests()
+      .requests.find((request) => request.id === approved.request.id)
+    if (!revokedRequest) throw new Error('fixture revoked request missing')
+
+    await expect(
+      harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: revokedRequest.id,
+          expectedStateVersion: revokedRequest.stateVersion,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      responseStatus: 409,
+      outcomeCode: 'binding_inactive',
+    })
+    expect(harness.repository.inspectForTests().grants).toHaveLength(0)
+  })
+
   it('returns one redacted recovery snapshot for the exact paired Desktop claimant', async () => {
     const harness = createHarness()
     const issued = await createIssuedGrant(harness)
