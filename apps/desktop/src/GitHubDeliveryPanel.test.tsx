@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type {
   GitHubDeliveryIntent,
   GitHubDeliveryOperatorOutcome,
+  GitHubDeliveryRevocationCheck,
 } from '@ai-devflow/shared'
 import { GitHubDeliveryPanel } from './GitHubDeliveryPanel'
 
@@ -136,6 +137,12 @@ describe('GitHubDeliveryPanel', () => {
       'href',
       'https://github.com/erich/ai-devflow-studio/pull/17',
     )
+    expect(screen.getByTestId('github-delivery-panel')).toHaveTextContent(
+      '只读授权阻断证明',
+    )
+    expect(screen.getByTestId('github-delivery-panel')).toHaveTextContent(
+      '不会执行 Git、push 或创建/修改 PR',
+    )
     expect(screen.getByTestId('github-delivery-panel')).not.toHaveTextContent('publication-1')
   })
 
@@ -149,5 +156,84 @@ describe('GitHubDeliveryPanel', () => {
     expect(panel).toHaveTextContent('显式 Retry')
     expect(panel).toHaveTextContent('新的 attempt')
     expect(panel).not.toHaveTextContent(/授权.*消耗/)
+  })
+
+  it('shows an exact persisted binding-inactive revocation proof', () => {
+    const completedIntent = intent('completed')
+    const revocationCheck: GitHubDeliveryRevocationCheck = {
+      stateVersion: 1,
+      intentId: completedIntent.id,
+      intentUpdatedAt: completedIntent.updatedAt,
+      bindingId: completedIntent.repositoryBindingId,
+      bindingVersion: completedIntent.repositoryBindingVersion + 1,
+      outcomeCode: 'binding_inactive',
+      checkedAt: '2026-08-11T12:10:00.000Z',
+      redacted: true,
+    }
+
+    render(
+      <GitHubDeliveryPanel
+        intent={completedIntent}
+        revocationCheck={revocationCheck}
+        hasExactPrPackage
+      />,
+    )
+
+    const panel = screen.getByTestId('github-delivery-panel')
+    expect(panel).toHaveTextContent('Credential revocation proof')
+    expect(panel).toHaveTextContent('binding_inactive')
+    expect(panel).toHaveTextContent(revocationCheck.checkedAt)
+  })
+
+  it('does not display revocation proof material for a mismatched binding', () => {
+    const completedIntent = intent('completed')
+    const check: GitHubDeliveryRevocationCheck = {
+      stateVersion: 1,
+      intentId: completedIntent.id,
+      intentUpdatedAt: completedIntent.updatedAt,
+      bindingId: 'different-binding',
+      bindingVersion: completedIntent.repositoryBindingVersion + 1,
+      outcomeCode: 'binding_inactive',
+      checkedAt: '2026-08-11T12:10:00.000Z',
+      redacted: true,
+    }
+
+    render(
+      <GitHubDeliveryPanel
+        intent={completedIntent}
+        revocationCheck={check}
+        hasExactPrPackage
+      />,
+    )
+
+    const panel = screen.getByTestId('github-delivery-panel')
+    expect(panel).not.toHaveTextContent('Credential revocation proof')
+    expect(panel).not.toHaveTextContent(check.checkedAt)
+  })
+
+  it('does not display a same-version revocation check as proof', () => {
+    const completedIntent = intent('completed')
+    const check: GitHubDeliveryRevocationCheck = {
+      stateVersion: 1,
+      intentId: completedIntent.id,
+      intentUpdatedAt: completedIntent.updatedAt,
+      bindingId: completedIntent.repositoryBindingId,
+      bindingVersion: completedIntent.repositoryBindingVersion,
+      outcomeCode: 'binding_inactive',
+      checkedAt: '2026-08-11T12:10:00.000Z',
+      redacted: true,
+    }
+
+    render(
+      <GitHubDeliveryPanel
+        intent={completedIntent}
+        revocationCheck={check}
+        hasExactPrPackage
+      />,
+    )
+
+    expect(screen.getByTestId('github-delivery-panel')).not.toHaveTextContent(
+      'Credential revocation proof',
+    )
   })
 })

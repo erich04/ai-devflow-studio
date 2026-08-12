@@ -26,6 +26,6 @@ describe('V1.5 README truth', () => {
     expect(readme).toContain('corepack pnpm test:v15-github-delivery-packaged-smoke')
     expect(readme).toContain('docs/guides/devflow-studio-v1.5-walkthrough.md')
     expect(readme).toContain('Team schema v12')
-    expect(readme).toContain('Desktop schema v15')
+    expect(readme).toContain('Desktop schema v16')
   })
 })

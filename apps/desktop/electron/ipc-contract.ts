@@ -80,6 +80,8 @@ export const ipcChannels = {
   retryGitHubDelivery: 'devflow:github-delivery:retry',
   resumeGitHubDelivery: 'devflow:github-delivery:resume',
   stopGitHubDelivery: 'devflow:github-delivery:stop',
+  verifyGitHubDeliveryRevocation:
+    'devflow:github-delivery:revocation:verify',
   createAcceptanceBundle: 'devflow:acceptance-bundle:create',
   approveGate: 'devflow:gate:approve',
   saveGateOverride: 'devflow:gate:override:save',
@@ -220,6 +222,25 @@ export type StopGitHubDeliveryResult =
       intentId: string
       disposition: 'already_terminal'
       outcomeCode: 'intent_terminal'
+    }
+
+export type VerifyGitHubDeliveryRevocationInput = ResumeGitHubDeliveryInput
+
+export type VerifyGitHubDeliveryRevocationResult =
+  | {
+      intentId: string
+      disposition: 'blocked'
+      outcomeCode: 'binding_inactive'
+    }
+  | {
+      intentId: string
+      disposition: 'unverified'
+      outcomeCode:
+        | 'binding_active'
+        | 'intent_not_found'
+        | 'stale_intent'
+        | 'remote_request_unavailable'
+        | 'revocation_unavailable'
     }
 
 export type CreateAcceptanceBundleInput = {
@@ -415,6 +436,9 @@ export type DevFlowDesktopApi = {
   stopGitHubDelivery: (
     input: StopGitHubDeliveryInput,
   ) => Promise<StopGitHubDeliveryResult>
+  verifyGitHubDeliveryRevocation: (
+    input: VerifyGitHubDeliveryRevocationInput,
+  ) => Promise<VerifyGitHubDeliveryRevocationResult>
   createAcceptanceBundle: (
     input: CreateAcceptanceBundleInput,
   ) => Promise<CreateAcceptanceBundleResult>
@@ -741,6 +765,15 @@ export function parseStopGitHubDeliveryInput(
   return parseExactGitHubDeliveryIntentInput(
     value,
     'stop GitHub delivery payload',
+  )
+}
+
+export function parseVerifyGitHubDeliveryRevocationInput(
+  value: unknown,
+): VerifyGitHubDeliveryRevocationInput {
+  return parseExactGitHubDeliveryIntentInput(
+    value,
+    'verify GitHub delivery revocation payload',
   )
 }
 

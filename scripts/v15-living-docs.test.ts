@@ -64,7 +64,7 @@ describe('V1.5 living documentation truth', () => {
 
     for (const markdown of [testingStrategy, demoAndSmoke]) {
       expect(markdown).toContain('Team schema v12')
-      expect(markdown).toContain('Desktop schema v15')
+      expect(markdown).toContain('Desktop schema v16')
       expect(markdown).toContain('corepack pnpm test:v15-github-delivery')
       expect(markdown).toContain('corepack pnpm test:v15-github-delivery-packaged-smoke')
       expect(markdown).toContain('corepack pnpm test:postgres-smoke')
@@ -111,7 +111,7 @@ describe('V1.5 living documentation truth', () => {
     expect(postgres).toContain('redacted')
     expect(postgres).toContain('does not authorize paid-provider smoke')
 
-    expect(electron).toContain('Desktop schema v15')
+    expect(electron).toContain('Desktop schema v16')
     expect(electron).toContain('corepack pnpm test:v15-github-delivery-packaged-smoke')
     expect(electron).toContain('V1.5 GitHub Delivery')
     expect(electron).toContain('Revise')
@@ -160,7 +160,7 @@ describe('V1.5 living documentation truth', () => {
     }
 
     expect(backendMatrix).toContain('Team schema v12')
-    expect(backendMatrix).toContain('Desktop schema v15')
+    expect(backendMatrix).toContain('Desktop schema v16')
     expect(backendMatrix).toContain('remote_sync_outbox')
     expect(backendMatrix).not.toContain('durable outbox/backoff 留到 v1.4')
     expect(backendMatrix).not.toContain('Durable sync outbox/backoff：')

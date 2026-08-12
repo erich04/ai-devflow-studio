@@ -37,6 +37,7 @@ export type InspectorActionId =
   | 'retryGitHubDelivery'
   | 'resumeGitHubDelivery'
   | 'stopGitHubDelivery'
+  | 'verifyGitHubDeliveryRevocation'
   | 'createAcceptanceBundle'
 
 export type PendingInspectorActionId = InspectorActionId | 'saveGateOverride'
@@ -757,6 +758,12 @@ function buildActionCatalog(
       variant: 'ghost',
       disabledReasons: [],
     },
+    verifyGitHubDeliveryRevocation: {
+      id: 'verifyGitHubDeliveryRevocation',
+      label: 'Verify credential revocation',
+      variant: 'ghost',
+      disabledReasons: [],
+    },
     createAcceptanceBundle: {
       id: 'createAcceptanceBundle',
       label: '生成验收证据包',
@@ -814,6 +821,7 @@ function buildNextAction(input: {
   latestAgentReview: AgentReviewResult | undefined
   canApprove: boolean
   hasTeamProjectBinding: boolean
+  canVerifyGitHubDeliveryRevocation: boolean
 }): InspectorNextAction {
   const { node } = input
 
@@ -913,7 +921,9 @@ function buildNextAction(input: {
       return {
         title: 'Draft PR 已创建',
         copy: '精确 commit 的 Draft PR 已记录为交付证据；后台处理器会确保 Workflow 推进到 Acceptance。',
-        secondaryActionIds: [],
+        secondaryActionIds: input.canVerifyGitHubDeliveryRevocation
+          ? ['verifyGitHubDeliveryRevocation']
+          : [],
       }
     }
     if (input.githubDeliveryIntent?.status === 'approved') {
@@ -1008,6 +1018,7 @@ export function buildNodeInspectorViewModel(input: {
   isLoadingGateEnforcement: boolean
   canApprove: boolean
   hasTeamProjectBinding: boolean
+  canVerifyGitHubDeliveryRevocation: boolean
 }): NodeInspectorViewModel {
   const visualKind = getBoardNodeKind(input.node)
   const nodeType = getInspectorNodeType(input.node)
@@ -1027,7 +1038,13 @@ export function buildNodeInspectorViewModel(input: {
     addAction('runCodingAgent')
   }
   if (input.node.kind === 'pr') {
-    if (input.githubDeliveryIntent?.status === 'recovery_required') {
+    if (
+      input.githubDeliveryIntent?.status === 'completed' &&
+      input.canVerifyGitHubDeliveryRevocation &&
+      input.node.status === 'success'
+    ) {
+      addAction('verifyGitHubDeliveryRevocation')
+    } else if (input.githubDeliveryIntent?.status === 'recovery_required') {
       addAction('resumeGitHubDelivery')
     } else if (!input.githubDeliveryIntent) {
       addAction(hasExactPrDeliveryPackage(input.artifacts) ? 'prepareGitHubDelivery' : 'createPrDraft')
@@ -1037,6 +1054,12 @@ export function buildNodeInspectorViewModel(input: {
     addAction('createAcceptanceBundle')
     if (hasAcceptanceArtifact(input.artifacts)) {
       addAction('approveGate')
+    }
+    if (
+      input.githubDeliveryIntent?.status === 'completed' &&
+      input.canVerifyGitHubDeliveryRevocation
+    ) {
+      addAction('verifyGitHubDeliveryRevocation')
     }
   }
   const actions = actionIds.map((actionId) => actionCatalog[actionId])

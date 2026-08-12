@@ -178,6 +178,31 @@ describe('Electron GitHub Delivery renderer boundary', () => {
     expect(stop).not.toMatch(/token|worktreePath|encryptedToken|rawError/)
   })
 
+  it('runs the credential revocation proof in the exclusive main-only pairing boundary', () => {
+    const probe = main.slice(
+      main.indexOf('async function verifyCurrentGitHubDeliveryRevocation'),
+      main.indexOf('async function stopCurrentGitHubDelivery'),
+    )
+    const handler = main.slice(
+      main.indexOf('ipcChannels.verifyGitHubDeliveryRevocation'),
+      main.indexOf('ipcMain.handle(ipcChannels.createAcceptanceBundle'),
+    )
+
+    expect(main).toContain("from './github-delivery-revocation-probe.js'")
+    expect(probe).toMatch(
+      /runGitHubDeliveryExclusive\(async \(signal\)[\s\S]*?createCurrentGitHubDeliveryContext\(signal\)[\s\S]*?runGitHubDeliveryRevocationProbe\([\s\S]*?store: context\.store[\s\S]*?remote: context\.remote[\s\S]*?expectedPairing: context\.credential/,
+    )
+    expect(probe).toMatch(
+      /finally \{[\s\S]*?broadcastGitHubDeliveryState\(\)/,
+    )
+    expect(handler).toMatch(
+      /parseVerifyGitHubDeliveryRevocationInput\(payload\)[\s\S]*?verifyCurrentGitHubDeliveryRevocation\(input\)/,
+    )
+    expect(`${probe}\n${handler}`).not.toMatch(
+      /createGitHubGitPublisher|withCredentialGrant|token|worktreePath|repository|requestId|stateVersion/,
+    )
+  })
+
   it('starts after app readiness, wakes on authority changes, and drains safely before quit', () => {
     const ready = main.slice(main.indexOf('app.whenReady()'))
     expect(ready).toMatch(

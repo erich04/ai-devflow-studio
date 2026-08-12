@@ -29,6 +29,14 @@ repository credential. A dated result is written only after every step passes.
   substitute for the Desktop bytes that will be published.
 - Signoff accepts only `run_attempt: 1`. If any Verify job fails, do not rerun that workflow run;
   correct only setup outside `C` when permitted, then dispatch a new exact-candidate Verify run.
+- For this completion gate, the **non-maintainer operator** is an independent operator who does not
+  author or modify `C`, release evidence, the database, or service configuration after the frozen
+  run starts. The operator uses only the documented normal Web and packaged Desktop surfaces and
+  does not use shell, direct HTTP, SQL, or GitHub CLI to complete or repair the product story. A
+  separate setup principal may create/install the sandbox App and inject its secrets before the run;
+  those setup actions and their completion time are recorded separately and are not operator steps.
+  If a maintainer supplies an undocumented command, data repair, API call, or state mutation after
+  the run starts, `adHocMaintainerAssistance` is true and the walkthrough fails.
 
 ## Operator Path
 
@@ -59,8 +67,14 @@ repository credential. A dated result is written only after every step passes.
 11. At Acceptance, inspect the exact remote commit, Draft URL, passing Test Evidence, and completed
     Delivery evidence. Approve Acceptance and confirm the canonical Run becomes `completed` while
     the pull request remains Draft and unmerged.
-12. Revoke the repository binding in Web. Attempt a new credential grant for a separate bounded
-    request and confirm it is blocked before token minting or git/network mutation.
+12. Revoke the repository binding in Web, return to the completed Delivery in packaged Desktop,
+    and invoke **Verify credential revocation**. This bounded Electron-main probe derives the exact
+    remote request from the completed local evidence and uses the encrypted pairing authority. The
+    probe command/result adds no remote request or repository fields to its exact local-CAS envelope,
+    and the renderer never receives the Desktop Bearer or credential response. Only the exact
+    `binding_inactive` rejection passes. A `200`/other `2xx` response is
+    treated as `credential_unexpectedly_issued`: Desktop cancels the unread response body, performs
+    no git/publisher/PR action, and the walkthrough fails and must restart from fresh isolated state.
 13. Exercise one safe operator recovery path if needed: **Stop** moves an active local attempt to
     manual recovery; **Resume** continues the same `recovery_required` attempt; **Revise** replaces
     changed pre-publication material in the same series/attempt; **Retry** creates only the next
@@ -80,7 +94,8 @@ The walkthrough passes only when all observations bind to the same `C` and show:
 - remote head SHA equal to the approved expected commit SHA;
 - PR and Acceptance nodes `success`, with the canonical Run `completed`;
 - restart recovery with zero repeated credential, push, or pull-request side effects;
-- binding revocation followed by a blocked new credential grant;
+- binding revocation followed by the packaged Desktop **Verify credential revocation** action
+  recording one redacted `binding_inactive` check, with no second git or pull-request effect;
 - no merge, force-push, tag publication, remote branch deletion, or permission widening;
 - no App private key, installation token, pairing value, Cookie, Bearer value, raw patch/output,
   repository content, credential URL, or local absolute path in durable or release evidence.
@@ -223,7 +238,7 @@ fixed lifecycle outcomes. Do not add convenience fields containing local diagnos
 ```
 
 The dated result must say `Status: Passed` and record `C`, the packaged artifact platform and
-SHA-256, Team schema v12, Desktop schema v15, exact-SHA Verify URL, non-secret sandbox/App identity,
+SHA-256, Team schema v12, Desktop schema v16, exact-SHA Verify URL, non-secret sandbox/App identity,
 series/attempt/revision and digests, lifecycle counts, approval role/auth kind, expected/remote SHA,
 Draft URL and state, completed Acceptance, restart zero-repeat observations, revocation result,
 redaction scan, cleanup, the non-maintainer operator role, zero ad hoc maintainer assistance, and any
@@ -238,7 +253,7 @@ Use this exact label skeleton so the result remains both human-auditable and mac
 Status: Passed
 Candidate: <C-full-40-hex-SHA>
 Packaged artifact: 1.5.0 <platform-arch> <64-hex-SHA-256>
-Team schema v12; Desktop schema v15.
+Team schema v12; Desktop schema v16.
 Verify: <exact-first-attempt-workflow_dispatch-run-URL>
 Delivery series: <github-delivery:64-hex>
 Delivery attempt: 1; intent revision: 1.

@@ -2,7 +2,7 @@
 
 本文件是 Airbnb-III 前端重构进入后端/IPC/local store 对接后的工程清单。目标不是新增一批接口，而是先把现有页面字段的来源讲清楚：哪些已经由 Electron IPC / 本地 SQLite / 远端 snapshot 驱动，哪些只是 renderer adapter 或 seed fallback，哪些需要后续 shared/API/IPC 合同变更。
 
-当前持久化基线是 Team schema v12 与 Desktop schema v15。V1.5 GitHub Delivery 已实现；
+当前持久化基线是 Team schema v12 与 Desktop schema v16。V1.5 GitHub Delivery 已实现；
 `v1.4.0` 仍是 current release，V1.5 release/signoff 尚未完成。
 
 状态枚举：

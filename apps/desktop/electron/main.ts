@@ -63,6 +63,7 @@ import {
   parseRetryGitHubDeliveryInput,
   parseResumeGitHubDeliveryInput,
   parseStopGitHubDeliveryInput,
+  parseVerifyGitHubDeliveryRevocationInput,
   parseCreateRunInput,
   parseCompleteWorkflowAgentNodeInput,
   parseListAgentReviewsInput,
@@ -91,6 +92,8 @@ import {
   type ResumeGitHubDeliveryResult,
   type StopGitHubDeliveryInput,
   type StopGitHubDeliveryResult,
+  type VerifyGitHubDeliveryRevocationInput,
+  type VerifyGitHubDeliveryRevocationResult,
 } from './ipc-contract.js'
 import {
   createRemoteSyncClient,
@@ -106,6 +109,7 @@ import {
   type GitHubDeliveryRuntime,
 } from './github-delivery-runtime.js'
 import { createGitHubDeliveryRemoteClient } from './github-delivery-remote-client.js'
+import { runGitHubDeliveryRevocationProbe } from './github-delivery-revocation-probe.js'
 import {
   GitHubDeliveryRetryAuthorityError,
   assertGitHubDeliveryRetryAuthority,
@@ -657,6 +661,39 @@ async function resumeGitHubDelivery(
         }
       }
     })
+  } finally {
+    await broadcastGitHubDeliveryState()
+  }
+}
+
+async function verifyCurrentGitHubDeliveryRevocation(
+  input: VerifyGitHubDeliveryRevocationInput,
+): Promise<VerifyGitHubDeliveryRevocationResult> {
+  try {
+    return await runGitHubDeliveryExclusive(async (signal) => {
+      const context = await createCurrentGitHubDeliveryContext(signal)
+      if (!context) {
+        return {
+          intentId: input.intentId,
+          disposition: 'unverified',
+          outcomeCode: 'revocation_unavailable',
+        }
+      }
+      return runGitHubDeliveryRevocationProbe(
+        {
+          store: context.store,
+          remote: context.remote,
+          expectedPairing: context.credential,
+        },
+        input,
+      )
+    })
+  } catch {
+    return {
+      intentId: input.intentId,
+      disposition: 'unverified',
+      outcomeCode: 'revocation_unavailable',
+    }
   } finally {
     await broadcastGitHubDeliveryState()
   }
@@ -2282,6 +2319,14 @@ function registerIpcHandlers() {
     const input = parseStopGitHubDeliveryInput(payload)
     return stopCurrentGitHubDelivery(input)
   })
+
+  ipcMain.handle(
+    ipcChannels.verifyGitHubDeliveryRevocation,
+    async (_, payload: unknown) => {
+      const input = parseVerifyGitHubDeliveryRevocationInput(payload)
+      return verifyCurrentGitHubDeliveryRevocation(input)
+    },
+  )
 
   ipcMain.handle(ipcChannels.createAcceptanceBundle, async (_, payload: unknown) => {
     const input = parseCreateAcceptanceBundleInput(payload)

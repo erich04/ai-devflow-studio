@@ -56,6 +56,7 @@ import {
   type GitHubDeliveryCompletion,
   type GitHubDeliveryOperatorOutcome,
   type GitHubDeliveryOperatorOutcomeCode,
+  type GitHubDeliveryRevocationCheck,
   type GitHubDeliveryStatus,
   type GitHubRepositoryBinding,
   type PolicySnapshot,
@@ -71,7 +72,7 @@ import {
   type WorkflowRun,
   type WorkRequest,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 15
+export const CURRENT_SCHEMA_VERSION = 16
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -208,6 +209,35 @@ export type StopGitHubDeliveryIntentResult =
   | {
       committed: false
       reason: 'intent_not_found' | 'source_stale' | 'intent_terminal'
+    }
+
+export type CommitGitHubDeliveryRevocationCheckInput = {
+  check: GitHubDeliveryRevocationCheck
+  expectedIntent: GitHubDeliveryIntent
+  expectedBinding: GitHubRepositoryBinding
+  expectedPairing: DesktopPairingCredential
+}
+
+export type CommitGitHubDeliveryRevocationCheckResult =
+  | {
+      committed: true
+      replayed: boolean
+      check: GitHubDeliveryRevocationCheck
+    }
+  | {
+      committed: false
+      reason:
+        | 'invalid_input'
+        | 'intent_not_found'
+        | 'intent_stale'
+        | 'intent_ineligible'
+        | 'binding_not_found'
+        | 'binding_stale'
+        | 'binding_ineligible'
+        | 'pairing_not_found'
+        | 'pairing_stale'
+        | 'authority_mismatch'
+        | 'check_conflict'
     }
 
 export type ManagedCodingWorkspaceHeadMutation = {
@@ -634,6 +664,12 @@ export type LocalStore = {
   stopGitHubDeliveryIntent(
     input: StopGitHubDeliveryIntentInput,
   ): Promise<StopGitHubDeliveryIntentResult>
+  commitGitHubDeliveryRevocationCheck(
+    input: CommitGitHubDeliveryRevocationCheckInput,
+  ): Promise<CommitGitHubDeliveryRevocationCheckResult>
+  listGitHubDeliveryRevocationChecks(
+    intentId?: string,
+  ): Promise<GitHubDeliveryRevocationCheck[]>
   commitGitHubRepositoryBindingObservation(
     input: CommitGitHubRepositoryBindingObservationInput,
   ): Promise<CommitGitHubRepositoryBindingObservationResult>
@@ -1641,6 +1677,40 @@ const schemaMigrations: readonly SchemaMigration[] = [
       `)
     },
   },
+  {
+    version: 16,
+    migrate(db) {
+      db.run(`
+    create table if not exists github_delivery_revocation_checks (
+      intent_id text primary key,
+      intent_updated_at text not null,
+      binding_id text not null,
+      binding_version integer not null,
+      outcome_code text not null,
+      checked_at text not null,
+      state_version integer not null,
+      json text not null,
+      check (length(trim(intent_id)) > 0 and length(intent_id) <= 200 and trim(intent_id) = intent_id),
+      check (length(trim(binding_id)) > 0 and length(binding_id) <= 200 and trim(binding_id) = binding_id),
+      check (binding_version between 1 and 2147483647),
+      check (outcome_code = 'binding_inactive'),
+      check (state_version = 1),
+      check (json_valid(json)),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.intentId') = intent_id),
+      check (json_extract(json, '$.intentUpdatedAt') = intent_updated_at),
+      check (json_extract(json, '$.bindingId') = binding_id),
+      check (json_extract(json, '$.bindingVersion') = binding_version),
+      check (json_extract(json, '$.outcomeCode') = outcome_code),
+      check (json_extract(json, '$.checkedAt') = checked_at),
+      check (json_extract(json, '$.redacted') = 1)
+    );
+
+    create index if not exists idx_github_delivery_revocation_checks_checked
+      on github_delivery_revocation_checks(checked_at, intent_id);
+      `)
+    },
+  },
 ]
 
 function migrateSchema(db: Database) {
@@ -2372,6 +2442,63 @@ function writeGitHubDeliveryOperatorOutcome(
       outcome.stateVersion,
       JSON.stringify(outcome),
       outcome.recordedAt,
+    ],
+  )
+}
+
+const GITHUB_DELIVERY_REVOCATION_CHECK_KEYS = [
+  'stateVersion',
+  'intentId',
+  'intentUpdatedAt',
+  'bindingId',
+  'bindingVersion',
+  'outcomeCode',
+  'checkedAt',
+  'redacted',
+] as const
+
+function isCanonicalGitHubDeliveryRevocationCheck(
+  check: GitHubDeliveryRevocationCheck,
+): boolean {
+  const actualKeys = Object.keys(check).sort()
+  const expectedKeys = [...GITHUB_DELIVERY_REVOCATION_CHECK_KEYS].sort()
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key, index) => key === expectedKeys[index]) &&
+    check.stateVersion === 1 &&
+    isNonEmptyIdentifier(check.intentId) &&
+    check.intentId.length <= 200 &&
+    isCanonicalIsoTimestamp(check.intentUpdatedAt) &&
+    isNonEmptyIdentifier(check.bindingId) &&
+    check.bindingId.length <= 200 &&
+    Number.isSafeInteger(check.bindingVersion) &&
+    check.bindingVersion >= 1 &&
+    check.bindingVersion <= 2_147_483_647 &&
+    check.outcomeCode === 'binding_inactive' &&
+    isCanonicalIsoTimestamp(check.checkedAt) &&
+    Date.parse(check.checkedAt) >= Date.parse(check.intentUpdatedAt) &&
+    check.redacted === true
+  )
+}
+
+function writeGitHubDeliveryRevocationCheck(
+  db: Database,
+  check: GitHubDeliveryRevocationCheck,
+): void {
+  db.run(
+    `insert into github_delivery_revocation_checks (
+      intent_id, intent_updated_at, binding_id, binding_version,
+      outcome_code, checked_at, state_version, json
+    ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      check.intentId,
+      check.intentUpdatedAt,
+      check.bindingId,
+      check.bindingVersion,
+      check.outcomeCode,
+      check.checkedAt,
+      check.stateVersion,
+      JSON.stringify(check),
     ],
   )
 }
@@ -5978,6 +6105,144 @@ class SqlJsLocalStore implements LocalStore {
     )
   }
 
+  async listGitHubDeliveryRevocationChecks(
+    intentId?: string,
+  ): Promise<GitHubDeliveryRevocationCheck[]> {
+    if (intentId) {
+      return selectJson<GitHubDeliveryRevocationCheck>(
+        this.db,
+        'select json from github_delivery_revocation_checks where intent_id = ? limit 1',
+        [intentId],
+      )
+    }
+    return selectJson<GitHubDeliveryRevocationCheck>(
+      this.db,
+      'select json from github_delivery_revocation_checks order by checked_at asc, intent_id asc',
+    )
+  }
+
+  async commitGitHubDeliveryRevocationCheck(
+    input: CommitGitHubDeliveryRevocationCheckInput,
+  ): Promise<CommitGitHubDeliveryRevocationCheckResult> {
+    const { check, expectedIntent, expectedBinding, expectedPairing } = input
+    if (
+      !isCanonicalGitHubDeliveryRevocationCheck(check) ||
+      check.intentId !== expectedIntent.id ||
+      check.intentUpdatedAt !== expectedIntent.updatedAt ||
+      check.bindingId !== expectedBinding.id ||
+      check.bindingVersion !== expectedBinding.version ||
+      Date.parse(check.checkedAt) < Date.parse(expectedBinding.updatedAt)
+    ) {
+      return { committed: false, reason: 'invalid_input' }
+    }
+
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+
+      const currentIntent = selectGitHubDeliveryIntent(this.db, 'id', check.intentId)
+      if (!currentIntent) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'intent_not_found' }
+      }
+      if (JSON.stringify(currentIntent) !== JSON.stringify(expectedIntent)) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'intent_stale' }
+      }
+      if (currentIntent.status !== 'completed' || !currentIntent.completion) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'intent_ineligible' }
+      }
+
+      const currentPairing = selectJson<DesktopPairingCredential>(
+        this.db,
+        "select json from desktop_pairing_credentials where id = 'default' limit 1",
+      )[0]
+      if (!currentPairing) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'pairing_not_found' }
+      }
+      if (JSON.stringify(currentPairing) !== JSON.stringify(expectedPairing)) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'pairing_stale' }
+      }
+
+      const currentBinding = selectJson<GitHubRepositoryBinding>(
+        this.db,
+        'select json from github_repository_bindings where id = ? limit 1',
+        [check.bindingId],
+      )[0]
+      if (!currentBinding) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'binding_not_found' }
+      }
+      if (JSON.stringify(currentBinding) !== JSON.stringify(expectedBinding)) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'binding_stale' }
+      }
+      if (currentBinding.status !== 'revoked') {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'binding_ineligible' }
+      }
+      if (
+        currentBinding.id !== currentIntent.repositoryBindingId ||
+        currentBinding.version <= currentIntent.repositoryBindingVersion ||
+        currentBinding.organizationId !== currentIntent.organizationId ||
+        currentBinding.teamProjectId !== currentIntent.teamProjectId ||
+        currentBinding.installationId !== currentIntent.installationId ||
+        currentBinding.repositoryId !== currentIntent.repositoryId ||
+        currentBinding.repository !== currentIntent.repository ||
+        currentBinding.defaultBranch !== currentIntent.baseBranch ||
+        currentPairing.organizationId !== currentIntent.organizationId ||
+        currentPairing.projectId !== currentIntent.teamProjectId ||
+        currentPairing.localProjectId !== currentIntent.localProjectId
+      ) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return { committed: false, reason: 'authority_mismatch' }
+      }
+
+      const existing = selectJson<GitHubDeliveryRevocationCheck>(
+        this.db,
+        'select json from github_delivery_revocation_checks where intent_id = ? limit 1',
+        [check.intentId],
+      )[0]
+      if (existing) {
+        this.db.run('rollback')
+        transactionOpen = false
+        return JSON.stringify(existing) === JSON.stringify(check)
+          ? { committed: true, replayed: true, check: existing }
+          : { committed: false, reason: 'check_conflict' }
+      }
+
+      writeGitHubDeliveryRevocationCheck(this.db, check)
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return { committed: true, replayed: false, check }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      throw error
+    }
+  }
+
   async stopGitHubDeliveryIntent(
     input: StopGitHubDeliveryIntentInput,
   ): Promise<StopGitHubDeliveryIntentResult> {
@@ -7270,6 +7535,7 @@ class SqlJsLocalStore implements LocalStore {
       githubRepositoryBindings,
       githubDeliveryIntents,
       githubDeliveryOperatorOutcomes,
+      githubDeliveryRevocationChecks,
       retryAttempts,
       desktopPairingCredential,
       settings,
@@ -7294,6 +7560,7 @@ class SqlJsLocalStore implements LocalStore {
       this.listGitHubRepositoryBindings(),
       this.listGitHubDeliveryIntents(),
       this.listGitHubDeliveryOperatorOutcomes(),
+      this.listGitHubDeliveryRevocationChecks(),
       this.listRetryAttempts(),
       this.getDesktopPairingCredential(),
       this.getSettings(),
@@ -7320,6 +7587,7 @@ class SqlJsLocalStore implements LocalStore {
       githubRepositoryBindings,
       githubDeliveryIntents,
       githubDeliveryOperatorOutcomes,
+      githubDeliveryRevocationChecks,
       retryAttempts,
       desktopPairingCredential,
       settings,
@@ -7378,6 +7646,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'commitGitHubDeliveryReplacement',
   'commitGitHubDeliveryIntentStatus',
   'commitGitHubDeliveryIntentCompletion',
+  'commitGitHubDeliveryRevocationCheck',
   'stopGitHubDeliveryIntent',
   'commitGitHubRepositoryBindingObservation',
   'saveGitHubRepositoryBinding',

@@ -39,6 +39,7 @@ export type GitHubDeliveryRemoteErrorCode =
   | 'request_cancelled'
   | 'invalid_response'
   | 'response_too_large'
+  | 'credential_unexpectedly_issued'
   | 'publisher_failed'
   | GitHubGitPublisherErrorCode
 
@@ -76,6 +77,8 @@ const safeErrorMessages: Record<GitHubDeliveryRemoteErrorCode, string> = {
   request_cancelled: 'The GitHub Delivery API request was cancelled.',
   invalid_response: 'The GitHub Delivery API returned an invalid response.',
   response_too_large: 'The GitHub Delivery API response exceeded the safe limit.',
+  credential_unexpectedly_issued:
+    'GitHub credential revocation could not be verified safely.',
   publisher_failed: 'The exact GitHub commit could not be published.',
   invalid_delivery_source: 'The approved GitHub delivery source is invalid.',
   operation_cancelled: 'GitHub delivery publication was cancelled safely.',
@@ -292,6 +295,11 @@ export type GitHubCredentialGrantInput = {
   projectId: string
   requestId: string
   expectedStateVersion: number
+}
+
+export type VerifyGitHubCredentialGrantBlockedResult = {
+  status: 'blocked'
+  outcomeCode: 'binding_inactive'
 }
 
 export type GitHubCredentialPublishResult = {
@@ -673,6 +681,8 @@ const sha256Pattern = /^[a-f0-9]{64}$/u
 const maximumResponseBytes = 1024 * 1024
 const defaultTimeoutMs = 15_000
 const maximumTimeoutMs = 30_000
+const bindingInactiveRejectionMessage =
+  'The Project GitHub repository binding is not active.'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -1765,6 +1775,110 @@ export function createGitHubDeliveryRemoteClient(
         },
       })
       return parseRecoverySnapshot(body, input, response.status)
+    },
+
+    async verifyCredentialGrantBlocked(
+      input: GitHubCredentialGrantInput,
+    ): Promise<VerifyGitHubCredentialGrantBlockedResult> {
+      const operation = 'credential_grant'
+      if (
+        !isIdentifier(input?.projectId) ||
+        !isIdentifier(input?.requestId) ||
+        !isPositiveInteger(input?.expectedStateVersion)
+      ) {
+        throw invalid(operation, 'invalid_request', null, false)
+      }
+      if (options.signal?.aborted) {
+        throw invalid(operation, 'request_cancelled', null, false)
+      }
+      const pathname = `/api/desktop/projects/${encodeURIComponent(input.projectId)}/github-deliveries/${encodeURIComponent(input.requestId)}/credential-grant`
+      const controller = new AbortController()
+      let timedOut = false
+      let callerCancelled = false
+      const onCallerAbort = () => {
+        callerCancelled = true
+        controller.abort()
+      }
+      options.signal?.addEventListener('abort', onCallerAbort, { once: true })
+      const timer = setTimeout(() => {
+        timedOut = true
+        controller.abort()
+      }, timeoutMs)
+      const aborted = new Promise<never>((_resolve, reject) => {
+        controller.signal.addEventListener(
+          'abort',
+          () => reject(new Error('github_delivery_request_aborted')),
+          { once: true },
+        )
+      })
+      try {
+        const requested = (async () => {
+          const response = await fetcher(`${apiBaseUrl}${pathname}`, {
+            method: 'POST',
+            credentials: 'omit',
+            redirect: 'error',
+            referrerPolicy: 'no-referrer',
+            headers: {
+              accept: 'application/json',
+              authorization: `Bearer ${authToken}`,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+              expectedStateVersion: input.expectedStateVersion,
+            }),
+            signal: controller.signal,
+          })
+          if (response.status >= 200 && response.status < 300) {
+            void response.body?.cancel().catch(() => undefined)
+            throw invalid(
+              operation,
+              'credential_unexpectedly_issued',
+              response.status,
+              false,
+            )
+          }
+          if (response.status !== 409) {
+            await throwHttpError(response, operation, controller.signal)
+          }
+          const body = await readBoundedJson(
+            response,
+            operation,
+            controller.signal,
+          )
+          if (
+            !isRecord(body) ||
+            !hasExactKeys(body, [
+              'error',
+              'message',
+              'outcomeCode',
+              'replayed',
+            ]) ||
+            body.error !== 'conflict' ||
+            body.message !== bindingInactiveRejectionMessage ||
+            body.outcomeCode !== 'binding_inactive' ||
+            body.replayed !== false
+          ) {
+            throw invalid(operation, 'invalid_response', response.status, false)
+          }
+          return {
+            status: 'blocked' as const,
+            outcomeCode: 'binding_inactive' as const,
+          }
+        })()
+        return await Promise.race([requested, aborted])
+      } catch (error) {
+        if (error instanceof GitHubDeliveryRemoteError) throw error
+        if (timedOut) {
+          throw invalid(operation, 'request_timeout', null, true)
+        }
+        if (callerCancelled || options.signal?.aborted) {
+          throw invalid(operation, 'request_cancelled', null, false)
+        }
+        throw invalid(operation, 'remote_unavailable', null, true)
+      } finally {
+        clearTimeout(timer)
+        options.signal?.removeEventListener('abort', onCallerAbort)
+      }
     },
 
     async withCredentialGrant(

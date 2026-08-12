@@ -46,6 +46,8 @@ import type {
   RetryGitHubDeliveryResult,
   StopGitHubDeliveryInput,
   StopGitHubDeliveryResult,
+  VerifyGitHubDeliveryRevocationInput,
+  VerifyGitHubDeliveryRevocationResult,
   RetryRemoteSyncOperationInput,
 } from '../electron/ipc-contract'
 
@@ -242,6 +244,9 @@ export type DevFlowDesktopApi = {
   stopGitHubDelivery: (
     input: StopGitHubDeliveryInput,
   ) => Promise<StopGitHubDeliveryResult>
+  verifyGitHubDeliveryRevocation: (
+    input: VerifyGitHubDeliveryRevocationInput,
+  ) => Promise<VerifyGitHubDeliveryRevocationResult>
   createAcceptanceBundle: (
     input: CreateAcceptanceBundleInput,
   ) => Promise<CreateAcceptanceBundleResult>

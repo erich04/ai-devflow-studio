@@ -13,6 +13,8 @@ import {
   type DesktopPairingCredential,
   type GitHubDeliveryIntent,
   type GitHubDeliveryOperatorOutcome,
+  type GitHubDeliveryRevocationCheck,
+  type GitHubRepositoryBinding,
   type RepositoryKnowledgeSnapshot,
   type RemoteSyncOperation,
   validateTestCommandSafety,
@@ -263,9 +265,36 @@ function githubDeliveryIntentFixture(
   }
 }
 
+function githubRepositoryBindingFixture(
+  intent: GitHubDeliveryIntent,
+  status: GitHubRepositoryBinding['status'],
+  overrides: Partial<GitHubRepositoryBinding> = {},
+): GitHubRepositoryBinding {
+  return {
+    stateVersion: 1,
+    id: intent.repositoryBindingId,
+    version: status === 'revoked'
+      ? intent.repositoryBindingVersion + 1
+      : intent.repositoryBindingVersion,
+    organizationId: intent.organizationId,
+    teamProjectId: intent.teamProjectId,
+    installationId: intent.installationId,
+    repositoryId: intent.repositoryId,
+    repository: intent.repository,
+    defaultBranch: intent.baseBranch,
+    status,
+    validatedAt: '2026-08-11T12:09:00.000Z',
+    updatedAt: '2026-08-11T12:09:00.000Z',
+    redacted: true,
+    ...overrides,
+  }
+}
+
 function prDeliveryState(
   intent?: GitHubDeliveryIntent,
   operatorOutcomes: GitHubDeliveryOperatorOutcome[] = [],
+  revocationChecks: GitHubDeliveryRevocationCheck[] = [],
+  repositoryBindings: GitHubRepositoryBinding[] = [],
 ) {
   const artifact = prDeliveryPackageFixture()
   const run = fixtureRunAtCurrentNode('n-pr')
@@ -283,6 +312,8 @@ function prDeliveryState(
     artifacts: [artifact],
     githubDeliveryIntents: intent ? [intent] : [],
     githubDeliveryOperatorOutcomes: operatorOutcomes,
+    githubDeliveryRevocationChecks: revocationChecks,
+    githubRepositoryBindings: repositoryBindings,
     desktopPairingCredential: fixturePairingCredential,
   })
 }
@@ -625,6 +656,9 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     ),
     stopGitHubDelivery: vi.fn().mockRejectedValue(
       new Error('GitHub Delivery Stop is not configured for this test.'),
+    ),
+    verifyGitHubDeliveryRevocation: vi.fn().mockRejectedValue(
+      new Error('GitHub Delivery revocation verification is not configured for this test.'),
     ),
     createAcceptanceBundle: vi.fn().mockImplementation(async ({ runId, nodeId }) => {
       const timestamp = '2026-06-15T00:07:00.000Z'
@@ -2522,6 +2556,302 @@ describe('App', () => {
     expect(within(inspector).queryByRole('button', { name: 'Resume GitHub Delivery' })).not.toBeInTheDocument()
   })
 
+  it('verifies completed delivery revocation once with exact local CAS and reloads persisted proof', async () => {
+    const completedIntent = githubDeliveryIntentFixture('completed', {
+      repositoryBindingVersion: 3,
+    })
+    const check: GitHubDeliveryRevocationCheck = {
+      stateVersion: 1,
+      intentId: completedIntent.id,
+      intentUpdatedAt: completedIntent.updatedAt,
+      bindingId: completedIntent.repositoryBindingId,
+      bindingVersion: 4,
+      outcomeCode: 'binding_inactive',
+      checkedAt: '2026-08-11T12:10:00.000Z',
+      redacted: true,
+    }
+    const loadState = vi.fn()
+      .mockResolvedValueOnce(prDeliveryState(
+        completedIntent,
+        [],
+        [],
+        [githubRepositoryBindingFixture(completedIntent, 'revoked')],
+      ))
+      .mockResolvedValue(prDeliveryState(
+        completedIntent,
+        [],
+        [check],
+        [githubRepositoryBindingFixture(completedIntent, 'revoked')],
+      ))
+    const verifyGitHubDeliveryRevocation = vi.fn().mockResolvedValue({
+      intentId: completedIntent.id,
+      disposition: 'blocked',
+      outcomeCode: 'binding_inactive',
+    })
+    installDesktopApi({
+      loadState,
+      verifyGitHubDeliveryRevocation,
+    } as Partial<DevFlowDesktopApi>)
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    const verifyButton = within(screen.getByTestId('node-inspector')).getByRole(
+      'button',
+      { name: 'Verify credential revocation' },
+    )
+
+    fireEvent.click(verifyButton)
+    fireEvent.click(verifyButton)
+
+    await waitFor(() => expect(verifyGitHubDeliveryRevocation).toHaveBeenCalledTimes(1))
+    expect(verifyGitHubDeliveryRevocation).toHaveBeenCalledWith({
+      intentId: completedIntent.id,
+      expectedUpdatedAt: completedIntent.updatedAt,
+    })
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
+    expect(screen.getByTestId('toast')).toHaveTextContent(
+      'Credential revocation 已验证：binding_inactive',
+    )
+    const panel = screen.getByTestId('github-delivery-panel')
+    expect(panel).toHaveTextContent('Credential revocation proof')
+    expect(panel).toHaveTextContent(check.checkedAt)
+  })
+
+  it.each([
+    ['missing', []],
+    ['active', ['active']],
+  ] as const)(
+    'hides credential revocation verification when the exact binding is %s',
+    async (_label, statuses) => {
+      const completedIntent = githubDeliveryIntentFixture('completed')
+      const repositoryBindings = statuses.map((status) =>
+        githubRepositoryBindingFixture(completedIntent, status),
+      )
+      const api = installDesktopApi({
+        loadState: vi.fn().mockResolvedValue(
+          prDeliveryState(completedIntent, [], [], repositoryBindings),
+        ),
+      })
+      render(<App />)
+
+      await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+      expect(
+        within(screen.getByTestId('node-inspector')).queryByRole('button', {
+          name: 'Verify credential revocation',
+        }),
+      ).not.toBeInTheDocument()
+    },
+  )
+
+  it('hides credential revocation verification for a same-version revoked observation', async () => {
+    const completedIntent = githubDeliveryIntentFixture('completed')
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(prDeliveryState(
+        completedIntent,
+        [],
+        [],
+        [githubRepositoryBindingFixture(completedIntent, 'revoked', {
+          version: completedIntent.repositoryBindingVersion,
+        })],
+      )),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    expect(screen.queryByRole('button', {
+      name: 'Verify credential revocation',
+    })).not.toBeInTheDocument()
+  })
+
+  it('hides credential revocation verification when revoked authority is ambiguous', async () => {
+    const completedIntent = githubDeliveryIntentFixture('completed')
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(prDeliveryState(
+        completedIntent,
+        [],
+        [],
+        [
+          githubRepositoryBindingFixture(completedIntent, 'revoked'),
+          githubRepositoryBindingFixture(completedIntent, 'revoked', {
+            version: completedIntent.repositoryBindingVersion + 2,
+            updatedAt: '2026-08-11T12:10:00.000Z',
+          }),
+        ],
+      )),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    expect(screen.queryByRole('button', {
+      name: 'Verify credential revocation',
+    })).not.toBeInTheDocument()
+  })
+
+  it('hides credential revocation verification when a newer active authority conflicts with revoked history', async () => {
+    const completedIntent = githubDeliveryIntentFixture('completed')
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(prDeliveryState(
+        completedIntent,
+        [],
+        [],
+        [
+          githubRepositoryBindingFixture(completedIntent, 'revoked'),
+          githubRepositoryBindingFixture(completedIntent, 'active', {
+            version: completedIntent.repositoryBindingVersion + 2,
+            updatedAt: '2026-08-11T12:10:00.000Z',
+          }),
+        ],
+      )),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    expect(screen.queryByRole('button', {
+      name: 'Verify credential revocation',
+    })).not.toBeInTheDocument()
+  })
+
+  it('hides credential revocation verification for a newer revoked binding from another repository scope', async () => {
+    const completedIntent = githubDeliveryIntentFixture('completed')
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(prDeliveryState(
+        completedIntent,
+        [],
+        [],
+        [githubRepositoryBindingFixture(completedIntent, 'revoked', {
+          repositoryId: 'different-repository-id',
+          repository: 'erich/different-repository',
+        })],
+      )),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    expect(screen.queryByRole('button', {
+      name: 'Verify credential revocation',
+    })).not.toBeInTheDocument()
+  })
+
+  it('does not display a check for an older revoked authority version', async () => {
+    const completedIntent = githubDeliveryIntentFixture('completed')
+    const revokedBinding = githubRepositoryBindingFixture(completedIntent, 'revoked', {
+      version: completedIntent.repositoryBindingVersion + 2,
+    })
+    const staleCheck: GitHubDeliveryRevocationCheck = {
+      stateVersion: 1,
+      intentId: completedIntent.id,
+      intentUpdatedAt: completedIntent.updatedAt,
+      bindingId: completedIntent.repositoryBindingId,
+      bindingVersion: completedIntent.repositoryBindingVersion + 1,
+      outcomeCode: 'binding_inactive',
+      checkedAt: '2026-08-11T12:10:00.000Z',
+      redacted: true,
+    }
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(prDeliveryState(
+        completedIntent,
+        [],
+        [staleCheck],
+        [revokedBinding],
+      )),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    expect(screen.getByRole('button', {
+      name: 'Verify credential revocation',
+    })).toBeInTheDocument()
+    expect(screen.getByTestId('github-delivery-panel')).not.toHaveTextContent(
+      'Credential revocation proof',
+    )
+  })
+
+  it.each([
+    [
+      'stale',
+      {
+        intentId: 'github-delivery-intent-1',
+        disposition: 'unverified',
+        outcomeCode: 'stale_intent',
+      },
+    ],
+    [
+      'unexpected',
+      {
+        intentId: 'different-intent',
+        disposition: 'blocked',
+        outcomeCode: 'binding_inactive',
+      },
+    ],
+  ] as const)(
+    'fails closed with fixed safe copy for a %s revocation result',
+    async (_label, result) => {
+      const completedIntent = githubDeliveryIntentFixture('completed')
+      const state = prDeliveryState(
+        completedIntent,
+        [],
+        [],
+        [githubRepositoryBindingFixture(completedIntent, 'revoked')],
+      )
+      const loadState = vi.fn().mockResolvedValue(state)
+      const verifyGitHubDeliveryRevocation = vi.fn().mockResolvedValue(result)
+      installDesktopApi({
+        loadState,
+        verifyGitHubDeliveryRevocation,
+      } as Partial<DevFlowDesktopApi>)
+      render(<App />)
+
+      await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+      fireEvent.click(screen.getByRole('button', {
+        name: 'Verify credential revocation',
+      }))
+
+      await waitFor(() => expect(verifyGitHubDeliveryRevocation).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
+      const toast = screen.getByTestId('toast')
+      expect(toast).toHaveTextContent(
+        'Credential revocation 未验证；授权阻断证明不可用',
+      )
+      expect(toast).not.toHaveTextContent('stale_intent')
+      expect(toast).not.toHaveTextContent('API_TOKEN')
+      expect(toast).not.toHaveTextContent('/Users/')
+      expect(toast).not.toHaveTextContent('private')
+    },
+  )
+
+  it('fails closed and refreshes after a raw revocation probe failure', async () => {
+    const completedIntent = githubDeliveryIntentFixture('completed')
+    const state = prDeliveryState(
+      completedIntent,
+      [],
+      [],
+      [githubRepositoryBindingFixture(completedIntent, 'revoked')],
+    )
+    const loadState = vi.fn().mockResolvedValue(state)
+    const verifyGitHubDeliveryRevocation = vi.fn().mockRejectedValue(
+      new Error('ghs_secret_token failed in /Users/alice/repository'),
+    )
+    installDesktopApi({
+      loadState,
+      verifyGitHubDeliveryRevocation,
+    } as Partial<DevFlowDesktopApi>)
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Verify credential revocation',
+    }))
+
+    await waitFor(() => expect(verifyGitHubDeliveryRevocation).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
+    const toast = screen.getByTestId('toast')
+    expect(toast).toHaveTextContent(
+      'Credential revocation 未验证；授权阻断证明不可用',
+    )
+    expect(toast).not.toHaveTextContent('ghs_secret_token')
+    expect(toast).not.toHaveTextContent('/Users/')
+  })
+
   it('carries the completed PR delivery evidence into Acceptance for the same Run', async () => {
     const prPackage = prDeliveryPackageFixture()
     const pullRequestUrl = 'https://github.com/erich/ai-devflow-studio/pull/17'
@@ -2556,6 +2886,9 @@ describe('App', () => {
         runs: [acceptanceRunWithDelivery],
         artifacts: [prPackage],
         githubDeliveryIntents: [completedIntent],
+        githubRepositoryBindings: [
+          githubRepositoryBindingFixture(completedIntent, 'revoked'),
+        ],
         desktopPairingCredential: fixturePairingCredential,
       })),
     })
@@ -2572,6 +2905,9 @@ describe('App', () => {
       'href',
       completedIntent.completion?.pullRequestUrl,
     )
+    expect(within(inspector).getByRole('button', {
+      name: 'Verify credential revocation',
+    })).toBeInTheDocument()
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('flow-node-n-build'))

@@ -1,6 +1,7 @@
 import type {
   GitHubDeliveryIntent,
   GitHubDeliveryOperatorOutcome,
+  GitHubDeliveryRevocationCheck,
 } from '@ai-devflow/shared'
 
 const statusCopy: Record<GitHubDeliveryIntent['status'], string> = {
@@ -39,11 +40,13 @@ const statusTone: Record<GitHubDeliveryIntent['status'], string> = {
 export function GitHubDeliveryPanel({
   intent,
   operatorOutcome,
+  revocationCheck,
   hasExactPrPackage,
   surface = 'pr',
 }: {
   intent: GitHubDeliveryIntent | undefined
   operatorOutcome?: GitHubDeliveryOperatorOutcome
+  revocationCheck?: GitHubDeliveryRevocationCheck
   hasExactPrPackage: boolean
   surface?: 'pr' | 'acceptance'
 }) {
@@ -53,6 +56,18 @@ export function GitHubDeliveryPanel({
     operatorOutcome?.intentId === intent.id &&
     operatorOutcome.intentUpdatedAt === intent.updatedAt
       ? operatorOutcome
+      : undefined
+  const exactRevocationCheck =
+    intent &&
+    intent.status === 'completed' &&
+    revocationCheck?.stateVersion === 1 &&
+    revocationCheck.intentId === intent.id &&
+    revocationCheck.intentUpdatedAt === intent.updatedAt &&
+    revocationCheck.bindingId === intent.repositoryBindingId &&
+    revocationCheck.bindingVersion > intent.repositoryBindingVersion &&
+    revocationCheck.outcomeCode === 'binding_inactive' &&
+    revocationCheck.redacted === true
+      ? revocationCheck
       : undefined
 
   return (
@@ -136,16 +151,32 @@ export function GitHubDeliveryPanel({
                 <dd><code>{exactOperatorOutcome.outcomeCode}</code></dd>
               </div>
             ) : null}
+            {exactRevocationCheck ? (
+              <div>
+                <dt>Credential revocation proof</dt>
+                <dd>
+                  <code>{exactRevocationCheck.outcomeCode}</code>{' '}
+                  <time dateTime={exactRevocationCheck.checkedAt}>
+                    {exactRevocationCheck.checkedAt}
+                  </time>
+                </dd>
+              </div>
+            ) : null}
           </dl>
           {intent.status === 'completed' && intent.completion ? (
-            <a
-              className="inline-link-button"
-              href={intent.completion.pullRequestUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open Draft PR #{intent.completion.pullRequestNumber}
-            </a>
+            <>
+              <p className="meta">
+                Verify credential revocation 是只读授权阻断证明；它不会执行 Git、push 或创建/修改 PR，也不会向 Renderer 暴露 credential。
+              </p>
+              <a
+                className="inline-link-button"
+                href={intent.completion.pullRequestUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open Draft PR #{intent.completion.pullRequestNumber}
+              </a>
+            </>
           ) : null}
         </>
       )}

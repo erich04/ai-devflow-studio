@@ -501,6 +501,405 @@ describe('GitHub Delivery remote client', () => {
     expect(JSON.stringify(result)).not.toContain('token')
   })
 
+  it('proves a revoked binding only from the exact credential rejection', async () => {
+    const fetcher = vi.fn(async () =>
+      jsonResponse(
+        {
+          error: 'conflict',
+          message: 'The Project GitHub repository binding is not active.',
+          outcomeCode: 'binding_inactive',
+          replayed: false,
+        },
+        409,
+      ),
+    )
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher,
+    })
+
+    await expect(
+      client.verifyCredentialGrantBlocked({
+        projectId,
+        requestId,
+        expectedStateVersion: 8,
+      }),
+    ).resolves.toEqual({
+      status: 'blocked',
+      outcomeCode: 'binding_inactive',
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://api.devflow.test/api/desktop/projects/project-a/github-deliveries/delivery-1/credential-grant',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'omit',
+        redirect: 'error',
+        referrerPolicy: 'no-referrer',
+        headers: {
+          accept: 'application/json',
+          authorization: 'Bearer desktop-secret-token',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ expectedStateVersion: 8 }),
+      }),
+    )
+  })
+
+  it('cancels an unexpected credential response without reading or exposing its body', async () => {
+    const credentialSentinel =
+      'ghs_unexpected_secret_from_/Users/alice/private-worktree'
+    let cancelled = false
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              JSON.stringify({ credential: { token: credentialSentinel } }),
+            ),
+          )
+        },
+        cancel() {
+          cancelled = true
+        },
+      }),
+      { status: 200 },
+    )
+    const json = vi.spyOn(response, 'json')
+    const text = vi.spyOn(response, 'text')
+    const arrayBuffer = vi.spyOn(response, 'arrayBuffer')
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () => response),
+    })
+
+    const error = await client
+      .verifyCredentialGrantBlocked({
+        projectId,
+        requestId,
+        expectedStateVersion: 8,
+      })
+      .catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({
+      name: 'GitHubDeliveryRemoteError',
+      status: 200,
+      code: 'credential_unexpectedly_issued',
+      operation: 'credential_grant',
+      retryable: false,
+      outcomeCode: null,
+    })
+    expect(cancelled).toBe(true)
+    expect(json).not.toHaveBeenCalled()
+    expect(text).not.toHaveBeenCalled()
+    expect(arrayBuffer).not.toHaveBeenCalled()
+    expect(`${String(error)} ${JSON.stringify(error)}`).not.toContain(
+      credentialSentinel,
+    )
+  })
+
+  it('fails immediately on 2xx even when stream cancellation never settles', async () => {
+    let cancelStarted = false
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel() {
+          cancelStarted = true
+          return new Promise<void>(() => undefined)
+        },
+      }),
+      { status: 201 },
+    )
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () => response),
+    })
+
+    await expect(
+      client.verifyCredentialGrantBlocked({
+        projectId,
+        requestId,
+        expectedStateVersion: 8,
+      }),
+    ).rejects.toMatchObject({
+      status: 201,
+      code: 'credential_unexpectedly_issued',
+      retryable: false,
+    })
+    expect(cancelStarted).toBe(true)
+  })
+
+  it.each([
+    [
+      'extra field',
+      {
+        error: 'conflict',
+        message: 'The Project GitHub repository binding is not active.',
+        outcomeCode: 'binding_inactive',
+        replayed: false,
+        token: 'ghs_untrusted_extra',
+      },
+    ],
+    [
+      'wrong message',
+      {
+        error: 'conflict',
+        message: 'Bearer raw-secret at /Users/alice/private',
+        outcomeCode: 'binding_inactive',
+        replayed: false,
+      },
+    ],
+    [
+      'replayed rejection',
+      {
+        error: 'conflict',
+        message: 'The Project GitHub repository binding is not active.',
+        outcomeCode: 'binding_inactive',
+        replayed: true,
+      },
+    ],
+    [
+      'wrong outcome',
+      {
+        error: 'conflict',
+        message: 'The Project GitHub repository binding is not active.',
+        outcomeCode: 'stale_version',
+        replayed: false,
+      },
+    ],
+    [
+      'malformed envelope',
+      {
+        error: 'conflict',
+        message: 'The Project GitHub repository binding is not active.',
+        outcomeCode: 'binding_inactive',
+      },
+    ],
+  ])('rejects a non-exact revocation response: %s', async (_label, body) => {
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () => jsonResponse(body, 409)),
+    })
+
+    const error = await client
+      .verifyCredentialGrantBlocked({
+        projectId,
+        requestId,
+        expectedStateVersion: 8,
+      })
+      .catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({
+      name: 'GitHubDeliveryRemoteError',
+      status: 409,
+      code: 'invalid_response',
+      operation: 'credential_grant',
+      retryable: false,
+      outcomeCode: null,
+    })
+    expect(`${String(error)} ${JSON.stringify(error)}`).not.toMatch(
+      /ghs_untrusted_extra|raw-secret|\/Users\/alice/u,
+    )
+  })
+
+  it('rejects malformed revocation JSON without reflecting its bytes', async () => {
+    const rawSentinel =
+      'Bearer malformed-secret at /Users/alice/private-worktree'
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () =>
+        new Response(`{"outcomeCode":"binding_inactive",${rawSentinel}`, {
+          status: 409,
+        }),
+      ),
+    })
+
+    const error = await client
+      .verifyCredentialGrantBlocked({
+        projectId,
+        requestId,
+        expectedStateVersion: 8,
+      })
+      .catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({
+      status: 409,
+      code: 'invalid_response',
+      operation: 'credential_grant',
+      retryable: true,
+    })
+    expect(`${String(error)} ${JSON.stringify(error)}`).not.toContain(
+      rawSentinel,
+    )
+  })
+
+  it('bounds an oversized revocation rejection without reflecting its body', async () => {
+    const rawSentinel =
+      'Bearer oversized-secret at /Users/alice/private-worktree'
+    const response = new Response(
+      JSON.stringify({
+        error: 'conflict',
+        message: rawSentinel,
+        outcomeCode: 'binding_inactive',
+        replayed: false,
+      }),
+      {
+        status: 409,
+        headers: { 'content-length': '1100000' },
+      },
+    )
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () => response),
+    })
+
+    const error = await client
+      .verifyCredentialGrantBlocked({
+        projectId,
+        requestId,
+        expectedStateVersion: 8,
+      })
+      .catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({
+      status: 409,
+      code: 'response_too_large',
+      operation: 'credential_grant',
+      retryable: true,
+    })
+    expect(`${String(error)} ${JSON.stringify(error)}`).not.toContain(
+      rawSentinel,
+    )
+    expect(response.bodyUsed).toBe(true)
+  })
+
+  it('classifies a non-409 revocation response without leaking its raw message', async () => {
+    const rawMessage =
+      'forbidden Bearer remote-secret at /Users/alice/private-worktree'
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () =>
+        jsonResponse(
+          {
+            error: 'forbidden',
+            message: rawMessage,
+            outcomeCode: 'project_forbidden',
+            replayed: false,
+          },
+          403,
+        ),
+      ),
+    })
+
+    const error = await client
+      .verifyCredentialGrantBlocked({
+        projectId,
+        requestId,
+        expectedStateVersion: 8,
+      })
+      .catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({
+      status: 403,
+      code: 'forbidden',
+      operation: 'credential_grant',
+      retryable: false,
+      outcomeCode: 'project_forbidden',
+    })
+    expect(`${String(error)} ${JSON.stringify(error)}`).not.toContain(rawMessage)
+  })
+
+  it('enforces a bounded timeout for the raw revocation probe', async () => {
+    vi.useFakeTimers()
+    try {
+      const rawFailure =
+        'aborted Bearer desktop-secret-token at /Users/alice/private'
+      const fetcher = vi.fn(
+        (_url: string | URL | Request, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              'abort',
+              () => reject(new Error(rawFailure)),
+              { once: true },
+            )
+          }),
+      ) as typeof fetch
+      const client = createGitHubDeliveryRemoteClient({
+        apiBaseUrl: 'https://api.devflow.test',
+        authToken: 'desktop-secret-token',
+        fetcher,
+        timeoutMs: 5,
+      })
+
+      const result = client
+        .verifyCredentialGrantBlocked({
+          projectId,
+          requestId,
+          expectedStateVersion: 8,
+        })
+        .catch((caught: unknown) => caught)
+      await vi.advanceTimersByTimeAsync(5)
+      const error = await result
+
+      expect(error).toMatchObject({
+        status: null,
+        code: 'request_timeout',
+        operation: 'credential_grant',
+        retryable: true,
+      })
+      expect(`${String(error)} ${JSON.stringify(error)}`).not.toContain(
+        rawFailure,
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('honors caller cancellation without exposing the fetch failure', async () => {
+    const controller = new AbortController()
+    const rawFailure =
+      'cancelled Bearer desktop-secret-token at /Users/alice/private'
+    const fetcher = vi.fn(
+      (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            'abort',
+            () => reject(new Error(rawFailure)),
+            { once: true },
+          )
+        }),
+    ) as typeof fetch
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher,
+      signal: controller.signal,
+    })
+
+    const result = client
+      .verifyCredentialGrantBlocked({
+        projectId,
+        requestId,
+        expectedStateVersion: 8,
+      })
+      .catch((caught: unknown) => caught)
+    controller.abort()
+    const error = await result
+
+    expect(error).toMatchObject({
+      status: null,
+      code: 'request_cancelled',
+      operation: 'credential_grant',
+      retryable: false,
+    })
+    expect(`${String(error)} ${JSON.stringify(error)}`).not.toContain(rawFailure)
+  })
+
   it.each([
     ['operation_cancelled', true],
     ['remote_branch_diverged', true],

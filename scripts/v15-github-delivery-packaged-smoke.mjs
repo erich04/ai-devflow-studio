@@ -944,6 +944,8 @@ async function readLocalDeliveryRecords(storePath) {
       UNION ALL
       SELECT 'outcome' AS kind, json FROM github_delivery_operator_outcomes
       UNION ALL
+      SELECT 'revocation_check' AS kind, json FROM github_delivery_revocation_checks
+      UNION ALL
       SELECT 'binding' AS kind, json FROM github_repository_bindings
       ORDER BY kind, json
     `)
@@ -1616,33 +1618,81 @@ try {
     },
   )
   assert(revocation.body.binding?.status === 'revoked', 'Browser session did not revoke binding.')
-  const blockedGrant = await requestJson(
-    internalApiUrl,
-    `/api/desktop/projects/p-payments/github-deliveries/${remoteRequest.id}/credential-grant`,
-    {
-      method: 'POST',
-      headers: { authorization: `Bearer ${desktopBearer}` },
-      body: { expectedStateVersion: 8 },
-      allowError: true,
-    },
-  )
-  assert(
-    blockedGrant.status === 409 && blockedGrant.body?.outcomeCode === 'binding_inactive',
-    'Revoked binding did not block a new credential grant.',
-  )
   const completedIntent = restartSnapshot.githubDeliveryIntents.find(
     (candidate) => candidate.id === prepared.intent.id,
   )
-  await callDesktop(secondLaunch.page, 'resumeGitHubDelivery', {
-    intentId: completedIntent.id,
-    expectedUpdatedAt: completedIntent.updatedAt,
+  await waitFor('packaged Desktop revoked binding convergence', async () => {
+    const nextState = await callDesktop(secondLaunch.page, 'loadState')
+    return nextState.githubRepositoryBindings?.some(
+      (candidate) =>
+        candidate.id === binding.id &&
+        candidate.version === revocation.body.binding.version &&
+        candidate.status === 'revoked',
+    )
   })
-  const revokedState = await callDesktop(secondLaunch.page, 'loadState')
+  await gitBoundary.waitForIdle()
+  const providerBeforeRevocationProbe = JSON.parse(await readFile(metricsPath, 'utf8'))
+  const gitBeforeRevocationProbe = snapshotGitBoundaryEffects(gitBoundary.metrics)
+  const remoteBeforeRevocationProbe = await readRemoteDeliveryEvidence(
+    database.databaseUrl,
+    remoteRequest.id,
+    binding.id,
+  )
+  const verifyRevocationButton = secondLaunch.page.getByRole('button', {
+    name: 'Verify credential revocation',
+    exact: true,
+  })
+  await verifyRevocationButton.waitFor({ state: 'visible', timeout: 30_000 })
+  await verifyRevocationButton.click()
+  const revokedState = await waitFor(
+    'packaged Desktop persisted revocation proof',
+    async () => {
+      const nextState = await callDesktop(secondLaunch.page, 'loadState')
+      return nextState.githubDeliveryRevocationChecks?.some(
+        (candidate) =>
+          candidate.intentId === completedIntent.id &&
+          candidate.intentUpdatedAt === completedIntent.updatedAt &&
+          candidate.bindingId === binding.id &&
+          candidate.bindingVersion === revocation.body.binding.version &&
+          candidate.outcomeCode === 'binding_inactive' &&
+          candidate.redacted === true,
+      )
+        ? nextState
+        : false
+    },
+  )
+  await waitFor('packaged Desktop revocation success message', async () => {
+    const copy = await secondLaunch.page.getByTestId('toast').textContent()
+    return copy?.includes(
+      'Credential revocation 已验证：binding_inactive',
+    )
+  })
+  const revocationProbe = {
+    intentId: completedIntent.id,
+    disposition: 'blocked',
+    outcomeCode: 'binding_inactive',
+  }
+  await gitBoundary.waitForIdle()
   assert(
     revokedState.githubRepositoryBindings?.some(
-      (candidate) => candidate.id === binding.id && candidate.status === 'revoked',
+      (candidate) =>
+        candidate.id === binding.id &&
+        candidate.version === revocation.body.binding.version &&
+        candidate.status === 'revoked',
     ),
     'Packaged renderer did not converge the revoked binding.',
+  )
+  assert(
+    revokedState.githubDeliveryRevocationChecks?.some(
+      (candidate) =>
+        candidate.intentId === completedIntent.id &&
+        candidate.intentUpdatedAt === completedIntent.updatedAt &&
+        candidate.bindingId === binding.id &&
+        candidate.bindingVersion === revocation.body.binding.version &&
+        candidate.outcomeCode === 'binding_inactive' &&
+        candidate.redacted === true,
+    ),
+    'Packaged renderer did not expose the exact redacted revocation proof.',
   )
   assertNoSecretMaterial(
     revokedState,
@@ -1660,6 +1710,21 @@ try {
     database.databaseUrl,
     remoteRequest.id,
     binding.id,
+  )
+  const providerAfterRevocationProbe = JSON.parse(await readFile(metricsPath, 'utf8'))
+  const gitAfterRevocationProbe = snapshotGitBoundaryEffects(gitBoundary.metrics)
+  assert(
+    stableJson(providerAfterRevocationProbe) ===
+      stableJson(providerBeforeRevocationProbe),
+    'Revocation verification called the GitHub provider.',
+  )
+  assert(
+    stableJson(gitAfterRevocationProbe) === stableJson(gitBeforeRevocationProbe),
+    'Revocation verification performed a Git credential, push, or remote inspection effect.',
+  )
+  assert(
+    stableJson(remoteAfterRevocation) === stableJson(remoteBeforeRevocationProbe),
+    'Revocation verification mutated the completed remote delivery chain.',
   )
   assert(
     remoteAfterRevocation.counts.grants === 1,
@@ -1729,12 +1794,12 @@ try {
     typedOutcomes: {
       preparation: prepared.status,
       replayed: prepared.replayed,
-      approvalAuthentication: approval.body.approval.authenticationKind,
-      resumeDisposition: resumed.disposition,
-      resumeOutcomeCode: resumed.outcomeCode,
-      revokedGrantStatus: blockedGrant.status,
-      revokedGrantOutcomeCode: blockedGrant.body.outcomeCode,
-    },
+       approvalAuthentication: approval.body.approval.authenticationKind,
+       resumeDisposition: resumed.disposition,
+       resumeOutcomeCode: resumed.outcomeCode,
+       revocationDisposition: revocationProbe.disposition,
+       revocationOutcomeCode: revocationProbe.outcomeCode,
+     },
     durableSecretLeaks: 0,
     cleanup: 'pending',
   }

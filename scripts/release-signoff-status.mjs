@@ -892,7 +892,7 @@ function isValidV15WalkthroughContent(content, snapshot) {
     ) &&
     /Status:\s*Passed/i.test(content) &&
     /Team schema v12/i.test(content) &&
-    /Desktop schema v15/i.test(content) &&
+    /Desktop schema v16/i.test(content) &&
     new RegExp(
       `Packaged artifact:[^\\n]*${escapeRegExp(String(artifactVersion))}[^\\n]*${escapeRegExp(String(artifactPlatform))}[^\\n]*${escapeRegExp(String(artifactSha))}`,
       'i',

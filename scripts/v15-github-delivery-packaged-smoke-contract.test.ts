@@ -128,7 +128,17 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     expect(smoke).toContain('force-attempt')
     expect(smoke).toContain('gitAuditEvents')
     expect(smoke).toContain('githubAppPrivateKeyBase64')
-    expect(smoke).toContain("blockedGrant.status === 409")
+    expect(smoke).toContain("getByRole('button'")
+    expect(smoke).toContain("name: 'Verify credential revocation'")
+    expect(smoke).toContain("disposition: 'blocked'")
+    expect(smoke).toContain("outcomeCode: 'binding_inactive'")
+    expect(smoke).toContain('githubDeliveryRevocationChecks')
+    expect(smoke).not.toMatch(
+      /callDesktop\([\s\S]{0,250}'verifyGitHubDeliveryRevocation'/u,
+    )
+    expect(smoke).not.toMatch(
+      /requestJson\([\s\S]{0,500}\/credential-grant/u,
+    )
     expect(smoke).toContain('assertNoLeaks(')
     expect(apiBoundary).not.toContain('generateKeyPairSync')
     expect(apiBoundary).toContain('DEVFLOW_PACKAGED_SMOKE_GITHUB_APP_PRIVATE_KEY_BASE64')

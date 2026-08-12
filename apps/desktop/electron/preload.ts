@@ -48,6 +48,8 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.resumeGitHubDelivery, input),
   stopGitHubDelivery: (input) =>
     ipcRenderer.invoke(ipcChannels.stopGitHubDelivery, input),
+  verifyGitHubDeliveryRevocation: (input) =>
+    ipcRenderer.invoke(ipcChannels.verifyGitHubDeliveryRevocation, input),
   createAcceptanceBundle: (input) =>
     ipcRenderer.invoke(ipcChannels.createAcceptanceBundle, input),
   approveGate: (input) => ipcRenderer.invoke(ipcChannels.approveGate, input),

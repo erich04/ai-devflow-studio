@@ -38,6 +38,17 @@ export type GitHubDeliveryOperatorOutcome = {
   redacted: true
 }
 
+export type GitHubDeliveryRevocationCheck = {
+  stateVersion: 1
+  intentId: string
+  intentUpdatedAt: string
+  bindingId: string
+  bindingVersion: number
+  outcomeCode: 'binding_inactive'
+  checkedAt: string
+  redacted: true
+}
+
 const terminalGitHubDeliveryStatuses: ReadonlySet<GitHubDeliveryStatus> = new Set([
   'completed',
   'failed',

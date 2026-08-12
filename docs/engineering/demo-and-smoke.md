@@ -7,7 +7,7 @@ passes.
 ## Baseline Prerequisites
 
 - Team/API/Postgres must report Team schema v12.
-- Electron/SQLite must report Desktop schema v15.
+- Electron/SQLite must report Desktop schema v16.
 - The Web/API/Postgres walkthrough needs authenticated owner, lead, and paired Desktop identities.
 - A GitHub Delivery walkthrough needs a verified GitHub App repository binding, one tested canonical
   managed-worktree commit, a PR Delivery Package, and an exact Delivery Intent.

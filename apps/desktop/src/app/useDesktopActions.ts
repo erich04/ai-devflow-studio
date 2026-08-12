@@ -99,6 +99,7 @@ export function useDesktopActions(input: {
   latestCodingRun: DesktopWorkspaceState['codingRuns'][number] | undefined
   selectedManagedWorkspace: ManagedCodingWorkspace | undefined
   selectedGitHubDeliveryIntent?: GitHubDeliveryIntent
+  canVerifyGitHubDeliveryRevocation?: boolean
   gateEnforcementDecision: GateEnforcementDecision | null
   applyLocalExecutionState: (state: import('@ai-devflow/shared').LocalExecutionState) => void
 }) {
@@ -114,6 +115,7 @@ export function useDesktopActions(input: {
     latestCodingRun,
     selectedManagedWorkspace,
     selectedGitHubDeliveryIntent,
+    canVerifyGitHubDeliveryRevocation = false,
     applyLocalExecutionState,
   } = input
   const {
@@ -1201,6 +1203,67 @@ export function useDesktopActions(input: {
     }
   }
 
+  async function verifySelectedGitHubDeliveryRevocation() {
+    if (!selectedRun || !selectedNode || !selectedGitHubDeliveryIntent) {
+      return
+    }
+    const prNodes = selectedRun.nodes.filter(
+      (node) => node.kind === 'pr' && node.stage === 'pr',
+    )
+    const isExactDeliverySurface = selectedNode.kind === 'pr'
+      ? selectedGitHubDeliveryIntent.nodeId === selectedNode.id
+      : selectedNode.kind === 'acceptance' &&
+        prNodes.length === 1 &&
+        selectedGitHubDeliveryIntent.nodeId === prNodes[0]!.id &&
+        Boolean(selectedRun.pullRequestUrl) &&
+        selectedGitHubDeliveryIntent.completion?.pullRequestUrl === selectedRun.pullRequestUrl
+    if (
+      selectedGitHubDeliveryIntent.runId !== selectedRun.id ||
+      selectedGitHubDeliveryIntent.status !== 'completed' ||
+      !isExactDeliverySurface ||
+      !canVerifyGitHubDeliveryRevocation
+    ) {
+      setToast('Credential revocation 未验证；授权阻断证明不可用')
+      return
+    }
+    if (!desktopApi) {
+      setToast(browserPreviewWorkflowWriteMessage)
+      return
+    }
+    if (blockIfInspectorWriteInFlight()) {
+      return
+    }
+
+    const pending = startPendingInspectorAction(
+      'verifyGitHubDeliveryRevocation',
+      selectedRun,
+      selectedNode,
+      '正在验证 credential revocation...',
+    )
+    try {
+      const result = await desktopApi.verifyGitHubDeliveryRevocation({
+        intentId: selectedGitHubDeliveryIntent.id,
+        expectedUpdatedAt: selectedGitHubDeliveryIntent.updatedAt,
+      })
+      setToast(
+        result.intentId === selectedGitHubDeliveryIntent.id &&
+        result.disposition === 'blocked' &&
+        result.outcomeCode === 'binding_inactive'
+          ? 'Credential revocation 已验证：binding_inactive'
+          : 'Credential revocation 未验证；授权阻断证明不可用',
+      )
+    } catch {
+      setToast('Credential revocation 未验证；授权阻断证明不可用')
+    } finally {
+      try {
+        applyLocalExecutionState(await desktopApi.loadState())
+      } catch {
+        // The fixed proof result stays safe; a later state push or reload may recover the evidence.
+      }
+      clearPendingInspectorAction(pending)
+    }
+  }
+
   async function generateAcceptanceBundle() {
     if (!selectedRun) {
       return
@@ -1291,6 +1354,7 @@ export function useDesktopActions(input: {
     retrySelectedGitHubDelivery,
     resumeSelectedGitHubDelivery,
     stopSelectedGitHubDelivery,
+    verifySelectedGitHubDeliveryRevocation,
     generateAcceptanceBundle,
     toggleMcp,
     redactPreview,

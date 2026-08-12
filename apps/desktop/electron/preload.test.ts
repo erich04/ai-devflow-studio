@@ -37,6 +37,10 @@ type ExposedDesktopApi = {
     intentId: string
     expectedUpdatedAt: string
   }) => Promise<unknown>
+  verifyGitHubDeliveryRevocation: (input: {
+    intentId: string
+    expectedUpdatedAt: string
+  }) => Promise<unknown>
   retryRemoteSyncOperation: (input: { operationId: string }) => Promise<unknown>
   loadRepositoryKnowledge: (input: { projectId: string }) => Promise<unknown>
   refreshRepositoryKnowledge: (input: { projectId: string }) => Promise<unknown>
@@ -125,6 +129,31 @@ describe('Electron preload remote sync operator surface', () => {
     )
     expect(Object.keys(input).sort()).toEqual(['expectedUpdatedAt', 'intentId'])
     expect(JSON.stringify(input)).not.toMatch(/token|path|error|repository/i)
+  })
+
+  it('forwards only the exact Intent CAS for a credential revocation proof', async () => {
+    const result = {
+      intentId: 'github-delivery-intent-1',
+      disposition: 'blocked',
+      outcomeCode: 'binding_inactive',
+    }
+    const input = {
+      intentId: 'github-delivery-intent-1',
+      expectedUpdatedAt: '2026-08-11T12:34:56.000Z',
+    }
+    electron.invoke.mockResolvedValueOnce(result)
+
+    await expect(
+      exposedApi.verifyGitHubDeliveryRevocation(input),
+    ).resolves.toBe(result)
+    expect(electron.invoke).toHaveBeenCalledWith(
+      ipcChannels.verifyGitHubDeliveryRevocation,
+      input,
+    )
+    expect(Object.keys(input).sort()).toEqual(['expectedUpdatedAt', 'intentId'])
+    expect(JSON.stringify(input)).not.toMatch(
+      /request|token|path|error|repository|version/i,
+    )
   })
 
   it('forwards identifier-only retry commands without exposing enqueue or upload methods', async () => {

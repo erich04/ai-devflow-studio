@@ -65,7 +65,7 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 | `corepack pnpm test:docker-lifecycle-smoke` | Fresh Team schema v12, retained V1.4 schema v10 upgrade, transactional populated v11-to-v12 retry, and bounded V1.4 backup/restore rollback. |
 | `corepack pnpm test:v15-github-delivery` | The full offline Delivery Intent → separate approval → exact branch → Draft PR → Acceptance story, including restart and revocation. |
 | `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive and packaged launch isolation. |
-| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v15 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
+| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v16 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
 | Release-only opencode smoke | A paid, explicit signoff for the real local coding runtime; it is never part of default CI. |
 
 Deterministic results become release evidence only when `required-gates.json` binds them to the clean

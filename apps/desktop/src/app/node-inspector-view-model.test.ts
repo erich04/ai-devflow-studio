@@ -99,6 +99,7 @@ function viewModelFor(node: WorkflowNode, overrides: Partial<Parameters<typeof b
     isLoadingGateEnforcement: false,
     canApprove: false,
     hasTeamProjectBinding: true,
+    canVerifyGitHubDeliveryRevocation: false,
     ...overrides,
   })
 }
@@ -460,14 +461,75 @@ describe('node inspector view model', () => {
           redacted: true,
         },
       }),
+      canVerifyGitHubDeliveryRevocation: true,
     })
 
     expect(viewModel.nextAction).toMatchObject({
       title: 'Draft PR 已创建',
-      secondaryActionIds: [],
+      secondaryActionIds: ['verifyGitHubDeliveryRevocation'],
     })
     expect(viewModel.nextAction.copy).toContain('Workflow')
     expect(viewModel.nextAction.primaryActionId).toBeUndefined()
+    expect(viewModel.actionCatalog.verifyGitHubDeliveryRevocation).toMatchObject({
+      label: 'Verify credential revocation',
+      disabledReasons: [],
+    })
+  })
+
+  it('keeps credential revocation verification reachable from Acceptance delivery evidence', () => {
+    const acceptanceNode = findNode((candidate) => candidate.kind === 'acceptance')
+    const viewModel = viewModelFor(acceptanceNode, {
+      githubDeliveryIntent: githubDeliveryIntent('completed'),
+      canVerifyGitHubDeliveryRevocation: true,
+    })
+
+    expect(viewModel.actions.map((action) => action.id)).toContain(
+      'verifyGitHubDeliveryRevocation',
+    )
+  })
+
+  it('keeps credential revocation verification reachable on a completed PR node', () => {
+    const prNode = {
+      ...findNode((candidate) => candidate.kind === 'pr'),
+      status: 'success' as const,
+    }
+    const viewModel = viewModelFor(prNode, {
+      isSelectedCurrentNode: false,
+      githubDeliveryIntent: githubDeliveryIntent('completed'),
+      canVerifyGitHubDeliveryRevocation: true,
+    })
+
+    expect([
+      ...viewModel.nextAction.secondaryActionIds,
+      ...viewModel.actions.map((action) => action.id),
+    ]).toContain('verifyGitHubDeliveryRevocation')
+  })
+
+  it.each([
+    'approval_required',
+    'approved',
+    'publishing_branch',
+    'branch_published',
+    'creating_pr',
+    'failed',
+    'recovery_required',
+    'revoked',
+  ] as const)('does not offer credential revocation verification for %s delivery', (status) => {
+    const prNode = findNode((candidate) => candidate.kind === 'pr')
+    const viewModel = viewModelFor(prNode, {
+      githubDeliveryIntent: githubDeliveryIntent(status),
+      canVerifyGitHubDeliveryRevocation: true,
+    })
+
+    expect(viewModel.nextAction.primaryActionId).not.toBe(
+      'verifyGitHubDeliveryRevocation',
+    )
+    expect(viewModel.nextAction.secondaryActionIds).not.toContain(
+      'verifyGitHubDeliveryRevocation',
+    )
+    expect(viewModel.actions.map((action) => action.id)).not.toContain(
+      'verifyGitHubDeliveryRevocation',
+    )
   })
 
   it('selects the active immutable revision ahead of its same-timestamp revoked predecessor', () => {

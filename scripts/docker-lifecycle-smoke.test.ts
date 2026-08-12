@@ -107,7 +107,7 @@ describe('V1.5 Docker lifecycle smoke contract', () => {
     expect(guide).toContain('schema v12')
     expect(guide).toContain('fails readiness closed')
     expect(guide).toContain('must not run the V1.4 migrator')
-    expect(guide).toContain('Desktop schema v15')
+    expect(guide).toContain('Desktop schema v16')
     expect(guide).toContain('V1.4 schema v12')
     expect(guide).toContain('restore the pre-upgrade backup')
   })

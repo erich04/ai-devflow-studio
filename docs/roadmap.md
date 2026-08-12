@@ -474,8 +474,11 @@ GitHub sandbox evidence must still pass before V1.5 and the 1.x line can be mark
 
 ## 1.x Completion Gate
 
-The 1.x product line is complete when a non-maintainer can follow documented operator steps and take
-one authenticated Work Request through one canonical local Run.
+The 1.x product line is complete when an independent non-maintainer operator who did not author or
+modify the frozen candidate can follow only the documented Web and packaged Desktop steps and take
+one authenticated Work Request through one canonical local Run. Pre-run App installation and secret
+injection may be performed by a setup principal; shell/direct-API/SQL/GitHub-CLI repair or an
+undocumented maintainer intervention after the run starts fails the gate.
 
 That Run must reach governed local implementation, Test Evidence, human-approved GitHub Draft PR
 publication, and Acceptance without ad hoc maintainer assistance.

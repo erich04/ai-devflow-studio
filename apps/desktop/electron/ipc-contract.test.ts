@@ -12,6 +12,7 @@ import {
   parseRetryGitHubDeliveryInput,
   parseResumeGitHubDeliveryInput,
   parseStopGitHubDeliveryInput,
+  parseVerifyGitHubDeliveryRevocationInput,
   parseCreateRunInput,
   parseDeleteRunInput,
   parseCompleteWorkflowAgentNodeInput,
@@ -241,6 +242,29 @@ describe('IPC contract parsers', () => {
         expectedUpdatedAt: 'yesterday',
       }),
     ).toThrow(/expectedUpdatedAt/i)
+  })
+
+  it('accepts only an exact local Intent CAS for a credential revocation proof', () => {
+    const input = {
+      intentId: 'github-delivery-intent-1',
+      expectedUpdatedAt: '2026-08-11T12:34:56.000Z',
+    }
+
+    expect(parseVerifyGitHubDeliveryRevocationInput(input)).toEqual(input)
+    expect(ipcChannels.verifyGitHubDeliveryRevocation).toBe(
+      'devflow:github-delivery:revocation:verify',
+    )
+    for (const derived of [
+      { requestId: 'renderer-request' },
+      { repository: 'example/project' },
+      { expectedStateVersion: 8 },
+      { token: 'renderer-token' },
+      { path: '/private/worktree' },
+    ]) {
+      expect(() =>
+        parseVerifyGitHubDeliveryRevocationInput({ ...input, ...derived }),
+      ).toThrow(/unexpected field/i)
+    }
   })
 
   it.each([

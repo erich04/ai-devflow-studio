@@ -414,6 +414,30 @@ describe('GitHub Delivery service', () => {
     })
   })
 
+  it('does not cross the GitHub token boundary when a revoked binding rejects the grant', async () => {
+    const harness = createHarness()
+    vi.mocked(harness.repository.reserveGitHubCredentialGrant).mockResolvedValue({
+      ok: false,
+      responseStatus: 409,
+      outcomeCode: 'binding_inactive',
+      replayed: false,
+    })
+
+    await expect(
+      harness.service.issueCredentialGrant(
+        { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 8 },
+        desktopPrincipal,
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      responseStatus: 409,
+      outcomeCode: 'binding_inactive',
+      replayed: false,
+    })
+    expect(harness.client.issueContentsWriteToken).not.toHaveBeenCalled()
+    expect(harness.repository.finalizeGitHubCredentialGrant).not.toHaveBeenCalled()
+  })
+
   it('records a safe recovery state when token issuance fails without leaking the cause', async () => {
     const harness = createHarness()
     vi.mocked(harness.client.issueContentsWriteToken).mockRejectedValue(

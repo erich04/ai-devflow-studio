@@ -22,6 +22,7 @@ import {
   type GateOverrideDecision,
   type GitHubDeliveryIntent,
   type GitHubDeliveryOperatorOutcome,
+  type GitHubDeliveryRevocationCheck,
   type KnowledgeDocument,
   type KnowledgeEntity,
   type KnowledgeGovernanceCheck,
@@ -234,9 +235,12 @@ export function Inspector({
   onRetryGitHubDelivery,
   onResumeGitHubDelivery,
   onStopGitHubDelivery,
+  onVerifyGitHubDeliveryRevocation,
   onCreateAcceptanceBundle,
   selectedGitHubDeliveryIntent,
   selectedGitHubDeliveryOperatorOutcome,
+  selectedGitHubDeliveryRevocationCheck,
+  canVerifyGitHubDeliveryRevocation,
   isRunningTests,
   isRunningAgentReview,
   isStartingCodingAgent,
@@ -275,9 +279,12 @@ export function Inspector({
   onRetryGitHubDelivery: () => void
   onResumeGitHubDelivery: () => void
   onStopGitHubDelivery: () => void
+  onVerifyGitHubDeliveryRevocation: () => void
   onCreateAcceptanceBundle: () => void
   selectedGitHubDeliveryIntent: GitHubDeliveryIntent | undefined
   selectedGitHubDeliveryOperatorOutcome?: GitHubDeliveryOperatorOutcome
+  selectedGitHubDeliveryRevocationCheck?: GitHubDeliveryRevocationCheck
+  canVerifyGitHubDeliveryRevocation: boolean
   isRunningTests: boolean
   isRunningAgentReview: boolean
   isStartingCodingAgent: boolean
@@ -315,6 +322,7 @@ export function Inspector({
     isLoadingGateEnforcement,
     canApprove,
     hasTeamProjectBinding: hasDeliveryProjectBinding,
+    canVerifyGitHubDeliveryRevocation,
     ...(selectedGitHubDeliveryIntent
       ? { githubDeliveryIntent: selectedGitHubDeliveryIntent }
       : {}),
@@ -349,6 +357,7 @@ export function Inspector({
     retryGitHubDelivery: onRetryGitHubDelivery,
     resumeGitHubDelivery: onResumeGitHubDelivery,
     stopGitHubDelivery: onStopGitHubDelivery,
+    verifyGitHubDeliveryRevocation: onVerifyGitHubDeliveryRevocation,
     createAcceptanceBundle: onCreateAcceptanceBundle,
   }
   const writeActionIds = new Set<InspectorActionId>([
@@ -361,6 +370,7 @@ export function Inspector({
     'retryGitHubDelivery',
     'resumeGitHubDelivery',
     'stopGitHubDelivery',
+    'verifyGitHubDeliveryRevocation',
     'createAcceptanceBundle',
   ])
   const hasPendingInspectorAction = Boolean(pendingInspectorAction)
@@ -420,6 +430,9 @@ export function Inspector({
       if (action.id === 'stopGitHubDelivery') {
         return '停止中'
       }
+      if (action.id === 'verifyGitHubDeliveryRevocation') {
+        return '验证中'
+      }
     }
     if (action.id === 'openKnowledgeReview' && isRunningAgentReview) {
       return '审查中'
@@ -458,6 +471,7 @@ export function Inspector({
       case 'reviseGitHubDelivery':
       case 'retryGitHubDelivery':
       case 'resumeGitHubDelivery':
+      case 'verifyGitHubDeliveryRevocation':
         return <RefreshCw size={16} />
       case 'stopGitHubDelivery':
         return <Square size={16} />
@@ -615,6 +629,9 @@ export function Inspector({
         intent={selectedGitHubDeliveryIntent}
         {...(selectedGitHubDeliveryOperatorOutcome
           ? { operatorOutcome: selectedGitHubDeliveryOperatorOutcome }
+          : {})}
+        {...(selectedGitHubDeliveryRevocationCheck
+          ? { revocationCheck: selectedGitHubDeliveryRevocationCheck }
           : {})}
         surface={selectedNode.kind === 'acceptance' ? 'acceptance' : 'pr'}
         hasExactPrPackage={artifacts.some((artifact) => (

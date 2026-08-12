@@ -20,6 +20,8 @@ import {
   type DesktopPairingCredential,
   type GitHubDeliveryIntent,
   type GitHubDeliveryOperatorOutcome,
+  type GitHubDeliveryRevocationCheck,
+  type GitHubRepositoryBinding,
   type LocalExecutionState,
   type LocalProject,
   type ManagedCodingWorkspace,
@@ -109,6 +111,8 @@ export type DesktopWorkspaceState = {
   codingDiffArtifacts: CodingDiffArtifact[]
   githubDeliveryIntents: GitHubDeliveryIntent[]
   githubDeliveryOperatorOutcomes: GitHubDeliveryOperatorOutcome[]
+  githubDeliveryRevocationChecks: GitHubDeliveryRevocationCheck[]
+  githubRepositoryBindings: GitHubRepositoryBinding[]
   retryAttempts: RetryAttempt[]
   remoteSyncOperations: RemoteSyncOperation[]
   providerIdDraft: string
@@ -170,6 +174,10 @@ export type DesktopWorkspaceSetters = {
   setGitHubDeliveryOperatorOutcomes: Dispatch<
     SetStateAction<GitHubDeliveryOperatorOutcome[]>
   >
+  setGitHubDeliveryRevocationChecks: Dispatch<
+    SetStateAction<GitHubDeliveryRevocationCheck[]>
+  >
+  setGitHubRepositoryBindings: Dispatch<SetStateAction<GitHubRepositoryBinding[]>>
   setRetryAttempts: Dispatch<SetStateAction<RetryAttempt[]>>
   setProviderIdDraft: Dispatch<SetStateAction<string>>
   setProviderBaseUrlDraft: Dispatch<SetStateAction<string>>
@@ -248,6 +256,10 @@ export function useDesktopWorkspace(input: {
   const [githubDeliveryIntents, setGitHubDeliveryIntents] = useState<GitHubDeliveryIntent[]>([])
   const [githubDeliveryOperatorOutcomes, setGitHubDeliveryOperatorOutcomes] =
     useState<GitHubDeliveryOperatorOutcome[]>([])
+  const [githubDeliveryRevocationChecks, setGitHubDeliveryRevocationChecks] =
+    useState<GitHubDeliveryRevocationCheck[]>([])
+  const [githubRepositoryBindings, setGitHubRepositoryBindings] =
+    useState<GitHubRepositoryBinding[]>([])
   const [retryAttempts, setRetryAttempts] = useState<RetryAttempt[]>([])
   const [remoteSyncOperations, setRemoteSyncOperations] = useState<RemoteSyncOperation[]>([])
   const [providerIdDraft, setProviderIdDraft] = useState(input.defaultReviewProviderDraft.providerId)
@@ -405,6 +417,8 @@ export function useDesktopWorkspace(input: {
     setCodingDiffArtifacts(state.codingDiffArtifacts)
     setGitHubDeliveryIntents(state.githubDeliveryIntents ?? [])
     setGitHubDeliveryOperatorOutcomes(state.githubDeliveryOperatorOutcomes ?? [])
+    setGitHubDeliveryRevocationChecks(state.githubDeliveryRevocationChecks ?? [])
+    setGitHubRepositoryBindings(state.githubRepositoryBindings ?? [])
     setRetryAttempts(state.retryAttempts ?? [])
     setRemoteSyncOperations(state.remoteSyncOperations ?? [])
     setDesktopPairing(state.desktopPairingCredential ?? null)
@@ -616,6 +630,8 @@ export function useDesktopWorkspace(input: {
     codingDiffArtifacts,
     githubDeliveryIntents,
     githubDeliveryOperatorOutcomes,
+    githubDeliveryRevocationChecks,
+    githubRepositoryBindings,
     retryAttempts,
     remoteSyncOperations,
     providerIdDraft,
@@ -675,6 +691,8 @@ export function useDesktopWorkspace(input: {
     setCodingDiffArtifacts,
     setGitHubDeliveryIntents,
     setGitHubDeliveryOperatorOutcomes,
+    setGitHubDeliveryRevocationChecks,
+    setGitHubRepositoryBindings,
     setRetryAttempts,
     setProviderIdDraft,
     setProviderBaseUrlDraft,

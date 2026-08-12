@@ -11,6 +11,7 @@ import {
   createGitHubDeliveryCompletion,
   createGitHubDeliveryIntent,
   isTerminalGitHubDeliveryStatus,
+  type GitHubDeliveryRevocationCheck,
   type GitHubRepositoryBinding,
 } from './github-delivery'
 
@@ -175,6 +176,33 @@ const baseInput = {
 }
 
 describe('GitHub Delivery Intent', () => {
+  it('defines revocation verification as bounded redacted evidence only', () => {
+    const check: GitHubDeliveryRevocationCheck = {
+      stateVersion: 1,
+      intentId: 'delivery-1',
+      intentUpdatedAt: '2026-08-11T10:36:00.000Z',
+      bindingId: 'github-binding-1',
+      bindingVersion: 4,
+      outcomeCode: 'binding_inactive',
+      checkedAt: '2026-08-11T10:38:00.000Z',
+      redacted: true,
+    }
+
+    expect(Object.keys(check).sort()).toEqual([
+      'bindingId',
+      'bindingVersion',
+      'checkedAt',
+      'intentId',
+      'intentUpdatedAt',
+      'outcomeCode',
+      'redacted',
+      'stateVersion',
+    ])
+    expect(JSON.stringify(check)).not.toMatch(
+      /requestId|repository|token|secret|bearer|credential|raw|path/i,
+    )
+  })
+
   it('distinguishes recoverable delivery work from terminal outcomes', () => {
     expect(isTerminalGitHubDeliveryStatus('recovery_required')).toBe(false)
     expect(isTerminalGitHubDeliveryStatus('completed')).toBe(true)

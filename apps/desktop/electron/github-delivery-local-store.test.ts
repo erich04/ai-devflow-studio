@@ -13,6 +13,7 @@ import type {
   CodingAgentRun,
   CodingDiffArtifact,
   DesktopPairingCredential,
+  GitHubDeliveryRevocationCheck,
   GitHubRepositoryBinding,
   LocalProject,
   ManagedCodingWorkspace,
@@ -250,6 +251,64 @@ async function savePreparedIntent(
   })
   expect(result).toMatchObject({ committed: true })
   return intent
+}
+
+async function saveCompletedIntent(
+  store: Awaited<ReturnType<typeof createLocalStore>>,
+  sources: ReturnType<typeof createSources>,
+) {
+  const intent = await savePreparedIntent(store, sources)
+  const approved = {
+    ...intent,
+    status: 'approved' as const,
+    updatedAt: '2026-08-11T10:32:00.000Z',
+  }
+  const publishing = {
+    ...approved,
+    status: 'publishing_branch' as const,
+    updatedAt: '2026-08-11T10:33:00.000Z',
+  }
+  const published = {
+    ...publishing,
+    status: 'branch_published' as const,
+    updatedAt: '2026-08-11T10:34:00.000Z',
+  }
+  const creating = {
+    ...published,
+    status: 'creating_pr' as const,
+    updatedAt: '2026-08-11T10:35:00.000Z',
+  }
+  await store.commitGitHubDeliveryIntentStatus({ expectedIntent: intent, intent: approved })
+  await store.commitGitHubDeliveryIntentStatus({ expectedIntent: approved, intent: publishing })
+  await store.commitGitHubDeliveryIntentStatus({ expectedIntent: publishing, intent: published })
+  await store.commitGitHubDeliveryIntentStatus({ expectedIntent: published, intent: creating })
+  const completion = createGitHubDeliveryCompletion({
+    intent: creating,
+    remoteRequestId: 'remote-delivery-1',
+    publicationId: 'publication-1',
+    pullRequestOutcomeId: 'pull-request-outcome-1',
+    pullRequestId: '123456789',
+    pullRequestNumber: 42,
+    pullRequestUrl: 'https://github.com/erich04/ai-devflow-studio/pull/42',
+    repository: creating.repository,
+    baseBranch: creating.baseBranch,
+    headBranch: creating.headBranch,
+    headSha: creating.expectedCommitSha,
+    draft: true,
+    providerCreatedAt: '2026-08-11T10:35:30.000Z',
+    recordedAt: '2026-08-11T10:36:00.000Z',
+  })
+  const completed = {
+    ...creating,
+    status: 'completed' as const,
+    completion,
+    updatedAt: completion.recordedAt,
+  }
+  await store.commitGitHubDeliveryIntentCompletion({
+    expectedIntent: creating,
+    intent: completed,
+  })
+  return completed
 }
 
 describe('GitHub repository binding observation CAS', () => {
@@ -593,10 +652,10 @@ describe('GitHub repository binding observation CAS', () => {
 })
 
 describe('GitHub Delivery Intent local persistence', () => {
-  it('migrates to schema 15 with immutable delivery series history and operator outcomes', async () => {
+  it('migrates to schema 16 with isolated redacted revocation checks', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
-    expect(await store.getSchemaVersion()).toBe(15)
+    expect(await store.getSchemaVersion()).toBe(16)
     store.close()
 
     const SQL = await initSqlJs()
@@ -654,10 +713,307 @@ describe('GitHub Delivery Intent local persistence', () => {
     expect(outcomeColumns).not.toEqual(expect.arrayContaining([
       'token', 'secret', 'path', 'message', 'error', 'cause',
     ]))
+    const revocationCheckColumns = database
+      .exec('pragma table_info(github_delivery_revocation_checks)')[0]
+      ?.values.map((row) => String(row[1])) ?? []
+    expect(revocationCheckColumns).toEqual([
+      'intent_id',
+      'intent_updated_at',
+      'binding_id',
+      'binding_version',
+      'outcome_code',
+      'checked_at',
+      'state_version',
+      'json',
+    ])
+    expect(revocationCheckColumns).not.toEqual(expect.arrayContaining([
+      'request_id', 'repository', 'token', 'secret', 'path', 'message', 'error', 'cause',
+    ]))
     database.close()
   })
 
-  it('preserves an existing v14 JSON series and non-first attempt during schema 15 migration', async () => {
+  it('durably records one exact completed-intent revocation check in the safe state projection', async () => {
+    const dbPath = await tempDbPath()
+    const sources = createSources()
+    const store = await createLocalStore({ dbPath })
+    await saveSources(store, sources)
+    const completed = await saveCompletedIntent(store, sources)
+    const revokedBinding: GitHubRepositoryBinding = {
+      ...sources.repositoryBinding,
+      version: sources.repositoryBinding.version + 1,
+      status: 'revoked',
+      updatedAt: '2026-08-11T10:37:00.000Z',
+    }
+    await store.saveGitHubRepositoryBinding(revokedBinding)
+    const check: GitHubDeliveryRevocationCheck = {
+      stateVersion: 1,
+      intentId: completed.id,
+      intentUpdatedAt: completed.updatedAt,
+      bindingId: revokedBinding.id,
+      bindingVersion: revokedBinding.version,
+      outcomeCode: 'binding_inactive',
+      checkedAt: '2026-08-11T10:38:00.000Z',
+      redacted: true,
+    }
+
+    await expect(store.commitGitHubDeliveryRevocationCheck({
+      check,
+      expectedIntent: completed,
+      expectedBinding: revokedBinding,
+      expectedPairing: sources.pairing,
+    })).resolves.toEqual({ committed: true, replayed: false, check })
+    await expect(store.commitGitHubDeliveryRevocationCheck({
+      check,
+      expectedIntent: completed,
+      expectedBinding: revokedBinding,
+      expectedPairing: sources.pairing,
+    })).resolves.toEqual({ committed: true, replayed: true, check })
+    await expect(store.listGitHubDeliveryRevocationChecks()).resolves.toEqual([check])
+    await expect(store.loadState()).resolves.toMatchObject({
+      githubDeliveryRevocationChecks: [check],
+    })
+    store.close()
+
+    const SQL = await initSqlJs()
+    const database = new SQL.Database(await readFile(dbPath))
+    const persistedJson = String(
+      database.exec('select json from github_delivery_revocation_checks')[0]
+        ?.values[0]?.[0],
+    )
+    expect(persistedJson).toBe(JSON.stringify(check))
+    expect(persistedJson).not.toMatch(
+      /requestId|repository|token|secret|bearer|credential|raw|path|\/Users\//i,
+    )
+    database.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.listGitHubDeliveryRevocationChecks(completed.id))
+      .resolves.toEqual([check])
+    await expect(reopened.loadState()).resolves.toMatchObject({
+      githubDeliveryRevocationChecks: [check],
+    })
+    expect(JSON.stringify(check)).not.toMatch(
+      /requestId|repository|token|secret|bearer|credential|raw|path|\/Users\//i,
+    )
+    reopened.close()
+  })
+
+  it('fails closed when revoked repository authority differs from the completed intent', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const sources = createSources()
+    await saveSources(store, sources)
+    const completed = await saveCompletedIntent(store, sources)
+    const unrelatedBinding: GitHubRepositoryBinding = {
+      ...sources.repositoryBinding,
+      version: sources.repositoryBinding.version + 1,
+      repositoryId: '111111111',
+      repository: 'erich04/unrelated-private-sandbox',
+      status: 'revoked',
+      updatedAt: '2026-08-11T10:37:00.000Z',
+    }
+    await store.saveGitHubRepositoryBinding(unrelatedBinding)
+    const check: GitHubDeliveryRevocationCheck = {
+      stateVersion: 1,
+      intentId: completed.id,
+      intentUpdatedAt: completed.updatedAt,
+      bindingId: unrelatedBinding.id,
+      bindingVersion: unrelatedBinding.version,
+      outcomeCode: 'binding_inactive',
+      checkedAt: '2026-08-11T10:38:00.000Z',
+      redacted: true,
+    }
+
+    await expect(store.commitGitHubDeliveryRevocationCheck({
+      check,
+      expectedIntent: completed,
+      expectedBinding: unrelatedBinding,
+      expectedPairing: sources.pairing,
+    })).resolves.toEqual({ committed: false, reason: 'authority_mismatch' })
+    await expect(store.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])
+    store.close()
+  })
+
+  it('never persists a non-binding-inactive probe result as pass evidence', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const sources = createSources()
+    await saveSources(store, sources)
+    const completed = await saveCompletedIntent(store, sources)
+    const revokedBinding: GitHubRepositoryBinding = {
+      ...sources.repositoryBinding,
+      version: sources.repositoryBinding.version + 1,
+      status: 'revoked',
+      updatedAt: '2026-08-11T10:37:00.000Z',
+    }
+    await store.saveGitHubRepositoryBinding(revokedBinding)
+    const unexpectedGrant = {
+      stateVersion: 1 as const,
+      intentId: completed.id,
+      intentUpdatedAt: completed.updatedAt,
+      bindingId: revokedBinding.id,
+      bindingVersion: revokedBinding.version,
+      outcomeCode: 'grant_finalized',
+      checkedAt: '2026-08-11T10:38:00.000Z',
+      redacted: true as const,
+    } as unknown as GitHubDeliveryRevocationCheck
+
+    await expect(store.commitGitHubDeliveryRevocationCheck({
+      check: unexpectedGrant,
+      expectedIntent: completed,
+      expectedBinding: revokedBinding,
+      expectedPairing: sources.pairing,
+    })).resolves.toEqual({ committed: false, reason: 'invalid_input' })
+    await expect(store.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])
+    store.close()
+  })
+
+  it('rejects a probe-to-commit pairing race without creating evidence', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const sources = createSources()
+    await saveSources(store, sources)
+    const completed = await saveCompletedIntent(store, sources)
+    const revokedBinding: GitHubRepositoryBinding = {
+      ...sources.repositoryBinding,
+      version: sources.repositoryBinding.version + 1,
+      status: 'revoked',
+      updatedAt: '2026-08-11T10:37:00.000Z',
+    }
+    await store.saveGitHubRepositoryBinding(revokedBinding)
+    const check: GitHubDeliveryRevocationCheck = {
+      stateVersion: 1,
+      intentId: completed.id,
+      intentUpdatedAt: completed.updatedAt,
+      bindingId: revokedBinding.id,
+      bindingVersion: revokedBinding.version,
+      outcomeCode: 'binding_inactive',
+      checkedAt: '2026-08-11T10:38:00.000Z',
+      redacted: true,
+    }
+    await store.saveDesktopPairingCredential({
+      ...sources.pairing,
+      tokenId: 'replacement-token',
+      createdAt: '2026-08-11T10:37:30.000Z',
+    }, 'replacement-encrypted-token')
+
+    await expect(store.commitGitHubDeliveryRevocationCheck({
+      check,
+      expectedIntent: completed,
+      expectedBinding: revokedBinding,
+      expectedPairing: sources.pairing,
+    })).resolves.toEqual({ committed: false, reason: 'pairing_stale' })
+    await expect(store.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])
+    store.close()
+  })
+
+  it('rejects terminal delivery work without completed Draft evidence', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const sources = createSources()
+    await saveSources(store, sources)
+    const intent = await savePreparedIntent(store, sources)
+    const failed = {
+      ...intent,
+      status: 'failed' as const,
+      updatedAt: '2026-08-11T10:32:00.000Z',
+    }
+    await store.commitGitHubDeliveryIntentStatus({ expectedIntent: intent, intent: failed })
+    const revokedBinding: GitHubRepositoryBinding = {
+      ...sources.repositoryBinding,
+      version: sources.repositoryBinding.version + 1,
+      status: 'revoked',
+      updatedAt: '2026-08-11T10:37:00.000Z',
+    }
+    await store.saveGitHubRepositoryBinding(revokedBinding)
+    const check: GitHubDeliveryRevocationCheck = {
+      stateVersion: 1,
+      intentId: failed.id,
+      intentUpdatedAt: failed.updatedAt,
+      bindingId: revokedBinding.id,
+      bindingVersion: revokedBinding.version,
+      outcomeCode: 'binding_inactive',
+      checkedAt: '2026-08-11T10:38:00.000Z',
+      redacted: true,
+    }
+
+    await expect(store.commitGitHubDeliveryRevocationCheck({
+      check,
+      expectedIntent: failed,
+      expectedBinding: revokedBinding,
+      expectedPairing: sources.pairing,
+    })).resolves.toEqual({ committed: false, reason: 'intent_ineligible' })
+    await expect(store.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])
+    store.close()
+  })
+
+  it('rejects extra secret-bearing revocation-check fields before persistence', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const sources = createSources()
+    await saveSources(store, sources)
+    const completed = await saveCompletedIntent(store, sources)
+    const revokedBinding: GitHubRepositoryBinding = {
+      ...sources.repositoryBinding,
+      version: sources.repositoryBinding.version + 1,
+      status: 'revoked',
+      updatedAt: '2026-08-11T10:37:00.000Z',
+    }
+    await store.saveGitHubRepositoryBinding(revokedBinding)
+    const unsafeCheck = {
+      stateVersion: 1 as const,
+      intentId: completed.id,
+      intentUpdatedAt: completed.updatedAt,
+      bindingId: revokedBinding.id,
+      bindingVersion: revokedBinding.version,
+      outcomeCode: 'binding_inactive' as const,
+      checkedAt: '2026-08-11T10:38:00.000Z',
+      redacted: true as const,
+      token: 'must-not-persist',
+    } as GitHubDeliveryRevocationCheck
+
+    await expect(store.commitGitHubDeliveryRevocationCheck({
+      check: unsafeCheck,
+      expectedIntent: completed,
+      expectedBinding: revokedBinding,
+      expectedPairing: sources.pairing,
+    })).resolves.toEqual({ committed: false, reason: 'invalid_input' })
+    await expect(store.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])
+    store.close()
+  })
+
+  it('rolls back revocation pass evidence when durable persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const sources = createSources()
+    await saveSources(store, sources)
+    const completed = await saveCompletedIntent(store, sources)
+    const revokedBinding: GitHubRepositoryBinding = {
+      ...sources.repositoryBinding,
+      version: sources.repositoryBinding.version + 1,
+      status: 'revoked',
+      updatedAt: '2026-08-11T10:37:00.000Z',
+    }
+    await store.saveGitHubRepositoryBinding(revokedBinding)
+    const check: GitHubDeliveryRevocationCheck = {
+      stateVersion: 1,
+      intentId: completed.id,
+      intentUpdatedAt: completed.updatedAt,
+      bindingId: revokedBinding.id,
+      bindingVersion: revokedBinding.version,
+      outcomeCode: 'binding_inactive',
+      checkedAt: '2026-08-11T10:38:00.000Z',
+      redacted: true,
+    }
+    await rename(dbPath, `${dbPath}.backup`)
+    await mkdir(dbPath)
+
+    await expect(store.commitGitHubDeliveryRevocationCheck({
+      check,
+      expectedIntent: completed,
+      expectedBinding: revokedBinding,
+      expectedPairing: sources.pairing,
+    })).rejects.toThrow()
+    await expect(store.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])
+    store.close()
+  })
+
+  it('preserves an existing v14 JSON series and non-first attempt through schema 16', async () => {
     const dbPath = await tempDbPath()
     const sources = createSources()
     const store = await createLocalStore({ dbPath })
@@ -699,9 +1055,32 @@ describe('GitHub Delivery Intent local persistence', () => {
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(15)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(16)
     await expect(migrated.listGitHubDeliveryIntents(sources.run.id))
       .resolves.toEqual([attemptTwo])
+    migrated.close()
+  })
+
+  it('adds the isolated revocation-check table to an existing schema 15 database', async () => {
+    const dbPath = await tempDbPath()
+    const sources = createSources()
+    const store = await createLocalStore({ dbPath })
+    await saveSources(store, sources)
+    const completed = await saveCompletedIntent(store, sources)
+    store.close()
+
+    const SQL = await initSqlJs()
+    const database = new SQL.Database(await readFile(dbPath))
+    database.run('drop table github_delivery_revocation_checks')
+    database.run("update schema_meta set value = '15' where key = 'schema_version'")
+    await writeFile(dbPath, database.export())
+    database.close()
+
+    const migrated = await createLocalStore({ dbPath })
+    await expect(migrated.getSchemaVersion()).resolves.toBe(16)
+    await expect(migrated.listGitHubDeliveryIntents(sources.run.id))
+      .resolves.toEqual([completed])
+    await expect(migrated.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])
     migrated.close()
   })
 

@@ -1201,41 +1201,22 @@ describe('V1.5 deterministic GitHub Delivery gate', () => {
       status: 'revoked',
       outcomeCode: 'binding_revoked',
     })
-    let publisherCalled = false
-
-    const rejected = await harness.remote
-      .withCredentialGrant(
-        {
-          projectId: teamProjectId,
-          requestId: revokedRequest.id,
-          expectedStateVersion: revokedRequest.stateVersion,
-        },
-        async (credential) => {
-          publisherCalled = true
-          return {
-            outcome: 'pushed' as const,
-            expectedCommitSha: credential.expectedCommitSha,
-            repository: credential.repository,
-            headBranch: credential.headBranch,
-          }
-        },
-      )
-      .then(() => null, (error: unknown) => error)
-
-    expect(rejected).toMatchObject({
-      name: 'GitHubDeliveryRemoteError',
-      code: 'conflict',
-      operation: 'credential_grant',
-      outcomeCode: 'approval_required',
+    const blocked = await harness.remote.verifyCredentialGrantBlocked({
+      projectId: teamProjectId,
+      requestId: revokedRequest.id,
+      expectedStateVersion: revokedRequest.stateVersion,
     })
-    expect(publisherCalled).toBe(false)
+    expect(blocked).toEqual({
+      status: 'blocked',
+      outcomeCode: 'binding_inactive',
+    })
     expect(harness.counts()).toEqual({
       pullRequestProviderCalls: 0,
       credentialProviderCalls: 0,
       publisherPushCalls: 0,
     })
     expect(harness.repository.inspectForTests().grants).toEqual([])
-    const serialized = JSON.stringify(rejected)
+    const serialized = JSON.stringify(blocked)
     expect(serialized).not.toContain(ephemeralToken)
     expect(serialized).not.toContain(harness.fixture.worktreePath)
     expect(serialized).not.toContain(rawProviderFailure)

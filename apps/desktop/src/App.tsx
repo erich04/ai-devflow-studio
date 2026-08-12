@@ -121,6 +121,8 @@ export function App() {
     codingDiffArtifacts,
     githubDeliveryIntents,
     githubDeliveryOperatorOutcomes,
+    githubDeliveryRevocationChecks,
+    githubRepositoryBindings,
     retryAttempts,
     remoteSyncOperations,
     providerIdDraft,
@@ -347,6 +349,47 @@ export function App() {
       : undefined,
     [githubDeliveryOperatorOutcomes, selectedGitHubDeliveryIntent],
   )
+  const selectedRevokedGitHubRepositoryBinding = useMemo(() => {
+    if (!selectedGitHubDeliveryIntent || selectedGitHubDeliveryIntent.status !== 'completed') {
+      return undefined
+    }
+    const authorities = githubRepositoryBindings.filter((binding) =>
+      binding.id === selectedGitHubDeliveryIntent.repositoryBindingId &&
+      binding.version > selectedGitHubDeliveryIntent.repositoryBindingVersion &&
+      binding.organizationId === selectedGitHubDeliveryIntent.organizationId &&
+      binding.teamProjectId === selectedGitHubDeliveryIntent.teamProjectId &&
+      binding.installationId === selectedGitHubDeliveryIntent.installationId &&
+      binding.repositoryId === selectedGitHubDeliveryIntent.repositoryId &&
+      binding.repository === selectedGitHubDeliveryIntent.repository &&
+      binding.defaultBranch === selectedGitHubDeliveryIntent.baseBranch &&
+      binding.redacted === true,
+    )
+    return authorities.length === 1 && authorities[0]?.status === 'revoked'
+      ? authorities[0]
+      : undefined
+  }, [githubRepositoryBindings, selectedGitHubDeliveryIntent])
+  const canVerifyGitHubDeliveryRevocation = Boolean(
+    selectedGitHubDeliveryIntent?.status === 'completed' &&
+    selectedRevokedGitHubRepositoryBinding,
+  )
+  const selectedGitHubDeliveryRevocationCheck = useMemo(() => {
+    if (!selectedGitHubDeliveryIntent || !selectedRevokedGitHubRepositoryBinding) {
+      return undefined
+    }
+    const matches = githubDeliveryRevocationChecks.filter((check) =>
+      check.intentId === selectedGitHubDeliveryIntent.id &&
+      check.intentUpdatedAt === selectedGitHubDeliveryIntent.updatedAt &&
+      check.bindingId === selectedGitHubDeliveryIntent.repositoryBindingId &&
+      check.bindingVersion === selectedRevokedGitHubRepositoryBinding.version &&
+      check.outcomeCode === 'binding_inactive' &&
+      check.redacted === true,
+    )
+    return matches.length === 1 ? matches[0] : undefined
+  }, [
+    githubDeliveryRevocationChecks,
+    selectedGitHubDeliveryIntent,
+    selectedRevokedGitHubRepositoryBinding,
+  ])
   const hasSelectedLocalProjectBinding = Boolean(
     selectedLocalProject && desktopPairing?.localProjectId === selectedLocalProject.id,
   )
@@ -647,6 +690,7 @@ export function App() {
     retrySelectedGitHubDelivery,
     resumeSelectedGitHubDelivery,
     stopSelectedGitHubDelivery,
+    verifySelectedGitHubDeliveryRevocation,
     generateAcceptanceBundle,
     toggleMcp,
     redactPreview,
@@ -664,6 +708,7 @@ export function App() {
     ...(selectedGitHubDeliveryIntent
       ? { selectedGitHubDeliveryIntent }
       : {}),
+    canVerifyGitHubDeliveryRevocation,
     gateEnforcementDecision: gateEnforcement.decision,
     applyLocalExecutionState,
   })
@@ -1143,11 +1188,18 @@ export function App() {
                   onRetryGitHubDelivery={retrySelectedGitHubDelivery}
                   onResumeGitHubDelivery={resumeSelectedGitHubDelivery}
                   onStopGitHubDelivery={stopSelectedGitHubDelivery}
+                  onVerifyGitHubDeliveryRevocation={verifySelectedGitHubDeliveryRevocation}
                   onCreateAcceptanceBundle={generateAcceptanceBundle}
                   selectedGitHubDeliveryIntent={selectedGitHubDeliveryIntent}
+                  canVerifyGitHubDeliveryRevocation={canVerifyGitHubDeliveryRevocation}
                   {...(selectedGitHubDeliveryOperatorOutcome
                     ? {
                         selectedGitHubDeliveryOperatorOutcome,
+                      }
+                    : {})}
+                  {...(selectedGitHubDeliveryRevocationCheck
+                    ? {
+                        selectedGitHubDeliveryRevocationCheck,
                       }
                     : {})}
                   isRunningTests={isRunningTests}
