@@ -57,6 +57,29 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(plan).toContain('2.x implementation remains blocked')
   })
 
+  it('defines the post-revocation issuance linearization and conservative quarantine guarantee', () => {
+    const prd = read('docs/product/prd/v1.5-github-delivery-prd.md')
+    const plan = read('docs/plans/v1.5-github-delivery.md')
+    const walkthrough = read('docs/guides/devflow-studio-v1.5-walkthrough.md')
+
+    for (const contract of [prd, plan]) {
+      expect(contract).toContain('active-binding CAS')
+      expect(contract).toContain('issuance linearization point')
+      expect(contract).toContain('credential_revocation_pending')
+      expect(contract).toContain('non-secret quarantine marker')
+      expect(contract).toContain('69 minutes')
+      expect(contract).toContain('exact `204`')
+      expect(contract).toContain('confirmed or expired')
+      expect(contract).toContain('never persisted')
+    }
+
+    expect(walkthrough).toContain('credential_revocation_pending')
+    expect(walkthrough).toContain('wait and retry **Verify credential revocation**')
+    expect(walkthrough).toContain('must not bypass quarantine')
+    expect(walkthrough).toContain('does not claim that every pre-revocation credential is invalid')
+    expect(walkthrough).toContain('post-revocation new issuance')
+  })
+
   it('indexes the scoped contract from the existing documentation entrypoints', () => {
     const prdIndex = read('docs/product/prd/README.md')
     const roadmap = read('docs/roadmap.md')

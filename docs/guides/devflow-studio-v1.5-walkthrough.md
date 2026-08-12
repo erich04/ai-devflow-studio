@@ -72,7 +72,11 @@ repository credential. A dated result is written only after every step passes.
     remote request from the completed local evidence and uses the encrypted pairing authority. The
     probe command/result adds no remote request or repository fields to its exact local-CAS envelope,
     and the renderer never receives the Desktop Bearer or credential response. Only the exact
-    `binding_inactive` rejection passes. A `200`/other `2xx` response is
+    `binding_inactive` rejection passes. If an issuance reserved before revocation still has an
+    unresolved non-secret quarantine marker, the probe returns `credential_revocation_pending` and
+    records no passing check. The operator may only wait and retry **Verify credential revocation**
+    through packaged Desktop; they must not bypass quarantine with direct HTTP, SQL, evidence edits,
+    or another manual state change. A `200`/other `2xx` response is
     treated as `credential_unexpectedly_issued`: Desktop cancels the unread response body, performs
     no git/publisher/PR action, and the walkthrough fails and must restart from fresh isolated state.
 13. Exercise one safe operator recovery path if needed: **Stop** moves an active local attempt to
@@ -96,8 +100,8 @@ The walkthrough passes only when all observations bind to the same `C` and show:
 - restart recovery with zero repeated credential, push, or pull-request side effects;
 - binding revocation followed by the packaged Desktop **Verify credential revocation** action
   recording exactly one redacted durable check for the completed intent, the newer revoked binding
-  version, canonical check time, and `binding_inactive` outcome, with no second git or pull-request
-  effect;
+  version, canonical check time, and `binding_inactive` outcome only after every overlapping marker
+  is confirmed or expired, with no second git or pull-request effect;
 - no merge, force-push, tag publication, remote branch deletion, or permission widening;
 - no App private key, installation token, pairing value, Cookie, Bearer value, raw patch/output,
   repository content, credential URL, or local absolute path in durable or release evidence.
@@ -130,6 +134,12 @@ For V1.5, `walkthrough.json.date`, the date embedded in its `evidencePath`,
 `required-gates.json.recordedAt`, `github-sandbox.json.recordedAt`, and
 `revocationProof.checkedAt` must all have the same UTC calendar date. The dated result must contain
 exactly one `Revocation proof:` line, and that line must exactly encode the sandbox record values.
+This result proves the absence of post-revocation new issuance across the active-binding CAS
+linearization boundary. It does not claim that every pre-revocation credential is invalid: a token
+normally issued or consumed before revocation may remain valid until use, provider revocation, or
+expiry, and no token value is ever persisted. `credential_revocation_pending` is not signoff
+evidence; the operator must wait and retry the packaged action until the product records the exact
+passing outcome.
 
 `docs/releases/v1.5.0/walkthrough.json`:
 
