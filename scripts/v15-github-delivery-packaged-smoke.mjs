@@ -516,6 +516,7 @@ async function createOfflineGitHubGitBoundary(temporaryDirectory, gitFixture) {
     uploadPackRequests: 0,
     receivePackRequests: 0,
     rejectedHosts: 0,
+    rejectedAuthorities: [],
     backendFailures: 0,
     backendStatuses: [],
     tlsClientErrorCodes: [],
@@ -589,6 +590,18 @@ async function createOfflineGitHubGitBoundary(temporaryDirectory, gitFixture) {
   proxyServer.on('connect', (request, socket, head) => {
     if (request.url !== 'github.com:443') {
       metrics.rejectedHosts += 1
+      const authority =
+        typeof request.url === 'string' &&
+        request.url.length <= 255 &&
+        /^[a-z0-9.-]+:\d{1,5}$/iu.test(request.url)
+          ? request.url.toLowerCase()
+          : 'invalid'
+      if (
+        metrics.rejectedAuthorities.length < 8 &&
+        !metrics.rejectedAuthorities.includes(authority)
+      ) {
+        metrics.rejectedAuthorities.push(authority)
+      }
       socket.end('HTTP/1.1 403 Forbidden\r\n\r\n')
       return
     }
@@ -712,8 +725,12 @@ async function launchPackagedDesktop(input) {
     cwd: input.appDirectory,
     args:
       process.platform === 'linux'
-        ? ['--password-store=gnome-libsecret', '--no-sandbox']
-        : ['--password-store=basic'],
+        ? [
+            '--disable-background-networking',
+            '--password-store=gnome-libsecret',
+            '--no-sandbox',
+          ]
+        : ['--disable-background-networking', '--password-store=basic'],
     env: input.env,
     timeout: 30_000,
   })
@@ -863,6 +880,7 @@ function snapshotGitBoundaryEffects(metrics) {
     uploadPackRequests: metrics.uploadPackRequests,
     receivePackRequests: metrics.receivePackRequests,
     rejectedHosts: metrics.rejectedHosts,
+    rejectedAuthorities: [...metrics.rejectedAuthorities],
     backendFailures: metrics.backendFailures,
     backendStatuses: [...metrics.backendStatuses],
   }

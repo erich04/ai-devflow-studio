@@ -167,7 +167,7 @@ export function runLocalTestCommand(input: LocalTestCommandInput): Promise<Local
     const child = spawn(input.command, {
       cwd: input.cwd,
       shell: true,
-      detached: true,
+      detached: process.platform !== 'win32',
       env: createLocalCommandEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
     })

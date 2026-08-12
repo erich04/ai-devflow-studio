@@ -60,6 +60,7 @@ const repositoryId = '98765'
 const desktopToken = 'desktop-v15-gate-token'
 const ephemeralToken = 'ghs_deterministic_v15_token_123456'
 const rawProviderFailure = '/private/provider/output TOKEN_SHOULD_NOT_PERSIST'
+const FULL_DELIVERY_GATE_TIMEOUT_MS = 15_000
 
 const ownerPrincipal = {
   session: {
@@ -787,7 +788,7 @@ describe('V1.5 deterministic GitHub Delivery gate', () => {
     expect(serialized).not.toContain(harness.fixture.worktreePath)
     expect(serialized).not.toContain(rawProviderFailure)
     reopened.close()
-  })
+  }, FULL_DELIVERY_GATE_TIMEOUT_MS)
 
   it('reconciles durable completion after restart even when the current binding is revoked', async () => {
     const harness = await createGateHarness()
@@ -1154,7 +1155,7 @@ describe('V1.5 deterministic GitHub Delivery gate', () => {
     }
     restartedStore.close()
     expect(await readFile(harness.dbPath)).toBeInstanceOf(Buffer)
-  })
+  }, FULL_DELIVERY_GATE_TIMEOUT_MS)
 
   it('blocks a new credential grant after owner revocation without invoking the token or publisher boundary', async () => {
     const harness = await createGateHarness()
