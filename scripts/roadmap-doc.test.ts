@@ -80,7 +80,11 @@ describe('product roadmap source of truth', () => {
     expect(markdown).toContain('### v2.1: Evaluated Retrieval And Memory')
     expect(markdown).toContain('### v2.2: Multi-Agent And Execution Tenancy')
     expect(markdown).toContain('## 2.x Completion Gate')
-    expect(markdown).toContain('The scoped contract, authority decision, and seven implementation slices are complete')
+    expect(markdown).toContain(
+      'The scoped contract, authority decision, and implementation Slices 1–6 are complete',
+    )
+    expect(markdown).toContain('Slice 7, the candidate-bound completion gate, remains in progress')
+    expect(markdown).not.toContain('seven implementation slices are complete')
     expect(markdown).toContain('v1.5-github-delivery-prd.md')
     expect(markdown).toContain('0013-github-app-delivery-authority.md')
     expect(markdown).toContain('Public SaaS, billing, enterprise SSO')
@@ -103,6 +107,7 @@ describe('product roadmap source of truth', () => {
     expect(currentRelease).not.toContain('No V1.5 or 2.x implementation is claimed')
     expect(priorities).toContain('### Now — Close V1.5 And The 1.x Completion Gate')
     expect(priorities).toContain('### Next — Freeze, Sign Off, And Publish V1.5')
+    expect(markdown).not.toContain('current V1.4 runtime already implements every layer')
     expect(priorities).toContain('real private GitHub sandbox')
     expect(markdown).toContain('### v1.5: GitHub Delivery Integration — Implemented, Release Pending')
     expect(markdown).toContain('2.x implementation remains blocked')

@@ -1,7 +1,11 @@
-import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   collectReleaseSignoffSnapshot,
+  collectDesktopArtifactEvidence,
   evaluateReleaseSignoffSnapshot,
   formatReleaseSignoffItems,
   packagePaths,
@@ -19,6 +23,19 @@ type EvidenceRecord = {
   exists: boolean
   parseError: string | null
   value: Record<string, unknown> | null
+  referencedEvidenceExists?: boolean
+  referencedEvidenceContent?: string | null
+  referencedEvidenceReadError?: string | null
+}
+
+type DesktopArtifactEvidence = {
+  indexPath: string
+  exists: boolean
+  parseError: string | null
+  version: string | null
+  platform: string | null
+  declaredSha256: string | null
+  actualSha256: string | null
 }
 
 type ReleaseSignoffSnapshot = {
@@ -33,6 +50,8 @@ type ReleaseSignoffSnapshot = {
   currentBranch: string
   releaseTagExists: boolean
   releaseTagTarget: string | null
+  releaseTagObjectType: string | null
+  desktopArtifactEvidence: DesktopArtifactEvidence
   walkthroughEvidence: EvidenceRecord
   requiredGateRecord: EvidenceRecord
   realOpencodeRecord?: EvidenceRecord
@@ -42,6 +61,39 @@ type ReleaseSignoffSnapshot = {
 const currentRootVersion = JSON.parse(readFileSync('package.json', 'utf8')).version
 const candidateSha = '1234567890abcdef1234567890abcdef12345678'
 const signoffSha = 'abcdef1234567890abcdef1234567890abcdef12'
+const desktopArtifactSha = '9'.repeat(64)
+
+function walkthroughContent(releaseSeries: string): string {
+  if (releaseSeries !== '1.5') {
+    return `# V${releaseSeries} walkthrough\n\nStatus: Passed\n\nCandidate: ${candidateSha}\n`
+  }
+
+  return `# V1.5 walkthrough result
+
+Status: Passed
+
+Candidate: ${candidateSha}
+Packaged artifact: 1.5.0 darwin-arm64 ${desktopArtifactSha}
+Team schema v12; Desktop schema v15.
+Verify: https://github.com/devflow/ai-devflow-studio/actions/runs/123456
+Delivery series: github-delivery:${'a'.repeat(64)}
+Delivery attempt: 1; intent revision: 1.
+Intent digest: ${'b'.repeat(64)}
+Test evidence digest: ${'c'.repeat(64)}
+PR package digest: ${'d'.repeat(64)}
+Expected commit: ${'e'.repeat(40)}; remote head: ${'e'.repeat(40)}.
+Draft PR: https://github.com/devflow/release-sandbox/pull/17
+Acceptance: completed. Restart recovery: passed. Binding revocation: passed.
+Redaction check: passed. Cleanup: passed. The Draft PR was not merged.
+Operator role: non-maintainer. Ad hoc maintainer assistance: false.
+Approval role/auth: owner/session_cookie.
+Lifecycle counts: Work Request 1, canonical Run 1, credential grant 1, branch publication 1, Draft PR 1.
+Sandbox/App: private devflow/release-sandbox via devflow-release-sandbox.
+Draft state: true; merged: false; automatic retry: false.
+Restart side-effect repeats: credential 0, push 0, pull request 0.
+Post-revocation credential grant: blocked.
+`
+}
 
 function record(path: string, value: Record<string, unknown>): EvidenceRecord {
   return {
@@ -78,15 +130,29 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
     currentBranch: `codex/v${releaseSeries}-closeout`,
     releaseTagExists: false,
     releaseTagTarget: null,
-    walkthroughEvidence: record(evidencePaths.walkthrough, {
-      targetVersion,
-      candidateSha,
-      status: 'passed',
-      date: '2026-07-31',
-      method: 'computer-use',
-      evidencePath: `docs/guides/devflow-studio-v${releaseSeries}-walkthrough-result-2026-07-31.md`,
-      evidenceExists: true,
-    }),
+    releaseTagObjectType: null,
+    desktopArtifactEvidence: {
+      indexPath: 'out/desktop-pilot/artifact-index.json',
+      exists: true,
+      parseError: null,
+      version: targetVersion,
+      platform: 'darwin-arm64',
+      declaredSha256: desktopArtifactSha,
+      actualSha256: desktopArtifactSha,
+    },
+    walkthroughEvidence: {
+      ...record(evidencePaths.walkthrough, {
+        targetVersion,
+        candidateSha,
+        status: 'passed',
+        date: '2026-07-31',
+        method: 'computer-use',
+        evidencePath: `docs/guides/devflow-studio-v${releaseSeries}-walkthrough-result-2026-07-31.md`,
+      }),
+      referencedEvidenceExists: true,
+      referencedEvidenceContent: walkthroughContent(releaseSeries),
+      referencedEvidenceReadError: null,
+    },
     requiredGateRecord: record(evidencePaths.requiredGates, {
       targetVersion,
       candidateSha,
@@ -101,8 +167,9 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
             },
             verifyRun: {
               workflow: 'Verify',
-              event: 'pull_request',
+              event: 'workflow_dispatch',
               runId: 123456,
+              runAttempt: 1,
               url: 'https://github.com/devflow/ai-devflow-studio/actions/runs/123456',
               headSha: candidateSha,
               conclusion: 'success',
@@ -117,7 +184,7 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
             desktopArtifact: {
               version: targetVersion,
               platform: 'darwin-arm64',
-              sha256: '9'.repeat(64),
+              sha256: desktopArtifactSha,
             },
           }
         : {}),
@@ -166,6 +233,8 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
             redactionCheck: 'passed',
             cleanup: 'passed',
             cleanupMethod: 'external-operator-no-merge',
+            operatorRole: 'non-maintainer',
+            adHocMaintainerAssistance: false,
           }),
         }
       : {
@@ -245,6 +314,112 @@ describe('release signoff status', () => {
     expect(collected.walkthroughEvidence.path).toBe(
       `docs/releases/v${currentRootVersion}/walkthrough.json`,
     )
+    expect(collected.desktopArtifactEvidence.indexPath).toBe(
+      'out/desktop-pilot/artifact-index.json',
+    )
+  })
+
+  it('derives the packaged Desktop digest from the indexed archive bytes', () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'devflow-release-artifact-'))
+    try {
+      const archive = Buffer.from('candidate-bound-desktop-archive')
+      const label = 'ai-devflow-studio-desktop-1.5.0-darwin-arm64'
+      const manifestName = `${label}.manifest.json`
+      const archiveName = `${label}.tar.gz`
+      writeFileSync(
+        join(fixtureRoot, 'artifact-index.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          platform: 'darwin',
+          arch: 'arm64',
+          appDirectory: 'app-directory/AI DevFlow Studio-darwin-arm64',
+          manifest: manifestName,
+          archive: archiveName,
+        }),
+      )
+      writeFileSync(
+        join(fixtureRoot, manifestName),
+        JSON.stringify({
+          schemaVersion: 1,
+          artifact: { version: '1.5.0', platform: 'darwin', arch: 'arm64' },
+          entries: [],
+          archive: {
+            path: archiveName,
+            sha256: createHash('sha256').update(archive).digest('hex'),
+          },
+        }),
+      )
+      writeFileSync(join(fixtureRoot, archiveName), archive)
+
+      expect(
+        collectDesktopArtifactEvidence(join(fixtureRoot, 'artifact-index.json')),
+      ).toEqual({
+        indexPath: join(fixtureRoot, 'artifact-index.json'),
+        exists: true,
+        parseError: null,
+        version: '1.5.0',
+        platform: 'darwin-arm64',
+        declaredSha256: createHash('sha256').update(archive).digest('hex'),
+        actualSha256: createHash('sha256').update(archive).digest('hex'),
+      })
+
+      writeFileSync(join(fixtureRoot, archiveName), Buffer.from('tampered archive'))
+      expect(
+        collectDesktopArtifactEvidence(join(fixtureRoot, 'artifact-index.json')),
+      ).toEqual(
+        expect.objectContaining({
+          exists: true,
+          parseError: 'artifact_digest_mismatch',
+          declaredSha256: null,
+          actualSha256: null,
+        }),
+      )
+      writeFileSync(join(fixtureRoot, archiveName), archive)
+      writeFileSync(
+        join(fixtureRoot, manifestName),
+        JSON.stringify({
+          schemaVersion: 1,
+          artifact: { version: '1.5.0', platform: 'darwin', arch: 'arm64' },
+          entries: [],
+          archive: {
+            path: 'different.tar.gz',
+            sha256: createHash('sha256').update(archive).digest('hex'),
+          },
+        }),
+      )
+      expect(
+        collectDesktopArtifactEvidence(join(fixtureRoot, 'artifact-index.json')),
+      ).toEqual(
+        expect.objectContaining({
+          exists: true,
+          parseError: 'invalid_artifact_manifest',
+        }),
+      )
+
+      writeFileSync(
+        join(fixtureRoot, 'artifact-index.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          platform: 'darwin',
+          arch: 'arm64',
+          appDirectory: 'app-directory/AI DevFlow Studio-darwin-arm64',
+          manifest: '../outside.manifest.json',
+          archive: archiveName,
+        }),
+      )
+      expect(
+        collectDesktopArtifactEvidence(join(fixtureRoot, 'artifact-index.json')),
+      ).toEqual(
+        expect.objectContaining({
+          exists: true,
+          parseError: 'invalid_artifact_index',
+          declaredSha256: null,
+          actualSha256: null,
+        }),
+      )
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true })
+    }
   })
 
   it('requires the v1.3 closeout, walkthrough, and paid-smoke policy docs', () => {
@@ -333,7 +508,6 @@ describe('release signoff status', () => {
   it('collects v1.5 GitHub sandbox evidence without touching paid OpenCode configuration', () => {
     const env = {
       DEVFLOW_RELEASE_TARGET_VERSION: '1.5.0',
-      DEVFLOW_RELEASE_GITHUB_SANDBOX_RECORD: 'package.json',
     } as NodeJS.ProcessEnv
     Object.defineProperty(env, 'DEVFLOW_RELEASE_OPENCODE_RECORD', {
       get() {
@@ -343,8 +517,30 @@ describe('release signoff status', () => {
 
     const collected = collectReleaseSignoffSnapshot('pre-tag', env)
 
-    expect(collected.githubSandboxRecord.path).toBe('package.json')
+    expect(collected.githubSandboxRecord.path).toBe(
+      'docs/releases/v1.5.0/github-sandbox.json',
+    )
     expect(collected).not.toHaveProperty('realOpencodeRecord')
+  })
+
+  it('refuses every noncanonical v1.5 signoff-record override', () => {
+    for (const envName of [
+      'DEVFLOW_RELEASE_WALKTHROUGH_RECORD',
+      'DEVFLOW_RELEASE_GATE_RECORD',
+      'DEVFLOW_RELEASE_GITHUB_SANDBOX_RECORD',
+    ]) {
+      expect(() =>
+        releaseEvidencePaths('1.5.0', {
+          [envName]: 'package.json',
+        } as NodeJS.ProcessEnv),
+      ).toThrow('noncanonical_v15_evidence_path')
+    }
+
+    expect(
+      releaseEvidencePaths('1.4.0', {
+        DEVFLOW_RELEASE_GATE_RECORD: 'tmp/legacy-required-gates.json',
+      } as NodeJS.ProcessEnv).requiredGates,
+    ).toBe('tmp/legacy-required-gates.json')
   })
 
   it('accepts one candidate-bound private GitHub sandbox Draft PR for v1.5', () => {
@@ -445,7 +641,9 @@ describe('release signoff status', () => {
       { bindingVersion: 0 },
       { deliverySeriesKey: 'github-delivery:not-a-digest' },
       { deliveryAttempt: 0 },
+      { deliveryAttempt: 2 },
       { intentRevision: 0 },
+      { intentRevision: 2 },
       { intentDigest: 'not-a-digest' },
       { runVersion: 0 },
       { testEvidenceDigest: 'not-a-digest' },
@@ -482,6 +680,27 @@ describe('release signoff status', () => {
         ...validRecord,
         verifyRun: {
           ...(validRecord.verifyRun as Record<string, unknown>),
+          event: 'pull_request',
+        },
+      },
+      {
+        ...validRecord,
+        verifyRun: {
+          ...(validRecord.verifyRun as Record<string, unknown>),
+          runAttempt: 2,
+        },
+      },
+      {
+        ...validRecord,
+        verifyRun: {
+          ...(validRecord.verifyRun as Record<string, unknown>),
+          url: 'https://github.com/devflow/ai-devflow-studio/actions/runs/654321',
+        },
+      },
+      {
+        ...validRecord,
+        verifyRun: {
+          ...(validRecord.verifyRun as Record<string, unknown>),
           headSha: 'f'.repeat(40),
         },
       },
@@ -498,7 +717,7 @@ describe('release signoff status', () => {
         desktopArtifact: {
           version: '1.5.0',
           platform: 'darwin-arm64',
-          sha256: 'short',
+          sha256: '8'.repeat(64),
         },
       },
     ]
@@ -510,6 +729,183 @@ describe('release signoff status', () => {
       })
       expect(items).toContainEqual(
         expect.objectContaining({ id: 'required-gates', state: 'attention' }),
+      )
+    }
+  })
+
+  it('requires exact v1.5 evidence object shapes', () => {
+    const ready = snapshot({ targetVersion: '1.5.0' })
+    const cases: Array<Partial<ReleaseSignoffSnapshot>> = [
+      {
+        walkthroughEvidence: {
+          ...ready.walkthroughEvidence,
+          value: { ...ready.walkthroughEvidence.value, notes: 'extra field' },
+        },
+      },
+      {
+        requiredGateRecord: record(ready.requiredGateRecord.path, {
+          ...ready.requiredGateRecord.value,
+          notes: 'extra field',
+        }),
+      },
+      {
+        requiredGateRecord: record(ready.requiredGateRecord.path, {
+          ...ready.requiredGateRecord.value,
+          verifyRun: {
+            ...(ready.requiredGateRecord.value!.verifyRun as Record<string, unknown>),
+            notes: 'extra nested field',
+          },
+        }),
+      },
+      {
+        requiredGateRecord: record(ready.requiredGateRecord.path, {
+          ...ready.requiredGateRecord.value,
+          gates: {
+            ...(ready.requiredGateRecord.value!.gates as Record<string, unknown>),
+            convenienceGate: 'passed',
+          },
+        }),
+      },
+      {
+        githubSandboxRecord: record(ready.githubSandboxRecord!.path, {
+          ...ready.githubSandboxRecord!.value,
+          notes: 'extra field',
+        }),
+      },
+    ]
+
+    for (const overrides of cases) {
+      const items = evaluateReleaseSignoffSnapshot({ ...ready, ...overrides })
+      expect(
+        items.some(
+          (item) =>
+            ['dated-walkthrough', 'required-gates', 'github-sandbox'].includes(item.id) &&
+            item.state === 'attention',
+        ),
+      ).toBe(true)
+    }
+  })
+
+  it('rejects unsafe content in the dated v1.5 walkthrough result', () => {
+    const ready = snapshot({ targetVersion: '1.5.0' })
+
+    for (const unsafeContent of [
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nghs_${'a'.repeat(32)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\n-----BEGIN PRIVATE KEY-----`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nAuthorization: Bearer ${'a'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nCookie: devflow_session=${'a'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nSet-Cookie: devflow_session=${'a'.repeat(24)}; HttpOnly`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\ndevflow_session=${'a'.repeat(24)}.${'b'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\n"password": "hunter2-secret"`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\ntoken: opaque-copy-once-value`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\npostgresql://user:password@db.example/release`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nAuthorization: token ${'a'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nX-API-Key: ${'a'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nPrivate-Token: ${'a'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nxoxb-${'a'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nAKIA${'A'.repeat(16)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nAIza${'a'.repeat(32)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nglpat-${'a'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nnpm_${'a'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\npypi-${'a'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nsk_live_${'a'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nAWS_SECRET_ACCESS_KEY=${'a'.repeat(32)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\n_authToken=${'a'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\ndesktop-pairing-project.${'a'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\ndesktop-token-${'a'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\neyJ${'a'.repeat(16)}.${'b'.repeat(16)}.${'c'.repeat(16)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nsk-${'a'.repeat(24)}`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nhttps://user:password@example.com/result`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\ndiff --git a/secret.ts b/secret.ts\n@@ -1 +1 @@`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\n  diff --git a/secret.ts b/secret.ts\n  @@ -1 +1 @@`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\n/Users/alice/private/release.log`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\n/opt/devflow/release.log`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\n/workspace/devflow/release.log`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\n/Volumes/build/release.log`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\n/root/release.log`,
+      `${ready.walkthroughEvidence.referencedEvidenceContent}\nC:\\Users\\alice\\release.log`,
+    ]) {
+      const items = evaluateReleaseSignoffSnapshot({
+        ...ready,
+        walkthroughEvidence: {
+          ...ready.walkthroughEvidence,
+          referencedEvidenceContent: unsafeContent,
+        },
+      })
+      expect(items).toContainEqual(
+        expect.objectContaining({ id: 'dated-walkthrough', state: 'attention' }),
+      )
+      expect(formatReleaseSignoffItems(items)).not.toContain(unsafeContent)
+    }
+  })
+
+  it('binds the dated v1.5 walkthrough to exact schema, delivery, and evidence identities', () => {
+    const ready = snapshot({ targetVersion: '1.5.0' })
+    const content = ready.walkthroughEvidence.referencedEvidenceContent!
+
+    for (const requiredIdentity of [
+      'Team schema v12',
+      'Desktop schema v15',
+      ready.githubSandboxRecord!.value!.deliverySeriesKey as string,
+      ready.githubSandboxRecord!.value!.intentDigest as string,
+      ready.githubSandboxRecord!.value!.testEvidenceDigest as string,
+      ready.githubSandboxRecord!.value!.prPackageDigest as string,
+      ready.githubSandboxRecord!.value!.expectedCommitSha as string,
+      'Operator role: non-maintainer',
+      'Ad hoc maintainer assistance: false',
+      `Packaged artifact: 1.5.0 darwin-arm64 ${desktopArtifactSha}`,
+      `Expected commit: ${ready.githubSandboxRecord!.value!.expectedCommitSha as string}; remote head: ${ready.githubSandboxRecord!.value!.remoteHeadSha as string}.`,
+      'Binding revocation: passed',
+    ]) {
+      const items = evaluateReleaseSignoffSnapshot({
+        ...ready,
+        walkthroughEvidence: {
+          ...ready.walkthroughEvidence,
+          referencedEvidenceContent: content.replaceAll(requiredIdentity, 'missing'),
+        },
+      })
+      expect(items).toContainEqual(
+        expect.objectContaining({ id: 'dated-walkthrough', state: 'attention' }),
+      )
+    }
+
+    for (const requiredStatement of [
+      'Lifecycle counts:',
+      'Sandbox/App:',
+      'Draft state: true',
+      'Restart side-effect repeats:',
+      'Post-revocation credential grant: blocked',
+    ]) {
+      const items = evaluateReleaseSignoffSnapshot({
+        ...ready,
+        walkthroughEvidence: {
+          ...ready.walkthroughEvidence,
+          referencedEvidenceContent: content
+            .split('\n')
+            .filter((line) => !line.startsWith(requiredStatement))
+            .join('\n'),
+        },
+      })
+      expect(items).toContainEqual(
+        expect.objectContaining({ id: 'dated-walkthrough', state: 'attention' }),
+      )
+    }
+
+    for (const ambiguousCount of [
+      content.replace('Delivery attempt: 1;', 'Delivery attempt: 10;'),
+      content.replace('intent revision: 1.', 'intent revision: 10.'),
+      content.replace('Work Request 1,', 'Work Request 10,'),
+      content.replace('credential grant 1,', 'credential grant 10,'),
+    ]) {
+      const items = evaluateReleaseSignoffSnapshot({
+        ...ready,
+        walkthroughEvidence: {
+          ...ready.walkthroughEvidence,
+          referencedEvidenceContent: ambiguousCount,
+        },
+      })
+      expect(items).toContainEqual(
+        expect.objectContaining({ id: 'dated-walkthrough', state: 'attention' }),
       )
     }
   })
@@ -563,6 +959,8 @@ describe('release signoff status', () => {
       { redactionCheck: 'failed' },
       { cleanup: 'failed' },
       { cleanupMethod: 'remote-branch-deletion' },
+      { operatorRole: 'maintainer' },
+      { adHocMaintainerAssistance: true },
     ]) {
       const items = evaluateReleaseSignoffSnapshot(
         v15SnapshotWithSandbox(invalidOutcome),
@@ -790,6 +1188,15 @@ describe('release signoff status', () => {
         mode: 'tagged',
         releaseTagExists: true,
         releaseTagTarget: candidateSha,
+        releaseTagObjectType: 'tag',
+      }),
+    )
+    const lightweightTagItems = evaluateReleaseSignoffSnapshot(
+      snapshot({
+        mode: 'tagged',
+        releaseTagExists: true,
+        releaseTagTarget: signoffSha,
+        releaseTagObjectType: 'commit',
       }),
     )
     const readyItems = evaluateReleaseSignoffSnapshot(
@@ -797,6 +1204,7 @@ describe('release signoff status', () => {
         mode: 'tagged',
         releaseTagExists: true,
         releaseTagTarget: signoffSha,
+        releaseTagObjectType: 'tag',
       }),
     )
 
@@ -804,6 +1212,9 @@ describe('release signoff status', () => {
       expect.objectContaining({ id: 'release-tag', state: 'attention' }),
     )
     expect(wrongTargetItems).toContainEqual(
+      expect.objectContaining({ id: 'release-tag', state: 'attention' }),
+    )
+    expect(lightweightTagItems).toContainEqual(
       expect.objectContaining({ id: 'release-tag', state: 'attention' }),
     )
     expect(readyItems.every((item) => item.state === 'ready')).toBe(true)
@@ -853,6 +1264,23 @@ describe('release signoff status', () => {
     expect(items).toContainEqual(
       expect.objectContaining({ id: 'real-opencode', state: 'attention' }),
     )
+  })
+
+  it('does not echo an untrusted evidence value while rejecting its release binding', () => {
+    const sentinel = `ghs_${'z'.repeat(24)}`
+    const ready = snapshot({ targetVersion: '1.5.0' })
+    const items = evaluateReleaseSignoffSnapshot({
+      ...ready,
+      walkthroughEvidence: {
+        ...ready.walkthroughEvidence,
+        value: { ...ready.walkthroughEvidence.value, targetVersion: sentinel },
+      },
+    })
+
+    expect(items).toContainEqual(
+      expect.objectContaining({ id: 'dated-walkthrough', state: 'attention' }),
+    )
+    expect(formatReleaseSignoffItems(items)).not.toContain(sentinel)
   })
 
   it('rejects missing deterministic gates and secret-bearing opencode records', () => {

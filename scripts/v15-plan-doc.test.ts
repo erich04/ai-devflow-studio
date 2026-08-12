@@ -96,6 +96,18 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(walkthrough).toContain('Run becomes `completed`')
     expect(walkthrough).toContain('binding revocation')
     expect(walkthrough).toContain('docs/releases/v1.5.0/github-sandbox.json')
+    expect(walkthrough).toContain('ai-devflow-studio-v15-candidate-desktop')
+    expect(walkthrough).toContain('DEVFLOW_RELEASE_DESKTOP_ARTIFACT_INDEX')
+    expect(walkthrough).toContain(
+      'private-sandbox walkthrough with that exact downloaded archive',
+    )
+    expect(walkthrough).toContain('Signoff accepts only `run_attempt: 1`')
+    expect(walkthrough).toContain('Publish GitHub Release')
+    expect(walkthrough).toContain('require exactly seven regular')
+    expect(walkthrough).toContain('git/ref/tags/v1.5.0')
+    expect(walkthrough).toContain('desktop-artifact-trio.mjs inspect')
+    expect(walkthrough).toContain('numeric version/count')
+    expect(walkthrough).not.toContain('"evidenceExists"')
     expect(walkthrough).toContain('"desktopArtifact"')
     expect(walkthrough).toContain('"intentDigest"')
     expect(walkthrough).toContain('"runVersion"')

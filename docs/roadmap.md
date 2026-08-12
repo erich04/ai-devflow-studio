@@ -101,14 +101,17 @@ candidate-bound release matrix and real private GitHub sandbox walkthrough pass.
 
 ### Now — Close V1.5 And The 1.x Completion Gate
 
-The scoped contract, authority decision, and seven implementation slices are complete:
+The scoped contract, authority decision, and implementation Slices 1–6 are complete.
+Slice 7, the candidate-bound completion gate, remains in progress:
 
 - `docs/product/prd/v1.5-github-delivery-prd.md`
 - `docs/adr/0013-github-app-delivery-authority.md`
 - `docs/plans/v1.5-github-delivery.md`
 
-- Finish the current-schema lifecycle gate and the packaged Desktop GitHub Delivery gate.
-- Refresh living product/operator documentation and align all six package manifests to `1.5.0`.
+- Keep the implemented lifecycle, packaged Desktop, deterministic, Postgres, and Docker gates green
+  against one frozen candidate.
+- Collect exact-candidate CI, private GitHub sandbox, and redacted signoff evidence before publishing.
+- Keep living product/operator documentation and all six package manifests aligned to `1.5.0`.
 - Keep default verification offline, deterministic, secret-free, and explicit about the V1.5 gates.
 - Keep `v1.4.0` and its release evidence immutable.
 - Do not start 2.x implementation in parallel with the V1.5 delivery closure.
@@ -488,7 +491,7 @@ feature milestone.
 This model explains how deterministic workflow control, bounded model use, autonomous Agent work,
 and code-changing execution fit together.
 
-It is the stable 2.x direction, not a claim that the current V1.4 runtime already implements every
+It is the stable 2.x direction, not a claim that the current 1.x runtime already implements every
 layer.
 
 | Layer | Owns | Use it when | Product posture |

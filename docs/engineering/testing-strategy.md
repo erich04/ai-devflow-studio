@@ -47,30 +47,36 @@ retroactive TDD rewrites unless it is touched.
 
 ## Verification Commands
 
-The normal local quality gates remain:
+The frozen V1.5 candidate must run this complete local matrix against one clean candidate SHA:
 
 ```bash
-corepack pnpm typecheck
-corepack pnpm test
-corepack pnpm test:cross-platform
+corepack pnpm verify
+corepack pnpm build
+corepack pnpm test:build-output-smoke
 corepack pnpm test:e2e
 corepack pnpm test:electron-smoke
-corepack pnpm build
-corepack pnpm verify
-```
-
-The V1.5 candidate-bound gates are:
-
-```bash
 corepack pnpm test:v15-github-delivery
-corepack pnpm test:v15-github-delivery-packaged-smoke
 DEVFLOW_DATABASE_URL=postgres://... corepack pnpm test:postgres-smoke
+corepack pnpm test:docker-smoke
 corepack pnpm test:docker-lifecycle-smoke
+corepack pnpm build:desktop-pilot
+corepack pnpm test:desktop-pilot-smoke
+DEVFLOW_PACKAGED_SMOKE_NETWORK_MODE=offline \
+  corepack pnpm test:v15-github-delivery-packaged-smoke
 ```
 
-`verify` intentionally excludes Postgres, Docker lifecycle, packaged Desktop, and the real private
-GitHub sandbox because they require dedicated environments or credentials. Their results must be
-recorded separately against the same frozen candidate.
+`verify` contains type checking, the complete Vitest suite, and cross-platform static checks. It
+intentionally excludes production builds, browser/Electron runtime smoke, Postgres, Docker,
+packaged Desktop, and the real private GitHub sandbox because those require dedicated environments,
+artifacts, or credentials. Their results must be recorded separately against the same frozen
+candidate.
+
+The exact-candidate `workflow_dispatch` is also the artifact authority. Its `macOS verify` job
+uploads `ai-devflow-studio-v15-candidate-desktop`; signoff records that archive's digest, and both
+local `release:status` and the Release workflow re-read its index/manifest and hash the same archive
+bytes. The Release workflow also checks the recorded run against GitHub's run and job APIs before
+downloading it. A current-runner rebuild may be smoked, but it cannot silently replace the candidate
+artifact.
 
 ## External-Cost And Remote-Write Boundary
 

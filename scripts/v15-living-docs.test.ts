@@ -60,6 +60,7 @@ describe('V1.5 living documentation truth', () => {
   it('documents current V1.5 verification layers without authorizing paid-provider work', () => {
     const testingStrategy = read('docs/engineering/testing-strategy.md')
     const demoAndSmoke = read('docs/engineering/demo-and-smoke.md')
+    const v15Prd = read('docs/product/prd/v1.5-github-delivery-prd.md')
 
     for (const markdown of [testingStrategy, demoAndSmoke]) {
       expect(markdown).toContain('Team schema v12')
@@ -71,6 +72,18 @@ describe('V1.5 living documentation truth', () => {
       expect(markdown).toContain('private GitHub sandbox')
       expect(markdown).toContain('does not authorize paid-provider smoke')
     }
+
+    for (const command of [
+      'corepack pnpm test:build-output-smoke',
+      'corepack pnpm test:docker-smoke',
+      'corepack pnpm build:desktop-pilot',
+      'corepack pnpm test:desktop-pilot-smoke',
+    ]) {
+      expect(testingStrategy).toContain(command)
+    }
+
+    expect(v15Prd).toContain('Lifecycle: Implemented; release/signoff pending')
+    expect(testingStrategy).toContain('ai-devflow-studio-v15-candidate-desktop')
 
     expect(demoAndSmoke).toContain('v1.4.0 remains the current release')
     expect(demoAndSmoke).toContain('Revise')

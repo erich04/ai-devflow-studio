@@ -33,7 +33,8 @@ describe('GitHub release workflow', () => {
     expect(workflow).toContain('workflow_dispatch:')
     expect(workflow).toContain('tags:')
     expect(workflow).toContain("'v*'")
-    expect(workflow).toContain('contents: write')
+    expect(workflow).toContain('contents: read')
+    expect(workflow).toContain('actions: read')
     expect(workflow).toContain('corepack pnpm verify')
     expect(workflow).toContain('corepack pnpm build')
     expect(workflow).toContain('corepack pnpm test:build-output-smoke')
@@ -59,7 +60,7 @@ describe('GitHub release workflow', () => {
     expect(workflow).not.toContain('test:opencode-smoke')
   })
 
-  it('checks out the signoff parent history without auto-following annotated tags', () => {
+  it('checks out the signoff parent history and the exact annotated tag object', () => {
     const workflow = readWorkflow(releaseWorkflowPath)
     const windowsJob = jobBlock(workflow, 'windows-compatibility')
     const artifactsJob = jobBlock(workflow, 'release-artifacts')
@@ -68,7 +69,7 @@ describe('GitHub release workflow', () => {
       /- uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 2[\s\S]*?corepack pnpm test/,
     )
     expect(artifactsJob).toMatch(
-      /- uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 2[\s\S]*?release:status/,
+      /- uses: actions\/checkout@v4\n\s+with:\n\s+ref: \$\{\{ github\.ref \}\}\n\s+fetch-depth: 0[\s\S]*?release:status/,
     )
     expect(artifactsJob).not.toContain('fetch-tags: true')
   })
@@ -80,14 +81,95 @@ describe('GitHub release workflow', () => {
     expect(workflow).not.toContain('VERSION="${GITHUB_REF_NAME:-manual-${GITHUB_RUN_NUMBER}}"')
   })
 
+  it('refuses a manual Release dispatch that is not attached to the recorded signoff commit', () => {
+    const workflow = readWorkflow(releaseWorkflowPath)
+    const artifactsJob = jobBlock(workflow, 'release-artifacts')
+
+    expect(artifactsJob).toContain('Require exact signoff checkout')
+    expect(artifactsJob).toContain('git rev-parse HEAD')
+    expect(artifactsJob).toContain('"$(git rev-parse HEAD)" = "${GITHUB_SHA}"')
+    expect(artifactsJob).toContain('git rev-parse "v${TARGET_VERSION}^{commit}"')
+    expect(artifactsJob).toContain('Manual Release dispatch must use the annotated version tag ref')
+  })
+
   it('publishes the executable Desktop pilot archive and its integrity manifest', () => {
     const workflow = readWorkflow(releaseWorkflowPath)
     const artifactsJob = jobBlock(workflow, 'release-artifacts')
 
-    expect(artifactsJob).toContain('out/desktop-pilot/*.tar.gz')
-    expect(artifactsJob).toContain('out/desktop-pilot/*.manifest.json')
+    expect(artifactsJob).toContain('actions/download-artifact@v4')
+    expect(artifactsJob).toContain('node scripts/validate-release-verify-run.mjs')
+    expect(artifactsJob).toContain('id: recorded-verify')
+    expect(artifactsJob).toContain('run-id: ${{ steps.recorded-verify.outputs.run-id }}')
+    expect(artifactsJob).not.toContain('fs.readFileSync')
+    expect(artifactsJob).not.toContain('Resolve exact-SHA candidate Desktop artifact')
+    expect(artifactsJob).toContain('name: ai-devflow-studio-v15-candidate-desktop')
+    expect(artifactsJob).toContain('path: out/release-candidate-desktop')
+    expect(artifactsJob).toContain(
+      'DEVFLOW_RELEASE_DESKTOP_ARTIFACT_INDEX: out/release-candidate-desktop/artifact-index.json',
+    )
+    expect(artifactsJob).toContain(
+      'desktop-artifact-trio.mjs verify out/release-candidate-desktop/artifact-index.json --exclusive',
+    )
+    expect(artifactsJob).toContain(
+      'desktop-artifact-trio.mjs stage out/release-candidate-desktop/artifact-index.json release-artifacts --exclusive-source',
+    )
+    expect(artifactsJob).toContain('out/release-candidate-desktop/artifact-index.json')
+    expect(artifactsJob).not.toContain('out/release-candidate-desktop/*.tar.gz')
+    expect(artifactsJob).not.toContain('out/release-candidate-desktop/*.manifest.json')
+    expect(artifactsJob).not.toMatch(/cp out\/release-candidate-desktop\/\*/)
+    expect(artifactsJob).not.toContain('path: candidate-desktop')
     expect(artifactsJob).not.toContain('-desktop-renderer.tar.gz')
     expect(artifactsJob).not.toContain('-desktop-electron.tar.gz')
+  })
+
+  it('grants write authority only to a no-checkout publishing job', () => {
+    const workflow = readWorkflow(releaseWorkflowPath)
+    const defaults = workflow.slice(0, workflow.indexOf('\njobs:\n'))
+    const artifactsJob = jobBlock(workflow, 'release-artifacts')
+    const publishJob = jobBlock(workflow, 'publish-release')
+
+    expect(defaults).toContain('actions: read')
+    expect(defaults).toContain('contents: read')
+    expect(defaults).not.toContain('contents: write')
+    expect(workflow.match(/contents: write/g)).toHaveLength(1)
+    expect(artifactsJob).not.toContain('contents: write')
+    expect(artifactsJob).not.toContain('gh release create')
+    expect(artifactsJob).not.toContain('gh release upload')
+    expect(publishJob).toContain('contents: write')
+    expect(publishJob).toContain('actions: read')
+    expect(publishJob).toContain('- release-artifacts')
+    expect(publishJob).not.toContain('actions/checkout')
+    expect(publishJob).not.toContain('uses:')
+    expect(publishJob).not.toContain('scripts/')
+    expect(publishJob).not.toMatch(/\b(?:node|pnpm|npm|npx|corepack)\b/)
+  })
+
+  it('does not persist checkout credentials in repository-code jobs', () => {
+    const workflow = readWorkflow(releaseWorkflowPath)
+    for (const id of [
+      'windows-compatibility',
+      'postgres-integration',
+      'docker-smoke',
+      'docker-lifecycle-smoke',
+      'release-artifacts',
+    ]) {
+      expect(jobBlock(workflow, id)).toMatch(
+        /actions\/checkout@v4[\s\S]*?persist-credentials: false/,
+      )
+    }
+  })
+
+  it('publishes only the current-run artifact after remote annotated-tag verification', () => {
+    const publishJob = jobBlock(readWorkflow(releaseWorkflowPath), 'publish-release')
+
+    expect(publishJob).toContain('gh run download "${GITHUB_RUN_ID}"')
+    expect(publishJob).toContain('--name ai-devflow-studio-release-artifacts')
+    expect(publishJob).toContain('/git/ref/tags/${TAG}')
+    expect(publishJob).toContain('/git/tags/${TAG_OBJECT_SHA}')
+    expect(publishJob).toContain('"${TAG_OBJECT_TYPE}" != "tag"')
+    expect(publishJob).toContain('"${TARGET_TYPE}" != "commit"')
+    expect(publishJob).toContain('"${PEELED_SHA}" != "${GITHUB_SHA}"')
+    expect(publishJob).toContain('EXPECTED_FILE_COUNT=7')
   })
 
   it('bounds Postgres delivery and Docker smoke jobs so a stuck daemon cannot consume the release runner forever', () => {
@@ -140,5 +222,39 @@ describe('GitHub verify workflow', () => {
     expect(workflow).not.toContain('DEVFLOW_RUN_OPENCODE_SMOKE=1')
     expect(workflow).not.toContain('test:opencode-smoke')
     expect(postgresJob).toContain('timeout-minutes: 30')
+  })
+
+  it('uploads the exact-SHA candidate Desktop artifact for signoff and release reuse', () => {
+    const workflow = readWorkflow(verifyWorkflowPath)
+    const macosJob = jobBlock(workflow, 'macos-verify')
+
+    expect(macosJob).toContain('actions/upload-artifact@v4')
+    expect(macosJob).toContain('name: ai-devflow-studio-v15-candidate-desktop')
+    expect(macosJob).toContain(
+      'desktop-artifact-trio.mjs stage out/desktop-pilot/artifact-index.json out/verify-candidate-desktop',
+    )
+    expect(macosJob).toContain('path: out/verify-candidate-desktop/')
+    expect(macosJob).not.toContain('out/desktop-pilot/*.manifest.json')
+    expect(macosJob).not.toContain('out/desktop-pilot/*.tar.gz')
+    expect(macosJob).toContain('compression-level: 0')
+    expect(macosJob).toContain('if-no-files-found: error')
+  })
+
+  it('keeps every Verify checkout read-only and non-persistent', () => {
+    const workflow = readWorkflow(verifyWorkflowPath)
+    const defaults = workflow.slice(0, workflow.indexOf('\njobs:\n'))
+    expect(defaults).toContain('actions: read')
+    expect(defaults).toContain('contents: read')
+    for (const id of [
+      'macos-verify',
+      'windows-compatibility',
+      'postgres-integration',
+      'docker-smoke',
+      'docker-lifecycle-smoke',
+    ]) {
+      expect(jobBlock(workflow, id)).toMatch(
+        /actions\/checkout@v4[\s\S]*?persist-credentials: false/,
+      )
+    }
   })
 })

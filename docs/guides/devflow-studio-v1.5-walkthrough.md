@@ -9,8 +9,7 @@ repository credential. A dated result is written only after every step passes.
 
 ## Preconditions
 
-- Use a clean checkout at the full SHA of `C`, a package built from that same commit, and fresh,
-  isolated Web/API/Postgres/Desktop state.
+- Use a clean checkout at the full SHA of `C` and fresh, isolated Web/API/Postgres/Desktop state.
 - Use a non-sensitive fixture repository and a dedicated private GitHub sandbox repository. The
   sandbox must not be the DevFlow product repository or another production repository.
 - Install the V1.5 GitHub App only on that sandbox. Grant repository Metadata read, Contents write,
@@ -22,11 +21,20 @@ repository credential. A dated result is written only after every step passes.
   and one short-lived project pairing code. Development identity headers are forbidden.
 - Record the candidate SHA, package digest, non-secret sandbox identity, and isolated service names
   before starting. Keep raw local paths out of the result.
+- Dispatch the `Verify` workflow against the exact candidate ref. Its `macOS verify` job uploads the
+  artifact named `ai-devflow-studio-v15-candidate-desktop`; that indexed archive, not a later
+  runner rebuild, is the candidate Desktop artifact used by signoff and release publication.
+- Download and integrity-check that exact workflow artifact before the private-sandbox run. Run the
+  private-sandbox walkthrough with that exact downloaded archive; a local rebuild is not a
+  substitute for the Desktop bytes that will be published.
+- Signoff accepts only `run_attempt: 1`. If any Verify job fails, do not rerun that workflow run;
+  correct only setup outside `C` when permitted, then dispatch a new exact-candidate Verify run.
 
 ## Operator Path
 
-1. Start the candidate-bound self-hosted stack and packaged Desktop. Confirm API and Web readiness,
-   current Team schema, fresh Desktop state, and absence of prior Delivery records.
+1. Start the candidate-bound self-hosted stack and the packaged Desktop extracted from the exact
+   downloaded Verify artifact. Confirm API and Web readiness, current Team schema, fresh Desktop
+   state, the artifact's recorded SHA-256, and absence of prior Delivery records.
 2. Sign in through the identity-only GitHub OAuth path. In Web, select the intended Team Project and
    configure its repository binding with the sandbox installation id and repository id. Confirm the
    API resolves the canonical private repository and `main` base branch.
@@ -95,8 +103,9 @@ raw HTTP/git/provider output, source content, prompts, patches, local paths, or 
 V1.5 does not authorize or require another paid OpenCode provider smoke; the V1.4 paid-smoke record
 remains immutable and candidate-bound to V1.4.
 
-Use these exact record shapes. Replace angle-bracket placeholders with observed non-secret values;
-do not add convenience fields containing local diagnostics or credentials.
+Use these exact record shapes. Replace every example identity, numeric version/count, role, URL, and
+angle-bracket placeholder with the observed non-secret value while preserving the exact keys and
+fixed lifecycle outcomes. Do not add convenience fields containing local diagnostics or credentials.
 
 `docs/releases/v1.5.0/walkthrough.json`:
 
@@ -107,8 +116,7 @@ do not add convenience fields containing local diagnostics or credentials.
   "status": "passed",
   "date": "YYYY-MM-DD",
   "method": "computer-use",
-  "evidencePath": "docs/guides/devflow-studio-v1.5-walkthrough-result-YYYY-MM-DD.md",
-  "evidenceExists": true
+  "evidencePath": "docs/guides/devflow-studio-v1.5-walkthrough-result-YYYY-MM-DD.md"
 }
 ```
 
@@ -145,6 +153,7 @@ do not add convenience fields containing local diagnostics or credentials.
     "workflow": "Verify",
     "event": "workflow_dispatch",
     "runId": 123456789,
+    "runAttempt": 1,
     "url": "https://github.com/erich04/ai-devflow-studio/actions/runs/123456789",
     "headSha": "<C-full-40-hex-SHA>",
     "conclusion": "success",
@@ -177,23 +186,23 @@ do not add convenience fields containing local diagnostics or credentials.
   "appSlug": "<lowercase-hyphenated-app-slug>",
   "installationIdSuffix": "<exactly-4-digits>",
   "repositoryIdSuffix": "<exactly-4-digits>",
-  "bindingVersion": 1,
+  "bindingVersion": 2,
   "deliverySeriesKey": "github-delivery:<64-hex>",
   "deliveryAttempt": 1,
   "intentRevision": 1,
   "intentDigest": "<64-hex>",
-  "runVersion": 1,
+  "runVersion": 7,
   "testEvidenceDigest": "<64-hex>",
   "prPackageDigest": "<64-hex>",
   "expectedCommitSha": "<40-hex sandbox source commit>",
   "remoteHeadSha": "<same-40-hex sandbox source commit>",
   "baseBranch": "main",
   "headBranch": "devflow/<safe-branch-name>",
-  "pullRequestNumber": 1,
-  "pullRequestUrl": "https://github.com/erich04/ai-devflow-studio-v15-sandbox/pull/1",
+  "pullRequestNumber": 17,
+  "pullRequestUrl": "https://github.com/erich04/ai-devflow-studio-v15-sandbox/pull/17",
   "draft": true,
   "merged": false,
-  "approvalRole": "owner",
+  "approvalRole": "lead",
   "approvalAuthKind": "session_cookie",
   "workRequestCount": 1,
   "canonicalRunCount": 1,
@@ -207,7 +216,9 @@ do not add convenience fields containing local diagnostics or credentials.
   "postRevocationGrant": "blocked",
   "redactionCheck": "passed",
   "cleanup": "passed",
-  "cleanupMethod": "external-operator-no-merge"
+  "cleanupMethod": "external-operator-no-merge",
+  "operatorRole": "non-maintainer",
+  "adHocMaintainerAssistance": false
 }
 ```
 
@@ -215,24 +226,91 @@ The dated result must say `Status: Passed` and record `C`, the packaged artifact
 SHA-256, Team schema v12, Desktop schema v15, exact-SHA Verify URL, non-secret sandbox/App identity,
 series/attempt/revision and digests, lifecycle counts, approval role/auth kind, expected/remote SHA,
 Draft URL and state, completed Acceptance, restart zero-repeat observations, revocation result,
-redaction scan, cleanup, and any non-sensitive setup correction. It must not record `S`, because the
-dated result itself participates in calculating `S`.
+redaction scan, cleanup, the non-maintainer operator role, zero ad hoc maintainer assistance, and any
+non-sensitive setup correction. It must not record `S`, because the dated result itself participates
+in calculating `S`.
+
+Use this exact label skeleton so the result remains both human-auditable and machine-checkable:
+
+```markdown
+# V1.5 walkthrough result
+
+Status: Passed
+Candidate: <C-full-40-hex-SHA>
+Packaged artifact: 1.5.0 <platform-arch> <64-hex-SHA-256>
+Team schema v12; Desktop schema v15.
+Verify: <exact-first-attempt-workflow_dispatch-run-URL>
+Delivery series: <github-delivery:64-hex>
+Delivery attempt: 1; intent revision: 1.
+Intent digest: <64-hex>
+Test evidence digest: <64-hex>
+PR package digest: <64-hex>
+Expected commit: <40-hex>; remote head: <same-40-hex>.
+Draft PR: <canonical-GitHub-Draft-PR-URL>
+Acceptance: completed. Restart recovery: passed. Binding revocation: passed.
+Redaction check: passed. Cleanup: passed. The Draft PR was not merged.
+Operator role: non-maintainer. Ad hoc maintainer assistance: false.
+Approval role/auth: <owner-or-lead>/<session_cookie>.
+Lifecycle counts: Work Request 1, canonical Run 1, credential grant 1, branch publication 1, Draft PR 1.
+Sandbox/App: private <owner/repository> via <app-slug>.
+Draft state: true; merged: false; automatic retry: false.
+Restart side-effect repeats: credential 0, push 0, pull request 0.
+Post-revocation credential grant: blocked.
+```
 
 ## Candidate, Signoff, And Tag Sequence
 
 1. Commit every ordinary product, test, workflow, version, and documentation change. With a clean
-   worktree, record that commit as `C`; push it and complete the local matrix, exact-SHA Verify run,
-   packaged smoke, and private-sandbox walkthrough without changing `C`.
+   worktree, record that commit as `C`; push it and complete the local matrix and exact-SHA Verify
+   run without changing `C`. Download `ai-devflow-studio-v15-candidate-desktop` from that exact
+   first-attempt `workflow_dispatch` run into a temporary directory. Confirm its index names only sibling
+   manifest/archive files and the manifest archive SHA-256 equals the actual archive bytes. Extract
+   and use that exact archive for the packaged private-sandbox walkthrough. Only after it passes,
+   record the same platform/version/SHA in `required-gates.json`. Do not record the temporary path.
 2. Add only the four evidence files above, then create one commit `S`. Require
    `git rev-parse S^1` to equal `C`, and require `git diff --name-only C..S` to list exactly those
    four paths.
-3. On `S`, run `corepack pnpm release:status -- --mode=pre-tag`. Do not move `C`, amend `S`, or add
-   another evidence commit after it passes.
+3. On `S`, point `DEVFLOW_RELEASE_DESKTOP_ARTIFACT_INDEX` at the downloaded candidate
+   `artifact-index.json`, then run `corepack pnpm release:status -- --mode=pre-tag`. The evaluator
+   independently hashes the archive and compares it with both its manifest and
+   `required-gates.json`. Do not move `C`, amend `S`, or add another evidence commit after it passes.
 4. Preserve both original commits when integrating the release branch; squash and rebase are
    forbidden. Create the annotated tag with
    `git tag -a v1.5.0 S -m "AI DevFlow Studio v1.5.0"`.
-5. Before pushing the tag, check out `S` and run
-   `corepack pnpm release:status -- --mode=tagged`. Push the annotated tag only after it passes, then
-   verify the tag-triggered Release workflow and all published assets.
+5. Before pushing the tag, check out `S`, point
+   `DEVFLOW_RELEASE_DESKTOP_ARTIFACT_INDEX` at the same downloaded index, and run
+   `corepack pnpm release:status -- --mode=tagged`. Push the annotated tag only after it passes. The
+   Release workflow independently reads the recorded run from the GitHub API, requires the exact
+   `workflow_dispatch` event, candidate SHA, URL, repository, conclusion, and five successful jobs,
+   then downloads and revalidates the same artifact. It publishes that archive instead of its
+   current-runner rebuild. Wait for the exact tag-triggered `Release` workflow to succeed and confirm
+   its `Publish GitHub Release` job succeeded. Independently query `git/ref/tags/v1.5.0`, require its
+   object type to be `tag`, query `git/tags/<tag-object-SHA>`, and require its commit target to equal
+   `S`. Download the Release assets into a new temporary directory, require exactly seven regular
+   files, and run `node scripts/desktop-artifact-trio.mjs inspect
+   <temporary-directory>/artifact-index.json`. Its index-bound Desktop archive and manifest plus
+   `artifact-index.json`, `manifest.txt`, and the exact `ai-devflow-studio-v1.5.0-{web-next-build,
+   api-build,worker-build}.tar.gz` files must be the complete seven-file set. A practical command
+   sequence is:
+
+   ```bash
+   TAG_OBJECT_SHA="$(gh api repos/erich04/ai-devflow-studio/git/ref/tags/v1.5.0 \
+     --jq 'select(.object.type == "tag") | .object.sha')"
+   test -n "${TAG_OBJECT_SHA}"
+   test "$(gh api repos/erich04/ai-devflow-studio/git/tags/${TAG_OBJECT_SHA} \
+     --jq 'select(.object.type == "commit") | .object.sha')" = "$(git rev-parse S)"
+   RELEASE_CHECK_DIR="$(mktemp -d)"
+   gh release download v1.5.0 --repo erich04/ai-devflow-studio --dir "${RELEASE_CHECK_DIR}"
+   test "$(find "${RELEASE_CHECK_DIR}" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 7
+   test "$(find "${RELEASE_CHECK_DIR}" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 7
+   node scripts/desktop-artifact-trio.mjs inspect "${RELEASE_CHECK_DIR}/artifact-index.json"
+   test -f "${RELEASE_CHECK_DIR}/manifest.txt"
+   for kind in web-next-build api-build worker-build; do
+     test -f "${RELEASE_CHECK_DIR}/ai-devflow-studio-v1.5.0-${kind}.tar.gz"
+   done
+   ```
+
+   Remove only that newly created temporary directory after the checks pass, before changing release
+   truth.
 6. Make the first post-release documentation commit without moving the tag: set Current Release to
    `v1.5.0`, mark 1.x complete, and make the V2.0 contract/ADR the next action.

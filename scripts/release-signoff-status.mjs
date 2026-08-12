@@ -1,8 +1,15 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
+import { inspectDesktopArtifactTrioSync } from './desktop-artifact-trio.mjs'
+import {
+  readBoundedJsonFileSync,
+  readBoundedUtf8FileSync,
+  ReleaseEvidenceFileError,
+} from './release-evidence-file.mjs'
 
 const rootPackagePath = 'package.json'
+const defaultDesktopArtifactIndexPath = 'out/desktop-pilot/artifact-index.json'
 const releaseModes = new Set(['pre-tag', 'tagged'])
 
 export const packagePaths = [
@@ -174,7 +181,19 @@ export function parseReleaseMode(args) {
 
 export function releaseEvidencePaths(targetVersion, env = process.env) {
   const releaseDir = `docs/releases/v${targetVersion}`
-  const evidence = releaseProfileFor(targetVersion)?.evidence ?? realOpencodeEvidence
+  const profile = releaseProfileFor(targetVersion)
+  const evidence = profile?.evidence ?? realOpencodeEvidence
+
+  if (
+    evidence.canonicalSignoffPaths === true &&
+    [
+      env.DEVFLOW_RELEASE_WALKTHROUGH_RECORD,
+      env.DEVFLOW_RELEASE_GATE_RECORD,
+      env[evidence.envName],
+    ].some((value) => typeof value === 'string' && value.trim().length > 0)
+  ) {
+    throw new Error('noncanonical_v15_evidence_path')
+  }
 
   return {
     walkthrough:
@@ -197,7 +216,7 @@ function readEvidenceRecord(path) {
   }
 
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8'))
+    const parsed = readBoundedJsonFileSync(path)
     return {
       path,
       exists: true,
@@ -208,9 +227,58 @@ function readEvidenceRecord(path) {
     return {
       path,
       exists: true,
-      parseError: error instanceof Error ? error.message : String(error),
+      parseError:
+        error instanceof ReleaseEvidenceFileError
+          ? error.code
+          : 'RELEASE_EVIDENCE_FILE_READ_FAILED',
       value: null,
     }
+  }
+}
+
+function nullDesktopArtifactEvidence(indexPath, exists, parseError) {
+  return {
+    indexPath,
+    exists,
+    parseError,
+    version: null,
+    platform: null,
+    declaredSha256: null,
+    actualSha256: null,
+  }
+}
+
+export function collectDesktopArtifactEvidence(
+  indexPath = defaultDesktopArtifactIndexPath,
+) {
+  if (!existsSync(indexPath)) {
+    return nullDesktopArtifactEvidence(indexPath, false, null)
+  }
+
+  try {
+    const artifact = inspectDesktopArtifactTrioSync(indexPath)
+    return {
+      indexPath,
+      exists: true,
+      parseError: null,
+      version: artifact.version,
+      platform: `${artifact.platform}-${artifact.arch}`,
+      declaredSha256: artifact.archiveSha256,
+      actualSha256: artifact.archiveSha256,
+    }
+  } catch (error) {
+    const code =
+      error && typeof error === 'object' && 'code' in error
+        ? String(error.code)
+        : ''
+    const parseError = code === 'artifact_digest_mismatch'
+      ? 'artifact_digest_mismatch'
+      : code.startsWith('artifact_manifest') || code === 'artifact_names_not_bound'
+        ? 'invalid_artifact_manifest'
+        : code.startsWith('artifact_archive')
+          ? 'invalid_artifact_archive'
+          : 'invalid_artifact_index'
+    return nullDesktopArtifactEvidence(indexPath, true, parseError)
   }
 }
 
@@ -219,15 +287,58 @@ function collectWalkthroughEvidence(path) {
   const evidencePath = record.value?.evidencePath
 
   if (typeof evidencePath !== 'string') {
-    return record
+    return {
+      ...record,
+      referencedEvidenceExists: false,
+      referencedEvidenceContent: null,
+      referencedEvidenceReadError: null,
+    }
   }
 
-  return {
-    ...record,
-    value: {
-      ...record.value,
-      evidenceExists: existsSync(evidencePath),
-    },
+  const releaseSeries = releaseSeriesFor(record.value?.targetVersion)
+  const date = record.value?.date
+  const expectedPath =
+    typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && releaseSeries
+      ? `docs/guides/devflow-studio-v${releaseSeries}-walkthrough-result-${date}.md`
+      : null
+  if (expectedPath === null || evidencePath !== expectedPath) {
+    return {
+      ...record,
+      referencedEvidenceExists: false,
+      referencedEvidenceContent: null,
+      referencedEvidenceReadError: null,
+    }
+  }
+
+  if (!existsSync(evidencePath)) {
+    return {
+      ...record,
+      referencedEvidenceExists: false,
+      referencedEvidenceContent: null,
+      referencedEvidenceReadError: null,
+    }
+  }
+
+  try {
+    return {
+      ...record,
+      referencedEvidenceExists: true,
+      referencedEvidenceContent: readBoundedUtf8FileSync(
+        evidencePath,
+        128 * 1024,
+      ),
+      referencedEvidenceReadError: null,
+    }
+  } catch (error) {
+    return {
+      ...record,
+      referencedEvidenceExists: true,
+      referencedEvidenceContent: null,
+      referencedEvidenceReadError:
+        error instanceof ReleaseEvidenceFileError
+          ? 'walkthrough_result_unsafe'
+          : 'walkthrough_result_unreadable',
+    }
   }
 }
 
@@ -264,18 +375,24 @@ export function collectReleaseSignoffSnapshot(mode, env = process.env) {
     changedFilesFromCandidate = null
   }
   const evidencePaths = releaseEvidencePaths(targetVersion, env)
+  const desktopArtifactIndexPath =
+    env.DEVFLOW_RELEASE_DESKTOP_ARTIFACT_INDEX?.trim() ||
+    defaultDesktopArtifactIndexPath
 
   let releaseTagExists = false
   let releaseTagTarget = null
+  let releaseTagObjectType = null
   try {
     const releaseTag = `v${targetVersion}`
     releaseTagExists = runGit(['tag', '--list', releaseTag]) === releaseTag
     if (releaseTagExists) {
       releaseTagTarget = runGit(['rev-list', '-n', '1', releaseTag])
+      releaseTagObjectType = runGit(['cat-file', '-t', `refs/tags/${releaseTag}`])
     }
   } catch {
     releaseTagExists = false
     releaseTagTarget = null
+    releaseTagObjectType = null
   }
 
   return {
@@ -290,6 +407,8 @@ export function collectReleaseSignoffSnapshot(mode, env = process.env) {
     currentBranch,
     releaseTagExists,
     releaseTagTarget,
+    releaseTagObjectType,
+    desktopArtifactEvidence: collectDesktopArtifactEvidence(desktopArtifactIndexPath),
     walkthroughEvidence: collectWalkthroughEvidence(evidencePaths.walkthrough),
     requiredGateRecord: readEvidenceRecord(evidencePaths.requiredGates),
     [releaseEvidence.snapshotKey]: readEvidenceRecord(
@@ -302,25 +421,140 @@ function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function hasExactKeys(value, expectedKeys) {
+  if (!isRecord(value)) {
+    return false
+  }
+  const actualKeys = Object.keys(value)
+  return (
+    actualKeys.length === expectedKeys.length &&
+    expectedKeys.every((key) => Object.prototype.hasOwnProperty.call(value, key))
+  )
+}
+
+const v15WalkthroughKeys = [
+  'targetVersion',
+  'candidateSha',
+  'status',
+  'date',
+  'method',
+  'evidencePath',
+]
+
+const v15RequiredGateKeys = [
+  'targetVersion',
+  'candidateSha',
+  'status',
+  'recordedAt',
+  'gates',
+  'localMatrix',
+  'verifyRun',
+  'desktopArtifact',
+]
+
+const v15GitHubSandboxKeys = [
+  'targetVersion',
+  'candidateSha',
+  'status',
+  'recordedAt',
+  'repository',
+  'repositoryVisibility',
+  'appSlug',
+  'installationIdSuffix',
+  'repositoryIdSuffix',
+  'bindingVersion',
+  'deliverySeriesKey',
+  'deliveryAttempt',
+  'intentRevision',
+  'intentDigest',
+  'runVersion',
+  'testEvidenceDigest',
+  'prPackageDigest',
+  'expectedCommitSha',
+  'remoteHeadSha',
+  'baseBranch',
+  'headBranch',
+  'pullRequestNumber',
+  'pullRequestUrl',
+  'draft',
+  'merged',
+  'approvalRole',
+  'approvalAuthKind',
+  'workRequestCount',
+  'canonicalRunCount',
+  'credentialGrantCount',
+  'branchPublicationCount',
+  'draftPullRequestCount',
+  'automaticRetry',
+  'acceptanceStatus',
+  'restartRecovery',
+  'bindingRevocation',
+  'postRevocationGrant',
+  'redactionCheck',
+  'cleanup',
+  'cleanupMethod',
+  'operatorRole',
+  'adHocMaintainerAssistance',
+]
+
+function v15EvidenceShapeIssue(snapshot, kind, value) {
+  if (releaseSeriesFor(snapshot.targetVersion) !== '1.5') {
+    return null
+  }
+  const profileGateIds = releaseProfileFor(snapshot.targetVersion)?.requiredGateIds ?? []
+  const expectedJobs = [
+    'macOS verify',
+    'Windows compatibility',
+    'Postgres integration',
+    'Docker smoke',
+    'Docker lifecycle smoke',
+  ]
+  const valid =
+    kind === 'walkthrough'
+      ? hasExactKeys(value, v15WalkthroughKeys)
+      : kind === 'required-gates'
+        ? hasExactKeys(value, v15RequiredGateKeys) &&
+          hasExactKeys(value.gates, profileGateIds) &&
+          hasExactKeys(value.localMatrix, [
+            'candidateSha',
+            'result',
+            'worktreeCleanAfter',
+          ]) &&
+          hasExactKeys(value.verifyRun, [
+            'workflow',
+            'event',
+            'runId',
+            'runAttempt',
+            'url',
+            'headSha',
+            'conclusion',
+            'jobs',
+          ]) &&
+          hasExactKeys(value.verifyRun?.jobs, expectedJobs) &&
+          hasExactKeys(value.desktopArtifact, ['version', 'platform', 'sha256'])
+        : hasExactKeys(value, v15GitHubSandboxKeys)
+  return valid ? null : `Unexpected or missing fields in the v1.5 ${kind} evidence.`
+}
+
 function evidenceBaseState(record, snapshot) {
   if (!record.exists) {
     return {
       state: 'pending',
-      detail: `Missing evidence record ${record.path}.`,
+      detail: 'Missing required evidence record.',
     }
   }
 
   if (record.parseError || !isRecord(record.value)) {
     return {
       state: 'attention',
-      detail: `Invalid evidence record ${record.path}: ${record.parseError ?? 'expected a JSON object'}.`,
+      detail: 'Invalid bounded evidence record.',
     }
   }
 
   if (record.value.targetVersion !== snapshot.targetVersion) {
     return {
       state: 'attention',
-      detail: `${record.path} targets ${record.value.targetVersion ?? 'no version'}, expected ${snapshot.targetVersion}.`,
+      detail: `${record.path} targets a different release version; expected ${snapshot.targetVersion}.`,
     }
   }
 
@@ -371,6 +605,15 @@ function evaluateWalkthroughEvidence(snapshot) {
       detail: safetyIssue,
     }
   }
+  const shapeIssue = v15EvidenceShapeIssue(snapshot, 'walkthrough', value)
+  if (shapeIssue) {
+    return {
+      id: 'dated-walkthrough',
+      label: 'Dated Computer Use walkthrough',
+      state: 'attention',
+      detail: shapeIssue,
+    }
+  }
   const releaseSeries = releaseSeriesFor(snapshot.targetVersion)
   const expectedPath = `docs/guides/devflow-studio-v${releaseSeries ?? 'unknown'}-walkthrough-result-${value.date}.md`
   const validDate = typeof value.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
@@ -378,7 +621,13 @@ function evaluateWalkthroughEvidence(snapshot) {
     validDate &&
     value.method === 'computer-use' &&
     value.evidencePath === expectedPath &&
-    value.evidenceExists === true
+    snapshot.walkthroughEvidence.referencedEvidenceExists === true &&
+    snapshot.walkthroughEvidence.referencedEvidenceReadError === null &&
+    (releaseSeries !== '1.5' ||
+      isValidV15WalkthroughContent(
+        snapshot.walkthroughEvidence.referencedEvidenceContent,
+        snapshot,
+      ))
 
   return {
     id: 'dated-walkthrough',
@@ -410,6 +659,15 @@ function evaluateRequiredGateRecord(snapshot) {
       detail: safetyIssue,
     }
   }
+  const shapeIssue = v15EvidenceShapeIssue(snapshot, 'required-gates', value)
+  if (shapeIssue) {
+    return {
+      id: 'required-gates',
+      label: 'Required deterministic gates',
+      state: 'attention',
+      detail: shapeIssue,
+    }
+  }
   const gates = value.gates
   const profileGateIds = releaseProfileFor(snapshot.targetVersion)?.requiredGateIds ?? []
   const missingOrFailed =
@@ -437,6 +695,13 @@ function isValidV15GateMetadata(value, snapshot) {
   const localMatrix = value.localMatrix
   const verifyRun = value.verifyRun
   const desktopArtifact = value.desktopArtifact
+  const collectedArtifact = snapshot.desktopArtifactEvidence
+  const verifyRunUrlMatch =
+    typeof verifyRun?.url === 'string'
+      ? /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/([1-9]\d*)$/.exec(
+          verifyRun.url,
+        )
+      : null
   const expectedJobs = [
     'macOS verify',
     'Windows compatibility',
@@ -453,13 +718,11 @@ function isValidV15GateMetadata(value, snapshot) {
     localMatrix.worktreeCleanAfter === true &&
     isRecord(verifyRun) &&
     verifyRun.workflow === 'Verify' &&
-    (verifyRun.event === 'pull_request' || verifyRun.event === 'workflow_dispatch') &&
+    verifyRun.event === 'workflow_dispatch' &&
     Number.isSafeInteger(verifyRun.runId) &&
     verifyRun.runId > 0 &&
-    typeof verifyRun.url === 'string' &&
-    /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/[1-9]\d*$/.test(
-      verifyRun.url,
-    ) &&
+    verifyRun.runAttempt === 1 &&
+    verifyRunUrlMatch?.[1] === String(verifyRun.runId) &&
     verifyRun.headSha === snapshot.candidateSha &&
     verifyRun.conclusion === 'success' &&
     isRecord(verifyRun.jobs) &&
@@ -469,7 +732,14 @@ function isValidV15GateMetadata(value, snapshot) {
     typeof desktopArtifact.platform === 'string' &&
     /^(?:darwin|linux|win32)-(?:arm64|x64)$/.test(desktopArtifact.platform) &&
     typeof desktopArtifact.sha256 === 'string' &&
-    /^[0-9a-f]{64}$/.test(desktopArtifact.sha256)
+    /^[0-9a-f]{64}$/.test(desktopArtifact.sha256) &&
+    isRecord(collectedArtifact) &&
+    collectedArtifact.exists === true &&
+    collectedArtifact.parseError === null &&
+    collectedArtifact.version === desktopArtifact.version &&
+    collectedArtifact.platform === desktopArtifact.platform &&
+    collectedArtifact.declaredSha256 === desktopArtifact.sha256 &&
+    collectedArtifact.actualSha256 === desktopArtifact.sha256
   )
 }
 
@@ -537,18 +807,142 @@ function findUnsafeEvidenceValues(value, parentPath = '') {
     trimmed.startsWith('/') ||
     trimmed.startsWith('\\') ||
     /^[A-Za-z]:[\\/]/.test(trimmed) ||
-    /(?:^|[\s"'(=])\/(?!\/)/.test(value)
+    /(?:^|[\s"'(=])\/(?!\/)/.test(value) ||
+    containsSecretOrRawPatch(value)
   return unsafe ? [parentPath || '<root>'] : []
+}
+
+function containsSecretOrRawPatch(value) {
+  return (
+    /\bgh[pousr]_[A-Za-z0-9_]{8,}\b/.test(value) ||
+    /\bgithub_pat_[A-Za-z0-9_]{8,}\b/.test(value) ||
+    /\bsk-(?:ant-)?[A-Za-z0-9_-]{6,}\b/.test(value) ||
+    /\bsk_(?:live|test)_[A-Za-z0-9]{8,}\b/.test(value) ||
+    /\bxox(?:b|p|a|r|s)-[A-Za-z0-9-]{8,}\b/i.test(value) ||
+    /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/.test(value) ||
+    /\bAIza[A-Za-z0-9_-]{20,}\b/.test(value) ||
+    /\bglpat-[A-Za-z0-9_-]{10,}\b/.test(value) ||
+    /\bnpm_[A-Za-z0-9]{10,}\b/.test(value) ||
+    /\bpypi-[A-Za-z0-9_-]{10,}\b/.test(value) ||
+    /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b/.test(
+      value,
+    ) ||
+    /\bdesktop-pairing-[A-Za-z0-9._-]+\.[A-Za-z0-9_-]{6,}\b/i.test(value) ||
+    /\bdesktop-token-[A-Za-z0-9._-]{6,}\b/i.test(value) ||
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/.test(value) ||
+    /\b(?:Bearer|Basic)\s+[A-Za-z0-9+/=._-]{8,}/i.test(value) ||
+    /\bAuthorization\s*:\s*token\s+\S+/i.test(value) ||
+    /(?:^|\n)[ \t]*(?:X-API-Key|Private-Token)\s*:\s*\S+/i.test(value) ||
+    /(?:^|\n)[ \t]*(?:Cookie|Set-Cookie|Proxy-Authorization)\s*:\s*\S+/i.test(
+      value,
+    ) ||
+    /\bdevflow_session\s*=\s*[A-Za-z0-9._-]{8,}/i.test(value) ||
+    /(?:^|\n)[ \t]*["']?(?:api[_-]?key|client[_-]?secret|password|private[_-]?key|secret|token)["']?[ \t]*:[ \t]*["']?[^\s"',;]{4,}/i.test(
+      value,
+    ) ||
+    /\b[A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|COOKIE)\s*=\s*\S+/i.test(
+      value,
+    ) ||
+    /\b(?:AWS_SECRET_ACCESS_KEY|_authToken)\s*=\s*\S+/i.test(value) ||
+    /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i.test(value) ||
+    /(?:^|\n)[ \t]*diff --git\s/.test(value) ||
+    /(?:^|\n)[ \t]*@@\s+-\d/.test(value)
+  )
+}
+
+function containsLocalAbsolutePath(value) {
+  return (
+    /file:\/\/\//i.test(value) ||
+    /(?:^|[\s`'"(])[A-Za-z]:[\\/]/.test(value) ||
+    /(?:^|[\s`'"(])\\\\[^\\\s]+\\/.test(value) ||
+    /(?:^|[\s`'"(=:,\[])\/(?!\/)[A-Za-z0-9._~-]+(?:\/[^\s`'"<>{}\[\]]*)?/.test(
+      value,
+    )
+  )
+}
+
+function isValidV15WalkthroughContent(content, snapshot) {
+  if (
+    typeof content !== 'string' ||
+    content.trim().length === 0 ||
+    containsSecretOrRawPatch(content) ||
+    containsLocalAbsolutePath(content)
+  ) {
+    return false
+  }
+
+  const requiredGateValue = snapshot.requiredGateRecord?.value
+  const sandboxValue = snapshot.githubSandboxRecord?.value
+  const artifactVersion = requiredGateValue?.desktopArtifact?.version
+  const artifactPlatform = requiredGateValue?.desktopArtifact?.platform
+  const artifactSha = requiredGateValue?.desktopArtifact?.sha256
+  const verifyUrl = requiredGateValue?.verifyRun?.url
+  const pullRequestUrl = sandboxValue?.pullRequestUrl
+  const exactValues = [snapshot.candidateSha, artifactSha, verifyUrl, pullRequestUrl]
+  const deliveryValues = [
+    sandboxValue?.deliverySeriesKey,
+    sandboxValue?.intentDigest,
+    sandboxValue?.testEvidenceDigest,
+    sandboxValue?.prPackageDigest,
+    sandboxValue?.expectedCommitSha,
+  ]
+  return (
+    [...exactValues, ...deliveryValues].every(
+      (value) => isNonEmptyString(value) && content.includes(value),
+    ) &&
+    /Status:\s*Passed/i.test(content) &&
+    /Team schema v12/i.test(content) &&
+    /Desktop schema v15/i.test(content) &&
+    new RegExp(
+      `Packaged artifact:[^\\n]*${escapeRegExp(String(artifactVersion))}[^\\n]*${escapeRegExp(String(artifactPlatform))}[^\\n]*${escapeRegExp(String(artifactSha))}`,
+      'i',
+    ).test(content) &&
+    /Delivery attempt\s*:\s*1(?!\d)/i.test(content) &&
+    /intent revision\s*:\s*1(?!\d)/i.test(content) &&
+    new RegExp(
+      `Sandbox/App:[^\\n]*private[^\\n]*${escapeRegExp(String(sandboxValue?.repository))}[^\\n]*${escapeRegExp(String(sandboxValue?.appSlug))}`,
+      'i',
+    ).test(content) &&
+    new RegExp(
+      `Approval role/auth:[^\\n]*${escapeRegExp(String(sandboxValue?.approvalRole))}[^\\n]*${escapeRegExp(String(sandboxValue?.approvalAuthKind))}`,
+      'i',
+    ).test(content) &&
+    /Lifecycle counts:[^\n]*Work Request 1(?!\d)[^\n]*canonical Run 1(?!\d)[^\n]*credential grant 1(?!\d)[^\n]*branch publication 1(?!\d)[^\n]*Draft PR 1(?!\d)/i.test(
+      content,
+    ) &&
+    new RegExp(
+      `Expected commit:[^\\n]*${escapeRegExp(String(sandboxValue?.expectedCommitSha))}[^\\n]*remote head:[^\\n]*${escapeRegExp(String(sandboxValue?.remoteHeadSha))}`,
+      'i',
+    ).test(content) &&
+    /Operator role[^\n]*non-maintainer/i.test(content) &&
+    /Ad hoc maintainer assistance[^\n]*false/i.test(content) &&
+    /Draft state[^\n]*true/i.test(content) &&
+    /automatic retry[^\n]*false/i.test(content) &&
+    /Restart side-effect repeats[^\n]*credential 0[^\n]*push 0[^\n]*pull request 0/i.test(
+      content,
+    ) &&
+    /Restart recovery[^\n]*passed/i.test(content) &&
+    /Binding revocation[^\n]*passed/i.test(content) &&
+    /Post-revocation credential grant[^\n]*blocked/i.test(content) &&
+    /Acceptance[^\n]*completed/i.test(content) &&
+    /(?:not merged|no merge)/i.test(content) &&
+    /Redaction[^\n]*passed/i.test(content) &&
+    /Cleanup[^\n]*passed/i.test(content)
+  )
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function evidenceSafetyIssue(recordPath, value) {
   const forbiddenFields = findForbiddenEvidenceFields(value)
   if (forbiddenFields.length > 0) {
-    return `Secret-bearing fields are forbidden in ${recordPath}: ${forbiddenFields.join(', ')}.`
+    return 'Secret-bearing fields are forbidden in release evidence.'
   }
   const unsafeValues = findUnsafeEvidenceValues(value)
   if (unsafeValues.length > 0) {
-    return `Local absolute paths are forbidden in ${recordPath}: ${unsafeValues.join(', ')}.`
+    return 'Local absolute paths are forbidden; unsafe text is also forbidden in release evidence.'
   }
   return null
 }
@@ -648,7 +1042,7 @@ function evaluateRealOpencodeRecord(snapshot) {
     detail: ready
       ? `Live smoke passed for ${snapshot.candidateSha}; only non-secret metadata is recorded.`
       : forbiddenFields.length > 0
-        ? `Secret-bearing fields are forbidden in ${snapshot.realOpencodeRecord.path}: ${forbiddenFields.join(', ')}.`
+        ? 'Secret-bearing fields are forbidden in release evidence.'
         : !controlsValid
           ? `${snapshot.realOpencodeRecord.path} must record one attempt, no automatic retry, exactly three provider segments, and an explicit uncapped authorization.`
         : `${snapshot.realOpencodeRecord.path} is missing required non-secret live-smoke metadata.`,
@@ -675,6 +1069,19 @@ function evaluateGitHubSandboxRecord(snapshot) {
       label: 'GitHub sandbox Draft PR',
       state: 'attention',
       detail: safetyIssue,
+    }
+  }
+  const shapeIssue = v15EvidenceShapeIssue(
+    snapshot,
+    'github-sandbox',
+    snapshot.githubSandboxRecord.value,
+  )
+  if (shapeIssue) {
+    return {
+      id: 'github-sandbox',
+      label: 'GitHub sandbox Draft PR',
+      state: 'attention',
+      detail: shapeIssue,
     }
   }
   const value = snapshot.githubSandboxRecord.value
@@ -751,8 +1158,8 @@ function evaluateGitHubSandboxRecord(snapshot) {
     positiveInteger(value.bindingVersion) &&
     typeof value.deliverySeriesKey === 'string' &&
     /^github-delivery:[0-9a-f]{64}$/.test(value.deliverySeriesKey) &&
-    positiveInteger(value.deliveryAttempt) &&
-    positiveInteger(value.intentRevision) &&
+    value.deliveryAttempt === 1 &&
+    value.intentRevision === 1 &&
     typeof value.intentDigest === 'string' &&
     /^[0-9a-f]{64}$/.test(value.intentDigest) &&
     positiveInteger(value.runVersion) &&
@@ -784,7 +1191,9 @@ function evaluateGitHubSandboxRecord(snapshot) {
     value.postRevocationGrant === 'blocked' &&
     value.redactionCheck === 'passed' &&
     value.cleanup === 'passed' &&
-    value.cleanupMethod === 'external-operator-no-merge'
+    value.cleanupMethod === 'external-operator-no-merge' &&
+    value.operatorRole === 'non-maintainer' &&
+    value.adHocMaintainerAssistance === false
   if (!lifecycleControlsValid) {
     return {
       id: 'github-sandbox',
@@ -824,7 +1233,9 @@ function evaluateReleaseTag(snapshot) {
   }
 
   const tagMatchesHead =
-    snapshot.releaseTagExists && snapshot.releaseTagTarget === snapshot.headSha
+    snapshot.releaseTagExists &&
+    snapshot.releaseTagObjectType === 'tag' &&
+    snapshot.releaseTagTarget === snapshot.headSha
 
   return {
     id: 'release-tag',
@@ -833,7 +1244,9 @@ function evaluateReleaseTag(snapshot) {
     detail: tagMatchesHead
       ? `${tag} resolves to signoff commit ${snapshot.headSha}.`
       : snapshot.releaseTagExists
-        ? `${tag} resolves to ${snapshot.releaseTagTarget ?? 'an unknown target'}, not HEAD ${snapshot.headSha}.`
+        ? snapshot.releaseTagObjectType !== 'tag'
+          ? `${tag} must be an annotated tag, not ${snapshot.releaseTagObjectType ?? 'an unknown object type'}.`
+          : `${tag} resolves to ${snapshot.releaseTagTarget ?? 'an unknown target'}, not HEAD ${snapshot.headSha}.`
         : `${tag} does not exist; tagged mode requires the exact version tag at HEAD.`,
   }
 }
@@ -996,8 +1409,8 @@ function runCli() {
     if (items.some((item) => item.state !== 'ready')) {
       process.exitCode = 1
     }
-  } catch (error) {
-    console.error(`!! Release status: ${error instanceof Error ? error.message : String(error)}`)
+  } catch {
+    console.error('!! Release status: Release status could not be collected safely.')
     process.exitCode = 1
   }
 }
