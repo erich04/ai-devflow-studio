@@ -8,10 +8,10 @@ DevFlow turns an AI-assisted code change into a governed delivery flow with loca
 
 _A real Electron workbench showing the six-stage workflow, local repository controls, Gate Enforcement, knowledge evidence, and agent actions._
 
-> **Current release and roadmap status:** the [Roadmap](docs/roadmap.md) is the single source of
-> truth for the released baseline, active milestone, major-version charters, and future sequence.
-> Immutable candidate-bound proof remains under `docs/releases/`; package labels and this README do
-> not substitute for that evidence.
+> **Current release and roadmap status:** `v1.4.0` remains the current release. V1.5 GitHub Delivery implementation is complete,
+> while its release and 1.x completion gate remain pending
+> candidate-bound evidence. The [Roadmap](docs/roadmap.md) is the single source of truth; package
+> labels and this README do not substitute for immutable proof under `docs/releases/`.
 
 ## Why It Exists
 
@@ -46,6 +46,12 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 - Runtime budgets model projected provider cost and lead approval. Paid Coding and Knowledge Review runtimes fail closed before provider invocation when authoritative budget context is missing, invalid, unavailable, unauthenticated, or out of scope.
 - Desktop pairing explicitly binds a Local Project to its Team Project; Web Work Requests and Gate Commands preserve Desktop authority over the canonical local Run.
 - Durable redacted sync uses a persisted outbox with bounded backoff, restart recovery, immutable project scope, and operator-visible retry state.
+- GitHub Delivery binds one Delivery Intent to the managed-worktree commit, Test Evidence, Run
+  version, repository binding, and PR Delivery Package; a separate signed Web approval is required
+  before any remote write.
+- A least-privilege GitHub App gives Electron main one short-lived repository credential for the
+  exact branch push; the API independently verifies the head and creates or reconciles one Draft
+  pull request. DevFlow never merges, force-pushes, deletes a branch, or publishes a tag.
 - Bearer-token sync, API/Postgres persistence, reproducible unsigned pilot artifacts, and the Web console provide a self-hosted team-pilot path.
 
 ### Verification Evidence
@@ -57,7 +63,9 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 | `corepack pnpm test:postgres-smoke` | Migration, persistence, policy, approval, sync, and redacted team reads against Postgres. |
 | `corepack pnpm test:docker-smoke` | The containerized API/Web/Postgres stack, Desktop pairing, bearer auth, and safe overview data. |
 | `corepack pnpm test:docker-lifecycle-smoke` | Fresh Team schema v12, retained V1.4 schema v10 upgrade, transactional populated v11-to-v12 retry, and bounded V1.4 backup/restore rollback. |
+| `corepack pnpm test:v15-github-delivery` | The full offline Delivery Intent → separate approval → exact branch → Draft PR → Acceptance story, including restart and revocation. |
 | `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive and packaged launch isolation. |
+| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v15 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
 | Release-only opencode smoke | A paid, explicit signoff for the real local coding runtime; it is never part of default CI. |
 
 Deterministic results become release evidence only when `required-gates.json` binds them to the clean
@@ -75,6 +83,8 @@ flowchart LR
     Desktop -- "approved redacted summaries" --> API["Team API"]
     API --> Postgres["Postgres<br/>team state"]
     API --> Web["Web Console<br/>lead + manager view"]
+    Desktop -- "approved exact-commit push" --> GitHub["GitHub<br/>namespaced branch + Draft PR"]
+    API -- "verify head + create/reconcile Draft" --> GitHub
     Core["Shared domain core<br/>workflow · policy · redaction · cost"] --> Desktop
     Core --> API
     Core --> Web
@@ -116,7 +126,9 @@ require explicit configuration.
 4. Start the Coding Agent from the Build task, approve its permission request, and inspect the managed-worktree diff and Test Evidence.
 5. Open Agents and Tests to review the trace, command result, redaction state, and cost source.
 
-Continue through PR Draft and Acceptance Bundle with the [full feature walkthrough](docs/guides/devflow-studio-full-feature-walkthrough.md).
+The [full feature walkthrough](docs/guides/devflow-studio-full-feature-walkthrough.md) is the
+historical v1.3 feature tour. Use the [V1.5 operator walkthrough](docs/guides/devflow-studio-v1.5-walkthrough.md)
+for the current governed GitHub Delivery path.
 
 Use `corepack pnpm dev:electron` for local execution. The browser-only `dev:desktop` path is a visual preview: it cannot select folders, run local tests, or execute Agent, Gate, PR, and Acceptance workflow writes. Those actions fail closed unless the trusted Electron main-process runtime is available.
 
@@ -145,14 +157,17 @@ For the API/Web/Postgres team path, use the [self-hosted pilot guide](docs/guide
 ## Current Boundaries
 
 - The default system is intentionally empty. Demo data and fake runtimes require explicit flags, while real runtimes require explicit provider configuration.
-- The PR stage creates a reviewable handoff artifact. It does not silently push, open, merge, or publish a real GitHub pull request.
+- The PR Delivery Package is metadata, not source or publication authority. After an exact signed
+  Web approval, GitHub Delivery may publish only the approved commit and create or reconcile one
+  Draft pull request; it never merges or silently broadens scope.
 - Real opencode and live Knowledge Review are opt-in paths that can spend provider quota. They stay outside the default quality gate.
 - Skills and MCP are management surfaces today. Real MCP process execution, permission auditing, and MCP policy enforcement are not implemented.
 - Knowledge retrieval is lexical and graph-backed. Full RAG or vector-provider integration is not implemented.
 - Full real-window validation is macOS-local. Windows has CI compatibility checks and a source-validation guide, but no signed installer or full Electron release signoff.
 - The current product is a self-hosted team pilot, not a managed public SaaS offering.
 
-The [roadmap](docs/roadmap.md) is the source of truth for milestone status, planned GitHub delivery integration, runtime hardening, and deferred platform work.
+The [roadmap](docs/roadmap.md) is the source of truth for the pending V1.5/1.x completion gate, the
+blocked 2.x Agent Runtime line, and deferred platform work.
 
 ## Documentation Map
 
@@ -160,8 +175,9 @@ The [roadmap](docs/roadmap.md) is the source of truth for milestone status, plan
 | --- | --- |
 | Product positioning and user workflow | [Product Definition](docs/product/product-definition.md) |
 | Current status and future priorities | [Roadmap](docs/roadmap.md) |
-| Complete hands-on product tour | [Full feature walkthrough](docs/guides/devflow-studio-full-feature-walkthrough.md) |
+| Historical v1.3 feature tour | [Full feature walkthrough](docs/guides/devflow-studio-full-feature-walkthrough.md) |
 | V1.4 operator walkthrough | [v1.4 Walkthrough](docs/guides/devflow-studio-v1.4-walkthrough.md) |
+| V1.5 governed GitHub Delivery | [v1.5 Walkthrough](docs/guides/devflow-studio-v1.5-walkthrough.md) |
 | Self-hosted API/Web/Postgres pilot | [Self-Hosted Pilot](docs/guides/devflow-studio-self-hosted-pilot.md) |
 | Windows source and ZIP validation | [Windows ZIP Smoke Guide](docs/guides/windows-zip-smoke.md) |
 | Test layers and quality gates | [Testing Strategy](docs/engineering/testing-strategy.md) |
