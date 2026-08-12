@@ -1,6 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeTheme,
+  safeStorage,
+  session,
+  shell,
+} from 'electron'
 import { watch, type FSWatcher } from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -2687,6 +2696,9 @@ if (hasSingleInstanceLock) {
   })
 
   app.whenReady().then(() => {
+    const defaultSession = session.defaultSession
+    defaultSession.setSpellCheckerLanguages([])
+    defaultSession.setSpellCheckerEnabled(false)
     registerIpcHandlers()
     createWindow()
     void getRemoteSyncOutboxScheduler()

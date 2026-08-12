@@ -23,8 +23,22 @@ describe('Electron single-instance persistence boundary', () => {
   it('disables the packaged Chromium dictionary downloader', () => {
     const main = readFileSync('apps/desktop/electron/main.ts', 'utf8')
     const browserWindow = main.match(/new BrowserWindow\(\{[\s\S]*?\n  \}\)/)?.[0]
+    const resolveDefaultSession = main.indexOf('const defaultSession = session.defaultSession')
+    const clearSessionSpellCheckerLanguages = main.indexOf(
+      'defaultSession.setSpellCheckerLanguages([])',
+    )
+    const disableSessionSpellChecker = main.indexOf('defaultSession.setSpellCheckerEnabled(false)')
+    const createFirstWindow = main.indexOf('createWindow()', main.indexOf('app.whenReady().then'))
 
     expect(browserWindow).toBeDefined()
     expect(browserWindow).toContain('spellcheck: false')
+    expect(main).toMatch(/import \{[\s\S]*?session[\s\S]*?\} from 'electron'/)
+    expect(main).toMatch(
+      /app\.whenReady\(\)\.then\(\(\) => \{\n\s+const defaultSession = session\.defaultSession\n\s+defaultSession\.setSpellCheckerLanguages\(\[\]\)\n\s+defaultSession\.setSpellCheckerEnabled\(false\)\n\s+registerIpcHandlers\(\)\n\s+createWindow\(\)/,
+    )
+    expect(resolveDefaultSession).toBeGreaterThan(-1)
+    expect(clearSessionSpellCheckerLanguages).toBeGreaterThan(resolveDefaultSession)
+    expect(disableSessionSpellChecker).toBeGreaterThan(clearSessionSpellCheckerLanguages)
+    expect(disableSessionSpellChecker).toBeLessThan(createFirstWindow)
   })
 })
