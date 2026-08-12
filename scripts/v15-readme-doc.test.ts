@@ -2,12 +2,11 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 describe('V1.5 README truth', () => {
-  it('distinguishes implemented GitHub Delivery from the still-current v1.4 release', () => {
+  it('records the released V1.5 GitHub Delivery baseline and active V2.0 line', () => {
     const readme = readFileSync('README.md', 'utf8')
 
-    expect(readme).toContain('`v1.4.0` remains the current release')
-    expect(readme).toContain('V1.5 GitHub Delivery implementation is complete')
-    expect(readme).toContain('release and 1.x completion gate remain pending')
+    expect(readme).toContain('`v1.5.0` is released and the finite 1.x line is complete')
+    expect(readme).toContain('V2.0 Native Agent Runtime contract definition is now the active priority')
     expect(readme).toContain('Delivery Intent')
     expect(readme).toContain('signed Web approval')
     expect(readme).toContain('GitHub App')
