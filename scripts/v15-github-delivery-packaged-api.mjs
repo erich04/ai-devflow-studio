@@ -19,6 +19,10 @@ const repositoryId = requiredEnvironment(
 const repository = requiredEnvironment(
   'DEVFLOW_PACKAGED_SMOKE_GITHUB_REPOSITORY',
 )
+const repositoryOwner = repository.split('/')[0]
+if (!repositoryOwner) {
+  throw new Error('Packaged smoke GitHub repository owner is missing.')
+}
 const bareRepositoryPath = requiredEnvironment(
   'DEVFLOW_PACKAGED_SMOKE_GIT_BARE_REPOSITORY',
 )
@@ -190,7 +194,11 @@ const fakeGitHubFetch = async (input, init) => {
 
   if (url.pathname === `/repos/${repository}/pulls` && method === 'POST') {
     const body = parseBody(init)
-    const headBranch = String(body['head'] ?? '')
+    const ownerQualifiedHead = String(body['head'] ?? '')
+    const expectedHeadPrefix = `${repositoryOwner}:`
+    const headBranch = ownerQualifiedHead.startsWith(expectedHeadPrefix)
+      ? ownerQualifiedHead.slice(expectedHeadPrefix.length)
+      : ''
     const baseBranch = String(body['base'] ?? '')
     const headSha = await readBareBranch(headBranch)
     if (!headSha || body['draft'] !== true || baseBranch !== 'main') {

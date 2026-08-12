@@ -69,6 +69,10 @@ describe('Postgres GitHub Delivery smoke contract', () => {
     expect(fixture).toContain("url.origin !== 'https://api.github.com'")
     expect(fixture).toContain('globalThis.fetch = fakeGitHubFetch')
     expect(fixture).toContain("throw new Error('Unexpected outbound request')")
+    expect(fixture).toContain("const repositoryOwner = repository.split('/')[0]")
+    expect(fixture).toContain("const ownerQualifiedHead = String(body['head'] ?? '')")
+    expect(fixture).toContain('const expectedHeadPrefix = `${repositoryOwner}:`')
+    expect(fixture).toContain('ref: headBranch')
     expect(fixture).toContain("await import('../server')")
   })
 

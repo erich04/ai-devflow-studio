@@ -16,6 +16,10 @@ if (
 ) {
   throw new Error('Postgres GitHub Delivery smoke fixture is incomplete')
 }
+const repositoryOwner = repository.split('/')[0]
+if (!repositoryOwner) {
+  throw new Error('Postgres GitHub Delivery smoke repository owner is missing')
+}
 
 const { privateKey } = generateKeyPairSync('rsa', {
   modulusLength: 2_048,
@@ -126,8 +130,15 @@ const fakeGitHubFetch: typeof fetch = async (input, init) => {
 
   if (url.pathname === `/repos/${repository}/pulls` && method === 'POST') {
     const body = requestBody(init)
-    const headBranch = String(body['head'] ?? '')
+    const ownerQualifiedHead = String(body['head'] ?? '')
+    const expectedHeadPrefix = `${repositoryOwner}:`
+    const headBranch = ownerQualifiedHead.startsWith(expectedHeadPrefix)
+      ? ownerQualifiedHead.slice(expectedHeadPrefix.length)
+      : ''
     const baseBranch = String(body['base'] ?? '')
+    if (!headBranch || body['draft'] !== true || baseBranch !== 'main') {
+      return jsonResponse(422, { message: 'Invalid fake Draft PR authority' })
+    }
     createdPullRequest = {
       id: 456789,
       number: 42,
