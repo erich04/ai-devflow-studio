@@ -1150,6 +1150,10 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
     delivery: NormalizedDraftInput,
     token: string,
   ): Promise<GitHubDraftPullRequest> => {
+    const [owner] = delivery.repository.split('/')
+    if (!owner) {
+      throw clientError('github_invalid_request')
+    }
     const response = await requestJson(
       `${githubApiBaseUrl}/repos/${delivery.repository}/pulls`,
       {
@@ -1158,7 +1162,7 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
         body: {
           title: delivery.title,
           body: delivery.markedBody,
-          head: delivery.headBranch,
+          head: `${owner}:${delivery.headBranch}`,
           base: delivery.baseBranch,
           draft: true,
         },

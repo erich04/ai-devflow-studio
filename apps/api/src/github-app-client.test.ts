@@ -1192,7 +1192,7 @@ describe('GitHub App client', () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       title: 'Deliver the approved change',
       body: `Delivery package\n\n${marker}`,
-      head: headBranch,
+      head: `erich04:${headBranch}`,
       base: baseBranch,
       draft: true,
     })
