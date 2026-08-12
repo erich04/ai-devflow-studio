@@ -19,4 +19,12 @@ describe('Electron single-instance persistence boundary', () => {
     expect(configuredUserData).toBeGreaterThanOrEqual(0)
     expect(configuredUserData).toBeLessThan(processLock)
   })
+
+  it('disables the packaged Chromium dictionary downloader', () => {
+    const main = readFileSync('apps/desktop/electron/main.ts', 'utf8')
+    const browserWindow = main.match(/new BrowserWindow\(\{[\s\S]*?\n  \}\)/)?.[0]
+
+    expect(browserWindow).toBeDefined()
+    expect(browserWindow).toContain('spellcheck: false')
+  })
 })
