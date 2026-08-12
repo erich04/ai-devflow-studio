@@ -61,7 +61,11 @@ repository credential. A dated result is written only after every step passes.
 8. Let Desktop obtain one short-lived, repository-scoped Contents credential in Electron main,
    publish the approved SHA to the approved `devflow/` branch without force, and report the result.
 9. Let the API independently verify the remote head and create or reconcile exactly one Draft pull
-   request. Confirm the PR node advances only after durable branch and Draft evidence exists.
+   request. Confirm the PR node advances only after durable branch and Draft evidence exists. If
+   GitHub returns a `403` or `422` with a canonical bounded `Retry-After`, the product must report
+   `github_rate_limited` and persist only the derived provider retry not-before. Use only the
+   documented Resume action: it reconciles the exact marker first and cannot create before the
+   provider backoff expires.
 10. Stop Desktop after the remote effect is durable, then cold-start it with the same isolated state.
     Confirm it reconciles without a second credential grant, push, or pull-request creation.
 11. At Acceptance, inspect the exact remote commit, Draft URL, passing Test Evidence, and completed
@@ -268,7 +272,7 @@ provider revocation and records the exact passing outcome.
 ```
 
 The dated result must say `Status: Passed` and record `C`, the packaged artifact platform and
-SHA-256, Team schema v13, Desktop schema v17, exact-SHA Verify URL, non-secret sandbox/App identity,
+SHA-256, Team schema v14, Desktop schema v17, exact-SHA Verify URL, non-secret sandbox/App identity,
 series/attempt/revision and digests, lifecycle counts, approval role/auth kind, expected/remote SHA,
 Draft URL and state, completed Acceptance, restart zero-repeat observations, and the exact revocation
 proof values (`intentId`, newer revoked binding version, `binding_inactive`, canonical `checkedAt`,
@@ -284,7 +288,7 @@ Use this exact label skeleton so the result remains both human-auditable and mac
 Status: Passed
 Candidate: <C-full-40-hex-SHA>
 Packaged artifact: 1.5.0 <platform-arch> <64-hex-SHA-256>
-Team schema v13; Desktop schema v17.
+Team schema v14; Desktop schema v17.
 Verify: <exact-first-attempt-workflow_dispatch-run-URL>
 Delivery series: <github-delivery:64-hex>
 Delivery attempt: 1; intent revision: 1.

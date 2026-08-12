@@ -1229,6 +1229,91 @@ describe('GitHub App client', () => {
     expect(listCount).toBe(2)
   })
 
+  it('treats a Retry-After 422 from Draft PR creation as recoverable rate limiting', async () => {
+    let listCount = 0
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url)
+      if (target.includes('/access_tokens')) {
+        return tokenResponse('pull_requests', 'write')
+      }
+      if (init?.method === 'POST' && target.endsWith('/pulls')) {
+        return new Response(JSON.stringify({ message: secretSentinel }), {
+          status: 422,
+          headers: { 'retry-after': '60', 'x-secret-debug': secretSentinel },
+        })
+      }
+      listCount += 1
+      return Response.json([])
+    })
+
+    const error = await makeClient(fetcher)
+      .findOrCreateDraftPullRequest({
+        ...deliveryInput(),
+        title: 'Deliver the approved change',
+        body: 'Delivery package',
+      })
+      .catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(GitHubAppClientError)
+    expect(error).toMatchObject({
+      code: 'github_rate_limited',
+      status: 422,
+      retryable: true,
+      retryAfterSeconds: 60,
+    })
+    expect(String(error)).not.toContain(secretSentinel)
+    expect(JSON.stringify(error)).not.toContain(secretSentinel)
+    expect(listCount).toBe(2)
+  })
+
+  it('treats a canonical Retry-After 403 as recoverable rate limiting', async () => {
+    const client = makeClient(
+      vi.fn(async () =>
+        new Response(JSON.stringify({ message: secretSentinel }), {
+          status: 403,
+          headers: { 'retry-after': '120', 'x-secret-debug': secretSentinel },
+        }),
+      ),
+    )
+
+    const error = await client
+      .issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline })
+      .catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(GitHubAppClientError)
+    expect(error).toMatchObject({
+      code: 'github_rate_limited',
+      status: 403,
+      retryable: true,
+      retryAfterSeconds: 120,
+    })
+    expect(String(error)).not.toContain(secretSentinel)
+    expect(JSON.stringify(error)).not.toContain(secretSentinel)
+  })
+
+  it.each([
+    ['0', 'github_validation_failed'],
+    ['86401', 'github_validation_failed'],
+    ['60.0', 'github_validation_failed'],
+    ['Wed, 12 Aug 2026 12:00:00 GMT', 'github_validation_failed'],
+  ] as const)(
+    'does not trust malformed or out-of-range Retry-After %s on a 422',
+    async (retryAfter, code) => {
+      const client = makeClient(
+        vi.fn(async () =>
+          new Response(JSON.stringify({ message: secretSentinel }), {
+            status: 422,
+            headers: { 'retry-after': retryAfter },
+          }),
+        ),
+      )
+
+      await expect(
+        client.issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline }),
+      ).rejects.toMatchObject({ code, retryable: false })
+    },
+  )
+
   it('fails closed when the same branch already has an incompatible PR marker', async () => {
     const fetcher = vi
       .fn()

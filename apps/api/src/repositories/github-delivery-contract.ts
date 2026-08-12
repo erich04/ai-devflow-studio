@@ -15,6 +15,7 @@ import type { RequestPrincipal } from '../auth/request-auth'
 export const GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS = 2 * 60 * 1_000
 export const GITHUB_CREDENTIAL_PROVIDER_MAX_MS = 2 * 60 * 1_000
 export const GITHUB_CREDENTIAL_MAX_TTL_MS = 60 * 60 * 1_000
+export const GITHUB_PROVIDER_RETRY_AFTER_MAX_SECONDS = 24 * 60 * 60
 
 export type GitHubDeliverySessionPrincipal = RequestPrincipal & {
   authentication: { kind: 'session_cookie'; tokenRecordId: null }
@@ -615,6 +616,7 @@ export type GitHubPullRequestOutcome = {
   baseBranch: string
   headSha: string
   providerCreatedAt: string | null
+  providerRetryNotBefore: string | null
   recordedAt: string
   outcomeCode: 'draft_pr_created' | 'pull_request_failed' | null
   redacted: true
@@ -648,8 +650,13 @@ export type FinalizeGitHubDraftPullRequestInput = {
         outcomeCode: 'draft_pr_created'
       }
     | {
-        status: 'failed' | 'recovery_required'
+        status: 'failed'
         outcomeCode: 'pull_request_failed'
+      }
+    | {
+        status: 'recovery_required'
+        outcomeCode: 'pull_request_failed'
+        providerRetryAfterSeconds?: number | null
       }
 }
 
@@ -673,6 +680,13 @@ export type GitHubDeliveryRecoverySnapshot = {
   grant: GitHubCredentialGrant | null
   publication: GitHubBranchPublication | null
   pullRequest: GitHubPullRequestOutcome | null
+}
+
+export type AuthorizeGitHubDeliveryRecoveryLookupInput = {
+  projectId: string
+  requestId: string
+  expectedStateVersion: number
+  expectedPullRequestVersion: number
 }
 
 export type GitHubDeliveryRejectionCode =
@@ -736,6 +750,10 @@ export type GitHubDeliveryRepository = {
     requestId: string,
     principal: GitHubDeliveryDesktopPrincipal,
   ): Promise<GitHubDeliveryRecoverySnapshot | null>
+  authorizeGitHubDeliveryRecoveryLookup(
+    input: AuthorizeGitHubDeliveryRecoveryLookupInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubDeliveryRejectionResult | { ok: true }>
   listGitHubDeliveryRequests(
     projectId: string,
     principal: GitHubDeliverySessionPrincipal,
@@ -1128,6 +1146,7 @@ export function cloneGitHubPullRequestOutcome(
     baseBranch,
     headSha,
     providerCreatedAt,
+    providerRetryNotBefore,
     recordedAt,
     outcomeCode,
     redacted,
@@ -1147,6 +1166,7 @@ export function cloneGitHubPullRequestOutcome(
     baseBranch,
     headSha,
     providerCreatedAt,
+    providerRetryNotBefore,
     recordedAt,
     outcomeCode,
     redacted,

@@ -19,7 +19,7 @@ describe('Postgres GitHub Delivery smoke contract', () => {
     expectInOrder(source, [
       'const retainedV12Fixture = await prepareRetainedV12CredentialFixture(',
       "['pnpm', '--filter', '@ai-devflow/api', 'db:setup']",
-      'await assertRetainedV12CredentialAfterV13(retainedV12Fixture)',
+      'await assertRetainedV12CredentialAfterCurrentMigration(retainedV12Fixture)',
     ])
     expect(source).toContain('version: 12')
     expect(source).toContain('snapshotBeforeV12')
@@ -85,6 +85,7 @@ describe('Postgres GitHub Delivery smoke contract', () => {
     expect(source).toContain('expectedGitHubOperationCounts')
     expect(source).toContain('credentialLeakNeedles')
     expect(source).toContain('forbiddenJsonFieldNames')
+    expect(source).toContain('provider_retry_not_before')
     expect(source).toContain("'authorization'")
     expect(source).toContain("'privatekey'")
     expect(source).toContain("'rawpath'")

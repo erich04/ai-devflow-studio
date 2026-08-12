@@ -213,6 +213,7 @@ function pullRequestOutcome(overrides: Record<string, unknown> = {}) {
     baseBranch: 'main',
     headSha: 'b'.repeat(40),
     providerCreatedAt: now,
+    providerRetryNotBefore: null,
     recordedAt: now,
     outcomeCode: 'draft_pr_created',
     redacted: true,
@@ -1113,6 +1114,37 @@ describe('GitHub Delivery remote client', () => {
       outcomeCode: 'pull_request_completed',
       replayed: false,
     })
+  })
+
+  it('rejects a provider retry boundary on a non-recovery Draft PR outcome', async () => {
+    const fetcher = vi.fn(async () =>
+      jsonResponse({
+        request: deliveryRequest({
+          stateVersion: 8,
+          status: 'completed',
+          outcomeCode: 'draft_pr_created',
+        }),
+        pullRequest: pullRequestOutcome({
+          providerRetryNotBefore: '2026-08-11T15:01:00.000Z',
+        }),
+        outcomeCode: 'pull_request_completed',
+        replayed: false,
+      }),
+    )
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher,
+    })
+
+    await expect(
+      client.createDraftPullRequest({
+        projectId,
+        requestId,
+        publicationId: 'publication-1',
+        expectedStateVersion: 6,
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_response', operation: 'draft_pull_request' })
   })
 
   it('rejects an oversized response before parsing or reflecting its body', async () => {

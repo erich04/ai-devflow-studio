@@ -14,6 +14,7 @@ import {
   cloneGitHubRepositoryBinding,
   cloneGitHubPullRequestOutcome,
   fingerprintGitHubDeliveryRequest,
+  GITHUB_PROVIDER_RETRY_AFTER_MAX_SECONDS,
   githubDeliveryRejection,
   normalizeGitHubDeliveryRequestIntent,
   type CreateOrReviseGitHubDeliveryRequestInput,
@@ -36,12 +37,14 @@ import {
   type GitHubDeliveryCanonicalRunAuthority,
   type GitHubDeliveryCanonicalRunAuthorityLookup,
   type GitHubDeliveryApproval,
+  type AuthorizeGitHubDeliveryRecoveryLookupInput,
   type GitHubDeliveryDecisionResult,
   type GitHubDeliveryDesktopPrincipal,
   type GitHubDeliveryDesktopAuthorityLookup,
   type GitHubDeliveryProjectRole,
   type GitHubDeliveryReadPrincipal,
   type GitHubDeliveryRecoverySnapshot,
+  type GitHubDeliveryRejectionResult,
   type GitHubDeliveryRepository,
   type GitHubDeliveryRequest,
   type GitHubDeliveryRequestMutationResult,
@@ -856,6 +859,43 @@ export function createSeedGitHubDeliveryRepository(
       publication: publication ? cloneGitHubBranchPublication(publication) : null,
       pullRequest: pullRequest ? cloneGitHubPullRequestOutcome(pullRequest) : null,
     }
+  }
+
+  async function authorizeGitHubDeliveryRecoveryLookup(
+    input: AuthorizeGitHubDeliveryRecoveryLookupInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubDeliveryRejectionResult | { ok: true }> {
+    if (!(await hasDesktopAuthority(principal, input.projectId))) {
+      return githubDeliveryRejection('project_forbidden')
+    }
+    const request = findRequest(
+      input.requestId,
+      principal.session.organizationId,
+      input.projectId,
+    )
+    if (!request) return githubDeliveryRejection('not_found')
+    if (request.requestedByTokenId !== principal.authentication.tokenRecordId) {
+      return githubDeliveryRejection('project_forbidden')
+    }
+    const pullRequest = currentPullRequest(request)
+    if (!pullRequest) return githubDeliveryRejection('not_found')
+    if (
+      request.stateVersion !== input.expectedStateVersion ||
+      pullRequest.version !== input.expectedPullRequestVersion
+    ) return githubDeliveryRejection('stale_version')
+    if (!hasCurrentBinding(request)) {
+      return githubDeliveryRejection('binding_inactive')
+    }
+    const authority = await canonicalRequestAuthority(request)
+    if (authority === 'claimant_forbidden') {
+      return githubDeliveryRejection('project_forbidden')
+    }
+    if (authority === 'stale') return githubDeliveryRejection('invalid_state')
+    const approval = currentApproval(request)
+    if (!approval || !approvalMatchesRequest(approval, request)) {
+      return githubDeliveryRejection('approval_required')
+    }
+    return { ok: true }
   }
 
   async function listGitHubDeliveryRequests(
@@ -2109,6 +2149,7 @@ export function createSeedGitHubDeliveryRepository(
         existing.pullRequestNumber = null
         existing.safeUrl = null
         existing.providerCreatedAt = null
+        existing.providerRetryNotBefore = null
         existing.recordedAt = at
         existing.outcomeCode = null
         request.stateVersion += 1
@@ -2160,6 +2201,7 @@ export function createSeedGitHubDeliveryRepository(
       baseBranch: request.baseBranch,
       headSha: request.expectedCommitSha,
       providerCreatedAt: null,
+      providerRetryNotBefore: null,
       recordedAt: timestamp(),
       outcomeCode: null,
       redacted: true,
@@ -2278,20 +2320,72 @@ export function createSeedGitHubDeliveryRepository(
     if (request.requestedByTokenId !== principal.authentication.tokenRecordId) {
       return githubDeliveryRejection('project_forbidden')
     }
-    if (pullRequest.status === 'creating') {
-      if (!hasCurrentBinding(request)) {
-        return githubDeliveryRejection('binding_inactive')
+    if (!hasCurrentBinding(request)) {
+      return githubDeliveryRejection('binding_inactive')
+    }
+    const runAuthority = await canonicalRequestAuthority(request)
+    if (runAuthority === 'claimant_forbidden') {
+      return githubDeliveryRejection('project_forbidden')
+    }
+    if (runAuthority === 'stale') {
+      return githubDeliveryRejection('invalid_state')
+    }
+    const approval = currentApproval(request)
+    if (!approval || !approvalMatchesRequest(approval, request)) {
+      return githubDeliveryRejection('approval_required')
+    }
+    if (
+      pullRequest.status === 'recovery_required' &&
+      request.status === 'recovery_required' &&
+      input.outcome.status === 'recovery_required' &&
+      input.outcome.providerRetryAfterSeconds != null
+    ) {
+      const retryAfterSeconds = input.outcome.providerRetryAfterSeconds
+      if (
+        request.stateVersion !== input.expectedStateVersion ||
+        pullRequest.version !== input.expectedPullRequestVersion
+      ) return githubDeliveryRejection('stale_version')
+      if (
+        !Number.isSafeInteger(retryAfterSeconds) ||
+        retryAfterSeconds < 1 ||
+        retryAfterSeconds > GITHUB_PROVIDER_RETRY_AFTER_MAX_SECONDS
+      ) return githubDeliveryRejection('pull_request_conflict')
+      const at = timestamp()
+      const nextRetryNotBefore = new Date(
+        Date.parse(at) + retryAfterSeconds * 1_000,
+      ).toISOString()
+      if (
+        pullRequest.providerRetryNotBefore !== null &&
+        pullRequest.providerRetryNotBefore >= nextRetryNotBefore
+      ) {
+        return {
+          ok: true,
+          responseStatus: 200,
+          outcomeCode: 'pull_request_failed',
+          replayed: true,
+          request: cloneGitHubDeliveryRequest(request),
+          pullRequest: cloneGitHubPullRequestOutcome(pullRequest),
+        }
       }
-      const runAuthority = await canonicalRequestAuthority(request)
-      if (runAuthority === 'claimant_forbidden') {
-        return githubDeliveryRejection('project_forbidden')
-      }
-      if (runAuthority === 'stale') {
-        return githubDeliveryRejection('invalid_state')
-      }
-      const approval = currentApproval(request)
-      if (!approval || !approvalMatchesRequest(approval, request)) {
-        return githubDeliveryRejection('approval_required')
+      pullRequest.providerRetryNotBefore = nextRetryNotBefore
+      pullRequest.recordedAt = at
+      pullRequest.version += 1
+      audit(
+        principal,
+        input.projectId,
+        'github_pull_request_create',
+        pullRequest.id,
+        'pull_request_failed',
+        [request.id, pullRequest.version, 'provider-retry-extended'],
+        at,
+      )
+      return {
+        ok: true,
+        responseStatus: 200,
+        outcomeCode: 'pull_request_failed',
+        replayed: false,
+        request: cloneGitHubDeliveryRequest(request),
+        pullRequest: cloneGitHubPullRequestOutcome(pullRequest),
       }
     }
     if (
@@ -2321,6 +2415,20 @@ export function createSeedGitHubDeliveryRepository(
     }
 
     const at = timestamp()
+    const providerRetryAfterSeconds = input.outcome.status === 'recovery_required'
+      ? input.outcome.providerRetryAfterSeconds ?? null
+      : null
+    if (
+      providerRetryAfterSeconds !== null &&
+      (!Number.isSafeInteger(providerRetryAfterSeconds) ||
+        providerRetryAfterSeconds < 1 ||
+        providerRetryAfterSeconds > GITHUB_PROVIDER_RETRY_AFTER_MAX_SECONDS)
+    ) {
+      return githubDeliveryRejection('pull_request_conflict')
+    }
+    const providerRetryNotBefore = providerRetryAfterSeconds === null
+      ? null
+      : new Date(Date.parse(at) + providerRetryAfterSeconds * 1_000).toISOString()
     if (input.outcome.status === 'completed') {
       const validated = validateCompletedPullRequest(request, input.outcome)
       const publication = publications.get(pullRequest.publicationId)
@@ -2337,12 +2445,14 @@ export function createSeedGitHubDeliveryRepository(
       pullRequest.safeUrl = validated.safeUrl
       pullRequest.headSha = validated.headSha
       pullRequest.providerCreatedAt = validated.providerCreatedAt
+      pullRequest.providerRetryNotBefore = null
       pullRequest.outcomeCode = 'draft_pr_created'
       request.status = 'completed'
       request.outcomeCode = 'draft_pr_created'
     } else {
       pullRequest.status = input.outcome.status
       pullRequest.outcomeCode = input.outcome.outcomeCode
+      pullRequest.providerRetryNotBefore = providerRetryNotBefore
       request.status = input.outcome.status
       request.outcomeCode = 'pull_request_failed'
     }
@@ -2371,6 +2481,7 @@ export function createSeedGitHubDeliveryRepository(
     createOrReviseGitHubDeliveryRequest,
     listGitHubDeliveryInbox,
     getGitHubDeliveryRecoverySnapshot,
+    authorizeGitHubDeliveryRecoveryLookup,
     listGitHubDeliveryRequests,
     decideGitHubDeliveryRequest,
     reserveGitHubCredentialGrant,

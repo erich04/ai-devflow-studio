@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 13
+export const TEAM_SCHEMA_VERSION = 14
 
 export const requiredTeamTableNames = [
   'team_schema_migrations',
@@ -786,6 +786,7 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('base_branch', 'text'),
       column('head_sha', 'text'),
       column('provider_created_at', 'timestamptz', { nullable: true }),
+      column('provider_retry_not_before', 'timestamptz', { nullable: true }),
       column('recorded_at', 'timestamptz'),
       column('outcome_code', 'text', { nullable: true }),
     ],

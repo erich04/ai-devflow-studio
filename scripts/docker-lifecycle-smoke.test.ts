@@ -24,15 +24,15 @@ describe('V1.5 Docker lifecycle smoke contract', () => {
     expect(lifecycleSmoke).toContain('`--output=${archivePath}`, V14_COMMIT')
   })
 
-  it('proves fresh schema v13 and a volume-retained V1.4 schema v10 upgrade', () => {
+  it('proves fresh schema v14 and a volume-retained V1.4 schema v10 upgrade', () => {
     expect(lifecycleSmoke).toContain("const FRESH_DATABASE = 'devflow_fresh'")
     expect(lifecycleSmoke).toContain("const UPGRADE_DATABASE = 'devflow_upgrade'")
-    expect(lifecycleSmoke).toContain("expectSchemaVersion(FRESH_DATABASE, 13)")
+    expect(lifecycleSmoke).toContain("expectSchemaVersion(FRESH_DATABASE, 14)")
     expect(lifecycleSmoke).toContain('startCurrentApiAgainstDatabase(FRESH_DATABASE)')
     expect(lifecycleSmoke).toContain('runV14Migration(UPGRADE_DATABASE)')
     expect(lifecycleSmoke).toContain("expectSchemaVersion(UPGRADE_DATABASE, 10)")
     expect(lifecycleSmoke).toContain('restartPostgresWithRetainedVolume()')
-    expect(lifecycleSmoke).toContain("expectSchemaVersion(UPGRADE_DATABASE, 13)")
+    expect(lifecycleSmoke).toContain("expectSchemaVersion(UPGRADE_DATABASE, 14)")
     expect(lifecycleSmoke).toContain('V1.4 retained sentinel')
     expect(lifecycleSmoke).toContain('snapshotBeforeV10Upgrade')
     expect(lifecycleSmoke).toContain('snapshotAfterV13Upgrade')
@@ -72,12 +72,12 @@ describe('V1.5 Docker lifecycle smoke contract', () => {
     expect(lifecycleSmoke).toContain("expectSchemaVersion(FAILURE_DATABASE, 12)")
   })
 
-  it('migrates a legacy issued v12 credential to v13 without inventing provider expiry proof', () => {
+  it('migrates a legacy issued v12 credential through v14 without inventing provider expiry proof', () => {
     expect(lifecycleSmoke).toContain('prepareV12LegacyIssuedCredentialFixture')
     expect(lifecycleSmoke).toContain('expectMigrationHistoryMissing(FAILURE_DATABASE, 13)')
     expect(lifecycleSmoke).toContain('snapshotBeforeV13')
     expect(lifecycleSmoke).toContain('assertLegacyIssuedCredentialAfterV13')
-    expect(lifecycleSmoke).toContain("expectSchemaVersion(FAILURE_DATABASE, 13)")
+    expect(lifecycleSmoke).toContain("expectSchemaVersion(FAILURE_DATABASE, 14)")
     expect(lifecycleSmoke).toContain('provider_expiry_contract_version')
     expect(lifecycleSmoke).toContain('provider_credential_expires_at')
     expect(lifecycleSmoke).toContain('provider_expiry_observed_at')
@@ -117,7 +117,7 @@ describe('V1.5 Docker lifecycle smoke contract', () => {
     const guide = readFileSync('docs/guides/devflow-studio-self-hosted-pilot.md', 'utf8')
     expect(guide).toContain('V1.5 lifecycle and rollback matrix')
     expect(guide).toContain('V1.4 API')
-    expect(guide).toContain('Team schema v13')
+    expect(guide).toContain('Team schema v14')
     expect(guide).toContain('fails readiness closed')
     expect(guide).toContain('must not run the V1.4 migrator')
     expect(guide).toContain('Desktop schema v17')

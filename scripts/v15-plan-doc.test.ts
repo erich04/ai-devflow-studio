@@ -112,6 +112,23 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(guide).toContain('Desktop main memory')
   })
 
+  it('keeps Retry-After validation failures recoverable without retaining provider payloads', () => {
+    const prd = read('docs/product/prd/v1.5-github-delivery-prd.md')
+    const plan = read('docs/plans/v1.5-github-delivery.md')
+    const walkthrough = read('docs/guides/devflow-studio-v1.5-walkthrough.md')
+
+    for (const contract of [prd, plan, walkthrough]) {
+      expect(contract).toContain('Retry-After')
+      expect(contract).toContain('`github_rate_limited`')
+    }
+    expect(prd).toContain('Raw provider headers and bodies are never persisted')
+    expect(plan).toContain('persist only the derived provider retry not-before')
+    expect(plan).toMatch(/reconcile by exact\s+marker first/u)
+    expect(plan).toContain('block another create before that boundary')
+    expect(walkthrough).toContain('cannot create before the')
+    expect(walkthrough).toContain('provider backoff expires')
+  })
+
   it('defines one candidate-bound V1.5 walkthrough without reusing paid-provider authority', () => {
     const walkthrough = read('docs/guides/devflow-studio-v1.5-walkthrough.md')
 

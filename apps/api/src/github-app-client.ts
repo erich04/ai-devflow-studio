@@ -8,6 +8,7 @@ import {
 import {
   GITHUB_CREDENTIAL_MAX_TTL_MS,
   GITHUB_CREDENTIAL_PROVIDER_MAX_MS,
+  GITHUB_PROVIDER_RETRY_AFTER_MAX_SECONDS,
 } from './repositories/github-delivery-contract'
 
 const githubApiBaseUrl = 'https://api.github.com'
@@ -88,12 +89,14 @@ export class GitHubAppClientError extends Error {
   readonly status?: number
   readonly credentialRevocationConfirmed: boolean
   readonly providerCredentialAbsentConfirmed: boolean
+  readonly retryAfterSeconds: number | undefined
 
   constructor(
     code: GitHubAppClientErrorCode,
     status?: number,
     credentialRevocationConfirmed = false,
     providerCredentialAbsentConfirmed = false,
+    retryAfterSeconds?: number,
   ) {
     super(safeErrorMessages[code])
     this.name = 'GitHubAppClientError'
@@ -102,6 +105,7 @@ export class GitHubAppClientError extends Error {
       code === 'github_rate_limited' || code === 'github_timeout' || code === 'github_unavailable'
     this.credentialRevocationConfirmed = credentialRevocationConfirmed
     this.providerCredentialAbsentConfirmed = providerCredentialAbsentConfirmed
+    this.retryAfterSeconds = retryAfterSeconds
     if (status !== undefined) {
       this.status = status
     }
@@ -264,12 +268,14 @@ function clientError(
   status?: number,
   credentialRevocationConfirmed = false,
   providerCredentialAbsentConfirmed = false,
+  retryAfterSeconds?: number,
 ): GitHubAppClientError {
   return new GitHubAppClientError(
     code,
     status,
     credentialRevocationConfirmed,
     providerCredentialAbsentConfirmed,
+    retryAfterSeconds,
   )
 }
 
@@ -472,11 +478,21 @@ function parseStrictImfFixdate(value: string | null): number {
   return parsed.getTime()
 }
 
-function statusError(status: number): GitHubAppClientError {
+function statusError(status: number, retryAfter: string | null = null): GitHubAppClientError {
+  const retryAfterSeconds = /^[1-9]\d{0,4}$/u.test(retryAfter ?? '')
+    ? Number(retryAfter)
+    : null
+  const boundedRetryAfterSeconds =
+    retryAfterSeconds !== null && retryAfterSeconds <= GITHUB_PROVIDER_RETRY_AFTER_MAX_SECONDS
+      ? retryAfterSeconds
+      : null
   if (status === 401) {
     return clientError('github_unauthorized', status)
   }
   if (status === 403) {
+    if (boundedRetryAfterSeconds !== null) {
+      return clientError('github_rate_limited', status, false, false, boundedRetryAfterSeconds)
+    }
     return clientError('github_forbidden', status)
   }
   if (status === 404) {
@@ -486,10 +502,19 @@ function statusError(status: number): GitHubAppClientError {
     return clientError('github_conflict', status)
   }
   if (status === 422) {
+    if (boundedRetryAfterSeconds !== null) {
+      return clientError('github_rate_limited', status, false, false, boundedRetryAfterSeconds)
+    }
     return clientError('github_validation_failed', status)
   }
   if (status === 429) {
-    return clientError('github_rate_limited', status)
+    return clientError(
+      'github_rate_limited',
+      status,
+      false,
+      false,
+      boundedRetryAfterSeconds ?? 60,
+    )
   }
   if (status >= 500 && status <= 599) {
     return clientError('github_unavailable', status)
@@ -606,8 +631,9 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
         throw clientError('github_malformed_response')
       }
       if (response.status !== request.expectedStatus) {
+        const error = statusError(response.status, response.headers.get('retry-after'))
         await response.body?.cancel().catch(() => undefined)
-        throw statusError(response.status)
+        throw error
       }
       return readBoundedJson(response)
     })()

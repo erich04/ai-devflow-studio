@@ -159,6 +159,7 @@ function pullRequest(
     baseBranch: 'main',
     headSha: expectedCommitSha,
     providerCreatedAt: null,
+    providerRetryNotBefore: null,
     recordedAt: now,
     outcomeCode: null,
     redacted: true,
@@ -335,9 +336,17 @@ function createHarness() {
           input.outcome.status === 'completed'
             ? input.outcome.providerCreatedAt
             : null,
+        providerRetryNotBefore:
+          input.outcome.status === 'recovery_required' &&
+          input.outcome.providerRetryAfterSeconds
+            ? new Date(Date.parse(now) + input.outcome.providerRetryAfterSeconds * 1_000)
+                .toISOString()
+            : null,
         outcomeCode: input.outcome.outcomeCode,
       }),
     })),
+    getGitHubDeliveryRecoverySnapshot: vi.fn(async () => null),
+    authorizeGitHubDeliveryRecoveryLookup: vi.fn(async () => ({ ok: true as const })),
   } as unknown as GitHubDeliveryRepository
 
   const client = {
@@ -1476,6 +1485,199 @@ describe('GitHub Delivery service', () => {
       }),
       desktopPrincipal,
     )
+  })
+
+  it('records recoverable Draft PR state when GitHub rate limits a validated create', async () => {
+    const harness = createHarness()
+    vi.mocked(harness.client.findOrCreateDraftPullRequest).mockRejectedValue(
+      new GitHubAppClientError('github_rate_limited', 422, false, false, 60),
+    )
+
+    const error = await harness.service
+      .createDraftPullRequest(
+        {
+          projectId: 'project-a',
+          requestId: 'delivery-1',
+          publicationId: 'publication-1',
+          expectedStateVersion: 6,
+        },
+        desktopPrincipal,
+      )
+      .catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({
+      code: 'github_rate_limited',
+      retryable: true,
+      phase: 'pull_request',
+    })
+    expect(harness.repository.finalizeGitHubDraftPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: {
+          status: 'recovery_required',
+          outcomeCode: 'pull_request_failed',
+          providerRetryAfterSeconds: 60,
+        },
+      }),
+      desktopPrincipal,
+    )
+  })
+
+  it('reconciles but does not create a Draft PR before durable provider backoff expires', async () => {
+    const harness = createHarness()
+    const retryNotBefore = '2026-08-11T15:01:00.000Z'
+    vi.mocked(harness.repository.getGitHubDeliveryRecoverySnapshot).mockResolvedValue({
+      request: request({ stateVersion: 8, status: 'recovery_required' }),
+      approval: null,
+      grant: null,
+      publication: publication({ status: 'verified', verifiedHeadSha: expectedCommitSha }),
+      pullRequest: pullRequest({
+        version: 2,
+        status: 'recovery_required',
+        recordedAt: now,
+        providerRetryNotBefore: retryNotBefore,
+        outcomeCode: 'pull_request_failed',
+      }),
+    })
+    vi.mocked(harness.client.findDraftPullRequest).mockResolvedValue(null)
+
+    const error = await harness.service
+      .createDraftPullRequest(
+        {
+          projectId: 'project-a',
+          requestId: 'delivery-1',
+          publicationId: 'publication-1',
+          expectedStateVersion: 8,
+        },
+        desktopPrincipal,
+      )
+      .catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({
+      code: 'github_rate_limited',
+      retryable: true,
+      phase: 'pull_request',
+    })
+    expect(harness.client.findDraftPullRequest).toHaveBeenCalledOnce()
+    expect(harness.repository.reserveGitHubDraftPullRequest).not.toHaveBeenCalled()
+    expect(harness.client.findOrCreateDraftPullRequest).not.toHaveBeenCalled()
+  })
+
+  it('does not mint a GitHub lookup credential when recovery authority is inactive', async () => {
+    const harness = createHarness()
+    vi.mocked(harness.repository.getGitHubDeliveryRecoverySnapshot).mockResolvedValue({
+      request: request({ stateVersion: 8, status: 'recovery_required' }),
+      approval: null,
+      grant: null,
+      publication: publication({ status: 'verified', verifiedHeadSha: expectedCommitSha }),
+      pullRequest: pullRequest({
+        version: 2,
+        status: 'recovery_required',
+        providerRetryNotBefore: '2026-08-11T15:01:00.000Z',
+        outcomeCode: 'pull_request_failed',
+      }),
+    })
+    vi.mocked(harness.repository.authorizeGitHubDeliveryRecoveryLookup)
+      .mockResolvedValue({
+        ok: false,
+        responseStatus: 409,
+        outcomeCode: 'binding_inactive',
+        replayed: false,
+      })
+
+    await expect(
+      harness.service.createDraftPullRequest(
+        {
+          projectId: 'project-a',
+          requestId: 'delivery-1',
+          publicationId: 'publication-1',
+          expectedStateVersion: 8,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'binding_inactive' })
+
+    expect(harness.client.findDraftPullRequest).not.toHaveBeenCalled()
+    expect(harness.repository.reserveGitHubDraftPullRequest).not.toHaveBeenCalled()
+    expect(harness.client.findOrCreateDraftPullRequest).not.toHaveBeenCalled()
+  })
+
+  it('allows one Draft PR create at the durable provider backoff boundary', async () => {
+    const harness = createHarness()
+    vi.mocked(harness.repository.getGitHubDeliveryRecoverySnapshot).mockResolvedValue({
+      request: request({ stateVersion: 8, status: 'recovery_required' }),
+      approval: null,
+      grant: null,
+      publication: publication({ status: 'verified', verifiedHeadSha: expectedCommitSha }),
+      pullRequest: pullRequest({
+        version: 2,
+        status: 'recovery_required',
+        providerRetryNotBefore: now,
+        outcomeCode: 'pull_request_failed',
+      }),
+    })
+
+    await expect(
+      harness.service.createDraftPullRequest(
+        {
+          projectId: 'project-a',
+          requestId: 'delivery-1',
+          publicationId: 'publication-1',
+          expectedStateVersion: 8,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: true, outcomeCode: 'pull_request_completed' })
+
+    expect(harness.client.findDraftPullRequest).toHaveBeenCalledOnce()
+    expect(harness.repository.reserveGitHubDraftPullRequest).toHaveBeenCalledOnce()
+    expect(harness.client.findOrCreateDraftPullRequest).toHaveBeenCalledOnce()
+  })
+
+  it('durably extends provider backoff when Resume reconciliation is rate limited again', async () => {
+    const harness = createHarness()
+    vi.mocked(harness.repository.getGitHubDeliveryRecoverySnapshot).mockResolvedValue({
+      request: request({ stateVersion: 8, status: 'recovery_required' }),
+      approval: null,
+      grant: null,
+      publication: publication({ status: 'verified', verifiedHeadSha: expectedCommitSha }),
+      pullRequest: pullRequest({
+        version: 2,
+        status: 'recovery_required',
+        providerRetryNotBefore: '2026-08-11T15:01:00.000Z',
+        outcomeCode: 'pull_request_failed',
+      }),
+    })
+    vi.mocked(harness.client.findDraftPullRequest).mockRejectedValue(
+      new GitHubAppClientError('github_rate_limited', 403, false, false, 120),
+    )
+
+    const error = await harness.service
+      .createDraftPullRequest(
+        {
+          projectId: 'project-a',
+          requestId: 'delivery-1',
+          publicationId: 'publication-1',
+          expectedStateVersion: 8,
+        },
+        desktopPrincipal,
+      )
+      .catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({ code: 'github_rate_limited', retryable: true })
+    expect(harness.repository.finalizeGitHubDraftPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedStateVersion: 8,
+        expectedPullRequestVersion: 2,
+        outcome: {
+          status: 'recovery_required',
+          outcomeCode: 'pull_request_failed',
+          providerRetryAfterSeconds: 120,
+        },
+      }),
+      desktopPrincipal,
+    )
+    expect(harness.repository.reserveGitHubDraftPullRequest).not.toHaveBeenCalled()
+    expect(harness.client.findOrCreateDraftPullRequest).not.toHaveBeenCalled()
   })
 
   it('replays a completed Draft PR without another GitHub request', async () => {

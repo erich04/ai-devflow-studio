@@ -743,7 +743,7 @@ async function expectV14ApiRejectsNewerSchema(database) {
     const readinessResponse = await fetch(`${apiUrl}/ready`)
     expect(
       readinessResponse.status === 503,
-      `Exact V1.4 API did not fail closed on Team schema v13; received ${readinessResponse.status}.`,
+      `Exact V1.4 API did not fail closed on Team schema v14; received ${readinessResponse.status}.`,
     )
   } finally {
     await runDocker(['rm', '-f', rollbackApiContainerName])
@@ -945,7 +945,7 @@ try {
   }
 
   await runCurrentMigration(FRESH_DATABASE)
-  await expectSchemaVersion(FRESH_DATABASE, 13)
+  await expectSchemaVersion(FRESH_DATABASE, 14)
   await startCurrentApiAgainstDatabase(FRESH_DATABASE)
 
   await runV14Migration(UPGRADE_DATABASE)
@@ -964,7 +964,7 @@ try {
 
   await restartPostgresWithRetainedVolume()
   await runCurrentMigration(UPGRADE_DATABASE)
-  await expectSchemaVersion(UPGRADE_DATABASE, 13)
+  await expectSchemaVersion(UPGRADE_DATABASE, 14)
   const snapshotAfterV13Upgrade = await readV14RunSnapshot(UPGRADE_DATABASE)
   expect(
     snapshotAfterV13Upgrade === snapshotBeforeV10Upgrade,
@@ -1043,7 +1043,7 @@ try {
   await expectMigrationHistoryMissing(FAILURE_DATABASE, 13)
   const snapshotBeforeV13 = await prepareV12LegacyIssuedCredentialFixture()
   await runCurrentMigration(FAILURE_DATABASE)
-  await expectSchemaVersion(FAILURE_DATABASE, 13)
+  await expectSchemaVersion(FAILURE_DATABASE, 14)
   await assertLegacyIssuedCredentialAfterV13(snapshotBeforeV13)
   await startCurrentApiAgainstDatabase(FAILURE_DATABASE)
 
@@ -1069,6 +1069,6 @@ if (mainError) throw mainError
 if (cleanupError) throw cleanupError
 if (completed) {
   console.log(
-    'Docker lifecycle smoke passed: fresh v13, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, and bounded V1.4 backup/restore rollback.',
+    'Docker lifecycle smoke passed: fresh v14, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, durable v13-to-v14 provider backoff, and bounded V1.4 backup/restore rollback.',
   )
 }

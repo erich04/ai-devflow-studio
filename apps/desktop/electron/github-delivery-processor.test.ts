@@ -301,6 +301,7 @@ function pullRequest(
     baseBranch: 'main',
     headSha: sha,
     providerCreatedAt: '2026-08-11T12:10:00.000Z',
+    providerRetryNotBefore: null,
     recordedAt: '2026-08-11T12:10:01.000Z',
     outcomeCode: 'draft_pr_created',
     redacted: true,

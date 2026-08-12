@@ -783,10 +783,10 @@ async function prepareRetainedV12CredentialFixture() {
   }
 }
 
-async function assertRetainedV12CredentialAfterV13(fixture) {
+async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
   const pool = new Pool({
     connectionString: databaseUrl,
-    application_name: 'ai-devflow-postgres-smoke-v13-assertion',
+    application_name: 'ai-devflow-postgres-smoke-v14-assertion',
     statement_timeout: 10_000,
   })
   const connection = await pool.connect()
@@ -796,8 +796,8 @@ async function assertRetainedV12CredentialAfterV13(fixture) {
       "SELECT value FROM schema_meta WHERE key = 'schema_version'",
     )
     expect(
-      schemaVersion.rows[0]?.value === '13',
-      'Team database did not migrate the retained fixture to schema v13.',
+      schemaVersion.rows[0]?.value === '14',
+      'Team database did not migrate the retained fixture to schema v14.',
     )
     const retained = await connection.query(
       `SELECT to_jsonb(retained) AS snapshot
@@ -844,6 +844,17 @@ async function assertRetainedV12CredentialAfterV13(fixture) {
         'provider_expiry_observed_at',
       ]),
       'V13 provider expiry column inventory was incomplete.',
+    )
+    const retryColumns = await connection.query(
+      `SELECT column_name
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'github_pull_request_outcomes'
+         AND column_name = 'provider_retry_not_before'`,
+    )
+    expect(
+      retryColumns.rows.length === 1,
+      'V14 provider retry not-before column was missing.',
     )
 
     await connection.query('BEGIN')
@@ -932,6 +943,26 @@ async function assertGitHubDeliveryDatabaseState({
       `GitHub Delivery durable counts were not exact: ${stableJson(
         tableCountsResult.rows[0],
       )}`,
+    )
+
+    await connection.query('BEGIN')
+    let providerRetryConstraintError
+    try {
+      await connection.query(
+        `UPDATE github_pull_request_outcomes
+         SET provider_retry_not_before = recorded_at + interval '60 seconds'
+         WHERE request_id = $1`,
+        [requestId],
+      )
+    } catch (error) {
+      providerRetryConstraintError = error
+    }
+    await connection.query('ROLLBACK')
+    expect(
+      providerRetryConstraintError?.code === '23514' &&
+        providerRetryConstraintError?.constraint ===
+          'github_pull_request_outcomes_retry_after',
+      'V14 accepted a provider retry boundary on a completed pull request.',
     )
 
     const candidateAuthority = await connection.query(
@@ -1379,7 +1410,7 @@ try {
   await run(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'db:setup'], {
     DEVFLOW_DATABASE_URL: databaseUrl,
   })
-  await assertRetainedV12CredentialAfterV13(retainedV12Fixture)
+  await assertRetainedV12CredentialAfterCurrentMigration(retainedV12Fixture)
   await run(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'db:seed'], {
     DEVFLOW_DATABASE_URL: databaseUrl,
     DEVFLOW_ENABLE_DEMO_DATA: 'true',

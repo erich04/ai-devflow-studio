@@ -278,6 +278,7 @@ function pullRequestOutcome(
     baseBranch: 'main',
     headSha: 'b'.repeat(40),
     providerCreatedAt: now,
+    providerRetryNotBefore: null,
     recordedAt: now,
     outcomeCode: 'draft_pr_created',
     redacted: true,
@@ -312,6 +313,7 @@ function createHarness() {
       publication: branchPublication({ version: 3 }),
       pullRequest: pullRequestOutcome({ version: 1, status: 'creating' }),
     })),
+    authorizeGitHubDeliveryRecoveryLookup: vi.fn(async () => ({ ok: true as const })),
     finalizeGitHubCredentialGrant: vi.fn(async () => {
       throw new Error('route must not expose credential finalization')
     }),

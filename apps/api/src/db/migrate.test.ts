@@ -105,6 +105,11 @@ describe('team database migration runner', () => {
         name: '0013_github_credential_provider_expiry',
         fileName: '0013_github_credential_provider_expiry.sql',
       },
+      {
+        version: 14,
+        name: '0014_github_pull_request_retry_after',
+        fileName: '0014_github_pull_request_retry_after.sql',
+      },
     ])
 
     const [
@@ -115,6 +120,7 @@ describe('team database migration runner', () => {
       githubDelivery,
       githubDeliveryAttempts,
       githubCredentialProviderExpiry,
+      githubPullRequestRetryAfter,
     ] = await readTeamMigrationCatalog()
     expect(baseline).toMatchObject({ version: 7, name: '0001_initial' })
     expect(baseline?.sql).toMatch(/^BEGIN;/)
@@ -157,6 +163,11 @@ describe('team database migration runner', () => {
     expect(githubCredentialProviderExpiry?.sql).toContain(
       'provider_expiry_contract_version',
     )
+    expect(githubPullRequestRetryAfter).toMatchObject({
+      version: 14,
+      name: '0014_github_pull_request_retry_after',
+    })
+    expect(githubPullRequestRetryAfter?.sql).toContain('provider_retry_not_before')
   })
 
   it('orders the v10 Gate backfill before validation and keeps its SQL function atomic', async () => {

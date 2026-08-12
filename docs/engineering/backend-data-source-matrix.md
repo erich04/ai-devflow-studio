@@ -2,7 +2,7 @@
 
 本文件是 Airbnb-III 前端重构进入后端/IPC/local store 对接后的工程清单。目标不是新增一批接口，而是先把现有页面字段的来源讲清楚：哪些已经由 Electron IPC / 本地 SQLite / 远端 snapshot 驱动，哪些只是 renderer adapter 或 seed fallback，哪些需要后续 shared/API/IPC 合同变更。
 
-当前持久化基线是 Team schema v13 与 Desktop schema v17。Team 持久层记录非秘密的
+当前持久化基线是 Team schema v14 与 Desktop schema v17。Team 持久层记录非秘密的
 provider-authoritative expiry 合同与观测时间，不把本机时钟或 legacy NULL 当作清除授权。V1.5 GitHub Delivery 已实现；
 `v1.4.0` 仍是 current release，V1.5 release/signoff 尚未完成。
 
@@ -83,7 +83,7 @@ provider-authoritative expiry 合同与观测时间，不把本机时钟或 lega
 | Gate override sync | main 提交 identifier/reason-only override；remote snapshot 回灌 accepted audit | `real IPC/API` + `local persisted` | 独立 Lead 不重传 creator-owned Run。API 规范化 Postgres node namespace、重算 exact blocker/policy；持久化 audit 恢复 namespaced FK，同 scope 幂等更新保持该命名空间。 |
 | GitHub App repository binding | owner-managed API route + Postgres binding/version/revocation state | `real IPC/API` | API 验证 installation/repository/default branch；private key 不进入 Postgres、Desktop 或 renderer。 |
 | Delivery Request / approval | redacted request + immutable signed Web approval | `real IPC/API` | Desktop Bearer authority 不能审批自身请求；approval 精确绑定 binding、series/attempt/revision、commit 与 evidence digests。 |
-| Credential / publication / Draft | API credential grant、Desktop publication report、API remote verification 与 PR result | `real IPC/API` + `local persisted` | Electron main 内存中短暂使用 repository-scoped token；Team schema v13 只持久化 provider-authoritative expiry、观测时间和合同版本，不持久化 token；API 独立确认 remote head 后创建或 reconcile 一个 Draft pull request。 |
+| Credential / publication / Draft | API credential grant、Desktop publication report、API remote verification 与 PR result | `real IPC/API` + `local persisted` | Electron main 内存中短暂使用 repository-scoped token；Team schema v14 只持久化 provider-authoritative expiry、观测时间、合同版本与 bounded provider retry not-before，不持久化 token/header/body；API 独立确认 remote head 后创建或 reconcile 一个 Draft pull request。 |
 | Snapshot history | 当前只有 latest snapshot | `missing contract` | 后续单独设计历史查询合同。 |
 
 ## Browser Preview Boundary

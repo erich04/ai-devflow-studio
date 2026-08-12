@@ -763,7 +763,7 @@ title: Postgres Smoke Readiness Checklist
 category: review_checklist
 ownerId: u-erich
 tags: postgres, api, smoke, policy, github-delivery
-summary: Postgres smoke should prove Team schema v13, retained migration, governed GitHub Delivery, policy, sync, and redaction.
+summary: Postgres smoke should prove Team schema v14, retained migration, governed GitHub Delivery, policy, sync, and redaction.
 ---
 
 # Postgres Smoke Readiness Checklist
@@ -772,7 +772,7 @@ Use this checklist when API, repository, migration, policy, override, sync, GitH
 manager-summary code changes.
 
 - Set \`DEVFLOW_DATABASE_URL\` explicitly before running Postgres smoke.
-- Prove a disposable fresh database reaches Team schema v13.
+- Prove a disposable fresh database reaches Team schema v14.
 - Prove a populated v11-to-v12 migration retains exact repository binding, Delivery Request,
   approval, publication, recovery, and audit data.
 - Prove a failed v11-to-v12 migration rolls back transactionally and succeeds once on explicit
@@ -780,6 +780,7 @@ manager-summary code changes.
 - Prove a populated v12-to-v13 migration leaves each legacy issued credential at contract version
   \`0\`, with \`provider_credential_expires_at\` and \`provider_expiry_observed_at\` NULL, and therefore
   fail closed instead of fabricating provider-authoritative expiry confirmation.
+- Prove v13-to-v14 adds only a nullable bounded Draft PR provider retry not-before.
 - Verify seeded team data can be read through the API repository boundary.
 - Verify policy save/read and enforcement evaluation behavior.
 - Verify override rejection for owner, member, and conflicted lead cases.

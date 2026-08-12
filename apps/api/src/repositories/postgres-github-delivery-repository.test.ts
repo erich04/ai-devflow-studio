@@ -337,6 +337,7 @@ function pullRequestOutcomeRow(overrides: Record<string, unknown> = {}) {
     base_branch: 'main',
     head_sha: shaB,
     provider_created_at: null,
+    provider_retry_not_before: null,
     recorded_at: now,
     outcome_code: null,
     ...overrides,
@@ -3298,7 +3299,184 @@ describe('Postgres GitHub Delivery repository', () => {
     const finalize = db.calls.find(
       ({ sql }) => marker(sql) === 'pull-request-finalize',
     )
-    expect(finalize?.params[9]).toBe(now)
+    expect(finalize?.params[9]).toBeNull()
+    expect(finalize?.params[10]).toBe(now)
+  })
+
+  it('persists a bounded provider retry boundary for Draft PR recovery', async () => {
+    const request = {
+      ...deliveryRequestRow,
+      state_version: 7,
+      status: 'creating_pr',
+    }
+    const pullRequest = pullRequestOutcomeRow()
+    const publication = branchPublicationRow({
+      status: 'verified',
+      verified_head_sha: shaB,
+      verified_at: '2026-08-11T09:59:00.000Z',
+      outcome_code: 'branch_verified',
+    })
+    const retryNotBefore = '2026-08-11T10:01:00.000Z'
+    const recoveredPullRequest = {
+      ...pullRequest,
+      version: 2,
+      status: 'recovery_required',
+      provider_retry_not_before: retryNotBefore,
+      recorded_at: now,
+      outcome_code: 'pull_request_failed',
+    }
+    const recoveredRequest = {
+      ...request,
+      state_version: 8,
+      status: 'recovery_required',
+      outcome_code: 'pull_request_failed',
+      updated_at: now,
+    }
+    const db = new FakeGitHubDeliveryDb((sql) => {
+      switch (marker(sql)) {
+        case 'project-lock':
+        case 'audit-insert':
+        case 'idempotency-insert':
+          return []
+        case 'bearer-identity':
+          return [bearerIdentity()]
+        case 'delivery-lock':
+          return [request]
+        case 'pull-request-lock':
+          return [pullRequest]
+        case 'publication-lock':
+          return [publication]
+        case 'approval-current':
+          return [deliveryApprovalRow()]
+        case 'binding-lock':
+          return [bindingRow]
+        case 'canonical-authority':
+          return [canonicalAuthority()]
+        case 'idempotency-read':
+          return []
+        case 'pull-request-finalize':
+          return [recoveredPullRequest]
+        case 'delivery-finalize-pull-request':
+          return [recoveredRequest]
+        default:
+          throw new Error(`Unexpected query: ${sql}`)
+      }
+    })
+    const repository = createPostgresGitHubDeliveryRepository(db, {
+      now: () => new Date(now),
+    })
+
+    await expect(
+      repository.finalizeGitHubDraftPullRequest(
+        {
+          projectId: 'project-a',
+          requestId: request.id,
+          pullRequestOutcomeId: pullRequest.id,
+          expectedStateVersion: request.state_version,
+          expectedPullRequestVersion: pullRequest.version,
+          outcome: {
+            status: 'recovery_required',
+            outcomeCode: 'pull_request_failed',
+            providerRetryAfterSeconds: 60,
+          },
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      request: { stateVersion: 8, status: 'recovery_required' },
+      pullRequest: { providerRetryNotBefore: retryNotBefore },
+    })
+    const finalize = db.calls.find(
+      ({ sql }) => marker(sql) === 'pull-request-finalize',
+    )
+    expect(finalize?.params.slice(9, 12)).toEqual([retryNotBefore, now, 'pull_request_failed'])
+  })
+
+  it('monotonically extends a recoverable Draft PR provider retry boundary', async () => {
+    const request = {
+      ...deliveryRequestRow,
+      state_version: 8,
+      status: 'recovery_required',
+      outcome_code: 'pull_request_failed',
+    }
+    const pullRequest = pullRequestOutcomeRow({
+      version: 2,
+      status: 'recovery_required',
+      provider_retry_not_before: '2026-08-11T10:01:00.000Z',
+      outcome_code: 'pull_request_failed',
+    })
+    const extendedRetryNotBefore = '2026-08-11T10:02:00.000Z'
+    const extendedPullRequest = {
+      ...pullRequest,
+      version: 3,
+      provider_retry_not_before: extendedRetryNotBefore,
+      recorded_at: now,
+    }
+    const db = new FakeGitHubDeliveryDb((sql) => {
+      switch (marker(sql)) {
+        case 'project-lock':
+        case 'audit-insert':
+        case 'idempotency-insert':
+          return []
+        case 'bearer-identity':
+          return [bearerIdentity()]
+        case 'delivery-lock':
+          return [request]
+        case 'pull-request-lock':
+          return [pullRequest]
+        case 'publication-lock':
+          return [branchPublicationRow({
+            status: 'verified',
+            verified_head_sha: shaB,
+            verified_at: '2026-08-11T09:59:00.000Z',
+            outcome_code: 'branch_verified',
+          })]
+        case 'approval-current':
+          return [deliveryApprovalRow()]
+        case 'binding-lock':
+          return [bindingRow]
+        case 'canonical-authority':
+          return [canonicalAuthority()]
+        case 'idempotency-read':
+          return []
+        case 'pull-request-retry-extend':
+          return [extendedPullRequest]
+        default:
+          throw new Error(`Unexpected query: ${sql}`)
+      }
+    })
+    const repository = createPostgresGitHubDeliveryRepository(db, {
+      now: () => new Date(now),
+    })
+
+    await expect(
+      repository.finalizeGitHubDraftPullRequest(
+        {
+          projectId: 'project-a',
+          requestId: request.id,
+          pullRequestOutcomeId: pullRequest.id,
+          expectedStateVersion: request.state_version,
+          expectedPullRequestVersion: pullRequest.version,
+          outcome: {
+            status: 'recovery_required',
+            outcomeCode: 'pull_request_failed',
+            providerRetryAfterSeconds: 120,
+          },
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      replayed: false,
+      request: { stateVersion: 8 },
+      pullRequest: { version: 3, providerRetryNotBefore: extendedRetryNotBefore },
+    })
+    const extension = db.calls.find(
+      ({ sql }) => marker(sql) === 'pull-request-retry-extend',
+    )
+    expect(extension?.params.slice(4, 6)).toEqual([extendedRetryNotBefore, now])
+    expect(db.markers()).not.toContain('delivery-finalize-pull-request')
   })
 
   it('rechecks the immutable approval before finalizing a Draft PR', async () => {

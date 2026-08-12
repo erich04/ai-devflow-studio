@@ -18,7 +18,7 @@ const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(13)
+    expect(TEAM_SCHEMA_VERSION).toBe(14)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -230,6 +230,11 @@ describe('team database schema', () => {
         name: '0013_github_credential_provider_expiry',
         fileName: '0013_github_credential_provider_expiry.sql',
       },
+      {
+        version: 14,
+        name: '0014_github_pull_request_retry_after',
+        fileName: '0014_github_pull_request_retry_after.sql',
+      },
     ])
 
     const migrations = await readTeamMigrationCatalog()
@@ -329,6 +334,10 @@ describe('team database schema', () => {
     )
     expect(migrationV13?.sql).toContain("provider_expiry_observed_at >= provider_credential_expires_at + interval '2 seconds'")
     expect(migrationV13?.sql).not.toMatch(/UPDATE\s+github_delivery_credential_grants\s+SET\s+provider_credential_expires_at/iu)
+    const migrationV14 = migrations.find((migration) => migration.version === 14)
+    expect(migrationV14?.name).toBe('0014_github_pull_request_retry_after')
+    expect(migrationV14?.sql).toContain('provider_retry_not_before timestamptz')
+    expect(migrationV14?.sql).toContain("provider_retry_not_before <= recorded_at + interval '24 hours'")
     expect(migrationV12?.sql).not.toMatch(/^\s*(?:DELETE FROM|TRUNCATE TABLE)\b/im)
   })
 
@@ -444,6 +453,7 @@ describe('team database schema', () => {
         'safe_url',
         'draft',
         'head_sha',
+        'provider_retry_not_before',
       ]),
     )
 

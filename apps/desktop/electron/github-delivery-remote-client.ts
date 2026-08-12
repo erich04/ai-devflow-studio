@@ -371,6 +371,7 @@ export type GitHubPullRequestOutcomeRecord = {
   baseBranch: string
   headSha: string
   providerCreatedAt: string | null
+  providerRetryNotBefore: string | null
   recordedAt: string
   outcomeCode: 'draft_pr_created' | 'pull_request_failed' | null
   redacted: true
@@ -625,6 +626,7 @@ const pullRequestKeys = [
   'baseBranch',
   'headSha',
   'providerCreatedAt',
+  'providerRetryNotBefore',
   'recordedAt',
   'outcomeCode',
   'redacted',
@@ -698,6 +700,7 @@ const sha256Pattern = /^[a-f0-9]{64}$/u
 const maximumResponseBytes = 1024 * 1024
 const defaultTimeoutMs = 15_000
 const maximumTimeoutMs = 30_000
+const providerRetryAfterMaxMs = 24 * 60 * 60 * 1_000
 const bindingInactiveRejectionMessage =
   'The Project GitHub repository binding is not active.'
 const credentialRevocationPendingMessage =
@@ -1112,6 +1115,8 @@ function parsePullRequestOutcome(
     !isFullSha(value.headSha) ||
     (value.providerCreatedAt !== null &&
       !isCanonicalDate(value.providerCreatedAt)) ||
+    (value.providerRetryNotBefore !== null &&
+      !isCanonicalDate(value.providerRetryNotBefore)) ||
     !isCanonicalDate(value.recordedAt) ||
     (value.outcomeCode !== null &&
       value.outcomeCode !== 'draft_pr_created' &&
@@ -1119,6 +1124,18 @@ function parsePullRequestOutcome(
     value.redacted !== true
   ) {
     return null
+  }
+  if (value.providerRetryNotBefore !== null) {
+    const recordedAt = Date.parse(value.recordedAt)
+    const retryNotBefore = Date.parse(value.providerRetryNotBefore)
+    if (
+      value.status !== 'recovery_required' ||
+      value.outcomeCode !== 'pull_request_failed' ||
+      retryNotBefore <= recordedAt ||
+      retryNotBefore > recordedAt + providerRetryAfterMaxMs
+    ) {
+      return null
+    }
   }
   return value as GitHubPullRequestOutcomeRecord
 }

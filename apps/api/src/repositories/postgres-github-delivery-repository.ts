@@ -17,15 +17,18 @@ import {
 } from '../db/transaction'
 import {
   fingerprintGitHubDeliveryRequest,
+  GITHUB_PROVIDER_RETRY_AFTER_MAX_SECONDS,
   githubDeliveryRejection,
   normalizeGitHubDeliveryRequestIntent,
   type CreateOrReviseGitHubDeliveryRequestInput,
+  type AuthorizeGitHubDeliveryRecoveryLookupInput,
   type ConfirmGitHubCredentialClearanceInput,
   type ConfirmGitHubCredentialProviderExpiryInput,
   type DecideGitHubDeliveryRequestInput,
   type GitHubDeliveryDesktopPrincipal,
   type GitHubDeliveryApproval,
   type GitHubDeliveryRecoverySnapshot,
+  type GitHubDeliveryRejectionResult,
   type GitHubDeliveryDecisionResult,
   type FinalizeGitHubCredentialGrantInput,
   type FinalizeGitHubBranchPublicationInput,
@@ -249,6 +252,7 @@ type PullRequestOutcomeRow = {
   base_branch: string
   head_sha: string
   provider_created_at: TimestampValue | null
+  provider_retry_not_before: TimestampValue | null
   recorded_at: TimestampValue
   outcome_code: GitHubPullRequestOutcome['outcomeCode']
 }
@@ -431,6 +435,7 @@ const pullRequestOutcomeColumns = `
   github_pull_request_outcomes.base_branch,
   github_pull_request_outcomes.head_sha,
   github_pull_request_outcomes.provider_created_at,
+  github_pull_request_outcomes.provider_retry_not_before,
   github_pull_request_outcomes.recorded_at,
   github_pull_request_outcomes.outcome_code
 `
@@ -621,6 +626,8 @@ function mapPullRequestOutcomeRow(
     headSha: row.head_sha,
     providerCreatedAt:
       row.provider_created_at === null ? null : toIso(row.provider_created_at),
+    providerRetryNotBefore:
+      row.provider_retry_not_before === null ? null : toIso(row.provider_retry_not_before),
     recordedAt: toIso(row.recorded_at),
     outcomeCode: row.outcome_code,
     redacted: true,
@@ -2562,6 +2569,51 @@ export function createPostgresGitHubDeliveryRepository(
       },
       { isolationLevel: 'repeatable_read' },
     )
+  }
+
+  async function authorizeGitHubDeliveryRecoveryLookup(
+    input: AuthorizeGitHubDeliveryRecoveryLookupInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubDeliveryRejectionResult | { ok: true }> {
+    return withTeamDbTransaction(db, async (tx) => {
+      await lockProject(tx, principal.session.organizationId, input.projectId)
+      const identity = await loadBearerIdentity(tx, principal, input.projectId, true)
+      if (!identity?.hasProjectAccess || !identity.tokenRecordId) {
+        return githubDeliveryRejection('project_forbidden')
+      }
+      const request = await lockDeliveryById(tx, identity, input.requestId)
+      if (!request) return githubDeliveryRejection('not_found')
+      if (request.requested_by_token_id !== identity.tokenRecordId) {
+        return githubDeliveryRejection('project_forbidden')
+      }
+      const pullRequest = await loadCurrentPullRequest(tx, request)
+      if (!pullRequest) return githubDeliveryRejection('not_found')
+      if (
+        request.state_version !== input.expectedStateVersion ||
+        pullRequest.version !== input.expectedPullRequestVersion
+      ) return githubDeliveryRejection('stale_version')
+      const binding = await lockBinding(tx, identity)
+      if (!exactActiveBinding(binding, request)) {
+        return githubDeliveryRejection('binding_inactive')
+      }
+      const authority = await loadCanonicalDeliveryAuthority(tx, {
+        identity,
+        runId: request.run_id,
+        requestedByUserId: request.requested_by_user_id,
+        requestedByTokenId: request.requested_by_token_id,
+      })
+      if (!canonicalAuthorityMatches(authority, {
+        runId: request.run_id,
+        runVersion: request.run_version,
+        nodeId: request.node_id,
+        tokenId: request.requested_by_token_id,
+      })) return githubDeliveryRejection('invalid_state')
+      const approval = await loadCurrentApproval(tx, request)
+      if (!approval || !approvalMatchesRequest(approval, request)) {
+        return githubDeliveryRejection('approval_required')
+      }
+      return { ok: true }
+    })
   }
 
   async function listGitHubDeliveryRequests(
@@ -4652,6 +4704,7 @@ export function createPostgresGitHubDeliveryRepository(
                 pull_request_number = NULL,
                 safe_url = NULL,
                 provider_created_at = NULL,
+                provider_retry_not_before = NULL,
                 recorded_at = $5,
                 outcome_code = NULL
             WHERE id = $1
@@ -4672,11 +4725,12 @@ export function createPostgresGitHubDeliveryRepository(
               id, version, request_id, intent_revision, publication_id, status,
               pull_request_id, pull_request_number, safe_url, draft,
               head_branch, base_branch, head_sha, provider_created_at,
+              provider_retry_not_before,
               recorded_at, outcome_code
             )
             VALUES (
               $1, 1, $2, $3, $4, 'creating', NULL, NULL, NULL, true,
-              $5, $6, $7, NULL, $8, NULL
+              $5, $6, $7, NULL, NULL, $8, NULL
             )
             RETURNING ${pullRequestOutcomeColumns}
           `,
@@ -4819,6 +4873,76 @@ export function createPostgresGitHubDeliveryRepository(
         return finalize(githubDeliveryRejection('approval_required'), request.state_version)
       }
 
+      if (
+        pullRequest.status === 'recovery_required' &&
+        request.status === 'recovery_required' &&
+        input.outcome.status === 'recovery_required' &&
+        input.outcome.providerRetryAfterSeconds != null
+      ) {
+        const retryAfterSeconds = input.outcome.providerRetryAfterSeconds
+        if (
+          request.state_version !== input.expectedStateVersion ||
+          pullRequest.version !== input.expectedPullRequestVersion
+        ) return finalize(githubDeliveryRejection('stale_version'), request.state_version)
+        if (
+          !Number.isSafeInteger(retryAfterSeconds) ||
+          retryAfterSeconds < 1 ||
+          retryAfterSeconds > GITHUB_PROVIDER_RETRY_AFTER_MAX_SECONDS
+        ) return finalize(githubDeliveryRejection('pull_request_conflict'), request.state_version)
+        const at = now().toISOString()
+        const nextRetryNotBefore = new Date(
+          Date.parse(at) + retryAfterSeconds * 1_000,
+        ).toISOString()
+        if (
+          pullRequest.provider_retry_not_before !== null &&
+          toIso(pullRequest.provider_retry_not_before) >= nextRetryNotBefore
+        ) {
+          return finalize({
+            ok: true,
+            responseStatus: 200,
+            outcomeCode: 'pull_request_failed',
+            replayed: true,
+            request: mapDeliveryRequestRow(request),
+            pullRequest: mapPullRequestOutcomeRow(pullRequest),
+          }, request.state_version)
+        }
+        const [extended] = await tx.query<PullRequestOutcomeRow>(
+          `
+            /* github_delivery:pull-request-retry-extend */
+            UPDATE github_pull_request_outcomes
+            SET version = version + 1,
+                provider_retry_not_before = $5,
+                recorded_at = $6
+            WHERE id = $1
+              AND request_id = $2
+              AND intent_revision = $3
+              AND version = $4
+              AND status = 'recovery_required'
+              AND outcome_code = 'pull_request_failed'
+            RETURNING ${pullRequestOutcomeColumns}
+          `,
+          [
+            pullRequest.id,
+            request.id,
+            request.intent_revision,
+            input.expectedPullRequestVersion,
+            nextRetryNotBefore,
+            at,
+          ],
+        )
+        if (!extended) {
+          return finalize(githubDeliveryRejection('stale_version'), request.state_version)
+        }
+        return finalize({
+          ok: true,
+          responseStatus: 200,
+          outcomeCode: 'pull_request_failed',
+          replayed: false,
+          request: mapDeliveryRequestRow(request),
+          pullRequest: mapPullRequestOutcomeRow(extended),
+        }, request.state_version)
+      }
+
       let validated = input.outcome.status === 'completed'
         ? validateCompletedPullRequest(request, input.outcome)
         : null
@@ -4859,6 +4983,18 @@ export function createPostgresGitHubDeliveryRepository(
 
       const status = input.outcome.status
       const providerCreatedAt = validated?.providerCreatedAt ?? null
+      const providerRetryAfterSeconds = input.outcome.status === 'recovery_required'
+        ? input.outcome.providerRetryAfterSeconds ?? null
+        : null
+      if (
+        providerRetryAfterSeconds !== null &&
+        (!Number.isSafeInteger(providerRetryAfterSeconds) ||
+          providerRetryAfterSeconds < 1 ||
+          providerRetryAfterSeconds > GITHUB_PROVIDER_RETRY_AFTER_MAX_SECONDS)
+      ) return finalize(githubDeliveryRejection('pull_request_conflict'), request.state_version)
+      const providerRetryNotBefore = providerRetryAfterSeconds === null
+        ? null
+        : new Date(Date.parse(at) + providerRetryAfterSeconds * 1_000).toISOString()
       const [updatedPullRequest] = await tx.query<PullRequestOutcomeRow>(
         `
           /* github_delivery:pull-request-finalize */
@@ -4869,8 +5005,9 @@ export function createPostgresGitHubDeliveryRepository(
               pull_request_number = $7,
               safe_url = $8,
               provider_created_at = $9,
-              recorded_at = $10,
-              outcome_code = $11
+              provider_retry_not_before = $10,
+              recorded_at = $11,
+              outcome_code = $12
           WHERE id = $1 AND request_id = $2 AND intent_revision = $3
             AND version = $4 AND status = 'creating'
           RETURNING ${pullRequestOutcomeColumns}
@@ -4882,6 +5019,7 @@ export function createPostgresGitHubDeliveryRepository(
           input.outcome.status === 'completed' ? input.outcome.pullRequestNumber : null,
           validated?.safeUrl ?? null,
           providerCreatedAt,
+          providerRetryNotBefore,
           at,
           input.outcome.outcomeCode,
         ],
@@ -4920,6 +5058,7 @@ export function createPostgresGitHubDeliveryRepository(
     createOrReviseGitHubDeliveryRequest,
     listGitHubDeliveryInbox,
     getGitHubDeliveryRecoverySnapshot,
+    authorizeGitHubDeliveryRecoveryLookup,
     listGitHubDeliveryRequests,
     decideGitHubDeliveryRequest,
     reserveGitHubCredentialGrant,

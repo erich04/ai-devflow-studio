@@ -2597,11 +2597,61 @@ describe('seed GitHub Delivery repository', () => {
         outcome: {
           status: 'recovery_required',
           outcomeCode: 'pull_request_failed',
+          providerRetryAfterSeconds: 60,
         },
       },
       desktopPrincipal,
     )
     if (!recovery.ok) throw new Error('fixture PR recovery failed')
+    expect(recovery.pullRequest).toMatchObject({
+      providerRetryNotBefore: '2026-08-11T10:01:00.000Z',
+    })
+
+    harness.setCanonicalRunAuthority({ currentNodeId: 'acceptance-1' })
+    await expect(
+      harness.repository.finalizeGitHubDraftPullRequest(
+        {
+          projectId: 'project-a',
+          requestId: verified.request.id,
+          pullRequestOutcomeId: recovery.pullRequest.id,
+          expectedStateVersion: recovery.request.stateVersion,
+          expectedPullRequestVersion: recovery.pullRequest.version,
+          outcome: {
+            status: 'recovery_required',
+            outcomeCode: 'pull_request_failed',
+            providerRetryAfterSeconds: 120,
+          },
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'invalid_state' })
+    harness.setCanonicalRunAuthority({ currentNodeId: 'pr-1' })
+
+    const extended = await harness.repository.finalizeGitHubDraftPullRequest(
+      {
+        projectId: 'project-a',
+        requestId: verified.request.id,
+        pullRequestOutcomeId: recovery.pullRequest.id,
+        expectedStateVersion: recovery.request.stateVersion,
+        expectedPullRequestVersion: recovery.pullRequest.version,
+        outcome: {
+          status: 'recovery_required',
+          outcomeCode: 'pull_request_failed',
+          providerRetryAfterSeconds: 120,
+        },
+      },
+      desktopPrincipal,
+    )
+    expect(extended).toMatchObject({
+      ok: true,
+      replayed: false,
+      request: { stateVersion: recovery.request.stateVersion },
+      pullRequest: {
+        version: 3,
+        providerRetryNotBefore: '2026-08-11T10:02:00.000Z',
+      },
+    })
+    if (!extended.ok) throw new Error('fixture PR retry extension failed')
 
     await expect(
       harness.repository.reserveGitHubDraftPullRequest(
@@ -2609,7 +2659,7 @@ describe('seed GitHub Delivery repository', () => {
           projectId: 'project-a',
           requestId: verified.request.id,
           publicationId: verified.publication.id,
-          expectedStateVersion: recovery.request.stateVersion,
+          expectedStateVersion: extended.request.stateVersion,
         },
         desktopPrincipal,
       ),
@@ -2619,8 +2669,9 @@ describe('seed GitHub Delivery repository', () => {
       request: { status: 'creating_pr', outcomeCode: null },
       pullRequest: {
         id: reserved.pullRequest.id,
-        version: 3,
+        version: 4,
         status: 'creating',
+        providerRetryNotBefore: null,
         outcomeCode: null,
       },
     })

@@ -803,6 +803,116 @@ export function createGitHubDeliveryService(
     pullRequestInput: CreateGitHubDraftPullRequestServiceInput,
     principal: GitHubDeliveryDesktopPrincipal,
   ): Promise<GitHubPullRequestMutationResult> {
+    let preResolved: Awaited<
+      ReturnType<GitHubAppClient['findOrCreateDraftPullRequest']>
+    > | null = null
+    let recoverySnapshot: Awaited<
+      ReturnType<GitHubDeliveryRepository['getGitHubDeliveryRecoverySnapshot']>
+    >
+    try {
+      recoverySnapshot = await input.repository.getGitHubDeliveryRecoverySnapshot(
+        pullRequestInput.projectId,
+        pullRequestInput.requestId,
+        principal,
+      )
+    } catch (error) {
+      throw serviceError('pull_request', error)
+    }
+    const retryNotBefore = recoverySnapshot?.pullRequest?.providerRetryNotBefore
+    if (
+      recoverySnapshot?.pullRequest?.status === 'recovery_required' &&
+      retryNotBefore !== null &&
+      retryNotBefore !== undefined
+    ) {
+      let authorization: Awaited<
+        ReturnType<GitHubDeliveryRepository['authorizeGitHubDeliveryRecoveryLookup']>
+      >
+      try {
+        authorization = await input.repository.authorizeGitHubDeliveryRecoveryLookup(
+          {
+            projectId: pullRequestInput.projectId,
+            requestId: recoverySnapshot.request.id,
+            expectedStateVersion: recoverySnapshot.request.stateVersion,
+            expectedPullRequestVersion: recoverySnapshot.pullRequest.version,
+          },
+          principal,
+        )
+      } catch (error) {
+        throw serviceError('pull_request', error)
+      }
+      if (!authorization.ok) return authorization
+      try {
+        const existing = await input.client.findDraftPullRequest({
+          installationId: recoverySnapshot.request.installationId,
+          repositoryId: recoverySnapshot.request.repositoryId,
+          repository: recoverySnapshot.request.repository,
+          baseBranch: recoverySnapshot.request.baseBranch,
+          headBranch: recoverySnapshot.request.headBranch,
+          expectedHeadSha: recoverySnapshot.request.expectedCommitSha,
+          idempotencyKey: recoverySnapshot.request.logicalIdempotencyKey,
+        })
+        if (existing) {
+          preResolved = { disposition: 'found', pullRequest: existing }
+        } else {
+          const retryAt = Date.parse(retryNotBefore)
+          const observedAt = input.clock().valueOf()
+          if (!Number.isFinite(retryAt) || !Number.isFinite(observedAt)) {
+            throw new GitHubDeliveryServiceError({
+              code: 'github_delivery_state_conflict',
+              retryable: false,
+              phase: 'pull_request',
+            })
+          }
+          if (observedAt < retryAt) {
+            throw new GitHubDeliveryServiceError({
+              code: 'github_rate_limited',
+              retryable: true,
+              phase: 'pull_request',
+            })
+          }
+        }
+      } catch (error) {
+        if (
+          error instanceof GitHubAppClientError &&
+          error.code === 'github_rate_limited' &&
+          error.retryAfterSeconds !== undefined &&
+          recoverySnapshot?.pullRequest
+        ) {
+          let extended: GitHubPullRequestMutationResult
+          try {
+            extended = await input.repository.finalizeGitHubDraftPullRequest(
+              {
+                projectId: pullRequestInput.projectId,
+                requestId: recoverySnapshot.request.id,
+                pullRequestOutcomeId: recoverySnapshot.pullRequest.id,
+                expectedStateVersion: recoverySnapshot.request.stateVersion,
+                expectedPullRequestVersion: recoverySnapshot.pullRequest.version,
+                outcome: {
+                  status: 'recovery_required',
+                  outcomeCode: 'pull_request_failed',
+                  providerRetryAfterSeconds: error.retryAfterSeconds,
+                },
+              },
+              principal,
+            )
+          } catch {
+            throw new GitHubDeliveryServiceError({
+              code: 'github_delivery_state_conflict',
+              retryable: false,
+              phase: 'pull_request',
+            })
+          }
+          if (!extended.ok) {
+            throw new GitHubDeliveryServiceError({
+              code: 'github_delivery_state_conflict',
+              retryable: false,
+              phase: 'pull_request',
+            })
+          }
+        }
+        throw serviceError('pull_request', error)
+      }
+    }
     let reserved: Awaited<
       ReturnType<GitHubDeliveryRepository['reserveGitHubDraftPullRequest']>
     >
@@ -832,7 +942,7 @@ export function createGitHubDeliveryService(
 
     let resolved: Awaited<
       ReturnType<GitHubAppClient['findOrCreateDraftPullRequest']>
-    > | null = null
+    > | null = preResolved
     let replayNeedsRecovery = false
     try {
       const identity = {
@@ -844,7 +954,9 @@ export function createGitHubDeliveryService(
         expectedHeadSha: reserved.request.expectedCommitSha,
         idempotencyKey: reserved.request.logicalIdempotencyKey,
       }
-      if (reserved.replayed) {
+      if (resolved) {
+        // A matching Draft was reconciled before a durable provider backoff gate.
+      } else if (reserved.replayed) {
         const existing = await input.client.findDraftPullRequest(identity)
         if (!existing) {
           replayNeedsRecovery = true
@@ -861,6 +973,12 @@ export function createGitHubDeliveryService(
     } catch (error) {
       if (error instanceof GitHubDeliveryServiceError) throw error
       const safe = serviceError('pull_request', error)
+      const providerRetryAfterSeconds =
+        error instanceof GitHubAppClientError &&
+        error.code === 'github_rate_limited' &&
+        error.retryAfterSeconds !== undefined
+          ? error.retryAfterSeconds
+          : null
       let finalized: GitHubPullRequestMutationResult
       try {
         finalized = await input.repository.finalizeGitHubDraftPullRequest(
@@ -870,10 +988,18 @@ export function createGitHubDeliveryService(
             pullRequestOutcomeId: reserved.pullRequest.id,
             expectedStateVersion: reserved.request.stateVersion,
             expectedPullRequestVersion: reserved.pullRequest.version,
-            outcome: {
-              status: safe.retryable ? 'recovery_required' : 'failed',
-              outcomeCode: 'pull_request_failed',
-            },
+            outcome: safe.retryable
+              ? {
+                  status: 'recovery_required',
+                  outcomeCode: 'pull_request_failed',
+                  ...(providerRetryAfterSeconds === null
+                    ? {}
+                    : { providerRetryAfterSeconds }),
+                }
+              : {
+                  status: 'failed',
+                  outcomeCode: 'pull_request_failed',
+                },
           },
           principal,
         )
