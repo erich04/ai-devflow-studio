@@ -7,7 +7,7 @@ describe('Electron Agent Runtime production wiring', () => {
   it('keeps runtime construction and execution inside Electron main', () => {
     expect(main).toContain("from './agent-runtime-runtime.js'")
     expect(main).toMatch(
-      /function getDesktopAgentRuntime\(\)[\s\S]*?getStore\(\)\.then\(\(store\) =>[\s\S]*?createDesktopAgentRuntime\(\{ store \}\)/,
+      /function getDesktopAgentRuntime\(\)[\s\S]*?getStore\(\)[\s\S]*?\.then\(async \(store\) =>[\s\S]*?!runtimeFlags\.localMcpFixtureEnabled[\s\S]*?createDesktopAgentRuntime\(\{ store \}\)[\s\S]*?createFixtureLocalMcpRuntime\([\s\S]*?nativeToolRegistry: fixtureLocalMcpRuntime\.nativeToolRegistry/,
     )
 
     const handlers = main.slice(

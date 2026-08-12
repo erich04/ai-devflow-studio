@@ -1,7 +1,8 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import initSqlJs from 'sql.js'
 import {
   createAgentRuntime,
   createWorkflowRunFromRequest,
@@ -42,6 +43,9 @@ function startAudit(grant: AgentRuntimeCapabilityGrant): NativeToolAuditRecord {
     localProjectId: 'local-project-1',
     toolId: grant.capabilityId,
     toolVersion: grant.capabilityVersion,
+    source: 'native',
+    installationId: null,
+    installationVersion: null,
     permissionClass: grant.permissionClass,
     sideEffectClass: 'none',
     resourceKind: grant.resourceKind,
@@ -60,7 +64,7 @@ describe('Native Tool durable local audit', () => {
   it('atomically consumes one capability and persists bounded audit across restart', async () => {
     const storePath = await dbPath()
     const store = await createLocalStore({ dbPath: storePath })
-    expect(await store.getSchemaVersion()).toBe(19)
+    expect(await store.getSchemaVersion()).toBe(20)
 
     const project = {
       id: 'local-project-1',
@@ -282,6 +286,23 @@ describe('Native Tool durable local audit', () => {
       { ...grantRecord, status: 'consumed', settledAt: started.createdAt },
     ])
     reopened.close()
+
+    const SQL = await initSqlJs()
+    const database = new SQL.Database(await readFile(storePath))
+    expect(
+      database.exec('pragma table_info(agent_runtime_tool_audits)')[0]?.values.map(
+        (row) => String(row[1]),
+      ),
+    ).toEqual(expect.arrayContaining(['source', 'installation_id', 'installation_version']))
+    expect(
+      database.exec(
+        'select source, installation_id, installation_version from agent_runtime_tool_audits order by created_at, id',
+      )[0]?.values,
+    ).toEqual([
+      ['native', null, null],
+      ['native', null, null],
+    ])
+    database.close()
   })
 
   it('rejects audit tamper and rolls back grant consumption with the audit insert', async () => {

@@ -23,7 +23,6 @@ import { createAcceptedNativeToolRegistrations } from './native-tools.js'
 
 const DEFAULT_RUNTIME_WALL_TIME_MS = 10 * 60_000
 const NATIVE_RUNTIME_TOOL_ID = 'scenario.evaluate'
-const NATIVE_RUNTIME_TOOL_VERSION = 1
 const NATIVE_RUNTIME_SCENARIO_INPUT = {
   scenarioJson: JSON.stringify({
     stateVersion: 1,
@@ -135,8 +134,11 @@ export function createDesktopAgentRuntime(
         },
       })
   const nativeCapabilitySetDigest = nativeToolRegistry
-    ? digestNativeToolValue(nativeToolRegistry.listDefinitions())
+    ? nativeToolRegistry.capabilitySetDigest()
     : sha256('runtime.fake.observe@1')
+  const nativeRuntimeToolVersion = nativeToolRegistry
+    ?.listDefinitions()
+    .find((definition) => definition.id === NATIVE_RUNTIME_TOOL_ID)?.version ?? 1
 
   function failureResult(code: string) {
     return {
@@ -319,7 +321,7 @@ export function createDesktopAgentRuntime(
           id: actionId,
           kind: 'tool',
           capabilityId: nativeAction ? NATIVE_RUNTIME_TOOL_ID : 'runtime.fake.observe',
-          capabilityVersion: nativeAction ? NATIVE_RUNTIME_TOOL_VERSION : 1,
+          capabilityVersion: nativeAction ? nativeRuntimeToolVersion : 1,
           requestDigest: nativeAction
             ? digestNativeToolValue(NATIVE_RUNTIME_SCENARIO_INPUT)
             : sha256(`${runtime.id}:${runtime.checkpointVersion}:${runtime.lastObservationDigest}`),

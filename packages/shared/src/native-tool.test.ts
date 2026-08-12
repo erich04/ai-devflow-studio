@@ -43,6 +43,11 @@ describe('Native Tool contract', () => {
     expect(parseNativeToolDefinition(definition)).toEqual(definition)
   })
 
+  it('uses the same bounded Tool contract for an installation-owned MCP Tool', () => {
+    const mcpDefinition = { ...definition, id: 'fixture.echo', source: 'mcp' as const }
+    expect(parseNativeToolDefinition(mcpDefinition)).toEqual(mcpDefinition)
+  })
+
   it.each([
     ['extra definition field', { ...definition, command: 'cat' }],
     ['unknown source', { ...definition, source: 'renderer' }],

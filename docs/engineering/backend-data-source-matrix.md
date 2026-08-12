@@ -2,7 +2,7 @@
 
 本文件是 Airbnb-III 前端重构进入后端/IPC/local store 对接后的工程清单。目标不是新增一批接口，而是先把现有页面字段的来源讲清楚：哪些已经由 Electron IPC / 本地 SQLite / 远端 snapshot 驱动，哪些只是 renderer adapter 或 seed fallback，哪些需要后续 shared/API/IPC 合同变更。
 
-当前持久化基线是 Team schema v15 与 Desktop schema v19。Team 持久层记录非秘密的
+当前持久化基线是 Team schema v15 与 Desktop schema v20。Team 持久层记录非秘密的
 provider-authoritative expiry 合同与观测时间，不把本机时钟或 legacy NULL 当作清除授权。
 `v1.5.0` 已发布并完成 1.x；V2.0 Agent Runtime 实现正在按唯一 Roadmap 推进。
 
@@ -48,7 +48,7 @@ provider-authoritative expiry 合同与观测时间，不把本机时钟或 lega
 | Knowledge Review trace | `AgentTrace[]` | `local persisted` | 已可回写当前 Run/Node。 |
 | Token usage | `AgentTokenUsage[]` | `local persisted` | 保留 provider-reported/estimated source。 |
 | Coding Agent run | `runCodingAgent` / subscriptions | `real IPC/API` + `local persisted` | 继续接 permission relay、tool timeline、diff preview；Team summary 分别对白名单 structured metadata、model/cost、budget/reason 投影，净化允许字符串中的 secret/path，并丢弃未知嵌套键。 |
-| Agent Runtime | `startAgentRuntime` / `advanceAgentRuntime` / `cancelAgentRuntime` / `listAgentRuntimes` | `real IPC` + `local persisted` | Desktop schema v19 已持久化严格 trajectory、checkpoint、evaluation、terminal summary 与 metadata-only Native Tool audit；Native Tool 主进程 Registry、Runtime 接线及 packaged 场景已完成，trusted local MCP 留给 Slice 4。 |
+| Agent Runtime | `startAgentRuntime` / `advanceAgentRuntime` / `cancelAgentRuntime` / `listAgentRuntimes` | `real IPC` + `local persisted` | Desktop schema v20 已持久化严格 trajectory、checkpoint、evaluation、terminal summary、`local_mcp_installations` 与 installation-bound metadata-only Tool audit；Native Tool 和 trusted Local MCP 主进程 Registry、Runtime 接线及 packaged 场景均已完成，Coding Executor 留给 Slice 5。 |
 | Permission relay | `CodingPermissionRequest[]` + decisions | `real IPC/API` + `local persisted` | 已有 IPC；继续补真实 UI 状态。 |
 | Diff preview | `CodingDiffArtifact[]` | `local persisted` | 已可展示。 |
 

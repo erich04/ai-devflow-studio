@@ -53,6 +53,10 @@ import {
 import { createLocalStore, type LocalStore } from './local-store.js'
 import { createDesktopAgentRuntime, type DesktopAgentRuntime } from './agent-runtime-runtime.js'
 import {
+  createFixtureLocalMcpRuntime,
+  type FixtureLocalMcpRuntime,
+} from './local-mcp-runtime.js'
+import {
   ipcChannels,
   parseCancelCodingAgentRunInput,
   parseCancelAgentRuntimeInput,
@@ -201,6 +205,7 @@ const execFileAsync = promisify(execFile)
 
 let storePromise: Promise<LocalStore> | undefined
 let desktopAgentRuntimePromise: Promise<DesktopAgentRuntime> | undefined
+let fixtureLocalMcpRuntime: FixtureLocalMcpRuntime | undefined
 let remoteSyncClient: RemoteSyncClient | undefined
 let remoteSyncClientKey: string | undefined
 let remoteSyncOutboxScheduler: ReturnType<typeof createRemoteSyncOutboxScheduler> | undefined
@@ -1096,9 +1101,27 @@ function broadcastToRenderers(channel: string, payload: unknown) {
 }
 
 function getDesktopAgentRuntime(): Promise<DesktopAgentRuntime> {
-  desktopAgentRuntimePromise ??= getStore().then((store) =>
-    createDesktopAgentRuntime({ store }),
-  )
+  desktopAgentRuntimePromise ??= getStore()
+    .then(async (store) => {
+      if (!runtimeFlags.localMcpFixtureEnabled) return createDesktopAgentRuntime({ store })
+      const projects = await store.listProjects()
+      if (projects.length !== 1) throw new Error('local_mcp_fixture_project_unavailable')
+      fixtureLocalMcpRuntime = await createFixtureLocalMcpRuntime({
+        store,
+        localProjectPath: projects[0]!.path,
+        executablePath: process.execPath,
+        serverPath: path.join(__dirname, 'local-mcp-fixture-server.js'),
+        environment: { ELECTRON_RUN_AS_NODE: '1' },
+      })
+      return createDesktopAgentRuntime({
+        store,
+        nativeToolRegistry: fixtureLocalMcpRuntime.nativeToolRegistry,
+      })
+    })
+    .catch((error) => {
+      desktopAgentRuntimePromise = undefined
+      throw error
+    })
   return desktopAgentRuntimePromise
 }
 
@@ -2797,6 +2820,9 @@ app.on('before-quit', (event) => {
   githubDeliveryScheduler?.stop()
   githubDeliveryOperationAbortController?.abort()
   quitCleanupPromise ??= Promise.all([
+    (fixtureLocalMcpRuntime?.shutdown() ?? Promise.resolve()).catch(() => {
+      console.warn('[local-mcp] Unable to complete fixture MCP cleanup before quit.')
+    }),
     stopOpencodeWithRetry(opencodeProcessManager).catch(() => {
       console.warn('[opencode] Unable to complete managed runtime cleanup before quit.')
     }),

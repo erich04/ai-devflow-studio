@@ -19,7 +19,8 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).toContain('hostileDevelopmentServerRequests !== 0')
   })
 
-  it('completes and reopens one durable Native Tool Agent Runtime', () => {
+  it('completes and reopens one durable Local MCP Tool Agent Runtime', () => {
+    expect(smoke).toContain("DEVFLOW_ENABLE_LOCAL_MCP_FIXTURE: 'true'")
     expect(smoke).toContain('startAgentRuntime')
     expect(smoke).toContain('advanceAgentRuntime')
     expect(smoke).toContain('listAgentRuntimes')
@@ -27,7 +28,11 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).toContain('runtimeAfterRestart')
     expect(smoke).toContain('acceptedActionIds.length !== 1')
     expect(smoke).toContain('agent_runtime_tool_audits')
-    expect(smoke).toContain("nativeToolAudit?.[0] !== 'scenario.evaluate'")
-    expect(smoke).toContain('schemaVersion !== 19')
+    expect(smoke).toContain('local_mcp_installations')
+    expect(smoke).toContain("source !== 'mcp'")
+    expect(smoke).toContain('installation_id')
+    expect(smoke).toContain('installation_version')
+    expect(smoke).toContain("toolId !== 'scenario.evaluate'")
+    expect(smoke).toContain('schemaVersion !== 20')
   })
 })

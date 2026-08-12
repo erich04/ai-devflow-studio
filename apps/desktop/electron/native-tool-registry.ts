@@ -38,6 +38,7 @@ export type NativeToolHandler = (context: NativeToolHandlerContext) => Promise<u
 
 export type NativeToolRegistration = {
   definition: NativeToolDefinition
+  installation?: { id: string; version: number }
   handler: NativeToolHandler
 }
 
@@ -90,6 +91,9 @@ export type NativeToolAuditRecord = {
   localProjectId: string
   toolId: string
   toolVersion: number
+  source: NativeToolDefinition['source']
+  installationId: string | null
+  installationVersion: number | null
   permissionClass: NativeToolPermissionClass
   sideEffectClass: NativeToolDefinition['sideEffectClass']
   resourceKind: NativeToolResourceScope['kind']
@@ -147,6 +151,9 @@ type GrantRecord = {
   capabilitySetDigest: string
   toolId: string
   toolVersion: number
+  source: NativeToolDefinition['source']
+  installationId: string | null
+  installationVersion: number | null
   permission: NativeToolPermission
   sideEffectClass: NativeToolDefinition['sideEffectClass']
   resourceScope: NativeToolResourceScope
@@ -161,6 +168,7 @@ type ActiveExecution = {
 
 export type NativeToolRegistry = {
   listDefinitions(): NativeToolDefinition[]
+  capabilitySetDigest(): string
   issueGrant(input: {
     runtime: AgentRuntimeState
     toolId: string
@@ -241,6 +249,9 @@ function hasExactAuditKeys(value: Record<string, unknown>): boolean {
     'localProjectId',
     'toolId',
     'toolVersion',
+    'source',
+    'installationId',
+    'installationVersion',
     'permissionClass',
     'sideEffectClass',
     'resourceKind',
@@ -280,6 +291,18 @@ export function parseNativeToolAuditRecord(value: unknown): NativeToolAuditRecor
       !Number.isInteger(value.toolVersion) ||
       Number(value.toolVersion) < 1 ||
       Number(value.toolVersion) > 2_147_483_647 ||
+      !['native', 'mcp'].includes(String(value.source)) ||
+      !(
+        (value.source === 'native' &&
+          value.installationId === null &&
+          value.installationVersion === null) ||
+        (value.source === 'mcp' &&
+          typeof value.installationId === 'string' &&
+          auditIdentifierPattern.test(value.installationId) &&
+          Number.isInteger(value.installationVersion) &&
+          Number(value.installationVersion) >= 1 &&
+          Number(value.installationVersion) <= 2_147_483_647)
+      ) ||
       !['read', 'edit', 'execute'].includes(String(value.permissionClass)) ||
       !['none', 'workspace_write', 'local_process'].includes(String(value.sideEffectClass)) ||
       !['local_project', 'managed_workspace'].includes(String(value.resourceKind)) ||
@@ -370,6 +393,7 @@ function deepFreeze<T>(value: T): T {
 
 export function createNativeToolRegistry(input: {
   tools: NativeToolRegistration[]
+  capabilitySetDigest?: string
   clock?: () => string
   createId?: () => string
   redactResult?: (value: unknown) => { value: unknown; redacted: boolean }
@@ -383,11 +407,31 @@ export function createNativeToolRegistry(input: {
   const activeByRuntime = new Map<string, Set<ActiveExecution>>()
   const auditRecords: NativeToolAuditRecord[] = []
 
+  if (input.capabilitySetDigest !== undefined && !digestPattern.test(input.capabilitySetDigest)) {
+    throw new Error('invalid_native_tool_capability_set')
+  }
+
   for (const registration of input.tools) {
     const definition = parseNativeToolDefinition(registration.definition)
+    const installation = registration.installation
+    if (
+      (definition.source === 'native' && installation !== undefined) ||
+      (definition.source === 'mcp' &&
+        (!installation ||
+          !auditIdentifierPattern.test(installation.id) ||
+          !Number.isInteger(installation.version) ||
+          installation.version < 1 ||
+          installation.version > 2_147_483_647))
+    ) {
+      throw new Error('invalid_native_tool_installation_authority')
+    }
     const key = `${definition.id}@${definition.version}`
     if (tools.has(key)) throw new Error('duplicate_native_tool_definition')
-    tools.set(key, { definition: deepFreeze(definition), handler: registration.handler })
+    tools.set(key, {
+      definition: deepFreeze(definition),
+      ...(installation ? { installation: deepFreeze(clone(installation)) } : {}),
+      handler: registration.handler,
+    })
   }
 
   function now(): { value: string; timestamp: number } {
@@ -419,6 +463,9 @@ export function createNativeToolRegistry(input: {
       localProjectId: grant.runtimeScope.localProjectId,
       toolId: grant.toolId,
       toolVersion: grant.toolVersion,
+      source: grant.source,
+      installationId: grant.installationId,
+      installationVersion: grant.installationVersion,
       permissionClass: grant.permission.permissionClass,
       sideEffectClass: grant.sideEffectClass,
       resourceKind: grant.resourceScope.kind,
@@ -472,6 +519,9 @@ export function createNativeToolRegistry(input: {
       capabilitySetDigest: input.runtime.capabilitySetDigest,
       toolId: input.durableGrant.capabilityId,
       toolVersion: input.durableGrant.capabilityVersion,
+      source: input.tool.definition.source,
+      installationId: input.tool.installation?.id ?? null,
+      installationVersion: input.tool.installation?.version ?? null,
       permission: clone(input.permission),
       sideEffectClass: input.tool.definition.sideEffectClass,
       resourceScope: clone(input.resourceScope),
@@ -484,6 +534,12 @@ export function createNativeToolRegistry(input: {
   return {
     listDefinitions() {
       return [...tools.values()].map(({ definition }) => clone(definition))
+    },
+
+    capabilitySetDigest() {
+      return input.capabilitySetDigest ?? digestNativeToolValue(
+        [...tools.values()].map(({ definition }) => definition),
+      )
     },
 
     async issueGrant({ runtime, toolId, toolVersion, permission, resourceScope, callLimit }) {
@@ -501,6 +557,8 @@ export function createNativeToolRegistry(input: {
         runtime.activeAction.id === '' ||
         runtime.activeAction.capabilityId !== toolId ||
         runtime.activeAction.capabilityVersion !== toolVersion ||
+        (input.capabilitySetDigest !== undefined &&
+          runtime.capabilitySetDigest !== input.capabilitySetDigest) ||
         permission.decision !== 'approved' ||
         permission.permissionClass !== tool.definition.permissionClass ||
         decidedAt > current ||
@@ -577,6 +635,8 @@ export function createNativeToolRegistry(input: {
         runtime.activeAction.capabilityId !== durableGrant.capabilityId ||
         runtime.activeAction.capabilityVersion !== durableGrant.capabilityVersion ||
         runtime.activeAction.requestDigest !== durableGrant.requestDigest ||
+        (input.capabilitySetDigest !== undefined &&
+          runtime.capabilitySetDigest !== input.capabilitySetDigest) ||
         durableGrant.permissionClass !== tool.definition.permissionClass ||
         !['local_project', 'managed_workspace'].includes(durableGrant.resourceKind) ||
         !auditIdentifierPattern.test(durableGrant.resourceId) ||

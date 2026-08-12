@@ -56,7 +56,7 @@ export type NativeToolDefinition = {
   stateVersion: typeof NATIVE_TOOL_CONTRACT_VERSION
   id: string
   version: number
-  source: 'native'
+  source: 'native' | 'mcp'
   description: string
   inputSchema: NativeToolObjectSchema
   outputSchema: NativeToolObjectSchema
@@ -231,7 +231,7 @@ export function parseNativeToolDefinition(value: unknown): NativeToolDefinition 
     value.id.length > NATIVE_TOOL_ID_MAX_LENGTH ||
     !identifierPattern.test(value.id) ||
     !isBoundedInteger(value.version, 1, MAX_VERSION) ||
-    value.source !== 'native' ||
+    !['native', 'mcp'].includes(String(value.source)) ||
     typeof value.description !== 'string' ||
     value.description.length === 0 ||
     value.description.length > 500 ||

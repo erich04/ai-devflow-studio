@@ -54,6 +54,30 @@ function tickingClock(...values: string[]) {
 }
 
 describe('Desktop Agent Runtime', () => {
+  it('binds a new Runtime to the registry-negotiated capability set digest', async () => {
+    const { store, run, project } = await runtimeFixture()
+    const capabilitySetDigest = 'c'.repeat(64)
+    const nativeToolRegistry = createNativeToolRegistry({
+      tools: createAcceptedNativeToolRegistrations({
+        resolveLocalProject: async (localProjectId) =>
+          localProjectId === project.id ? project : null,
+        resolveManagedWorkspace: async () => null,
+      }),
+      capabilitySetDigest,
+    })
+    const runtime = createDesktopAgentRuntime({
+      store,
+      nativeToolRegistry,
+      clock: tickingClock('2026-08-12T20:30:00.000Z'),
+      createId: () => 'agent-runtime-negotiated-capability-1',
+    })
+
+    const started = await runtime.start({ runId: run.id, nodeId: run.currentNodeId })
+
+    expect(started.runtime.capabilitySetDigest).toBe(capabilitySetDigest)
+    store.close()
+  })
+
   it('rejects a current Gate node before creating durable runtime state', async () => {
     const { store, run } = await runtimeFixture()
     const gateRun = {

@@ -51,6 +51,7 @@ async function launchPackagedDesktop() {
       DEVFLOW_API_BASE_URL: 'http://127.0.0.1:9',
       DEVFLOW_CODING_ENGINE: 'fake',
       DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
+      DEVFLOW_ENABLE_LOCAL_MCP_FIXTURE: 'true',
       DEVFLOW_ENABLE_DEMO_DATA: 'true',
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
       VITE_DEV_SERVER_URL: hostileDevelopmentServerUrl,
@@ -163,29 +164,44 @@ try {
   const schemaVersion = Number(
     database.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0],
   )
-  const nativeToolAudit = database.exec(
-    `select tool_id,
+  const localMcpAudit = database.exec(
+    `select tool_id, source, installation_id, installation_version,
             sum(case when status = 'started' then 1 else 0 end),
             sum(case when status = 'succeeded' then 1 else 0 end),
             count(*),
             sum(case when result_digest is not null then 1 else 0 end)
        from agent_runtime_tool_audits
       where runtime_id = ?
-      group by tool_id`,
+      group by tool_id, source, installation_id, installation_version`,
     [runtimeBeforeRestart.runtime.id],
   )[0]?.values[0]
+  const localMcpInstallations = database.exec(
+    `select id, version, enabled
+       from local_mcp_installations
+      order by id`,
+  )[0]?.values ?? []
   database.close()
-  if (schemaVersion !== 19) {
-    throw new Error(`Packaged Desktop did not initialize schema 19: ${schemaVersion}`)
+  if (schemaVersion !== 20) {
+    throw new Error(`Packaged Desktop did not initialize schema 20: ${schemaVersion}`)
   }
+  const [toolId, source, installationId, installationVersion, started, succeeded, records, results] =
+    localMcpAudit ?? []
+  const [persistedInstallation] = localMcpInstallations
   if (
-    nativeToolAudit?.[0] !== 'scenario.evaluate' ||
-    Number(nativeToolAudit[1]) !== 1 ||
-    Number(nativeToolAudit[2]) !== 1 ||
-    Number(nativeToolAudit[3]) !== 2 ||
-    Number(nativeToolAudit[4]) !== 1
+    toolId !== 'scenario.evaluate' ||
+    source !== 'mcp' ||
+    installationId !== 'local-mcp-installation-runtime-fixture' ||
+    Number(installationVersion) !== 2 ||
+    Number(started) !== 1 ||
+    Number(succeeded) !== 1 ||
+    Number(records) !== 2 ||
+    Number(results) !== 1 ||
+    localMcpInstallations.length !== 1 ||
+    persistedInstallation?.[0] !== installationId ||
+    Number(persistedInstallation?.[1]) !== Number(installationVersion) ||
+    Number(persistedInstallation?.[2]) !== 1
   ) {
-    throw new Error('Packaged Agent Runtime did not persist one exact bounded Native Tool audit.')
+    throw new Error('Packaged Agent Runtime did not persist one exact bounded Local MCP audit.')
   }
 
   console.log(
@@ -201,11 +217,14 @@ try {
           stopReason: runtimeAfterRestart.runtime.stopReason,
           acceptedActionCount: runtimeAfterRestart.terminalSummary.acceptedActionCount,
           restartDuplicateEffects: 0,
-          nativeToolAudit: {
-            toolId: nativeToolAudit[0],
-            started: Number(nativeToolAudit[1]),
-            succeeded: Number(nativeToolAudit[2]),
-            durableRecords: Number(nativeToolAudit[3]),
+          localMcp: {
+            installationId,
+            installationVersion: Number(installationVersion),
+            toolId,
+            source,
+            started: Number(started),
+            succeeded: Number(succeeded),
+            durableRecords: Number(records),
           },
         },
       },

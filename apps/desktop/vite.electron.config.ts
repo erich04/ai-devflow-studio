@@ -8,13 +8,16 @@ export default defineConfig({
     outDir: 'dist-electron',
     emptyOutDir: true,
     lib: {
-      entry: 'electron/main.ts',
+      entry: {
+        main: 'electron/main.ts',
+        'local-mcp-fixture-server': 'electron/local-mcp-fixture-server.ts',
+      },
       formats: ['es'],
     },
     rollupOptions: {
       external: ['electron', 'sql.js', ...nodeExternals],
       output: {
-        entryFileNames: 'main.js',
+        entryFileNames: '[name].js',
       },
     },
   },

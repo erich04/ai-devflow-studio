@@ -75,9 +75,11 @@ describe('V1.5 living documentation truth', () => {
       expect(markdown).toContain('does not authorize paid-provider smoke')
     }
 
-    expect(testingStrategy).toContain('Desktop schema v19')
+    expect(testingStrategy).toContain('Desktop schema v20')
     expect(testingStrategy).toContain('Desktop schema 17-to-18')
     expect(testingStrategy).toContain('18-to-19')
+    expect(testingStrategy).toContain('19-to-20')
+    expect(testingStrategy).toContain('Local MCP')
     expect(testingStrategy).toContain('accepted action count remains exactly one after cold restart')
     expect(demoAndSmoke).toContain('Desktop schema v17')
 
@@ -125,7 +127,8 @@ describe('V1.5 living documentation truth', () => {
     expect(postgres).toContain('redacted')
     expect(postgres).toContain('does not authorize paid-provider smoke')
 
-    expect(electron).toContain('Desktop schema v19')
+    expect(electron).toContain('Desktop schema v20')
+    expect(electron).toContain('Local MCP')
     expect(electron).toContain('accepted action count remains exactly one after cold restart')
     expect(electron).toContain('corepack pnpm test:v15-github-delivery-packaged-smoke')
     expect(electron).toContain('V1.5 GitHub Delivery')
@@ -175,8 +178,9 @@ describe('V1.5 living documentation truth', () => {
     }
 
     expect(backendMatrix).toContain('Team schema v15')
-    expect(backendMatrix).toContain('Desktop schema v19')
+    expect(backendMatrix).toContain('Desktop schema v20')
     expect(backendMatrix).toContain('Agent Runtime')
+    expect(backendMatrix).toContain('Local MCP')
     expect(backendMatrix).toContain('provider-authoritative expiry')
     expect(backendMatrix).toContain('verified publication adoption')
     expect(backendMatrix).toContain('remote_sync_outbox')

@@ -10,6 +10,7 @@ describe('DevFlow runtime flags', () => {
     expect(resolveDevFlowRuntimeFlags({})).toEqual({
       demoDataEnabled: false,
       fakeRuntimeEnabled: false,
+      localMcpFixtureEnabled: false,
       requireAuth: false,
     })
   })
@@ -22,6 +23,22 @@ describe('DevFlow runtime flags', () => {
     expect(isEnabledEnvFlag(undefined)).toBe(false)
   })
 
+  it('allows the packaged Local MCP fixture only behind the fake-runtime boundary', () => {
+    expect(() =>
+      resolveDevFlowRuntimeFlags({ DEVFLOW_ENABLE_LOCAL_MCP_FIXTURE: 'true' }),
+    ).toThrow(
+      'DEVFLOW_ENABLE_LOCAL_MCP_FIXTURE=true requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.',
+    )
+
+    expect(resolveDevFlowRuntimeFlags({
+      DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
+      DEVFLOW_ENABLE_LOCAL_MCP_FIXTURE: 'true',
+    })).toMatchObject({
+      fakeRuntimeEnabled: true,
+      localMcpFixtureEnabled: true,
+    })
+  })
+
   it('parses demo, fake runtime, and auth flags independently', () => {
     expect(resolveDevFlowRuntimeFlags({
       DEVFLOW_ENABLE_DEMO_DATA: 'true',
@@ -30,6 +47,7 @@ describe('DevFlow runtime flags', () => {
     })).toEqual({
       demoDataEnabled: true,
       fakeRuntimeEnabled: true,
+      localMcpFixtureEnabled: false,
       requireAuth: true,
     })
   })

@@ -10,6 +10,10 @@ import {
   type NativeToolAuditRecord,
 } from './native-tool-registry.js'
 import {
+  parseLocalMcpInstallation,
+  type LocalMcpInstallation,
+} from './local-mcp-installation.js'
+import {
   applyWorkflowCommand,
   assertFullGitCommitSha,
   assertSafeGitHubBranch,
@@ -88,7 +92,7 @@ import {
   type WorkflowRun,
   type WorkRequest,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 19
+export const CURRENT_SCHEMA_VERSION = 20
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -632,6 +636,14 @@ export type BeginAgentRuntimeToolExecutionResult =
   | { consumed: true }
   | { consumed: false; reason: 'invalid_input' | 'grant_stale' }
 
+export type CommitLocalMcpInstallationResult =
+  | { committed: true; installation: LocalMcpInstallation }
+  | { committed: false; reason: 'invalid_installation' | 'version_conflict' }
+
+export type DeleteLocalMcpInstallationResult =
+  | { deleted: true }
+  | { deleted: false; reason: 'invalid_installation' | 'version_conflict' }
+
 export type LocalStore = {
   upsertProject(project: LocalProject): Promise<void>
   listProjects(): Promise<LocalProject[]>
@@ -675,6 +687,15 @@ export type LocalStore = {
   appendAgentRuntimeToolAudit(audit: NativeToolAuditRecord): Promise<void>
   listAgentRuntimeToolAudits(runtimeId?: string): Promise<NativeToolAuditRecord[]>
   listAgentRuntimeCapabilityGrants(runtimeId?: string): Promise<AgentRuntimeCapabilityGrant[]>
+  commitLocalMcpInstallation(input: {
+    expectedInstallation: LocalMcpInstallation | null
+    installation: LocalMcpInstallation
+  }): Promise<CommitLocalMcpInstallationResult>
+  deleteLocalMcpInstallation(
+    expectedInstallation: LocalMcpInstallation,
+  ): Promise<DeleteLocalMcpInstallationResult>
+  getLocalMcpInstallation(installationId: string): Promise<LocalMcpInstallation | null>
+  listLocalMcpInstallations(): Promise<LocalMcpInstallation[]>
   createWorkflow(
     creation: WorkflowCreation,
   ): Promise<WorkflowCreationResult>
@@ -2142,6 +2163,75 @@ const schemaMigrations: readonly SchemaMigration[] = [
       `)
     },
   },
+  {
+    version: 20,
+    migrate(db) {
+      db.run(`
+    update agent_runtime_tool_audits
+       set json = json_set(
+         json,
+         '$.source', 'native',
+         '$.installationId', json('null'),
+         '$.installationVersion', json('null')
+       );
+
+    alter table agent_runtime_tool_audits
+      add column source text not null default 'native'
+      check (
+        source in ('native', 'mcp') and
+        json_extract(json, '$.source') = source
+      );
+    alter table agent_runtime_tool_audits
+      add column installation_id text
+      check (
+        (installation_id is null or
+          (length(trim(installation_id)) > 0 and length(installation_id) <= 200 and trim(installation_id) = installation_id)) and
+        json_extract(json, '$.installationId') is installation_id
+      );
+    alter table agent_runtime_tool_audits
+      add column installation_version integer
+      check (
+        (installation_version is null or installation_version between 1 and 2147483647) and
+        json_extract(json, '$.installationVersion') is installation_version and
+        (
+          (source = 'native' and installation_id is null and installation_version is null) or
+          (source = 'mcp' and installation_id is not null and installation_version is not null)
+        )
+      );
+
+    create table local_mcp_installations (
+      id text primary key,
+      version integer not null,
+      enabled integer not null,
+      transport text not null,
+      executable_sha256 text not null,
+      state_version integer not null,
+      json text not null,
+      created_at text not null,
+      updated_at text not null,
+      check (length(trim(id)) > 0 and length(id) <= 200 and trim(id) = id),
+      check (version between 1 and 2147483647),
+      check (enabled in (0, 1)),
+      check (transport = 'stdio'),
+      check (length(executable_sha256) = 64 and executable_sha256 not glob '*[^0-9a-f]*'),
+      check (state_version = 1),
+      check (updated_at >= created_at),
+      check (json_valid(json)),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.id') = id),
+      check (json_extract(json, '$.version') = version),
+      check (json_extract(json, '$.enabled') = enabled),
+      check (json_extract(json, '$.transport') = transport),
+      check (json_extract(json, '$.executableSha256') = executable_sha256),
+      check (json_extract(json, '$.createdAt') = created_at),
+      check (json_extract(json, '$.updatedAt') = updated_at)
+    );
+
+    create index idx_local_mcp_installations_enabled
+      on local_mcp_installations(enabled, id);
+      `)
+    },
+  },
 ]
 
 function migrateSchema(db: Database) {
@@ -2316,6 +2406,9 @@ function sameNativeToolAuditIdentity(
     started.localProjectId === terminal.localProjectId &&
     started.toolId === terminal.toolId &&
     started.toolVersion === terminal.toolVersion &&
+    started.source === terminal.source &&
+    started.installationId === terminal.installationId &&
+    started.installationVersion === terminal.installationVersion &&
     started.permissionClass === terminal.permissionClass &&
     started.sideEffectClass === terminal.sideEffectClass &&
     started.resourceKind === terminal.resourceKind &&
@@ -2330,10 +2423,11 @@ function writeNativeToolAudit(db: Database, value: NativeToolAuditRecord): void 
     `insert into agent_runtime_tool_audits (
        id, runtime_id, action_id, grant_id, organization_id, team_project_id,
        user_id, session_id, local_project_id, tool_id, tool_version,
+       source, installation_id, installation_version,
        permission_class, side_effect_class, resource_kind, resource_id,
        status, code, input_digest, result_digest, result_bytes,
        redaction_state, state_version, json, created_at
-     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       audit.id,
       audit.runtimeId,
@@ -2346,6 +2440,9 @@ function writeNativeToolAudit(db: Database, value: NativeToolAuditRecord): void 
       audit.localProjectId,
       audit.toolId,
       audit.toolVersion,
+      audit.source,
+      audit.installationId,
+      audit.installationVersion,
       audit.permissionClass,
       audit.sideEffectClass,
       audit.resourceKind,
@@ -8625,6 +8722,126 @@ class SqlJsLocalStore implements LocalStore {
       "select json from local_settings where key = 'settings'",
     )
     return settings ?? DEFAULT_LOCAL_SETTINGS
+  }
+
+  async commitLocalMcpInstallation({
+    expectedInstallation,
+    installation,
+  }: {
+    expectedInstallation: LocalMcpInstallation | null
+    installation: LocalMcpInstallation
+  }): Promise<CommitLocalMcpInstallationResult> {
+    let next: LocalMcpInstallation
+    let expected: LocalMcpInstallation | null
+    try {
+      next = parseLocalMcpInstallation(installation)
+      expected = expectedInstallation === null
+        ? null
+        : parseLocalMcpInstallation(expectedInstallation)
+    } catch {
+      return { committed: false, reason: 'invalid_installation' }
+    }
+
+    const serialized = JSON.stringify(next)
+    if (expected === null) {
+      if (next.version !== 1 || next.createdAt !== next.updatedAt) {
+        return { committed: false, reason: 'invalid_installation' }
+      }
+      this.db.run(
+        `
+        insert into local_mcp_installations (
+          id, version, enabled, transport, executable_sha256,
+          state_version, json, created_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict(id) do nothing
+        `,
+        [
+          next.id,
+          next.version,
+          next.enabled ? 1 : 0,
+          next.transport,
+          next.executableSha256,
+          next.stateVersion,
+          serialized,
+          next.createdAt,
+          next.updatedAt,
+        ],
+      )
+    } else {
+      if (
+        next.id !== expected.id ||
+        next.version !== expected.version + 1 ||
+        next.createdAt !== expected.createdAt ||
+        next.updatedAt <= expected.updatedAt
+      ) {
+        return { committed: false, reason: 'invalid_installation' }
+      }
+      this.db.run(
+        `
+        update local_mcp_installations
+        set version = ?, enabled = ?, transport = ?, executable_sha256 = ?,
+            state_version = ?, json = ?, updated_at = ?
+        where id = ? and version = ? and json = ?
+        `,
+        [
+          next.version,
+          next.enabled ? 1 : 0,
+          next.transport,
+          next.executableSha256,
+          next.stateVersion,
+          serialized,
+          next.updatedAt,
+          expected.id,
+          expected.version,
+          JSON.stringify(expected),
+        ],
+      )
+    }
+
+    if (this.db.getRowsModified() !== 1) {
+      return { committed: false, reason: 'version_conflict' }
+    }
+    await this.persist()
+    return { committed: true, installation: next }
+  }
+
+  async getLocalMcpInstallation(installationId: string): Promise<LocalMcpInstallation | null> {
+    if (!isNonEmptyIdentifier(installationId) || installationId.length > 200) {
+      throw new Error('Invalid Local MCP installation id')
+    }
+    const [value] = selectJson<unknown>(
+      this.db,
+      'select json from local_mcp_installations where id = ?',
+      [installationId],
+    )
+    return value === undefined ? null : parseLocalMcpInstallation(value)
+  }
+
+  async deleteLocalMcpInstallation(
+    expectedInstallation: LocalMcpInstallation,
+  ): Promise<DeleteLocalMcpInstallationResult> {
+    let expected: LocalMcpInstallation
+    try {
+      expected = parseLocalMcpInstallation(expectedInstallation)
+    } catch {
+      return { deleted: false, reason: 'invalid_installation' }
+    }
+    this.db.run(
+      'delete from local_mcp_installations where id = ? and version = ? and json = ?',
+      [expected.id, expected.version, JSON.stringify(expected)],
+    )
+    if (this.db.getRowsModified() !== 1) {
+      return { deleted: false, reason: 'version_conflict' }
+    }
+    await this.persist()
+    return { deleted: true }
+  }
+
+  async listLocalMcpInstallations(): Promise<LocalMcpInstallation[]> {
+    return selectJson<unknown>(
+      this.db,
+      'select json from local_mcp_installations order by id asc',
+    ).map(parseLocalMcpInstallation)
   }
 
   async saveMcpServers(servers: McpServerDefinition[]): Promise<McpServerDefinition[]> {

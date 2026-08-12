@@ -94,15 +94,16 @@ contains the signoff-bound release artifacts.
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
 restart with zero repeated remote effects, Acceptance, and a versioned credential-revocation proof.
-V2.0 implementation is active. Slices 1–3 are complete: the shared kernel, durable Desktop Runtime,
-and main-owned Native Tool boundary are implemented; trusted MCP and Coding Executor work remain.
+V2.0 implementation is active. Slices 1–4 are complete: the shared kernel, durable Desktop Runtime,
+main-owned Native Tool boundary, and trusted local stdio MCP boundary are implemented; governed
+Coding Executor work is next.
 
 ## Now / Next / Later
 
 ### Now — Implement V2.0 Native Agent Runtime
 
-V1.5 and the finite 1.x line are released and complete. V2.0 now proceeds through the accepted
-contract and executable slice plan:
+V1.5 and the finite 1.x line are released and complete. Slices 1–4 are complete; V2.0 now proceeds
+through the accepted contract and executable slice plan:
 
 - `docs/product/prd/v2.0-native-agent-runtime-prd.md`
 - `docs/adr/0014-bounded-agent-runtime.md`
@@ -118,15 +119,18 @@ contract and executable slice plan:
 - Slice 3 added Desktop schema 19, immutable Tool definitions, opaque one-shot grants, bounded
   repository read/workspace edit/saved-test/scenario Tools, durable metadata-only audit, restart
   reconciliation, and a packaged Native Tool probe with zero repeat execution.
-- Continue with Slice 4 while preserving Workflow/Gate authority, local evidence boundaries, and
+- Slice 4 added Desktop schema 20, main-owned `LocalMcpInstallation` authority, exact executable
+  verification, bounded stdio discovery and calls, a negotiated capability-set digest,
+  installation-bound audit, and a packaged Local MCP probe with zero repeat execution.
+- Continue with Slice 5 while preserving Workflow/Gate authority, local evidence boundaries, and
   deterministic no-cost default verification.
 
-### Next — Add Trusted Local MCP Execution
+### Next — Add Governed Coding Execution
 
-- Implement Slice 4's trusted local stdio MCP installation without treating Team display metadata
-  as process-spawn authority.
-- Then place OpenCode and one deliberately narrow DevFlow-owned Coding Agent behind the common
-  Coding Executor contract and evaluate the accepted scenarios.
+- Place OpenCode behind the common Coding Executor contract without inventing private OpenCode
+  trajectory events or weakening existing permission, cancellation, cleanup, and budget behavior.
+- Then add one deliberately narrow DevFlow-owned Coding Agent behind that same contract and evaluate
+  the accepted scenarios.
 
 ### Later — V2.1 Retrieval/Memory And V2.2 Multi-Agent/Tenancy
 

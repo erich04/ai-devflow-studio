@@ -1,6 +1,7 @@
 export type DevFlowRuntimeFlags = {
   demoDataEnabled: boolean
   fakeRuntimeEnabled: boolean
+  localMcpFixtureEnabled: boolean
   requireAuth: boolean
 }
 
@@ -13,6 +14,7 @@ export type DevFlowRuntimeFlagEnv = Partial<
   Record<
     | 'DEVFLOW_ENABLE_DEMO_DATA'
     | 'DEVFLOW_ENABLE_FAKE_RUNTIME'
+    | 'DEVFLOW_ENABLE_LOCAL_MCP_FIXTURE'
     | 'DEVFLOW_REQUIRE_AUTH'
     | 'DEVFLOW_CODING_ENGINE',
     string | undefined
@@ -26,9 +28,17 @@ export function isEnabledEnvFlag(value: string | undefined): boolean {
 export function resolveDevFlowRuntimeFlags(
   env: DevFlowRuntimeFlagEnv,
 ): DevFlowRuntimeFlags {
+  const fakeRuntimeEnabled = isEnabledEnvFlag(env.DEVFLOW_ENABLE_FAKE_RUNTIME)
+  const localMcpFixtureEnabled = isEnabledEnvFlag(env.DEVFLOW_ENABLE_LOCAL_MCP_FIXTURE)
+  if (localMcpFixtureEnabled && !fakeRuntimeEnabled) {
+    throw new Error(
+      'DEVFLOW_ENABLE_LOCAL_MCP_FIXTURE=true requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.',
+    )
+  }
   return {
     demoDataEnabled: isEnabledEnvFlag(env.DEVFLOW_ENABLE_DEMO_DATA),
-    fakeRuntimeEnabled: isEnabledEnvFlag(env.DEVFLOW_ENABLE_FAKE_RUNTIME),
+    fakeRuntimeEnabled,
+    localMcpFixtureEnabled,
     requireAuth: isEnabledEnvFlag(env.DEVFLOW_REQUIRE_AUTH),
   }
 }
