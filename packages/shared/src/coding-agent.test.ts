@@ -367,6 +367,25 @@ describe('selectDependencyBootstrap', () => {
 })
 
 describe('sanitizeCodingDiffArtifact', () => {
+  it('marks a safe processed diff as redacted even when no replacement was needed', () => {
+    const safePatch = [
+      'diff --git a/devflow-fake-change.txt b/devflow-fake-change.txt',
+      '+DevFlow fake coding adapter was approved.',
+    ].join('\n')
+    const artifact = sanitizeCodingDiffArtifact({
+      id: 'diff-safe',
+      runId: run.id,
+      nodeId: buildNode.id,
+      projectId: project.id,
+      changedPaths: ['devflow-fake-change.txt'],
+      patch: safePatch,
+      createdAt: '2026-06-17T00:06:00.000Z',
+    })
+
+    expect(artifact.patch).toBe(safePatch)
+    expect(artifact.redacted).toBe(true)
+  })
+
   it('redacts secrets in added diff lines, drops non-relative paths, and caps large patches', () => {
     const huge = '+'.repeat(MAX_DIFF_CHARS + 120)
     const artifact = sanitizeCodingDiffArtifact({

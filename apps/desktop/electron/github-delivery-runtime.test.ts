@@ -12,6 +12,7 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
+import { sanitizeCodingDiffArtifact } from '@ai-devflow/shared'
 import { createGitHubDeliveryRuntime } from './github-delivery-runtime'
 import type {
   GitHubDeliveryPreparationMutationResult,
@@ -136,18 +137,16 @@ function fixture() {
   }
   const rawPatch = 'diff --git a/src/delivery.ts b/src/delivery.ts\n+reviewed\n'
   const sourceDigest = createHash('sha256').update(rawPatch, 'utf8').digest('hex')
-  const diff: CodingDiffArtifact = {
+  const diff: CodingDiffArtifact = sanitizeCodingDiffArtifact({
     id: 'diff-1',
     runId: run.id,
     nodeId: codingRun.nodeId,
     projectId: project.id,
     changedPaths: [...codingRun.changedPaths],
-    patch: '+[REDACTED]',
+    patch: rawPatch,
     sourceDigest,
-    truncated: false,
-    redacted: true,
     createdAt: '2026-08-11T13:03:00.000Z',
-  }
+  })
   const precommitTest: TestEvidence = {
     id: 'precommit-test-1',
     runId: run.id,
@@ -487,6 +486,28 @@ describe('GitHub Delivery preparation runtime', () => {
     expect(JSON.stringify(failure)).not.toContain(rawFailure)
     expect(JSON.stringify(failure)).not.toContain('/private/')
     expect(failure).not.toHaveProperty('cause')
+  })
+
+  it('rejects a diff without sanitizer provenance before commit or test side effects', async () => {
+    const source = fixture()
+    source.diff = { ...source.diff, redacted: false }
+    const store = fakeStore(source)
+    const commitWorkspace = vi.fn()
+    const runTestCommand = vi.fn()
+    const runtime = createGitHubDeliveryRuntime({
+      store,
+      commitWorkspace,
+      runTestCommand,
+    })
+
+    await expect(runtime.prepare({ runId: source.run.id, nodeId: 'run-1-pr' }))
+      .rejects.toMatchObject({
+        code: 'preparation_failed',
+        message: 'GitHub Delivery preparation failed safely',
+      })
+    expect(commitWorkspace).not.toHaveBeenCalled()
+    expect(runTestCommand).not.toHaveBeenCalled()
+    expect(store.commitGitHubDeliveryPreparation).not.toHaveBeenCalled()
   })
 
   it('commits, records the workspace head, retests the exact worktree, and atomically prepares an intent', async () => {

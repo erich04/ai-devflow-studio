@@ -284,6 +284,7 @@ describe('fake coding harness helpers', () => {
     expect(completed.codingRun.changedPaths).toEqual(['devflow-fake-change.txt'])
     expect(completed.diff.changedPaths).toEqual(['devflow-fake-change.txt'])
     expect(completed.diff.patch).toContain('DevFlow fake coding adapter')
+    expect(completed.diff.redacted).toBe(true)
     expect(completed.bootstrapEvidence.status).toBe('skipped')
     expect(await readFile(path.join(workspace.worktreePath, 'devflow-fake-change.txt'), 'utf8')).toContain(
       'Add the fake marker file.',

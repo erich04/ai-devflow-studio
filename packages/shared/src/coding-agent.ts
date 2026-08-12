@@ -273,7 +273,7 @@ export function sanitizeCodingDiffArtifact(input: RawCodingDiffArtifact): Coding
     patch,
     ...(input.sourceDigest ? { sourceDigest: input.sourceDigest } : {}),
     truncated,
-    redacted: redactedPatch.redacted,
+    redacted: true,
     createdAt: input.createdAt,
   }
 }
