@@ -33,6 +33,35 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     expect(smoke).toContain('await app.whenReady()')
   })
 
+  it('captures the restart effect baseline only after the first packaged process is closed', () => {
+    const smoke = readFileSync(
+      'scripts/v15-github-delivery-packaged-smoke.mjs',
+      'utf8',
+    )
+
+    const preCloseEffectsIndex = smoke.indexOf('const gitEffectsBeforeClose =')
+    const firstCloseIndex = smoke.indexOf('await firstLaunch.electronApp.close()')
+    const idleIndex = smoke.indexOf(
+      'await gitBoundary.waitForIdle()',
+      firstCloseIndex + 1,
+    )
+    const closeGuardIndex = smoke.indexOf('gitEffectsAfterClose')
+    const providerBaselineIndex = smoke.indexOf('const metricsBeforeRestart =')
+    const gitBaselineIndex = smoke.indexOf('const gitEffectsBeforeRestart =')
+    const secondLaunchIndex = smoke.indexOf('const secondLaunch =')
+
+    expect(preCloseEffectsIndex).toBeGreaterThan(-1)
+    expect(firstCloseIndex).toBeGreaterThan(-1)
+    expect(preCloseEffectsIndex).toBeLessThan(firstCloseIndex)
+    expect(idleIndex).toBeGreaterThan(firstCloseIndex)
+    expect(closeGuardIndex).toBeGreaterThan(idleIndex)
+    expect(providerBaselineIndex).toBeGreaterThan(firstCloseIndex)
+    expect(gitBaselineIndex).toBeGreaterThan(firstCloseIndex)
+    expect(secondLaunchIndex).toBeGreaterThan(gitBaselineIndex)
+    expect(smoke).toContain('snapshotGitBoundaryEffects(gitBoundary.metrics)')
+    expect(smoke).not.toContain('{ ...gitBoundary.metrics }')
+  })
+
   it('runs once in both Verify and Release after building the packaged application', () => {
     for (const workflowPath of [
       '.github/workflows/verify.yml',

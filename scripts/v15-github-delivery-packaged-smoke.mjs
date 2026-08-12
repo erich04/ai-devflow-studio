@@ -520,6 +520,7 @@ async function createOfflineGitHubGitBoundary(temporaryDirectory, gitFixture) {
     backendStatuses: [],
     tlsClientErrorCodes: [],
   }
+  let activeRequests = 0
   const sockets = new Set()
   const secureServer = createHttpsServer(
     {
@@ -528,6 +529,7 @@ async function createOfflineGitHubGitBoundary(temporaryDirectory, gitFixture) {
       minVersion: 'TLSv1.2',
     },
     async (request, response) => {
+      activeRequests += 1
       try {
         if (request.headers.authorization !== expectedAuthorization) {
           response.writeHead(401, {
@@ -566,6 +568,8 @@ async function createOfflineGitHubGitBoundary(temporaryDirectory, gitFixture) {
         metrics.backendFailures += 1
         response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
         response.end('Offline Git boundary failure')
+      } finally {
+        activeRequests -= 1
       }
     },
   )
@@ -609,6 +613,26 @@ async function createOfflineGitHubGitBoundary(temporaryDirectory, gitFixture) {
     gitWrapperDirectory,
     proxyUrl: `http://127.0.0.1:${proxyPort}`,
     metrics,
+    async waitForIdle() {
+      const deadline = Date.now() + 5_000
+      let previousSnapshot = null
+      let stableSince = null
+      while (Date.now() < deadline) {
+        const currentSnapshot = stableJson({
+          activeRequests,
+          effects: snapshotGitBoundaryEffects(metrics),
+        })
+        if (activeRequests === 0 && currentSnapshot === previousSnapshot) {
+          stableSince ??= Date.now()
+          if (Date.now() - stableSince >= 250) return
+        } else {
+          stableSince = null
+        }
+        previousSnapshot = currentSnapshot
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      throw new Error('Offline Git boundary did not become idle.')
+    },
     async close() {
       for (const socket of sockets) socket.destroy()
       await closeServer(proxyServer)
@@ -830,6 +854,18 @@ function stableJson(value) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`
   }
   return JSON.stringify(value)
+}
+
+function snapshotGitBoundaryEffects(metrics) {
+  return {
+    connectRequests: metrics.connectRequests,
+    authenticatedRequests: metrics.authenticatedRequests,
+    uploadPackRequests: metrics.uploadPackRequests,
+    receivePackRequests: metrics.receivePackRequests,
+    rejectedHosts: metrics.rejectedHosts,
+    backendFailures: metrics.backendFailures,
+    backendStatuses: [...metrics.backendStatuses],
+  }
 }
 
 function assertNoLeaks(value, needles, label) {
@@ -1416,10 +1452,32 @@ try {
     ],
     'Packaged renderer GitHub Delivery projection',
   )
+
+  await gitBoundary.waitForIdle()
+  const providerEffectsBeforeClose = JSON.parse(await readFile(metricsPath, 'utf8'))
+  const remoteEffectsBeforeClose = await readRemoteDeliveryEvidence(
+    database.databaseUrl,
+    remoteRequest.id,
+    binding.id,
+  )
+  const gitEffectsBeforeClose = snapshotGitBoundaryEffects(gitBoundary.metrics)
+  await firstLaunch.electronApp.close()
+  firstLaunch = null
+  await gitBoundary.waitForIdle()
+  const gitEffectsAfterClose = snapshotGitBoundaryEffects(gitBoundary.metrics)
+  assert(
+    stableJson(gitEffectsAfterClose) === stableJson(gitEffectsBeforeClose),
+    `Packaged shutdown performed a late Git credential, push, or remote inspection effect (${stableJson({ before: gitEffectsBeforeClose, after: gitEffectsAfterClose })}).`,
+  )
+
   const remoteBeforeRestart = await readRemoteDeliveryEvidence(
     database.databaseUrl,
     remoteRequest.id,
     binding.id,
+  )
+  assert(
+    stableJson(remoteBeforeRestart) === stableJson(remoteEffectsBeforeClose),
+    'Packaged shutdown mutated durable GitHub Delivery evidence.',
   )
   assert(
     stableJson(remoteBeforeRestart.counts) ===
@@ -1427,7 +1485,11 @@ try {
     'Remote durable GitHub Delivery chain was not exact.',
   )
   const metricsBeforeRestart = JSON.parse(await readFile(metricsPath, 'utf8'))
-  const gitMetricsBeforeRestart = { ...gitBoundary.metrics }
+  assert(
+    stableJson(metricsBeforeRestart) === stableJson(providerEffectsBeforeClose),
+    'Packaged shutdown repeated a GitHub provider effect.',
+  )
+  const gitEffectsBeforeRestart = snapshotGitBoundaryEffects(gitBoundary.metrics)
   const branchBeforeRestart = (
     await run('git', [
       '--git-dir',
@@ -1461,8 +1523,6 @@ try {
     'Packaged Desktop honored the hostile development renderer URL.',
   )
 
-  await firstLaunch.electronApp.close()
-  firstLaunch = null
   const secondLaunch = await launchPackagedDesktop({
     executablePath,
     appDirectory,
@@ -1477,14 +1537,16 @@ try {
     return intent?.status === 'completed' ? nextState : false
   })
   await new Promise((resolve) => setTimeout(resolve, 2_000))
+  await gitBoundary.waitForIdle()
   const metricsAfterRestart = JSON.parse(await readFile(metricsPath, 'utf8'))
   assert(
     stableJson(metricsAfterRestart) === stableJson(metricsBeforeRestart),
     'Packaged restart repeated a GitHub provider effect.',
   )
   assert(
-    stableJson(gitBoundary.metrics) === stableJson(gitMetricsBeforeRestart),
-    'Packaged restart repeated a Git credential, push, or remote inspection effect.',
+    stableJson(snapshotGitBoundaryEffects(gitBoundary.metrics)) ===
+      stableJson(gitEffectsBeforeRestart),
+    `Packaged restart repeated a Git credential, push, or remote inspection effect (${stableJson({ before: gitEffectsBeforeRestart, after: snapshotGitBoundaryEffects(gitBoundary.metrics) })}).`,
   )
   const gitAuditEventsAfterRestart = (await readFile(gitBoundary.gitAuditPath, 'utf8'))
     .split('\n')
