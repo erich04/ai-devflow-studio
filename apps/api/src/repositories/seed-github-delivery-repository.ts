@@ -2037,7 +2037,6 @@ export function createSeedGitHubDeliveryRepository(
       previousRequest.headBranch !== request.headBranch ||
       previousRequest.expectedCommitSha !== request.expectedCommitSha ||
       previousRequest.diffDigest !== request.diffDigest ||
-      previousRequest.testEvidenceDigest !== request.testEvidenceDigest ||
       previousRequest.packageDigest !== request.packageDigest ||
       !sourcePublication ||
       sourcePublication.status !== 'verified' ||

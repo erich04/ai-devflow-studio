@@ -4530,7 +4530,6 @@ export function createPostgresGitHubDeliveryRepository(
         previousRequest.head_branch !== request.head_branch ||
         previousRequest.expected_commit_sha !== request.expected_commit_sha ||
         previousRequest.diff_digest !== request.diff_digest ||
-        previousRequest.test_evidence_digest !== request.test_evidence_digest ||
         previousRequest.package_digest !== request.package_digest ||
         !sourcePublication ||
         sourcePublication.status !== 'verified' ||

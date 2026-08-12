@@ -3782,6 +3782,8 @@ describe('Postgres GitHub Delivery repository', () => {
         deliveryIntent({ id: 'local-intent-2', deliveryAttempt: 2 }),
       ),
       delivery_attempt: 2,
+      test_evidence_id: 'test-2',
+      test_evidence_digest: '2'.repeat(64),
       status: 'approved',
     }
     const previousRequest = {
@@ -3792,6 +3794,7 @@ describe('Postgres GitHub Delivery repository', () => {
     const approval = deliveryApprovalRow({
       request_id: request.id,
       request_state_version: request.state_version,
+      test_evidence_digest: request.test_evidence_digest,
     })
     const sourcePublication = branchPublicationRow({
       status: 'verified',

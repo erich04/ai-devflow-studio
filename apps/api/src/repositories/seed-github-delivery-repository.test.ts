@@ -2571,6 +2571,9 @@ describe('seed GitHub Delivery repository', () => {
     const secondIntent = deliveryIntent({
       id: 'local-intent-2',
       deliveryAttempt: 2,
+      testEvidenceId: 'test-2',
+      testEvidenceCreatedAt: '2026-08-11T10:01:00.000Z',
+      testEvidenceDigest: '2'.repeat(64),
     })
     const secondCreated =
       await harness.repository.createOrReviseGitHubDeliveryRequest(
