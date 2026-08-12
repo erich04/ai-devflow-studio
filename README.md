@@ -52,6 +52,9 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 - A least-privilege GitHub App gives Electron main one short-lived repository credential for the
   exact branch push; the API independently verifies the head and creates or reconciles one Draft
   pull request. DevFlow never merges, force-pushes, deletes a branch, or publishes a tag.
+- A later approved delivery attempt can use verified publication adoption after an earlier attempt
+  pushed the exact same commit but failed before Draft creation; it does not mint another credential
+  or push the branch again.
 - Bearer-token sync, API/Postgres persistence, reproducible unsigned pilot artifacts, and the Web console provide a self-hosted team-pilot path.
 
 ### Verification Evidence
@@ -62,7 +65,7 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 | `corepack pnpm verify:demo` | The default gate plus browser E2E and a real Electron main/preload/SQLite smoke path. |
 | `corepack pnpm test:postgres-smoke` | Migration, persistence, policy, approval, sync, and redacted team reads against Postgres. |
 | `corepack pnpm test:docker-smoke` | The containerized API/Web/Postgres stack, Desktop pairing, bearer auth, and safe overview data. |
-| `corepack pnpm test:docker-lifecycle-smoke` | Fresh Team schema v14, retained V1.4 schema v10 upgrade, transactional populated v11-to-v12 retry, fail-closed v12-to-v13 provider-authoritative expiry migration, durable v13-to-v14 provider backoff, and bounded V1.4 backup/restore rollback. |
+| `corepack pnpm test:docker-lifecycle-smoke` | Fresh Team schema v15, retained V1.4 schema v10 upgrade, transactional populated v11-to-v12 retry, fail-closed v12-to-v13 provider-authoritative expiry migration, durable v13-to-v14 provider backoff, v14-to-v15 verified publication adoption, and bounded V1.4 backup/restore rollback. |
 | `corepack pnpm test:v15-github-delivery` | The full offline Delivery Intent → separate approval → exact branch → Draft PR → Acceptance story, including restart and revocation. |
 | `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive and packaged launch isolation. |
 | `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v17 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |

@@ -10,7 +10,7 @@ import {
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import type { RequestPrincipal } from '../auth/request-auth'
-import type { GitHubAppClient } from '../github-app-client'
+import { GitHubAppClientError, type GitHubAppClient } from '../github-app-client'
 import { createGitHubDeliveryService } from '../github-delivery-service'
 import type {
   GitHubBranchPublication,
@@ -853,5 +853,171 @@ describe('GitHub Delivery API integration', () => {
       },
     })
     expect(JSON.stringify(completedSnapshot)).not.toContain(ephemeralToken)
+  })
+
+  it('adopts an earlier verified branch on a later attempt without another credential or push', async () => {
+    const harness = createHarness()
+    const bindingPath = `/api/team/projects/${projectId}/github-repository-binding`
+    const bindingResult = await route(harness, 'PUT', bindingPath, ownerPrincipal, {
+      installationId: '12345',
+      repositoryId: '98765',
+      expectedStateVersion: 0,
+    })
+    const repositoryBinding = (
+      bindingResult?.body as { binding: GitHubRepositoryBinding }
+    ).binding
+    const submitPath = `/api/desktop/projects/${projectId}/github-deliveries`
+    const firstIntent = await createGitHubDeliveryIntent(
+      createIntentSource(repositoryBinding),
+    )
+    const requestBody = (intent: typeof firstIntent) => ({
+      intent,
+      prTitle: 'Deliver the exact approved commit',
+      prBody: 'Bound to passing Test Evidence.',
+      expectedStateVersion: 0,
+    })
+    const submitAndApprove = async (intent: typeof firstIntent) => {
+      const submitted = await route(
+        harness,
+        'POST',
+        submitPath,
+        desktopPrincipal,
+        requestBody(intent),
+      )
+      const deliveryRequest = (
+        submitted?.body as { request: GitHubDeliveryRequest }
+      ).request
+      await expect(route(
+        harness,
+        'POST',
+        `/api/team/projects/${projectId}/github-deliveries/${deliveryRequest.id}/approve`,
+        ownerPrincipal,
+        { expectedStateVersion: deliveryRequest.stateVersion },
+      )).resolves.toMatchObject({
+        status: 200,
+        body: { request: { status: 'approved' } },
+      })
+      return deliveryRequest
+    }
+
+    const firstRequest = await submitAndApprove(firstIntent)
+    const firstRequestPath = `${submitPath}/${firstRequest.id}`
+    const credentialResult = await route(
+      harness,
+      'POST',
+      `${firstRequestPath}/credential-grant`,
+      desktopPrincipal,
+      { expectedStateVersion: 2 },
+    )
+    const issuedGrant = (
+      credentialResult?.body as { grant: GitHubCredentialGrant }
+    ).grant
+    const publicationResult = await route(
+      harness,
+      'POST',
+      `${firstRequestPath}/branch-publication`,
+      desktopPrincipal,
+      {
+        grantId: issuedGrant.id,
+        expectedStateVersion: 4,
+        expectedGrantVersion: issuedGrant.version,
+        reportedOutcomeCode: 'pushed',
+      },
+    )
+    const firstPublication = (
+      publicationResult?.body as { publication: GitHubBranchPublication }
+    ).publication
+    harness.effects.findOrCreateDraftPullRequest.mockRejectedValueOnce(
+      new GitHubAppClientError('github_request_rejected', 422),
+    )
+    await expect(route(
+      harness,
+      'POST',
+      `${firstRequestPath}/draft-pull-request`,
+      desktopPrincipal,
+      {
+        publicationId: firstPublication.id,
+        expectedStateVersion: 6,
+      },
+    )).resolves.toMatchObject({
+      status: 502,
+      body: {
+        code: 'github_request_rejected',
+        retryable: false,
+        phase: 'pull_request',
+      },
+    })
+    await expect(route(
+      harness,
+      'GET',
+      firstRequestPath,
+      desktopPrincipal,
+    )).resolves.toMatchObject({
+      status: 200,
+      body: {
+        snapshot: {
+          request: { status: 'failed', outcomeCode: 'pull_request_failed' },
+          grant: { status: 'consumed' },
+          publication: { status: 'verified', outcomeCode: 'branch_verified' },
+          pullRequest: { status: 'failed', outcomeCode: 'pull_request_failed' },
+        },
+      },
+    })
+
+    const secondIntent = await createGitHubDeliveryIntent({
+      ...createIntentSource(repositoryBinding),
+      id: 'local-delivery-intent-2',
+      deliveryAttempt: 2,
+    })
+    const secondRequest = await submitAndApprove(secondIntent)
+    const secondRequestPath = `${submitPath}/${secondRequest.id}`
+    const adopted = await route(
+      harness,
+      'POST',
+      `${secondRequestPath}/branch-publication/recover`,
+      desktopPrincipal,
+      { expectedStateVersion: 2 },
+    )
+    expect(adopted).toMatchObject({
+      status: 201,
+      body: {
+        request: { status: 'branch_published' },
+        publication: {
+          grantId: null,
+          sourcePublicationId: firstPublication.id,
+          status: 'verified',
+          reportedOutcomeCode: 'already_present',
+          verifiedHeadSha: expectedCommitSha,
+          outcomeCode: 'branch_verified',
+        },
+        outcomeCode: 'publication_adopted',
+        replayed: false,
+      },
+    })
+    const adoptedBody = adopted?.body as {
+      request: GitHubDeliveryRequest
+      publication: GitHubBranchPublication
+    }
+    await expect(route(
+      harness,
+      'POST',
+      `${secondRequestPath}/draft-pull-request`,
+      desktopPrincipal,
+      {
+        publicationId: adoptedBody.publication.id,
+        expectedStateVersion: adoptedBody.request.stateVersion,
+      },
+    )).resolves.toMatchObject({
+      status: 200,
+      body: {
+        request: { status: 'completed', outcomeCode: 'draft_pr_created' },
+        pullRequest: { status: 'completed', outcomeCode: 'draft_pr_created' },
+        outcomeCode: 'pull_request_completed',
+      },
+    })
+    expect(harness.effects.issueContentsWriteToken).toHaveBeenCalledTimes(1)
+    expect(harness.effects.getBranchHead).toHaveBeenCalledTimes(1)
+    expect(harness.effects.findOrCreateDraftPullRequest).toHaveBeenCalledTimes(2)
+    expect(harness.effects.findDraftPullRequest).not.toHaveBeenCalled()
   })
 })

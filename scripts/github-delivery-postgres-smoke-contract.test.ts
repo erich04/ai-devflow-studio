@@ -35,6 +35,11 @@ describe('Postgres GitHub Delivery smoke contract', () => {
     )
     expect(source).toContain("expiryConfirmationError?.code === '23514'")
     expect(source).toContain('retainedGrantWithoutV13Fields')
+    expect(source).toContain('snapshotBeforeV15')
+    expect(source).toContain('retainedPublicationWithoutV15Fields')
+    expect(source).toContain('source_publication_id')
+    expect(source).toContain('github_branch_publications_authority_exactly_one')
+    expect(source).toContain("publicationAuthorityError?.code === '23514'")
   })
 
   it('uses an offline GitHub boundary for the canonical delivery sequence', () => {

@@ -311,6 +311,7 @@ function branchPublicationRow(overrides: Record<string, unknown> = {}) {
     request_id: 'github-delivery-1',
     intent_revision: 1,
     grant_id: 'github-grant-1',
+    source_publication_id: null,
     status: 'recovery_required',
     reported_outcome_code: 'unknown',
     verified_head_sha: null,
@@ -3769,5 +3770,146 @@ describe('Postgres GitHub Delivery repository', () => {
     )
     expect(rearm?.sql).toMatch(/grant_id\s*=\s*\$5/i)
     expect(rearm?.params[4]).toBe('github-grant-2')
+  })
+
+  it('adopts a verified prior publication for the next attempt in one locked transaction', async () => {
+    const request = {
+      ...deliveryRequestRow,
+      id: 'github-delivery-2',
+      state_version: 2,
+      local_intent_id: 'local-intent-2',
+      logical_idempotency_key: expectedLogicalDeliveryKey(
+        deliveryIntent({ id: 'local-intent-2', deliveryAttempt: 2 }),
+      ),
+      delivery_attempt: 2,
+      status: 'approved',
+    }
+    const previousRequest = {
+      ...deliveryRequestRow,
+      status: 'failed',
+      outcome_code: 'pull_request_failed',
+    }
+    const approval = deliveryApprovalRow({
+      request_id: request.id,
+      request_state_version: request.state_version,
+    })
+    const sourcePublication = branchPublicationRow({
+      status: 'verified',
+      reported_outcome_code: 'pushed',
+      verified_head_sha: shaB,
+      verified_at: '2026-08-11T09:59:00.000Z',
+      outcome_code: 'branch_verified',
+    })
+    const sourcePullRequest = pullRequestOutcomeRow({
+      status: 'failed',
+      outcome_code: 'pull_request_failed',
+    })
+    const adoptedPublication = branchPublicationRow({
+      id: 'github-publication-2',
+      version: 1,
+      request_id: request.id,
+      grant_id: null,
+      source_publication_id: sourcePublication.id,
+      status: 'verified',
+      reported_outcome_code: 'already_present',
+      verified_head_sha: shaB,
+      reported_at: now,
+      verified_at: sourcePublication.verified_at,
+      outcome_code: 'branch_verified',
+    })
+    const updatedRequest = {
+      ...request,
+      state_version: 3,
+      status: 'branch_published',
+      outcome_code: null,
+    }
+    const db = new FakeGitHubDeliveryDb((sql) => {
+      switch (marker(sql)) {
+        case 'project-lock':
+        case 'audit-insert':
+        case 'idempotency-insert':
+          return []
+        case 'bearer-identity':
+          return [bearerIdentity()]
+        case 'delivery-lock':
+          return [request]
+        case 'binding-lock':
+          return [bindingRow]
+        case 'canonical-authority':
+          return [canonicalAuthority()]
+        case 'approval-current':
+          return [approval]
+        case 'publication-current':
+        case 'idempotency-read':
+          return []
+        case 'delivery-adoption-source-lock':
+          return [previousRequest]
+        case 'publication-adoption-source-lock':
+          return [sourcePublication]
+        case 'pull-request-adoption-source-lock':
+          return [sourcePullRequest]
+        case 'publication-adopt':
+          return [adoptedPublication]
+        case 'delivery-adopt-publication':
+          return [updatedRequest]
+        default:
+          throw new Error(`Unexpected query: ${sql}`)
+      }
+    })
+    const repository = createPostgresGitHubDeliveryRepository(db, {
+      now: () => new Date(now),
+      createId: (kind) => `github-${kind}-2`,
+    })
+
+    const result =
+      await repository.adoptGitHubVerifiedBranchPublication(
+        {
+          projectId: 'project-a',
+          requestId: request.id,
+          expectedStateVersion: request.state_version,
+        },
+        desktopPrincipal,
+      )
+
+    expect(result).toMatchObject({
+      ok: true,
+      responseStatus: 201,
+      outcomeCode: 'publication_adopted',
+      replayed: false,
+      request: {
+        id: request.id,
+        stateVersion: 3,
+        status: 'branch_published',
+      },
+      publication: {
+        id: 'github-publication-2',
+        grantId: null,
+        sourcePublicationId: sourcePublication.id,
+        status: 'verified',
+        reportedOutcomeCode: 'already_present',
+        verifiedHeadSha: shaB,
+        outcomeCode: 'branch_verified',
+      },
+    })
+    expect(db.markers()).toEqual([
+      'project-lock',
+      'bearer-identity',
+      'delivery-lock',
+      'publication-current',
+      'idempotency-read',
+      'binding-lock',
+      'canonical-authority',
+      'approval-current',
+      'delivery-adoption-source-lock',
+      'publication-adoption-source-lock',
+      'pull-request-adoption-source-lock',
+      'publication-adopt',
+      'delivery-adopt-publication',
+      'audit-insert',
+      'idempotency-insert',
+    ])
+    expect(
+      db.calls.filter(({ sql }) => marker(sql) === 'publication-adopt'),
+    ).toHaveLength(1)
   })
 })

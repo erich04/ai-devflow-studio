@@ -565,7 +565,41 @@ async function prepareV12LegacyIssuedCredentialFixture() {
   )
   const snapshotBeforeV13 = snapshot.stdout.trim()
   expect(snapshotBeforeV13.length > 0, 'The populated V12 legacy issued credential was missing.')
-  return snapshotBeforeV13
+  await applyHistoricalMigration(
+    FAILURE_DATABASE,
+    '0013_github_credential_provider_expiry.sql',
+    13,
+    '0013_github_credential_provider_expiry',
+  )
+  await applyHistoricalMigration(
+    FAILURE_DATABASE,
+    '0014_github_pull_request_retry_after.sql',
+    14,
+    '0014_github_pull_request_retry_after',
+  )
+  await expectSchemaVersion(FAILURE_DATABASE, 14)
+  await expectMigrationHistoryMissing(FAILURE_DATABASE, 15)
+  await psql(
+    FAILURE_DATABASE,
+    `INSERT INTO github_branch_publications (
+       id, version, request_id, intent_revision, grant_id, status,
+       reported_outcome_code, verified_head_sha, reported_at, verified_at,
+       outcome_code
+     ) VALUES (
+       'github-publication-lifecycle-v14', 2,
+       'github-delivery-lifecycle-v11', 2, 'github-grant-lifecycle-v12',
+       'verified', 'pushed', repeat('b', 40),
+       '2026-08-11T18:02:00.000Z', '2026-08-11T18:02:00.000Z',
+       'branch_verified'
+     );\n`,
+  )
+  const publicationSnapshot = await psql(
+    FAILURE_DATABASE,
+    "SELECT to_jsonb(publication)::text FROM github_branch_publications AS publication WHERE id = 'github-publication-lifecycle-v14';\n",
+  )
+  const snapshotBeforeV15 = publicationSnapshot.stdout.trim()
+  expect(snapshotBeforeV15.length > 0, 'The populated V14 publication was missing.')
+  return { snapshotBeforeV13, snapshotBeforeV15 }
 }
 
 async function assertLegacyIssuedCredentialAfterV13(snapshotBeforeV13) {
@@ -640,6 +674,66 @@ async function assertLegacyIssuedCredentialAfterV13(snapshotBeforeV13) {
       `${fabricatedConfirmation.result?.stdout ?? ''}${fabricatedConfirmation.result?.stderr ?? ''}`,
     ),
     'V13 did not fail closed on a fabricated legacy provider expiry confirmation.',
+  )
+}
+
+async function assertLegacyPublicationAfterV15(snapshotBeforeV15) {
+  const fields = await psql(
+    FAILURE_DATABASE,
+    `SELECT
+       grant_id || '|' || coalesce(source_publication_id, 'NULL') || '|' ||
+       status || '|' || reported_outcome_code || '|' || outcome_code
+     FROM github_branch_publications
+     WHERE id = 'github-publication-lifecycle-v14';\n`,
+  )
+  expect(
+    fields.stdout.trim() ===
+      'github-grant-lifecycle-v12|NULL|verified|pushed|branch_verified',
+    'V15 did not preserve the legacy grant-backed publication authority.',
+  )
+  const retained = await psql(
+    FAILURE_DATABASE,
+    `SELECT (to_jsonb(publication) - 'source_publication_id')::text
+     FROM github_branch_publications AS publication
+     WHERE id = 'github-publication-lifecycle-v14';\n`,
+  )
+  expect(
+    retained.stdout.trim() === snapshotBeforeV15,
+    'V15 migration changed retained V14 publication fields.',
+  )
+  const publicationColumns = await psql(
+    FAILURE_DATABASE,
+    `SELECT count(*) FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'github_branch_publications'
+       AND column_name = 'source_publication_id';\n`,
+  )
+  expect(
+    publicationColumns.stdout.trim() === '1',
+    'V15 source_publication_id column was missing.',
+  )
+  const invalidAuthority = await expectDockerFailure([
+    'exec',
+    '-i',
+    postgresContainerName,
+    'psql',
+    '-v',
+    'ON_ERROR_STOP=1',
+    '-U',
+    postgresUser,
+    '-d',
+    FAILURE_DATABASE,
+    '-Atq',
+  ], {
+    input: `UPDATE github_branch_publications
+            SET grant_id = NULL, source_publication_id = NULL
+            WHERE id = 'github-publication-lifecycle-v14';\n`,
+  })
+  expect(
+    /github_branch_publications_authority_exactly_one|check constraint/i.test(
+      `${invalidAuthority.result?.stdout ?? ''}${invalidAuthority.result?.stderr ?? ''}`,
+    ),
+    'V15 accepted a publication without exact grant or adoption authority.',
   )
 }
 
@@ -743,7 +837,7 @@ async function expectV14ApiRejectsNewerSchema(database) {
     const readinessResponse = await fetch(`${apiUrl}/ready`)
     expect(
       readinessResponse.status === 503,
-      `Exact V1.4 API did not fail closed on Team schema v14; received ${readinessResponse.status}.`,
+      `Exact V1.4 API did not fail closed on Team schema v15; received ${readinessResponse.status}.`,
     )
   } finally {
     await runDocker(['rm', '-f', rollbackApiContainerName])
@@ -945,7 +1039,7 @@ try {
   }
 
   await runCurrentMigration(FRESH_DATABASE)
-  await expectSchemaVersion(FRESH_DATABASE, 14)
+  await expectSchemaVersion(FRESH_DATABASE, 15)
   await startCurrentApiAgainstDatabase(FRESH_DATABASE)
 
   await runV14Migration(UPGRADE_DATABASE)
@@ -964,10 +1058,10 @@ try {
 
   await restartPostgresWithRetainedVolume()
   await runCurrentMigration(UPGRADE_DATABASE)
-  await expectSchemaVersion(UPGRADE_DATABASE, 14)
-  const snapshotAfterV13Upgrade = await readV14RunSnapshot(UPGRADE_DATABASE)
+  await expectSchemaVersion(UPGRADE_DATABASE, 15)
+  const snapshotAfterV15Upgrade = await readV14RunSnapshot(UPGRADE_DATABASE)
   expect(
-    snapshotAfterV13Upgrade === snapshotBeforeV10Upgrade,
+    snapshotAfterV15Upgrade === snapshotBeforeV10Upgrade,
     'V1.5 upgrade changed the retained V1.4 Run row.',
   )
   const retained = await psql(
@@ -1041,10 +1135,11 @@ try {
     'provider_expiry_observed_at',
   )
   await expectMigrationHistoryMissing(FAILURE_DATABASE, 13)
-  const snapshotBeforeV13 = await prepareV12LegacyIssuedCredentialFixture()
+  const retainedV14Fixture = await prepareV12LegacyIssuedCredentialFixture()
   await runCurrentMigration(FAILURE_DATABASE)
-  await expectSchemaVersion(FAILURE_DATABASE, 14)
-  await assertLegacyIssuedCredentialAfterV13(snapshotBeforeV13)
+  await expectSchemaVersion(FAILURE_DATABASE, 15)
+  await assertLegacyIssuedCredentialAfterV13(retainedV14Fixture.snapshotBeforeV13)
+  await assertLegacyPublicationAfterV15(retainedV14Fixture.snapshotBeforeV15)
   await startCurrentApiAgainstDatabase(FAILURE_DATABASE)
 
   completed = true
@@ -1069,6 +1164,6 @@ if (mainError) throw mainError
 if (cleanupError) throw cleanupError
 if (completed) {
   console.log(
-    'Docker lifecycle smoke passed: fresh v14, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, durable v13-to-v14 provider backoff, and bounded V1.4 backup/restore rollback.',
+    'Docker lifecycle smoke passed: fresh v15, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, durable v13-to-v14 provider backoff, exact v14-to-v15 verified publication adoption, and bounded V1.4 backup/restore rollback.',
   )
 }

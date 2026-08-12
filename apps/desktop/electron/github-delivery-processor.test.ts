@@ -272,6 +272,7 @@ function publication(
     requestId: 'request-1',
     intentRevision: 1,
     grantId: 'grant-1',
+    sourcePublicationId: null,
     status: 'verified',
     reportedOutcomeCode: 'pushed',
     verifiedHeadSha: sha,
@@ -363,6 +364,7 @@ function harness(
     getRecoverySnapshot: vi.fn(),
     withCredentialGrant: vi.fn(),
     reportBranchPublication: vi.fn(),
+    adoptVerifiedBranchPublication: vi.fn(),
     createDraftPullRequest: vi.fn(),
   }
   const publisher = { publish: vi.fn() }
@@ -1084,6 +1086,86 @@ describe('GitHub Delivery processor', () => {
     })
   })
 
+  it('adopts the verified publication on an explicit later-attempt resume without another credential or push', async () => {
+    const source = intent({
+      id: 'intent-2',
+      deliveryAttempt: 2,
+      status: 'recovery_required',
+    })
+    const approvedRequest = request(source, {
+      id: 'request-2',
+      stateVersion: 3,
+      status: 'approved',
+    })
+    const adoptedRequest = request(source, {
+      id: approvedRequest.id,
+      stateVersion: 4,
+      status: 'branch_published',
+    })
+    const completedRequest = request(source, {
+      id: approvedRequest.id,
+      stateVersion: 6,
+      status: 'completed',
+      outcomeCode: 'draft_pr_created',
+    })
+    const adoptedPublication = publication({
+      id: 'publication-2',
+      requestId: approvedRequest.id,
+      grantId: null,
+      sourcePublicationId: 'publication-1',
+      reportedOutcomeCode: 'already_present',
+    })
+    const completedPullRequest = pullRequest({
+      requestId: approvedRequest.id,
+      publicationId: adoptedPublication.id,
+    })
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([approvedRequest])
+    test.remote.getRecoverySnapshot.mockResolvedValue(
+      snapshot(approvedRequest, {
+        approval: approval(source, approvedRequest),
+      }),
+    )
+    test.remote.adoptVerifiedBranchPublication.mockResolvedValue({
+      request: adoptedRequest,
+      publication: adoptedPublication,
+      outcomeCode: 'publication_adopted',
+      replayed: false,
+    })
+    test.remote.createDraftPullRequest.mockResolvedValue({
+      request: completedRequest,
+      pullRequest: completedPullRequest,
+      outcomeCode: 'pull_request_completed',
+      replayed: false,
+    })
+    test.workflow.execute.mockResolvedValue({ applied: true, blockers: [], run: {} })
+
+    await expect(
+      test.processor.resume({
+        intentId: source.id,
+        expectedUpdatedAt: source.updatedAt,
+      }),
+    ).resolves.toMatchObject({
+      disposition: 'workflow_advanced',
+      outcomeCode: 'draft_pr_created',
+    })
+    expect(test.remote.adoptVerifiedBranchPublication).toHaveBeenCalledWith({
+      projectId: source.teamProjectId,
+      requestId: approvedRequest.id,
+      expectedStateVersion: approvedRequest.stateVersion,
+    })
+    expect(test.remote.createDraftPullRequest).toHaveBeenCalledWith({
+      projectId: source.teamProjectId,
+      requestId: approvedRequest.id,
+      publicationId: adoptedPublication.id,
+      expectedStateVersion: adoptedRequest.stateVersion,
+    })
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.remote.reportBranchPublication).not.toHaveBeenCalled()
+    expect(test.publisher.publish).not.toHaveBeenCalled()
+    expect(test.workspaceCoordinator.runExclusive).not.toHaveBeenCalled()
+  })
+
   it('parks in recovery when authority changes after publishing state is persisted', async () => {
     const source = intent({ status: 'approved' })
     const approvedRequest = request(source, { stateVersion: 2, status: 'approved' })
@@ -1366,6 +1448,53 @@ describe('GitHub Delivery processor', () => {
     expect(test.current().status).toBe('completed')
   })
 
+  it('recovers an adopted-publication completion crash window without another credential or pull request', async () => {
+    const source = intent({
+      id: 'intent-2',
+      deliveryAttempt: 2,
+      status: 'creating_pr',
+    })
+    const completedRequest = request(source, {
+      id: 'request-2',
+      stateVersion: 6,
+      status: 'completed',
+      outcomeCode: 'draft_pr_created',
+    })
+    const adoptedPublication = publication({
+      id: 'publication-2',
+      requestId: completedRequest.id,
+      grantId: null,
+      sourcePublicationId: 'publication-1',
+      reportedOutcomeCode: 'already_present',
+    })
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([completedRequest])
+    test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(completedRequest, {
+      approval: approval(source, completedRequest),
+      grant: null,
+      publication: adoptedPublication,
+      pullRequest: pullRequest({
+        requestId: completedRequest.id,
+        publicationId: adoptedPublication.id,
+      }),
+    }))
+    test.workflow.execute.mockResolvedValue({ applied: true, blockers: [], run: {} })
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: completedRequest.id,
+        disposition: 'workflow_advanced',
+        outcomeCode: 'draft_pr_created',
+      }],
+    })
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.publisher.publish).not.toHaveBeenCalled()
+    expect(test.remote.reportBranchPublication).not.toHaveBeenCalled()
+    expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
+    expect(test.current().status).toBe('completed')
+  })
+
   it('leaves evidence-only remote completion to the bounded read-only reconciler', async () => {
     const source = intent({ status: 'recovery_required' })
     const completedRequest = request(source, {
@@ -1450,6 +1579,62 @@ describe('GitHub Delivery processor', () => {
       expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
     },
   )
+
+  it('read-only reconciles a completed later attempt backed by an adopted verified publication', async () => {
+    const source = intent({
+      id: 'intent-2',
+      deliveryAttempt: 2,
+      status: 'recovery_required',
+    })
+    const completedRequest = request(source, {
+      id: 'request-2',
+      stateVersion: 6,
+      status: 'completed',
+      outcomeCode: 'draft_pr_created',
+    })
+    const adoptedPublication = publication({
+      id: 'publication-2',
+      requestId: completedRequest.id,
+      grantId: null,
+      sourcePublicationId: 'publication-1',
+      reportedOutcomeCode: 'already_present',
+    })
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([completedRequest])
+    test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(completedRequest, {
+      approval: approval(source, completedRequest),
+      grant: null,
+      publication: adoptedPublication,
+      pullRequest: pullRequest({
+        requestId: completedRequest.id,
+        publicationId: adoptedPublication.id,
+      }),
+    }))
+    test.workflow.execute.mockResolvedValue({ applied: true, blockers: [], run: {} })
+
+    await expect(reconcileRemoteCompletedGitHubDeliveryIntents({
+      store: test.store,
+      remote: test.remote,
+      workflow: test.workflow,
+      now: () => '2026-08-11T12:03:00.000Z',
+      maxIntentsPerCycle: 1,
+      maxIntentsScannedPerCycle: 1,
+    })).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: completedRequest.id,
+        disposition: 'workflow_advanced',
+        outcomeCode: 'draft_pr_created',
+      }],
+    })
+    expect(test.current().status).toBe('completed')
+    expect(test.store.commitGitHubDeliveryIntentCompletion).toHaveBeenCalledTimes(1)
+    expect(test.workflow.execute).toHaveBeenCalledTimes(1)
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.publisher.publish).not.toHaveBeenCalled()
+    expect(test.remote.reportBranchPublication).not.toHaveBeenCalled()
+    expect(test.remote.createDraftPullRequest).not.toHaveBeenCalled()
+  })
 
   it('rejects remote completion reconciliation across delivery attempts before snapshot access', async () => {
     const source = intent({ status: 'recovery_required' })

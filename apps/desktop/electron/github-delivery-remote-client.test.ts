@@ -186,6 +186,7 @@ function branchPublication(overrides: Record<string, unknown> = {}) {
     requestId,
     intentRevision: 1,
     grantId: 'grant-1',
+    sourcePublicationId: null,
     status: 'verified',
     reportedOutcomeCode: 'pushed',
     verifiedHeadSha: 'b'.repeat(40),
@@ -1076,6 +1077,51 @@ describe('GitHub Delivery remote client', () => {
       expectedGrantVersion: 2,
       reportedOutcomeCode: 'pushed',
     })
+  })
+
+  it('adopts an exact verified prior publication without requesting a credential', async () => {
+    const adopted = branchPublication({
+      id: 'publication-2',
+      version: 1,
+      grantId: null,
+      sourcePublicationId: 'publication-1',
+      reportedOutcomeCode: 'already_present',
+    })
+    const fetcher = vi.fn(async () =>
+      jsonResponse(
+        {
+          request: deliveryRequest({ stateVersion: 4, status: 'branch_published' }),
+          publication: adopted,
+          outcomeCode: 'publication_adopted',
+          replayed: false,
+        },
+        201,
+      ),
+    )
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher,
+    })
+
+    await expect(
+      client.adoptVerifiedBranchPublication({
+        projectId,
+        requestId,
+        expectedStateVersion: 3,
+      }),
+    ).resolves.toEqual({
+      request: deliveryRequest({ stateVersion: 4, status: 'branch_published' }),
+      publication: adopted,
+      outcomeCode: 'publication_adopted',
+      replayed: false,
+    })
+    const [url, init] = vi.mocked(fetcher as typeof fetch).mock.calls[0] ?? []
+    expect(url).toBe(
+      'https://api.devflow.test/api/desktop/projects/project-a/github-deliveries/delivery-1/branch-publication/recover',
+    )
+    expect(JSON.parse(String(init?.body))).toEqual({ expectedStateVersion: 3 })
+    expect(init?.method).toBe('POST')
   })
 
   it('creates or reconciles only an exact Draft pull request outcome', async () => {

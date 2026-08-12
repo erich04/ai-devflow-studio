@@ -6,10 +6,11 @@ retroactive TDD rewrites unless it is touched.
 
 ## Current Persistence Baseline
 
-- Team/API/Postgres uses Team schema v14. Migration tests must prove a fresh v14 database, the
+- Team/API/Postgres uses Team schema v15. Migration tests must prove a fresh v15 database, the
   populated v11-to-v12 delivery-series upgrade, and the v12-to-v13 provider-authoritative expiry
   contract without inventing expiry evidence for legacy issued credentials, followed by the
-  v13-to-v14 bounded provider retry boundary.
+  v13-to-v14 bounded provider retry boundary, and the v14-to-v15 verified publication adoption
+  authority without changing legacy grant-backed publications.
 - Electron/SQLite uses Desktop schema v17. Local-store tests must prove a fresh v17 database,
   retained upgrades, rollback on migration failure, and refusal of a newer unknown schema.
 
@@ -26,7 +27,8 @@ retroactive TDD rewrites unless it is touched.
 - **Desktop/Web UI**: component tests cover visible state and explicit user actions; browser E2E
   covers the Workbench and Team Console paths.
 - **Deterministic GitHub Delivery**: fake GitHub clients and local bare remotes prove exact-commit,
-  no-force publication and Draft reconciliation without an external write.
+  no-force publication, verified publication adoption across attempts, and Draft reconciliation
+  without an external write.
 - **Packaged Desktop**: the packaged smoke exercises production main/preload/renderer boundaries,
   local SQLite, a local fake API, a local bare remote, crash/restart reconciliation, and credential
   non-persistence.

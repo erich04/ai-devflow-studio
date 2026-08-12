@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 14
+export const TEAM_SCHEMA_VERSION = 15
 
 export const requiredTeamTableNames = [
   'team_schema_migrations',
@@ -760,7 +760,14 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('version', 'integer'),
       column('request_id', 'text', { references: 'github_delivery_requests.id' }),
       column('intent_revision', 'integer'),
-      column('grant_id', 'text', { references: 'github_delivery_credential_grants.id' }),
+      column('grant_id', 'text', {
+        nullable: true,
+        references: 'github_delivery_credential_grants.id',
+      }),
+      column('source_publication_id', 'text', {
+        nullable: true,
+        references: 'github_branch_publications.id',
+      }),
       column('status', 'text'),
       column('reported_outcome_code', 'text'),
       column('verified_head_sha', 'text', { nullable: true }),

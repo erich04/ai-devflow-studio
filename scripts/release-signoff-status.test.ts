@@ -79,7 +79,7 @@ Status: Passed
 
 Candidate: ${candidateSha}
 Packaged artifact: 1.5.0 darwin-arm64 ${desktopArtifactSha}
-Team schema v14; Desktop schema v17.
+Team schema v15; Desktop schema v17.
 Verify: https://github.com/devflow/ai-devflow-studio/actions/runs/123456
 Delivery series: github-delivery:${'a'.repeat(64)}
 Delivery attempt: 1; intent revision: 1.
@@ -1049,7 +1049,7 @@ describe('release signoff status', () => {
     const content = ready.walkthroughEvidence.referencedEvidenceContent!
 
     for (const requiredIdentity of [
-      'Team schema v14',
+      'Team schema v15',
       'Desktop schema v17',
       ready.githubSandboxRecord!.value!.deliverySeriesKey as string,
       ready.githubSandboxRecord!.value!.intentDigest as string,

@@ -85,6 +85,9 @@ const unavailableGitHubDeliveryService: GitHubDeliveryService = {
   async verifyBranchPublication() {
     return unavailableGitHubDelivery('publication')
   },
+  async adoptVerifiedBranchPublication() {
+    return unavailableGitHubDelivery('publication')
+  },
   async createDraftPullRequest() {
     return unavailableGitHubDelivery('pull_request')
   },

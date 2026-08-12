@@ -10,9 +10,13 @@ import {
   type GitHubGitPublisherErrorCode,
 } from './github-git-publisher.js'
 import type {
+  AdoptVerifiedGitHubBranchPublicationInput,
+  AdoptVerifiedGitHubBranchPublicationResult,
   CreateGitHubDraftPullRequestInput,
   CreateGitHubDraftPullRequestResult,
   EphemeralGitHubDeliveryCredential,
+  GitHubBranchPublicationRecord,
+  GitHubCredentialGrantRecord,
   GitHubCredentialGrantInput,
   GitHubCredentialPublishResult,
   GitHubDeliveryRecoverySnapshot,
@@ -98,6 +102,9 @@ type ProcessorRemote = {
   reportBranchPublication(
     input: ReportGitHubBranchPublicationInput,
   ): Promise<ReportGitHubBranchPublicationResult>
+  adoptVerifiedBranchPublication(
+    input: AdoptVerifiedGitHubBranchPublicationInput,
+  ): Promise<AdoptVerifiedGitHubBranchPublicationResult>
   createDraftPullRequest(
     input: CreateGitHubDraftPullRequestInput,
   ): Promise<CreateGitHubDraftPullRequestResult>
@@ -765,6 +772,71 @@ async function advanceRecovered(
     return requireRecovery(deps, source, request.id, 'publication_resume_required')
   }
 
+  if (
+    explicitResume &&
+    source.deliveryAttempt > 1 &&
+    request.status === 'approved' &&
+    snapshot.approval !== null &&
+    snapshot.grant === null &&
+    snapshot.publication === null &&
+    snapshot.pullRequest === null
+  ) {
+    if (!await verifyPreparedAuthority(deps, source)) {
+      return safeResult(source.id, request.id, 'local_conflict', 'authority_mismatch')
+    }
+    let adopted: AdoptVerifiedGitHubBranchPublicationResult | null = null
+    try {
+      adopted = await deps.remote.adoptVerifiedBranchPublication({
+        projectId: source.teamProjectId,
+        requestId: request.id,
+        expectedStateVersion: request.stateVersion,
+      })
+    } catch (error) {
+      if (
+        !(error instanceof GitHubDeliveryRemoteError) ||
+        error.outcomeCode !== 'publication_evidence_missing'
+      ) {
+        throw error
+      }
+    }
+    if (adopted !== null) {
+      if (
+        !matchesAuthority(source, adopted.request) ||
+        adopted.request.status !== 'branch_published' ||
+        adopted.request.outcomeCode !== null ||
+        adopted.publication.requestId !== request.id ||
+        adopted.publication.intentRevision !== adopted.request.intentRevision ||
+        adopted.publication.grantId !== null ||
+        adopted.publication.sourcePublicationId === null ||
+        adopted.publication.status !== 'verified' ||
+        adopted.publication.reportedOutcomeCode !== 'already_present' ||
+        adopted.publication.verifiedHeadSha !== source.expectedCommitSha ||
+        adopted.publication.verifiedAt === null ||
+        adopted.publication.outcomeCode !== 'branch_verified'
+      ) {
+        return safeResult(
+          source.id,
+          request.id,
+          'local_conflict',
+          'authority_mismatch',
+        )
+      }
+      if (!await verifyPreparedAuthority(deps, source)) {
+        return safeResult(source.id, request.id, 'local_conflict', 'authority_mismatch')
+      }
+      const branchPublished = await transitionTo(deps, source, 'branch_published')
+      if (!branchPublished) {
+        return safeResult(source.id, request.id, 'local_conflict', 'stale_intent')
+      }
+      return createPullRequest(
+        deps,
+        branchPublished,
+        adopted.request,
+        adopted.publication,
+      )
+    }
+  }
+
   if (!await verifyPreparedAuthority(deps, source)) {
     return safeResult(source.id, request.id, 'local_conflict', 'authority_mismatch')
   }
@@ -936,13 +1008,15 @@ async function completeFromRemote(
     snapshot.request.status !== 'completed' ||
     snapshot.request.outcomeCode !== 'draft_pr_created' ||
     !snapshot.approval ||
-    !snapshot.grant ||
-    snapshot.grant.status !== 'consumed' ||
     !snapshot.publication ||
     snapshot.publication.status !== 'verified' ||
     snapshot.publication.outcomeCode !== 'branch_verified' ||
     snapshot.publication.verifiedHeadSha !== source.expectedCommitSha ||
-    snapshot.publication.grantId !== snapshot.grant.id ||
+    !hasCompletedPublicationAuthority(
+      snapshot.request,
+      snapshot.grant,
+      snapshot.publication,
+    ) ||
     !snapshot.pullRequest ||
     snapshot.pullRequest.status !== 'completed' ||
     snapshot.pullRequest.outcomeCode !== 'draft_pr_created'
@@ -1338,6 +1412,14 @@ function matchesSnapshotAuthority(
     (publication.status === 'recovery_required' || publication.status === 'conflict') &&
     pullRequest === null
   )
+  const publicationReferencesAdoptedEvidence = Boolean(
+    publication &&
+    grant === null &&
+    request.deliveryAttempt > 1 &&
+    publication.grantId === null &&
+    publication.sourcePublicationId !== null &&
+    publication.reportedOutcomeCode === 'already_present'
+  )
   const approvalRequired = request.status === 'approved' ||
     request.status === 'publishing_branch' ||
     request.status === 'branch_published' ||
@@ -1370,10 +1452,13 @@ function matchesSnapshotAuthority(
       grant.repositoryId === intent.repositoryId
     )) &&
     (!publication || (
-      grant !== null &&
       publication.requestId === request.id &&
       publication.intentRevision === request.intentRevision &&
-      (!grant || publication.grantId === grant.id || publicationReferencesRecoverablePriorGrant) &&
+      (
+        (grant !== null && publication.sourcePublicationId === null && publication.grantId === grant.id) ||
+        publicationReferencesRecoverablePriorGrant ||
+        publicationReferencesAdoptedEvidence
+      ) &&
       (publication.status === 'verified'
         ? publication.verifiedHeadSha === intent.expectedCommitSha
         : publication.verifiedHeadSha === null || publication.verifiedHeadSha === intent.expectedCommitSha)
@@ -1402,15 +1487,12 @@ function matchesExactRemoteCompletion(
     request.status === 'completed' &&
     request.outcomeCode === 'draft_pr_created' &&
     approval !== null &&
-    grant !== null &&
-    grant.status === 'consumed' &&
-    grant.consumedAt !== null &&
     publication !== null &&
     publication.status === 'verified' &&
     publication.outcomeCode === 'branch_verified' &&
     publication.verifiedHeadSha === intent.expectedCommitSha &&
     publication.verifiedAt !== null &&
-    publication.grantId === grant.id &&
+    hasCompletedPublicationAuthority(request, grant, publication) &&
     pullRequest !== null &&
     pullRequest.status === 'completed' &&
     pullRequest.outcomeCode === 'draft_pr_created' &&
@@ -1421,6 +1503,26 @@ function matchesExactRemoteCompletion(
     pullRequest.draft === true &&
     pullRequest.publicationId === publication.id
   )
+}
+
+function hasCompletedPublicationAuthority(
+  request: GitHubDeliveryRequestRecord,
+  grant: GitHubCredentialGrantRecord | null,
+  publication: GitHubBranchPublicationRecord,
+): boolean {
+  const currentGrantWasConsumed =
+    grant !== null &&
+    grant.status === 'consumed' &&
+    grant.consumedAt !== null &&
+    publication.grantId === grant.id &&
+    publication.sourcePublicationId === null
+  const verifiedPriorPublicationWasAdopted =
+    request.deliveryAttempt > 1 &&
+    grant === null &&
+    publication.grantId === null &&
+    publication.sourcePublicationId !== null &&
+    publication.reportedOutcomeCode === 'already_present'
+  return currentGrantWasConsumed || verifiedPriorPublicationWasAdopted
 }
 
 async function verifyPreparedAuthority(

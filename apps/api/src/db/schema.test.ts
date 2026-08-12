@@ -17,8 +17,42 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
+  it('defines Team schema v15 as an exact verified-publication adoption authority', async () => {
+    expect(TEAM_SCHEMA_VERSION).toBe(15)
+    expect(teamMigrationCatalog.at(-1)).toEqual({
+      version: 15,
+      name: '0015_github_verified_publication_adoption',
+      fileName: '0015_github_verified_publication_adoption.sql',
+    })
+    const migrations = await readTeamMigrationCatalog()
+    const migration = migrations.find((candidate) => candidate.version === 15)
+    expect(migration?.sql).toContain('ADD COLUMN source_publication_id text')
+    expect(migration?.sql).toContain('ALTER COLUMN grant_id DROP NOT NULL')
+    expect(migration?.sql).toContain(
+      'github_branch_publications_authority_exactly_one',
+    )
+    expect(migration?.sql).toContain(
+      'FOREIGN KEY (source_publication_id) REFERENCES github_branch_publications(id)',
+    )
+
+    const publications = teamTableDefinitions.find(
+      (table) => table.name === 'github_branch_publications',
+    )
+    expect(
+      publications?.columns.find((column) => column.name === 'grant_id'),
+    ).toMatchObject({ nullable: true })
+    expect(
+      publications?.columns.find(
+        (column) => column.name === 'source_publication_id',
+      ),
+    ).toMatchObject({
+      nullable: true,
+      references: 'github_branch_publications.id',
+    })
+  })
+
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(14)
+    expect(TEAM_SCHEMA_VERSION).toBe(15)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -234,6 +268,11 @@ describe('team database schema', () => {
         version: 14,
         name: '0014_github_pull_request_retry_after',
         fileName: '0014_github_pull_request_retry_after.sql',
+      },
+      {
+        version: 15,
+        name: '0015_github_verified_publication_adoption',
+        fileName: '0015_github_verified_publication_adoption.sql',
       },
     ])
 

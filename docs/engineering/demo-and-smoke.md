@@ -6,8 +6,8 @@ passes.
 
 ## Baseline Prerequisites
 
-- Team/API/Postgres must report Team schema v14 with provider-authoritative expiry and bounded
-  provider retry contracts.
+- Team/API/Postgres must report Team schema v15 with provider-authoritative expiry, bounded
+  provider retry, and verified publication adoption contracts.
 - Electron/SQLite must report Desktop schema v17.
 - The Web/API/Postgres walkthrough needs authenticated owner, lead, and paired Desktop identities.
 - A GitHub Delivery walkthrough needs a verified GitHub App repository binding, one tested canonical
@@ -47,7 +47,9 @@ status.
 - **Resume**: continue the same `recovery_required` attempt without allocating another remote
   identity.
 - **Retry**: create the next attempt only after the current pairing claimant proves the exact remote
-  predecessor `failed` or `revoked`.
+  predecessor `failed` or `revoked`. If that predecessor already has a verified publication for the
+  same immutable series and failed only at Draft creation, the approved next attempt adopts that
+  evidence and proceeds directly to Draft reconciliation without another credential or push.
 - **Stop**: park the exact active attempt for manual recovery without claiming remote rollback.
 
 None of these actions may silently reuse approval, force-push, delete a branch, publish a tag, or
@@ -86,9 +88,10 @@ export DEVFLOW_DATABASE_URL='postgres://postgres:devflow@127.0.0.1:55432/devflow
 corepack pnpm test:postgres-smoke
 ```
 
-The Postgres smoke must prove fresh Team schema v14, populated v11-to-v12 retention, a v12-to-v13
+The Postgres smoke must prove fresh Team schema v15, populated v11-to-v12 retention, a v12-to-v13
 legacy issued credential that remains fail closed when its raw provider expiry is NULL, and the
-v13-to-v14 nullable bounded provider retry field.
+v13-to-v14 nullable bounded provider retry field. It must also prove v14-to-v15
+`source_publication_id` retention and the exact grant-or-adoption authority constraint.
 It also proves repository binding and revocation, exact Delivery Request approval, credential
 grant, remote verification, Draft completion, recovery/audit behavior, and redaction.
 

@@ -531,6 +531,9 @@ async function resolveGitHubDeliveryRouteUnchecked(
   const publicationMatch = pathname.match(
     /^\/api\/desktop\/projects\/([^/]+)\/github-deliveries\/([^/]+)\/branch-publication$/,
   )
+  const publicationRecoveryMatch = pathname.match(
+    /^\/api\/desktop\/projects\/([^/]+)\/github-deliveries\/([^/]+)\/branch-publication\/recover$/,
+  )
   const pullRequestMatch = pathname.match(
     /^\/api\/desktop\/projects\/([^/]+)\/github-deliveries\/([^/]+)\/draft-pull-request$/,
   )
@@ -547,6 +550,8 @@ async function resolveGitHubDeliveryRouteUnchecked(
     recoveryMatch !== null && inboxMatch === null && method === 'GET'
   const isCredentialRoute = credentialMatch !== null && method === 'POST'
   const isPublicationRoute = publicationMatch !== null && method === 'POST'
+  const isPublicationRecoveryRoute =
+    publicationRecoveryMatch !== null && method === 'POST'
   const isPullRequestRoute = pullRequestMatch !== null && method === 'POST'
   const isDesktopRoute =
     isDesktopBindingRoute ||
@@ -555,6 +560,7 @@ async function resolveGitHubDeliveryRouteUnchecked(
     isRecoveryRoute ||
     isCredentialRoute ||
     isPublicationRoute ||
+    isPublicationRecoveryRoute ||
     isPullRequestRoute
   if (
     !isBindingRoute &&
@@ -567,6 +573,7 @@ async function resolveGitHubDeliveryRouteUnchecked(
     !isRecoveryRoute &&
     !isCredentialRoute &&
     !isPublicationRoute &&
+    !isPublicationRecoveryRoute &&
     !isPullRequestRoute
   ) {
     return null
@@ -600,6 +607,8 @@ async function resolveGitHubDeliveryRouteUnchecked(
                     ? recoveryMatch?.[1]
                     : isCredentialRoute
                       ? credentialMatch?.[1]
+                      : isPublicationRecoveryRoute
+                        ? publicationRecoveryMatch?.[1]
                       : isPublicationRoute
                         ? publicationMatch?.[1]
                         : pullRequestMatch?.[1]) ?? '',
@@ -869,6 +878,54 @@ async function resolveGitHubDeliveryRouteUnchecked(
     }
     return {
       status: 200,
+      body: {
+        request: cloneGitHubDeliveryRequest(result.request),
+        publication: cloneGitHubBranchPublication(result.publication),
+        outcomeCode: result.outcomeCode,
+        replayed: result.replayed,
+      },
+    }
+  }
+  if (isPublicationRecoveryRoute) {
+    const requestId = decodeIdentifier(publicationRecoveryMatch?.[2] ?? '')
+    const expectedStateVersion = parseExpectedStateVersion(options.body)
+    if (requestId === null || expectedStateVersion === null) {
+      return badRequest('Invalid GitHub branch publication recovery input.')
+    }
+    const result = await service.adoptVerifiedBranchPublication(
+      { projectId, requestId, expectedStateVersion },
+      principal as GitHubDeliveryDesktopPrincipal,
+    )
+    if (!result.ok) return rejectionResult(result)
+    if (
+      result.responseStatus !== 201 ||
+      result.outcomeCode !== 'publication_adopted' ||
+      typeof result.replayed !== 'boolean' ||
+      result.request.organizationId !== principal.session.organizationId ||
+      result.request.projectId !== projectId ||
+      result.request.id !== requestId ||
+      result.request.status !== 'branch_published' ||
+      result.request.outcomeCode !== null ||
+      result.request.redacted !== true ||
+      result.publication.requestId !== requestId ||
+      result.publication.intentRevision !== result.request.intentRevision ||
+      result.publication.grantId !== null ||
+      typeof result.publication.sourcePublicationId !== 'string' ||
+      !identifierPattern.test(result.publication.sourcePublicationId) ||
+      result.publication.sourcePublicationId.trim() !==
+        result.publication.sourcePublicationId ||
+      result.publication.status !== 'verified' ||
+      result.publication.reportedOutcomeCode !== 'already_present' ||
+      result.publication.verifiedHeadSha !== result.request.expectedCommitSha ||
+      !isCanonicalDate(result.publication.reportedAt) ||
+      !isCanonicalDate(result.publication.verifiedAt) ||
+      result.publication.outcomeCode !== 'branch_verified' ||
+      result.publication.redacted !== true
+    ) {
+      throw new Error('Invalid GitHub Delivery service result.')
+    }
+    return {
+      status: 201,
       body: {
         request: cloneGitHubDeliveryRequest(result.request),
         publication: cloneGitHubBranchPublication(result.publication),

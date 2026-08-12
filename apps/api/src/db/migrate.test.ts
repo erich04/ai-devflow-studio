@@ -110,6 +110,11 @@ describe('team database migration runner', () => {
         name: '0014_github_pull_request_retry_after',
         fileName: '0014_github_pull_request_retry_after.sql',
       },
+      {
+        version: 15,
+        name: '0015_github_verified_publication_adoption',
+        fileName: '0015_github_verified_publication_adoption.sql',
+      },
     ])
 
     const [
@@ -121,6 +126,7 @@ describe('team database migration runner', () => {
       githubDeliveryAttempts,
       githubCredentialProviderExpiry,
       githubPullRequestRetryAfter,
+      githubVerifiedPublicationAdoption,
     ] = await readTeamMigrationCatalog()
     expect(baseline).toMatchObject({ version: 7, name: '0001_initial' })
     expect(baseline?.sql).toMatch(/^BEGIN;/)
@@ -168,6 +174,13 @@ describe('team database migration runner', () => {
       name: '0014_github_pull_request_retry_after',
     })
     expect(githubPullRequestRetryAfter?.sql).toContain('provider_retry_not_before')
+    expect(githubVerifiedPublicationAdoption).toMatchObject({
+      version: 15,
+      name: '0015_github_verified_publication_adoption',
+    })
+    expect(githubVerifiedPublicationAdoption?.sql).toContain(
+      'source_publication_id',
+    )
   })
 
   it('orders the v10 Gate backfill before validation and keeps its SQL function atomic', async () => {

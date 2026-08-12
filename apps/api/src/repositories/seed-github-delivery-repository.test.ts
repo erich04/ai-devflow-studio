@@ -2533,6 +2533,105 @@ describe('seed GitHub Delivery repository', () => {
     ).toBe(false)
   })
 
+  it('adopts a verified prior publication for the next approved delivery attempt without issuing another credential', async () => {
+    const harness = createHarness()
+    const verified = await createVerifiedPublication(harness)
+    const reservedPullRequest =
+      await harness.repository.reserveGitHubDraftPullRequest(
+        {
+          projectId: 'project-a',
+          requestId: verified.request.id,
+          publicationId: verified.publication.id,
+          expectedStateVersion: verified.request.stateVersion,
+        },
+        desktopPrincipal,
+      )
+    if (!reservedPullRequest.ok) {
+      throw new Error('fixture PR reservation failed')
+    }
+    const failedPullRequest =
+      await harness.repository.finalizeGitHubDraftPullRequest(
+        {
+          projectId: 'project-a',
+          requestId: verified.request.id,
+          pullRequestOutcomeId: reservedPullRequest.pullRequest.id,
+          expectedStateVersion: reservedPullRequest.request.stateVersion,
+          expectedPullRequestVersion: reservedPullRequest.pullRequest.version,
+          outcome: {
+            status: 'failed',
+            outcomeCode: 'pull_request_failed',
+          },
+        },
+        desktopPrincipal,
+      )
+    if (!failedPullRequest.ok) {
+      throw new Error('fixture PR failure failed')
+    }
+
+    const secondIntent = deliveryIntent({
+      id: 'local-intent-2',
+      deliveryAttempt: 2,
+    })
+    const secondCreated =
+      await harness.repository.createOrReviseGitHubDeliveryRequest(
+        {
+          projectId: 'project-a',
+          intent: secondIntent,
+          prTitle: 'Retry the reviewed change',
+          prBody: 'Reuse the already verified branch publication.',
+          expectedStateVersion: 0,
+        },
+        desktopPrincipal,
+      )
+    if (!secondCreated.ok) throw new Error('fixture retry request failed')
+    const secondApproved =
+      await harness.repository.decideGitHubDeliveryRequest(
+        {
+          projectId: 'project-a',
+          requestId: secondCreated.request.id,
+          decision: 'approve',
+          expectedStateVersion: secondCreated.request.stateVersion,
+        },
+        leadPrincipal,
+      )
+    if (!secondApproved.ok) throw new Error('fixture retry approval failed')
+
+    const adopted =
+      await harness.repository.adoptGitHubVerifiedBranchPublication(
+        {
+          projectId: 'project-a',
+          requestId: secondApproved.request.id,
+          expectedStateVersion: secondApproved.request.stateVersion,
+        },
+        desktopPrincipal,
+      )
+
+    expect(adopted).toMatchObject({
+      ok: true,
+      responseStatus: 201,
+      outcomeCode: 'publication_adopted',
+      replayed: false,
+      request: {
+        id: secondApproved.request.id,
+        deliveryAttempt: 2,
+        status: 'branch_published',
+        outcomeCode: null,
+      },
+      publication: {
+        grantId: null,
+        sourcePublicationId: verified.publication.id,
+        status: 'verified',
+        reportedOutcomeCode: 'already_present',
+        verifiedHeadSha: shaB,
+        verifiedAt: verified.publication.verifiedAt,
+        outcomeCode: 'branch_verified',
+        redacted: true,
+      },
+    })
+    expect(harness.repository.inspectForTests().grants).toHaveLength(1)
+    expect(harness.repository.inspectForTests().publications).toHaveLength(2)
+  })
+
   it('rejects a Draft PR creation timestamp later than the API observation', async () => {
     const harness = createHarness()
     const verified = await createVerifiedPublication(harness)

@@ -447,6 +447,27 @@ async function prepareRetainedV12CredentialFixture() {
       'utf8',
     ),
   }
+  const laterMigrations = await Promise.all([
+    {
+      version: 13,
+      name: '0013_github_credential_provider_expiry',
+      fileName: '0013_github_credential_provider_expiry.sql',
+    },
+    {
+      version: 14,
+      name: '0014_github_pull_request_retry_after',
+      fileName: '0014_github_pull_request_retry_after.sql',
+    },
+  ].map(async (migration) => ({
+    ...migration,
+    sql: await readFile(
+      new URL(
+        `../apps/api/src/db/migrations/${migration.fileName}`,
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  })))
   const pool = new Pool({
     connectionString: databaseUrl,
     application_name: 'ai-devflow-postgres-smoke-v12-fixture',
@@ -765,12 +786,51 @@ async function prepareRetainedV12CredentialFixture() {
     )
     const snapshotBeforeV13 = retainedGrant.rows[0]?.snapshot
     expect(snapshotBeforeV13, 'Populated v12 legacy issued credential was not retained.')
+    for (const migration of laterMigrations) {
+      await connection.query('BEGIN')
+      transactionOpen = true
+      await connection.query(migration.sql)
+      await connection.query(
+        `UPDATE schema_meta SET value = $1, updated_at = now()
+         WHERE key = 'schema_version'`,
+        [String(migration.version)],
+      )
+      await connection.query(
+        `INSERT INTO team_schema_migrations (version, name, checksum, adopted)
+         VALUES ($1, $2, $3, false)`,
+        [migration.version, migration.name, migrationChecksum(migration.sql)],
+      )
+      await connection.query('COMMIT')
+      transactionOpen = false
+    }
+    const retainedPublicationId = 'github-publication-retained-v14'
+    await connection.query(
+      `INSERT INTO github_branch_publications (
+         id, version, request_id, intent_revision, grant_id, status,
+         reported_outcome_code, verified_head_sha, reported_at, verified_at,
+         outcome_code
+       ) VALUES (
+         $1, 2, $2, 2, $3, 'verified', 'pushed', repeat('b', 40),
+         $4, $4, 'branch_verified'
+       )`,
+      [retainedPublicationId, retainedRequestId, retainedGrantId, createdAt],
+    )
+    const retainedPublication = await connection.query(
+      `SELECT to_jsonb(retained) AS snapshot
+       FROM github_branch_publications AS retained
+       WHERE id = $1`,
+      [retainedPublicationId],
+    )
+    const snapshotBeforeV15 = retainedPublication.rows[0]?.snapshot
+    expect(snapshotBeforeV15, 'Populated v14 branch publication was not retained.')
     return {
       retainedRequestId,
       retainedGrantId,
+      retainedPublicationId,
       retainedLogicalKey,
       snapshotBeforeV12,
       snapshotBeforeV13,
+      snapshotBeforeV15,
     }
   } catch (error) {
     if (transactionOpen) {
@@ -786,7 +846,7 @@ async function prepareRetainedV12CredentialFixture() {
 async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
   const pool = new Pool({
     connectionString: databaseUrl,
-    application_name: 'ai-devflow-postgres-smoke-v14-assertion',
+    application_name: 'ai-devflow-postgres-smoke-v15-assertion',
     statement_timeout: 10_000,
   })
   const connection = await pool.connect()
@@ -796,8 +856,8 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
       "SELECT value FROM schema_meta WHERE key = 'schema_version'",
     )
     expect(
-      schemaVersion.rows[0]?.value === '14',
-      'Team database did not migrate the retained fixture to schema v14.',
+      schemaVersion.rows[0]?.value === '15',
+      'Team database did not migrate the retained fixture to schema v15.',
     )
     const retained = await connection.query(
       `SELECT to_jsonb(retained) AS snapshot
@@ -856,6 +916,36 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
       retryColumns.rows.length === 1,
       'V14 provider retry not-before column was missing.',
     )
+    const retainedPublication = await connection.query(
+      `SELECT to_jsonb(retained) AS snapshot
+       FROM github_branch_publications AS retained
+       WHERE id = $1`,
+      [fixture.retainedPublicationId],
+    )
+    const migratedPublication = retainedPublication.rows[0]?.snapshot
+    expect(
+      migratedPublication?.grant_id === fixture.retainedGrantId &&
+        migratedPublication?.source_publication_id === null,
+      'V15 did not preserve the legacy grant-backed publication authority.',
+    )
+    const retainedPublicationWithoutV15Fields = { ...migratedPublication }
+    delete retainedPublicationWithoutV15Fields.source_publication_id
+    expect(
+      stableJson(retainedPublicationWithoutV15Fields) ===
+        stableJson(fixture.snapshotBeforeV15),
+      'V15 migration changed retained v14 publication fields.',
+    )
+    const publicationColumns = await connection.query(
+      `SELECT column_name
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'github_branch_publications'
+         AND column_name = 'source_publication_id'`,
+    )
+    expect(
+      publicationColumns.rows.length === 1,
+      'V15 source_publication_id column was missing.',
+    )
 
     await connection.query('BEGIN')
     transactionOpen = true
@@ -875,6 +965,28 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
         expiryConfirmationError?.constraint ===
           'github_delivery_grants_provider_expiry_contract',
       'V13 did not fail closed on a fabricated legacy provider expiry confirmation.',
+    )
+    await connection.query('ROLLBACK')
+    transactionOpen = false
+
+    await connection.query('BEGIN')
+    transactionOpen = true
+    let publicationAuthorityError
+    try {
+      await connection.query(
+        `UPDATE github_branch_publications
+         SET grant_id = NULL, source_publication_id = NULL
+         WHERE id = $1`,
+        [fixture.retainedPublicationId],
+      )
+    } catch (error) {
+      publicationAuthorityError = error
+    }
+    expect(
+      publicationAuthorityError?.code === '23514' &&
+        publicationAuthorityError?.constraint ===
+          'github_branch_publications_authority_exactly_one',
+      'V15 accepted a publication without exact grant or adoption authority.',
     )
     await connection.query('ROLLBACK')
     transactionOpen = false

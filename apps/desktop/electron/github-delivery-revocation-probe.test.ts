@@ -184,6 +184,7 @@ function recoverySnapshot(
       requestId: source.completion.remoteRequestId,
       intentRevision: 1,
       grantId: 'grant-1',
+      sourcePublicationId: null,
       status: 'verified',
       reportedOutcomeCode: 'pushed',
       verifiedHeadSha: source.expectedCommitSha,

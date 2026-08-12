@@ -21,6 +21,7 @@ import {
   githubDeliveryRejection,
   normalizeGitHubDeliveryRequestIntent,
   type CreateOrReviseGitHubDeliveryRequestInput,
+  type AdoptGitHubVerifiedBranchPublicationInput,
   type AuthorizeGitHubDeliveryRecoveryLookupInput,
   type ConfirmGitHubCredentialClearanceInput,
   type ConfirmGitHubCredentialProviderExpiryInput,
@@ -33,6 +34,7 @@ import {
   type FinalizeGitHubCredentialGrantInput,
   type FinalizeGitHubBranchPublicationInput,
   type GitHubBranchPublication,
+  type GitHubBranchPublicationAdoptionResult,
   type GitHubBranchPublicationFinalizationResult,
   type GitHubBranchPublicationReportResult,
   type GitHubCredentialGrant,
@@ -228,7 +230,8 @@ type BranchPublicationRow = {
   version: number
   request_id: string
   intent_revision: number
-  grant_id: string
+  grant_id: string | null
+  source_publication_id: string | null
   status: GitHubBranchPublication['status']
   reported_outcome_code: GitHubBranchPublication['reportedOutcomeCode']
   verified_head_sha: string | null
@@ -412,6 +415,7 @@ const branchPublicationColumns = `
   github_branch_publications.request_id,
   github_branch_publications.intent_revision,
   github_branch_publications.grant_id,
+  github_branch_publications.source_publication_id,
   github_branch_publications.status,
   github_branch_publications.reported_outcome_code,
   github_branch_publications.verified_head_sha,
@@ -597,6 +601,7 @@ function mapBranchPublicationRow(
     requestId: row.request_id,
     intentRevision: row.intent_revision,
     grantId: row.grant_id,
+    sourcePublicationId: row.source_publication_id,
     status: row.status,
     reportedOutcomeCode: row.reported_outcome_code,
     verifiedHeadSha: row.verified_head_sha,
@@ -4233,6 +4238,7 @@ export function createPostgresGitHubDeliveryRepository(
               request_id,
               intent_revision,
               grant_id,
+              source_publication_id,
               status,
               reported_outcome_code,
               verified_head_sha,
@@ -4241,7 +4247,7 @@ export function createPostgresGitHubDeliveryRepository(
               outcome_code
             )
             VALUES (
-              $1, 1, $2, $3, $4, 'verifying', $5,
+              $1, 1, $2, $3, $4, NULL, 'verifying', $5,
               NULL, $6, NULL, NULL
             )
             RETURNING ${branchPublicationColumns}
@@ -4320,6 +4326,303 @@ export function createPostgresGitHubDeliveryRepository(
         : toIso(publication.verified_at) === verifiedAt) &&
       publication.outcome_code === input.verification.outcomeCode
     )
+  }
+
+  async function adoptGitHubVerifiedBranchPublication(
+    input: AdoptGitHubVerifiedBranchPublicationInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubBranchPublicationAdoptionResult> {
+    if (principal.authentication.kind !== 'desktop_bearer') {
+      return githubDeliveryRejection('authentication_forbidden')
+    }
+    return withTeamDbTransaction(db, async (tx) => {
+      const operation = 'github_branch_publication' as const
+      const operationMeta = operationFingerprint(operation, ['adopt', input])
+      await lockProject(
+        tx,
+        principal.session.organizationId,
+        input.projectId,
+      )
+      const identity = await loadBearerIdentity(
+        tx,
+        principal,
+        input.projectId,
+        true,
+      )
+      if (!identity?.hasProjectAccess || !identity.tokenRecordId) {
+        return githubDeliveryRejection('project_forbidden')
+      }
+      const request = await lockDeliveryById(tx, identity, input.requestId)
+      const publication = request
+        ? await loadCurrentPublication(tx, request)
+        : null
+      const existingIdempotency = await loadIdempotency(
+        tx,
+        identity,
+        operation,
+        operationMeta.idempotencyKey,
+      )
+      const recordId = publication?.id ?? createId('publication')
+      const finalize = (
+        result: GitHubBranchPublicationAdoptionResult,
+        observedVersion: number | null,
+        resolvedRecordId = recordId,
+      ) =>
+        finalizeMutation(tx, {
+          identity,
+          operation,
+          recordKind: 'github_branch_publication',
+          recordId: resolvedRecordId,
+          expectedVersion: input.expectedStateVersion,
+          observedVersion,
+          ...operationMeta,
+          existingIdempotency,
+          result,
+        })
+      if (!request) {
+        return finalize(githubDeliveryRejection('not_found'), null)
+      }
+      if (request.requested_by_token_id !== identity.tokenRecordId) {
+        return finalize(
+          githubDeliveryRejection('project_forbidden'),
+          request.state_version,
+        )
+      }
+      const binding = await lockBinding(tx, identity)
+      if (!exactActiveBinding(binding, request)) {
+        return finalize(
+          githubDeliveryRejection('binding_inactive'),
+          request.state_version,
+        )
+      }
+      const authority = await loadCanonicalDeliveryAuthority(tx, {
+        identity,
+        runId: request.run_id,
+        requestedByUserId: request.requested_by_user_id,
+        requestedByTokenId: request.requested_by_token_id,
+      })
+      if (
+        !canonicalAuthorityMatches(authority, {
+          runId: request.run_id,
+          runVersion: request.run_version,
+          nodeId: request.node_id,
+          tokenId: request.requested_by_token_id,
+        })
+      ) {
+        return finalize(
+          githubDeliveryRejection('invalid_state'),
+          request.state_version,
+        )
+      }
+      const approval = await loadCurrentApproval(tx, request)
+      if (!approval || !approvalMatchesRequest(approval, request)) {
+        return finalize(
+          githubDeliveryRejection('approval_required'),
+          request.state_version,
+        )
+      }
+      if (publication) {
+        if (
+          publication.grant_id === null &&
+          publication.source_publication_id !== null &&
+          publication.status === 'verified' &&
+          publication.reported_outcome_code === 'already_present' &&
+          publication.verified_head_sha === request.expected_commit_sha &&
+          publication.outcome_code === 'branch_verified'
+        ) {
+          return finalize(
+            {
+              ok: true,
+              responseStatus: 201,
+              outcomeCode: 'publication_adopted',
+              replayed: true,
+              request: mapDeliveryRequestRow(request),
+              publication: mapBranchPublicationRow(publication),
+            },
+            request.state_version,
+            publication.id,
+          )
+        }
+        return finalize(
+          githubDeliveryRejection('publication_conflict'),
+          request.state_version,
+        )
+      }
+      if (
+        request.state_version !== input.expectedStateVersion ||
+        request.status !== 'approved'
+      ) {
+        return finalize(
+          githubDeliveryRejection('stale_version'),
+          request.state_version,
+        )
+      }
+      if (request.delivery_attempt <= 1) {
+        return finalize(
+          githubDeliveryRejection('publication_evidence_missing'),
+          request.state_version,
+        )
+      }
+
+      const [previousRequest] = await tx.query<DeliveryRequestRow>(
+        `
+          /* github_delivery:delivery-adoption-source-lock */
+          SELECT ${deliveryRequestColumns}
+          FROM github_delivery_requests
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND requested_by_token_id = $3
+            AND delivery_series_key = $4
+            AND delivery_attempt = $5
+          LIMIT 1
+          FOR UPDATE
+        `,
+        [
+          identity.organizationId,
+          identity.projectId,
+          identity.tokenRecordId,
+          request.delivery_series_key,
+          request.delivery_attempt - 1,
+        ],
+      )
+      const [sourcePublication] = previousRequest
+        ? await tx.query<BranchPublicationRow>(
+            `
+              /* github_delivery:publication-adoption-source-lock */
+              SELECT ${branchPublicationColumns}
+              FROM github_branch_publications
+              WHERE request_id = $1
+                AND intent_revision = $2
+              LIMIT 1
+              FOR UPDATE
+            `,
+            [previousRequest.id, previousRequest.intent_revision],
+          )
+        : []
+      const [sourcePullRequest] = previousRequest
+        ? await tx.query<PullRequestOutcomeRow>(
+            `
+              /* github_delivery:pull-request-adoption-source-lock */
+              SELECT ${pullRequestOutcomeColumns}
+              FROM github_pull_request_outcomes
+              WHERE request_id = $1
+                AND intent_revision = $2
+              LIMIT 1
+              FOR UPDATE
+            `,
+            [previousRequest.id, previousRequest.intent_revision],
+          )
+        : []
+      if (
+        !previousRequest ||
+        previousRequest.status !== 'failed' ||
+        previousRequest.outcome_code !== 'pull_request_failed' ||
+        previousRequest.binding_id !== request.binding_id ||
+        previousRequest.binding_version !== request.binding_version ||
+        previousRequest.installation_id !== request.installation_id ||
+        previousRequest.repository_id !== request.repository_id ||
+        previousRequest.repository_full_name !== request.repository_full_name ||
+        previousRequest.run_id !== request.run_id ||
+        previousRequest.run_version !== request.run_version ||
+        previousRequest.node_id !== request.node_id ||
+        previousRequest.workspace_id !== request.workspace_id ||
+        previousRequest.base_branch !== request.base_branch ||
+        previousRequest.head_branch !== request.head_branch ||
+        previousRequest.expected_commit_sha !== request.expected_commit_sha ||
+        previousRequest.diff_digest !== request.diff_digest ||
+        previousRequest.test_evidence_digest !== request.test_evidence_digest ||
+        previousRequest.package_digest !== request.package_digest ||
+        !sourcePublication ||
+        sourcePublication.status !== 'verified' ||
+        sourcePublication.verified_head_sha !== request.expected_commit_sha ||
+        sourcePublication.verified_at === null ||
+        sourcePublication.outcome_code !== 'branch_verified' ||
+        !sourcePullRequest ||
+        sourcePullRequest.publication_id !== sourcePublication.id ||
+        sourcePullRequest.status !== 'failed' ||
+        sourcePullRequest.outcome_code !== 'pull_request_failed'
+      ) {
+        return finalize(
+          githubDeliveryRejection('publication_evidence_missing'),
+          request.state_version,
+        )
+      }
+
+      const at = now().toISOString()
+      const [adoptedPublication] = await tx.query<BranchPublicationRow>(
+        `
+          /* github_delivery:publication-adopt */
+          INSERT INTO github_branch_publications (
+            id,
+            version,
+            request_id,
+            intent_revision,
+            grant_id,
+            source_publication_id,
+            status,
+            reported_outcome_code,
+            verified_head_sha,
+            reported_at,
+            verified_at,
+            outcome_code
+          )
+          VALUES (
+            $1, 1, $2, $3, NULL, $4, 'verified',
+            'already_present', $5, $6, $7, 'branch_verified'
+          )
+          RETURNING ${branchPublicationColumns}
+        `,
+        [
+          recordId,
+          request.id,
+          request.intent_revision,
+          sourcePublication.id,
+          sourcePublication.verified_head_sha,
+          at,
+          toIso(sourcePublication.verified_at),
+        ],
+      )
+      if (!adoptedPublication) {
+        throw new Error('GitHub Delivery publication adoption failed.')
+      }
+      const [updatedRequest] = await tx.query<DeliveryRequestRow>(
+        `
+          /* github_delivery:delivery-adopt-publication */
+          UPDATE github_delivery_requests
+          SET state_version = state_version + 1,
+              status = 'branch_published',
+              outcome_code = NULL,
+              updated_at = $5
+          WHERE id = $1
+            AND organization_id = $2
+            AND project_id = $3
+            AND state_version = $4
+            AND status = 'approved'
+          RETURNING ${deliveryRequestColumns}
+        `,
+        [
+          request.id,
+          identity.organizationId,
+          identity.projectId,
+          input.expectedStateVersion,
+          at,
+        ],
+      )
+      if (!updatedRequest) {
+        throw new Error('GitHub Delivery publication adoption lost request CAS.')
+      }
+      return finalize(
+        {
+          ok: true,
+          responseStatus: 201,
+          outcomeCode: 'publication_adopted',
+          replayed: false,
+          request: mapDeliveryRequestRow(updatedRequest),
+          publication: mapBranchPublicationRow(adoptedPublication),
+        },
+        updatedRequest.state_version,
+      )
+    })
   }
 
   async function finalizeGitHubBranchPublication(
@@ -5067,6 +5370,7 @@ export function createPostgresGitHubDeliveryRepository(
     confirmGitHubCredentialProviderExpiry,
     recordGitHubBranchPublicationReport,
     finalizeGitHubBranchPublication,
+    adoptGitHubVerifiedBranchPublication,
     reserveGitHubDraftPullRequest,
     finalizeGitHubDraftPullRequest,
   }

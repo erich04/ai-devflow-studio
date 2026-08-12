@@ -58,6 +58,7 @@ export type GitHubDeliveryRejectionOutcome =
   | 'approval_required'
   | 'approval_conflict'
   | 'grant_conflict'
+  | 'publication_evidence_missing'
   | 'publication_conflict'
   | 'pull_request_conflict'
   | 'expired'
@@ -326,7 +327,8 @@ export type GitHubBranchPublicationRecord = {
   version: number
   requestId: string
   intentRevision: number
-  grantId: string
+  grantId: string | null
+  sourcePublicationId: string | null
   status: 'verifying' | 'verified' | 'conflict' | 'recovery_required' | 'failed'
   reportedOutcomeCode: 'pushed' | 'already_present' | 'unknown'
   verifiedHeadSha: string | null
@@ -353,6 +355,19 @@ export type ReportGitHubBranchPublicationResult = {
   request: GitHubDeliveryRequestRecord
   publication: GitHubBranchPublicationRecord
   outcomeCode: 'publication_verified' | 'publication_failed'
+  replayed: boolean
+}
+
+export type AdoptVerifiedGitHubBranchPublicationInput = {
+  projectId: string
+  requestId: string
+  expectedStateVersion: number
+}
+
+export type AdoptVerifiedGitHubBranchPublicationResult = {
+  request: GitHubDeliveryRequestRecord
+  publication: GitHubBranchPublicationRecord
+  outcomeCode: 'publication_adopted'
   replayed: boolean
 }
 
@@ -603,6 +618,7 @@ const publicationKeys = [
   'requestId',
   'intentRevision',
   'grantId',
+  'sourcePublicationId',
   'status',
   'reportedOutcomeCode',
   'verifiedHeadSha',
@@ -1071,7 +1087,10 @@ function parseBranchPublication(
   if (
     !isIdentifier(value.id) ||
     !isIdentifier(value.requestId) ||
-    !isIdentifier(value.grantId) ||
+    !(
+      (isIdentifier(value.grantId) && value.sourcePublicationId === null) ||
+      (value.grantId === null && isIdentifier(value.sourcePublicationId))
+    ) ||
     !isPositiveInteger(value.version) ||
     !isPositiveInteger(value.intentRevision) ||
     typeof value.status !== 'string' ||
@@ -1355,6 +1374,7 @@ const rejectionOutcomes = new Set<GitHubDeliveryRejectionOutcome>([
   'approval_required',
   'approval_conflict',
   'grant_conflict',
+  'publication_evidence_missing',
   'publication_conflict',
   'pull_request_conflict',
   'expired',
@@ -2159,6 +2179,82 @@ export function createGitHubDeliveryRemoteClient(
         request,
         publication,
         outcomeCode: body.outcomeCode,
+        replayed: body.replayed,
+      }
+    },
+
+    async adoptVerifiedBranchPublication(
+      input: AdoptVerifiedGitHubBranchPublicationInput,
+    ): Promise<AdoptVerifiedGitHubBranchPublicationResult> {
+      const operation = 'branch_publication'
+      if (
+        !isIdentifier(input?.projectId) ||
+        !isIdentifier(input?.requestId) ||
+        !isPositiveInteger(input?.expectedStateVersion)
+      ) {
+        throw invalid(operation, 'invalid_request', null, false)
+      }
+      const pathname = `/api/desktop/projects/${encodeURIComponent(input.projectId)}/github-deliveries/${encodeURIComponent(input.requestId)}/branch-publication/recover`
+      const { response, body } = await requestRemoteJson({
+        fetcher,
+        url: `${apiBaseUrl}${pathname}`,
+        operation,
+        timeoutMs,
+        signal: options.signal,
+        init: {
+          method: 'POST',
+          credentials: 'omit',
+          redirect: 'error',
+          referrerPolicy: 'no-referrer',
+          headers: {
+            accept: 'application/json',
+            authorization: `Bearer ${authToken}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            expectedStateVersion: input.expectedStateVersion,
+          }),
+        },
+      })
+      if (
+        response.status !== 201 ||
+        !isRecord(body) ||
+        !hasExactKeys(body, [
+          'request',
+          'publication',
+          'outcomeCode',
+          'replayed',
+        ]) ||
+        body.outcomeCode !== 'publication_adopted' ||
+        typeof body.replayed !== 'boolean'
+      ) {
+        throw invalid(operation, 'invalid_response', response.status, true)
+      }
+      const request = parseRequest(body.request)
+      const publication = parseBranchPublication(body.publication)
+      if (
+        !request ||
+        !publication ||
+        request.projectId !== input.projectId ||
+        request.id !== input.requestId ||
+        request.status !== 'branch_published' ||
+        request.outcomeCode !== null ||
+        publication.requestId !== input.requestId ||
+        publication.intentRevision !== request.intentRevision ||
+        publication.grantId !== null ||
+        publication.sourcePublicationId === null ||
+        publication.status !== 'verified' ||
+        publication.reportedOutcomeCode !== 'already_present' ||
+        publication.verifiedHeadSha !== request.expectedCommitSha ||
+        publication.verifiedAt === null ||
+        publication.outcomeCode !== 'branch_verified'
+      ) {
+        throw invalid(operation, 'invalid_response', response.status, true)
+      }
+      return {
+        request,
+        publication,
+        outcomeCode: 'publication_adopted',
         replayed: body.replayed,
       }
     },

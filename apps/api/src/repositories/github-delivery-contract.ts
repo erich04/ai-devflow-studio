@@ -528,7 +528,8 @@ export type GitHubBranchPublication = {
   version: number
   requestId: string
   intentRevision: number
-  grantId: string
+  grantId: string | null
+  sourcePublicationId: string | null
   status: 'verifying' | 'verified' | 'conflict' | 'recovery_required' | 'failed'
   reportedOutcomeCode: 'pushed' | 'already_present' | 'unknown'
   verifiedHeadSha: string | null
@@ -578,6 +579,12 @@ export type FinalizeGitHubBranchPublicationInput = {
       }
 }
 
+export type AdoptGitHubVerifiedBranchPublicationInput = {
+  projectId: string
+  requestId: string
+  expectedStateVersion: number
+}
+
 export type GitHubBranchPublicationReportResult =
   | {
       ok: true
@@ -595,6 +602,17 @@ export type GitHubBranchPublicationFinalizationResult =
       ok: true
       responseStatus: 200
       outcomeCode: 'publication_verified' | 'publication_failed'
+      replayed: boolean
+      request: GitHubDeliveryRequest
+      publication: GitHubBranchPublication
+    }
+  | GitHubDeliveryRejectionResult
+
+export type GitHubBranchPublicationAdoptionResult =
+  | {
+      ok: true
+      responseStatus: 201
+      outcomeCode: 'publication_adopted'
       replayed: boolean
       request: GitHubDeliveryRequest
       publication: GitHubBranchPublication
@@ -703,6 +721,7 @@ export type GitHubDeliveryRejectionCode =
   | 'approval_required'
   | 'approval_conflict'
   | 'grant_conflict'
+  | 'publication_evidence_missing'
   | 'publication_conflict'
   | 'pull_request_conflict'
   | 'expired'
@@ -786,6 +805,10 @@ export type GitHubDeliveryRepository = {
     input: FinalizeGitHubBranchPublicationInput,
     principal: GitHubDeliveryDesktopPrincipal,
   ): Promise<GitHubBranchPublicationFinalizationResult>
+  adoptGitHubVerifiedBranchPublication(
+    input: AdoptGitHubVerifiedBranchPublicationInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubBranchPublicationAdoptionResult>
   reserveGitHubDraftPullRequest(
     input: ReserveGitHubDraftPullRequestInput,
     principal: GitHubDeliveryDesktopPrincipal,
@@ -818,6 +841,7 @@ export function githubDeliveryRejection(
     approval_required: 409,
     approval_conflict: 409,
     grant_conflict: 409,
+    publication_evidence_missing: 409,
     publication_conflict: 409,
     pull_request_conflict: 409,
     expired: 410,
@@ -860,6 +884,8 @@ export function githubDeliveryRejectionMessage(
       return 'The Delivery approval conflicts with current intent state.'
     case 'grant_conflict':
       return 'The credential grant conflicts with current delivery state.'
+    case 'publication_evidence_missing':
+      return 'No verified branch publication can be adopted for this delivery attempt.'
     case 'publication_conflict':
       return 'The published branch does not match the approved commit.'
     case 'pull_request_conflict':
@@ -1104,6 +1130,7 @@ export function cloneGitHubBranchPublication(
     requestId,
     intentRevision,
     grantId,
+    sourcePublicationId,
     status,
     reportedOutcomeCode,
     verifiedHeadSha,
@@ -1118,6 +1145,7 @@ export function cloneGitHubBranchPublication(
     requestId,
     intentRevision,
     grantId,
+    sourcePublicationId,
     status,
     reportedOutcomeCode,
     verifiedHeadSha,

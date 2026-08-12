@@ -61,6 +61,11 @@ export const teamMigrationCatalog = [
     name: '0014_github_pull_request_retry_after',
     fileName: '0014_github_pull_request_retry_after.sql',
   },
+  {
+    version: 15,
+    name: '0015_github_verified_publication_adoption',
+    fileName: '0015_github_verified_publication_adoption.sql',
+  },
 ] as const
 
 export function splitSqlStatements(sql: string): string[] {

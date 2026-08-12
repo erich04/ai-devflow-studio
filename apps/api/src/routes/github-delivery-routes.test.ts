@@ -249,6 +249,7 @@ function branchPublication(
     requestId: 'delivery-1',
     intentRevision: 1,
     grantId: 'grant-1',
+    sourcePublicationId: null,
     status: 'verified',
     reportedOutcomeCode: 'pushed',
     verifiedHeadSha: 'b'.repeat(40),
@@ -363,6 +364,20 @@ function createHarness() {
       replayed: false,
       request: deliveryRequest({ stateVersion: 6, status: 'branch_published' }),
       publication: branchPublication(),
+    })),
+    adoptVerifiedBranchPublication: vi.fn(async () => ({
+      ok: true as const,
+      responseStatus: 201 as const,
+      outcomeCode: 'publication_adopted' as const,
+      replayed: false,
+      request: deliveryRequest({ stateVersion: 4, status: 'branch_published' }),
+      publication: branchPublication({
+        id: 'publication-2',
+        version: 1,
+        grantId: null,
+        sourcePublicationId: 'publication-1',
+        reportedOutcomeCode: 'already_present',
+      }),
     })),
     createDraftPullRequest: vi.fn(async () => ({
       ok: true as const,
@@ -931,6 +946,47 @@ describe('GitHub Delivery routes', () => {
     expect(
       harness.repository.finalizeGitHubBranchPublication,
     ).not.toHaveBeenCalled()
+  })
+
+  it('adopts a verified prior branch publication without exposing a credential route', async () => {
+    const harness = createHarness()
+
+    await expect(
+      resolveGitHubDeliveryRoute(
+        'POST',
+        '/api/desktop/projects/project-a/github-deliveries/delivery-1/branch-publication/recover',
+        harness.repository,
+        harness.service,
+        {
+          principal: desktopMember,
+          body: { expectedStateVersion: 3 },
+        },
+      ),
+    ).resolves.toEqual({
+      status: 201,
+      body: {
+        request: deliveryRequest({ stateVersion: 4, status: 'branch_published' }),
+        publication: branchPublication({
+          id: 'publication-2',
+          version: 1,
+          grantId: null,
+          sourcePublicationId: 'publication-1',
+          reportedOutcomeCode: 'already_present',
+        }),
+        outcomeCode: 'publication_adopted',
+        replayed: false,
+      },
+    })
+    expect(harness.service.adoptVerifiedBranchPublication).toHaveBeenCalledWith(
+      {
+        projectId: 'project-a',
+        requestId: 'delivery-1',
+        expectedStateVersion: 3,
+      },
+      desktopMember,
+    )
+    expect(harness.service.issueCredentialGrant).not.toHaveBeenCalled()
+    expect(harness.service.verifyBranchPublication).not.toHaveBeenCalled()
   })
 
   it('creates or reconciles a Draft PR only through the API-owned GitHub service', async () => {

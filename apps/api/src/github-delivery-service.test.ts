@@ -130,6 +130,7 @@ function publication(
     requestId: 'delivery-1',
     intentRevision: 1,
     grantId: 'grant-1',
+    sourcePublicationId: null,
     status: 'verifying',
     reportedOutcomeCode: 'pushed',
     verifiedHeadSha: null,

@@ -920,7 +920,7 @@ function isValidV15WalkthroughContent(content, snapshot) {
     ) &&
     sameUtcEvidenceDate &&
     /Status:\s*Passed/i.test(content) &&
-    /Team schema v14/i.test(content) &&
+    /Team schema v15/i.test(content) &&
     /Desktop schema v17/i.test(content) &&
     new RegExp(
       `Packaged artifact:[^\\n]*${escapeRegExp(String(artifactVersion))}[^\\n]*${escapeRegExp(String(artifactPlatform))}[^\\n]*${escapeRegExp(String(artifactSha))}`,

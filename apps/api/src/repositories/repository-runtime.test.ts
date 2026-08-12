@@ -77,7 +77,7 @@ describe('team repository runtime', () => {
   })
 
   it('reports Postgres readiness only at the current Team schema version', async () => {
-    const querySpy = vi.fn(async (_sql: string) => [{ value: '14' }])
+    const querySpy = vi.fn(async (_sql: string) => [{ value: '15' }])
     const query = async <T>(sql: string): Promise<T[]> =>
       (await querySpy(sql)) as T[]
     const runtime = await createTeamRepositoryRuntime({
@@ -97,7 +97,7 @@ describe('team repository runtime', () => {
     )
   })
 
-  it.each([undefined, '10', '11', '12', '13', '14junk', ' 14 '])(
+  it.each([undefined, '10', '11', '12', '13', '14', '15junk', ' 15 '])(
     'rejects missing or non-canonical Team schema version %s',
     async (schemaVersion) => {
       const query = async <T>(): Promise<T[]> =>

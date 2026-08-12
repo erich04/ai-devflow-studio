@@ -23,9 +23,11 @@ import {
   type DecideGitHubDeliveryRequestInput,
   type FinalizeGitHubCredentialGrantInput,
   type FinalizeGitHubBranchPublicationInput,
+  type AdoptGitHubVerifiedBranchPublicationInput,
   type FinalizeGitHubDraftPullRequestInput,
   type GitHubBranchPublication,
   type GitHubBranchPublicationFinalizationResult,
+  type GitHubBranchPublicationAdoptionResult,
   type GitHubBranchPublicationReportResult,
   type GitHubCredentialGrant,
   type GitHubCredentialGrantMutationResult,
@@ -1892,6 +1894,7 @@ export function createSeedGitHubDeliveryRepository(
       requestId: request.id,
       intentRevision: request.intentRevision,
       grantId: grant.id,
+      sourcePublicationId: null,
       status: 'verifying',
       reportedOutcomeCode: input.reportedOutcomeCode,
       verifiedHeadSha: null,
@@ -1938,6 +1941,155 @@ export function createSeedGitHubDeliveryRepository(
       publication.verifiedAt === verifiedAt &&
       publication.outcomeCode === input.verification.outcomeCode
     )
+  }
+
+  async function adoptGitHubVerifiedBranchPublication(
+    input: AdoptGitHubVerifiedBranchPublicationInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubBranchPublicationAdoptionResult> {
+    if (!(await hasDesktopAuthority(principal, input.projectId))) {
+      return githubDeliveryRejection('project_forbidden')
+    }
+    const request = findRequest(
+      input.requestId,
+      principal.session.organizationId,
+      input.projectId,
+    )
+    if (!request) return githubDeliveryRejection('not_found')
+    if (request.requestedByTokenId !== principal.authentication.tokenRecordId) {
+      return githubDeliveryRejection('project_forbidden')
+    }
+    if (!hasCurrentBinding(request)) {
+      return githubDeliveryRejection('binding_inactive')
+    }
+    const runAuthority = await canonicalRequestAuthority(request)
+    if (runAuthority === 'claimant_forbidden') {
+      return githubDeliveryRejection('project_forbidden')
+    }
+    if (runAuthority === 'stale') {
+      return githubDeliveryRejection('invalid_state')
+    }
+    const approval = currentApproval(request)
+    if (!approval || !approvalMatchesRequest(approval, request)) {
+      return githubDeliveryRejection('approval_required')
+    }
+
+    const existing = currentPublication(request)
+    if (existing) {
+      if (
+        existing.sourcePublicationId !== null &&
+        existing.grantId === null &&
+        existing.status === 'verified' &&
+        existing.reportedOutcomeCode === 'already_present' &&
+        existing.verifiedHeadSha === request.expectedCommitSha &&
+        existing.outcomeCode === 'branch_verified'
+      ) {
+        return {
+          ok: true,
+          responseStatus: 201,
+          outcomeCode: 'publication_adopted',
+          replayed: true,
+          request: cloneGitHubDeliveryRequest(request),
+          publication: cloneGitHubBranchPublication(existing),
+        }
+      }
+      return githubDeliveryRejection('publication_conflict')
+    }
+    if (
+      request.stateVersion !== input.expectedStateVersion ||
+      request.status !== 'approved'
+    ) {
+      return githubDeliveryRejection('stale_version')
+    }
+    if (request.deliveryAttempt <= 1) {
+      return githubDeliveryRejection('publication_evidence_missing')
+    }
+
+    const previousRequest = [...requestsByLogicalKey.values()].find(
+      (candidate) =>
+        candidate.organizationId === request.organizationId &&
+        candidate.projectId === request.projectId &&
+        candidate.requestedByTokenId === request.requestedByTokenId &&
+        candidate.deliverySeriesKey === request.deliverySeriesKey &&
+        candidate.deliveryAttempt === request.deliveryAttempt - 1,
+    )
+    const sourcePublication = previousRequest
+      ? currentPublication(previousRequest)
+      : null
+    const sourcePullRequest = previousRequest
+      ? currentPullRequest(previousRequest)
+      : null
+    if (
+      !previousRequest ||
+      previousRequest.status !== 'failed' ||
+      previousRequest.outcomeCode !== 'pull_request_failed' ||
+      previousRequest.repositoryBindingId !== request.repositoryBindingId ||
+      previousRequest.repositoryBindingVersion !==
+        request.repositoryBindingVersion ||
+      previousRequest.installationId !== request.installationId ||
+      previousRequest.repositoryId !== request.repositoryId ||
+      previousRequest.repository !== request.repository ||
+      previousRequest.runId !== request.runId ||
+      previousRequest.runVersion !== request.runVersion ||
+      previousRequest.nodeId !== request.nodeId ||
+      previousRequest.workspaceId !== request.workspaceId ||
+      previousRequest.baseBranch !== request.baseBranch ||
+      previousRequest.headBranch !== request.headBranch ||
+      previousRequest.expectedCommitSha !== request.expectedCommitSha ||
+      previousRequest.diffDigest !== request.diffDigest ||
+      previousRequest.testEvidenceDigest !== request.testEvidenceDigest ||
+      previousRequest.packageDigest !== request.packageDigest ||
+      !sourcePublication ||
+      sourcePublication.status !== 'verified' ||
+      sourcePublication.verifiedHeadSha !== request.expectedCommitSha ||
+      sourcePublication.verifiedAt === null ||
+      sourcePublication.outcomeCode !== 'branch_verified' ||
+      !sourcePullRequest ||
+      sourcePullRequest.publicationId !== sourcePublication.id ||
+      sourcePullRequest.status !== 'failed' ||
+      sourcePullRequest.outcomeCode !== 'pull_request_failed'
+    ) {
+      return githubDeliveryRejection('publication_evidence_missing')
+    }
+
+    const reportedAt = timestamp()
+    const publication: GitHubBranchPublication = {
+      id: nextId('github-publication'),
+      version: 1,
+      requestId: request.id,
+      intentRevision: request.intentRevision,
+      grantId: null,
+      sourcePublicationId: sourcePublication.id,
+      status: 'verified',
+      reportedOutcomeCode: 'already_present',
+      verifiedHeadSha: sourcePublication.verifiedHeadSha,
+      reportedAt,
+      verifiedAt: sourcePublication.verifiedAt,
+      outcomeCode: 'branch_verified',
+      redacted: true,
+    }
+    publications.set(publication.id, publication)
+    request.stateVersion += 1
+    request.status = 'branch_published'
+    request.outcomeCode = null
+    request.updatedAt = reportedAt
+    audit(
+      principal,
+      input.projectId,
+      'github_branch_publication',
+      publication.id,
+      'publication_adopted',
+      [request.id, sourcePublication.id, publication.version],
+      reportedAt,
+    )
+    return {
+      ok: true,
+      responseStatus: 201,
+      outcomeCode: 'publication_adopted',
+      replayed: false,
+      request: cloneGitHubDeliveryRequest(request),
+      publication: cloneGitHubBranchPublication(publication),
+    }
   }
 
   async function finalizeGitHubBranchPublication(
@@ -2490,6 +2642,7 @@ export function createSeedGitHubDeliveryRepository(
     confirmGitHubCredentialProviderExpiry,
     recordGitHubBranchPublicationReport,
     finalizeGitHubBranchPublication,
+    adoptGitHubVerifiedBranchPublication,
     reserveGitHubDraftPullRequest,
     finalizeGitHubDraftPullRequest,
     inspectForTests: () => ({

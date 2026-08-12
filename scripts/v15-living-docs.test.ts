@@ -63,9 +63,10 @@ describe('V1.5 living documentation truth', () => {
     const v15Prd = read('docs/product/prd/v1.5-github-delivery-prd.md')
 
     for (const markdown of [testingStrategy, demoAndSmoke]) {
-      expect(markdown).toContain('Team schema v14')
+      expect(markdown).toContain('Team schema v15')
       expect(markdown).toContain('Desktop schema v17')
       expect(markdown).toContain('provider-authoritative expiry')
+      expect(markdown).toContain('verified publication adoption')
       expect(markdown).toContain('corepack pnpm test:v15-github-delivery')
       expect(markdown).toContain('corepack pnpm test:v15-github-delivery-packaged-smoke')
       expect(markdown).toContain('corepack pnpm test:postgres-smoke')
@@ -100,10 +101,12 @@ describe('V1.5 living documentation truth', () => {
     const postgres = read('docs/knowledge/checklists/postgres-smoke-readiness.md')
     const electron = read('docs/knowledge/checklists/electron-demo-readiness.md')
 
-    expect(postgres).toContain('Team schema v14')
+    expect(postgres).toContain('Team schema v15')
     expect(postgres).toContain('v11-to-v12')
     expect(postgres).toContain('v12-to-v13')
+    expect(postgres).toContain('v14-to-v15')
     expect(postgres).toContain('provider_credential_expires_at')
+    expect(postgres).toContain('source_publication_id')
     expect(postgres).toContain('legacy issued credential')
     expect(postgres).toContain('fail closed')
     expect(postgres).toContain('GitHub Delivery')
@@ -164,9 +167,10 @@ describe('V1.5 living documentation truth', () => {
       expect(markdown).toContain('Stop')
     }
 
-    expect(backendMatrix).toContain('Team schema v14')
+    expect(backendMatrix).toContain('Team schema v15')
     expect(backendMatrix).toContain('Desktop schema v17')
     expect(backendMatrix).toContain('provider-authoritative expiry')
+    expect(backendMatrix).toContain('verified publication adoption')
     expect(backendMatrix).toContain('remote_sync_outbox')
     expect(backendMatrix).not.toContain('durable outbox/backoff 留到 v1.4')
     expect(backendMatrix).not.toContain('Durable sync outbox/backoff：')
@@ -204,10 +208,11 @@ describe('V1.5 living documentation truth', () => {
     expect(prdIndex).toContain('Implemented final 1.x feature contract')
     expect(prdIndex).toContain('release/signoff pending')
 
-    expect(lessons).toContain('Team schema v14')
+    expect(lessons).toContain('Team schema v15')
     expect(lessons).toContain('v11-to-v12')
     expect(lessons).toContain('v12-to-v13')
     expect(lessons).toContain('provider-authoritative expiry')
+    expect(lessons).toContain('verified publication adoption')
     expect(lessons).toContain('GitHub App repository binding')
     expect(lessons).toContain('Delivery Request')
     expect(lessons).toContain('Draft completion')

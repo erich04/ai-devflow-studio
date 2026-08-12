@@ -5,6 +5,8 @@ import {
 } from './github-app-client'
 import { isGitHubCredentialToken } from '@ai-devflow/shared'
 import type {
+  AdoptGitHubVerifiedBranchPublicationInput,
+  GitHubBranchPublicationAdoptionResult,
   GitHubBranchPublicationFinalizationResult,
   GitHubCredentialGrantMutationResult,
   GitHubDeliveryDesktopPrincipal,
@@ -109,6 +111,9 @@ export type IssueGitHubCredentialGrantResult =
 export type VerifyGitHubBranchPublicationInput =
   RecordGitHubBranchPublicationReportInput
 
+export type AdoptVerifiedGitHubBranchPublicationInput =
+  AdoptGitHubVerifiedBranchPublicationInput
+
 export type CreateGitHubDraftPullRequestServiceInput =
   ReserveGitHubDraftPullRequestInput
 
@@ -131,6 +136,10 @@ export type GitHubDeliveryService = {
     input: VerifyGitHubBranchPublicationInput,
     principal: GitHubDeliveryDesktopPrincipal,
   ): Promise<GitHubBranchPublicationFinalizationResult>
+  adoptVerifiedBranchPublication(
+    input: AdoptVerifiedGitHubBranchPublicationInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubBranchPublicationAdoptionResult>
   createDraftPullRequest(
     input: CreateGitHubDraftPullRequestServiceInput,
     principal: GitHubDeliveryDesktopPrincipal,
@@ -799,6 +808,20 @@ export function createGitHubDeliveryService(
     }
   }
 
+  async function adoptVerifiedBranchPublication(
+    publicationInput: AdoptVerifiedGitHubBranchPublicationInput,
+    principal: GitHubDeliveryDesktopPrincipal,
+  ): Promise<GitHubBranchPublicationAdoptionResult> {
+    try {
+      return await input.repository.adoptGitHubVerifiedBranchPublication(
+        publicationInput,
+        principal,
+      )
+    } catch (error) {
+      throw serviceError('publication', error)
+    }
+  }
+
   async function createDraftPullRequest(
     pullRequestInput: CreateGitHubDraftPullRequestServiceInput,
     principal: GitHubDeliveryDesktopPrincipal,
@@ -1109,6 +1132,7 @@ export function createGitHubDeliveryService(
     configureRepositoryBinding,
     issueCredentialGrant,
     verifyBranchPublication,
+    adoptVerifiedBranchPublication,
     createDraftPullRequest,
   }
 }

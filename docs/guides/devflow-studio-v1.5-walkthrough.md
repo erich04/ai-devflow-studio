@@ -272,7 +272,7 @@ provider revocation and records the exact passing outcome.
 ```
 
 The dated result must say `Status: Passed` and record `C`, the packaged artifact platform and
-SHA-256, Team schema v14, Desktop schema v17, exact-SHA Verify URL, non-secret sandbox/App identity,
+SHA-256, Team schema v15, Desktop schema v17, exact-SHA Verify URL, non-secret sandbox/App identity,
 series/attempt/revision and digests, lifecycle counts, approval role/auth kind, expected/remote SHA,
 Draft URL and state, completed Acceptance, restart zero-repeat observations, and the exact revocation
 proof values (`intentId`, newer revoked binding version, `binding_inactive`, canonical `checkedAt`,
@@ -288,7 +288,7 @@ Use this exact label skeleton so the result remains both human-auditable and mac
 Status: Passed
 Candidate: <C-full-40-hex-SHA>
 Packaged artifact: 1.5.0 <platform-arch> <64-hex-SHA-256>
-Team schema v14; Desktop schema v17.
+Team schema v15; Desktop schema v17.
 Verify: <exact-first-attempt-workflow_dispatch-run-URL>
 Delivery series: <github-delivery:64-hex>
 Delivery attempt: 1; intent revision: 1.

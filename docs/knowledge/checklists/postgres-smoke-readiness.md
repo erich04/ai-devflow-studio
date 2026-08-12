@@ -3,7 +3,7 @@ title: Postgres Smoke Readiness Checklist
 category: review_checklist
 ownerId: u-erich
 tags: postgres, api, smoke, policy, github-delivery
-summary: Postgres smoke should prove Team schema v14, retained migration, governed GitHub Delivery, policy, sync, and redaction.
+summary: Postgres smoke should prove Team schema v15, retained migration, governed GitHub Delivery, policy, sync, and redaction.
 ---
 
 # Postgres Smoke Readiness Checklist
@@ -12,7 +12,7 @@ Use this checklist when API, repository, migration, policy, override, sync, GitH
 manager-summary code changes.
 
 - Set `DEVFLOW_DATABASE_URL` explicitly before running Postgres smoke.
-- Prove a disposable fresh database reaches Team schema v14.
+- Prove a disposable fresh database reaches Team schema v15.
 - Prove a populated v11-to-v12 migration retains exact repository binding, Delivery Request,
   approval, publication, recovery, and audit data.
 - Prove a failed v11-to-v12 migration rolls back transactionally and succeeds once on explicit
@@ -21,6 +21,8 @@ manager-summary code changes.
   `0`, with `provider_credential_expires_at` and `provider_expiry_observed_at` NULL, and therefore
   fail closed instead of fabricating provider-authoritative expiry confirmation.
 - Prove v13-to-v14 adds only a nullable bounded Draft PR provider retry not-before.
+- Prove v14-to-v15 adds nullable `source_publication_id`, retains every legacy grant-backed
+  publication exactly, and rejects rows that have neither or both publication authorities.
 - Verify seeded team data can be read through the API repository boundary.
 - Verify policy save/read and enforcement evaluation behavior.
 - Verify override rejection for owner, member, and conflicted lead cases.
@@ -37,6 +39,8 @@ manager-summary code changes.
   private key and issued token must never become durable Postgres evidence.
 - Verify the API independently confirms the expected commit as remote head before it creates or
   reconciles one Draft pull request.
+- Verify an approved later attempt may use verified publication adoption only from the immediately
+  prior same-series terminal Draft failure, with zero additional credential issuance or push.
 - Verify revocation blocks a new credential grant and that replay/restart paths do not duplicate the
   request, publication, Draft pull request, or audit result.
 - Verify overview and Delivery Request responses remain redacted and do not expose local paths, raw
