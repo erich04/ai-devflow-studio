@@ -72,7 +72,7 @@ import {
   type WorkflowRun,
   type WorkRequest,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 16
+export const CURRENT_SCHEMA_VERSION = 17
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -1711,6 +1711,42 @@ const schemaMigrations: readonly SchemaMigration[] = [
       `)
     },
   },
+  {
+    version: 17,
+    migrate(db) {
+      db.run(`
+    drop table if exists github_delivery_revocation_checks;
+
+    create table github_delivery_revocation_checks (
+      intent_id text primary key,
+      intent_updated_at text not null,
+      binding_id text not null,
+      binding_version integer not null,
+      outcome_code text not null,
+      checked_at text not null,
+      state_version integer not null,
+      json text not null,
+      check (length(trim(intent_id)) > 0 and length(intent_id) <= 200 and trim(intent_id) = intent_id),
+      check (length(trim(binding_id)) > 0 and length(binding_id) <= 200 and trim(binding_id) = binding_id),
+      check (binding_version between 1 and 2147483647),
+      check (outcome_code = 'binding_inactive'),
+      check (state_version = 2),
+      check (json_valid(json)),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.intentId') = intent_id),
+      check (json_extract(json, '$.intentUpdatedAt') = intent_updated_at),
+      check (json_extract(json, '$.bindingId') = binding_id),
+      check (json_extract(json, '$.bindingVersion') = binding_version),
+      check (json_extract(json, '$.outcomeCode') = outcome_code),
+      check (json_extract(json, '$.checkedAt') = checked_at),
+      check (json_extract(json, '$.redacted') = 1)
+    );
+
+    create index idx_github_delivery_revocation_checks_checked
+      on github_delivery_revocation_checks(checked_at, intent_id);
+      `)
+    },
+  },
 ]
 
 function migrateSchema(db: Database) {
@@ -2465,7 +2501,7 @@ function isCanonicalGitHubDeliveryRevocationCheck(
   return (
     actualKeys.length === expectedKeys.length &&
     actualKeys.every((key, index) => key === expectedKeys[index]) &&
-    check.stateVersion === 1 &&
+    check.stateVersion === 2 &&
     isNonEmptyIdentifier(check.intentId) &&
     check.intentId.length <= 200 &&
     isCanonicalIsoTimestamp(check.intentUpdatedAt) &&

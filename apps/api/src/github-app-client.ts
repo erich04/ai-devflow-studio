@@ -1,17 +1,39 @@
 import {
   assertFullGitCommitSha,
   assertSafeGitHubBranch,
+  GITHUB_CREDENTIAL_TOKEN_MAX_LENGTH,
+  isGitHubCredentialToken,
   normalizeGitHubRepository,
 } from '@ai-devflow/shared'
+import {
+  GITHUB_CREDENTIAL_MAX_TTL_MS,
+  GITHUB_CREDENTIAL_PROVIDER_MAX_MS,
+} from './repositories/github-delivery-contract'
 
 const githubApiBaseUrl = 'https://api.github.com'
 const githubWebHost = 'github.com'
 const githubApiVersion = '2022-11-28'
 const maxResponseBytes = 256 * 1_024
-const maxInstallationTokenLifetimeMs = 60 * 60 * 1_000
 const maxPullRequestsPerLookup = 20
-const credentialPattern = /^[A-Za-z0-9._-]{16,8192}$/u
 const numericIdPattern = /^[1-9][0-9]{0,15}$/u
+const providerExpiryPattern = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{3}))?Z$/u
+const imfFixdatePattern = /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat), ([0-9]{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ([0-9]{4}) ([0-9]{2}):([0-9]{2}):([0-9]{2}) GMT$/u
+const imfFixdateWeekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const
+const imfFixdateMonths = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+] as const
+const providerExpiryObservationSafetyMarginMs = 2_000
 const idempotencyKeyPattern = /^github-delivery:([a-f0-9]{64})$/u
 const embeddedMarkerPrefix = '<!-- devflow-delivery:'
 
@@ -64,13 +86,22 @@ export class GitHubAppClientError extends Error {
   readonly code: GitHubAppClientErrorCode
   readonly retryable: boolean
   readonly status?: number
+  readonly credentialRevocationConfirmed: boolean
+  readonly providerCredentialAbsentConfirmed: boolean
 
-  constructor(code: GitHubAppClientErrorCode, status?: number) {
+  constructor(
+    code: GitHubAppClientErrorCode,
+    status?: number,
+    credentialRevocationConfirmed = false,
+    providerCredentialAbsentConfirmed = false,
+  ) {
     super(safeErrorMessages[code])
     this.name = 'GitHubAppClientError'
     this.code = code
     this.retryable =
       code === 'github_rate_limited' || code === 'github_timeout' || code === 'github_unavailable'
+    this.credentialRevocationConfirmed = credentialRevocationConfirmed
+    this.providerCredentialAbsentConfirmed = providerCredentialAbsentConfirmed
     if (status !== undefined) {
       this.status = status
     }
@@ -112,6 +143,10 @@ export type GitHubRepositoryAuthority = {
   repositoryId: string
 }
 
+export type GitHubCredentialIssuanceAuthority = GitHubRepositoryAuthority & {
+  issuanceDeadline: string
+}
+
 export type GitHubRepositoryContext = GitHubRepositoryAuthority & {
   repository: string
 }
@@ -126,8 +161,19 @@ export type VerifiedGitHubRepository = GitHubRepositoryContext & {
 export type GitHubRepositoryAccessToken = GitHubRepositoryAuthority & {
   token: string
   expiresAt: string
+  providerExpiresAt: string
   permissions: { contents: 'write' }
 }
+
+export type GitHubProviderCredentialExpiryObservationInput = Pick<
+  GitHubRepositoryAccessToken,
+  'installationId' | 'providerExpiresAt'
+>
+
+export type GitHubProviderCredentialExpiryObservation =
+  GitHubProviderCredentialExpiryObservationInput & {
+    providerObservedAt: string
+  }
 
 export type GitHubBranchHead = {
   repository: string
@@ -169,8 +215,11 @@ export type GitHubDraftPullRequestResolution = {
 
 export type GitHubAppClient = {
   issueContentsWriteToken(
-    input: GitHubRepositoryAuthority,
+    input: GitHubCredentialIssuanceAuthority,
   ): Promise<GitHubRepositoryAccessToken>
+  observeProviderCredentialExpiry(
+    input: GitHubProviderCredentialExpiryObservationInput,
+  ): Promise<GitHubProviderCredentialExpiryObservation>
   revokeInstallationAccessToken(token: string): Promise<void>
   verifyRepository(input: GitHubRepositoryAuthority): Promise<VerifiedGitHubRepository>
   getBranchHead(
@@ -190,6 +239,9 @@ type InstallationPermissionLevel = 'read' | 'write'
 type MintedInstallationToken = {
   token: string
   expiresAt: string
+  providerExpiresAt: string
+  installationId: string
+  repositoryId: string
 }
 
 type NormalizedRepositoryContext = GitHubRepositoryContext
@@ -210,8 +262,22 @@ type NormalizedDraftInput = NormalizedDraftIdentity & {
 function clientError(
   code: GitHubAppClientErrorCode,
   status?: number,
+  credentialRevocationConfirmed = false,
+  providerCredentialAbsentConfirmed = false,
 ): GitHubAppClientError {
-  return new GitHubAppClientError(code, status)
+  return new GitHubAppClientError(
+    code,
+    status,
+    credentialRevocationConfirmed,
+    providerCredentialAbsentConfirmed,
+  )
+}
+
+function confirmedAbsentError(error: unknown): GitHubAppClientError {
+  if (error instanceof GitHubAppClientError) {
+    return clientError(error.code, error.status, false, true)
+  }
+  return clientError('github_invalid_request', undefined, false, true)
 }
 
 function expectRecord(value: unknown): Record<string, unknown> {
@@ -336,6 +402,76 @@ function normalizeClockValue(clock: () => Date): Date {
   return value
 }
 
+function parseCanonicalIsoInstant(value: unknown, code: GitHubAppClientErrorCode): number {
+  if (typeof value !== 'string') {
+    throw clientError(code)
+  }
+  const instant = Date.parse(value)
+  if (!Number.isFinite(instant) || new Date(instant).toISOString() !== value) {
+    throw clientError(code)
+  }
+  return instant
+}
+
+function parseProviderExpiry(value: unknown): number {
+  if (typeof value !== 'string') {
+    throw clientError('github_malformed_response')
+  }
+  const match = providerExpiryPattern.exec(value)
+  if (!match) {
+    throw clientError('github_malformed_response')
+  }
+  const [, year, month, day, hour, minute, second, millisecond = '000'] = match
+  const normalized = `${year}-${month}-${day}T${hour}:${minute}:${second}.${millisecond}Z`
+  const instant = Date.parse(normalized)
+  if (!Number.isFinite(instant) || new Date(instant).toISOString() !== normalized) {
+    throw clientError('github_malformed_response')
+  }
+  return instant
+}
+
+function parseStrictImfFixdate(value: string | null): number {
+  if (value === null) {
+    throw clientError('github_malformed_response')
+  }
+  const match = imfFixdatePattern.exec(value)
+  if (!match) {
+    throw clientError('github_malformed_response')
+  }
+  const [, weekday, rawDay, month, rawYear, rawHour, rawMinute, rawSecond] = match
+  const day = Number(rawDay)
+  const monthIndex = imfFixdateMonths.indexOf(month as typeof imfFixdateMonths[number])
+  const year = Number(rawYear)
+  const hour = Number(rawHour)
+  const minute = Number(rawMinute)
+  const second = Number(rawSecond)
+  if (
+    monthIndex < 0 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59
+  ) {
+    throw clientError('github_malformed_response')
+  }
+
+  const parsed = new Date(0)
+  parsed.setUTCHours(0, 0, 0, 0)
+  parsed.setUTCFullYear(year, monthIndex, day)
+  parsed.setUTCHours(hour, minute, second, 0)
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== monthIndex ||
+    parsed.getUTCDate() !== day ||
+    parsed.getUTCHours() !== hour ||
+    parsed.getUTCMinutes() !== minute ||
+    parsed.getUTCSeconds() !== second ||
+    imfFixdateWeekdays[parsed.getUTCDay()] !== weekday
+  ) {
+    throw clientError('github_malformed_response')
+  }
+  return parsed.getTime()
+}
+
 function statusError(status: number): GitHubAppClientError {
   if (status === 401) {
     return clientError('github_unauthorized', status)
@@ -436,7 +572,7 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
   if (
     !Number.isSafeInteger(requestTimeoutMs) ||
     requestTimeoutMs < 10 ||
-    requestTimeoutMs > 120_000
+    requestTimeoutMs > GITHUB_CREDENTIAL_PROVIDER_MAX_MS
   ) {
     throw clientError('github_invalid_request')
   }
@@ -474,6 +610,62 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
         throw statusError(response.status)
       }
       return readBoundedJson(response)
+    })()
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true
+        controller.abort()
+        reject(clientError('github_timeout'))
+      }, requestTimeoutMs)
+    })
+    try {
+      return await Promise.race([operation, deadline])
+    } finally {
+      if (timer) clearTimeout(timer)
+      controller.abort()
+    }
+  }
+
+  const requestProviderExpiryObservation = async (
+    url: string,
+    authorization: string,
+  ): Promise<{ body: unknown; providerObservedAtMs: number }> => {
+    const controller = new AbortController()
+    let timedOut = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const operation = (async () => {
+      let response: Response
+      try {
+        response = await input.fetcher(url, {
+          method: 'GET',
+          headers: {
+            ...safeHeaders(authorization, false),
+            'cache-control': 'no-store',
+          },
+          cache: 'no-store',
+          redirect: 'error',
+          signal: controller.signal,
+        })
+      } catch {
+        throw clientError(timedOut ? 'github_timeout' : 'github_unavailable')
+      }
+
+      if (!(response instanceof Response)) {
+        throw clientError('github_malformed_response')
+      }
+      if (response.status !== 200) {
+        await response.body?.cancel().catch(() => undefined)
+        throw statusError(response.status)
+      }
+      if (response.redirected || response.url !== url) {
+        await response.body?.cancel().catch(() => undefined)
+        throw clientError('github_malformed_response')
+      }
+      const providerObservedAtMs = parseStrictImfFixdate(response.headers.get('date'))
+      return {
+        body: await readBoundedJson(response),
+        providerObservedAtMs,
+      }
     })()
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
@@ -541,7 +733,7 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
   }
 
   const revokeInstallationAccessToken = async (token: string): Promise<void> => {
-    if (typeof token !== 'string' || !credentialPattern.test(token)) {
+    if (!isGitHubCredentialToken(token)) {
       throw clientError('github_invalid_request')
     }
     try {
@@ -555,20 +747,43 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
     }
   }
 
-  const signAppJwt = async (): Promise<string> => {
+  const compensateProviderToken = async (token: string): Promise<void> => {
+    if (!/^[A-Za-z0-9._-]{16,16384}$/u.test(token)) {
+      throw clientError('github_credential_revocation_unconfirmed')
+    }
+    try {
+      await requestNoContent(`${githubApiBaseUrl}/installation/token`, {
+        method: 'DELETE',
+        authorization: `Bearer ${token}`,
+        expectedStatus: 204,
+      })
+    } catch {
+      throw clientError('github_credential_revocation_unconfirmed')
+    }
+  }
+
+  const signAppJwt = async (absoluteDeadlineMs?: number): Promise<string> => {
     const current = normalizeClockValue(input.clock)
     const nowSeconds = Math.floor(current.getTime() / 1_000)
+    // GitHub JWT expiry has whole-second precision. If the remaining authority
+    // cannot be represented by a future exp, fail closed before signing.
+    const deadlineSeconds = absoluteDeadlineMs === undefined
+      ? nowSeconds + 540
+      : Math.floor(absoluteDeadlineMs / 1_000)
+    if (deadlineSeconds <= nowSeconds) {
+      throw clientError('github_invalid_request')
+    }
     let token: string
     try {
       token = await input.signJwt({
         iss: input.appId,
         iat: nowSeconds - 60,
-        exp: nowSeconds + 540,
+        exp: Math.min(nowSeconds + 540, deadlineSeconds),
       })
     } catch {
       throw clientError('github_authentication_failed')
     }
-    if (typeof token !== 'string' || !credentialPattern.test(token)) {
+    if (!isGitHubCredentialToken(token)) {
       throw clientError('github_authentication_failed')
     }
     return token
@@ -578,9 +793,37 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
     authority: GitHubRepositoryAuthority,
     permission: InstallationPermission,
     level: InstallationPermissionLevel,
+    issuanceDeadline?: string,
   ): Promise<MintedInstallationToken> => {
-    const normalized = normalizeAuthority(authority)
-    const appJwt = await signAppJwt()
+    const tracksCredentialIssuance = permission === 'contents' && level === 'write'
+    let normalized: GitHubRepositoryAuthority
+    let appJwt: string
+    try {
+      normalized = normalizeAuthority(authority)
+      let absoluteDeadlineMs: number | undefined
+      if (tracksCredentialIssuance && issuanceDeadline === undefined) {
+        throw clientError('github_invalid_request')
+      }
+      if (issuanceDeadline !== undefined) {
+        absoluteDeadlineMs = Date.parse(issuanceDeadline)
+        if (
+          !Number.isFinite(absoluteDeadlineMs) ||
+          new Date(absoluteDeadlineMs).toISOString() !== issuanceDeadline
+        ) {
+          throw clientError('github_invalid_request')
+        }
+      }
+      appJwt = await signAppJwt(absoluteDeadlineMs)
+      if (
+        absoluteDeadlineMs !== undefined &&
+        normalizeClockValue(input.clock).getTime() >= absoluteDeadlineMs
+      ) {
+        throw clientError('github_invalid_request')
+      }
+    } catch (error) {
+      if (tracksCredentialIssuance) throw confirmedAbsentError(error)
+      throw error
+    }
     const response = expectRecord(
       await requestJson(
         `${githubApiBaseUrl}/app/installations/${normalized.installationId}/access_tokens`,
@@ -591,27 +834,35 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
             repository_ids: [Number(normalized.repositoryId)],
             permissions: { [permission]: level },
           },
-          expectedStatus: 200,
+          expectedStatus: 201,
         },
       ),
     )
 
     const token = expectString(response['token'])
-    if (!credentialPattern.test(token)) {
+    if (!/^[A-Za-z0-9._-]{16,}$/u.test(token)) {
       throw clientError('github_malformed_response')
     }
 
     try {
-      const rawExpiresAt = expectString(response['expires_at'])
-      const expirationMs = Date.parse(rawExpiresAt)
+      if (token.length > GITHUB_CREDENTIAL_TOKEN_MAX_LENGTH) {
+        throw clientError('github_malformed_response')
+      }
+      const expirationMs = parseProviderExpiry(response['expires_at'])
       const receivedAt = normalizeClockValue(input.clock)
       if (
-        !Number.isFinite(expirationMs) ||
-        expirationMs <= receivedAt.getTime() ||
-        expirationMs - receivedAt.getTime() > maxInstallationTokenLifetimeMs
+        expirationMs <= receivedAt.getTime()
       ) {
         throw clientError('github_scope_mismatch')
       }
+      // GitHub's one-hour lifetime starts on its clock when the credential is
+      // created. A local clock that trails GitHub by even a millisecond must not
+      // turn a valid response into a permanent issuance failure. Clamp the
+      // locally enforced lifetime instead: this can only shorten authority.
+      const enforcedExpirationMs = Math.min(
+        expirationMs,
+        receivedAt.getTime() + GITHUB_CREDENTIAL_MAX_TTL_MS,
+      )
 
       if (response['repository_selection'] !== 'selected') {
         throw clientError('github_scope_mismatch')
@@ -646,11 +897,17 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
 
       return {
         token,
-        expiresAt: new Date(expirationMs).toISOString(),
+        expiresAt: new Date(enforcedExpirationMs).toISOString(),
+        providerExpiresAt: new Date(expirationMs).toISOString(),
+        installationId: normalized.installationId,
+        repositoryId: normalized.repositoryId,
       }
     } catch (error) {
-      await revokeInstallationAccessToken(token)
-      throw error
+      await compensateProviderToken(token)
+      if (error instanceof GitHubAppClientError) {
+        throw clientError(error.code, error.status, true)
+      }
+      throw clientError('github_malformed_response', undefined, true)
     }
   }
 
@@ -900,14 +1157,77 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
 
   return {
     async issueContentsWriteToken(authority) {
-      const normalized = normalizeAuthority(authority)
-      const grant = await mintInstallationToken(normalized, 'contents', 'write')
+      let issuanceDeadline: string | undefined
+      try {
+        issuanceDeadline = authority.issuanceDeadline
+      } catch (error) {
+        throw confirmedAbsentError(error)
+      }
+      const grant = await mintInstallationToken(
+        authority,
+        'contents',
+        'write',
+        issuanceDeadline,
+      )
       return {
         token: grant.token,
         expiresAt: grant.expiresAt,
-        installationId: normalized.installationId,
-        repositoryId: normalized.repositoryId,
+        providerExpiresAt: grant.providerExpiresAt,
+        installationId: grant.installationId,
+        repositoryId: grant.repositoryId,
         permissions: { contents: 'write' },
+      }
+    },
+
+    async observeProviderCredentialExpiry(observationInput) {
+      let normalizedInstallationId: string
+      let normalizedProviderExpiresAt: string
+      let providerExpiresAtMs: number
+      let configuredAppId: string
+      try {
+        if (typeof observationInput !== 'object' || observationInput === null) {
+          throw clientError('github_invalid_request')
+        }
+        normalizedInstallationId = normalizeNumericId(observationInput.installationId)
+        normalizedProviderExpiresAt = observationInput.providerExpiresAt
+        providerExpiresAtMs = parseCanonicalIsoInstant(
+          normalizedProviderExpiresAt,
+          'github_invalid_request',
+        )
+        configuredAppId = normalizeNumericId(input.appId)
+      } catch (error) {
+        if (error instanceof GitHubAppClientError) throw error
+        throw clientError('github_invalid_request')
+      }
+
+      const appJwt = await signAppJwt()
+      const observation = await requestProviderExpiryObservation(
+        `${githubApiBaseUrl}/app/installations/${normalizedInstallationId}`,
+        `Bearer ${appJwt}`,
+      )
+      const body = expectRecord(observation.body)
+      const observedInstallationId = parseResponseNumericId(body['id'])
+      const observedAppId = parseResponseNumericId(body['app_id'])
+      if (
+        observedInstallationId !== normalizedInstallationId ||
+        observedAppId !== configuredAppId
+      ) {
+        throw clientError('github_conflict')
+      }
+
+      // Application safety premise: GitHub's HTTP Date is at most one second
+      // ahead of the clock used to validate this credential. HTTP does not
+      // supply that skew bound; the extra second is our fail-closed margin.
+      if (
+        observation.providerObservedAtMs <
+        providerExpiresAtMs + providerExpiryObservationSafetyMarginMs
+      ) {
+        throw clientError('github_conflict')
+      }
+      return {
+        installationId: normalizedInstallationId,
+        providerExpiresAt: normalizedProviderExpiresAt,
+        providerObservedAt: new Date(observation.providerObservedAtMs).toISOString(),
       }
     },
 

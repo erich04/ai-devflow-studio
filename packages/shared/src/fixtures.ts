@@ -718,7 +718,7 @@ title: Electron Demo Readiness Checklist
 category: review_checklist
 ownerId: u-erich
 tags: electron, demo, smoke, local, github-delivery
-summary: Electron demos should prove Desktop schema v16, production boundaries, governed GitHub Delivery, restart recovery, and credential containment.
+summary: Electron demos should prove Desktop schema v17, production boundaries, governed GitHub Delivery, restart recovery, and credential containment.
 ---
 
 # Electron Demo Readiness Checklist
@@ -730,7 +730,7 @@ Before using the desktop app for a demo or signoff, confirm the real Electron pa
 - Confirm Electron launched \`apps/desktop\`, not \`default_app.asar\`.
 - Confirm the intended desktop renderer is listening on \`127.0.0.1:5173\`.
 - Clear stale DevFlow listeners on \`5173\` before trusting a demo run.
-- Confirm the local SQLite database reports Desktop schema v16 and refuses an unknown newer schema.
+- Confirm the local SQLite database reports Desktop schema v17 and refuses an unknown newer schema.
 - Open the Workbench and select a Gate node to confirm Inspector state is live.
 - Use \`corepack pnpm test:electron-smoke\` for automated signoff of preload, main process, SQLite, and local execution behavior.
 - For V1.5 GitHub Delivery, prepare the Delivery Intent from the canonical managed worktree and one
@@ -763,7 +763,7 @@ title: Postgres Smoke Readiness Checklist
 category: review_checklist
 ownerId: u-erich
 tags: postgres, api, smoke, policy, github-delivery
-summary: Postgres smoke should prove Team schema v12, retained migration, governed GitHub Delivery, policy, sync, and redaction.
+summary: Postgres smoke should prove Team schema v13, retained migration, governed GitHub Delivery, policy, sync, and redaction.
 ---
 
 # Postgres Smoke Readiness Checklist
@@ -772,11 +772,14 @@ Use this checklist when API, repository, migration, policy, override, sync, GitH
 manager-summary code changes.
 
 - Set \`DEVFLOW_DATABASE_URL\` explicitly before running Postgres smoke.
-- Prove a disposable fresh database reaches Team schema v12.
+- Prove a disposable fresh database reaches Team schema v13.
 - Prove a populated v11-to-v12 migration retains exact repository binding, Delivery Request,
   approval, publication, recovery, and audit data.
 - Prove a failed v11-to-v12 migration rolls back transactionally and succeeds once on explicit
   retry without duplicating rows.
+- Prove a populated v12-to-v13 migration leaves each legacy issued credential at contract version
+  \`0\`, with \`provider_credential_expires_at\` and \`provider_expiry_observed_at\` NULL, and therefore
+  fail closed instead of fabricating provider-authoritative expiry confirmation.
 - Verify seeded team data can be read through the API repository boundary.
 - Verify policy save/read and enforcement evaluation behavior.
 - Verify override rejection for owner, member, and conflicted lead cases.

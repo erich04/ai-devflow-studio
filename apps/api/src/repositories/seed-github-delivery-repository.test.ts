@@ -284,6 +284,7 @@ async function createIssuedGrant(harness: ReturnType<typeof createHarness>) {
         status: 'issued',
         issuedAt: '2026-08-11T10:00:01.000Z',
         credentialExpiresAt: '2026-08-11T10:45:01.000Z',
+        providerCredentialExpiresAt: '2026-08-11T10:45:01.000Z',
         repositoryId: '98765',
         permission: 'contents:write',
         repositoryCount: 1,
@@ -292,7 +293,10 @@ async function createIssuedGrant(harness: ReturnType<typeof createHarness>) {
     desktopPrincipal,
   )
   if (!finalized.ok) throw new Error('fixture grant finalize failed')
-  return finalized
+  return {
+    ...finalized,
+    clearanceAuthority: reserved.clearanceAuthority,
+  }
 }
 
 async function createVerifiedPublication(
@@ -657,6 +661,553 @@ describe('seed GitHub Delivery repository', () => {
     expect(harness.repository.inspectForTests().grants).toHaveLength(0)
   })
 
+  it('quarantines an unresolved unissued grant indefinitely until exact confirmation', async () => {
+    const harness = createHarness()
+    const approved = await createApprovedDelivery(harness)
+    const reserved = await harness.repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: approved.request.id,
+        expectedStateVersion: approved.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+    if (!reserved.ok) throw new Error('fixture grant reservation failed')
+    await harness.repository.revokeGitHubRepositoryBinding(
+      { projectId: 'project-a', expectedStateVersion: 1 },
+      ownerPrincipal,
+    )
+    const expectedStateVersion = reserved.request.stateVersion + 1
+
+    await expect(
+      harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: reserved.request.id,
+          expectedStateVersion,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      responseStatus: 409,
+      outcomeCode: 'credential_revocation_pending',
+    })
+
+    const confirmed = await harness.repository.confirmGitHubCredentialClearance(
+      {
+        organizationId: 'org-a',
+        projectId: 'project-a',
+        requestId: reserved.request.id,
+        grantId: reserved.grant.id,
+        outcomeCode: 'credential_revocation_confirmed',
+      },
+      reserved.clearanceAuthority,
+    )
+    expect(confirmed).toMatchObject({
+      ok: true,
+      replayed: false,
+      outcomeCode: 'credential_revocation_confirmed',
+      grant: {
+        id: reserved.grant.id,
+        status: 'revoked',
+        outcomeCode: 'credential_revocation_confirmed',
+      },
+    })
+    await expect(
+      harness.repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: reserved.request.id,
+          grantId: reserved.grant.id,
+          outcomeCode: 'credential_revocation_confirmed',
+        },
+        reserved.clearanceAuthority,
+      ),
+    ).resolves.toMatchObject({ ok: true, replayed: true })
+    await expect(
+      harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: reserved.request.id,
+          expectedStateVersion,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'binding_inactive' })
+
+    const second = createHarness()
+    const secondApproved = await createApprovedDelivery(second)
+    const secondReserved = await second.repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: secondApproved.request.id,
+        expectedStateVersion: secondApproved.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+    if (!secondReserved.ok) throw new Error('fixture second reservation failed')
+    await second.repository.revokeGitHubRepositoryBinding(
+      { projectId: 'project-a', expectedStateVersion: 1 },
+      ownerPrincipal,
+    )
+    second.setTime('2036-08-11T11:09:00.000Z')
+    await expect(
+      second.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: secondReserved.request.id,
+          expectedStateVersion: secondReserved.request.stateVersion + 1,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      outcomeCode: 'credential_revocation_pending',
+    })
+  })
+
+  it('settles an issuing grant through its server capability after the Desktop bearer is revoked', async () => {
+    const harness = createHarness()
+    const approved = await createApprovedDelivery(harness)
+    const reserved = await harness.repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: approved.request.id,
+        expectedStateVersion: approved.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+    if (!reserved.ok) throw new Error('fixture grant reservation failed')
+    expect(Object.keys(reserved)).not.toContain('clearanceAuthority')
+    expect(JSON.stringify(reserved)).not.toMatch(
+      /clearanceAuthority|desktop-token-1/u,
+    )
+    harness.authorizedDesktopTokens.delete('org-a:project-a:desktop-token-1')
+
+    await expect(
+      harness.repository.finalizeGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: reserved.request.id,
+          grantId: reserved.grant.id,
+          expectedStateVersion: reserved.request.stateVersion,
+          expectedGrantVersion: reserved.grant.version,
+          outcome: {
+            status: 'failed',
+            outcomeCode: 'credential_issue_failed',
+          },
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'project_forbidden' })
+
+    const confirmed = await harness.repository.confirmGitHubCredentialClearance(
+      {
+        organizationId: 'org-a',
+        projectId: 'project-a',
+        requestId: reserved.request.id,
+        grantId: reserved.grant.id,
+        outcomeCode: 'credential_mint_absent_confirmed',
+      },
+      reserved.clearanceAuthority,
+    )
+    expect(confirmed).toMatchObject({
+      ok: true,
+      replayed: false,
+      outcomeCode: 'credential_mint_absent_confirmed',
+      request: {
+        id: reserved.request.id,
+        projectId: 'project-a',
+        stateVersion: reserved.request.stateVersion + 1,
+        status: 'failed',
+        outcomeCode: 'credential_issue_failed',
+      },
+      grant: {
+        id: reserved.grant.id,
+        requestId: reserved.request.id,
+        status: 'failed',
+        issuedAt: null,
+        credentialExpiresAt: null,
+        outcomeCode: 'credential_mint_absent_confirmed',
+      },
+    })
+    if (!confirmed.ok) throw new Error('fixture grant clearance failed')
+    harness.authorizedDesktopTokens.add('org-a:project-a:desktop-token-1')
+    await expect(
+      harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: confirmed.request.id,
+          expectedStateVersion: confirmed.request.stateVersion,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      replayed: false,
+      request: { status: 'publishing_branch' },
+      grant: { attempt: 2, status: 'issuing' },
+    })
+    await expect(
+      harness.repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: reserved.request.id,
+          grantId: reserved.grant.id,
+          outcomeCode: 'credential_mint_absent_confirmed',
+        },
+        reserved.clearanceAuthority,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      replayed: true,
+      outcomeCode: 'credential_mint_absent_confirmed',
+      grant: {
+        id: reserved.grant.id,
+        outcomeCode: 'credential_mint_absent_confirmed',
+      },
+    })
+  })
+
+  it('blocks a later delivery attempt while the same series has an unresolved credential', async () => {
+    const harness = createHarness()
+    const firstApproved = await createApprovedDelivery(harness)
+    const first = await harness.repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: firstApproved.request.id,
+        expectedStateVersion: firstApproved.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+    if (!first.ok) throw new Error('fixture first reservation failed')
+    const firstFailed = await harness.repository.finalizeGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: first.request.id,
+        grantId: first.grant.id,
+        expectedStateVersion: first.request.stateVersion,
+        expectedGrantVersion: first.grant.version,
+        outcome: {
+          status: 'failed',
+          outcomeCode: 'credential_issue_failed',
+        },
+      },
+      desktopPrincipal,
+    )
+    if (!firstFailed.ok) throw new Error('fixture first failure failed')
+    const secondIntent = deliveryIntent({
+      id: 'local-intent-2',
+      deliveryAttempt: 2,
+    })
+    const secondCreated = await harness.repository.createOrReviseGitHubDeliveryRequest(
+      {
+        projectId: 'project-a',
+        intent: secondIntent,
+        prTitle: 'Retry the reviewed change',
+        prBody: 'Bound to passing Test Evidence.',
+        expectedStateVersion: 0,
+      },
+      desktopPrincipal,
+    )
+    if (!secondCreated.ok) throw new Error('fixture second request failed')
+    const secondApproved = await harness.repository.decideGitHubDeliveryRequest(
+      {
+        projectId: 'project-a',
+        requestId: secondCreated.request.id,
+        decision: 'approve',
+        expectedStateVersion: secondCreated.request.stateVersion,
+      },
+      leadPrincipal,
+    )
+    if (!secondApproved.ok) throw new Error('fixture second approval failed')
+
+    await expect(
+      harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: secondApproved.request.id,
+          expectedStateVersion: secondApproved.request.stateVersion,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      outcomeCode: 'credential_revocation_pending',
+    })
+    expect(harness.repository.inspectForTests().grants).toEqual([
+      expect.objectContaining({
+        id: first.grant.id,
+        issuedAt: null,
+        outcomeCode: 'credential_issue_failed',
+      }),
+    ])
+
+    await harness.repository.confirmGitHubCredentialClearance(
+      {
+        organizationId: 'org-a',
+        projectId: 'project-a',
+        requestId: first.request.id,
+        grantId: first.grant.id,
+        outcomeCode: 'credential_mint_absent_confirmed',
+      },
+      first.clearanceAuthority,
+    )
+    await expect(
+      harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: secondApproved.request.id,
+          expectedStateVersion: secondApproved.request.stateVersion,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: true, grant: { attempt: 1 } })
+  })
+
+  it('blocks a different series on an updated active binding until its historical unissued grant is confirmed', async () => {
+    const harness = createHarness()
+    const first = await createApprovedDelivery(harness)
+    const reserved = await harness.repository.reserveGitHubCredentialGrant({
+      projectId: 'project-a',
+      requestId: first.request.id,
+      expectedStateVersion: first.request.stateVersion,
+    }, desktopPrincipal)
+    if (!reserved.ok) throw new Error('fixture first reserve failed')
+    harness.setTime('2026-08-11T10:01:00.000Z')
+    const updated = await harness.repository.upsertGitHubRepositoryBinding({
+      projectId: 'project-a',
+      installationId: '12345',
+      repositoryId: '98765',
+      repository: 'example/project',
+      defaultBranch: 'main',
+      verifiedAt: '2026-08-11T10:01:00.000Z',
+      expectedStateVersion: 1,
+    }, ownerPrincipal)
+    if (!updated.ok) throw new Error('fixture binding update failed')
+    const secondIntent = deliveryIntent({
+      id: 'local-intent-2',
+      repositoryBindingVersion: updated.binding.version,
+      workspaceId: 'workspace-2',
+      codingRunId: 'coding-2',
+      diffArtifactId: 'diff-2',
+      testEvidenceId: 'test-2',
+      prPackageArtifactId: 'package-2',
+    })
+    const second = await harness.repository.createOrReviseGitHubDeliveryRequest({
+      projectId: 'project-a',
+      intent: secondIntent,
+      prTitle: 'Second reviewed change',
+      prBody: 'Different series on the same binding identity.',
+      expectedStateVersion: 0,
+    }, desktopPrincipal)
+    if (!second.ok) throw new Error('fixture second request failed')
+    const approved = await harness.repository.decideGitHubDeliveryRequest({
+      projectId: 'project-a',
+      requestId: second.request.id,
+      decision: 'approve',
+      expectedStateVersion: second.request.stateVersion,
+    }, leadPrincipal)
+    if (!approved.ok) throw new Error('fixture second approval failed')
+    await expect(harness.repository.reserveGitHubCredentialGrant({
+      projectId: 'project-a',
+      requestId: second.request.id,
+      expectedStateVersion: approved.request.stateVersion,
+    }, desktopPrincipal)).resolves.toMatchObject({
+      ok: false,
+      outcomeCode: 'credential_revocation_pending',
+    })
+    const cleared = await harness.repository.confirmGitHubCredentialClearance({
+      organizationId: 'org-a',
+      projectId: 'project-a',
+      requestId: reserved.request.id,
+      grantId: reserved.grant.id,
+      outcomeCode: 'credential_mint_absent_confirmed',
+    }, reserved.clearanceAuthority)
+    if (!cleared.ok) throw new Error('fixture old grant confirmation failed')
+    await expect(harness.repository.reserveGitHubCredentialGrant({
+      projectId: 'project-a',
+      requestId: second.request.id,
+      expectedStateVersion: approved.request.stateVersion,
+    }, desktopPrincipal)).resolves.toMatchObject({
+      ok: true,
+      replayed: false,
+      grant: { status: 'issuing', attempt: 1 },
+    })
+  })
+
+  it('clears one exact issued commit after provider revocation but never treats it as mint absence', async () => {
+    const harness = createHarness()
+    const issued = await createIssuedGrant(harness)
+    await expect(
+      harness.repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: issued.request.id,
+          grantId: issued.grant.id,
+          outcomeCode: 'credential_mint_absent_confirmed',
+        },
+        issued.clearanceAuthority,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'grant_conflict' })
+
+    const cleared =
+      await harness.repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: issued.request.id,
+          grantId: issued.grant.id,
+          outcomeCode: 'credential_revocation_confirmed',
+        },
+        issued.clearanceAuthority,
+      )
+    expect(cleared).toMatchObject({
+      ok: true,
+      replayed: false,
+      request: {
+        stateVersion: issued.request.stateVersion + 1,
+        status: 'failed',
+        outcomeCode: 'credential_issue_failed',
+      },
+      grant: {
+        version: issued.grant.version + 1,
+        status: 'revoked',
+        issuedAt: issued.grant.issuedAt,
+        credentialExpiresAt: issued.grant.credentialExpiresAt,
+        consumedAt: null,
+        outcomeCode: 'credential_revocation_confirmed',
+      },
+    })
+    if (!cleared.ok) throw new Error('fixture issued clearance failed')
+    await expect(
+      harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: cleared.request.id,
+          expectedStateVersion: cleared.request.stateVersion,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      replayed: false,
+      grant: { attempt: 2, status: 'issuing' },
+    })
+  })
+
+  it('accepts only the exact repository-issued capability and exact reservation scope', async () => {
+    const harness = createHarness()
+    const approved = await createApprovedDelivery(harness)
+    const reserved = await harness.repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: approved.request.id,
+        expectedStateVersion: approved.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+    if (!reserved.ok) throw new Error('fixture grant reservation failed')
+
+    await expect(
+      harness.repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: reserved.request.id,
+          grantId: reserved.grant.id,
+          outcomeCode: 'credential_revocation_confirmed',
+        },
+        Object.freeze(Object.create(null)) as typeof reserved.clearanceAuthority,
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      outcomeCode: 'authentication_forbidden',
+    })
+    const otherRepositoryInstance = createHarness()
+    await expect(
+      otherRepositoryInstance.repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: reserved.request.id,
+          grantId: reserved.grant.id,
+          outcomeCode: 'credential_revocation_confirmed',
+        },
+        reserved.clearanceAuthority,
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      outcomeCode: 'authentication_forbidden',
+    })
+    await expect(
+      harness.repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-other',
+          projectId: 'project-a',
+          requestId: reserved.request.id,
+          grantId: reserved.grant.id,
+          outcomeCode: 'credential_revocation_confirmed',
+        },
+        reserved.clearanceAuthority,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'project_forbidden' })
+    expect(
+      harness.repository.inspectForTests().grants.find(
+        (grant) => grant.id === reserved.grant.id,
+      ),
+    ).toMatchObject({ status: 'issuing', outcomeCode: null })
+
+    const failed = await harness.repository.finalizeGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: reserved.request.id,
+        grantId: reserved.grant.id,
+        expectedStateVersion: reserved.request.stateVersion,
+        expectedGrantVersion: reserved.grant.version,
+        outcome: {
+          status: 'failed',
+          outcomeCode: 'credential_issue_failed',
+        },
+      },
+      desktopPrincipal,
+    )
+    if (!failed.ok) throw new Error('fixture grant failure finalization failed')
+
+    await expect(
+      harness.repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: reserved.request.id,
+          grantId: reserved.grant.id,
+          outcomeCode: 'credential_revocation_confirmed',
+        },
+        reserved.clearanceAuthority,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      outcomeCode: 'credential_revocation_confirmed',
+      grant: { status: 'failed' },
+    })
+    await expect(
+      harness.repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: reserved.request.id,
+          grantId: reserved.grant.id,
+          outcomeCode: 'credential_mint_absent_confirmed',
+        },
+        reserved.clearanceAuthority,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'grant_conflict' })
+  })
+
   it('returns one redacted recovery snapshot for the exact paired Desktop claimant', async () => {
     const harness = createHarness()
     const issued = await createIssuedGrant(harness)
@@ -687,7 +1238,7 @@ describe('seed GitHub Delivery repository', () => {
     )
   })
 
-  it('reserves one bounded replacement credential after an issued response is lost', async () => {
+  it('does not replace a still-live issued credential after its response is lost', async () => {
     const harness = createHarness()
     const issued = await createIssuedGrant(harness)
 
@@ -702,88 +1253,197 @@ describe('seed GitHub Delivery repository', () => {
 
     expect(replacement).toMatchObject({
       ok: true,
-      replayed: false,
-      outcomeCode: 'grant_reserved',
-      request: { status: 'publishing_branch' },
-      grant: { attempt: 2, status: 'issuing', redacted: true },
+      replayed: true,
+      request: issued.request,
+      grant: issued.grant,
     })
-    expect(harness.repository.inspectForTests().grants).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: issued.grant.id,
-          status: 'failed',
-          outcomeCode: 'credential_superseded',
-        }),
-      ]),
-    )
+    expect(harness.repository.inspectForTests().grants).toEqual([
+      expect.objectContaining({
+        id: issued.grant.id,
+        status: 'issued',
+        outcomeCode: null,
+      }),
+    ])
   })
 
-  it('fails closed after three credential attempts for one approved intent revision', async () => {
+  it('releases an issued response-loss quarantine only from an exact provider expiry observation', async () => {
     const harness = createHarness()
-    const first = await createIssuedGrant(harness)
-    const second = await harness.repository.reserveGitHubCredentialGrant(
+    const issued = await createIssuedGrant(harness)
+    const replayed = await harness.repository.reserveGitHubCredentialGrant(
       {
         projectId: 'project-a',
-        requestId: first.request.id,
-        expectedStateVersion: first.request.stateVersion,
+        requestId: issued.request.id,
+        expectedStateVersion: issued.request.stateVersion,
       },
       desktopPrincipal,
     )
-    if (!second.ok) throw new Error('fixture second grant reservation failed')
-    const secondIssued = await harness.repository.finalizeGitHubCredentialGrant(
+    if (!replayed.ok) throw new Error('fixture grant replay failed')
+
+    const confirmed = await harness.repository.confirmGitHubCredentialProviderExpiry(
       {
+        organizationId: 'org-a',
         projectId: 'project-a',
-        requestId: first.request.id,
-        grantId: second.grant.id,
-        expectedStateVersion: second.request.stateVersion,
-        expectedGrantVersion: second.grant.version,
-        outcome: {
-          status: 'issued',
-          issuedAt: '2026-08-11T10:00:02.000Z',
-          credentialExpiresAt: '2026-08-11T10:45:02.000Z',
-          repositoryId: '98765',
-          permission: 'contents:write',
-          repositoryCount: 1,
+        requestId: replayed.request.id,
+        grantId: replayed.grant.id,
+        providerCredentialExpiresAt: '2026-08-11T10:45:01.000Z',
+        providerExpiryObservedAt: '2026-08-11T10:45:03.000Z',
+      },
+      replayed.clearanceAuthority,
+    )
+
+    expect(confirmed).toMatchObject({
+      ok: true,
+      replayed: false,
+      outcomeCode: 'credential_provider_expiry_confirmed',
+      request: {
+        stateVersion: issued.request.stateVersion + 1,
+        status: 'recovery_required',
+        outcomeCode: 'credential_issue_failed',
+      },
+      grant: {
+        version: issued.grant.version + 1,
+        status: 'expired',
+        providerExpiryContractVersion: 1,
+        providerCredentialExpiresAt: '2026-08-11T10:45:01.000Z',
+        providerExpiryObservedAt: '2026-08-11T10:45:03.000Z',
+        outcomeCode: 'credential_provider_expiry_confirmed',
+      },
+    })
+    await expect(
+      harness.repository.confirmGitHubCredentialProviderExpiry(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: replayed.request.id,
+          grantId: replayed.grant.id,
+          providerCredentialExpiresAt: '2026-08-11T10:45:01.000Z',
+          providerExpiryObservedAt: '2026-08-11T10:45:03.000Z',
         },
-      },
-      desktopPrincipal,
-    )
-    if (!secondIssued.ok) throw new Error('fixture second grant finalization failed')
-    const third = await harness.repository.reserveGitHubCredentialGrant(
-      {
-        projectId: 'project-a',
-        requestId: first.request.id,
-        expectedStateVersion: secondIssued.request.stateVersion,
-      },
-      desktopPrincipal,
-    )
-    if (!third.ok) throw new Error('fixture third grant reservation failed')
-    const thirdIssued = await harness.repository.finalizeGitHubCredentialGrant(
-      {
-        projectId: 'project-a',
-        requestId: first.request.id,
-        grantId: third.grant.id,
-        expectedStateVersion: third.request.stateVersion,
-        expectedGrantVersion: third.grant.version,
-        outcome: {
-          status: 'issued',
-          issuedAt: '2026-08-11T10:00:03.000Z',
-          credentialExpiresAt: '2026-08-11T10:45:03.000Z',
-          repositoryId: '98765',
-          permission: 'contents:write',
-          repositoryCount: 1,
-        },
-      },
-      desktopPrincipal,
-    )
-    if (!thirdIssued.ok) throw new Error('fixture third grant finalization failed')
+        replayed.clearanceAuthority,
+      ),
+    ).resolves.toMatchObject({ ok: true, replayed: true })
+    if (!confirmed.ok) throw new Error('fixture provider expiry confirmation failed')
 
     await expect(
       harness.repository.reserveGitHubCredentialGrant(
         {
           projectId: 'project-a',
-          requestId: first.request.id,
-          expectedStateVersion: thirdIssued.request.stateVersion,
+          requestId: issued.request.id,
+          expectedStateVersion: confirmed.request.stateVersion,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      replayed: false,
+      grant: { status: 'issuing', attempt: 2 },
+    })
+  })
+
+  it.each([
+    [
+      'an early observation',
+      '2026-08-11T10:45:01.000Z',
+      '2026-08-11T10:45:02.999Z',
+    ],
+    [
+      'a mismatched raw expiry',
+      '2026-08-11T10:45:00.000Z',
+      '2026-08-11T10:45:03.000Z',
+    ],
+  ])('fails closed on provider expiry confirmation from %s', async (
+    _case,
+    providerCredentialExpiresAt,
+    providerExpiryObservedAt,
+  ) => {
+    const harness = createHarness()
+    const issued = await createIssuedGrant(harness)
+    const replayed = await harness.repository.reserveGitHubCredentialGrant({
+      projectId: 'project-a',
+      requestId: issued.request.id,
+      expectedStateVersion: issued.request.stateVersion,
+    }, desktopPrincipal)
+    if (!replayed.ok) throw new Error('fixture replay failed')
+    await expect(harness.repository.confirmGitHubCredentialProviderExpiry({
+      organizationId: 'org-a',
+      projectId: 'project-a',
+      requestId: issued.request.id,
+      grantId: issued.grant.id,
+      providerCredentialExpiresAt,
+      providerExpiryObservedAt,
+    }, replayed.clearanceAuthority)).resolves.toMatchObject({ ok: false })
+    expect(harness.repository.inspectForTests().grants).toMatchObject([
+      { id: issued.grant.id, status: 'issued', outcomeCode: null },
+    ])
+  })
+
+  it('rejects a forged provider expiry capability', async () => {
+    const harness = createHarness()
+    const issued = await createIssuedGrant(harness)
+    await expect(harness.repository.confirmGitHubCredentialProviderExpiry({
+      organizationId: 'org-a',
+      projectId: 'project-a',
+      requestId: issued.request.id,
+      grantId: issued.grant.id,
+      providerCredentialExpiresAt: '2026-08-11T10:45:01.000Z',
+      providerExpiryObservedAt: '2026-08-11T10:45:03.000Z',
+    }, Object.freeze(Object.create(null)) as typeof issued.clearanceAuthority))
+      .resolves.toMatchObject({
+        ok: false,
+        outcomeCode: 'authentication_forbidden',
+      })
+  })
+
+  it('fails closed after three credential attempts for one approved intent revision', async () => {
+    const harness = createHarness()
+    const approved = await createApprovedDelivery(harness)
+    let currentRequest = approved.request
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const reserved = await harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: currentRequest.id,
+          expectedStateVersion: currentRequest.stateVersion,
+        },
+        desktopPrincipal,
+      )
+      if (!reserved.ok) throw new Error(`fixture grant ${attempt} reservation failed`)
+      expect(reserved.grant.attempt).toBe(attempt)
+      const failed = await harness.repository.finalizeGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: currentRequest.id,
+          grantId: reserved.grant.id,
+          expectedStateVersion: reserved.request.stateVersion,
+          expectedGrantVersion: reserved.grant.version,
+          outcome: {
+            status: 'failed',
+            outcomeCode: 'credential_issue_failed',
+          },
+        },
+        desktopPrincipal,
+      )
+      if (!failed.ok) throw new Error(`fixture grant ${attempt} failure failed`)
+      const cleared = await harness.repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: currentRequest.id,
+          grantId: reserved.grant.id,
+          outcomeCode: 'credential_mint_absent_confirmed',
+        },
+        reserved.clearanceAuthority,
+      )
+      if (!cleared.ok) throw new Error(`fixture grant ${attempt} clearance failed`)
+      currentRequest = failed.request
+    }
+
+    await expect(
+      harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: currentRequest.id,
+          expectedStateVersion: currentRequest.stateVersion,
         },
         desktopPrincipal,
       ),
@@ -1238,6 +1898,7 @@ describe('seed GitHub Delivery repository', () => {
           status: 'issued',
           issuedAt: '2026-08-11T10:00:01.000Z',
           credentialExpiresAt: '2026-08-11T10:45:01.000Z',
+          providerCredentialExpiresAt: '2026-08-11T10:45:01.000Z',
           repositoryId: '98765',
           permission: 'contents:write',
           repositoryCount: 1,
@@ -1262,7 +1923,7 @@ describe('seed GitHub Delivery repository', () => {
     )
   })
 
-  it('creates a numbered manual grant retry after a recoverable issuance failure', async () => {
+  it('does not replace an ambiguous recoverable issuance failure', async () => {
     const harness = createHarness()
     const approved = await createApprovedDelivery(harness)
     const first = await harness.repository.reserveGitHubCredentialGrant(
@@ -1299,18 +1960,105 @@ describe('seed GitHub Delivery repository', () => {
       desktopPrincipal,
     )
     expect(retried).toMatchObject({
-      ok: true,
+      ok: false,
       replayed: false,
-      request: { status: 'publishing_branch', outcomeCode: null },
-      grant: { attempt: 2, status: 'issuing', outcomeCode: null },
+      outcomeCode: 'credential_revocation_pending',
     })
     expect(harness.repository.inspectForTests().grants).toMatchObject([
-      { id: first.grant.id, status: 'failed', attempt: 1 },
-      { status: 'issuing', attempt: 2 },
+      { id: first.grant.id, status: 'recovery_required', attempt: 1 },
     ])
+
+    const cleared = await harness.repository.confirmGitHubCredentialClearance(
+      {
+        organizationId: 'org-a',
+        projectId: 'project-a',
+        requestId: first.request.id,
+        grantId: first.grant.id,
+        outcomeCode: 'credential_revocation_confirmed',
+      },
+      first.clearanceAuthority,
+    )
+    expect(cleared).toMatchObject({
+      ok: true,
+      grant: {
+        status: 'failed',
+        issuedAt: null,
+        outcomeCode: 'credential_revocation_confirmed',
+      },
+    })
+    if (!cleared.ok) throw new Error('fixture recovery clearance failed')
+    await expect(
+      harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: cleared.request.id,
+          expectedStateVersion: cleared.request.stateVersion,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      replayed: false,
+      grant: { attempt: 2, status: 'issuing' },
+    })
   })
 
-  it('leases an issuing credential reservation and recovers it with one new attempt', async () => {
+  it('creates a new attempt only after provider absence is durably confirmed', async () => {
+    const harness = createHarness()
+    const approved = await createApprovedDelivery(harness)
+    const first = await harness.repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: approved.request.id,
+        expectedStateVersion: approved.request.stateVersion,
+      },
+      desktopPrincipal,
+    )
+    if (!first.ok) throw new Error('fixture grant reservation failed')
+    const failed = await harness.repository.finalizeGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: approved.request.id,
+        grantId: first.grant.id,
+        expectedStateVersion: first.request.stateVersion,
+        expectedGrantVersion: first.grant.version,
+        outcome: {
+          status: 'failed',
+          outcomeCode: 'credential_issue_failed',
+        },
+      },
+      desktopPrincipal,
+    )
+    if (!failed.ok) throw new Error('fixture grant failure failed')
+    const cleared = await harness.repository.confirmGitHubCredentialClearance(
+      {
+        organizationId: 'org-a',
+        projectId: 'project-a',
+        requestId: approved.request.id,
+        grantId: first.grant.id,
+        outcomeCode: 'credential_mint_absent_confirmed',
+      },
+      first.clearanceAuthority,
+    )
+    if (!cleared.ok) throw new Error('fixture absence confirmation failed')
+
+    await expect(
+      harness.repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: approved.request.id,
+          expectedStateVersion: failed.request.stateVersion,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      replayed: false,
+      grant: { attempt: 2, status: 'issuing' },
+    })
+  })
+
+  it('never replaces an ambiguous issuing credential solely because its lease elapsed', async () => {
     const harness = createHarness()
     const approved = await createApprovedDelivery(harness)
     const first = await harness.repository.reserveGitHubCredentialGrant(
@@ -1344,20 +2092,14 @@ describe('seed GitHub Delivery repository', () => {
       },
       desktopPrincipal,
     )
-    expect(recovered).toMatchObject({
-      ok: true,
-      replayed: false,
-      request: { stateVersion: 4, status: 'publishing_branch' },
-      grant: { attempt: 2, status: 'issuing' },
-    })
+    expect(recovered).toEqual({ ...first, replayed: true })
     expect(harness.repository.inspectForTests().grants).toMatchObject([
       {
         id: first.grant.id,
-        version: 2,
-        status: 'failed',
-        outcomeCode: 'credential_issue_failed',
+        version: 1,
+        status: 'issuing',
+        outcomeCode: null,
       },
-      { attempt: 2, status: 'issuing' },
     ])
 
     await expect(
@@ -1375,7 +2117,7 @@ describe('seed GitHub Delivery repository', () => {
         },
         desktopPrincipal,
       ),
-    ).resolves.toMatchObject({ ok: false, outcomeCode: 'stale_version' })
+    ).resolves.toMatchObject({ ok: true, outcomeCode: 'grant_finalized' })
   })
 
   it('fails closed when an issuing credential outlives its delivery request', async () => {
@@ -1431,6 +2173,7 @@ describe('seed GitHub Delivery repository', () => {
             status: 'issued',
             issuedAt: '2026-08-11T10:10:01.000Z',
             credentialExpiresAt: '2026-08-11T11:10:01.000Z',
+            providerCredentialExpiresAt: '2026-08-11T11:10:01.000Z',
             repositoryId: '98765',
             permission: 'contents:write',
             repositoryCount: 1,
@@ -1612,7 +2355,7 @@ describe('seed GitHub Delivery repository', () => {
     })
   })
 
-  it('reserves a new credential attempt after a consumed publication enters recovery', async () => {
+  it('never replaces a consumed credential without provider clearance', async () => {
     const harness = createHarness()
     const issued = await createIssuedGrant(harness)
     harness.setTime('2026-08-11T10:01:00.000Z')
@@ -1658,10 +2401,12 @@ describe('seed GitHub Delivery repository', () => {
       ),
     ).resolves.toMatchObject({
       ok: true,
-      replayed: false,
-      request: { status: 'publishing_branch', outcomeCode: null },
-      grant: { attempt: 2, status: 'issuing' },
+      replayed: true,
+      request: { status: 'recovery_required' },
+      grant: { attempt: 1, status: 'consumed' },
     })
+
+    expect(harness.repository.inspectForTests().grants).toHaveLength(1)
   })
 
   it('rechecks canonical Run authority after remote branch lookup and before finalization', async () => {

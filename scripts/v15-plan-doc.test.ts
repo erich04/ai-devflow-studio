@@ -57,7 +57,7 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(plan).toContain('2.x implementation remains blocked')
   })
 
-  it('defines the post-revocation issuance linearization and conservative quarantine guarantee', () => {
+  it('defines the post-revocation issuance linearization and confirmation-only quarantine guarantee', () => {
     const prd = read('docs/product/prd/v1.5-github-delivery-prd.md')
     const plan = read('docs/plans/v1.5-github-delivery.md')
     const walkthrough = read('docs/guides/devflow-studio-v1.5-walkthrough.md')
@@ -67,14 +67,18 @@ describe('v1.5 GitHub Delivery contract', () => {
       expect(contract).toContain('issuance linearization point')
       expect(contract).toContain('credential_revocation_pending')
       expect(contract).toContain('non-secret quarantine marker')
-      expect(contract).toContain('69 minutes')
+      expect(contract).toContain('credential-absence-or-revocation confirmation')
+      expect(contract).toContain('pre-POST credential absence')
+      expect(contract).toMatch(/exact-`204`\s+provider\s+revocation\s+is\s+durably\s+confirmed/u)
       expect(contract).toContain('exact `204`')
-      expect(contract).toContain('confirmed or expired')
+      expect(contract).toMatch(/must\s+not\s+be\s+cleared\s+by\s+elapsed\s+time/u)
       expect(contract).toContain('never persisted')
+      expect(contract).not.toContain('69 minutes')
+      expect(contract).not.toContain('confirmed or expired')
     }
 
     expect(walkthrough).toContain('credential_revocation_pending')
-    expect(walkthrough).toContain('wait and retry **Verify credential revocation**')
+    expect(walkthrough).toMatch(/wait\s+and\s+retry\s+\*\*Verify credential revocation\*\*/u)
     expect(walkthrough).toContain('must not bypass quarantine')
     expect(walkthrough).toContain('does not claim that every pre-revocation credential is invalid')
     expect(walkthrough).toContain('post-revocation new issuance')
@@ -144,6 +148,7 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(walkthrough).toContain('"testEvidenceDigest"')
     expect(walkthrough).toContain('"prPackageDigest"')
     expect(walkthrough).toContain('"revocationProof"')
+    expect(walkthrough).toContain('"proofStateVersion": 2')
     expect(walkthrough).toContain('"intentId"')
     expect(walkthrough).toContain('"revokedBindingVersion"')
     expect(walkthrough).toContain('"outcomeCode": "binding_inactive"')
@@ -155,6 +160,7 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(walkthrough).toContain('variant nibble `8`, `9`, `a`, or `b`')
     expect(walkthrough).toContain('same UTC calendar date')
     expect(walkthrough).toContain('exactly one `Revocation proof:` line')
+    expect(walkthrough).toContain('Revocation proof: state version 2;')
     expect(walkthrough).toContain('git rev-parse S^1')
     expect(walkthrough).toContain('git diff --name-only C..S')
     expect(walkthrough).toContain('release:status -- --mode=pre-tag')

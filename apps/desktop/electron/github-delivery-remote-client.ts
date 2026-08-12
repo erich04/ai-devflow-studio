@@ -1,6 +1,7 @@
 import {
   assertFullGitCommitSha,
   assertSafeGitHubBranch,
+  isGitHubCredentialToken,
   normalizeGitHubRepository,
   type GitHubDeliveryIntent,
   type GitHubDeliveryStatus,
@@ -50,6 +51,7 @@ export type GitHubDeliveryRejectionOutcome =
   | 'not_found'
   | 'stale_version'
   | 'binding_inactive'
+  | 'credential_revocation_pending'
   | 'binding_conflict'
   | 'invalid_state'
   | 'intent_conflict'
@@ -258,12 +260,18 @@ export type GitHubCredentialGrantRecord = {
   requestedAt: string
   issuedAt: string | null
   credentialExpiresAt: string | null
+  providerExpiryContractVersion: 0 | 1
+  providerCredentialExpiresAt: string | null
+  providerExpiryObservedAt: string | null
   consumedAt: string | null
   outcomeCode:
     | 'credential_issue_failed'
     | 'credential_expired'
     | 'credential_superseded'
     | 'binding_revoked'
+    | 'credential_revocation_confirmed'
+    | 'credential_mint_absent_confirmed'
+    | 'credential_provider_expiry_confirmed'
     | null
   redacted: true
 }
@@ -300,6 +308,9 @@ export type GitHubCredentialGrantInput = {
 export type VerifyGitHubCredentialGrantBlockedResult = {
   status: 'blocked'
   outcomeCode: 'binding_inactive'
+} | {
+  status: 'pending'
+  outcomeCode: 'credential_revocation_pending'
 }
 
 export type GitHubCredentialPublishResult = {
@@ -555,6 +566,9 @@ const grantKeys = [
   'requestedAt',
   'issuedAt',
   'credentialExpiresAt',
+  'providerExpiryContractVersion',
+  'providerCredentialExpiresAt',
+  'providerExpiryObservedAt',
   'consumedAt',
   'outcomeCode',
   'redacted',
@@ -651,6 +665,9 @@ const credentialGrantOutcomeCodes = new Set([
   'credential_expired',
   'credential_superseded',
   'binding_revoked',
+  'credential_revocation_confirmed',
+  'credential_mint_absent_confirmed',
+  'credential_provider_expiry_confirmed',
 ])
 const branchPublicationStatuses = new Set([
   'verifying',
@@ -683,6 +700,8 @@ const defaultTimeoutMs = 15_000
 const maximumTimeoutMs = 30_000
 const bindingInactiveRejectionMessage =
   'The Project GitHub repository binding is not active.'
+const credentialRevocationPendingMessage =
+  'GitHub credential revocation remains conservatively quarantined.'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -931,6 +950,27 @@ function parseSubmitIntent(value: unknown): GitHubDeliveryIntent | null {
 
 function parseCredentialGrant(value: unknown): GitHubCredentialGrantRecord | null {
   if (!isRecord(value) || !hasExactKeys(value, grantKeys)) return null
+  const providerCredentialExpiresAt = value.providerCredentialExpiresAt
+  const providerExpiryObservedAt = value.providerExpiryObservedAt
+  const credentialExpiresAt = value.credentialExpiresAt
+  const issuedAt = value.issuedAt
+  const providerContractIsValid =
+    value.providerExpiryContractVersion === 0
+      ? providerCredentialExpiresAt === null &&
+        providerExpiryObservedAt === null &&
+        value.outcomeCode !== 'credential_provider_expiry_confirmed'
+      : value.providerExpiryContractVersion === 1 &&
+        isCanonicalDate(issuedAt) &&
+        isCanonicalDate(credentialExpiresAt) &&
+        isCanonicalDate(providerCredentialExpiresAt) &&
+        Date.parse(credentialExpiresAt) <= Date.parse(providerCredentialExpiresAt) &&
+        (providerExpiryObservedAt === null
+          ? value.outcomeCode !== 'credential_provider_expiry_confirmed'
+          : isCanonicalDate(providerExpiryObservedAt) &&
+            value.status === 'expired' &&
+            value.outcomeCode === 'credential_provider_expiry_confirmed' &&
+            Date.parse(providerExpiryObservedAt) >=
+              Date.parse(providerCredentialExpiresAt) + 2_000)
   if (
     !isIdentifier(value.id) ||
     !isIdentifier(value.requestId) ||
@@ -945,9 +985,9 @@ function parseCredentialGrant(value: unknown): GitHubCredentialGrantRecord | nul
     typeof value.status !== 'string' ||
     !credentialGrantStatuses.has(value.status) ||
     !isCanonicalDate(value.requestedAt) ||
-    (value.issuedAt !== null && !isCanonicalDate(value.issuedAt)) ||
-    (value.credentialExpiresAt !== null &&
-      !isCanonicalDate(value.credentialExpiresAt)) ||
+    (issuedAt !== null && !isCanonicalDate(issuedAt)) ||
+    (credentialExpiresAt !== null && !isCanonicalDate(credentialExpiresAt)) ||
+    !providerContractIsValid ||
     (value.consumedAt !== null && !isCanonicalDate(value.consumedAt)) ||
     (value.outcomeCode !== null &&
       (typeof value.outcomeCode !== 'string' ||
@@ -1007,7 +1047,7 @@ function parseCredential(value: unknown): Omit<EphemeralGitHubDeliveryCredential
     !isIdentifier(value.grantId) ||
     value.username !== 'x-access-token' ||
     typeof value.token !== 'string' ||
-    !/^[A-Za-z0-9._-]{16,5000}$/u.test(value.token) ||
+    !isGitHubCredentialToken(value.token) ||
     !isCanonicalDate(value.expiresAt) ||
     typeof value.repositoryId !== 'string' ||
     !numericGitHubIdPattern.test(value.repositoryId) ||
@@ -1291,6 +1331,7 @@ const rejectionOutcomes = new Set<GitHubDeliveryRejectionOutcome>([
   'not_found',
   'stale_version',
   'binding_inactive',
+  'credential_revocation_pending',
   'binding_conflict',
   'invalid_state',
   'intent_conflict',
@@ -1855,9 +1896,22 @@ export function createGitHubDeliveryRemoteClient(
               'replayed',
             ]) ||
             body.error !== 'conflict' ||
-            body.message !== bindingInactiveRejectionMessage ||
-            body.outcomeCode !== 'binding_inactive' ||
             body.replayed !== false
+          ) {
+            throw invalid(operation, 'invalid_response', response.status, false)
+          }
+          if (
+            body.message === credentialRevocationPendingMessage &&
+            body.outcomeCode === 'credential_revocation_pending'
+          ) {
+            return {
+              status: 'pending' as const,
+              outcomeCode: 'credential_revocation_pending' as const,
+            }
+          }
+          if (
+            body.message !== bindingInactiveRejectionMessage ||
+            body.outcomeCode !== 'binding_inactive'
           ) {
             throw invalid(operation, 'invalid_response', response.status, false)
           }

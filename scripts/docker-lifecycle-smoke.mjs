@@ -79,9 +79,9 @@ function runDocker(args, options = {}) {
   return execute('docker', args, options)
 }
 
-async function expectDockerFailure(args) {
+async function expectDockerFailure(args, options = {}) {
   try {
-    await runDocker(args)
+    await runDocker(args, options)
   } catch (error) {
     return error
   }
@@ -391,7 +391,7 @@ async function expectColumnMissing(database, table, column) {
   )
   expect(
     result.stdout.trim() === '0',
-    `${database}.${table}.${column} remained after the failed transactional migration.`,
+    `${database}.${table}.${column} was present when it should be absent.`,
   )
 }
 
@@ -528,6 +528,121 @@ async function assertRetainedV11DeliveryAfterV12(snapshotBeforeV12Retry) {
   )
 }
 
+async function prepareV12LegacyIssuedCredentialFixture() {
+  await psql(
+    FAILURE_DATABASE,
+    `INSERT INTO github_delivery_approvals (
+       id, request_id, intent_revision, request_state_version, intent_digest,
+       binding_id, binding_version, run_id, run_version, node_id,
+       repository_id, base_branch, head_branch, expected_commit_sha,
+       test_evidence_digest, package_digest, approved_by_user_id,
+       approved_role, auth_kind, approved_at
+     ) VALUES (
+       'github-approval-lifecycle-v12', 'github-delivery-lifecycle-v11', 2, 7,
+       repeat('2', 64), 'github-binding-lifecycle-v11', 1, 'run-health-001',
+       1, 'n-pr', '98765', 'main', 'devflow/lifecycle-v11', repeat('b', 40),
+       repeat('4', 64), repeat('5', 64), 'u-erich', 'owner', 'session_cookie',
+       '2026-08-11T18:01:00.000Z'
+     );
+
+     INSERT INTO github_delivery_credential_grants (
+       id, version, request_id, intent_revision, approval_id, attempt,
+       issued_to_token_id, repository_id, permission, repository_count,
+       status, requested_at, issued_at, credential_expires_at,
+       consumed_at, outcome_code
+     ) VALUES (
+       'github-grant-lifecycle-v12', 2, 'github-delivery-lifecycle-v11', 2,
+       'github-approval-lifecycle-v12', 1, 'desktop-token-lifecycle-v11',
+       '98765', 'contents:write', 1, 'issued',
+       '2026-08-11T18:01:00.000Z', '2026-08-11T18:01:00.000Z',
+       '2026-08-11T18:31:00.000Z', NULL, NULL
+     );
+    `,
+  )
+  const snapshot = await psql(
+    FAILURE_DATABASE,
+    "SELECT to_jsonb(grant_record)::text FROM github_delivery_credential_grants AS grant_record WHERE id = 'github-grant-lifecycle-v12';\n",
+  )
+  const snapshotBeforeV13 = snapshot.stdout.trim()
+  expect(snapshotBeforeV13.length > 0, 'The populated V12 legacy issued credential was missing.')
+  return snapshotBeforeV13
+}
+
+async function assertLegacyIssuedCredentialAfterV13(snapshotBeforeV13) {
+  const fields = await psql(
+    FAILURE_DATABASE,
+    `SELECT
+       provider_expiry_contract_version::text || '|' ||
+       coalesce(provider_credential_expires_at::text, 'NULL') || '|' ||
+       coalesce(provider_expiry_observed_at::text, 'NULL') || '|' ||
+       status || '|' || coalesce(outcome_code, 'NULL')
+     FROM github_delivery_credential_grants
+     WHERE id = 'github-grant-lifecycle-v12';\n`,
+  )
+  expect(
+    fields.stdout.trim() === '0|NULL|NULL|issued|NULL',
+    'V13 fabricated provider expiry proof for a legacy issued credential.',
+  )
+
+  const retained = await psql(
+    FAILURE_DATABASE,
+    `SELECT (
+       to_jsonb(grant_record)
+       - 'provider_expiry_contract_version'
+       - 'provider_credential_expires_at'
+       - 'provider_expiry_observed_at'
+     )::text
+     FROM github_delivery_credential_grants AS grant_record
+     WHERE id = 'github-grant-lifecycle-v12';\n`,
+  )
+  expect(
+    retained.stdout.trim() === snapshotBeforeV13,
+    'V13 migration changed retained V12 credential fields.',
+  )
+
+  const expiryColumns = await psql(
+    FAILURE_DATABASE,
+    `SELECT string_agg(column_name, ',' ORDER BY column_name)
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'github_delivery_credential_grants'
+       AND column_name IN (
+         'provider_expiry_contract_version',
+         'provider_credential_expires_at',
+         'provider_expiry_observed_at'
+       );\n`,
+  )
+  expect(
+    expiryColumns.stdout.trim() ===
+      'provider_credential_expires_at,provider_expiry_contract_version,provider_expiry_observed_at',
+    'V13 provider expiry column inventory was incomplete.',
+  )
+
+  const fabricatedConfirmation = await expectDockerFailure([
+    'exec',
+    '-i',
+    postgresContainerName,
+    'psql',
+    '-v',
+    'ON_ERROR_STOP=1',
+    '-U',
+    postgresUser,
+    '-d',
+    FAILURE_DATABASE,
+    '-Atq',
+  ], {
+    input: `UPDATE github_delivery_credential_grants
+            SET status = 'expired', outcome_code = 'credential_provider_expiry_confirmed'
+            WHERE id = 'github-grant-lifecycle-v12';\n`,
+  })
+  expect(
+    /github_delivery_grants_provider_expiry_contract|check constraint/i.test(
+      `${fabricatedConfirmation.result?.stdout ?? ''}${fabricatedConfirmation.result?.stderr ?? ''}`,
+    ),
+    'V13 did not fail closed on a fabricated legacy provider expiry confirmation.',
+  )
+}
+
 function createCurrentSessionCookie() {
   const claims = {
     v: 1,
@@ -628,7 +743,7 @@ async function expectV14ApiRejectsNewerSchema(database) {
     const readinessResponse = await fetch(`${apiUrl}/ready`)
     expect(
       readinessResponse.status === 503,
-      `Exact V1.4 API did not fail closed on Team schema v12; received ${readinessResponse.status}.`,
+      `Exact V1.4 API did not fail closed on Team schema v13; received ${readinessResponse.status}.`,
     )
   } finally {
     await runDocker(['rm', '-f', rollbackApiContainerName])
@@ -830,7 +945,7 @@ try {
   }
 
   await runCurrentMigration(FRESH_DATABASE)
-  await expectSchemaVersion(FRESH_DATABASE, 12)
+  await expectSchemaVersion(FRESH_DATABASE, 13)
   await startCurrentApiAgainstDatabase(FRESH_DATABASE)
 
   await runV14Migration(UPGRADE_DATABASE)
@@ -849,10 +964,10 @@ try {
 
   await restartPostgresWithRetainedVolume()
   await runCurrentMigration(UPGRADE_DATABASE)
-  await expectSchemaVersion(UPGRADE_DATABASE, 12)
-  const snapshotAfterV12Upgrade = await readV14RunSnapshot(UPGRADE_DATABASE)
+  await expectSchemaVersion(UPGRADE_DATABASE, 13)
+  const snapshotAfterV13Upgrade = await readV14RunSnapshot(UPGRADE_DATABASE)
   expect(
-    snapshotAfterV12Upgrade === snapshotBeforeV10Upgrade,
+    snapshotAfterV13Upgrade === snapshotBeforeV10Upgrade,
     'V1.5 upgrade changed the retained V1.4 Run row.',
   )
   const retained = await psql(
@@ -902,9 +1017,34 @@ try {
      WHERE id = 'github-delivery-lifecycle-v11';\n`,
   )
   const snapshotBeforeV12Retry = await readV11DeliverySnapshot(FAILURE_DATABASE)
-  await runCurrentMigration(FAILURE_DATABASE)
+  await applyHistoricalMigration(
+    FAILURE_DATABASE,
+    '0012_github_delivery_attempts.sql',
+    12,
+    '0012_github_delivery_attempts',
+  )
   await expectSchemaVersion(FAILURE_DATABASE, 12)
   await assertRetainedV11DeliveryAfterV12(snapshotBeforeV12Retry)
+  await expectColumnMissing(
+    FAILURE_DATABASE,
+    'github_delivery_credential_grants',
+    'provider_expiry_contract_version',
+  )
+  await expectColumnMissing(
+    FAILURE_DATABASE,
+    'github_delivery_credential_grants',
+    'provider_credential_expires_at',
+  )
+  await expectColumnMissing(
+    FAILURE_DATABASE,
+    'github_delivery_credential_grants',
+    'provider_expiry_observed_at',
+  )
+  await expectMigrationHistoryMissing(FAILURE_DATABASE, 13)
+  const snapshotBeforeV13 = await prepareV12LegacyIssuedCredentialFixture()
+  await runCurrentMigration(FAILURE_DATABASE)
+  await expectSchemaVersion(FAILURE_DATABASE, 13)
+  await assertLegacyIssuedCredentialAfterV13(snapshotBeforeV13)
   await startCurrentApiAgainstDatabase(FAILURE_DATABASE)
 
   completed = true
@@ -929,6 +1069,6 @@ if (mainError) throw mainError
 if (cleanupError) throw cleanupError
 if (completed) {
   console.log(
-    'Docker lifecycle smoke passed: fresh v12, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, and bounded V1.4 backup/restore rollback.',
+    'Docker lifecycle smoke passed: fresh v13, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, and bounded V1.4 backup/restore rollback.',
   )
 }

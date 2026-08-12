@@ -138,7 +138,7 @@ const fakeGitHubFetch = async (input, init) => {
     }
     metrics.installationTokens[counter] += 1
     await persistMetrics()
-    return jsonResponse(200, {
+    return jsonResponse(201, {
       token: ephemeralCredential,
       expires_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
       repository_selection: 'selected',

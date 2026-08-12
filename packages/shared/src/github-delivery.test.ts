@@ -10,10 +10,27 @@ import type {
 import {
   createGitHubDeliveryCompletion,
   createGitHubDeliveryIntent,
+  isGitHubCredentialToken,
   isTerminalGitHubDeliveryStatus,
   type GitHubDeliveryRevocationCheck,
   type GitHubRepositoryBinding,
 } from './github-delivery'
+
+describe('GitHub credential token boundary', () => {
+  it.each([
+    [15, false],
+    [16, true],
+    [5_001, true],
+    [8_192, true],
+    [8_193, false],
+  ])('validates the shared %i-character boundary', (length, expected) => {
+    expect(isGitHubCredentialToken('g'.repeat(length))).toBe(expected)
+  })
+
+  it('rejects unsafe token characters', () => {
+    expect(isGitHubCredentialToken(`g${'x'.repeat(14)}\n`)).toBe(false)
+  })
+})
 
 const run: WorkflowRun = {
   id: 'run-1',
@@ -178,7 +195,7 @@ const baseInput = {
 describe('GitHub Delivery Intent', () => {
   it('defines revocation verification as bounded redacted evidence only', () => {
     const check: GitHubDeliveryRevocationCheck = {
-      stateVersion: 1,
+      stateVersion: 2,
       intentId: 'delivery-1',
       intentUpdatedAt: '2026-08-11T10:36:00.000Z',
       bindingId: 'github-binding-1',

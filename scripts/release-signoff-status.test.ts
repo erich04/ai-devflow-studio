@@ -79,7 +79,7 @@ Status: Passed
 
 Candidate: ${candidateSha}
 Packaged artifact: 1.5.0 darwin-arm64 ${desktopArtifactSha}
-Team schema v12; Desktop schema v16.
+Team schema v13; Desktop schema v17.
 Verify: https://github.com/devflow/ai-devflow-studio/actions/runs/123456
 Delivery series: github-delivery:${'a'.repeat(64)}
 Delivery attempt: 1; intent revision: 1.
@@ -96,7 +96,7 @@ Lifecycle counts: Work Request 1, canonical Run 1, credential grant 1, branch pu
 Sandbox/App: private devflow/release-sandbox via devflow-release-sandbox.
 Draft state: true; merged: false; automatic retry: false.
 Restart side-effect repeats: credential 0, push 0, pull request 0.
-Revocation proof: intent ${revocationIntentId}; revoked binding version 2; outcome binding_inactive; checked at ${revocationCheckedAt}; durable check count 1.
+Revocation proof: state version 2; intent ${revocationIntentId}; revoked binding version 2; outcome binding_inactive; checked at ${revocationCheckedAt}; durable check count 1.
 `
 }
 
@@ -235,6 +235,7 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
             acceptanceStatus: 'completed',
             restartRecovery: 'passed',
             revocationProof: {
+              proofStateVersion: 2,
               intentId: revocationIntentId,
               revokedBindingVersion: 2,
               outcomeCode: 'binding_inactive',
@@ -684,6 +685,8 @@ describe('release signoff status', () => {
       .revocationProof as Record<string, unknown>
     const invalidProofs = [
       undefined,
+      { ...validProof, proofStateVersion: 1 },
+      { ...validProof, proofStateVersion: 3 },
       { ...validProof, outcomeCode: 'blocked' },
       { ...validProof, outcomeCode: 'binding_active' },
       { ...validProof, durableCheckCount: 0 },
@@ -729,6 +732,7 @@ describe('release signoff status', () => {
       .revocationProof as Record<string, unknown>
 
     for (const proofOverride of [
+      { proofStateVersion: 1 },
       { intentId: otherRevocationIntentId },
       { revokedBindingVersion: 3 },
       { checkedAt: '2026-08-11T12:31:00.000Z' },
@@ -746,6 +750,7 @@ describe('release signoff status', () => {
 
     for (const vagueOrTamperedContent of [
       content.replace(/^Revocation proof:.*$/mu, 'Binding revocation: passed. Post-revocation credential grant: blocked.'),
+      content.replace('state version 2', 'state version 1'),
       content.replace('outcome binding_inactive', 'outcome blocked'),
       content.replace('durable check count 1.', 'durable check count 0.'),
       content.replace('durable check count 1.', 'durable check count 2.'),
@@ -1044,8 +1049,8 @@ describe('release signoff status', () => {
     const content = ready.walkthroughEvidence.referencedEvidenceContent!
 
     for (const requiredIdentity of [
-      'Team schema v12',
-      'Desktop schema v16',
+      'Team schema v13',
+      'Desktop schema v17',
       ready.githubSandboxRecord!.value!.deliverySeriesKey as string,
       ready.githubSandboxRecord!.value!.intentDigest as string,
       ready.githubSandboxRecord!.value!.testEvidenceDigest as string,
@@ -1055,7 +1060,7 @@ describe('release signoff status', () => {
       'Ad hoc maintainer assistance: false',
       `Packaged artifact: 1.5.0 darwin-arm64 ${desktopArtifactSha}`,
       `Expected commit: ${ready.githubSandboxRecord!.value!.expectedCommitSha as string}; remote head: ${ready.githubSandboxRecord!.value!.remoteHeadSha as string}.`,
-      `Revocation proof: intent ${revocationIntentId}; revoked binding version 2; outcome binding_inactive; checked at ${revocationCheckedAt}; durable check count 1.`,
+      `Revocation proof: state version 2; intent ${revocationIntentId}; revoked binding version 2; outcome binding_inactive; checked at ${revocationCheckedAt}; durable check count 1.`,
     ]) {
       const items = evaluateReleaseSignoffSnapshot({
         ...ready,

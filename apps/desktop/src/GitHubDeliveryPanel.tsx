@@ -60,7 +60,7 @@ export function GitHubDeliveryPanel({
   const exactRevocationCheck =
     intent &&
     intent.status === 'completed' &&
-    revocationCheck?.stateVersion === 1 &&
+    revocationCheck?.stateVersion === 2 &&
     revocationCheck.intentId === intent.id &&
     revocationCheck.intentUpdatedAt === intent.updatedAt &&
     revocationCheck.bindingId === intent.repositoryBindingId &&

@@ -1250,6 +1250,8 @@ export function useDesktopActions(input: {
         result.disposition === 'blocked' &&
         result.outcomeCode === 'binding_inactive'
           ? 'Credential revocation 已验证：binding_inactive'
+          : result.outcomeCode === 'credential_revocation_pending'
+            ? 'Credential revocation 仍在安全隔离，请稍后重试'
           : 'Credential revocation 未验证；授权阻断证明不可用',
       )
     } catch {

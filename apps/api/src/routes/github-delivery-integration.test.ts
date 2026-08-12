@@ -253,11 +253,18 @@ function createHarness() {
     ...input,
     token: ephemeralToken,
     expiresAt: credentialExpiresAt,
+    providerExpiresAt: credentialExpiresAt,
     permissions: { contents: 'write' },
   }))
   const revokeInstallationAccessToken = vi.fn<
     GitHubAppClient['revokeInstallationAccessToken']
   >(async () => undefined)
+  const observeProviderCredentialExpiry = vi.fn<
+    GitHubAppClient['observeProviderCredentialExpiry']
+  >(async (input) => ({
+    ...input,
+    providerObservedAt: '2026-08-11T16:00:02.000Z',
+  }))
   const getBranchHead = vi.fn<GitHubAppClient['getBranchHead']>(
     async (input) => ({
       repository: input.repository,
@@ -290,6 +297,7 @@ function createHarness() {
   const client: GitHubAppClient = {
     verifyRepository,
     issueContentsWriteToken,
+    observeProviderCredentialExpiry,
     revokeInstallationAccessToken,
     getBranchHead,
     findDraftPullRequest,
@@ -306,6 +314,7 @@ function createHarness() {
     effects: {
       verifyRepository,
       issueContentsWriteToken,
+      observeProviderCredentialExpiry,
       revokeInstallationAccessToken,
       getBranchHead,
       findDraftPullRequest,
@@ -486,6 +495,7 @@ describe('GitHub Delivery API integration', () => {
       repositoryId: '98765',
       token: ephemeralToken,
       expiresAt: credentialExpiresAt,
+      providerExpiresAt: credentialExpiresAt,
       permissions: { contents: 'write' as const },
     }
     let resolveMint: ((access: typeof minted) => void) | undefined
@@ -555,10 +565,10 @@ describe('GitHub Delivery API integration', () => {
             status: 'revoked',
             outcomeCode: 'binding_revoked',
           },
-          grant: {
-            status: 'revoked',
-            outcomeCode: 'binding_revoked',
-          },
+        grant: {
+          status: 'revoked',
+          outcomeCode: 'credential_revocation_confirmed',
+        },
         },
       },
     })

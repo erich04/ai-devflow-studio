@@ -100,6 +100,11 @@ describe('team database migration runner', () => {
         name: '0012_github_delivery_attempts',
         fileName: '0012_github_delivery_attempts.sql',
       },
+      {
+        version: 13,
+        name: '0013_github_credential_provider_expiry',
+        fileName: '0013_github_credential_provider_expiry.sql',
+      },
     ])
 
     const [
@@ -109,6 +114,7 @@ describe('team database migration runner', () => {
       gateCommandHardening,
       githubDelivery,
       githubDeliveryAttempts,
+      githubCredentialProviderExpiry,
     ] = await readTeamMigrationCatalog()
     expect(baseline).toMatchObject({ version: 7, name: '0001_initial' })
     expect(baseline?.sql).toMatch(/^BEGIN;/)
@@ -143,6 +149,13 @@ describe('team database migration runner', () => {
     expect(githubDeliveryAttempts?.sql).toContain('ADD COLUMN delivery_attempt integer')
     expect(githubDeliveryAttempts?.sql).toContain(
       'UNIQUE (organization_id, project_id, delivery_series_key, delivery_attempt)',
+    )
+    expect(githubCredentialProviderExpiry).toMatchObject({
+      version: 13,
+      name: '0013_github_credential_provider_expiry',
+    })
+    expect(githubCredentialProviderExpiry?.sql).toContain(
+      'provider_expiry_contract_version',
     )
   })
 

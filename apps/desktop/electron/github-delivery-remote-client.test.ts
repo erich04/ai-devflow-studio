@@ -142,6 +142,9 @@ function credentialGrant(overrides: Record<string, unknown> = {}) {
     requestedAt: now,
     issuedAt: now,
     credentialExpiresAt: '2026-08-11T16:00:00.000Z',
+    providerExpiryContractVersion: 0,
+    providerCredentialExpiresAt: null,
+    providerExpiryObservedAt: null,
     consumedAt: null,
     outcomeCode: null,
     redacted: true,
@@ -501,6 +504,55 @@ describe('GitHub Delivery remote client', () => {
     expect(JSON.stringify(result)).not.toContain('token')
   })
 
+  it.each([5_001, 8_192])(
+    'passes one valid %i-character credential to the exact publisher',
+    async (length) => {
+      const ephemeralToken = `g${'x'.repeat(length - 1)}`
+      const fetcher = vi.fn(async () =>
+        jsonResponse({
+          request: deliveryRequest({ stateVersion: 4, status: 'publishing_branch' }),
+          grant: credentialGrant(),
+          credential: {
+            grantId: 'grant-1',
+            username: 'x-access-token',
+            token: ephemeralToken,
+            expiresAt: '2026-08-11T16:00:00.000Z',
+            repositoryId: '98765',
+            canonicalHttpsUrl: 'https://github.com/example/project.git',
+          },
+          outcomeCode: 'grant_finalized',
+          replayed: false,
+        }),
+      )
+      const seenTokenLengths: number[] = []
+      const publishExactCommit = vi.fn(async (credential: { token: string }) => {
+        seenTokenLengths.push(credential.token.length)
+        return {
+          outcome: 'pushed' as const,
+          expectedCommitSha: 'b'.repeat(40),
+          repository: 'example/project',
+          headBranch: 'devflow/run-1-pr-1',
+        }
+      })
+      const client = createGitHubDeliveryRemoteClient({
+        apiBaseUrl: 'https://api.devflow.test',
+        authToken: 'desktop-secret-token',
+        fetcher,
+      })
+
+      await expect(
+        client.withCredentialGrant(
+          { projectId, requestId, expectedStateVersion: 3 },
+          publishExactCommit,
+        ),
+      ).resolves.toMatchObject({
+        publisherResult: { outcome: 'pushed' },
+      })
+      expect(publishExactCommit).toHaveBeenCalledTimes(1)
+      expect(seenTokenLengths).toEqual([length])
+    },
+  )
+
   it('proves a revoked binding only from the exact credential rejection', async () => {
     const fetcher = vi.fn(async () =>
       jsonResponse(
@@ -544,6 +596,37 @@ describe('GitHub Delivery remote client', () => {
         body: JSON.stringify({ expectedStateVersion: 8 }),
       }),
     )
+  })
+
+  it('returns one strict pending result while credential revocation is quarantined', async () => {
+    const fetcher = vi.fn(async () =>
+      jsonResponse(
+        {
+          error: 'conflict',
+          message:
+            'GitHub credential revocation remains conservatively quarantined.',
+          outcomeCode: 'credential_revocation_pending',
+          replayed: false,
+        },
+        409,
+      ),
+    )
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher,
+    })
+
+    await expect(
+      client.verifyCredentialGrantBlocked({
+        projectId,
+        requestId,
+        expectedStateVersion: 8,
+      }),
+    ).resolves.toEqual({
+      status: 'pending',
+      outcomeCode: 'credential_revocation_pending',
+    })
   })
 
   it('cancels an unexpected credential response without reading or exposing its body', async () => {
@@ -1605,6 +1688,135 @@ describe('GitHub Delivery remote client', () => {
     await expect(
       client.getRecoverySnapshot({ projectId, requestId }),
     ).resolves.toEqual(snapshot)
+  })
+
+  it('parses one redacted confirmed credential revocation marker', async () => {
+    const snapshot = {
+      request: deliveryRequest({
+        stateVersion: 5,
+        status: 'revoked',
+        outcomeCode: 'binding_revoked',
+      }),
+      approval: approval(),
+      grant: credentialGrant({
+        version: 3,
+        status: 'revoked',
+        issuedAt: null,
+        credentialExpiresAt: null,
+        outcomeCode: 'credential_revocation_confirmed',
+      }),
+      publication: null,
+      pullRequest: null,
+    }
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () => jsonResponse({ snapshot })),
+    })
+
+    await expect(
+      client.getRecoverySnapshot({ projectId, requestId }),
+    ).resolves.toEqual(snapshot)
+  })
+
+  it('parses one redacted confirmed credential-mint absence marker', async () => {
+    const snapshot = {
+      request: deliveryRequest({
+        stateVersion: 5,
+        status: 'failed',
+        outcomeCode: 'credential_issue_failed',
+      }),
+      approval: approval(),
+      grant: credentialGrant({
+        version: 3,
+        status: 'failed',
+        issuedAt: null,
+        credentialExpiresAt: null,
+        outcomeCode: 'credential_mint_absent_confirmed',
+      }),
+      publication: null,
+      pullRequest: null,
+    }
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () => jsonResponse({ snapshot })),
+    })
+
+    await expect(
+      client.getRecoverySnapshot({ projectId, requestId }),
+    ).resolves.toEqual(snapshot)
+  })
+
+  it('parses one exact provider-expiry confirmation without trusting local expiry', async () => {
+    const providerCredentialExpiresAt = '2026-08-11T16:00:00.000Z'
+    const snapshot = {
+      request: deliveryRequest({
+        stateVersion: 5,
+        status: 'recovery_required',
+        outcomeCode: 'credential_issue_failed',
+      }),
+      approval: approval(),
+      grant: credentialGrant({
+        version: 3,
+        status: 'expired',
+        providerExpiryContractVersion: 1,
+        providerCredentialExpiresAt,
+        providerExpiryObservedAt: '2026-08-11T16:00:02.000Z',
+        outcomeCode: 'credential_provider_expiry_confirmed',
+      }),
+      publication: null,
+      pullRequest: null,
+    }
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () => jsonResponse({ snapshot })),
+    })
+
+    await expect(
+      client.getRecoverySnapshot({ projectId, requestId }),
+    ).resolves.toEqual(snapshot)
+  })
+
+  it.each([
+    ['legacy contract with provider evidence', {
+      providerExpiryContractVersion: 0,
+      providerCredentialExpiresAt: '2026-08-11T16:00:00.000Z',
+    }],
+    ['provider contract without raw expiry', {
+      providerExpiryContractVersion: 1,
+      providerCredentialExpiresAt: null,
+    }],
+    ['early provider observation', {
+      providerExpiryContractVersion: 1,
+      providerCredentialExpiresAt: '2026-08-11T16:00:00.000Z',
+      providerExpiryObservedAt: '2026-08-11T16:00:01.999Z',
+      status: 'expired',
+      outcomeCode: 'credential_provider_expiry_confirmed',
+    }],
+    ['local expiry after provider expiry', {
+      providerExpiryContractVersion: 1,
+      credentialExpiresAt: '2026-08-11T16:00:00.001Z',
+      providerCredentialExpiresAt: '2026-08-11T16:00:00.000Z',
+    }],
+  ])('rejects %s in a credential recovery snapshot', async (_label, overrides) => {
+    const snapshot = {
+      request: deliveryRequest(),
+      approval: approval(),
+      grant: credentialGrant(overrides),
+      publication: null,
+      pullRequest: null,
+    }
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () => jsonResponse({ snapshot })),
+    })
+
+    await expect(
+      client.getRecoverySnapshot({ projectId, requestId }),
+    ).rejects.toMatchObject({ code: 'invalid_response' })
   })
 
   it.each([

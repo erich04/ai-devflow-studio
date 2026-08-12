@@ -13,6 +13,8 @@ import {
 import type { RequestPrincipal } from '../auth/request-auth'
 
 export const GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS = 2 * 60 * 1_000
+export const GITHUB_CREDENTIAL_PROVIDER_MAX_MS = 2 * 60 * 1_000
+export const GITHUB_CREDENTIAL_MAX_TTL_MS = 60 * 60 * 1_000
 
 export type GitHubDeliverySessionPrincipal = RequestPrincipal & {
   authentication: { kind: 'session_cookie'; tokenRecordId: null }
@@ -399,12 +401,18 @@ export type GitHubCredentialGrant = {
   requestedAt: string
   issuedAt: string | null
   credentialExpiresAt: string | null
+  providerExpiryContractVersion: 0 | 1
+  providerCredentialExpiresAt: string | null
+  providerExpiryObservedAt: string | null
   consumedAt: string | null
   outcomeCode:
     | 'credential_issue_failed'
     | 'credential_expired'
     | 'credential_superseded'
     | 'binding_revoked'
+    | 'credential_mint_absent_confirmed'
+    | 'credential_revocation_confirmed'
+    | 'credential_provider_expiry_confirmed'
     | null
   redacted: true
 }
@@ -426,6 +434,7 @@ export type FinalizeGitHubCredentialGrantInput = {
         status: 'issued'
         issuedAt: string
         credentialExpiresAt: string
+        providerCredentialExpiresAt: string
         repositoryId: string
         permission: 'contents:write'
         repositoryCount: 1
@@ -436,11 +445,77 @@ export type FinalizeGitHubCredentialGrantInput = {
       }
 }
 
+export type ConfirmGitHubCredentialClearanceInput = {
+  organizationId: string
+  projectId: string
+  requestId: string
+  grantId: string
+  outcomeCode:
+    | 'credential_mint_absent_confirmed'
+    | 'credential_revocation_confirmed'
+}
+
+declare const gitHubCredentialClearanceAuthorityBrand: unique symbol
+
+/**
+ * An in-process, repository-issued capability for settling one exact credential
+ * reservation. Implementations validate object identity; this brand prevents
+ * callers from constructing or serializing a substitute.
+ */
+export type GitHubCredentialClearanceAuthority = {
+  readonly [gitHubCredentialClearanceAuthorityBrand]: true
+}
+
 export type GitHubCredentialGrantMutationResult =
   | {
       ok: true
       responseStatus: 200 | 201
       outcomeCode: 'grant_reserved' | 'grant_finalized'
+      replayed: boolean
+      request: GitHubDeliveryRequest
+      grant: GitHubCredentialGrant
+    }
+  | GitHubDeliveryRejectionResult
+
+export type GitHubCredentialGrantReservationResult =
+  | {
+      ok: true
+      responseStatus: 200 | 201
+      outcomeCode: 'grant_reserved'
+      replayed: boolean
+      request: GitHubDeliveryRequest
+      grant: GitHubCredentialGrant
+      clearanceAuthority: GitHubCredentialClearanceAuthority
+    }
+  | GitHubDeliveryRejectionResult
+
+export type GitHubCredentialClearanceConfirmationResult =
+  | {
+      ok: true
+      responseStatus: 200
+      outcomeCode:
+        | 'credential_mint_absent_confirmed'
+        | 'credential_revocation_confirmed'
+      replayed: boolean
+      request: GitHubDeliveryRequest
+      grant: GitHubCredentialGrant
+    }
+  | GitHubDeliveryRejectionResult
+
+export type ConfirmGitHubCredentialProviderExpiryInput = {
+  organizationId: string
+  projectId: string
+  requestId: string
+  grantId: string
+  providerCredentialExpiresAt: string
+  providerExpiryObservedAt: string
+}
+
+export type GitHubCredentialProviderExpiryConfirmationResult =
+  | {
+      ok: true
+      responseStatus: 200
+      outcomeCode: 'credential_provider_expiry_confirmed'
       replayed: boolean
       request: GitHubDeliveryRequest
       grant: GitHubCredentialGrant
@@ -607,6 +682,7 @@ export type GitHubDeliveryRejectionCode =
   | 'not_found'
   | 'stale_version'
   | 'binding_inactive'
+  | 'credential_revocation_pending'
   | 'binding_conflict'
   | 'invalid_state'
   | 'intent_conflict'
@@ -671,11 +747,19 @@ export type GitHubDeliveryRepository = {
   reserveGitHubCredentialGrant(
     input: ReserveGitHubCredentialGrantInput,
     principal: GitHubDeliveryDesktopPrincipal,
-  ): Promise<GitHubCredentialGrantMutationResult>
+  ): Promise<GitHubCredentialGrantReservationResult>
   finalizeGitHubCredentialGrant(
     input: FinalizeGitHubCredentialGrantInput,
     principal: GitHubDeliveryDesktopPrincipal,
   ): Promise<GitHubCredentialGrantMutationResult>
+  confirmGitHubCredentialClearance(
+    input: ConfirmGitHubCredentialClearanceInput,
+    authority: GitHubCredentialClearanceAuthority,
+  ): Promise<GitHubCredentialClearanceConfirmationResult>
+  confirmGitHubCredentialProviderExpiry(
+    input: ConfirmGitHubCredentialProviderExpiryInput,
+    authority: GitHubCredentialClearanceAuthority,
+  ): Promise<GitHubCredentialProviderExpiryConfirmationResult>
   recordGitHubBranchPublicationReport(
     input: RecordGitHubBranchPublicationReportInput,
     principal: GitHubDeliveryDesktopPrincipal,
@@ -709,6 +793,7 @@ export function githubDeliveryRejection(
     not_found: 404,
     stale_version: 409,
     binding_inactive: 409,
+    credential_revocation_pending: 409,
     binding_conflict: 409,
     invalid_state: 409,
     intent_conflict: 409,
@@ -743,6 +828,8 @@ export function githubDeliveryRejectionMessage(
       return 'GitHub Delivery state changed; refresh before retrying.'
     case 'binding_inactive':
       return 'The Project GitHub repository binding is not active.'
+    case 'credential_revocation_pending':
+      return 'GitHub credential revocation remains conservatively quarantined.'
     case 'binding_conflict':
       return 'The GitHub repository binding conflicts with current Project state.'
     case 'invalid_state':
@@ -960,6 +1047,9 @@ export function cloneGitHubCredentialGrant(
     requestedAt,
     issuedAt,
     credentialExpiresAt,
+    providerExpiryContractVersion,
+    providerCredentialExpiresAt,
+    providerExpiryObservedAt,
     consumedAt,
     outcomeCode,
     redacted,
@@ -978,6 +1068,9 @@ export function cloneGitHubCredentialGrant(
     requestedAt,
     issuedAt,
     credentialExpiresAt,
+    providerExpiryContractVersion,
+    providerCredentialExpiresAt,
+    providerExpiryObservedAt,
     consumedAt,
     outcomeCode,
     redacted,

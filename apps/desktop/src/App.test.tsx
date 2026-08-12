@@ -2561,7 +2561,7 @@ describe('App', () => {
       repositoryBindingVersion: 3,
     })
     const check: GitHubDeliveryRevocationCheck = {
-      stateVersion: 1,
+      stateVersion: 2,
       intentId: completedIntent.id,
       intentUpdatedAt: completedIntent.updatedAt,
       bindingId: completedIntent.repositoryBindingId,
@@ -2642,6 +2642,37 @@ describe('App', () => {
       ).not.toBeInTheDocument()
     },
   )
+
+  it('shows fixed retry copy while credential revocation remains quarantined', async () => {
+    const completedIntent = githubDeliveryIntentFixture('completed')
+    const state = prDeliveryState(
+      completedIntent,
+      [],
+      [],
+      [githubRepositoryBindingFixture(completedIntent, 'revoked')],
+    )
+    const loadState = vi.fn().mockResolvedValue(state)
+    const verifyGitHubDeliveryRevocation = vi.fn().mockResolvedValue({
+      intentId: completedIntent.id,
+      disposition: 'unverified',
+      outcomeCode: 'credential_revocation_pending',
+    })
+    installDesktopApi({
+      loadState,
+      verifyGitHubDeliveryRevocation,
+    } as Partial<DevFlowDesktopApi>)
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Verify credential revocation',
+    }))
+
+    await waitFor(() => expect(verifyGitHubDeliveryRevocation).toHaveBeenCalledTimes(1))
+    expect(screen.getByTestId('toast')).toHaveTextContent(
+      'Credential revocation 仍在安全隔离，请稍后重试',
+    )
+  })
 
   it('hides credential revocation verification for a same-version revoked observation', async () => {
     const completedIntent = githubDeliveryIntentFixture('completed')
@@ -2738,7 +2769,7 @@ describe('App', () => {
       version: completedIntent.repositoryBindingVersion + 2,
     })
     const staleCheck: GitHubDeliveryRevocationCheck = {
-      stateVersion: 1,
+      stateVersion: 2,
       intentId: completedIntent.id,
       intentUpdatedAt: completedIntent.updatedAt,
       bindingId: completedIntent.repositoryBindingId,

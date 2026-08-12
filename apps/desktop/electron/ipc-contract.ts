@@ -240,6 +240,7 @@ export type VerifyGitHubDeliveryRevocationResult =
         | 'intent_not_found'
         | 'stale_intent'
         | 'remote_request_unavailable'
+        | 'credential_revocation_pending'
         | 'revocation_unavailable'
     }
 

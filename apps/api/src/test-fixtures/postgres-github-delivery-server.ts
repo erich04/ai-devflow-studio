@@ -82,7 +82,7 @@ const fakeGitHubFetch: typeof fetch = async (input, init) => {
     ) {
       return jsonResponse(422, { message: 'Invalid fake GitHub scope' })
     }
-    return jsonResponse(200, {
+    return jsonResponse(201, {
       token: ephemeralCredential,
       expires_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
       repository_selection: 'selected',

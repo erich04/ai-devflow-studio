@@ -400,7 +400,7 @@ function createRedactedGitHubDeliveryIntent({ binding, runId, nodeId, now }) {
   }
 }
 
-async function prepareRetainedV11DeliveryFixture() {
+async function prepareRetainedV12CredentialFixture() {
   const migrations = [
     { version: 7, name: '0001_initial', fileName: '0001_initial.sql' },
     {
@@ -436,14 +436,27 @@ async function prepareRetainedV11DeliveryFixture() {
       ),
     })),
   )
+  const migrationV12 = {
+    version: 12,
+    name: '0012_github_delivery_attempts',
+    sql: await readFile(
+      new URL(
+        '../apps/api/src/db/migrations/0012_github_delivery_attempts.sql',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  }
   const pool = new Pool({
     connectionString: databaseUrl,
-    application_name: 'ai-devflow-postgres-smoke-v11-fixture',
+    application_name: 'ai-devflow-postgres-smoke-v12-fixture',
     statement_timeout: 10_000,
   })
   const connection = await pool.connect()
   let transactionOpen = false
-  const retainedRequestId = 'github-delivery-retained-v11'
+  const retainedRequestId = 'github-delivery-retained-v12'
+  const retainedApprovalId = 'github-delivery-approval-retained-v12'
+  const retainedGrantId = 'github-delivery-grant-retained-v12'
   const retainedLogicalKey = `github-delivery:${'1'.repeat(64)}`
 
   try {
@@ -498,11 +511,14 @@ async function prepareRetainedV11DeliveryFixture() {
     )
     expect(
       schemaVersion.rows[0]?.value === '11',
-      'Retained-data fixture did not stop at Team schema v11.',
+      'Retained-data fixture did not stop at Team schema v11 before population.',
     )
 
     const createdAt = new Date(Date.now() - 60_000).toISOString()
     const expiresAt = new Date(Date.parse(createdAt) + 23 * 60 * 60 * 1_000).toISOString()
+    const credentialExpiresAt = new Date(
+      Date.parse(createdAt) + 30 * 60 * 1_000,
+    ).toISOString()
     await connection.query('BEGIN')
     transactionOpen = true
     await connection.query(
@@ -609,21 +625,152 @@ async function prepareRetainedV11DeliveryFixture() {
         createdAt,
       ],
     )
+    await connection.query(
+      `INSERT INTO github_delivery_approvals (
+         id, request_id, intent_revision, request_state_version, intent_digest,
+         binding_id, binding_version, run_id, run_version, node_id,
+         repository_id, base_branch, head_branch, expected_commit_sha,
+         test_evidence_digest, package_digest, approved_by_user_id,
+         approved_role, auth_kind, approved_at
+       ) VALUES (
+         $1, $2, 2, 7, $3, 'github-binding-retained-v11', 1,
+         'run-retained-v11', 3, 'node-pr', '98765', 'main',
+         'devflow/retained-v11', $4, $5, $6, 'user-retained-v11',
+         'owner', 'session_cookie', $7
+       )`,
+      [
+        retainedApprovalId,
+        retainedRequestId,
+        '2'.repeat(64),
+        'b'.repeat(40),
+        '4'.repeat(64),
+        '5'.repeat(64),
+        createdAt,
+      ],
+    )
+    await connection.query(
+      `INSERT INTO github_delivery_credential_grants (
+         id, version, request_id, intent_revision, approval_id, attempt,
+         issued_to_token_id, repository_id, permission, repository_count,
+         status, requested_at, issued_at, credential_expires_at,
+         consumed_at, outcome_code
+       ) VALUES (
+         $1, 2, $2, 2, $3, 1, 'desktop-token-retained-v11', '98765',
+         'contents:write', 1, 'issued', $4, $4, $5, NULL, NULL
+       )`,
+      [
+        retainedGrantId,
+        retainedRequestId,
+        retainedApprovalId,
+        createdAt,
+        credentialExpiresAt,
+      ],
+    )
     await connection.query('COMMIT')
     transactionOpen = false
 
-    const retained = await connection.query(
+    const retainedRequest = await connection.query(
       `SELECT to_jsonb(retained) AS snapshot
        FROM github_delivery_requests AS retained
        WHERE id = $1`,
       [retainedRequestId],
     )
-    const snapshotBeforeV12 = retained.rows[0]?.snapshot
+    const snapshotBeforeV12 = retainedRequest.rows[0]?.snapshot
     expect(snapshotBeforeV12, 'Populated v11 GitHub Delivery row was not retained.')
+
+    await connection.query('BEGIN')
+    transactionOpen = true
+    await connection.query(migrationV12.sql)
+    await connection.query(
+      `INSERT INTO schema_meta (key, value) VALUES ('schema_version', $1)
+       ON CONFLICT (key) DO UPDATE
+       SET value = excluded.value, updated_at = now()`,
+      [String(migrationV12.version)],
+    )
+    await connection.query(
+      `INSERT INTO team_schema_migrations (version, name, checksum, adopted)
+       VALUES ($1, $2, $3, false)`,
+      [
+        migrationV12.version,
+        migrationV12.name,
+        migrationChecksum(migrationV12.sql),
+      ],
+    )
+    await connection.query('COMMIT')
+    transactionOpen = false
+
+    const schemaV12 = await connection.query(
+      "SELECT value FROM schema_meta WHERE key = 'schema_version'",
+    )
+    expect(
+      schemaV12.rows[0]?.value === '12',
+      'Retained-data fixture did not stop at Team schema v12 before the current migrator.',
+    )
+    const migratedRequest = await connection.query(
+      `SELECT to_jsonb(retained) AS snapshot
+       FROM github_delivery_requests AS retained
+       WHERE id = $1`,
+      [retainedRequestId],
+    )
+    const migratedRequestRow = migratedRequest.rows[0]?.snapshot
+    expect(
+      migratedRequestRow?.delivery_series_key === retainedLogicalKey &&
+        migratedRequestRow?.delivery_attempt === 1,
+      'V12 did not backfill delivery series identity from the v11 logical key.',
+    )
+    const retainedRowWithoutV12Fields = { ...migratedRequestRow }
+    delete retainedRowWithoutV12Fields.delivery_series_key
+    delete retainedRowWithoutV12Fields.delivery_attempt
+    expect(
+      stableJson(retainedRowWithoutV12Fields) === stableJson(snapshotBeforeV12),
+      'V12 migration changed retained v11 GitHub Delivery fields.',
+    )
+
+    await connection.query('BEGIN')
+    transactionOpen = true
+    let seriesUniquenessError
+    try {
+      await connection.query(
+        `INSERT INTO github_delivery_requests
+         SELECT (
+           jsonb_populate_record(
+             NULL::github_delivery_requests,
+             to_jsonb(source) || jsonb_build_object(
+               'id', 'github-delivery-retained-v12-duplicate',
+               'logical_idempotency_key', $2::text
+             )
+           )
+         ).*
+         FROM github_delivery_requests AS source
+         WHERE source.id = $1`,
+        [retainedRequestId, `github-delivery:${'9'.repeat(64)}`],
+      )
+    } catch (error) {
+      seriesUniquenessError = error
+    }
+    expect(
+      seriesUniquenessError?.code === '23505' &&
+        seriesUniquenessError?.constraint ===
+          'github_delivery_requests_series_attempt_unique',
+      'V12 did not enforce unique deliverySeriesKey/deliveryAttempt identity.',
+    )
+    await connection.query('ROLLBACK')
+    transactionOpen = false
+
+    const retainedGrant = await connection.query(
+      `SELECT to_jsonb(retained) AS snapshot
+       FROM github_delivery_credential_grants AS retained
+       WHERE id = $1`,
+      [retainedGrantId],
+    )
+    const snapshotBeforeV13 = retainedGrant.rows[0]?.snapshot
+    expect(snapshotBeforeV13, 'Populated v12 legacy issued credential was not retained.')
     return {
       retainedRequestId,
+      retainedGrantId,
       retainedLogicalKey,
       snapshotBeforeV12,
+      snapshotBeforeV13,
     }
   } catch (error) {
     if (transactionOpen) {
@@ -636,10 +783,10 @@ async function prepareRetainedV11DeliveryFixture() {
   }
 }
 
-async function assertRetainedV11DeliveryAfterV12(fixture) {
+async function assertRetainedV12CredentialAfterV13(fixture) {
   const pool = new Pool({
     connectionString: databaseUrl,
-    application_name: 'ai-devflow-postgres-smoke-v12-assertion',
+    application_name: 'ai-devflow-postgres-smoke-v13-assertion',
     statement_timeout: 10_000,
   })
   const connection = await pool.connect()
@@ -649,58 +796,74 @@ async function assertRetainedV11DeliveryAfterV12(fixture) {
       "SELECT value FROM schema_meta WHERE key = 'schema_version'",
     )
     expect(
-      schemaVersion.rows[0]?.value === '12',
-      'Team database did not migrate the retained fixture to schema v12.',
+      schemaVersion.rows[0]?.value === '13',
+      'Team database did not migrate the retained fixture to schema v13.',
     )
     const retained = await connection.query(
       `SELECT to_jsonb(retained) AS snapshot
-       FROM github_delivery_requests AS retained
+       FROM github_delivery_credential_grants AS retained
        WHERE id = $1`,
-      [fixture.retainedRequestId],
+      [fixture.retainedGrantId],
     )
     const migratedRow = retained.rows[0]?.snapshot
-    expect(migratedRow, 'V11 GitHub Delivery row was lost during v12 migration.')
+    expect(migratedRow, 'V12 legacy issued credential was lost during v13 migration.')
     expect(
-      migratedRow.delivery_series_key === fixture.retainedLogicalKey &&
-        migratedRow.delivery_attempt === 1,
-      'V12 did not backfill delivery series identity from the v11 logical key.',
+      migratedRow.provider_expiry_contract_version === 0 &&
+        migratedRow.provider_credential_expires_at === null &&
+        migratedRow.provider_expiry_observed_at === null &&
+        migratedRow.status === 'issued' &&
+        migratedRow.outcome_code === null,
+      'V13 fabricated provider expiry proof for a legacy issued credential.',
     )
-    const retainedRowWithoutV12Fields = { ...migratedRow }
-    delete retainedRowWithoutV12Fields.delivery_series_key
-    delete retainedRowWithoutV12Fields.delivery_attempt
+    const retainedGrantWithoutV13Fields = { ...migratedRow }
+    delete retainedGrantWithoutV13Fields.provider_expiry_contract_version
+    delete retainedGrantWithoutV13Fields.provider_credential_expires_at
+    delete retainedGrantWithoutV13Fields.provider_expiry_observed_at
     expect(
-      stableJson(retainedRowWithoutV12Fields) ===
-        stableJson(fixture.snapshotBeforeV12),
-      'V12 migration changed retained v11 GitHub Delivery fields.',
+      stableJson(retainedGrantWithoutV13Fields) ===
+        stableJson(fixture.snapshotBeforeV13),
+      'V13 migration changed retained v12 credential fields.',
+    )
+
+    const expiryColumns = await connection.query(
+      `SELECT column_name
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'github_delivery_credential_grants'
+         AND column_name IN (
+           'provider_expiry_contract_version',
+           'provider_credential_expires_at',
+           'provider_expiry_observed_at'
+         )
+       ORDER BY column_name`,
+    )
+    expect(
+      stableJson(expiryColumns.rows.map((row) => row.column_name)) === stableJson([
+        'provider_credential_expires_at',
+        'provider_expiry_contract_version',
+        'provider_expiry_observed_at',
+      ]),
+      'V13 provider expiry column inventory was incomplete.',
     )
 
     await connection.query('BEGIN')
     transactionOpen = true
-    let uniquenessError
+    let expiryConfirmationError
     try {
       await connection.query(
-        `INSERT INTO github_delivery_requests
-         SELECT (
-           jsonb_populate_record(
-             NULL::github_delivery_requests,
-             to_jsonb(source) || jsonb_build_object(
-               'id', 'github-delivery-retained-v11-duplicate',
-               'logical_idempotency_key', $2::text
-             )
-           )
-         ).*
-         FROM github_delivery_requests AS source
-         WHERE source.id = $1`,
-        [fixture.retainedRequestId, `github-delivery:${'9'.repeat(64)}`],
+        `UPDATE github_delivery_credential_grants
+         SET status = 'expired', outcome_code = 'credential_provider_expiry_confirmed'
+         WHERE id = $1`,
+        [fixture.retainedGrantId],
       )
     } catch (error) {
-      uniquenessError = error
+      expiryConfirmationError = error
     }
     expect(
-      uniquenessError?.code === '23505' &&
-        uniquenessError?.constraint ===
-          'github_delivery_requests_series_attempt_unique',
-      'V12 did not enforce unique deliverySeriesKey/deliveryAttempt identity.',
+      expiryConfirmationError?.code === '23514' &&
+        expiryConfirmationError?.constraint ===
+          'github_delivery_grants_provider_expiry_contract',
+      'V13 did not fail closed on a fabricated legacy provider expiry confirmation.',
     )
     await connection.query('ROLLBACK')
     transactionOpen = false
@@ -1212,11 +1375,11 @@ const completedTimestamp = new Date(Date.now() + 1_000).toISOString()
 let api
 
 try {
-  const retainedV11Fixture = await prepareRetainedV11DeliveryFixture()
+  const retainedV12Fixture = await prepareRetainedV12CredentialFixture()
   await run(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'db:setup'], {
     DEVFLOW_DATABASE_URL: databaseUrl,
   })
-  await assertRetainedV11DeliveryAfterV12(retainedV11Fixture)
+  await assertRetainedV12CredentialAfterV13(retainedV12Fixture)
   await run(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'db:seed'], {
     DEVFLOW_DATABASE_URL: databaseUrl,
     DEVFLOW_ENABLE_DEMO_DATA: 'true',

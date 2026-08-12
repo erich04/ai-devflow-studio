@@ -7,6 +7,18 @@ import type {
   WorkflowRun,
 } from './domain'
 
+export const GITHUB_CREDENTIAL_TOKEN_MIN_LENGTH = 16
+export const GITHUB_CREDENTIAL_TOKEN_MAX_LENGTH = 8_192
+
+export function isGitHubCredentialToken(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length >= GITHUB_CREDENTIAL_TOKEN_MIN_LENGTH &&
+    value.length <= GITHUB_CREDENTIAL_TOKEN_MAX_LENGTH &&
+    /^[A-Za-z0-9._-]+$/u.test(value)
+  )
+}
+
 export type GitHubDeliveryStatus =
   | 'approval_required'
   | 'approved'
@@ -39,7 +51,7 @@ export type GitHubDeliveryOperatorOutcome = {
 }
 
 export type GitHubDeliveryRevocationCheck = {
-  stateVersion: 1
+  stateVersion: 2
   intentId: string
   intentUpdatedAt: string
   bindingId: string

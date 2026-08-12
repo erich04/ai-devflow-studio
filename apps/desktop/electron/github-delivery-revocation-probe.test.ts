@@ -221,7 +221,7 @@ function harness(
   const currentBinding = revokedBinding()
   const expectedPairing = pairing()
   const check: GitHubDeliveryRevocationCheck = {
-    stateVersion: 1,
+    stateVersion: 2,
     intentId: source.id,
     intentUpdatedAt: source.updatedAt,
     bindingId: currentBinding.id,
@@ -298,7 +298,7 @@ describe('GitHub Delivery credential revocation probe', () => {
       expectedBinding: currentBinding,
       expectedPairing,
       check: {
-        stateVersion: 1,
+        stateVersion: 2,
         intentId: source.id,
         intentUpdatedAt: source.updatedAt,
         bindingId: currentBinding.id,
@@ -308,6 +308,26 @@ describe('GitHub Delivery credential revocation probe', () => {
         redacted: true,
       },
     })
+  })
+
+  it('returns an unverified quarantine result and never commits revocation proof', async () => {
+    const { deps, source, store, remote } = harness()
+    vi.mocked(remote.verifyCredentialGrantBlocked).mockResolvedValue({
+      status: 'pending',
+      outcomeCode: 'credential_revocation_pending',
+    })
+
+    await expect(
+      runGitHubDeliveryRevocationProbe(deps, {
+        intentId: source.id,
+        expectedUpdatedAt: source.updatedAt,
+      }),
+    ).resolves.toEqual({
+      intentId: source.id,
+      disposition: 'unverified',
+      outcomeCode: 'credential_revocation_pending',
+    })
+    expect(store.commitGitHubDeliveryRevocationCheck).not.toHaveBeenCalled()
   })
 
   it('refuses to probe while the freshly synchronized binding remains active', async () => {
@@ -460,6 +480,31 @@ describe('GitHub Delivery credential revocation probe', () => {
     expect(remote.getRecoverySnapshot).not.toHaveBeenCalled()
     expect(remote.verifyCredentialGrantBlocked).not.toHaveBeenCalled()
     expect(store.commitGitHubDeliveryRevocationCheck).not.toHaveBeenCalled()
+  })
+
+  it('never replays a stale v1 proof and verifies the remote authority again', async () => {
+    const { deps, source, check, store, remote } = harness()
+    vi.mocked(store.listGitHubDeliveryRevocationChecks).mockResolvedValue([
+      { ...check, stateVersion: 1 } as unknown as GitHubDeliveryRevocationCheck,
+    ])
+
+    await expect(
+      runGitHubDeliveryRevocationProbe(deps, {
+        intentId: source.id,
+        expectedUpdatedAt: source.updatedAt,
+      }),
+    ).resolves.toEqual({
+      intentId: source.id,
+      disposition: 'blocked',
+      outcomeCode: 'binding_inactive',
+    })
+    expect(remote.getRecoverySnapshot).toHaveBeenCalledTimes(1)
+    expect(remote.verifyCredentialGrantBlocked).toHaveBeenCalledTimes(1)
+    expect(store.commitGitHubDeliveryRevocationCheck).toHaveBeenCalledWith(
+      expect.objectContaining({
+        check: expect.objectContaining({ stateVersion: 2 }),
+      }),
+    )
   })
 
   it('fails closed for a malformed durable proof projection', async () => {

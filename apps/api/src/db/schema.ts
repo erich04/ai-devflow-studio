@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 12
+export const TEAM_SCHEMA_VERSION = 13
 
 export const requiredTeamTableNames = [
   'team_schema_migrations',
@@ -746,6 +746,9 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('requested_at', 'timestamptz'),
       column('issued_at', 'timestamptz', { nullable: true }),
       column('credential_expires_at', 'timestamptz', { nullable: true }),
+      column('provider_expiry_contract_version', 'smallint'),
+      column('provider_credential_expires_at', 'timestamptz', { nullable: true }),
+      column('provider_expiry_observed_at', 'timestamptz', { nullable: true }),
       column('consumed_at', 'timestamptz', { nullable: true }),
       column('outcome_code', 'text', { nullable: true }),
     ],

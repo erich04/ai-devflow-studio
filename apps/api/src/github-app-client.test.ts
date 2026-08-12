@@ -18,6 +18,8 @@ const baseSha = 'b'.repeat(40)
 const idempotencyKey = `github-delivery:${'c'.repeat(64)}`
 const marker = `<!-- devflow-delivery:${'c'.repeat(64)} -->`
 const secretSentinel = 'SECRET_SENTINEL_DO_NOT_LEAK'
+const issuanceDeadline = '2026-08-11T12:02:00.000Z'
+const providerInstallationUrl = `https://api.github.com/app/installations/${installationId}`
 
 function tokenResponse(
   permission: 'contents' | 'pull_requests',
@@ -33,7 +35,29 @@ function tokenResponse(
       [permission]: access,
     },
     repositories: [{ id: Number(repositoryId) }],
+  }, { status: 201 })
+}
+
+function providerObservationResponse(input: {
+  body?: unknown
+  date?: string
+  status?: number
+  url?: string
+  redirected?: boolean
+} = {}): Response {
+  const headers = new Headers({ 'content-type': 'application/json' })
+  if (input.date !== undefined) headers.set('date', input.date)
+  const response = new Response(
+    JSON.stringify(input.body ?? { id: Number(installationId), app_id: 789 }),
+    { status: input.status ?? 200, headers },
+  )
+  Object.defineProperty(response, 'url', {
+    value: input.url ?? providerInstallationUrl,
   })
+  if (input.redirected !== undefined) {
+    Object.defineProperty(response, 'redirected', { value: input.redirected })
+  }
+  return response
 }
 
 function pullRequestResponse(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -65,11 +89,11 @@ function makeClient(fetcher: typeof fetch): GitHubAppClient {
     fetcher,
     clock: () => new Date(now),
     signJwt: vi.fn(async (claims) => {
-      expect(claims).toEqual({
+      expect(claims).toMatchObject({
         iss: '789',
         iat: Math.floor(Date.parse(now) / 1_000) - 60,
-        exp: Math.floor(Date.parse(now) / 1_000) + 540,
       })
+      expect(claims.exp).toBeGreaterThan(Math.floor(Date.parse(now) / 1_000))
       return `app-jwt-${'j'.repeat(32)}`
     }),
   })
@@ -97,10 +121,15 @@ describe('GitHub App client', () => {
     const client = makeClient(fetcher)
 
     await expect(
-      client.issueContentsWriteToken({ installationId, repositoryId }),
+      client.issueContentsWriteToken({
+        installationId,
+        repositoryId,
+        issuanceDeadline,
+      }),
     ).resolves.toEqual({
       token,
       expiresAt,
+      providerExpiresAt: expiresAt,
       installationId,
       repositoryId,
       permissions: { contents: 'write' },
@@ -119,6 +148,208 @@ describe('GitHub App client', () => {
       repository_ids: [Number(repositoryId)],
       permissions: { contents: 'write' },
     })
+  })
+
+  it('rejects a non-201 mint response as ambiguous after crossing the provider boundary', async () => {
+    const response = tokenResponse('contents', 'write')
+    const body = await response.json()
+    const fetcher = vi.fn(async () => Response.json(body, { status: 200 }))
+    const client = createGitHubAppClient({
+      appId: '789',
+      fetcher,
+      clock: () => new Date(now),
+      signJwt: vi.fn(async () => `app-jwt-${'j'.repeat(32)}`),
+    })
+
+    await expect(
+      client.issueContentsWriteToken({
+        installationId,
+        repositoryId,
+        issuanceDeadline,
+      }),
+    ).rejects.toMatchObject({
+      code: 'github_request_rejected',
+      providerCredentialAbsentConfirmed: false,
+      credentialRevocationConfirmed: false,
+    })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('clamps the mint App JWT to the absolute issuance deadline', async () => {
+    const signJwt = vi.fn(async () => `app-jwt-${'j'.repeat(32)}`)
+    const fetcher = vi.fn(async () => tokenResponse('contents', 'write'))
+    const client = createGitHubAppClient({
+      appId: '789',
+      fetcher,
+      clock: () => new Date(now),
+      signJwt,
+    })
+
+    await client.issueContentsWriteToken({
+      installationId,
+      repositoryId,
+      issuanceDeadline,
+    })
+
+    expect(signJwt).toHaveBeenCalledWith({
+      iss: '789',
+      iat: Math.floor(Date.parse(now) / 1_000) - 60,
+      exp: Math.floor(Date.parse(issuanceDeadline) / 1_000),
+    })
+  })
+
+  it('does not POST when asynchronous signing crosses the absolute issuance deadline', async () => {
+    let current = new Date(now)
+    const fetcher = vi.fn()
+    const client = createGitHubAppClient({
+      appId: '789',
+      fetcher,
+      clock: () => current,
+      signJwt: vi.fn(async () => {
+        current = new Date(issuanceDeadline)
+        return `app-jwt-${'j'.repeat(32)}`
+      }),
+    })
+
+    await expect(
+      client.issueContentsWriteToken({
+        installationId,
+        repositoryId,
+        issuanceDeadline,
+      }),
+    ).rejects.toMatchObject({
+      code: 'github_invalid_request',
+      providerCredentialAbsentConfirmed: true,
+    })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('does not sign or POST at the absolute issuance deadline', async () => {
+    const signJwt = vi.fn()
+    const fetcher = vi.fn()
+    const client = createGitHubAppClient({
+      appId: '789',
+      fetcher,
+      clock: () => new Date(issuanceDeadline),
+      signJwt,
+    })
+
+    await expect(
+      client.issueContentsWriteToken({
+        installationId,
+        repositoryId,
+        issuanceDeadline,
+      }),
+    ).rejects.toMatchObject({
+      code: 'github_invalid_request',
+      providerCredentialAbsentConfirmed: true,
+    })
+    expect(signJwt).not.toHaveBeenCalled()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('allows the provider POST at the last representable millisecond before the deadline', async () => {
+    const signJwt = vi.fn(async () => `app-jwt-${'j'.repeat(32)}`)
+    const fetcher = vi.fn(async () => tokenResponse('contents', 'write'))
+    const client = createGitHubAppClient({
+      appId: '789',
+      fetcher,
+      clock: () => new Date('2026-08-11T12:01:59.999Z'),
+      signJwt,
+    })
+
+    await expect(
+      client.issueContentsWriteToken({
+        installationId,
+        repositoryId,
+        issuanceDeadline,
+      }),
+    ).resolves.toMatchObject({
+      repositoryId,
+      permissions: { contents: 'write' },
+    })
+    expect(signJwt).toHaveBeenCalledTimes(1)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['missing', { installationId, repositoryId }],
+    [
+      'non-canonical',
+      {
+        installationId,
+        repositoryId,
+        issuanceDeadline: '2026-08-11T12:02:00Z',
+      },
+    ],
+  ])('rejects a %s issuance deadline before signing or POSTing', async (_label, authority) => {
+    const signJwt = vi.fn()
+    const fetcher = vi.fn()
+    const client = createGitHubAppClient({
+      appId: '789',
+      fetcher,
+      clock: () => new Date(now),
+      signJwt,
+    })
+
+    await expect(
+      Reflect.apply(client.issueContentsWriteToken, client, [authority]),
+    ).rejects.toMatchObject({
+      code: 'github_invalid_request',
+      providerCredentialAbsentConfirmed: true,
+    })
+    expect(signJwt).not.toHaveBeenCalled()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['null authority', null],
+    [
+      'throwing deadline getter',
+      Object.defineProperty(
+        { installationId, repositoryId },
+        'issuanceDeadline',
+        { get: () => { throw new Error(secretSentinel) } },
+      ),
+    ],
+  ])('turns a runtime %s failure into a safe confirmed absence', async (_label, authority) => {
+    const fetcher = vi.fn()
+    const client = makeClient(fetcher)
+
+    const error = await Reflect.apply(client.issueContentsWriteToken, client, [authority])
+      .catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({
+      code: 'github_invalid_request',
+      providerCredentialAbsentConfirmed: true,
+    })
+    expect(String(error)).not.toContain(secretSentinel)
+    expect(JSON.stringify(error)).not.toContain(secretSentinel)
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when a sub-second deadline cannot produce a future JWT exp', async () => {
+    const signJwt = vi.fn()
+    const fetcher = vi.fn()
+    const client = createGitHubAppClient({
+      appId: '789',
+      fetcher,
+      clock: () => new Date('2026-08-11T12:02:00.500Z'),
+      signJwt,
+    })
+
+    await expect(
+      client.issueContentsWriteToken({
+        installationId,
+        repositoryId,
+        issuanceDeadline: '2026-08-11T12:02:00.900Z',
+      }),
+    ).rejects.toMatchObject({
+      code: 'github_invalid_request',
+      providerCredentialAbsentConfirmed: true,
+    })
+    expect(signJwt).not.toHaveBeenCalled()
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   it('revokes one installation access token only through strict no-content success', async () => {
@@ -223,18 +454,21 @@ describe('GitHub App client', () => {
 
   it('does not attempt compensation for a malformed provider token', async () => {
     const fetcher = vi.fn(async () =>
-      Response.json({
-        token: `bad token\n${secretSentinel}`,
-        expires_at: expiresAt,
-        repository_selection: 'selected',
-        permissions: { metadata: 'read', contents: 'write' },
-        repositories: [{ id: Number(repositoryId) }],
-      }),
+      Response.json(
+        {
+          token: `bad token\n${secretSentinel}`,
+          expires_at: expiresAt,
+          repository_selection: 'selected',
+          permissions: { metadata: 'read', contents: 'write' },
+          repositories: [{ id: Number(repositoryId) }],
+        },
+        { status: 201 },
+      ),
     )
     const client = makeClient(fetcher)
 
     const error = await client
-      .issueContentsWriteToken({ installationId, repositoryId })
+      .issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline })
       .catch((reason: unknown) => reason)
 
     expect(error).toMatchObject({ code: 'github_malformed_response', retryable: false })
@@ -243,42 +477,488 @@ describe('GitHub App client', () => {
     expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
-  it('rejects an over-broad or overlong installation token grant', async () => {
+  it('rejects an over-broad installation token grant', async () => {
     const broadFetcher = vi
       .fn()
       .mockResolvedValueOnce(
-        Response.json({
-          token: `ghs_${'x'.repeat(40)}`,
-          expires_at: expiresAt,
-          repository_selection: 'selected',
-          permissions: { metadata: 'read', contents: 'write', pull_requests: 'write' },
-          repositories: [{ id: Number(repositoryId) }],
-        }),
+        Response.json(
+          {
+            token: `ghs_${'x'.repeat(40)}`,
+            expires_at: expiresAt,
+            repository_selection: 'selected',
+            permissions: { metadata: 'read', contents: 'write', pull_requests: 'write' },
+            repositories: [{ id: Number(repositoryId) }],
+          },
+          { status: 201 },
+        ),
       )
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
     const broad = makeClient(broadFetcher)
     await expect(
-      broad.issueContentsWriteToken({ installationId, repositoryId }),
+      broad.issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline }),
     ).rejects.toMatchObject({ code: 'github_scope_mismatch' })
     expect(broadFetcher).toHaveBeenCalledTimes(2)
+  })
 
-    const overlongFetcher = vi
-      .fn()
-      .mockResolvedValueOnce(
-        Response.json({
+  it('clamps a valid provider expiry that is one millisecond beyond the local receipt hour', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json(
+        {
           token: `ghs_${'x'.repeat(40)}`,
-          expires_at: '2026-08-11T13:00:01.000Z',
+          expires_at: '2026-08-11T13:00:00.001Z',
           repository_selection: 'selected',
           permissions: { metadata: 'read', contents: 'write' },
           repositories: [{ id: Number(repositoryId) }],
-        }),
+        },
+        { status: 201 },
+      ),
+    )
+
+    await expect(
+      makeClient(fetcher).issueContentsWriteToken({
+        installationId,
+        repositoryId,
+        issuanceDeadline,
+      }),
+    ).resolves.toMatchObject({
+      expiresAt: '2026-08-11T13:00:00.000Z',
+      providerExpiresAt: '2026-08-11T13:00:00.001Z',
+    })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('accepts GitHub provider expiry at official whole-second precision and canonicalizes it', async () => {
+    const token = `ghs_${'x'.repeat(40)}`
+    const fetcher = vi.fn(async () =>
+      Response.json(
+        {
+          token,
+          expires_at: '2026-08-11T12:59:00Z',
+          repository_selection: 'selected',
+          permissions: { metadata: 'read', contents: 'write' },
+          repositories: [{ id: Number(repositoryId) }],
+        },
+        { status: 201 },
+      ),
+    )
+
+    await expect(
+      makeClient(fetcher).issueContentsWriteToken({
+        installationId,
+        repositoryId,
+        issuanceDeadline,
+      }),
+    ).resolves.toMatchObject({
+      expiresAt: '2026-08-11T12:59:00.000Z',
+      providerExpiresAt: '2026-08-11T12:59:00.000Z',
+    })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['non-exact fractional precision', '2026-08-11T12:59:00.00Z'],
+    ['numeric offset', '2026-08-11T12:59:00+00:00'],
+    ['impossible calendar date', '2026-02-31T12:59:00Z'],
+    ['trailing data', '2026-08-11T12:59:00Z junk'],
+  ])('revokes a minted credential with %s in provider expiry', async (_label, expires_at) => {
+    const token = `ghs_${'x'.repeat(40)}`
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            token,
+            expires_at,
+            repository_selection: 'selected',
+            permissions: { metadata: 'read', contents: 'write' },
+            repositories: [{ id: Number(repositoryId) }],
+          },
+          { status: 201 },
+        ),
       )
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
-    const overlong = makeClient(overlongFetcher)
+
     await expect(
-      overlong.issueContentsWriteToken({ installationId, repositoryId }),
-    ).rejects.toMatchObject({ code: 'github_scope_mismatch' })
-    expect(overlongFetcher).toHaveBeenCalledTimes(2)
+      makeClient(fetcher).issueContentsWriteToken({
+        installationId,
+        repositoryId,
+        issuanceDeadline,
+      }),
+    ).rejects.toMatchObject({
+      code: 'github_malformed_response',
+      credentialRevocationConfirmed: true,
+    })
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('observes provider credential expiry at the exact two-second safety boundary', async () => {
+    const response = Response.json(
+      { id: Number(installationId), app_id: 789 },
+      {
+        status: 200,
+        headers: { date: 'Tue, 11 Aug 2026 13:00:02 GMT' },
+      },
+    )
+    Object.defineProperty(response, 'url', { value: providerInstallationUrl })
+    const fetcher = vi.fn(async () => response)
+
+    await expect(
+      makeClient(fetcher).observeProviderCredentialExpiry({
+        installationId,
+        providerExpiresAt: '2026-08-11T13:00:00.000Z',
+      }),
+    ).resolves.toEqual({
+      installationId,
+      providerExpiresAt: '2026-08-11T13:00:00.000Z',
+      providerObservedAt: '2026-08-11T13:00:02.000Z',
+    })
+
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(fetcher).toHaveBeenCalledWith(
+      providerInstallationUrl,
+      expect.objectContaining({
+        method: 'GET',
+        redirect: 'error',
+        cache: 'no-store',
+        headers: expect.objectContaining({
+          authorization: expect.stringMatching(/^Bearer app-jwt-/u),
+          'cache-control': 'no-store',
+        }),
+      }),
+    )
+  })
+
+  it('rejects a provider observation only 1.999 seconds beyond expiry', async () => {
+    const response = Response.json(
+      { id: Number(installationId), app_id: 789 },
+      {
+        status: 200,
+        headers: { date: 'Tue, 11 Aug 2026 13:00:02 GMT' },
+      },
+    )
+    Object.defineProperty(response, 'url', { value: providerInstallationUrl })
+    const fetcher = vi.fn(async () => response)
+
+    await expect(
+      makeClient(fetcher).observeProviderCredentialExpiry({
+        installationId,
+        providerExpiresAt: '2026-08-11T13:00:00.001Z',
+      }),
+    ).rejects.toMatchObject({ code: 'github_conflict', retryable: false })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['obsolete RFC 850', 'Tuesday, 11-Aug-26 13:00:02 GMT'],
+    ['wrong weekday', 'Mon, 11 Aug 2026 13:00:02 GMT'],
+    ['impossible date', 'Tue, 31 Feb 2026 13:00:02 GMT'],
+    ['invalid hour', 'Tue, 11 Aug 2026 24:00:02 GMT'],
+    ['trailing data', 'Tue, 11 Aug 2026 13:00:02 GMT junk'],
+  ])('rejects a %s provider Date header', async (_label, date) => {
+    const fetcher = vi.fn(async () =>
+      providerObservationResponse(date === undefined ? {} : { date }),
+    )
+
+    await expect(
+      makeClient(fetcher).observeProviderCredentialExpiry({
+        installationId,
+        providerExpiresAt: '2026-08-11T13:00:00.000Z',
+      }),
+    ).rejects.toMatchObject({ code: 'github_malformed_response', retryable: false })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects comma-combined duplicate provider Date headers', async () => {
+    const date = 'Tue, 11 Aug 2026 13:00:02 GMT'
+    const response = providerObservationResponse({ date })
+    response.headers.append('date', date)
+    const fetcher = vi.fn(async () => response)
+
+    await expect(
+      makeClient(fetcher).observeProviderCredentialExpiry({
+        installationId,
+        providerExpiresAt: '2026-08-11T13:00:00.000Z',
+      }),
+    ).rejects.toMatchObject({ code: 'github_malformed_response', retryable: false })
+  })
+
+  it.each([
+    ['far behind', '2001-01-01T00:00:00.000Z'],
+    ['far ahead', '2099-01-01T00:00:00.000Z'],
+  ])('does not use a local clock that is %s to prove provider expiry', async (_label, localNow) => {
+    const fetcher = vi.fn(async () =>
+      providerObservationResponse({ date: 'Tue, 11 Aug 2026 13:00:02 GMT' }),
+    )
+    const client = createGitHubAppClient({
+      appId: '789',
+      fetcher,
+      clock: () => new Date(localNow),
+      signJwt: async () => `app-jwt-${'j'.repeat(32)}`,
+    })
+
+    await expect(
+      client.observeProviderCredentialExpiry({
+        installationId,
+        providerExpiresAt: '2026-08-11T13:00:00.000Z',
+      }),
+    ).resolves.toMatchObject({ providerObservedAt: '2026-08-11T13:00:02.000Z' })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['missing installation id', { app_id: 789 }, 'github_malformed_response'],
+    ['missing app id', { id: Number(installationId) }, 'github_malformed_response'],
+    ['wrong installation id', { id: 124, app_id: 789 }, 'github_conflict'],
+    ['wrong app id', { id: Number(installationId), app_id: 790 }, 'github_conflict'],
+    [
+      'non-canonical app id',
+      { id: Number(installationId), app_id: '0789' },
+      'github_malformed_response',
+    ],
+  ])('rejects a provider observation body with %s', async (_label, body, code) => {
+    const fetcher = vi.fn(async () =>
+      providerObservationResponse({
+        body,
+        date: 'Tue, 11 Aug 2026 13:00:02 GMT',
+      }),
+    )
+
+    await expect(
+      makeClient(fetcher).observeProviderCredentialExpiry({
+        installationId,
+        providerExpiresAt: '2026-08-11T13:00:00.000Z',
+      }),
+    ).rejects.toMatchObject({ code, retryable: false })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['an unavailable final URL', { url: '' }],
+    ['a mismatched final URL', { url: `${providerInstallationUrl}/redirected` }],
+    ['a redirected response', { redirected: true }],
+  ])('rejects %s for a provider observation', async (_label, responseOverrides) => {
+    const fetcher = vi.fn(async () =>
+      providerObservationResponse({
+        date: 'Tue, 11 Aug 2026 13:00:02 GMT',
+        ...responseOverrides,
+      }),
+    )
+
+    await expect(
+      makeClient(fetcher).observeProviderCredentialExpiry({
+        installationId,
+        providerExpiresAt: '2026-08-11T13:00:00.000Z',
+      }),
+    ).rejects.toMatchObject({ code: 'github_malformed_response', retryable: false })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('requires exact HTTP 200 for a provider observation', async () => {
+    const fetcher = vi.fn(async () =>
+      providerObservationResponse({
+        date: 'Tue, 11 Aug 2026 13:00:02 GMT',
+        status: 201,
+      }),
+    )
+
+    await expect(
+      makeClient(fetcher).observeProviderCredentialExpiry({
+        installationId,
+        providerExpiresAt: '2026-08-11T13:00:00.000Z',
+      }),
+    ).rejects.toMatchObject({ code: 'github_request_rejected', status: 201 })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('bounds a provider observation when the fetcher ignores AbortSignal', async () => {
+    let signal: AbortSignal | undefined
+    const fetcher = vi.fn(async (_url, init) => {
+      signal = init?.signal ?? undefined
+      return new Promise<Response>(() => undefined)
+    })
+    const client = createGitHubAppClient({
+      appId: '789',
+      fetcher,
+      clock: () => new Date(now),
+      signJwt: async () => `app-jwt-${'j'.repeat(32)}`,
+      requestTimeoutMs: 10,
+    })
+
+    await expect(
+      client.observeProviderCredentialExpiry({
+        installationId,
+        providerExpiresAt: '2026-08-11T13:00:00.000Z',
+      }),
+    ).rejects.toMatchObject({ code: 'github_timeout', retryable: true })
+    expect(signal?.aborted).toBe(true)
+  })
+
+  it('rejects an oversized provider observation body', async () => {
+    const fetcher = vi.fn(async () =>
+      providerObservationResponse({
+        body: { padding: 'x'.repeat(300_000) },
+        date: 'Tue, 11 Aug 2026 13:00:02 GMT',
+      }),
+    )
+
+    await expect(
+      makeClient(fetcher).observeProviderCredentialExpiry({
+        installationId,
+        providerExpiresAt: '2026-08-11T13:00:00.000Z',
+      }),
+    ).rejects.toMatchObject({ code: 'github_response_too_large', retryable: false })
+  })
+
+  it('never leaks provider observation response or transport secrets', async () => {
+    const responseSecret = `ghs_${secretSentinel}_${'s'.repeat(24)}`
+    const bodyFailure = makeClient(
+      vi.fn(async () =>
+        providerObservationResponse({
+          body: { id: 124, app_id: 789, token: responseSecret },
+          date: 'Tue, 11 Aug 2026 13:00:02 GMT',
+        }),
+      ),
+    )
+    const bodyError = await bodyFailure
+      .observeProviderCredentialExpiry({
+        installationId,
+        providerExpiresAt: '2026-08-11T13:00:00.000Z',
+      })
+      .catch((reason: unknown) => reason)
+    expect(bodyError).toMatchObject({ code: 'github_conflict' })
+    expect(String(bodyError)).not.toContain(secretSentinel)
+    expect(JSON.stringify(bodyError)).not.toContain(secretSentinel)
+
+    const transportFailure = makeClient(
+      vi.fn(async () => {
+        throw new Error(secretSentinel)
+      }),
+    )
+    const transportError = await transportFailure
+      .observeProviderCredentialExpiry({
+        installationId,
+        providerExpiresAt: '2026-08-11T13:00:00.000Z',
+      })
+      .catch((reason: unknown) => reason)
+    expect(transportError).toMatchObject({ code: 'github_unavailable' })
+    expect(String(transportError)).not.toContain(secretSentinel)
+    expect(JSON.stringify(transportError)).not.toContain(secretSentinel)
+  })
+
+  it.each([5_001, 8_192])(
+    'accepts one valid provider credential with %i characters',
+    async (length) => {
+      const token = `g${'x'.repeat(length - 1)}`
+      const fetcher = vi.fn(async () =>
+        Response.json(
+          {
+            token,
+            expires_at: expiresAt,
+            repository_selection: 'selected',
+            permissions: { metadata: 'read', contents: 'write' },
+            repositories: [{ id: Number(repositoryId) }],
+          },
+          { status: 201 },
+        ),
+      )
+      const client = makeClient(fetcher)
+
+      await expect(
+        client.issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline }),
+      ).resolves.toMatchObject({ token })
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    },
+  )
+
+  it('deletes an 8193-character provider credential before rejecting it', async () => {
+    const token = `g${'x'.repeat(8_192)}`
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            token,
+            expires_at: expiresAt,
+            repository_selection: 'selected',
+            permissions: { metadata: 'read', contents: 'write' },
+            repositories: [{ id: Number(repositoryId) }],
+          },
+          { status: 201 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const client = makeClient(fetcher)
+
+    const error = await client
+      .issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline })
+      .catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({
+      code: 'github_malformed_response',
+      retryable: false,
+      credentialRevocationConfirmed: true,
+    })
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(fetcher.mock.calls[1]).toEqual([
+      'https://api.github.com/installation/token',
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: expect.objectContaining({ authorization: `Bearer ${token}` }),
+      }),
+    ])
+  })
+
+  it('returns only a typed confirmed failure when post-token clock validation throws', async () => {
+    const token = `ghs_${secretSentinel}_${'c'.repeat(24)}`
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            token,
+            expires_at: expiresAt,
+            repository_selection: 'selected',
+            permissions: { metadata: 'read', contents: 'write' },
+            repositories: [{ id: Number(repositoryId) }],
+          },
+          { status: 201 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    let clockCalls = 0
+    const client = createGitHubAppClient({
+      appId: '789',
+      fetcher,
+      clock: () => {
+        clockCalls += 1
+        if (clockCalls <= 2) return new Date(now)
+        throw new Error(`RAW_CLOCK_${secretSentinel}`)
+      },
+      signJwt: async () => `app-jwt-${'j'.repeat(32)}`,
+    })
+
+    const error = await client
+      .issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline })
+      .catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(GitHubAppClientError)
+    expect(error).toMatchObject({
+      code: 'github_invalid_request',
+      retryable: false,
+      credentialRevocationConfirmed: true,
+    })
+    expect(error).not.toHaveProperty('cause')
+    expect(String(error)).not.toContain(secretSentinel)
+    expect(JSON.stringify(error)).not.toContain(secretSentinel)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(fetcher.mock.calls[1]).toEqual([
+      'https://api.github.com/installation/token',
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: expect.objectContaining({ authorization: `Bearer ${token}` }),
+      }),
+    ])
   })
 
   it('revokes a valid provider token before rejecting its invalid expiry', async () => {
@@ -286,19 +966,22 @@ describe('GitHub App client', () => {
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(
-        Response.json({
-          token,
-          expires_at: '2026-08-11T13:00:01.000Z',
-          repository_selection: 'selected',
-          permissions: { metadata: 'read', contents: 'write' },
-          repositories: [{ id: Number(repositoryId) }],
-        }),
+        Response.json(
+          {
+            token,
+            expires_at: now,
+            repository_selection: 'selected',
+            permissions: { metadata: 'read', contents: 'write' },
+            repositories: [{ id: Number(repositoryId) }],
+          },
+          { status: 201 },
+        ),
       )
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
     const client = makeClient(fetcher)
 
     const error = await client
-      .issueContentsWriteToken({ installationId, repositoryId })
+      .issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline })
       .catch((reason: unknown) => reason)
 
     expect(error).toMatchObject({ code: 'github_scope_mismatch', retryable: false })
@@ -319,19 +1002,22 @@ describe('GitHub App client', () => {
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(
-        Response.json({
-          token,
-          expires_at: '2026-08-11T13:00:01.000Z',
-          repository_selection: 'selected',
-          permissions: { metadata: 'read', contents: 'write' },
-          repositories: [{ id: Number(repositoryId) }],
-        }),
+        Response.json(
+          {
+            token,
+            expires_at: now,
+            repository_selection: 'selected',
+            permissions: { metadata: 'read', contents: 'write' },
+            repositories: [{ id: Number(repositoryId) }],
+          },
+          { status: 201 },
+        ),
       )
       .mockResolvedValueOnce(new Response(secretSentinel, { status: 401 }))
     const client = makeClient(fetcher)
 
     const error = await client
-      .issueContentsWriteToken({ installationId, repositoryId })
+      .issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline })
       .catch((reason: unknown) => reason)
 
     expect(error).toBeInstanceOf(GitHubAppClientError)
@@ -361,20 +1047,23 @@ describe('GitHub App client', () => {
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(
-        Response.json({
-          token,
-          expires_at: expiresAt,
-          repository_selection: 'selected',
-          permissions: { metadata: 'read', contents: 'write' },
-          repositories: [{ id: Number(repositoryId) }],
-          ...override,
-        }),
+        Response.json(
+          {
+            token,
+            expires_at: expiresAt,
+            repository_selection: 'selected',
+            permissions: { metadata: 'read', contents: 'write' },
+            repositories: [{ id: Number(repositoryId) }],
+            ...override,
+          },
+          { status: 201 },
+        ),
       )
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
     const client = makeClient(fetcher)
 
     const error = await client
-      .issueContentsWriteToken({ installationId, repositoryId })
+      .issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline })
       .catch((reason: unknown) => reason)
 
     expect(error).toMatchObject({ code: 'github_scope_mismatch', retryable: false })
@@ -647,7 +1336,7 @@ describe('GitHub App client', () => {
     )
 
     const error = await client
-      .issueContentsWriteToken({ installationId, repositoryId })
+      .issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline })
       .catch((reason: unknown) => reason)
     expect(error).toBeInstanceOf(GitHubAppClientError)
     expect(error).toMatchObject({ code, status })
@@ -656,18 +1345,18 @@ describe('GitHub App client', () => {
   })
 
   it('rejects malformed and oversized JSON with fixed codes', async () => {
-    const malformed = makeClient(vi.fn(async () => new Response('{not-json', { status: 200 })))
+    const malformed = makeClient(vi.fn(async () => new Response('{not-json', { status: 201 })))
     await expect(
-      malformed.issueContentsWriteToken({ installationId, repositoryId }),
+      malformed.issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline }),
     ).rejects.toMatchObject({ code: 'github_malformed_response' })
 
     const oversized = makeClient(
       vi.fn(async () =>
-        new Response(JSON.stringify({ padding: 'x'.repeat(300_000) }), { status: 200 }),
+        new Response(JSON.stringify({ padding: 'x'.repeat(300_000) }), { status: 201 }),
       ),
     )
     await expect(
-      oversized.issueContentsWriteToken({ installationId, repositoryId }),
+      oversized.issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline }),
     ).rejects.toMatchObject({ code: 'github_response_too_large' })
   })
 
@@ -678,9 +1367,12 @@ describe('GitHub App client', () => {
       }),
     )
     const fetchError = await fetchFailure
-      .issueContentsWriteToken({ installationId, repositoryId })
+      .issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline })
       .catch((reason: unknown) => reason)
-    expect(fetchError).toMatchObject({ code: 'github_unavailable' })
+    expect(fetchError).toMatchObject({
+      code: 'github_unavailable',
+      providerCredentialAbsentConfirmed: false,
+    })
     expect(String(fetchError)).not.toContain(secretSentinel)
     expect(JSON.stringify(fetchError)).not.toContain(secretSentinel)
 
@@ -693,9 +1385,12 @@ describe('GitHub App client', () => {
       },
     })
     const signerError = await signerFailure
-      .issueContentsWriteToken({ installationId, repositoryId })
+      .issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline })
       .catch((reason: unknown) => reason)
-    expect(signerError).toMatchObject({ code: 'github_authentication_failed' })
+    expect(signerError).toMatchObject({
+      code: 'github_authentication_failed',
+      providerCredentialAbsentConfirmed: true,
+    })
     expect(String(signerError)).not.toContain(secretSentinel)
     expect(JSON.stringify(signerError)).not.toContain(secretSentinel)
   })
@@ -714,7 +1409,7 @@ describe('GitHub App client', () => {
     })
 
     await expect(
-      client.issueContentsWriteToken({ installationId, repositoryId }),
+      client.issueContentsWriteToken({ installationId, repositoryId, issuanceDeadline }),
     ).rejects.toMatchObject({ code: 'github_timeout', retryable: true })
     expect(signal?.aborted).toBe(true)
   })
@@ -726,6 +1421,7 @@ describe('GitHub App client', () => {
       'findOrCreateDraftPullRequest',
       'getBranchHead',
       'issueContentsWriteToken',
+      'observeProviderCredentialExpiry',
       'revokeInstallationAccessToken',
       'verifyRepository',
     ])

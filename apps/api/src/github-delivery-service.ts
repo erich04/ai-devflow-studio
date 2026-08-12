@@ -3,6 +3,7 @@ import {
   type GitHubAppClient,
   type GitHubAppClientErrorCode,
 } from './github-app-client'
+import { isGitHubCredentialToken } from '@ai-devflow/shared'
 import type {
   GitHubBranchPublicationFinalizationResult,
   GitHubCredentialGrantMutationResult,
@@ -13,6 +14,9 @@ import type {
   GitHubRepositoryBindingMutationResult,
   RecordGitHubBranchPublicationReportInput,
   ReserveGitHubDraftPullRequestInput,
+} from './repositories/github-delivery-contract'
+import {
+  GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS,
 } from './repositories/github-delivery-contract'
 
 export type GitHubDeliveryServiceErrorCode =
@@ -205,6 +209,107 @@ export function createGitHubDeliveryService(
     }
   }
 
+  async function confirmCredentialClearance(
+    grantInput: IssueGitHubCredentialGrantInput,
+    requestId: string,
+    grantId: string,
+    outcomeCode:
+      | 'credential_mint_absent_confirmed'
+      | 'credential_revocation_confirmed',
+    authority: Extract<
+      Awaited<ReturnType<GitHubDeliveryRepository['reserveGitHubCredentialGrant']>>,
+      { ok: true }
+    >['clearanceAuthority'],
+    organizationId: string,
+  ): Promise<void> {
+    try {
+      const confirmed =
+        await input.repository.confirmGitHubCredentialClearance(
+          {
+            organizationId,
+            projectId: grantInput.projectId,
+            requestId,
+            grantId,
+            outcomeCode,
+          },
+          authority,
+        )
+      if (
+        !confirmed.ok ||
+        confirmed.outcomeCode !== outcomeCode ||
+        confirmed.request.id !== requestId ||
+        confirmed.request.projectId !== grantInput.projectId ||
+        confirmed.grant.id !== grantId ||
+        confirmed.grant.requestId !== requestId ||
+        (confirmed.grant.status !== 'failed' &&
+          confirmed.grant.status !== 'revoked') ||
+        (outcomeCode === 'credential_mint_absent_confirmed' &&
+          (confirmed.grant.issuedAt !== null ||
+            confirmed.grant.credentialExpiresAt !== null)) ||
+        (outcomeCode === 'credential_revocation_confirmed' &&
+          (confirmed.grant.consumedAt !== null ||
+            ((confirmed.grant.issuedAt === null) !==
+              (confirmed.grant.credentialExpiresAt === null)))) ||
+        confirmed.grant.outcomeCode !== outcomeCode ||
+        confirmed.request.redacted !== true ||
+        confirmed.grant.redacted !== true
+      ) {
+        throw new Error('credential clearance confirmation failed')
+      }
+    } catch {
+      throw new GitHubDeliveryServiceError({
+        code: 'github_credential_revocation_unconfirmed',
+        retryable: false,
+        phase: 'credential',
+      })
+    }
+  }
+
+  async function settleCompensatedGrant(
+    grantInput: IssueGitHubCredentialGrantInput,
+    requestId: string,
+    grantId: string,
+    expectedStateVersion: number,
+    expectedGrantVersion: number,
+    outcomeCode:
+      | 'credential_mint_absent_confirmed'
+      | 'credential_revocation_confirmed',
+    principal: GitHubDeliveryDesktopPrincipal,
+    authority: Extract<
+      Awaited<ReturnType<GitHubDeliveryRepository['reserveGitHubCredentialGrant']>>,
+      { ok: true }
+    >['clearanceAuthority'],
+    organizationId: string,
+  ): Promise<void> {
+    try {
+      await input.repository.finalizeGitHubCredentialGrant(
+        {
+          projectId: grantInput.projectId,
+          requestId,
+          grantId,
+          expectedStateVersion,
+          expectedGrantVersion,
+          outcome: {
+            status: 'failed',
+            outcomeCode: 'credential_issue_failed',
+          },
+        },
+        principal,
+      )
+    } catch {
+      // The strict confirmation below is the authority: it succeeds only when
+      // this exact unissued grant is already failed/revoked and compensable.
+    }
+    await confirmCredentialClearance(
+      grantInput,
+      requestId,
+      grantId,
+      outcomeCode,
+      authority,
+      organizationId,
+    )
+  }
+
   async function issueCredentialGrant(
     grantInput: IssueGitHubCredentialGrantInput,
     principal: GitHubDeliveryDesktopPrincipal,
@@ -222,10 +327,118 @@ export function createGitHubDeliveryService(
     }
     if (!reserved.ok) return reserved
     if (reserved.replayed) {
+      if (
+        reserved.grant.status === 'issued' &&
+        reserved.grant.providerExpiryContractVersion === 1 &&
+        reserved.grant.providerCredentialExpiresAt !== null &&
+        reserved.grant.providerExpiryObservedAt === null &&
+        reserved.grant.consumedAt === null &&
+        reserved.grant.outcomeCode === null
+      ) {
+        try {
+          const observed = await input.client.observeProviderCredentialExpiry({
+            installationId: reserved.request.installationId,
+            providerExpiresAt: reserved.grant.providerCredentialExpiresAt,
+          })
+          if (
+            observed.installationId !== reserved.request.installationId ||
+            observed.providerExpiresAt !==
+              reserved.grant.providerCredentialExpiresAt
+          ) {
+            throw new Error('provider expiry observation mismatch')
+          }
+          const confirmed =
+            await input.repository.confirmGitHubCredentialProviderExpiry(
+              {
+                organizationId: reserved.request.organizationId,
+                projectId: reserved.request.projectId,
+                requestId: reserved.request.id,
+                grantId: reserved.grant.id,
+                providerCredentialExpiresAt: observed.providerExpiresAt,
+                providerExpiryObservedAt: observed.providerObservedAt,
+              },
+              reserved.clearanceAuthority,
+            )
+          if (
+            !confirmed.ok ||
+            confirmed.outcomeCode !== 'credential_provider_expiry_confirmed' ||
+            confirmed.request.id !== reserved.request.id ||
+            confirmed.request.status !== 'recovery_required' ||
+            confirmed.grant.id !== reserved.grant.id ||
+            confirmed.grant.status !== 'expired' ||
+            confirmed.grant.providerExpiryContractVersion !== 1 ||
+            confirmed.grant.providerCredentialExpiresAt !==
+              observed.providerExpiresAt ||
+            confirmed.grant.providerExpiryObservedAt !==
+              observed.providerObservedAt ||
+            confirmed.grant.outcomeCode !==
+              'credential_provider_expiry_confirmed'
+          ) {
+            throw new Error('provider expiry confirmation failed')
+          }
+        } catch (error) {
+          throw serviceError('credential', error)
+        }
+        throw new GitHubDeliveryServiceError({
+          code: 'github_delivery_state_conflict',
+          retryable: true,
+          phase: 'credential',
+        })
+      }
       throw new GitHubDeliveryServiceError({
         code: 'github_delivery_state_conflict',
         retryable: reserved.grant.status === 'issuing' ||
           reserved.grant.status === 'recovery_required',
+        phase: 'credential',
+      })
+    }
+
+    const requestedAt = Date.parse(reserved.grant.requestedAt)
+    if (
+      !Number.isFinite(requestedAt) ||
+      new Date(requestedAt).toISOString() !== reserved.grant.requestedAt
+    ) {
+      await settleCompensatedGrant(
+        grantInput,
+        reserved.request.id,
+        reserved.grant.id,
+        reserved.request.stateVersion,
+        reserved.grant.version,
+        'credential_mint_absent_confirmed',
+        principal,
+        reserved.clearanceAuthority,
+        reserved.request.organizationId,
+      )
+      throw new GitHubDeliveryServiceError({
+        code: 'github_delivery_state_conflict',
+        retryable: false,
+        phase: 'credential',
+      })
+    }
+    let issuanceStartedAt = Number.NaN
+    try {
+      issuanceStartedAt = input.clock().getTime()
+    } catch {
+      issuanceStartedAt = Number.NaN
+    }
+    if (
+      !Number.isFinite(issuanceStartedAt) ||
+      issuanceStartedAt >= requestedAt + GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS
+    ) {
+      await settleCompensatedGrant(
+        grantInput,
+        reserved.request.id,
+        reserved.grant.id,
+        reserved.request.stateVersion,
+        reserved.grant.version,
+        'credential_mint_absent_confirmed',
+        principal,
+        reserved.clearanceAuthority,
+        reserved.request.organizationId,
+      )
+      throw new GitHubDeliveryServiceError({
+        code: 'github_delivery_state_conflict',
+        retryable: false,
         phase: 'credential',
       })
     }
@@ -235,6 +448,9 @@ export function createGitHubDeliveryService(
       access = await input.client.issueContentsWriteToken({
         installationId: reserved.request.installationId,
         repositoryId: reserved.request.repositoryId,
+        issuanceDeadline: new Date(
+          requestedAt + GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS,
+        ).toISOString(),
       })
     } catch (error) {
       const safe = serviceError('credential', error)
@@ -261,6 +477,24 @@ export function createGitHubDeliveryService(
       if (safe.code === 'github_credential_revocation_unconfirmed') {
         throw safe
       }
+      if (error instanceof GitHubAppClientError &&
+        (error.credentialRevocationConfirmed ||
+          error.providerCredentialAbsentConfirmed)) {
+        await settleCompensatedGrant(
+          grantInput,
+          reserved.request.id,
+          reserved.grant.id,
+          reserved.request.stateVersion,
+          reserved.grant.version,
+          error.credentialRevocationConfirmed
+            ? 'credential_revocation_confirmed'
+            : 'credential_mint_absent_confirmed',
+          principal,
+          reserved.clearanceAuthority,
+          reserved.request.organizationId,
+        )
+        throw safe
+      }
       if (!failureRecorded) {
         throw new GitHubDeliveryServiceError({
           code: 'github_delivery_state_conflict',
@@ -276,11 +510,33 @@ export function createGitHubDeliveryService(
       { ok: true }
     > | null = null
     let postMintFailure: GitHubDeliveryServiceError | null = null
+    let mintedToken: string | null = null
+    let accessSnapshot: {
+      installationId: string
+      repositoryId: string
+      token: string
+      expiresAt: string
+      providerExpiresAt: string
+      contentsPermission: string | undefined
+    } | null = null
     try {
+      const candidateToken = access.token
+      if (isGitHubCredentialToken(candidateToken)) {
+        mintedToken = candidateToken
+      }
+      accessSnapshot = {
+        installationId: access.installationId,
+        repositoryId: access.repositoryId,
+        token: candidateToken,
+        expiresAt: access.expiresAt,
+        providerExpiresAt: access.providerExpiresAt,
+        contentsPermission: access.permissions.contents,
+      }
       if (
-        access.installationId !== reserved.request.installationId ||
-        access.repositoryId !== reserved.request.repositoryId ||
-        access.permissions.contents !== 'write'
+        mintedToken === null ||
+        accessSnapshot.installationId !== reserved.request.installationId ||
+        accessSnapshot.repositoryId !== reserved.request.repositoryId ||
+        accessSnapshot.contentsPermission !== 'write'
       ) {
         postMintFailure = new GitHubDeliveryServiceError({
           code: 'github_scope_mismatch',
@@ -304,37 +560,66 @@ export function createGitHubDeliveryService(
         if (!finalized.ok) finalizationRejection = finalized
       } else {
         const issuedAt = input.clock().toISOString()
-        const finalized = await input.repository.finalizeGitHubCredentialGrant(
-          {
-            projectId: grantInput.projectId,
-            requestId: reserved.request.id,
-            grantId: reserved.grant.id,
-            expectedStateVersion: reserved.request.stateVersion,
-            expectedGrantVersion: reserved.grant.version,
-            outcome: {
-              status: 'issued',
-              issuedAt,
-              credentialExpiresAt: access.expiresAt,
-              repositoryId: access.repositoryId,
-              permission: 'contents:write',
-              repositoryCount: 1,
+        if (
+          Date.parse(issuedAt) >=
+            Date.parse(reserved.grant.requestedAt) +
+              GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS
+        ) {
+          postMintFailure = new GitHubDeliveryServiceError({
+            code: 'github_delivery_state_conflict',
+            retryable: false,
+            phase: 'credential',
+          })
+          const finalized = await input.repository.finalizeGitHubCredentialGrant(
+            {
+              projectId: grantInput.projectId,
+              requestId: reserved.request.id,
+              grantId: reserved.grant.id,
+              expectedStateVersion: reserved.request.stateVersion,
+              expectedGrantVersion: reserved.grant.version,
+              outcome: {
+                status: 'failed',
+                outcomeCode: 'credential_issue_failed',
+              },
             },
-          },
-          principal,
-        )
-        if (!finalized.ok) {
-          finalizationRejection = finalized
+            principal,
+          )
+          if (!finalized.ok) finalizationRejection = finalized
         } else {
-          return {
-            ...finalized,
-            credential: {
-              grantId: finalized.grant.id,
-              username: 'x-access-token',
-              token: access.token,
-              expiresAt: access.expiresAt,
-              repositoryId: access.repositoryId,
-              canonicalHttpsUrl: `https://github.com/${finalized.request.repository}.git`,
+          const finalized = await input.repository.finalizeGitHubCredentialGrant(
+            {
+              projectId: grantInput.projectId,
+              requestId: reserved.request.id,
+              grantId: reserved.grant.id,
+              expectedStateVersion: reserved.request.stateVersion,
+              expectedGrantVersion: reserved.grant.version,
+              outcome: {
+                status: 'issued',
+                issuedAt,
+                credentialExpiresAt: accessSnapshot.expiresAt,
+                providerCredentialExpiresAt:
+                  accessSnapshot.providerExpiresAt,
+                repositoryId: accessSnapshot.repositoryId,
+                permission: 'contents:write',
+                repositoryCount: 1,
+              },
             },
+            principal,
+          )
+          if (!finalized.ok) {
+            finalizationRejection = finalized
+          } else {
+            return {
+              ...finalized,
+              credential: {
+                grantId: finalized.grant.id,
+                username: 'x-access-token',
+                token: accessSnapshot.token,
+                expiresAt: accessSnapshot.expiresAt,
+                repositoryId: accessSnapshot.repositoryId,
+                canonicalHttpsUrl: `https://github.com/${finalized.request.repository}.git`,
+              },
+            }
           }
         }
       }
@@ -346,7 +631,25 @@ export function createGitHubDeliveryService(
       })
     }
 
-    await revokeMintedCredential(access.token)
+    if (mintedToken === null) {
+      throw new GitHubDeliveryServiceError({
+        code: 'github_credential_revocation_unconfirmed',
+        retryable: false,
+        phase: 'credential',
+      })
+    }
+    await revokeMintedCredential(mintedToken)
+    await settleCompensatedGrant(
+      grantInput,
+      reserved.request.id,
+      reserved.grant.id,
+      reserved.request.stateVersion,
+      reserved.grant.version,
+      'credential_revocation_confirmed',
+      principal,
+      reserved.clearanceAuthority,
+      reserved.request.organizationId,
+    )
     if (finalizationRejection !== null) {
       if (finalizationRejection.outcomeCode === 'binding_inactive') {
         return finalizationRejection

@@ -15,10 +15,14 @@ import type {
   GitHubDeliveryRequest,
   GitHubDeliverySessionPrincipal,
   GitHubPullRequestOutcome,
+  GitHubCredentialClearanceAuthority,
 } from './repositories/github-delivery-contract'
 
 const now = '2026-08-11T15:00:00.000Z'
 const expectedCommitSha = 'b'.repeat(40)
+const clearanceAuthority = Object.freeze(
+  Object.create(null),
+) as GitHubCredentialClearanceAuthority
 
 const sessionPrincipal = {
   session: {
@@ -107,6 +111,9 @@ function grant(overrides: Partial<GitHubCredentialGrant> = {}): GitHubCredential
     requestedAt: now,
     issuedAt: null,
     credentialExpiresAt: null,
+    providerExpiryContractVersion: 0,
+    providerCredentialExpiresAt: null,
+    providerExpiryObservedAt: null,
     consumedAt: null,
     outcomeCode: null,
     redacted: true,
@@ -189,6 +196,7 @@ function createHarness() {
       replayed: false,
       request: request(),
       grant: grant(),
+      clearanceAuthority,
     })),
     finalizeGitHubCredentialGrant: vi.fn(async (input) => ({
       ok: true as const,
@@ -202,8 +210,49 @@ function createHarness() {
         issuedAt: input.outcome.status === 'issued' ? input.outcome.issuedAt : null,
         credentialExpiresAt:
           input.outcome.status === 'issued' ? input.outcome.credentialExpiresAt : null,
+        providerExpiryContractVersion: input.outcome.status === 'issued' ? 1 : 0,
+        providerCredentialExpiresAt:
+          input.outcome.status === 'issued'
+            ? input.outcome.providerCredentialExpiresAt
+            : null,
+        providerExpiryObservedAt: null,
         outcomeCode:
           input.outcome.status === 'issued' ? null : input.outcome.outcomeCode,
+      }),
+    })),
+    confirmGitHubCredentialClearance: vi.fn(async (input) => ({
+      ok: true as const,
+      responseStatus: 200 as const,
+      outcomeCode: input.outcomeCode,
+      replayed: false,
+      request: request(),
+      grant: grant({
+        id: input.grantId,
+        version: 3,
+        status: 'failed',
+        outcomeCode: input.outcomeCode,
+      }),
+    })),
+    confirmGitHubCredentialProviderExpiry: vi.fn(async (input) => ({
+      ok: true as const,
+      responseStatus: 200 as const,
+      outcomeCode: 'credential_provider_expiry_confirmed' as const,
+      replayed: false,
+      request: request({
+        stateVersion: 4,
+        status: 'recovery_required',
+        outcomeCode: 'credential_issue_failed',
+      }),
+      grant: grant({
+        id: input.grantId,
+        version: 3,
+        status: 'expired',
+        issuedAt: now,
+        credentialExpiresAt: input.providerCredentialExpiresAt,
+        providerExpiryContractVersion: 1,
+        providerCredentialExpiresAt: input.providerCredentialExpiresAt,
+        providerExpiryObservedAt: input.providerExpiryObservedAt,
+        outcomeCode: 'credential_provider_expiry_confirmed',
       }),
     })),
     recordGitHubBranchPublicationReport: vi.fn(async () => ({
@@ -306,7 +355,12 @@ function createHarness() {
       repositoryId: '98765',
       token: 'ghs_ephemeral_value_for_desktop_only',
       expiresAt: '2026-08-11T16:00:00.000Z',
+      providerExpiresAt: '2026-08-11T16:00:00.000Z',
       permissions: { contents: 'write' as const },
+    })),
+    observeProviderCredentialExpiry: vi.fn(async (expiryInput) => ({
+      ...expiryInput,
+      providerObservedAt: '2026-08-11T16:00:02.000Z',
     })),
     revokeInstallationAccessToken: vi.fn(async () => undefined),
     getBranchHead: vi.fn(async () => ({
@@ -381,6 +435,7 @@ describe('GitHub Delivery service', () => {
         repositoryId: '98765',
         token: 'ghs_ephemeral_value_for_desktop_only',
         expiresAt: '2026-08-11T16:00:00.000Z',
+        providerExpiresAt: '2026-08-11T16:00:00.000Z',
         permissions: { contents: 'write' },
       }
     })
@@ -408,6 +463,11 @@ describe('GitHub Delivery service', () => {
     )
 
     expect(events).toEqual(['issued', 'finalized'])
+    expect(harness.client.issueContentsWriteToken).toHaveBeenCalledWith({
+      installationId: '12345',
+      repositoryId: '98765',
+      issuanceDeadline: '2026-08-11T15:02:00.000Z',
+    })
     expect(result).toMatchObject({
       ok: true,
       credential: {
@@ -443,6 +503,113 @@ describe('GitHub Delivery service', () => {
     expect(harness.repository.finalizeGitHubCredentialGrant).not.toHaveBeenCalled()
   })
 
+  it('does not cross the GitHub token boundary while prior credential authority is unresolved', async () => {
+    const harness = createHarness()
+    vi.mocked(harness.repository.reserveGitHubCredentialGrant).mockResolvedValue({
+      ok: false,
+      responseStatus: 409,
+      outcomeCode: 'credential_revocation_pending',
+      replayed: false,
+    })
+
+    await expect(
+      harness.service.issueCredentialGrant(
+        { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 8 },
+        desktopPrincipal,
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      responseStatus: 409,
+      outcomeCode: 'credential_revocation_pending',
+      replayed: false,
+    })
+    expect(harness.client.issueContentsWriteToken).not.toHaveBeenCalled()
+    expect(harness.client.revokeInstallationAccessToken).not.toHaveBeenCalled()
+    expect(harness.repository.finalizeGitHubCredentialGrant).not.toHaveBeenCalled()
+    expect(harness.repository.confirmGitHubCredentialClearance).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['null access', null],
+    [
+      'throwing token getter',
+      Object.defineProperty({}, 'token', {
+        get: () => {
+          throw new Error('RAW_TOKEN_GETTER ghs_must_not_escape')
+        },
+      }),
+    ],
+  ])('keeps the grant unresolved for a runtime %s result', async (_label, access) => {
+    const harness = createHarness()
+    vi.mocked(harness.client.issueContentsWriteToken).mockResolvedValue(
+      access as never,
+    )
+
+    const error = await harness.service
+      .issueCredentialGrant(
+        { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 2 },
+        desktopPrincipal,
+      )
+      .catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(GitHubDeliveryServiceError)
+    expect(error).toMatchObject({
+      code: 'github_credential_revocation_unconfirmed',
+      retryable: false,
+      phase: 'credential',
+    })
+    expect(String(error)).not.toMatch(/RAW_TOKEN_GETTER|ghs_/u)
+    expect(JSON.stringify(error)).not.toMatch(/RAW_TOKEN_GETTER|ghs_/u)
+    expect(harness.client.revokeInstallationAccessToken).not.toHaveBeenCalled()
+    expect(harness.repository.confirmGitHubCredentialClearance).not.toHaveBeenCalled()
+  })
+
+  it('snapshots a valid token once before compensating a later runtime getter failure', async () => {
+    const harness = createHarness()
+    const mintedToken = 'ghs_ephemeral_value_for_desktop_only'
+    let tokenReads = 0
+    vi.mocked(harness.client.issueContentsWriteToken).mockResolvedValue(
+      Object.defineProperties({}, {
+        token: {
+          get: () => {
+            tokenReads += 1
+            if (tokenReads > 1) throw new Error('RAW_SECOND_TOKEN_READ')
+            return mintedToken
+          },
+        },
+        installationId: { value: '12345' },
+        repositoryId: {
+          get: () => {
+            throw new Error('RAW_REPOSITORY_GETTER')
+          },
+        },
+      }) as never,
+    )
+
+    const error = await harness.service
+      .issueCredentialGrant(
+        { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 2 },
+        desktopPrincipal,
+      )
+      .catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(GitHubDeliveryServiceError)
+    expect(error).toMatchObject({
+      code: 'github_delivery_state_conflict',
+      retryable: false,
+      phase: 'credential',
+    })
+    expect(String(error)).not.toMatch(/RAW_|ghs_/u)
+    expect(tokenReads).toBe(1)
+    expect(harness.client.revokeInstallationAccessToken).toHaveBeenCalledWith(
+      mintedToken,
+    )
+    expect(harness.repository.confirmGitHubCredentialClearance).toHaveBeenCalledWith(
+      expect.objectContaining({ outcomeCode: 'credential_revocation_confirmed' }),
+      clearanceAuthority,
+    )
+  })
+
   it('revokes a token minted after repository revocation wins the finalization race', async () => {
     const harness = createHarness()
     const minted = {
@@ -450,6 +617,7 @@ describe('GitHub Delivery service', () => {
       repositoryId: '98765',
       token: 'ghs_ephemeral_value_for_desktop_only',
       expiresAt: '2026-08-11T16:00:00.000Z',
+      providerExpiresAt: '2026-08-11T16:00:00.000Z',
       permissions: { contents: 'write' as const },
     }
     let resolveMinted: ((access: typeof minted) => void) | undefined
@@ -514,6 +682,159 @@ describe('GitHub Delivery service', () => {
     expect(harness.client.revokeInstallationAccessToken).toHaveBeenCalledTimes(1)
   })
 
+  it('requires exact durable confirmation after compensating a finalization race', async () => {
+    const harness = createHarness()
+    vi.mocked(harness.repository.finalizeGitHubCredentialGrant).mockResolvedValue({
+      ok: false,
+      responseStatus: 409,
+      outcomeCode: 'binding_inactive',
+      replayed: false,
+    })
+    vi.mocked(harness.repository.confirmGitHubCredentialClearance).mockResolvedValue({
+      ok: true,
+      responseStatus: 200,
+      outcomeCode: 'credential_revocation_confirmed',
+      replayed: false,
+      request: request({ id: 'wrong-request' }),
+      grant: grant({
+        version: 3,
+        status: 'revoked',
+        outcomeCode: 'credential_revocation_confirmed',
+      }),
+    })
+
+    await expect(
+      harness.service.issueCredentialGrant(
+        { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 2 },
+        desktopPrincipal,
+      ),
+    ).rejects.toMatchObject({
+      code: 'github_credential_revocation_unconfirmed',
+      retryable: false,
+    })
+    expect(harness.client.revokeInstallationAccessToken).toHaveBeenCalledTimes(1)
+    expect(
+      harness.repository.confirmGitHubCredentialClearance,
+    ).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects confirmation snapshots with an unresolved status or credential expiry', async () => {
+    const invalidConfirmedGrants = [
+      grant({
+        version: 3,
+        status: 'issuing',
+        outcomeCode: 'credential_revocation_confirmed',
+      }),
+      grant({
+        version: 3,
+        status: 'failed',
+        credentialExpiresAt: '2026-08-11T16:00:00.000Z',
+        outcomeCode: 'credential_revocation_confirmed',
+      }),
+    ]
+
+    for (const invalidGrant of invalidConfirmedGrants) {
+      const harness = createHarness()
+      vi.mocked(harness.repository.finalizeGitHubCredentialGrant).mockResolvedValue({
+        ok: false,
+        responseStatus: 409,
+        outcomeCode: 'binding_inactive',
+        replayed: false,
+      })
+      vi.mocked(
+        harness.repository.confirmGitHubCredentialClearance,
+      ).mockResolvedValue({
+        ok: true,
+        responseStatus: 200,
+        outcomeCode: 'credential_revocation_confirmed',
+        replayed: false,
+        request: request(),
+        grant: invalidGrant,
+      })
+
+      await expect(
+        harness.service.issueCredentialGrant(
+          { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 2 },
+          desktopPrincipal,
+        ),
+      ).rejects.toMatchObject({
+        code: 'github_credential_revocation_unconfirmed',
+        retryable: false,
+      })
+    }
+  })
+
+  it('never crosses the provider boundary after the fixed mint-start deadline', async () => {
+    const harness = createHarness()
+    const service = createGitHubDeliveryService({
+      repository: harness.repository,
+      client: harness.client,
+      clock: () => new Date('2026-08-11T15:02:00.000Z'),
+    })
+
+    await expect(
+      service.issueCredentialGrant(
+        { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 2 },
+        desktopPrincipal,
+      ),
+    ).rejects.toMatchObject({
+      code: 'github_delivery_state_conflict',
+      retryable: false,
+    })
+    expect(harness.client.issueContentsWriteToken).not.toHaveBeenCalled()
+    expect(harness.repository.finalizeGitHubCredentialGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: {
+          status: 'failed',
+          outcomeCode: 'credential_issue_failed',
+        },
+      }),
+      desktopPrincipal,
+    )
+    expect(harness.repository.confirmGitHubCredentialClearance).toHaveBeenCalledWith(
+      {
+        organizationId: 'org-a',
+        projectId: 'project-a',
+        requestId: 'delivery-1',
+        grantId: 'grant-1',
+        outcomeCode: 'credential_mint_absent_confirmed',
+      },
+      clearanceAuthority,
+    )
+    expect(harness.client.revokeInstallationAccessToken).not.toHaveBeenCalled()
+  })
+
+  it('allows issuance at the last millisecond before the fixed mint-start deadline', async () => {
+    const harness = createHarness()
+    const service = createGitHubDeliveryService({
+      repository: harness.repository,
+      client: harness.client,
+      clock: () => new Date('2026-08-11T15:01:59.999Z'),
+    })
+
+    await expect(
+      service.issueCredentialGrant(
+        { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 2 },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      credential: { token: 'ghs_ephemeral_value_for_desktop_only' },
+    })
+    expect(harness.client.issueContentsWriteToken).toHaveBeenCalledTimes(1)
+    expect(harness.repository.finalizeGitHubCredentialGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: expect.objectContaining({
+          status: 'issued',
+          issuedAt: '2026-08-11T15:01:59.999Z',
+        }),
+      }),
+      desktopPrincipal,
+    )
+    expect(harness.client.revokeInstallationAccessToken).not.toHaveBeenCalled()
+    expect(harness.repository.confirmGitHubCredentialClearance).not.toHaveBeenCalled()
+  })
+
   it('revokes then hides non-revocation finalization rejections behind state conflict', async () => {
     const harness = createHarness()
     vi.mocked(harness.repository.finalizeGitHubCredentialGrant).mockResolvedValue({
@@ -567,6 +888,136 @@ describe('GitHub Delivery service', () => {
     )
   })
 
+  it('durably clears a grant only when the client proves the provider POST never happened', async () => {
+    const harness = createHarness()
+    vi.mocked(harness.client.issueContentsWriteToken).mockRejectedValue(
+      new GitHubAppClientError(
+        'github_authentication_failed',
+        undefined,
+        false,
+        true,
+      ),
+    )
+
+    await expect(
+      harness.service.issueCredentialGrant(
+        { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 2 },
+        desktopPrincipal,
+      ),
+    ).rejects.toMatchObject({
+      code: 'github_authentication_failed',
+      retryable: false,
+    })
+    expect(harness.client.revokeInstallationAccessToken).not.toHaveBeenCalled()
+    expect(harness.repository.confirmGitHubCredentialClearance).toHaveBeenCalledWith(
+      {
+        organizationId: 'org-a',
+        projectId: 'project-a',
+        requestId: 'delivery-1',
+        grantId: 'grant-1',
+        outcomeCode: 'credential_mint_absent_confirmed',
+      },
+      clearanceAuthority,
+    )
+  })
+
+  it('durably confirms a client-compensated provider credential only after failure finalization', async () => {
+    const harness = createHarness()
+    const events: string[] = []
+    vi.mocked(harness.client.issueContentsWriteToken).mockRejectedValue(
+      new GitHubAppClientError(
+        'github_malformed_response',
+        undefined,
+        true,
+      ),
+    )
+    vi.mocked(harness.repository.finalizeGitHubCredentialGrant)
+      .mockImplementationOnce(async () => {
+        events.push('failure-finalize-threw')
+        throw new Error('RAW_TRANSIENT_DB_FAILURE')
+      })
+      .mockImplementationOnce(async (finalizeInput) => {
+        events.push('failure-finalized')
+        return {
+          ok: true,
+          responseStatus: 200,
+          outcomeCode: 'grant_finalized',
+          replayed: false,
+          request: request({ stateVersion: 4, status: 'failed' }),
+          grant: grant({
+            version: 2,
+            status: 'failed',
+            outcomeCode: finalizeInput.outcome.status === 'issued'
+              ? null
+              : finalizeInput.outcome.outcomeCode,
+          }),
+        }
+      })
+    vi.mocked(harness.repository.confirmGitHubCredentialClearance).mockImplementation(
+      async () => {
+        events.push('revocation-confirmed')
+        return {
+          ok: true,
+          responseStatus: 200,
+          outcomeCode: 'credential_revocation_confirmed',
+          replayed: false,
+          request: request({ stateVersion: 4, status: 'failed' }),
+          grant: grant({
+            version: 3,
+            status: 'failed',
+            outcomeCode: 'credential_revocation_confirmed',
+          }),
+        }
+      },
+    )
+
+    await expect(
+      harness.service.issueCredentialGrant(
+        { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 2 },
+        desktopPrincipal,
+      ),
+    ).rejects.toMatchObject({
+      code: 'github_malformed_response',
+      retryable: false,
+    })
+    expect(events).toEqual([
+      'failure-finalize-threw',
+      'failure-finalized',
+      'revocation-confirmed',
+    ])
+    expect(harness.client.revokeInstallationAccessToken).not.toHaveBeenCalled()
+  })
+
+  it('confirms a client-compensated credential when binding revocation wins failure finalization', async () => {
+    const harness = createHarness()
+    vi.mocked(harness.client.issueContentsWriteToken).mockRejectedValue(
+      new GitHubAppClientError(
+        'github_malformed_response',
+        undefined,
+        true,
+      ),
+    )
+    vi.mocked(harness.repository.finalizeGitHubCredentialGrant).mockResolvedValue({
+      ok: false,
+      responseStatus: 409,
+      outcomeCode: 'binding_inactive',
+      replayed: false,
+    })
+
+    await expect(
+      harness.service.issueCredentialGrant(
+        { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 2 },
+        desktopPrincipal,
+      ),
+    ).rejects.toMatchObject({
+      code: 'github_malformed_response',
+      retryable: false,
+    })
+    expect(
+      harness.repository.confirmGitHubCredentialClearance,
+    ).toHaveBeenCalledTimes(1)
+  })
+
   it('preserves an unconfirmed client compensation failure across a binding race', async () => {
     const harness = createHarness()
     vi.mocked(harness.client.issueContentsWriteToken).mockRejectedValue(
@@ -604,6 +1055,7 @@ describe('GitHub Delivery service', () => {
       repositoryId: '99999',
       token: 'ghs_wrong_scope_must_be_revoked',
       expiresAt: '2026-08-11T16:00:00.000Z',
+      providerExpiresAt: '2026-08-11T16:00:00.000Z',
       permissions: { contents: 'write' },
     })
 
@@ -636,11 +1088,24 @@ describe('GitHub Delivery service', () => {
     )
   })
 
-  it('does not expose a minted credential when durable grant finalization is ambiguous', async () => {
+  it('keeps a compensated grant unresolved when issued finalization may have committed', async () => {
     const harness = createHarness()
-    vi.mocked(harness.repository.finalizeGitHubCredentialGrant).mockRejectedValue(
-      new Error('SQL RAW ghs_ephemeral_value_for_desktop_only /private/database'),
-    )
+    vi.mocked(harness.repository.finalizeGitHubCredentialGrant)
+      .mockRejectedValueOnce(
+        new Error('SQL RAW ghs_ephemeral_value_for_desktop_only /private/database'),
+      )
+      .mockResolvedValueOnce({
+        ok: false,
+        responseStatus: 409,
+        outcomeCode: 'grant_conflict',
+        replayed: false,
+      })
+    vi.mocked(harness.repository.confirmGitHubCredentialClearance).mockResolvedValue({
+      ok: false,
+      responseStatus: 409,
+      outcomeCode: 'grant_conflict',
+      replayed: false,
+    })
 
     const error = await harness.service
       .issueCredentialGrant(
@@ -651,7 +1116,7 @@ describe('GitHub Delivery service', () => {
 
     expect(error).toBeInstanceOf(GitHubDeliveryServiceError)
     expect(error).toMatchObject({
-      code: 'github_delivery_state_conflict',
+      code: 'github_credential_revocation_unconfirmed',
       retryable: false,
       phase: 'credential',
     })
@@ -660,14 +1125,21 @@ describe('GitHub Delivery service', () => {
     expect(harness.client.revokeInstallationAccessToken).toHaveBeenCalledWith(
       'ghs_ephemeral_value_for_desktop_only',
     )
+    expect(harness.repository.finalizeGitHubCredentialGrant).toHaveBeenCalledTimes(2)
+    expect(
+      harness.repository.confirmGitHubCredentialClearance,
+    ).toHaveBeenCalledTimes(1)
   })
 
   it('revokes a minted credential when the issuance clock fails before finalization', async () => {
     const harness = createHarness()
+    let clockCalls = 0
     const service = createGitHubDeliveryService({
       repository: harness.repository,
       client: harness.client,
       clock: () => {
+        clockCalls += 1
+        if (clockCalls === 1) return new Date(now)
         throw new Error('RAW CLOCK FAILURE ghs_must_not_escape')
       },
     })
@@ -688,7 +1160,136 @@ describe('GitHub Delivery service', () => {
     expect(String(error)).not.toMatch(/RAW CLOCK FAILURE|ghs_/u)
     expect(JSON.stringify(error)).not.toMatch(/RAW CLOCK FAILURE|ghs_/u)
     expect(harness.client.revokeInstallationAccessToken).toHaveBeenCalledTimes(1)
+    expect(harness.repository.finalizeGitHubCredentialGrant).toHaveBeenCalledTimes(1)
+    expect(harness.repository.finalizeGitHubCredentialGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: {
+          status: 'failed',
+          outcomeCode: 'credential_issue_failed',
+        },
+      }),
+      desktopPrincipal,
+    )
+    expect(
+      harness.repository.confirmGitHubCredentialClearance,
+    ).toHaveBeenCalledTimes(1)
+  })
+
+  it('observes provider expiry on an issued replay without minting and requires an explicit retry', async () => {
+    const harness = createHarness()
+    const providerExpiresAt = '2026-08-11T16:00:00.000Z'
+    vi.mocked(harness.repository.reserveGitHubCredentialGrant).mockResolvedValue({
+      ok: true,
+      responseStatus: 201,
+      outcomeCode: 'grant_reserved',
+      replayed: true,
+      request: request({ stateVersion: 4 }),
+      grant: grant({
+        version: 2,
+        status: 'issued',
+        issuedAt: now,
+        credentialExpiresAt: providerExpiresAt,
+        providerExpiryContractVersion: 1,
+        providerCredentialExpiresAt: providerExpiresAt,
+      }),
+      clearanceAuthority,
+    })
+
+    await expect(
+      harness.service.issueCredentialGrant(
+        { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 4 },
+        desktopPrincipal,
+      ),
+    ).rejects.toMatchObject({
+      code: 'github_delivery_state_conflict',
+      retryable: true,
+      phase: 'credential',
+    })
+    expect(harness.client.observeProviderCredentialExpiry).toHaveBeenCalledWith({
+      installationId: '12345',
+      providerExpiresAt,
+    })
+    expect(harness.repository.confirmGitHubCredentialProviderExpiry).toHaveBeenCalledWith(
+      {
+        organizationId: 'org-a',
+        projectId: 'project-a',
+        requestId: 'delivery-1',
+        grantId: 'grant-1',
+        providerCredentialExpiresAt: providerExpiresAt,
+        providerExpiryObservedAt: '2026-08-11T16:00:02.000Z',
+      },
+      clearanceAuthority,
+    )
+    expect(harness.client.issueContentsWriteToken).not.toHaveBeenCalled()
     expect(harness.repository.finalizeGitHubCredentialGrant).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['legacy raw expiry is absent', { providerExpiryContractVersion: 0 as const, providerCredentialExpiresAt: null }],
+    ['credential was consumed', { consumedAt: now }],
+    ['legacy local expiry outcome is terminal', { status: 'expired' as const, outcomeCode: 'credential_expired' as const }],
+  ])('fails closed on an issued replay when %s', async (_case, overrides) => {
+    const harness = createHarness()
+    vi.mocked(harness.repository.reserveGitHubCredentialGrant).mockResolvedValue({
+      ok: true,
+      responseStatus: 201,
+      outcomeCode: 'grant_reserved',
+      replayed: true,
+      request: request({ stateVersion: 4 }),
+      grant: grant({
+        version: 2,
+        status: 'issued',
+        issuedAt: now,
+        credentialExpiresAt: '2026-08-11T16:00:00.000Z',
+        providerExpiryContractVersion: 1,
+        providerCredentialExpiresAt: '2026-08-11T16:00:00.000Z',
+        ...overrides,
+      }),
+      clearanceAuthority,
+    })
+
+    await expect(
+      harness.service.issueCredentialGrant(
+        { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 4 },
+        desktopPrincipal,
+      ),
+    ).rejects.toMatchObject({ code: 'github_delivery_state_conflict' })
+    expect(harness.client.observeProviderCredentialExpiry).not.toHaveBeenCalled()
+    expect(harness.client.issueContentsWriteToken).not.toHaveBeenCalled()
+    expect(harness.repository.confirmGitHubCredentialProviderExpiry).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the provider observation is early and never persists local-clock evidence', async () => {
+    const harness = createHarness()
+    const providerExpiresAt = '2026-08-11T16:00:00.000Z'
+    vi.mocked(harness.repository.reserveGitHubCredentialGrant).mockResolvedValue({
+      ok: true,
+      responseStatus: 201,
+      outcomeCode: 'grant_reserved',
+      replayed: true,
+      request: request({ stateVersion: 4 }),
+      grant: grant({
+        version: 2,
+        status: 'issued',
+        issuedAt: now,
+        credentialExpiresAt: providerExpiresAt,
+        providerExpiryContractVersion: 1,
+        providerCredentialExpiresAt: providerExpiresAt,
+      }),
+      clearanceAuthority,
+    })
+    vi.mocked(harness.client.observeProviderCredentialExpiry).mockRejectedValue(
+      new GitHubAppClientError('github_conflict'),
+    )
+
+    await expect(
+      harness.service.issueCredentialGrant(
+        { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 4 },
+        desktopPrincipal,
+      ),
+    ).rejects.toMatchObject({ code: 'github_conflict', retryable: false })
+    expect(harness.repository.confirmGitHubCredentialProviderExpiry).not.toHaveBeenCalled()
+    expect(harness.client.issueContentsWriteToken).not.toHaveBeenCalled()
   })
 
   it('independently verifies the exact remote branch head before finalizing publication', async () => {

@@ -277,15 +277,16 @@ containers:
 
 | Scenario | Automated proof | Supported operator action |
 | --- | --- | --- |
-| Fresh V1.5 deploy | The production migration bundle creates Team schema v12 from an empty database, and the current API reaches readiness. | Start the one-shot migrator before API/Web. |
-| Retained-data upgrade | The exact V1.4 migrator creates populated schema v10. Seeded Run data survives a Postgres container restart and the V1.5 migration to schema v12, then remains visible through an authenticated current-API read. | Back up Postgres, stop writers, run the V1.5 migrator once, then start V1.5 API/Web. |
+| Fresh V1.5 deploy | The production migration bundle creates Team schema v13 from an empty database, including the provider-authoritative expiry contract, and the current API reaches readiness. | Start the one-shot migrator before API/Web. |
+| Retained-data upgrade | The exact V1.4 migrator creates populated schema v10. Seeded Run data survives a Postgres container restart and the V1.5 migration to schema v13, then remains visible through an authenticated current-API read. | Back up Postgres, stop writers, run the V1.5 migrator once, then start V1.5 API/Web. |
 | Transactional v11-to-v12 retry | A populated v11 GitHub Delivery row with an incompatible series key makes v12 fail. The transaction leaves schema v11, migration history, columns, and the exact row unchanged. After the key is remediated, retry reaches v12, preserves every prior field, and adds only the documented series/attempt backfill. | Keep the failed database offline, fix the reported incompatible row, and rerun the same V1.5 migrator. Do not partially apply migration SQL by hand. |
-| API application rollback | The exact V1.4 API fails readiness closed against schema v12. The smoke restores the captured pre-upgrade schema v10 backup into a separate database, then proves an authenticated V1.4 overview read with the retained Run. | Do not point V1.4 at schema v12; operators must not run the V1.4 migrator against it. To roll back, stop V1.5 writers, restore the pre-upgrade backup as schema v10, and only then start the V1.4 API. |
-| Desktop application rollback | V1.5 Desktop schema v16 contains migrations unknown to V1.4 schema v12. | There is no in-place Desktop database downgrade. Before upgrading, back up the Desktop user-data directory; to return to V1.4, restore the pre-upgrade backup or use a separate V1.4 user-data directory. |
+| Provider-expiry v12-to-v13 | A legacy issued credential reaches v13 with contract version `0` and NULL raw provider expiry/observation. The constraint rejects a fabricated `credential_provider_expiry_confirmed` outcome; only new version-`1` evidence with the required provider observation can clear it. | Treat the legacy grant as unresolved and fail closed; do not backfill provider time from local clocks or edit expiry fields by hand. |
+| API application rollback | The exact V1.4 API fails readiness closed against Team schema v13. The smoke restores the captured pre-upgrade schema v10 backup into a separate database, then proves an authenticated V1.4 overview read with the retained Run. | Do not point V1.4 at Team schema v13; operators must not run the V1.4 migrator against it. To roll back, stop V1.5 writers, restore the pre-upgrade backup as schema v10, and only then start the V1.4 API. |
+| Desktop application rollback | V1.5 Desktop schema v17 contains migrations unknown to V1.4 schema v12. | There is no in-place Desktop database downgrade. Before upgrading, back up the Desktop user-data directory; to return to V1.4, restore the pre-upgrade backup or use a separate V1.4 user-data directory. |
 
 The API rollback check is deliberately bounded: it proves that a V1.4 binary rejects the newer Team
 schema and can read an explicitly restored V1.4 backup. It does not claim that old binaries own V1.5
-writes, can consume schema v12, or can reverse migrations. Database rollback always requires the
+writes, can consume Team schema v13, or can reverse migrations. Database rollback always requires the
 operator to restore the pre-upgrade Postgres backup; Desktop rollback likewise requires its separate
 pre-upgrade user-data backup.
 

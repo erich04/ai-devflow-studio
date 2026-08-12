@@ -295,6 +295,9 @@ function credentialGrantRow(overrides: Record<string, unknown> = {}) {
     requested_at: '2026-08-11T09:55:00.000Z',
     issued_at: '2026-08-11T09:56:00.000Z',
     credential_expires_at: '2026-08-11T10:45:00.000Z',
+    provider_expiry_contract_version: 1,
+    provider_credential_expires_at: '2026-08-11T10:45:00.000Z',
+    provider_expiry_observed_at: null,
     consumed_at: null,
     outcome_code: null,
     ...overrides,
@@ -411,7 +414,7 @@ function leadIdentity() {
 
 describe('Postgres GitHub Delivery repository', () => {
   it('loads an allowlisted repository binding only through live project authority', async () => {
-    const db = new FakeGitHubDeliveryDb((sql) => {
+    const db = new FakeGitHubDeliveryDb((sql, params) => {
       switch (marker(sql)) {
         case 'cookie-identity':
           return [cookieIdentity()]
@@ -421,7 +424,9 @@ describe('Postgres GitHub Delivery repository', () => {
           throw new Error(`Unexpected query: ${sql}`)
       }
     })
-    const repository = createPostgresGitHubDeliveryRepository(db)
+    const repository = createPostgresGitHubDeliveryRepository(db, {
+      now: () => new Date(now),
+    })
 
     const result = await repository.getGitHubRepositoryBinding(
       'project-a',
@@ -454,7 +459,7 @@ describe('Postgres GitHub Delivery repository', () => {
 
   it('creates a binding under project lock, live owner authority, audit, and bounded idempotency metadata', async () => {
     const createdRow = { ...bindingRow, id: 'github-binding-fixed' }
-    const db = new FakeGitHubDeliveryDb((sql) => {
+    const db = new FakeGitHubDeliveryDb((sql, params) => {
       switch (marker(sql)) {
         case 'project-lock':
         case 'repository-lock':
@@ -533,7 +538,7 @@ describe('Postgres GitHub Delivery repository', () => {
   })
 
   it('serializes repository claims across Projects and returns a typed binding conflict', async () => {
-    const db = new FakeGitHubDeliveryDb((sql) => {
+    const db = new FakeGitHubDeliveryDb((sql, params) => {
       switch (marker(sql)) {
         case 'project-lock':
         case 'repository-lock':
@@ -1230,7 +1235,9 @@ describe('Postgres GitHub Delivery repository', () => {
           throw new Error(`Unexpected query: ${sql}`)
       }
     })
-    const repository = createPostgresGitHubDeliveryRepository(db)
+      const repository = createPostgresGitHubDeliveryRepository(db, {
+        now: () => new Date(now),
+      })
 
     const snapshot = await repository.getGitHubDeliveryRecoverySnapshot(
       'project-a',
@@ -1577,6 +1584,8 @@ describe('Postgres GitHub Delivery repository', () => {
           return [canonicalAuthority()]
         case 'approval-current':
           return [approvalRow]
+        case 'grant-replacement-blockers-lock':
+          return []
         case 'grant-current':
         case 'idempotency-read':
           return []
@@ -1624,7 +1633,822 @@ describe('Postgres GitHub Delivery repository', () => {
     expect(create?.params).toContain('desktop-token-1')
   })
 
-  it('reserves a new numbered grant after a consumed publication enters recovery', async () => {
+  it('settles an issuing grant with its opaque server capability without reloading the bearer', async () => {
+    const approvedRequest = {
+      ...deliveryRequestRow,
+      state_version: 2,
+      status: 'approved',
+      outcome_code: null,
+    }
+    const publishingRequest = {
+      ...approvedRequest,
+      state_version: 3,
+      status: 'publishing_branch',
+    }
+    const issuingGrant = credentialGrantRow({
+      version: 1,
+      status: 'issuing',
+      requested_at: now,
+      issued_at: null,
+      credential_expires_at: null,
+      outcome_code: null,
+    })
+    const confirmedGrant = {
+      ...issuingGrant,
+      version: 2,
+      status: 'failed',
+      outcome_code: 'credential_mint_absent_confirmed',
+    }
+    const failedRequest = {
+      ...publishingRequest,
+      state_version: 4,
+      status: 'failed',
+      outcome_code: 'credential_issue_failed',
+    }
+    const retryPublishingRequest = {
+      ...failedRequest,
+      state_version: 5,
+      status: 'publishing_branch',
+      outcome_code: null,
+    }
+    const retryGrant = {
+      ...issuingGrant,
+      id: 'github-grant-2',
+      attempt: 2,
+    }
+    let phase: 'reserve' | 'finalize' | 'confirm' | 'retry' = 'reserve'
+    const db = new FakeGitHubDeliveryDb((sql) => {
+      switch (marker(sql)) {
+        case 'project-lock':
+        case 'audit-insert':
+        case 'idempotency-insert':
+          return []
+        case 'bearer-identity':
+          if (phase === 'confirm') {
+            throw new Error('clearance must not depend on a live bearer')
+          }
+          if (phase === 'finalize') return []
+          return [bearerIdentity()]
+        case 'delivery-lock':
+          return [
+            phase === 'reserve'
+              ? approvedRequest
+              : phase === 'confirm'
+                ? publishingRequest
+                : failedRequest,
+          ]
+        case 'binding-lock':
+          return [bindingRow]
+        case 'canonical-authority':
+          return [canonicalAuthority()]
+        case 'approval-current':
+          return [deliveryApprovalRow()]
+        case 'grant-replacement-blockers-lock':
+        case 'idempotency-read':
+          return []
+        case 'grant-current':
+          return phase === 'retry' ? [confirmedGrant] : []
+        case 'delivery-start-publishing':
+          return [
+            phase === 'retry' ? retryPublishingRequest : publishingRequest,
+          ]
+        case 'grant-create':
+          return [phase === 'retry' ? retryGrant : issuingGrant]
+        case 'grant-lock':
+          return [issuingGrant]
+        case 'grant-confirm-clearance':
+          return [confirmedGrant]
+        case 'delivery-confirm-clearance-failed':
+          return [failedRequest]
+        default:
+          throw new Error(`Unexpected query: ${sql}`)
+      }
+    })
+    const repository = createPostgresGitHubDeliveryRepository(db, {
+      now: () => new Date(now),
+      createId: (kind) => `github-${kind}-1`,
+    })
+    const reserved = await repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: approvedRequest.id,
+        expectedStateVersion: approvedRequest.state_version,
+      },
+      desktopPrincipal,
+    )
+    if (!reserved.ok) throw new Error('fixture grant reservation failed')
+    expect(Object.keys(reserved)).not.toContain('clearanceAuthority')
+    expect(JSON.stringify(reserved)).not.toMatch(
+      /clearanceAuthority|desktop-token-1/u,
+    )
+    await expect(
+      repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: publishingRequest.id,
+          grantId: issuingGrant.id,
+          outcomeCode: 'credential_mint_absent_confirmed',
+        },
+        Object.freeze(Object.create(null)) as typeof reserved.clearanceAuthority,
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      outcomeCode: 'authentication_forbidden',
+    })
+    await expect(
+      repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-other',
+          projectId: 'project-a',
+          requestId: publishingRequest.id,
+          grantId: issuingGrant.id,
+          outcomeCode: 'credential_mint_absent_confirmed',
+        },
+        reserved.clearanceAuthority,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'project_forbidden' })
+
+    phase = 'finalize'
+    await expect(
+      repository.finalizeGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: publishingRequest.id,
+          grantId: issuingGrant.id,
+          expectedStateVersion: publishingRequest.state_version,
+          expectedGrantVersion: issuingGrant.version,
+          outcome: {
+            status: 'failed',
+            outcomeCode: 'credential_issue_failed',
+          },
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'project_forbidden' })
+
+    phase = 'confirm'
+    const confirmed = await repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: publishingRequest.id,
+          grantId: issuingGrant.id,
+          outcomeCode: 'credential_mint_absent_confirmed',
+        },
+        reserved.clearanceAuthority,
+      )
+    expect(confirmed).toMatchObject({
+      ok: true,
+      replayed: false,
+      outcomeCode: 'credential_mint_absent_confirmed',
+      request: {
+        id: publishingRequest.id,
+        stateVersion: 4,
+        status: 'failed',
+        outcomeCode: 'credential_issue_failed',
+      },
+      grant: {
+        id: issuingGrant.id,
+        status: 'failed',
+        issuedAt: null,
+        outcomeCode: 'credential_mint_absent_confirmed',
+      },
+    })
+    expect(
+      db.calls.filter(({ sql }) => marker(sql) === 'bearer-identity'),
+    ).toHaveLength(2)
+
+    phase = 'retry'
+    await expect(
+      repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: failedRequest.id,
+          expectedStateVersion: failedRequest.state_version,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      replayed: false,
+      request: { stateVersion: 5, status: 'publishing_branch' },
+      grant: { id: 'github-grant-2', attempt: 2, status: 'issuing' },
+    })
+  })
+
+  it('blocks a new request with no current grant when its series has a historical NULL-outcome authority', async () => {
+    const approvedRequest = {
+      ...deliveryRequestRow,
+      state_version: 2,
+      delivery_attempt: 2,
+      status: 'approved',
+      outcome_code: null,
+    }
+    const db = new FakeGitHubDeliveryDb((sql) => {
+      switch (marker(sql)) {
+        case 'project-lock':
+        case 'audit-insert':
+        case 'idempotency-insert':
+          return []
+        case 'bearer-identity':
+          return [bearerIdentity()]
+        case 'delivery-lock':
+          return [approvedRequest]
+        case 'binding-lock':
+          return [bindingRow]
+        case 'canonical-authority':
+          return [canonicalAuthority()]
+        case 'approval-current':
+          return [deliveryApprovalRow()]
+        case 'grant-current':
+        case 'idempotency-read':
+          return []
+        case 'grant-replacement-blockers-lock':
+          return [{ id: 'historical-issuing-grant-with-null-outcome' }]
+        default:
+          throw new Error(`Unexpected query: ${sql}`)
+      }
+    })
+    const repository = createPostgresGitHubDeliveryRepository(db, {
+      now: () => new Date(now),
+    })
+
+    await expect(
+      repository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: approvedRequest.id,
+          expectedStateVersion: approvedRequest.state_version,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      responseStatus: 409,
+      outcomeCode: 'credential_revocation_pending',
+    })
+    const blockers = db.calls.find(
+      ({ sql }) => marker(sql) === 'grant-replacement-blockers-lock',
+    )
+    expect(blockers?.params).toEqual([
+      'org-a',
+      'project-a',
+      'github-binding-1',
+      approvedRequest.delivery_series_key,
+      null,
+    ])
+    expect(blockers?.sql).toMatch(
+      /organization_id = \$1[\s\S]*project_id = \$2[\s\S]*binding_id = \$3[\s\S]*delivery_series_key = \$4/u,
+    )
+    expect(blockers?.sql).toMatch(
+      /\(\$5::text IS NULL OR github_delivery_credential_grants\.id <> \$5\)/u,
+    )
+    expect(blockers?.sql).toMatch(/\) IS NOT TRUE/u)
+    expect(blockers?.sql).toMatch(
+      /FOR UPDATE OF github_delivery_credential_grants/u,
+    )
+    expect(db.markers()).not.toContain('delivery-start-publishing')
+    expect(db.markers()).not.toContain('grant-create')
+  })
+
+  it('locks all unissued grant history for the revoked binding without a time-based escape', async () => {
+    const revokedRequest = {
+      ...deliveryRequestRow,
+      state_version: 4,
+      status: 'revoked',
+      outcome_code: 'binding_revoked',
+    }
+    const revokedBinding = {
+      ...bindingRow,
+      version: 2,
+      status: 'revoked',
+      revoked_at: now,
+    }
+    const revokedGrant = credentialGrantRow({
+      version: 2,
+      status: 'revoked',
+      requested_at: now,
+      issued_at: null,
+      credential_expires_at: null,
+      outcome_code: 'binding_revoked',
+    })
+    const makeDb = (pending: boolean) =>
+      new FakeGitHubDeliveryDb((sql) => {
+        switch (marker(sql)) {
+          case 'project-lock':
+          case 'audit-insert':
+          case 'idempotency-insert':
+            return []
+          case 'bearer-identity':
+            return [bearerIdentity()]
+          case 'delivery-lock':
+            return [revokedRequest]
+          case 'approval-current':
+            return [deliveryApprovalRow()]
+          case 'grant-current':
+            return [revokedGrant]
+          case 'binding-lock':
+            return [revokedBinding]
+          case 'grant-revocation-pending-lock':
+            return pending ? [{ id: revokedGrant.id }] : []
+          case 'idempotency-read':
+            return []
+          default:
+            throw new Error(`Unexpected query: ${sql}`)
+        }
+      })
+
+    const pendingDb = makeDb(true)
+    const pendingRepository = createPostgresGitHubDeliveryRepository(pendingDb, {
+      now: () => new Date(now),
+    })
+    await expect(
+      pendingRepository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: revokedRequest.id,
+          expectedStateVersion: revokedRequest.state_version,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      responseStatus: 409,
+      outcomeCode: 'credential_revocation_pending',
+    })
+    const pendingQuery = pendingDb.calls.find(
+      ({ sql }) => marker(sql) === 'grant-revocation-pending-lock',
+    )
+    expect(pendingQuery?.sql).toMatch(
+      /github_delivery_requests\.binding_id\s*=\s*\$3/u,
+    )
+    expect(pendingQuery?.sql).toMatch(/issued_at IS NULL/u)
+    expect(pendingQuery?.sql).toMatch(/status IN \('failed', 'revoked'\)/u)
+    expect(pendingQuery?.sql).toMatch(/IS NOT TRUE/u)
+    expect(pendingQuery?.sql).not.toMatch(/requested_at|interval/u)
+    expect(pendingQuery?.sql).toMatch(/FOR UPDATE OF github_delivery_credential_grants/u)
+    expect(pendingQuery?.params).toEqual([
+      'org-a',
+      'project-a',
+      'github-binding-1',
+    ])
+
+    const settledDb = makeDb(false)
+    const settledRepository = createPostgresGitHubDeliveryRepository(settledDb, {
+      now: () => new Date('2036-08-11T11:09:00.000Z'),
+    })
+    await expect(
+      settledRepository.reserveGitHubCredentialGrant(
+        {
+          projectId: 'project-a',
+          requestId: revokedRequest.id,
+          expectedStateVersion: revokedRequest.state_version,
+        },
+        desktopPrincipal,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'binding_inactive' })
+    expect(
+      settledDb.calls.find(
+        ({ sql }) => marker(sql) === 'grant-revocation-pending-lock',
+      )?.params,
+    ).toEqual(['org-a', 'project-a', 'github-binding-1'])
+  })
+
+  it('scans active binding history across versions and series while excluding normal issued or consumed grants', async () => {
+    const request = {
+      ...deliveryRequestRow,
+      binding_version: 2,
+      delivery_series_key: `github-delivery:${'9'.repeat(64)}`,
+      state_version: 2,
+      status: 'approved',
+    }
+    const activeBinding = { ...bindingRow, version: 2 }
+    const db = new FakeGitHubDeliveryDb((sql, params) => {
+      switch (marker(sql)) {
+        case 'project-lock':
+        case 'audit-insert':
+        case 'idempotency-insert':
+          return []
+        case 'bearer-identity':
+          return [bearerIdentity()]
+        case 'delivery-lock':
+          return [request]
+        case 'approval-current':
+          return [deliveryApprovalRow({ binding_version: 2 })]
+        case 'grant-current':
+          return []
+        case 'binding-lock':
+          return [activeBinding]
+        case 'canonical-authority':
+          return [canonicalAuthority()]
+        case 'idempotency-read':
+          return []
+        case 'grant-replacement-blockers-lock':
+          return params.length === 5
+            ? []
+            : [{ id: 'historical-unissued-grant' }]
+        default:
+          throw new Error(`Unexpected query: ${sql}`)
+      }
+    })
+    const repository = createPostgresGitHubDeliveryRepository(db, {
+      now: () => new Date(now),
+    })
+    await expect(repository.reserveGitHubCredentialGrant({
+      projectId: 'project-a',
+      requestId: request.id,
+      expectedStateVersion: request.state_version,
+    }, desktopPrincipal)).resolves.toMatchObject({
+      ok: false,
+      outcomeCode: 'credential_revocation_pending',
+    })
+    const scans = db.calls.filter(
+      ({ sql }) => marker(sql) === 'grant-replacement-blockers-lock',
+    )
+    expect(scans).toHaveLength(2)
+    const bindingWide = scans[1]
+    expect(bindingWide?.params).toEqual([
+      'org-a',
+      'project-a',
+      'github-binding-1',
+      null,
+    ])
+    expect(bindingWide?.sql).toMatch(/issued_at IS NULL/u)
+    expect(bindingWide?.sql).toMatch(/id <> \$4/u)
+    expect(bindingWide?.sql).not.toMatch(/delivery_series_key/u)
+    expect(db.markers()).not.toContain('grant-create')
+  })
+
+  it('monotonically confirms only a locked exact-claimant revoked grant', async () => {
+    const approvedRequest = {
+      ...deliveryRequestRow,
+      state_version: 2,
+      status: 'approved',
+      outcome_code: null,
+    }
+    const publishingRequest = {
+      ...approvedRequest,
+      state_version: 3,
+      status: 'publishing_branch',
+    }
+    const revokedRequest = {
+      ...publishingRequest,
+      state_version: 4,
+      status: 'revoked',
+      outcome_code: 'binding_revoked',
+    }
+    const issuingGrant = credentialGrantRow({
+      version: 1,
+      status: 'issuing',
+      issued_at: null,
+      credential_expires_at: null,
+      outcome_code: null,
+    })
+    const revokedGrant = credentialGrantRow({
+      version: 2,
+      status: 'revoked',
+      issued_at: null,
+      credential_expires_at: null,
+      outcome_code: 'binding_revoked',
+    })
+    const confirmedGrant = {
+      ...revokedGrant,
+      version: 3,
+      outcome_code: 'credential_revocation_confirmed',
+    }
+    let phase: 'reserve' | 'confirm' | 'replay' = 'reserve'
+    const db = new FakeGitHubDeliveryDb((sql) => {
+      switch (marker(sql)) {
+        case 'project-lock':
+        case 'audit-insert':
+        case 'idempotency-insert':
+          return []
+        case 'bearer-identity':
+          if (phase !== 'reserve') {
+            throw new Error('clearance must not reload the bearer')
+          }
+          return [bearerIdentity()]
+        case 'delivery-lock':
+          return [phase === 'reserve' ? approvedRequest : revokedRequest]
+        case 'binding-lock':
+          return [bindingRow]
+        case 'canonical-authority':
+          return [canonicalAuthority()]
+        case 'approval-current':
+          return [deliveryApprovalRow()]
+        case 'grant-replacement-blockers-lock':
+        case 'grant-current':
+          return []
+        case 'delivery-start-publishing':
+          return [publishingRequest]
+        case 'grant-create':
+          return [issuingGrant]
+        case 'grant-lock':
+          return [phase === 'replay' ? confirmedGrant : revokedGrant]
+        case 'idempotency-read':
+          return []
+        case 'grant-confirm-clearance':
+          return [confirmedGrant]
+        default:
+          throw new Error(`Unexpected query: ${sql}`)
+      }
+    })
+    const repository = createPostgresGitHubDeliveryRepository(db, {
+      now: () => new Date(now),
+    })
+    const reserved = await repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: approvedRequest.id,
+        expectedStateVersion: approvedRequest.state_version,
+      },
+      desktopPrincipal,
+    )
+    if (!reserved.ok) throw new Error('fixture grant reservation failed')
+
+    phase = 'confirm'
+    const confirmed = await repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: revokedRequest.id,
+          grantId: revokedGrant.id,
+          outcomeCode: 'credential_revocation_confirmed',
+        },
+        reserved.clearanceAuthority,
+      )
+    expect(confirmed).toMatchObject({
+      ok: true,
+      replayed: false,
+      outcomeCode: 'credential_revocation_confirmed',
+      request: { status: 'revoked', outcomeCode: 'binding_revoked' },
+      grant: {
+        id: revokedGrant.id,
+        status: 'revoked',
+        outcomeCode: 'credential_revocation_confirmed',
+      },
+    })
+    const update = db.calls.find(
+      ({ sql }) => marker(sql) === 'grant-confirm-clearance',
+    )
+    expect(update?.sql).toMatch(/issued_at IS NULL/u)
+    expect(update?.sql).toMatch(
+      /status IN \('issuing', 'recovery_required', 'failed', 'revoked'\)/u,
+    )
+    expect(update?.params).toEqual([
+      revokedGrant.id,
+      revokedRequest.id,
+      revokedGrant.intent_revision,
+      revokedGrant.version,
+      'credential_revocation_confirmed',
+      'desktop-token-1',
+      false,
+    ])
+    expect(db.markers()).not.toContain('delivery-confirm-clearance-failed')
+
+    phase = 'replay'
+    await expect(
+      repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: revokedRequest.id,
+          grantId: revokedGrant.id,
+          outcomeCode: 'credential_revocation_confirmed',
+        },
+        reserved.clearanceAuthority,
+      ),
+    ).resolves.toMatchObject({ ok: true, replayed: true })
+  })
+
+  it('clears exactly one issued-finalize commit after provider revocation and preserves its issuance evidence', async () => {
+    const approvedRequest = {
+      ...deliveryRequestRow,
+      state_version: 2,
+      status: 'approved',
+      outcome_code: null,
+    }
+    const publishingRequest = {
+      ...approvedRequest,
+      state_version: 3,
+      status: 'publishing_branch',
+      outcome_code: null,
+    }
+    const issuedRequest = {
+      ...publishingRequest,
+      state_version: 4,
+    }
+    const issuingGrant = credentialGrantRow({
+      version: 1,
+      status: 'issuing',
+      issued_at: null,
+      credential_expires_at: null,
+      outcome_code: null,
+    })
+    const terminalGrant = credentialGrantRow({
+      version: 2,
+      status: 'issued',
+      consumed_at: null,
+    })
+    const failedRequest = {
+      ...issuedRequest,
+      state_version: 5,
+      status: 'failed',
+      outcome_code: 'credential_issue_failed',
+    }
+    const revokedGrant = {
+      ...terminalGrant,
+      version: 3,
+      status: 'revoked',
+      outcome_code: 'credential_revocation_confirmed',
+    }
+    let phase: 'reserve' | 'confirm' = 'reserve'
+    const db = new FakeGitHubDeliveryDb((sql) => {
+      switch (marker(sql)) {
+        case 'project-lock':
+        case 'audit-insert':
+        case 'idempotency-insert':
+          return []
+        case 'bearer-identity':
+          if (phase === 'confirm') {
+            throw new Error('clearance must not reload the bearer')
+          }
+          return [bearerIdentity()]
+        case 'delivery-lock':
+          return [phase === 'reserve' ? approvedRequest : issuedRequest]
+        case 'binding-lock':
+          return [bindingRow]
+        case 'canonical-authority':
+          return [canonicalAuthority()]
+        case 'approval-current':
+          return [deliveryApprovalRow()]
+        case 'grant-replacement-blockers-lock':
+        case 'grant-current':
+          return []
+        case 'delivery-start-publishing':
+          return [publishingRequest]
+        case 'grant-create':
+          return [issuingGrant]
+        case 'grant-lock':
+          return [terminalGrant]
+        case 'grant-confirm-clearance':
+          return [revokedGrant]
+        case 'delivery-confirm-clearance-failed':
+          return [failedRequest]
+        case 'idempotency-read':
+          return []
+        default:
+          throw new Error(`Unexpected query: ${sql}`)
+      }
+    })
+    const repository = createPostgresGitHubDeliveryRepository(db, {
+      now: () => new Date(now),
+    })
+    const reserved = await repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: approvedRequest.id,
+        expectedStateVersion: approvedRequest.state_version,
+      },
+      desktopPrincipal,
+    )
+    if (!reserved.ok) throw new Error('fixture grant reservation failed')
+
+    phase = 'confirm'
+    await expect(
+      repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: publishingRequest.id,
+          grantId: issuingGrant.id,
+          outcomeCode: 'credential_revocation_confirmed',
+        },
+        reserved.clearanceAuthority,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      replayed: false,
+      request: {
+        stateVersion: 5,
+        status: 'failed',
+        outcomeCode: 'credential_issue_failed',
+      },
+      grant: {
+        version: 3,
+        status: 'revoked',
+        issuedAt: terminalGrant.issued_at,
+        credentialExpiresAt: terminalGrant.credential_expires_at,
+        consumedAt: null,
+        outcomeCode: 'credential_revocation_confirmed',
+      },
+    })
+    const update = db.calls.find(
+      ({ sql }) => marker(sql) === 'grant-confirm-clearance',
+    )
+    expect(update?.params).toEqual([
+      terminalGrant.id,
+      publishingRequest.id,
+      terminalGrant.intent_revision,
+      terminalGrant.version,
+      'credential_revocation_confirmed',
+      'desktop-token-1',
+      true,
+    ])
+  })
+
+  it('never clears a credential that has already been consumed', async () => {
+    const approvedRequest = {
+      ...deliveryRequestRow,
+      state_version: 2,
+      status: 'approved',
+      outcome_code: null,
+    }
+    const publishingRequest = {
+      ...approvedRequest,
+      state_version: 3,
+      status: 'publishing_branch',
+      outcome_code: null,
+    }
+    const issuingGrant = credentialGrantRow({
+      version: 1,
+      status: 'issuing',
+      issued_at: null,
+      credential_expires_at: null,
+      consumed_at: null,
+      outcome_code: null,
+    })
+    const consumedGrant = credentialGrantRow({
+      version: 3,
+      status: 'consumed',
+      consumed_at: '2026-08-11T10:01:00.000Z',
+    })
+    let phase: 'reserve' | 'confirm' = 'reserve'
+    const db = new FakeGitHubDeliveryDb((sql) => {
+      switch (marker(sql)) {
+        case 'project-lock':
+        case 'audit-insert':
+        case 'idempotency-insert':
+          return []
+        case 'bearer-identity':
+          if (phase === 'confirm') {
+            throw new Error('clearance must not reload the bearer')
+          }
+          return [bearerIdentity()]
+        case 'delivery-lock':
+          return [phase === 'reserve' ? approvedRequest : publishingRequest]
+        case 'binding-lock':
+          return [bindingRow]
+        case 'canonical-authority':
+          return [canonicalAuthority()]
+        case 'approval-current':
+          return [deliveryApprovalRow()]
+        case 'grant-replacement-blockers-lock':
+        case 'grant-current':
+        case 'idempotency-read':
+          return []
+        case 'delivery-start-publishing':
+          return [publishingRequest]
+        case 'grant-create':
+          return [issuingGrant]
+        case 'grant-lock':
+          return [consumedGrant]
+        default:
+          throw new Error(`Unexpected query: ${sql}`)
+      }
+    })
+    const repository = createPostgresGitHubDeliveryRepository(db, {
+      now: () => new Date(now),
+    })
+    const reserved = await repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: approvedRequest.id,
+        expectedStateVersion: approvedRequest.state_version,
+      },
+      desktopPrincipal,
+    )
+    if (!reserved.ok) throw new Error('fixture grant reservation failed')
+
+    phase = 'confirm'
+    await expect(
+      repository.confirmGitHubCredentialClearance(
+        {
+          organizationId: 'org-a',
+          projectId: 'project-a',
+          requestId: publishingRequest.id,
+          grantId: issuingGrant.id,
+          outcomeCode: 'credential_revocation_confirmed',
+        },
+        reserved.clearanceAuthority,
+      ),
+    ).resolves.toMatchObject({ ok: false, outcomeCode: 'grant_conflict' })
+    expect(db.markers()).not.toContain('grant-confirm-clearance')
+    expect(db.markers()).not.toContain('delivery-confirm-clearance-failed')
+  })
+
+  it('does not replace a consumed credential after publication recovery', async () => {
     const recoveringRequest = {
       ...deliveryRequestRow,
       state_version: 6,
@@ -1666,6 +2490,8 @@ describe('Postgres GitHub Delivery repository', () => {
           return [deliveryApprovalRow()]
         case 'grant-current':
           return [consumedGrant]
+        case 'grant-replacement-blockers-lock':
+          return []
         case 'publication-current':
           return [branchPublicationRow({ status: 'conflict' })]
         case 'binding-lock':
@@ -1698,15 +2524,15 @@ describe('Postgres GitHub Delivery repository', () => {
       ),
     ).resolves.toMatchObject({
       ok: true,
-      replayed: false,
-      request: { stateVersion: 7, status: 'publishing_branch' },
-      grant: { id: 'github-grant-2', attempt: 2, status: 'issuing' },
+      replayed: true,
+      request: { stateVersion: 6, status: 'recovery_required' },
+      grant: { id: consumedGrant.id, attempt: 1, status: 'consumed' },
     })
-    const audit = db.calls.find(({ sql }) => marker(sql) === 'audit-insert')
-    expect(audit?.params[8]).toBe('github-grant-2')
+    expect(db.markers()).not.toContain('delivery-start-publishing')
+    expect(db.markers()).not.toContain('grant-create')
   })
 
-  it('closes a stale issuing lease before reserving one bounded replacement', async () => {
+  it('never replaces an ambiguous issuing credential solely because its lease elapsed', async () => {
     const request = {
       ...deliveryRequestRow,
       state_version: 4,
@@ -1750,6 +2576,8 @@ describe('Postgres GitHub Delivery repository', () => {
           return [deliveryApprovalRow()]
         case 'grant-current':
           return [staleGrant]
+        case 'grant-replacement-blockers-lock':
+          return []
         case 'binding-lock':
           return [bindingRow]
         case 'canonical-authority':
@@ -1782,15 +2610,13 @@ describe('Postgres GitHub Delivery repository', () => {
       ),
     ).resolves.toMatchObject({
       ok: true,
-      replayed: false,
-      request: { stateVersion: 5, status: 'publishing_branch' },
-      grant: { id: 'github-grant-2', attempt: 2, status: 'issuing' },
+      replayed: true,
+      request: { stateVersion: 4, status: 'publishing_branch' },
+      grant: { id: staleGrant.id, attempt: 1, status: 'issuing' },
     })
-    const close = db.calls.find(
-      ({ sql }) => marker(sql) === 'grant-close-stale-issuance',
-    )
-    expect(close?.sql).toMatch(/status\s*=\s*'failed'/i)
-    expect(close?.sql).toMatch(/outcome_code\s*=\s*'credential_issue_failed'/i)
+    expect(db.markers()).not.toContain('grant-close-stale-issuance')
+    expect(db.markers()).not.toContain('delivery-start-publishing')
+    expect(db.markers()).not.toContain('grant-create')
   })
 
   it('replays an issuing credential reservation while its lease is live', async () => {
@@ -1821,6 +2647,8 @@ describe('Postgres GitHub Delivery repository', () => {
           return [deliveryApprovalRow()]
         case 'grant-current':
           return [issuingGrant]
+        case 'grant-replacement-blockers-lock':
+          return []
         case 'binding-lock':
           return [bindingRow]
         case 'canonical-authority':
@@ -1853,7 +2681,7 @@ describe('Postgres GitHub Delivery repository', () => {
     expect(db.markers()).not.toContain('grant-create')
   })
 
-  it('transitions an issued grant to expired before reserving its replacement', async () => {
+  it('does not replace an issued credential from the local clock alone', async () => {
     const request = {
       ...deliveryRequestRow,
       state_version: 4,
@@ -1893,6 +2721,8 @@ describe('Postgres GitHub Delivery repository', () => {
           return [deliveryApprovalRow()]
         case 'grant-current':
           return [expiredGrant]
+        case 'grant-replacement-blockers-lock':
+          return []
         case 'binding-lock':
           return [bindingRow]
         case 'canonical-authority':
@@ -1925,17 +2755,15 @@ describe('Postgres GitHub Delivery repository', () => {
       ),
     ).resolves.toMatchObject({
       ok: true,
-      replayed: false,
-      request: { stateVersion: 5, status: 'publishing_branch' },
-      grant: { id: 'github-grant-2', attempt: 2, status: 'issuing' },
+      replayed: true,
+      request: { stateVersion: 4, status: 'publishing_branch' },
+      grant: { id: expiredGrant.id, attempt: 1, status: 'issued' },
     })
-    const expire = db.calls.find(({ sql }) => marker(sql) === 'grant-expire')
-    expect(expire?.sql).toMatch(/status\s*=\s*'expired'/i)
-    expect(expire?.sql).toMatch(/outcome_code\s*=\s*'credential_expired'/i)
-    expect(expire?.sql).toMatch(/credential_expires_at\s*<=\s*\$5/i)
+    expect(db.markers()).not.toContain('grant-expire')
+    expect(db.markers()).not.toContain('grant-create')
   })
 
-  it('supersedes an issued grant before a bounded replacement after response loss', async () => {
+  it('does not supersede an issued credential after response loss', async () => {
     const request = {
       ...deliveryRequestRow,
       state_version: 4,
@@ -1976,6 +2804,8 @@ describe('Postgres GitHub Delivery repository', () => {
           return [deliveryApprovalRow()]
         case 'grant-current':
           return [issuedGrant]
+        case 'grant-replacement-blockers-lock':
+          return []
         case 'binding-lock':
           return [bindingRow]
         case 'canonical-authority':
@@ -2008,17 +2838,236 @@ describe('Postgres GitHub Delivery repository', () => {
       ),
     ).resolves.toMatchObject({
       ok: true,
+      replayed: true,
+      request: { stateVersion: 4, status: 'publishing_branch' },
+      grant: { id: issuedGrant.id, attempt: 1, status: 'issued' },
+    })
+    expect(db.markers()).not.toContain('grant-supersede-lost-response')
+    expect(db.markers()).not.toContain('grant-create')
+  })
+
+  it('atomically confirms exact provider expiry at the safety boundary and permits the next explicit retry', async () => {
+    const approvedRequest = {
+      ...deliveryRequestRow,
+      state_version: 2,
+      status: 'approved',
+      outcome_code: null,
+    }
+    const publishingRequest = {
+      ...approvedRequest,
+      state_version: 3,
+      status: 'publishing_branch',
+    }
+    const issuingGrant = credentialGrantRow({
+      version: 1,
+      status: 'issuing',
+      issued_at: null,
+      credential_expires_at: null,
+      provider_expiry_contract_version: 0,
+      provider_credential_expires_at: null,
+    })
+    const issuedRequest = { ...publishingRequest, state_version: 4 }
+    const issuedGrant = credentialGrantRow({
+      version: 2,
+      issued_at: '2026-08-11T10:00:01.000Z',
+      credential_expires_at: '2026-08-11T10:45:01.000Z',
+      provider_credential_expires_at: '2026-08-11T10:45:01.000Z',
+    })
+    const expiredGrant = {
+      ...issuedGrant,
+      version: 3,
+      status: 'expired',
+      provider_expiry_observed_at: '2026-08-11T10:45:03.000Z',
+      outcome_code: 'credential_provider_expiry_confirmed',
+    }
+    const recoveryRequest = {
+      ...issuedRequest,
+      state_version: 5,
+      status: 'recovery_required',
+      outcome_code: 'credential_issue_failed',
+    }
+    const nextPublishingRequest = {
+      ...recoveryRequest,
+      state_version: 6,
+      status: 'publishing_branch',
+      outcome_code: null,
+    }
+    const nextGrant = credentialGrantRow({
+      id: 'github-grant-2',
+      version: 1,
+      attempt: 2,
+      status: 'issuing',
+      issued_at: null,
+      credential_expires_at: null,
+      provider_expiry_contract_version: 0,
+      provider_credential_expires_at: null,
+    })
+    let phase: 'reserve' | 'finalize' | 'replay' | 'confirm' | 'confirmReplay' | 'retry' = 'reserve'
+    const db = new FakeGitHubDeliveryDb((sql) => {
+      switch (marker(sql)) {
+        case 'project-lock':
+        case 'audit-insert':
+        case 'idempotency-insert':
+          return []
+        case 'bearer-identity':
+          if (phase === 'confirm' || phase === 'confirmReplay') {
+            throw new Error('internal capability only')
+          }
+          return [bearerIdentity()]
+        case 'delivery-lock':
+          return [
+            phase === 'reserve'
+              ? approvedRequest
+              : phase === 'finalize'
+                ? publishingRequest
+                : phase === 'retry'
+                  ? recoveryRequest
+                  : phase === 'confirmReplay'
+                    ? recoveryRequest
+                    : issuedRequest,
+          ]
+        case 'approval-current':
+          return [deliveryApprovalRow()]
+        case 'binding-lock':
+          return [bindingRow]
+        case 'canonical-authority':
+          return [canonicalAuthority()]
+        case 'grant-current':
+          return phase === 'reserve'
+            ? []
+            : phase === 'retry'
+              ? [expiredGrant]
+              : [issuedGrant]
+        case 'grant-lock':
+          return [
+            phase === 'finalize'
+              ? issuingGrant
+              : phase === 'confirmReplay'
+                ? expiredGrant
+                : issuedGrant,
+          ]
+        case 'grant-replacement-blockers-lock':
+        case 'idempotency-read':
+          return []
+        case 'delivery-start-publishing':
+          return [phase === 'retry' ? nextPublishingRequest : publishingRequest]
+        case 'grant-create':
+          return [phase === 'retry' ? nextGrant : issuingGrant]
+        case 'grant-finalize':
+          return [issuedGrant]
+        case 'delivery-finalize-grant':
+          return [issuedRequest]
+        case 'grant-confirm-provider-expiry':
+          return [expiredGrant]
+        case 'delivery-confirm-provider-expiry':
+          return [recoveryRequest]
+        default:
+          throw new Error(`Unexpected query: ${sql}`)
+      }
+    })
+    const repository = createPostgresGitHubDeliveryRepository(db, {
+      now: () => new Date(now),
+      createId: (kind) => `github-${kind}-1`,
+    })
+    const reserved = await repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: approvedRequest.id,
+        expectedStateVersion: approvedRequest.state_version,
+      },
+      desktopPrincipal,
+    )
+    if (!reserved.ok) throw new Error('fixture reserve failed')
+    phase = 'finalize'
+    await expect(repository.finalizeGitHubCredentialGrant({
+      projectId: 'project-a',
+      requestId: publishingRequest.id,
+      grantId: issuingGrant.id,
+      expectedStateVersion: publishingRequest.state_version,
+      expectedGrantVersion: issuingGrant.version,
+      outcome: {
+        status: 'issued',
+        issuedAt: '2026-08-11T10:00:01.000Z',
+        credentialExpiresAt: '2026-08-11T10:45:01.000Z',
+        providerCredentialExpiresAt: '2026-08-11T10:45:01.000Z',
+        repositoryId: '98765',
+        permission: 'contents:write',
+        repositoryCount: 1,
+      },
+    }, desktopPrincipal)).resolves.toMatchObject({ ok: true, replayed: false })
+    const finalizeCall = db.calls.find(({ sql }) => marker(sql) === 'grant-finalize')
+    expect(finalizeCall?.params).toContain('2026-08-11T10:45:01.000Z')
+    expect(finalizeCall?.params).toContain(1)
+
+    phase = 'replay'
+    const replayed = await repository.reserveGitHubCredentialGrant(
+      {
+        projectId: 'project-a',
+        requestId: issuedRequest.id,
+        expectedStateVersion: issuedRequest.state_version,
+      },
+      desktopPrincipal,
+    )
+    if (!replayed.ok) throw new Error('fixture replay failed')
+    await expect(repository.confirmGitHubCredentialProviderExpiry({
+      organizationId: 'org-a',
+      projectId: 'project-a',
+      requestId: issuedRequest.id,
+      grantId: issuedGrant.id,
+      providerCredentialExpiresAt: '2026-08-11T10:45:01.000Z',
+      providerExpiryObservedAt: '2026-08-11T10:45:02.999Z',
+    }, replayed.clearanceAuthority)).resolves.toMatchObject({
+      ok: false,
+      outcomeCode: 'invalid_state',
+    })
+    phase = 'confirm'
+    const confirmed = await repository.confirmGitHubCredentialProviderExpiry({
+      organizationId: 'org-a',
+      projectId: 'project-a',
+      requestId: issuedRequest.id,
+      grantId: issuedGrant.id,
+      providerCredentialExpiresAt: '2026-08-11T10:45:01.000Z',
+      providerExpiryObservedAt: '2026-08-11T10:45:03.000Z',
+    }, replayed.clearanceAuthority)
+    expect(confirmed).toMatchObject({
+      ok: true,
       replayed: false,
-      request: { stateVersion: 5, status: 'publishing_branch' },
+      request: { status: 'recovery_required' },
+      grant: {
+        status: 'expired',
+        outcomeCode: 'credential_provider_expiry_confirmed',
+      },
+    })
+    const confirmCall = db.calls.find(
+      ({ sql }) => marker(sql) === 'grant-confirm-provider-expiry',
+    )
+    expect(confirmCall?.sql).toMatch(/interval '2 seconds'/u)
+    expect(confirmCall?.sql).toMatch(/provider_credential_expires_at = \$7/u)
+
+    phase = 'confirmReplay'
+    await expect(repository.confirmGitHubCredentialProviderExpiry({
+      organizationId: 'org-a',
+      projectId: 'project-a',
+      requestId: issuedRequest.id,
+      grantId: issuedGrant.id,
+      providerCredentialExpiresAt: '2026-08-11T10:45:01.000Z',
+      providerExpiryObservedAt: '2026-08-11T10:45:03.000Z',
+    }, replayed.clearanceAuthority)).resolves.toMatchObject({
+      ok: true,
+      replayed: true,
+      grant: { status: 'expired' },
+    })
+
+    phase = 'retry'
+    await expect(repository.reserveGitHubCredentialGrant({
+      projectId: 'project-a',
+      requestId: recoveryRequest.id,
+      expectedStateVersion: recoveryRequest.state_version,
+    }, desktopPrincipal)).resolves.toMatchObject({
+      ok: true,
+      replayed: false,
       grant: { id: 'github-grant-2', attempt: 2, status: 'issuing' },
     })
-    const supersede = db.calls.find(
-      ({ sql }) => marker(sql) === 'grant-supersede-lost-response',
-    )
-    expect(supersede?.sql).toMatch(/status\s*=\s*'failed'/i)
-    expect(supersede?.sql).toMatch(
-      /outcome_code\s*=\s*'credential_superseded'/i,
-    )
   })
 
   it('rechecks the exact binding before finalizing a credential grant', async () => {

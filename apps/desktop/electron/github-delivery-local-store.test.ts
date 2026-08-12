@@ -652,10 +652,105 @@ describe('GitHub repository binding observation CAS', () => {
 })
 
 describe('GitHub Delivery Intent local persistence', () => {
-  it('migrates to schema 16 with isolated redacted revocation checks', async () => {
+  it('discards schema 16 revocation checks and writes only proof state version 2', async () => {
+    const dbPath = await tempDbPath()
+    const sources = createSources()
+    const store = await createLocalStore({ dbPath })
+    await saveSources(store, sources)
+    const completed = await saveCompletedIntent(store, sources)
+    const revokedBinding: GitHubRepositoryBinding = {
+      ...sources.repositoryBinding,
+      version: sources.repositoryBinding.version + 1,
+      status: 'revoked',
+      updatedAt: '2026-08-11T10:37:00.000Z',
+    }
+    await store.saveGitHubRepositoryBinding(revokedBinding)
+    store.close()
+
+    const staleV1Check = {
+      stateVersion: 1,
+      intentId: completed.id,
+      intentUpdatedAt: completed.updatedAt,
+      bindingId: revokedBinding.id,
+      bindingVersion: revokedBinding.version,
+      outcomeCode: 'binding_inactive',
+      checkedAt: '2026-08-11T10:38:00.000Z',
+      redacted: true,
+    } as const
+    const SQL = await initSqlJs()
+    const database = new SQL.Database(await readFile(dbPath))
+    database.run(`
+      drop table github_delivery_revocation_checks;
+      create table github_delivery_revocation_checks (
+        intent_id text primary key,
+        intent_updated_at text not null,
+        binding_id text not null,
+        binding_version integer not null,
+        outcome_code text not null,
+        checked_at text not null,
+        state_version integer not null,
+        json text not null,
+        check (outcome_code = 'binding_inactive'),
+        check (state_version = 1),
+        check (json_valid(json)),
+        check (json_extract(json, '$.stateVersion') = state_version)
+      );
+      update schema_meta set value = '16' where key = 'schema_version';
+    `)
+    database.run(
+      `insert into github_delivery_revocation_checks (
+        intent_id, intent_updated_at, binding_id, binding_version,
+        outcome_code, checked_at, state_version, json
+      ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        staleV1Check.intentId,
+        staleV1Check.intentUpdatedAt,
+        staleV1Check.bindingId,
+        staleV1Check.bindingVersion,
+        staleV1Check.outcomeCode,
+        staleV1Check.checkedAt,
+        staleV1Check.stateVersion,
+        JSON.stringify(staleV1Check),
+      ],
+    )
+    await writeFile(dbPath, database.export())
+    database.close()
+
+    const migrated = await createLocalStore({ dbPath })
+    await expect(migrated.getSchemaVersion()).resolves.toBe(17)
+    await expect(migrated.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])
+
+    const v2Check: GitHubDeliveryRevocationCheck = {
+      ...staleV1Check,
+      stateVersion: 2,
+    }
+    await expect(
+      migrated.commitGitHubDeliveryRevocationCheck({
+        check: v2Check,
+        expectedIntent: completed,
+        expectedBinding: revokedBinding,
+        expectedPairing: sources.pairing,
+      }),
+    ).resolves.toEqual({ committed: true, replayed: false, check: v2Check })
+    await expect(migrated.listGitHubDeliveryRevocationChecks()).resolves.toEqual([
+      v2Check,
+    ])
+    migrated.close()
+
+    const verified = new SQL.Database(await readFile(dbPath))
+    const migratedTableSql = String(
+      verified.exec(
+        "select sql from sqlite_master where type = 'table' and name = 'github_delivery_revocation_checks'",
+      )[0]?.values[0]?.[0],
+    )
+    expect(migratedTableSql).toMatch(/check \(state_version = 2\)/u)
+    verified.close()
+  })
+
+  it('migrates to schema 17 with isolated redacted revocation checks', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
-    expect(await store.getSchemaVersion()).toBe(16)
+    expect(await store.getSchemaVersion()).toBe(17)
     store.close()
 
     const SQL = await initSqlJs()
@@ -746,7 +841,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     }
     await store.saveGitHubRepositoryBinding(revokedBinding)
     const check: GitHubDeliveryRevocationCheck = {
-      stateVersion: 1,
+      stateVersion: 2,
       intentId: completed.id,
       intentUpdatedAt: completed.updatedAt,
       bindingId: revokedBinding.id,
@@ -813,7 +908,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     }
     await store.saveGitHubRepositoryBinding(unrelatedBinding)
     const check: GitHubDeliveryRevocationCheck = {
-      stateVersion: 1,
+      stateVersion: 2,
       intentId: completed.id,
       intentUpdatedAt: completed.updatedAt,
       bindingId: unrelatedBinding.id,
@@ -846,7 +941,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     }
     await store.saveGitHubRepositoryBinding(revokedBinding)
     const unexpectedGrant = {
-      stateVersion: 1 as const,
+      stateVersion: 2 as const,
       intentId: completed.id,
       intentUpdatedAt: completed.updatedAt,
       bindingId: revokedBinding.id,
@@ -879,7 +974,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     }
     await store.saveGitHubRepositoryBinding(revokedBinding)
     const check: GitHubDeliveryRevocationCheck = {
-      stateVersion: 1,
+      stateVersion: 2,
       intentId: completed.id,
       intentUpdatedAt: completed.updatedAt,
       bindingId: revokedBinding.id,
@@ -923,7 +1018,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     }
     await store.saveGitHubRepositoryBinding(revokedBinding)
     const check: GitHubDeliveryRevocationCheck = {
-      stateVersion: 1,
+      stateVersion: 2,
       intentId: failed.id,
       intentUpdatedAt: failed.updatedAt,
       bindingId: revokedBinding.id,
@@ -956,7 +1051,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     }
     await store.saveGitHubRepositoryBinding(revokedBinding)
     const unsafeCheck = {
-      stateVersion: 1 as const,
+      stateVersion: 2 as const,
       intentId: completed.id,
       intentUpdatedAt: completed.updatedAt,
       bindingId: revokedBinding.id,
@@ -991,7 +1086,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     }
     await store.saveGitHubRepositoryBinding(revokedBinding)
     const check: GitHubDeliveryRevocationCheck = {
-      stateVersion: 1,
+      stateVersion: 2,
       intentId: completed.id,
       intentUpdatedAt: completed.updatedAt,
       bindingId: revokedBinding.id,
@@ -1013,7 +1108,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     store.close()
   })
 
-  it('preserves an existing v14 JSON series and non-first attempt through schema 16', async () => {
+  it('preserves an existing v14 JSON series and non-first attempt through schema 17', async () => {
     const dbPath = await tempDbPath()
     const sources = createSources()
     const store = await createLocalStore({ dbPath })
@@ -1055,7 +1150,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(16)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(17)
     await expect(migrated.listGitHubDeliveryIntents(sources.run.id))
       .resolves.toEqual([attemptTwo])
     migrated.close()
@@ -1077,7 +1172,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(16)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(17)
     await expect(migrated.listGitHubDeliveryIntents(sources.run.id))
       .resolves.toEqual([completed])
     await expect(migrated.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])

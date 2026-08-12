@@ -14,10 +14,11 @@ import {
   cloneGitHubRepositoryBinding,
   cloneGitHubPullRequestOutcome,
   fingerprintGitHubDeliveryRequest,
-  GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS,
   githubDeliveryRejection,
   normalizeGitHubDeliveryRequestIntent,
   type CreateOrReviseGitHubDeliveryRequestInput,
+  type ConfirmGitHubCredentialClearanceInput,
+  type ConfirmGitHubCredentialProviderExpiryInput,
   type DecideGitHubDeliveryRequestInput,
   type FinalizeGitHubCredentialGrantInput,
   type FinalizeGitHubBranchPublicationInput,
@@ -27,6 +28,10 @@ import {
   type GitHubBranchPublicationReportResult,
   type GitHubCredentialGrant,
   type GitHubCredentialGrantMutationResult,
+  type GitHubCredentialGrantReservationResult,
+  type GitHubCredentialClearanceAuthority,
+  type GitHubCredentialClearanceConfirmationResult,
+  type GitHubCredentialProviderExpiryConfirmationResult,
   type GitHubDeliveryAuthorityLookup,
   type GitHubDeliveryCanonicalRunAuthority,
   type GitHubDeliveryCanonicalRunAuthorityLookup,
@@ -91,6 +96,19 @@ type InternalCredentialGrant = GitHubCredentialGrant & {
   issuedToTokenId: string
 }
 
+type CredentialClearanceAuthoritySnapshot = {
+  organizationId: string
+  projectId: string
+  userId: string
+  role: GitHubDeliveryDesktopPrincipal['session']['role']
+  tokenRecordId: string
+  requestId: string
+  requestStateVersion: number
+  grantId: string
+  grantVersion: number
+  intentRevision: number
+}
+
 export type SeedGitHubDeliveryRepository = GitHubDeliveryRepository & {
   inspectForTests(): {
     bindings: InternalRepositoryBinding[]
@@ -142,6 +160,10 @@ export function createSeedGitHubDeliveryRepository(
   const publications = new Map<string, GitHubBranchPublication>()
   const pullRequests = new Map<string, GitHubPullRequestOutcome>()
   const auditEvents: SeedGitHubDeliveryAuditEvent[] = []
+  const credentialClearanceAuthorities = new WeakMap<
+    GitHubCredentialClearanceAuthority,
+    CredentialClearanceAuthoritySnapshot
+  >()
   const now = options.now ?? (() => new Date())
   const nextId = options.id ?? (() => `github-binding-${randomUUID()}`)
 
@@ -151,6 +173,59 @@ export function createSeedGitHubDeliveryRepository(
       throw new Error('Seed GitHub Delivery clock returned an invalid date.')
     }
     return date.toISOString()
+  }
+
+  function attachCredentialClearanceAuthority(
+    result: Omit<
+      Extract<GitHubCredentialGrantReservationResult, { ok: true }>,
+      'clearanceAuthority'
+    >,
+    snapshot: CredentialClearanceAuthoritySnapshot,
+  ): Extract<GitHubCredentialGrantReservationResult, { ok: true }> {
+    const authority = Object.freeze(
+      Object.create(null),
+    ) as GitHubCredentialClearanceAuthority
+    credentialClearanceAuthorities.set(authority, snapshot)
+    Object.defineProperty(result, 'clearanceAuthority', {
+      configurable: false,
+      enumerable: false,
+      value: authority,
+      writable: false,
+    })
+    return result as Extract<
+      GitHubCredentialGrantReservationResult,
+      { ok: true }
+    >
+  }
+
+  function credentialReservationResult(
+    request: InternalDeliveryRequest,
+    grant: InternalCredentialGrant,
+    principal: GitHubDeliveryDesktopPrincipal,
+    replayed: boolean,
+  ): Extract<GitHubCredentialGrantReservationResult, { ok: true }> {
+    return attachCredentialClearanceAuthority(
+      {
+        ok: true,
+        responseStatus: 201,
+        outcomeCode: 'grant_reserved',
+        replayed,
+        request: cloneGitHubDeliveryRequest(request),
+        grant: cloneGitHubCredentialGrant(grant),
+      },
+      {
+        organizationId: request.organizationId,
+        projectId: request.projectId,
+        userId: request.requestedByUserId,
+        role: principal.session.role,
+        tokenRecordId: grant.issuedToTokenId,
+        requestId: request.id,
+        requestStateVersion: request.stateVersion,
+        grantId: grant.id,
+        grantVersion: grant.version,
+        intentRevision: grant.intentRevision,
+      },
+    )
   }
 
   function scope(organizationId: string, projectId: string): string {
@@ -1012,10 +1087,90 @@ export function createSeedGitHubDeliveryRepository(
     )
   }
 
+  function credentialAuthorityIsCleared(
+    grant: InternalCredentialGrant,
+  ): boolean {
+    if (grant.outcomeCode === 'credential_provider_expiry_confirmed') {
+      return (
+        grant.status === 'expired' &&
+        grant.providerExpiryContractVersion === 1 &&
+        grant.issuedAt !== null &&
+        grant.credentialExpiresAt !== null &&
+        grant.providerCredentialExpiresAt !== null &&
+        grant.providerExpiryObservedAt !== null &&
+        grant.consumedAt === null &&
+        Date.parse(grant.credentialExpiresAt) <=
+          Date.parse(grant.providerCredentialExpiresAt) &&
+        Date.parse(grant.providerExpiryObservedAt) >=
+          Date.parse(grant.providerCredentialExpiresAt) + 2_000
+      )
+    }
+    if (!['failed', 'revoked'].includes(grant.status)) return false
+    if (grant.outcomeCode === 'credential_mint_absent_confirmed') {
+      return grant.issuedAt === null && grant.credentialExpiresAt === null
+    }
+    if (grant.outcomeCode !== 'credential_revocation_confirmed') return false
+    return (
+      grant.consumedAt === null &&
+      ((grant.issuedAt === null && grant.credentialExpiresAt === null) ||
+        (grant.status === 'revoked' &&
+          grant.issuedAt !== null &&
+          grant.credentialExpiresAt !== null))
+    )
+  }
+
+  function deliverySeriesHasUnclearedPriorCredential(
+    request: InternalDeliveryRequest,
+    currentGrantId: string | null,
+  ): boolean {
+    const requestIds = new Set(
+      [...requestsByLogicalKey.values()]
+        .filter(
+          (candidate) =>
+            candidate.organizationId === request.organizationId &&
+            candidate.projectId === request.projectId &&
+            candidate.repositoryBindingId === request.repositoryBindingId &&
+            candidate.deliverySeriesKey === request.deliverySeriesKey,
+        )
+        .map((candidate) => candidate.id),
+    )
+    return [...grants.values()].some(
+      (grant) =>
+        grant.id !== currentGrantId &&
+        requestIds.has(grant.requestId) &&
+        !credentialAuthorityIsCleared(grant),
+    )
+  }
+
+  function bindingHasPendingCredentialRevocation(
+    organizationId: string,
+    projectId: string,
+    bindingId: string,
+    currentGrantId: string | null = null,
+  ): boolean {
+    const requestIds = new Set(
+      [...requestsByLogicalKey.values()]
+        .filter(
+          (request) =>
+            request.organizationId === organizationId &&
+            request.projectId === projectId &&
+            request.repositoryBindingId === bindingId,
+        )
+        .map((request) => request.id),
+    )
+    return [...grants.values()].some(
+      (grant) =>
+        grant.id !== currentGrantId &&
+        requestIds.has(grant.requestId) &&
+        grant.issuedAt === null &&
+        !credentialAuthorityIsCleared(grant),
+    )
+  }
+
   async function reserveGitHubCredentialGrant(
     input: ReserveGitHubCredentialGrantInput,
     principal: GitHubDeliveryDesktopPrincipal,
-  ): Promise<GitHubCredentialGrantMutationResult> {
+  ): Promise<GitHubCredentialGrantReservationResult> {
     if (!(await hasDesktopAuthority(principal, input.projectId))) {
       return githubDeliveryRejection('project_forbidden')
     }
@@ -1028,8 +1183,17 @@ export function createSeedGitHubDeliveryRepository(
     if (request.requestedByTokenId !== principal.authentication.tokenRecordId) {
       return githubDeliveryRejection('project_forbidden')
     }
+    const at = timestamp()
     if (!hasCurrentBinding(request)) {
-      return githubDeliveryRejection('binding_inactive')
+      return githubDeliveryRejection(
+        bindingHasPendingCredentialRevocation(
+          request.organizationId,
+          request.projectId,
+          request.repositoryBindingId,
+        )
+          ? 'credential_revocation_pending'
+          : 'binding_inactive',
+      )
     }
     const runAuthority = await canonicalRequestAuthority(request)
     if (runAuthority === 'claimant_forbidden') {
@@ -1040,17 +1204,24 @@ export function createSeedGitHubDeliveryRepository(
     }
     const existingGrant = currentGrant(request)
     const existingPublication = currentPublication(request)
-    const at = timestamp()
-    const staleIssuingGrant = Boolean(
-      existingGrant?.status === 'issuing' &&
-        request.status === 'publishing_branch' &&
-        Date.parse(at) >=
-          Date.parse(existingGrant.requestedAt) +
-            GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS,
-    )
-    const replacingLostIssuedCredential = Boolean(
-      existingGrant?.status === 'issued' &&
-        request.status === 'publishing_branch',
+    if (
+      bindingHasPendingCredentialRevocation(
+        request.organizationId,
+        request.projectId,
+        request.repositoryBindingId,
+        existingGrant?.id ?? null,
+      )
+    ) {
+      return githubDeliveryRejection('credential_revocation_pending')
+    }
+    if (deliverySeriesHasUnclearedPriorCredential(request, existingGrant?.id ?? null)) {
+      return githubDeliveryRejection('credential_revocation_pending')
+    }
+    if (Date.parse(at) >= Date.parse(request.expiresAt)) {
+      return githubDeliveryRejection('expired')
+    }
+    const existingAuthorityCleared = Boolean(
+      existingGrant && credentialAuthorityIsCleared(existingGrant),
     )
     const consumedPublicationRecovery = Boolean(
       existingGrant?.status === 'consumed' &&
@@ -1060,11 +1231,8 @@ export function createSeedGitHubDeliveryRepository(
     )
     const retrying = Boolean(
       existingGrant &&
-        (['failed', 'recovery_required', 'expired'].includes(
-          existingGrant.status,
-        ) ||
-          staleIssuingGrant ||
-          replacingLostIssuedCredential ||
+        existingAuthorityCleared &&
+        (['failed', 'revoked', 'recovery_required', 'expired'].includes(existingGrant.status) ||
           consumedPublicationRecovery),
     )
     if (
@@ -1077,16 +1245,22 @@ export function createSeedGitHubDeliveryRepository(
     if (
       existingGrant &&
       !retrying &&
+      existingGrant.issuedToTokenId === principal.authentication.tokenRecordId &&
+      ['issuing', 'issued', 'consumed'].includes(existingGrant.status)
+    ) {
+      return credentialReservationResult(
+        request,
+        existingGrant,
+        principal,
+        true,
+      )
+    }
+    if (
+      existingGrant &&
+      !retrying &&
       existingGrant.issuedToTokenId === principal.authentication.tokenRecordId
     ) {
-      return {
-        ok: true,
-        responseStatus: 201,
-        outcomeCode: 'grant_reserved',
-        replayed: true,
-        request: cloneGitHubDeliveryRequest(request),
-        grant: cloneGitHubCredentialGrant(existingGrant),
-      }
+      return githubDeliveryRejection('credential_revocation_pending')
     }
     if (request.stateVersion !== input.expectedStateVersion) {
       return githubDeliveryRejection('stale_version')
@@ -1094,33 +1268,20 @@ export function createSeedGitHubDeliveryRepository(
     if (
       (!retrying && request.status !== 'approved') ||
       (retrying &&
-        !['failed', 'recovery_required', 'publishing_branch'].includes(
+        !['failed', 'recovery_required'].includes(
           request.status,
         ))
     ) {
       return githubDeliveryRejection('approval_required')
-    }
-    if (Date.parse(at) >= Date.parse(request.expiresAt)) {
-      return githubDeliveryRejection('expired')
     }
     const approval = currentApproval(request)
     if (!approval || !approvalMatchesRequest(approval, request)) {
       return githubDeliveryRejection('approval_required')
     }
     if (existingGrant && retrying) {
-      if (staleIssuingGrant) {
-        existingGrant.version += 1
-        existingGrant.status = 'failed'
-        existingGrant.outcomeCode = 'credential_issue_failed'
-      }
       if (existingGrant.status === 'recovery_required') {
         existingGrant.version += 1
         existingGrant.status = 'failed'
-      }
-      if (replacingLostIssuedCredential) {
-        existingGrant.version += 1
-        existingGrant.status = 'failed'
-        existingGrant.outcomeCode = 'credential_superseded'
       }
     }
 
@@ -1139,6 +1300,9 @@ export function createSeedGitHubDeliveryRepository(
       requestedAt: at,
       issuedAt: null,
       credentialExpiresAt: null,
+      providerExpiryContractVersion: 0,
+      providerCredentialExpiresAt: null,
+      providerExpiryObservedAt: null,
       consumedAt: null,
       outcomeCode: null,
       redacted: true,
@@ -1149,14 +1313,7 @@ export function createSeedGitHubDeliveryRepository(
     request.outcomeCode = null
     request.updatedAt = at
     audit(principal, input.projectId, 'github_delivery_grant', grant.id, 'grant_reserved', [request.id, grant.attempt], at)
-    return {
-      ok: true,
-      responseStatus: 201,
-      outcomeCode: 'grant_reserved',
-      replayed: false,
-      request: cloneGitHubDeliveryRequest(request),
-      grant: cloneGitHubCredentialGrant(grant),
-    }
+    return credentialReservationResult(request, grant, principal, false)
   }
 
   function grantFinalizationMatches(
@@ -1169,6 +1326,10 @@ export function createSeedGitHubDeliveryRepository(
         grant.issuedAt === new Date(input.outcome.issuedAt).toISOString() &&
         grant.credentialExpiresAt ===
           new Date(input.outcome.credentialExpiresAt).toISOString() &&
+        grant.providerExpiryContractVersion === 1 &&
+        grant.providerCredentialExpiresAt ===
+          new Date(input.outcome.providerCredentialExpiresAt).toISOString() &&
+        grant.providerExpiryObservedAt === null &&
         grant.repositoryId === input.outcome.repositoryId &&
         grant.permission === input.outcome.permission &&
         grant.repositoryCount === input.outcome.repositoryCount
@@ -1245,9 +1406,13 @@ export function createSeedGitHubDeliveryRepository(
     if (input.outcome.status === 'issued') {
       let issuedAt: string
       let credentialExpiresAt: string
+      let providerCredentialExpiresAt: string
       try {
         issuedAt = timestamp(input.outcome.issuedAt)
         credentialExpiresAt = timestamp(input.outcome.credentialExpiresAt)
+        providerCredentialExpiresAt = timestamp(
+          input.outcome.providerCredentialExpiresAt,
+        )
       } catch {
         return githubDeliveryRejection('invalid_state')
       }
@@ -1257,6 +1422,9 @@ export function createSeedGitHubDeliveryRepository(
         input.outcome.repositoryCount !== 1 ||
         Date.parse(issuedAt) < Date.parse(grant.requestedAt) ||
         Date.parse(credentialExpiresAt) <= Date.parse(issuedAt) ||
+        Date.parse(providerCredentialExpiresAt) <= Date.parse(issuedAt) ||
+        Date.parse(credentialExpiresAt) >
+          Date.parse(providerCredentialExpiresAt) ||
         Date.parse(credentialExpiresAt) > Date.parse(issuedAt) + 60 * 60 * 1_000 ||
         Date.parse(credentialExpiresAt) > Date.parse(request.expiresAt)
       ) {
@@ -1265,6 +1433,9 @@ export function createSeedGitHubDeliveryRepository(
       grant.status = 'issued'
       grant.issuedAt = issuedAt
       grant.credentialExpiresAt = credentialExpiresAt
+      grant.providerExpiryContractVersion = 1
+      grant.providerCredentialExpiresAt = providerCredentialExpiresAt
+      grant.providerExpiryObservedAt = null
       grant.outcomeCode = null
     } else {
       grant.status = input.outcome.status
@@ -1281,6 +1452,279 @@ export function createSeedGitHubDeliveryRepository(
       ok: true,
       responseStatus: 200,
       outcomeCode: 'grant_finalized',
+      replayed: false,
+      request: cloneGitHubDeliveryRequest(request),
+      grant: cloneGitHubCredentialGrant(grant),
+    }
+  }
+
+  async function confirmGitHubCredentialClearance(
+    input: ConfirmGitHubCredentialClearanceInput,
+    authority: GitHubCredentialClearanceAuthority,
+  ): Promise<GitHubCredentialClearanceConfirmationResult> {
+    const snapshot =
+      authority !== null && typeof authority === 'object'
+        ? credentialClearanceAuthorities.get(authority)
+        : undefined
+    if (!snapshot) {
+      return githubDeliveryRejection('authentication_forbidden')
+    }
+    if (
+      input.organizationId !== snapshot.organizationId ||
+      input.projectId !== snapshot.projectId ||
+      input.requestId !== snapshot.requestId ||
+      input.grantId !== snapshot.grantId
+    ) {
+      return githubDeliveryRejection('project_forbidden')
+    }
+    const request = findRequest(
+      input.requestId,
+      snapshot.organizationId,
+      snapshot.projectId,
+    )
+    const grant = grants.get(input.grantId)
+    if (
+      !request ||
+      !grant ||
+      grant.requestId !== request.id ||
+      grant.intentRevision !== snapshot.intentRevision
+    ) {
+      return githubDeliveryRejection('not_found')
+    }
+    if (
+      request.organizationId !== snapshot.organizationId ||
+      request.projectId !== snapshot.projectId ||
+      request.requestedByUserId !== snapshot.userId ||
+      request.requestedByTokenId !== snapshot.tokenRecordId ||
+      grant.issuedToTokenId !== snapshot.tokenRecordId
+    ) {
+      return githubDeliveryRejection('project_forbidden')
+    }
+    if (
+      (grant.status === 'revoked' || grant.status === 'failed') &&
+      grant.outcomeCode === input.outcomeCode &&
+      credentialAuthorityIsCleared(grant)
+    ) {
+      return {
+        ok: true,
+        responseStatus: 200,
+        outcomeCode: input.outcomeCode,
+        replayed: true,
+        request: cloneGitHubDeliveryRequest(request),
+        grant: cloneGitHubCredentialGrant(grant),
+      }
+    }
+    const unissuedConfirmable =
+      grant.issuedAt === null &&
+      grant.credentialExpiresAt === null &&
+      grant.consumedAt === null &&
+      (grant.version === snapshot.grantVersion ||
+        (grant.version === snapshot.grantVersion + 1 &&
+          ['failed', 'recovery_required', 'revoked'].includes(grant.status))) &&
+      (request.stateVersion === snapshot.requestStateVersion ||
+        (request.stateVersion === snapshot.requestStateVersion + 1 &&
+          ['failed', 'recovery_required', 'revoked'].includes(request.status))) &&
+      ['issuing', 'recovery_required', 'failed', 'revoked'].includes(
+        grant.status,
+      ) &&
+      grant.outcomeCode !== 'credential_mint_absent_confirmed' &&
+      grant.outcomeCode !== 'credential_revocation_confirmed'
+    const issuedRevocationConfirmable =
+      input.outcomeCode === 'credential_revocation_confirmed' &&
+      grant.status === 'issued' &&
+      grant.issuedAt !== null &&
+      grant.credentialExpiresAt !== null &&
+      grant.consumedAt === null &&
+      grant.outcomeCode === null &&
+      grant.version === snapshot.grantVersion + 1 &&
+      request.stateVersion === snapshot.requestStateVersion + 1 &&
+      request.status === 'publishing_branch'
+    if (!unissuedConfirmable && !issuedRevocationConfirmable) {
+      return githubDeliveryRejection('grant_conflict')
+    }
+
+    const at = timestamp()
+    const settlesActiveRequest =
+      request.status === 'publishing_branch' &&
+      (grant.status === 'issuing' ||
+        grant.status === 'recovery_required' ||
+        issuedRevocationConfirmable)
+    grant.version += 1
+    if (issuedRevocationConfirmable) {
+      grant.status = 'revoked'
+    } else if (grant.status !== 'revoked') {
+      grant.status = 'failed'
+    }
+    grant.outcomeCode = input.outcomeCode
+    if (settlesActiveRequest) {
+      request.stateVersion += 1
+      request.status = 'failed'
+      request.outcomeCode = 'credential_issue_failed'
+      request.updatedAt = at
+    }
+    const principal = {
+      session: {
+        source: 'authenticated' as const,
+        authAccountId: 'server-internal-credential-clearance',
+        organizationId: snapshot.organizationId,
+        userId: snapshot.userId,
+        role: snapshot.role,
+        projectMemberships: [],
+      },
+      authentication: {
+        kind: 'desktop_bearer' as const,
+        tokenRecordId: snapshot.tokenRecordId,
+      },
+    }
+    audit(
+      principal,
+      snapshot.projectId,
+      'github_delivery_grant',
+      grant.id,
+      input.outcomeCode,
+      [request.id, grant.version],
+      at,
+    )
+    return {
+      ok: true,
+      responseStatus: 200,
+      outcomeCode: input.outcomeCode,
+      replayed: false,
+      request: cloneGitHubDeliveryRequest(request),
+      grant: cloneGitHubCredentialGrant(grant),
+    }
+  }
+
+  async function confirmGitHubCredentialProviderExpiry(
+    input: ConfirmGitHubCredentialProviderExpiryInput,
+    authority: GitHubCredentialClearanceAuthority,
+  ): Promise<GitHubCredentialProviderExpiryConfirmationResult> {
+    const snapshot =
+      authority !== null && typeof authority === 'object'
+        ? credentialClearanceAuthorities.get(authority)
+        : undefined
+    if (!snapshot) return githubDeliveryRejection('authentication_forbidden')
+    if (
+      input.organizationId !== snapshot.organizationId ||
+      input.projectId !== snapshot.projectId ||
+      input.requestId !== snapshot.requestId ||
+      input.grantId !== snapshot.grantId
+    ) {
+      return githubDeliveryRejection('project_forbidden')
+    }
+    const request = findRequest(
+      input.requestId,
+      snapshot.organizationId,
+      snapshot.projectId,
+    )
+    const grant = grants.get(input.grantId)
+    if (
+      !request ||
+      !grant ||
+      grant.requestId !== request.id ||
+      grant.intentRevision !== snapshot.intentRevision
+    ) {
+      return githubDeliveryRejection('not_found')
+    }
+    if (
+      request.organizationId !== snapshot.organizationId ||
+      request.projectId !== snapshot.projectId ||
+      request.requestedByUserId !== snapshot.userId ||
+      request.requestedByTokenId !== snapshot.tokenRecordId ||
+      grant.issuedToTokenId !== snapshot.tokenRecordId
+    ) {
+      return githubDeliveryRejection('project_forbidden')
+    }
+    let providerCredentialExpiresAt: string
+    let providerExpiryObservedAt: string
+    try {
+      providerCredentialExpiresAt = timestamp(
+        input.providerCredentialExpiresAt,
+      )
+      providerExpiryObservedAt = timestamp(input.providerExpiryObservedAt)
+      if (
+        providerCredentialExpiresAt !== input.providerCredentialExpiresAt ||
+        providerExpiryObservedAt !== input.providerExpiryObservedAt
+      ) {
+        return githubDeliveryRejection('invalid_state')
+      }
+    } catch {
+      return githubDeliveryRejection('invalid_state')
+    }
+    const exactObservation =
+      grant.providerExpiryContractVersion === 1 &&
+      grant.providerCredentialExpiresAt === providerCredentialExpiresAt &&
+      Date.parse(providerExpiryObservedAt) >=
+        Date.parse(providerCredentialExpiresAt) + 2_000
+    if (
+      grant.status === 'expired' &&
+      grant.outcomeCode === 'credential_provider_expiry_confirmed' &&
+      grant.providerExpiryObservedAt === providerExpiryObservedAt &&
+      exactObservation &&
+      credentialAuthorityIsCleared(grant) &&
+      grant.version === snapshot.grantVersion + 1 &&
+      request.stateVersion === snapshot.requestStateVersion + 1 &&
+      request.status === 'recovery_required'
+    ) {
+      return {
+        ok: true,
+        responseStatus: 200,
+        outcomeCode: 'credential_provider_expiry_confirmed',
+        replayed: true,
+        request: cloneGitHubDeliveryRequest(request),
+        grant: cloneGitHubCredentialGrant(grant),
+      }
+    }
+    if (
+      !exactObservation ||
+      grant.status !== 'issued' ||
+      grant.issuedAt === null ||
+      grant.credentialExpiresAt === null ||
+      grant.providerExpiryObservedAt !== null ||
+      grant.consumedAt !== null ||
+      grant.outcomeCode !== null ||
+      grant.version !== snapshot.grantVersion ||
+      request.stateVersion !== snapshot.requestStateVersion ||
+      request.status !== 'publishing_branch'
+    ) {
+      return githubDeliveryRejection('grant_conflict')
+    }
+    const at = timestamp()
+    grant.version += 1
+    grant.status = 'expired'
+    grant.providerExpiryObservedAt = providerExpiryObservedAt
+    grant.outcomeCode = 'credential_provider_expiry_confirmed'
+    request.stateVersion += 1
+    request.status = 'recovery_required'
+    request.outcomeCode = 'credential_issue_failed'
+    request.updatedAt = at
+    const principal = {
+      session: {
+        source: 'authenticated' as const,
+        authAccountId: 'server-internal-provider-expiry',
+        organizationId: snapshot.organizationId,
+        userId: snapshot.userId,
+        role: snapshot.role,
+        projectMemberships: [],
+      },
+      authentication: {
+        kind: 'desktop_bearer' as const,
+        tokenRecordId: snapshot.tokenRecordId,
+      },
+    }
+    audit(
+      principal,
+      snapshot.projectId,
+      'github_delivery_grant',
+      grant.id,
+      'credential_provider_expiry_confirmed',
+      [request.id, grant.version, providerCredentialExpiresAt, providerExpiryObservedAt],
+      at,
+    )
+    return {
+      ok: true,
+      responseStatus: 200,
+      outcomeCode: 'credential_provider_expiry_confirmed',
       replayed: false,
       request: cloneGitHubDeliveryRequest(request),
       grant: cloneGitHubCredentialGrant(grant),
@@ -1931,6 +2375,8 @@ export function createSeedGitHubDeliveryRepository(
     decideGitHubDeliveryRequest,
     reserveGitHubCredentialGrant,
     finalizeGitHubCredentialGrant,
+    confirmGitHubCredentialClearance,
+    confirmGitHubCredentialProviderExpiry,
     recordGitHubBranchPublicationReport,
     finalizeGitHubBranchPublication,
     reserveGitHubDraftPullRequest,

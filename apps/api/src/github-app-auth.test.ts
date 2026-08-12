@@ -72,19 +72,26 @@ describe('GitHub App authentication', () => {
             Buffer.from(signature!, 'base64url'),
           ),
         ).toBe(true)
-        return Response.json({
-          token: `ghs_${'x'.repeat(40)}`,
-          expires_at: '2026-08-11T12:59:00.000Z',
-          repository_selection: 'selected',
-          permissions: { metadata: 'read', contents: 'write' },
-          repositories: [{ id: 456 }],
-        })
+        return Response.json(
+          {
+            token: `ghs_${'x'.repeat(40)}`,
+            expires_at: '2026-08-11T12:59:00.000Z',
+            repository_selection: 'selected',
+            permissions: { metadata: 'read', contents: 'write' },
+            repositories: [{ id: 456 }],
+          },
+          { status: 201 },
+        )
       }),
     })
 
     expect(client).toBeDefined()
     await expect(
-      client!.issueContentsWriteToken({ installationId: '123', repositoryId: '456' }),
+      client!.issueContentsWriteToken({
+        installationId: '123',
+        repositoryId: '456',
+        issuanceDeadline: '2026-08-11T12:10:00.000Z',
+      }),
     ).resolves.toMatchObject({ repositoryId: '456', permissions: { contents: 'write' } })
   })
 })

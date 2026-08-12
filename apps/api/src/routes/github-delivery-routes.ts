@@ -1,6 +1,7 @@
 import {
   assertFullGitCommitSha,
   assertSafeGitHubBranch,
+  isGitHubCredentialToken,
   normalizeGitHubRepository,
   type GitHubDeliveryIntent,
 } from '@ai-devflow/shared'
@@ -811,9 +812,7 @@ async function resolveGitHubDeliveryRouteUnchecked(
       credential.repositoryId !== result.request.repositoryId ||
       credential.repositoryId !== result.grant.repositoryId ||
       credential.username !== 'x-access-token' ||
-      typeof credential.token !== 'string' ||
-      credential.token.length === 0 ||
-      credential.token.length > 5_000 ||
+      !isGitHubCredentialToken(credential.token) ||
       !isCanonicalDate(credential.expiresAt) ||
       credential.expiresAt !== result.grant.credentialExpiresAt ||
       credential.canonicalHttpsUrl !== expectedUrl

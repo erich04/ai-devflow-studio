@@ -17,10 +17,11 @@ import {
 } from '../db/transaction'
 import {
   fingerprintGitHubDeliveryRequest,
-  GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS,
   githubDeliveryRejection,
   normalizeGitHubDeliveryRequestIntent,
   type CreateOrReviseGitHubDeliveryRequestInput,
+  type ConfirmGitHubCredentialClearanceInput,
+  type ConfirmGitHubCredentialProviderExpiryInput,
   type DecideGitHubDeliveryRequestInput,
   type GitHubDeliveryDesktopPrincipal,
   type GitHubDeliveryApproval,
@@ -33,6 +34,10 @@ import {
   type GitHubBranchPublicationReportResult,
   type GitHubCredentialGrant,
   type GitHubCredentialGrantMutationResult,
+  type GitHubCredentialGrantReservationResult,
+  type GitHubCredentialClearanceAuthority,
+  type GitHubCredentialClearanceConfirmationResult,
+  type GitHubCredentialProviderExpiryConfirmationResult,
   type ReserveGitHubCredentialGrantInput,
   type RecordGitHubBranchPublicationReportInput,
   type FinalizeGitHubDraftPullRequestInput,
@@ -69,6 +74,19 @@ type VerifiedIdentity = {
   authKind: 'session_cookie' | 'desktop_bearer'
   tokenRecordId: string | null
   hasProjectAccess: boolean
+}
+
+type CredentialClearanceAuthoritySnapshot = {
+  organizationId: string
+  projectId: string
+  userId: string
+  role: Role
+  tokenRecordId: string
+  requestId: string
+  requestStateVersion: number
+  grantId: string
+  grantVersion: number
+  intentRevision: number
 }
 
 type RepositoryBindingRow = {
@@ -195,6 +213,9 @@ type CredentialGrantRow = {
   requested_at: TimestampValue
   issued_at: TimestampValue | null
   credential_expires_at: TimestampValue | null
+  provider_expiry_contract_version: number
+  provider_credential_expires_at: TimestampValue | null
+  provider_expiry_observed_at: TimestampValue | null
   consumed_at: TimestampValue | null
   outcome_code: GitHubCredentialGrant['outcomeCode']
 }
@@ -374,6 +395,9 @@ const credentialGrantColumns = `
   github_delivery_credential_grants.requested_at,
   github_delivery_credential_grants.issued_at,
   github_delivery_credential_grants.credential_expires_at,
+  github_delivery_credential_grants.provider_expiry_contract_version,
+  github_delivery_credential_grants.provider_credential_expires_at,
+  github_delivery_credential_grants.provider_expiry_observed_at,
   github_delivery_credential_grants.consumed_at,
   github_delivery_credential_grants.outcome_code
 `
@@ -543,6 +567,16 @@ function mapCredentialGrantRow(row: CredentialGrantRow): GitHubCredentialGrant {
       row.credential_expires_at === null
         ? null
         : toIso(row.credential_expires_at),
+    providerExpiryContractVersion:
+      row.provider_expiry_contract_version === 1 ? 1 : 0,
+    providerCredentialExpiresAt:
+      row.provider_credential_expires_at == null
+        ? null
+        : toIso(row.provider_credential_expires_at),
+    providerExpiryObservedAt:
+      row.provider_expiry_observed_at == null
+        ? null
+        : toIso(row.provider_expiry_observed_at),
     consumedAt: row.consumed_at === null ? null : toIso(row.consumed_at),
     outcomeCode: row.outcome_code,
     redacted: true,
@@ -649,6 +683,63 @@ export function createPostgresGitHubDeliveryRepository(
   const createId =
     options.createId ??
     ((kind: GitHubDeliveryIdKind) => `github-${kind}-${randomUUID()}`)
+  const credentialClearanceAuthorities = new WeakMap<
+    GitHubCredentialClearanceAuthority,
+    CredentialClearanceAuthoritySnapshot
+  >()
+
+  function attachCredentialClearanceAuthority(
+    result: Omit<
+      Extract<GitHubCredentialGrantReservationResult, { ok: true }>,
+      'clearanceAuthority'
+    >,
+    snapshot: CredentialClearanceAuthoritySnapshot,
+  ): Extract<GitHubCredentialGrantReservationResult, { ok: true }> {
+    const authority = Object.freeze(
+      Object.create(null),
+    ) as GitHubCredentialClearanceAuthority
+    credentialClearanceAuthorities.set(authority, snapshot)
+    Object.defineProperty(result, 'clearanceAuthority', {
+      configurable: false,
+      enumerable: false,
+      value: authority,
+      writable: false,
+    })
+    return result as Extract<
+      GitHubCredentialGrantReservationResult,
+      { ok: true }
+    >
+  }
+
+  function credentialReservationResult(
+    request: DeliveryRequestRow,
+    grant: CredentialGrantRow,
+    identity: VerifiedIdentity & { tokenRecordId: string },
+    replayed: boolean,
+  ): Extract<GitHubCredentialGrantReservationResult, { ok: true }> {
+    return attachCredentialClearanceAuthority(
+      {
+        ok: true,
+        responseStatus: 201,
+        outcomeCode: 'grant_reserved',
+        replayed,
+        request: mapDeliveryRequestRow(request),
+        grant: mapCredentialGrantRow(grant),
+      },
+      {
+        organizationId: request.organization_id,
+        projectId: request.project_id,
+        userId: request.requested_by_user_id,
+        role: identity.role,
+        tokenRecordId: identity.tokenRecordId,
+        requestId: request.id,
+        requestStateVersion: request.state_version,
+        grantId: grant.id,
+        grantVersion: grant.version,
+        intentRevision: grant.intent_revision,
+      },
+    )
+  }
 
   async function lockProject(
     tx: TeamDbTransactionClient,
@@ -1304,6 +1395,181 @@ export function createPostgresGitHubDeliveryRepository(
       [grantId, request.id, request.intent_revision],
     )
     return row ?? null
+  }
+
+  async function bindingHasPendingCredentialRevocation(
+    tx: TeamDbTransactionClient,
+    identity: VerifiedIdentity,
+    bindingId: string,
+    currentGrantId: string | null = null,
+    replacementScan = false,
+  ): Promise<boolean> {
+    const rows = await tx.query<{ id: string }>(
+      `
+        /* github_delivery:${replacementScan
+          ? 'grant-replacement-blockers-lock'
+          : 'grant-revocation-pending-lock'} */
+        SELECT github_delivery_credential_grants.id
+        FROM github_delivery_credential_grants
+        JOIN github_delivery_requests
+          ON github_delivery_requests.id =
+             github_delivery_credential_grants.request_id
+        WHERE github_delivery_requests.organization_id = $1
+          AND github_delivery_requests.project_id = $2
+          AND github_delivery_requests.binding_id = $3
+          ${replacementScan
+            ? 'AND ($4::text IS NULL OR github_delivery_credential_grants.id <> $4)'
+            : ''}
+          AND github_delivery_credential_grants.issued_at IS NULL
+          AND (
+            github_delivery_credential_grants.status IN ('failed', 'revoked')
+            AND (
+              (
+                github_delivery_credential_grants.outcome_code =
+                  'credential_mint_absent_confirmed'
+                AND github_delivery_credential_grants.issued_at IS NULL
+                AND github_delivery_credential_grants.credential_expires_at IS NULL
+              )
+              OR
+              (
+                github_delivery_credential_grants.outcome_code =
+                  'credential_revocation_confirmed'
+                AND github_delivery_credential_grants.consumed_at IS NULL
+                AND (
+                  (
+                    github_delivery_credential_grants.issued_at IS NULL
+                    AND github_delivery_credential_grants.credential_expires_at
+                      IS NULL
+                  )
+                  OR (
+                    github_delivery_credential_grants.status = 'revoked'
+                    AND github_delivery_credential_grants.issued_at IS NOT NULL
+                    AND github_delivery_credential_grants.credential_expires_at
+                      IS NOT NULL
+                  )
+                )
+              )
+            )
+          ) IS NOT TRUE
+        FOR UPDATE OF github_delivery_credential_grants
+      `,
+      [
+        identity.organizationId,
+        identity.projectId,
+        bindingId,
+        ...(replacementScan ? [currentGrantId] : []),
+      ],
+    )
+    return rows.length > 0
+  }
+
+  async function deliverySeriesHasUnclearedPriorCredential(
+    tx: TeamDbTransactionClient,
+    identity: VerifiedIdentity,
+    request: DeliveryRequestRow,
+    currentGrantId: string | null,
+  ): Promise<boolean> {
+    const rows = await tx.query<{ id: string }>(
+      `
+        /* github_delivery:grant-replacement-blockers-lock */
+        SELECT github_delivery_credential_grants.id
+        FROM github_delivery_credential_grants
+        JOIN github_delivery_requests
+          ON github_delivery_requests.id =
+             github_delivery_credential_grants.request_id
+        WHERE github_delivery_requests.organization_id = $1
+          AND github_delivery_requests.project_id = $2
+          AND github_delivery_requests.binding_id = $3
+          AND github_delivery_requests.delivery_series_key = $4
+          AND ($5::text IS NULL OR github_delivery_credential_grants.id <> $5)
+          AND (
+            (
+              github_delivery_credential_grants.status IN ('failed', 'revoked')
+              AND (
+              (
+                github_delivery_credential_grants.outcome_code =
+                  'credential_mint_absent_confirmed'
+                AND github_delivery_credential_grants.issued_at IS NULL
+                AND github_delivery_credential_grants.credential_expires_at IS NULL
+              )
+              OR
+              (
+                github_delivery_credential_grants.outcome_code =
+                  'credential_revocation_confirmed'
+                AND github_delivery_credential_grants.consumed_at IS NULL
+                AND (
+                  (
+                    github_delivery_credential_grants.issued_at IS NULL
+                    AND github_delivery_credential_grants.credential_expires_at
+                      IS NULL
+                  )
+                  OR (
+                    github_delivery_credential_grants.status = 'revoked'
+                    AND github_delivery_credential_grants.issued_at IS NOT NULL
+                    AND github_delivery_credential_grants.credential_expires_at
+                      IS NOT NULL
+                  )
+                )
+              )
+              )
+            )
+            OR (
+              github_delivery_credential_grants.status = 'expired'
+              AND github_delivery_credential_grants.outcome_code =
+                'credential_provider_expiry_confirmed'
+              AND github_delivery_credential_grants.provider_expiry_contract_version = 1
+              AND github_delivery_credential_grants.issued_at IS NOT NULL
+              AND github_delivery_credential_grants.credential_expires_at IS NOT NULL
+              AND github_delivery_credential_grants.provider_credential_expires_at IS NOT NULL
+              AND github_delivery_credential_grants.provider_expiry_observed_at IS NOT NULL
+              AND github_delivery_credential_grants.consumed_at IS NULL
+              AND github_delivery_credential_grants.credential_expires_at <=
+                github_delivery_credential_grants.provider_credential_expires_at
+              AND github_delivery_credential_grants.provider_expiry_observed_at >=
+                github_delivery_credential_grants.provider_credential_expires_at + interval '2 seconds'
+            )
+          ) IS NOT TRUE
+        FOR UPDATE OF github_delivery_credential_grants
+      `,
+      [
+        identity.organizationId,
+        identity.projectId,
+        request.binding_id,
+        request.delivery_series_key,
+        currentGrantId,
+      ],
+    )
+    return rows.length > 0
+  }
+
+  function credentialAuthorityIsCleared(grant: CredentialGrantRow): boolean {
+    if (grant.outcome_code === 'credential_provider_expiry_confirmed') {
+      return (
+        grant.status === 'expired' &&
+        grant.provider_expiry_contract_version === 1 &&
+        grant.issued_at !== null &&
+        grant.credential_expires_at !== null &&
+        grant.provider_credential_expires_at !== null &&
+        grant.provider_expiry_observed_at !== null &&
+        grant.consumed_at === null &&
+        Date.parse(toIso(grant.credential_expires_at)) <=
+          Date.parse(toIso(grant.provider_credential_expires_at)) &&
+        Date.parse(toIso(grant.provider_expiry_observed_at)) >=
+          Date.parse(toIso(grant.provider_credential_expires_at)) + 2_000
+      )
+    }
+    if (!['failed', 'revoked'].includes(grant.status)) return false
+    if (grant.outcome_code === 'credential_mint_absent_confirmed') {
+      return grant.issued_at === null && grant.credential_expires_at === null
+    }
+    if (grant.outcome_code !== 'credential_revocation_confirmed') return false
+    return (
+      grant.consumed_at === null &&
+      ((grant.issued_at === null && grant.credential_expires_at === null) ||
+        (grant.status === 'revoked' &&
+          grant.issued_at !== null &&
+          grant.credential_expires_at !== null))
+    )
   }
 
   function exactActiveBinding(
@@ -2618,7 +2884,7 @@ export function createPostgresGitHubDeliveryRepository(
   async function reserveGitHubCredentialGrant(
     input: ReserveGitHubCredentialGrantInput,
     principal: GitHubDeliveryDesktopPrincipal,
-  ): Promise<GitHubCredentialGrantMutationResult> {
+  ): Promise<GitHubCredentialGrantReservationResult> {
     if (principal.authentication.kind !== 'desktop_bearer') {
       return githubDeliveryRejection('authentication_forbidden')
     }
@@ -2648,13 +2914,9 @@ export function createPostgresGitHubDeliveryRepository(
       )
       const approval = request ? await loadCurrentApproval(tx, request) : null
       const existingGrant = request ? await loadCurrentGrant(tx, request) : null
-      const existingPublication =
-        request && existingGrant?.status === 'consumed'
-          ? await loadCurrentPublication(tx, request)
-          : null
       let recordId = existingGrant?.id ?? createId('grant')
       const finalize = (
-        result: GitHubCredentialGrantMutationResult,
+        result: GitHubCredentialGrantReservationResult,
         observedVersion: number | null,
       ) =>
         finalizeMutation(tx, {
@@ -2677,8 +2939,17 @@ export function createPostgresGitHubDeliveryRepository(
       }
       const binding = await lockBinding(tx, identity)
       if (!exactActiveBinding(binding, request)) {
+        const revocationPending = await bindingHasPendingCredentialRevocation(
+          tx,
+          identity,
+          request.binding_id,
+        )
         return finalize(
-          githubDeliveryRejection('binding_inactive'),
+          githubDeliveryRejection(
+            revocationPending
+              ? 'credential_revocation_pending'
+              : 'binding_inactive',
+          ),
           request.state_version,
         )
       }
@@ -2708,39 +2979,40 @@ export function createPostgresGitHubDeliveryRepository(
         )
       }
       const at = now().toISOString()
-      const staleIssuingGrant = Boolean(
-        existingGrant?.status === 'issuing' &&
-          request.status === 'publishing_branch' &&
-          Date.parse(at) >=
-            Date.parse(toIso(existingGrant.requested_at)) +
-              GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS,
-      )
-      const expiredIssuedGrant = Boolean(
-        existingGrant?.status === 'issued' &&
-          existingGrant.credential_expires_at !== null &&
-          Date.parse(at) >=
-            Date.parse(toIso(existingGrant.credential_expires_at)),
-      )
-      const replacingLostIssuedCredential = Boolean(
-        existingGrant?.status === 'issued' &&
-          !expiredIssuedGrant &&
-          request.status === 'publishing_branch',
-      )
-      const consumedPublicationRecovery = Boolean(
-        existingGrant?.status === 'consumed' &&
-          existingPublication?.grant_id === existingGrant.id &&
-          ['recovery_required', 'conflict'].includes(existingPublication.status) &&
-          request.status === 'recovery_required',
+      if (
+        await deliverySeriesHasUnclearedPriorCredential(
+          tx,
+          identity,
+          request,
+          existingGrant?.id ?? null,
+        )
+      ) {
+        return finalize(
+          githubDeliveryRejection('credential_revocation_pending'),
+          request.state_version,
+        )
+      }
+      if (
+        await bindingHasPendingCredentialRevocation(
+          tx,
+          identity,
+          request.binding_id,
+          existingGrant?.id ?? null,
+          true,
+        )
+      ) {
+        return finalize(
+          githubDeliveryRejection('credential_revocation_pending'),
+          request.state_version,
+        )
+      }
+      const existingAuthorityCleared = Boolean(
+        existingGrant && credentialAuthorityIsCleared(existingGrant),
       )
       const retrying = Boolean(
-        existingGrant &&
-          (['failed', 'recovery_required', 'expired'].includes(
-            existingGrant.status,
-          ) ||
-            staleIssuingGrant ||
-            expiredIssuedGrant ||
-            replacingLostIssuedCredential ||
-            consumedPublicationRecovery),
+          existingGrant &&
+          existingAuthorityCleared &&
+          ['failed', 'revoked', 'expired'].includes(existingGrant.status),
       )
       if (
         retrying &&
@@ -2759,14 +3031,22 @@ export function createPostgresGitHubDeliveryRepository(
         ['issuing', 'issued', 'consumed'].includes(existingGrant.status)
       ) {
         return finalize(
-          {
-            ok: true,
-            responseStatus: 201,
-            outcomeCode: 'grant_reserved',
-            replayed: true,
-            request: mapDeliveryRequestRow(request),
-            grant: mapCredentialGrantRow(existingGrant),
-          },
+          credentialReservationResult(
+            request,
+            existingGrant,
+            identity as VerifiedIdentity & { tokenRecordId: string },
+            true,
+          ),
+          request.state_version,
+        )
+      }
+      if (
+        existingGrant &&
+        existingGrant.issued_to_token_id === identity.tokenRecordId &&
+        !retrying
+      ) {
+        return finalize(
+          githubDeliveryRejection('credential_revocation_pending'),
           request.state_version,
         )
       }
@@ -2779,9 +3059,7 @@ export function createPostgresGitHubDeliveryRepository(
       const recovering = Boolean(
         retrying &&
           existingGrant?.issued_to_token_id === identity.tokenRecordId &&
-          (['failed', 'recovery_required'].includes(request.status) ||
-            ((staleIssuingGrant || expiredIssuedGrant || replacingLostIssuedCredential) &&
-              request.status === 'publishing_branch')),
+          ['failed', 'recovery_required'].includes(request.status),
       )
       if (request.status !== 'approved' && !recovering) {
         return finalize(
@@ -2794,124 +3072,6 @@ export function createPostgresGitHubDeliveryRepository(
           githubDeliveryRejection('expired'),
           request.state_version,
         )
-      }
-      if (recovering && existingGrant?.status === 'recovery_required') {
-        const [closed] = await tx.query<CredentialGrantRow>(
-          `
-            /* github_delivery:grant-close-recovery */
-            UPDATE github_delivery_credential_grants
-            SET version = version + 1,
-                status = 'failed',
-                outcome_code = 'credential_issue_failed'
-            WHERE id = $1
-              AND request_id = $2
-              AND intent_revision = $3
-              AND version = $4
-              AND status = 'recovery_required'
-            RETURNING ${credentialGrantColumns}
-          `,
-          [
-            existingGrant.id,
-            request.id,
-            request.intent_revision,
-            existingGrant.version,
-          ],
-        )
-        if (!closed) {
-          return finalize(
-            githubDeliveryRejection('grant_conflict'),
-            request.state_version,
-          )
-        }
-      }
-      if (recovering && existingGrant && staleIssuingGrant) {
-        const [closed] = await tx.query<CredentialGrantRow>(
-          `
-            /* github_delivery:grant-close-stale-issuance */
-            UPDATE github_delivery_credential_grants
-            SET version = version + 1,
-                status = 'failed',
-                outcome_code = 'credential_issue_failed'
-            WHERE id = $1
-              AND request_id = $2
-              AND intent_revision = $3
-              AND version = $4
-              AND status = 'issuing'
-            RETURNING ${credentialGrantColumns}
-          `,
-          [
-            existingGrant.id,
-            request.id,
-            request.intent_revision,
-            existingGrant.version,
-          ],
-        )
-        if (!closed) {
-          return finalize(
-            githubDeliveryRejection('grant_conflict'),
-            request.state_version,
-          )
-        }
-      }
-      if (recovering && existingGrant && expiredIssuedGrant) {
-        const [expired] = await tx.query<CredentialGrantRow>(
-          `
-            /* github_delivery:grant-expire */
-            UPDATE github_delivery_credential_grants
-            SET version = version + 1,
-                status = 'expired',
-                outcome_code = 'credential_expired'
-            WHERE id = $1
-              AND request_id = $2
-              AND intent_revision = $3
-              AND version = $4
-              AND status = 'issued'
-              AND credential_expires_at <= $5
-            RETURNING ${credentialGrantColumns}
-          `,
-          [
-            existingGrant.id,
-            request.id,
-            request.intent_revision,
-            existingGrant.version,
-            at,
-          ],
-        )
-        if (!expired) {
-          return finalize(
-            githubDeliveryRejection('grant_conflict'),
-            request.state_version,
-          )
-        }
-      }
-      if (recovering && existingGrant && replacingLostIssuedCredential) {
-        const [superseded] = await tx.query<CredentialGrantRow>(
-          `
-            /* github_delivery:grant-supersede-lost-response */
-            UPDATE github_delivery_credential_grants
-            SET version = version + 1,
-                status = 'failed',
-                outcome_code = 'credential_superseded'
-            WHERE id = $1
-              AND request_id = $2
-              AND intent_revision = $3
-              AND version = $4
-              AND status = 'issued'
-            RETURNING ${credentialGrantColumns}
-          `,
-          [
-            existingGrant.id,
-            request.id,
-            request.intent_revision,
-            existingGrant.version,
-          ],
-        )
-        if (!superseded) {
-          return finalize(
-            githubDeliveryRejection('grant_conflict'),
-            request.state_version,
-          )
-        }
       }
       const [publishing] = await tx.query<DeliveryRequestRow>(
         `
@@ -2989,14 +3149,12 @@ export function createPostgresGitHubDeliveryRepository(
         throw new Error('GitHub Delivery credential reservation failed.')
       }
       return finalize(
-        {
-          ok: true,
-          responseStatus: 201,
-          outcomeCode: 'grant_reserved',
-          replayed: false,
-          request: mapDeliveryRequestRow(publishing),
-          grant: mapCredentialGrantRow(grant),
-        },
+        credentialReservationResult(
+          publishing,
+          grant,
+          identity as VerifiedIdentity & { tokenRecordId: string },
+          false,
+        ),
         publishing.state_version,
       )
     })
@@ -3014,6 +3172,11 @@ export function createPostgresGitHubDeliveryRepository(
         toIso(grant.issued_at) === toIso(input.outcome.issuedAt) &&
         toIso(grant.credential_expires_at) ===
           toIso(input.outcome.credentialExpiresAt) &&
+        grant.provider_expiry_contract_version === 1 &&
+        grant.provider_credential_expires_at !== null &&
+        toIso(grant.provider_credential_expires_at) ===
+          toIso(input.outcome.providerCredentialExpiresAt) &&
+        grant.provider_expiry_observed_at === null &&
         grant.repository_id === input.outcome.repositoryId &&
         grant.permission === input.outcome.permission &&
         grant.repository_count === input.outcome.repositoryCount
@@ -3158,10 +3321,14 @@ export function createPostgresGitHubDeliveryRepository(
       const at = now().toISOString()
       let issuedAt: string | null = null
       let credentialExpiresAt: string | null = null
+      let providerCredentialExpiresAt: string | null = null
       if (input.outcome.status === 'issued') {
         try {
           issuedAt = toIso(input.outcome.issuedAt)
           credentialExpiresAt = toIso(input.outcome.credentialExpiresAt)
+          providerCredentialExpiresAt = toIso(
+            input.outcome.providerCredentialExpiresAt,
+          )
         } catch {
           return finalize(
             githubDeliveryRejection('invalid_state'),
@@ -3174,6 +3341,9 @@ export function createPostgresGitHubDeliveryRepository(
           input.outcome.repositoryCount !== 1 ||
           Date.parse(issuedAt) < Date.parse(toIso(grant.requested_at)) ||
           Date.parse(credentialExpiresAt) <= Date.parse(issuedAt) ||
+          Date.parse(providerCredentialExpiresAt) <= Date.parse(issuedAt) ||
+          Date.parse(credentialExpiresAt) >
+            Date.parse(providerCredentialExpiresAt) ||
           Date.parse(credentialExpiresAt) >
             Date.parse(issuedAt) + 60 * 60 * 1_000 ||
           Date.parse(credentialExpiresAt) > Date.parse(toIso(request.expires_at))
@@ -3195,7 +3365,10 @@ export function createPostgresGitHubDeliveryRepository(
               status = $5,
               issued_at = $6,
               credential_expires_at = $7,
-              outcome_code = $8
+              provider_expiry_contract_version = $8,
+              provider_credential_expires_at = $9,
+              provider_expiry_observed_at = NULL,
+              outcome_code = $10
           WHERE id = $1
             AND request_id = $2
             AND intent_revision = $3
@@ -3211,6 +3384,8 @@ export function createPostgresGitHubDeliveryRepository(
           grantStatus,
           issuedAt,
           credentialExpiresAt,
+          input.outcome.status === 'issued' ? 1 : 0,
+          providerCredentialExpiresAt,
           grantOutcome,
         ],
       )
@@ -3267,6 +3442,459 @@ export function createPostgresGitHubDeliveryRepository(
         },
         updatedRequest.state_version,
       )
+    })
+  }
+
+  async function confirmGitHubCredentialClearance(
+    input: ConfirmGitHubCredentialClearanceInput,
+    authority: GitHubCredentialClearanceAuthority,
+  ): Promise<GitHubCredentialClearanceConfirmationResult> {
+    const snapshot =
+      authority !== null && typeof authority === 'object'
+        ? credentialClearanceAuthorities.get(authority)
+        : undefined
+    if (!snapshot) {
+      return githubDeliveryRejection('authentication_forbidden')
+    }
+    if (
+      input.organizationId !== snapshot.organizationId ||
+      input.projectId !== snapshot.projectId ||
+      input.requestId !== snapshot.requestId ||
+      input.grantId !== snapshot.grantId
+    ) {
+      return githubDeliveryRejection('project_forbidden')
+    }
+    return withTeamDbTransaction(db, async (tx) => {
+      const operation = 'github_delivery_grant' as const
+      const operationMeta = operationFingerprint(operation, [
+        'confirm-clearance',
+        input,
+      ])
+      await lockProject(tx, snapshot.organizationId, snapshot.projectId)
+      const identity: VerifiedIdentity = {
+        organizationId: snapshot.organizationId,
+        projectId: snapshot.projectId,
+        userId: snapshot.userId,
+        role: snapshot.role,
+        authKind: 'desktop_bearer',
+        tokenRecordId: snapshot.tokenRecordId,
+        hasProjectAccess: true,
+      }
+      const request = await lockDeliveryById(tx, identity, input.requestId)
+      const grant = request
+        ? await lockGrantById(tx, request, input.grantId)
+        : null
+      const existingIdempotency = await loadIdempotency(
+        tx,
+        identity,
+        operation,
+        operationMeta.idempotencyKey,
+      )
+      const finalize = (
+        result: GitHubCredentialClearanceConfirmationResult,
+        observedVersion: number | null,
+      ) =>
+        finalizeMutation(tx, {
+          identity,
+          operation,
+          recordKind: 'github_credential_grant',
+          recordId: grant?.id ?? unresolvedRecordId('grant', input.grantId),
+          expectedVersion: null,
+          observedVersion,
+          ...operationMeta,
+          existingIdempotency,
+          result,
+        })
+      if (!request || !grant) {
+        return finalize(githubDeliveryRejection('not_found'), null)
+      }
+      if (
+        request.organization_id !== snapshot.organizationId ||
+        request.project_id !== snapshot.projectId ||
+        request.requested_by_user_id !== snapshot.userId ||
+        request.requested_by_token_id !== snapshot.tokenRecordId ||
+        grant.issued_to_token_id !== snapshot.tokenRecordId ||
+        grant.intent_revision !== snapshot.intentRevision
+      ) {
+        return finalize(
+          githubDeliveryRejection('project_forbidden'),
+          grant.version,
+        )
+      }
+      if (
+        (grant.status === 'revoked' || grant.status === 'failed') &&
+        grant.outcome_code === input.outcomeCode &&
+        credentialAuthorityIsCleared(grant)
+      ) {
+        return finalize(
+          {
+            ok: true,
+            responseStatus: 200,
+            outcomeCode: input.outcomeCode,
+            replayed: true,
+            request: mapDeliveryRequestRow(request),
+            grant: mapCredentialGrantRow(grant),
+          },
+          grant.version,
+        )
+      }
+      const unissuedConfirmable =
+        grant.issued_at === null &&
+        grant.credential_expires_at === null &&
+        grant.consumed_at === null &&
+        (grant.version === snapshot.grantVersion ||
+          (grant.version === snapshot.grantVersion + 1 &&
+            ['failed', 'recovery_required', 'revoked'].includes(grant.status))) &&
+        (request.state_version === snapshot.requestStateVersion ||
+          (request.state_version === snapshot.requestStateVersion + 1 &&
+            ['failed', 'recovery_required', 'revoked'].includes(
+              request.status,
+            ))) &&
+        ['issuing', 'recovery_required', 'failed', 'revoked'].includes(
+          grant.status,
+        ) &&
+        grant.outcome_code !== 'credential_mint_absent_confirmed' &&
+        grant.outcome_code !== 'credential_revocation_confirmed'
+      const issuedRevocationConfirmable =
+        input.outcomeCode === 'credential_revocation_confirmed' &&
+        grant.status === 'issued' &&
+        grant.issued_at !== null &&
+        grant.credential_expires_at !== null &&
+        grant.consumed_at === null &&
+        grant.outcome_code === null &&
+        grant.version === snapshot.grantVersion + 1 &&
+        request.state_version === snapshot.requestStateVersion + 1 &&
+        request.status === 'publishing_branch'
+      if (!unissuedConfirmable && !issuedRevocationConfirmable) {
+        return finalize(
+          githubDeliveryRejection('grant_conflict'),
+          grant.version,
+        )
+      }
+      const [confirmed] = await tx.query<CredentialGrantRow>(
+        `
+          /* github_delivery:grant-confirm-clearance */
+          UPDATE github_delivery_credential_grants
+          SET version = version + 1,
+              status = CASE
+                WHEN status IN ('revoked', 'issued') THEN 'revoked'
+                ELSE 'failed'
+              END,
+              outcome_code = $5
+          WHERE id = $1
+            AND request_id = $2
+            AND intent_revision = $3
+            AND version = $4
+            AND issued_to_token_id = $6
+            AND consumed_at IS NULL
+            AND (
+              (
+                status IN ('issuing', 'recovery_required', 'failed', 'revoked')
+                AND issued_at IS NULL
+                AND credential_expires_at IS NULL
+                AND $7::boolean = FALSE
+              )
+              OR
+              (
+                status = 'issued'
+                AND issued_at IS NOT NULL
+                AND credential_expires_at IS NOT NULL
+                AND outcome_code IS NULL
+                AND $7::boolean = TRUE
+              )
+            )
+            AND outcome_code IS DISTINCT FROM 'credential_mint_absent_confirmed'
+            AND outcome_code IS DISTINCT FROM 'credential_revocation_confirmed'
+          RETURNING ${credentialGrantColumns}
+        `,
+        [
+          grant.id,
+          request.id,
+          grant.intent_revision,
+          grant.version,
+          input.outcomeCode,
+          snapshot.tokenRecordId,
+          issuedRevocationConfirmable,
+        ],
+      )
+      if (!confirmed) {
+        return finalize(
+          githubDeliveryRejection('grant_conflict'),
+          grant.version,
+        )
+      }
+      let confirmedRequest = request
+      if (
+        request.status === 'publishing_branch' &&
+        (grant.status === 'issuing' ||
+          grant.status === 'recovery_required' ||
+          issuedRevocationConfirmable)
+      ) {
+        const [failedRequest] = await tx.query<DeliveryRequestRow>(
+          `
+            /* github_delivery:delivery-confirm-clearance-failed */
+            UPDATE github_delivery_requests
+            SET state_version = state_version + 1,
+                status = 'failed',
+                outcome_code = 'credential_issue_failed',
+                updated_at = $8
+            WHERE id = $1
+              AND organization_id = $2
+              AND project_id = $3
+              AND state_version = $4
+              AND requested_by_user_id = $5
+              AND requested_by_token_id = $6
+              AND intent_revision = $7
+              AND status = 'publishing_branch'
+            RETURNING ${deliveryRequestColumns}
+          `,
+          [
+            request.id,
+            snapshot.organizationId,
+            snapshot.projectId,
+            request.state_version,
+            snapshot.userId,
+            snapshot.tokenRecordId,
+            snapshot.intentRevision,
+            now().toISOString(),
+          ],
+        )
+        if (!failedRequest) {
+          throw new Error(
+            'GitHub Delivery credential clearance lost request CAS.',
+          )
+        }
+        confirmedRequest = failedRequest
+      }
+      return finalize(
+        {
+          ok: true,
+          responseStatus: 200,
+          outcomeCode: input.outcomeCode,
+          replayed: false,
+          request: mapDeliveryRequestRow(confirmedRequest),
+          grant: mapCredentialGrantRow(confirmed),
+        },
+        confirmed.version,
+      )
+    })
+  }
+
+  async function confirmGitHubCredentialProviderExpiry(
+    input: ConfirmGitHubCredentialProviderExpiryInput,
+    authority: GitHubCredentialClearanceAuthority,
+  ): Promise<GitHubCredentialProviderExpiryConfirmationResult> {
+    const snapshot =
+      authority !== null && typeof authority === 'object'
+        ? credentialClearanceAuthorities.get(authority)
+        : undefined
+    if (!snapshot) return githubDeliveryRejection('authentication_forbidden')
+    if (
+      input.organizationId !== snapshot.organizationId ||
+      input.projectId !== snapshot.projectId ||
+      input.requestId !== snapshot.requestId ||
+      input.grantId !== snapshot.grantId
+    ) {
+      return githubDeliveryRejection('project_forbidden')
+    }
+    let providerCredentialExpiresAt: string
+    let providerExpiryObservedAt: string
+    try {
+      providerCredentialExpiresAt = toIso(input.providerCredentialExpiresAt)
+      providerExpiryObservedAt = toIso(input.providerExpiryObservedAt)
+      if (
+        providerCredentialExpiresAt !== input.providerCredentialExpiresAt ||
+        providerExpiryObservedAt !== input.providerExpiryObservedAt ||
+        Date.parse(providerExpiryObservedAt) <
+          Date.parse(providerCredentialExpiresAt) + 2_000
+      ) {
+        return githubDeliveryRejection('invalid_state')
+      }
+    } catch {
+      return githubDeliveryRejection('invalid_state')
+    }
+    return withTeamDbTransaction(db, async (tx) => {
+      const operation = 'github_delivery_grant' as const
+      const operationMeta = operationFingerprint(operation, [
+        'confirm-provider-expiry',
+        input,
+      ])
+      await lockProject(tx, snapshot.organizationId, snapshot.projectId)
+      const identity: VerifiedIdentity = {
+        organizationId: snapshot.organizationId,
+        projectId: snapshot.projectId,
+        userId: snapshot.userId,
+        role: snapshot.role,
+        authKind: 'desktop_bearer',
+        tokenRecordId: snapshot.tokenRecordId,
+        hasProjectAccess: true,
+      }
+      const request = await lockDeliveryById(tx, identity, input.requestId)
+      const grant = request
+        ? await lockGrantById(tx, request, input.grantId)
+        : null
+      const existingIdempotency = await loadIdempotency(
+        tx,
+        identity,
+        operation,
+        operationMeta.idempotencyKey,
+      )
+      const finalize = (
+        result: GitHubCredentialProviderExpiryConfirmationResult,
+        observedVersion: number | null,
+      ) => finalizeMutation(tx, {
+        identity,
+        operation,
+        recordKind: 'github_credential_grant',
+        recordId: grant?.id ?? unresolvedRecordId('grant', input.grantId),
+        expectedVersion: null,
+        observedVersion,
+        ...operationMeta,
+        existingIdempotency,
+        result,
+      })
+      if (!request || !grant) {
+        return finalize(githubDeliveryRejection('not_found'), null)
+      }
+      if (
+        request.organization_id !== snapshot.organizationId ||
+        request.project_id !== snapshot.projectId ||
+        request.requested_by_user_id !== snapshot.userId ||
+        request.requested_by_token_id !== snapshot.tokenRecordId ||
+        grant.issued_to_token_id !== snapshot.tokenRecordId ||
+        grant.intent_revision !== snapshot.intentRevision
+      ) {
+        return finalize(
+          githubDeliveryRejection('project_forbidden'),
+          grant.version,
+        )
+      }
+      if (
+        grant.status === 'expired' &&
+        grant.outcome_code === 'credential_provider_expiry_confirmed' &&
+        grant.provider_expiry_contract_version === 1 &&
+        grant.provider_credential_expires_at !== null &&
+        grant.provider_expiry_observed_at !== null &&
+        toIso(grant.provider_credential_expires_at) ===
+          providerCredentialExpiresAt &&
+        toIso(grant.provider_expiry_observed_at) === providerExpiryObservedAt &&
+        grant.version === snapshot.grantVersion + 1 &&
+        request.state_version === snapshot.requestStateVersion + 1 &&
+        request.status === 'recovery_required' &&
+        credentialAuthorityIsCleared(grant)
+      ) {
+        return finalize({
+          ok: true,
+          responseStatus: 200,
+          outcomeCode: 'credential_provider_expiry_confirmed',
+          replayed: true,
+          request: mapDeliveryRequestRow(request),
+          grant: mapCredentialGrantRow(grant),
+        }, grant.version)
+      }
+      if (
+        grant.status !== 'issued' ||
+        grant.issued_at === null ||
+        grant.credential_expires_at === null ||
+        grant.provider_expiry_contract_version !== 1 ||
+        grant.provider_credential_expires_at === null ||
+        toIso(grant.provider_credential_expires_at) !==
+          providerCredentialExpiresAt ||
+        grant.provider_expiry_observed_at !== null ||
+        grant.consumed_at !== null ||
+        grant.outcome_code !== null ||
+        grant.version !== snapshot.grantVersion ||
+        request.state_version !== snapshot.requestStateVersion ||
+        request.status !== 'publishing_branch'
+      ) {
+        return finalize(
+          githubDeliveryRejection('grant_conflict'),
+          grant.version,
+        )
+      }
+      const [confirmed] = await tx.query<CredentialGrantRow>(
+        `
+          /* github_delivery:grant-confirm-provider-expiry */
+          UPDATE github_delivery_credential_grants
+          SET version = version + 1,
+              status = 'expired',
+              provider_expiry_observed_at = $5,
+              outcome_code = 'credential_provider_expiry_confirmed'
+          WHERE id = $1
+            AND request_id = $2
+            AND intent_revision = $3
+            AND version = $4
+            AND issued_to_token_id = $6
+            AND status = 'issued'
+            AND issued_at IS NOT NULL
+            AND credential_expires_at IS NOT NULL
+            AND provider_expiry_contract_version = 1
+            AND provider_credential_expires_at = $7
+            AND provider_expiry_observed_at IS NULL
+            AND consumed_at IS NULL
+            AND outcome_code IS NULL
+            AND credential_expires_at <= provider_credential_expires_at
+            AND $5::timestamptz >= provider_credential_expires_at + interval '2 seconds'
+          RETURNING ${credentialGrantColumns}
+        `,
+        [
+          grant.id,
+          request.id,
+          grant.intent_revision,
+          grant.version,
+          providerExpiryObservedAt,
+          snapshot.tokenRecordId,
+          providerCredentialExpiresAt,
+        ],
+      )
+      if (!confirmed) {
+        return finalize(
+          githubDeliveryRejection('grant_conflict'),
+          grant.version,
+        )
+      }
+      const [recoveryRequest] = await tx.query<DeliveryRequestRow>(
+        `
+          /* github_delivery:delivery-confirm-provider-expiry */
+          UPDATE github_delivery_requests
+          SET state_version = state_version + 1,
+              status = 'recovery_required',
+              outcome_code = 'credential_issue_failed',
+              updated_at = $8
+          WHERE id = $1
+            AND organization_id = $2
+            AND project_id = $3
+            AND state_version = $4
+            AND requested_by_user_id = $5
+            AND requested_by_token_id = $6
+            AND intent_revision = $7
+            AND status = 'publishing_branch'
+          RETURNING ${deliveryRequestColumns}
+        `,
+        [
+          request.id,
+          snapshot.organizationId,
+          snapshot.projectId,
+          request.state_version,
+          snapshot.userId,
+          snapshot.tokenRecordId,
+          snapshot.intentRevision,
+          now().toISOString(),
+        ],
+      )
+      if (!recoveryRequest) {
+        throw new Error(
+          'GitHub Delivery provider expiry confirmation lost request CAS.',
+        )
+      }
+      return finalize({
+        ok: true,
+        responseStatus: 200,
+        outcomeCode: 'credential_provider_expiry_confirmed',
+        replayed: false,
+        request: mapDeliveryRequestRow(recoveryRequest),
+        grant: mapCredentialGrantRow(confirmed),
+      }, confirmed.version)
     })
   }
 
@@ -4296,6 +4924,8 @@ export function createPostgresGitHubDeliveryRepository(
     decideGitHubDeliveryRequest,
     reserveGitHubCredentialGrant,
     finalizeGitHubCredentialGrant,
+    confirmGitHubCredentialClearance,
+    confirmGitHubCredentialProviderExpiry,
     recordGitHubBranchPublicationReport,
     finalizeGitHubBranchPublication,
     reserveGitHubDraftPullRequest,

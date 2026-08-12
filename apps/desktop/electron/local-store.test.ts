@@ -635,15 +635,15 @@ const retryAttempt: RetryAttempt = {
 }
 
 describe('createLocalStore', () => {
-  it('initializes schema version 16 and keeps it stable across reopen', async () => {
+  it('initializes schema version 17 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(16)
+    expect(await first.getSchemaVersion()).toBe(17)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(16)
+    expect(await second.getSchemaVersion()).toBe(17)
     second.close()
   })
 
@@ -3874,13 +3874,13 @@ describe('createLocalStore', () => {
     second.close()
   })
 
-  it('migrates an existing v1 database to v16 without losing local projects or runs', async () => {
+  it('migrates an existing v1 database to v17 without losing local projects or runs', async () => {
     const dbPath = await tempDbPath()
     await writeLegacyV1Database(dbPath)
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(16)
+    expect(await store.getSchemaVersion()).toBe(17)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -3891,7 +3891,7 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const db = new SQL.Database(await readFile(dbPath))
-    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('16')
+    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('17')
     expect(db.exec("select name from sqlite_master where type = 'table' and name = 'workflow_nodes'")[0]?.values[0]?.[0]).toBe('workflow_nodes')
     db.close()
   })
@@ -3916,7 +3916,7 @@ describe('createLocalStore', () => {
     v8Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(16)
+    expect(await migrated.getSchemaVersion()).toBe(17)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     migrated.close()
@@ -3950,7 +3950,7 @@ describe('createLocalStore', () => {
     v9Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(16)
+    expect(await migrated.getSchemaVersion()).toBe(17)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -3985,7 +3985,7 @@ describe('createLocalStore', () => {
     v10Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(16)
+    expect(await migrated.getSchemaVersion()).toBe(17)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -4052,7 +4052,7 @@ describe('createLocalStore', () => {
     v11Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(16)
+    expect(await migrated.getSchemaVersion()).toBe(17)
     await expect(
       migrated.getGateCommandReceiptObservation(receipt.id),
     ).resolves.toMatchObject({
@@ -4323,19 +4323,19 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const newerDb = new SQL.Database(await readFile(dbPath))
-    newerDb.run("update schema_meta set value = '17' where key = 'schema_version'")
+    newerDb.run("update schema_meta set value = '18' where key = 'schema_version'")
     await writeFile(dbPath, Buffer.from(newerDb.export()))
     newerDb.close()
 
     await expect(createLocalStore({ dbPath })).rejects.toThrow(
-      /schema version 17 is newer than supported version 16/,
+      /schema version 18 is newer than supported version 17/,
     )
 
     const unchangedDb = new SQL.Database(await readFile(dbPath))
     expect(
       unchangedDb.exec("select value from schema_meta where key = 'schema_version'")[0]
         ?.values[0]?.[0],
-    ).toBe('17')
+    ).toBe('18')
     unchangedDb.close()
   })
 
@@ -4375,7 +4375,7 @@ describe('createLocalStore', () => {
     unchangedDb.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(16)
+    expect(await migrated.getSchemaVersion()).toBe(17)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
   })

@@ -463,8 +463,12 @@ async function createGateHarness() {
         ...input,
         token: ephemeralToken,
         expiresAt: credentialExpiresAt,
+        providerExpiresAt: credentialExpiresAt,
         permissions: { contents: 'write' },
       }
+    },
+    async observeProviderCredentialExpiry() {
+      throw new Error('deterministic success gate must never observe credential expiry')
     },
     async revokeInstallationAccessToken() {
       throw new Error('deterministic success gate must never revoke a credential')

@@ -185,7 +185,7 @@ function isExactExistingCheck(
   return (
     keys.length === expectedKeys.length &&
     keys.every((key, index) => key === expectedKeys[index]) &&
-    check.stateVersion === 1 &&
+    check.stateVersion === 2 &&
     check.intentId === intent.id &&
     check.intentUpdatedAt === intent.updatedAt &&
     check.bindingId === binding.id &&
@@ -256,7 +256,11 @@ export async function runGitHubDeliveryRevocationProbe(
         outcomeCode: 'binding_inactive',
       }
     }
-    if (existing.length > 0) {
+    const staleV1Only =
+      existing.length === 1 &&
+      existing[0] &&
+      (existing[0] as { stateVersion?: unknown }).stateVersion === 1
+    if (existing.length > 0 && !staleV1Only) {
       return unverified(input.intentId, 'revocation_unavailable')
     }
 
@@ -273,6 +277,12 @@ export async function runGitHubDeliveryRevocationProbe(
       expectedStateVersion: snapshot.request.stateVersion,
     })
     if (
+      proof.status === 'pending' &&
+      proof.outcomeCode === 'credential_revocation_pending'
+    ) {
+      return unverified(input.intentId, 'credential_revocation_pending')
+    }
+    if (
       proof.status !== 'blocked' ||
       proof.outcomeCode !== 'binding_inactive'
     ) {
@@ -288,7 +298,7 @@ export async function runGitHubDeliveryRevocationProbe(
     }
     const committed = await deps.store.commitGitHubDeliveryRevocationCheck({
       check: {
-        stateVersion: 1,
+        stateVersion: 2,
         intentId: completedIntent.id,
         intentUpdatedAt: completedIntent.updatedAt,
         bindingId: binding.id,

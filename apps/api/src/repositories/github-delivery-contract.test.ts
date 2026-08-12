@@ -5,6 +5,9 @@ import {
   cloneGitHubDeliveryRequest,
   cloneGitHubRepositoryBinding,
   fingerprintGitHubDeliveryRequest,
+  GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS,
+  GITHUB_CREDENTIAL_MAX_TTL_MS,
+  GITHUB_CREDENTIAL_PROVIDER_MAX_MS,
   githubDeliveryRejection,
   githubDeliveryRejectionMessage,
   type GitHubDeliveryRejectionCode,
@@ -12,6 +15,12 @@ import {
 } from './github-delivery-contract'
 
 describe('GitHub Delivery repository contract', () => {
+  it('exports fixed non-configurable credential safety bounds', () => {
+    expect(GITHUB_CREDENTIAL_ISSUANCE_LEASE_MS).toBe(2 * 60 * 1_000)
+    expect(GITHUB_CREDENTIAL_PROVIDER_MAX_MS).toBe(2 * 60 * 1_000)
+    expect(GITHUB_CREDENTIAL_MAX_TTL_MS).toBe(60 * 60 * 1_000)
+  })
+
   it('fingerprints the logical intent digest and bounded PR copy deterministically', () => {
     const input = {
       intent: {
@@ -48,6 +57,7 @@ describe('GitHub Delivery repository contract', () => {
       'not_found',
       'stale_version',
       'binding_inactive',
+      'credential_revocation_pending',
       'binding_conflict',
       'invalid_state',
       'intent_conflict',

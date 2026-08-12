@@ -230,6 +230,9 @@ function credentialGrant(
     requestedAt: now,
     issuedAt: now,
     credentialExpiresAt: '2026-08-11T16:00:00.000Z',
+    providerExpiryContractVersion: 1,
+    providerCredentialExpiresAt: '2026-08-11T16:00:00.000Z',
+    providerExpiryObservedAt: null,
     consumedAt: null,
     outcomeCode: null,
     redacted: true,
@@ -849,6 +852,40 @@ describe('GitHub Delivery routes', () => {
     )
     expect(harness.repository.finalizeGitHubCredentialGrant).not.toHaveBeenCalled()
   })
+
+  it.each([5_001, 8_192])(
+    'returns one valid %i-character ephemeral credential without truncation',
+    async (length) => {
+      const harness = createHarness()
+      const token = `g${'x'.repeat(length - 1)}`
+      vi.mocked(harness.service.issueCredentialGrant).mockResolvedValue({
+        ok: true,
+        responseStatus: 200,
+        outcomeCode: 'grant_finalized',
+        replayed: false,
+        request: deliveryRequest({ stateVersion: 4, status: 'publishing_branch' }),
+        grant: credentialGrant(),
+        credential: {
+          grantId: 'grant-1',
+          username: 'x-access-token',
+          token,
+          expiresAt: '2026-08-11T16:00:00.000Z',
+          repositoryId: '98765',
+          canonicalHttpsUrl: 'https://github.com/example/project.git',
+        },
+      })
+
+      await expect(
+        resolveGitHubDeliveryRoute(
+          'POST',
+          '/api/desktop/projects/project-a/github-deliveries/delivery-1/credential-grant',
+          harness.repository,
+          harness.service,
+          { principal: desktopMember, body: { expectedStateVersion: 3 } },
+        ),
+      ).resolves.toMatchObject({ status: 200, body: { credential: { token } } })
+    },
+  )
 
   it('accepts only a safe push outcome and lets the API service verify the remote branch', async () => {
     const harness = createHarness()

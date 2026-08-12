@@ -15,20 +15,26 @@ function expectInOrder(source: string, fragments: string[]): void {
 describe('Postgres GitHub Delivery smoke contract', () => {
   const source = readFileSync('scripts/postgres-smoke.mjs', 'utf8')
 
-  it('migrates a populated retained v11 delivery row to v12 without data loss', () => {
+  it('migrates a populated retained v12 legacy credential to v13 without inventing expiry proof', () => {
     expectInOrder(source, [
-      'const retainedV11Fixture = await prepareRetainedV11DeliveryFixture(',
+      'const retainedV12Fixture = await prepareRetainedV12CredentialFixture(',
       "['pnpm', '--filter', '@ai-devflow/api', 'db:setup']",
-      'await assertRetainedV11DeliveryAfterV12(retainedV11Fixture)',
+      'await assertRetainedV12CredentialAfterV13(retainedV12Fixture)',
     ])
-    expect(source).toContain('version: 11')
+    expect(source).toContain('version: 12')
     expect(source).toContain('snapshotBeforeV12')
-    expect(source).toContain("delivery_series_key")
-    expect(source).toContain("delivery_attempt")
-    expect(source).toContain(
-      "github_delivery_requests_series_attempt_unique",
-    )
     expect(source).toContain('retainedRowWithoutV12Fields')
+    expect(source).toContain('github_delivery_requests_series_attempt_unique')
+    expect(source).toContain('snapshotBeforeV13')
+    expect(source).toContain('provider_expiry_contract_version')
+    expect(source).toContain('provider_credential_expires_at')
+    expect(source).toContain('provider_expiry_observed_at')
+    expect(source).toContain('credential_provider_expiry_confirmed')
+    expect(source).toContain(
+      'github_delivery_grants_provider_expiry_contract',
+    )
+    expect(source).toContain("expiryConfirmationError?.code === '23514'")
+    expect(source).toContain('retainedGrantWithoutV13Fields')
   })
 
   it('uses an offline GitHub boundary for the canonical delivery sequence', () => {

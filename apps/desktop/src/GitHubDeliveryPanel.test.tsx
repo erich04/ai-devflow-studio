@@ -161,7 +161,7 @@ describe('GitHubDeliveryPanel', () => {
   it('shows an exact persisted binding-inactive revocation proof', () => {
     const completedIntent = intent('completed')
     const revocationCheck: GitHubDeliveryRevocationCheck = {
-      stateVersion: 1,
+      stateVersion: 2,
       intentId: completedIntent.id,
       intentUpdatedAt: completedIntent.updatedAt,
       bindingId: completedIntent.repositoryBindingId,
@@ -188,7 +188,7 @@ describe('GitHubDeliveryPanel', () => {
   it('does not display revocation proof material for a mismatched binding', () => {
     const completedIntent = intent('completed')
     const check: GitHubDeliveryRevocationCheck = {
-      stateVersion: 1,
+      stateVersion: 2,
       intentId: completedIntent.id,
       intentUpdatedAt: completedIntent.updatedAt,
       bindingId: 'different-binding',
@@ -214,7 +214,7 @@ describe('GitHubDeliveryPanel', () => {
   it('does not display a same-version revocation check as proof', () => {
     const completedIntent = intent('completed')
     const check: GitHubDeliveryRevocationCheck = {
-      stateVersion: 1,
+      stateVersion: 2,
       intentId: completedIntent.id,
       intentUpdatedAt: completedIntent.updatedAt,
       bindingId: completedIntent.repositoryBindingId,

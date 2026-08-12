@@ -5,6 +5,7 @@ import path from 'node:path'
 import {
   assertFullGitCommitSha,
   assertSafeGitHubBranch,
+  isGitHubCredentialToken,
   normalizeGitHubRepository,
 } from '@ai-devflow/shared'
 import { terminateProcessTree } from './opencode-process.js'
@@ -16,7 +17,6 @@ export const GITHUB_GIT_PUBLISHER_WALL_CLOCK_BUDGET_MS =
   3 * localGitTimeoutMs + 2 * networkGitTimeoutMs + 15_000
 export const GITHUB_GIT_PUBLISHER_REQUIRED_CREDENTIAL_LIFETIME_MS =
   GITHUB_GIT_PUBLISHER_WALL_CLOCK_BUDGET_MS + 30_000
-const credentialPattern = /^[A-Za-z0-9._-]{16,8192}$/u
 
 export type GitHubGitPublisherErrorCode =
   | 'invalid_delivery_source'
@@ -271,7 +271,7 @@ function normalizeInput(input: GitHubGitPublisherInput): Omit<GitHubGitPublisher
     !path.isAbsolute(input.worktreePath) ||
     input.worktreePath.length > 4_096 ||
     typeof input.token !== 'string' ||
-    !credentialPattern.test(input.token)
+    !isGitHubCredentialToken(input.token)
   ) {
     throw publisherError('invalid_delivery_source')
   }

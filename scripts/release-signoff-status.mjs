@@ -533,6 +533,7 @@ function v15EvidenceShapeIssue(snapshot, kind, value) {
           hasExactKeys(value.desktopArtifact, ['version', 'platform', 'sha256'])
         : hasExactKeys(value, v15GitHubSandboxKeys) &&
           hasExactKeys(value.revocationProof, [
+            'proofStateVersion',
             'intentId',
             'revokedBindingVersion',
             'outcomeCode',
@@ -899,7 +900,7 @@ function isValidV15WalkthroughContent(content, snapshot) {
     sandboxValue?.recordedAt,
   )
   const exactRevocationProofLine = isRecord(revocationProof)
-    ? `Revocation proof: intent ${String(revocationProof.intentId)}; revoked binding version ${String(revocationProof.revokedBindingVersion)}; outcome ${String(revocationProof.outcomeCode)}; checked at ${String(revocationProof.checkedAt)}; durable check count ${String(revocationProof.durableCheckCount)}.`
+    ? `Revocation proof: state version ${String(revocationProof.proofStateVersion)}; intent ${String(revocationProof.intentId)}; revoked binding version ${String(revocationProof.revokedBindingVersion)}; outcome ${String(revocationProof.outcomeCode)}; checked at ${String(revocationProof.checkedAt)}; durable check count ${String(revocationProof.durableCheckCount)}.`
     : null
   const contentLines = content.split(/\r?\n/u)
   const revocationProofLines = contentLines.filter((line) =>
@@ -919,8 +920,8 @@ function isValidV15WalkthroughContent(content, snapshot) {
     ) &&
     sameUtcEvidenceDate &&
     /Status:\s*Passed/i.test(content) &&
-    /Team schema v12/i.test(content) &&
-    /Desktop schema v16/i.test(content) &&
+    /Team schema v13/i.test(content) &&
+    /Desktop schema v17/i.test(content) &&
     new RegExp(
       `Packaged artifact:[^\\n]*${escapeRegExp(String(artifactVersion))}[^\\n]*${escapeRegExp(String(artifactPlatform))}[^\\n]*${escapeRegExp(String(artifactSha))}`,
       'i',
@@ -999,12 +1000,14 @@ function isCanonicalTimestamp(value) {
 function isValidV15RevocationProof(value, deliveryBindingVersion, recordedAt) {
   return (
     hasExactKeys(value, [
+      'proofStateVersion',
       'intentId',
       'revokedBindingVersion',
       'outcomeCode',
       'checkedAt',
       'durableCheckCount',
     ]) &&
+    value.proofStateVersion === 2 &&
     isExactEvidenceIdentifier(value.intentId) &&
     Number.isSafeInteger(deliveryBindingVersion) &&
     deliveryBindingVersion > 0 &&

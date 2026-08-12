@@ -6,9 +6,10 @@ retroactive TDD rewrites unless it is touched.
 
 ## Current Persistence Baseline
 
-- Team/API/Postgres uses Team schema v12. Migration tests must prove both a fresh v12 database and a
-  populated v11-to-v12 upgrade without losing GitHub Delivery identity or evidence.
-- Electron/SQLite uses Desktop schema v16. Local-store tests must prove a fresh v16 database,
+- Team/API/Postgres uses Team schema v13. Migration tests must prove a fresh v13 database, the
+  populated v11-to-v12 delivery-series upgrade, and the v12-to-v13 provider-authoritative expiry
+  contract without inventing expiry evidence for legacy issued credentials.
+- Electron/SQLite uses Desktop schema v17. Local-store tests must prove a fresh v17 database,
   retained upgrades, rollback on migration failure, and refusal of a newer unknown schema.
 
 ## Test Layers

@@ -18,7 +18,7 @@ const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(12)
+    expect(TEAM_SCHEMA_VERSION).toBe(13)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -225,6 +225,11 @@ describe('team database schema', () => {
         name: '0012_github_delivery_attempts',
         fileName: '0012_github_delivery_attempts.sql',
       },
+      {
+        version: 13,
+        name: '0013_github_credential_provider_expiry',
+        fileName: '0013_github_credential_provider_expiry.sql',
+      },
     ])
 
     const migrations = await readTeamMigrationCatalog()
@@ -233,6 +238,7 @@ describe('team database schema', () => {
     const migrationV10 = migrations.find((candidate) => candidate.version === 10)
     const migrationV11 = migrations.find((candidate) => candidate.version === 11)
     const migrationV12 = migrations.find((candidate) => candidate.version === 12)
+    const migrationV13 = migrations.find((candidate) => candidate.version === 13)
     expect(migrationChecksum(migrationV8?.sql ?? '')).toBe(
       '630b28be579566ceeafd52353c30394d8182f256c1b787ec3780bb44c94992e5',
     )
@@ -312,6 +318,17 @@ describe('team database schema', () => {
     expect(migrationV12?.sql).toContain(
       'UNIQUE (organization_id, project_id, delivery_series_key, delivery_attempt)',
     )
+    expect(migrationV13?.sql).toContain(
+      'ADD COLUMN provider_credential_expires_at timestamptz',
+    )
+    expect(migrationV13?.sql).toContain(
+      'ADD COLUMN provider_expiry_observed_at timestamptz',
+    )
+    expect(migrationV13?.sql).toContain(
+      'ADD COLUMN provider_expiry_contract_version smallint NOT NULL DEFAULT 0',
+    )
+    expect(migrationV13?.sql).toContain("provider_expiry_observed_at >= provider_credential_expires_at + interval '2 seconds'")
+    expect(migrationV13?.sql).not.toMatch(/UPDATE\s+github_delivery_credential_grants\s+SET\s+provider_credential_expires_at/iu)
     expect(migrationV12?.sql).not.toMatch(/^\s*(?:DELETE FROM|TRUNCATE TABLE)\b/im)
   })
 
@@ -398,6 +415,9 @@ describe('team database schema', () => {
         'issued_to_token_id',
         'requested_at',
         'credential_expires_at',
+        'provider_expiry_contract_version',
+        'provider_credential_expires_at',
+        'provider_expiry_observed_at',
         'status',
       ]),
     )
@@ -432,6 +452,8 @@ describe('team database schema', () => {
         expect.arrayContaining([
           'token',
           'token_hash',
+          'provider_token',
+          'authorization',
           'private_key',
           'credential',
           'worktree_path',

@@ -62,8 +62,9 @@ Use this shape:
   external database.
 - **Checks**:
   - Run Postgres smoke only with an explicit `DEVFLOW_DATABASE_URL`.
-  - Prove a clean database reaches Team schema v12 and a populated v11-to-v12 upgrade retains exact
-    data and rolls back transactionally on failure.
+  - Prove a clean database reaches Team schema v13, a populated v11-to-v12 upgrade retains exact
+    data, and a v12-to-v13 upgrade preserves a legacy issued credential without fabricating
+    provider-authoritative expiry evidence.
   - Confirm policy save/read, enforcement evaluation, override audit, stale policy rejection,
     approval-sync bypass rejection, and overview redaction.
   - Confirm the GitHub App repository binding, Delivery Request, signed approval, credential grant,
@@ -73,6 +74,8 @@ Use this shape:
     transaction boundary and exact incompatible row are understood.
   - Remediate the documented v11 row, then retry the same v11-to-v12 migration rather than applying
     migration SQL by hand or weakening assertions.
+  - Keep a legacy issued credential fail closed when `provider_credential_expires_at` is NULL;
+    only a bounded provider observation can establish provider-authoritative expiry.
 - **Prevention**: run Postgres smoke whenever API, repository, migration, policy, override, or
   GitHub Delivery persistence or manager-summary behavior changes.
 - **Promote when stable**: promoted to `docs/knowledge/checklists/postgres-smoke-readiness.md`.
