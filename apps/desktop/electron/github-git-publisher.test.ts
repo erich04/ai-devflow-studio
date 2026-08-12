@@ -59,6 +59,7 @@ describe('GitHub git publisher', () => {
       if (command.args[0] === 'status') return { stdout: '' }
       if (command.args[0] === 'remote') return { stdout: `git@github.com:${repository}.git\n` }
       expect(command.env['DEVFLOW_GITHUB_ACCESS_TOKEN']).toBe(secret)
+      expect(command.env['ELECTRON_RUN_AS_NODE']).toBe('1')
       expect(command.args.join(' ')).not.toContain(secret)
       askPassPath = command.env['GIT_ASKPASS']!
       expect(await readFile(askPassPath, 'utf8')).not.toContain(secret)
@@ -96,6 +97,9 @@ describe('GitHub git publisher', () => {
     ])
     expect(calls.slice(0, 3).every(({ env }) => env['DEVFLOW_GITHUB_ACCESS_TOKEN'] === undefined))
       .toBe(true)
+    expect(calls.slice(0, 3).every(({ env }) => env['ELECTRON_RUN_AS_NODE'] === undefined)).toBe(
+      true,
+    )
     await expect(access(askPassPath)).rejects.toBeDefined()
   })
 

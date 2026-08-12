@@ -373,6 +373,7 @@ export function createGitHubGitPublisher(
         DEVFLOW_GITHUB_ACCESS_TOKEN: input.token,
         DEVFLOW_GITHUB_ASKPASS_SCRIPT: askPass.scriptPath,
         DEVFLOW_NODE_EXECUTABLE: nodeExecutable,
+        ELECTRON_RUN_AS_NODE: '1',
         GIT_ASKPASS: askPass.askPassPath,
         GIT_ASKPASS_REQUIRE: 'force',
       }
