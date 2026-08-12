@@ -15,6 +15,9 @@ repository credential. A dated result is written only after every step passes.
 - Install the V1.5 GitHub App only on that sandbox. Grant repository Metadata read, Contents write,
   and Pull requests write; do not enable administration, merge, workflow, issue, or organization
   permissions.
+- For Draft lookup and creation, the API narrows its short-lived token to the exact pair
+  `Contents: read + Pull requests: write`; this lets GitHub read the approved refs without widening
+  the installation or giving PR authority to Desktop.
 - Keep the App private key in API process configuration. Never place the key, installation token,
   OAuth token, pairing code, Cookie, Bearer value, or credential URL in evidence or shell history.
 - Use normal GitHub OAuth for browser identity, one signed Web session, one explicit Team Project,

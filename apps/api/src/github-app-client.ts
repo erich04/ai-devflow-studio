@@ -239,6 +239,15 @@ export type GitHubAppClient = {
 
 type InstallationPermission = 'contents' | 'pull_requests'
 type InstallationPermissionLevel = 'read' | 'write'
+type InstallationPermissionGrant =
+  | Readonly<{
+      contents: InstallationPermissionLevel
+      pull_requests?: InstallationPermissionLevel
+    }>
+  | Readonly<{
+      contents?: InstallationPermissionLevel
+      pull_requests: InstallationPermissionLevel
+    }>
 
 type MintedInstallationToken = {
   token: string
@@ -817,11 +826,10 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
 
   const mintInstallationToken = async (
     authority: GitHubRepositoryAuthority,
-    permission: InstallationPermission,
-    level: InstallationPermissionLevel,
+    permissionGrant: InstallationPermissionGrant,
     issuanceDeadline?: string,
   ): Promise<MintedInstallationToken> => {
-    const tracksCredentialIssuance = permission === 'contents' && level === 'write'
+    const tracksCredentialIssuance = permissionGrant.contents === 'write'
     let normalized: GitHubRepositoryAuthority
     let appJwt: string
     try {
@@ -858,7 +866,7 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
           authorization: `Bearer ${appJwt}`,
           body: {
             repository_ids: [Number(normalized.repositoryId)],
-            permissions: { [permission]: level },
+            permissions: permissionGrant,
           },
           expectedStatus: 201,
         },
@@ -876,9 +884,7 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
       }
       const expirationMs = parseProviderExpiry(response['expires_at'])
       const receivedAt = normalizeClockValue(input.clock)
-      if (
-        expirationMs <= receivedAt.getTime()
-      ) {
+      if (expirationMs <= receivedAt.getTime()) {
         throw clientError('github_scope_mismatch')
       }
       // GitHub's one-hour lifetime starts on its clock when the credential is
@@ -896,18 +902,19 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
 
       const permissions = expectRecord(response['permissions'])
       for (const [name, value] of Object.entries(permissions)) {
-        if (name === permission) {
-          if (value !== level) {
-            throw clientError('github_scope_mismatch')
-          }
+        if (name === 'metadata') {
+          if (value !== 'read') throw clientError('github_scope_mismatch')
           continue
         }
-        if (name !== 'metadata' || value !== 'read') {
+        if (
+          (name !== 'contents' && name !== 'pull_requests') ||
+          permissionGrant[name] !== value
+        ) {
           throw clientError('github_scope_mismatch')
         }
       }
-      if (permissions[permission] !== level) {
-        throw clientError('github_scope_mismatch')
+      for (const [name, level] of Object.entries(permissionGrant)) {
+        if (permissions[name] !== level) throw clientError('github_scope_mismatch')
       }
 
       const repositories = response['repositories']
@@ -939,11 +946,10 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
 
   const withInstallationToken = async <Result>(
     authority: GitHubRepositoryAuthority,
-    permission: InstallationPermission,
-    level: InstallationPermissionLevel,
+    permissionGrant: InstallationPermissionGrant,
     operation: (token: string) => Promise<Result>,
   ): Promise<Result> => {
-    const grant = await mintInstallationToken(authority, permission, level)
+    const grant = await mintInstallationToken(authority, permissionGrant)
     return operation(grant.token)
   }
 
@@ -1195,8 +1201,7 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
       }
       const grant = await mintInstallationToken(
         authority,
-        'contents',
-        'write',
+        { contents: 'write' },
         issuanceDeadline,
       )
       return {
@@ -1267,7 +1272,7 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
 
     async verifyRepository(repositoryInput) {
       const authority = normalizeAuthority(repositoryInput)
-      return withInstallationToken(authority, 'contents', 'read', async (token) => {
+      return withInstallationToken(authority, { contents: 'read' }, async (token) => {
         const response = expectRecord(
           await requestJson(`${githubApiBaseUrl}/repositories/${authority.repositoryId}`, {
             method: 'GET',
@@ -1315,7 +1320,7 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
     async getBranchHead(branchInput) {
       const context = normalizeRepositoryContext(branchInput)
       const branch = normalizeBranch(branchInput.branch)
-      return withInstallationToken(context, 'contents', 'read', async (token) => {
+      return withInstallationToken(context, { contents: 'read' }, async (token) => {
         const response = expectRecord(
           await requestJson(
             `${githubApiBaseUrl}/repos/${context.repository}/git/ref/heads/${encodeURIComponent(branch)}`,
@@ -1344,41 +1349,47 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
 
     async findDraftPullRequest(delivery) {
       const identity = normalizeDraftIdentity(delivery)
-      return withInstallationToken(identity, 'pull_requests', 'write', (token) =>
-        findDraftWithToken(identity, token),
+      return withInstallationToken(
+        identity,
+        { contents: 'read', pull_requests: 'write' },
+        (token) => findDraftWithToken(identity, token),
       )
     },
 
     async findOrCreateDraftPullRequest(delivery) {
       const normalized = normalizeDraftInput(delivery)
-      return withInstallationToken(normalized, 'pull_requests', 'write', async (token) => {
-        const existing = await findDraftWithToken(normalized, token)
-        if (existing) {
-          return { disposition: 'found', pullRequest: existing }
-        }
-        try {
-          const created = await createDraftWithToken(normalized, token)
-          return { disposition: 'created', pullRequest: created }
-        } catch (error) {
-          if (!shouldReconcileCreateFailure(error)) {
-            throw error
+      return withInstallationToken(
+        normalized,
+        { contents: 'read', pull_requests: 'write' },
+        async (token) => {
+          const existing = await findDraftWithToken(normalized, token)
+          if (existing) {
+            return { disposition: 'found', pullRequest: existing }
           }
           try {
-            const reconciled = await findDraftWithToken(normalized, token)
-            if (reconciled) {
-              return { disposition: 'reconciled', pullRequest: reconciled }
+            const created = await createDraftWithToken(normalized, token)
+            return { disposition: 'created', pullRequest: created }
+          } catch (error) {
+            if (!shouldReconcileCreateFailure(error)) {
+              throw error
             }
-          } catch (reconciliationError) {
-            if (
-              reconciliationError instanceof GitHubAppClientError &&
-              reconciliationError.code === 'github_pull_request_conflict'
-            ) {
-              throw reconciliationError
+            try {
+              const reconciled = await findDraftWithToken(normalized, token)
+              if (reconciled) {
+                return { disposition: 'reconciled', pullRequest: reconciled }
+              }
+            } catch (reconciliationError) {
+              if (
+                reconciliationError instanceof GitHubAppClientError &&
+                reconciliationError.code === 'github_pull_request_conflict'
+              ) {
+                throw reconciliationError
+              }
             }
+            throw error
           }
-          throw error
-        }
-      })
+        },
+      )
     },
   }
 }

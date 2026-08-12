@@ -83,6 +83,13 @@ function permissionCounter(permissions) {
     return null
   }
   const entries = Object.entries(permissions)
+  if (
+    entries.length === 2 &&
+    permissions.contents === 'read' &&
+    permissions.pull_requests === 'write'
+  ) {
+    return 'pullRequestsWrite'
+  }
   if (entries.length !== 1) return null
   const [permission, level] = entries[0]
   if (permission === 'contents' && level === 'read') return 'contentsRead'

@@ -154,5 +154,7 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     expect(apiBoundary).toContain("const ownerQualifiedHead = String(body['head'] ?? '')")
     expect(apiBoundary).toContain('const expectedHeadPrefix = `${repositoryOwner}:`')
     expect(apiBoundary).toContain('ref: headBranch')
+    expect(apiBoundary).toContain("permissions.contents === 'read'")
+    expect(apiBoundary).toContain("permissions.pull_requests === 'write'")
   })
 })

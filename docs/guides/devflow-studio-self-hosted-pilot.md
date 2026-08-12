@@ -112,7 +112,9 @@ DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64=<base64-encoded-private-key-pem>
 Never paste the private key or an installation access token into Web, Desktop, a database, a log,
 or source control. The API mints a repository-scoped installation access token for at most one
 hour. Its `Contents: write` copy exists only in Desktop main memory while one publication attempt is
-active. `Pull requests: write` authority stays inside the API process.
+active. Draft lookup and creation use an API-held token narrowed to exactly
+`Contents: read + Pull requests: write`, so GitHub can read the approved base and head refs while PR
+authority stays inside the API process.
 
 After the stack is ready:
 

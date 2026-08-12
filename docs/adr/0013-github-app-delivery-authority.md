@@ -40,7 +40,8 @@ Use a GitHub App installation for V1.5 delivery.
   credential helper, or raw git command.
 - Desktop main publishes only the approved expected commit to the approved namespaced branch.
 - The API independently reads the remote branch head and, only after it matches the expected commit,
-  uses API-held `Pull requests: write` App authority to create only a Draft pull request.
+  uses an API-held token narrowed to one repository and the exact permission pair
+  `Contents: read + Pull requests: write` to read the two refs and create only a Draft pull request.
 - DevFlow will never merge or auto-merge, never force-push, never delete a remote branch, never
   publish a tag, and never widen permissions as part of V1.5.
 

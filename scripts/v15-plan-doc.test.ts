@@ -95,6 +95,9 @@ describe('v1.5 GitHub Delivery contract', () => {
   })
 
   it('documents the bounded GitHub App setup and recoverable operator path', () => {
+    const adr = read('docs/adr/0013-github-app-delivery-authority.md')
+    const plan = read('docs/plans/v1.5-github-delivery.md')
+    const walkthrough = read('docs/guides/devflow-studio-v1.5-walkthrough.md')
     const guide = read('docs/guides/devflow-studio-self-hosted-pilot.md')
 
     expect(guide).toContain('## Configure GitHub Delivery')
@@ -110,6 +113,9 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(guide).toContain('never merge')
     expect(guide).toContain('installation access token')
     expect(guide).toContain('Desktop main memory')
+    for (const contract of [adr, plan, walkthrough, guide]) {
+      expect(contract).toContain('Contents: read + Pull requests: write')
+    }
   })
 
   it('keeps Retry-After validation failures recoverable without retaining provider payloads', () => {

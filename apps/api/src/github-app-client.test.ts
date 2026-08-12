@@ -25,6 +25,7 @@ function tokenResponse(
   permission: 'contents' | 'pull_requests',
   access: 'read' | 'write',
   token = `ghs_${'x'.repeat(40)}`,
+  extraPermissions: Partial<Record<'contents' | 'pull_requests', 'read' | 'write'>> = {},
 ): Response {
   return Response.json({
     token,
@@ -32,7 +33,9 @@ function tokenResponse(
     repository_selection: 'selected',
     permissions: {
       metadata: 'read',
+      ...(permission === 'pull_requests' ? { contents: 'read' as const } : {}),
       [permission]: access,
+      ...extraPermissions,
     },
     repositories: [{ id: Number(repositoryId) }],
   }, { status: 201 })
@@ -1169,7 +1172,9 @@ describe('GitHub App client', () => {
   it('creates only a Draft PR and appends the deterministic marker itself', async () => {
     const fetcher = vi
       .fn()
-      .mockResolvedValueOnce(tokenResponse('pull_requests', 'write'))
+      .mockResolvedValueOnce(
+        tokenResponse('pull_requests', 'write', undefined, { contents: 'read' }),
+      )
       .mockResolvedValueOnce(Response.json([]))
       .mockResolvedValueOnce(Response.json(pullRequestResponse(), { status: 201 }))
     const client = makeClient(fetcher)
@@ -1186,6 +1191,10 @@ describe('GitHub App client', () => {
     })
 
     expect(fetcher).toHaveBeenCalledTimes(3)
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+      repository_ids: [Number(repositoryId)],
+      permissions: { contents: 'read', pull_requests: 'write' },
+    })
     const [url, init] = fetcher.mock.calls[2]!
     expect(url).toBe(`https://api.github.com/repos/${repository}/pulls`)
     expect(init?.method).toBe('POST')
