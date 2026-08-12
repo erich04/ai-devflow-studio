@@ -228,8 +228,19 @@ function hasAllowedMutationOrigin(request: NextRequest): boolean {
     // A browser-shaped request may not bypass the exact Origin comparison by omitting Origin.
     return request.headers.get('sec-fetch-site') === null
   }
+
+  const configuredWebAppUrl = process.env['DEVFLOW_WEB_APP_URL']?.trim()
+  if (!configuredWebAppUrl) return false
   try {
-    return new URL(origin).origin === request.nextUrl.origin
+    const configuredOrigin = new URL(configuredWebAppUrl)
+    const requestOrigin = new URL(origin)
+    return (
+      (configuredOrigin.protocol === 'http:' || configuredOrigin.protocol === 'https:') &&
+      configuredOrigin.username === '' &&
+      configuredOrigin.password === '' &&
+      requestOrigin.origin === origin &&
+      requestOrigin.origin === configuredOrigin.origin
+    )
   } catch {
     return false
   }

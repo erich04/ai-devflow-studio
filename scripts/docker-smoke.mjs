@@ -19,6 +19,8 @@ const composeEnv = {
   DEV_AUTH_ENABLED: 'false',
   DEVFLOW_REQUIRE_AUTH: 'true',
   DEVFLOW_SESSION_SECRET: sessionSecret,
+  DEVFLOW_GITHUB_APP_ID: '',
+  DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64: '',
   GITHUB_CLIENT_ID: 'docker-smoke-oauth-client',
   GITHUB_CLIENT_SECRET: 'docker-smoke-oauth-secret-not-production',
   GITHUB_OAUTH_REDIRECT_URI: `http://127.0.0.1:${apiPort}/api/auth/github/callback`,
@@ -204,6 +206,46 @@ try {
   expect(
     oauthStart.headers.get('set-cookie')?.includes('devflow_oauth_state='),
     'Docker GitHub OAuth start did not set its state cookie.',
+  )
+
+  const browserBindingBody = JSON.stringify({
+    action: 'configure',
+    projectId: 'p-payments',
+    installationId: '12345',
+    repositoryId: '98765',
+    expectedStateVersion: 0,
+  })
+  const rejectedBrowserOrigin = await fetch(`${webUrl}/api/github-delivery`, {
+    method: 'PUT',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      cookie: pilotSessionCookie,
+      origin: 'https://attacker.example',
+      'sec-fetch-site': 'cross-site',
+    },
+    body: browserBindingBody,
+  })
+  expect(
+    rejectedBrowserOrigin.status === 403 &&
+      (await rejectedBrowserOrigin.json()).code === 'origin_forbidden',
+    'Docker Web accepted a cross-origin GitHub Delivery mutation.',
+  )
+  const allowedBrowserOrigin = await fetch(`${webUrl}/api/github-delivery`, {
+    method: 'PUT',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      cookie: pilotSessionCookie,
+      origin: webUrl,
+      'sec-fetch-site': 'same-origin',
+    },
+    body: browserBindingBody,
+  })
+  expect(
+    allowedBrowserOrigin.status === 503 &&
+      (await allowedBrowserOrigin.json()).code === 'provider_unavailable',
+    'Docker Web rejected its configured browser origin before the provider boundary.',
   )
 
   const pairingCode = await postJson(

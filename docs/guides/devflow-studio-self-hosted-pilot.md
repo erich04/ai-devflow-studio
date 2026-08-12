@@ -86,7 +86,8 @@ The pilot API owns this explicit configuration surface:
 
 Unknown `DEVFLOW_*` or `DEV_AUTH_*` names are rejected in pilot so misspelled safety settings do
 not silently pass. Compose passes only the variables above. The Web runtime allowlist is
-`DEVFLOW_INTERNAL_API_BASE_URL`, `DEVFLOW_PUBLIC_API_BASE_URL`, `HOSTNAME`, and `PORT`.
+`DEVFLOW_INTERNAL_API_BASE_URL`, `DEVFLOW_PUBLIC_API_BASE_URL`, `DEVFLOW_WEB_APP_URL`, `HOSTNAME`,
+and `PORT`.
 
 ## Configure GitHub Delivery
 
@@ -175,7 +176,10 @@ Web readiness also depends on API readiness. Compose uses readiness for startup 
 
 The Web service uses `DEVFLOW_INTERNAL_API_BASE_URL=http://api:4310` for server-side calls and
 `DEVFLOW_PUBLIC_API_BASE_URL` for browser-facing OAuth links. Set the latter to the URL users can
-actually reach when the pilot is behind a reverse proxy.
+actually reach when the pilot is behind a reverse proxy. The Web service also receives
+`DEVFLOW_WEB_APP_URL` and uses its canonical origin for browser mutation checks; it must match the
+scheme, hostname, and port that users see. The internal standalone listener address such as
+`http://0.0.0.0:4311` is never a browser trust origin.
 
 Demo seed data is never loaded during normal pilot startup. For an isolated demonstration only,
 invoke the explicit one-shot utility after the stack is ready:

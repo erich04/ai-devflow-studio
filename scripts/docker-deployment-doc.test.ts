@@ -120,7 +120,7 @@ describe('self-hosted Docker deployment files', () => {
     expect(compose).toContain(
       'DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64: ${DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64:-}',
     )
-    expect(compose).toContain('DEVFLOW_WEB_APP_URL:')
+    expect(compose.match(/^\s+DEVFLOW_WEB_APP_URL:/gm)).toHaveLength(2)
     expect(compose).not.toContain('POSTGRES_PASSWORD:-devflow')
     expect(compose).not.toContain('replace-this-devflow-session-secret')
   })
@@ -138,6 +138,8 @@ describe('self-hosted Docker deployment files', () => {
       "import { createSessionCookie } from '../apps/api/src/auth/session-cookie'",
     )
     expect(smoke).toContain("DEV_AUTH_ENABLED: 'false'")
+    expect(smoke).toContain("DEVFLOW_GITHUB_APP_ID: ''")
+    expect(smoke).toContain("DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64: ''")
     expect(smoke).toContain('cookie: pilotSessionCookie')
     expect(smoke).not.toContain('demoSessionHeaders')
     expect(smoke).toContain("redirect: 'manual'")

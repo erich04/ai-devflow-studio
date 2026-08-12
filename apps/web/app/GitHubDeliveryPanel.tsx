@@ -23,6 +23,20 @@ function isExactObject(value: unknown, keys: readonly string[]): value is Record
   )
 }
 
+function githubDeliveryFailureKind(
+  status: number,
+  payload: unknown,
+): 'provider' | 'authority' | 'unavailable' {
+  const code =
+    typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+      ? (payload as { code?: unknown }).code
+      : undefined
+
+  if (status === 503 && code === 'provider_unavailable') return 'provider'
+  if (status === 403 && code === 'authority_required') return 'authority'
+  return 'unavailable'
+}
+
 function shortFingerprint(value: string): string {
   return value.length <= 12 ? value : `${value.slice(0, 8)}…${value.slice(-4)}`
 }
@@ -84,11 +98,7 @@ export function GitHubDeliveryPanel({
       const expectedOutcome = binding ? 'binding_updated' : 'binding_created'
       const expectedStatus = binding ? 200 : 201
       if (response.status !== expectedStatus) {
-        const code =
-          typeof payload === 'object' && payload !== null && !Array.isArray(payload)
-            ? (payload as { code?: unknown }).code
-            : undefined
-        throw new Error(code === 'provider_unavailable' ? 'provider' : response.status === 403 ? 'authority' : 'unavailable')
+        throw new Error(githubDeliveryFailureKind(response.status, payload))
       }
       if (
         typeof payload !== 'object' ||
@@ -149,11 +159,7 @@ export function GitHubDeliveryPanel({
       })
       const payload = await response.json().catch(() => null)
       if (response.status !== 200) {
-        const code =
-          typeof payload === 'object' && payload !== null && !Array.isArray(payload)
-            ? (payload as { code?: unknown }).code
-            : undefined
-        throw new Error(code === 'provider_unavailable' ? 'provider' : response.status === 403 ? 'authority' : 'unavailable')
+        throw new Error(githubDeliveryFailureKind(response.status, payload))
       }
       if (
         typeof payload !== 'object' ||
@@ -223,12 +229,14 @@ export function GitHubDeliveryPanel({
       const expectedOutcome = action === 'approve'
         ? 'delivery_approved'
         : 'delivery_rejected'
+      if (response.status !== 200) {
+        throw new Error(githubDeliveryFailureKind(response.status, payload))
+      }
       if (!isExactObject(payload, ['outcomeCode', 'request'])) {
-        throw new Error(response.status === 403 ? 'authority' : 'unavailable')
+        throw new Error('unavailable')
       }
       const nextRequest = parseGitHubDeliveryRequestView(payload.request, projectId)
       if (
-        response.status !== 200 ||
         payload.outcomeCode !== expectedOutcome ||
         nextRequest.id !== delivery.id ||
         nextRequest.projectId !== projectId ||
@@ -237,7 +245,7 @@ export function GitHubDeliveryPanel({
         nextRequest.status !== (action === 'approve' ? 'approved' : 'revoked') ||
         (action === 'reject' && nextRequest.outcomeCode !== 'approval_rejected')
       ) {
-        throw new Error(response.status === 403 ? 'authority' : 'unavailable')
+        throw new Error('unavailable')
       }
       setDeliveries((current) => current.map((item) =>
         item.id === delivery.id

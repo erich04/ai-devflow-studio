@@ -153,6 +153,123 @@ describe('GitHubDeliveryPanel', () => {
     expect(screen.getByRole('button', { name: 'Approve delivery' })).toBeDisabled()
   })
 
+  it('does not misreport a rejected Web origin as missing owner authority', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      code: 'origin_forbidden',
+      message: 'GitHub Delivery mutation origin was rejected.',
+    }), { status: 403 })))
+    render(
+      <GitHubDeliveryPanel
+        projectId="p-payments"
+        projectName="Payments"
+        initialBinding={null}
+        initialDeliveries={[]}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('GitHub App installation ID'), {
+      target: { value: '12345' },
+    })
+    fireEvent.change(screen.getByLabelText('GitHub repository ID'), {
+      target: { value: '98765' },
+    })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Confirm repository binding' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Configure repository binding' }))
+
+    expect(await screen.findByText(
+      'GitHub repository binding could not be changed safely.',
+    )).toBeInTheDocument()
+    expect(screen.queryByText(
+      'Owner authority is required to configure this repository binding.',
+    )).not.toBeInTheDocument()
+  })
+
+  it('shows owner guidance only for the typed authority failure', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      code: 'authority_required',
+      message: 'Required project authority was not verified.',
+    }), { status: 403 })))
+    render(
+      <GitHubDeliveryPanel
+        projectId="p-payments"
+        projectName="Payments"
+        initialBinding={null}
+        initialDeliveries={[]}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('GitHub App installation ID'), {
+      target: { value: '12345' },
+    })
+    fireEvent.change(screen.getByLabelText('GitHub repository ID'), {
+      target: { value: '98765' },
+    })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Confirm repository binding' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Configure repository binding' }))
+
+    expect(await screen.findByText(
+      'Owner authority is required to configure this repository binding.',
+    )).toBeInTheDocument()
+  })
+
+  it('requires the matching forbidden status before showing owner guidance', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      code: 'authority_required',
+      message: 'A session is required.',
+    }), { status: 401 })))
+    render(
+      <GitHubDeliveryPanel
+        projectId="p-payments"
+        projectName="Payments"
+        initialBinding={null}
+        initialDeliveries={[]}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('GitHub App installation ID'), {
+      target: { value: '12345' },
+    })
+    fireEvent.change(screen.getByLabelText('GitHub repository ID'), {
+      target: { value: '98765' },
+    })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Confirm repository binding' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Configure repository binding' }))
+
+    expect(await screen.findByText(
+      'GitHub repository binding could not be changed safely.',
+    )).toBeInTheDocument()
+    expect(screen.queryByText(
+      'Owner authority is required to configure this repository binding.',
+    )).not.toBeInTheDocument()
+  })
+
+  it('does not misreport a rejected Web origin as decision authority', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      code: 'origin_forbidden',
+      message: 'GitHub Delivery mutation origin was rejected.',
+    }), { status: 403 })))
+    render(
+      <GitHubDeliveryPanel
+        projectId="p-payments"
+        projectName="Payments"
+        initialBinding={binding}
+        initialDeliveries={[delivery]}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: 'Confirm delivery delivery-1',
+    }))
+    fireEvent.click(screen.getByRole('button', { name: 'Approve delivery' }))
+
+    expect(await screen.findByText(
+      'GitHub Delivery service is unavailable. No decision was applied.',
+    )).toBeInTheDocument()
+    expect(screen.queryByText(
+      'Lead or owner authority is required for this decision.',
+    )).not.toBeInTheDocument()
+  })
+
   it('requires an explicit human confirmation before approving an exact Delivery version', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       request: {
@@ -334,5 +451,32 @@ describe('GitHubDeliveryPanel', () => {
     expect(deliveryConfirmation).not.toBeChecked()
     expect(deliveryConfirmation).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Approve delivery' })).toBeDisabled()
+  })
+
+  it('does not misreport a rejected Web origin as revocation owner authority', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      code: 'origin_forbidden',
+      message: 'GitHub Delivery mutation origin was rejected.',
+    }), { status: 403 })))
+    render(
+      <GitHubDeliveryPanel
+        projectId="p-payments"
+        projectName="Payments"
+        initialBinding={binding}
+        initialDeliveries={[]}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: 'Confirm repository binding revocation',
+    }))
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke repository binding' }))
+
+    expect(await screen.findByText(
+      'GitHub repository binding could not be revoked safely.',
+    )).toBeInTheDocument()
+    expect(screen.queryByText(
+      'Owner authority is required to revoke this repository binding.',
+    )).not.toBeInTheDocument()
   })
 })

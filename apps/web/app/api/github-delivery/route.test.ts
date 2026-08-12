@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server'
 import { cookies } from 'next/headers'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   GitHubDeliveryApiError,
   configureGitHubRepositoryBinding,
@@ -88,6 +88,7 @@ function request(method: 'POST' | 'PUT', body: unknown) {
 describe('GitHub Delivery Web proxy', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubEnv('DEVFLOW_WEB_APP_URL', 'http://web.local')
     mockedCookies.mockResolvedValue({
       get: vi.fn(() => ({ name: 'devflow_session', value: 'session-1' })),
     } as never)
@@ -106,6 +107,10 @@ describe('GitHub Delivery Web proxy', () => {
       outcomeCode: 'binding_revoked',
       replayed: false,
     })
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
   })
 
   it('requires application/json before accepting a mutation', async () => {
@@ -148,6 +153,61 @@ describe('GitHub Delivery Web proxy', () => {
 
     expect(response.status).toBe(403)
     expect(mockedConfigure).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['missing', null],
+    ['malformed', 'not a URL'],
+    ['non-HTTP', 'ftp://web.local'],
+    ['credentialed', 'http://user@web.local'],
+  ])('fails closed for a %s configured Web URL', async (_label, configuredUrl) => {
+    if (configuredUrl === null) {
+      delete process.env['DEVFLOW_WEB_APP_URL']
+    } else {
+      vi.stubEnv('DEVFLOW_WEB_APP_URL', configuredUrl)
+    }
+
+    const response = await PUT(request('PUT', {
+      action: 'configure',
+      projectId: 'p-payments',
+      installationId: '12345',
+      repositoryId: '98765',
+      expectedStateVersion: 2,
+    }))
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toMatchObject({ code: 'origin_forbidden' })
+    expect(mockedConfigure).not.toHaveBeenCalled()
+  })
+
+  it('accepts the configured browser origin when the standalone listener uses an internal host', async () => {
+    vi.stubEnv('DEVFLOW_WEB_APP_URL', 'http://127.0.0.1:4311')
+
+    const response = await PUT(new NextRequest('http://0.0.0.0:4311/api/github-delivery', {
+      method: 'PUT',
+      headers: {
+        'content-type': 'application/json',
+        host: '127.0.0.1:4311',
+        origin: 'http://127.0.0.1:4311',
+        'sec-fetch-site': 'same-origin',
+      },
+      body: JSON.stringify({
+        action: 'configure',
+        projectId: 'p-payments',
+        installationId: '12345',
+        repositoryId: '98765',
+        expectedStateVersion: 2,
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(mockedConfigure).toHaveBeenCalledWith({
+      projectId: 'p-payments',
+      installationId: '12345',
+      repositoryId: '98765',
+      expectedStateVersion: 2,
+      cookieHeader: 'devflow_session=session-1',
+    })
   })
 
   it('allows absent Origin only for a documented same-server programmatic call', async () => {
