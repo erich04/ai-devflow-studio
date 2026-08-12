@@ -30,6 +30,7 @@ export type LocalTestCommandInput = {
   command: string
   cwd: string
   timeoutMs: number
+  signal?: AbortSignal
 }
 
 export type LocalTestCommandResult = {
@@ -162,6 +163,7 @@ export function runLocalTestCommand(input: LocalTestCommandInput): Promise<Local
     let stdout = ''
     let stderr = ''
     let didTimeout = false
+    let didAbort = false
     let settled = false
 
     const child = spawn(input.command, {
@@ -172,8 +174,10 @@ export function runLocalTestCommand(input: LocalTestCommandInput): Promise<Local
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
-    const timer = setTimeout(() => {
-      didTimeout = true
+    const terminate = (reason: 'timeout' | 'abort') => {
+      if (settled || didTimeout || didAbort) return
+      didTimeout = reason === 'timeout'
+      didAbort = reason === 'abort'
       void terminateProcessTree(child, {
         timeoutMs: 250,
         forceTimeoutMs: 1_000,
@@ -188,7 +192,11 @@ export function runLocalTestCommand(input: LocalTestCommandInput): Promise<Local
           reject(new Error('Test process cleanup failed safely'))
         },
       )
-    }, input.timeoutMs)
+    }
+    const timer = setTimeout(() => terminate('timeout'), input.timeoutMs)
+    const abort = () => terminate('abort')
+    input.signal?.addEventListener('abort', abort, { once: true })
+    if (input.signal?.aborted) abort()
 
     const settle = (code: number | null) => {
       if (settled) {
@@ -197,12 +205,14 @@ export function runLocalTestCommand(input: LocalTestCommandInput): Promise<Local
 
       settled = true
       clearTimeout(timer)
+      input.signal?.removeEventListener('abort', abort)
 
       const durationMs = Date.now() - startedAt
-      const status: TestEvidenceStatus = didTimeout ? 'timed_out' : code === 0 ? 'passed' : 'failed'
+      const status: TestEvidenceStatus =
+        didTimeout || didAbort ? 'timed_out' : code === 0 ? 'passed' : 'failed'
       const redactedStdout = redactSecrets(stdout)
       const redactedStderr = redactSecrets(stderr)
-      const exitCode = didTimeout ? null : code
+      const exitCode = didTimeout || didAbort ? null : code
       const summary =
         status === 'passed'
           ? `Tests passed in ${durationMs}ms`
@@ -234,7 +244,7 @@ export function runLocalTestCommand(input: LocalTestCommandInput): Promise<Local
     })
 
     child.on('close', (code) => {
-      if (didTimeout) {
+      if (didTimeout || didAbort) {
         return
       }
       settle(code)

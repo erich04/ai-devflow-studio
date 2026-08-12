@@ -138,7 +138,7 @@ export function redactSensitiveText(input: string): RedactionResult {
   }
 }
 
-type RecursiveRedactionResult = {
+export type RecursiveRedactionResult = {
   value: unknown
   redacted: boolean
 }
@@ -169,7 +169,7 @@ function structuredSecretLabel(key: string): string | null {
   return null
 }
 
-function redactSensitiveValue(value: unknown): RecursiveRedactionResult {
+export function redactSensitiveValue(value: unknown): RecursiveRedactionResult {
   if (typeof value === 'string') {
     return redactSensitiveText(value)
   }
