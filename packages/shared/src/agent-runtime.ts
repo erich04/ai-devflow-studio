@@ -1,4 +1,5 @@
 import { redactSensitiveText } from './redaction'
+import type { WorkflowNode } from './domain'
 
 export const AGENT_RUNTIME_CONTRACT_VERSION = 1 as const
 export const AGENT_RUNTIME_ID_MAX_LENGTH = 200
@@ -171,6 +172,10 @@ export type AgentRuntimeTransition = {
   runtime: AgentRuntimeState
   checkpoint: AgentCheckpoint
   events: AgentRuntimeEvent[]
+}
+
+export function canRunAgentRuntimeOnNode(node: WorkflowNode): boolean {
+  return node.status === 'running' && (node.kind === 'agent' || node.kind === 'task')
 }
 
 export class AgentRuntimeContractError extends Error {
@@ -1083,6 +1088,175 @@ export function parseAgentRuntimeTransition(value: unknown): AgentRuntimeTransit
     return { runtime, checkpoint, events }
   } catch {
     fail('invalid_agent_runtime_transition')
+  }
+}
+
+function sameTransition(left: AgentRuntimeTransition, right: AgentRuntimeTransition): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function unusedBoundaryAction(runtime: AgentRuntimeState): AgentRuntimeAction {
+  let suffix = 1
+  let id = `boundary-action-${suffix}`
+  while (runtime.acceptedActionIds.includes(id)) {
+    suffix += 1
+    id = `boundary-action-${suffix}`
+  }
+  return {
+    id,
+    kind: 'tool',
+    capabilityId: 'runtime.boundary',
+    capabilityVersion: 1,
+    requestDigest: '0'.repeat(64),
+    requiresPermission: false,
+  }
+}
+
+export function isExactAgentRuntimeTransition(
+  previousValue: AgentRuntimeState | null,
+  transitionValue: unknown,
+): boolean {
+  try {
+    const transition = parseAgentRuntimeTransition(transitionValue)
+    if (previousValue === null) {
+      const runtime = transition.runtime
+      return sameTransition(
+        createAgentRuntime({
+          stateVersion: runtime.stateVersion,
+          id: runtime.id,
+          scope: runtime.scope,
+          authority: runtime.authority,
+          contextDigest: runtime.contextDigest,
+          capabilitySetDigest: runtime.capabilitySetDigest,
+          bounds: runtime.bounds,
+          requestedAt: runtime.requestedAt,
+          deadline: runtime.deadline,
+        }),
+        transition,
+      )
+    }
+
+    const previous = parseAgentRuntimeState(previousValue)
+    const now = transition.runtime.updatedAt
+    const eventTypes = transition.events.map((event) => event.type)
+    let expected: AgentRuntimeTransition
+
+    if (eventTypes[0] === 'runtime_resumed') {
+      expected = resumeAgentRuntime({
+        runtime: previous,
+        expectedCheckpointVersion: previous.checkpointVersion,
+        authority: previous.authority,
+        contextDigest: previous.contextDigest,
+        capabilitySetDigest: previous.capabilitySetDigest,
+        now,
+      })
+    } else if (eventTypes[0] === 'decision_recorded') {
+      if (!transition.runtime.activeAction) return false
+      expected = requestAgentAction({
+        runtime: previous,
+        expectedCheckpointVersion: previous.checkpointVersion,
+        now,
+        action: transition.runtime.activeAction,
+      })
+    } else if (eventTypes[0] === 'permission_decided') {
+      const metadata = transition.events[0]?.metadata
+      expected = recordAgentPermissionDecision({
+        runtime: previous,
+        expectedCheckpointVersion: previous.checkpointVersion,
+        actionId: String(metadata?.actionId),
+        requestDigest: String(metadata?.requestDigest),
+        decision: metadata?.decision === 'denied' ? 'denied' : 'approved_once',
+        now,
+      })
+    } else if (eventTypes[0] === 'action_result') {
+      const resultEvent = transition.events[0]
+      const evaluationEvent = transition.events.find(
+        (event) => event.type === 'evaluation_recorded',
+      )
+      if (!resultEvent || !evaluationEvent) return false
+      expected = acceptAgentActionResult({
+        runtime: previous,
+        expectedCheckpointVersion: previous.checkpointVersion,
+        actionId: String(resultEvent.metadata.actionId),
+        requestDigest: String(resultEvent.metadata.requestDigest),
+        result: {
+          outcome: resultEvent.metadata.outcome as AgentActionResultInput['outcome'],
+          resultDigest: String(resultEvent.metadata.resultDigest),
+          resultBytes: Number(resultEvent.metadata.resultBytes),
+          tokens: Number(resultEvent.metadata.tokens),
+          costUsd: Number(resultEvent.metadata.costUsd),
+          evaluation: evaluationEvent.metadata.evaluation as AgentActionResultInput['evaluation'],
+          evaluationSummary: String(evaluationEvent.metadata.summary),
+        },
+        now,
+      })
+    } else if (
+      eventTypes.length === 1 &&
+      eventTypes[0] === 'runtime_stopped'
+    ) {
+      if (transition.runtime.stopReason === 'cancelled') {
+        expected = cancelAgentRuntime({
+          runtime: previous,
+          expectedCheckpointVersion: previous.checkpointVersion,
+          now,
+        })
+      } else if (previous.status === 'checkpointed') {
+        expected = resumeAgentRuntime({
+          runtime: previous,
+          expectedCheckpointVersion: previous.checkpointVersion,
+          authority: previous.authority,
+          contextDigest: previous.contextDigest,
+          capabilitySetDigest: previous.capabilitySetDigest,
+          now,
+        })
+      } else if (previous.status === 'running') {
+        expected = requestAgentAction({
+          runtime: previous,
+          expectedCheckpointVersion: previous.checkpointVersion,
+          now,
+          action: unusedBoundaryAction(previous),
+        })
+      } else if (previous.status === 'waiting_permission' && previous.activeAction) {
+        expected = recordAgentPermissionDecision({
+          runtime: previous,
+          expectedCheckpointVersion: previous.checkpointVersion,
+          actionId: previous.activeAction.id,
+          requestDigest: previous.activeAction.requestDigest,
+          decision: 'approved_once',
+          now,
+        })
+      } else if (
+        previous.status === 'waiting_action' &&
+        previous.activeAction &&
+        transition.runtime.stopReason === 'failure' &&
+        transition.events[0]?.metadata.failureCode === 'result_too_large'
+      ) {
+        expected = acceptAgentActionResult({
+          runtime: previous,
+          expectedCheckpointVersion: previous.checkpointVersion,
+          actionId: previous.activeAction.id,
+          requestDigest: previous.activeAction.requestDigest,
+          result: {
+            outcome: 'failure',
+            resultDigest: '0'.repeat(64),
+            resultBytes: previous.bounds.maxToolResultBytes + 1,
+            tokens: transition.runtime.counters.tokens - previous.counters.tokens,
+            costUsd: transition.runtime.counters.costUsd - previous.counters.costUsd,
+            evaluation: 'failure',
+            evaluationSummary: 'The bounded result exceeded the accepted size.',
+          },
+          now,
+        })
+      } else {
+        return false
+      }
+    } else {
+      return false
+    }
+
+    return sameTransition(expected, transition)
+  } catch {
+    return false
   }
 }
 

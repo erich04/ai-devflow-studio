@@ -26,7 +26,7 @@ describe('V1.5 living documentation truth', () => {
     expect(productDefinition).toContain('V1.5 is released as `v1.5.0`')
     expect(productDefinition).toContain('finite 1.x product line is complete')
     expect(currentPrd).toContain('finite 1.x completion gate passed')
-    expect(currentPrd).toContain('V2.0 Native Agent Runtime contract definition')
+    expect(currentPrd).toContain('V2.0 Native Agent Runtime implementation')
     expect(currentPrd).not.toContain(
       'Real GitHub PR creation, pushing, merging, and branch publication require a future scoped PRD',
     )
@@ -65,7 +65,6 @@ describe('V1.5 living documentation truth', () => {
 
     for (const markdown of [testingStrategy, demoAndSmoke]) {
       expect(markdown).toContain('Team schema v15')
-      expect(markdown).toContain('Desktop schema v17')
       expect(markdown).toContain('provider-authoritative expiry')
       expect(markdown).toContain('verified publication adoption')
       expect(markdown).toContain('corepack pnpm test:v15-github-delivery')
@@ -75,6 +74,11 @@ describe('V1.5 living documentation truth', () => {
       expect(markdown).toContain('private GitHub sandbox')
       expect(markdown).toContain('does not authorize paid-provider smoke')
     }
+
+    expect(testingStrategy).toContain('Desktop schema v18')
+    expect(testingStrategy).toContain('Desktop schema 17-to-18')
+    expect(testingStrategy).toContain('accepted action count remains exactly one after cold restart')
+    expect(demoAndSmoke).toContain('Desktop schema v17')
 
     for (const command of [
       'corepack pnpm test:build-output-smoke',
@@ -120,7 +124,8 @@ describe('V1.5 living documentation truth', () => {
     expect(postgres).toContain('redacted')
     expect(postgres).toContain('does not authorize paid-provider smoke')
 
-    expect(electron).toContain('Desktop schema v17')
+    expect(electron).toContain('Desktop schema v18')
+    expect(electron).toContain('accepted action count remains exactly one after cold restart')
     expect(electron).toContain('corepack pnpm test:v15-github-delivery-packaged-smoke')
     expect(electron).toContain('V1.5 GitHub Delivery')
     expect(electron).toContain('Revise')
@@ -169,7 +174,8 @@ describe('V1.5 living documentation truth', () => {
     }
 
     expect(backendMatrix).toContain('Team schema v15')
-    expect(backendMatrix).toContain('Desktop schema v17')
+    expect(backendMatrix).toContain('Desktop schema v18')
+    expect(backendMatrix).toContain('Agent Runtime')
     expect(backendMatrix).toContain('provider-authoritative expiry')
     expect(backendMatrix).toContain('verified publication adoption')
     expect(backendMatrix).toContain('remote_sync_outbox')

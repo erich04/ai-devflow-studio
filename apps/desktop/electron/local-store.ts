@@ -9,17 +9,23 @@ import {
   assertFullGitCommitSha,
   assertSafeGitHubBranch,
   canApproveGateNow,
+  canRunAgentRuntimeOnNode,
   createGitHubDeliveryCompletion,
   createGitHubDeliveryIntent,
   createRemoteSyncIdempotencyKey,
   createRemoteSyncOperation,
   createWorkflowRunFromRequest,
+  isExactAgentRuntimeTransition,
   isActiveCodingAgentRunStatus,
   normalizeGitHubRepository,
   REMOTE_SYNC_CLAIM_LEASE_MS,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   normalizeWorkflowRunProgress,
+  parseAgentCheckpoint,
+  parseAgentRuntimeEvent,
+  parseAgentRuntimeState,
+  parseAgentRuntimeTransition,
   parseWorkRequestRecord,
   redactCodingAgentEventForStorage,
   redactSensitiveText,
@@ -30,6 +36,11 @@ import {
   parseGateCommandAcknowledgementRecord,
   parseGateCommandReceiptRecord,
   type AgentEvent,
+  type AgentCheckpoint,
+  type AgentRuntimeEvent,
+  type AgentRuntimeState,
+  type AgentRuntimeStopReason,
+  type AgentRuntimeTransition,
   type AgentReviewResult,
   type AgentTrace,
   type AgentTokenUsage,
@@ -72,7 +83,7 @@ import {
   type WorkflowRun,
   type WorkRequest,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 17
+export const CURRENT_SCHEMA_VERSION = 18
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -581,6 +592,31 @@ export type RetryRemoteSyncOperationResult =
   | { retried: true; operation: RemoteSyncOperation }
   | { retried: false; reason: 'not_found' | 'not_terminal' }
 
+export type CommitAgentRuntimeTransitionInput = {
+  expectedRuntime: AgentRuntimeState | null
+  transition: AgentRuntimeTransition
+}
+
+export type CommitAgentRuntimeTransitionResult =
+  | { committed: true; replayed: boolean; runtime: AgentRuntimeState }
+  | {
+      committed: false
+      reason: 'runtime_exists' | 'runtime_not_found' | 'stale_checkpoint' | 'invalid_transition'
+    }
+
+export type AgentRuntimeTerminalSummary = {
+  stateVersion: 1
+  runtimeId: string
+  checkpointVersion: number
+  stopReason: AgentRuntimeStopReason
+  counters: AgentRuntimeState['counters']
+  acceptedActionCount: number
+  lastObservationDigest: string
+  lastResultDigest: string | null
+  completedAt: string
+  redacted: true
+}
+
 export type LocalStore = {
   upsertProject(project: LocalProject): Promise<void>
   listProjects(): Promise<LocalProject[]>
@@ -603,6 +639,17 @@ export type LocalStore = {
     input: RetryRemoteSyncOperationInput,
   ): Promise<RetryRemoteSyncOperationResult>
   recoverInterruptedRemoteSyncOperations(updatedAt: string): Promise<number>
+  commitAgentRuntimeTransition(
+    input: CommitAgentRuntimeTransitionInput,
+  ): Promise<CommitAgentRuntimeTransitionResult>
+  getAgentRuntime(runtimeId: string): Promise<AgentRuntimeState | null>
+  listAgentRuntimes(): Promise<AgentRuntimeState[]>
+  listRecoverableAgentRuntimes(): Promise<AgentRuntimeState[]>
+  listAgentRuntimeEvents(runtimeId: string): Promise<AgentRuntimeEvent[]>
+  listAgentRuntimeCheckpoints(runtimeId: string): Promise<AgentCheckpoint[]>
+  getAgentRuntimeTerminalSummary(
+    runtimeId: string,
+  ): Promise<AgentRuntimeTerminalSummary | null>
   createWorkflow(
     creation: WorkflowCreation,
   ): Promise<WorkflowCreationResult>
@@ -1747,6 +1794,226 @@ const schemaMigrations: readonly SchemaMigration[] = [
       `)
     },
   },
+  {
+    version: 18,
+    migrate(db) {
+      db.run(`
+    create table agent_runtimes (
+      id text primary key,
+      scope_kind text not null,
+      organization_id text,
+      team_project_id text,
+      user_id text not null,
+      session_id text not null,
+      local_project_id text not null,
+      run_id text not null,
+      node_id text not null,
+      run_version integer not null,
+      policy_version integer not null,
+      context_digest text not null,
+      capability_set_digest text not null,
+      status text not null,
+      stop_reason text,
+      version integer not null,
+      checkpoint_version integer not null,
+      next_sequence integer not null,
+      state_version integer not null,
+      json text not null,
+      requested_at text not null,
+      started_at text not null,
+      updated_at text not null,
+      deadline text not null,
+      check (length(trim(id)) > 0 and length(id) <= 200 and trim(id) = id),
+      check (scope_kind in ('team', 'local')),
+      check (
+        (scope_kind = 'team' and organization_id is not null and team_project_id is not null) or
+        (scope_kind = 'local' and organization_id is null and team_project_id is null)
+      ),
+      check (length(trim(user_id)) > 0 and length(user_id) <= 200 and trim(user_id) = user_id),
+      check (length(trim(session_id)) > 0 and length(session_id) <= 200 and trim(session_id) = session_id),
+      check (length(trim(local_project_id)) > 0 and length(local_project_id) <= 200 and trim(local_project_id) = local_project_id),
+      check (length(trim(run_id)) > 0 and length(run_id) <= 200 and trim(run_id) = run_id),
+      check (length(trim(node_id)) > 0 and length(node_id) <= 200 and trim(node_id) = node_id),
+      check (run_version between 1 and 2147483647),
+      check (policy_version between 1 and 2147483647),
+      check (length(context_digest) = 64 and context_digest not glob '*[^0-9a-f]*'),
+      check (length(capability_set_digest) = 64 and capability_set_digest not glob '*[^0-9a-f]*'),
+      check (status in ('running', 'waiting_permission', 'waiting_action', 'checkpointed', 'terminal')),
+      check (stop_reason is null or stop_reason in (
+        'success', 'failure', 'cancelled', 'timeout',
+        'step_limit', 'budget_exhausted', 'policy_denied'
+      )),
+      check ((status = 'terminal') = (stop_reason is not null)),
+      check (version between 1 and 2147483647),
+      check (checkpoint_version = version),
+      check (next_sequence between 4 and 2147483647),
+      check (state_version = 1),
+      check (json_valid(json)),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.id') = id),
+      check (json_extract(json, '$.scope.kind') = scope_kind),
+      check (json_extract(json, '$.scope.organizationId') is organization_id),
+      check (json_extract(json, '$.scope.projectId') is team_project_id),
+      check (json_extract(json, '$.scope.userId') = user_id),
+      check (json_extract(json, '$.scope.sessionId') = session_id),
+      check (json_extract(json, '$.scope.localProjectId') = local_project_id),
+      check (json_extract(json, '$.authority.runId') = run_id),
+      check (json_extract(json, '$.authority.nodeId') = node_id),
+      check (json_extract(json, '$.authority.runVersion') = run_version),
+      check (json_extract(json, '$.authority.policyVersion') = policy_version),
+      check (json_extract(json, '$.contextDigest') = context_digest),
+      check (json_extract(json, '$.capabilitySetDigest') = capability_set_digest),
+      check (json_extract(json, '$.status') = status),
+      check (json_extract(json, '$.stopReason') is stop_reason),
+      check (json_extract(json, '$.version') = version),
+      check (json_extract(json, '$.checkpointVersion') = checkpoint_version),
+      check (json_extract(json, '$.nextSequence') = next_sequence),
+      check (requested_at = json_extract(json, '$.requestedAt')),
+      check (started_at = json_extract(json, '$.startedAt')),
+      check (updated_at = json_extract(json, '$.updatedAt')),
+      check (deadline = json_extract(json, '$.deadline')),
+      check (started_at = requested_at and updated_at >= started_at and deadline > requested_at)
+    );
+
+    create index idx_agent_runtimes_run
+      on agent_runtimes(run_id, node_id, updated_at, id);
+
+    create index idx_agent_runtimes_recovery
+      on agent_runtimes(status, updated_at, id);
+
+    create table agent_runtime_events (
+      runtime_id text not null,
+      sequence integer not null,
+      checkpoint_version integer not null,
+      type text not null,
+      state_version integer not null,
+      json text not null,
+      created_at text not null,
+      primary key (runtime_id, sequence),
+      foreign key (runtime_id) references agent_runtimes(id) on delete cascade,
+      check (length(trim(runtime_id)) > 0 and length(runtime_id) <= 200 and trim(runtime_id) = runtime_id),
+      check (sequence between 1 and 2147483647),
+      check (checkpoint_version between 1 and 2147483647),
+      check (type in (
+        'runtime_started', 'context_attached', 'runtime_resumed',
+        'decision_recorded', 'action_requested', 'permission_decided',
+        'action_result', 'observation_recorded', 'evaluation_recorded',
+        'checkpointed', 'runtime_stopped'
+      )),
+      check (state_version = 1),
+      check (json_valid(json)),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.runtimeId') = runtime_id),
+      check (json_extract(json, '$.sequence') = sequence),
+      check (json_extract(json, '$.checkpointVersion') = checkpoint_version),
+      check (json_extract(json, '$.type') = type),
+      check (json_extract(json, '$.createdAt') = created_at)
+    );
+
+    create index idx_agent_runtime_events_checkpoint
+      on agent_runtime_events(runtime_id, checkpoint_version, sequence);
+
+    create table agent_runtime_checkpoints (
+      runtime_id text not null,
+      version integer not null,
+      runtime_version integer not null,
+      status text not null,
+      stop_reason text,
+      state_version integer not null,
+      json text not null,
+      created_at text not null,
+      primary key (runtime_id, version),
+      unique (runtime_id, runtime_version),
+      foreign key (runtime_id) references agent_runtimes(id) on delete cascade,
+      check (version between 1 and 2147483647),
+      check (runtime_version between 1 and 2147483647),
+      check (status in ('running', 'waiting_permission', 'waiting_action', 'checkpointed', 'terminal')),
+      check (stop_reason is null or stop_reason in (
+        'success', 'failure', 'cancelled', 'timeout',
+        'step_limit', 'budget_exhausted', 'policy_denied'
+      )),
+      check ((status = 'terminal') = (stop_reason is not null)),
+      check (state_version = 1),
+      check (json_valid(json)),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.runtimeId') = runtime_id),
+      check (json_extract(json, '$.version') = version),
+      check (json_extract(json, '$.runtimeVersion') = runtime_version),
+      check (json_extract(json, '$.status') = status),
+      check (json_extract(json, '$.stopReason') is stop_reason),
+      check (json_extract(json, '$.createdAt') = created_at)
+    );
+
+    create table agent_runtime_evaluations (
+      runtime_id text not null,
+      sequence integer not null,
+      checkpoint_version integer not null,
+      evaluation text not null,
+      summary text not null,
+      event_json text not null,
+      created_at text not null,
+      primary key (runtime_id, sequence),
+      foreign key (runtime_id, sequence)
+        references agent_runtime_events(runtime_id, sequence) on delete cascade,
+      check (evaluation in ('continue', 'success', 'failure')),
+      check (length(summary) between 1 and 2000),
+      check (json_valid(event_json)),
+      check (json_extract(event_json, '$.type') = 'evaluation_recorded'),
+      check (json_extract(event_json, '$.metadata.evaluation') = evaluation),
+      check (json_extract(event_json, '$.metadata.summary') = summary),
+      check (json_extract(event_json, '$.checkpointVersion') = checkpoint_version),
+      check (json_extract(event_json, '$.createdAt') = created_at)
+    );
+
+    create table agent_runtime_capability_grants (
+      id text primary key,
+      runtime_id text not null,
+      capability_id text not null,
+      capability_version integer not null,
+      request_digest text not null,
+      status text not null,
+      granted_at text not null,
+      expires_at text not null,
+      settled_at text,
+      foreign key (runtime_id) references agent_runtimes(id) on delete cascade,
+      check (length(trim(id)) > 0 and length(id) <= 200 and trim(id) = id),
+      check (length(trim(capability_id)) > 0 and length(capability_id) <= 200 and trim(capability_id) = capability_id),
+      check (capability_version between 1 and 2147483647),
+      check (length(request_digest) = 64 and request_digest not glob '*[^0-9a-f]*'),
+      check (status in ('active', 'consumed', 'denied', 'expired', 'cancelled')),
+      check (expires_at > granted_at),
+      check ((status = 'active') = (settled_at is null))
+    );
+
+    create unique index idx_agent_runtime_capability_grants_active
+      on agent_runtime_capability_grants(runtime_id, capability_id)
+      where status = 'active';
+
+    create table agent_runtime_terminal_summaries (
+      runtime_id text primary key,
+      checkpoint_version integer not null,
+      stop_reason text not null,
+      state_version integer not null,
+      json text not null,
+      completed_at text not null,
+      foreign key (runtime_id) references agent_runtimes(id) on delete cascade,
+      check (checkpoint_version between 1 and 2147483647),
+      check (stop_reason in (
+        'success', 'failure', 'cancelled', 'timeout',
+        'step_limit', 'budget_exhausted', 'policy_denied'
+      )),
+      check (state_version = 1),
+      check (json_valid(json)),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.runtimeId') = runtime_id),
+      check (json_extract(json, '$.checkpointVersion') = checkpoint_version),
+      check (json_extract(json, '$.stopReason') = stop_reason),
+      check (json_extract(json, '$.completedAt') = completed_at),
+      check (json_extract(json, '$.redacted') = 1)
+    );
+      `)
+    },
+  },
 ]
 
 function migrateSchema(db: Database) {
@@ -1824,6 +2091,214 @@ function selectStringColumn(db: Database, sql: string, params: SqlValue[] = []):
   }
 
   return first.values.map((row) => String(row[0]))
+}
+
+function parseStoredAgentRuntime(value: unknown): AgentRuntimeState {
+  try {
+    return parseAgentRuntimeState(value)
+  } catch {
+    throw new Error('Stored Agent Runtime state is invalid')
+  }
+}
+
+function parseStoredAgentRuntimeEvent(value: unknown): AgentRuntimeEvent {
+  try {
+    return parseAgentRuntimeEvent(value)
+  } catch {
+    throw new Error('Stored Agent Runtime event is invalid')
+  }
+}
+
+function parseStoredAgentCheckpoint(value: unknown): AgentCheckpoint {
+  try {
+    return parseAgentCheckpoint(value)
+  } catch {
+    throw new Error('Stored Agent Runtime checkpoint is invalid')
+  }
+}
+
+function selectAgentRuntime(
+  db: Database,
+  runtimeId: string,
+): AgentRuntimeState | null {
+  const value = selectJson<unknown>(
+    db,
+    'select json from agent_runtimes where id = ? limit 1',
+    [runtimeId],
+  )[0]
+  return value === undefined ? null : parseStoredAgentRuntime(value)
+}
+
+function selectAgentRuntimeEvents(
+  db: Database,
+  runtimeId: string,
+  checkpointVersion?: number,
+): AgentRuntimeEvent[] {
+  const values = checkpointVersion === undefined
+    ? selectJson<unknown>(
+        db,
+        'select json from agent_runtime_events where runtime_id = ? order by sequence asc',
+        [runtimeId],
+      )
+    : selectJson<unknown>(
+        db,
+        `select json from agent_runtime_events
+         where runtime_id = ? and checkpoint_version = ? order by sequence asc`,
+        [runtimeId, checkpointVersion],
+      )
+  return values.map(parseStoredAgentRuntimeEvent)
+}
+
+function selectAgentRuntimeCheckpoints(
+  db: Database,
+  runtimeId: string,
+): AgentCheckpoint[] {
+  return selectJson<unknown>(
+    db,
+    'select json from agent_runtime_checkpoints where runtime_id = ? order by version asc',
+    [runtimeId],
+  ).map(parseStoredAgentCheckpoint)
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function createAgentRuntimeTerminalSummary(
+  runtime: AgentRuntimeState & { status: 'terminal'; stopReason: AgentRuntimeStopReason },
+): AgentRuntimeTerminalSummary {
+  return {
+    stateVersion: 1,
+    runtimeId: runtime.id,
+    checkpointVersion: runtime.checkpointVersion,
+    stopReason: runtime.stopReason,
+    counters: { ...runtime.counters },
+    acceptedActionCount: runtime.acceptedActionIds.length,
+    lastObservationDigest: runtime.lastObservationDigest,
+    lastResultDigest: runtime.lastResultDigest,
+    completedAt: runtime.updatedAt,
+    redacted: true,
+  }
+}
+
+function writeAgentRuntimeRow(db: Database, runtime: AgentRuntimeState): void {
+  db.run(
+    `insert into agent_runtimes (
+       id, scope_kind, organization_id, team_project_id, user_id, session_id,
+       local_project_id, run_id, node_id, run_version, policy_version,
+       context_digest, capability_set_digest, status, stop_reason, version,
+       checkpoint_version, next_sequence, state_version, json,
+       requested_at, started_at, updated_at, deadline
+     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     on conflict(id) do update set
+       status = excluded.status,
+       stop_reason = excluded.stop_reason,
+       version = excluded.version,
+       checkpoint_version = excluded.checkpoint_version,
+       next_sequence = excluded.next_sequence,
+       json = excluded.json,
+       updated_at = excluded.updated_at`,
+    [
+      runtime.id,
+      runtime.scope.kind,
+      runtime.scope.organizationId,
+      runtime.scope.projectId,
+      runtime.scope.userId,
+      runtime.scope.sessionId,
+      runtime.scope.localProjectId,
+      runtime.authority.runId,
+      runtime.authority.nodeId,
+      runtime.authority.runVersion,
+      runtime.authority.policyVersion,
+      runtime.contextDigest,
+      runtime.capabilitySetDigest,
+      runtime.status,
+      runtime.stopReason,
+      runtime.version,
+      runtime.checkpointVersion,
+      runtime.nextSequence,
+      runtime.stateVersion,
+      JSON.stringify(runtime),
+      runtime.requestedAt,
+      runtime.startedAt,
+      runtime.updatedAt,
+      runtime.deadline,
+    ],
+  )
+}
+
+function writeAgentRuntimeTransition(db: Database, transition: AgentRuntimeTransition): void {
+  writeAgentRuntimeRow(db, transition.runtime)
+  for (const event of transition.events) {
+    db.run(
+      `insert into agent_runtime_events (
+         runtime_id, sequence, checkpoint_version, type, state_version, json, created_at
+       ) values (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        event.runtimeId,
+        event.sequence,
+        event.checkpointVersion,
+        event.type,
+        event.stateVersion,
+        JSON.stringify(event),
+        event.createdAt,
+      ],
+    )
+    if (event.type === 'evaluation_recorded') {
+      db.run(
+        `insert into agent_runtime_evaluations (
+           runtime_id, sequence, checkpoint_version, evaluation, summary, event_json, created_at
+         ) values (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          event.runtimeId,
+          event.sequence,
+          event.checkpointVersion,
+          String(event.metadata.evaluation),
+          String(event.metadata.summary),
+          JSON.stringify(event),
+          event.createdAt,
+        ],
+      )
+    }
+  }
+  const checkpoint = transition.checkpoint
+  db.run(
+    `insert into agent_runtime_checkpoints (
+       runtime_id, version, runtime_version, status, stop_reason,
+       state_version, json, created_at
+     ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      checkpoint.runtimeId,
+      checkpoint.version,
+      checkpoint.runtimeVersion,
+      checkpoint.status,
+      checkpoint.stopReason,
+      checkpoint.stateVersion,
+      JSON.stringify(checkpoint),
+      checkpoint.createdAt,
+    ],
+  )
+  if (transition.runtime.status === 'terminal' && transition.runtime.stopReason !== null) {
+    const summary = createAgentRuntimeTerminalSummary(
+      transition.runtime as AgentRuntimeState & {
+        status: 'terminal'
+        stopReason: AgentRuntimeStopReason
+      },
+    )
+    db.run(
+      `insert into agent_runtime_terminal_summaries (
+         runtime_id, checkpoint_version, stop_reason, state_version, json, completed_at
+       ) values (?, ?, ?, ?, ?, ?)`,
+      [
+        summary.runtimeId,
+        summary.checkpointVersion,
+        summary.stopReason,
+        summary.stateVersion,
+        JSON.stringify(summary),
+        summary.completedAt,
+      ],
+    )
+  }
 }
 
 function selectRemoteSyncOperations(
@@ -3578,6 +4053,177 @@ class SqlJsLocalStore implements LocalStore {
     )
   }
 
+  async getAgentRuntime(runtimeId: string): Promise<AgentRuntimeState | null> {
+    if (!isNonEmptyIdentifier(runtimeId) || runtimeId.length > 200) {
+      throw new Error('Invalid Agent Runtime id')
+    }
+    return selectAgentRuntime(this.db, runtimeId)
+  }
+
+  async listRecoverableAgentRuntimes(): Promise<AgentRuntimeState[]> {
+    return selectJson<unknown>(
+      this.db,
+      `select json from agent_runtimes
+       where status <> 'terminal' order by updated_at asc, id asc`,
+    ).map(parseStoredAgentRuntime)
+  }
+
+  async listAgentRuntimes(): Promise<AgentRuntimeState[]> {
+    return selectJson<unknown>(
+      this.db,
+      'select json from agent_runtimes order by updated_at asc, id asc',
+    ).map(parseStoredAgentRuntime)
+  }
+
+  async listAgentRuntimeEvents(runtimeId: string): Promise<AgentRuntimeEvent[]> {
+    if (!isNonEmptyIdentifier(runtimeId) || runtimeId.length > 200) {
+      throw new Error('Invalid Agent Runtime id')
+    }
+    return selectAgentRuntimeEvents(this.db, runtimeId)
+  }
+
+  async listAgentRuntimeCheckpoints(runtimeId: string): Promise<AgentCheckpoint[]> {
+    if (!isNonEmptyIdentifier(runtimeId) || runtimeId.length > 200) {
+      throw new Error('Invalid Agent Runtime id')
+    }
+    return selectAgentRuntimeCheckpoints(this.db, runtimeId)
+  }
+
+  async getAgentRuntimeTerminalSummary(
+    runtimeId: string,
+  ): Promise<AgentRuntimeTerminalSummary | null> {
+    if (!isNonEmptyIdentifier(runtimeId) || runtimeId.length > 200) {
+      throw new Error('Invalid Agent Runtime id')
+    }
+    const value = selectJson<AgentRuntimeTerminalSummary>(
+      this.db,
+      'select json from agent_runtime_terminal_summaries where runtime_id = ? limit 1',
+      [runtimeId],
+    )[0]
+    if (value === undefined) return null
+    const runtime = selectAgentRuntime(this.db, runtimeId)
+    if (
+      !runtime ||
+      runtime.status !== 'terminal' ||
+      runtime.stopReason === null ||
+      !sameJson(value, createAgentRuntimeTerminalSummary(
+        runtime as AgentRuntimeState & {
+          status: 'terminal'
+          stopReason: AgentRuntimeStopReason
+        },
+      ))
+    ) {
+      throw new Error('Stored Agent Runtime terminal summary is invalid')
+    }
+    return value
+  }
+
+  async commitAgentRuntimeTransition(
+    input: CommitAgentRuntimeTransitionInput,
+  ): Promise<CommitAgentRuntimeTransitionResult> {
+    let transition: AgentRuntimeTransition
+    try {
+      transition = parseAgentRuntimeTransition(input.transition)
+      if (input.expectedRuntime !== null) {
+        parseAgentRuntimeState(input.expectedRuntime)
+      }
+    } catch {
+      return { committed: false, reason: 'invalid_transition' }
+    }
+
+    const current = selectAgentRuntime(this.db, transition.runtime.id)
+    if (current && sameJson(current, transition.runtime)) {
+      const events = selectAgentRuntimeEvents(
+        this.db,
+        transition.runtime.id,
+        transition.runtime.checkpointVersion,
+      )
+      const checkpoint = selectAgentRuntimeCheckpoints(
+        this.db,
+        transition.runtime.id,
+      ).find((candidate) => candidate.version === transition.checkpoint.version)
+      return sameJson(events, transition.events) && sameJson(checkpoint, transition.checkpoint)
+        ? { committed: true, replayed: true, runtime: current }
+        : { committed: false, reason: 'invalid_transition' }
+    }
+
+    if (input.expectedRuntime === null) {
+      if (current) return { committed: false, reason: 'runtime_exists' }
+      if (!isExactAgentRuntimeTransition(null, transition)) {
+        return { committed: false, reason: 'invalid_transition' }
+      }
+    } else {
+      if (!current) return { committed: false, reason: 'runtime_not_found' }
+      if (!sameJson(current, input.expectedRuntime)) {
+        return { committed: false, reason: 'stale_checkpoint' }
+      }
+      if (!isExactAgentRuntimeTransition(input.expectedRuntime, transition)) {
+        return { committed: false, reason: 'invalid_transition' }
+      }
+    }
+
+    const currentRun = await this.getRun(transition.runtime.authority.runId)
+    const currentProject = (await this.listProjects()).find(
+      (candidate) => candidate.id === transition.runtime.scope.localProjectId,
+    )
+    const currentPolicy = await this.getPolicySnapshot(transition.runtime.scope.localProjectId)
+    if (
+      !currentRun ||
+      !currentProject ||
+      currentRun.projectId !== currentProject.id ||
+      currentRun.version !== transition.runtime.authority.runVersion ||
+      currentRun.currentNodeId !== transition.runtime.authority.nodeId ||
+      !currentRun.nodes.some(
+        (node) =>
+          node.id === transition.runtime.authority.nodeId &&
+          canRunAgentRuntimeOnNode(node),
+      ) ||
+      (currentPolicy
+        ? currentPolicy.version !== transition.runtime.authority.policyVersion
+        : transition.runtime.authority.policyVersion !== 1)
+    ) {
+      return { committed: false, reason: 'invalid_transition' }
+    }
+
+    if (transition.runtime.scope.kind === 'team') {
+      const pairing = await this.getDesktopPairingCredential()
+      if (
+        !pairing ||
+        pairing.organizationId !== transition.runtime.scope.organizationId ||
+        pairing.projectId !== transition.runtime.scope.projectId ||
+        pairing.userId !== transition.runtime.scope.userId ||
+        pairing.tokenId !== transition.runtime.scope.sessionId ||
+        pairing.localProjectId !== transition.runtime.scope.localProjectId
+      ) {
+        return { committed: false, reason: 'invalid_transition' }
+      }
+    } else if (transition.runtime.scope.userId !== currentRun.creatorId) {
+      return { committed: false, reason: 'invalid_transition' }
+    }
+
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      writeAgentRuntimeTransition(this.db, transition)
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return { committed: true, replayed: false, runtime: transition.runtime }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      throw error
+    }
+  }
+
   async saveRun(run: WorkflowRun): Promise<void> {
     const normalizedRun = normalizeWorkflowRunProgress(run)
     this.db.run('begin transaction')
@@ -3613,6 +4259,15 @@ class SqlJsLocalStore implements LocalStore {
       ).length > 0
     ) {
       throw new Error('Run is bound to a GitHub Delivery Intent.')
+    }
+    if (
+      selectStringColumn(
+        this.db,
+        'select id from agent_runtimes where run_id = ? limit 1',
+        [trimmedRunId],
+      ).length > 0
+    ) {
+      throw new Error('Run is bound to an Agent Runtime.')
     }
 
     this.db.run('begin transaction')
@@ -7670,6 +8325,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'settleRemoteSyncOperation',
   'retryRemoteSyncOperation',
   'recoverInterruptedRemoteSyncOperations',
+  'commitAgentRuntimeTransition',
   'createWorkflow',
   'materializeClaimedWorkRequest',
   'markWorkRequestMaterializationAcknowledged',

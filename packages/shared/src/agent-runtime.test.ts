@@ -5,9 +5,11 @@ import {
   AGENT_RUNTIME_MAX_TOOL_CALLS,
   acceptAgentActionResult,
   accumulateAgentScenarioMetrics,
+  canRunAgentRuntimeOnNode,
   cancelAgentRuntime,
   createAgentRuntime,
   evaluateAgentScenario,
+  isExactAgentRuntimeTransition,
   parseAgentEvaluationScenario,
   parseAgentRuntimeStartRequest,
   parseAgentRuntimeTransition,
@@ -75,6 +77,24 @@ function expectJsonRoundTrip(transition: AgentRuntimeTransition) {
 }
 
 describe('Agent Runtime request contract', () => {
+  it('allows only running agent and task nodes to host a runtime', () => {
+    const node = {
+      id: 'node-1',
+      stage: 'clarify' as const,
+      title: 'Clarify',
+      subtitle: 'Clarify the request',
+      kind: 'agent' as const,
+      status: 'running' as const,
+      ownerId: 'user-1',
+      retryCount: 0,
+      artifactIds: [],
+    }
+    expect(canRunAgentRuntimeOnNode(node)).toBe(true)
+    expect(canRunAgentRuntimeOnNode({ ...node, stage: 'build', kind: 'task' })).toBe(true)
+    expect(canRunAgentRuntimeOnNode({ ...node, kind: 'gate' })).toBe(false)
+    expect(canRunAgentRuntimeOnNode({ ...node, status: 'success' })).toBe(false)
+  })
+
   it('parses an exact canonical team-scoped request', () => {
     expect(parseAgentRuntimeStartRequest(validRequest)).toEqual(validRequest)
     expect(AGENT_RUNTIME_CONTRACT_VERSION).toBe(1)
@@ -687,6 +707,34 @@ describe('Agent Runtime deterministic kernel', () => {
       metadata: { failureCode: 'result_too_large' },
     })
     expect(JSON.stringify(failed.events)).not.toContain('This summary must not be accepted.')
+    expect(isExactAgentRuntimeTransition(requested.runtime, failed)).toBe(true)
+  })
+
+  it('recognizes only transitions emitted by the deterministic runtime kernel', () => {
+    const created = createAgentRuntime(validRequest)
+    const resumed = resumeAgentRuntime({
+      runtime: created.runtime,
+      expectedCheckpointVersion: created.checkpoint.version,
+      authority,
+      contextDigest: digestA,
+      capabilitySetDigest: digestB,
+      now: '2026-08-12T20:30:01.000Z',
+    })
+    const forged = {
+      ...resumed,
+      runtime: {
+        ...resumed.runtime,
+        counters: { ...resumed.runtime.counters, tokens: 1 },
+      },
+      checkpoint: {
+        ...resumed.checkpoint,
+        counters: { ...resumed.checkpoint.counters, tokens: 1 },
+      },
+    }
+
+    expect(isExactAgentRuntimeTransition(null, created)).toBe(true)
+    expect(isExactAgentRuntimeTransition(created.runtime, resumed)).toBe(true)
+    expect(isExactAgentRuntimeTransition(created.runtime, forged)).toBe(false)
   })
 
   it('cancels monotonically and fences all later work', () => {

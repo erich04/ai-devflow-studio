@@ -6,7 +6,7 @@ describe('V1.5 README truth', () => {
     const readme = readFileSync('README.md', 'utf8')
 
     expect(readme).toContain('`v1.5.0` is released and the finite 1.x line is complete')
-    expect(readme).toContain('V2.0 Native Agent Runtime contract definition is now the active priority')
+    expect(readme).toContain('V2.0 Native Agent Runtime implementation is now the active priority')
     expect(readme).toContain('Delivery Intent')
     expect(readme).toContain('signed Web approval')
     expect(readme).toContain('GitHub App')
@@ -25,7 +25,8 @@ describe('V1.5 README truth', () => {
     expect(readme).toContain('corepack pnpm test:v15-github-delivery-packaged-smoke')
     expect(readme).toContain('docs/guides/devflow-studio-v1.5-walkthrough.md')
     expect(readme).toContain('Team schema v15')
-    expect(readme).toContain('Desktop schema v17')
+    expect(readme).toContain('Desktop schema v18')
+    expect(readme).toContain('accepted action count remains exactly one after cold restart')
     expect(readme).toContain('provider-authoritative expiry')
     expect(readme).toContain('verified publication adoption')
   })

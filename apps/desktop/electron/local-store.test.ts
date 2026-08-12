@@ -6,12 +6,17 @@ import { afterEach, describe, expect, it } from 'vitest'
 import initSqlJs from 'sql.js'
 import {
   applyWorkflowCommand,
+  acceptAgentActionResult,
+  cancelAgentRuntime,
+  createAgentRuntime,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   createRemoteSyncOperation,
   createWorkflowRunFromRequest,
   createWarnOnlyDefaultPolicy,
   redactTestEvidenceForStorage,
+  requestAgentAction,
+  resumeAgentRuntime,
   resolveEffectivePolicy,
 } from '@ai-devflow/shared'
 import type {
@@ -19,6 +24,7 @@ import type {
   AgentReviewResult,
   AgentTrace,
   AgentTokenUsage,
+  AgentRuntimeStartRequest,
   Artifact,
   CodingAgentEvent,
   CodingAgentRun,
@@ -66,6 +72,14 @@ async function tempDbPath() {
 
 const require = createRequire(import.meta.url)
 const sqlJsDist = path.dirname(require.resolve('sql.js/dist/sql-wasm.js'))
+const dropAgentRuntimeSchemaSql = `
+  drop table if exists agent_runtime_terminal_summaries;
+  drop table if exists agent_runtime_capability_grants;
+  drop table if exists agent_runtime_evaluations;
+  drop table if exists agent_runtime_checkpoints;
+  drop table if exists agent_runtime_events;
+  drop table if exists agent_runtimes;
+`
 
 async function writeLegacyV1Database(dbPath: string) {
   const SQL = await initSqlJs({
@@ -634,17 +648,392 @@ const retryAttempt: RetryAttempt = {
   createdAt: '2026-06-15T00:05:00.000Z',
 }
 
+const agentRuntimeStartRequest: AgentRuntimeStartRequest = {
+  stateVersion: 1,
+  id: 'agent-runtime-local-store-1',
+  scope: {
+    kind: 'local',
+    organizationId: null,
+    projectId: null,
+    userId: gateWorkflowCreation.run.creatorId,
+    sessionId: 'desktop-session-1',
+    localProjectId: project.id,
+  },
+  authority: {
+    runId: gateWorkflowCreation.run.id,
+    nodeId: gateWorkflowCreation.run.currentNodeId,
+    runVersion: gateWorkflowCreation.run.version,
+    policyVersion: 1,
+  },
+  contextDigest: 'a'.repeat(64),
+  capabilitySetDigest: 'b'.repeat(64),
+  bounds: {
+    maxSteps: 4,
+    maxWallTimeMs: 60_000,
+    maxToolCalls: 4,
+    maxToolResultBytes: 64 * 1_024,
+    maxTrajectoryMetadataBytes: 16 * 1_024,
+    maxCheckpointBytes: 128 * 1_024,
+    maxTokens: 10_000,
+    maxCostUsd: 1,
+  },
+  requestedAt: '2026-08-12T20:30:00.000Z',
+  deadline: '2026-08-12T20:31:00.000Z',
+}
+
 describe('createLocalStore', () => {
-  it('initializes schema version 17 and keeps it stable across reopen', async () => {
+  it('initializes schema version 18 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(17)
+    expect(await first.getSchemaVersion()).toBe(18)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(17)
+    expect(await second.getSchemaVersion()).toBe(18)
     second.close()
+  })
+
+  it('migrates Desktop schema 17 without changing 1.x state or inventing runtime rows', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    await initial.upsertProject(project)
+    await initial.saveRun(run)
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const legacy = new SQL.Database(await readFile(dbPath))
+    for (const table of [
+      'agent_runtime_terminal_summaries',
+      'agent_runtime_capability_grants',
+      'agent_runtime_evaluations',
+      'agent_runtime_checkpoints',
+      'agent_runtime_events',
+      'agent_runtimes',
+    ]) {
+      legacy.run(`drop table if exists ${table}`)
+    }
+    legacy.run("update schema_meta set value = '17' where key = 'schema_version'")
+    await writeFile(dbPath, Buffer.from(legacy.export()))
+    legacy.close()
+
+    const migrated = await createLocalStore({ dbPath })
+    expect(await migrated.getSchemaVersion()).toBe(18)
+    expect(await migrated.listProjects()).toEqual([project])
+    expect(await migrated.listRuns()).toEqual([run])
+    migrated.close()
+
+    const inspected = new SQL.Database(await readFile(dbPath))
+    for (const table of [
+      'agent_runtimes',
+      'agent_runtime_events',
+      'agent_runtime_checkpoints',
+      'agent_runtime_evaluations',
+      'agent_runtime_capability_grants',
+      'agent_runtime_terminal_summaries',
+    ]) {
+      expect(
+        inspected.exec(`select count(*) from ${table}`)[0]?.values[0]?.[0],
+      ).toBe(0)
+    }
+    inspected.close()
+  })
+
+  it('atomically persists exact Agent Runtime events and checkpoints across restart', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+
+    const created = createAgentRuntime(agentRuntimeStartRequest)
+    await expect(
+      store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: created }),
+    ).resolves.toEqual({ committed: true, replayed: false, runtime: created.runtime })
+
+    const resumed = resumeAgentRuntime({
+      runtime: created.runtime,
+      expectedCheckpointVersion: created.checkpoint.version,
+      authority: agentRuntimeStartRequest.authority,
+      contextDigest: agentRuntimeStartRequest.contextDigest,
+      capabilitySetDigest: agentRuntimeStartRequest.capabilitySetDigest,
+      now: '2026-08-12T20:30:01.000Z',
+    })
+    await expect(
+      store.commitAgentRuntimeTransition({
+        expectedRuntime: created.runtime,
+        transition: resumed,
+      }),
+    ).resolves.toEqual({ committed: true, replayed: false, runtime: resumed.runtime })
+    await expect(
+      store.commitAgentRuntimeTransition({
+        expectedRuntime: created.runtime,
+        transition: resumed,
+      }),
+    ).resolves.toEqual({ committed: true, replayed: true, runtime: resumed.runtime })
+
+    const staleCancellation = cancelAgentRuntime({
+      runtime: created.runtime,
+      expectedCheckpointVersion: created.checkpoint.version,
+      now: '2026-08-12T20:30:02.000Z',
+    })
+    await expect(
+      store.commitAgentRuntimeTransition({
+        expectedRuntime: created.runtime,
+        transition: staleCancellation,
+      }),
+    ).resolves.toEqual({ committed: false, reason: 'stale_checkpoint' })
+
+    expect(await store.getAgentRuntime(agentRuntimeStartRequest.id)).toEqual(resumed.runtime)
+    expect(await store.listAgentRuntimeEvents(agentRuntimeStartRequest.id)).toEqual([
+      ...created.events,
+      ...resumed.events,
+    ])
+    expect(await store.listAgentRuntimeCheckpoints(agentRuntimeStartRequest.id)).toEqual([
+      created.checkpoint,
+      resumed.checkpoint,
+    ])
+    expect(await store.listRecoverableAgentRuntimes()).toEqual([resumed.runtime])
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    expect(await reopened.getAgentRuntime(agentRuntimeStartRequest.id)).toEqual(resumed.runtime)
+    expect(await reopened.listAgentRuntimeEvents(agentRuntimeStartRequest.id)).toEqual([
+      ...created.events,
+      ...resumed.events,
+    ])
+    expect(await reopened.listAgentRuntimeCheckpoints(agentRuntimeStartRequest.id)).toEqual([
+      created.checkpoint,
+      resumed.checkpoint,
+    ])
+    reopened.close()
+  })
+
+  it('rejects a structurally valid transition that was not produced by the runtime kernel', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    const created = createAgentRuntime(agentRuntimeStartRequest)
+    await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: created })
+    const resumed = resumeAgentRuntime({
+      runtime: created.runtime,
+      expectedCheckpointVersion: created.checkpoint.version,
+      authority: agentRuntimeStartRequest.authority,
+      contextDigest: agentRuntimeStartRequest.contextDigest,
+      capabilitySetDigest: agentRuntimeStartRequest.capabilitySetDigest,
+      now: '2026-08-12T20:30:01.000Z',
+    })
+    const forged = {
+      ...resumed,
+      runtime: {
+        ...resumed.runtime,
+        counters: { ...resumed.runtime.counters, tokens: 1 },
+      },
+      checkpoint: {
+        ...resumed.checkpoint,
+        counters: { ...resumed.checkpoint.counters, tokens: 1 },
+      },
+    }
+
+    await expect(
+      store.commitAgentRuntimeTransition({
+        expectedRuntime: created.runtime,
+        transition: forged,
+      }),
+    ).resolves.toEqual({ committed: false, reason: 'invalid_transition' })
+    await expect(store.getAgentRuntime(agentRuntimeStartRequest.id)).resolves.toEqual(
+      created.runtime,
+    )
+    store.close()
+  })
+
+  it('restores the prior Agent Runtime snapshot when durable persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const backupPath = `${dbPath}.backup`
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    const created = createAgentRuntime(agentRuntimeStartRequest)
+
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+    await expect(
+      store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: created }),
+    ).rejects.toThrow(persistenceFailurePattern)
+    await expect(store.getAgentRuntime(agentRuntimeStartRequest.id)).resolves.toBeNull()
+
+    await rm(dbPath, { recursive: true, force: true })
+    await rename(backupPath, dbPath)
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getAgentRuntime(agentRuntimeStartRequest.id)).resolves.toBeNull()
+    reopened.close()
+  })
+
+  it('commits result, evaluation, counters, checkpoint, and terminal summary in one transaction', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+
+    const created = createAgentRuntime(agentRuntimeStartRequest)
+    const resumed = resumeAgentRuntime({
+      runtime: created.runtime,
+      expectedCheckpointVersion: created.checkpoint.version,
+      authority: agentRuntimeStartRequest.authority,
+      contextDigest: agentRuntimeStartRequest.contextDigest,
+      capabilitySetDigest: agentRuntimeStartRequest.capabilitySetDigest,
+      now: '2026-08-12T20:30:01.000Z',
+    })
+    const requested = requestAgentAction({
+      runtime: resumed.runtime,
+      expectedCheckpointVersion: resumed.checkpoint.version,
+      now: '2026-08-12T20:30:02.000Z',
+      action: {
+        id: 'agent-runtime-action-1',
+        kind: 'tool',
+        capabilityId: 'runtime.fake.observe',
+        capabilityVersion: 1,
+        requestDigest: 'c'.repeat(64),
+        requiresPermission: false,
+      },
+    })
+    const completed = acceptAgentActionResult({
+      runtime: requested.runtime,
+      expectedCheckpointVersion: requested.checkpoint.version,
+      actionId: 'agent-runtime-action-1',
+      requestDigest: 'c'.repeat(64),
+      result: {
+        outcome: 'success',
+        resultDigest: 'd'.repeat(64),
+        resultBytes: 32,
+        tokens: 0,
+        costUsd: 0,
+        evaluation: 'success',
+        evaluationSummary: 'The deterministic fake observation satisfied the scenario.',
+      },
+      now: '2026-08-12T20:30:03.000Z',
+    })
+
+    for (const [expectedRuntime, transition] of [
+      [null, created],
+      [created.runtime, resumed],
+      [resumed.runtime, requested],
+      [requested.runtime, completed],
+    ] as const) {
+      await expect(
+        store.commitAgentRuntimeTransition({ expectedRuntime, transition }),
+      ).resolves.toMatchObject({ committed: true, replayed: false })
+    }
+
+    expect(await store.getAgentRuntime(agentRuntimeStartRequest.id)).toEqual(completed.runtime)
+    expect(await store.listRecoverableAgentRuntimes()).toEqual([])
+    expect(await store.getAgentRuntimeTerminalSummary(agentRuntimeStartRequest.id)).toEqual({
+      stateVersion: 1,
+      runtimeId: agentRuntimeStartRequest.id,
+      checkpointVersion: completed.checkpoint.version,
+      stopReason: 'success',
+      counters: { steps: 1, toolCalls: 1, tokens: 0, costUsd: 0 },
+      acceptedActionCount: 1,
+      lastObservationDigest: 'd'.repeat(64),
+      lastResultDigest: 'd'.repeat(64),
+      completedAt: '2026-08-12T20:30:03.000Z',
+      redacted: true,
+    })
+    store.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const inspected = new SQL.Database(await readFile(dbPath))
+    expect(inspected.exec('select count(*) from agent_runtime_evaluations')[0]?.values[0]?.[0]).toBe(1)
+    expect(inspected.exec('select count(*) from agent_runtime_terminal_summaries')[0]?.values[0]?.[0]).toBe(1)
+    expect(inspected.exec('select count(*) from agent_runtime_capability_grants')[0]?.values[0]?.[0]).toBe(0)
+    inspected.close()
+  })
+
+  it('serializes competing checkpoint owners so only one continuation commits', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    const created = createAgentRuntime(agentRuntimeStartRequest)
+    await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: created })
+
+    const resumed = resumeAgentRuntime({
+      runtime: created.runtime,
+      expectedCheckpointVersion: created.checkpoint.version,
+      authority: agentRuntimeStartRequest.authority,
+      contextDigest: agentRuntimeStartRequest.contextDigest,
+      capabilitySetDigest: agentRuntimeStartRequest.capabilitySetDigest,
+      now: '2026-08-12T20:30:01.000Z',
+    })
+    const cancelled = cancelAgentRuntime({
+      runtime: created.runtime,
+      expectedCheckpointVersion: created.checkpoint.version,
+      now: '2026-08-12T20:30:01.000Z',
+    })
+    const results = await Promise.all([
+      store.commitAgentRuntimeTransition({ expectedRuntime: created.runtime, transition: resumed }),
+      store.commitAgentRuntimeTransition({ expectedRuntime: created.runtime, transition: cancelled }),
+    ])
+
+    expect(results.filter((result) => result.committed)).toHaveLength(1)
+    expect(results.filter((result) => !result.committed)).toEqual([
+      { committed: false, reason: 'stale_checkpoint' },
+    ])
+    expect(await store.listAgentRuntimeCheckpoints(agentRuntimeStartRequest.id)).toHaveLength(2)
+    store.close()
+  })
+
+  it('fails closed when an Agent Runtime row is corrupt', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    const created = createAgentRuntime(agentRuntimeStartRequest)
+    await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: created })
+    store.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const corrupt = new SQL.Database(await readFile(dbPath))
+    corrupt.run('pragma ignore_check_constraints = on')
+    corrupt.run("update agent_runtimes set json = '{\"stateVersion\":1}' where id = ?", [
+      agentRuntimeStartRequest.id,
+    ])
+    await writeFile(dbPath, Buffer.from(corrupt.export()))
+    corrupt.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getAgentRuntime(agentRuntimeStartRequest.id)).rejects.toThrow(
+      'Stored Agent Runtime state is invalid',
+    )
+    reopened.close()
+  })
+
+  it('refuses to delete a Run that owns durable Agent Runtime history', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    const created = createAgentRuntime(agentRuntimeStartRequest)
+    await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: created })
+
+    await expect(store.deleteRun(gateWorkflowCreation.run.id)).rejects.toThrow(
+      'Run is bound to an Agent Runtime.',
+    )
+    await expect(store.getRun(gateWorkflowCreation.run.id)).resolves.toEqual(
+      gateWorkflowCreation.run,
+    )
+    await expect(store.getAgentRuntime(agentRuntimeStartRequest.id)).resolves.toEqual(
+      created.runtime,
+    )
+    store.close()
   })
 
   it('creates metadata-only Gate Command execution, receipt, and acknowledgement tables', async () => {
@@ -3874,13 +4263,13 @@ describe('createLocalStore', () => {
     second.close()
   })
 
-  it('migrates an existing v1 database to v17 without losing local projects or runs', async () => {
+  it('migrates an existing v1 database to v18 without losing local projects or runs', async () => {
     const dbPath = await tempDbPath()
     await writeLegacyV1Database(dbPath)
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(17)
+    expect(await store.getSchemaVersion()).toBe(18)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -3891,7 +4280,7 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const db = new SQL.Database(await readFile(dbPath))
-    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('17')
+    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('18')
     expect(db.exec("select name from sqlite_master where type = 'table' and name = 'workflow_nodes'")[0]?.values[0]?.[0]).toBe('workflow_nodes')
     db.close()
   })
@@ -3908,6 +4297,7 @@ describe('createLocalStore', () => {
     })
     const v8Db = new SQL.Database(await readFile(dbPath))
     v8Db.run(`
+      ${dropAgentRuntimeSchemaSql}
       drop index idx_remote_sync_outbox_due;
       drop table remote_sync_outbox;
       update schema_meta set value = '8' where key = 'schema_version';
@@ -3916,7 +4306,7 @@ describe('createLocalStore', () => {
     v8Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(17)
+    expect(await migrated.getSchemaVersion()).toBe(18)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     migrated.close()
@@ -3941,6 +4331,7 @@ describe('createLocalStore', () => {
     })
     const v9Db = new SQL.Database(await readFile(dbPath))
     v9Db.run(`
+      ${dropAgentRuntimeSchemaSql}
       drop index idx_work_request_materializations_pending;
       drop index idx_work_request_materializations_run_id;
       drop table work_request_materializations;
@@ -3950,7 +4341,7 @@ describe('createLocalStore', () => {
     v9Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(17)
+    expect(await migrated.getSchemaVersion()).toBe(18)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -3974,6 +4365,7 @@ describe('createLocalStore', () => {
     })
     const v10Db = new SQL.Database(await readFile(dbPath))
     v10Db.run(`
+      ${dropAgentRuntimeSchemaSql}
       drop index idx_gate_command_acknowledgements_pending;
       drop table gate_command_acknowledgements;
       drop index idx_gate_command_receipts_command;
@@ -3985,7 +4377,7 @@ describe('createLocalStore', () => {
     v10Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(17)
+    expect(await migrated.getSchemaVersion()).toBe(18)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -4044,6 +4436,7 @@ describe('createLocalStore', () => {
     })
     const v11Db = new SQL.Database(await readFile(dbPath))
     v11Db.run(`
+      ${dropAgentRuntimeSchemaSql}
       drop index idx_gate_command_receipt_observations_command;
       drop table gate_command_receipt_observations;
       update schema_meta set value = '11' where key = 'schema_version';
@@ -4052,7 +4445,7 @@ describe('createLocalStore', () => {
     v11Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(17)
+    expect(await migrated.getSchemaVersion()).toBe(18)
     await expect(
       migrated.getGateCommandReceiptObservation(receipt.id),
     ).resolves.toMatchObject({
@@ -4323,19 +4716,19 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const newerDb = new SQL.Database(await readFile(dbPath))
-    newerDb.run("update schema_meta set value = '18' where key = 'schema_version'")
+    newerDb.run("update schema_meta set value = '19' where key = 'schema_version'")
     await writeFile(dbPath, Buffer.from(newerDb.export()))
     newerDb.close()
 
     await expect(createLocalStore({ dbPath })).rejects.toThrow(
-      /schema version 18 is newer than supported version 17/,
+      /schema version 19 is newer than supported version 18/,
     )
 
     const unchangedDb = new SQL.Database(await readFile(dbPath))
     expect(
       unchangedDb.exec("select value from schema_meta where key = 'schema_version'")[0]
         ?.values[0]?.[0],
-    ).toBe('18')
+    ).toBe('19')
     unchangedDb.close()
   })
 
@@ -4350,6 +4743,7 @@ describe('createLocalStore', () => {
     })
     const v7Db = new SQL.Database(await readFile(dbPath))
     v7Db.run(`
+      ${dropAgentRuntimeSchemaSql}
       drop index idx_workflow_nodes_run_id_position;
       drop table workflow_nodes;
       create table workflow_nodes (id text primary key);
@@ -4375,7 +4769,7 @@ describe('createLocalStore', () => {
     unchangedDb.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(17)
+    expect(await migrated.getSchemaVersion()).toBe(18)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
   })

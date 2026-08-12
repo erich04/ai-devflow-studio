@@ -9,7 +9,8 @@ DevFlow turns an AI-assisted code change into a governed delivery flow with loca
 _A real Electron workbench showing the six-stage workflow, local repository controls, Gate Enforcement, knowledge evidence, and agent actions._
 
 > **Current release and roadmap status:** `v1.5.0` is released and the finite 1.x line is complete.
-> V2.0 Native Agent Runtime contract definition is now the active priority. The
+> V2.0 Native Agent Runtime implementation is now the active priority. The shared bounded kernel
+> and durable Desktop runtime are complete; Native Tool execution is next. The
 > [Roadmap](docs/roadmap.md) is the single source of truth; package
 > labels and this README do not substitute for immutable proof under `docs/releases/`.
 
@@ -55,6 +56,9 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 - A later approved delivery attempt can use verified publication adoption after an earlier attempt
   pushed the exact same commit but failed before Draft creation; it does not mint another credential
   or push the branch again.
+- The V2.0 foundation provides a strict bounded Agent Runtime kernel plus Desktop schema v18
+  trajectory/checkpoint persistence, main-owned execution, cancellation fencing, and restart
+  recovery. Its deterministic fake action has no native Tool, MCP, or Coding side effect.
 - Bearer-token sync, API/Postgres persistence, reproducible unsigned pilot artifacts, and the Web console provide a self-hosted team-pilot path.
 
 ### Verification Evidence
@@ -67,8 +71,8 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 | `corepack pnpm test:docker-smoke` | The containerized API/Web/Postgres stack, Desktop pairing, bearer auth, and safe overview data. |
 | `corepack pnpm test:docker-lifecycle-smoke` | Fresh Team schema v15, retained V1.4 schema v10 upgrade, transactional populated v11-to-v12 retry, fail-closed v12-to-v13 provider-authoritative expiry migration, durable v13-to-v14 provider backoff, v14-to-v15 verified publication adoption, and bounded V1.4 backup/restore rollback. |
 | `corepack pnpm test:v15-github-delivery` | The full offline Delivery Intent → separate approval → exact branch → Draft PR → Acceptance story, including restart and revocation. |
-| `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive and packaged launch isolation. |
-| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v17 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
+| `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive, packaged launch isolation, and a durable no-side-effect Runtime whose accepted action count remains exactly one after cold restart. |
+| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v18 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
 | Release-only opencode smoke | A paid, explicit signoff for the real local coding runtime; it is never part of default CI. |
 
 Deterministic results become release evidence only when `required-gates.json` binds them to the clean
@@ -170,7 +174,7 @@ For the API/Web/Postgres team path, use the [self-hosted pilot guide](docs/guide
 - The current product is a self-hosted team pilot, not a managed public SaaS offering.
 
 The [roadmap](docs/roadmap.md) is the source of truth for the completed 1.x line, the active V2.0
-Agent Runtime contract work, the V2.1/V2.2 sequence, and deferred platform work.
+Agent Runtime implementation, the V2.1/V2.2 sequence, and deferred platform work.
 
 ## Documentation Map
 

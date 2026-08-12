@@ -51,9 +51,11 @@ import {
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import { createLocalStore, type LocalStore } from './local-store.js'
+import { createDesktopAgentRuntime, type DesktopAgentRuntime } from './agent-runtime-runtime.js'
 import {
   ipcChannels,
   parseCancelCodingAgentRunInput,
+  parseCancelAgentRuntimeInput,
   parseDeleteRunInput,
   parseDeleteManagedWorktreeInput,
   parseEnsureCodingEngineInput,
@@ -74,6 +76,7 @@ import {
   parseStopGitHubDeliveryInput,
   parseVerifyGitHubDeliveryRevocationInput,
   parseCreateRunInput,
+  parseAdvanceAgentRuntimeInput,
   parseCompleteWorkflowAgentNodeInput,
   parseListAgentReviewsInput,
   parseReplyCodingPermissionInput,
@@ -91,6 +94,7 @@ import {
   parseSaveGateOverrideInput,
   parseSaveProjectTestCommandInput,
   parseStartRetryAttemptInput,
+  parseStartAgentRuntimeInput,
   parseSettingsInput,
   parseSubscribeCodingRunInput,
   parseValidateTestCommandInput,
@@ -196,6 +200,7 @@ const runtimeFlags = resolveDevFlowRuntimeFlags(process.env)
 const execFileAsync = promisify(execFile)
 
 let storePromise: Promise<LocalStore> | undefined
+let desktopAgentRuntimePromise: Promise<DesktopAgentRuntime> | undefined
 let remoteSyncClient: RemoteSyncClient | undefined
 let remoteSyncClientKey: string | undefined
 let remoteSyncOutboxScheduler: ReturnType<typeof createRemoteSyncOutboxScheduler> | undefined
@@ -1088,6 +1093,13 @@ function broadcastToRenderers(channel: string, payload: unknown) {
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send(channel, payload)
   }
+}
+
+function getDesktopAgentRuntime(): Promise<DesktopAgentRuntime> {
+  desktopAgentRuntimePromise ??= getStore().then((store) =>
+    createDesktopAgentRuntime({ store }),
+  )
+  return desktopAgentRuntimePromise
 }
 
 async function assertNoActiveCodingAgentForRun(store: LocalStore, runId: string) {
@@ -2044,6 +2056,38 @@ function registerIpcHandlers() {
     return created.run
   })
 
+  ipcMain.handle(ipcChannels.startAgentRuntime, async (_, payload: unknown) => {
+    const input = parseStartAgentRuntimeInput(payload)
+    const snapshot = await (await getDesktopAgentRuntime()).start(input)
+    broadcastToRenderers(ipcChannels.agentRuntimeUpdated, snapshot)
+    return snapshot
+  })
+
+  ipcMain.handle(ipcChannels.advanceAgentRuntime, async (_, payload: unknown) => {
+    const input = parseAdvanceAgentRuntimeInput(payload)
+    const snapshot = await (await getDesktopAgentRuntime()).advance(input.runtimeId)
+    broadcastToRenderers(ipcChannels.agentRuntimeUpdated, snapshot)
+    return snapshot
+  })
+
+  ipcMain.handle(ipcChannels.cancelAgentRuntime, async (_, payload: unknown) => {
+    const input = parseCancelAgentRuntimeInput(payload)
+    const snapshot = await (await getDesktopAgentRuntime()).cancel(input.runtimeId)
+    broadcastToRenderers(ipcChannels.agentRuntimeUpdated, snapshot)
+    return snapshot
+  })
+
+  ipcMain.handle(ipcChannels.listAgentRuntimes, async () => {
+    const store = await getStore()
+    const runtimes = await store.listAgentRuntimes()
+    return Promise.all(
+      runtimes.map(async (runtime) => ({
+        runtime,
+        terminalSummary: await store.getAgentRuntimeTerminalSummary(runtime.id),
+      })),
+    )
+  })
+
   ipcMain.handle(ipcChannels.deleteRun, async (_, payload: unknown) => {
     const input = parseDeleteRunInput(payload)
     const store = await getStore()
@@ -2715,6 +2759,16 @@ if (hasSingleInstanceLock) {
       .then((scheduler) => scheduler.start())
       .catch(() => {
         console.warn('[github-delivery] Unable to start the recovery scheduler.')
+      })
+    void getDesktopAgentRuntime()
+      .then((runtime) => runtime.recover())
+      .then((snapshots) => {
+        for (const snapshot of snapshots) {
+          broadcastToRenderers(ipcChannels.agentRuntimeUpdated, snapshot)
+        }
+      })
+      .catch(() => {
+        console.warn('[agent-runtime] Unable to recover a durable runtime.')
       })
 
     app.on('activate', () => {

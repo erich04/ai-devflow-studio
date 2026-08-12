@@ -28,6 +28,9 @@ import type {
   WorkflowRun,
 } from '@ai-devflow/shared'
 import type {
+  AgentRuntimeCommandInput,
+  AgentRuntimeListItem,
+  AgentRuntimeSnapshot,
   CreateRunInput,
   DeleteRunInput,
   DeleteRunResult,
@@ -46,6 +49,7 @@ import type {
   RetryGitHubDeliveryResult,
   StopGitHubDeliveryInput,
   StopGitHubDeliveryResult,
+  StartAgentRuntimeInput,
   VerifyGitHubDeliveryRevocationInput,
   VerifyGitHubDeliveryRevocationResult,
   RetryRemoteSyncOperationInput,
@@ -227,6 +231,10 @@ export type DevFlowDesktopApi = {
   evaluateGateEnforcement: (input: EvaluateGateEnforcementInput) => Promise<GateEnforcementDecision>
   createRun: (input: CreateRunInput) => Promise<WorkflowRun>
   deleteRun: (input: DeleteRunInput) => Promise<DeleteRunResult>
+  startAgentRuntime: (input: StartAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
+  advanceAgentRuntime: (input: AgentRuntimeCommandInput) => Promise<AgentRuntimeSnapshot>
+  cancelAgentRuntime: (input: AgentRuntimeCommandInput) => Promise<AgentRuntimeSnapshot>
+  listAgentRuntimes: () => Promise<AgentRuntimeListItem[]>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
   prepareGitHubDelivery: (
@@ -277,6 +285,7 @@ export type DevFlowDesktopApi = {
   onCodingRunStatusUpdated: (listener: (run: CodingAgentRun) => void) => () => void
   onCodingEventAppended: (listener: (event: CodingAgentEvent) => void) => () => void
   onCodingPermissionUpdated: (listener: (request: CodingPermissionRequest) => void) => () => void
+  onAgentRuntimeUpdated: (listener: (snapshot: AgentRuntimeSnapshot) => void) => () => void
   onProjectGitStatusUpdated: (listener: (status: ProjectGitStatus) => void) => () => void
   onLocalStateUpdated: (listener: (state: LocalExecutionState) => void) => () => void
 }

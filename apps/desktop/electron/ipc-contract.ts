@@ -4,6 +4,8 @@ import type {
   AgentEvent,
   AgentProviderConfig,
   AgentReviewExecutionResult,
+  AgentRuntimeEvent,
+  AgentRuntimeState,
   Artifact,
   CommandSafetyResult,
   CodingAgentEvent,
@@ -50,6 +52,40 @@ export type DeleteRunResult = {
   remote?: RemoteRunDeleteResult
 }
 
+export type StartAgentRuntimeInput = {
+  runId: string
+  nodeId: string
+}
+
+export type AgentRuntimeCommandInput = {
+  runtimeId: string
+}
+
+export type AdvanceAgentRuntimeInput = AgentRuntimeCommandInput
+export type CancelAgentRuntimeInput = AgentRuntimeCommandInput
+
+export type AgentRuntimeSnapshot = {
+  runtime: AgentRuntimeState
+  events: AgentRuntimeEvent[]
+  terminalSummary: {
+    stateVersion: 1
+    runtimeId: string
+    checkpointVersion: number
+    stopReason: NonNullable<AgentRuntimeState['stopReason']>
+    counters: AgentRuntimeState['counters']
+    acceptedActionCount: number
+    lastObservationDigest: string
+    lastResultDigest: string | null
+    completedAt: string
+    redacted: true
+  } | null
+}
+
+export type AgentRuntimeListItem = {
+  runtime: AgentRuntimeState
+  terminalSummary: AgentRuntimeSnapshot['terminalSummary']
+}
+
 export type RetryRemoteSyncOperationInput = {
   operationId: string
 }
@@ -73,6 +109,11 @@ export const ipcChannels = {
   evaluateGateEnforcement: 'devflow:enforcement:gate:evaluate',
   createRun: 'devflow:run:create',
   deleteRun: 'devflow:run:delete',
+  startAgentRuntime: 'devflow:agent-runtime:start',
+  advanceAgentRuntime: 'devflow:agent-runtime:advance',
+  cancelAgentRuntime: 'devflow:agent-runtime:cancel',
+  listAgentRuntimes: 'devflow:agent-runtime:list',
+  agentRuntimeUpdated: 'devflow:agent-runtime:updated',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   createPrDraft: 'devflow:pr-draft:create',
   prepareGitHubDelivery: 'devflow:github-delivery:prepare',
@@ -420,6 +461,10 @@ export type DevFlowDesktopApi = {
   evaluateGateEnforcement: (input: EvaluateGateEnforcementInput) => Promise<GateEnforcementDecision>
   createRun: (input: CreateRunInput) => Promise<WorkflowRun>
   deleteRun: (input: DeleteRunInput) => Promise<DeleteRunResult>
+  startAgentRuntime: (input: StartAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
+  advanceAgentRuntime: (input: AdvanceAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
+  cancelAgentRuntime: (input: CancelAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
+  listAgentRuntimes: () => Promise<AgentRuntimeListItem[]>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
   prepareGitHubDelivery: (
@@ -464,6 +509,7 @@ export type DevFlowDesktopApi = {
   onCodingRunStatusUpdated: (listener: (run: CodingAgentRun) => void) => () => void
   onCodingEventAppended: (listener: (event: CodingAgentEvent) => void) => () => void
   onCodingPermissionUpdated: (listener: (request: CodingPermissionRequest) => void) => () => void
+  onAgentRuntimeUpdated: (listener: (snapshot: AgentRuntimeSnapshot) => void) => () => void
   onProjectGitStatusUpdated: (listener: (status: ProjectGitStatus) => void) => () => void
   onLocalStateUpdated: (listener: (state: LocalExecutionState) => void) => () => void
 }
@@ -645,6 +691,34 @@ export function parseDeleteRunInput(value: unknown): DeleteRunInput {
     runId: readRequiredString(value, 'runId'),
     deleteRemote: deleteRemote === true,
   }
+}
+
+export function parseStartAgentRuntimeInput(value: unknown): StartAgentRuntimeInput {
+  if (!isRecord(value)) {
+    throw new Error('Invalid start Agent Runtime payload')
+  }
+  rejectUnexpectedFields(value, ['runId', 'nodeId'], 'start Agent Runtime payload')
+  return {
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    nodeId: readExactRequiredIdentifier(value, 'nodeId'),
+  }
+}
+
+function parseAgentRuntimeCommandInput(
+  value: unknown,
+  payloadName: string,
+): AgentRuntimeCommandInput {
+  if (!isRecord(value)) throw new Error(`Invalid ${payloadName}`)
+  rejectUnexpectedFields(value, ['runtimeId'], payloadName)
+  return { runtimeId: readExactRequiredIdentifier(value, 'runtimeId') }
+}
+
+export function parseAdvanceAgentRuntimeInput(value: unknown): AdvanceAgentRuntimeInput {
+  return parseAgentRuntimeCommandInput(value, 'advance Agent Runtime payload')
+}
+
+export function parseCancelAgentRuntimeInput(value: unknown): CancelAgentRuntimeInput {
+  return parseAgentRuntimeCommandInput(value, 'cancel Agent Runtime payload')
 }
 
 export function parseCompleteWorkflowAgentNodeInput(value: unknown): CompleteWorkflowAgentNodeInput {

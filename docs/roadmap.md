@@ -58,7 +58,7 @@ rules.
 | --- | --- | --- | --- | --- |
 | 0.x | Engineering foundation | Real Electron execution, durable local state, team sync, Knowledge Governance, Gate policy, a managed external Coding Agent Adapter, runtime observability, and release discipline. | Fake and explicitly authorized real Coding paths can execute in managed worktrees, preserve auditable evidence, obey human Gates, sync only redacted summaries, and pass reproducible verification. | Completed at v0.9.0. |
 | 1.x | Governed self-hosted delivery | Authenticated team pilot, Desktop pairing, project scope, policy and budget controls, durable sync, repository knowledge, Web collaboration commands, reproducible lifecycle, and human-approved GitHub delivery. | One authenticated Work Request becomes one canonical local Run, reaches tested and evidence-backed delivery, and publishes a branch and pull request only after explicit human approval. V1.5 is the final planned 1.x feature milestone. | Completed at v1.5.0. |
-| 2.x | DevFlow-native Agent Runtime | A bounded first-party Agent loop, native Tool and MCP execution, pluggable Coding Executors, trajectory and evaluation, scoped Context and Memory, evaluated RAG, Multi-Agent orchestration, and tenant-scoped execution. | Benchmarked scenarios demonstrate bounded single- and Multi-Agent execution, native and delegated coding, MCP/tool use, evaluated retrieval and Memory, failure recovery, tenant isolation, and auditable trajectories while Workflow and Gate authority remains intact. | Active; V2.0 contract definition is the current priority. |
+| 2.x | DevFlow-native Agent Runtime | A bounded first-party Agent loop, native Tool and MCP execution, pluggable Coding Executors, trajectory and evaluation, scoped Context and Memory, evaluated RAG, Multi-Agent orchestration, and tenant-scoped execution. | Benchmarked scenarios demonstrate bounded single- and Multi-Agent execution, native and delegated coding, MCP/tool use, evaluated retrieval and Memory, failure recovery, tenant isolation, and auditable trajectories while Workflow and Gate authority remains intact. | Active; V2.0 implementation is the current priority. |
 
 The version lines are finite product contracts, not an instruction to keep adding versions. A line
 ends when its completion gate passes; remaining ideas move to maintenance, evidence-promoted work,
@@ -88,19 +88,20 @@ contains the signoff-bound release artifacts.
 | V1.5 execution history | `docs/plans/v1.5-github-delivery.md` and the four immutable release evidence files |
 | Completed version line | 1.x governed self-hosted delivery |
 | Active version line | 2.x DevFlow-native Agent Runtime |
-| Active milestone | V2.0 Native Agent Runtime contract definition |
-| Next gate | Accepted V2.0 ADRs, scoped PRD, executable plan, domain language, and scenario baseline contract |
+| Active milestone | V2.0 Native Agent Runtime implementation |
+| Next gate | Slice 3 Native Tool Registry with scoped capabilities and packaged execution evidence |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
 restart with zero repeated remote effects, Acceptance, and a versioned credential-revocation proof.
-V2.0 contract work is now active; no V2.0 product implementation is claimed yet.
+V2.0 implementation is active. Slice 1 shared runtime kernel and Slice 2 durable Desktop runtime are complete; native Tool, MCP, and Coding side effects are not yet implemented.
 
 ## Now / Next / Later
 
-### Now — Define V2.0 Native Agent Runtime Contracts
+### Now — Implement V2.0 Native Agent Runtime
 
-V1.5 and the finite 1.x line are released and complete. Before V2.0 product code begins:
+V1.5 and the finite 1.x line are released and complete. V2.0 now proceeds through the accepted
+contract and executable slice plan:
 
 - `docs/product/prd/v2.0-native-agent-runtime-prd.md`
 - `docs/adr/0014-bounded-agent-runtime.md`
@@ -108,24 +109,21 @@ V1.5 and the finite 1.x line are released and complete. Before V2.0 product code
 - `docs/adr/0016-tool-mcp-execution-authority.md`
 - `docs/plans/v2.0-native-agent-runtime.md`
 
-- approve the bounded Agent Runtime, Coding Executor, and Tool/MCP authority decisions that evolve
-  ADR 0008 and ADR 0009 without weakening Workflow, Gate, Desktop, or Team authority;
-- publish a scoped V2.0 PRD and executable slice plan with deterministic stop, checkpoint/resume,
-  permission, cancellation, evidence, redaction, and evaluation contracts;
-- update `CONTEXT.md` with stable Agent Runtime, trajectory, checkpoint, Tool, capability, Coding
-  Executor, and trusted local MCP installation language;
-- define the reproducible scenario dataset and the quality, cost, latency, intervention, recovery,
-  and isolation measurements required for the V2.0 completion gate.
+- Slice 0 froze the accepted bounded Runtime, Coding Executor, and Tool/MCP authority contracts.
+- Slice 1 added the versioned shared deterministic kernel, strict transitions, bounds, scenario
+  parser, and evaluation metrics without performing I/O.
+- Slice 2 added Desktop schema 18, atomic trajectory/checkpoint persistence, strict IPC, startup
+  recovery, cancellation fencing, and a packaged no-side-effect Runtime restart probe.
+- Continue with Slice 3 while preserving Workflow/Gate authority, local evidence boundaries, and
+  deterministic no-cost default verification.
 
-### Next — Implement And Evaluate V2.0
+### Next — Add Native Tool And Trusted MCP Execution
 
-- Implement the bounded DevFlow Agent Runtime and persistent trajectory/checkpoint boundary.
-- Place OpenCode and one deliberately narrow DevFlow-owned Coding Agent behind the same Coding
-  Executor contract.
-- Add a trusted main-process Tool registry plus bounded MCP discovery/execution for the accepted
-  scenarios; Team-authored display metadata must never become process-spawn authority.
-- Keep default verification deterministic and no-cost, then record explicit real-provider evidence
-  only where the V2.0 plan authorizes it.
+- Implement Slice 3's main-owned Native Tool Registry and opaque scoped capability grants.
+- Implement Slice 4's trusted local stdio MCP installation without treating Team display metadata
+  as process-spawn authority.
+- Then place OpenCode and one deliberately narrow DevFlow-owned Coding Agent behind the common
+  Coding Executor contract and evaluate the accepted scenarios.
 
 ### Later — V2.1 Retrieval/Memory And V2.2 Multi-Agent/Tenancy
 

@@ -20,6 +20,10 @@ vi.mock('electron', () => ({
 await import('./preload')
 
 type ExposedDesktopApi = {
+  startAgentRuntime: (input: { runId: string; nodeId: string }) => Promise<unknown>
+  advanceAgentRuntime: (input: { runtimeId: string }) => Promise<unknown>
+  cancelAgentRuntime: (input: { runtimeId: string }) => Promise<unknown>
+  listAgentRuntimes: () => Promise<unknown>
   prepareGitHubDelivery: (input: { runId: string; nodeId: string }) => Promise<unknown>
   reviseGitHubDelivery: (input: {
     intentId: string
@@ -51,11 +55,62 @@ type ExposedDesktopApi = {
     expectedVersion: number
   }) => Promise<unknown>
   onLocalStateUpdated: (listener: (state: unknown) => void) => () => void
+  onAgentRuntimeUpdated: (listener: (state: unknown) => void) => () => void
 }
 
 const exposedApi = electron.exposeInMainWorld.mock.calls[0]?.[1] as ExposedDesktopApi
 
 describe('Electron preload remote sync operator surface', () => {
+  it('exposes identifier-only Agent Runtime commands and the exact update subscription', async () => {
+    const snapshot = { runtime: { id: 'agent-runtime-1', status: 'checkpointed' } }
+    electron.invoke.mockResolvedValue(snapshot)
+
+    await expect(
+      exposedApi.startAgentRuntime({ runId: 'run-1', nodeId: 'run-1-build' }),
+    ).resolves.toBe(snapshot)
+    await expect(
+      exposedApi.advanceAgentRuntime({ runtimeId: 'agent-runtime-1' }),
+    ).resolves.toBe(snapshot)
+    await expect(
+      exposedApi.cancelAgentRuntime({ runtimeId: 'agent-runtime-1' }),
+    ).resolves.toBe(snapshot)
+    await expect(exposedApi.listAgentRuntimes()).resolves.toBe(snapshot)
+
+    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.startAgentRuntime, {
+      runId: 'run-1',
+      nodeId: 'run-1-build',
+    })
+    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.advanceAgentRuntime, {
+      runtimeId: 'agent-runtime-1',
+    })
+    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.cancelAgentRuntime, {
+      runtimeId: 'agent-runtime-1',
+    })
+    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.listAgentRuntimes)
+
+    const listener = vi.fn()
+    const unsubscribe = exposedApi.onAgentRuntimeUpdated(listener)
+    const registration = electron.on.mock.calls.find(
+      ([channel]) => channel === ipcChannels.agentRuntimeUpdated,
+    )
+    const wrappedListener = registration?.[1] as (
+      event: unknown,
+      payload: unknown,
+    ) => void
+    wrappedListener({}, snapshot)
+    expect(listener).toHaveBeenCalledWith(snapshot)
+    unsubscribe()
+    expect(electron.removeListener).toHaveBeenCalledWith(
+      ipcChannels.agentRuntimeUpdated,
+      wrappedListener,
+    )
+
+    expect(Object.keys(exposedApi)).not.toContain('commitAgentRuntimeTransition')
+    expect(JSON.stringify(electron.invoke.mock.calls)).not.toMatch(
+      /worktreePath|command|capabilitySet|checkpoint|resultDigest|stopReason/,
+    )
+  })
+
   it('forwards only Run and PR node identifiers for GitHub Delivery preparation', async () => {
     const result = { status: 'prepared', intent: { id: 'intent-1' } }
     const input = { runId: 'run-1', nodeId: 'run-1-pr' }

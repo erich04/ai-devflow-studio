@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,6 +15,7 @@ const appDirectory = path.resolve(artifactDirectory, artifactIndex.appDirectory)
 const executablePath = resolveDesktopExecutablePath(appDirectory, artifactIndex.platform)
 const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'devflow-desktop-pilot-smoke-'))
 const userDataDirectory = path.join(temporaryDirectory, 'user-data')
+const runtimeProjectDirectory = path.join(temporaryDirectory, 'runtime-project')
 const diagnostics = []
 let hostileDevelopmentServerRequests = 0
 let electronApp
@@ -35,6 +36,29 @@ if (!address || typeof address === 'string') {
 }
 const hostileDevelopmentServerUrl = `http://127.0.0.1:${address.port}/must-not-load`
 
+async function launchPackagedDesktop() {
+  const app = await electron.launch({
+    executablePath,
+    cwd: appDirectory,
+    env: {
+      ...process.env,
+      DEVFLOW_USER_DATA_DIR: userDataDirectory,
+      DEVFLOW_API_BASE_URL: 'http://127.0.0.1:9',
+      DEVFLOW_CODING_ENGINE: 'fake',
+      DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
+      DEVFLOW_ENABLE_DEMO_DATA: 'true',
+      ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
+      VITE_DEV_SERVER_URL: hostileDevelopmentServerUrl,
+    },
+    timeout: 30_000,
+  })
+  app.process().stderr?.on('data', (chunk) => diagnostics.push(chunk.toString()))
+  const page = await app.firstWindow({ timeout: 30_000 })
+  await page.waitForURL((url) => url.protocol !== 'about:', { timeout: 30_000 })
+  await page.locator('#root').waitFor({ state: 'attached', timeout: 30_000 })
+  return { app, page }
+}
+
 async function waitForIsolatedStore() {
   const storePath = path.join(userDataDirectory, 'devflow.sqlite')
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -50,26 +74,15 @@ async function waitForIsolatedStore() {
 
 try {
   await access(executablePath)
-  electronApp = await electron.launch({
-    executablePath,
-    cwd: appDirectory,
-    env: {
-      ...process.env,
-      DEVFLOW_USER_DATA_DIR: userDataDirectory,
-      DEVFLOW_API_BASE_URL: 'http://127.0.0.1:9',
-      DEVFLOW_CODING_ENGINE: 'fake',
-      DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
-      DEVFLOW_ENABLE_DEMO_DATA: 'true',
-      ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
-      VITE_DEV_SERVER_URL: hostileDevelopmentServerUrl,
-    },
-    timeout: 30_000,
-  })
-  electronApp.process().stderr?.on('data', (chunk) => diagnostics.push(chunk.toString()))
+  await mkdir(runtimeProjectDirectory, { recursive: true })
+  await writeFile(
+    path.join(runtimeProjectDirectory, 'package.json'),
+    `${JSON.stringify({ name: 'devflow-agent-runtime-smoke', private: true }, null, 2)}\n`,
+  )
 
-  const page = await electronApp.firstWindow({ timeout: 30_000 })
-  await page.waitForURL((url) => url.protocol !== 'about:', { timeout: 30_000 })
-  await page.locator('#root').waitFor({ state: 'attached', timeout: 30_000 })
+  const firstLaunch = await launchPackagedDesktop()
+  electronApp = firstLaunch.app
+  const page = firstLaunch.page
   const loadedUrl = page.url()
   if (!loadedUrl.startsWith('file://')) {
     throw new Error(`Packaged Desktop loaded a non-file renderer: ${loadedUrl}`)
@@ -80,6 +93,61 @@ try {
     )
   }
   const storePath = await waitForIsolatedStore()
+  await electronApp.evaluate(({ dialog }, selectedPath) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] })
+  }, runtimeProjectDirectory)
+  const runtimeBeforeRestart = await page.evaluate(async () => {
+    const project = await window.aiDevFlowDesktop.selectLocalProject()
+    if (!project) throw new Error('Packaged Runtime smoke project was not selected')
+    const run = await window.aiDevFlowDesktop.createRun({
+      title: 'Packaged Agent Runtime smoke',
+      request: 'Complete one bounded no-side-effect observation.',
+      projectId: project.id,
+      creatorId: 'packaged-smoke-user',
+      branchName: 'devflow/packaged-agent-runtime-smoke',
+    })
+    let snapshot = await window.aiDevFlowDesktop.startAgentRuntime({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+    })
+    for (let iteration = 0; iteration < 3; iteration += 1) {
+      snapshot = await window.aiDevFlowDesktop.advanceAgentRuntime({
+        runtimeId: snapshot.runtime.id,
+      })
+    }
+    return snapshot
+  })
+  if (
+    runtimeBeforeRestart.runtime.status !== 'terminal' ||
+    runtimeBeforeRestart.runtime.stopReason !== 'success'
+  ) {
+    throw new Error('Packaged Agent Runtime did not reach the exact success terminal state.')
+  }
+  if (
+    runtimeBeforeRestart.runtime.acceptedActionIds.length !== 1 ||
+    runtimeBeforeRestart.events.filter((event) => event.type === 'action_requested').length !== 1 ||
+    runtimeBeforeRestart.terminalSummary?.acceptedActionCount !== 1
+  ) {
+    throw new Error('Packaged Agent Runtime did not accept exactly one deterministic action.')
+  }
+
+  await electronApp.close()
+  electronApp = undefined
+  const secondLaunch = await launchPackagedDesktop()
+  electronApp = secondLaunch.app
+  const runtimeAfterRestart = await secondLaunch.page.evaluate(async (runtimeId) => {
+    const runtimes = await window.aiDevFlowDesktop.listAgentRuntimes()
+    return runtimes.find((candidate) => candidate.runtime.id === runtimeId)
+  }, runtimeBeforeRestart.runtime.id)
+  if (
+    !runtimeAfterRestart ||
+    runtimeAfterRestart.runtime.status !== 'terminal' ||
+    runtimeAfterRestart.runtime.stopReason !== 'success' ||
+    runtimeAfterRestart.runtime.acceptedActionIds.length !== 1 ||
+    runtimeAfterRestart.terminalSummary?.acceptedActionCount !== 1
+  ) {
+    throw new Error('Packaged Agent Runtime was not restored exactly after restart.')
+  }
 
   console.log(
     JSON.stringify(
@@ -89,6 +157,12 @@ try {
         loadedProtocol: new URL(loadedUrl).protocol,
         hostileDevelopmentServerRequests,
         isolatedStore: path.relative(temporaryDirectory, storePath).split(path.sep).join('/'),
+        agentRuntime: {
+          status: runtimeAfterRestart.runtime.status,
+          stopReason: runtimeAfterRestart.runtime.stopReason,
+          acceptedActionCount: runtimeAfterRestart.terminalSummary.acceptedActionCount,
+          restartDuplicateEffects: 0,
+        },
       },
       null,
       2,

@@ -18,4 +18,13 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).toContain("loadedUrl.startsWith('file://')")
     expect(smoke).toContain('hostileDevelopmentServerRequests !== 0')
   })
+
+  it('completes and reopens one durable no-side-effect Agent Runtime', () => {
+    expect(smoke).toContain('startAgentRuntime')
+    expect(smoke).toContain('advanceAgentRuntime')
+    expect(smoke).toContain('listAgentRuntimes')
+    expect(smoke).toContain("stopReason !== 'success'")
+    expect(smoke).toContain('runtimeAfterRestart')
+    expect(smoke).toContain('acceptedActionIds.length !== 1')
+  })
 })

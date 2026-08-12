@@ -35,6 +35,10 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.evaluateGateEnforcement, input),
   createRun: (run) => ipcRenderer.invoke(ipcChannels.createRun, run),
   deleteRun: (input) => ipcRenderer.invoke(ipcChannels.deleteRun, input),
+  startAgentRuntime: (input) => ipcRenderer.invoke(ipcChannels.startAgentRuntime, input),
+  advanceAgentRuntime: (input) => ipcRenderer.invoke(ipcChannels.advanceAgentRuntime, input),
+  cancelAgentRuntime: (input) => ipcRenderer.invoke(ipcChannels.cancelAgentRuntime, input),
+  listAgentRuntimes: () => ipcRenderer.invoke(ipcChannels.listAgentRuntimes),
   completeWorkflowAgentNode: (input) =>
     ipcRenderer.invoke(ipcChannels.completeWorkflowAgentNode, input),
   createPrDraft: (input) => ipcRenderer.invoke(ipcChannels.createPrDraft, input),
@@ -77,6 +81,8 @@ const desktopApi: DevFlowDesktopApi = {
     onIpcPayload(ipcChannels.codingEventAppended, listener),
   onCodingPermissionUpdated: (listener) =>
     onIpcPayload(ipcChannels.codingPermissionUpdated, listener),
+  onAgentRuntimeUpdated: (listener) =>
+    onIpcPayload(ipcChannels.agentRuntimeUpdated, listener),
   onProjectGitStatusUpdated: (listener) =>
     onIpcPayload(ipcChannels.projectGitStatusUpdated, listener),
   onLocalStateUpdated: (listener) => onIpcPayload(ipcChannels.localStateUpdated, listener),

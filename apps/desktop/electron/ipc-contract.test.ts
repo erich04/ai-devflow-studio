@@ -3,6 +3,8 @@ import type { McpServerDefinition } from '@ai-devflow/shared'
 import {
   ipcChannels,
   parseApproveGateInput,
+  parseAdvanceAgentRuntimeInput,
+  parseCancelAgentRuntimeInput,
   parseAgentProviderCredentialInput,
   parseCancelCodingAgentRunInput,
   parseCreateAcceptanceBundleInput,
@@ -12,6 +14,7 @@ import {
   parseRetryGitHubDeliveryInput,
   parseResumeGitHubDeliveryInput,
   parseStopGitHubDeliveryInput,
+  parseStartAgentRuntimeInput,
   parseVerifyGitHubDeliveryRevocationInput,
   parseCreateRunInput,
   parseDeleteRunInput,
@@ -98,6 +101,37 @@ describe('IPC contract parsers', () => {
         role: 'owner',
       }),
     ).toThrow(/unexpected field/i)
+  })
+
+  it('keeps Agent Runtime commands identifier-only and rejects renderer-owned execution state', () => {
+    expect(parseStartAgentRuntimeInput({ runId: 'run-1', nodeId: 'node-1' })).toEqual({
+      runId: 'run-1',
+      nodeId: 'node-1',
+    })
+    expect(parseAdvanceAgentRuntimeInput({ runtimeId: 'agent-runtime-1' })).toEqual({
+      runtimeId: 'agent-runtime-1',
+    })
+    expect(parseCancelAgentRuntimeInput({ runtimeId: 'agent-runtime-1' })).toEqual({
+      runtimeId: 'agent-runtime-1',
+    })
+
+    for (const forbidden of [
+      { path: '/tmp/repository' },
+      { command: 'rm -rf build' },
+      { capabilityId: 'shell.execute' },
+      { checkpoint: { version: 99 } },
+      { result: { outcome: 'success' } },
+      { stopReason: 'success' },
+      { contextDigest: 'a'.repeat(64) },
+      { policyVersion: 99 },
+    ]) {
+      expect(() =>
+        parseStartAgentRuntimeInput({ runId: 'run-1', nodeId: 'node-1', ...forbidden }),
+      ).toThrow(/unexpected field/i)
+      expect(() =>
+        parseAdvanceAgentRuntimeInput({ runtimeId: 'agent-runtime-1', ...forbidden }),
+      ).toThrow(/unexpected field/i)
+    }
   })
 
   it('keeps Gate override input command-only and rejects derived trust fields', () => {

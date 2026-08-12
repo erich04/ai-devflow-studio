@@ -11,8 +11,9 @@ retroactive TDD rewrites unless it is touched.
   contract without inventing expiry evidence for legacy issued credentials, followed by the
   v13-to-v14 bounded provider retry boundary, and the v14-to-v15 verified publication adoption
   authority without changing legacy grant-backed publications.
-- Electron/SQLite uses Desktop schema v17. Local-store tests must prove a fresh v17 database,
-  retained upgrades, rollback on migration failure, and refusal of a newer unknown schema.
+- Electron/SQLite uses Desktop schema v18. Local-store tests must prove a fresh v18 database, the
+  Desktop schema 17-to-18 retained upgrade with no invented Runtime rows, rollback on migration
+  failure, and refusal of a newer unknown schema.
 
 ## Test Layers
 
@@ -31,7 +32,8 @@ retroactive TDD rewrites unless it is touched.
   without an external write.
 - **Packaged Desktop**: the packaged smoke exercises production main/preload/renderer boundaries,
   local SQLite, a local fake API, a local bare remote, crash/restart reconciliation, and credential
-  non-persistence.
+  non-persistence. The pilot also completes a no-side-effect Agent Runtime and proves the
+  accepted action count remains exactly one after cold restart.
 - **Fresh systems and lifecycle**: Postgres and Docker smokes prove current migrations, real service
   wiring, retained-volume upgrades, transactional retry, and bounded rollback.
 - **Private sandbox**: one explicitly authorized private GitHub sandbox validates real GitHub App
