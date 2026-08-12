@@ -113,7 +113,11 @@ jobs:
       - run: corepack pnpm test:v15-github-delivery
       - run: node scripts/ensure-electron-install.mjs
       - run: corepack pnpm build:desktop-pilot
-      - run: xvfb-run -a corepack pnpm test:v15-github-delivery-packaged-smoke
+      - name: Install the ephemeral Linux credential service
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dbus-x11 gnome-keyring libsecret-1-0
+      - run: dbus-run-session -- node scripts/run-v15-packaged-smoke-linux.mjs
 
   docker-smoke:
     name: Docker smoke

@@ -43,7 +43,7 @@ describe('GitHub release workflow', () => {
     expect(workflow).toContain('corepack pnpm test:postgres-smoke')
     expect(workflow).toContain('corepack pnpm test:v15-github-delivery')
     expect(workflow).toContain(
-      'corepack pnpm test:v15-github-delivery-packaged-smoke',
+      'dbus-run-session -- node scripts/run-v15-packaged-smoke-linux.mjs',
     )
     expect(workflow).toContain('corepack pnpm test:docker-smoke')
     expect(workflow).toContain('corepack pnpm test:docker-lifecycle-smoke')
@@ -213,7 +213,7 @@ describe('GitHub verify workflow', () => {
     expect(workflow).toContain('corepack pnpm test:postgres-smoke')
     expect(workflow).toContain('corepack pnpm test:v15-github-delivery')
     expect(workflow).toContain(
-      'corepack pnpm test:v15-github-delivery-packaged-smoke',
+      'dbus-run-session -- node scripts/run-v15-packaged-smoke-linux.mjs',
     )
     expect(workflow).toContain('corepack pnpm test:docker-smoke')
     expect(workflow).toContain('corepack pnpm test:docker-lifecycle-smoke')

@@ -686,7 +686,10 @@ async function launchPackagedDesktop(input) {
   const electronApp = await electron.launch({
     executablePath: input.executablePath,
     cwd: input.appDirectory,
-    args: ['--password-store=basic', ...(process.platform === 'linux' ? ['--no-sandbox'] : [])],
+    args:
+      process.platform === 'linux'
+        ? ['--password-store=gnome-libsecret', '--no-sandbox']
+        : ['--password-store=basic'],
     env: input.env,
     timeout: 30_000,
   })
@@ -696,6 +699,26 @@ async function launchPackagedDesktop(input) {
     }
   })
   try {
+    const credentialStorage = await electronApp.evaluate(async ({ app, safeStorage }) => {
+      await app.whenReady()
+      return {
+        available: safeStorage.isEncryptionAvailable(),
+        backend:
+          typeof safeStorage.getSelectedStorageBackend === 'function'
+            ? safeStorage.getSelectedStorageBackend()
+            : null,
+      }
+    })
+    assert(
+      credentialStorage.available,
+      'Packaged Desktop credential encryption is unavailable.',
+    )
+    if (process.platform === 'linux') {
+      assert(
+        credentialStorage.backend === 'gnome_libsecret',
+        'Packaged Linux Desktop did not select the Secret Service backend.',
+      )
+    }
     const page = await electronApp.firstWindow({ timeout: 30_000 })
     await page.waitForURL((url) => url.protocol !== 'about:', { timeout: 30_000 })
     await page.locator('#root').waitFor({ state: 'attached', timeout: 30_000 })
