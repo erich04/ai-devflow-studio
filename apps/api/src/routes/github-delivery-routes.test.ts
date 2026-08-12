@@ -1187,6 +1187,37 @@ describe('GitHub Delivery routes', () => {
     expect(JSON.stringify(result)).not.toMatch(/token|privateKey|Authorization/i)
   })
 
+  it('maps unconfirmed credential revocation to a fixed non-retryable bad gateway', async () => {
+    const harness = createHarness()
+    vi.mocked(harness.service.issueCredentialGrant).mockRejectedValue(
+      new GitHubDeliveryServiceError({
+        code: 'github_credential_revocation_unconfirmed',
+        retryable: false,
+        phase: 'credential',
+      }),
+    )
+
+    const result = await resolveGitHubDeliveryRoute(
+      'POST',
+      '/api/desktop/projects/project-a/github-deliveries/delivery-1/credential-grant',
+      harness.repository,
+      harness.service,
+      { principal: desktopMember, body: { expectedStateVersion: 3 } },
+    )
+
+    expect(result).toEqual({
+      status: 502,
+      body: {
+        error: 'bad_gateway',
+        message: 'GitHub credential revocation could not be confirmed.',
+        code: 'github_credential_revocation_unconfirmed',
+        retryable: false,
+        phase: 'credential',
+      },
+    })
+    expect(JSON.stringify(result)).not.toMatch(/ghs_|privateKey|Authorization/i)
+  })
+
   it('checks Project scope and live role before calling repository or provider operations', async () => {
     const harness = createHarness()
     const noProjectCookie: RequestPrincipal = {

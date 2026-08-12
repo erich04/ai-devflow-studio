@@ -1121,6 +1121,15 @@ describe('GitHub Delivery remote client', () => {
       operation: 'credential_grant',
       expectedCode: 'service_unavailable',
     },
+    {
+      status: 502,
+      error: 'bad_gateway',
+      code: 'github_credential_revocation_unconfirmed',
+      retryable: false,
+      phase: 'credential',
+      operation: 'credential_grant',
+      expectedCode: 'service_unavailable',
+    },
   ])(
     'preserves the trusted service retryability contract for $code ($retryable)',
     async ({ status, error, code, retryable, phase, operation, expectedCode }) => {
@@ -1250,6 +1259,44 @@ describe('GitHub Delivery remote client', () => {
     expect(
       `${String(extraField)} ${JSON.stringify(extraField)} ${String(inconsistentStatus)} ${JSON.stringify(inconsistentStatus)} ${String(inconsistentPhase)} ${JSON.stringify(inconsistentPhase)}`,
     ).not.toContain(secretMessage)
+  })
+
+  it('does not trust an unconfirmed-revocation envelope at an inconsistent status', async () => {
+    const secretMessage =
+      'DELETE failed for Authorization: Bearer remote-secret at /Users/alice/private'
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () =>
+        jsonResponse(
+          {
+            error: 'service_unavailable',
+            message: secretMessage,
+            code: 'github_credential_revocation_unconfirmed',
+            retryable: false,
+            phase: 'credential',
+          },
+          503,
+        ),
+      ),
+    })
+
+    const error = await client
+      .withCredentialGrant(
+        { projectId, requestId, expectedStateVersion: 2 },
+        async () => {
+          throw new Error('publisher must not run for a failed credential request')
+        },
+      )
+      .catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({
+      status: 503,
+      code: 'service_unavailable',
+      operation: 'credential_grant',
+      retryable: true,
+    })
+    expect(`${String(error)} ${JSON.stringify(error)}`).not.toContain(secretMessage)
   })
 
   it('enforces its own bounded timeout and sanitizes the aborted fetch failure', async () => {

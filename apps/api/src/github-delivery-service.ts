@@ -21,6 +21,7 @@ export type GitHubDeliveryServiceErrorCode =
   | 'github_delivery_unavailable'
 
 const safeMessages: Record<GitHubDeliveryServiceErrorCode, string> = {
+  github_credential_revocation_unconfirmed: 'GitHub credential revocation could not be confirmed.',
   github_authentication_failed: 'GitHub App authentication failed.',
   github_conflict: 'GitHub remote state conflicts with the approved delivery.',
   github_forbidden: 'GitHub denied the approved delivery operation.',
@@ -192,6 +193,18 @@ export function createGitHubDeliveryService(
     }
   }
 
+  async function revokeMintedCredential(token: string): Promise<void> {
+    try {
+      await input.client.revokeInstallationAccessToken(token)
+    } catch {
+      throw new GitHubDeliveryServiceError({
+        code: 'github_credential_revocation_unconfirmed',
+        retryable: false,
+        phase: 'credential',
+      })
+    }
+  }
+
   async function issueCredentialGrant(
     grantInput: IssueGitHubCredentialGrantInput,
     principal: GitHubDeliveryDesktopPrincipal,
@@ -225,6 +238,7 @@ export function createGitHubDeliveryService(
       })
     } catch (error) {
       const safe = serviceError('credential', error)
+      let failureRecorded = false
       try {
         const finalized = await input.repository.finalizeGitHubCredentialGrant(
           {
@@ -240,8 +254,14 @@ export function createGitHubDeliveryService(
           },
           principal,
         )
-        if (!finalized.ok) throw new Error('state conflict')
+        failureRecorded = finalized.ok
       } catch {
+        failureRecorded = false
+      }
+      if (safe.code === 'github_credential_revocation_unconfirmed') {
+        throw safe
+      }
+      if (!failureRecorded) {
         throw new GitHubDeliveryServiceError({
           code: 'github_delivery_state_conflict',
           retryable: false,
@@ -251,17 +271,22 @@ export function createGitHubDeliveryService(
       throw safe
     }
 
-    if (
-      access.installationId !== reserved.request.installationId ||
-      access.repositoryId !== reserved.request.repositoryId ||
-      access.permissions.contents !== 'write'
-    ) {
-      const safe = new GitHubDeliveryServiceError({
-        code: 'github_scope_mismatch',
-        retryable: false,
-        phase: 'credential',
-      })
-      try {
+    let finalizationRejection: Exclude<
+      GitHubCredentialGrantMutationResult,
+      { ok: true }
+    > | null = null
+    let postMintFailure: GitHubDeliveryServiceError | null = null
+    try {
+      if (
+        access.installationId !== reserved.request.installationId ||
+        access.repositoryId !== reserved.request.repositoryId ||
+        access.permissions.contents !== 'write'
+      ) {
+        postMintFailure = new GitHubDeliveryServiceError({
+          code: 'github_scope_mismatch',
+          retryable: false,
+          phase: 'credential',
+        })
         const finalized = await input.repository.finalizeGitHubCredentialGrant(
           {
             projectId: grantInput.projectId,
@@ -276,64 +301,67 @@ export function createGitHubDeliveryService(
           },
           principal,
         )
-        if (!finalized.ok) throw new Error('state conflict')
-      } catch {
-        throw new GitHubDeliveryServiceError({
-          code: 'github_delivery_state_conflict',
-          retryable: false,
-          phase: 'credential',
-        })
-      }
-      throw safe
-    }
-
-    const issuedAt = input.clock().toISOString()
-    let finalized: GitHubCredentialGrantMutationResult
-    try {
-      finalized = await input.repository.finalizeGitHubCredentialGrant(
-        {
-          projectId: grantInput.projectId,
-          requestId: reserved.request.id,
-          grantId: reserved.grant.id,
-          expectedStateVersion: reserved.request.stateVersion,
-          expectedGrantVersion: reserved.grant.version,
-          outcome: {
-            status: 'issued',
-            issuedAt,
-            credentialExpiresAt: access.expiresAt,
-            repositoryId: access.repositoryId,
-            permission: 'contents:write',
-            repositoryCount: 1,
+        if (!finalized.ok) finalizationRejection = finalized
+      } else {
+        const issuedAt = input.clock().toISOString()
+        const finalized = await input.repository.finalizeGitHubCredentialGrant(
+          {
+            projectId: grantInput.projectId,
+            requestId: reserved.request.id,
+            grantId: reserved.grant.id,
+            expectedStateVersion: reserved.request.stateVersion,
+            expectedGrantVersion: reserved.grant.version,
+            outcome: {
+              status: 'issued',
+              issuedAt,
+              credentialExpiresAt: access.expiresAt,
+              repositoryId: access.repositoryId,
+              permission: 'contents:write',
+              repositoryCount: 1,
+            },
           },
-        },
-        principal,
-      )
+          principal,
+        )
+        if (!finalized.ok) {
+          finalizationRejection = finalized
+        } else {
+          return {
+            ...finalized,
+            credential: {
+              grantId: finalized.grant.id,
+              username: 'x-access-token',
+              token: access.token,
+              expiresAt: access.expiresAt,
+              repositoryId: access.repositoryId,
+              canonicalHttpsUrl: `https://github.com/${finalized.request.repository}.git`,
+            },
+          }
+        }
+      }
     } catch {
-      throw new GitHubDeliveryServiceError({
-        code: 'github_delivery_state_conflict',
-        retryable: false,
-        phase: 'credential',
-      })
-    }
-    if (!finalized.ok) {
-      throw new GitHubDeliveryServiceError({
+      postMintFailure = new GitHubDeliveryServiceError({
         code: 'github_delivery_state_conflict',
         retryable: false,
         phase: 'credential',
       })
     }
 
-    return {
-      ...finalized,
-      credential: {
-        grantId: finalized.grant.id,
-        username: 'x-access-token',
-        token: access.token,
-        expiresAt: access.expiresAt,
-        repositoryId: access.repositoryId,
-        canonicalHttpsUrl: `https://github.com/${finalized.request.repository}.git`,
-      },
+    await revokeMintedCredential(access.token)
+    if (finalizationRejection !== null) {
+      if (finalizationRejection.outcomeCode === 'binding_inactive') {
+        return finalizationRejection
+      }
+      throw new GitHubDeliveryServiceError({
+        code: 'github_delivery_state_conflict',
+        retryable: false,
+        phase: 'credential',
+      })
     }
+    throw postMintFailure ?? new GitHubDeliveryServiceError({
+      code: 'github_delivery_state_conflict',
+      retryable: false,
+      phase: 'credential',
+    })
   }
 
   async function verifyBranchPublication(

@@ -1303,6 +1303,7 @@ const rejectionOutcomes = new Set<GitHubDeliveryRejectionOutcome>([
 ])
 
 const serviceFailureStatuses = {
+  github_credential_revocation_unconfirmed: 502,
   github_authentication_failed: 502,
   github_conflict: 409,
   github_forbidden: 502,

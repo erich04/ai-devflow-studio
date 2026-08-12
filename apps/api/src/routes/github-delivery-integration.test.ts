@@ -255,6 +255,9 @@ function createHarness() {
     expiresAt: credentialExpiresAt,
     permissions: { contents: 'write' },
   }))
+  const revokeInstallationAccessToken = vi.fn<
+    GitHubAppClient['revokeInstallationAccessToken']
+  >(async () => undefined)
   const getBranchHead = vi.fn<GitHubAppClient['getBranchHead']>(
     async (input) => ({
       repository: input.repository,
@@ -287,6 +290,7 @@ function createHarness() {
   const client: GitHubAppClient = {
     verifyRepository,
     issueContentsWriteToken,
+    revokeInstallationAccessToken,
     getBranchHead,
     findDraftPullRequest,
     findOrCreateDraftPullRequest,
@@ -302,6 +306,7 @@ function createHarness() {
     effects: {
       verifyRepository,
       issueContentsWriteToken,
+      revokeInstallationAccessToken,
       getBranchHead,
       findDraftPullRequest,
       findOrCreateDraftPullRequest,
@@ -427,6 +432,138 @@ describe('GitHub Delivery API integration', () => {
       body: { outcomeCode: 'approval_required', replayed: false },
     })
     expect(harness.effects.issueContentsWriteToken).not.toHaveBeenCalled()
+  })
+
+  it('revokes a provider token when owner binding revocation wins seed finalization', async () => {
+    const harness = createHarness()
+    const bindingPath = `/api/team/projects/${projectId}/github-repository-binding`
+    const bindingResult = await route(
+      harness,
+      'PUT',
+      bindingPath,
+      ownerPrincipal,
+      {
+        installationId: '12345',
+        repositoryId: '98765',
+        expectedStateVersion: 0,
+      },
+    )
+    const repositoryBinding = (
+      bindingResult?.body as { binding: GitHubRepositoryBinding }
+    ).binding
+    const intent = await createGitHubDeliveryIntent(
+      createIntentSource(repositoryBinding),
+    )
+    const submitPath = `/api/desktop/projects/${projectId}/github-deliveries`
+    const submitted = await route(
+      harness,
+      'POST',
+      submitPath,
+      desktopPrincipal,
+      {
+        intent,
+        prTitle: 'Deliver the exact approved commit',
+        prBody: 'Bound to passing Test Evidence.',
+        expectedStateVersion: 0,
+      },
+    )
+    const request = (submitted?.body as { request: GitHubDeliveryRequest }).request
+    await expect(
+      route(
+        harness,
+        'POST',
+        `/api/team/projects/${projectId}/github-deliveries/${request.id}/approve`,
+        ownerPrincipal,
+        { expectedStateVersion: request.stateVersion },
+      ),
+    ).resolves.toMatchObject({
+      status: 200,
+      body: { request: { stateVersion: 2, status: 'approved' } },
+    })
+
+    const minted = {
+      installationId: '12345',
+      repositoryId: '98765',
+      token: ephemeralToken,
+      expiresAt: credentialExpiresAt,
+      permissions: { contents: 'write' as const },
+    }
+    let resolveMint: ((access: typeof minted) => void) | undefined
+    harness.effects.issueContentsWriteToken.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveMint = resolve
+        }),
+    )
+    const requestPath = `${submitPath}/${request.id}`
+    const pendingCredential = route(
+      harness,
+      'POST',
+      `${requestPath}/credential-grant`,
+      desktopPrincipal,
+      { expectedStateVersion: 2 },
+    )
+    await vi.waitFor(() =>
+      expect(harness.effects.issueContentsWriteToken).toHaveBeenCalledTimes(1),
+    )
+
+    await expect(
+      route(
+        harness,
+        'POST',
+        `${bindingPath}/revoke`,
+        ownerPrincipal,
+        { expectedStateVersion: 1 },
+      ),
+    ).resolves.toMatchObject({
+      status: 200,
+      body: {
+        binding: { version: 2, status: 'revoked' },
+        outcomeCode: 'binding_revoked',
+        replayed: false,
+      },
+    })
+    resolveMint!(minted)
+
+    const credentialResult = await pendingCredential
+    expect(credentialResult).toEqual({
+      status: 409,
+      body: {
+        error: 'conflict',
+        message: 'The Project GitHub repository binding is not active.',
+        outcomeCode: 'binding_inactive',
+        replayed: false,
+      },
+    })
+    expect(harness.effects.issueContentsWriteToken).toHaveBeenCalledTimes(1)
+    expect(harness.effects.revokeInstallationAccessToken).toHaveBeenCalledTimes(1)
+    expect(harness.effects.revokeInstallationAccessToken).toHaveBeenCalledWith(
+      ephemeralToken,
+    )
+
+    const snapshot = await route(
+      harness,
+      'GET',
+      requestPath,
+      desktopPrincipal,
+    )
+    expect(snapshot).toMatchObject({
+      status: 200,
+      body: {
+        snapshot: {
+          request: {
+            status: 'revoked',
+            outcomeCode: 'binding_revoked',
+          },
+          grant: {
+            status: 'revoked',
+            outcomeCode: 'binding_revoked',
+          },
+        },
+      },
+    })
+    expect(JSON.stringify(snapshot)).not.toContain(ephemeralToken)
+    expect(JSON.stringify(credentialResult)).not.toContain(ephemeralToken)
   })
 
   it('delivers one exact approved commit through separated Web/Desktop authority and replays its Draft PR without another provider effect', async () => {
@@ -562,6 +699,7 @@ describe('GitHub Delivery API integration', () => {
       },
     })
     expect(harness.effects.issueContentsWriteToken).toHaveBeenCalledTimes(1)
+    expect(harness.effects.revokeInstallationAccessToken).not.toHaveBeenCalled()
     const credentialBody = credentialResult?.body as {
       grant: GitHubCredentialGrant
     }

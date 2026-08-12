@@ -121,9 +121,132 @@ describe('GitHub App client', () => {
     })
   })
 
+  it('revokes one installation access token only through strict no-content success', async () => {
+    const token = `ghs_${secretSentinel}_${'r'.repeat(24)}`
+    const fetcher = vi.fn<typeof fetch>(
+      async () => new Response(null, { status: 204 }),
+    )
+    const client = makeClient(fetcher)
+
+    await expect(client.revokeInstallationAccessToken(token)).resolves.toBeUndefined()
+
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://api.github.com/installation/token',
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: expect.objectContaining({ authorization: `Bearer ${token}` }),
+        signal: expect.any(AbortSignal),
+      }),
+    )
+    const [, init] = fetcher.mock.calls[0]!
+    expect(init?.body).toBeUndefined()
+  })
+
+  it.each([200, 202, 401, 500])(
+    'fails closed with a fixed non-retryable error when token revocation returns %i',
+    async (status) => {
+      const token = `ghs_${secretSentinel}_${'r'.repeat(24)}`
+      const client = makeClient(
+        vi.fn(async () => new Response(secretSentinel, { status })),
+      )
+
+      const error = await client
+        .revokeInstallationAccessToken(token)
+        .catch((reason: unknown) => reason)
+
+      expect(error).toBeInstanceOf(GitHubAppClientError)
+      if (!(error instanceof GitHubAppClientError)) {
+        throw new Error('expected a typed GitHub App client error')
+      }
+      expect(error).toMatchObject({
+        code: 'github_credential_revocation_unconfirmed',
+        retryable: false,
+      })
+      expect(error.status).toBeUndefined()
+      expect(error).not.toHaveProperty('cause')
+      expect(String(error)).not.toContain(secretSentinel)
+      expect(JSON.stringify(error)).not.toContain(secretSentinel)
+    },
+  )
+
+  it('bounds token revocation independently when the fetcher ignores AbortSignal', async () => {
+    const token = `ghs_${secretSentinel}_${'r'.repeat(24)}`
+    let signal: AbortSignal | undefined
+    const client = createGitHubAppClient({
+      appId: '789',
+      fetcher: vi.fn(async (_url, init) => {
+        signal = init?.signal ?? undefined
+        return new Promise<Response>(() => undefined)
+      }),
+      clock: () => new Date(now),
+      signJwt: async () => `app-jwt-${'j'.repeat(32)}`,
+      requestTimeoutMs: 10,
+    })
+
+    await expect(client.revokeInstallationAccessToken(token)).rejects.toMatchObject({
+      code: 'github_credential_revocation_unconfirmed',
+      retryable: false,
+    })
+    expect(signal?.aborted).toBe(true)
+  })
+
+  it('maps an aborted token revocation request to the fixed unconfirmed result', async () => {
+    const token = `ghs_${secretSentinel}_${'r'.repeat(24)}`
+    const client = makeClient(
+      vi.fn(async () => {
+        throw new DOMException(secretSentinel, 'AbortError')
+      }),
+    )
+
+    const error = await client
+      .revokeInstallationAccessToken(token)
+      .catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({
+      code: 'github_credential_revocation_unconfirmed',
+      retryable: false,
+    })
+    expect(String(error)).not.toContain(secretSentinel)
+    expect(JSON.stringify(error)).not.toContain(secretSentinel)
+  })
+
+  it('rejects an invalid token before attempting revocation network access', async () => {
+    const fetcher = vi.fn()
+    const client = makeClient(fetcher)
+
+    await expect(
+      client.revokeInstallationAccessToken('bad token\nAuthorization: secret'),
+    ).rejects.toMatchObject({ code: 'github_invalid_request', retryable: false })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('does not attempt compensation for a malformed provider token', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        token: `bad token\n${secretSentinel}`,
+        expires_at: expiresAt,
+        repository_selection: 'selected',
+        permissions: { metadata: 'read', contents: 'write' },
+        repositories: [{ id: Number(repositoryId) }],
+      }),
+    )
+    const client = makeClient(fetcher)
+
+    const error = await client
+      .issueContentsWriteToken({ installationId, repositoryId })
+      .catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({ code: 'github_malformed_response', retryable: false })
+    expect(String(error)).not.toContain(secretSentinel)
+    expect(JSON.stringify(error)).not.toContain(secretSentinel)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
   it('rejects an over-broad or overlong installation token grant', async () => {
-    const broad = makeClient(
-      vi.fn(async () =>
+    const broadFetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
         Response.json({
           token: `ghs_${'x'.repeat(40)}`,
           expires_at: expiresAt,
@@ -131,14 +254,17 @@ describe('GitHub App client', () => {
           permissions: { metadata: 'read', contents: 'write', pull_requests: 'write' },
           repositories: [{ id: Number(repositoryId) }],
         }),
-      ),
-    )
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const broad = makeClient(broadFetcher)
     await expect(
       broad.issueContentsWriteToken({ installationId, repositoryId }),
     ).rejects.toMatchObject({ code: 'github_scope_mismatch' })
+    expect(broadFetcher).toHaveBeenCalledTimes(2)
 
-    const overlong = makeClient(
-      vi.fn(async () =>
+    const overlongFetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
         Response.json({
           token: `ghs_${'x'.repeat(40)}`,
           expires_at: '2026-08-11T13:00:01.000Z',
@@ -146,11 +272,122 @@ describe('GitHub App client', () => {
           permissions: { metadata: 'read', contents: 'write' },
           repositories: [{ id: Number(repositoryId) }],
         }),
-      ),
-    )
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const overlong = makeClient(overlongFetcher)
     await expect(
       overlong.issueContentsWriteToken({ installationId, repositoryId }),
     ).rejects.toMatchObject({ code: 'github_scope_mismatch' })
+    expect(overlongFetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('revokes a valid provider token before rejecting its invalid expiry', async () => {
+    const token = `ghs_${secretSentinel}_${'e'.repeat(24)}`
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          token,
+          expires_at: '2026-08-11T13:00:01.000Z',
+          repository_selection: 'selected',
+          permissions: { metadata: 'read', contents: 'write' },
+          repositories: [{ id: Number(repositoryId) }],
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const client = makeClient(fetcher)
+
+    const error = await client
+      .issueContentsWriteToken({ installationId, repositoryId })
+      .catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({ code: 'github_scope_mismatch', retryable: false })
+    expect(String(error)).not.toContain(token)
+    expect(JSON.stringify(error)).not.toContain(token)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(fetcher.mock.calls[1]).toEqual([
+      'https://api.github.com/installation/token',
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: expect.objectContaining({ authorization: `Bearer ${token}` }),
+      }),
+    ])
+  })
+
+  it('masks provider validation failure when compensation cannot be confirmed', async () => {
+    const token = `ghs_${secretSentinel}_${'u'.repeat(24)}`
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          token,
+          expires_at: '2026-08-11T13:00:01.000Z',
+          repository_selection: 'selected',
+          permissions: { metadata: 'read', contents: 'write' },
+          repositories: [{ id: Number(repositoryId) }],
+        }),
+      )
+      .mockResolvedValueOnce(new Response(secretSentinel, { status: 401 }))
+    const client = makeClient(fetcher)
+
+    const error = await client
+      .issueContentsWriteToken({ installationId, repositoryId })
+      .catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(GitHubAppClientError)
+    expect(error).toMatchObject({
+      code: 'github_credential_revocation_unconfirmed',
+      retryable: false,
+    })
+    expect(error).not.toHaveProperty('cause')
+    expect(String(error)).not.toContain(token)
+    expect(JSON.stringify(error)).not.toContain(token)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['repository selection', { repository_selection: 'all' }],
+    [
+      'over-broad permissions',
+      { permissions: { metadata: 'read', contents: 'write', pull_requests: 'write' } },
+    ],
+    ['wrong repository', { repositories: [{ id: 999 }] }],
+    [
+      'duplicate repositories',
+      { repositories: [{ id: Number(repositoryId) }, { id: Number(repositoryId) }] },
+    ],
+  ])('revokes a valid provider token before rejecting %s', async (_label, override) => {
+    const token = `ghs_${secretSentinel}_${'s'.repeat(24)}`
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          token,
+          expires_at: expiresAt,
+          repository_selection: 'selected',
+          permissions: { metadata: 'read', contents: 'write' },
+          repositories: [{ id: Number(repositoryId) }],
+          ...override,
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const client = makeClient(fetcher)
+
+    const error = await client
+      .issueContentsWriteToken({ installationId, repositoryId })
+      .catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({ code: 'github_scope_mismatch', retryable: false })
+    expect(String(error)).not.toContain(token)
+    expect(JSON.stringify(error)).not.toContain(token)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    const [url, init] = fetcher.mock.calls[1]!
+    expect(url).toBe('https://api.github.com/installation/token')
+    expect(init).toMatchObject({
+      method: 'DELETE',
+      headers: expect.objectContaining({ authorization: `Bearer ${token}` }),
+    })
+    expect(init?.body).toBeUndefined()
   })
 
   it('verifies the exact installation repository through a narrowed read token', async () => {
@@ -489,6 +726,7 @@ describe('GitHub App client', () => {
       'findOrCreateDraftPullRequest',
       'getBranchHead',
       'issueContentsWriteToken',
+      'revokeInstallationAccessToken',
       'verifyRepository',
     ])
     expect(Object.keys(client).join(' ')).not.toMatch(/merge|force|delete|tag|rawRequest/iu)

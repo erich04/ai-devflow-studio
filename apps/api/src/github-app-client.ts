@@ -22,6 +22,7 @@ export type GitHubAppJwtClaims = {
 }
 
 export type GitHubAppClientErrorCode =
+  | 'github_credential_revocation_unconfirmed'
   | 'github_authentication_failed'
   | 'github_conflict'
   | 'github_forbidden'
@@ -40,6 +41,7 @@ export type GitHubAppClientErrorCode =
   | 'github_validation_failed'
 
 const safeErrorMessages: Record<GitHubAppClientErrorCode, string> = {
+  github_credential_revocation_unconfirmed: 'GitHub credential revocation could not be confirmed',
   github_authentication_failed: 'GitHub App authentication failed',
   github_conflict: 'GitHub rejected the request because remote state conflicts',
   github_forbidden: 'GitHub denied the requested operation',
@@ -169,6 +171,7 @@ export type GitHubAppClient = {
   issueContentsWriteToken(
     input: GitHubRepositoryAuthority,
   ): Promise<GitHubRepositoryAccessToken>
+  revokeInstallationAccessToken(token: string): Promise<void>
   verifyRepository(input: GitHubRepositoryAuthority): Promise<VerifiedGitHubRepository>
   getBranchHead(
     input: GitHubRepositoryContext & { branch: string },
@@ -487,6 +490,71 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
     }
   }
 
+  const requestNoContent = async (
+    url: string,
+    request: {
+      method: 'DELETE'
+      authorization: string
+      expectedStatus: 204
+    },
+  ): Promise<void> => {
+    const controller = new AbortController()
+    let timedOut = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const operation = (async () => {
+      let response: Response
+      try {
+        response = await input.fetcher(url, {
+          method: request.method,
+          headers: safeHeaders(request.authorization, false),
+          signal: controller.signal,
+        })
+      } catch {
+        throw clientError(timedOut ? 'github_timeout' : 'github_unavailable')
+      }
+
+      if (!(response instanceof Response)) {
+        throw clientError('github_malformed_response')
+      }
+      if (response.status !== request.expectedStatus) {
+        await response.body?.cancel().catch(() => undefined)
+        throw statusError(response.status)
+      }
+      if (response.body !== null) {
+        await response.body.cancel().catch(() => undefined)
+        throw clientError('github_malformed_response')
+      }
+    })()
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true
+        controller.abort()
+        reject(clientError('github_timeout'))
+      }, requestTimeoutMs)
+    })
+    try {
+      return await Promise.race([operation, deadline])
+    } finally {
+      if (timer) clearTimeout(timer)
+      controller.abort()
+    }
+  }
+
+  const revokeInstallationAccessToken = async (token: string): Promise<void> => {
+    if (typeof token !== 'string' || !credentialPattern.test(token)) {
+      throw clientError('github_invalid_request')
+    }
+    try {
+      await requestNoContent(`${githubApiBaseUrl}/installation/token`, {
+        method: 'DELETE',
+        authorization: `Bearer ${token}`,
+        expectedStatus: 204,
+      })
+    } catch {
+      throw clientError('github_credential_revocation_unconfirmed')
+    }
+  }
+
   const signAppJwt = async (): Promise<string> => {
     const current = normalizeClockValue(input.clock)
     const nowSeconds = Math.floor(current.getTime() / 1_000)
@@ -533,51 +601,56 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
       throw clientError('github_malformed_response')
     }
 
-    const rawExpiresAt = expectString(response['expires_at'])
-    const expirationMs = Date.parse(rawExpiresAt)
-    const receivedAt = normalizeClockValue(input.clock)
-    if (
-      !Number.isFinite(expirationMs) ||
-      expirationMs <= receivedAt.getTime() ||
-      expirationMs - receivedAt.getTime() > maxInstallationTokenLifetimeMs
-    ) {
-      throw clientError('github_scope_mismatch')
-    }
+    try {
+      const rawExpiresAt = expectString(response['expires_at'])
+      const expirationMs = Date.parse(rawExpiresAt)
+      const receivedAt = normalizeClockValue(input.clock)
+      if (
+        !Number.isFinite(expirationMs) ||
+        expirationMs <= receivedAt.getTime() ||
+        expirationMs - receivedAt.getTime() > maxInstallationTokenLifetimeMs
+      ) {
+        throw clientError('github_scope_mismatch')
+      }
 
-    if (response['repository_selection'] !== 'selected') {
-      throw clientError('github_scope_mismatch')
-    }
+      if (response['repository_selection'] !== 'selected') {
+        throw clientError('github_scope_mismatch')
+      }
 
-    const permissions = expectRecord(response['permissions'])
-    for (const [name, value] of Object.entries(permissions)) {
-      if (name === permission) {
-        if (value !== level) {
+      const permissions = expectRecord(response['permissions'])
+      for (const [name, value] of Object.entries(permissions)) {
+        if (name === permission) {
+          if (value !== level) {
+            throw clientError('github_scope_mismatch')
+          }
+          continue
+        }
+        if (name !== 'metadata' || value !== 'read') {
           throw clientError('github_scope_mismatch')
         }
-        continue
       }
-      if (name !== 'metadata' || value !== 'read') {
+      if (permissions[permission] !== level) {
         throw clientError('github_scope_mismatch')
       }
-    }
-    if (permissions[permission] !== level) {
-      throw clientError('github_scope_mismatch')
-    }
 
-    const repositories = response['repositories']
-    if (repositories !== undefined) {
-      if (!Array.isArray(repositories) || repositories.length !== 1) {
-        throw clientError('github_scope_mismatch')
+      const repositories = response['repositories']
+      if (repositories !== undefined) {
+        if (!Array.isArray(repositories) || repositories.length !== 1) {
+          throw clientError('github_scope_mismatch')
+        }
+        const returnedRepository = expectRecord(repositories[0])
+        if (parseResponseNumericId(returnedRepository['id']) !== normalized.repositoryId) {
+          throw clientError('github_scope_mismatch')
+        }
       }
-      const returnedRepository = expectRecord(repositories[0])
-      if (parseResponseNumericId(returnedRepository['id']) !== normalized.repositoryId) {
-        throw clientError('github_scope_mismatch')
-      }
-    }
 
-    return {
-      token,
-      expiresAt: new Date(expirationMs).toISOString(),
+      return {
+        token,
+        expiresAt: new Date(expirationMs).toISOString(),
+      }
+    } catch (error) {
+      await revokeInstallationAccessToken(token)
+      throw error
     }
   }
 
@@ -836,6 +909,10 @@ function createClient(input: CreateGitHubAppClientInput): GitHubAppClient {
         repositoryId: normalized.repositoryId,
         permissions: { contents: 'write' },
       }
+    },
+
+    async revokeInstallationAccessToken(token) {
+      await revokeInstallationAccessToken(token)
     },
 
     async verifyRepository(repositoryInput) {

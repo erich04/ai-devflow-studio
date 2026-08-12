@@ -466,6 +466,9 @@ async function createGateHarness() {
         permissions: { contents: 'write' },
       }
     },
+    async revokeInstallationAccessToken() {
+      throw new Error('deterministic success gate must never revoke a credential')
+    },
     async getBranchHead(input) {
       const sha = (
         await git(fixture.bareRemotePath, [
