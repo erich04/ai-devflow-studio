@@ -1,6 +1,6 @@
 # DevFlow Studio Self-Hosted Pilot Guide
 
-This guide runs the v1.4 pilot stack: Web, API, and Postgres. It is intended for a small,
+This guide runs the v1.5 pilot stack: Web, API, and Postgres. It is intended for a small,
 self-hosted evaluation behind an operator-controlled network boundary, not public SaaS deployment.
 
 ## What This Stack Proves
@@ -263,7 +263,7 @@ visibility, and then removes its isolated stack and volume. It does not enable u
 headers. `test:docker-smoke` is outside `corepack pnpm verify` because it requires Docker, though CI
 runs it in the dedicated Docker smoke step.
 
-### V1.4 lifecycle and rollback matrix
+### V1.5 lifecycle and rollback matrix
 
 Run the explicit lifecycle proof before forming a release candidate:
 
@@ -272,20 +272,22 @@ corepack pnpm test:docker-lifecycle-smoke
 ```
 
 This command is no-cost and remains outside the default `verify` command. It builds the exact
-annotated `v1.3.0` source, pins its resolved commit, and exercises these isolated databases and
+annotated `v1.4.0` source, pins its resolved commit, and exercises these isolated databases and
 containers:
 
 | Scenario | Automated proof | Supported operator action |
 | --- | --- | --- |
-| Fresh V1.4 deploy | The production migration bundle creates schema v10 from an empty database. | Start the one-shot migrator before API/Web. |
-| Retained-data upgrade | V1.3 schema v7 and seeded Run data survive a Postgres container restart and the V1.4 migration to schema v10. | Back up the Postgres volume, stop writers, run the V1.4 migrator once, then start V1.4 API/Web. |
-| Failed upgrade | A deliberately incompatible v9 Gate row makes v10 fail; the transaction leaves schema v9 unchanged. After the row is remediated, the same production migrator reaches v10. | Keep the failed database offline, fix the reported incompatible data, and rerun the V1.4 migrator. Do not partially apply migration SQL by hand. |
-| API application rollback | The exact V1.3 API starts against the upgraded schema v10 and performs an authenticated overview read that retains V1.3 data. | A bounded read-path rollback to the V1.3 API is supported while keeping schema v10, but operators must not run the V1.3 migrator against that upgraded database. Return to V1.4 for writes and further migrations. |
-| Desktop application rollback | V1.4 Desktop schema v12 contains migrations unknown to V1.3 schema v8. | There is no in-place Desktop database downgrade. Before upgrading, back up the Desktop user-data directory; to return to V1.3, restore the pre-upgrade backup or use a separate V1.3 user-data directory. |
+| Fresh V1.5 deploy | The production migration bundle creates Team schema v12 from an empty database, and the current API reaches readiness. | Start the one-shot migrator before API/Web. |
+| Retained-data upgrade | The exact V1.4 migrator creates populated schema v10. Seeded Run data survives a Postgres container restart and the V1.5 migration to schema v12, then remains visible through an authenticated current-API read. | Back up Postgres, stop writers, run the V1.5 migrator once, then start V1.5 API/Web. |
+| Transactional v11-to-v12 retry | A populated v11 GitHub Delivery row with an incompatible series key makes v12 fail. The transaction leaves schema v11, migration history, columns, and the exact row unchanged. After the key is remediated, retry reaches v12, preserves every prior field, and adds only the documented series/attempt backfill. | Keep the failed database offline, fix the reported incompatible row, and rerun the same V1.5 migrator. Do not partially apply migration SQL by hand. |
+| API application rollback | The exact V1.4 API fails readiness closed against schema v12. The smoke restores the captured pre-upgrade schema v10 backup into a separate database, then proves an authenticated V1.4 overview read with the retained Run. | Do not point V1.4 at schema v12; operators must not run the V1.4 migrator against it. To roll back, stop V1.5 writers, restore the pre-upgrade backup as schema v10, and only then start the V1.4 API. |
+| Desktop application rollback | V1.5 Desktop schema v15 contains migrations unknown to V1.4 schema v12. | There is no in-place Desktop database downgrade. Before upgrading, back up the Desktop user-data directory; to return to V1.4, restore the pre-upgrade backup or use a separate V1.4 user-data directory. |
 
-The API rollback check is deliberately bounded: it proves the V1.3 authenticated read surface can
-consume the additive V1.4 Team schema. It does not claim that old binaries own V1.4 writes or can
-reverse schema v10. A database-level rollback requires restoring the pre-upgrade Postgres backup.
+The API rollback check is deliberately bounded: it proves that a V1.4 binary rejects the newer Team
+schema and can read an explicitly restored V1.4 backup. It does not claim that old binaries own V1.5
+writes, can consume schema v12, or can reverse migrations. Database rollback always requires the
+operator to restore the pre-upgrade Postgres backup; Desktop rollback likewise requires its separate
+pre-upgrade user-data backup.
 
 ## Stop And Reset
 

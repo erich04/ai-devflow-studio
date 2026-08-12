@@ -56,7 +56,7 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 | `corepack pnpm verify:demo` | The default gate plus browser E2E and a real Electron main/preload/SQLite smoke path. |
 | `corepack pnpm test:postgres-smoke` | Migration, persistence, policy, approval, sync, and redacted team reads against Postgres. |
 | `corepack pnpm test:docker-smoke` | The containerized API/Web/Postgres stack, Desktop pairing, bearer auth, and safe overview data. |
-| `corepack pnpm test:docker-lifecycle-smoke` | Fresh schema v10, retained V1.3 upgrade, failed-upgrade recovery, and bounded V1.3 API read rollback. |
+| `corepack pnpm test:docker-lifecycle-smoke` | Fresh Team schema v12, retained V1.4 schema v10 upgrade, transactional populated v11-to-v12 retry, and bounded V1.4 backup/restore rollback. |
 | `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive and packaged launch isolation. |
 | Release-only opencode smoke | A paid, explicit signoff for the real local coding runtime; it is never part of default CI. |
 

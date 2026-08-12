@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { createHmac, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import os from 'node:os'
@@ -8,11 +8,12 @@ import { fileURLToPath } from 'node:url'
 
 import { waitForFinalPostgresReadiness } from './docker-lifecycle-readiness.mjs'
 
-const V13_TAG = 'v1.3.0'
-const V13_COMMIT = '06f3cc321300e3751aaa41c67f66d70cfaf6ebe4'
+const V14_TAG = 'v1.4.0'
+const V14_COMMIT = 'e746843c1943755c50c8fb060bdf533b06442232'
 const FRESH_DATABASE = 'devflow_fresh'
 const UPGRADE_DATABASE = 'devflow_upgrade'
 const FAILURE_DATABASE = 'devflow_failed_upgrade'
+const ROLLBACK_DATABASE = 'devflow_v14_rollback'
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'devflow-lifecycle-smoke-'))
@@ -20,10 +21,10 @@ const uniqueSuffix = `${Date.now()}-${process.pid}-${randomBytes(4).toString('he
 const networkName = `devflow-lifecycle-network-${uniqueSuffix}`
 const volumeName = `devflow-lifecycle-postgres-${uniqueSuffix}`
 const postgresContainerName = `devflow-lifecycle-postgres-${uniqueSuffix}`
-const rollbackApiContainerName = `devflow-lifecycle-v13-api-${uniqueSuffix}`
+const rollbackApiContainerName = `devflow-lifecycle-v14-api-${uniqueSuffix}`
 const currentApiContainerName = `devflow-lifecycle-current-api-${uniqueSuffix}`
 const currentApiImage = `devflow-lifecycle-current-api:${uniqueSuffix}`
-const v13Image = `devflow-lifecycle-v13:${uniqueSuffix}`
+const v14Image = `devflow-lifecycle-v14:${uniqueSuffix}`
 const postgresUser = 'postgres'
 const postgresPassword = 'devflow-lifecycle-smoke-password'
 const sessionSecret = 'devflow-lifecycle-session-secret-non-production-32-plus'
@@ -91,20 +92,20 @@ function databaseUrl(database) {
   return `postgresql://${postgresUser}:${postgresPassword}@postgres:5432/${database}`
 }
 
-async function verifyV13Tag() {
-  const objectType = await execute('git', ['cat-file', '-t', V13_TAG])
+async function verifyV14Tag() {
+  const objectType = await execute('git', ['cat-file', '-t', V14_TAG])
   expect(
     objectType.stdout.trim() === 'tag',
-    `${V13_TAG} is not an annotated tag object.`,
+    `${V14_TAG} is not an annotated tag object.`,
   )
-  const resolved = await execute('git', ['rev-parse', `${V13_TAG}^{}`])
+  const resolved = await execute('git', ['rev-parse', `${V14_TAG}^{}`])
   expect(
-    resolved.stdout.trim() === V13_COMMIT,
-    `${V13_TAG} resolved to ${resolved.stdout.trim() || 'nothing'}, expected ${V13_COMMIT}.`,
+    resolved.stdout.trim() === V14_COMMIT,
+    `${V14_TAG} resolved to ${resolved.stdout.trim() || 'nothing'}, expected ${V14_COMMIT}.`,
   )
 }
 
-async function assertV13BuildContextSafe(root, relativeDirectory = '') {
+async function assertV14BuildContextSafe(root, relativeDirectory = '') {
   const directory = path.join(root, relativeDirectory)
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const relativePath = path.join(relativeDirectory, entry.name)
@@ -113,11 +114,11 @@ async function assertV13BuildContextSafe(root, relativeDirectory = '') {
       /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(entry.name)
     ) {
       throw new Error(
-        `Refusing to send a V1.3 test path to the Docker build context: ${relativePath}`,
+        `Refusing to send a V1.4 test path to the Docker build context: ${relativePath}`,
       )
     }
     if (entry.isDirectory()) {
-      await assertV13BuildContextSafe(root, relativePath)
+      await assertV14BuildContextSafe(root, relativePath)
       continue
     }
     if (!entry.isFile()) continue
@@ -132,7 +133,7 @@ async function assertV13BuildContextSafe(root, relativeDirectory = '') {
       const source = await readFile(sourcePath, 'utf8')
       if (/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/i.test(source)) {
         throw new Error(
-          `Refusing a UUID-shaped literal in the V1.3 production build context: ${relativePath}`,
+          `Refusing a UUID-shaped literal in the V1.4 production build context: ${relativePath}`,
         )
       }
     }
@@ -140,11 +141,11 @@ async function assertV13BuildContextSafe(root, relativeDirectory = '') {
 }
 
 async function buildImages() {
-  const archivePath = path.join(temporaryRoot, 'v1.3.0.tar')
-  const v13Source = path.join(temporaryRoot, 'v1.3.0')
-  await mkdir(v13Source, { recursive: true })
+  const archivePath = path.join(temporaryRoot, 'v1.4.0.tar')
+  const v14Source = path.join(temporaryRoot, 'v1.4.0')
+  await mkdir(v14Source, { recursive: true })
   await execute('git', [
-    'archive', '--format=tar', `--output=${archivePath}`, V13_COMMIT, '--',
+    'archive', '--format=tar', `--output=${archivePath}`, V14_COMMIT, '--',
     'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.base.json',
     'packages/shared', 'apps/api',
     ':(exclude,glob)**/*.test.ts',
@@ -153,11 +154,11 @@ async function buildImages() {
     ':(exclude,glob)**/*.spec.tsx',
     ':(exclude,glob)**/__tests__/**',
   ])
-  await execute('tar', ['-xf', archivePath, '-C', v13Source])
-  await assertV13BuildContextSafe(v13Source)
-  const v13Dockerfile = path.join(v13Source, 'lifecycle.Dockerfile')
+  await execute('tar', ['-xf', archivePath, '-C', v14Source])
+  await assertV14BuildContextSafe(v14Source)
+  const v14Dockerfile = path.join(v14Source, 'lifecycle.Dockerfile')
   await writeFile(
-    v13Dockerfile,
+    v14Dockerfile,
     `FROM node:24-bookworm-slim@sha256:235600a8101ab264e117b1768e925532262668dc9b581ef1dd7d96ced463b8e7
 ENV CI=1
 WORKDIR /app
@@ -177,7 +178,7 @@ CMD ["node", "apps/api/dist/server.js"]
     { inherit: true },
   )
   await runDocker(
-    ['build', '--file', v13Dockerfile, '--tag', v13Image, v13Source],
+    ['build', '--file', v14Dockerfile, '--tag', v14Image, v14Source],
     { inherit: true },
   )
 }
@@ -295,6 +296,27 @@ async function psql(database, sql) {
   )
 }
 
+async function backupV14Database(database) {
+  const dump = await runDocker([
+    'exec',
+    postgresContainerName,
+    'pg_dump',
+    '--no-owner',
+    '--no-privileges',
+    '--format=p',
+    '-U',
+    postgresUser,
+    database,
+  ])
+  expect(dump.stdout.length > 0, 'The V1.4 pre-upgrade backup was empty.')
+  return dump.stdout
+}
+
+async function restoreV14Database(v14Backup) {
+  await createDatabase(ROLLBACK_DATABASE)
+  await psql(ROLLBACK_DATABASE, v14Backup)
+}
+
 function currentMigrationArgs(database) {
   return [
     'run',
@@ -315,7 +337,7 @@ async function runCurrentMigration(database) {
   await runDocker(currentMigrationArgs(database))
 }
 
-async function runV13Migration(database) {
+async function runV14Migration(database) {
   await runDocker([
     'run',
     '--rm',
@@ -323,7 +345,7 @@ async function runV13Migration(database) {
     networkName,
     '-e',
     `DEVFLOW_DATABASE_URL=${databaseUrl(database)}`,
-    v13Image,
+    v14Image,
     'corepack',
     'pnpm',
     '--filter',
@@ -332,7 +354,7 @@ async function runV13Migration(database) {
   ])
 }
 
-async function seedV13(database) {
+async function seedV14(database) {
   await runDocker([
     'run',
     '--rm',
@@ -342,7 +364,7 @@ async function seedV13(database) {
     `DEVFLOW_DATABASE_URL=${databaseUrl(database)}`,
     '-e',
     'DEVFLOW_ENABLE_DEMO_DATA=true',
-    v13Image,
+    v14Image,
     'corepack',
     'pnpm',
     '--filter',
@@ -373,28 +395,137 @@ async function expectColumnMissing(database, table, column) {
   )
 }
 
-async function applyHistoricalMigration(database, fileName, version) {
+async function expectMigrationHistoryMissing(database, version) {
+  const result = await psql(
+    database,
+    `SELECT count(*) FROM team_schema_migrations WHERE version = ${version};\n`,
+  )
+  expect(
+    result.stdout.trim() === '0',
+    `${database} retained migration history version ${version} after rollback.`,
+  )
+}
+
+function migrationChecksum(sql) {
+  return createHash('sha256')
+    .update(sql.replace(/\r\n/g, '\n'), 'utf8')
+    .digest('hex')
+}
+
+async function applyHistoricalMigration(database, fileName, version, name) {
   const sql = await readFile(
     path.join(repositoryRoot, 'apps', 'api', 'src', 'db', 'migrations', fileName),
     'utf8',
   )
-  await psql(database, `${sql}\nUPDATE schema_meta SET value = '${version}' WHERE key = 'schema_version';\n`)
+  const checksum = migrationChecksum(sql)
+  await psql(
+    database,
+    `BEGIN;\n${sql}\nUPDATE schema_meta SET value = '${version}', updated_at = now() WHERE key = 'schema_version';\nINSERT INTO team_schema_migrations (version, name, checksum, adopted) VALUES (${version}, '${name}', '${checksum}', false);\nCOMMIT;\n`,
+  )
 }
 
-function createV13SessionCookie(projectId) {
-  const session = {
-    source: 'authenticated',
-    organizationId: 'org-demo',
-    userId: 'u-erich',
-    role: 'owner',
-    authAccountId: 'acct-demo-u-erich',
-    projectMemberships: [{ projectId, userId: 'u-erich', role: 'owner' }],
-  }
-  const payload = Buffer.from(JSON.stringify(session), 'utf8').toString('base64url')
-  const signature = createHmac('sha256', sessionSecret)
-    .update(payload)
-    .digest('base64url')
-  return `devflow_session=${payload}.${signature}`
+async function readV14RunSnapshot(database) {
+  const result = await psql(
+    database,
+    "SELECT to_jsonb(run)::text FROM workflow_runs AS run WHERE title = 'V1.4 retained sentinel';\n",
+  )
+  const snapshot = result.stdout.trim()
+  expect(snapshot.length > 0, 'The populated V1.4 Run sentinel was missing.')
+  return snapshot
+}
+
+async function readV11DeliverySnapshot(database) {
+  const result = await psql(
+    database,
+    "SELECT to_jsonb(request)::text FROM github_delivery_requests AS request WHERE id = 'github-delivery-lifecycle-v11';\n",
+  )
+  const snapshot = result.stdout.trim()
+  expect(snapshot.length > 0, 'The populated V11 GitHub Delivery fixture was missing.')
+  return snapshot
+}
+
+async function prepareV11FailureFixture() {
+  await runV14Migration(FAILURE_DATABASE)
+  await seedV14(FAILURE_DATABASE)
+  await applyHistoricalMigration(
+    FAILURE_DATABASE,
+    '0011_github_delivery.sql',
+    11,
+    '0011_github_delivery',
+  )
+  await expectSchemaVersion(FAILURE_DATABASE, 11)
+  await psql(
+    FAILURE_DATABASE,
+    `
+      INSERT INTO desktop_tokens (
+        id, organization_id, project_id, user_id, token_hash, created_at
+      ) VALUES (
+        'desktop-token-lifecycle-v11', 'org-demo', 'p-payments', 'u-erich',
+        'sha256:lifecycle-v11-token-metadata', '2026-08-11T18:00:00.000Z'
+      );
+
+      INSERT INTO github_repository_bindings (
+        id, version, organization_id, project_id, installation_id,
+        repository_id, full_name, default_branch, status,
+        configured_by_user_id, updated_by_user_id, validated_at,
+        revoked_at, created_at, updated_at
+      ) VALUES (
+        'github-binding-lifecycle-v11', 1, 'org-demo', 'p-payments',
+        '12345', '98765', 'example/lifecycle-v11', 'main', 'active',
+        'u-erich', 'u-erich', '2026-08-11T18:00:00.000Z', NULL,
+        '2026-08-11T18:00:00.000Z', '2026-08-11T18:00:00.000Z'
+      );
+
+      INSERT INTO github_delivery_requests (
+        id, state_version, intent_revision, organization_id, project_id,
+        requested_by_user_id, requested_by_token_id, local_intent_id,
+        local_project_id, run_id, run_version, node_id, binding_id,
+        binding_version, installation_id, repository_id, repository_full_name,
+        coding_run_id, workspace_id, diff_artifact_id, test_evidence_id,
+        pr_package_artifact_id, status, outcome_code, expected_run_version,
+        base_branch, head_branch, base_commit_sha, expected_commit_sha,
+        intent_digest, logical_idempotency_key, diff_digest,
+        test_evidence_digest, package_digest, changed_paths, pr_title, pr_body,
+        expires_at, created_at, updated_at
+      ) VALUES (
+        'github-delivery-lifecycle-v11', 7, 2, 'org-demo', 'p-payments',
+        'u-erich', 'desktop-token-lifecycle-v11',
+        'local-intent-lifecycle-v11', 'local-project-lifecycle-v11',
+        'run-health-001', 1, 'n-pr', 'github-binding-lifecycle-v11',
+        1, '12345', '98765', 'example/lifecycle-v11',
+        'coding-run-lifecycle-v11', 'workspace-lifecycle-v11',
+        'diff-lifecycle-v11', 'test-evidence-lifecycle-v11',
+        'pr-package-lifecycle-v11', 'failed', 'pull_request_failed', 1,
+        'main', 'devflow/lifecycle-v11', repeat('a', 40), repeat('b', 40),
+        repeat('2', 64), 'github-delivery:not-a-digest', repeat('3', 64),
+        repeat('4', 64), repeat('5', 64),
+        '["src/lifecycle-v11.ts"]'::jsonb,
+        'Retained V11 delivery', 'Retained redacted lifecycle body.',
+        '2026-08-12T17:00:00.000Z', '2026-08-11T18:00:00.000Z',
+        '2026-08-11T18:00:00.000Z'
+      );
+    `,
+  )
+  return readV11DeliverySnapshot(FAILURE_DATABASE)
+}
+
+async function assertRetainedV11DeliveryAfterV12(snapshotBeforeV12Retry) {
+  const fields = await psql(
+    FAILURE_DATABASE,
+    "SELECT delivery_series_key || '|' || delivery_attempt::text FROM github_delivery_requests WHERE id = 'github-delivery-lifecycle-v11';\n",
+  )
+  expect(
+    fields.stdout.trim() === `github-delivery:${'9'.repeat(64)}|1`,
+    'V12 did not backfill the retained V11 delivery series and first attempt.',
+  )
+  const retained = await psql(
+    FAILURE_DATABASE,
+    "SELECT (to_jsonb(request) - 'delivery_series_key' - 'delivery_attempt')::text FROM github_delivery_requests AS request WHERE id = 'github-delivery-lifecycle-v11';\n",
+  )
+  expect(
+    retained.stdout.trim() === snapshotBeforeV12Retry,
+    'V12 changed retained V11 GitHub Delivery fields beyond the documented backfill.',
+  )
 }
 
 function createCurrentSessionCookie() {
@@ -421,13 +552,13 @@ async function findOpenPort() {
           resolve(address.port)
           return
         }
-        reject(new Error('Unable to allocate the V1.3 rollback API port.'))
+        reject(new Error('Unable to allocate the lifecycle API port.'))
       })
     })
   })
 }
 
-async function startV13ApiAgainstUpgradedDatabase(projectId) {
+async function startV14Api(database) {
   const port = await findOpenPort()
   await runDocker([
     'run',
@@ -439,7 +570,11 @@ async function startV13ApiAgainstUpgradedDatabase(projectId) {
     '-p',
     `127.0.0.1:${port}:4310`,
     '-e',
-    `DEVFLOW_DATABASE_URL=${databaseUrl(UPGRADE_DATABASE)}`,
+    `DEVFLOW_DATABASE_URL=${databaseUrl(database)}`,
+    '-e',
+    'DEVFLOW_DATABASE_STATEMENT_TIMEOUT_MS=15000',
+    '-e',
+    'DEVFLOW_DEPLOYMENT_PROFILE=pilot',
     '-e',
     'DEVFLOW_ENABLE_DEMO_DATA=false',
     '-e',
@@ -447,12 +582,24 @@ async function startV13ApiAgainstUpgradedDatabase(projectId) {
     '-e',
     'DEV_AUTH_ENABLED=false',
     '-e',
+    'DEVFLOW_ENABLE_FAKE_RUNTIME=false',
+    '-e',
     `DEVFLOW_SESSION_SECRET=${sessionSecret}`,
+    '-e',
+    `DEVFLOW_AGENT_CREDENTIAL_KEY=${agentCredentialKey}`,
+    '-e',
+    'GITHUB_CLIENT_ID=lifecycle-smoke-client',
+    '-e',
+    'GITHUB_CLIENT_SECRET=lifecycle-smoke-secret-not-production',
+    '-e',
+    `GITHUB_OAUTH_REDIRECT_URI=http://127.0.0.1:${port}/api/auth/github/callback`,
+    '-e',
+    'DEVFLOW_WEB_APP_URL=http://127.0.0.1:4311',
     '-e',
     'HOST=0.0.0.0',
     '-e',
     'PORT=4310',
-    v13Image,
+    v14Image,
     'node',
     'apps/api/dist/server.js',
   ])
@@ -463,31 +610,65 @@ async function startV13ApiAgainstUpgradedDatabase(projectId) {
       const response = await fetch(`${apiUrl}/health`)
       if (response.ok) break
     } catch {
-      // The exact V1.3 API is still starting.
+      // The exact V1.4 API is still starting.
     }
     if (attempt === 119) {
       const logs = await runDocker(['logs', rollbackApiContainerName])
-      throw new Error(`Timed out waiting for the V1.3 rollback API.\n${logs.stdout}${logs.stderr}`)
+      throw new Error(`Timed out waiting for the V1.4 API.\n${logs.stdout}${logs.stderr}`)
     }
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
 
-  const overviewResponse = await fetch(`${apiUrl}/api/team/overview`, {
-    headers: {
-      accept: 'application/json',
-      cookie: createV13SessionCookie(projectId),
-    },
-  })
-  const overviewText = await overviewResponse.text()
-  expect(
-    overviewResponse.ok,
-    `V1.3 rollback overview failed with ${overviewResponse.status}: ${overviewText}`,
-  )
-  const overview = JSON.parse(overviewText)
-  expect(
-    overview.runs?.some((run) => run.title === 'V1.3 retained sentinel'),
-    'V1.3 rollback overview did not retain the V1.3 sentinel.',
-  )
+  return apiUrl
+}
+
+async function expectV14ApiRejectsNewerSchema(database) {
+  const apiUrl = await startV14Api(database)
+  try {
+    const readinessResponse = await fetch(`${apiUrl}/ready`)
+    expect(
+      readinessResponse.status === 503,
+      `Exact V1.4 API did not fail closed on Team schema v12; received ${readinessResponse.status}.`,
+    )
+  } finally {
+    await runDocker(['rm', '-f', rollbackApiContainerName])
+  }
+}
+
+async function startV14ApiAgainstRestoredDatabase() {
+  const apiUrl = await startV14Api(ROLLBACK_DATABASE)
+  try {
+    const readinessResponse = await fetch(`${apiUrl}/ready`)
+    const readinessText = await readinessResponse.text()
+    expect(
+      readinessResponse.ok,
+      `V1.4 restored API readiness failed with ${readinessResponse.status}: ${readinessText}`,
+    )
+    const readiness = JSON.parse(readinessText)
+    expect(
+      readiness.service === '@ai-devflow/api',
+      'V1.4 restored API returned an unexpected readiness service.',
+    )
+
+    const overviewResponse = await fetch(`${apiUrl}/api/team/overview`, {
+      headers: {
+        accept: 'application/json',
+        cookie: createCurrentSessionCookie(),
+      },
+    })
+    const overviewText = await overviewResponse.text()
+    expect(
+      overviewResponse.ok,
+      `V1.4 rollback overview failed with ${overviewResponse.status}: ${overviewText}`,
+    )
+    const overview = JSON.parse(overviewText)
+    expect(
+      overview.runs?.some((run) => run.title === 'V1.4 retained sentinel'),
+      'V1.4 rollback overview did not retain the V1.4 sentinel.',
+    )
+  } finally {
+    await runDocker(['rm', '-f', rollbackApiContainerName])
+  }
 }
 
 async function startCurrentApiAgainstDatabase(database, expectedRunTitle) {
@@ -577,7 +758,7 @@ async function startCurrentApiAgainstDatabase(database, expectedRunTitle) {
       const overview = JSON.parse(overviewText)
       expect(
         overview.runs?.some((run) => run.title === expectedRunTitle),
-        'Current production API did not read the retained V1.3 sentinel.',
+        'Current production API did not read the retained V1.4 sentinel.',
       )
     }
   } finally {
@@ -605,7 +786,7 @@ async function cleanup() {
       ['network', 'rm', networkName],
       ['volume', 'rm', volumeName],
       ['image', 'rm', '-f', currentApiImage],
-      ['image', 'rm', '-f', v13Image],
+      ['image', 'rm', '-f', v14Image],
     ]) {
       try {
         await runDocker(args)
@@ -638,7 +819,7 @@ for (const [signal, exitCode] of [['SIGINT', 130], ['SIGTERM', 143]]) {
 let mainError
 let completed = false
 try {
-  await verifyV13Tag()
+  await verifyV14Tag()
   await buildImages()
   await runDocker(['network', 'create', networkName])
   await runDocker(['volume', 'create', volumeName])
@@ -649,83 +830,82 @@ try {
   }
 
   await runCurrentMigration(FRESH_DATABASE)
-  await expectSchemaVersion(FRESH_DATABASE, 10)
+  await expectSchemaVersion(FRESH_DATABASE, 12)
+  await startCurrentApiAgainstDatabase(FRESH_DATABASE)
 
-  await runV13Migration(UPGRADE_DATABASE)
-  await seedV13(UPGRADE_DATABASE)
-  await expectSchemaVersion(UPGRADE_DATABASE, 7)
+  await runV14Migration(UPGRADE_DATABASE)
+  await seedV14(UPGRADE_DATABASE)
+  await expectSchemaVersion(UPGRADE_DATABASE, 10)
   const sentinel = await psql(
     UPGRADE_DATABASE,
-    "UPDATE workflow_runs SET title = 'V1.3 retained sentinel' WHERE id = (SELECT id FROM workflow_runs ORDER BY id LIMIT 1) RETURNING project_id;\n",
+    "UPDATE workflow_runs SET title = 'V1.4 retained sentinel' WHERE id = (SELECT id FROM workflow_runs ORDER BY id LIMIT 1) RETURNING project_id;\n",
   )
   const sentinelProjectId = sentinel.stdout.trim()
-  expect(sentinelProjectId.length > 0, 'The V1.3 seed did not provide a retained Run sentinel.')
+  expect(sentinelProjectId.length > 0, 'The V1.4 seed did not provide a retained Run sentinel.')
+  const snapshotBeforeV10Upgrade = await readV14RunSnapshot(UPGRADE_DATABASE)
+  const v14Backup = await backupV14Database(UPGRADE_DATABASE)
 
-  await runV13Migration(FAILURE_DATABASE)
-  await seedV13(FAILURE_DATABASE)
-  await applyHistoricalMigration(
-    FAILURE_DATABASE,
-    '0008_v14_work_authority.sql',
-    8,
-  )
-  await applyHistoricalMigration(
-    FAILURE_DATABASE,
-    '0009_harden_work_request_timeline.sql',
-    9,
-  )
-  await psql(
-    FAILURE_DATABASE,
-    `
-      INSERT INTO gate_commands (
-        id, organization_id, project_id, work_request_id, run_id, node_id,
-        action, workflow_command, reason, requested_by_user_id, requested_role,
-        auth_kind, auth_token_record_id, idempotency_key, request_fingerprint,
-        expected_run_version, expected_policy_version, expected_blocker_ids,
-        evaluation_status, evaluation_blocker_ids, status, outcome_code,
-        expires_at, created_at, updated_at
-      ) VALUES (
-        'gate-lifecycle-invalid-auth', 'org-demo', 'p-payments', NULL,
-        'run-lifecycle-invalid-auth', 'n-design-gate', 'reject', NULL,
-        'V1.4 lifecycle failed-upgrade sentinel', 'u-erich', 'owner',
-        'development_header', NULL, 'gate:lifecycle:invalid-auth', repeat('a', 64),
-        1, 1, '[]'::jsonb, 'allowed', '[]'::jsonb, 'pending', NULL,
-        now() + interval '10 minutes', now(), now()
-      );
-    `,
-  )
-  await expectSchemaVersion(FAILURE_DATABASE, 9)
+  const snapshotBeforeFailedV12 = await prepareV11FailureFixture()
 
   await restartPostgresWithRetainedVolume()
   await runCurrentMigration(UPGRADE_DATABASE)
-  await expectSchemaVersion(UPGRADE_DATABASE, 10)
+  await expectSchemaVersion(UPGRADE_DATABASE, 12)
+  const snapshotAfterV12Upgrade = await readV14RunSnapshot(UPGRADE_DATABASE)
+  expect(
+    snapshotAfterV12Upgrade === snapshotBeforeV10Upgrade,
+    'V1.5 upgrade changed the retained V1.4 Run row.',
+  )
   const retained = await psql(
     UPGRADE_DATABASE,
-    "SELECT count(*) FROM workflow_runs WHERE title = 'V1.3 retained sentinel';\n",
+    "SELECT count(*) FROM workflow_runs WHERE title = 'V1.4 retained sentinel';\n",
   )
-  expect(retained.stdout.trim() === '1', 'V1.4 upgrade did not retain the V1.3 sentinel.')
+  expect(retained.stdout.trim() === '1', 'V1.5 upgrade did not retain the V1.4 sentinel.')
   await startCurrentApiAgainstDatabase(
     UPGRADE_DATABASE,
-    'V1.3 retained sentinel',
+    'V1.4 retained sentinel',
   )
+  await expectV14ApiRejectsNewerSchema(UPGRADE_DATABASE)
+  await restoreV14Database(v14Backup)
+  await expectSchemaVersion(ROLLBACK_DATABASE, 10)
+  await startV14ApiAgainstRestoredDatabase()
 
-  const failedMigration = await expectDockerFailure(currentMigrationArgs(FAILURE_DATABASE))
+  const failedMigration = await expectDockerFailure(
+    currentMigrationArgs(FAILURE_DATABASE),
+  )
   expect(
-    /gate_commands_browser_write_auth|check constraint/i.test(
+    /github_delivery_requests_delivery_series_shape|check constraint/i.test(
       `${failedMigration.result?.stdout ?? ''}${failedMigration.result?.stderr ?? ''}`,
     ),
-    'The v9 to v10 failure did not stop at the expected Gate authority constraint.',
+    'The v11 to v12 failure did not stop at the expected delivery-series constraint.',
   )
-  await expectSchemaVersion(FAILURE_DATABASE, 9)
-  await expectColumnMissing(FAILURE_DATABASE, 'gate_commands', 'version')
+  await expectSchemaVersion(FAILURE_DATABASE, 11)
+  await expectColumnMissing(
+    FAILURE_DATABASE,
+    'github_delivery_requests',
+    'delivery_series_key',
+  )
+  await expectColumnMissing(
+    FAILURE_DATABASE,
+    'github_delivery_requests',
+    'delivery_attempt',
+  )
+  await expectMigrationHistoryMissing(FAILURE_DATABASE, 12)
+  const snapshotAfterFailedV12 = await readV11DeliverySnapshot(FAILURE_DATABASE)
+  expect(
+    snapshotAfterFailedV12 === snapshotBeforeFailedV12,
+    'Failed V12 migration changed the populated V11 delivery row.',
+  )
   await psql(
     FAILURE_DATABASE,
-    `UPDATE gate_commands SET auth_kind = 'session_cookie' WHERE id = 'gate-lifecycle-invalid-auth';\n`,
+    `UPDATE github_delivery_requests
+     SET logical_idempotency_key = 'github-delivery:' || repeat('9', 64)
+     WHERE id = 'github-delivery-lifecycle-v11';\n`,
   )
+  const snapshotBeforeV12Retry = await readV11DeliverySnapshot(FAILURE_DATABASE)
   await runCurrentMigration(FAILURE_DATABASE)
-  await expectSchemaVersion(FAILURE_DATABASE, 10)
+  await expectSchemaVersion(FAILURE_DATABASE, 12)
+  await assertRetainedV11DeliveryAfterV12(snapshotBeforeV12Retry)
   await startCurrentApiAgainstDatabase(FAILURE_DATABASE)
-
-  await startV13ApiAgainstUpgradedDatabase(sentinelProjectId)
 
   completed = true
 } catch (error) {
@@ -749,6 +929,6 @@ if (mainError) throw mainError
 if (cleanupError) throw cleanupError
 if (completed) {
   console.log(
-    'Docker lifecycle smoke passed: fresh v10, retained V1.3-to-V1.4 upgrade, transactional failed-upgrade recovery, and bounded V1.3 API rollback read.',
+    'Docker lifecycle smoke passed: fresh v12, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, and bounded V1.4 backup/restore rollback.',
   )
 }
