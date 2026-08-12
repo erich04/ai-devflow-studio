@@ -59,6 +59,12 @@ describe('Electron smoke V1.5 trusted workflow contract', () => {
     const positions = markers.map(position)
 
     expect(positions).toEqual([...positions].sort((left, right) => left - right))
+    expect(smoke).toContain('expect(createdPrDraft.artifact.redacted).toBe(true)')
+    expect(smoke).toContain('expect(createdPrDraft.artifact.githubDeliverySource).toMatchObject({')
+    expect(smoke).toContain('expect(localDeliveryIntents).toEqual([])')
+    expect(smoke).toContain('expect(createdPrDraft.run.pullRequestUrl).toBeUndefined()')
+    expect(smoke).toContain('expect(restoredWorkflow.githubDeliveryIntentIds).toEqual([])')
+    expect(smoke).toContain('run.version === localRun.version')
     expect(smoke).not.toContain('const createdAcceptanceBundle =')
     expect(smoke).not.toContain('const approvedAcceptance =')
   })

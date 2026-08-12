@@ -870,13 +870,31 @@ try {
   }, { runId: localRun.id, nodeId: localNodes.pr.id })
   expect(createdPrDraft.artifact.kind).toBe('pr')
   expect(createdPrDraft.event.kind).toBe('thinking')
+  expect(createdPrDraft.artifact.redacted).toBe(true)
+  expect(createdPrDraft.artifact.githubDeliverySource).toMatchObject({
+    stateVersion: 1,
+    headBranch: expect.stringMatching(/^devflow\//),
+    codingRunId: expect.any(String),
+    workspaceId: expect.any(String),
+    diffArtifactId: expect.any(String),
+    testEvidenceId: expect.any(String),
+  })
   expect(createdPrDraft.run.status).toBe('paused_at_gate')
   expect(createdPrDraft.run.currentNodeId).toBe(localNodes.pr.id)
+  expect(createdPrDraft.run.pullRequestUrl).toBeUndefined()
   expect(createdPrDraft.run.nodes.find((node) => node.id === localNodes.pr.id)).toMatchObject({
     status: 'running',
     artifactIds: expect.arrayContaining([createdPrDraft.artifact.id]),
   })
+  expect(createdPrDraft.run.nodes.find((node) => node.id === localNodes.accept.id)?.status).toBe(
+    'pending',
+  )
   localRun = createdPrDraft.run
+  const localDeliveryIntents = await first.page.evaluate(async (runId) => {
+    const state = await window.aiDevFlowDesktop.loadState()
+    return state.githubDeliveryIntents.filter((intent) => intent.runId === runId)
+  }, localRun.id)
+  expect(localDeliveryIntents).toEqual([])
 
   await first.page.getByRole('button', { name: /工作台/ }).click()
   await selectWorkflowNode(first.page, `flow-node-${localNodes.pr.id}`, localNodes.pr.title)
@@ -915,7 +933,11 @@ try {
     const evidence = overview.testEvidenceSummaries.find(
       (candidate) => candidate.runId === localRun.id && candidate.nodeId === localNodes.test.id,
     )
-    return run?.status === 'paused_at_gate' && Boolean(evidence)
+    return (
+      run?.status === 'paused_at_gate' &&
+      run.version === localRun.version &&
+      Boolean(evidence)
+    )
   }, { timeout: 20_000 }).toBe(true)
 
   const overviewResponse = await fetchWithRetry(
@@ -931,6 +953,7 @@ try {
   )
   expect(syncedRun).toMatchObject({
     title: '重构 GitHub webhook 重试策略',
+    version: localRun.version,
     status: 'paused_at_gate',
     currentNodeId: localNodes.pr.id,
   })
@@ -990,11 +1013,19 @@ try {
     return {
       status: run?.status,
       currentNodeId: run?.currentNodeId,
+      pullRequestUrl: run?.pullRequestUrl,
+      acceptanceStatus: run?.nodes.find((node) => node.kind === 'acceptance')?.status,
+      githubDeliveryIntentIds: state.githubDeliveryIntents
+        .filter((intent) => intent.runId === runId)
+        .map((intent) => intent.id),
       reviewNodeIds: reviews.map((review) => review.nodeId),
     }
   }, localRun.id)
   expect(restoredWorkflow.status).toBe('paused_at_gate')
   expect(restoredWorkflow.currentNodeId).toBe(localNodes.pr.id)
+  expect(restoredWorkflow.pullRequestUrl).toBeUndefined()
+  expect(restoredWorkflow.acceptanceStatus).toBe('pending')
+  expect(restoredWorkflow.githubDeliveryIntentIds).toEqual([])
   expect(restoredWorkflow.reviewNodeIds).toEqual(
     expect.arrayContaining([
       localNodes.clarifyGate.id,
