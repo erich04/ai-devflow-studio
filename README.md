@@ -8,9 +8,9 @@ DevFlow turns an AI-assisted code change into a governed delivery flow with loca
 
 _A real Electron workbench showing the six-stage workflow, local repository controls, Gate Enforcement, knowledge evidence, and agent actions._
 
-> **Current release and roadmap status:** `v1.4.0` remains the current release. V1.5 GitHub Delivery implementation is complete,
-> while its release and 1.x completion gate remain pending
-> candidate-bound evidence. The [Roadmap](docs/roadmap.md) is the single source of truth; package
+> **Current release and roadmap status:** `v1.5.0` is released and the finite 1.x line is complete.
+> V2.0 Native Agent Runtime contract definition is now the active priority. The
+> [Roadmap](docs/roadmap.md) is the single source of truth; package
 > labels and this README do not substitute for immutable proof under `docs/releases/`.
 
 ## Why It Exists
@@ -169,8 +169,8 @@ For the API/Web/Postgres team path, use the [self-hosted pilot guide](docs/guide
 - Full real-window validation is macOS-local. Windows has CI compatibility checks and a source-validation guide, but no signed installer or full Electron release signoff.
 - The current product is a self-hosted team pilot, not a managed public SaaS offering.
 
-The [roadmap](docs/roadmap.md) is the source of truth for the pending V1.5/1.x completion gate, the
-blocked 2.x Agent Runtime line, and deferred platform work.
+The [roadmap](docs/roadmap.md) is the source of truth for the completed 1.x line, the active V2.0
+Agent Runtime contract work, the V2.1/V2.2 sequence, and deferred platform work.
 
 ## Documentation Map
 

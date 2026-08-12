@@ -57,8 +57,8 @@ rules.
 | Version line | Core question | Included scope | Completion definition | Status |
 | --- | --- | --- | --- | --- |
 | 0.x | Engineering foundation | Real Electron execution, durable local state, team sync, Knowledge Governance, Gate policy, a managed external Coding Agent Adapter, runtime observability, and release discipline. | Fake and explicitly authorized real Coding paths can execute in managed worktrees, preserve auditable evidence, obey human Gates, sync only redacted summaries, and pass reproducible verification. | Completed at v0.9.0. |
-| 1.x | Governed self-hosted delivery | Authenticated team pilot, Desktop pairing, project scope, policy and budget controls, durable sync, repository knowledge, Web collaboration commands, reproducible lifecycle, and human-approved GitHub delivery. | One authenticated Work Request becomes one canonical local Run, reaches tested and evidence-backed delivery, and publishes a branch and pull request only after explicit human approval. V1.5 is the final planned 1.x feature milestone. | Release pending; v1.4.0 is released, V1.5 implementation is complete, and its candidate-bound completion gate is in progress. |
-| 2.x | DevFlow-native Agent Runtime | A bounded first-party Agent loop, native Tool and MCP execution, pluggable Coding Executors, trajectory and evaluation, scoped Context and Memory, evaluated RAG, Multi-Agent orchestration, and tenant-scoped execution. | Benchmarked scenarios demonstrate bounded single- and Multi-Agent execution, native and delegated coding, MCP/tool use, evaluated retrieval and Memory, failure recovery, tenant isolation, and auditable trajectories while Workflow and Gate authority remains intact. | Planned after the 1.x completion gate. |
+| 1.x | Governed self-hosted delivery | Authenticated team pilot, Desktop pairing, project scope, policy and budget controls, durable sync, repository knowledge, Web collaboration commands, reproducible lifecycle, and human-approved GitHub delivery. | One authenticated Work Request becomes one canonical local Run, reaches tested and evidence-backed delivery, and publishes a branch and pull request only after explicit human approval. V1.5 is the final planned 1.x feature milestone. | Completed at v1.5.0. |
+| 2.x | DevFlow-native Agent Runtime | A bounded first-party Agent loop, native Tool and MCP execution, pluggable Coding Executors, trajectory and evaluation, scoped Context and Memory, evaluated RAG, Multi-Agent orchestration, and tenant-scoped execution. | Benchmarked scenarios demonstrate bounded single- and Multi-Agent execution, native and delegated coding, MCP/tool use, evaluated retrieval and Memory, failure recovery, tenant isolation, and auditable trajectories while Workflow and Gate authority remains intact. | Active; V2.0 contract definition is the current priority. |
 
 The version lines are finite product contracts, not an instruction to keep adding versions. A line
 ends when its completion gate passes; remaining ideas move to maintenance, evidence-promoted work,
@@ -66,79 +66,69 @@ or a separately approved future charter.
 
 ## Current Release
 
-`v1.4.0` is the released baseline. Its annotated tag resolves to signoff commit
-`e746843c1943755c50c8fb060bdf533b06442232`, whose direct parent is candidate
-`b7986d4faec2f8f1bcc220a0341cb0686286209e`.
+`v1.5.0` is the released baseline. Its annotated tag resolves to signoff commit
+`bd7de6f82c3a60092816bd947f5590e9f148c3ae`, whose direct parent is candidate
+`f461f9d9de300b8e4a15fe31be8f518bde37b2b8`.
 
-Immutable release evidence is stored under `docs/releases/v1.4.0/`. All first-party package
-manifests at that release commit report `1.4.0`.
+Immutable release evidence is stored under `docs/releases/v1.5.0/`. All first-party package
+manifests at that release commit report `1.5.0`.
 
-The candidate-bound local matrix, exact-SHA CI, packaged Desktop Computer Use walkthrough, and the
-single explicitly authorized real OpenCode provider smoke passed.
+The candidate-bound local matrix, exact-SHA CI, packaged Desktop walkthrough, restart/revocation
+checks, and one real private GitHub sandbox Draft-PR walkthrough passed. The published Desktop
+archive SHA-256 is `3e44cdfe6d07aa355c259821e2b36f857cbd3ac239bde2ea7c3cdc34abfc449b`.
 
-The published [GitHub Release](https://github.com/erich04/ai-devflow-studio/releases/tag/v1.4.0)
+The published [GitHub Release](https://github.com/erich04/ai-devflow-studio/releases/tag/v1.5.0)
 contains the signoff-bound release artifacts.
 
 | Layer | Current status |
 | --- | --- |
-| Released baseline | `v1.4.0` signed off, tagged, and published |
-| Release evidence | `docs/releases/v1.4.0/` |
-| V1.4 product contract | `docs/product/prd/v1.4-pilot-trust-boundary-prd.md` |
-| V1.4 execution history | `docs/plans/v1.4-pilot-trust-boundary.md` and `docs/plans/v1.4-release-signoff.md` |
-| Active version line | 1.x governed self-hosted delivery |
-| Active milestone | V1.5 GitHub Delivery implementation complete; release/signoff in progress |
-| Next release gate | Candidate-bound lifecycle, packaged Desktop, exact-SHA CI, and private GitHub sandbox evidence |
-| Later version line | 2.x DevFlow-native Agent Runtime, blocked until the 1.x completion gate passes |
+| Released baseline | `v1.5.0` signed off, tagged, and published |
+| Release evidence | `docs/releases/v1.5.0/` |
+| V1.5 product contract | `docs/product/prd/v1.5-github-delivery-prd.md` |
+| V1.5 execution history | `docs/plans/v1.5-github-delivery.md` and the four immutable release evidence files |
+| Completed version line | 1.x governed self-hosted delivery |
+| Active version line | 2.x DevFlow-native Agent Runtime |
+| Active milestone | V2.0 Native Agent Runtime contract definition |
+| Next gate | Accepted V2.0 ADRs, scoped PRD, executable plan, domain language, and scenario baseline contract |
 
-V1.5 implementation is complete: an exact local Delivery Intent can receive a separate signed Web
-approval, obtain a repository-scoped GitHub App credential in Electron main, publish only the
-approved commit, and create or reconcile one Draft pull request with restart, revocation, Revise,
-Resume, Retry, and Stop semantics. The V1.5 release and 1.x completion gate remain pending until the
-candidate-bound release matrix and real private GitHub sandbox walkthrough pass. No V1.5 release or
-2.x implementation is claimed yet. The 2.x implementation remains blocked until that gate passes.
+The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
+became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
+restart with zero repeated remote effects, Acceptance, and a versioned credential-revocation proof.
+V2.0 contract work is now active; no V2.0 product implementation is claimed yet.
 
 ## Now / Next / Later
 
-### Now — Close V1.5 And The 1.x Completion Gate
+### Now — Define V2.0 Native Agent Runtime Contracts
 
-The scoped contract, authority decision, and implementation Slices 1–6 are complete.
-Slice 7, the candidate-bound completion gate, remains in progress:
+V1.5 and the finite 1.x line are released and complete. Before V2.0 product code begins:
 
-- `docs/product/prd/v1.5-github-delivery-prd.md`
-- `docs/adr/0013-github-app-delivery-authority.md`
-- `docs/plans/v1.5-github-delivery.md`
+- approve the bounded Agent Runtime, Coding Executor, and Tool/MCP authority decisions that evolve
+  ADR 0008 and ADR 0009 without weakening Workflow, Gate, Desktop, or Team authority;
+- publish a scoped V2.0 PRD and executable slice plan with deterministic stop, checkpoint/resume,
+  permission, cancellation, evidence, redaction, and evaluation contracts;
+- update `CONTEXT.md` with stable Agent Runtime, trajectory, checkpoint, Tool, capability, Coding
+  Executor, and trusted local MCP installation language;
+- define the reproducible scenario dataset and the quality, cost, latency, intervention, recovery,
+  and isolation measurements required for the V2.0 completion gate.
 
-- Keep the implemented lifecycle, packaged Desktop, deterministic, Postgres, and Docker gates green
-  against one frozen candidate.
-- Collect exact-candidate CI, private GitHub sandbox, and redacted signoff evidence before publishing.
-- Keep living product/operator documentation and all six package manifests aligned to `1.5.0`.
-- Keep default verification offline, deterministic, secret-free, and explicit about the V1.5 gates.
-- Keep `v1.4.0` and its release evidence immutable.
-- Do not start 2.x implementation in parallel with the V1.5 delivery closure.
+### Next — Implement And Evaluate V2.0
 
-### Next — Freeze, Sign Off, And Publish V1.5
+- Implement the bounded DevFlow Agent Runtime and persistent trajectory/checkpoint boundary.
+- Place OpenCode and one deliberately narrow DevFlow-owned Coding Agent behind the same Coding
+  Executor contract.
+- Add a trusted main-process Tool registry plus bounded MCP discovery/execution for the accepted
+  scenarios; Team-authored display metadata must never become process-spawn authority.
+- Keep default verification deterministic and no-cost, then record explicit real-provider evidence
+  only where the V2.0 plan authorizes it.
 
-- Freeze a clean candidate `C` after every ordinary product, test, workflow, version, and document
-  change is committed.
-- Run the full local matrix and exact-`C` Verify workflow, then complete one separately authorized
-  real private GitHub sandbox Draft-PR walkthrough.
-- Create direct-child signoff `S` containing only the four candidate-bound V1.5 evidence files.
-- Preserve `C` and `S`, publish an annotated `v1.5.0` tag at `S`, and verify the GitHub Release and
-  assets before declaring the 1.x completion gate passed.
+### Later — V2.1 Retrieval/Memory And V2.2 Multi-Agent/Tenancy
 
-After V1.5, do not add another planned 1.x feature milestone. New 1.x work is limited to release
-defects, security fixes, dependency maintenance, or hardening justified by real pilot evidence.
-
-### Later — DevFlow-Native Agent Runtime
-
-The 2.x line starts only after the 1.x completion gate. It keeps the deterministic Workflow and
-human Gates as the outer authority.
-
-DevFlow-owned orchestration, native Tool/MCP execution, Memory, and trajectory semantics then move
-into a first-party runtime.
-
-Single-Call LLM Operations remain available for narrow work, while code changes route through
-approved Coding Executors.
+- V2.1 adds evaluated hybrid retrieval and scoped Agent Memory only after the V2.0 single-Agent
+  baseline is durable.
+- V2.2 adds bounded supervisor/specialist coordination and execution tenancy only after V2.1 proves
+  retrieval, Memory, citation, and isolation behavior.
+- New 1.x work is limited to release defects, security fixes, dependency maintenance, or hardening
+  justified by real pilot evidence; there is no planned V1.6 feature milestone.
 
 ## Completed Milestones
 
@@ -449,9 +439,7 @@ approved Coding Executors.
   `docs/plans/v1.4-pilot-trust-boundary.md`, and `docs/plans/v1.4-release-signoff.md`.
 - See immutable release evidence under `docs/releases/v1.4.0/`.
 
-## Implemented Milestone Awaiting Release
-
-### v1.5: GitHub Delivery Integration — Implemented, Release Pending
+### v1.5: GitHub Delivery Integration
 
 - Added project-to-repository delivery settings. The canonical managed worktree and expected local
   commit as the source for branch publication and GitHub compare.
@@ -468,9 +456,14 @@ approved Coding Executors.
   over the canonical local Run.
 - Preserves explicit Revise, Resume, Retry, and Stop behavior without reusing an older approval or
   allowing background scheduling to resume manual recovery.
-
-The implementation is not the release claim. Candidate-bound local, packaged, CI, and private
-GitHub sandbox evidence must still pass before V1.5 and the 1.x line can be marked complete.
+- Released `v1.5.0` at signoff commit `bd7de6f82c3a60092816bd947f5590e9f148c3ae`,
+  whose direct parent is candidate `f461f9d9de300b8e4a15fe31be8f518bde37b2b8`.
+- Passed the candidate-bound local, packaged, exact-SHA CI, Postgres, Docker lifecycle, restart,
+  revocation, redaction, and real private GitHub sandbox gates.
+- Preserved the immutable completion evidence under `docs/releases/v1.5.0/` and published the
+  signoff-bound assets in the `v1.5.0` GitHub Release.
+- Preserved the scoped contract and authority decision in `docs/product/prd/v1.5-github-delivery-prd.md`,
+  `docs/adr/0013-github-app-delivery-authority.md`, and `docs/plans/v1.5-github-delivery.md`.
 
 ## 1.x Completion Gate
 

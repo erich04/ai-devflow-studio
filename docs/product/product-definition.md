@@ -243,9 +243,10 @@ Release status and future milestones live only in the [Roadmap](../roadmap.md).
 This Product Definition owns the durable product shape, users, workflow, evidence model, governance
 rules, and non-goals. The Roadmap remains authoritative for release status and sequencing.
 
-V1.5 implementation is complete in the current development line; v1.4.0 remains the current release.
-V1.5 release signoff and the 1.x completion gate remain pending until all candidate-bound
-local, CI, packaged Desktop, Postgres, lifecycle, and private GitHub sandbox evidence passes.
+V1.5 is released as `v1.5.0`, and the finite 1.x product line is complete. Its candidate-bound local,
+CI, packaged Desktop, Postgres, lifecycle, restart, revocation, redaction, and private GitHub sandbox
+evidence is immutable under `docs/releases/v1.5.0/`. V2.0 Native Agent Runtime contract definition
+is the active Roadmap priority.
 
 The released product baseline provides:
 
@@ -259,9 +260,9 @@ The released product baseline provides:
 - Knowledge Governance, bounded repository Markdown context, durable sync outbox recovery, and
   reproducible self-hosted pilot lifecycle validation.
 
-The implemented V1.5 extension adds commit-bound Delivery Intent preparation, redacted Delivery
+The released V1.5 extension adds commit-bound Delivery Intent preparation, redacted Delivery
 Requests and signed approval, GitHub App repository authority, idempotent branch/Draft publication,
-bounded recovery, and Acceptance evidence. This implementation statement is not a release claim.
+bounded recovery, and Acceptance evidence.
 
 Historical PRDs, plans, walkthroughs, release records, and candidate evidence remain immutable
 records of what was proposed or verified at that time. They do not compete with the Roadmap for

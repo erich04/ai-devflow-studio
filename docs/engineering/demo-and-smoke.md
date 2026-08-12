@@ -1,8 +1,8 @@
 # DevFlow Studio Demo And Smoke Guide
 
-This guide describes the implemented V1.5 GitHub Delivery path. v1.4.0 remains the current release;
-V1.5 release signoff and the 1.x completion gate remain pending until all candidate-bound evidence
-passes.
+This guide describes the released V1.5 GitHub Delivery path. `v1.5.0` is the current release, the
+finite 1.x completion gate passed, and its immutable candidate-bound evidence lives under
+`docs/releases/v1.5.0/`.
 
 ## Baseline Prerequisites
 

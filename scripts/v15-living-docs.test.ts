@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 const read = (relativePath: string) => readFileSync(relativePath, 'utf8')
 
 describe('V1.5 living documentation truth', () => {
-  it('describes governed GitHub Delivery as implemented without claiming V1.5 is released', () => {
+  it('describes governed GitHub Delivery as the released V1.5 baseline', () => {
     const context = read('CONTEXT.md')
     const productDefinition = read('docs/product/product-definition.md')
     const currentPrd = read('docs/product/prd/current-product-prd.md')
@@ -23,9 +23,10 @@ describe('V1.5 living documentation truth', () => {
       expect(markdown).toContain('Draft pull request')
     }
 
-    expect(productDefinition).toContain('V1.5 implementation is complete')
-    expect(productDefinition).toContain('v1.4.0 remains the current release')
-    expect(currentPrd).toContain('V1.5 release and the 1.x completion gate remain pending')
+    expect(productDefinition).toContain('V1.5 is released as `v1.5.0`')
+    expect(productDefinition).toContain('finite 1.x product line is complete')
+    expect(currentPrd).toContain('finite 1.x completion gate passed')
+    expect(currentPrd).toContain('V2.0 Native Agent Runtime contract definition')
     expect(currentPrd).not.toContain(
       'Real GitHub PR creation, pushing, merging, and branch publication require a future scoped PRD',
     )
@@ -87,7 +88,7 @@ describe('V1.5 living documentation truth', () => {
     expect(v15Prd).toContain('Lifecycle: Implemented; release/signoff pending')
     expect(testingStrategy).toContain('ai-devflow-studio-v15-candidate-desktop')
 
-    expect(demoAndSmoke).toContain('v1.4.0 remains the current release')
+    expect(demoAndSmoke).toContain('`v1.5.0` is the current release')
     expect(demoAndSmoke).toContain('Revise')
     expect(demoAndSmoke).toContain('Resume')
     expect(demoAndSmoke).toContain('Retry')

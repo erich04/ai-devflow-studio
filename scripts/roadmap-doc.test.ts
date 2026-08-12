@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest'
 
 const roadmapPath = join(process.cwd(), 'docs/roadmap.md')
 const releaseEvidencePaths = [
-  'docs/releases/v1.4.0/walkthrough.json',
-  'docs/releases/v1.4.0/required-gates.json',
-  'docs/releases/v1.4.0/real-opencode.json',
+  'docs/releases/v1.5.0/walkthrough.json',
+  'docs/releases/v1.5.0/required-gates.json',
+  'docs/releases/v1.5.0/github-sandbox.json',
 ]
 
 describe('product roadmap source of truth', () => {
@@ -23,7 +23,7 @@ describe('product roadmap source of truth', () => {
     expect(markdown).toContain('Do not create a parallel roadmap')
   })
 
-  it('records the released v1.4 truth instead of the former candidate state', () => {
+  it('records the released v1.5 truth instead of the former candidate state', () => {
     const markdown = readFileSync(roadmapPath, 'utf8')
     const currentRelease = markdown.match(
       /## Current Release[\s\S]*?(?=\n## (?:Now \/ Next \/ Later|Completed Milestones))/u,
@@ -32,13 +32,12 @@ describe('product roadmap source of truth', () => {
     expect(currentRelease).toBeDefined()
     expect([...markdown.matchAll(/^## Current Release$/gmu)]).toHaveLength(1)
     expect([...markdown.matchAll(/^### Now —/gmu)]).toHaveLength(1)
-    expect(currentRelease).toContain('`v1.4.0` is the released baseline')
-    expect(currentRelease).toContain('docs/releases/v1.4.0/')
-    expect(currentRelease).toContain('b7986d4faec2f8f1bcc220a0341cb0686286209e')
-    expect(currentRelease).toContain('e746843c1943755c50c8fb060bdf533b06442232')
-    expect(currentRelease).not.toContain('`v1.3.0` is the released baseline')
-    expect(currentRelease).not.toContain('V1.4 candidate preparation')
-    expect(currentRelease).not.toContain('No V1.4 signoff, tag, or Release is claimed yet')
+    expect(currentRelease).toContain('`v1.5.0` is the released baseline')
+    expect(currentRelease).toContain('docs/releases/v1.5.0/')
+    expect(currentRelease).toContain('f461f9d9de300b8e4a15fe31be8f518bde37b2b8')
+    expect(currentRelease).toContain('bd7de6f82c3a60092816bd947f5590e9f148c3ae')
+    expect(currentRelease).not.toContain('`v1.4.0` is the released baseline')
+    expect(currentRelease).not.toContain('release and 1.x completion gate remain pending')
 
     for (const relativePath of releaseEvidencePaths) {
       const evidence = JSON.parse(readFileSync(join(process.cwd(), relativePath), 'utf8')) as {
@@ -46,7 +45,7 @@ describe('product roadmap source of truth', () => {
         status?: unknown
       }
 
-      expect(evidence.candidateSha).toBe('b7986d4faec2f8f1bcc220a0341cb0686286209e')
+      expect(evidence.candidateSha).toBe('f461f9d9de300b8e4a15fe31be8f518bde37b2b8')
       expect(evidence.status).toBe('passed')
     }
   })
@@ -81,10 +80,10 @@ describe('product roadmap source of truth', () => {
     expect(markdown).toContain('### v2.2: Multi-Agent And Execution Tenancy')
     expect(markdown).toContain('## 2.x Completion Gate')
     expect(markdown).toContain(
-      'The scoped contract, authority decision, and implementation Slices 1–6 are complete',
+      'V1.5 and the finite 1.x line are released and complete',
     )
-    expect(markdown).toContain('Slice 7, the candidate-bound completion gate, remains in progress')
-    expect(markdown).not.toContain('seven implementation slices are complete')
+    expect(markdown).toContain('### Now — Define V2.0 Native Agent Runtime Contracts')
+    expect(markdown).not.toContain('Slice 7, the candidate-bound completion gate, remains in progress')
     expect(markdown).toContain('v1.5-github-delivery-prd.md')
     expect(markdown).toContain('0013-github-app-delivery-authority.md')
     expect(markdown).toContain('Public SaaS, billing, enterprise SSO')
@@ -92,7 +91,7 @@ describe('product roadmap source of truth', () => {
     expect(markdown).not.toContain('### v1.7 Candidate:')
   })
 
-  it('records V1.5 as implemented but not released while the 1.x gate is open', () => {
+  it('records V1.5 as released and makes V2.0 the single active priority', () => {
     const markdown = readFileSync(roadmapPath, 'utf8')
     const currentRelease = markdown.match(
       /## Current Release[\s\S]*?(?=\n## Now \/ Next \/ Later)/u,
@@ -101,16 +100,16 @@ describe('product roadmap source of truth', () => {
       /## Now \/ Next \/ Later[\s\S]*?(?=\n## Completed Milestones)/u,
     )?.[0]
 
-    expect(currentRelease).toContain('`v1.4.0` is the released baseline')
-    expect(currentRelease).toContain('V1.5 implementation is complete')
-    expect(currentRelease).toContain('release and 1.x completion gate remain pending')
-    expect(currentRelease).not.toContain('No V1.5 or 2.x implementation is claimed')
-    expect(priorities).toContain('### Now — Close V1.5 And The 1.x Completion Gate')
-    expect(priorities).toContain('### Next — Freeze, Sign Off, And Publish V1.5')
+    expect(currentRelease).toContain('`v1.5.0` is the released baseline')
+    expect(currentRelease).toContain('The finite 1.x product line is complete')
+    expect(currentRelease).not.toContain('release and 1.x completion gate remain pending')
+    expect(priorities).toContain('### Now — Define V2.0 Native Agent Runtime Contracts')
+    expect(priorities).toContain('### Next — Implement And Evaluate V2.0')
     expect(markdown).not.toContain('current V1.4 runtime already implements every layer')
-    expect(priorities).toContain('real private GitHub sandbox')
-    expect(markdown).toContain('### v1.5: GitHub Delivery Integration — Implemented, Release Pending')
-    expect(markdown).toContain('2.x implementation remains blocked')
+    expect(currentRelease).toContain('real private GitHub sandbox')
+    expect(markdown).toContain('### v1.5: GitHub Delivery Integration')
+    expect(markdown).not.toContain('Implemented Milestone Awaiting Release')
+    expect(markdown).not.toContain('2.x implementation remains blocked')
     expect(markdown).not.toContain('v1.5 planned')
     expect(markdown).not.toContain('Decide GitHub App versus scoped user token before implementation')
   })

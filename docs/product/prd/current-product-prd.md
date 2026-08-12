@@ -1,7 +1,7 @@
 # DevFlow Studio Current Product PRD
 
-Status: Current implemented baseline; V1.5 release signoff pending
-Last updated: 2026-08-11
+Status: Current released baseline; V2.0 contract definition active
+Last updated: 2026-08-12
 
 ## Source Documents
 
@@ -318,9 +318,10 @@ preserving the evidence needed for human review.
 
 ## Further Notes
 
-- V1.5 implementation is complete, but v1.4.0 remains the current release.
-- V1.5 release and the 1.x completion gate remain pending until the Roadmap's candidate-bound
-  completion evidence passes.
+- V1.5 is released as `v1.5.0`, and the finite 1.x completion gate passed with immutable
+  candidate-bound evidence under `docs/releases/v1.5.0/`.
+- V2.0 Native Agent Runtime contract definition is the active Roadmap priority; this PRD does not
+  pre-approve V2.0 implementation designs or make a V2.0 product claim.
 - Runtime Operations and Collaboration Hardening remain evidence-promoted backlog items unless the
   Roadmap assigns milestone priority.
 - UI refactor work should preserve the Evidence Chain as the center of gravity: current stage,
