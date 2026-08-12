@@ -870,50 +870,26 @@ try {
   }, { runId: localRun.id, nodeId: localNodes.pr.id })
   expect(createdPrDraft.artifact.kind).toBe('pr')
   expect(createdPrDraft.event.kind).toBe('thinking')
-  expect(createdPrDraft.run.currentNodeId).toBe(localNodes.accept.id)
+  expect(createdPrDraft.run.status).toBe('paused_at_gate')
+  expect(createdPrDraft.run.currentNodeId).toBe(localNodes.pr.id)
+  expect(createdPrDraft.run.nodes.find((node) => node.id === localNodes.pr.id)).toMatchObject({
+    status: 'running',
+    artifactIds: expect.arrayContaining([createdPrDraft.artifact.id]),
+  })
   localRun = createdPrDraft.run
 
-  const createdAcceptanceBundle = await first.page.evaluate(async ({ runId, nodeId }) => {
-    return window.aiDevFlowDesktop.createAcceptanceBundle({ runId, nodeId })
-  }, { runId: localRun.id, nodeId: localNodes.accept.id })
-  expect(createdAcceptanceBundle.artifact.kind).toBe('acceptance')
-  expect(createdAcceptanceBundle.event.kind).toBe('thinking')
-  expect(createdAcceptanceBundle.run.currentNodeId).toBe(localNodes.accept.id)
-  localRun = createdAcceptanceBundle.run
-
-  await runKnowledgeReviewViaDesktopApi(first.page, {
-    runId: localRun.id,
-    nodeId: localNodes.accept.id,
-    projectId: localProjectId,
-    runTitle: '重构 GitHub webhook 重试策略',
-    nodeTitle: localNodes.accept.title,
-  })
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('Knowledge Review ready')
   await first.page.getByRole('button', { name: /工作台/ }).click()
-  await selectWorkflowNode(first.page, `flow-node-${localNodes.accept.id}`, localNodes.accept.title)
-  const acceptanceDecision = await first.page.evaluate(async ({ runId, nodeId, projectId }) => {
-    return window.aiDevFlowDesktop.evaluateGateEnforcement({
-      runId,
-      nodeId,
-      projectId,
-    })
-  }, { runId: localRun.id, nodeId: localNodes.accept.id, projectId: localProjectId })
-  expect(acceptanceDecision.blocksApproval).toBe(false)
-
-  const approvedAcceptance = await first.page.evaluate(async ({ runId, nodeId }) => {
-    return window.aiDevFlowDesktop.approveGate({
-      runId,
-      nodeId,
-    })
+  await selectWorkflowNode(first.page, `flow-node-${localNodes.pr.id}`, localNodes.pr.title)
+  await expect(first.page.getByTestId('github-delivery-panel')).toContainText('ready_to_prepare')
+  const prematureAcceptanceError = await first.page.evaluate(async ({ runId, nodeId }) => {
+    try {
+      await window.aiDevFlowDesktop.createAcceptanceBundle({ runId, nodeId })
+      return ''
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
   }, { runId: localRun.id, nodeId: localNodes.accept.id })
-  expect(approvedAcceptance.run.status).toBe('completed')
-  expect(approvedAcceptance.run.currentNodeId).toBe(localNodes.accept.id)
-  expect(
-    approvedAcceptance.run.nodes.find((node) => node.id === localNodes.accept.id)?.status,
-  ).toBe('success')
-  expect(approvedAcceptance.event.kind).toBe('approval')
-  localRun = approvedAcceptance.run
+  expect(prematureAcceptanceError).toMatch(/Only the current Acceptance node/i)
 
   const rendererUploadSurface = await first.page.evaluate(() => ({
     run: 'uploadRunSummary' in window.aiDevFlowDesktop,
@@ -939,13 +915,13 @@ try {
     const evidence = overview.testEvidenceSummaries.find(
       (candidate) => candidate.runId === localRun.id && candidate.nodeId === localNodes.test.id,
     )
-    return run?.status === 'completed' && Boolean(evidence)
+    return run?.status === 'paused_at_gate' && Boolean(evidence)
   }, { timeout: 20_000 }).toBe(true)
 
   const overviewResponse = await fetchWithRetry(
     `${apiServerUrl}/api/team/overview`,
     { headers: demoSessionHeaders },
-    'team overview after completed Run sync',
+    'team overview after governed PR package sync',
   )
   expect(overviewResponse.ok).toBe(true)
   const syncedOverview = await overviewResponse.json()
@@ -955,8 +931,8 @@ try {
   )
   expect(syncedRun).toMatchObject({
     title: '重构 GitHub webhook 重试策略',
-    status: 'completed',
-    currentNodeId: localNodes.accept.id,
+    status: 'paused_at_gate',
+    currentNodeId: localNodes.pr.id,
   })
   expect(syncedEvidence).toMatchObject({
     command: 'npm test',
@@ -1017,16 +993,17 @@ try {
       reviewNodeIds: reviews.map((review) => review.nodeId),
     }
   }, localRun.id)
-  expect(restoredWorkflow.status).toBe('completed')
-  expect(restoredWorkflow.currentNodeId).toBe(localNodes.accept.id)
+  expect(restoredWorkflow.status).toBe('paused_at_gate')
+  expect(restoredWorkflow.currentNodeId).toBe(localNodes.pr.id)
   expect(restoredWorkflow.reviewNodeIds).toEqual(
     expect.arrayContaining([
       localNodes.clarifyGate.id,
       localNodes.designGate.id,
-      localNodes.accept.id,
     ]),
   )
-  await selectWorkflowNode(second.page, `flow-node-${localNodes.accept.id}`, localNodes.accept.title)
+  expect(restoredWorkflow.reviewNodeIds).not.toContain(localNodes.accept.id)
+  await selectWorkflowNode(second.page, `flow-node-${localNodes.pr.id}`, localNodes.pr.title)
+  await expect(second.page.getByTestId('github-delivery-panel')).toContainText('ready_to_prepare')
   const restoredOverrides = await second.page.evaluate(async (runId) => {
     return window.aiDevFlowDesktop.listGateOverrides({ runId })
   }, localRun.id)
@@ -1039,7 +1016,7 @@ try {
   await expect(second.page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
   await expect(second.page.getByTestId('agent-workbench')).toContainText('completed')
   await expect(second.page.getByTestId('agent-workbench')).toContainText('devflow-fake-change.txt')
-  await expect(second.page.getByTestId('agent-workbench')).toContainText('Knowledge Review ready')
+  await expect(second.page.getByTestId('agent-workbench')).toContainText('Total reviews2')
   await second.page.getByRole('button', { name: /^MCP$/ }).click()
   const secondEnableMcpButton = second.page.getByRole('button', { name: /Enable/ }).first()
   if ((await secondEnableMcpButton.count()) > 0) {

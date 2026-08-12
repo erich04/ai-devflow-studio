@@ -10,7 +10,7 @@ function position(marker: string) {
   return index
 }
 
-describe('Electron smoke v1.3 trusted workflow contract', () => {
+describe('Electron smoke V1.5 trusted workflow contract', () => {
   it('allocates an isolated runtime instead of claiming shared development ports', () => {
     expect(smoke).toContain("import { resolveE2eRuntime } from './e2e-runtime.mjs'")
     expect(smoke).toContain('} = await resolveE2eRuntime()')
@@ -39,7 +39,7 @@ describe('Electron smoke v1.3 trusted workflow contract', () => {
     )
   })
 
-  it('walks the authoritative workflow in current-node order through completion', () => {
+  it('walks the authoritative local workflow to the governed GitHub handoff', () => {
     const markers = [
       "getByRole('button', { name: /新建 Run/ })",
       'const completedClarify =',
@@ -52,14 +52,15 @@ describe('Electron smoke v1.3 trusted workflow contract', () => {
       'expect(localRun.currentNodeId).toBe(localNodes.test.id)',
       'await runProjectTestsViaDesktopApi(first.page, {',
       'const createdPrDraft =',
-      'const createdAcceptanceBundle =',
-      'nodeId: localNodes.accept.id,\n    projectId: localProjectId,',
-      'const approvedAcceptance =',
-      "expect(approvedAcceptance.run.status).toBe('completed')",
+      "expect(createdPrDraft.run.status).toBe('paused_at_gate')",
+      "expect(createdPrDraft.run.currentNodeId).toBe(localNodes.pr.id)",
+      "toContainText('ready_to_prepare')",
     ]
     const positions = markers.map(position)
 
     expect(positions).toEqual([...positions].sort((left, right) => left - right))
+    expect(smoke).not.toContain('const createdAcceptanceBundle =')
+    expect(smoke).not.toContain('const approvedAcceptance =')
   })
 
   it('keeps canonical remote synchronization behind the Electron main process', () => {
