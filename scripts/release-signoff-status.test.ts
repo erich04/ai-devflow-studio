@@ -62,6 +62,11 @@ const currentRootVersion = JSON.parse(readFileSync('package.json', 'utf8')).vers
 const candidateSha = '1234567890abcdef1234567890abcdef12345678'
 const signoffSha = 'abcdef1234567890abcdef1234567890abcdef12'
 const desktopArtifactSha = '9'.repeat(64)
+const revocationIntentId =
+  'github-delivery-intent-123e4567-e89b-42d3-a456-426614174000'
+const otherRevocationIntentId =
+  'github-delivery-intent-123e4567-e89b-42d3-b456-426614174001'
+const revocationCheckedAt = '2026-08-11T12:30:00.000Z'
 
 function walkthroughContent(releaseSeries: string): string {
   if (releaseSeries !== '1.5') {
@@ -83,7 +88,7 @@ Test evidence digest: ${'c'.repeat(64)}
 PR package digest: ${'d'.repeat(64)}
 Expected commit: ${'e'.repeat(40)}; remote head: ${'e'.repeat(40)}.
 Draft PR: https://github.com/devflow/release-sandbox/pull/17
-Acceptance: completed. Restart recovery: passed. Binding revocation: passed.
+Acceptance: completed. Restart recovery: passed.
 Redaction check: passed. Cleanup: passed. The Draft PR was not merged.
 Operator role: non-maintainer. Ad hoc maintainer assistance: false.
 Approval role/auth: owner/session_cookie.
@@ -91,7 +96,7 @@ Lifecycle counts: Work Request 1, canonical Run 1, credential grant 1, branch pu
 Sandbox/App: private devflow/release-sandbox via devflow-release-sandbox.
 Draft state: true; merged: false; automatic retry: false.
 Restart side-effect repeats: credential 0, push 0, pull request 0.
-Post-revocation credential grant: blocked.
+Revocation proof: intent ${revocationIntentId}; revoked binding version 2; outcome binding_inactive; checked at ${revocationCheckedAt}; durable check count 1.
 `
 }
 
@@ -107,6 +112,7 @@ function record(path: string, value: Record<string, unknown>): EvidenceRecord {
 function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSignoffSnapshot {
   const targetVersion = overrides.targetVersion ?? '1.3.0'
   const releaseSeries = targetVersion.split('.').slice(0, 2).join('.')
+  const evidenceDate = releaseSeries === '1.5' ? '2026-08-11' : '2026-07-31'
   const profile = releaseProfileFor(targetVersion)
   const evidencePaths = releaseEvidencePaths(targetVersion)
   const releaseEvidencePath = evidencePaths.githubSandbox ?? evidencePaths.realOpencode
@@ -120,7 +126,7 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
       evidencePaths.walkthrough,
       evidencePaths.requiredGates,
       releaseEvidencePath,
-      `docs/guides/devflow-studio-v${releaseSeries}-walkthrough-result-2026-07-31.md`,
+      `docs/guides/devflow-studio-v${releaseSeries}-walkthrough-result-${evidenceDate}.md`,
     ],
     packageVersions: Object.fromEntries(packagePaths.map((path) => [path, targetVersion])),
     requiredDocs: Object.fromEntries(
@@ -145,9 +151,9 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
         targetVersion,
         candidateSha,
         status: 'passed',
-        date: '2026-07-31',
+        date: evidenceDate,
         method: 'computer-use',
-        evidencePath: `docs/guides/devflow-studio-v${releaseSeries}-walkthrough-result-2026-07-31.md`,
+        evidencePath: `docs/guides/devflow-studio-v${releaseSeries}-walkthrough-result-${evidenceDate}.md`,
       }),
       referencedEvidenceExists: true,
       referencedEvidenceContent: walkthroughContent(releaseSeries),
@@ -196,7 +202,7 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
             targetVersion,
             candidateSha,
             status: 'passed',
-            recordedAt: '2026-08-11T12:00:00.000Z',
+            recordedAt: '2026-08-11T13:00:00.000Z',
             repository: 'devflow/release-sandbox',
             repositoryVisibility: 'private',
             appSlug: 'devflow-release-sandbox',
@@ -228,8 +234,13 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
             automaticRetry: false,
             acceptanceStatus: 'completed',
             restartRecovery: 'passed',
-            bindingRevocation: 'passed',
-            postRevocationGrant: 'blocked',
+            revocationProof: {
+              intentId: revocationIntentId,
+              revokedBindingVersion: 2,
+              outcomeCode: 'binding_inactive',
+              checkedAt: revocationCheckedAt,
+              durableCheckCount: 1,
+            },
             redactionCheck: 'passed',
             cleanup: 'passed',
             cleanupMethod: 'external-operator-no-merge',
@@ -667,6 +678,186 @@ describe('release signoff status', () => {
     }
   })
 
+  it('requires one exact durable binding_inactive revocation proof', () => {
+    const ready = snapshot({ targetVersion: '1.5.0' })
+    const validProof = ready.githubSandboxRecord!.value!
+      .revocationProof as Record<string, unknown>
+    const invalidProofs = [
+      undefined,
+      { ...validProof, outcomeCode: 'blocked' },
+      { ...validProof, outcomeCode: 'binding_active' },
+      { ...validProof, durableCheckCount: 0 },
+      { ...validProof, durableCheckCount: 2 },
+      { ...validProof, intentId: 'foo' },
+      { ...validProof, intentId: 'delivery-intent-123e4567-e89b-42d3-a456-426614174000' },
+      { ...validProof, intentId: 'github-delivery-intent-not-a-uuid' },
+      { ...validProof, intentId: 'github-delivery-intent-123E4567-E89B-42D3-A456-426614174000' },
+      { ...validProof, intentId: 'github-delivery-intent-123e4567-e89b-12d3-a456-426614174000' },
+      { ...validProof, intentId: 'github-delivery-intent-123e4567-e89b-42d3-7456-426614174000' },
+      { ...validProof, intentId: '../other-intent' },
+      { ...validProof, revokedBindingVersion: 1 },
+      { ...validProof, checkedAt: '2026-08-11T12:30:00Z' },
+      { ...validProof, checkedAt: '2026-08-11T13:00:00.001Z' },
+    ]
+
+    for (const revocationProof of invalidProofs) {
+      const items = evaluateReleaseSignoffSnapshot(
+        v15SnapshotWithSandbox({ revocationProof }),
+      )
+
+      expect(items).toContainEqual(
+        expect.objectContaining({ id: 'github-sandbox', state: 'attention' }),
+      )
+    }
+
+    const vagueOnly = evaluateReleaseSignoffSnapshot(
+      v15SnapshotWithSandbox({
+        revocationProof: undefined,
+        bindingRevocation: 'passed',
+        postRevocationGrant: 'blocked',
+      }),
+    )
+    expect(vagueOnly).toContainEqual(
+      expect.objectContaining({ id: 'github-sandbox', state: 'attention' }),
+    )
+  })
+
+  it('binds the dated result to the exact revocation identity, binding version, and time', () => {
+    const ready = snapshot({ targetVersion: '1.5.0' })
+    const content = ready.walkthroughEvidence.referencedEvidenceContent!
+    const validProof = ready.githubSandboxRecord!.value!
+      .revocationProof as Record<string, unknown>
+
+    for (const proofOverride of [
+      { intentId: otherRevocationIntentId },
+      { revokedBindingVersion: 3 },
+      { checkedAt: '2026-08-11T12:31:00.000Z' },
+    ]) {
+      const items = evaluateReleaseSignoffSnapshot(
+        v15SnapshotWithSandbox({
+          revocationProof: { ...validProof, ...proofOverride },
+        }),
+      )
+
+      expect(items).toContainEqual(
+        expect.objectContaining({ id: 'dated-walkthrough', state: 'attention' }),
+      )
+    }
+
+    for (const vagueOrTamperedContent of [
+      content.replace(/^Revocation proof:.*$/mu, 'Binding revocation: passed. Post-revocation credential grant: blocked.'),
+      content.replace('outcome binding_inactive', 'outcome blocked'),
+      content.replace('durable check count 1.', 'durable check count 0.'),
+      content.replace('durable check count 1.', 'durable check count 2.'),
+      content.replace(revocationIntentId, otherRevocationIntentId),
+      content.replace('revoked binding version 2', 'revoked binding version 3'),
+      content.replace(revocationCheckedAt, '2026-08-11T12:31:00.000Z'),
+    ]) {
+      const items = evaluateReleaseSignoffSnapshot({
+        ...ready,
+        walkthroughEvidence: {
+          ...ready.walkthroughEvidence,
+          referencedEvidenceContent: vagueOrTamperedContent,
+        },
+      })
+
+      expect(items).toContainEqual(
+        expect.objectContaining({ id: 'dated-walkthrough', state: 'attention' }),
+      )
+    }
+
+    for (const [proofOverride, lineReplacement] of [
+      [{ outcomeCode: 'blocked' }, 'outcome blocked'],
+      [{ durableCheckCount: 0 }, 'durable check count 0.'],
+      [{ durableCheckCount: 2 }, 'durable check count 2.'],
+    ] as const) {
+      const items = evaluateReleaseSignoffSnapshot({
+        ...v15SnapshotWithSandbox({
+          revocationProof: { ...validProof, ...proofOverride },
+        }),
+        walkthroughEvidence: {
+          ...ready.walkthroughEvidence,
+          referencedEvidenceContent:
+            'outcomeCode' in proofOverride
+              ? content.replace('outcome binding_inactive', lineReplacement)
+              : content.replace('durable check count 1.', lineReplacement),
+        },
+      })
+
+      expect(items).toContainEqual(
+        expect.objectContaining({ id: 'dated-walkthrough', state: 'attention' }),
+      )
+    }
+  })
+
+  it('requires every v1.5 release record and revocation proof to use the walkthrough UTC date', () => {
+    const ready = snapshot({ targetVersion: '1.5.0' })
+    const validProof = ready.githubSandboxRecord!.value!
+      .revocationProof as Record<string, unknown>
+
+    for (const overrides of [
+      {
+        walkthroughEvidence: {
+          ...ready.walkthroughEvidence,
+          value: { ...ready.walkthroughEvidence.value, date: '2026-08-10' },
+        },
+      },
+      {
+        walkthroughEvidence: {
+          ...ready.walkthroughEvidence,
+          value: {
+            ...ready.walkthroughEvidence.value,
+            evidencePath:
+              'docs/guides/devflow-studio-v1.5-walkthrough-result-2026-08-10.md',
+          },
+        },
+      },
+      {
+        requiredGateRecord: record(ready.requiredGateRecord.path, {
+          ...ready.requiredGateRecord.value,
+          recordedAt: '2026-08-10T23:59:59.999Z',
+        }),
+      },
+      {
+        githubSandboxRecord: record(ready.githubSandboxRecord!.path, {
+          ...ready.githubSandboxRecord!.value,
+          recordedAt: '2026-08-10T23:59:59.999Z',
+        }),
+      },
+      {
+        githubSandboxRecord: record(ready.githubSandboxRecord!.path, {
+          ...ready.githubSandboxRecord!.value,
+          revocationProof: {
+            ...validProof,
+            checkedAt: '2026-08-10T23:59:59.999Z',
+          },
+        }),
+      },
+    ] satisfies Array<Partial<ReleaseSignoffSnapshot>>) {
+      const items = evaluateReleaseSignoffSnapshot({ ...ready, ...overrides })
+
+      expect(items).toContainEqual(
+        expect.objectContaining({ id: 'dated-walkthrough', state: 'attention' }),
+      )
+    }
+  })
+
+  it('rejects a second conflicting Revocation proof line in the dated result', () => {
+    const ready = snapshot({ targetVersion: '1.5.0' })
+    const content = ready.walkthroughEvidence.referencedEvidenceContent!
+    const items = evaluateReleaseSignoffSnapshot({
+      ...ready,
+      walkthroughEvidence: {
+        ...ready.walkthroughEvidence,
+        referencedEvidenceContent: `${content}\nRevocation proof: intent ${otherRevocationIntentId}; revoked binding version 3; outcome binding_inactive; checked at 2026-08-11T12:31:00.000Z; durable check count 1.\n`,
+      },
+    })
+
+    expect(items).toContainEqual(
+      expect.objectContaining({ id: 'dated-walkthrough', state: 'attention' }),
+    )
+  })
+
   it('requires exact candidate, CI, and packaged Desktop metadata in the v1.5 gate record', () => {
     const ready = snapshot({ targetVersion: '1.5.0' })
     const validRecord = ready.requiredGateRecord.value!
@@ -772,6 +963,15 @@ describe('release signoff status', () => {
           notes: 'extra field',
         }),
       },
+      {
+        githubSandboxRecord: record(ready.githubSandboxRecord!.path, {
+          ...ready.githubSandboxRecord!.value,
+          revocationProof: {
+            ...(ready.githubSandboxRecord!.value!.revocationProof as Record<string, unknown>),
+            notes: 'extra nested field',
+          },
+        }),
+      },
     ]
 
     for (const overrides of cases) {
@@ -855,7 +1055,7 @@ describe('release signoff status', () => {
       'Ad hoc maintainer assistance: false',
       `Packaged artifact: 1.5.0 darwin-arm64 ${desktopArtifactSha}`,
       `Expected commit: ${ready.githubSandboxRecord!.value!.expectedCommitSha as string}; remote head: ${ready.githubSandboxRecord!.value!.remoteHeadSha as string}.`,
-      'Binding revocation: passed',
+      `Revocation proof: intent ${revocationIntentId}; revoked binding version 2; outcome binding_inactive; checked at ${revocationCheckedAt}; durable check count 1.`,
     ]) {
       const items = evaluateReleaseSignoffSnapshot({
         ...ready,
@@ -874,7 +1074,7 @@ describe('release signoff status', () => {
       'Sandbox/App:',
       'Draft state: true',
       'Restart side-effect repeats:',
-      'Post-revocation credential grant: blocked',
+      'Revocation proof:',
     ]) {
       const items = evaluateReleaseSignoffSnapshot({
         ...ready,
@@ -896,6 +1096,7 @@ describe('release signoff status', () => {
       content.replace('intent revision: 1.', 'intent revision: 10.'),
       content.replace('Work Request 1,', 'Work Request 10,'),
       content.replace('credential grant 1,', 'credential grant 10,'),
+      content.replace('durable check count 1.', 'durable check count 10.'),
     ]) {
       const items = evaluateReleaseSignoffSnapshot({
         ...ready,
@@ -945,7 +1146,7 @@ describe('release signoff status', () => {
     }
   })
 
-  it('requires exact approval, Draft, Acceptance, recovery, revocation, and cleanup outcomes', () => {
+  it('requires exact approval, Draft, Acceptance, recovery, and cleanup outcomes', () => {
     for (const invalidOutcome of [
       { draft: false },
       { merged: true },
@@ -954,8 +1155,6 @@ describe('release signoff status', () => {
       { automaticRetry: true },
       { acceptanceStatus: 'building' },
       { restartRecovery: 'failed' },
-      { bindingRevocation: 'failed' },
-      { postRevocationGrant: 'issued' },
       { redactionCheck: 'failed' },
       { cleanup: 'failed' },
       { cleanupMethod: 'remote-branch-deletion' },

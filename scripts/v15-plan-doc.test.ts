@@ -120,6 +120,18 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(walkthrough).toContain('"runVersion"')
     expect(walkthrough).toContain('"testEvidenceDigest"')
     expect(walkthrough).toContain('"prPackageDigest"')
+    expect(walkthrough).toContain('"revocationProof"')
+    expect(walkthrough).toContain('"intentId"')
+    expect(walkthrough).toContain('"revokedBindingVersion"')
+    expect(walkthrough).toContain('"outcomeCode": "binding_inactive"')
+    expect(walkthrough).toContain('"checkedAt"')
+    expect(walkthrough).toContain('"durableCheckCount": 1')
+    expect(walkthrough).toContain(
+      '`github-delivery-intent-<lowercase RFC4122 v4 UUID>`',
+    )
+    expect(walkthrough).toContain('variant nibble `8`, `9`, `a`, or `b`')
+    expect(walkthrough).toContain('same UTC calendar date')
+    expect(walkthrough).toContain('exactly one `Revocation proof:` line')
     expect(walkthrough).toContain('git rev-parse S^1')
     expect(walkthrough).toContain('git diff --name-only C..S')
     expect(walkthrough).toContain('release:status -- --mode=pre-tag')

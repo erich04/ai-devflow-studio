@@ -95,7 +95,9 @@ The walkthrough passes only when all observations bind to the same `C` and show:
 - PR and Acceptance nodes `success`, with the canonical Run `completed`;
 - restart recovery with zero repeated credential, push, or pull-request side effects;
 - binding revocation followed by the packaged Desktop **Verify credential revocation** action
-  recording one redacted `binding_inactive` check, with no second git or pull-request effect;
+  recording exactly one redacted durable check for the completed intent, the newer revoked binding
+  version, canonical check time, and `binding_inactive` outcome, with no second git or pull-request
+  effect;
 - no merge, force-push, tag publication, remote branch deletion, or permission widening;
 - no App private key, installation token, pairing value, Cookie, Bearer value, raw patch/output,
   repository content, credential URL, or local absolute path in durable or release evidence.
@@ -121,6 +123,13 @@ remains immutable and candidate-bound to V1.4.
 Use these exact record shapes. Replace every example identity, numeric version/count, role, URL, and
 angle-bracket placeholder with the observed non-secret value while preserving the exact keys and
 fixed lifecycle outcomes. Do not add convenience fields containing local diagnostics or credentials.
+The revocation `intentId` must use the production
+`github-delivery-intent-<lowercase RFC4122 v4 UUID>` form, including UUID version nibble `4` and
+variant nibble `8`, `9`, `a`, or `b`.
+For V1.5, `walkthrough.json.date`, the date embedded in its `evidencePath`,
+`required-gates.json.recordedAt`, `github-sandbox.json.recordedAt`, and
+`revocationProof.checkedAt` must all have the same UTC calendar date. The dated result must contain
+exactly one `Revocation proof:` line, and that line must exactly encode the sandbox record values.
 
 `docs/releases/v1.5.0/walkthrough.json`:
 
@@ -227,8 +236,13 @@ fixed lifecycle outcomes. Do not add convenience fields containing local diagnos
   "automaticRetry": false,
   "acceptanceStatus": "completed",
   "restartRecovery": "passed",
-  "bindingRevocation": "passed",
-  "postRevocationGrant": "blocked",
+  "revocationProof": {
+    "intentId": "github-delivery-intent-<lowercase-RFC4122-v4-UUID>",
+    "revokedBindingVersion": 3,
+    "outcomeCode": "binding_inactive",
+    "checkedAt": "<canonical-ISO-8601-check-timestamp>",
+    "durableCheckCount": 1
+  },
   "redactionCheck": "passed",
   "cleanup": "passed",
   "cleanupMethod": "external-operator-no-merge",
@@ -240,10 +254,11 @@ fixed lifecycle outcomes. Do not add convenience fields containing local diagnos
 The dated result must say `Status: Passed` and record `C`, the packaged artifact platform and
 SHA-256, Team schema v12, Desktop schema v16, exact-SHA Verify URL, non-secret sandbox/App identity,
 series/attempt/revision and digests, lifecycle counts, approval role/auth kind, expected/remote SHA,
-Draft URL and state, completed Acceptance, restart zero-repeat observations, revocation result,
-redaction scan, cleanup, the non-maintainer operator role, zero ad hoc maintainer assistance, and any
-non-sensitive setup correction. It must not record `S`, because the dated result itself participates
-in calculating `S`.
+Draft URL and state, completed Acceptance, restart zero-repeat observations, and the exact revocation
+proof values (`intentId`, newer revoked binding version, `binding_inactive`, canonical `checkedAt`,
+and durable check count `1`). It also records the redaction scan, cleanup, the non-maintainer operator
+role, zero ad hoc maintainer assistance, and any non-sensitive setup correction. It must not record
+`S`, because the dated result itself participates in calculating `S`.
 
 Use this exact label skeleton so the result remains both human-auditable and machine-checkable:
 
@@ -262,7 +277,7 @@ Test evidence digest: <64-hex>
 PR package digest: <64-hex>
 Expected commit: <40-hex>; remote head: <same-40-hex>.
 Draft PR: <canonical-GitHub-Draft-PR-URL>
-Acceptance: completed. Restart recovery: passed. Binding revocation: passed.
+Acceptance: completed. Restart recovery: passed.
 Redaction check: passed. Cleanup: passed. The Draft PR was not merged.
 Operator role: non-maintainer. Ad hoc maintainer assistance: false.
 Approval role/auth: <owner-or-lead>/<session_cookie>.
@@ -270,7 +285,7 @@ Lifecycle counts: Work Request 1, canonical Run 1, credential grant 1, branch pu
 Sandbox/App: private <owner/repository> via <app-slug>.
 Draft state: true; merged: false; automatic retry: false.
 Restart side-effect repeats: credential 0, push 0, pull request 0.
-Post-revocation credential grant: blocked.
+Revocation proof: intent github-delivery-intent-<lowercase-RFC4122-v4-UUID>; revoked binding version <positive-integer-newer-than-delivery-binding>; outcome binding_inactive; checked at <canonical-ISO-8601-check-timestamp>; durable check count 1.
 ```
 
 ## Candidate, Signoff, And Tag Sequence

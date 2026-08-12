@@ -488,8 +488,7 @@ const v15GitHubSandboxKeys = [
   'automaticRetry',
   'acceptanceStatus',
   'restartRecovery',
-  'bindingRevocation',
-  'postRevocationGrant',
+  'revocationProof',
   'redactionCheck',
   'cleanup',
   'cleanupMethod',
@@ -532,7 +531,14 @@ function v15EvidenceShapeIssue(snapshot, kind, value) {
           ]) &&
           hasExactKeys(value.verifyRun?.jobs, expectedJobs) &&
           hasExactKeys(value.desktopArtifact, ['version', 'platform', 'sha256'])
-        : hasExactKeys(value, v15GitHubSandboxKeys)
+        : hasExactKeys(value, v15GitHubSandboxKeys) &&
+          hasExactKeys(value.revocationProof, [
+            'intentId',
+            'revokedBindingVersion',
+            'outcomeCode',
+            'checkedAt',
+            'durableCheckCount',
+          ])
   return valid ? null : `Unexpected or missing fields in the v1.5 ${kind} evidence.`
 }
 
@@ -878,6 +884,27 @@ function isValidV15WalkthroughContent(content, snapshot) {
   const artifactSha = requiredGateValue?.desktopArtifact?.sha256
   const verifyUrl = requiredGateValue?.verifyRun?.url
   const pullRequestUrl = sandboxValue?.pullRequestUrl
+  const revocationProof = sandboxValue?.revocationProof
+  const walkthroughDate = snapshot.walkthroughEvidence?.value?.date
+  const sameUtcEvidenceDate =
+    typeof walkthroughDate === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/u.test(walkthroughDate) &&
+    [requiredGateValue?.recordedAt, sandboxValue?.recordedAt, revocationProof?.checkedAt].every(
+      (timestamp) =>
+        isCanonicalTimestamp(timestamp) && timestamp.slice(0, 10) === walkthroughDate,
+    )
+  const validRevocationProof = isValidV15RevocationProof(
+    revocationProof,
+    sandboxValue?.bindingVersion,
+    sandboxValue?.recordedAt,
+  )
+  const exactRevocationProofLine = isRecord(revocationProof)
+    ? `Revocation proof: intent ${String(revocationProof.intentId)}; revoked binding version ${String(revocationProof.revokedBindingVersion)}; outcome ${String(revocationProof.outcomeCode)}; checked at ${String(revocationProof.checkedAt)}; durable check count ${String(revocationProof.durableCheckCount)}.`
+    : null
+  const contentLines = content.split(/\r?\n/u)
+  const revocationProofLines = contentLines.filter((line) =>
+    line.startsWith('Revocation proof:'),
+  )
   const exactValues = [snapshot.candidateSha, artifactSha, verifyUrl, pullRequestUrl]
   const deliveryValues = [
     sandboxValue?.deliverySeriesKey,
@@ -890,6 +917,7 @@ function isValidV15WalkthroughContent(content, snapshot) {
     [...exactValues, ...deliveryValues].every(
       (value) => isNonEmptyString(value) && content.includes(value),
     ) &&
+    sameUtcEvidenceDate &&
     /Status:\s*Passed/i.test(content) &&
     /Team schema v12/i.test(content) &&
     /Desktop schema v16/i.test(content) &&
@@ -922,8 +950,10 @@ function isValidV15WalkthroughContent(content, snapshot) {
       content,
     ) &&
     /Restart recovery[^\n]*passed/i.test(content) &&
-    /Binding revocation[^\n]*passed/i.test(content) &&
-    /Post-revocation credential grant[^\n]*blocked/i.test(content) &&
+    validRevocationProof &&
+    exactRevocationProofLine !== null &&
+    revocationProofLines.length === 1 &&
+    revocationProofLines[0] === exactRevocationProofLine &&
     /Acceptance[^\n]*completed/i.test(content) &&
     /(?:not merged|no merge)/i.test(content) &&
     /Redaction[^\n]*passed/i.test(content) &&
@@ -949,6 +979,43 @@ function evidenceSafetyIssue(recordPath, value) {
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0
+}
+
+function isExactEvidenceIdentifier(value) {
+  return (
+    typeof value === 'string' &&
+    /^github-delivery-intent-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+      value,
+    )
+  )
+}
+
+function isCanonicalTimestamp(value) {
+  if (typeof value !== 'string') return false
+  const milliseconds = Date.parse(value)
+  return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value
+}
+
+function isValidV15RevocationProof(value, deliveryBindingVersion, recordedAt) {
+  return (
+    hasExactKeys(value, [
+      'intentId',
+      'revokedBindingVersion',
+      'outcomeCode',
+      'checkedAt',
+      'durableCheckCount',
+    ]) &&
+    isExactEvidenceIdentifier(value.intentId) &&
+    Number.isSafeInteger(deliveryBindingVersion) &&
+    deliveryBindingVersion > 0 &&
+    Number.isSafeInteger(value.revokedBindingVersion) &&
+    value.revokedBindingVersion > deliveryBindingVersion &&
+    value.outcomeCode === 'binding_inactive' &&
+    isCanonicalTimestamp(value.checkedAt) &&
+    isCanonicalTimestamp(recordedAt) &&
+    Date.parse(value.checkedAt) <= Date.parse(recordedAt) &&
+    value.durableCheckCount === 1
+  )
 }
 
 function isSafeRelativeEvidencePath(value) {
@@ -1179,6 +1246,19 @@ function evaluateGitHubSandboxRecord(snapshot) {
       detail: `${snapshot.githubSandboxRecord.path} is missing required private-repository identity metadata.`,
     }
   }
+  const revocationProofValid = isValidV15RevocationProof(
+    value.revocationProof,
+    value.bindingVersion,
+    value.recordedAt,
+  )
+  if (!revocationProofValid) {
+    return {
+      id: 'github-sandbox',
+      label: 'GitHub sandbox Draft PR',
+      state: 'attention',
+      detail: `${snapshot.githubSandboxRecord.path} must bind one exact durable binding_inactive revocation proof to the completed intent and newer revoked binding version.`,
+    }
+  }
   const lifecycleControlsValid =
     value.draft === true &&
     value.merged === false &&
@@ -1187,8 +1267,6 @@ function evaluateGitHubSandboxRecord(snapshot) {
     value.automaticRetry === false &&
     value.acceptanceStatus === 'completed' &&
     value.restartRecovery === 'passed' &&
-    value.bindingRevocation === 'passed' &&
-    value.postRevocationGrant === 'blocked' &&
     value.redactionCheck === 'passed' &&
     value.cleanup === 'passed' &&
     value.cleanupMethod === 'external-operator-no-merge' &&
