@@ -102,6 +102,12 @@ V2.0 contract work is now active; no V2.0 product implementation is claimed yet.
 
 V1.5 and the finite 1.x line are released and complete. Before V2.0 product code begins:
 
+- `docs/product/prd/v2.0-native-agent-runtime-prd.md`
+- `docs/adr/0014-bounded-agent-runtime.md`
+- `docs/adr/0015-governed-coding-executor.md`
+- `docs/adr/0016-tool-mcp-execution-authority.md`
+- `docs/plans/v2.0-native-agent-runtime.md`
+
 - approve the bounded Agent Runtime, Coding Executor, and Tool/MCP authority decisions that evolve
   ADR 0008 and ADR 0009 without weakening Workflow, Gate, Desktop, or Team authority;
 - publish a scoped V2.0 PRD and executable slice plan with deterministic stop, checkpoint/resume,

@@ -10,6 +10,10 @@ Last updated: 2026-08-12
 - [`Roadmap`](../../roadmap.md)
 - [`v1.3 Delivery Flow Completion`](../../plans/v1.3-delivery-flow-completion.md)
 - [`V1.5 GitHub Delivery PRD`](./v1.5-github-delivery-prd.md)
+- [`V2.0 Native Agent Runtime PRD`](./v2.0-native-agent-runtime-prd.md)
+- [`Bounded Agent Runtime`](../../adr/0014-bounded-agent-runtime.md)
+- [`Governed Coding Executor`](../../adr/0015-governed-coding-executor.md)
+- [`Tool And MCP Execution Authority`](../../adr/0016-tool-mcp-execution-authority.md)
 - [`GitHub App Delivery Authority`](../../adr/0013-github-app-delivery-authority.md)
 - [`Domain Context`](../../../CONTEXT.md)
 

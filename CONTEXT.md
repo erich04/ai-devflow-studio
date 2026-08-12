@@ -222,6 +222,74 @@ An auditable step record for an Agent Review, including context preparation, ret
 provider call, and artifact creation. Traces explain how the review was produced without exposing
 private local paths or raw command output.
 
+## Agent Runtime
+
+The bounded DevFlow-owned observe, decide, act, validate, evaluate, checkpoint, and stop loop used
+when work depends on Tool, MCP, or Coding Executor observations. The deterministic Workflow remains authoritative
+for Run state, policy, Evidence acceptance, and human Gates. An Agent Runtime cannot
+advance a Node, approve a Gate, publish, merge, or widen its own capabilities.
+
+## Agent Trajectory
+
+The ordered, auditable record of externally observable Runtime events such as Context attachment,
+observation, action request, permission decision, Tool or executor result, evaluation, checkpoint,
+and terminal outcome. It uses bounded summaries and digests and does not claim or persist hidden
+reasoning, private scratchpads, raw prompts, source, patches, stdout/stderr, credentials, or local
+absolute paths in Team-visible state.
+
+## Agent Checkpoint
+
+A versioned, atomically persisted continuation boundary that binds one Agent Runtime to its exact
+Run/Node version, Context and capability-set digests, Local Project, accepted results, sequence,
+deadline, and consumed/remaining bounds. Resume revalidates authority and uses optimistic
+concurrency; it cannot rewind or replay an accepted side effect as a new action.
+
+## Agent Stop Reason
+
+The explicit terminal reason for a bounded Agent Runtime: success, failure, cancelled, timeout,
+step limit, budget exhausted, or policy denied. Agent success produces reviewable Evidence but is not
+itself a Workflow transition or Gate decision.
+
+## Tool Definition
+
+A main-owned, versioned executable capability description with strict input/output schemas,
+permission and side-effect class, deadline, cancellation, size limit, idempotency posture, and
+audit/redaction rules. A model may select only a Tool already accepted for the current Runtime.
+
+## Tool Capability Grant
+
+An opaque, short-lived Electron-main authority for one bounded Tool or MCP capability. It binds the
+Runtime, organization, project, user, session, Local Project, Tool identity/version, permission,
+resource scope, expiry, remaining calls, and budget. Text, renderer input, and Team metadata cannot
+forge or widen it.
+
+## Local MCP Installation
+
+The Desktop-local, Electron-main-owned record that authorizes one verified MCP executable with fixed
+arguments, local stdio transport, environment-name allowlist, identity, deadlines, enabled state,
+and version. Team MCP metadata is not local execution authority and cannot create, revise, enable,
+or invoke this installation.
+
+## Coding Executor
+
+The governed boundary for scoped repository reads/changes, approved commands/tests, permission
+events, cancellation, and structured diff/Test Evidence results. OpenCode is the first external
+executor; V2.0 adds one narrow DevFlow-owned Coding Agent behind the same contract. An executor does
+not own Workflow, Gate, or delivery authority.
+
+## Coding Executor Capability
+
+A versioned feature advertised before executor selection, such as managed-workspace read/edit,
+approved test execution, permission relay, cancellation, checkpoint continuation, or structured
+diff/test Evidence. Missing capability is a deterministic selection denial rather than a prompt to
+behave outside the descriptor.
+
+## Agent Evaluation Scenario
+
+A versioned reproducible fixture that fixes starting Context, allowed capabilities, expected
+trajectory, bounds, stop reason, Evidence, cleanup, and quality/cost/latency/intervention/recovery/
+isolation measurements for comparing one Agent Runtime or Coding Executor path.
+
 ## Tool / Skill Trace
 
 A Coding Agent runtime timeline that summarizes permission-backed tool activity, the Skill metadata
