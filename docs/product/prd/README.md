@@ -16,8 +16,9 @@ separate from:
   Studio's self-hosted AI development workflow workbench.
 - [`v1.4-pilot-trust-boundary-prd.md`](./v1.4-pilot-trust-boundary-prd.md): Scoped V1.4 contract
   for paid-runtime trust, durable sync, repository knowledge, Web management, and pilot lifecycle.
-- [`v1.5-github-delivery-prd.md`](./v1.5-github-delivery-prd.md): Final planned 1.x contract for
-  explicit, repository-scoped, recoverable GitHub branch and Draft pull-request delivery.
+- [`v1.5-github-delivery-prd.md`](./v1.5-github-delivery-prd.md): Implemented final 1.x feature contract
+  for explicit, repository-scoped, recoverable GitHub branch and Draft pull-request delivery;
+  release/signoff pending.
 
 ## Naming
 

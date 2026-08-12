@@ -2,6 +2,9 @@
 
 本文件是 Airbnb-III 前端重构进入后端/IPC/local store 对接后的工程清单。目标不是新增一批接口，而是先把现有页面字段的来源讲清楚：哪些已经由 Electron IPC / 本地 SQLite / 远端 snapshot 驱动，哪些只是 renderer adapter 或 seed fallback，哪些需要后续 shared/API/IPC 合同变更。
 
+当前持久化基线是 Team schema v12 与 Desktop schema v15。V1.5 GitHub Delivery 已实现；
+`v1.4.0` 仍是 current release，V1.5 release/signoff 尚未完成。
+
 状态枚举：
 
 - `real IPC/API`: 已有 Electron IPC 或远端 API 读写路径。
@@ -31,7 +34,9 @@
 | Test Evidence | `runProjectTests` result + `test_evidence` | `real IPC/API` + `local persisted` | Main 从 canonical Evidence 自动同步；renderer 无远端写接口；LocalStore 永久净化旧 Evidence、Test Report、Test Result Event 与 Coding Event，API 与 Repository 再次净化。`skipped` 需后续合同变更。 |
 | Budget guard | `CodingAgentRun.budgetDecision` | `local persisted` | 当前只在 Coding Agent runtime 下真实；通用 budget history 待补。 |
 | Required Artifact | `Artifact[]` + node artifact ids | `local persisted` | 已可从现有合同计算。 |
-| Handoff bundle | PR/acceptance artifacts + trace | `real Electron IPC` + `local persisted` | Renderer 只发送 Run/Node 标识；Electron main 从可信本地状态汇总并提交，浏览器预览失败关闭。 |
+| PR Delivery Package | canonical PR artifact + reviewed coding source | `real Electron IPC` + `local persisted` | Renderer 只发送 Run/Node 标识；Electron main 从可信状态生成 metadata-only package，浏览器预览失败关闭。 |
+| Delivery Intent / recovery | `loadState().githubDeliveryIntents` + `githubDeliveryOperatorOutcomes` | `real Electron IPC` + `local persisted` | Electron main 绑定 canonical managed worktree、expected commit 与 evidence；UI 只提供明确的 Revise、Resume、Retry、Stop。 |
+| Draft completion / Acceptance | Delivery Intent completion + acceptance artifact/decision | `real Electron IPC` + `local persisted` | 只有 verified remote head 和 matching Draft pull request 可推进 GitHub-enabled Acceptance；永不 merge。 |
 
 ## Agents
 
@@ -72,9 +77,12 @@
 | Policy snapshot source/version | `loadEnforcementPolicy` / `policy_snapshots` | `real IPC/API` + `local persisted` | 继续展示 source/version/syncedAt。 |
 | Gate re-evaluation summary | `evaluateGateEnforcement` decision | `real IPC/API` | 当前只针对 selected Run/Node；批量历史需要新合同。 |
 | Canonical Run sync | Electron main 从 LocalStore 读取 Run/current Node 后生成白名单 summary | `real IPC/API` | Renderer 无上传接口；只有原 authenticated sync creator 可更新。Run Summary 独占 status/current Node 推进，并收敛旧 active Node；child summary 不推进或合成 Run。 |
-| Dependent summary sync | canonical local Test/Review/Coding 对象生成 child summary | `real IPC/API` | Child-first；只有明确 canonical-missing 才上传一次最新 Run 并重试一次。ID 固定绑定 organization/project/Run/Node，重绑定返回 409；迟到 child 不激活旧 Node。durable outbox/backoff 留到 v1.4。 |
+| Dependent summary sync | canonical local Test/Review/Coding 对象生成 child summary | `real IPC/API` + `local persisted` | Child-first；`remote_sync_outbox` 持久化 metadata-only 操作、租约、退避、失败和显式恢复；ID 固定绑定 organization/project/Run/Node，重绑定返回 409，迟到 child 不激活旧 Node。 |
 | Remote policy findings | redacted Agent Review `policyFindings` | `real IPC/API` + `local persisted` | 保留重建 exact blocker ID 所需的最小明细；count-only payload 被拒绝，本地 evidence/reference ID 与敏感文本不进入 Team read model。 |
 | Gate override sync | main 提交 identifier/reason-only override；remote snapshot 回灌 accepted audit | `real IPC/API` + `local persisted` | 独立 Lead 不重传 creator-owned Run。API 规范化 Postgres node namespace、重算 exact blocker/policy；持久化 audit 恢复 namespaced FK，同 scope 幂等更新保持该命名空间。 |
+| GitHub App repository binding | owner-managed API route + Postgres binding/version/revocation state | `real IPC/API` | API 验证 installation/repository/default branch；private key 不进入 Postgres、Desktop 或 renderer。 |
+| Delivery Request / approval | redacted request + immutable signed Web approval | `real IPC/API` | Desktop Bearer authority 不能审批自身请求；approval 精确绑定 binding、series/attempt/revision、commit 与 evidence digests。 |
+| Credential / publication / Draft | API credential grant、Desktop publication report、API remote verification 与 PR result | `real IPC/API` + `local persisted` | Electron main 内存中短暂使用 repository-scoped token；API 独立确认 remote head 后创建或 reconcile 一个 Draft pull request。 |
 | Snapshot history | 当前只有 latest snapshot | `missing contract` | 后续单独设计历史查询合同。 |
 
 ## Browser Preview Boundary
@@ -89,4 +97,3 @@ Team API 默认不接受未签名 `x-devflow-*` 身份头，CORS 也不放行这
 - Policy snapshot history：查询历史 snapshot、每次 sync 的 Gate re-evaluation 记录。
 - TestEvidence `skipped`：需要 shared schema、API summary、local store、UI 状态一起变更。
 - Batch Gate re-evaluation：Team 页对多个 Run/Node 的统一 rollup。
-- Durable sync outbox/backoff：持久化待发送操作、失败原因与显式重试/恢复状态。

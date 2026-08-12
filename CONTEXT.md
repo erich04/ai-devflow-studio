@@ -7,8 +7,8 @@ design, build, test, pull request, and acceptance.
 
 ## Delivery Workflow
 
-The six-stage flow for a Run: requirement clarification, solution design, implementation, test
-evidence, pull request handoff, and business acceptance.
+The six-stage flow for a Run: requirement clarification, solution design, implementation,
+test evidence, governed pull-request delivery, and business acceptance.
 
 ## Node
 

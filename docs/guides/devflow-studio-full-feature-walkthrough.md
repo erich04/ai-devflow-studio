@@ -2,10 +2,17 @@
 
 更新时间：2026-07-31
 
-适用版本：`v1.3.0` 候选与后续产品体验基线
+Status: Historical V1.3 guide; preserved for the V1.3 product and release context only.
+
+适用版本：仅限 `v1.3.0` 历史体验，不是当前 V1.5 操作指南。
+
+当前开发态的演示与 smoke 入口见
+[`demo-and-smoke.md`](../engineering/demo-and-smoke.md)；候选绑定的 V1.5 GitHub Delivery
+验收见 [`devflow-studio-v1.5-walkthrough.md`](./devflow-studio-v1.5-walkthrough.md)。
+This historical guide does not authorize paid-provider smoke.
 
 这份指南用于体验 DevFlow Studio 已经落地的基础能力。它不是某一个版本的 release
-walkthrough，而是按当前产品入口把 v0.2 到 v1.3 的核心能力串起来：本地仓库、Run/Gate、
+walkthrough，而是按 V1.3 当时的产品入口把 v0.2 到 v1.3 的核心能力串起来：本地仓库、Run/Gate、
 Knowledge、Agent Review、Coding Agent、测试证据、Team/Web、Pairing、Budget、Tool / Skill
 Trace、PR Draft 和 Acceptance Bundle。
 

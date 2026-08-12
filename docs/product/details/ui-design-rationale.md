@@ -30,6 +30,8 @@ DevFlow Studio 是一个本地优先的 AI 交付工作台，不是营销首页�
 - 预算规则
 - 角色权限
 - 远端同步
+- GitHub App repository binding 与 revocation
+- Delivery Request 和 signed Web approval
 - redaction / retention 等团队治理规则
 
 Team Project 是团队配置和治理边界。
@@ -112,7 +114,7 @@ Workflow Board 的主卡片只分为四类：
 | `Task` | 需要执行的工作 | Clarification Agent、Coding Agent、Local Test Task |
 | `Gate` | 判断能否继续推进 | 需求确认 Gate、Design Gate、PR Delivery Gate、业务验收 Gate |
 | `Review` | 评审和治理动作 | Knowledge Review |
-| `Delivery` | 交付封装节点 | PR Draft、Acceptance Bundle |
+| `Delivery` | 受治理的交付节点 | PR Delivery Package、Delivery Intent / Request、Draft pull request、Acceptance Bundle |
 
 Artifact / Evidence / Trace / Decision 作为主节点的关联资源出现，但卡片摘要不应该
 对所有 Node 强行使用同一组标签。Board summary 需要按 Node 类型翻译成产品语言，例如
@@ -174,14 +176,18 @@ Review 和 Gate 容易混淆，但二者不同：
 
 ### Delivery
 
-Delivery 是交付封装节点，不是普通 Task，也不是 Gate。
+Delivery 是受治理的交付节点，不是普通 Task，也不是 Gate。
 
 例子：
 
-- PR Draft
+- PR Delivery Package、Delivery Intent、Delivery Request 和 Draft pull request
 - Acceptance Bundle
 
-Delivery 的职责是把前面累积的 Artifact、Evidence、Trace 组织成可以交付给外部系统或业务方的内容。
+Delivery 先把累积的 Artifact、Evidence、Trace 组织成 metadata-only PR Delivery Package，再由
+Electron main 从 canonical managed worktree 固定 Delivery Intent。API/Postgres 持久化 redacted
+Delivery Request；lead/owner 通过 signed Web approval 批准精确 revision，随后才允许发布
+expected commit，并在 remote head 验证后创建或 reconcile 一个 Draft pull request。Acceptance
+消费该完成证据，但永不 merge。
 
 ## 6. Board 卡片数量由谁决定
 
@@ -295,14 +301,19 @@ Tab：
 Tab：
 
 - `状态`
-- `Artifacts`
+- `PR Delivery Package`
+- `Delivery Intent / Request`
+- `Approval / Recovery`
 - `Evidence`
-- `Handoff`
+- `Draft pull request / Acceptance`
 
 原因：
 
-- Delivery 负责封装可交付内容。
-- 它要解释 PR Draft 或 Acceptance Bundle 由哪些 Artifact 和 Evidence 组成。
+- Delivery Inspector 要解释 package、expected commit、binding、approval、remote head、Draft 和
+  Acceptance 由哪些 Artifact 与 Evidence 支撑。
+- **Revise** 创建新的 pre-publication revision 并使旧 approval 失效；**Resume** 继续同一个
+  `recovery_required` attempt；**Retry** 仅在 predecessor 被证明 terminal 后创建下一 attempt；
+  **Stop** 停放精确 active attempt。四个动作不能互换或静默执行。
 
 ## 9. Team Project policy 的归属
 
@@ -335,14 +346,14 @@ Workbench 和 Inspector 只能读取 policy snapshot，并解释当前 Gate 为�
 - budget / policy 状态
 - policy snapshot 版本
 
-但在当前原型里，它仍然是前端模拟：
+原 OpenDesign prototype 中，这个按钮曾经只是前端模拟：
 
 - 更新同步状态
 - 更新 Inspector 的 policy 状态
 - 更新 Team Overview 的 Gate 状态
 - 展示 toast
 
-真实实现时需要接入：
+当前 production path 已接入 Electron IPC、API/Postgres 和 SQLite，并保留以下职责：
 
 - Electron IPC
 - 远端 Team Project policy 拉取
@@ -350,6 +361,10 @@ Workbench 和 Inspector 只能读取 policy snapshot，并解释当前 Gate 为�
 - snapshot 版本和时间戳
 - Gate 重新评估
 - Event / Trace 记录
+
+GitHub App repository binding 和 signed Web approval 走独立的 Web/API authority path；Delivery
+Intent 与 Revise、Resume、Retry、Stop 走专用 Electron IPC/API command path，不能降级成通用
+renderer sync payload。
 
 ## 11. Local Project 卡片的定位
 

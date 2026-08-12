@@ -50,7 +50,7 @@ describe('opencode runtime contract refresh documentation', () => {
     }
   })
 
-  it('documents the release-only real provider smoke gate', () => {
+  it('keeps live provider smoke explicitly gated while preserving the V1.4 contract record', () => {
     const checklist = readFileSync(
       join(process.cwd(), 'docs/knowledge/checklists/opencode-runtime-signoff.md'),
       'utf8',
@@ -65,8 +65,10 @@ describe('opencode runtime contract refresh documentation', () => {
     )
 
     expect(checklist).toContain('Keep live opencode smoke out of `corepack pnpm verify`')
-    expect(checklist).toContain('For every future product release')
-    expect(checklist).toContain('docs/plans/release-only-real-opencode-smoke.md')
+    expect(checklist).toContain('only when its own release contract explicitly')
+    expect(checklist).toContain('separate candidate-bound authorization')
+    expect(checklist).toContain('V1.5 does not require or authorize another paid-provider smoke')
+    expect(checklist).not.toContain('For every future product release')
     expect(checklist).toContain('corepack pnpm --silent test:opencode-smoke')
 
     expect(releaseGate).toContain('Every future DevFlow Studio product release')

@@ -111,4 +111,84 @@ describe('V1.5 living documentation truth', () => {
     expect(electron).toContain('renderer')
     expect(electron).toContain('does not authorize paid-provider smoke')
   })
+
+  it('keeps paid OpenCode smoke conditional and marks the generic V1.3 walkthrough historical', () => {
+    const opencodeSignoff = read('docs/knowledge/checklists/opencode-runtime-signoff.md')
+    const historicalWalkthrough = read('docs/guides/devflow-studio-full-feature-walkthrough.md')
+
+    expect(opencodeSignoff).not.toContain('For every future product release')
+    expect(opencodeSignoff).toContain(
+      'V1.5 does not require or authorize another paid-provider smoke',
+    )
+    expect(opencodeSignoff).toContain('candidate-bound authorization')
+
+    expect(historicalWalkthrough).toContain('Historical V1.3 guide')
+    expect(historicalWalkthrough).toContain('../engineering/demo-and-smoke.md')
+    expect(historicalWalkthrough).toContain('./devflow-studio-v1.5-walkthrough.md')
+    expect(historicalWalkthrough).toContain('does not authorize paid-provider smoke')
+    expect(historicalWalkthrough).not.toContain('`v1.3.0` 候选与后续产品体验基线')
+  })
+
+  it('keeps the backend matrix and UI rationale aligned with implemented V1.5 delivery', () => {
+    const backendMatrix = read('docs/engineering/backend-data-source-matrix.md')
+    const uiRationale = read('docs/product/details/ui-design-rationale.md')
+
+    for (const markdown of [backendMatrix, uiRationale]) {
+      expect(markdown).toContain('PR Delivery Package')
+      expect(markdown).toContain('Delivery Intent')
+      expect(markdown).toContain('Delivery Request')
+      expect(markdown).toContain('GitHub App repository binding')
+      expect(markdown).toContain('signed Web approval')
+      expect(markdown).toContain('Draft pull request')
+      expect(markdown).toContain('Revise')
+      expect(markdown).toContain('Resume')
+      expect(markdown).toContain('Retry')
+      expect(markdown).toContain('Stop')
+    }
+
+    expect(backendMatrix).toContain('Team schema v12')
+    expect(backendMatrix).toContain('Desktop schema v15')
+    expect(backendMatrix).toContain('remote_sync_outbox')
+    expect(backendMatrix).not.toContain('durable outbox/backoff 留到 v1.4')
+    expect(backendMatrix).not.toContain('Durable sync outbox/backoff：')
+
+    expect(uiRationale).toContain('production path 已接入 Electron IPC、API/Postgres 和 SQLite')
+    expect(uiRationale).not.toContain('但在当前原型里，它仍然是前端模拟')
+    expect(uiRationale).not.toContain('真实实现时需要接入：')
+  })
+
+  it('keeps product narrative, indexes, and review knowledge on governed delivery truth', () => {
+    const context = read('CONTEXT.md')
+    const keynote = read(
+      'docs/product/design-references/ai-devflow-studio-keynote-decisions.md',
+    )
+    const prdIndex = read('docs/product/prd/README.md')
+    const lessons = read('docs/engineering/lessons-learned.md')
+    const prReview = read('docs/knowledge/checklists/pr-review.md')
+
+    expect(context).toContain(
+      'test evidence, governed pull-request delivery, and business acceptance',
+    )
+
+    for (const markdown of [keynote, prReview]) {
+      expect(markdown).toContain('PR Delivery Package')
+      expect(markdown).toContain('Delivery Intent')
+      expect(markdown).toContain('Delivery Request')
+      expect(markdown).toContain('signed Web approval')
+      expect(markdown).toContain('verified remote head')
+      expect(markdown).toContain('Draft pull request')
+      expect(markdown).toContain('never merge')
+    }
+
+    expect(keynote).not.toContain('a handoff artifact for later PR creation')
+    expect(keynote).toContain('first-party Agent Runtime')
+    expect(prdIndex).toContain('Implemented final 1.x feature contract')
+    expect(prdIndex).toContain('release/signoff pending')
+
+    expect(lessons).toContain('Team schema v12')
+    expect(lessons).toContain('v11-to-v12')
+    expect(lessons).toContain('GitHub App repository binding')
+    expect(lessons).toContain('Delivery Request')
+    expect(lessons).toContain('Draft completion')
+  })
 })

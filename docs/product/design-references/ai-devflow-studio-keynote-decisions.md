@@ -35,7 +35,8 @@ generic management audience.
 - **Confirmed Knowledge**: reviewed knowledge that can be used as authoritative Gate evidence.
 - **System Knowledge**: technical structure, boundaries, services, interfaces, data models, dependencies, and constraints.
 - **Business Knowledge**: business terms, rules, user flows, assumptions, and relationships between business concepts.
-- **PR Delivery Package / PR 交付包**: a handoff artifact for later PR creation, not automatic repository upload or merge.
+- **PR Delivery Package / PR 交付包**: a metadata-only input to governed GitHub Delivery. It is not
+  source code, repository authority, approval, or a credential container.
 
 Avoid:
 
@@ -73,15 +74,23 @@ The Workflow Board is the complete delivery flow, not a side process:
 4. Solution Review Gate
 5. Implementation
 6. Test evidence
-7. PR delivery package
-8. Business acceptance
+7. PR Delivery Package and exact Delivery Intent
+8. Redacted Delivery Request, signed Web approval, verified remote head, and Draft pull request
+9. Business acceptance
 
 The short Chinese flow for slides:
 
-> 需求澄清 -> Gate -> 方案设计 -> Gate -> 开发实现 -> 测试证据 -> PR 交付包 -> 业务验收
+> 需求澄清 -> Gate -> 方案设计 -> Gate -> 开发实现 -> 测试证据 -> PR 交付包/Intent -> Web 审批 -> Draft PR -> 业务验收
 
 Gate should be explained as evidence review, not generic approval. A Gate checks whether the current
 stage has enough evidence to enter the next risky stage.
+
+V1.5 implements this governed GitHub Delivery boundary in the development line: Desktop fixes one
+Delivery Intent to the canonical managed-worktree commit, API/Postgres owns the redacted Delivery
+Request and signed Web approval, Electron main publishes without force, and the API creates or
+reconciles one Draft pull request only after the verified remote head matches. Acceptance consumes
+that evidence but must never merge or otherwise mutate the pull request. `v1.4.0` remains the current
+release until V1.5 candidate-bound signoff passes.
 
 ## Agent Boundaries
 
@@ -175,5 +184,6 @@ Supporting points:
 - 从黑盒调用到证据链
 - 从个人 Agent 使用到团队治理
 
-Mention that the current artifact remains an exploratory demo and that future work should focus on
-real Agent integration, knowledge review flow, and team operation.
+Mention that the 1.x artifact is a governed self-hosted delivery system. After the 1.x completion
+gate, future work should focus on the 2.x first-party Agent Runtime, native Tool/MCP execution,
+evaluated RAG/Memory, Multi-Agent orchestration, and tenant-scoped execution.

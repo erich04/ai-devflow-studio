@@ -62,14 +62,19 @@ Use this shape:
   external database.
 - **Checks**:
   - Run Postgres smoke only with an explicit `DEVFLOW_DATABASE_URL`.
-  - Prefer a clean disposable database for signoff.
-  - Confirm that migration, seed, policy save/read, enforcement evaluation, override audit, stale
-    policy rejection, approval sync bypass rejection, and overview redaction are covered.
+  - Prove a clean database reaches Team schema v12 and a populated v11-to-v12 upgrade retains exact
+    data and rolls back transactionally on failure.
+  - Confirm policy save/read, enforcement evaluation, override audit, stale policy rejection,
+    approval-sync bypass rejection, and overview redaction.
+  - Confirm the GitHub App repository binding, Delivery Request, signed approval, credential grant,
+    remote-head verification, Draft completion, revocation, and replay-safe audit paths.
 - **Fix**:
-  - Recreate the disposable database or run the migration setup before the smoke.
-  - If failures depend on old state, discard the test database instead of weakening assertions.
+  - Recreate only the intended fresh fixture; preserve a failed retained-upgrade fixture until its
+    transaction boundary and exact incompatible row are understood.
+  - Remediate the documented v11 row, then retry the same v11-to-v12 migration rather than applying
+    migration SQL by hand or weakening assertions.
 - **Prevention**: run Postgres smoke whenever API, repository, migration, policy, override, or
-  manager summary behavior changes.
+  GitHub Delivery persistence or manager-summary behavior changes.
 - **Promote when stable**: promoted to `docs/knowledge/checklists/postgres-smoke-readiness.md`.
 
 ## opencode Runtime Signoff

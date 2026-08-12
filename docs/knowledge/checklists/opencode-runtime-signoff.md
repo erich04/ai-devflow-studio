@@ -8,7 +8,9 @@ summary: Real opencode runtime signoff must be explicit, env-gated, permission-a
 
 # opencode Runtime Signoff Checklist
 
-Use this checklist only when intentionally validating the real opencode coding adapter.
+Use this checklist only when intentionally validating the real opencode coding adapter under a
+release contract that explicitly requires it and after separate candidate-bound authorization. This
+checklist does not grant provider-spend authority by itself.
 
 - Keep the deterministic fake engine as the default daily verification path.
 - Confirm local opencode is installed and compatible with the adapter under test.
@@ -26,6 +28,7 @@ Use this checklist only when intentionally validating the real opencode coding a
 - Confirm permission requests are human-visible and unanswered requests reject by default.
 - Confirm smoke output does not print provider secrets.
 - Keep live opencode smoke out of `corepack pnpm verify` and default CI.
-- For every future product release, run the live provider smoke once before the release tag and record
-  the evidence in the release signoff note. Use `docs/plans/release-only-real-opencode-smoke.md` as
-  the required evidence template.
+- A future product release runs live provider smoke only when its own release contract explicitly
+  requires it and separate candidate-bound authorization has been recorded.
+- V1.5 does not require or authorize another paid-provider smoke. Preserve the V1.4 paid-smoke record
+  as immutable V1.4 evidence.
