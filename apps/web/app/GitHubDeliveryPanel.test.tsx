@@ -30,6 +30,8 @@ const delivery: GitHubDeliveryRequestView = {
   nodeId: 'pr-1',
   repositoryBindingId: 'binding-1',
   repositoryBindingVersion: 3,
+  deliverySeriesKey: `github-delivery:${'9'.repeat(64)}`,
+  deliveryAttempt: 1,
   repositoryId: '98765',
   repository: 'example/payments',
   status: 'approval_required',

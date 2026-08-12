@@ -438,6 +438,8 @@ const githubDeliveryRequestKeys = [
   'repository',
   'codingRunId',
   'workspaceId',
+  'deliverySeriesKey',
+  'deliveryAttempt',
   'diffArtifactId',
   'testEvidenceId',
   'prPackageArtifactId',
@@ -552,6 +554,8 @@ export type GitHubDeliveryRequestView = {
   nodeId: string
   repositoryBindingId: string
   repositoryBindingVersion: number
+  deliverySeriesKey: string
+  deliveryAttempt: number
   repositoryId: string
   repository: string
   status: GitHubDeliveryStatus
@@ -582,6 +586,8 @@ const githubDeliveryViewKeys = [
   'nodeId',
   'repositoryBindingId',
   'repositoryBindingVersion',
+  'deliverySeriesKey',
+  'deliveryAttempt',
   'repositoryId',
   'repository',
   'status',
@@ -643,6 +649,9 @@ export function parseGitHubDeliveryRequestView(
     !isSafeIdentifier(value.nodeId) ||
     !isSafeIdentifier(value.repositoryBindingId) ||
     !isPositiveInteger(value.repositoryBindingVersion) ||
+    typeof value.deliverySeriesKey !== 'string' ||
+    !/^github-delivery:[a-f0-9]{64}$/u.test(value.deliverySeriesKey) ||
+    !isPositiveInteger(value.deliveryAttempt) ||
     typeof value.repositoryId !== 'string' ||
     !/^[1-9][0-9]{0,19}$/u.test(value.repositoryId) ||
     typeof value.repository !== 'string' ||
@@ -690,6 +699,8 @@ export function parseGitHubDeliveryRequestView(
     nodeId: value.nodeId,
     repositoryBindingId: value.repositoryBindingId,
     repositoryBindingVersion: value.repositoryBindingVersion,
+    deliverySeriesKey: value.deliverySeriesKey,
+    deliveryAttempt: value.deliveryAttempt,
     repositoryId: value.repositoryId,
     repository: value.repository,
     status: value.status as GitHubDeliveryStatus,
@@ -728,6 +739,8 @@ function parseGitHubDeliveryRequest(
     nodeId: value.nodeId,
     repositoryBindingId: value.repositoryBindingId,
     repositoryBindingVersion: value.repositoryBindingVersion,
+    deliverySeriesKey: value.deliverySeriesKey,
+    deliveryAttempt: value.deliveryAttempt,
     repositoryId: value.repositoryId,
     repository: value.repository,
     status: value.status as GitHubDeliveryStatus,

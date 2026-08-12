@@ -471,6 +471,8 @@ describe('web product shell page', () => {
       nodeId: 'pr-remote',
       repositoryBindingId: 'binding-remote',
       repositoryBindingVersion: 3,
+      deliverySeriesKey: `github-delivery:${'9'.repeat(64)}`,
+      deliveryAttempt: 1,
       repositoryId: '98765',
       repository: 'erich/remote-api',
       status: 'approval_required',
