@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createAgentRuntime,
@@ -21,6 +22,21 @@ const tempDirs: string[] = []
 const platformEnvironmentNames = [
   'DEVFLOW_MCP_ENVIRONMENT_ISOLATED',
   ...(process.platform === 'darwin' ? ['__CF_USER_TEXT_ENCODING'] : []),
+  ...(process.platform === 'win32'
+    ? [
+        'HOMEDRIVE',
+        'HOMEPATH',
+        'LOGONSERVER',
+        'PATH',
+        'SYSTEMDRIVE',
+        'SYSTEMROOT',
+        'TEMP',
+        'USERDOMAIN',
+        'USERNAME',
+        'USERPROFILE',
+        'WINDIR',
+      ]
+    : []),
 ].sort()
 const authorizeFixtureCall = async () => undefined
 
@@ -30,12 +46,15 @@ afterEach(async () => {
 })
 
 const fixtureServer = `#!/usr/bin/env node
+import { spawn } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import readline from 'node:readline'
 
-if (process.argv[3]) writeFileSync(process.argv[3], 'started', 'utf8')
-const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
 const mode = process.argv[2] ?? 'valid'
+if (process.argv[3] && mode !== 'exit-before-stdio-close') {
+  writeFileSync(process.argv[3], 'started', 'utf8')
+}
+const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
 lines.on('line', (line) => {
   const message = JSON.parse(line)
   if (message.method === 'initialize') {
@@ -105,7 +124,15 @@ lines.on('line', (line) => {
         structuredContent: result,
         isError: mode === 'tool-error',
       },
-    }) + '\\n')
+    }) + '\\n', () => {
+      if (mode !== 'exit-before-stdio-close') return
+      spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600)'], {
+        stdio: ['ignore', process.stdout, process.stderr],
+        windowsHide: true,
+      })
+      if (process.argv[3]) writeFileSync(process.argv[3], 'parent-exiting', 'utf8')
+      process.exit(0)
+    })
   }
 })
 `
@@ -268,6 +295,25 @@ describe('main-owned local stdio MCP client', () => {
     ).resolves.toEqual({ echoed: 'hello', environmentNames: platformEnvironmentNames })
     await expect(client.shutdown()).resolves.toBeUndefined()
     expect(client.closed).toBe(true)
+  })
+
+  it('does not report closed until the child process and inherited stdio handles close', async () => {
+    const { installation, localProjectPath } = await fixtureInstallation('exit-before-stdio-close')
+    const markerPath = path.join(localProjectPath, 'parent-exiting.marker')
+    const client = await createLocalMcpClient({
+      installation: { ...installation, args: [...installation.args, markerPath] },
+      localProjectPath,
+      environment: {},
+      authorizeCall: authorizeFixtureCall,
+    })
+
+    await expect(
+      client.callTool({ toolName: 'fixture.echo', input: { message: 'hello' } }),
+    ).resolves.toEqual({ echoed: 'hello', environmentNames: platformEnvironmentNames })
+    await vi.waitFor(() => expect(readFile(markerPath, 'utf8')).resolves.toBe('parent-exiting'))
+    await delay(75)
+    expect(client.closed).toBe(false)
+    await vi.waitFor(() => expect(client.closed).toBe(true))
   })
 
   it('rechecks main-owned installation authority immediately before every Tool call', async () => {

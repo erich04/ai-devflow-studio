@@ -65,6 +65,11 @@ does not itself authorize execution.
 The main process owns start, health, deadline, cancellation, protocol error, and shutdown. A process
 is scoped to the accepted runtime/session policy; it cannot silently outlive cancellation or Desktop
 shutdown. Crash/restart recovery never assumes a prior non-idempotent call is safe to repeat.
+The lifecycle reports a child as closed only after Node's `close` event confirms both process exit
+and stdio-handle closure; an earlier `exit` event is not sufficient on Windows. The fixed isolation
+sentinel prevents an empty environment block from becoming wholesale inheritance. Platform runtime
+variables that Node/libuv must add on Windows, and the macOS Core Foundation text-encoding variable,
+are treated as an explicit non-secret platform baseline rather than product environment authority.
 
 Local audit records installation ID/version, runtime and Tool identity, scope IDs, permission
 decision, start/end time, bounded status, result digest/size, redaction state, and failure code. Team

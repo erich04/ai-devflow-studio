@@ -345,7 +345,6 @@ export async function createLocalMcpClient(input: {
     }
   })
   child.once('exit', () => {
-    closed = true
     if (!closing && !fatalError) {
       fatalError = safeError('local_mcp_process_exited')
       channel.rejectAll(fatalError)
