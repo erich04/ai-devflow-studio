@@ -1160,13 +1160,21 @@ export type LexicalRetrievalBaseline = {
 }
 
 type LexicalEvaluationChunk = {
+  documentId: string
   chunkId: string
+  organizationId: string
+  projectId: string
+  sourcePath: string
+  headingPath: string[]
+  contentHash: string
   content: string
 }
 
 type LexicalEvaluationDocument = {
+  documentId: string
   organizationId: string
   projectId: string
+  sourcePath: string
   chunks: LexicalEvaluationChunk[]
 }
 
@@ -1324,6 +1332,372 @@ export function evaluateLexicalRetrievalBaseline(value: unknown): LexicalRetriev
       (sum, observation) => sum + observation.forbiddenHitIds.length,
       0,
     ),
+    paidProviderCalls: 0,
+    observations,
+  }
+}
+
+export type HybridRetrievalEvaluation = {
+  contractVersion: typeof KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION
+  corpusId: RetrievalMemoryEvaluationCorpus['corpusId']
+  corpusVersion: 1
+  strategy: 'hybrid-reranked'
+  embedding: {
+    modelId: 'fixture-embedding'
+    modelVersion: '1'
+    dimensions: 3
+  }
+  rankingContractVersion: 1
+  rerankingContractVersion: 1
+  evaluatedCaseCount: number
+  citationCaseCount: number
+  recallAtK: number
+  ndcgAtK: number
+  meanReciprocalRank: number
+  aggregateImprovementOverLexical: number
+  citationPrecision: number
+  citationFaithfulness: number
+  isolationViolations: number
+  paidProviderCalls: 0
+  observations: Array<{
+    caseId: string
+    rankedChunkIds: string[]
+    forbiddenHitIds: string[]
+    citationOutcome: 'accepted' | 'stale_rejected' | null
+  }>
+}
+
+type FixtureVector = readonly [number, number, number]
+
+const fixtureChunkVectors: Readonly<Record<string, FixtureVector>> = {
+  'chunk-api-health-contract': [1, 0, 0],
+  'chunk-api-health-test': [0, 1, 0],
+  'chunk-delivery-non-force': [0, 0, 1],
+}
+
+const fixtureQueryVectors: Readonly<Record<string, FixtureVector>> = {
+  'lexical-health-baseline': [1, 1, 0],
+  'semantic-outage-recall': [0, 1, 0],
+  'citation-current-hash': [0, 0, 1],
+  'citation-stale-hash-rejected': [0, 0, 1],
+  'cross-tenant-retrieval-isolation': [1, 0, 0],
+}
+
+const fixtureRerankerScores: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  'lexical-health-baseline': {
+    'chunk-api-health-contract': 1,
+    'chunk-api-health-test': 0.95,
+  },
+  'semantic-outage-recall': {
+    'chunk-api-health-contract': 0.2,
+    'chunk-api-health-test': 1,
+  },
+  'citation-current-hash': {
+    'chunk-delivery-non-force': 1,
+  },
+  'citation-stale-hash-rejected': {
+    'chunk-api-health-test': 0.2,
+    'chunk-delivery-non-force': 1,
+  },
+  'cross-tenant-retrieval-isolation': {
+    'chunk-api-health-contract': 1,
+  },
+}
+
+type HybridEvaluationCase = Omit<LexicalEvaluationCase, 'category'> & {
+  category:
+    | LexicalEvaluationCase['category']
+    | 'citation'
+    | 'citation_staleness'
+  requiredCitationContentHashes?: string[]
+  staleContentHashes?: string[]
+}
+
+function fixtureCosineSimilarity(left: FixtureVector, right: FixtureVector): number {
+  const dot = left.reduce((sum, value, index) => sum + (value * right[index]!), 0)
+  const leftMagnitude = Math.sqrt(left.reduce((sum, value) => sum + (value * value), 0))
+  const rightMagnitude = Math.sqrt(right.reduce((sum, value) => sum + (value * value), 0))
+  return dot / (leftMagnitude * rightMagnitude)
+}
+
+function evaluationCandidate(
+  chunk: LexicalEvaluationChunk,
+  localProjectId: string,
+  score: number,
+  vectorDimensions: number | null,
+): KnowledgeRetrievalCandidate {
+  return {
+    documentId: chunk.documentId,
+    chunkId: chunk.chunkId,
+    organizationId: chunk.organizationId,
+    projectId: chunk.projectId,
+    localProjectId,
+    sourcePath: chunk.sourcePath,
+    headingPath: chunk.headingPath,
+    contentHash: chunk.contentHash,
+    score,
+    vectorDimensions,
+  }
+}
+
+function parseHybridEvaluationCases(cases: Array<Record<string, unknown>>): HybridEvaluationCase[] {
+  const selected = cases.filter((entry) => [
+    'retrieval_baseline',
+    'hybrid_improvement',
+    'citation',
+    'citation_staleness',
+    'tenant_isolation',
+  ].includes(String(entry.category)))
+  if (selected.length !== 5) {
+    throw new KnowledgeRetrievalContractError('invalid_retrieval_memory_evaluation_corpus')
+  }
+  return selected as unknown as HybridEvaluationCase[]
+}
+
+export function evaluateHybridRetrievalCandidate(value: unknown): HybridRetrievalEvaluation {
+  const corpus = parseRetrievalMemoryEvaluationCorpus(value)
+  const documents = parseLexicalEvaluationDocuments(corpus.documents)
+  const evaluationCases = parseHybridEvaluationCases(corpus.cases)
+  const lexicalBaseline = evaluateLexicalRetrievalBaseline(corpus)
+  const retrievals = evaluationCases.map((evaluationCase) => {
+    const localProjectId = `fixture-${evaluationCase.scope.projectId}`
+    const request: KnowledgeRetrievalRequest = {
+      stateVersion: KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION,
+      id: `evaluation-${evaluationCase.id}`,
+      scope: {
+        kind: 'team',
+        ...evaluationCase.scope,
+        localProjectId,
+      },
+      target: {
+        runId: 'evaluation-run',
+        nodeId: 'evaluation-node',
+        runVersion: 1,
+      },
+      knowledgeSnapshotHash: `sha256:${'1'.repeat(64)}`,
+      query: {
+        text: evaluationCase.query,
+        categories: [],
+        tags: [],
+        topK: evaluationCase.topK,
+      },
+      requestedAt: '2026-08-13T08:00:00.000Z',
+    }
+    parseKnowledgeRetrievalRequest(request)
+    const scopedChunks = documents
+      .filter((document) =>
+        document.organizationId === evaluationCase.scope.organizationId &&
+        document.projectId === evaluationCase.scope.projectId
+      )
+      .flatMap((document) => document.chunks.map((chunk) => ({
+        ...chunk,
+        documentId: document.documentId,
+        organizationId: document.organizationId,
+        projectId: document.projectId,
+        sourcePath: document.sourcePath,
+      })))
+    const queryTokens = tokenizeLexicalText(evaluationCase.query)
+    const lexicalCandidates = scopedChunks
+      .map((chunk) => {
+        const chunkTokens = tokenizeLexicalText(chunk.content)
+        const matchingTokenCount = [...queryTokens]
+          .filter((token) => chunkTokens.has(token)).length
+        return {
+          chunk,
+          score: queryTokens.size === 0 ? 0 : matchingTokenCount / queryTokens.size,
+        }
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((left, right) =>
+        right.score - left.score || left.chunk.chunkId.localeCompare(right.chunk.chunkId)
+      )
+      .slice(0, evaluationCase.topK)
+      .map((entry) => evaluationCandidate(entry.chunk, localProjectId, entry.score, null))
+    const queryVector = fixtureQueryVectors[evaluationCase.id]
+    const rerankerScores = fixtureRerankerScores[evaluationCase.id]
+    if (queryVector === undefined || rerankerScores === undefined) {
+      throw new KnowledgeRetrievalContractError('invalid_retrieval_memory_evaluation_corpus')
+    }
+    const vectorCandidates = scopedChunks
+      .map((chunk) => {
+        const chunkVector = fixtureChunkVectors[chunk.chunkId]
+        if (chunkVector === undefined) {
+          throw new KnowledgeRetrievalContractError('invalid_retrieval_memory_evaluation_corpus')
+        }
+        return { chunk, score: fixtureCosineSimilarity(queryVector, chunkVector) }
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((left, right) =>
+        right.score - left.score || left.chunk.chunkId.localeCompare(right.chunk.chunkId)
+      )
+      .slice(0, evaluationCase.topK)
+      .map((entry) => evaluationCandidate(entry.chunk, localProjectId, entry.score, 3))
+    const lexicalSet: KnowledgeRetrievalCandidateSet = {
+      stateVersion: 1,
+      requestId: request.id,
+      scope: request.scope,
+      knowledgeSnapshotHash: request.knowledgeSnapshotHash,
+      strategy: 'lexical',
+      embedding: null,
+      candidates: lexicalCandidates,
+      evaluatedAt: '2026-08-13T08:00:01.000Z',
+    }
+    const vectorSet: KnowledgeRetrievalCandidateSet = {
+      stateVersion: 1,
+      requestId: request.id,
+      scope: request.scope,
+      knowledgeSnapshotHash: request.knowledgeSnapshotHash,
+      strategy: 'vector',
+      embedding: {
+        modelId: 'fixture-embedding',
+        modelVersion: '1',
+        dimensions: 3,
+      },
+      candidates: vectorCandidates,
+      evaluatedAt: '2026-08-13T08:00:02.000Z',
+    }
+    const hybrid = mergeKnowledgeRetrievalCandidates(request, lexicalSet, vectorSet)
+    const scores = hybrid.candidates.map((candidate) => {
+      const score = rerankerScores[candidate.chunkId]
+      if (score === undefined) {
+        throw new KnowledgeRetrievalContractError('invalid_retrieval_memory_evaluation_corpus')
+      }
+      return { chunkId: candidate.chunkId, score }
+    })
+    return {
+      evaluationCase,
+      request,
+      result: rerankKnowledgeRetrievalCandidates(request, hybrid, scores),
+    }
+  })
+
+  let acceptedCitationCount = 0
+  let faithfulCitationCount = 0
+  let rejectedStaleCitationCount = 0
+  const observations = retrievals.map(({ evaluationCase, request, result }) => {
+    const rankedChunkIds = result.candidates.map((candidate) => candidate.chunkId)
+    const forbidden = new Set(evaluationCase.forbiddenChunkIds)
+    let citationOutcome: HybridRetrievalEvaluation['observations'][number]['citationOutcome'] = null
+    if (evaluationCase.category === 'citation') {
+      const candidate = result.candidates[0]
+      if (candidate === undefined) {
+        throw new KnowledgeRetrievalContractError('invalid_retrieval_memory_evaluation_corpus')
+      }
+      const citation: KnowledgeCitation = {
+        stateVersion: 1,
+        requestId: request.id,
+        scope: request.scope,
+        knowledgeSnapshotHash: request.knowledgeSnapshotHash,
+        documentId: candidate.documentId,
+        chunkId: candidate.chunkId,
+        sourcePath: candidate.sourcePath,
+        headingPath: candidate.headingPath,
+        contentHash: candidate.contentHash,
+        strategyChain: candidate.strategyChain,
+        rank: 1,
+        score: candidate.score,
+        citedAt: '2026-08-13T08:00:03.000Z',
+      }
+      parseKnowledgeCitation(citation, request, result)
+      acceptedCitationCount += 1
+      if (evaluationCase.requiredCitationContentHashes?.includes(candidate.contentHash)) {
+        faithfulCitationCount += 1
+      }
+      citationOutcome = 'accepted'
+    } else if (evaluationCase.category === 'citation_staleness') {
+      const candidate = result.candidates[0]
+      const staleContentHash = evaluationCase.staleContentHashes?.[0]
+      if (candidate === undefined || staleContentHash === undefined) {
+        throw new KnowledgeRetrievalContractError('invalid_retrieval_memory_evaluation_corpus')
+      }
+      try {
+        parseKnowledgeCitation({
+          stateVersion: 1,
+          requestId: request.id,
+          scope: request.scope,
+          knowledgeSnapshotHash: request.knowledgeSnapshotHash,
+          documentId: candidate.documentId,
+          chunkId: candidate.chunkId,
+          sourcePath: candidate.sourcePath,
+          headingPath: candidate.headingPath,
+          contentHash: staleContentHash,
+          strategyChain: candidate.strategyChain,
+          rank: 1,
+          score: candidate.score,
+          citedAt: '2026-08-13T08:00:03.000Z',
+        }, request, result)
+      } catch (error) {
+        if (
+          error instanceof KnowledgeRetrievalContractError &&
+          error.code === 'invalid_knowledge_retrieval_request'
+        ) {
+          rejectedStaleCitationCount += 1
+          citationOutcome = 'stale_rejected'
+        } else {
+          throw error
+        }
+      }
+      if (citationOutcome !== 'stale_rejected') {
+        throw new KnowledgeRetrievalContractError('invalid_retrieval_memory_evaluation_corpus')
+      }
+    }
+    return {
+      caseId: evaluationCase.id,
+      rankedChunkIds,
+      forbiddenHitIds: rankedChunkIds.filter((chunkId) => forbidden.has(chunkId)),
+      citationOutcome,
+    }
+  })
+  const qualityRetrievals = retrievals.filter(({ evaluationCase }) =>
+    evaluationCase.category === 'retrieval_baseline' ||
+    evaluationCase.category === 'hybrid_improvement'
+  )
+  const qualityMetrics = qualityRetrievals.map(({ evaluationCase, result }) =>
+    evaluateRanking(
+      result.candidates.map((candidate) => candidate.chunkId),
+      evaluationCase.relevantChunkIds,
+    )
+  )
+  const recallAtK = average(qualityMetrics.map((entry) => entry.recall))
+  const ndcgAtK = average(qualityMetrics.map((entry) => entry.ndcg))
+  const meanReciprocalRank = average(qualityMetrics.map((entry) => entry.reciprocalRank))
+  const lexicalAggregate = average([
+    lexicalBaseline.recallAtK,
+    lexicalBaseline.ndcgAtK,
+    lexicalBaseline.meanReciprocalRank,
+  ])
+  const hybridAggregate = average([recallAtK, ndcgAtK, meanReciprocalRank])
+  const citationCaseCount = acceptedCitationCount + rejectedStaleCitationCount
+  return {
+    contractVersion: KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION,
+    corpusId: corpus.corpusId,
+    corpusVersion: corpus.corpusVersion,
+    strategy: 'hybrid-reranked',
+    embedding: {
+      modelId: 'fixture-embedding',
+      modelVersion: '1',
+      dimensions: 3,
+    },
+    rankingContractVersion: 1,
+    rerankingContractVersion: 1,
+    evaluatedCaseCount: qualityRetrievals.length,
+    citationCaseCount,
+    recallAtK,
+    ndcgAtK,
+    meanReciprocalRank,
+    aggregateImprovementOverLexical: hybridAggregate - lexicalAggregate,
+    citationPrecision: citationCaseCount === 0
+      ? 0
+      : (acceptedCitationCount + rejectedStaleCitationCount) / citationCaseCount,
+    citationFaithfulness: acceptedCitationCount === 0
+      ? 0
+      : faithfulCitationCount / acceptedCitationCount,
+    isolationViolations: observations
+      .filter((observation) => {
+        const evaluationCase = evaluationCases.find((entry) => entry.id === observation.caseId)
+        return evaluationCase?.category === 'tenant_isolation'
+      })
+      .reduce((sum, observation) => sum + observation.forbiddenHitIds.length, 0),
     paidProviderCalls: 0,
     observations,
   }

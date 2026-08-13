@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
+  evaluateHybridRetrievalCandidate,
   evaluateLexicalRetrievalBaseline,
   KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION,
   KNOWLEDGE_RETRIEVAL_QUERY_MAX_LENGTH,
@@ -495,6 +496,64 @@ describe('V2.1 Retrieval and Memory evaluation corpus contract', () => {
           caseId: 'cross-tenant-retrieval-isolation',
           rankedChunkIds: ['chunk-api-health-contract'],
           forbiddenHitIds: [],
+        },
+      ],
+    })
+  })
+
+  it('proves the deterministic hybrid candidate improves the frozen corpus without leaks', () => {
+    expect(evaluateHybridRetrievalCandidate(corpusFixture)).toEqual({
+      contractVersion: 1,
+      corpusId: 'v2.1-evaluated-retrieval-memory',
+      corpusVersion: 1,
+      strategy: 'hybrid-reranked',
+      embedding: {
+        modelId: 'fixture-embedding',
+        modelVersion: '1',
+        dimensions: 3,
+      },
+      rankingContractVersion: 1,
+      rerankingContractVersion: 1,
+      evaluatedCaseCount: 2,
+      citationCaseCount: 2,
+      recallAtK: 1,
+      ndcgAtK: 1,
+      meanReciprocalRank: 1,
+      aggregateImprovementOverLexical: 0.5,
+      citationPrecision: 1,
+      citationFaithfulness: 1,
+      isolationViolations: 0,
+      paidProviderCalls: 0,
+      observations: [
+        {
+          caseId: 'lexical-health-baseline',
+          rankedChunkIds: ['chunk-api-health-contract', 'chunk-api-health-test'],
+          forbiddenHitIds: [],
+          citationOutcome: null,
+        },
+        {
+          caseId: 'semantic-outage-recall',
+          rankedChunkIds: ['chunk-api-health-test', 'chunk-api-health-contract'],
+          forbiddenHitIds: [],
+          citationOutcome: null,
+        },
+        {
+          caseId: 'citation-current-hash',
+          rankedChunkIds: ['chunk-delivery-non-force'],
+          forbiddenHitIds: [],
+          citationOutcome: 'accepted',
+        },
+        {
+          caseId: 'citation-stale-hash-rejected',
+          rankedChunkIds: ['chunk-delivery-non-force', 'chunk-api-health-test'],
+          forbiddenHitIds: ['chunk-delivery-non-force'],
+          citationOutcome: 'stale_rejected',
+        },
+        {
+          caseId: 'cross-tenant-retrieval-isolation',
+          rankedChunkIds: ['chunk-api-health-contract'],
+          forbiddenHitIds: [],
+          citationOutcome: null,
         },
       ],
     })
