@@ -1,6 +1,7 @@
 export * from './cost'
 export * from './agent-review'
 export * from './agent-coordination'
+export * from './agent-coordination-projection'
 export * from './agent-coordination-evaluation'
 export * from './agent-runtime'
 export * from './agent-runtime-context'
