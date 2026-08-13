@@ -56,6 +56,9 @@ import { createLocalStore, type LocalStore } from './local-store.js'
 import { createDesktopAgentRuntime, type DesktopAgentRuntime } from './agent-runtime-runtime.js'
 import { createAgentRuntimeRendererAccess } from './agent-runtime-renderer-access.js'
 import { createAgentCoordinationRendererAccess } from './agent-coordination-renderer-access.js'
+import { createAgentCoordinationCommands } from './agent-coordination-commands.js'
+import { createSpecialistTaskAuthorityBroker } from './specialist-task-authority.js'
+import { createSpecialistRuntimeCoordinator } from './specialist-runtime-coordinator.js'
 import { createAgentMemoryRendererAccess } from './agent-memory-renderer-access.js'
 import { createAgentMemoryHumanActions } from './agent-memory-human-actions.js'
 import {
@@ -93,6 +96,9 @@ import {
   parseGetAgentRuntimeInput,
   parseListCoordinationSessionsInput,
   parseGetCoordinationSessionInput,
+  parseResumeCoordinationSessionInput,
+  parseStartCoordinationTaskInput,
+  parseCancelCoordinationSessionInput,
   parseListAgentMemoryLifecycleInput,
   parseDeleteAgentMemoryInput,
   parsePromoteAgentMemoryCandidateInput,
@@ -2170,6 +2176,45 @@ function registerIpcHandlers() {
     const input = parseGetCoordinationSessionInput(payload)
     const store = await getStore()
     return createAgentCoordinationRendererAccess(store).get(input)
+  })
+
+  ipcMain.handle(ipcChannels.resumeCoordinationSession, async (_, payload: unknown) => {
+    const input = parseResumeCoordinationSessionInput(payload)
+    const store = await getStore()
+    const commands = createAgentCoordinationCommands({
+      access: createAgentCoordinationRendererAccess(store),
+      coordinator: createSpecialistRuntimeCoordinator({
+        store,
+        authorityBroker: createSpecialistTaskAuthorityBroker({ store }),
+      }),
+    })
+    return commands.resume(input)
+  })
+
+  ipcMain.handle(ipcChannels.startCoordinationTask, async (_, payload: unknown) => {
+    const input = parseStartCoordinationTaskInput(payload)
+    const store = await getStore()
+    const commands = createAgentCoordinationCommands({
+      access: createAgentCoordinationRendererAccess(store),
+      coordinator: createSpecialistRuntimeCoordinator({
+        store,
+        authorityBroker: createSpecialistTaskAuthorityBroker({ store }),
+      }),
+    })
+    return commands.startTask(input)
+  })
+
+  ipcMain.handle(ipcChannels.cancelCoordinationSession, async (_, payload: unknown) => {
+    const input = parseCancelCoordinationSessionInput(payload)
+    const store = await getStore()
+    const commands = createAgentCoordinationCommands({
+      access: createAgentCoordinationRendererAccess(store),
+      coordinator: createSpecialistRuntimeCoordinator({
+        store,
+        authorityBroker: createSpecialistTaskAuthorityBroker({ store }),
+      }),
+    })
+    return commands.cancel(input)
   })
 
   ipcMain.handle(ipcChannels.listAgentMemoryLifecycle, async (_, payload: unknown) => {

@@ -150,6 +150,9 @@ function apiWith(snapshots: unknown[]) {
       if (!match) throw new Error('missing')
       return match
     }),
+    resumeCoordinationSession: vi.fn().mockResolvedValue(snapshots[0]),
+    startCoordinationTask: vi.fn().mockResolvedValue(snapshots[0]),
+    cancelCoordinationSession: vi.fn().mockResolvedValue(snapshots[0]),
   } as unknown as DevFlowDesktopApi
 }
 
@@ -211,5 +214,52 @@ describe('AgentCoordinationPanel', () => {
       'Multi-Agent Coordination state could not be loaded safely.',
     )
     expect(screen.queryByText('secret reasoning')).not.toBeInTheDocument()
+  })
+
+  it('resumes and starts only the exact versioned session and ready task', async () => {
+    const snapshot = coordinationSnapshot()
+    const api = apiWith([snapshot])
+    render(<AgentCoordinationPanel desktopApi={api} runId="run-1" localProjectId="project-1" />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume coordination-ui-1' }))
+    await waitFor(() => expect(api.resumeCoordinationSession).toHaveBeenCalledWith({
+      coordinationId: 'coordination-ui-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+      expectedSessionVersion: 4,
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start task-test' }))
+    await waitFor(() => expect(api.startCoordinationTask).toHaveBeenCalledWith({
+      coordinationId: 'coordination-ui-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+      expectedSessionVersion: 4,
+      taskId: 'task-test',
+      expectedTaskVersion: 2,
+    }))
+  })
+
+  it('requires explicit confirmation before cancelling the exact current session', async () => {
+    const snapshot = coordinationSnapshot()
+    const api = apiWith([snapshot])
+    const confirm = vi.spyOn(window, 'confirm')
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true)
+    render(<AgentCoordinationPanel desktopApi={api} runId="run-1" localProjectId="project-1" />)
+
+    const cancel = await screen.findByRole('button', { name: 'Cancel coordination-ui-1' })
+    fireEvent.click(cancel)
+    expect(api.cancelCoordinationSession).not.toHaveBeenCalled()
+
+    fireEvent.click(cancel)
+    await waitFor(() => expect(api.cancelCoordinationSession).toHaveBeenCalledWith({
+      coordinationId: 'coordination-ui-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+      expectedSessionVersion: 4,
+      confirmation: 'cancel-coordination',
+    }))
+    confirm.mockRestore()
   })
 })

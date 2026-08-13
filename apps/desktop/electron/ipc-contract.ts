@@ -92,6 +92,19 @@ export type GetCoordinationSessionInput = ListCoordinationSessionsInput & {
   coordinationId: string
 }
 
+export type ResumeCoordinationSessionInput = GetCoordinationSessionInput & {
+  expectedSessionVersion: number
+}
+
+export type StartCoordinationTaskInput = ResumeCoordinationSessionInput & {
+  taskId: string
+  expectedTaskVersion: number
+}
+
+export type CancelCoordinationSessionInput = ResumeCoordinationSessionInput & {
+  confirmation: 'cancel-coordination'
+}
+
 export type CoordinationSessionSnapshot = CoordinationRendererSnapshot
 
 export type ListAgentMemoryLifecycleInput = GetAgentRuntimeInput
@@ -152,6 +165,9 @@ export const ipcChannels = {
   agentRuntimeUpdated: 'devflow:agent-runtime:updated',
   listCoordinationSessions: 'devflow:agent-coordination:list',
   getCoordinationSession: 'devflow:agent-coordination:get',
+  resumeCoordinationSession: 'devflow:agent-coordination:resume',
+  startCoordinationTask: 'devflow:agent-coordination:task:start',
+  cancelCoordinationSession: 'devflow:agent-coordination:cancel',
   listAgentMemoryLifecycle: 'devflow:agent-memory:lifecycle:list',
   promoteAgentMemoryCandidate: 'devflow:agent-memory:candidate:promote',
   reviseAgentMemory: 'devflow:agent-memory:revise',
@@ -513,6 +529,15 @@ export type DevFlowDesktopApi = {
   ) => Promise<CoordinationSessionSnapshot[]>
   getCoordinationSession: (
     input: GetCoordinationSessionInput,
+  ) => Promise<CoordinationSessionSnapshot>
+  resumeCoordinationSession: (
+    input: ResumeCoordinationSessionInput,
+  ) => Promise<CoordinationSessionSnapshot>
+  startCoordinationTask: (
+    input: StartCoordinationTaskInput,
+  ) => Promise<CoordinationSessionSnapshot>
+  cancelCoordinationSession: (
+    input: CancelCoordinationSessionInput,
   ) => Promise<CoordinationSessionSnapshot>
   listAgentMemoryLifecycle: (
     input: ListAgentMemoryLifecycleInput,
@@ -908,6 +933,83 @@ export function parseGetCoordinationSessionInput(
     coordinationId: readExactRequiredIdentifier(value, 'coordinationId'),
     runId: readExactRequiredIdentifier(value, 'runId'),
     localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+  }
+}
+
+function parseCoordinationSessionCommandInput(
+  value: unknown,
+  payloadName: string,
+): ResumeCoordinationSessionInput {
+  if (!isRecord(value)) throw new Error(`Invalid ${payloadName}`)
+  rejectUnexpectedFields(
+    value,
+    ['coordinationId', 'runId', 'localProjectId', 'expectedSessionVersion'],
+    payloadName,
+  )
+  return {
+    coordinationId: readExactRequiredIdentifier(value, 'coordinationId'),
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+    expectedSessionVersion: readExactPositiveVersion(value, 'expectedSessionVersion'),
+  }
+}
+
+export function parseResumeCoordinationSessionInput(
+  value: unknown,
+): ResumeCoordinationSessionInput {
+  return parseCoordinationSessionCommandInput(value, 'resume Agent Coordination payload')
+}
+
+export function parseStartCoordinationTaskInput(
+  value: unknown,
+): StartCoordinationTaskInput {
+  if (!isRecord(value)) throw new Error('Invalid start Agent Coordination task payload')
+  rejectUnexpectedFields(
+    value,
+    [
+      'coordinationId',
+      'runId',
+      'localProjectId',
+      'expectedSessionVersion',
+      'taskId',
+      'expectedTaskVersion',
+    ],
+    'start Agent Coordination task payload',
+  )
+  return {
+    coordinationId: readExactRequiredIdentifier(value, 'coordinationId'),
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+    expectedSessionVersion: readExactPositiveVersion(value, 'expectedSessionVersion'),
+    taskId: readExactRequiredIdentifier(value, 'taskId'),
+    expectedTaskVersion: readExactPositiveVersion(value, 'expectedTaskVersion'),
+  }
+}
+
+export function parseCancelCoordinationSessionInput(
+  value: unknown,
+): CancelCoordinationSessionInput {
+  if (!isRecord(value)) throw new Error('Invalid cancel Agent Coordination payload')
+  rejectUnexpectedFields(
+    value,
+    [
+      'coordinationId',
+      'runId',
+      'localProjectId',
+      'expectedSessionVersion',
+      'confirmation',
+    ],
+    'cancel Agent Coordination payload',
+  )
+  if (value.confirmation !== 'cancel-coordination') {
+    throw new Error('Invalid confirmation')
+  }
+  return {
+    coordinationId: readExactRequiredIdentifier(value, 'coordinationId'),
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+    expectedSessionVersion: readExactPositiveVersion(value, 'expectedSessionVersion'),
+    confirmation: 'cancel-coordination',
   }
 }
 

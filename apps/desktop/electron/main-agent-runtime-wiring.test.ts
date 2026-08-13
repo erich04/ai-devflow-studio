@@ -12,7 +12,7 @@ describe('Electron Agent Runtime production wiring', () => {
 
     const handlers = main.slice(
       main.indexOf('ipcMain.handle(ipcChannels.startAgentRuntime'),
-      main.indexOf('ipcMain.handle(ipcChannels.deleteRun'),
+      main.indexOf('ipcMain.handle(ipcChannels.listCoordinationSessions'),
     )
     expect(handlers).toMatch(
       /parseStartAgentRuntimeInput\(payload\)[\s\S]*?getDesktopAgentRuntime\(\)[\s\S]*?\.start\(input\)/,
@@ -31,7 +31,7 @@ describe('Electron Agent Runtime production wiring', () => {
   it('broadcasts only committed snapshots and lists redacted terminal summaries', () => {
     const handlers = main.slice(
       main.indexOf('ipcMain.handle(ipcChannels.startAgentRuntime'),
-      main.indexOf('ipcMain.handle(ipcChannels.deleteRun'),
+      main.indexOf('ipcMain.handle(ipcChannels.listCoordinationSessions'),
     )
     expect(handlers.match(/broadcastToRenderers\(ipcChannels\.agentRuntimeUpdated, snapshot\)/g))
       .toHaveLength(3)
@@ -49,7 +49,7 @@ describe('Electron Agent Runtime production wiring', () => {
   it('exposes Agent Coordination through one read-only metadata projection', () => {
     const handlers = main.slice(
       main.indexOf('ipcMain.handle(ipcChannels.listCoordinationSessions'),
-      main.indexOf('ipcMain.handle(ipcChannels.deleteRun'),
+      main.indexOf('ipcMain.handle(ipcChannels.resumeCoordinationSession'),
     )
     expect(main).toContain("from './agent-coordination-renderer-access.js'")
     expect(handlers).toMatch(
@@ -61,6 +61,26 @@ describe('Electron Agent Runtime production wiring', () => {
     expect(handlers).not.toMatch(
       /commitCoordination|authorizeCoordination|resume\(|start\(|cancel\(|scope|summary|sessionId/,
     )
+  })
+
+  it('routes exact Coordination commands through the main-owned authority broker', () => {
+    const handlers = main.slice(
+      main.indexOf('ipcMain.handle(ipcChannels.resumeCoordinationSession'),
+      main.indexOf('ipcMain.handle(ipcChannels.listAgentMemoryLifecycle'),
+    )
+    expect(main).toContain("from './agent-coordination-commands.js'")
+    expect(main).toContain("from './specialist-task-authority.js'")
+    expect(main).toContain("from './specialist-runtime-coordinator.js'")
+    expect(handlers).toMatch(
+      /parseResumeCoordinationSessionInput\(payload\)[\s\S]*?commands\.resume\(input\)/,
+    )
+    expect(handlers).toMatch(
+      /parseStartCoordinationTaskInput\(payload\)[\s\S]*?commands\.startTask\(input\)/,
+    )
+    expect(handlers).toMatch(
+      /parseCancelCoordinationSessionInput\(payload\)[\s\S]*?commands\.cancel\(input\)/,
+    )
+    expect(handlers).not.toMatch(/graph|roleId|capabilityIds|scope|summary|transition|sessionId/)
   })
 
   it('recovers durable nonterminal runtimes after app readiness', () => {

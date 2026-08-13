@@ -35,6 +35,9 @@ import type {
   GetAgentRuntimeInput,
   GetCoordinationSessionInput,
   CoordinationSessionSnapshot,
+  ResumeCoordinationSessionInput,
+  StartCoordinationTaskInput,
+  CancelCoordinationSessionInput,
   DeleteAgentMemoryInput,
   ListAgentMemoryLifecycleInput,
   PromoteAgentMemoryCandidateInput,
@@ -251,6 +254,15 @@ export type DevFlowDesktopApi = {
   ) => Promise<CoordinationSessionSnapshot[]>
   getCoordinationSession: (
     input: GetCoordinationSessionInput,
+  ) => Promise<CoordinationSessionSnapshot>
+  resumeCoordinationSession: (
+    input: ResumeCoordinationSessionInput,
+  ) => Promise<CoordinationSessionSnapshot>
+  startCoordinationTask: (
+    input: StartCoordinationTaskInput,
+  ) => Promise<CoordinationSessionSnapshot>
+  cancelCoordinationSession: (
+    input: CancelCoordinationSessionInput,
   ) => Promise<CoordinationSessionSnapshot>
   listAgentMemoryLifecycle: (
     input: ListAgentMemoryLifecycleInput,

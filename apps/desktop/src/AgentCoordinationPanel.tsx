@@ -38,6 +38,7 @@ export function AgentCoordinationPanel({
   const [sessions, setSessions] = useState<CoordinationRendererSnapshot[]>([])
   const [detail, setDetail] = useState<CoordinationRendererSnapshot | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [isActing, setIsActing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -45,6 +46,7 @@ export function AgentCoordinationPanel({
       setSessions([])
       setDetail(null)
       setIsLoading(false)
+      setIsActing(false)
       setError(null)
       return
     }
@@ -86,7 +88,7 @@ export function AgentCoordinationPanel({
   }, [desktopApi, localProjectId, runId])
 
   async function selectSession(coordinationId: string) {
-    if (!desktopApi || !runId || !localProjectId || isLoading) return
+    if (!desktopApi || !runId || !localProjectId || isLoading || isActing) return
     if (detail?.session.coordinationId === coordinationId) return
     const selection = { runId, localProjectId }
     setIsLoading(true)
@@ -101,6 +103,74 @@ export function AgentCoordinationPanel({
       setError('Multi-Agent Coordination detail could not be loaded safely.')
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  function applyCommandSnapshot(
+    value: unknown,
+    selection: { runId: string; localProjectId: string },
+  ) {
+    const parsed = parseSelectedSnapshot(value, selection)
+    setDetail(parsed)
+    setSessions((current) => current.map((snapshot) =>
+      snapshot.session.coordinationId === parsed.session.coordinationId ? parsed : snapshot))
+  }
+
+  async function resumeSession() {
+    if (!desktopApi || !runId || !localProjectId || !detail || isActing) return
+    const selection = { runId, localProjectId }
+    setIsActing(true)
+    setError(null)
+    try {
+      applyCommandSnapshot(await desktopApi.resumeCoordinationSession({
+        coordinationId: detail.session.coordinationId,
+        ...selection,
+        expectedSessionVersion: detail.session.version,
+      }), selection)
+    } catch {
+      setError('Multi-Agent Coordination resume was rejected safely.')
+    } finally {
+      setIsActing(false)
+    }
+  }
+
+  async function startTask(taskId: string, expectedTaskVersion: number) {
+    if (!desktopApi || !runId || !localProjectId || !detail || isActing) return
+    const selection = { runId, localProjectId }
+    setIsActing(true)
+    setError(null)
+    try {
+      applyCommandSnapshot(await desktopApi.startCoordinationTask({
+        coordinationId: detail.session.coordinationId,
+        ...selection,
+        expectedSessionVersion: detail.session.version,
+        taskId,
+        expectedTaskVersion,
+      }), selection)
+    } catch {
+      setError('Specialist start was rejected safely.')
+    } finally {
+      setIsActing(false)
+    }
+  }
+
+  async function cancelSession() {
+    if (!desktopApi || !runId || !localProjectId || !detail || isActing) return
+    if (!window.confirm('Cancel this bounded Multi-Agent Coordination session?')) return
+    const selection = { runId, localProjectId }
+    setIsActing(true)
+    setError(null)
+    try {
+      applyCommandSnapshot(await desktopApi.cancelCoordinationSession({
+        coordinationId: detail.session.coordinationId,
+        ...selection,
+        expectedSessionVersion: detail.session.version,
+        confirmation: 'cancel-coordination',
+      }), selection)
+    } catch {
+      setError('Multi-Agent Coordination cancellation was rejected safely.')
+    } finally {
+      setIsActing(false)
     }
   }
 
@@ -221,6 +291,28 @@ export function AgentCoordinationPanel({
                   <strong>{session.stopReason ?? 'none'}</strong>
                 </div>
               </div>
+              {session.status === 'running' ? (
+                <div className="agent-action-row">
+                  <button
+                    className="ghost-button"
+                    type="button"
+                    aria-label={`Resume ${session.coordinationId}`}
+                    disabled={isActing || isLoading}
+                    onClick={() => void resumeSession()}
+                  >
+                    Resume
+                  </button>
+                  <button
+                    className="danger-button"
+                    type="button"
+                    aria-label={`Cancel ${session.coordinationId}`}
+                    disabled={isActing || isLoading}
+                    onClick={() => void cancelSession()}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : null}
             </article>
           </div>
 
@@ -236,10 +328,21 @@ export function AgentCoordinationPanel({
                   <strong>{task.taskId} · {task.roleId}</strong>
                 </div>
                 {detail.readyTaskIds.includes(task.taskId) ? (
-                  <div className="agent-advisory">
-                    <span>Dependency readiness</span>
-                    <strong>Ready now</strong>
-                  </div>
+                  <>
+                    <div className="agent-advisory">
+                      <span>Dependency readiness</span>
+                      <strong>Ready now</strong>
+                    </div>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      aria-label={`Start ${task.taskId}`}
+                      disabled={isActing || isLoading || session.status !== 'running'}
+                      onClick={() => void startTask(task.taskId, task.version)}
+                    >
+                      Start specialist
+                    </button>
+                  </>
                 ) : null}
                 <div className="knowledge-reference-meta">
                   <span>

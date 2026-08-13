@@ -48,6 +48,27 @@ type ExposedDesktopApi = {
     runId: string
     localProjectId: string
   }) => Promise<unknown>
+  resumeCoordinationSession: (input: {
+    coordinationId: string
+    runId: string
+    localProjectId: string
+    expectedSessionVersion: number
+  }) => Promise<unknown>
+  startCoordinationTask: (input: {
+    coordinationId: string
+    runId: string
+    localProjectId: string
+    expectedSessionVersion: number
+    taskId: string
+    expectedTaskVersion: number
+  }) => Promise<unknown>
+  cancelCoordinationSession: (input: {
+    coordinationId: string
+    runId: string
+    localProjectId: string
+    expectedSessionVersion: number
+    confirmation: 'cancel-coordination'
+  }) => Promise<unknown>
   listAgentMemoryLifecycle: (input: {
     runtimeId: string
     runId: string
@@ -154,6 +175,21 @@ describe('Electron preload remote sync operator surface', () => {
       coordinationId: 'coordination-1',
       ...selection,
     })).resolves.toBe(snapshot)
+    const coordinationCommand = {
+      coordinationId: 'coordination-1',
+      ...selection,
+      expectedSessionVersion: 4,
+    }
+    await expect(exposedApi.resumeCoordinationSession(coordinationCommand)).resolves.toBe(snapshot)
+    await expect(exposedApi.startCoordinationTask({
+      ...coordinationCommand,
+      taskId: 'task-contract',
+      expectedTaskVersion: 2,
+    })).resolves.toBe(snapshot)
+    await expect(exposedApi.cancelCoordinationSession({
+      ...coordinationCommand,
+      confirmation: 'cancel-coordination',
+    })).resolves.toBe(snapshot)
     await expect(exposedApi.listAgentMemoryLifecycle({
       runtimeId: 'agent-runtime-1',
       ...selection,
@@ -207,6 +243,19 @@ describe('Electron preload remote sync operator surface', () => {
     expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.getCoordinationSession, {
       coordinationId: 'coordination-1',
       ...selection,
+    })
+    expect(electron.invoke).toHaveBeenCalledWith(
+      ipcChannels.resumeCoordinationSession,
+      coordinationCommand,
+    )
+    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.startCoordinationTask, {
+      ...coordinationCommand,
+      taskId: 'task-contract',
+      expectedTaskVersion: 2,
+    })
+    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.cancelCoordinationSession, {
+      ...coordinationCommand,
+      confirmation: 'cancel-coordination',
     })
     expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.listAgentMemoryLifecycle, {
       runtimeId: 'agent-runtime-1',

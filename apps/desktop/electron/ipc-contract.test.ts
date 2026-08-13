@@ -26,6 +26,9 @@ import {
   parseLoadRepositoryKnowledgeInput,
   parseGetAgentRuntimeInput,
   parseGetCoordinationSessionInput,
+  parseResumeCoordinationSessionInput,
+  parseStartCoordinationTaskInput,
+  parseCancelCoordinationSessionInput,
   parseListAgentMemoryLifecycleInput,
   parseDeleteAgentMemoryInput,
   parsePromoteAgentMemoryCandidateInput,
@@ -222,6 +225,54 @@ describe('IPC contract parsers', () => {
       localProjectId: 'project-1',
       summary: 'hidden reasoning',
     })).toThrow(/unexpected field/i)
+  })
+
+  it('keeps Coordination commands identifier-only, version-exact, and main-owned', () => {
+    const command = {
+      coordinationId: 'coordination-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+      expectedSessionVersion: 4,
+    }
+    expect(parseResumeCoordinationSessionInput(command)).toEqual(command)
+    expect(parseStartCoordinationTaskInput({
+      ...command,
+      taskId: 'task-contract',
+      expectedTaskVersion: 2,
+    })).toEqual({
+      ...command,
+      taskId: 'task-contract',
+      expectedTaskVersion: 2,
+    })
+    expect(parseCancelCoordinationSessionInput({
+      ...command,
+      confirmation: 'cancel-coordination',
+    })).toEqual({
+      ...command,
+      confirmation: 'cancel-coordination',
+    })
+
+    for (const forbidden of [
+      { graph: { nodes: [] } },
+      { roleId: 'renderer-agent' },
+      { capabilityIds: ['workspace.write_text'] },
+      { scope: { sessionId: 'secret' } },
+      { transition: { status: 'success' } },
+      { summary: 'hidden reasoning' },
+    ]) {
+      expect(() => parseResumeCoordinationSessionInput({ ...command, ...forbidden }))
+        .toThrow(/unexpected field/i)
+    }
+    for (const expectedSessionVersion of [0, -1, 1.5, 2_147_483_648, '4']) {
+      expect(() => parseResumeCoordinationSessionInput({
+        ...command,
+        expectedSessionVersion,
+      })).toThrow(/expectedSessionVersion/)
+    }
+    expect(() => parseCancelCoordinationSessionInput({
+      ...command,
+      confirmation: true,
+    })).toThrow(/confirmation/)
   })
 
   it('keeps Agent Memory lifecycle reads bound to one exact Runtime selection', () => {

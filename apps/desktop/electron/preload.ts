@@ -44,6 +44,12 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.listCoordinationSessions, input),
   getCoordinationSession: (input) =>
     ipcRenderer.invoke(ipcChannels.getCoordinationSession, input),
+  resumeCoordinationSession: (input) =>
+    ipcRenderer.invoke(ipcChannels.resumeCoordinationSession, input),
+  startCoordinationTask: (input) =>
+    ipcRenderer.invoke(ipcChannels.startCoordinationTask, input),
+  cancelCoordinationSession: (input) =>
+    ipcRenderer.invoke(ipcChannels.cancelCoordinationSession, input),
   listAgentMemoryLifecycle: (input) =>
     ipcRenderer.invoke(ipcChannels.listAgentMemoryLifecycle, input),
   promoteAgentMemoryCandidate: (input) =>
