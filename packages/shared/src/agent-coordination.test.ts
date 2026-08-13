@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   acceptAgentHandoff,
+  acceptCoordinationResourceLease,
   applyCoordinationHandoff,
   cancelCoordinationSession,
   COORDINATION_CONTRACT_VERSION,
@@ -16,6 +17,7 @@ import {
   type AgentHandoff,
   type AgentHandoffAcceptOptions,
   type CoordinationSessionRequest,
+  type CoordinationResourceLease,
   type SpecialistAllocationRequest,
 } from './agent-coordination'
 
@@ -1855,5 +1857,340 @@ describe('Coordination state transition contract', () => {
       usage: { steps: 0, toolCalls: 0, tokens: 0, costUsd: 0 },
       now: '2026-08-13T15:02:00.000Z',
     })).toThrowError('invalid_coordination_transition')
+  })
+})
+
+describe('Coordination resource lease contract', () => {
+  const resourceDigest = 'f'.repeat(64)
+  const leaseGraph: AgentTaskGraph = {
+    stateVersion: 1,
+    id: 'lease-graph-1',
+    coordinationId: request.id,
+    version: 1,
+    entryTaskIds: ['lease-task-a', 'lease-task-b', 'lease-task-c'],
+    nodes: [
+      {
+        id: 'lease-task-a',
+        roleId: 'contract-analyst',
+        contextDigest: '1'.repeat(64),
+        capabilityIds: ['repository_read'],
+        resourceRequirements: [{
+          resourceId: 'repository-source-1',
+          resourceDigest,
+          mode: 'read',
+        }],
+      },
+      {
+        id: 'lease-task-b',
+        roleId: 'test-analyst',
+        contextDigest: '2'.repeat(64),
+        capabilityIds: ['repository_read'],
+        resourceRequirements: [{
+          resourceId: 'repository-source-1',
+          resourceDigest,
+          mode: 'read',
+        }],
+      },
+      {
+        id: 'lease-task-c',
+        roleId: 'bounded-implementer',
+        contextDigest: '3'.repeat(64),
+        capabilityIds: ['managed_workspace_edit'],
+        resourceRequirements: [{
+          resourceId: 'repository-source-1',
+          resourceDigest,
+          mode: 'write',
+        }],
+      },
+    ],
+    edges: [],
+  }
+  const allocation = (
+    taskId: string,
+    agentId: string,
+    capabilityIds: string[],
+    mode: 'read' | 'write',
+  ): SpecialistAllocationRequest => ({
+    ...specialistAllocation,
+    id: `allocation-${taskId}`,
+    taskGraphId: leaseGraph.id,
+    taskId,
+    roleId: leaseGraph.nodes.find((node) => node.id === taskId)!.roleId,
+    agentId,
+    contextDigest: leaseGraph.nodes.find((node) => node.id === taskId)!.contextDigest,
+    capabilityIds,
+    resourceRequirements: [{
+      resourceId: 'repository-source-1',
+      resourceDigest,
+      mode,
+    }],
+  })
+  const runningState = () => {
+    const initial = createCoordinationSessionState({
+      coordination: request,
+      graph: leaseGraph,
+      startedAt: '2026-08-13T15:00:00.001Z',
+    })
+    const first = startCoordinationTask({
+      state: initial,
+      allocation: allocation('lease-task-a', 'lease-agent-a', ['repository_read'], 'read'),
+      expectedSessionVersion: 1,
+      expectedTaskVersion: 1,
+      runtimeId: 'lease-runtime-a',
+      runtimeVersion: 1,
+      now: '2026-08-13T15:00:01.000Z',
+    })
+    const second = startCoordinationTask({
+      state: first,
+      allocation: allocation('lease-task-b', 'lease-agent-b', ['repository_read'], 'read'),
+      expectedSessionVersion: 2,
+      expectedTaskVersion: 1,
+      runtimeId: 'lease-runtime-b',
+      runtimeVersion: 1,
+      now: '2026-08-13T15:00:01.001Z',
+    })
+    return startCoordinationTask({
+      state: second,
+      allocation: allocation(
+        'lease-task-c',
+        'lease-agent-c',
+        ['managed_workspace_edit'],
+        'write',
+      ),
+      expectedSessionVersion: 3,
+      expectedTaskVersion: 1,
+      runtimeId: 'lease-runtime-c',
+      runtimeVersion: 1,
+      now: '2026-08-13T15:00:01.002Z',
+    })
+  }
+  const lease = (
+    id: string,
+    taskId: string,
+    runtimeId: string,
+    capabilityId: string,
+    mode: 'read' | 'write',
+  ): CoordinationResourceLease => ({
+    stateVersion: 1,
+    id,
+    coordinationId: request.id,
+    taskId,
+    taskVersion: 2,
+    runtimeId,
+    runtimeVersion: 1,
+    scope: request.scope,
+    capabilityId,
+    capabilityVersion: 1,
+    resourceId: 'repository-source-1',
+    resourceDigest,
+    mode,
+    status: 'active',
+    version: 1,
+    acquiredAt: '2026-08-13T15:00:02.000Z',
+    expiresAt: '2026-08-13T15:01:02.000Z',
+    releasedAt: null,
+  })
+
+  it('accepts concurrent exact readers and rejects a writer while either reader is active', () => {
+    const state = runningState()
+    const readerA = lease(
+      'lease-reader-a',
+      'lease-task-a',
+      'lease-runtime-a',
+      'repository_read',
+      'read',
+    )
+    const readerB = lease(
+      'lease-reader-b',
+      'lease-task-b',
+      'lease-runtime-b',
+      'repository_read',
+      'read',
+    )
+    const writer = lease(
+      'lease-writer-c',
+      'lease-task-c',
+      'lease-runtime-c',
+      'managed_workspace_edit',
+      'write',
+    )
+
+    expect(acceptCoordinationResourceLease(readerA, {
+      coordination: request,
+      graph: leaseGraph,
+      state,
+      existingLeases: [],
+    })).toEqual({ lease: readerA, replayed: false })
+    expect(acceptCoordinationResourceLease(readerB, {
+      coordination: request,
+      graph: leaseGraph,
+      state,
+      existingLeases: [readerA],
+    })).toEqual({ lease: readerB, replayed: false })
+    expect(acceptCoordinationResourceLease(writer, {
+      coordination: request,
+      graph: leaseGraph,
+      state,
+      existingLeases: [],
+    })).toEqual({ lease: writer, replayed: false })
+    expect(() => acceptCoordinationResourceLease(writer, {
+      coordination: request,
+      graph: leaseGraph,
+      state,
+      existingLeases: [readerA, readerB],
+    })).toThrowError('coordination_resource_conflict')
+  })
+
+  it('replays one exact lease and rejects a conflicting reuse of its identity', () => {
+    const state = runningState()
+    const reader = lease(
+      'lease-reader-a',
+      'lease-task-a',
+      'lease-runtime-a',
+      'repository_read',
+      'read',
+    )
+    expect(acceptCoordinationResourceLease(
+      JSON.parse(JSON.stringify(reader)),
+      {
+        coordination: request,
+        graph: leaseGraph,
+        state,
+        existingLeases: [reader],
+      },
+    )).toEqual({ lease: reader, replayed: true })
+    expect(() => acceptCoordinationResourceLease({
+      ...reader,
+      expiresAt: '2026-08-13T15:01:01.000Z',
+    }, {
+      coordination: request,
+      graph: leaseGraph,
+      state,
+      existingLeases: [reader],
+    })).toThrowError('coordination_resource_conflict')
+  })
+
+  it('rejects a reader behind an active writer and keeps release ordering monotonic', () => {
+    const state = runningState()
+    const reader = lease(
+      'lease-reader-a',
+      'lease-task-a',
+      'lease-runtime-a',
+      'repository_read',
+      'read',
+    )
+    const writer = lease(
+      'lease-writer-c',
+      'lease-task-c',
+      'lease-runtime-c',
+      'managed_workspace_edit',
+      'write',
+    )
+    expect(() => acceptCoordinationResourceLease(reader, {
+      coordination: request,
+      graph: leaseGraph,
+      state,
+      existingLeases: [writer],
+    })).toThrowError('coordination_resource_conflict')
+
+    const releasedReader: CoordinationResourceLease = {
+      ...reader,
+      status: 'released',
+      version: 2,
+      releasedAt: '2026-08-13T15:00:03.000Z',
+    }
+    expect(() => acceptCoordinationResourceLease(writer, {
+      coordination: request,
+      graph: leaseGraph,
+      state,
+      existingLeases: [releasedReader],
+    })).toThrowError('coordination_resource_conflict')
+    const writerAfterRelease = {
+      ...writer,
+      acquiredAt: '2026-08-13T15:00:03.000Z',
+      expiresAt: '2026-08-13T15:01:03.000Z',
+    }
+    expect(acceptCoordinationResourceLease(writerAfterRelease, {
+      coordination: request,
+      graph: leaseGraph,
+      state,
+      existingLeases: [releasedReader],
+    })).toEqual({ lease: writerAfterRelease, replayed: false })
+  })
+
+  it('does not infer clearance from elapsed time while a lease remains active', () => {
+    const state = runningState()
+    const reader = lease(
+      'lease-reader-a',
+      'lease-task-a',
+      'lease-runtime-a',
+      'repository_read',
+      'read',
+    )
+    const writer = {
+      ...lease(
+        'lease-writer-c',
+        'lease-task-c',
+        'lease-runtime-c',
+        'managed_workspace_edit',
+        'write',
+      ),
+      acquiredAt: reader.expiresAt,
+      expiresAt: '2026-08-13T15:02:02.000Z',
+    }
+    expect(() => acceptCoordinationResourceLease(writer, {
+      coordination: request,
+      graph: leaseGraph,
+      state,
+      existingLeases: [reader],
+    })).toThrowError('coordination_resource_conflict')
+  })
+
+  it.each([
+    ['unknown field', { unexpected: true }],
+    ['overlong duration', { expiresAt: '2026-08-13T15:01:02.001Z' }],
+    ['pre-state acquisition', { acquiredAt: '2026-08-13T15:00:01.001Z' }],
+  ])('rejects an invalid %s boundary', (_label, override) => {
+    expect(() => acceptCoordinationResourceLease({
+      ...lease(
+        'lease-reader-a',
+        'lease-task-a',
+        'lease-runtime-a',
+        'repository_read',
+        'read',
+      ),
+      ...override,
+    }, {
+      coordination: request,
+      graph: leaseGraph,
+      state: runningState(),
+      existingLeases: [],
+    })).toThrowError('invalid_coordination_resource_lease')
+  })
+
+  it.each([
+    ['task', { taskId: 'lease-task-b' }],
+    ['runtime', { runtimeId: 'lease-runtime-b' }],
+    ['capability', { capabilityId: 'managed_workspace_edit' }],
+    ['resource', { resourceId: 'foreign-resource' }],
+    ['digest', { resourceDigest: '0'.repeat(64) }],
+    ['scope', { scope: { ...request.scope, projectId: 'foreign-project' } }],
+  ])('rejects a lease with mismatched %s identity', (_label, override) => {
+    const candidate = {
+      ...lease(
+        'lease-reader-a',
+        'lease-task-a',
+        'lease-runtime-a',
+        'repository_read',
+        'read',
+      ),
+      ...override,
+    }
+    expect(() => acceptCoordinationResourceLease(candidate, {
+      coordination: request,
+      graph: leaseGraph,
+      state: runningState(),
+      existingLeases: [],
+    })).toThrowError('invalid_coordination_resource_lease')
   })
 })

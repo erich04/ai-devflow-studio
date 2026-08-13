@@ -16,6 +16,7 @@ export const COORDINATION_MAX_PARALLEL_SPECIALISTS = 3
 export const COORDINATION_MAX_ACCEPTED_HANDOFFS = 16
 export const COORDINATION_MAX_SPECIALIST_RETRIES = 1
 export const COORDINATION_MAX_HANDOFF_SUMMARY_BYTES = 16_384
+export const COORDINATION_RESOURCE_LEASE_MAX_MS = 60_000
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u
 const digestPattern = /^[a-f0-9]{64}$/u
 
@@ -184,6 +185,45 @@ export type AgentHandoffAcceptOptions = {
 
 export type AcceptedAgentHandoff = {
   handoff: AgentHandoff
+  replayed: boolean
+}
+
+export type CoordinationResourceLeaseStatus =
+  | 'active'
+  | 'released'
+  | 'expired'
+  | 'cancelled'
+
+export type CoordinationResourceLease = {
+  stateVersion: typeof COORDINATION_CONTRACT_VERSION
+  id: string
+  coordinationId: string
+  taskId: string
+  taskVersion: number
+  runtimeId: string
+  runtimeVersion: number
+  scope: CoordinationScope
+  capabilityId: string
+  capabilityVersion: number
+  resourceId: string
+  resourceDigest: string
+  mode: 'read' | 'write'
+  status: CoordinationResourceLeaseStatus
+  version: number
+  acquiredAt: string
+  expiresAt: string
+  releasedAt: string | null
+}
+
+export type CoordinationResourceLeaseAcceptOptions = {
+  coordination: CoordinationSessionRequest
+  graph: AgentTaskGraph
+  state: CoordinationSessionState
+  existingLeases: CoordinationResourceLease[]
+}
+
+export type AcceptedCoordinationResourceLease = {
+  lease: CoordinationResourceLease
   replayed: boolean
 }
 
@@ -929,6 +969,179 @@ export function acceptAgentHandoff(
     return { handoff: options.existingHandoff, replayed: true }
   }
   return { handoff: value as AgentHandoff, replayed: false }
+}
+
+function isCoordinationResourceLease(
+  value: unknown,
+  coordination: CoordinationSessionRequest,
+  graph: AgentTaskGraph,
+): value is CoordinationResourceLease {
+  if (
+    !isPlainRecord(value) ||
+    value.stateVersion !== COORDINATION_CONTRACT_VERSION ||
+    !hasExactKeys(value, [
+      'stateVersion',
+      'id',
+      'coordinationId',
+      'taskId',
+      'taskVersion',
+      'runtimeId',
+      'runtimeVersion',
+      'scope',
+      'capabilityId',
+      'capabilityVersion',
+      'resourceId',
+      'resourceDigest',
+      'mode',
+      'status',
+      'version',
+      'acquiredAt',
+      'expiresAt',
+      'releasedAt',
+    ]) ||
+    !isIdentifier(value.id) ||
+    value.coordinationId !== coordination.id ||
+    !isIdentifier(value.taskId) ||
+    !isPositiveVersion(value.taskVersion) ||
+    !isIdentifier(value.runtimeId) ||
+    !isPositiveVersion(value.runtimeVersion) ||
+    !isExactCoordinationScope(value.scope) ||
+    !hasSameCoordinationScope(value.scope, coordination.scope) ||
+    !isIdentifier(value.capabilityId) ||
+    value.capabilityVersion !== COORDINATION_CONTRACT_VERSION ||
+    !isIdentifier(value.resourceId) ||
+    !isDigest(value.resourceDigest) ||
+    (value.mode !== 'read' && value.mode !== 'write') ||
+    (value.status !== 'active' &&
+      value.status !== 'released' &&
+      value.status !== 'expired' &&
+      value.status !== 'cancelled') ||
+    !isPositiveVersion(value.version) ||
+    !isCanonicalIso(value.acquiredAt) ||
+    !isCanonicalIso(value.expiresAt)
+  ) {
+    return false
+  }
+
+  const acquiredAt = Date.parse(value.acquiredAt)
+  const expiresAt = Date.parse(value.expiresAt)
+  if (
+    acquiredAt < Date.parse(coordination.requestedAt) ||
+    acquiredAt >= Date.parse(coordination.deadline) ||
+    expiresAt <= acquiredAt ||
+    expiresAt - acquiredAt > COORDINATION_RESOURCE_LEASE_MAX_MS ||
+    expiresAt > Date.parse(coordination.deadline)
+  ) {
+    return false
+  }
+
+  if (value.status === 'active') {
+    if (value.releasedAt !== null) return false
+  } else {
+    if (!isCanonicalIso(value.releasedAt)) return false
+    const releasedAt = Date.parse(value.releasedAt)
+    if (value.status === 'expired') {
+      if (releasedAt < expiresAt) return false
+    } else if (releasedAt < acquiredAt || releasedAt > expiresAt) {
+      return false
+    }
+  }
+
+  const task = graph.nodes.find((node) => node.id === value.taskId)
+  return task !== undefined &&
+    task.capabilityIds.includes(value.capabilityId) &&
+    task.resourceRequirements.some((resource) =>
+      resource.resourceId === value.resourceId &&
+      resource.resourceDigest === value.resourceDigest &&
+      resource.mode === value.mode
+    )
+}
+
+export function acceptCoordinationResourceLease(
+  value: unknown,
+  options: CoordinationResourceLeaseAcceptOptions,
+): AcceptedCoordinationResourceLease {
+  try {
+    parseCoordinationSessionRequest(options.coordination, options.coordination.bounds)
+    parseAgentTaskGraph(options.graph, {
+      coordinationId: options.coordination.id,
+      acceptedRoleIds: options.graph.nodes.map((node) => node.roleId),
+      maxTaskNodes: options.coordination.bounds.maxTaskNodes,
+      maxDependencyEdges: options.coordination.bounds.maxDependencyEdges,
+    })
+    parseCoordinationSessionState(options.state)
+  } catch {
+    throw new Error('invalid_coordination_resource_lease')
+  }
+
+  if (
+    options.graph.id !== options.state.graphId ||
+    options.graph.version !== options.state.graphVersion ||
+    options.graph.coordinationId !== options.state.id ||
+    options.state.id !== options.coordination.id ||
+    options.state.status !== 'running' ||
+    options.state.stopReason !== null ||
+    !hasSameCoordinationScope(options.state.scope, options.coordination.scope) ||
+    !hasSameCoordinationAuthority(options.state.authority, options.coordination.authority) ||
+    options.state.contextDigest !== options.coordination.contextDigest ||
+    options.state.capabilitySetDigest !== options.coordination.capabilitySetDigest ||
+    canonicalJson(options.state.bounds) !== canonicalJson(options.coordination.bounds) ||
+    options.state.requestedAt !== options.coordination.requestedAt ||
+    options.state.deadline !== options.coordination.deadline ||
+    !Array.isArray(options.existingLeases) ||
+    !isCoordinationResourceLease(value, options.coordination, options.graph)
+  ) {
+    throw new Error('invalid_coordination_resource_lease')
+  }
+
+  const lease = value as CoordinationResourceLease
+  const task = options.state.tasks.find((candidate) => candidate.id === lease.taskId)
+  if (
+    lease.status !== 'active' ||
+    lease.version !== 1 ||
+    lease.releasedAt !== null ||
+    Date.parse(lease.acquiredAt) < Date.parse(options.state.updatedAt) ||
+    task === undefined ||
+    task.status !== 'running' ||
+    task.version !== lease.taskVersion ||
+    task.runtimeId !== lease.runtimeId ||
+    task.runtimeVersion !== lease.runtimeVersion
+  ) {
+    throw new Error('invalid_coordination_resource_lease')
+  }
+
+  if (
+    options.existingLeases.some((existing) =>
+      !isCoordinationResourceLease(existing, options.coordination, options.graph)
+    ) ||
+    new Set(options.existingLeases.map((existing) => existing.id)).size !==
+      options.existingLeases.length
+  ) {
+    throw new Error('invalid_coordination_resource_lease')
+  }
+
+  const existingReplay = options.existingLeases.find((existing) => existing.id === lease.id)
+  if (existingReplay !== undefined) {
+    if (canonicalJson(existingReplay) !== canonicalJson(lease)) {
+      throw new Error('coordination_resource_conflict')
+    }
+    return { lease: existingReplay, replayed: true }
+  }
+
+  const hasConflict = options.existingLeases.some((existing) =>
+    existing.resourceId === lease.resourceId &&
+    (
+      existing.status === 'active' ||
+      (
+        existing.releasedAt !== null &&
+        Date.parse(existing.releasedAt) > Date.parse(lease.acquiredAt)
+      )
+    ) &&
+    (existing.mode === 'write' || lease.mode === 'write')
+  )
+  if (hasConflict) throw new Error('coordination_resource_conflict')
+
+  return { lease, replayed: false }
 }
 
 function isCoordinationTaskFailure(
