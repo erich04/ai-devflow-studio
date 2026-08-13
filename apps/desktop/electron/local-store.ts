@@ -47,6 +47,7 @@ export type {
 export { KNOWLEDGE_INDEX_CHUNK_COUNT_MAX } from './knowledge-index-local-store.js'
 import {
   acceptAgentHandoff,
+  acceptCoordinationResourceLease,
   applyWorkflowCommand,
   applyCoordinationHandoff,
   assertFullGitCommitSha,
@@ -81,6 +82,7 @@ import {
   parseAgentTaskGraph,
   parseCoordinationSessionRequest,
   parseCoordinationSessionState,
+  parseCoordinationResourceLease,
   parseSpecialistAllocationRequest,
   recordCoordinationTaskResult,
   retryCoordinationTask,
@@ -124,6 +126,7 @@ import {
   type CodingPermissionDecision,
   type CodingPermissionRequest,
   type CoordinationSessionRequest,
+  type CoordinationResourceLease,
   type CoordinationSessionState,
   type CoordinationTaskFailure,
   type CoordinationTaskResult,
@@ -809,6 +812,9 @@ export type LocalStore = {
   commitSpecialistRuntimeRecovery(
     input: CommitSpecialistRuntimeRecoveryInput,
   ): Promise<CommitSpecialistRuntimeRecoveryResult>
+  acquireCoordinationResourceLease(
+    input: AcquireCoordinationResourceLeaseInput,
+  ): Promise<AcquireCoordinationResourceLeaseResult>
   commitCoordinationTaskStart(
     input: CommitCoordinationTaskStartInput,
   ): Promise<CommitCoordinationTaskStartResult>
@@ -1031,6 +1037,7 @@ export type DurableCoordinationCheckpoint = {
 
 export type CoordinationRecoverySnapshot = DurableCoordinationSession & {
   handoffs: AgentHandoff[]
+  leases: CoordinationResourceLease[]
   audits: CoordinationTrajectoryAudit[]
   checkpoints: DurableCoordinationCheckpoint[]
 }
@@ -1038,6 +1045,23 @@ export type CoordinationRecoverySnapshot = DurableCoordinationSession & {
 export type CreateCoordinationSessionResult =
   | { committed: true; replayed: boolean; state: CoordinationSessionState }
   | { committed: false; reason: 'invalid_input' | 'authority_mismatch' | 'session_exists' }
+
+export type AcquireCoordinationResourceLeaseInput = {
+  expectedState: CoordinationSessionState
+  lease: CoordinationResourceLease
+}
+
+export type AcquireCoordinationResourceLeaseResult =
+  | { committed: true; replayed: boolean; lease: CoordinationResourceLease }
+  | {
+      committed: false
+      reason:
+        | 'invalid_input'
+        | 'authority_mismatch'
+        | 'conflicting_lease'
+        | 'not_found'
+        | 'stale_state'
+    }
 
 export type CommitCoordinationTaskStartInput = {
   expectedState: CoordinationSessionState
@@ -4102,6 +4126,85 @@ function selectAgentCoordinationHandoffs(
   })
 }
 
+function selectAgentCoordinationResourceLeases(
+  db: Database,
+  durable: DurableCoordinationSession,
+): CoordinationResourceLease[] {
+  const rows = db.exec(
+    `select id, coordination_id, task_id, resource_id, resource_digest, mode,
+            status, version, lease_json, acquired_at, expires_at, released_at
+       from agent_coordination_leases
+      where coordination_id = ?
+      order by acquired_at asc, id asc`,
+    [durable.coordination.id],
+  )[0]?.values ?? []
+  const leases = rows.map((row) => {
+    let value: unknown
+    try {
+      value = JSON.parse(String(row[8]))
+    } catch {
+      throw new Error('Stored Agent Coordination lease is invalid')
+    }
+    let lease: CoordinationResourceLease
+    try {
+      lease = parseCoordinationResourceLease(value, {
+        coordination: durable.coordination,
+        graph: durable.graph,
+      })
+    } catch {
+      throw new Error('Stored Agent Coordination lease is invalid')
+    }
+    if (
+      lease.id !== String(row[0]) ||
+      lease.coordinationId !== String(row[1]) ||
+      lease.taskId !== String(row[2]) ||
+      lease.resourceId !== String(row[3]) ||
+      lease.resourceDigest !== String(row[4]) ||
+      lease.mode !== String(row[5]) ||
+      lease.status !== String(row[6]) ||
+      lease.version !== Number(row[7]) ||
+      lease.acquiredAt !== String(row[9]) ||
+      lease.expiresAt !== String(row[10]) ||
+      lease.releasedAt !== (row[11] === null ? null : String(row[11]))
+    ) throw new Error('Stored Agent Coordination lease is invalid')
+    const task = durable.state.tasks.find((candidate) => candidate.id === lease.taskId)
+    if (
+      lease.status === 'active' &&
+      (
+        task === undefined ||
+        task.status !== 'running' ||
+        task.version !== lease.taskVersion ||
+        task.runtimeId !== lease.runtimeId ||
+        task.runtimeVersion !== lease.runtimeVersion
+      )
+    ) throw new Error('Stored Agent Coordination lease is invalid')
+    return lease
+  })
+
+  for (let leftIndex = 0; leftIndex < leases.length; leftIndex += 1) {
+    const left = leases[leftIndex]!
+    const leftEnd = left.releasedAt === null ? Number.POSITIVE_INFINITY : Date.parse(left.releasedAt)
+    for (let rightIndex = leftIndex + 1; rightIndex < leases.length; rightIndex += 1) {
+      const right = leases[rightIndex]!
+      const sameOwner = left.taskId === right.taskId &&
+        left.runtimeId === right.runtimeId &&
+        left.capabilityId === right.capabilityId
+      if (
+        left.resourceId !== right.resourceId ||
+        (left.mode === 'read' && right.mode === 'read' && !sameOwner)
+      ) continue
+      const rightEnd = right.releasedAt === null
+        ? Number.POSITIVE_INFINITY
+        : Date.parse(right.releasedAt)
+      if (
+        Date.parse(left.acquiredAt) < rightEnd &&
+        Date.parse(right.acquiredAt) < leftEnd
+      ) throw new Error('Stored Agent Coordination lease is invalid')
+    }
+  }
+  return leases
+}
+
 function selectDurableCoordinationSession(
   db: Database,
   coordinationId: string,
@@ -4567,6 +4670,7 @@ function selectCoordinationRecoverySnapshot(
     const audits = selectCoordinationTrajectoryAudits(db, coordinationId)
     const checkpoints = selectCoordinationCheckpoints(db, coordinationId)
     const rawHandoffs = selectAgentCoordinationHandoffs(db, coordinationId)
+    const leases = selectAgentCoordinationResourceLeases(db, durable)
     if (
       audits.length !== durable.state.version ||
       checkpoints.length !== durable.state.version
@@ -4697,6 +4801,7 @@ function selectCoordinationRecoverySnapshot(
     const snapshot: CoordinationRecoverySnapshot = {
       ...durable,
       handoffs: acceptedHandoffs,
+      leases,
       audits,
       checkpoints,
     }
@@ -8688,6 +8793,92 @@ class SqlJsLocalStore implements LocalStore {
   ): Promise<CoordinationRecoverySnapshot | null> {
     if (!isNonEmptyIdentifier(coordinationId) || coordinationId.length > 200) return null
     return selectCoordinationRecoverySnapshot(this.db, coordinationId)
+  }
+
+  async acquireCoordinationResourceLease(
+    input: AcquireCoordinationResourceLeaseInput,
+  ): Promise<AcquireCoordinationResourceLeaseResult> {
+    let expectedState: CoordinationSessionState
+    try {
+      expectedState = parseCoordinationSessionState(input.expectedState)
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    const stored = selectCoordinationRecoverySnapshot(this.db, expectedState.id)
+    if (stored === null) return { committed: false, reason: 'not_found' }
+    if (!sameJson(stored.state, expectedState)) {
+      return { committed: false, reason: 'stale_state' }
+    }
+
+    let accepted
+    try {
+      accepted = acceptCoordinationResourceLease(input.lease, {
+        coordination: stored.coordination,
+        graph: stored.graph,
+        state: stored.state,
+        existingLeases: stored.leases,
+      })
+    } catch (error) {
+      return {
+        committed: false,
+        reason: error instanceof Error && error.message === 'coordination_resource_conflict'
+          ? 'conflicting_lease'
+          : 'invalid_input',
+      }
+    }
+    if (!await this.isCoordinationSupervisorAuthorityCurrent(stored.coordination)) {
+      return { committed: false, reason: 'authority_mismatch' }
+    }
+    const current = selectCoordinationRecoverySnapshot(this.db, expectedState.id)
+    if (
+      current === null ||
+      !sameJson(current.coordination, stored.coordination) ||
+      !sameJson(current.graph, stored.graph) ||
+      !sameJson(current.state, stored.state) ||
+      !sameJson(current.leases, stored.leases)
+    ) return { committed: false, reason: 'stale_state' }
+    if (accepted.replayed) {
+      return { committed: true, replayed: true, lease: accepted.lease }
+    }
+
+    const lease = accepted.lease
+    this.db.run('begin transaction')
+    try {
+      this.db.run(
+        `insert into agent_coordination_leases (
+           id, coordination_id, task_id, resource_id, resource_digest, mode,
+           status, version, lease_json, acquired_at, expires_at, released_at
+         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          lease.id,
+          lease.coordinationId,
+          lease.taskId,
+          lease.resourceId,
+          lease.resourceDigest,
+          lease.mode,
+          lease.status,
+          lease.version,
+          JSON.stringify(lease),
+          lease.acquiredAt,
+          lease.expiresAt,
+          lease.releasedAt,
+        ],
+      )
+      assertCoordinationMetadataBound(this.db, lease.coordinationId)
+      this.db.run('commit')
+    } catch (error) {
+      this.db.run('rollback')
+      if (error instanceof Error && error.message === 'coordination_metadata_too_large') {
+        return { committed: false, reason: 'invalid_input' }
+      }
+      const existing = selectCoordinationRecoverySnapshot(this.db, lease.coordinationId)
+        ?.leases.find((candidate) => candidate.id === lease.id)
+      return existing !== undefined && sameJson(existing, lease)
+        ? { committed: true, replayed: true, lease: existing }
+        : { committed: false, reason: 'conflicting_lease' }
+    }
+    await this.persist()
+    return { committed: true, replayed: false, lease }
   }
 
   async createCoordinationSession(
@@ -14865,6 +15056,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'commitSpecialistRuntimeStart',
   'commitSpecialistRuntimeCompletion',
   'commitSpecialistRuntimeRecovery',
+  'acquireCoordinationResourceLease',
   'commitCoordinationTaskStart',
   'commitCoordinationTaskResult',
   'commitCoordinationHandoff',

@@ -35,6 +35,7 @@ import type {
   AgentTokenUsage,
   AgentRuntimeStartRequest,
   CoordinationSessionRequest,
+  CoordinationResourceLease,
   SpecialistAllocationRequest,
   AcceptedSpecialistResult,
   AgentMemoryPromotionAuthority,
@@ -873,6 +874,55 @@ const researchReviewHandoff: AgentHandoff = {
   resourceLeaseOutcome: acceptedResearchResult.resourceLeaseOutcome,
   summary: 'Research completed with one bounded Evidence reference.',
   createdAt: '2026-08-12T20:30:03.000Z',
+}
+
+async function persistRunningResearchCoordination(
+  store: LocalStore,
+): Promise<ReturnType<typeof startCoordinationTask>> {
+  await store.upsertProject(project)
+  await store.saveRun(gateWorkflowCreation.run)
+  await store.saveDesktopPairingCredential(
+    { ...desktopPairingCredential, localProjectId: project.id },
+    'encrypted-token',
+  )
+  const supervisor = createAgentRuntime(teamAgentRuntimeStartRequest)
+  await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: supervisor })
+  const initialState = createCoordinationSessionState({
+    coordination: coordinationSessionRequest,
+    graph: coordinationTaskGraph,
+    startedAt: coordinationSessionRequest.requestedAt,
+  })
+  await store.createCoordinationSession({
+    coordination: coordinationSessionRequest,
+    graph: coordinationTaskGraph,
+    startedAt: coordinationSessionRequest.requestedAt,
+  })
+  const startedState = startCoordinationTask({
+    state: initialState,
+    allocation: specialistAllocationRequest,
+    expectedSessionVersion: initialState.version,
+    expectedTaskVersion: 1,
+    runtimeId: acceptedResearchResult.runtimeId,
+    runtimeVersion: acceptedResearchResult.runtimeVersion,
+    now: '2026-08-12T20:30:01.000Z',
+  })
+  await store.commitCoordinationTaskStart({
+    expectedState: initialState,
+    allocation: specialistAllocationRequest,
+    supervisorCapabilityIds: ['repository_read'],
+    supervisorResourceRequirements: specialistAllocationRequest.resourceRequirements,
+    remainingBudget: {
+      maxSteps: 4,
+      maxWallTimeMs: 60_000,
+      maxToolCalls: 4,
+      maxTokens: 10_000,
+      maxCostUsd: 1,
+    },
+    runtimeId: acceptedResearchResult.runtimeId,
+    runtimeVersion: acceptedResearchResult.runtimeVersion,
+    now: startedState.updatedAt,
+  })
+  return startedState
 }
 
 async function persistCompletedResearchCoordination(store: LocalStore) {
@@ -3371,6 +3421,409 @@ describe('createLocalStore', () => {
       graph: coordinationTaskGraph,
       state: expectedState,
     })
+    reopened.close()
+  })
+
+  it('atomically acquires, replays, and reopens one exact Specialist resource lease', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    const supervisor = createAgentRuntime(teamAgentRuntimeStartRequest)
+    await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: supervisor })
+    const initialState = createCoordinationSessionState({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      startedAt: coordinationSessionRequest.requestedAt,
+    })
+    await store.createCoordinationSession({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      startedAt: coordinationSessionRequest.requestedAt,
+    })
+    const startedState = startCoordinationTask({
+      state: initialState,
+      allocation: specialistAllocationRequest,
+      expectedSessionVersion: initialState.version,
+      expectedTaskVersion: 1,
+      runtimeId: acceptedResearchResult.runtimeId,
+      runtimeVersion: acceptedResearchResult.runtimeVersion,
+      now: '2026-08-12T20:30:01.000Z',
+    })
+    await store.commitCoordinationTaskStart({
+      expectedState: initialState,
+      allocation: specialistAllocationRequest,
+      supervisorCapabilityIds: ['repository_read'],
+      supervisorResourceRequirements: [{
+        resourceId: 'repository-source',
+        resourceDigest: 'd'.repeat(64),
+        mode: 'read',
+      }],
+      remainingBudget: {
+        maxSteps: 4,
+        maxWallTimeMs: 60_000,
+        maxToolCalls: 4,
+        maxTokens: 10_000,
+        maxCostUsd: 1,
+      },
+      runtimeId: acceptedResearchResult.runtimeId,
+      runtimeVersion: acceptedResearchResult.runtimeVersion,
+      now: startedState.updatedAt,
+    })
+    const lease: CoordinationResourceLease = {
+      stateVersion: 1,
+      id: 'coordination-lease-research-1',
+      coordinationId: coordinationSessionRequest.id,
+      taskId: acceptedResearchResult.taskId,
+      taskVersion: 2,
+      runtimeId: acceptedResearchResult.runtimeId,
+      runtimeVersion: acceptedResearchResult.runtimeVersion,
+      scope: coordinationSessionRequest.scope,
+      capabilityId: 'repository_read',
+      capabilityVersion: 1,
+      resourceId: 'repository-source',
+      resourceDigest: 'd'.repeat(64),
+      mode: 'read',
+      status: 'active',
+      version: 1,
+      acquiredAt: '2026-08-12T20:30:02.000Z',
+      expiresAt: '2026-08-12T20:30:30.000Z',
+      releasedAt: null,
+    }
+
+    await expect(store.acquireCoordinationResourceLease({
+      expectedState: startedState,
+      lease,
+    })).resolves.toEqual({ committed: true, replayed: false, lease })
+    await expect(store.acquireCoordinationResourceLease({
+      expectedState: startedState,
+      lease: JSON.parse(JSON.stringify(lease)),
+    })).resolves.toEqual({ committed: true, replayed: true, lease })
+    await expect(store.acquireCoordinationResourceLease({
+      expectedState: startedState,
+      lease: { ...lease, expiresAt: '2026-08-12T20:30:29.000Z' },
+    })).resolves.toEqual({ committed: false, reason: 'conflicting_lease' })
+    await expect(store.getCoordinationRecoverySnapshot(
+      coordinationSessionRequest.id,
+    )).resolves.toMatchObject({ leases: [lease] })
+    store.close()
+
+    const inspected = new (await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })).Database(await readFile(dbPath))
+    expect(inspected.exec(`
+      select id, coordination_id, task_id, resource_id, resource_digest, mode,
+             status, version, acquired_at, expires_at, released_at
+        from agent_coordination_leases
+    `)[0]?.values).toEqual([[
+      lease.id,
+      lease.coordinationId,
+      lease.taskId,
+      lease.resourceId,
+      lease.resourceDigest,
+      lease.mode,
+      lease.status,
+      lease.version,
+      lease.acquiredAt,
+      lease.expiresAt,
+      null,
+    ]])
+    inspected.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getCoordinationRecoverySnapshot(
+      coordinationSessionRequest.id,
+    )).resolves.toMatchObject({ leases: [lease] })
+    reopened.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const tampered = new SQL.Database(await readFile(dbPath))
+    tampered.run(
+      'update agent_coordination_leases set resource_digest = ? where id = ?',
+      ['0'.repeat(64), lease.id],
+    )
+    await writeFile(dbPath, Buffer.from(tampered.export()))
+    tampered.close()
+    const rejected = await createLocalStore({ dbPath })
+    await expect(rejected.getCoordinationRecoverySnapshot(
+      coordinationSessionRequest.id,
+    )).rejects.toThrowError('Stored Agent Coordination trajectory is invalid')
+    rejected.close()
+  })
+
+  it('persists concurrent readers and rejects one competing writer without a lease row', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    const supervisor = createAgentRuntime(teamAgentRuntimeStartRequest)
+    await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: supervisor })
+
+    const coordination: CoordinationSessionRequest = {
+      ...coordinationSessionRequest,
+      id: 'coordination-resource-arbitration-1',
+      bounds: {
+        ...coordinationSessionRequest.bounds,
+        maxSpecialists: 3,
+        maxTaskNodes: 3,
+        maxParallelSpecialists: 3,
+      },
+    }
+    const resourceDigest = '4'.repeat(64)
+    const graph: AgentTaskGraph = {
+      stateVersion: 1,
+      id: 'coordination-resource-arbitration-graph-1',
+      coordinationId: coordination.id,
+      version: 1,
+      entryTaskIds: [
+        'lease-task-reader-a',
+        'lease-task-reader-b',
+        'lease-task-writer',
+      ],
+      nodes: [
+        {
+          id: 'lease-task-reader-a',
+          roleId: 'contract-analyst',
+          contextDigest: '4'.repeat(64),
+          capabilityIds: ['repository_read'],
+          resourceRequirements: [{
+            resourceId: 'repository-source-arbitrated',
+            resourceDigest,
+            mode: 'read',
+          }],
+        },
+        {
+          id: 'lease-task-reader-b',
+          roleId: 'test-analyst',
+          contextDigest: '5'.repeat(64),
+          capabilityIds: ['repository_read'],
+          resourceRequirements: [{
+            resourceId: 'repository-source-arbitrated',
+            resourceDigest,
+            mode: 'read',
+          }],
+        },
+        {
+          id: 'lease-task-writer',
+          roleId: 'bounded-implementer',
+          contextDigest: '6'.repeat(64),
+          capabilityIds: ['managed_workspace_edit'],
+          resourceRequirements: [{
+            resourceId: 'repository-source-arbitrated',
+            resourceDigest,
+            mode: 'write',
+          }],
+        },
+      ],
+      edges: [],
+    }
+    let state = createCoordinationSessionState({
+      coordination,
+      graph,
+      startedAt: coordination.requestedAt,
+    })
+    await store.createCoordinationSession({
+      coordination,
+      graph,
+      startedAt: coordination.requestedAt,
+    })
+    const taskStarts = [
+      {
+        taskId: 'lease-task-reader-a',
+        agentId: 'lease-agent-reader-a',
+        runtimeId: 'lease-runtime-reader-a',
+        capabilityId: 'repository_read',
+        mode: 'read' as const,
+        now: '2026-08-12T20:30:01.000Z',
+      },
+      {
+        taskId: 'lease-task-reader-b',
+        agentId: 'lease-agent-reader-b',
+        runtimeId: 'lease-runtime-reader-b',
+        capabilityId: 'repository_read',
+        mode: 'read' as const,
+        now: '2026-08-12T20:30:01.001Z',
+      },
+      {
+        taskId: 'lease-task-writer',
+        agentId: 'lease-agent-writer',
+        runtimeId: 'lease-runtime-writer',
+        capabilityId: 'managed_workspace_edit',
+        mode: 'write' as const,
+        now: '2026-08-12T20:30:01.002Z',
+      },
+    ]
+    for (const taskStart of taskStarts) {
+      const node = graph.nodes.find((candidate) => candidate.id === taskStart.taskId)!
+      const allocation: SpecialistAllocationRequest = {
+        ...specialistAllocationRequest,
+        id: `allocation-${taskStart.taskId}`,
+        coordinationId: coordination.id,
+        taskGraphId: graph.id,
+        taskId: taskStart.taskId,
+        roleId: node.roleId,
+        agentId: taskStart.agentId,
+        contextDigest: node.contextDigest,
+        capabilityIds: [taskStart.capabilityId],
+        resourceRequirements: [{
+          resourceId: 'repository-source-arbitrated',
+          resourceDigest,
+          mode: taskStart.mode,
+        }],
+      }
+      const priorState = state
+      state = startCoordinationTask({
+        state: priorState,
+        allocation,
+        expectedSessionVersion: priorState.version,
+        expectedTaskVersion: 1,
+        runtimeId: taskStart.runtimeId,
+        runtimeVersion: 1,
+        now: taskStart.now,
+      })
+      await expect(store.commitCoordinationTaskStart({
+        expectedState: priorState,
+        allocation,
+        supervisorCapabilityIds: [taskStart.capabilityId],
+        supervisorResourceRequirements: allocation.resourceRequirements,
+        remainingBudget: {
+          maxSteps: 4,
+          maxWallTimeMs: 60_000,
+          maxToolCalls: 4,
+          maxTokens: 10_000,
+          maxCostUsd: 1,
+        },
+        runtimeId: taskStart.runtimeId,
+        runtimeVersion: 1,
+        now: taskStart.now,
+      })).resolves.toMatchObject({ committed: true, replayed: false })
+    }
+
+    const resourceLease = (
+      id: string,
+      taskId: string,
+      runtimeId: string,
+      capabilityId: string,
+      mode: 'read' | 'write',
+    ): CoordinationResourceLease => ({
+      stateVersion: 1,
+      id,
+      coordinationId: coordination.id,
+      taskId,
+      taskVersion: 2,
+      runtimeId,
+      runtimeVersion: 1,
+      scope: coordination.scope,
+      capabilityId,
+      capabilityVersion: 1,
+      resourceId: 'repository-source-arbitrated',
+      resourceDigest,
+      mode,
+      status: 'active',
+      version: 1,
+      acquiredAt: '2026-08-12T20:30:02.000Z',
+      expiresAt: '2026-08-12T20:30:30.000Z',
+      releasedAt: null,
+    })
+    const readerA = resourceLease(
+      'lease-reader-a',
+      'lease-task-reader-a',
+      'lease-runtime-reader-a',
+      'repository_read',
+      'read',
+    )
+    const readerB = resourceLease(
+      'lease-reader-b',
+      'lease-task-reader-b',
+      'lease-runtime-reader-b',
+      'repository_read',
+      'read',
+    )
+    const writer = resourceLease(
+      'lease-writer',
+      'lease-task-writer',
+      'lease-runtime-writer',
+      'managed_workspace_edit',
+      'write',
+    )
+    await expect(store.acquireCoordinationResourceLease({
+      expectedState: state,
+      lease: readerA,
+    })).resolves.toMatchObject({ committed: true, replayed: false })
+    await expect(store.acquireCoordinationResourceLease({
+      expectedState: state,
+      lease: readerB,
+    })).resolves.toMatchObject({ committed: true, replayed: false })
+    await expect(store.acquireCoordinationResourceLease({
+      expectedState: state,
+      lease: writer,
+    })).resolves.toEqual({ committed: false, reason: 'conflicting_lease' })
+    const snapshot = await store.getCoordinationRecoverySnapshot(coordination.id)
+    expect(snapshot?.leases).toEqual([readerA, readerB])
+    store.close()
+
+    const inspected = new (await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })).Database(await readFile(dbPath))
+    expect(inspected.exec(
+      'select id from agent_coordination_leases order by id asc',
+    )[0]?.values).toEqual([[readerA.id], [readerB.id]])
+    inspected.close()
+  })
+
+  it('restores the prior lease set when durable resource-lease persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const backupPath = `${dbPath}.backup`
+    const store = await createLocalStore({ dbPath })
+    const startedState = await persistRunningResearchCoordination(store)
+    const lease: CoordinationResourceLease = {
+      stateVersion: 1,
+      id: 'coordination-lease-persistence-failure',
+      coordinationId: coordinationSessionRequest.id,
+      taskId: acceptedResearchResult.taskId,
+      taskVersion: 2,
+      runtimeId: acceptedResearchResult.runtimeId,
+      runtimeVersion: acceptedResearchResult.runtimeVersion,
+      scope: coordinationSessionRequest.scope,
+      capabilityId: 'repository_read',
+      capabilityVersion: 1,
+      resourceId: 'repository-source',
+      resourceDigest: 'd'.repeat(64),
+      mode: 'read',
+      status: 'active',
+      version: 1,
+      acquiredAt: '2026-08-12T20:30:02.000Z',
+      expiresAt: '2026-08-12T20:30:30.000Z',
+      releasedAt: null,
+    }
+
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+    await expect(store.acquireCoordinationResourceLease({
+      expectedState: startedState,
+      lease,
+    })).rejects.toThrow(persistenceFailurePattern)
+    await expect(store.getCoordinationRecoverySnapshot(
+      coordinationSessionRequest.id,
+    )).resolves.toMatchObject({ leases: [] })
+    await rm(dbPath, { recursive: true })
+    await rename(backupPath, dbPath)
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getCoordinationRecoverySnapshot(
+      coordinationSessionRequest.id,
+    )).resolves.toMatchObject({ leases: [] })
     reopened.close()
   })
 

@@ -2070,6 +2070,26 @@ describe('Coordination resource lease contract', () => {
     })).toThrowError('coordination_resource_conflict')
   })
 
+  it('rejects a second active lease identity for the same task and resource', () => {
+    const state = runningState()
+    const reader = lease(
+      'lease-reader-a',
+      'lease-task-a',
+      'lease-runtime-a',
+      'repository_read',
+      'read',
+    )
+    expect(() => acceptCoordinationResourceLease({
+      ...reader,
+      id: 'lease-reader-a-duplicate',
+    }, {
+      coordination: request,
+      graph: leaseGraph,
+      state,
+      existingLeases: [reader],
+    })).toThrowError('coordination_resource_conflict')
+  })
+
   it('rejects a reader behind an active writer and keeps release ordering monotonic', () => {
     const state = runningState()
     const reader = lease(

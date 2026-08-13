@@ -215,6 +215,11 @@ export type CoordinationResourceLease = {
   releasedAt: string | null
 }
 
+export type CoordinationResourceLeaseParseOptions = {
+  coordination: CoordinationSessionRequest
+  graph: AgentTaskGraph
+}
+
 export type CoordinationResourceLeaseAcceptOptions = {
   coordination: CoordinationSessionRequest
   graph: AgentTaskGraph
@@ -1057,6 +1062,16 @@ function isCoordinationResourceLease(
     )
 }
 
+export function parseCoordinationResourceLease(
+  value: unknown,
+  options: CoordinationResourceLeaseParseOptions,
+): CoordinationResourceLease {
+  if (!isCoordinationResourceLease(value, options.coordination, options.graph)) {
+    throw new Error('invalid_coordination_resource_lease')
+  }
+  return value
+}
+
 export function acceptCoordinationResourceLease(
   value: unknown,
   options: CoordinationResourceLeaseAcceptOptions,
@@ -1137,7 +1152,15 @@ export function acceptCoordinationResourceLease(
         Date.parse(existing.releasedAt) > Date.parse(lease.acquiredAt)
       )
     ) &&
-    (existing.mode === 'write' || lease.mode === 'write')
+    (
+      existing.mode === 'write' ||
+      lease.mode === 'write' ||
+      (
+        existing.taskId === lease.taskId &&
+        existing.runtimeId === lease.runtimeId &&
+        existing.capabilityId === lease.capabilityId
+      )
+    )
   )
   if (hasConflict) throw new Error('coordination_resource_conflict')
 
