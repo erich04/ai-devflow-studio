@@ -17,6 +17,7 @@ import {
   mergeKnowledgeRetrievalCandidates,
   parseCurrentKnowledgeCitation,
   parseAgentMemoryCandidate,
+  parseAgentMemoryRetrievalRequest,
   parseDurableAgentMemoryRevision,
   parseKnowledgeCitation,
   parseKnowledgeRetrievalCandidateSet,
@@ -33,6 +34,31 @@ import {
 } from './retrieval-memory'
 
 describe('V2.1 Agent Memory candidate contract', () => {
+  it('parses one exact bounded Memory retrieval request', () => {
+    const request = {
+      stateVersion: 1,
+      id: 'memory-retrieval-request-1',
+      scope: {
+        kind: 'team',
+        organizationId: 'org-1',
+        projectId: 'project-1',
+        userId: 'user-1',
+        sessionId: 'session-2',
+        localProjectId: 'local-project-1',
+      },
+      runtimeId: 'runtime-memory-2',
+      limit: 20,
+      requestedAt: '2026-08-13T08:00:09.000Z',
+    }
+    expect(parseAgentMemoryRetrievalRequest(request)).toEqual(request)
+    expect(() => parseAgentMemoryRetrievalRequest({ ...request, limit: 257 })).toThrowError(
+      'invalid_agent_memory_candidate',
+    )
+    expect(() => parseAgentMemoryRetrievalRequest({ ...request, rawQuery: 'secret' })).toThrowError(
+      'invalid_agent_memory_candidate',
+    )
+  })
+
   it('creates one inert candidate from an exact accepted observable result', async () => {
     const created = createAgentRuntime({
       stateVersion: 1,

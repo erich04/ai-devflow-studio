@@ -9,6 +9,8 @@ import { redactSensitiveText } from './redaction'
 
 export const KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION = 1 as const
 export const AGENT_MEMORY_CONTRACT_VERSION = 1 as const
+export const AGENT_MEMORY_RETRIEVAL_LIMIT_MAX = 256
+export const AGENT_MEMORY_ACTIVE_REVISIONS_MAX = 2_048
 export const AGENT_MEMORY_CANDIDATE_TEXT_MAX_BYTES = 8 * 1_024
 export const KNOWLEDGE_RETRIEVAL_QUERY_MAX_LENGTH = 8 * 1_024
 export const KNOWLEDGE_RETRIEVAL_TOP_K_MAX = 20
@@ -98,6 +100,15 @@ export type AgentMemoryCandidate = {
   createdAt: string
 }
 
+export type AgentMemoryRetrievalRequest = {
+  stateVersion: typeof AGENT_MEMORY_CONTRACT_VERSION
+  id: string
+  scope: KnowledgeRetrievalScope
+  runtimeId: string
+  limit: number
+  requestedAt: string
+}
+
 export type AgentMemoryVisibility = 'runtime' | 'user_project' | 'project_shared'
 export type AgentMemorySensitivity = 'private' | 'internal'
 export type AgentMemoryRetentionClass = 'session' | 'thirty_days' | 'until_deleted'
@@ -161,6 +172,36 @@ export type DurableAgentMemoryRevision = {
   promotionPolicyVersion: number
   promotionAuthorityDigest: string
   createdAt: string
+}
+
+export function parseAgentMemoryRetrievalRequest(value: unknown): AgentMemoryRetrievalRequest {
+  if (
+    !isPlainRecord(value) ||
+    !hasExactKeys(value, ['stateVersion', 'id', 'scope', 'runtimeId', 'limit', 'requestedAt']) ||
+    value.stateVersion !== AGENT_MEMORY_CONTRACT_VERSION ||
+    !isIdentifier(value.id) ||
+    !isIdentifier(value.runtimeId) ||
+    !Number.isInteger(value.limit) ||
+    Number(value.limit) < 1 ||
+    Number(value.limit) > AGENT_MEMORY_RETRIEVAL_LIMIT_MAX ||
+    !isCanonicalIso(value.requestedAt)
+  ) {
+    failMemoryCandidate()
+  }
+  let scope: KnowledgeRetrievalScope
+  try {
+    scope = parseScope(value.scope)
+  } catch {
+    failMemoryCandidate()
+  }
+  return {
+    stateVersion: AGENT_MEMORY_CONTRACT_VERSION,
+    id: value.id,
+    scope,
+    runtimeId: value.runtimeId,
+    limit: value.limit as number,
+    requestedAt: value.requestedAt,
+  }
 }
 
 export type KnowledgeRetrievalRequest = {

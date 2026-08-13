@@ -51,6 +51,7 @@ import {
   createTestEvidenceEvent,
   normalizeWorkflowRunProgress,
   parseAgentMemoryCandidate,
+  parseAgentMemoryRetrievalRequest,
   parseDurableAgentMemoryRevision,
   parseAgentCheckpoint,
   parseAgentRuntimeEvent,
@@ -70,6 +71,7 @@ import {
   type AgentEvent,
   type AgentMemoryCandidate,
   type AgentMemoryPromotionAuthority,
+  type AgentMemoryRetrievalRequest,
   type AgentMemoryRevisionAuthority,
   type AgentCheckpoint,
   type AgentRuntimeEvent,
@@ -120,6 +122,7 @@ import {
   type WorkflowEvidenceSnapshot,
   type WorkflowRun,
   type WorkRequest,
+  AGENT_MEMORY_ACTIVE_REVISIONS_MAX,
 } from '@ai-devflow/shared'
 export const CURRENT_SCHEMA_VERSION = 25
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
@@ -701,6 +704,9 @@ export type LocalStore = {
   ): Promise<CommitAgentMemoryPromotionResult>
   listAgentMemoryRevisions(memoryId: string): Promise<DurableAgentMemoryRevision[]>
   getAgentMemoryHead(memoryId: string): Promise<AgentMemoryHeadRecord | null>
+  retrieveAgentMemoryRevisions(
+    input: AgentMemoryRetrievalRequest,
+  ): Promise<DurableAgentMemoryRevision[]>
   authorizeAgentMemoryRevision(
     input: AuthorizeAgentMemoryRevisionInput,
   ): Promise<AuthorizeAgentMemoryRevisionResult>
@@ -5642,6 +5648,132 @@ class SqlJsLocalStore implements LocalStore {
       version,
       updatedAt,
     }
+  }
+
+  async retrieveAgentMemoryRevisions(
+    input: AgentMemoryRetrievalRequest,
+  ): Promise<DurableAgentMemoryRevision[]> {
+    let request: AgentMemoryRetrievalRequest
+    try {
+      request = parseAgentMemoryRetrievalRequest(input)
+    } catch {
+      throw new Error('Invalid Agent Memory retrieval request')
+    }
+    const pairing = request.scope.kind === 'team'
+      ? await this.getDesktopPairingCredential()
+      : null
+    if (!agentMemoryScopeMatchesPairing(request.scope, pairing)) {
+      return []
+    }
+
+    const values = selectJson<unknown>(
+      this.db,
+      `select r.json
+       from agent_memory_heads h
+       join agent_memory_revisions r
+         on r.memory_id = h.memory_id and r.revision = h.current_revision
+       join agent_memory_candidates c on c.id = r.source_candidate_id
+       left join agent_memory_tombstones t on t.memory_id = h.memory_id
+       where h.status = 'active'
+         and r.status = 'active'
+         and t.memory_id is null
+         and h.local_project_id = ?
+         and h.scope_kind = ?
+         and h.organization_id is ?
+         and h.team_project_id is ?
+         and (
+           (r.visibility = 'runtime' and h.user_id = ? and h.session_id = ? and c.runtime_id = ?) or
+           (r.visibility = 'user_project' and h.user_id = ?) or
+           (r.visibility = 'project_shared' and h.scope_kind = 'team')
+         )
+       order by r.created_at asc, r.memory_id asc
+       limit ?`,
+      [
+        request.scope.localProjectId,
+        request.scope.kind,
+        request.scope.organizationId,
+        request.scope.projectId,
+        request.scope.userId,
+        request.scope.sessionId,
+        request.runtimeId,
+        request.scope.userId,
+        AGENT_MEMORY_ACTIVE_REVISIONS_MAX + 1,
+      ],
+    )
+    if (values.length > AGENT_MEMORY_ACTIVE_REVISIONS_MAX) {
+      throw new Error('Agent Memory scope exceeds the active revision hard maximum')
+    }
+
+    const revisions = await Promise.all(values.map(parseDurableAgentMemoryRevision))
+    const retrievable: DurableAgentMemoryRevision[] = []
+    let expiredAny = false
+    for (const revision of revisions) {
+      const head = await this.getAgentMemoryHead(revision.id)
+      if (
+        head === null ||
+        head.status !== 'active' ||
+        head.currentRevision !== revision.revision ||
+        !stableJsonMatches(head.scope, revision.scope)
+      ) {
+        throw new Error('Stored Agent Memory retrieval state is invalid')
+      }
+      if (
+        revision.expiresAt !== null &&
+        Date.parse(revision.expiresAt) <= Date.parse(request.requestedAt)
+      ) {
+        const expiredAt = Date.parse(request.requestedAt) >= Date.parse(head.updatedAt)
+          ? request.requestedAt
+          : head.updatedAt
+        this.db.run(
+          `update agent_memory_heads
+           set status = 'expired', version = version + 1, updated_at = ?
+           where memory_id = ? and current_revision = ? and version = ? and status = 'active'`,
+          [expiredAt, revision.id, revision.revision, head.version],
+        )
+        if (this.db.getRowsModified() !== 1) {
+          throw new Error('Agent Memory expiry CAS was lost')
+        }
+        const authorityDigest = sha256Canonical({
+          stateVersion: revision.stateVersion,
+          memoryId: revision.id,
+          revision: revision.revision,
+          expiresAt: revision.expiresAt,
+          status: 'expired',
+        })
+        this.db.run(
+          `insert into agent_memory_audits (
+             id, memory_id, revision, local_project_id, scope_kind, organization_id,
+             team_project_id, user_id, session_id, event_kind, actor_kind, actor_id,
+             authority_digest, state_version, metadata_json, created_at
+           ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            `memory-expiry-audit-${revision.id}-${revision.revision}`,
+            revision.id,
+            revision.revision,
+            revision.scope.localProjectId,
+            revision.scope.kind,
+            revision.scope.organizationId,
+            revision.scope.projectId,
+            revision.scope.userId,
+            revision.scope.sessionId,
+            'memory_expired',
+            'system',
+            'electron-main-memory-retention',
+            authorityDigest,
+            revision.stateVersion,
+            JSON.stringify({ expiresAt: revision.expiresAt, status: 'expired' }),
+            expiredAt,
+          ],
+        )
+        expiredAny = true
+        continue
+      }
+      if (retrievable.length < request.limit) {
+        retrievable.push(revision)
+      }
+    }
+    if (expiredAny) await this.persist()
+    return retrievable
   }
 
   async authorizeAgentMemoryRevision(
@@ -10605,6 +10737,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'saveAgentMemoryCandidate',
   'commitAgentMemoryPromotion',
   'commitAgentMemoryRevision',
+  'retrieveAgentMemoryRevisions',
   'saveRun',
   'deleteRun',
   'enqueueRemoteSyncOperation',

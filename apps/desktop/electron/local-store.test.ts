@@ -773,7 +773,12 @@ async function persistAcceptedMemoryCandidate(store: LocalStore) {
     createdAt: '2026-08-12T20:30:04.000Z',
   })
   const firstSave = await store.saveAgentMemoryCandidate(candidate)
-  return { candidate, firstSave }
+  return {
+    candidate,
+    firstSave,
+    previousRuntime: requested.runtime,
+    acceptedTransition: accepted,
+  }
 }
 
 describe('createLocalStore', () => {
@@ -1326,6 +1331,179 @@ describe('createLocalStore', () => {
     })
     expect(JSON.stringify(auditRows)).not.toContain(firstWriter.revision.statement)
     expect(JSON.stringify(auditRows)).not.toContain(staleWriter.revision.statement)
+    inspected.close()
+  })
+
+  it('filters Memory scope and tombstones before retrieval and makes expiry monotonic', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const { candidate, previousRuntime, acceptedTransition } =
+      await persistAcceptedMemoryCandidate(store)
+    const durablePromotion = await store.authorizeAgentMemoryPromotion({
+      candidateId: candidate.id,
+      memoryId: 'memory-retrieval-durable',
+      authority: {
+        stateVersion: 1,
+        decisionId: 'memory-retrieval-durable-promotion',
+        candidateId: candidate.id,
+        candidateContentDigest: candidate.contentDigest,
+        scope: candidate.scope,
+        actorKind: 'human',
+        actorId: candidate.scope.userId,
+        policyId: 'memory-policy-local-store-1',
+        policyVersion: 1,
+        visibility: 'user_project',
+        sensitivity: 'private',
+        retentionClass: 'until_deleted',
+        expiresAt: null,
+        authorityDigest: '4'.repeat(64),
+        decidedAt: '2026-08-12T20:30:05.000Z',
+      },
+    })
+    expect(durablePromotion.authorized).toBe(true)
+    if (!durablePromotion.authorized) throw new Error('expected durable promotion authority')
+    await store.commitAgentMemoryPromotion(
+      { revision: durablePromotion.revision },
+      durablePromotion.capability,
+    )
+
+    const expiringCandidate = await createAgentMemoryCandidate({
+      id: 'memory-candidate-expiring-local-store',
+      statement: 'Dependency upgrade notes expire with this bounded working session.',
+      previousRuntime,
+      acceptedTransition,
+      createdAt: '2026-08-12T20:30:04.000Z',
+    })
+    await expect(store.saveAgentMemoryCandidate(expiringCandidate)).resolves.toMatchObject({
+      committed: true,
+      replayed: false,
+    })
+    const expiringPromotion = await store.authorizeAgentMemoryPromotion({
+      candidateId: expiringCandidate.id,
+      memoryId: 'memory-retrieval-expiring',
+      authority: {
+        stateVersion: 1,
+        decisionId: 'memory-retrieval-expiring-promotion',
+        candidateId: expiringCandidate.id,
+        candidateContentDigest: expiringCandidate.contentDigest,
+        scope: expiringCandidate.scope,
+        actorKind: 'human',
+        actorId: expiringCandidate.scope.userId,
+        policyId: 'memory-policy-local-store-1',
+        policyVersion: 1,
+        visibility: 'runtime',
+        sensitivity: 'private',
+        retentionClass: 'session',
+        expiresAt: '2026-08-12T20:30:10.000Z',
+        authorityDigest: '5'.repeat(64),
+        decidedAt: '2026-08-12T20:30:06.000Z',
+      },
+    })
+    expect(expiringPromotion.authorized).toBe(true)
+    if (!expiringPromotion.authorized) throw new Error('expected expiring promotion authority')
+    await store.commitAgentMemoryPromotion(
+      { revision: expiringPromotion.revision },
+      expiringPromotion.capability,
+    )
+
+    const request = {
+      stateVersion: 1 as const,
+      id: 'memory-retrieval-local-store-1',
+      scope: {
+        ...candidate.scope,
+      },
+      runtimeId: agentRuntimeStartRequest.id,
+      limit: 20,
+      requestedAt: '2026-08-12T20:30:09.999Z',
+    }
+    await expect(store.retrieveAgentMemoryRevisions(request)).resolves.toEqual([
+      durablePromotion.revision,
+      expiringPromotion.revision,
+    ])
+    await expect(store.retrieveAgentMemoryRevisions({
+      ...request,
+      id: 'memory-retrieval-later-session',
+      scope: { ...request.scope, sessionId: 'desktop-session-2' },
+      runtimeId: 'agent-runtime-later-session-1',
+    })).resolves.toEqual([durablePromotion.revision])
+    await expect(store.retrieveAgentMemoryRevisions({
+      ...request,
+      id: 'memory-retrieval-foreign-user',
+      scope: { ...request.scope, userId: 'user-foreign' },
+    })).resolves.toEqual([])
+    await expect(store.retrieveAgentMemoryRevisions({
+      ...request,
+      id: 'memory-retrieval-expiry-boundary',
+      requestedAt: '2026-08-12T20:30:10.000Z',
+    })).resolves.toEqual([durablePromotion.revision])
+    await expect(store.getAgentMemoryHead(expiringPromotion.revision.id)).resolves.toMatchObject({
+      currentRevision: 1,
+      status: 'expired',
+      version: 2,
+      updatedAt: '2026-08-12T20:30:10.000Z',
+    })
+    await expect(store.retrieveAgentMemoryRevisions({
+      ...request,
+      id: 'memory-retrieval-clock-rollback',
+    })).resolves.toEqual([durablePromotion.revision])
+    store.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const tombstoned = new SQL.Database(await readFile(dbPath))
+    tombstoned.run(
+      `insert into agent_memory_tombstones (
+         memory_id, deletion_version, last_revision, local_project_id,
+         scope_kind, organization_id, team_project_id, user_id, session_id,
+         actor_kind, actor_id, authority_digest, purge_status, state_version,
+         json, deleted_at, purged_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        durablePromotion.revision.id,
+        1,
+        1,
+        candidate.scope.localProjectId,
+        candidate.scope.kind,
+        candidate.scope.organizationId,
+        candidate.scope.projectId,
+        candidate.scope.userId,
+        candidate.scope.sessionId,
+        'human',
+        candidate.scope.userId,
+        '6'.repeat(64),
+        'pending',
+        1,
+        JSON.stringify({
+          stateVersion: 1,
+          memoryId: durablePromotion.revision.id,
+          purgeStatus: 'pending',
+        }),
+        '2026-08-12T20:30:11.000Z',
+        null,
+      ],
+    )
+    await writeFile(dbPath, Buffer.from(tombstoned.export()))
+    tombstoned.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.retrieveAgentMemoryRevisions({
+      ...request,
+      id: 'memory-retrieval-after-tombstone',
+      requestedAt: '2026-08-12T20:30:11.000Z',
+    })).resolves.toEqual([])
+    reopened.close()
+
+    const inspected = new SQL.Database(await readFile(dbPath))
+    const expiryAudits = inspected.exec(
+      "select metadata_json from agent_memory_audits where event_kind = 'memory_expired'",
+    )[0]?.values ?? []
+    expect(expiryAudits).toHaveLength(1)
+    expect(JSON.parse(String(expiryAudits[0]?.[0]))).toEqual({
+      expiresAt: '2026-08-12T20:30:10.000Z',
+      status: 'expired',
+    })
+    expect(JSON.stringify(expiryAudits)).not.toContain(expiringPromotion.revision.statement)
     inspected.close()
   })
 
