@@ -210,6 +210,94 @@ describe('Desktop Agent Runtime', () => {
     store.close()
   })
 
+  it('rechecks Team Context at durable grant reservation before invoking a Native Tool', async () => {
+    const { store, run, project } = await runtimeFixture()
+    const pairing = {
+      tokenId: 'desktop-token-context-grant-1',
+      organizationId: 'org-context-grant-1',
+      projectId: 'team-project-context-grant-1',
+      userId: run.creatorId,
+      role: 'owner' as const,
+      authAccountId: 'account-context-grant-1',
+      projectMemberships: [{
+        projectId: 'team-project-context-grant-1',
+        userId: run.creatorId,
+        role: 'owner' as const,
+      }],
+      createdAt: '2026-08-12T20:29:00.000Z',
+      localProjectId: project.id,
+    }
+    await store.saveDesktopPairingCredential(pairing, 'encrypted-pairing-token')
+
+    const handler = vi.fn(async () => ({ passed: true, failures: [] }))
+    const registrations = createAcceptedNativeToolRegistrations({
+      resolveLocalProject: async (localProjectId) =>
+        localProjectId === project.id ? project : null,
+      resolveManagedWorkspace: async () => null,
+    }).map((registration) =>
+      registration.definition.id === 'scenario.evaluate'
+        ? { ...registration, handler }
+        : registration,
+    )
+    const ids = [
+      'native-tool-context-grant-1',
+      'native-tool-context-audit-start-1',
+      'native-tool-context-audit-success-1',
+    ]
+    const nativeToolRegistry = createNativeToolRegistry({
+      tools: registrations,
+      clock: () => '2026-08-12T20:30:03.000Z',
+      createId: () => {
+        const id = ids.shift()
+        if (!id) throw new Error('unexpected native Tool id')
+        return id
+      },
+      persistence: {
+        reserveGrant: async (grant) => {
+          await store.saveDesktopPairingCredential({
+            ...pairing,
+            tokenId: 'desktop-token-context-grant-rotated',
+            createdAt: '2026-08-12T20:30:03.000Z',
+          }, 'rotated-encrypted-pairing-token')
+          const result = await store.reserveAgentRuntimeCapabilityGrant(grant)
+          return { reserved: result.reserved }
+        },
+        beginExecution: async (input) => {
+          const result = await store.beginAgentRuntimeToolExecution(input)
+          return { consumed: result.consumed }
+        },
+        appendAudit: (audit) => store.appendAgentRuntimeToolAudit(audit),
+      },
+    })
+    const runtime = createDesktopAgentRuntime({
+      store,
+      nativeToolRegistry,
+      clock: tickingClock(
+        '2026-08-12T20:30:00.000Z',
+        '2026-08-12T20:30:01.000Z',
+        '2026-08-12T20:30:02.000Z',
+        '2026-08-12T20:30:03.000Z',
+        '2026-08-12T20:30:04.000Z',
+      ),
+      createId: () => 'agent-runtime-context-grant-race-1',
+    })
+
+    const started = await runtime.start({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      localProjectId: project.id,
+    })
+    const resumed = await runtime.advance(runtimeCommand(started))
+    const waiting = await runtime.advance(runtimeCommand(resumed))
+    await expect(runtime.advance(runtimeCommand(waiting))).rejects.toThrow(
+      'Desktop Agent Runtime commit failed: invalid_transition',
+    )
+    expect(handler).not.toHaveBeenCalled()
+    await expect(store.listAgentRuntimeCapabilityGrants(started.runtime.id)).resolves.toEqual([])
+    await expect(store.listAgentRuntimeToolAudits(started.runtime.id)).resolves.toEqual([])
+    store.close()
+  })
+
   it('rejects a current Gate node before creating durable runtime state', async () => {
     const { store, run } = await runtimeFixture()
     const gateRun = {

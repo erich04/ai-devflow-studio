@@ -6844,6 +6844,24 @@ class SqlJsLocalStore implements LocalStore {
     ) {
       return { reserved: false, reason: 'runtime_stale' }
     }
+    let contextAttachment: AgentRuntimeContextAttachment | null
+    try {
+      contextAttachment = await selectAgentRuntimeContextAttachment(this.db, runtime.id)
+    } catch {
+      return { reserved: false, reason: 'runtime_stale' }
+    }
+    if (
+      contextAttachment !== null &&
+      (
+        contextAttachment.runtimeId !== runtime.id ||
+        contextAttachment.contextDigest !== runtime.contextDigest ||
+        !sameJson(contextAttachment.scope, runtime.scope) ||
+        !sameJson(contextAttachment.authority, runtime.authority) ||
+        !await this.areAgentRuntimeContextSourcesCurrent(contextAttachment, grant.grantedAt)
+      )
+    ) {
+      return { reserved: false, reason: 'runtime_stale' }
+    }
     if (
       this.db.exec(
         `select 1 from agent_runtime_capability_grants
