@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   COORDINATION_CONTRACT_VERSION,
+  parseAgentTaskGraph,
   parseCoordinationSessionRequest,
+  type AgentTaskGraph,
   type CoordinationSessionRequest,
 } from './agent-coordination'
 
@@ -45,6 +47,41 @@ const request: CoordinationSessionRequest = {
   },
   requestedAt: '2026-08-13T15:00:00.000Z',
   deadline: '2026-08-13T15:10:00.000Z',
+}
+
+const taskGraph: AgentTaskGraph = {
+  stateVersion: 1,
+  id: 'task-graph-1',
+  coordinationId: request.id,
+  version: 1,
+  entryTaskIds: ['task-b', 'task-a'],
+  nodes: [
+    {
+      id: 'task-c',
+      roleId: 'integration-analyst',
+      contextDigest: 'c'.repeat(64),
+      capabilityIds: ['repository_read'],
+      resourceRequirements: [],
+    },
+    {
+      id: 'task-b',
+      roleId: 'test-analyst',
+      contextDigest: 'd'.repeat(64),
+      capabilityIds: ['repository_read', 'saved_test'],
+      resourceRequirements: [],
+    },
+    {
+      id: 'task-a',
+      roleId: 'contract-analyst',
+      contextDigest: 'e'.repeat(64),
+      capabilityIds: ['repository_read'],
+      resourceRequirements: [],
+    },
+  ],
+  edges: [
+    { id: 'edge-a-c', sourceTaskId: 'task-a', targetTaskId: 'task-c' },
+    { id: 'edge-b-c', sourceTaskId: 'task-b', targetTaskId: 'task-c' },
+  ],
 }
 
 describe('Coordination Session request contract', () => {
@@ -272,5 +309,165 @@ describe('Coordination Session request contract', () => {
       maxTokens: 50_000,
       maxCostUsd: 5,
     })).toThrowError('invalid_coordination_session_request')
+  })
+})
+
+describe('Agent Task Graph contract', () => {
+  it('accepts one bounded DAG and returns deterministic initial ready order', () => {
+    expect(parseAgentTaskGraph(taskGraph, {
+      coordinationId: request.id,
+      acceptedRoleIds: ['contract-analyst', 'integration-analyst', 'test-analyst'],
+      maxTaskNodes: request.bounds.maxTaskNodes,
+      maxDependencyEdges: request.bounds.maxDependencyEdges,
+    })).toEqual({
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+    })
+  })
+
+  it('rejects duplicate task identities before any task becomes ready', () => {
+    expect(() => parseAgentTaskGraph({
+      ...taskGraph,
+      nodes: taskGraph.nodes.map((node, index) =>
+        index === 0 ? { ...node, id: 'task-a' } : node),
+    }, {
+      coordinationId: request.id,
+      acceptedRoleIds: ['contract-analyst', 'integration-analyst', 'test-analyst'],
+      maxTaskNodes: request.bounds.maxTaskNodes,
+      maxDependencyEdges: request.bounds.maxDependencyEdges,
+    })).toThrowError('invalid_agent_task_graph')
+  })
+
+  it('rejects a dependency whose target is outside the graph', () => {
+    expect(() => parseAgentTaskGraph({
+      ...taskGraph,
+      edges: taskGraph.edges.map((edge, index) =>
+        index === 0 ? { ...edge, targetTaskId: 'missing-task' } : edge),
+    }, {
+      coordinationId: request.id,
+      acceptedRoleIds: ['contract-analyst', 'integration-analyst', 'test-analyst'],
+      maxTaskNodes: request.bounds.maxTaskNodes,
+      maxDependencyEdges: request.bounds.maxDependencyEdges,
+    })).toThrowError('invalid_agent_task_graph')
+  })
+
+  it('rejects a cycle before allocating any Specialist', () => {
+    expect(() => parseAgentTaskGraph({
+      ...taskGraph,
+      edges: [
+        ...taskGraph.edges,
+        { id: 'edge-c-a', sourceTaskId: 'task-c', targetTaskId: 'task-a' },
+      ],
+    }, {
+      coordinationId: request.id,
+      acceptedRoleIds: ['contract-analyst', 'integration-analyst', 'test-analyst'],
+      maxTaskNodes: request.bounds.maxTaskNodes,
+      maxDependencyEdges: request.bounds.maxDependencyEdges,
+    })).toThrowError('invalid_agent_task_graph')
+  })
+
+  it('rejects disconnected hidden work not declared as an entry task', () => {
+    expect(() => parseAgentTaskGraph({
+      ...taskGraph,
+      nodes: [
+        ...taskGraph.nodes,
+        {
+          id: 'task-hidden',
+          roleId: 'test-analyst',
+          contextDigest: 'f'.repeat(64),
+          capabilityIds: ['repository_read'],
+          resourceRequirements: [],
+        },
+      ],
+    }, {
+      coordinationId: request.id,
+      acceptedRoleIds: ['contract-analyst', 'integration-analyst', 'test-analyst'],
+      maxTaskNodes: request.bounds.maxTaskNodes,
+      maxDependencyEdges: request.bounds.maxDependencyEdges,
+    })).toThrowError('invalid_agent_task_graph')
+  })
+
+  it('rejects a model-created Specialist role outside the accepted registry', () => {
+    expect(() => parseAgentTaskGraph({
+      ...taskGraph,
+      nodes: taskGraph.nodes.map((node, index) =>
+        index === 0 ? { ...node, roleId: 'untrusted-role' } : node),
+    }, {
+      coordinationId: request.id,
+      acceptedRoleIds: ['contract-analyst', 'integration-analyst', 'test-analyst'],
+      maxTaskNodes: request.bounds.maxTaskNodes,
+      maxDependencyEdges: request.bounds.maxDependencyEdges,
+    })).toThrowError('invalid_agent_task_graph')
+  })
+
+  it('rejects a graph bound to another Coordination Session', () => {
+    expect(() => parseAgentTaskGraph({ ...taskGraph, coordinationId: 'coordination-2' }, {
+      coordinationId: request.id,
+      acceptedRoleIds: ['contract-analyst', 'integration-analyst', 'test-analyst'],
+      maxTaskNodes: request.bounds.maxTaskNodes,
+      maxDependencyEdges: request.bounds.maxDependencyEdges,
+    })).toThrowError('invalid_agent_task_graph')
+  })
+
+  it('rejects a task with a noncanonical Context digest', () => {
+    expect(() => parseAgentTaskGraph({
+      ...taskGraph,
+      nodes: taskGraph.nodes.map((node, index) =>
+        index === 0 ? { ...node, contextDigest: node.contextDigest.toUpperCase() } : node),
+    }, {
+      coordinationId: request.id,
+      acceptedRoleIds: ['contract-analyst', 'integration-analyst', 'test-analyst'],
+      maxTaskNodes: request.bounds.maxTaskNodes,
+      maxDependencyEdges: request.bounds.maxDependencyEdges,
+    })).toThrowError('invalid_agent_task_graph')
+  })
+
+  it('rejects duplicate task capability needs', () => {
+    expect(() => parseAgentTaskGraph({
+      ...taskGraph,
+      nodes: taskGraph.nodes.map((node, index) =>
+        index === 0
+          ? { ...node, capabilityIds: ['repository_read', 'repository_read'] }
+          : node),
+    }, {
+      coordinationId: request.id,
+      acceptedRoleIds: ['contract-analyst', 'integration-analyst', 'test-analyst'],
+      maxTaskNodes: request.bounds.maxTaskNodes,
+      maxDependencyEdges: request.bounds.maxDependencyEdges,
+    })).toThrowError('invalid_agent_task_graph')
+  })
+
+  it('rejects an unrecognized mutable-resource mode', () => {
+    expect(() => parseAgentTaskGraph({
+      ...taskGraph,
+      nodes: taskGraph.nodes.map((node, index) => index === 0
+        ? {
+            ...node,
+            resourceRequirements: [{
+              resourceId: 'workspace-1',
+              resourceDigest: 'f'.repeat(64),
+              mode: 'admin',
+            }],
+          }
+        : node),
+    }, {
+      coordinationId: request.id,
+      acceptedRoleIds: ['contract-analyst', 'integration-analyst', 'test-analyst'],
+      maxTaskNodes: request.bounds.maxTaskNodes,
+      maxDependencyEdges: request.bounds.maxDependencyEdges,
+    })).toThrowError('invalid_agent_task_graph')
+  })
+
+  it('rejects mutable dependency metadata outside the frozen edge contract', () => {
+    expect(() => parseAgentTaskGraph({
+      ...taskGraph,
+      edges: taskGraph.edges.map((edge, index) =>
+        index === 0 ? { ...edge, mutable: true } : edge),
+    }, {
+      coordinationId: request.id,
+      acceptedRoleIds: ['contract-analyst', 'integration-analyst', 'test-analyst'],
+      maxTaskNodes: request.bounds.maxTaskNodes,
+      maxDependencyEdges: request.bounds.maxDependencyEdges,
+    })).toThrowError('invalid_agent_task_graph')
   })
 })

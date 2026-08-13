@@ -66,6 +66,48 @@ export type CoordinationSessionRequest = {
   deadline: string
 }
 
+export type AgentTaskResourceRequirement = {
+  resourceId: string
+  resourceDigest: string
+  mode: 'read' | 'write'
+}
+
+export type AgentTaskNode = {
+  id: string
+  roleId: string
+  contextDigest: string
+  capabilityIds: string[]
+  resourceRequirements: AgentTaskResourceRequirement[]
+}
+
+export type AgentTaskEdge = {
+  id: string
+  sourceTaskId: string
+  targetTaskId: string
+}
+
+export type AgentTaskGraph = {
+  stateVersion: typeof COORDINATION_CONTRACT_VERSION
+  id: string
+  coordinationId: string
+  version: number
+  entryTaskIds: string[]
+  nodes: AgentTaskNode[]
+  edges: AgentTaskEdge[]
+}
+
+export type AgentTaskGraphParseOptions = {
+  coordinationId: string
+  acceptedRoleIds: readonly string[]
+  maxTaskNodes: number
+  maxDependencyEdges: number
+}
+
+export type ParsedAgentTaskGraph = {
+  graph: AgentTaskGraph
+  readyTaskIds: string[]
+}
+
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actual = Object.keys(value).sort()
   const expected = [...keys].sort()
@@ -134,6 +176,14 @@ function isExactCoordinationAuthority(value: unknown): value is CoordinationAuth
     isPositiveVersion(value.policyVersion) &&
     isIdentifier(value.supervisorRuntimeId) &&
     isPositiveVersion(value.supervisorRuntimeVersion)
+}
+
+function isExactResourceRequirement(value: unknown): value is AgentTaskResourceRequirement {
+  return isPlainRecord(value) &&
+    hasExactKeys(value, ['resourceId', 'resourceDigest', 'mode']) &&
+    isIdentifier(value.resourceId) &&
+    isDigest(value.resourceDigest) &&
+    (value.mode === 'read' || value.mode === 'write')
 }
 
 export function parseCoordinationSessionRequest(
@@ -232,4 +282,131 @@ export function parseCoordinationSessionRequest(
   }
 
   return value as CoordinationSessionRequest
+}
+
+export function parseAgentTaskGraph(
+  value: unknown,
+  options: AgentTaskGraphParseOptions,
+): ParsedAgentTaskGraph {
+  if (
+    !isPlainRecord(value) ||
+    value.stateVersion !== COORDINATION_CONTRACT_VERSION ||
+    !hasExactKeys(value, [
+      'stateVersion',
+      'id',
+      'coordinationId',
+      'version',
+      'entryTaskIds',
+      'nodes',
+      'edges',
+    ]) ||
+    !isIdentifier(value.id) ||
+    value.coordinationId !== options.coordinationId ||
+    !isPositiveVersion(value.version) ||
+    !Array.isArray(value.nodes) ||
+    value.nodes.length === 0 ||
+    value.nodes.length > options.maxTaskNodes ||
+    !value.nodes.every(isPlainRecord) ||
+    !Array.isArray(value.edges) ||
+    value.edges.length > options.maxDependencyEdges ||
+    !value.edges.every(isPlainRecord) ||
+    !Array.isArray(value.entryTaskIds)
+  ) {
+    throw new Error('invalid_agent_task_graph')
+  }
+
+  const graph = value as AgentTaskGraph
+  const acceptedRoleIds = new Set(options.acceptedRoleIds)
+  if (
+    graph.nodes.some((node) =>
+      !hasExactKeys(node as unknown as Record<string, unknown>, [
+        'id',
+        'roleId',
+        'contextDigest',
+        'capabilityIds',
+        'resourceRequirements',
+      ]) ||
+      !isIdentifier(node.roleId) ||
+      !acceptedRoleIds.has(node.roleId) ||
+      !isDigest(node.contextDigest) ||
+      !Array.isArray(node.capabilityIds) ||
+      node.capabilityIds.length === 0 ||
+      node.capabilityIds.some((capabilityId) => !isIdentifier(capabilityId)) ||
+      new Set(node.capabilityIds).size !== node.capabilityIds.length ||
+      node.capabilityIds.some((capabilityId, index) => {
+        const previous = node.capabilityIds[index - 1]
+        return previous !== undefined && previous.localeCompare(capabilityId) >= 0
+      }) ||
+      !Array.isArray(node.resourceRequirements) ||
+      !node.resourceRequirements.every(isExactResourceRequirement) ||
+      new Set(node.resourceRequirements.map((resource) => resource.resourceId)).size !==
+        node.resourceRequirements.length
+    )
+  ) {
+    throw new Error('invalid_agent_task_graph')
+  }
+  const taskIds = graph.nodes.map((node) => node.id)
+  if (
+    taskIds.some((taskId) => !isIdentifier(taskId)) ||
+    new Set(taskIds).size !== taskIds.length
+  ) {
+    throw new Error('invalid_agent_task_graph')
+  }
+
+  const taskIdSet = new Set(taskIds)
+  const edgeIds = graph.edges.map((edge) => edge.id)
+  if (
+    graph.edges.some((edge) => !hasExactKeys(edge as unknown as Record<string, unknown>, [
+      'id',
+      'sourceTaskId',
+      'targetTaskId',
+    ])) ||
+    edgeIds.some((edgeId) => !isIdentifier(edgeId)) ||
+    new Set(edgeIds).size !== edgeIds.length ||
+    graph.edges.some((edge) =>
+      !taskIdSet.has(edge.sourceTaskId) ||
+      !taskIdSet.has(edge.targetTaskId) ||
+      edge.sourceTaskId === edge.targetTaskId
+    )
+  ) {
+    throw new Error('invalid_agent_task_graph')
+  }
+
+  const inDegree = new Map(taskIds.map((taskId) => [taskId, 0]))
+  const dependents = new Map(taskIds.map((taskId) => [taskId, [] as string[]]))
+  for (const edge of graph.edges) {
+    inDegree.set(edge.targetTaskId, (inDegree.get(edge.targetTaskId) ?? 0) + 1)
+    dependents.get(edge.sourceTaskId)?.push(edge.targetTaskId)
+  }
+  const roots = taskIds.filter((taskId) => inDegree.get(taskId) === 0).sort()
+  const entries = [...graph.entryTaskIds].sort()
+  if (
+    entries.length === 0 ||
+    entries.some((taskId) => !isIdentifier(taskId) || !taskIdSet.has(taskId)) ||
+    new Set(entries).size !== entries.length ||
+    entries.length !== roots.length ||
+    entries.some((taskId, index) => taskId !== roots[index])
+  ) {
+    throw new Error('invalid_agent_task_graph')
+  }
+  const queue = [...roots]
+  let visited = 0
+  while (queue.length > 0) {
+    const taskId = queue.shift()
+    if (taskId === undefined) break
+    visited += 1
+    for (const dependentId of dependents.get(taskId) ?? []) {
+      const nextDegree = (inDegree.get(dependentId) ?? 0) - 1
+      inDegree.set(dependentId, nextDegree)
+      if (nextDegree === 0) queue.push(dependentId)
+    }
+  }
+  if (visited !== taskIds.length) {
+    throw new Error('invalid_agent_task_graph')
+  }
+
+  return {
+    graph,
+    readyTaskIds: [...graph.entryTaskIds].sort((left, right) => left.localeCompare(right)),
+  }
 }
