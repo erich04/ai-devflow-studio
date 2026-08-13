@@ -6,6 +6,8 @@ import {
   type CodingExecutorDescriptor,
   type CodingExecutorPermissionTurn,
   type CodingExecutorRequest,
+  type CodingExecutorTerminalTurn,
+  type TestEvidence,
 } from '@ai-devflow/shared'
 import type {
   CodingEngineAdapter,
@@ -25,7 +27,11 @@ export type CodingExecutorWaitingPermissionResult =
   }
 
 export type CodingExecutorCompletedResult =
-  CodingEngineApprovePermissionCompletedResult & { kind: 'engine_completed' }
+  CodingEngineApprovePermissionCompletedResult & {
+    kind: 'engine_completed'
+    turn?: CodingExecutorTerminalTurn
+    testEvidence?: TestEvidence
+  }
 
 export type CodingExecutorStartResult =
   | CodingExecutorWaitingPermissionResult
@@ -49,6 +55,7 @@ export type CodingExecutor = {
   engine: CodingEngineAdapter['engine']
   providerId: string
   modelId?: string
+  billing?: 'no_cost' | 'metered'
   ensure(input: CodingEngineEnsureInput): Promise<CodingEngineEnsureResult>
   start(input: CodingExecutorStartInput): Promise<CodingExecutorStartResult>
   continuePermission(
@@ -184,6 +191,7 @@ export function createCodingExecutorCompatibilityAdapter(
     descriptor,
     engine: engine.engine,
     providerId: engine.providerId,
+    billing: engine.engine === 'fake' ? 'no_cost' : 'metered',
     ...(engine.modelId ? { modelId: engine.modelId } : {}),
     ensure: (input) => engine.ensure(input),
     async start(input) {

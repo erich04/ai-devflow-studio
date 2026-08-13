@@ -1,9 +1,11 @@
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { execFile as execFileCallback } from 'node:child_process'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import { _electron as electron } from '@playwright/test'
 import { resolveDesktopExecutablePath } from './desktop-pilot-artifact.mjs'
 
@@ -12,6 +14,7 @@ const requireFromDesktop = createRequire(
   path.join(rootDirectory, 'apps', 'desktop', 'package.json'),
 )
 const initSqlJs = requireFromDesktop('sql.js')
+const execFile = promisify(execFileCallback)
 const artifactDirectory = path.join(rootDirectory, 'out', 'desktop-pilot')
 const artifactIndex = JSON.parse(
   await readFile(path.join(artifactDirectory, 'artifact-index.json'), 'utf8'),
@@ -50,6 +53,7 @@ async function launchPackagedDesktop() {
       DEVFLOW_USER_DATA_DIR: userDataDirectory,
       DEVFLOW_API_BASE_URL: 'http://127.0.0.1:9',
       DEVFLOW_CODING_ENGINE: 'fake',
+      DEVFLOW_CODING_EXECUTOR: 'native-deterministic',
       DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
       DEVFLOW_ENABLE_LOCAL_MCP_FIXTURE: 'true',
       DEVFLOW_ENABLE_DEMO_DATA: 'true',
@@ -83,8 +87,44 @@ try {
   await mkdir(runtimeProjectDirectory, { recursive: true })
   await writeFile(
     path.join(runtimeProjectDirectory, 'package.json'),
-    `${JSON.stringify({ name: 'devflow-agent-runtime-smoke', private: true }, null, 2)}\n`,
+    `${JSON.stringify({
+      name: 'devflow-agent-runtime-smoke',
+      version: '1.0.0',
+      private: true,
+      scripts: {
+        test: 'node -e "const fs=require(\'node:fs\');const p=\'devflow-native-change.txt\';if(!fs.existsSync(p)||fs.readFileSync(p,\'utf8\')!==\'DevFlow deterministic Native Coding repair.\\n\')process.exit(1)"',
+      },
+    }, null, 2)}\n`,
   )
+  await writeFile(
+    path.join(runtimeProjectDirectory, 'README.md'),
+    '# Packaged Agent Runtime smoke\n\nThis isolated repository accepts one bounded Native Coding repair.\n',
+  )
+  await writeFile(
+    path.join(runtimeProjectDirectory, 'package-lock.json'),
+    `${JSON.stringify({
+      name: 'devflow-agent-runtime-smoke',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': { name: 'devflow-agent-runtime-smoke', version: '1.0.0' },
+      },
+    }, null, 2)}\n`,
+  )
+  await execFile('git', ['init', '-b', 'main'], { cwd: runtimeProjectDirectory })
+  await execFile('git', ['config', 'user.email', 'packaged-smoke@example.invalid'], {
+    cwd: runtimeProjectDirectory,
+  })
+  await execFile('git', ['config', 'user.name', 'Packaged Smoke'], {
+    cwd: runtimeProjectDirectory,
+  })
+  await execFile('git', ['add', 'package.json', 'package-lock.json', 'README.md'], {
+    cwd: runtimeProjectDirectory,
+  })
+  await execFile('git', ['commit', '-m', 'packaged smoke baseline'], {
+    cwd: runtimeProjectDirectory,
+  })
 
   const firstLaunch = await launchPackagedDesktop()
   electronApp = firstLaunch.app
@@ -137,6 +177,114 @@ try {
     throw new Error('Packaged Agent Runtime did not accept exactly one deterministic action.')
   }
 
+  const nativeCodingBeforeRestart = await page.evaluate(async () => {
+    const project = await window.aiDevFlowDesktop.selectLocalProject()
+    if (!project) throw new Error('Packaged Native Coding project was not selected')
+    let run = await window.aiDevFlowDesktop.createRun({
+      title: 'Packaged Native Coding smoke',
+      request: 'Apply one bounded native edit through accepted main-owned Tools.',
+      projectId: project.id,
+      creatorId: 'packaged-smoke-user',
+      branchName: 'devflow/packaged-native-coding-smoke',
+    })
+    const currentNode = () => run.nodes.find((node) => node.id === run.currentNodeId)
+    let node = currentNode()
+    if (!node || node.kind !== 'agent' || node.stage !== 'clarify') {
+      throw new Error('Packaged Native Coding Workflow did not start at Clarify')
+    }
+    run = (await window.aiDevFlowDesktop.completeWorkflowAgentNode({
+      runId: run.id,
+      nodeId: node.id,
+      userId: 'packaged-smoke-user',
+      userName: 'Packaged Smoke User',
+      providerId: 'fake-knowledge-review',
+    })).run
+    node = currentNode()
+    if (!node || node.kind !== 'gate' || node.stage !== 'clarify') {
+      throw new Error('Packaged Native Coding Workflow did not reach Clarify Gate')
+    }
+    run = (await window.aiDevFlowDesktop.approveGate({ runId: run.id, nodeId: node.id })).run
+    node = currentNode()
+    if (!node || node.kind !== 'agent' || node.stage !== 'design') {
+      throw new Error('Packaged Native Coding Workflow did not reach Design')
+    }
+    run = (await window.aiDevFlowDesktop.completeWorkflowAgentNode({
+      runId: run.id,
+      nodeId: node.id,
+      userId: 'packaged-smoke-user',
+      userName: 'Packaged Smoke User',
+      providerId: 'fake-knowledge-review',
+    })).run
+    node = currentNode()
+    if (!node || node.kind !== 'gate' || node.stage !== 'design') {
+      throw new Error('Packaged Native Coding Workflow did not reach Design Gate')
+    }
+    run = (await window.aiDevFlowDesktop.approveGate({ runId: run.id, nodeId: node.id })).run
+    node = currentNode()
+    if (!node || node.kind !== 'task' || node.stage !== 'build') {
+      throw new Error('Packaged Native Coding Workflow did not reach Build')
+    }
+    await window.aiDevFlowDesktop.ensureCodingEngine({ projectId: project.id })
+    const started = await window.aiDevFlowDesktop.runCodingAgent({
+      runId: run.id,
+      nodeId: node.id,
+      projectId: project.id,
+      requestedBy: 'packaged-smoke-user',
+      providerId: 'native-decision-deterministic',
+      userInstruction: 'Apply the exact bounded Native Coding repair.',
+    })
+    const pending = started.state.codingPermissionRequests.find(
+      (request) => request.codingRunId === started.codingRun.id && request.status === 'pending',
+    )
+    if (!pending || pending.permission !== 'edit') {
+      throw new Error('Packaged Native Coding did not stop at one edit permission')
+    }
+    await window.aiDevFlowDesktop.replyCodingPermission({
+      requestId: pending.id,
+      codingRunId: started.codingRun.id,
+      decidedBy: 'packaged-smoke-user',
+      decision: 'approved',
+      comment: 'Approve one bounded packaged Native Coding edit.',
+    })
+    const [completed] = await window.aiDevFlowDesktop.listCodingAgentRuns({ runId: run.id })
+    const runtime = (await window.aiDevFlowDesktop.listAgentRuntimes())
+      .find((candidate) => candidate.runtime.id === `agent-runtime-coding-${started.codingRun.id}`)
+    const state = await window.aiDevFlowDesktop.loadState()
+    const completedWorkflow = state.runs.find((candidate) => candidate.id === run.id)
+    const workflowNode = completedWorkflow?.nodes.find(
+      (candidate) => candidate.id === completedWorkflow.currentNodeId,
+    )
+    if (
+      !completed ||
+      completed.status !== 'completed' ||
+      completed.changedPaths.length !== 1 ||
+      completed.changedPaths[0] !== 'devflow-native-change.txt' ||
+      !runtime ||
+      runtime.runtime.status !== 'terminal' ||
+      runtime.runtime.stopReason !== 'success' ||
+      workflowNode?.stage !== 'test'
+    ) {
+      throw new Error(`Packaged Native Coding did not complete at the bounded Test boundary: ${JSON.stringify({
+        codingStatus: completed?.status ?? null,
+        changedPaths: completed?.changedPaths ?? [],
+        runtimeStatus: runtime?.runtime.status ?? null,
+        runtimeStopReason: runtime?.runtime.stopReason ?? null,
+        workflowStage: workflowNode?.stage ?? null,
+        events: state.codingEvents
+          .filter((event) => event.codingRunId === started.codingRun.id)
+          .map((event) => ({ kind: event.kind, message: event.message })),
+      })}`)
+    }
+    return {
+      workflowRunId: run.id,
+      codingRunId: completed.id,
+      runtimeId: runtime.runtime.id,
+      status: completed.status,
+      changedPaths: completed.changedPaths,
+      acceptedActionIds: runtime.runtime.acceptedActionIds,
+    }
+  })
+
   await electronApp.close()
   electronApp = undefined
   const secondLaunch = await launchPackagedDesktop()
@@ -153,6 +301,25 @@ try {
     runtimeAfterRestart.terminalSummary?.acceptedActionCount !== 1
   ) {
     throw new Error('Packaged Agent Runtime was not restored exactly after restart.')
+  }
+  const nativeCodingAfterRestart = await secondLaunch.page.evaluate(async (identity) => {
+    const codingRun = (await window.aiDevFlowDesktop.listCodingAgentRuns({
+      runId: identity.workflowRunId,
+    })).find((candidate) => candidate.id === identity.codingRunId)
+    const runtime = (await window.aiDevFlowDesktop.listAgentRuntimes())
+      .find((candidate) => candidate.runtime.id === identity.runtimeId)
+    return { codingRun, runtime }
+  }, nativeCodingBeforeRestart)
+  if (
+    nativeCodingAfterRestart.codingRun?.status !== 'completed' ||
+    nativeCodingAfterRestart.codingRun.changedPaths.length !== 1 ||
+    nativeCodingAfterRestart.codingRun.changedPaths[0] !== 'devflow-native-change.txt' ||
+    nativeCodingAfterRestart.runtime?.runtime.status !== 'terminal' ||
+    nativeCodingAfterRestart.runtime.runtime.stopReason !== 'success' ||
+    JSON.stringify(nativeCodingAfterRestart.runtime.runtime.acceptedActionIds) !==
+      JSON.stringify(nativeCodingBeforeRestart.acceptedActionIds)
+  ) {
+    throw new Error('Packaged Native Coding was not restored exactly after restart.')
   }
   await electronApp.close()
   electronApp = undefined
@@ -180,6 +347,22 @@ try {
        from local_mcp_installations
       order by id`,
   )[0]?.values ?? []
+  const nativeCodingAudits = database.exec(
+    `select tool_id, status, count(*)
+       from agent_runtime_tool_audits
+      where runtime_id = ?
+      group by tool_id, status
+      order by tool_id, status`,
+    [nativeCodingBeforeRestart.runtimeId],
+  )[0]?.values ?? []
+  const nativeCodingPermissionDecisions = Number(
+    database.exec(
+      `select count(*)
+         from coding_permission_decisions
+        where coding_run_id = ?`,
+      [nativeCodingBeforeRestart.codingRunId],
+    )[0]?.values[0]?.[0],
+  )
   database.close()
   if (schemaVersion !== 20) {
     throw new Error(`Packaged Desktop did not initialize schema 20: ${schemaVersion}`)
@@ -203,6 +386,21 @@ try {
   ) {
     throw new Error('Packaged Agent Runtime did not persist one exact bounded Local MCP audit.')
   }
+  const expectedNativeCodingAudits = [
+    ['repo.read_text', 'started', 1],
+    ['repo.read_text', 'succeeded', 1],
+    ['workspace.run_saved_test', 'started', 1],
+    ['workspace.run_saved_test', 'succeeded', 1],
+    ['workspace.write_text', 'started', 1],
+    ['workspace.write_text', 'succeeded', 1],
+  ]
+  if (
+    JSON.stringify(nativeCodingAudits) !== JSON.stringify(expectedNativeCodingAudits) ||
+    nativeCodingPermissionDecisions !== 1
+  ) {
+    throw new Error('Packaged Native Coding repeated or escaped its bounded Tool/permission effects.')
+  }
+  const nativeCodingRestartDuplicateEffects = 0
 
   console.log(
     JSON.stringify(
@@ -226,6 +424,13 @@ try {
             succeeded: Number(succeeded),
             durableRecords: Number(records),
           },
+        },
+        nativeCoding: {
+          status: nativeCodingAfterRestart.codingRun.status,
+          changedPaths: nativeCodingAfterRestart.codingRun.changedPaths,
+          permissionDecisions: nativeCodingPermissionDecisions,
+          durableToolAuditRows: nativeCodingAudits.length,
+          nativeCodingRestartDuplicateEffects,
         },
       },
       null,

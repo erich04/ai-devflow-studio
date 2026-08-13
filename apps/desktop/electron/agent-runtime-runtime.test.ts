@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createWorkflowRunFromRequest } from '@ai-devflow/shared'
+import { createAgentRuntime, createWorkflowRunFromRequest } from '@ai-devflow/shared'
 import { createDesktopAgentRuntime } from './agent-runtime-runtime'
 import { createLocalStore } from './local-store'
 import { createNativeToolRegistry } from './native-tool-registry'
@@ -253,6 +253,54 @@ describe('Desktop Agent Runtime', () => {
       (event) => event.type === 'action_requested',
     )
     expect(requestedEvents).toHaveLength(1)
+    store.close()
+  })
+
+  it('leaves coding-owned runtimes for the native Coding recovery owner', async () => {
+    const { store, run, project } = await runtimeFixture()
+    const transition = createAgentRuntime({
+      stateVersion: 1,
+      id: 'agent-runtime-coding-owned-1',
+      scope: {
+        kind: 'local',
+        organizationId: null,
+        projectId: null,
+        userId: run.creatorId,
+        sessionId: 'coding-session-owned-1',
+        localProjectId: project.id,
+      },
+      authority: {
+        runId: run.id,
+        nodeId: run.currentNodeId,
+        runVersion: run.version,
+        policyVersion: 1,
+      },
+      contextDigest: 'a'.repeat(64),
+      capabilitySetDigest: 'b'.repeat(64),
+      bounds: {
+        maxSteps: 5,
+        maxWallTimeMs: 10 * 60_000,
+        maxToolCalls: 5,
+        maxToolResultBytes: 64 * 1_024,
+        maxTrajectoryMetadataBytes: 16 * 1_024,
+        maxCheckpointBytes: 128 * 1_024,
+        maxTokens: 1,
+        maxCostUsd: Number.EPSILON,
+      },
+      requestedAt: '2026-08-12T20:30:00.000Z',
+      deadline: '2026-08-12T20:40:00.000Z',
+    })
+    expect(await store.commitAgentRuntimeTransition({
+      expectedRuntime: null,
+      transition,
+    })).toMatchObject({ committed: true })
+
+    const runtime = createDesktopAgentRuntime({
+      store,
+      clock: tickingClock('2026-08-12T20:30:01.000Z'),
+    })
+    expect(await runtime.recover()).toEqual([])
+    expect(await store.getAgentRuntime(transition.runtime.id)).toEqual(transition.runtime)
     store.close()
   })
 

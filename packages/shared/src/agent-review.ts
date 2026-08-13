@@ -89,6 +89,11 @@ export type AgentProvider = {
   model: string
   reviewKnowledge: (input: KnowledgeReviewProviderInput) => Promise<KnowledgeReviewProviderOutput>
   generateWorkflowArtifact?: (input: WorkflowArtifactProviderInput) => Promise<WorkflowArtifactProviderOutput>
+  completeStructuredJson?: (input: {
+    systemPrompt: string
+    userPrompt: string
+    maxOutputTokens: number
+  }) => Promise<{ value: Record<string, unknown>; usage?: AgentProviderUsage }>
 }
 
 export type BuildAgentReviewContextInput = {
@@ -1028,6 +1033,108 @@ export function createOpenAiCompatibleAgentProvider({
         confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
         ...(policyFindings ? { policyFindings } : {}),
         ...(usage ? { usage } : {}),
+      }
+    },
+    async completeStructuredJson(input) {
+      if (
+        typeof input.systemPrompt !== 'string' ||
+        input.systemPrompt.length < 1 ||
+        input.systemPrompt.length > 8_000 ||
+        typeof input.userPrompt !== 'string' ||
+        input.userPrompt.length < 1 ||
+        input.userPrompt.length > 32_000 ||
+        !Number.isInteger(input.maxOutputTokens) ||
+        input.maxOutputTokens < 1 ||
+        input.maxOutputTokens > 4_096
+      ) {
+        throw new Error('Agent provider structured request is invalid')
+      }
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 30_000)
+      try {
+        const response = await fetcher(`${baseUrl.replace(/\/$/u, '')}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${apiKey}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model,
+            temperature: 0,
+            max_tokens: input.maxOutputTokens,
+            messages: [
+              { role: 'system', content: input.systemPrompt },
+              { role: 'user', content: input.userPrompt },
+            ],
+          }),
+          redirect: 'error',
+          signal: controller.signal,
+        })
+        if (response.status !== 200) {
+          throw new Error(`Agent provider structured request failed with status ${response.status}`)
+        }
+        const responseText = await response.text()
+        if (new TextEncoder().encode(responseText).byteLength > 64 * 1_024) {
+          throw new Error('Agent provider structured response is too large')
+        }
+        const body = JSON.parse(responseText) as unknown
+        if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+          throw new Error('Agent provider structured response is invalid')
+        }
+        const record = body as Record<string, unknown>
+        const choices = record.choices
+        const usageValue = record.usage
+        const raw =
+          Array.isArray(choices) &&
+          choices.length === 1 &&
+          typeof choices[0] === 'object' &&
+          choices[0] !== null &&
+          !Array.isArray(choices[0]) &&
+          typeof (choices[0] as { message?: unknown }).message === 'object' &&
+          (choices[0] as { message?: unknown }).message !== null
+            ? ((choices[0] as { message: { content?: unknown } }).message.content)
+            : undefined
+        if (typeof raw !== 'string' || new TextEncoder().encode(raw).byteLength > 32 * 1_024) {
+          throw new Error('Agent provider structured response is invalid')
+        }
+        const value = JSON.parse(raw) as unknown
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+          throw new Error('Agent provider structured output is invalid')
+        }
+        let usage: AgentProviderUsage | undefined
+        if (typeof usageValue === 'object' && usageValue !== null && !Array.isArray(usageValue)) {
+          const candidate = usageValue as Record<string, unknown>
+          const valid = [candidate.prompt_tokens, candidate.completion_tokens, candidate.cached_tokens]
+            .every((entry) => entry === undefined || (Number.isInteger(entry) && Number(entry) >= 0))
+          if (!valid) throw new Error('Agent provider structured usage is invalid')
+          usage = {
+            ...(typeof candidate.prompt_tokens === 'number'
+              ? { inputTokens: candidate.prompt_tokens }
+              : {}),
+            ...(typeof candidate.completion_tokens === 'number'
+              ? { outputTokens: candidate.completion_tokens }
+              : {}),
+            ...(typeof candidate.cached_tokens === 'number'
+              ? { cacheReadTokens: candidate.cached_tokens }
+              : {}),
+          }
+        }
+        return { value: value as Record<string, unknown>, ...(usage ? { usage } : {}) }
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          (error.message === 'Agent provider structured request is invalid' ||
+            error.message.startsWith('Agent provider structured request failed with status ') ||
+            error.message === 'Agent provider structured response is too large' ||
+            error.message === 'Agent provider structured response is invalid' ||
+            error.message === 'Agent provider structured output is invalid' ||
+            error.message === 'Agent provider structured usage is invalid')
+        ) {
+          throw error
+        }
+        throw new Error('Agent provider structured request failed')
+      } finally {
+        clearTimeout(timeout)
       }
     },
     async generateWorkflowArtifact({ request, prompt }) {

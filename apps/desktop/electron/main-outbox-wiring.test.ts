@@ -20,15 +20,21 @@ describe('Electron durable remote sync wiring', () => {
     )
   })
 
-  it('shares one governed executor, coding engine, and process manager across IPC requests and shutdown', () => {
+  it('shares one explicitly selected governed executor, coding engine, and process manager across IPC requests and shutdown', () => {
     expect(main).toMatch(
       /const opencodeProcessManager = createOpencodeProcessManager\(\)[\s\S]*?const codingEngineAdapter = createCodingEngineAdapterFromEnv\(process\.env, \{[\s\S]*?processManager: opencodeProcessManager[\s\S]*?\}\)/,
     )
     expect(main).toMatch(
-      /const codingExecutor = createCodingExecutorCompatibilityAdapter\(codingEngineAdapter\)[\s\S]*?async function createCodingRuntimeForRequest[\s\S]*?return createCodingRuntime\(\{[\s\S]*?executor: codingExecutor/,
+      /const compatibilityCodingExecutor = createCodingExecutorCompatibilityAdapter\(codingEngineAdapter\)[\s\S]*?async function getCodingExecutor\(\)[\s\S]*?resolveDevFlowCodingExecutorSelection\(process\.env\)[\s\S]*?createNativeCodingExecutor[\s\S]*?async function createCodingRuntimeForRequest[\s\S]*?getCodingExecutor\(\)[\s\S]*?return createCodingRuntime\(\{[\s\S]*?executor/,
+    )
+    expect(main).toMatch(
+      /selection\.executor === 'native-deterministic'[\s\S]*?createDeterministicNativeCodingDecisionProvider\(\)[\s\S]*?createAgentProviderNativeCodingDecisionProvider\([\s\S]*?resolveAgentProvider\(store, selection\.providerId\)/,
     )
     expect(main).toMatch(
       /app\.on\('before-quit'[\s\S]*?stopOpencodeWithRetry\(opencodeProcessManager\)/,
+    )
+    expect(main).toMatch(
+      /app\.whenReady\(\)\.then[\s\S]*?createCodingRuntimeForRequest\(\)[\s\S]*?recoverCodingAgentRuns\(\)/,
     )
   })
 

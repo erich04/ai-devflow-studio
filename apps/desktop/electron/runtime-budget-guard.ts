@@ -31,8 +31,8 @@ export function createKnowledgeReviewRuntimeBudgetGuard(
 export function createRuntimeBudgetGuard(
   remoteSync: Pick<ProjectBoundRemoteSync, 'evaluateRuntimeBudget'>,
 ): CodingRuntimeBudgetGuard {
-  return async ({ engine, estimatedCost, project, providerId, approvalId }) => {
-    if (engine === 'fake') {
+  return async ({ metered, estimatedCost, project, providerId, approvalId }) => {
+    if (!metered) {
       return {
         status: 'disabled',
         blocksRun: false,

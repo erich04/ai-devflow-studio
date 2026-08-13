@@ -88,6 +88,7 @@ function requiredCapabilitiesForExecutor(executor: CodingExecutor): CodingExecut
 
 export type CodingRuntimeStore = {
   listProjects(): Promise<LocalProject[]>
+  getPolicySnapshot?(projectId: string): Promise<{ version: number } | null>
   listRuns(): Promise<WorkflowRun[]>
   listArtifacts(runId?: string): Promise<Artifact[]>
   listEvents(runId?: string): Promise<AgentEvent[]>
@@ -106,6 +107,9 @@ export type CodingRuntimeStore = {
   saveCodingPermissionRequest(request: CodingPermissionRequest): Promise<void>
   listCodingPermissionRequests(codingRunId?: string): Promise<CodingPermissionRequest[]>
   saveCodingPermissionDecision(decision: CodingPermissionDecision): Promise<void>
+  listCodingPermissionDecisions?(
+    codingRunId?: string,
+  ): Promise<CodingPermissionDecision[]>
   saveManagedCodingWorkspace(workspace: ManagedCodingWorkspace): Promise<void>
   listManagedCodingWorkspaces(projectId?: string): Promise<ManagedCodingWorkspace[]>
   saveDependencyBootstrapEvidence(evidence: DependencyBootstrapEvidence): Promise<void>
@@ -159,6 +163,7 @@ export type CodingRuntimeBudgetGuard = (input: {
   requestedBy: string
   estimatedCost: CodingRuntimeCostSummary
   approvalId?: string
+  metered: boolean
 }) => Promise<BudgetGuardDecision>
 
 export type CodingRuntimeCompleteWorkflowBuild = (input: {
@@ -266,6 +271,7 @@ export type CodingRuntime = {
   startRetryAttempt(input: StartRetryAttemptRuntimeInput): Promise<StartRetryAttemptRuntimeResult>
   cancelCodingAgentRun(input: CancelCodingAgentRunRuntimeInput): Promise<CodingAgentRun>
   replyCodingPermission(input: ReplyCodingPermissionRuntimeInput): Promise<CodingPermissionRequest>
+  recoverCodingAgentRuns(): Promise<CodingAgentRun[]>
   subscribeCodingRun(input: { codingRunId: string }): Promise<LocalExecutionState>
   findManagedWorktree(input: OpenManagedWorktreeRuntimeInput): Promise<ManagedCodingWorkspace>
   deleteManagedWorktree(input: DeleteManagedWorktreeRuntimeInput): Promise<ManagedCodingWorkspace>
@@ -481,9 +487,11 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     previousCheckpointVersion: number
     previousSequence: number
     settledPermissionRequestIds: string[]
+    activePermissionRequestId: string | null
   }> {
     let previousCheckpointVersion = 0
     let previousSequence = 0
+    let activePermissionRequestId: string | null = null
     const settledPermissionRequestIds: string[] = []
     const events = await deps.store.listCodingAgentEvents(codingRunId)
     for (const event of events) {
@@ -499,9 +507,17 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       previousSequence = turn.events.at(-1)!.sequence
       if (turn.status === 'waiting_permission') {
         settledPermissionRequestIds.push(turn.permissionRequest.id)
+        activePermissionRequestId = turn.permissionRequest.id
+      } else {
+        activePermissionRequestId = null
       }
     }
-    return { previousCheckpointVersion, previousSequence, settledPermissionRequestIds }
+    return {
+      previousCheckpointVersion,
+      previousSequence,
+      settledPermissionRequestIds,
+      activePermissionRequestId,
+    }
   }
 
   async function nextAgentEventSequence(runId: string): Promise<number> {
@@ -637,6 +653,51 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     await saveEvents([completedEvent])
 
     return { codingRun, evidence }
+  }
+
+  async function persistExecutorTestEvidence(input: {
+    codingRun: CodingAgentRun
+    project: LocalProject
+    evidence: TestEvidence
+  }): Promise<{ codingRun: CodingAgentRun; evidence: TestEvidence }> {
+    const evidence = redactTestEvidenceForStorage(input.evidence)
+    if (
+      evidence.runId !== input.codingRun.runId ||
+      evidence.nodeId !== input.codingRun.nodeId ||
+      evidence.projectId !== input.project.id ||
+      evidence.command !== input.project.testCommand.trim() ||
+      evidence.cwd !== '<workspace>' ||
+      evidence.status !== 'passed' ||
+      evidence.redacted !== true
+    ) {
+      throw new Error('Coding Executor Test Evidence is not bound to the current saved worktree test.')
+    }
+    const artifact = createTestEvidenceArtifact(evidence)
+    const agentEvent = createTestEvidenceEvent(evidence, await nextAgentEventSequence(evidence.runId))
+    const completedEvent: CodingAgentEvent = {
+      id: idGenerator('coding-event'),
+      codingRunId: input.codingRun.id,
+      runId: input.codingRun.runId,
+      nodeId: input.codingRun.nodeId,
+      sequence: await nextSequence(input.codingRun.id),
+      kind: 'test',
+      message: `Coding Executor saved worktree test passed: ${evidence.summary}`,
+      timestamp: evidence.createdAt,
+      metadata: { evidenceId: evidence.id, status: evidence.status },
+      redacted: true,
+    }
+    await deps.store.saveTestEvidence(evidence)
+    await deps.store.saveArtifact(artifact)
+    await deps.store.saveEvent(agentEvent)
+    await saveEvents([completedEvent])
+    return {
+      evidence,
+      codingRun: {
+        ...input.codingRun,
+        testEvidenceId: evidence.id,
+        summary: `${input.codingRun.summary} Native Tool saved test evidence passed.`,
+      },
+    }
   }
 
   async function runCodingBootstrap(input: {
@@ -983,15 +1044,35 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     if (!engineResultCommitted.committed) {
       return false
     }
-    const bootstrapped = await runCodingBootstrap({
-      codingRun: bootstrappingRun,
-      workspace: input.workspace,
-      project: input.project,
-      timestamp: input.timestamp,
-      ...(input.completed.bootstrapEvidence
-        ? { engineBootstrapEvidence: input.completed.bootstrapEvidence }
-        : {}),
-    })
+    let bootstrapped: { codingRun: CodingAgentRun; canContinue: boolean }
+    if (
+      executor.descriptor.id === 'coding-executor-native' &&
+      bootstrappingRun.bootstrapEvidenceId
+    ) {
+      const evidence = (await deps.store.listDependencyBootstrapEvidence(bootstrappingRun.id))
+        .find((candidate) => candidate.id === bootstrappingRun.bootstrapEvidenceId)
+      if (
+        !evidence ||
+        evidence.codingRunId !== bootstrappingRun.id ||
+        evidence.runId !== bootstrappingRun.runId ||
+        evidence.nodeId !== bootstrappingRun.nodeId ||
+        evidence.projectId !== input.project.id ||
+        (evidence.status !== 'passed' && evidence.status !== 'skipped')
+      ) {
+        throw new Error('Native Coding dependency bootstrap evidence is unavailable or stale.')
+      }
+      bootstrapped = { codingRun: bootstrappingRun, canContinue: true }
+    } else {
+      bootstrapped = await runCodingBootstrap({
+        codingRun: bootstrappingRun,
+        workspace: input.workspace,
+        project: input.project,
+        timestamp: input.timestamp,
+        ...(input.completed.bootstrapEvidence
+          ? { engineBootstrapEvidence: input.completed.bootstrapEvidence }
+          : {}),
+      })
+    }
     if (!bootstrapped.canContinue) {
       const terminalEvent = await buildCodingExecutorTerminalEvent({
         codingRun: bootstrapped.codingRun,
@@ -1023,12 +1104,18 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     if (!testingStarted.committed) {
       return false
     }
-    const tested = await runCodingTests({
-      codingRun: testingRun,
-      workspace: input.workspace,
-      project: input.project,
-      timestamp: input.timestamp,
-    })
+    const tested = input.completed.testEvidence
+      ? await persistExecutorTestEvidence({
+          codingRun: testingRun,
+          project: input.project,
+          evidence: input.completed.testEvidence,
+        })
+      : await runCodingTests({
+          codingRun: testingRun,
+          workspace: input.workspace,
+          project: input.project,
+          timestamp: input.timestamp,
+        })
     const terminalCompletedAt = engineCompletedAt ?? input.timestamp
     const completedRun: CodingAgentRun = {
       ...tested.codingRun,
@@ -1073,9 +1160,12 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     return true
   }
 
-  async function replyCodingPermission(input: ReplyCodingPermissionRuntimeInput): Promise<CodingPermissionRequest> {
+  async function replyCodingPermission(
+    input: ReplyCodingPermissionRuntimeInput,
+    recoveryDecisionAt?: string,
+  ): Promise<CodingPermissionRequest> {
     const request = await findPermissionRequest(input)
-    const timestamp = now()
+    const timestamp = recoveryDecisionAt ?? now()
     const updatedRequest: CodingPermissionRequest = {
       ...request,
       status:
@@ -1095,20 +1185,31 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       decidedAt: timestamp,
     }
     const codingRun = await findCodingRun(input.codingRunId)
-    if (!activeCodingStatuses.has(codingRun.status) || request.status !== 'pending') {
+    const nativeApprovedRecovery =
+      recoveryDecisionAt !== undefined &&
+      executor.descriptor.id === 'coding-executor-native' &&
+      input.decision === 'approved' &&
+      request.status === 'approved' &&
+      codingRun.status === 'waiting_permission'
+    if (
+      !activeCodingStatuses.has(codingRun.status) ||
+      (request.status !== 'pending' && !nativeApprovedRecovery)
+    ) {
       return request
     }
-    const claimed = await commitCodingAgentMutation({
-      expectedRun: codingRun,
-      expectedPendingPermissionRequestIds: [request.id],
-      expectedPermissionRequests: [request],
-      permissionRequests: [updatedRequest],
-      permissionDecisions: [decision],
-    })
-    if (!claimed.committed) {
-      return (await deps.store.listCodingPermissionRequests(input.codingRunId)).find(
-        (candidate) => candidate.id === input.requestId,
-      ) ?? request
+    if (!nativeApprovedRecovery) {
+      const claimed = await commitCodingAgentMutation({
+        expectedRun: codingRun,
+        expectedPendingPermissionRequestIds: [request.id],
+        expectedPermissionRequests: [request],
+        permissionRequests: [updatedRequest],
+        permissionDecisions: [decision],
+      })
+      if (!claimed.committed) {
+        return (await deps.store.listCodingPermissionRequests(input.codingRunId)).find(
+          (candidate) => candidate.id === input.requestId,
+        ) ?? request
+      }
     }
 
     if (input.decision === 'approved') {
@@ -1399,6 +1500,74 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       return deps.store.listCodingAgentRuns(input.runId)
     },
 
+    async recoverCodingAgentRuns() {
+      if (
+        executor.descriptor.id !== 'coding-executor-native' ||
+        !deps.store.listCodingPermissionDecisions
+      ) {
+        return []
+      }
+      const recovered: CodingAgentRun[] = []
+      const codingRuns = await deps.store.listCodingAgentRuns()
+      for (const codingRun of codingRuns) {
+        if (
+          codingRun.status === 'preparing' ||
+          codingRun.status === 'bootstrapping' ||
+          codingRun.status === 'testing'
+        ) {
+          const timestamp = now()
+          if (codingRun.status === 'preparing') {
+            try {
+              await executor.cancel({ codingRun })
+            } catch {
+              await recordActiveCleanupFailure(
+                codingRun,
+                timestamp,
+                'Interrupted Native Coding startup could not confirm Agent Runtime cancellation.',
+              )
+            }
+          }
+          await failActiveCodingRun(
+            codingRun,
+            'Native Coding execution was interrupted; the managed workspace was retained for an explicit retry.',
+            timestamp,
+            { status: 'not_required', reasonCode: 'workspace_retained_for_recovery' },
+          )
+          recovered.push(await findCodingRun(codingRun.id))
+          continue
+        }
+        if (codingRun.status !== 'waiting_permission') continue
+        const [requests, decisions, continuation] = await Promise.all([
+          deps.store.listCodingPermissionRequests(codingRun.id),
+          deps.store.listCodingPermissionDecisions(codingRun.id),
+          loadExecutorContinuationState(codingRun.id),
+        ])
+        const request = requests.find(
+          (candidate) => candidate.id === continuation.activePermissionRequestId,
+        )
+        if (!request || request.status !== 'approved') continue
+        const approvedDecisions = decisions.filter(
+          (decision) =>
+            decision.requestId === request.id && decision.decision === 'approved',
+        )
+        if (approvedDecisions.length !== 1) continue
+        const decision = approvedDecisions[0]!
+        try {
+          await replyCodingPermission({
+            requestId: request.id,
+            codingRunId: codingRun.id,
+            decidedBy: decision.decidedBy,
+            decision: 'approved',
+            comment: decision.comment,
+          }, decision.decidedAt)
+        } catch {
+          // The continuation path records a safe terminal failure before surfacing an error.
+        }
+        recovered.push(await findCodingRun(codingRun.id))
+      }
+      return recovered
+    },
+
     async runCodingAgent(input) {
       const run = await findRun(input.runId)
       const node = validateCodingWorkflowContext(run, input)
@@ -1420,6 +1589,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         throw new Error('Coding Agent engine did not report a configured runtime after ensure.')
       }
       const configuredEngine = executor.engine
+      const metered = executor.billing === 'metered' || configuredEngine !== 'fake'
       const providerId = executor.providerId
       const codingRunId = idGenerator('coding-run')
       const briefContext = await loadCodingBriefContext(run, node)
@@ -1445,6 +1615,10 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         projectId: project.id,
         userId: input.requestedBy,
         timestamp: now(),
+        noCost: !metered,
+        ...(metered && executor.descriptor.kind === 'native'
+          ? { maxOutputTokens: 1_024, providerCallLimit: 3 }
+          : {}),
       })
       const budgetDecision = deps.budgetGuard
         ? await deps.budgetGuard({
@@ -1457,11 +1631,12 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             node,
             requestedBy: input.requestedBy,
             estimatedCost,
+            metered,
             ...(input.runtimeBudgetApprovalId?.trim()
               ? { approvalId: input.runtimeBudgetApprovalId.trim() }
               : {}),
           })
-        : configuredEngine === 'fake'
+        : !metered
           ? {
               status: 'disabled',
               blocksRun: false,
@@ -1766,12 +1941,82 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         }
         throw new Error('Coding Agent reservation changed before workspace registration completed')
       }
+      let executorReadyRun = workspacePreparingRun
+      if (
+        executor.descriptor.id === 'coding-executor-native' &&
+        deps.runDependencyBootstrap
+      ) {
+        let prepared: { codingRun: CodingAgentRun; canContinue: boolean }
+        try {
+          prepared = await runCodingBootstrap({
+            codingRun: workspacePreparingRun,
+            project,
+            workspace,
+            timestamp: reservationTimestamp,
+          })
+        } catch (error) {
+          await failActiveCodingRun(
+            workspacePreparingRun,
+            'Dependency bootstrap failed before Native Coding started.',
+            reservationTimestamp,
+            { status: 'not_required', reasonCode: 'workspace_retained_for_recovery' },
+          )
+          throw error
+        }
+        const terminalEvent = prepared.canContinue
+          ? undefined
+          : await buildCodingExecutorTerminalEvent({
+              codingRun: prepared.codingRun,
+              stopReason: 'failure',
+              cleanup: {
+                status: 'not_required',
+                reasonCode: 'workspace_retained_for_recovery',
+              },
+              timestamp: reservationTimestamp,
+            })
+        const bootstrapCommitted = await commitCodingAgentMutation({
+          expectedRun: workspacePreparingRun,
+          expectedPendingPermissionRequestIds: [],
+          run: prepared.codingRun,
+          ...(terminalEvent ? { events: [terminalEvent] } : {}),
+        })
+        if (!bootstrapCommitted.committed) {
+          const cleanup = await cleanupWorkspaceForRun(
+            bootstrapCommitted.run ?? workspacePreparingRun,
+            reservationTimestamp,
+          )
+          if (bootstrapCommitted.run && activeCodingStatuses.has(bootstrapCommitted.run.status)) {
+            await failActiveCodingRun(
+              bootstrapCommitted.run,
+              'Native Coding dependency bootstrap could not be persisted safely.',
+              reservationTimestamp,
+              cleanup,
+            )
+          }
+          throw new Error('Native Coding dependency bootstrap could not be persisted safely.')
+        }
+        executorReadyRun = prepared.codingRun
+        if (!prepared.canContinue) {
+          return {
+            codingRun: prepared.codingRun,
+            state: await deps.store.loadState(),
+          }
+        }
+      }
       const engineBriefContext = {
         upstreamArtifacts: briefContext.upstreamArtifacts,
         knowledgeReferences: briefContext.knowledgeReferences,
         governanceChecks: briefContext.governanceChecks,
         gateDecisions: briefContext.gateDecisions,
         testEvidence: briefContext.testEvidence,
+      }
+      const currentPolicy = await deps.store.getPolicySnapshot?.(project.id)
+      const policyVersion = currentPolicy?.version ?? input.remediationPlan?.policyVersion ?? 1
+      if (
+        input.remediationPlan &&
+        input.remediationPlan.policyVersion !== policyVersion
+      ) {
+        throw new Error('Coding Executor policy authority is stale.')
       }
       const executorRequest = parseCodingExecutorRequest({
         stateVersion: CODING_EXECUTOR_CONTRACT_VERSION,
@@ -1792,7 +2037,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           runId: run.id,
           nodeId: node.id,
           runVersion: run.version,
-          policyVersion: input.remediationPlan?.policyVersion ?? run.version,
+          policyVersion,
         },
         objectiveDigest: createHash('sha256')
           .update(input.userInstruction.trim(), 'utf8')
@@ -1839,17 +2084,17 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         redacted: true,
       }
       const selectionCommitted = await commitCodingAgentMutation({
-        expectedRun: workspacePreparingRun,
+        expectedRun: executorReadyRun,
         expectedPendingPermissionRequestIds: [],
         events: [selectionEvent],
       })
       if (!selectionCommitted.committed) {
         const cleanup = await cleanupWorkspaceForRun(
-          workspacePreparingRun,
+          executorReadyRun,
           reservationTimestamp,
         )
         await failActiveCodingRun(
-          workspacePreparingRun,
+          executorReadyRun,
           'Coding Executor selection could not be persisted safely.',
           reservationTimestamp,
           cleanup,
@@ -1884,7 +2129,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             cleanupError: 'Coding engine session cleanup did not complete; manual cleanup is required.',
           })
           await recordActiveCleanupFailure(
-            workspacePreparingRun,
+            executorReadyRun,
             reservationTimestamp,
             'Coding engine failed to start and session cleanup did not complete.',
           )
@@ -1907,7 +2152,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         await deps.store.saveManagedCodingWorkspace(cleaned)
         if ((cleaned.cleanupStatus ?? (cleaned.deletedAt ? 'deleted' : 'active')) !== 'deleted') {
           await recordActiveCleanupFailure(
-            workspacePreparingRun,
+            executorReadyRun,
             reservationTimestamp,
             'Coding engine failed to start and workspace cleanup did not complete.',
           )
@@ -1917,7 +2162,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           )
         }
         await failActiveCodingRun(
-          workspacePreparingRun,
+          executorReadyRun,
           'Coding engine failed to start.',
           reservationTimestamp,
           { status: 'completed', reasonCode: null },
@@ -1929,12 +2174,15 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           ...bundle,
           codingRun: {
             ...bundle.codingRun,
+            ...(executorReadyRun.bootstrapEvidenceId
+              ? { bootstrapEvidenceId: executorReadyRun.bootstrapEvidenceId }
+              : {}),
             runtimeCostSummary: estimatedCost,
             budgetDecision,
           },
         }
         const settled = await settleCompletedExecutorResult({
-          expectedRun: workspacePreparingRun,
+          expectedRun: executorReadyRun,
           completed,
           workspace,
           project,
@@ -1976,11 +2224,14 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         )
         startupRun = {
           ...bundle.codingRun,
+          ...(executorReadyRun.bootstrapEvidenceId
+            ? { bootstrapEvidenceId: executorReadyRun.bootstrapEvidenceId }
+            : {}),
           runtimeCostSummary: estimatedCost,
           budgetDecision,
         }
         bundleCommitted = await commitCodingAgentMutation({
-          expectedRun: workspacePreparingRun,
+          expectedRun: executorReadyRun,
           expectedPendingPermissionRequestIds: [],
           run: startupRun,
           events: startupEvents,
@@ -1988,18 +2239,18 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         })
       } catch (error) {
         try {
-          await executor.cancel({ codingRun: workspacePreparingRun })
+          await executor.cancel({ codingRun: executorReadyRun })
         } catch (cleanupError) {
           await recordActiveCleanupFailure(
-            workspacePreparingRun,
+            executorReadyRun,
             reservationTimestamp,
             'Coding engine started, but persistence and session cleanup did not complete.',
           )
           throw new CodingEngineContinuationCleanupError([error, cleanupError])
         }
-        const cleanup = await cleanupWorkspaceForRun(workspacePreparingRun, reservationTimestamp)
+        const cleanup = await cleanupWorkspaceForRun(executorReadyRun, reservationTimestamp)
         await failActiveCodingRun(
-          workspacePreparingRun,
+          executorReadyRun,
           'Coding engine started, but its local run bundle could not be persisted.',
           reservationTimestamp,
           cleanup,
@@ -2008,10 +2259,10 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       }
       if (!bundleCommitted.committed) {
         try {
-          await executor.cancel({ codingRun: workspacePreparingRun })
+          await executor.cancel({ codingRun: executorReadyRun })
         } catch (cleanupError) {
           await recordActiveCleanupFailure(
-            workspacePreparingRun,
+            executorReadyRun,
             reservationTimestamp,
             'Coding engine started, but its reservation changed and session cleanup did not complete.',
           )
@@ -2020,7 +2271,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             cleanupError,
           ])
         }
-        await cleanupWorkspaceForRun(workspacePreparingRun, reservationTimestamp)
+        await cleanupWorkspaceForRun(executorReadyRun, reservationTimestamp)
         throw new Error('Coding Agent startup bundle lost its reservation')
       }
       runBestEffortNotification(() => {

@@ -47,6 +47,7 @@ import {
   type WorkflowNode,
   type WorkflowRun,
   createDemoTeamSessionHeaders,
+  resolveDevFlowCodingExecutorSelection,
   resolveDevFlowRuntimeFlags,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
@@ -120,7 +121,15 @@ import {
 import { createDesktopWorkRequestService } from './work-request-service.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
 import { createCodingEngineAdapterFromEnv } from './coding-engine.js'
-import { createCodingExecutorCompatibilityAdapter } from './coding-executor.js'
+import {
+  createCodingExecutorCompatibilityAdapter,
+  type CodingExecutor,
+} from './coding-executor.js'
+import {
+  createDeterministicNativeCodingDecisionProvider,
+  createAgentProviderNativeCodingDecisionProvider,
+  createNativeCodingExecutor,
+} from './native-coding-executor.js'
 import { createCodingRuntime } from './coding-runtime.js'
 import {
   createGitHubDeliveryRuntime,
@@ -250,7 +259,8 @@ const opencodeProcessManager = createOpencodeProcessManager()
 const codingEngineAdapter = createCodingEngineAdapterFromEnv(process.env, {
   processManager: opencodeProcessManager,
 })
-const codingExecutor = createCodingExecutorCompatibilityAdapter(codingEngineAdapter)
+const compatibilityCodingExecutor = createCodingExecutorCompatibilityAdapter(codingEngineAdapter)
+let codingExecutorPromise: Promise<CodingExecutor> | undefined
 let quitCleanupComplete = false
 let quitCleanupPromise: Promise<void> | undefined
 const repositoryKnowledgeService = createRepositoryKnowledgeService()
@@ -278,6 +288,25 @@ function getStore() {
     dbPath: path.join(userDataPath, 'devflow.sqlite'),
   })
   return storePromise
+}
+
+async function getCodingExecutor(): Promise<CodingExecutor> {
+  const selection = resolveDevFlowCodingExecutorSelection(process.env)
+  if (selection.executor === 'compatibility') return compatibilityCodingExecutor
+  codingExecutorPromise ??= getStore().then(async (store) => {
+    const decisionProvider =
+      selection.executor === 'native-deterministic'
+        ? createDeterministicNativeCodingDecisionProvider()
+        : createAgentProviderNativeCodingDecisionProvider(
+            await resolveAgentProvider(store, selection.providerId),
+          )
+    return createNativeCodingExecutor({
+      store,
+      decisionProvider,
+      runSavedTest: runLocalTestCommand,
+    })
+  })
+  return codingExecutorPromise
 }
 
 function getGitHubDeliveryRuntime() {
@@ -1198,13 +1227,14 @@ function scheduleCodingRunTimeout(codingRunId: string, expire: () => Promise<voi
 async function createCodingRuntimeForRequest(
   knowledgeSnapshot?: RepositoryKnowledgeSnapshot,
 ) {
-  const [remoteSync, store] = await Promise.all([
+  const [remoteSync, store, executor] = await Promise.all([
     getProjectBoundRemoteSync(),
     getStore(),
+    getCodingExecutor(),
   ])
   return createCodingRuntime({
     store,
-    executor: codingExecutor,
+    executor,
     ...(knowledgeSnapshot
       ? {
           knowledgeDocuments: knowledgeSnapshot.documents,
@@ -2794,6 +2824,11 @@ if (hasSingleInstanceLock) {
       })
       .catch(() => {
         console.warn('[agent-runtime] Unable to recover a durable runtime.')
+      })
+    void createCodingRuntimeForRequest()
+      .then((runtime) => runtime.recoverCodingAgentRuns())
+      .catch(() => {
+        console.warn('[native-coding] Unable to recover a durable Coding Executor run.')
       })
 
     app.on('activate', () => {

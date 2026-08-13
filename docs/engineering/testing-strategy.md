@@ -18,7 +18,9 @@ retroactive TDD rewrites unless it is touched.
   and refusal of a newer unknown schema.
 - The packaged Desktop pilot must execute exactly one `scenario.evaluate` Local MCP Tool, persist
   one started and one succeeded installation-bound metadata-only audit, and retain one accepted
-  action after cold restart without another grant, MCP call, or audit record.
+  action after cold restart without another grant, MCP call, or audit record. It must also complete
+  one approved deterministic native Coding repair, persist one permission decision and the exact
+  read/write/saved-test audit pairs, and cold-start without repeating a Tool effect.
 - Coding Executor contract tests must prove capability denial before provider/workspace side effects,
   a path-free main-owned request, ordered bounded permission turns, repeated-permission rejection,
   no-permission completion, and uniform success/failure/cancel/timeout cleanup-aware terminal results.
@@ -41,7 +43,9 @@ retroactive TDD rewrites unless it is touched.
 - **Packaged Desktop**: the packaged smoke exercises production main/preload/renderer boundaries,
   local SQLite, a local fake API, a local bare remote, crash/restart reconciliation, and credential
   non-persistence. The pilot also completes a no-side-effect Agent Runtime through the trusted
-  Local MCP fixture and proves the accepted action count remains exactly one after cold restart.
+  Local MCP fixture and proves the accepted action count remains exactly one after cold restart. It
+  also drives the native Coding path through real Workflow/Gate prerequisites, one edit approval,
+  the saved test, and exact zero-repeat recovery.
 - **Fresh systems and lifecycle**: Postgres and Docker smokes prove current migrations, real service
   wiring, retained-volume upgrades, transactional retry, and bounded rollback.
 - **Private sandbox**: one explicitly authorized private GitHub sandbox validates real GitHub App

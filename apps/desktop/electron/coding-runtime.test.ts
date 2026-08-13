@@ -305,9 +305,11 @@ describe('CodingRuntime', () => {
 
   it('completes through an executor without fabricating a permission request', async () => {
     const repo = await gitRepo()
-    const store = new MemoryCodingStore({
+    const store = Object.assign(new MemoryCodingStore({
       projects: [project(repo)],
       runs: [buildRun()],
+    }), {
+      getPolicySnapshot: vi.fn(async () => ({ version: 7 })),
     })
     const engine = createFakeCodingEngineAdapter()
     const compatibility = createCodingExecutorCompatibilityAdapter(engine)
@@ -328,7 +330,26 @@ describe('CodingRuntime', () => {
       if ('permissionRequest' in completed) {
         throw new Error('native no-permission fixture unexpectedly requested permission')
       }
-      return { kind: 'engine_completed' as const, ...completed }
+      return {
+        kind: 'engine_completed' as const,
+        ...completed,
+        testEvidence: {
+          id: 'native-test-evidence-1',
+          runId: input.runtimeContext.run.id,
+          nodeId: input.runtimeContext.node.id,
+          projectId: input.runtimeContext.project.id,
+          command: 'npm test',
+          cwd: '<workspace>',
+          status: 'passed' as const,
+          exitCode: 0,
+          durationMs: 1,
+          stdout: '',
+          stderr: '',
+          summary: 'Native Tool saved test passed.',
+          redacted: true,
+          createdAt: input.runtimeContext.now,
+        },
+      }
     })
     const executor: CodingExecutor = {
       ...compatibility,
@@ -344,19 +365,20 @@ describe('CodingRuntime', () => {
       },
       start,
     }
+    const runTestCommand = vi.fn(async () => ({
+      status: 'passed' as const,
+      exitCode: 0,
+      durationMs: 1,
+      stdout: 'unexpected duplicate test',
+      stderr: '',
+      redacted: true,
+      summary: 'Unexpected duplicate test.',
+    }))
     const runtime = createCodingRuntime({
       store,
       executor,
       worktreeRoot: await tempDir('devflow-worktrees-'),
-      runTestCommand: async () => ({
-        status: 'passed',
-        exitCode: 0,
-        durationMs: 1,
-        stdout: 'passed',
-        stderr: '',
-        redacted: true,
-        summary: 'Native executor test evidence passed.',
-      }),
+      runTestCommand,
       idGenerator: fixedIds('coding-run-no-permission'),
       now: fixedNow('2026-08-12T23:30:00.000Z'),
     })
@@ -375,9 +397,12 @@ describe('CodingRuntime', () => {
     expect(store.permissionDecisions).toHaveLength(0)
     expect(store.diffArtifacts).toHaveLength(1)
     expect(store.testEvidence).toHaveLength(1)
+    expect(store.testEvidence[0]?.id).toBe('native-test-evidence-1')
+    expect(runTestCommand).not.toHaveBeenCalled()
     expect(start).toHaveBeenCalledWith({
       request: expect.objectContaining({
         id: 'coding-run-no-permission',
+        authority: expect.objectContaining({ policyVersion: 7 }),
         scope: expect.objectContaining({
           localProjectId: 'project-1',
           managedWorkspaceId: expect.stringMatching(/^workspace-/),
@@ -425,6 +450,232 @@ describe('CodingRuntime', () => {
       ],
     })
   })
+
+  it('bootstraps a native executor workspace before the executor can run its saved test', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    const compatibility = createCodingExecutorCompatibilityAdapter(engine)
+    const order: string[] = []
+    const runDependencyBootstrap = vi.fn(async (): Promise<DependencyBootstrapEvidence> => {
+      order.push('bootstrap')
+      return {
+        id: 'bootstrap-native-before-test',
+        codingRunId: 'coding-run-native-bootstrap',
+        runId: 'run-1',
+        nodeId: 'node-build',
+        projectId: 'project-1',
+        command: 'npm ci',
+        status: 'passed',
+        exitCode: 0,
+        durationMs: 12,
+        stdout: 'installed',
+        stderr: '',
+        summary: 'Native dependencies installed.',
+        dependencyHash: 'native-dependency-hash',
+        redacted: true,
+        createdAt: '2026-08-12T23:32:00.000Z',
+      }
+    })
+    const start = vi.fn(async (input: Parameters<CodingExecutor['start']>[0]) => {
+      order.push('executor')
+      expect(runDependencyBootstrap).toHaveBeenCalledTimes(1)
+      const started = await engine.start(input.runtimeContext)
+      const completed = await engine.approvePermission({
+        codingRun: started.codingRun,
+        request: { ...started.permissionRequest, status: 'approved' },
+        workspace: input.runtimeContext.workspace,
+        project: input.runtimeContext.project,
+        now: input.runtimeContext.now,
+      })
+      if ('permissionRequest' in completed) {
+        throw new Error('native bootstrap fixture unexpectedly requested permission')
+      }
+      const { bootstrapEvidence: _engineBootstrapEvidence, ...completedWithoutBootstrap } = completed
+      return {
+        kind: 'engine_completed' as const,
+        ...completedWithoutBootstrap,
+        testEvidence: {
+          id: 'native-test-evidence-bootstrap',
+          runId: input.runtimeContext.run.id,
+          nodeId: input.runtimeContext.node.id,
+          projectId: input.runtimeContext.project.id,
+          command: 'npm test',
+          cwd: '<workspace>',
+          status: 'passed' as const,
+          exitCode: 0,
+          durationMs: 1,
+          stdout: '',
+          stderr: '',
+          summary: 'Native Tool saved test passed after bootstrap.',
+          redacted: true,
+          createdAt: input.runtimeContext.now,
+        },
+      }
+    })
+    const executor: CodingExecutor = {
+      ...compatibility,
+      descriptor: {
+        ...compatibility.descriptor,
+        id: 'coding-executor-native',
+        kind: 'native',
+        capabilities: [
+          'cancellation',
+          'structured_diff',
+          'workspace_edit',
+          'workspace_read',
+        ],
+      },
+      start,
+    }
+    const runtime = createCodingRuntime({
+      store,
+      executor,
+      runDependencyBootstrap,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-native-bootstrap'),
+      now: fixedNow('2026-08-12T23:32:00.000Z'),
+    })
+
+    const result = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Bootstrap before running the saved test.',
+    })
+
+    expect(result.codingRun).toMatchObject({
+      status: 'completed',
+      bootstrapEvidenceId: 'bootstrap-native-before-test',
+      testEvidenceId: 'native-test-evidence-bootstrap',
+    })
+    expect(order).toEqual(['bootstrap', 'executor'])
+    expect(runDependencyBootstrap).toHaveBeenCalledTimes(1)
+    expect(store.bootstrapEvidence).toHaveLength(1)
+  })
+
+  it('fails closed before native provider or Tool work when dependency bootstrap cannot proceed', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const executor = createCodingExecutorCompatibilityAdapter(createFakeCodingEngineAdapter())
+    executor.descriptor = {
+      ...executor.descriptor,
+      id: 'coding-executor-native',
+      kind: 'native',
+    }
+    const start = vi.spyOn(executor, 'start')
+    const runtime = createCodingRuntime({
+      store,
+      executor,
+      runDependencyBootstrap: async () => ({
+        id: 'bootstrap-native-needs-approval',
+        codingRunId: 'coding-run-native-bootstrap-denied',
+        runId: 'run-1',
+        nodeId: 'node-build',
+        projectId: 'project-1',
+        command: 'npm install',
+        status: 'needs_approval',
+        exitCode: null,
+        durationMs: 0,
+        stdout: '',
+        stderr: '',
+        summary: 'Dependency installation requires explicit approval.',
+        dependencyHash: 'native-needs-approval-hash',
+        redacted: true,
+        createdAt: '2026-08-12T23:33:00.000Z',
+      }),
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-native-bootstrap-denied'),
+      now: fixedNow('2026-08-12T23:33:00.000Z'),
+    })
+
+    const result = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Do not run before dependencies are safe.',
+    })
+
+    expect(result.codingRun).toMatchObject({
+      status: 'failed',
+      bootstrapEvidenceId: 'bootstrap-native-needs-approval',
+      summary: 'Dependency bootstrap needs_approval; coding tests were not run.',
+    })
+    expect(start).not.toHaveBeenCalled()
+    expect(store.diffArtifacts).toHaveLength(0)
+    expect(store.permissionRequests).toHaveLength(0)
+    expect(store.codingEvents.at(-1)?.metadata?.codingExecutorTerminalResult).toMatchObject({
+      stopReason: 'failure',
+      cleanup: {
+        status: 'not_required',
+        reasonCode: 'workspace_retained_for_recovery',
+      },
+    })
+  })
+
+  it.each(['preparing', 'bootstrapping', 'testing'] as const)(
+    'fails an interrupted native %s settlement closed on startup without repeating work',
+    async (status) => {
+      const interrupted = codingRun({
+        id: `coding-run-interrupted-${status}`,
+        status,
+        summary: `Interrupted during ${status}.`,
+      })
+      const store = new MemoryCodingStore({ codingRuns: [interrupted] })
+      const compatibility = createCodingExecutorCompatibilityAdapter(createFakeCodingEngineAdapter())
+      const executor: CodingExecutor = {
+        ...compatibility,
+        descriptor: {
+          ...compatibility.descriptor,
+          id: 'coding-executor-native',
+          kind: 'native',
+        },
+      }
+      const cancel = vi.spyOn(executor, 'cancel')
+      const runtime = createCodingRuntime({
+        store,
+        executor,
+        idGenerator: fixedIds(
+          `native-${status}-failure-event`,
+          `native-${status}-terminal-event`,
+        ),
+        now: fixedNow('2026-08-12T23:35:00.000Z'),
+      })
+
+      await expect(runtime.recoverCodingAgentRuns()).resolves.toEqual([
+        expect.objectContaining({
+          id: interrupted.id,
+          status: 'failed',
+          summary: expect.stringContaining('was interrupted'),
+        }),
+      ])
+      expect(store.codingEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'error', redacted: true }),
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            codingExecutorTerminalResult: expect.objectContaining({
+              stopReason: 'failure',
+              cleanup: {
+                status: 'not_required',
+                reasonCode: 'workspace_retained_for_recovery',
+              },
+            }),
+          }),
+        }),
+      ]))
+      expect(cancel).toHaveBeenCalledTimes(status === 'preparing' ? 1 : 0)
+    },
+  )
 
   it('rejects a missing executor capability before provider, workspace, or reservation side effects', async () => {
     const repo = await gitRepo()
@@ -3257,6 +3508,12 @@ class MemoryCodingStore {
 
   async saveCodingPermissionDecision(decision: CodingPermissionDecision) {
     upsert(this.permissionDecisions, decision)
+  }
+
+  async listCodingPermissionDecisions(codingRunId?: string) {
+    return codingRunId
+      ? this.permissionDecisions.filter((decision) => decision.codingRunId === codingRunId)
+      : this.permissionDecisions
   }
 
   async saveManagedCodingWorkspace(workspace: ManagedCodingWorkspace) {

@@ -82,8 +82,8 @@ describe('V2.0 Native Agent Runtime contract', () => {
     }
 
     expect(roadmap).toContain('### Now — Implement V2.0 Native Agent Runtime')
-    expect(roadmap).toContain('Slices 1–5 are complete')
-    expect(roadmap).toContain('### Next — Add Narrow Native Coding')
+    expect(roadmap).toContain('Slices 1–6 are complete')
+    expect(roadmap).toContain('### Next — Add Runtime UX And Team Projection')
   })
 
   it('provides an executable TDD slice plan before product code starts', () => {
@@ -114,6 +114,7 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(plan).toContain('| Slice 3 | Complete |')
     expect(plan).toContain('| Slice 4 | Complete |')
     expect(plan).toContain('| Slice 5 | Complete |')
+    expect(plan).toContain('| Slice 6 | Complete |')
     expect(plan).toContain('path-free main-owned request')
     expect(plan).toContain('no-permission completion')
     expect(plan).toContain('uniform terminal result')

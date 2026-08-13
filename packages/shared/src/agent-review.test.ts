@@ -619,6 +619,38 @@ describe('estimateAgentTokenUsage', () => {
 })
 
 describe('createOpenAiCompatibleAgentProvider', () => {
+  it('provides one strict bounded structured JSON decision seam with provider usage', async () => {
+    let requestBody: Record<string, unknown> | undefined
+    let redirect: RequestRedirect | undefined
+    const provider = createOpenAiCompatibleAgentProvider({
+      model: 'gpt-native-coding',
+      apiKey: 'secret-key',
+      fetcher: async (_, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        redirect = init?.redirect
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: '{"stateVersion":1,"ok":true}' } }],
+          usage: { prompt_tokens: 21, completion_tokens: 8, cached_tokens: 3 },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      },
+    })
+
+    await expect(provider.completeStructuredJson?.({
+      systemPrompt: 'Return one exact JSON object.',
+      userPrompt: 'Choose one bounded edit.',
+      maxOutputTokens: 1_024,
+    })).resolves.toEqual({
+      value: { stateVersion: 1, ok: true },
+      usage: { inputTokens: 21, outputTokens: 8, cacheReadTokens: 3 },
+    })
+    expect(requestBody).toMatchObject({
+      model: 'gpt-native-coding',
+      temperature: 0,
+      max_tokens: 1_024,
+    })
+    expect(redirect).toBe('error')
+  })
+
   it('caps Knowledge Review output tokens before calling a real compatible provider', async () => {
     let requestBody: Record<string, unknown> | undefined
     const provider = createOpenAiCompatibleAgentProvider({

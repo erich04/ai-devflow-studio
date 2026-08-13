@@ -22,6 +22,7 @@ import {
 import { createAcceptedNativeToolRegistrations } from './native-tools.js'
 
 const DEFAULT_RUNTIME_WALL_TIME_MS = 10 * 60_000
+const CODING_OWNED_RUNTIME_PREFIX = 'agent-runtime-coding-'
 const NATIVE_RUNTIME_TOOL_ID = 'scenario.evaluate'
 const NATIVE_RUNTIME_SCENARIO_INPUT = {
   scenarioJson: JSON.stringify({
@@ -436,6 +437,7 @@ export function createDesktopAgentRuntime(
       const recoverable = await input.store.listRecoverableAgentRuntimes()
       const recovered: DesktopAgentRuntimeSnapshot[] = []
       for (const original of recoverable) {
+        if (original.id.startsWith(CODING_OWNED_RUNTIME_PREFIX)) continue
         let current = await snapshot(original)
         for (let iteration = 0; iteration <= original.bounds.maxSteps * 3 + 3; iteration += 1) {
           if (current.runtime.status === 'terminal') break

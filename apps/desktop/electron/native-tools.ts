@@ -175,6 +175,12 @@ const savedTestDefinition: NativeToolDefinition = {
   auditPolicy: 'redacted_metadata_only',
 }
 
+const workspaceSavedTestDefinition: NativeToolDefinition = {
+  ...savedTestDefinition,
+  id: 'workspace.run_saved_test',
+  description: 'Run only the Local Project saved recognized test command inside one active managed workspace.',
+}
+
 const scenarioEvaluateDefinition: NativeToolDefinition = {
   stateVersion: 1,
   id: 'scenario.evaluate',
@@ -416,6 +422,39 @@ export function createAcceptedNativeToolRegistrations(input: {
         const result = await runSavedTest({
           command: safety.normalizedCommand,
           cwd: project.path,
+          timeoutMs: TEST_TIMEOUT_MS,
+          signal,
+        })
+        return {
+          status: result.status,
+          exitCode: result.exitCode ?? -1,
+          durationMs: result.durationMs,
+          summary: result.summary,
+          redacted: result.redacted,
+        }
+      },
+    },
+    {
+      definition: workspaceSavedTestDefinition,
+      resourceKinds: ['managed_workspace'],
+      handler: async ({ resourceScope, signal }) => {
+        if (resourceScope.kind !== 'managed_workspace') throw new Error('native_tool_scope_invalid')
+        const project = await resolveProject(input.resolveLocalProject, resourceScope)
+        const workspace = await input.resolveManagedWorkspace(resourceScope.workspaceId)
+        if (
+          !workspace ||
+          workspace.id !== resourceScope.workspaceId ||
+          workspace.projectId !== project.id ||
+          workspace.sourcePath !== project.path ||
+          workspace.cleanupStatus !== 'active'
+        ) {
+          throw new Error('native_tool_workspace_stale')
+        }
+        const safety = validateTestCommandSafety(project.testCommand)
+        if (safety.level !== 'safe') throw new Error('native_tool_test_command_denied')
+        const result = await runSavedTest({
+          command: safety.normalizedCommand,
+          cwd: workspace.worktreePath,
           timeoutMs: TEST_TIMEOUT_MS,
           signal,
         })

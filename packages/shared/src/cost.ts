@@ -60,6 +60,24 @@ const DEFAULT_OPENAI_COMPATIBLE_PRICE_PER_1K = {
   output: 0.0006,
 }
 
+export function estimateOpenAiCompatibleUsageCost(input: {
+  inputTokens: number
+  outputTokens: number
+}): number {
+  if (
+    !Number.isSafeInteger(input.inputTokens) ||
+    input.inputTokens < 0 ||
+    !Number.isSafeInteger(input.outputTokens) ||
+    input.outputTokens < 0
+  ) {
+    throw new Error('Invalid OpenAI-compatible token usage')
+  }
+  return roundCost(
+    (input.inputTokens / 1000) * DEFAULT_OPENAI_COMPATIBLE_PRICE_PER_1K.input +
+      (input.outputTokens / 1000) * DEFAULT_OPENAI_COMPATIBLE_PRICE_PER_1K.output,
+  )
+}
+
 export type EstimateCodingRuntimeCostInput = {
   engine: CodingAgentEngine
   providerId: string
@@ -71,10 +89,13 @@ export type EstimateCodingRuntimeCostInput = {
   projectId: string
   userId: string
   timestamp: string
+  noCost?: boolean
+  maxOutputTokens?: number
+  providerCallLimit?: number
 }
 
 export function estimateCodingRuntimeCost(input: EstimateCodingRuntimeCostInput): CodingRuntimeCostSummary {
-  if (input.engine === 'fake') {
+  if (input.noCost !== false && input.engine === 'fake') {
     return {
       id: `coding-runtime-cost-${input.runId}-${input.nodeId}`,
       runId: input.runId,
@@ -94,13 +115,22 @@ export function estimateCodingRuntimeCost(input: EstimateCodingRuntimeCostInput)
     }
   }
 
-  const inputTokens = estimateTokens(input.prompt)
-  const outputTokens = estimateTokens(input.outputText ?? '')
-  const price = DEFAULT_OPENAI_COMPATIBLE_PRICE_PER_1K
-  const costUsd = roundCost(
-    (inputTokens / 1000) * price.input +
-      (outputTokens / 1000) * price.output,
-  )
+  const providerCallLimit = input.providerCallLimit ?? 1
+  if (!Number.isSafeInteger(providerCallLimit) || providerCallLimit < 1 || providerCallLimit > 32) {
+    throw new Error('Invalid coding runtime provider call limit')
+  }
+  if (
+    input.maxOutputTokens !== undefined &&
+    (!Number.isSafeInteger(input.maxOutputTokens) ||
+      input.maxOutputTokens < 0 ||
+      input.maxOutputTokens > 1_000_000)
+  ) {
+    throw new Error('Invalid coding runtime output token bound')
+  }
+  const inputTokens = estimateTokens(input.prompt) * providerCallLimit
+  const outputTokens =
+    (input.maxOutputTokens ?? estimateTokens(input.outputText ?? '')) * providerCallLimit
+  const costUsd = estimateOpenAiCompatibleUsageCost({ inputTokens, outputTokens })
 
   return {
     id: `coding-runtime-cost-${input.runId}-${input.nodeId}`,

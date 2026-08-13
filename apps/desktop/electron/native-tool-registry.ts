@@ -39,6 +39,7 @@ export type NativeToolHandler = (context: NativeToolHandlerContext) => Promise<u
 export type NativeToolRegistration = {
   definition: NativeToolDefinition
   installation?: { id: string; version: number }
+  resourceKinds?: readonly NativeToolResourceScope['kind'][]
   handler: NativeToolHandler
 }
 
@@ -371,13 +372,21 @@ function exactAuthority(
   return canonicalJson(left) === canonicalJson(right)
 }
 
-function compatibleResourceScope(
+function defaultResourceKinds(
   definition: NativeToolDefinition,
+): readonly NativeToolResourceScope['kind'][] {
+  return definition.sideEffectClass === 'workspace_write'
+    ? ['managed_workspace']
+    : ['local_project']
+}
+
+function compatibleResourceScope(
+  registration: NativeToolRegistration,
   resourceScope: NativeToolResourceScope,
 ): boolean {
-  return definition.sideEffectClass === 'workspace_write'
-    ? resourceScope.kind === 'managed_workspace'
-    : resourceScope.kind === 'local_project'
+  return (registration.resourceKinds ?? defaultResourceKinds(registration.definition)).includes(
+    resourceScope.kind,
+  )
 }
 
 function clone<T>(value: T): T {
@@ -414,6 +423,7 @@ export function createNativeToolRegistry(input: {
   for (const registration of input.tools) {
     const definition = parseNativeToolDefinition(registration.definition)
     const installation = registration.installation
+    const resourceKinds = registration.resourceKinds ?? defaultResourceKinds(definition)
     if (
       (definition.source === 'native' && installation !== undefined) ||
       (definition.source === 'mcp' &&
@@ -425,11 +435,20 @@ export function createNativeToolRegistry(input: {
     ) {
       throw new Error('invalid_native_tool_installation_authority')
     }
+    if (
+      resourceKinds.length !== 1 ||
+      !['local_project', 'managed_workspace'].includes(String(resourceKinds[0])) ||
+      (definition.sideEffectClass === 'workspace_write' &&
+        resourceKinds[0] !== 'managed_workspace')
+    ) {
+      throw new Error('invalid_native_tool_resource_authority')
+    }
     const key = `${definition.id}@${definition.version}`
     if (tools.has(key)) throw new Error('duplicate_native_tool_definition')
     tools.set(key, {
       definition: deepFreeze(definition),
       ...(installation ? { installation: deepFreeze(clone(installation)) } : {}),
+      resourceKinds: deepFreeze([...resourceKinds]),
       handler: registration.handler,
     })
   }
@@ -538,7 +557,10 @@ export function createNativeToolRegistry(input: {
 
     capabilitySetDigest() {
       return input.capabilitySetDigest ?? digestNativeToolValue(
-        [...tools.values()].map(({ definition }) => definition),
+        [...tools.values()].map(({ definition, resourceKinds }) => ({
+          definition,
+          resourceKinds,
+        })),
       )
     },
 
@@ -568,7 +590,7 @@ export function createNativeToolRegistry(input: {
         runtime.counters.toolCalls < 1 ||
         runtime.counters.toolCalls > runtime.bounds.maxToolCalls ||
         resourceScope.localProjectId !== runtime.scope.localProjectId ||
-        !compatibleResourceScope(tool.definition, resourceScope)
+        !compatibleResourceScope(tool, resourceScope)
       ) {
         throw new Error('invalid_native_tool_grant')
       }
@@ -645,7 +667,7 @@ export function createNativeToolRegistry(input: {
         canonicalTimestamp(durableGrant.expiresAt) <= canonicalTimestamp(durableGrant.grantedAt) ||
         canonicalTimestamp(durableGrant.expiresAt) > canonicalTimestamp(runtime.deadline) ||
         resourceScope.localProjectId !== runtime.scope.localProjectId ||
-        !compatibleResourceScope(tool.definition, resourceScope)
+        !compatibleResourceScope(tool, resourceScope)
       ) {
         throw new Error('invalid_native_tool_grant')
       }

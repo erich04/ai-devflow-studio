@@ -304,6 +304,74 @@ describe('accepted native Tools', () => {
     expect(runner).toHaveBeenCalledTimes(1)
   })
 
+  it('executes the saved recognized test command only inside the exact active managed workspace', async () => {
+    const sourceRoot = await temporaryDirectory('devflow-native-test-source')
+    const workspaceRoot = await temporaryDirectory('devflow-native-test-workspace')
+    const runner = vi.fn(async () => ({
+      status: 'passed' as const,
+      exitCode: 0,
+      durationMs: 9,
+      stdout: 'workspace output must not enter the Tool result',
+      stderr: '',
+      redacted: true,
+      summary: 'Workspace tests passed in 9ms',
+    }))
+    const project: LocalProject = {
+      id: 'local-project-1',
+      name: 'fixture',
+      path: sourceRoot,
+      packageManager: 'npm',
+      testCommand: '  npm   test  ',
+      createdAt: '2026-08-12T20:00:00.000Z',
+      updatedAt: '2026-08-12T20:00:00.000Z',
+    }
+    const workspace: ManagedCodingWorkspace = {
+      id: 'workspace-1',
+      projectId: project.id,
+      codingRunId: 'coding-run-1',
+      sourcePath: sourceRoot,
+      worktreePath: workspaceRoot,
+      branchName: 'devflow/run-1',
+      baseBranch: 'main',
+      createdAt: '2026-08-12T20:00:00.000Z',
+      cleanupStatus: 'active',
+    }
+    const registrations = createAcceptedNativeToolRegistrations({
+      resolveLocalProject: async () => project,
+      resolveManagedWorkspace: async (id) => (id === workspace.id ? workspace : null),
+      runSavedTest: runner,
+    })
+
+    const result = await invoke(registrations, 'workspace.run_saved_test', {}, {
+      kind: 'managed_workspace',
+      localProjectId: project.id,
+      workspaceId: workspace.id,
+    })
+    expect(result.value).toEqual({
+      status: 'passed',
+      exitCode: 0,
+      durationMs: 9,
+      summary: 'Workspace tests passed in 9ms',
+      redacted: true,
+    })
+    expect(runner).toHaveBeenCalledWith({
+      command: 'npm test',
+      cwd: workspaceRoot,
+      timeoutMs: 120_000,
+      signal: expect.any(AbortSignal),
+    })
+    expect(JSON.stringify(result)).not.toContain('workspace output')
+
+    await expect(
+      invoke(registrations, 'workspace.run_saved_test', {}, {
+        kind: 'managed_workspace',
+        localProjectId: project.id,
+        workspaceId: 'workspace-forged',
+      }),
+    ).rejects.toMatchObject({ code: 'handler_failed' })
+    expect(runner).toHaveBeenCalledTimes(1)
+  })
+
   it('evaluates a bounded scenario deterministically without filesystem or process authority', async () => {
     const project: LocalProject = {
       id: 'local-project-1',

@@ -8,6 +8,30 @@ import {
 import type { RuntimeBudgetApproval, RuntimeBudgetPolicy } from './domain'
 
 describe('estimateCodingRuntimeCost', () => {
+  it('reserves the exact bounded call and output envelope for a metered native repair loop', () => {
+    const oneCall = estimateCodingRuntimeCost({
+      engine: 'fake',
+      noCost: false,
+      providerId: 'team-openai',
+      model: 'gpt-native-coding',
+      prompt: '12345678',
+      maxOutputTokens: 1_024,
+      providerCallLimit: 3,
+      runId: 'run-native-metered',
+      nodeId: 'node-native-metered',
+      projectId: 'project-native-metered',
+      userId: 'user-native-metered',
+      timestamp: '2026-08-12T23:00:00.000Z',
+    })
+    expect(oneCall).toMatchObject({
+      inputTokens: 6,
+      outputTokens: 3_072,
+      provider: 'openai',
+      source: 'estimated',
+    })
+    expect(oneCall.costUsd).toBeGreaterThan(0)
+  })
+
   it('keeps the deterministic fake coding engine cost-free', () => {
     const summary = estimateCodingRuntimeCost({
       engine: 'fake',

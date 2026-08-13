@@ -35,4 +35,15 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).toContain("toolId !== 'scenario.evaluate'")
     expect(smoke).toContain('schemaVersion !== 20')
   })
+
+  it('completes and reopens one bounded Native Coding run without repeated Tool effects', () => {
+    expect(smoke).toContain("DEVFLOW_CODING_EXECUTOR: 'native-deterministic'")
+    expect(smoke).toContain('runCodingAgent')
+    expect(smoke).toContain('replyCodingPermission')
+    expect(smoke).toContain('nativeCodingAfterRestart')
+    expect(smoke).toContain("'devflow-native-change.txt'")
+    expect(smoke).toContain("'workspace.write_text'")
+    expect(smoke).toContain("'workspace.run_saved_test'")
+    expect(smoke).toContain('nativeCodingRestartDuplicateEffects')
+  })
 })

@@ -11,7 +11,8 @@ _A real Electron workbench showing the six-stage workflow, local repository cont
 > **Current release and roadmap status:** `v1.5.0` is released and the finite 1.x line is complete.
 > V2.0 Native Agent Runtime implementation is now the active priority. The shared bounded kernel,
 > durable Desktop runtime, Native Tool Registry, trusted local MCP boundary, and governed Coding
-> Executor are complete; narrow native coding is next. The [Roadmap](docs/roadmap.md) is the single source of truth; package
+> Executor plus the bounded native coding loop are complete; Runtime UX and redacted Team projection
+> are next. The [Roadmap](docs/roadmap.md) is the single source of truth; package
 > labels and this README do not substitute for immutable proof under `docs/releases/`.
 
 ## Why It Exists
@@ -62,7 +63,9 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
   grants, executable/digest verification, negotiated discovery, cancellation fencing, and bounded
   repository read, managed-workspace edit, saved-test, deterministic-evaluation, and MCP Tool
   execution. The governed Coding Executor now places OpenCode and deterministic fixtures behind one
-  capability-negotiated, path-free request/permission/terminal contract; narrow native coding is next.
+  capability-negotiated, path-free request/permission/terminal contract. The narrow native executor
+  now performs bounded plan/read/observation-bound-edit/test/evaluate/one-repair work through accepted main-owned Tools,
+  recovers approved checkpoints without repeated side effects, and keeps publication/Gate authority outside.
 - Bearer-token sync, API/Postgres persistence, reproducible unsigned pilot artifacts, and the Web console provide a self-hosted team-pilot path.
 
 ### Verification Evidence
@@ -75,7 +78,7 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 | `corepack pnpm test:docker-smoke` | The containerized API/Web/Postgres stack, Desktop pairing, bearer auth, and safe overview data. |
 | `corepack pnpm test:docker-lifecycle-smoke` | Fresh Team schema v15, retained V1.4 schema v10 upgrade, transactional populated v11-to-v12 retry, fail-closed v12-to-v13 provider-authoritative expiry migration, durable v13-to-v14 provider backoff, v14-to-v15 verified publication adoption, and bounded V1.4 backup/restore rollback. |
 | `corepack pnpm test:v15-github-delivery` | The full offline Delivery Intent → separate approval → exact branch → Draft PR → Acceptance story, including restart and revocation. |
-| `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive, packaged launch isolation, and one durable `scenario.evaluate` Local MCP Tool execution; its accepted action count remains exactly one after cold restart, with one started and one succeeded installation-bound audit. |
+| `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive and packaged launch isolation; the Local MCP accepted action count remains exactly one after cold restart, while one approved native Coding repair also survives with exact audit/permission counts and zero repeated effects. |
 | `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v20 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
 | Release-only opencode smoke | A paid, explicit signoff for the real local coding runtime; it is never part of default CI. |
 

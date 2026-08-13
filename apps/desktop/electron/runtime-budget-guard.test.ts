@@ -62,6 +62,24 @@ describe('RuntimeBudgetGuard', () => {
     expect(decision).toEqual(authoritativeDecision)
   })
 
+  it('does not let a metered native provider inherit the deterministic fake-engine bypass', async () => {
+    const authoritativeDecision = {
+      status: 'allowed' as const,
+      blocksRun: false,
+      currentSpendUsd: 0,
+      projectedCostUsd: 0.01,
+      limitUsd: 1,
+      reason: 'Authoritative policy allows the bounded native provider call.',
+    }
+    const evaluateRuntimeBudget = vi.fn(async () => authoritativeDecision)
+    const guard = createRuntimeBudgetGuard({ evaluateRuntimeBudget })
+
+    await expect(guard({ ...paidRuntimeInput(), engine: 'fake' })).resolves.toEqual(
+      authoritativeDecision,
+    )
+    expect(evaluateRuntimeBudget).toHaveBeenCalledOnce()
+  })
+
   it('blocks paid runtime when the authoritative team budget decision is unavailable', async () => {
     const evaluateRuntimeBudget = vi.fn(async () => {
       throw new Error('remote response included private infrastructure details')
@@ -90,6 +108,7 @@ function paidRuntimeInput(): Parameters<CodingRuntimeBudgetGuard>[0] {
   return {
     codingRunId: 'coding-run-1',
     engine: 'opencode-http',
+    metered: true,
     providerId: 'double',
     model: 'ark-code-latest',
     project: {
