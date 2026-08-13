@@ -19,6 +19,9 @@ retroactive TDD rewrites unless it is touched.
 - The packaged Desktop pilot must execute exactly one `scenario.evaluate` Local MCP Tool, persist
   one started and one succeeded installation-bound metadata-only audit, and retain one accepted
   action after cold restart without another grant, MCP call, or audit record.
+- Coding Executor contract tests must prove capability denial before provider/workspace side effects,
+  a path-free main-owned request, ordered bounded permission turns, repeated-permission rejection,
+  no-permission completion, and uniform success/failure/cancel/timeout cleanup-aware terminal results.
 
 ## Test Layers
 

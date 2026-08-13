@@ -89,20 +89,20 @@ contains the signoff-bound release artifacts.
 | Completed version line | 1.x governed self-hosted delivery |
 | Active version line | 2.x DevFlow-native Agent Runtime |
 | Active milestone | V2.0 Native Agent Runtime implementation |
-| Next gate | Slice 4 trusted local stdio MCP with the same capability and audit boundary |
+| Next gate | Slice 6 narrow native Coding Agent through accepted main-owned Tools |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
 restart with zero repeated remote effects, Acceptance, and a versioned credential-revocation proof.
-V2.0 implementation is active. Slices 1–4 are complete: the shared kernel, durable Desktop Runtime,
-main-owned Native Tool boundary, and trusted local stdio MCP boundary are implemented; governed
-Coding Executor work is next.
+V2.0 implementation is active. Slices 1–5 are complete: the shared kernel, durable Desktop Runtime,
+main-owned Native Tool boundary, trusted local stdio MCP boundary, and governed Coding Executor are
+implemented; narrow native coding is next.
 
 ## Now / Next / Later
 
 ### Now — Implement V2.0 Native Agent Runtime
 
-V1.5 and the finite 1.x line are released and complete. Slices 1–4 are complete; V2.0 now proceeds
+V1.5 and the finite 1.x line are released and complete. Slices 1–5 are complete; V2.0 now proceeds
 through the accepted contract and executable slice plan:
 
 - `docs/product/prd/v2.0-native-agent-runtime-prd.md`
@@ -122,15 +122,18 @@ through the accepted contract and executable slice plan:
 - Slice 4 added Desktop schema 20, main-owned `LocalMcpInstallation` authority, exact executable
   verification, bounded stdio discovery and calls, a negotiated capability-set digest,
   installation-bound audit, and a packaged Local MCP probe with zero repeat execution.
-- Continue with Slice 5 while preserving Workflow/Gate authority, local evidence boundaries, and
+- Slice 5 added the versioned Coding Executor descriptor, capability negotiation, path-free
+  main-owned request, bounded permission turns, no-permission completion, observable OpenCode
+  compatibility mapping, and one uniform terminal result including cleanup state.
+- Continue with Slice 6 while preserving Workflow/Gate authority, local evidence boundaries, and
   deterministic no-cost default verification.
 
-### Next — Add Governed Coding Execution
+### Next — Add Narrow Native Coding
 
-- Place OpenCode behind the common Coding Executor contract without inventing private OpenCode
-  trajectory events or weakening existing permission, cancellation, cleanup, and budget behavior.
-- Then add one deliberately narrow DevFlow-owned Coding Agent behind that same contract and evaluate
-  the accepted scenarios.
+- Add one deliberately narrow DevFlow-owned Coding Agent behind the completed common executor
+  contract, using only accepted main-owned Tools in one managed worktree.
+- Prove bounded plan/read/edit/test/evaluate/repair, deterministic stop behavior, and no delivery or
+  Gate authority before moving to Runtime UX and Team projection.
 
 ### Later — V2.1 Retrieval/Memory And V2.2 Multi-Agent/Tenancy
 

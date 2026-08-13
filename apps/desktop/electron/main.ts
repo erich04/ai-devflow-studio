@@ -120,6 +120,7 @@ import {
 import { createDesktopWorkRequestService } from './work-request-service.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
 import { createCodingEngineAdapterFromEnv } from './coding-engine.js'
+import { createCodingExecutorCompatibilityAdapter } from './coding-executor.js'
 import { createCodingRuntime } from './coding-runtime.js'
 import {
   createGitHubDeliveryRuntime,
@@ -249,6 +250,7 @@ const opencodeProcessManager = createOpencodeProcessManager()
 const codingEngineAdapter = createCodingEngineAdapterFromEnv(process.env, {
   processManager: opencodeProcessManager,
 })
+const codingExecutor = createCodingExecutorCompatibilityAdapter(codingEngineAdapter)
 let quitCleanupComplete = false
 let quitCleanupPromise: Promise<void> | undefined
 const repositoryKnowledgeService = createRepositoryKnowledgeService()
@@ -1202,7 +1204,7 @@ async function createCodingRuntimeForRequest(
   ])
   return createCodingRuntime({
     store,
-    engine: codingEngineAdapter,
+    executor: codingExecutor,
     ...(knowledgeSnapshot
       ? {
           knowledgeDocuments: knowledgeSnapshot.documents,

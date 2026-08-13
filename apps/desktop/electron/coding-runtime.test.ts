@@ -25,7 +25,15 @@ import type {
   WorkflowRun,
 } from '@ai-devflow/shared'
 import { estimateCodingRuntimeCost } from '@ai-devflow/shared'
-import { createFakeCodingEngineAdapter, type CodingEngineAdapter } from './coding-engine'
+import {
+  createFakeCodingEngineAdapter,
+  createUnconfiguredCodingEngineAdapter,
+  type CodingEngineAdapter,
+} from './coding-engine'
+import {
+  createCodingExecutorCompatibilityAdapter,
+  type CodingExecutor,
+} from './coding-executor'
 import {
   CodingEngineContinuationCleanupError,
   CodingEngineStartupCleanupError,
@@ -279,9 +287,216 @@ describe('CodingRuntime', () => {
     expect(result.codingRun.status).toBe('waiting_permission')
     expect(store.workspaces).toHaveLength(1)
     expect(store.codingRuns).toEqual([result.codingRun])
-    expect(store.codingEvents.map((event) => event.kind)).toEqual(['brief', 'permission'])
+    expect(store.codingEvents.map((event) => event.kind)).toEqual(['status', 'brief', 'permission'])
+    expect(store.codingEvents[0]?.metadata?.codingExecutorSelection).toEqual({
+      stateVersion: 1,
+      id: 'coding-executor-native-fixture',
+      version: 1,
+      kind: 'native',
+      capabilities:
+        'approved_command,cancellation,permission_relay,structured_diff,workspace_edit,workspace_read',
+      requestId: 'coding-run-1',
+      objectiveDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      contextDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
     expect(store.permissionRequests).toHaveLength(1)
     expect(await readFile(path.join(store.workspaces[0]!.worktreePath, 'package.json'), 'utf8')).toContain('fixture')
+  })
+
+  it('completes through an executor without fabricating a permission request', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    const compatibility = createCodingExecutorCompatibilityAdapter(engine)
+    const start = vi.fn(async (input: Parameters<CodingExecutor['start']>[0]) => {
+      expect(store.codingEvents).toEqual([
+        expect.objectContaining({
+          metadata: expect.objectContaining({ codingExecutorEventType: 'started' }),
+        }),
+      ])
+      const started = await engine.start(input.runtimeContext)
+      const completed = await engine.approvePermission({
+        codingRun: started.codingRun,
+        request: { ...started.permissionRequest, status: 'approved' },
+        workspace: input.runtimeContext.workspace,
+        project: input.runtimeContext.project,
+        now: input.runtimeContext.now,
+      })
+      if ('permissionRequest' in completed) {
+        throw new Error('native no-permission fixture unexpectedly requested permission')
+      }
+      return { kind: 'engine_completed' as const, ...completed }
+    })
+    const executor: CodingExecutor = {
+      ...compatibility,
+      descriptor: {
+        ...compatibility.descriptor,
+        id: 'coding-executor-native-no-permission',
+        capabilities: [
+          'cancellation',
+          'structured_diff',
+          'workspace_edit',
+          'workspace_read',
+        ],
+      },
+      start,
+    }
+    const runtime = createCodingRuntime({
+      store,
+      executor,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      runTestCommand: async () => ({
+        status: 'passed',
+        exitCode: 0,
+        durationMs: 1,
+        stdout: 'passed',
+        stderr: '',
+        redacted: true,
+        summary: 'Native executor test evidence passed.',
+      }),
+      idGenerator: fixedIds('coding-run-no-permission'),
+      now: fixedNow('2026-08-12T23:30:00.000Z'),
+    })
+
+    const result = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Complete without a permission turn.',
+    })
+
+    expect(result.codingRun.status).toBe('completed')
+    expect(store.permissionRequests).toHaveLength(0)
+    expect(store.permissionDecisions).toHaveLength(0)
+    expect(store.diffArtifacts).toHaveLength(1)
+    expect(store.testEvidence).toHaveLength(1)
+    expect(start).toHaveBeenCalledWith({
+      request: expect.objectContaining({
+        id: 'coding-run-no-permission',
+        scope: expect.objectContaining({
+          localProjectId: 'project-1',
+          managedWorkspaceId: expect.stringMatching(/^workspace-/),
+        }),
+        requiredCapabilities: [
+          'cancellation',
+          'structured_diff',
+          'workspace_edit',
+          'workspace_read',
+        ],
+      }),
+      runtimeContext: expect.objectContaining({
+        workspace: expect.objectContaining({ worktreePath: expect.any(String) }),
+      }),
+    })
+    expect(start.mock.calls[0]?.[0].request).not.toHaveProperty('worktreePath')
+    expect(start.mock.calls[0]?.[0].request).not.toHaveProperty('command')
+    expect(
+      store.codingEvents.find(
+        (event) => event.metadata?.codingExecutorEventType === 'terminal',
+      )?.metadata?.codingExecutorTerminalResult,
+    ).toMatchObject({
+      stateVersion: 1,
+      requestId: 'coding-run-no-permission',
+      stopReason: 'success',
+      executor: {
+        id: 'coding-executor-native-no-permission',
+        version: 1,
+        kind: 'native',
+      },
+      changedPaths: ['devflow-fake-change.txt'],
+      diffArtifactId: 'coding-diff-coding-run-no-permission',
+      cleanup: { status: 'not_required', reasonCode: 'workspace_retained_for_delivery' },
+    })
+    expect(
+      store.codingEvents.find(
+        (event) => event.metadata?.codingExecutorEventType === 'terminal',
+      )?.metadata?.codingExecutorTurn,
+    ).toMatchObject({
+      status: 'terminal',
+      checkpointVersion: 1,
+      events: [
+        { sequence: 1, type: 'started' },
+        { sequence: 2, type: 'terminal' },
+      ],
+    })
+  })
+
+  it('rejects a missing executor capability before provider, workspace, or reservation side effects', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    const ensure = vi.spyOn(engine, 'ensure')
+    const start = vi.spyOn(engine, 'start')
+    const executor = createCodingExecutorCompatibilityAdapter(engine)
+    executor.descriptor = {
+      ...executor.descriptor,
+      capabilities: executor.descriptor.capabilities.filter(
+        (capability) => capability !== 'structured_diff',
+      ),
+    }
+    const createWorkspace = vi.fn(async () => {
+      throw new Error('workspace must not be created after capability denial')
+    })
+    const runtime = createCodingRuntime({
+      store,
+      executor,
+      createWorkspace,
+      idGenerator: fixedIds('coding-run-capability-denied'),
+      now: fixedNow('2026-08-12T23:31:00.000Z'),
+    })
+
+    await expect(runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Do not run without a structured diff.',
+    })).rejects.toThrow('coding_executor_capability_unavailable')
+
+    expect(ensure).not.toHaveBeenCalled()
+    expect(start).not.toHaveBeenCalled()
+    expect(createWorkspace).not.toHaveBeenCalled()
+    expect(store.codingRuns).toHaveLength(0)
+  })
+
+  it('rejects an unavailable executor before provider, workspace, or reservation side effects', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createUnconfiguredCodingEngineAdapter()
+    const ensure = vi.spyOn(engine, 'ensure')
+    const createWorkspace = vi.fn()
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      createWorkspace,
+      idGenerator: fixedIds('coding-run-unavailable'),
+      now: fixedNow('2026-08-12T23:32:00.000Z'),
+    })
+
+    await expect(runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'not-configured',
+      userInstruction: 'Fail before side effects.',
+    })).rejects.toThrow('coding_executor_unavailable')
+
+    expect(ensure).not.toHaveBeenCalled()
+    expect(createWorkspace).not.toHaveBeenCalled()
+    expect(store.codingRuns).toHaveLength(0)
   })
 
   it('atomically reserves one run before concurrent starts can reach the coding engine', async () => {
@@ -627,6 +842,16 @@ describe('CodingRuntime', () => {
         summary: 'Coding engine failed to start.',
       }),
     ])
+    expect(store.codingEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          codingExecutorTerminalResult: expect.objectContaining({
+            stopReason: 'failure',
+            cleanup: { status: 'completed', reasonCode: null },
+          }),
+        }),
+      }),
+    ]))
   })
 
   it('retains a recoverable workspace when coding engine startup cleanup is incomplete', async () => {
@@ -727,13 +952,20 @@ describe('CodingRuntime', () => {
     })
     expect(result.codingRun.summary).toContain('unavailable')
     expect(result.codingRun.summary).not.toContain('lead approval')
-    expect(store.codingEvents).toEqual([
+    expect(store.codingEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'error',
         redacted: true,
         metadata: expect.objectContaining({ budgetStatus: 'unavailable' }),
       }),
-    ])
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          codingExecutorTerminalResult: expect.objectContaining({
+            stopReason: 'policy_denied',
+          }),
+        }),
+      }),
+    ]))
     expect(store.workspaces).toHaveLength(0)
     expect(result.state.managedCodingWorkspaces).toHaveLength(0)
   })
@@ -1445,7 +1677,7 @@ describe('CodingRuntime', () => {
     })
 
     expect(publisher.publishRunStatus).toHaveBeenCalledWith(result.codingRun)
-    expect(publisher.publishEvent).toHaveBeenCalledTimes(2)
+    expect(publisher.publishEvent).toHaveBeenCalledTimes(3)
     expect(publisher.publishPermission).toHaveBeenCalledWith(store.permissionRequests[0])
   })
 
@@ -1488,7 +1720,7 @@ describe('CodingRuntime', () => {
     expect(result.codingRun.status).toBe('waiting_permission')
     expect(cancel).not.toHaveBeenCalled()
     expect(store.codingRuns).toEqual([result.codingRun])
-    expect(store.codingEvents).toHaveLength(2)
+    expect(store.codingEvents).toHaveLength(3)
     expect(store.permissionRequests).toHaveLength(1)
     expect(store.workspaces).toEqual([expect.objectContaining({ cleanupStatus: 'active' })])
   })
@@ -1553,8 +1785,10 @@ describe('CodingRuntime', () => {
       userInstruction: 'Add the marker file.',
     })
 
-    const stored = store.codingEvents[0]
-    const published = publisher.publishEvent.mock.calls[0]?.[0]
+    const stored = store.codingEvents.find((event) => event.kind === 'brief')
+    const published = publisher.publishEvent.mock.calls.find(
+      ([event]) => event.kind === 'brief',
+    )?.[0]
     expect(JSON.stringify(stored)).not.toContain(repo)
     expect(JSON.stringify(stored)).not.toContain('opaque-runtime-secret')
     expect(JSON.stringify(stored)).not.toContain('opaque-structured-runtime-token')
@@ -1998,6 +2232,16 @@ describe('CodingRuntime', () => {
       status: 'waiting_permission',
       summary: 'opencode is waiting for another DevFlow permission relay.',
     })
+    const executorTurns = store.codingEvents
+      .map((event) => event.metadata?.codingExecutorTurn)
+      .filter((turn) => turn !== undefined)
+    expect(executorTurns).toHaveLength(2)
+    expect(executorTurns[1]).toMatchObject({
+      status: 'waiting_permission',
+      checkpointVersion: 2,
+      events: [{ sequence: 3, type: 'permission_request' }],
+      permissionRequest: { id: nextPermission.id },
+    })
     expect(store.diffArtifacts).toHaveLength(0)
     expect(runTestCommand).not.toHaveBeenCalled()
     expect(completeWorkflowBuild).not.toHaveBeenCalled()
@@ -2051,7 +2295,7 @@ describe('CodingRuntime', () => {
       decidedBy: 'user-1',
       decision: 'approved',
       comment: 'Approved first permission.',
-    })).rejects.toThrow('Coding Agent continuation could not be persisted safely.')
+    })).rejects.toThrow('invalid_coding_executor_turn')
 
     expect(cancel).toHaveBeenCalledOnce()
     expect(store.permissionRequests).toHaveLength(1)
@@ -2648,8 +2892,60 @@ describe('CodingRuntime', () => {
         kind: 'status',
         message: 'Coding Agent run cancelled by user.',
       }),
+      expect.objectContaining({
+        kind: 'status',
+        metadata: expect.objectContaining({
+          codingExecutorEventType: 'terminal',
+          codingExecutorTerminalResult: expect.objectContaining({
+            stopReason: 'cancelled',
+            cleanup: {
+              status: 'completed',
+              reasonCode: null,
+            },
+          }),
+        }),
+      }),
     ]))
     expect(completeWorkflowBuild).not.toHaveBeenCalled()
+  })
+
+  it('records cleanup failure inside the cancelled executor terminal result', async () => {
+    const workspace = managedWorkspace({ id: 'workspace-cleanup-failure' })
+    const store = new MemoryCodingStore({
+      projects: [project('/tmp/repo')],
+      runs: [buildRun()],
+      codingRuns: [
+        codingRun({
+          id: 'coding-run-cleanup-failure',
+          managedWorkspaceId: workspace.id,
+        }),
+      ],
+      workspaces: [workspace],
+    })
+    const runtime = createCodingRuntime({
+      store,
+      engine: createFakeCodingEngineAdapter(),
+      deleteWorkspace: vi.fn(async () => {
+        throw new Error('workspace remains busy')
+      }),
+      idGenerator: fixedIds('cancel-event', 'cleanup-event', 'terminal-event'),
+      now: fixedNow('2026-08-12T23:40:00.000Z'),
+    })
+
+    await runtime.cancelCodingAgentRun({ codingRunId: 'coding-run-cleanup-failure' })
+
+    expect(store.workspaces.at(-1)).toMatchObject({ cleanupStatus: 'cleanup_failed' })
+    expect(
+      store.codingEvents.find(
+        (event) => event.metadata?.codingExecutorEventType === 'terminal',
+      )?.metadata?.codingExecutorTerminalResult,
+    ).toMatchObject({
+      stopReason: 'cancelled',
+      cleanup: {
+        status: 'failed',
+        reasonCode: 'workspace_cleanup_unconfirmed',
+      },
+    })
   })
 
   it('atomically rejects pending permissions when cancelling an active coding run', async () => {

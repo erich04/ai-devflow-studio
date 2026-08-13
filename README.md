@@ -10,8 +10,8 @@ _A real Electron workbench showing the six-stage workflow, local repository cont
 
 > **Current release and roadmap status:** `v1.5.0` is released and the finite 1.x line is complete.
 > V2.0 Native Agent Runtime implementation is now the active priority. The shared bounded kernel,
-> durable Desktop runtime, Native Tool Registry, and trusted local MCP boundary are complete;
-> governed Coding Executor work is next. The [Roadmap](docs/roadmap.md) is the single source of truth; package
+> durable Desktop runtime, Native Tool Registry, trusted local MCP boundary, and governed Coding
+> Executor are complete; narrow native coding is next. The [Roadmap](docs/roadmap.md) is the single source of truth; package
 > labels and this README do not substitute for immutable proof under `docs/releases/`.
 
 ## Why It Exists
@@ -61,7 +61,8 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
   installation authority. Electron main owns strict Tool registration, opaque scoped
   grants, executable/digest verification, negotiated discovery, cancellation fencing, and bounded
   repository read, managed-workspace edit, saved-test, deterministic-evaluation, and MCP Tool
-  execution; Coding Executor integration remains the next V2.0 slice.
+  execution. The governed Coding Executor now places OpenCode and deterministic fixtures behind one
+  capability-negotiated, path-free request/permission/terminal contract; narrow native coding is next.
 - Bearer-token sync, API/Postgres persistence, reproducible unsigned pilot artifacts, and the Web console provide a self-hosted team-pilot path.
 
 ### Verification Evidence

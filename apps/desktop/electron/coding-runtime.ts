@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
+  CODING_EXECUTOR_CONTRACT_VERSION,
   buildKnowledgeGovernanceChecks,
   buildKnowledgeReferences,
   buildCodingBrief,
@@ -12,6 +13,10 @@ import {
   redactSensitiveText,
   redactTestEvidenceForStorage,
   redactSecrets,
+  parseCodingExecutorTerminalResult,
+  parseCodingExecutorRequest,
+  parseCodingExecutorTurn,
+  selectCodingExecutor,
   type AgentEvent,
   type Artifact,
   type BudgetGuardDecision,
@@ -22,6 +27,8 @@ import {
   type CodingPermissionRequest,
   type DependencyBootstrapEvidence,
   type CodingDiffArtifact,
+  type CodingExecutorCapability,
+  type CodingExecutorTerminalResult,
   type GateDecision,
   type KnowledgeChunk,
   type KnowledgeDocument,
@@ -42,8 +49,12 @@ import {
 } from './coding-runner.js'
 import type {
   CodingEngineAdapter,
-  CodingEngineApprovePermissionResult,
 } from './coding-engine.js'
+import {
+  createCodingExecutorCompatibilityAdapter,
+  type CodingExecutor,
+  type CodingExecutorCompletedResult,
+} from './coding-executor.js'
 import {
   CodingEngineContinuationCleanupError,
   CodingEngineStartupCleanupError,
@@ -56,6 +67,24 @@ import type {
 
 const defaultKnowledgeDocuments: KnowledgeDocument[] = []
 const defaultKnowledgeChunks: KnowledgeChunk[] = []
+const baseCodingExecutorCapabilities: CodingExecutorCapability[] = [
+  'cancellation',
+  'structured_diff',
+  'workspace_edit',
+  'workspace_read',
+]
+
+function requiredCapabilitiesForExecutor(executor: CodingExecutor): CodingExecutorCapability[] {
+  return executor.descriptor.kind === 'opencode'
+    ? [
+        'cancellation',
+        'permission_relay',
+        'structured_diff',
+        'workspace_edit',
+        'workspace_read',
+      ]
+    : baseCodingExecutorCapabilities
+}
 
 export type CodingRuntimeStore = {
   listProjects(): Promise<LocalProject[]>
@@ -203,7 +232,8 @@ export type DeleteManagedWorktreeRuntimeInput = OpenManagedWorktreeRuntimeInput
 
 export type CodingRuntimeDeps = {
   store: CodingRuntimeStore
-  engine: CodingEngineAdapter
+  engine?: CodingEngineAdapter
+  executor?: CodingExecutor
   publisher?: CodingRuntimePublisher
   runTestCommand?: CodingRuntimeTestCommandRunner
   runDependencyBootstrap?: CodingRuntimeDependencyBootstrapRunner
@@ -242,6 +272,13 @@ export type CodingRuntime = {
 }
 
 export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
+  const selectedExecutor =
+    deps.executor ??
+    (deps.engine ? createCodingExecutorCompatibilityAdapter(deps.engine) : undefined)
+  if (!selectedExecutor) {
+    throw new Error('Coding Runtime requires one Coding Executor.')
+  }
+  const executor: CodingExecutor = selectedExecutor
   const idGenerator = deps.idGenerator ?? ((prefix = 'id') => `${prefix}-${randomUUID()}`)
   const now = deps.now ?? (() => new Date().toISOString())
   const knowledgeDocuments = deps.knowledgeDocuments ?? defaultKnowledgeDocuments
@@ -411,6 +448,60 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
 
   async function nextSequence(codingRunId: string): Promise<number> {
     return (await deps.store.listCodingAgentEvents(codingRunId)).length + 1
+  }
+
+  async function mapObservableExecutorEvents(
+    requestId: string,
+    events: CodingAgentEvent[],
+  ): Promise<CodingAgentEvent[]> {
+    let sequence = await nextSequence(requestId)
+    return events.map((event) => ({
+      ...event,
+      sequence: sequence++,
+      metadata: {
+        ...event.metadata,
+        codingExecutorRequestId: requestId,
+        codingExecutorEventType:
+          event.kind === 'permission'
+            ? 'permission_request'
+            : event.kind === 'tool_call'
+              ? 'tool_request'
+              : event.kind === 'tool_result'
+                ? 'tool_result'
+                : event.kind === 'diff' || event.kind === 'test' || event.kind === 'bootstrap'
+                  ? 'evidence'
+                  : event.kind === 'error'
+                    ? 'observation'
+                    : 'observation',
+      },
+    }))
+  }
+
+  async function loadExecutorContinuationState(codingRunId: string): Promise<{
+    previousCheckpointVersion: number
+    previousSequence: number
+    settledPermissionRequestIds: string[]
+  }> {
+    let previousCheckpointVersion = 0
+    let previousSequence = 0
+    const settledPermissionRequestIds: string[] = []
+    const events = await deps.store.listCodingAgentEvents(codingRunId)
+    for (const event of events) {
+      const value = event.metadata?.codingExecutorTurn
+      if (value === undefined) continue
+      const turn = parseCodingExecutorTurn(value, {
+        expectedRequestId: codingRunId,
+        previousCheckpointVersion,
+        previousSequence,
+        settledPermissionRequestIds,
+      })
+      previousCheckpointVersion = turn.checkpointVersion
+      previousSequence = turn.events.at(-1)!.sequence
+      if (turn.status === 'waiting_permission') {
+        settledPermissionRequestIds.push(turn.permissionRequest.id)
+      }
+    }
+    return { previousCheckpointVersion, previousSequence, settledPermissionRequestIds }
   }
 
   async function nextAgentEventSequence(runId: string): Promise<number> {
@@ -612,23 +703,36 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       .at(-1)?.dependencyHash
   }
 
-  async function cleanupWorkspaceForRun(codingRun: CodingAgentRun, timestamp: string): Promise<void> {
+  async function cleanupWorkspaceForRun(
+    codingRun: CodingAgentRun,
+    timestamp: string,
+  ): Promise<CodingExecutorTerminalResult['cleanup']> {
     if (!codingRun.managedWorkspaceId) {
-      return
+      return { status: 'not_required', reasonCode: null }
     }
     let workspace: ManagedCodingWorkspace
     try {
       workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
     } catch {
-      return
+      return { status: 'failed', reasonCode: 'workspace_state_unavailable' }
     }
 
     let cleaned: ManagedCodingWorkspace
     if (deps.cleanupWorkspace) {
-      cleaned = await deps.cleanupWorkspace({
-        workspaceId: workspace.id,
-        projectId: workspace.projectId,
-      })
+      try {
+        cleaned = await deps.cleanupWorkspace({
+          workspaceId: workspace.id,
+          projectId: workspace.projectId,
+        })
+      } catch (error) {
+        cleaned = {
+          ...workspace,
+          deletedAt: timestamp,
+          cleanupStatus: 'cleanup_failed',
+          cleanupError: cleanupErrorSummary(error),
+        }
+        await deps.store.saveManagedCodingWorkspace(cleaned)
+      }
     } else {
       try {
         cleaned = await deleteWorkspace(workspace)
@@ -663,6 +767,100 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       redacted: true,
     }
     await saveEvents([event])
+    return status === 'deleted'
+      ? { status: 'completed', reasonCode: null }
+      : { status: 'failed', reasonCode: 'workspace_cleanup_unconfirmed' }
+  }
+
+  async function buildCodingExecutorTerminalEvent(input: {
+    codingRun: CodingAgentRun
+    stopReason: CodingExecutorTerminalResult['stopReason']
+    cleanup: CodingExecutorTerminalResult['cleanup']
+    timestamp: string
+  }): Promise<CodingAgentEvent> {
+    const usage = input.codingRun.runtimeCostSummary
+    const continuationState = await loadExecutorContinuationState(input.codingRun.id)
+    const finalCheckpointVersion = continuationState.previousCheckpointVersion + 1
+    const terminalResult = parseCodingExecutorTerminalResult({
+      stateVersion: CODING_EXECUTOR_CONTRACT_VERSION,
+      requestId: input.codingRun.id,
+      stopReason: input.stopReason,
+      executor: {
+        id: executor.descriptor.id,
+        version: executor.descriptor.version,
+        kind: executor.descriptor.kind,
+      },
+      finalCheckpointVersion,
+      changedPaths: [...input.codingRun.changedPaths].sort(),
+      diffArtifactId: input.codingRun.diffArtifactId ?? null,
+      testEvidenceIds: input.codingRun.testEvidenceId ? [input.codingRun.testEvidenceId] : [],
+      usage: {
+        tokens: usage ? usage.inputTokens + usage.outputTokens + usage.cacheReadTokens : 0,
+        costUsd: usage?.costUsd ?? 0,
+      },
+      cleanup: input.cleanup,
+      completedAt: input.timestamp,
+    })
+    const terminalTurn = parseCodingExecutorTurn(
+      {
+        stateVersion: CODING_EXECUTOR_CONTRACT_VERSION,
+        requestId: input.codingRun.id,
+        status: 'terminal',
+        checkpointVersion: finalCheckpointVersion,
+        events: [
+          ...(continuationState.previousSequence === 0
+            ? [
+                {
+                  stateVersion: CODING_EXECUTOR_CONTRACT_VERSION,
+                  requestId: input.codingRun.id,
+                  sequence: 1,
+                  checkpointVersion: 0,
+                  type: 'started' as const,
+                  createdAt: input.codingRun.startedAt,
+                  metadata: {
+                    executorId: executor.descriptor.id,
+                    executorVersion: executor.descriptor.version,
+                  },
+                },
+              ]
+            : []),
+          {
+            stateVersion: CODING_EXECUTOR_CONTRACT_VERSION,
+            requestId: input.codingRun.id,
+            sequence:
+              continuationState.previousSequence +
+              (continuationState.previousSequence === 0 ? 2 : 1),
+            checkpointVersion: finalCheckpointVersion,
+            type: 'terminal' as const,
+            createdAt: input.timestamp,
+            metadata: { stopReason: input.stopReason },
+          },
+        ],
+        terminalResult,
+      },
+      {
+        expectedRequestId: input.codingRun.id,
+        previousCheckpointVersion: continuationState.previousCheckpointVersion,
+        previousSequence: continuationState.previousSequence,
+        settledPermissionRequestIds: continuationState.settledPermissionRequestIds,
+      },
+    )
+    return {
+      id: idGenerator('coding-event'),
+      codingRunId: input.codingRun.id,
+      runId: input.codingRun.runId,
+      nodeId: input.codingRun.nodeId,
+      sequence: await nextSequence(input.codingRun.id),
+      kind: 'status',
+      message: 'Coding Executor reached a governed terminal result.',
+      timestamp: input.timestamp,
+      metadata: {
+        codingExecutorEventType: 'terminal',
+        codingExecutorTurn: terminalTurn,
+        codingExecutorTerminalResult: terminalResult,
+      },
+      redacted: true,
+    }
   }
 
   function cleanupErrorSummary(error: unknown): string {
@@ -680,7 +878,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       return
     }
     const timestamp = now()
-    await deps.engine.cancel({ codingRun: expectedRun })
+    await executor.cancel({ codingRun: expectedRun })
     for (let attempt = 0; attempt < 8; attempt += 1) {
       if (!activeCodingStatuses.has(expectedRun.status)) {
         return
@@ -740,7 +938,15 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         events: [...toolResultEvents, event],
       })
       if (committed.committed) {
-        await cleanupWorkspaceForRun(updated, timestamp)
+        const cleanup = await cleanupWorkspaceForRun(updated, timestamp)
+        await saveEvents([
+          await buildCodingExecutorTerminalEvent({
+            codingRun: updated,
+            stopReason: 'timeout',
+            cleanup,
+            timestamp,
+          }),
+        ])
         return
       }
       if (!committed.run) {
@@ -749,6 +955,122 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       expectedRun = committed.run
     }
     throw new Error('Coding Agent timeout could not settle concurrent state changes')
+  }
+
+  async function settleCompletedExecutorResult(input: {
+    expectedRun: CodingAgentRun
+    completed: CodingExecutorCompletedResult
+    workspace: ManagedCodingWorkspace
+    project: LocalProject
+    timestamp: string
+  }): Promise<boolean> {
+    const { completedAt: engineCompletedAt, ...completedRunFields } = input.completed.codingRun
+    const bootstrappingRun: CodingAgentRun = {
+      ...completedRunFields,
+      status: 'bootstrapping',
+    }
+    const observableEvents = await mapObservableExecutorEvents(
+      bootstrappingRun.id,
+      input.completed.events,
+    )
+    const engineResultCommitted = await commitCodingAgentMutation({
+      expectedRun: input.expectedRun,
+      expectedPendingPermissionRequestIds: [],
+      run: bootstrappingRun,
+      events: observableEvents,
+      diffArtifacts: [input.completed.diff],
+    })
+    if (!engineResultCommitted.committed) {
+      return false
+    }
+    const bootstrapped = await runCodingBootstrap({
+      codingRun: bootstrappingRun,
+      workspace: input.workspace,
+      project: input.project,
+      timestamp: input.timestamp,
+      ...(input.completed.bootstrapEvidence
+        ? { engineBootstrapEvidence: input.completed.bootstrapEvidence }
+        : {}),
+    })
+    if (!bootstrapped.canContinue) {
+      const terminalEvent = await buildCodingExecutorTerminalEvent({
+        codingRun: bootstrapped.codingRun,
+        stopReason: 'failure',
+        cleanup: {
+          status: 'not_required',
+          reasonCode: 'workspace_retained_for_recovery',
+        },
+        timestamp: input.timestamp,
+      })
+      await commitCodingAgentMutation({
+        expectedRun: bootstrappingRun,
+        expectedPendingPermissionRequestIds: [],
+        run: bootstrapped.codingRun,
+        events: [terminalEvent],
+      })
+      return true
+    }
+    const { completedAt: _bootstrapCompletedAt, ...bootstrappedRunFields } = bootstrapped.codingRun
+    const testingRun: CodingAgentRun = {
+      ...bootstrappedRunFields,
+      status: 'testing',
+    }
+    const testingStarted = await commitCodingAgentMutation({
+      expectedRun: bootstrappingRun,
+      expectedPendingPermissionRequestIds: [],
+      run: testingRun,
+    })
+    if (!testingStarted.committed) {
+      return false
+    }
+    const tested = await runCodingTests({
+      codingRun: testingRun,
+      workspace: input.workspace,
+      project: input.project,
+      timestamp: input.timestamp,
+    })
+    const terminalCompletedAt = engineCompletedAt ?? input.timestamp
+    const completedRun: CodingAgentRun = {
+      ...tested.codingRun,
+      status: 'completed',
+      completedAt: terminalCompletedAt,
+    }
+    const terminalEvent = await buildCodingExecutorTerminalEvent({
+      codingRun: completedRun,
+      stopReason: 'success',
+      cleanup: {
+        status: 'not_required',
+        reasonCode: 'workspace_retained_for_delivery',
+      },
+      timestamp: terminalCompletedAt,
+    })
+    const completionCommitted = await commitCodingAgentMutation({
+      expectedRun: testingRun,
+      expectedPendingPermissionRequestIds: [],
+      run: completedRun,
+      events: [terminalEvent],
+    })
+    if (!completionCommitted.committed) {
+      return false
+    }
+    try {
+      await deps.completeWorkflowBuild?.({
+        runId: completedRun.runId,
+        nodeId: completedRun.nodeId,
+        codingRunId: completedRun.id,
+        diffId: input.completed.diff.id,
+        now: input.timestamp,
+      })
+    } catch (error) {
+      const detail =
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : 'Unknown workflow runtime error'
+      throw new Error(`Workflow build completion failed: ${detail}`, {
+        cause: error,
+      })
+    }
+    return true
   }
 
   async function replyCodingPermission(input: ReplyCodingPermissionRuntimeInput): Promise<CodingPermissionRequest> {
@@ -795,14 +1117,19 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       }
       const workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
       const project = await findProject(codingRun.projectId)
-      let completed: CodingEngineApprovePermissionResult
+      const continuationState = await loadExecutorContinuationState(codingRun.id)
+      let completed
       try {
-        completed = await deps.engine.approvePermission({
-          request: updatedRequest,
-          codingRun,
-          workspace,
-          project,
-          now: timestamp,
+        completed = await executor.continuePermission({
+          requestId: codingRun.id,
+          ...continuationState,
+          runtimeContext: {
+            request: updatedRequest,
+            codingRun,
+            workspace,
+            project,
+            now: timestamp,
+          },
         })
       } catch (error) {
         const currentRun = await findCodingRun(codingRun.id)
@@ -814,7 +1141,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           throw error
         }
         try {
-          await deps.engine.cancel({ codingRun: currentRun })
+          await executor.cancel({ codingRun: currentRun })
         } catch (cleanupError) {
           await recordContinuationCleanupFailure(currentRun, timestamp)
           throw new CodingEngineContinuationCleanupError([error, cleanupError])
@@ -844,16 +1171,35 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           events: [failedEvent],
         })
         if (committed.committed) {
-          await cleanupWorkspaceForRun(failedRun, timestamp)
+          const cleanup = await cleanupWorkspaceForRun(failedRun, timestamp)
+          await saveEvents([
+            await buildCodingExecutorTerminalEvent({
+              codingRun: failedRun,
+              stopReason: 'failure',
+              cleanup,
+              timestamp,
+            }),
+          ])
         }
         throw error
       }
-      if ('permissionRequest' in completed) {
+      if (completed.kind === 'waiting_permission') {
+        const continuationEvents = (await mapObservableExecutorEvents(
+          completed.codingRun.id,
+          completed.events,
+        )).map((event) =>
+          event.kind === 'permission'
+            ? {
+                ...event,
+                metadata: { ...event.metadata, codingExecutorTurn: completed.turn },
+              }
+            : event,
+        )
         const continuationCommitted = await commitCodingAgentMutation({
           expectedRun: codingRun,
           expectedPendingPermissionRequestIds: [],
           run: completed.codingRun,
-          events: completed.events,
+          events: continuationEvents,
           permissionRequests: [completed.permissionRequest],
         })
         if (!continuationCommitted.committed) {
@@ -861,7 +1207,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             'Coding Agent continuation could not be persisted safely.',
           )
           try {
-            await deps.engine.cancel({ codingRun: completed.codingRun })
+            await executor.cancel({ codingRun: completed.codingRun })
           } catch (cleanupError) {
             if (continuationCommitted.run && activeCodingStatuses.has(continuationCommitted.run.status)) {
               await recordContinuationCleanupFailure(continuationCommitted.run, timestamp)
@@ -869,102 +1215,27 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             throw new CodingEngineContinuationCleanupError([persistenceError, cleanupError])
           }
           if (continuationCommitted.run && activeCodingStatuses.has(continuationCommitted.run.status)) {
-            const failed = await failActiveCodingRun(
+            const cleanup = await cleanupWorkspaceForRun(continuationCommitted.run, timestamp)
+            await failActiveCodingRun(
               continuationCommitted.run,
               'Coding Agent continuation could not be persisted safely.',
               timestamp,
+              cleanup,
             )
-            if (failed.committed) {
-              await cleanupWorkspaceForRun(failed.run, timestamp)
-            }
           }
           throw persistenceError
         }
         return updatedRequest
       }
-      const { completedAt: engineCompletedAt, ...completedRunFields } = completed.codingRun
-      const bootstrappingRun: CodingAgentRun = {
-        ...completedRunFields,
-        status: 'bootstrapping',
-      }
-      const engineResultCommitted = await commitCodingAgentMutation({
+      await settleCompletedExecutorResult({
         expectedRun: codingRun,
-        expectedPendingPermissionRequestIds: [],
-        run: bootstrappingRun,
-        events: completed.events,
-        diffArtifacts: [completed.diff],
-      })
-      if (!engineResultCommitted.committed) {
-        return updatedRequest
-      }
-      const bootstrapped = await runCodingBootstrap({
-        codingRun: bootstrappingRun,
-        workspace,
-        project,
-        timestamp,
-        ...(completed.bootstrapEvidence ? { engineBootstrapEvidence: completed.bootstrapEvidence } : {}),
-      })
-      if (!bootstrapped.canContinue) {
-        await commitCodingAgentMutation({
-          expectedRun: bootstrappingRun,
-          expectedPendingPermissionRequestIds: [],
-          run: bootstrapped.codingRun,
-        })
-        return updatedRequest
-      }
-      const { completedAt: _bootstrapCompletedAt, ...bootstrappedRunFields } = bootstrapped.codingRun
-      const testingRun: CodingAgentRun = {
-        ...bootstrappedRunFields,
-        status: 'testing',
-      }
-      const testingStarted = await commitCodingAgentMutation({
-        expectedRun: bootstrappingRun,
-        expectedPendingPermissionRequestIds: [],
-        run: testingRun,
-      })
-      if (!testingStarted.committed) {
-        return updatedRequest
-      }
-      const tested = await runCodingTests({
-        codingRun: testingRun,
+        completed,
         workspace,
         project,
         timestamp,
       })
-      const completedRun: CodingAgentRun = {
-        ...tested.codingRun,
-        status: 'completed',
-        completedAt: engineCompletedAt ?? timestamp,
-      }
-      const completionCommitted = await commitCodingAgentMutation({
-        expectedRun: testingRun,
-        expectedPendingPermissionRequestIds: [],
-        run: completedRun,
-      })
-      if (!completionCommitted.committed) {
-        return updatedRequest
-      }
-      if (completedRun.status === 'completed') {
-        try {
-          await deps.completeWorkflowBuild?.({
-            runId: completedRun.runId,
-            nodeId: completedRun.nodeId,
-            codingRunId: completedRun.id,
-            diffId: completed.diff.id,
-            now: timestamp,
-          })
-        } catch (error) {
-          const detail =
-            error instanceof Error && error.message.trim()
-              ? error.message
-              : 'Unknown workflow runtime error'
-          throw new Error(`Workflow build completion failed: ${detail}`, {
-            cause: error,
-          })
-        }
-      }
     } else {
-      await deps.engine.cancel({ codingRun })
+      await executor.cancel({ codingRun })
       const terminalStatus = input.decision === 'expired' ? 'timed_out' : 'interrupted'
       const sequence = await nextSequence(codingRun.id)
       const updatedRun: CodingAgentRun = {
@@ -1010,7 +1281,15 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         events: [event, toolResultEvent],
       })
       if (committed.committed) {
-        await cleanupWorkspaceForRun(updatedRun, timestamp)
+        const cleanup = await cleanupWorkspaceForRun(updatedRun, timestamp)
+        await saveEvents([
+          await buildCodingExecutorTerminalEvent({
+            codingRun: updatedRun,
+            stopReason: input.decision === 'expired' ? 'timeout' : 'cancelled',
+            cleanup,
+            timestamp,
+          }),
+        ])
       }
     }
 
@@ -1048,6 +1327,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     expectedRun: CodingAgentRun,
     summary: string,
     timestamp: string,
+    cleanup: CodingExecutorTerminalResult['cleanup'],
   ): Promise<CodingAgentMutationResult> {
     const failedRun: CodingAgentRun = {
       ...expectedRun,
@@ -1066,12 +1346,23 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       timestamp,
       redacted: true,
     }
-    return commitCodingAgentMutation({
+    const committed = await commitCodingAgentMutation({
       expectedRun,
       expectedPendingPermissionRequestIds: [],
       run: failedRun,
       events: [event],
     })
+    if (committed.committed) {
+      await saveEvents([
+        await buildCodingExecutorTerminalEvent({
+          codingRun: committed.run,
+          stopReason: 'failure',
+          cleanup,
+          timestamp,
+        }),
+      ])
+    }
+    return committed
   }
 
   async function recordActiveCleanupFailure(
@@ -1101,7 +1392,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   return {
     async ensureCodingEngine(input) {
       const project = await findProject(input.projectId)
-      return deps.engine.ensure({ project })
+      return executor.ensure({ project })
     },
 
     async listCodingAgentRuns(input = {}) {
@@ -1112,20 +1403,27 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const run = await findRun(input.runId)
       const node = validateCodingWorkflowContext(run, input)
       const project = await findProject(input.projectId)
+      const requiredCapabilities = requiredCapabilitiesForExecutor(executor)
+      selectCodingExecutor({
+        descriptors: [executor.descriptor],
+        executorId: executor.descriptor.id,
+        executorVersion: executor.descriptor.version,
+        requiredCapabilities,
+      })
       const active = findActiveCodingRun(await deps.store.listCodingAgentRuns(), input.projectId)
       if (active) {
         throw new Error(`Coding Agent run already active for this project: ${active.id}`)
       }
 
-      if (deps.engine.engine === 'not-configured') {
-        await deps.engine.ensure({ project })
+      if (executor.engine === 'not-configured') {
+        await executor.ensure({ project })
         throw new Error('Coding Agent engine did not report a configured runtime after ensure.')
       }
-      const configuredEngine = deps.engine.engine
-      const providerId = deps.engine.providerId
+      const configuredEngine = executor.engine
+      const providerId = executor.providerId
       const codingRunId = idGenerator('coding-run')
       const briefContext = await loadCodingBriefContext(run, node)
-      const model = deps.engine.modelId ?? providerId
+      const model = executor.modelId ?? providerId
       const canonicalBrief = buildCodingBrief({
         run,
         node,
@@ -1229,6 +1527,17 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         }
         await saveCodingRun(blockedRun)
         await saveEvents([event])
+        await saveEvents([
+          await buildCodingExecutorTerminalEvent({
+            codingRun: blockedRun,
+            stopReason: 'policy_denied',
+            cleanup: {
+              status: 'not_required',
+              reasonCode: 'side_effects_not_started',
+            },
+            timestamp,
+          }),
+        ])
         return {
           codingRun: blockedRun,
           state: await deps.store.loadState(),
@@ -1261,12 +1570,13 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       runBestEffortNotification(() => deps.publisher?.publishRunStatus(reservationRun))
 
       try {
-        await deps.engine.ensure({ project })
+        await executor.ensure({ project })
       } catch (error) {
         await failActiveCodingRun(
           reservationRun,
           'Coding engine readiness failed before the managed run started.',
           reservationTimestamp,
+          { status: 'not_required', reasonCode: 'side_effects_not_started' },
         )
         throw error
       }
@@ -1285,6 +1595,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           reservationRun,
           'Managed coding workspace creation failed.',
           reservationTimestamp,
+          { status: 'not_required', reasonCode: 'workspace_not_registered' },
         )
         throw error
       }
@@ -1349,6 +1660,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           recoveryRun,
           'Managed coding workspace registration failed.',
           reservationTimestamp,
+          { status: 'completed', reasonCode: null },
         )
         if (recoveryFailure) {
           throw new AggregateError(
@@ -1392,6 +1704,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
               currentRun,
               'Managed coding workspace registration failed.',
               reservationTimestamp,
+              { status: 'completed', reasonCode: null },
             )
           }
           if (cleanupPersistenceFailure) {
@@ -1460,22 +1773,108 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         gateDecisions: briefContext.gateDecisions,
         testEvidence: briefContext.testEvidence,
       }
+      const executorRequest = parseCodingExecutorRequest({
+        stateVersion: CODING_EXECUTOR_CONTRACT_VERSION,
+        id: codingRunId,
+        executor: {
+          id: executor.descriptor.id,
+          version: executor.descriptor.version,
+        },
+        scope: {
+          organizationId: null,
+          projectId: null,
+          userId: input.requestedBy,
+          sessionId: `coding-session-${codingRunId}`,
+          localProjectId: project.id,
+          managedWorkspaceId: workspace.id,
+        },
+        authority: {
+          runId: run.id,
+          nodeId: node.id,
+          runVersion: run.version,
+          policyVersion: input.remediationPlan?.policyVersion ?? run.version,
+        },
+        objectiveDigest: createHash('sha256')
+          .update(input.userInstruction.trim(), 'utf8')
+          .digest('hex'),
+        contextDigest: createHash('sha256')
+          .update(canonicalBrief.prompt, 'utf8')
+          .digest('hex'),
+        requiredCapabilities,
+        budget: {
+          maxTokens:
+            estimatedCost.inputTokens +
+            estimatedCost.outputTokens +
+            estimatedCost.cacheReadTokens,
+          maxCostUsd: budgetDecision.limitUsd ?? budgetDecision.projectedCostUsd,
+        },
+        expectedCheckpointVersion: 0,
+        requestedAt: reservationTimestamp,
+        deadline: new Date(Date.parse(reservationTimestamp) + 15 * 60_000).toISOString(),
+      })
+      const selection = {
+        stateVersion: CODING_EXECUTOR_CONTRACT_VERSION,
+        id: executor.descriptor.id,
+        version: executor.descriptor.version,
+        kind: executor.descriptor.kind,
+        capabilities: executor.descriptor.capabilities.join(','),
+        requestId: executorRequest.id,
+        objectiveDigest: executorRequest.objectiveDigest,
+        contextDigest: executorRequest.contextDigest,
+      }
+      const selectionEvent: CodingAgentEvent = {
+        id: idGenerator('coding-event'),
+        codingRunId,
+        runId: run.id,
+        nodeId: node.id,
+        sequence: await nextSequence(codingRunId),
+        kind: 'status',
+        message: 'Coding Executor capability selection accepted.',
+        timestamp: reservationTimestamp,
+        metadata: {
+          codingExecutorEventType: 'started',
+          codingExecutorRequestId: executorRequest.id,
+          codingExecutorSelection: selection,
+        },
+        redacted: true,
+      }
+      const selectionCommitted = await commitCodingAgentMutation({
+        expectedRun: workspacePreparingRun,
+        expectedPendingPermissionRequestIds: [],
+        events: [selectionEvent],
+      })
+      if (!selectionCommitted.committed) {
+        const cleanup = await cleanupWorkspaceForRun(
+          workspacePreparingRun,
+          reservationTimestamp,
+        )
+        await failActiveCodingRun(
+          workspacePreparingRun,
+          'Coding Executor selection could not be persisted safely.',
+          reservationTimestamp,
+          cleanup,
+        )
+        throw new Error('Coding Executor selection could not be persisted safely.')
+      }
       let bundle
       try {
-        bundle = await deps.engine.start({
-          id: codingRunId,
-          run,
-          node,
-          project,
-          workspace,
-          requestedBy: input.requestedBy,
-          providerId,
-          userInstruction: input.userInstruction,
-          now: reservationTimestamp,
-          ...engineBriefContext,
-          brief: canonicalBrief,
-          ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
-          ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
+        bundle = await executor.start({
+          request: executorRequest,
+          runtimeContext: {
+            id: codingRunId,
+            run,
+            node,
+            project,
+            workspace,
+            requestedBy: input.requestedBy,
+            providerId,
+            userInstruction: input.userInstruction,
+            now: reservationTimestamp,
+            ...engineBriefContext,
+            brief: canonicalBrief,
+            ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
+            ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
+          },
         })
       } catch (error) {
         if (error instanceof CodingEngineStartupCleanupError) {
@@ -1521,12 +1920,60 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           workspacePreparingRun,
           'Coding engine failed to start.',
           reservationTimestamp,
+          { status: 'completed', reasonCode: null },
         )
         throw error
+      }
+      if (bundle.kind === 'engine_completed') {
+        const completed: CodingExecutorCompletedResult = {
+          ...bundle,
+          codingRun: {
+            ...bundle.codingRun,
+            runtimeCostSummary: estimatedCost,
+            budgetDecision,
+          },
+        }
+        const settled = await settleCompletedExecutorResult({
+          expectedRun: workspacePreparingRun,
+          completed,
+          workspace,
+          project,
+          timestamp: reservationTimestamp,
+        })
+        if (!settled) {
+          await executor.cancel({ codingRun: completed.codingRun })
+          const currentRun = await findCodingRun(codingRunId)
+          if (activeCodingStatuses.has(currentRun.status)) {
+            const cleanup = await cleanupWorkspaceForRun(currentRun, reservationTimestamp)
+            await failActiveCodingRun(
+              currentRun,
+              'Coding Executor completion could not be persisted safely.',
+              reservationTimestamp,
+              cleanup,
+            )
+            throw new Error('Coding Executor completion could not be persisted safely.')
+          }
+        }
+        const currentRun = await findCodingRun(codingRunId)
+        return {
+          codingRun: currentRun,
+          state: await deps.store.loadState(),
+        }
       }
       let startupRun: CodingAgentRun
       let bundleCommitted: CodingAgentMutationResult
       try {
+        const startupEvents = (await mapObservableExecutorEvents(
+          executorRequest.id,
+          bundle.events,
+        )).map((event) =>
+          event.kind === 'permission'
+            ? {
+                ...event,
+                metadata: { ...event.metadata, codingExecutorTurn: bundle.turn },
+              }
+            : event,
+        )
         startupRun = {
           ...bundle.codingRun,
           runtimeCostSummary: estimatedCost,
@@ -1536,12 +1983,12 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           expectedRun: workspacePreparingRun,
           expectedPendingPermissionRequestIds: [],
           run: startupRun,
-          events: bundle.events,
+          events: startupEvents,
           permissionRequests: [bundle.permissionRequest],
         })
       } catch (error) {
         try {
-          await deps.engine.cancel({ codingRun: workspacePreparingRun })
+          await executor.cancel({ codingRun: workspacePreparingRun })
         } catch (cleanupError) {
           await recordActiveCleanupFailure(
             workspacePreparingRun,
@@ -1550,17 +1997,18 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           )
           throw new CodingEngineContinuationCleanupError([error, cleanupError])
         }
-        await cleanupWorkspaceForRun(workspacePreparingRun, reservationTimestamp)
+        const cleanup = await cleanupWorkspaceForRun(workspacePreparingRun, reservationTimestamp)
         await failActiveCodingRun(
           workspacePreparingRun,
           'Coding engine started, but its local run bundle could not be persisted.',
           reservationTimestamp,
+          cleanup,
         )
         throw error
       }
       if (!bundleCommitted.committed) {
         try {
-          await deps.engine.cancel({ codingRun: workspacePreparingRun })
+          await executor.cancel({ codingRun: workspacePreparingRun })
         } catch (cleanupError) {
           await recordActiveCleanupFailure(
             workspacePreparingRun,
@@ -1664,7 +2112,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       if (!activeCodingStatuses.has(expectedRun.status)) {
         return expectedRun
       }
-      await deps.engine.cancel({ codingRun: expectedRun })
+      await executor.cancel({ codingRun: expectedRun })
       const timestamp = now()
       for (let attempt = 0; attempt < 8; attempt += 1) {
         if (!activeCodingStatuses.has(expectedRun.status)) {
@@ -1720,7 +2168,15 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           events: [...toolResultEvents, event],
         })
         if (committed.committed) {
-          await cleanupWorkspaceForRun(updated, timestamp)
+          const cleanup = await cleanupWorkspaceForRun(updated, timestamp)
+          await saveEvents([
+            await buildCodingExecutorTerminalEvent({
+              codingRun: updated,
+              stopReason: 'cancelled',
+              cleanup,
+              timestamp,
+            }),
+          ])
           return updated
         }
         if (!committed.run) {

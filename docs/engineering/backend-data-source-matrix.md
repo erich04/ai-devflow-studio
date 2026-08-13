@@ -48,7 +48,7 @@ provider-authoritative expiry 合同与观测时间，不把本机时钟或 lega
 | Knowledge Review trace | `AgentTrace[]` | `local persisted` | 已可回写当前 Run/Node。 |
 | Token usage | `AgentTokenUsage[]` | `local persisted` | 保留 provider-reported/estimated source。 |
 | Coding Agent run | `runCodingAgent` / subscriptions | `real IPC/API` + `local persisted` | 继续接 permission relay、tool timeline、diff preview；Team summary 分别对白名单 structured metadata、model/cost、budget/reason 投影，净化允许字符串中的 secret/path，并丢弃未知嵌套键。 |
-| Agent Runtime | `startAgentRuntime` / `advanceAgentRuntime` / `cancelAgentRuntime` / `listAgentRuntimes` | `real IPC` + `local persisted` | Desktop schema v20 已持久化严格 trajectory、checkpoint、evaluation、terminal summary、`local_mcp_installations` 与 installation-bound metadata-only Tool audit；Native Tool 和 trusted Local MCP 主进程 Registry、Runtime 接线及 packaged 场景均已完成，Coding Executor 留给 Slice 5。 |
+| Agent Runtime | `startAgentRuntime` / `advanceAgentRuntime` / `cancelAgentRuntime` / `listAgentRuntimes` | `real IPC` + `local persisted` | Desktop schema v20 已持久化严格 trajectory、checkpoint、evaluation、terminal summary、`local_mcp_installations` 与 installation-bound metadata-only Tool audit；Native Tool、trusted Local MCP 与 governed Coding Executor 已完成主进程接线，OpenCode/fixture 共用 path-free request、observable permission turn 和 uniform terminal result；narrow native coding 留给 Slice 6。 |
 | Permission relay | `CodingPermissionRequest[]` + decisions | `real IPC/API` + `local persisted` | 已有 IPC；继续补真实 UI 状态。 |
 | Diff preview | `CodingDiffArtifact[]` | `local persisted` | 已可展示。 |
 

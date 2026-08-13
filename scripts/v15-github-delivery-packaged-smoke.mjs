@@ -860,6 +860,18 @@ async function advanceToPr(page, materialized, localProjectId, userId) {
     comment: 'Approve the bounded deterministic fixture edit.',
   })
   let state = await callDesktop(page, 'loadState')
+  const terminalEvents = state.codingEvents?.filter(
+    (event) =>
+      event.codingRunId === coding.codingRun.id &&
+      event.metadata?.codingExecutorEventType === 'terminal',
+  ) ?? []
+  assert(
+    terminalEvents.length === 1 &&
+      terminalEvents[0].metadata?.codingExecutorTerminalResult?.stopReason === 'success' &&
+      terminalEvents[0].metadata?.codingExecutorTerminalResult?.cleanup?.status === 'not_required' &&
+      terminalEvents[0].metadata?.codingExecutorTurn?.status === 'terminal',
+    'Packaged Coding Agent did not persist one governed cleanup-aware executor terminal result.',
+  )
   run = findRun(state, run.id)
   node = currentNode(run)
   assert(node.kind === 'test' && node.stage === 'test', 'Workflow did not reach Test.')

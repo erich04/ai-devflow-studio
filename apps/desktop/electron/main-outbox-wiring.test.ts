@@ -20,12 +20,12 @@ describe('Electron durable remote sync wiring', () => {
     )
   })
 
-  it('shares one coding engine and process manager across IPC requests and application shutdown', () => {
+  it('shares one governed executor, coding engine, and process manager across IPC requests and shutdown', () => {
     expect(main).toMatch(
       /const opencodeProcessManager = createOpencodeProcessManager\(\)[\s\S]*?const codingEngineAdapter = createCodingEngineAdapterFromEnv\(process\.env, \{[\s\S]*?processManager: opencodeProcessManager[\s\S]*?\}\)/,
     )
     expect(main).toMatch(
-      /async function createCodingRuntimeForRequest[\s\S]*?return createCodingRuntime\(\{[\s\S]*?engine: codingEngineAdapter/,
+      /const codingExecutor = createCodingExecutorCompatibilityAdapter\(codingEngineAdapter\)[\s\S]*?async function createCodingRuntimeForRequest[\s\S]*?return createCodingRuntime\(\{[\s\S]*?executor: codingExecutor/,
     )
     expect(main).toMatch(
       /app\.on\('before-quit'[\s\S]*?stopOpencodeWithRetry\(opencodeProcessManager\)/,
