@@ -846,7 +846,7 @@ async function prepareRetainedV12CredentialFixture() {
 async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
   const pool = new Pool({
     connectionString: databaseUrl,
-    application_name: 'ai-devflow-postgres-smoke-v17-assertion',
+    application_name: 'ai-devflow-postgres-smoke-v18-assertion',
     statement_timeout: 10_000,
   })
   const connection = await pool.connect()
@@ -856,8 +856,8 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
       "SELECT value FROM schema_meta WHERE key = 'schema_version'",
     )
     expect(
-      schemaVersion.rows[0]?.value === '17',
-      'Team database did not migrate the retained fixture to schema v17.',
+      schemaVersion.rows[0]?.value === '18',
+      'Team database did not migrate the retained fixture to schema v18.',
     )
     const retained = await connection.query(
       `SELECT to_jsonb(retained) AS snapshot
@@ -1001,6 +1001,46 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
       stableJson(retainedMemoryProjectionCounts.rows[0]) ===
         stableJson({ summaries: 0, audits: 0 }),
       'V16-to-v17 migration invented Agent Memory projection rows.',
+    )
+    const memoryQualityColumns = await connection.query(
+      `SELECT table_name, column_name
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name IN ('agent_memory_summaries', 'agent_memory_projection_audits')
+         AND column_name = 'quality_version'
+       ORDER BY table_name`,
+    )
+    expect(
+      stableJson(memoryQualityColumns.rows) === stableJson([
+        { table_name: 'agent_memory_projection_audits', column_name: 'quality_version' },
+        { table_name: 'agent_memory_summaries', column_name: 'quality_version' },
+      ]),
+      'V18 Agent Memory quality-version column inventory was incomplete.',
+    )
+    const memoryQualityAuditPrimaryKey = await connection.query(
+      `SELECT string_agg(attribute.attname, ',' ORDER BY key.ordinality) AS columns
+       FROM pg_constraint AS constraint_record
+       CROSS JOIN LATERAL unnest(constraint_record.conkey) WITH ORDINALITY AS key(attnum, ordinality)
+       JOIN pg_attribute AS attribute
+         ON attribute.attrelid = constraint_record.conrelid
+        AND attribute.attnum = key.attnum
+       WHERE constraint_record.conrelid = 'agent_memory_projection_audits'::regclass
+         AND constraint_record.contype = 'p'`,
+    )
+    expect(
+      memoryQualityAuditPrimaryKey.rows[0]?.columns ===
+        'memory_id,head_version,quality_version',
+      'V18 Agent Memory quality audit primary key was not independently versioned.',
+    )
+    const memoryQualityMigration = await connection.query(
+      `SELECT count(*)::integer AS count
+       FROM team_schema_migrations
+       WHERE version = 18
+         AND name = '0018_agent_memory_projection_quality_version'`,
+    )
+    expect(
+      memoryQualityMigration.rows[0]?.count === 1,
+      'V18 Agent Memory quality-version migration history was missing.',
     )
 
     await connection.query('BEGIN')
@@ -1159,6 +1199,84 @@ async function assertAgentRuntimeProjectionDatabaseState({
           'agent_runtime_summaries',
         ),
       'V16 accepted a non-redacted Agent Runtime Team projection.',
+    )
+    await connection.query('ROLLBACK')
+    transactionOpen = false
+  } finally {
+    if (transactionOpen) {
+      await connection.query('ROLLBACK').catch(() => undefined)
+    }
+    connection.release()
+    await pool.end()
+  }
+}
+
+async function assertAgentMemoryProjectionDatabaseState({ memoryId, runId, nodeId, summary }) {
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    application_name: 'ai-devflow-postgres-smoke-agent-memory-projection',
+    statement_timeout: 10_000,
+  })
+  const connection = await pool.connect()
+  let transactionOpen = false
+  try {
+    const state = await connection.query(
+      `SELECT
+         summary.project_id,
+         summary.run_id,
+         summary.node_id,
+         summary.runtime_id,
+         summary.head_version,
+         summary.quality_version,
+         summary.retrieval_count,
+         summary.accepted_context_count,
+         summary.citation_ids,
+         summary.redacted,
+         count(audit.quality_version)::integer AS audit_count,
+         array_agg(audit.quality_version ORDER BY audit.quality_version) AS audit_versions
+       FROM agent_memory_summaries AS summary
+       LEFT JOIN agent_memory_projection_audits AS audit
+         ON audit.memory_id = summary.memory_id
+       WHERE summary.memory_id = $1
+       GROUP BY summary.memory_id`,
+      [memoryId],
+    )
+    expect(state.rows.length === 1, 'Agent Memory projection did not persist exactly once.')
+    const row = state.rows[0]
+    expect(
+      row.project_id === summary.projectId &&
+        row.run_id === runId &&
+        row.node_id === `${runId}:${nodeId}` &&
+        row.runtime_id === summary.runtimeId &&
+        Number(row.head_version) === 1 &&
+        Number(row.quality_version) === 3 &&
+        Number(row.retrieval_count) === 2 &&
+        Number(row.accepted_context_count) === 2 &&
+        stableJson(row.citation_ids) === stableJson(['citation-a', 'citation-b']) &&
+        row.redacted === true &&
+        row.audit_count === 3 &&
+        stableJson(row.audit_versions.map(Number)) === stableJson([1, 2, 3]),
+      `Agent Memory projection state was not exact: ${stableJson(row)}`,
+    )
+
+    await connection.query('BEGIN')
+    transactionOpen = true
+    let qualityConstraintError
+    try {
+      await connection.query(
+        `UPDATE agent_memory_summaries
+         SET quality_version = accepted_context_count
+         WHERE memory_id = $1`,
+        [memoryId],
+      )
+    } catch (error) {
+      qualityConstraintError = error
+    }
+    expect(
+      qualityConstraintError?.code === '23514' &&
+        qualityConstraintError?.constraint ===
+          'agent_memory_summaries_quality_counts_are_exact',
+      'V18 accepted an incoherent Agent Memory quality version.',
     )
     await connection.query('ROLLBACK')
     transactionOpen = false
@@ -1673,6 +1791,7 @@ const suffix = Date.now()
 const runId = `run-postgres-smoke-${suffix}`
 const pairedRunId = `run-postgres-paired-smoke-${suffix}`
 const agentRuntimeId = `agent-runtime-postgres-smoke-${suffix}`
+const agentMemoryId = `agent-memory-postgres-smoke-${suffix}`
 const gateRunId = `run-postgres-gate-smoke-${suffix}`
 const githubRunId = `run-postgres-github-smoke-${suffix}`
 const gateNodeId = 'n-design-gate'
@@ -2526,6 +2645,104 @@ try {
     runId: pairedRunId,
     nodeId: 'n-test',
     summary: agentRuntimeSummaryV2,
+  })
+  const agentMemorySummaryV1 = {
+    stateVersion: 1,
+    projectionVersion: 1,
+    memoryId: agentMemoryId,
+    projectId: 'p-payments',
+    runId: pairedRunId,
+    nodeId: 'n-test',
+    runtimeId: agentRuntimeId,
+    ownerUserId: desktopPairing.userId,
+    candidateId: `agent-memory-candidate-postgres-smoke-${suffix}`,
+    currentRevision: 1,
+    headVersion: 1,
+    qualityVersion: 1,
+    lifecycleStatus: 'active',
+    visibility: 'user_project',
+    sensitivity: 'private',
+    retentionClass: 'until_deleted',
+    provenanceDigest: '5'.repeat(64),
+    citationIds: [],
+    retrievalCount: 0,
+    acceptedContextCount: 0,
+    expiresAt: null,
+    deletedAt: null,
+    purgeStatus: null,
+    purgedAt: null,
+    updatedAt: completedTimestamp,
+    redacted: true,
+  }
+  await postJsonWithBearer(
+    '/api/sync/agent-memory-summary',
+    agentMemorySummaryV1,
+    desktopPairing.token,
+  )
+  await postJsonWithBearer(
+    '/api/sync/agent-memory-summary',
+    agentMemorySummaryV1,
+    desktopPairing.token,
+  )
+  const agentMemorySummaryV2 = {
+    ...agentMemorySummaryV1,
+    qualityVersion: 2,
+    citationIds: ['citation-a'],
+    retrievalCount: 1,
+    acceptedContextCount: 1,
+  }
+  await postJsonWithBearer(
+    '/api/sync/agent-memory-summary',
+    agentMemorySummaryV2,
+    desktopPairing.token,
+  )
+  const agentMemorySummaryV3 = {
+    ...agentMemorySummaryV2,
+    qualityVersion: 3,
+    citationIds: ['citation-a', 'citation-b'],
+    retrievalCount: 2,
+    acceptedContextCount: 2,
+  }
+  await postJsonWithBearer(
+    '/api/sync/agent-memory-summary',
+    agentMemorySummaryV3,
+    desktopPairing.token,
+  )
+  await expectPostRejected(
+    '/api/sync/agent-memory-summary',
+    agentMemorySummaryV2,
+    { authorization: `Bearer ${desktopPairing.token}` },
+    409,
+    'stale same-head Agent Memory quality projection',
+  )
+  await expectPostRejected(
+    '/api/sync/agent-memory-summary',
+    { ...agentMemorySummaryV3, statement: 'must-not-cross-team-boundary' },
+    { authorization: `Bearer ${desktopPairing.token}` },
+    400,
+    'Agent Memory statement projection',
+  )
+  const memoryOverview = await fetchOverview(
+    '/api/team/overview after Agent Memory sync',
+    leadSessionHeaders,
+  )
+  expect(
+    memoryOverview.agentMemorySummaries?.filter(
+      (summary) =>
+        summary.memoryId === agentMemoryId &&
+        summary.headVersion === 1 &&
+        summary.qualityVersion === 3 &&
+        summary.acceptedContextCount === 2 &&
+        summary.redacted === true,
+    ).length === 1,
+    'Postgres overview did not expose the exact same-head Agent Memory quality projection.',
+  )
+  expectNoLocalOnlyFields(memoryOverview.agentMemorySummaries, 'Agent Memory overview')
+  await assertAgentMemoryProjectionDatabaseState({
+    memoryId: agentMemoryId,
+    runId: pairedRunId,
+    nodeId: 'n-test',
+    summary: agentMemorySummaryV3,
   })
   await expectPostRejected(
     '/api/sync/run-summary',

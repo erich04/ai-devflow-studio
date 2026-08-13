@@ -40,6 +40,7 @@ import {
   canRunAgentRuntimeOnNode,
   createAgentMemoryTombstone,
   createAgentMemoryCandidate,
+  createAgentMemoryRendererSnapshot,
   createGitHubDeliveryCompletion,
   createGitHubDeliveryIntent,
   createRemoteSyncIdempotencyKey,
@@ -79,6 +80,7 @@ import {
   type AgentMemoryRetrievalRequest,
   type AgentMemoryRevisionAuthority,
   type AgentMemoryTombstone,
+  type CreateRemoteAgentMemorySummaryInput,
   type AgentCheckpoint,
   type AgentRuntimeEvent,
   type AgentRuntimeContextAttachment,
@@ -131,7 +133,7 @@ import {
   type WorkRequest,
   AGENT_MEMORY_ACTIVE_REVISIONS_MAX,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 26
+export const CURRENT_SCHEMA_VERSION = 27
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -714,6 +716,9 @@ export type LocalStore = {
   listAgentMemoryRevisions(memoryId: string): Promise<DurableAgentMemoryRevision[]>
   listAgentMemoryHeads(localProjectId?: string): Promise<AgentMemoryHeadRecord[]>
   getAgentMemoryHead(memoryId: string): Promise<AgentMemoryHeadRecord | null>
+  getAgentMemoryTeamProjectionInput(
+    memoryId: string,
+  ): Promise<CreateRemoteAgentMemorySummaryInput | null>
   retrieveAgentMemoryRevisions(
     input: AgentMemoryRetrievalRequest,
   ): Promise<DurableAgentMemoryRevision[]>
@@ -3144,6 +3149,71 @@ const schemaMigrations: readonly SchemaMigration[] = [
       `)
     },
   },
+  {
+    version: 27,
+    migrate(db) {
+      db.run(`
+    drop index if exists idx_remote_sync_outbox_due;
+    alter table remote_sync_outbox rename to remote_sync_outbox_v26;
+
+    create table remote_sync_outbox (
+      id text primary key,
+      kind text not null,
+      local_project_id text not null,
+      organization_id text,
+      team_project_id text,
+      run_id text not null,
+      entity_id text not null,
+      idempotency_key text not null unique,
+      status text not null,
+      generation integer not null,
+      attempt_count integer not null,
+      next_attempt_at text,
+      lease_expires_at text,
+      last_attempt_at text,
+      last_error_code text,
+      last_error_message text,
+      recovery text not null,
+      completed_at text,
+      created_at text not null,
+      updated_at text not null,
+      check (kind in (
+        'run-summary', 'test-evidence-summary', 'agent-review-summary',
+        'coding-agent-summary', 'agent-runtime-summary', 'agent-memory-summary'
+      )),
+      check (status in ('pending', 'sending', 'retry-scheduled', 'completed', 'terminal')),
+      check (generation >= 1),
+      check (attempt_count >= 0),
+      check (
+        (status = 'sending' and lease_expires_at is not null) or
+        (status <> 'sending' and lease_expires_at is null)
+      ),
+      check (
+        (organization_id is null and team_project_id is null) or
+        (organization_id is not null and team_project_id is not null)
+      )
+    );
+
+    insert into remote_sync_outbox (
+      id, kind, local_project_id, organization_id, team_project_id,
+      run_id, entity_id, idempotency_key, status, generation, attempt_count,
+      next_attempt_at, lease_expires_at, last_attempt_at, last_error_code,
+      last_error_message, recovery, completed_at, created_at, updated_at
+    )
+    select
+      id, kind, local_project_id, organization_id, team_project_id,
+      run_id, entity_id, idempotency_key, status, generation, attempt_count,
+      next_attempt_at, lease_expires_at, last_attempt_at, last_error_code,
+      last_error_message, recovery, completed_at, created_at, updated_at
+    from remote_sync_outbox_v26;
+
+    drop table remote_sync_outbox_v26;
+
+    create index idx_remote_sync_outbox_due
+      on remote_sync_outbox(status, next_attempt_at, created_at);
+      `)
+    },
+  },
 ]
 
 function migrateSchema(db: Database) {
@@ -3686,6 +3756,7 @@ const REMOTE_SYNC_OPERATION_KINDS: readonly RemoteSyncOperation['kind'][] = [
   'agent-review-summary',
   'coding-agent-summary',
   'agent-runtime-summary',
+  'agent-memory-summary',
 ]
 
 function isNonEmptyIdentifier(value: unknown): value is string {
@@ -5763,6 +5834,7 @@ class SqlJsLocalStore implements LocalStore {
         revision.createdAt,
       ],
     )
+    await this.enqueueCanonicalAgentMemoryProjection(revision.id, revision.createdAt)
     await this.persist()
     return { committed: true, replayed: false, revision }
   }
@@ -5867,6 +5939,108 @@ class SqlJsLocalStore implements LocalStore {
       status: status as AgentMemoryHeadRecord['status'],
       version,
       updatedAt,
+    }
+  }
+
+  async getAgentMemoryTeamProjectionInput(
+    memoryId: string,
+  ): Promise<CreateRemoteAgentMemorySummaryInput | null> {
+    const head = await this.getAgentMemoryHead(memoryId)
+    if (head === null || head.scope.kind !== 'team') return null
+    const pairing = await this.getDesktopPairingCredential()
+    if (!agentMemoryScopeMatchesPairing(head.scope, pairing)) return null
+
+    const [revisions, tombstone] = await Promise.all([
+      this.listAgentMemoryRevisions(memoryId),
+      this.getAgentMemoryTombstone(memoryId),
+    ])
+    const revision = revisions.find((candidate) => candidate.revision === head.currentRevision)
+    if (
+      revision === undefined ||
+      !stableJsonMatches(revision.scope, head.scope) ||
+      (tombstone !== null && !stableJsonMatches(tombstone.scope, head.scope))
+    ) return null
+
+    const candidateValue = selectJson<unknown>(
+      this.db,
+      'select json from agent_memory_candidates where id = ? limit 1',
+      [revision.sourceCandidateId],
+    )[0]
+    if (candidateValue === undefined) return null
+    let candidate: AgentMemoryCandidate
+    try {
+      candidate = await parseAgentMemoryCandidate(candidateValue)
+    } catch {
+      return null
+    }
+    if (!stableJsonMatches(candidate.scope, head.scope)) return null
+
+    const runtime = await this.getAgentRuntime(candidate.provenance.runtimeId)
+    const run = runtime === null ? null : await this.getRun(runtime.authority.runId)
+    if (
+      runtime === null ||
+      run === null ||
+      !stableJsonMatches(runtime.scope, head.scope) ||
+      run.projectId !== head.scope.localProjectId ||
+      !run.nodes.some((node) => node.id === runtime.authority.nodeId)
+    ) return null
+
+    const sourceAttachment = await this.getAgentRuntimeContextAttachment(runtime.id)
+    if (
+      sourceAttachment !== null &&
+      !stableJsonMatches(sourceAttachment.scope, head.scope)
+    ) return null
+    const citationIds = [...new Set(
+      sourceAttachment?.knowledgeCitations.map((citation) => citation.requestId) ?? [],
+    )].sort()
+
+    const attachmentValues = selectJson<unknown>(
+      this.db,
+      'select json from agent_runtime_context_attachments order by attached_at asc, id asc',
+    )
+    const attachments: AgentRuntimeContextAttachment[] = []
+    try {
+      for (const value of attachmentValues) {
+        attachments.push(await parseAgentRuntimeContextAttachment(value))
+      }
+    } catch {
+      return null
+    }
+    const acceptedContextAttachments = attachments.filter((attachment) =>
+      stableJsonMatches(attachment.scope, head.scope) &&
+      attachment.memoryRevisions.some((memory) => memory.id === memoryId),
+    )
+    const acceptedContextCount = acceptedContextAttachments.length
+    const qualityUpdatedAt = acceptedContextAttachments.reduce(
+      (latest, attachment) => Date.parse(attachment.attachedAt) > Date.parse(latest)
+        ? attachment.attachedAt
+        : latest,
+      head.updatedAt,
+    )
+
+    let memory
+    try {
+      memory = createAgentMemoryRendererSnapshot({
+        scope: head.scope,
+        candidates: [],
+        memories: [{ head, revision, tombstone }],
+        observedAt: head.updatedAt,
+      }).memories[0]
+    } catch {
+      return null
+    }
+    if (memory === undefined) return null
+
+    return {
+      memory,
+      runId: runtime.authority.runId,
+      nodeId: runtime.authority.nodeId,
+      runtimeId: runtime.id,
+      citationIds,
+      retrievalCount: acceptedContextCount,
+      acceptedContextCount,
+      qualityVersion: acceptedContextCount + 1,
+      qualityUpdatedAt,
     }
   }
 
@@ -5985,6 +6159,7 @@ class SqlJsLocalStore implements LocalStore {
             expiredAt,
           ],
         )
+        await this.enqueueCanonicalAgentMemoryProjection(revision.id, expiredAt)
         expiredAny = true
         continue
       }
@@ -6263,6 +6438,7 @@ class SqlJsLocalStore implements LocalStore {
         input.recordedAt,
       ],
     )
+    await this.enqueueCanonicalAgentMemoryProjection(revision.id, input.recordedAt)
     await this.persist()
     return { committed: true, replayed: false, revision }
   }
@@ -6612,6 +6788,7 @@ class SqlJsLocalStore implements LocalStore {
         tombstone.deletedAt,
       ],
     )
+    await this.enqueueCanonicalAgentMemoryProjection(tombstone.memoryId, tombstone.deletedAt)
     await this.persist()
     return { committed: true, replayed: false, tombstone }
   }
@@ -6788,6 +6965,10 @@ class SqlJsLocalStore implements LocalStore {
         JSON.stringify(metadata),
         completedTombstone.purgedAt,
       ],
+    )
+    await this.enqueueCanonicalAgentMemoryProjection(
+      tombstone.memoryId,
+      completedTombstone.purgedAt!,
     )
     await this.persist()
     return { purged: true, replayed: false, tombstone: completedTombstone }
@@ -7341,6 +7522,14 @@ class SqlJsLocalStore implements LocalStore {
       writeAgentRuntimeTransition(this.db, transition)
       if (contextAttachment !== null) {
         writeAgentRuntimeContextAttachment(this.db, contextAttachment)
+        for (const memoryId of new Set(
+          contextAttachment.memoryRevisions.map((memory) => memory.id),
+        )) {
+          await this.enqueueCanonicalAgentMemoryProjection(
+            memoryId,
+            contextAttachment.attachedAt,
+          )
+        }
       }
       if (memoryCandidate !== null) {
         writeAgentMemoryCandidate(this.db, memoryCandidate)
@@ -7499,6 +7688,28 @@ class SqlJsLocalStore implements LocalStore {
     if (!result.enqueued && result.reason !== 'coalesced') {
       throw new Error(`Canonical remote-sync enqueue failed (${result.reason}).`)
     }
+  }
+
+  private async enqueueCanonicalAgentMemoryProjection(
+    memoryId: string,
+    createdAt: string,
+  ): Promise<void> {
+    const head = await this.getAgentMemoryHead(memoryId)
+    if (head === null) {
+      throw new Error('Canonical Agent Memory projection source is missing.')
+    }
+    if (head.scope.kind === 'local') return
+    const source = await this.getAgentMemoryTeamProjectionInput(memoryId)
+    if (source === null) {
+      throw new Error('Canonical Agent Memory projection source is invalid.')
+    }
+    this.enqueueCanonicalRemoteSyncOperation({
+      kind: 'agent-memory-summary',
+      localProjectId: head.scope.localProjectId,
+      runId: source.runId,
+      entityId: memoryId,
+      createdAt,
+    })
   }
 
   async enqueueRemoteSyncOperation(

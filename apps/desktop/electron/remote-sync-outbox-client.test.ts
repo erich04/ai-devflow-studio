@@ -77,6 +77,8 @@ function makeSource(
     listAgentReviews: async () => [],
     listCodingAgentRuns: async () => [],
     listCodingDiffArtifacts: async () => [],
+    getAgentRuntime: async () => null,
+    getAgentMemoryTeamProjectionInput: async () => null,
   }
 }
 

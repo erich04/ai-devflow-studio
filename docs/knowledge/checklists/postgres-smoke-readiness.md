@@ -3,7 +3,7 @@ title: Postgres Smoke Readiness Checklist
 category: review_checklist
 ownerId: u-erich
 tags: postgres, api, smoke, policy, github-delivery
-summary: Postgres smoke should prove Team schema v17, retained migration, governed GitHub Delivery, Agent Runtime and Memory projections, policy, sync, and redaction.
+summary: Postgres smoke should prove Team schema v18, retained migration, governed GitHub Delivery, Agent Runtime and Memory projections, policy, sync, and redaction.
 ---
 
 # Postgres Smoke Readiness Checklist
@@ -12,7 +12,7 @@ Use this checklist when API, repository, migration, policy, override, sync, GitH
 manager-summary code changes.
 
 - Set `DEVFLOW_DATABASE_URL` explicitly before running Postgres smoke.
-- Prove a disposable fresh database reaches Team schema v17.
+- Prove a disposable fresh database reaches Team schema v18.
 - Prove a populated v11-to-v12 migration retains exact repository binding, Delivery Request,
   approval, publication, recovery, and audit data.
 - Prove a failed v11-to-v12 migration rolls back transactionally and succeeds once on explicit
@@ -28,6 +28,9 @@ manager-summary code changes.
   incoherent-version, or invalid terminal Runtime summaries.
 - Prove v16-to-v17 creates empty `agent_memory_summaries` and
   `agent_memory_projection_audits` tables without local content or fabricated lifecycle rows.
+- Prove v17-to-v18 adds exact independent `quality_version` columns and the composite
+  `(memory_id, head_version, quality_version)` audit identity, leaves retained rows at reserved
+  version 0 for first-sync convergence, and does not change local content rules.
 - Verify seeded team data can be read through the API repository boundary.
 - Verify policy save/read and enforcement evaluation behavior.
 - Verify override rejection for owner, member, and conflicted lead cases.

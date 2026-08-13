@@ -384,6 +384,7 @@ function createRepository(): TeamRepository & GateCommandRepository {
     agentTokenUsage: [],
     codingAgentSummaries: [],
     agentRuntimeSummaries: [],
+    agentMemorySummaries: [],
     policyAwareDeliverySummaries: [],
     agentProviders: [
       {
@@ -531,6 +532,7 @@ function createRepository(): TeamRepository & GateCommandRepository {
             agentProviders: [],
             codingAgentSummaries: [],
             agentRuntimeSummaries: [],
+            agentMemorySummaries: [],
             policyAwareDeliverySummaries: [],
             enforcementPolicies: {
               organizationPolicy: createWarnOnlyDefaultPolicy({
@@ -575,6 +577,11 @@ function createRepository(): TeamRepository & GateCommandRepository {
       accepted: true,
       syncedAt: '2026-06-16T00:00:00.000Z',
       message: 'agent runtime summary accepted',
+    })),
+    uploadAgentMemorySummary: vi.fn(async () => ({
+      accepted: true,
+      syncedAt: '2026-06-16T00:00:00.000Z',
+      message: 'agent memory summary accepted',
     })),
     listAgentProviders: vi.fn(async () => overview.agentProviders),
     getEnforcementPolicy: vi.fn(async () => ({
@@ -2673,6 +2680,88 @@ describe('team API route resolver', () => {
       body: { error: 'bad_request', message: 'Invalid Agent Runtime Team projection payload' },
     })
     expect(repository.uploadAgentRuntimeSummary).not.toHaveBeenCalled()
+  })
+
+  it('routes an exact metadata-only Agent Memory Team projection', async () => {
+    const repository = createRepository()
+    const summary = {
+      stateVersion: 1 as const,
+      projectionVersion: 1 as const,
+      memoryId: 'agent-memory-team-1',
+      projectId: 'p-payments',
+      runId: 'run-payments',
+      nodeId: 'node-build',
+      runtimeId: 'agent-runtime-team-1',
+      ownerUserId: 'u-ling',
+      candidateId: 'agent-memory-candidate-team-1',
+      currentRevision: 1,
+      headVersion: 1,
+      qualityVersion: 2,
+      lifecycleStatus: 'active' as const,
+      visibility: 'user_project' as const,
+      sensitivity: 'private' as const,
+      retentionClass: 'until_deleted' as const,
+      provenanceDigest: 'a'.repeat(64),
+      citationIds: ['citation-a'],
+      retrievalCount: 1,
+      acceptedContextCount: 1,
+      expiresAt: null,
+      deletedAt: null,
+      purgeStatus: null,
+      purgedAt: null,
+      updatedAt: '2026-08-13T12:00:01.000Z',
+      redacted: true as const,
+    }
+
+    const result = await resolveTeamRoute('POST', '/api/sync/agent-memory-summary', repository, {
+      body: summary,
+      session: memberSession,
+    })
+
+    expect(result?.status).toBe(202)
+    expect(repository.uploadAgentMemorySummary).toHaveBeenCalledWith(summary, memberSession)
+  })
+
+  it('rejects non-exact Agent Memory projections before repository persistence', async () => {
+    const repository = createRepository()
+    const result = await resolveTeamRoute('POST', '/api/sync/agent-memory-summary', repository, {
+      body: {
+        stateVersion: 1,
+        projectionVersion: 1,
+        memoryId: 'agent-memory-team-1',
+        projectId: 'p-payments',
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        runtimeId: 'agent-runtime-team-1',
+        ownerUserId: 'u-ling',
+        candidateId: 'agent-memory-candidate-team-1',
+        currentRevision: 1,
+        headVersion: 1,
+        qualityVersion: 2,
+        lifecycleStatus: 'active',
+        visibility: 'user_project',
+        sensitivity: 'private',
+        retentionClass: 'until_deleted',
+        provenanceDigest: 'a'.repeat(64),
+        citationIds: ['citation-a'],
+        retrievalCount: 1,
+        acceptedContextCount: 1,
+        expiresAt: null,
+        deletedAt: null,
+        purgeStatus: null,
+        purgedAt: null,
+        updatedAt: '2026-08-13T12:00:01.000Z',
+        redacted: true,
+        statement: 'forbidden raw memory content',
+      },
+      session: memberSession,
+    })
+
+    expect(result).toEqual({
+      status: 400,
+      body: { error: 'bad_request', message: 'Invalid Agent Memory Team projection payload' },
+    })
+    expect(repository.uploadAgentMemorySummary).not.toHaveBeenCalled()
   })
 
   it('projects hostile nested coding metadata before repository persistence', async () => {

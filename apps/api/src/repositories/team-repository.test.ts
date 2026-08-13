@@ -153,6 +153,104 @@ describe('seed team repository', () => {
     )
   })
 
+  it('stores only a monotonic metadata-only Agent Memory Team projection', async () => {
+    const repository = createSeedTeamRepository()
+    await repository.uploadRunSummary({
+      kind: 'run',
+      runId: 'run-memory-projection-1',
+      version: 3,
+      projectId: 'p-payments',
+      title: 'Memory projection',
+      status: 'building',
+      currentNodeId: 'node-build',
+      currentNode: { id: 'node-build', stage: 'build', kind: 'task', status: 'running' },
+      branchName: 'codex/memory-projection',
+      updatedAt: '2026-08-13T12:00:00.000Z',
+    }, syncContext)
+    const summary = {
+      stateVersion: 1 as const,
+      projectionVersion: 1 as const,
+      memoryId: 'agent-memory-team-1',
+      projectId: 'p-payments',
+      runId: 'run-memory-projection-1',
+      nodeId: 'node-build',
+      runtimeId: 'agent-runtime-team-1',
+      ownerUserId: 'u-erich',
+      candidateId: 'agent-memory-candidate-team-1',
+      currentRevision: 1,
+      headVersion: 1,
+      qualityVersion: 2,
+      lifecycleStatus: 'active' as const,
+      visibility: 'user_project' as const,
+      sensitivity: 'private' as const,
+      retentionClass: 'until_deleted' as const,
+      provenanceDigest: 'a'.repeat(64),
+      citationIds: ['citation-a'],
+      retrievalCount: 1,
+      acceptedContextCount: 1,
+      expiresAt: null,
+      deletedAt: null,
+      purgeStatus: null,
+      purgedAt: null,
+      updatedAt: '2026-08-13T12:00:01.000Z',
+      redacted: true as const,
+    }
+
+    await expect(repository.uploadAgentMemorySummary({
+      ...summary,
+      qualityVersion: 0,
+    }, syncContext)).rejects.toThrow('Remote child summary ID conflicts')
+    await expect(repository.uploadAgentMemorySummary(summary, syncContext)).resolves.toMatchObject({
+      accepted: true,
+    })
+    await expect(repository.uploadAgentMemorySummary(summary, syncContext)).resolves.toMatchObject({
+      accepted: true,
+    })
+    const qualityAdvanced = {
+      ...summary,
+      qualityVersion: 3,
+      citationIds: ['citation-a', 'citation-b'],
+      retrievalCount: 2,
+      acceptedContextCount: 2,
+      updatedAt: '2026-08-13T12:00:02.000Z',
+    }
+    await expect(
+      repository.uploadAgentMemorySummary(qualityAdvanced, syncContext),
+    ).resolves.toMatchObject({ accepted: true })
+    const sameTimestampQualityAdvanced = {
+      ...qualityAdvanced,
+      qualityVersion: 4,
+      citationIds: ['citation-a', 'citation-b', 'citation-c'],
+      retrievalCount: 3,
+      acceptedContextCount: 3,
+    }
+    await expect(
+      repository.uploadAgentMemorySummary(sameTimestampQualityAdvanced, syncContext),
+    ).resolves.toMatchObject({ accepted: true })
+    const advanced = {
+      ...sameTimestampQualityAdvanced,
+      headVersion: 2,
+      updatedAt: '2026-08-13T12:00:03.000Z',
+    }
+    await expect(repository.uploadAgentMemorySummary(advanced, syncContext)).resolves.toMatchObject({
+      accepted: true,
+    })
+    await expect(repository.uploadAgentMemorySummary({
+      ...advanced,
+      headVersion: 3,
+      citationIds: ['citation-b'],
+    }, syncContext)).rejects.toThrow('Remote child summary ID conflicts')
+    await expect(repository.uploadAgentMemorySummary(summary, syncContext)).rejects.toThrow(
+      'Remote child summary ID conflicts',
+    )
+
+    const overview = await repository.getTeamOverview(syncContext)
+    expect(overview.agentMemorySummaries).toEqual([advanced])
+    expect(JSON.stringify(overview.agentMemorySummaries)).not.toMatch(
+      /statement|contentDigest|localProjectId|sessionId|prompt|reasoning|credential|path|rawOutput/iu,
+    )
+  })
+
   it('exposes GitHub Delivery repository authority through the unified Team repository', async () => {
     const repository = createSeedTeamRepository()
 

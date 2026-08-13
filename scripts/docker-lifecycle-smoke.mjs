@@ -458,6 +458,46 @@ async function assertAgentMemoryProjectionAfterV17(database) {
   )
 }
 
+async function assertAgentMemoryProjectionQualityAfterV18(database) {
+  const columns = await psql(
+    database,
+    `SELECT string_agg(table_name || '.' || column_name, ',' ORDER BY table_name)
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name IN ('agent_memory_summaries', 'agent_memory_projection_audits')
+       AND column_name = 'quality_version';\n`,
+  )
+  expect(
+    columns.stdout.trim() ===
+      'agent_memory_projection_audits.quality_version,agent_memory_summaries.quality_version',
+    `${database} did not create the exact V18 Agent Memory quality-version columns.`,
+  )
+  const primaryKey = await psql(
+    database,
+    `SELECT string_agg(attribute.attname, ',' ORDER BY key.ordinality)
+     FROM pg_constraint AS constraint_record
+     CROSS JOIN LATERAL unnest(constraint_record.conkey) WITH ORDINALITY AS key(attnum, ordinality)
+     JOIN pg_attribute AS attribute
+       ON attribute.attrelid = constraint_record.conrelid
+      AND attribute.attnum = key.attnum
+     WHERE constraint_record.conrelid = 'agent_memory_projection_audits'::regclass
+       AND constraint_record.contype = 'p';\n`,
+  )
+  expect(
+    primaryKey.stdout.trim() === 'memory_id,head_version,quality_version',
+    `${database} did not install the exact V18 Agent Memory quality audit key.`,
+  )
+  const migrationHistory = await psql(
+    database,
+    `SELECT count(*) FROM team_schema_migrations
+     WHERE version = 18 AND name = '0018_agent_memory_projection_quality_version';\n`,
+  )
+  expect(
+    migrationHistory.stdout.trim() === '1',
+    `${database} did not record the exact V18 Agent Memory quality migration.`,
+  )
+}
+
 async function expectColumnMissing(database, table, column) {
   const result = await psql(
     database,
@@ -911,7 +951,7 @@ async function expectV14ApiRejectsNewerSchema(database) {
     const readinessResponse = await fetch(`${apiUrl}/ready`)
     expect(
       readinessResponse.status === 503,
-      `Exact V1.4 API did not fail closed on Team schema v17; received ${readinessResponse.status}.`,
+      `Exact V1.4 API did not fail closed on Team schema v18; received ${readinessResponse.status}.`,
     )
   } finally {
     await runDocker(['rm', '-f', rollbackApiContainerName])
@@ -1113,9 +1153,10 @@ try {
   }
 
   await runCurrentMigration(FRESH_DATABASE)
-  await expectSchemaVersion(FRESH_DATABASE, 17)
+  await expectSchemaVersion(FRESH_DATABASE, 18)
   await assertAgentRuntimeProjectionAfterV16(FRESH_DATABASE)
   await assertAgentMemoryProjectionAfterV17(FRESH_DATABASE)
+  await assertAgentMemoryProjectionQualityAfterV18(FRESH_DATABASE)
   await startCurrentApiAgainstDatabase(FRESH_DATABASE)
 
   await runV14Migration(UPGRADE_DATABASE)
@@ -1134,9 +1175,10 @@ try {
 
   await restartPostgresWithRetainedVolume()
   await runCurrentMigration(UPGRADE_DATABASE)
-  await expectSchemaVersion(UPGRADE_DATABASE, 17)
+  await expectSchemaVersion(UPGRADE_DATABASE, 18)
   await assertAgentRuntimeProjectionAfterV16(UPGRADE_DATABASE)
   await assertAgentMemoryProjectionAfterV17(UPGRADE_DATABASE)
+  await assertAgentMemoryProjectionQualityAfterV18(UPGRADE_DATABASE)
   const snapshotAfterV15Upgrade = await readV14RunSnapshot(UPGRADE_DATABASE)
   expect(
     snapshotAfterV15Upgrade === snapshotBeforeV10Upgrade,
@@ -1215,9 +1257,10 @@ try {
   await expectMigrationHistoryMissing(FAILURE_DATABASE, 13)
   const retainedV14Fixture = await prepareV12LegacyIssuedCredentialFixture()
   await runCurrentMigration(FAILURE_DATABASE)
-  await expectSchemaVersion(FAILURE_DATABASE, 17)
+  await expectSchemaVersion(FAILURE_DATABASE, 18)
   await assertAgentRuntimeProjectionAfterV16(FAILURE_DATABASE)
   await assertAgentMemoryProjectionAfterV17(FAILURE_DATABASE)
+  await assertAgentMemoryProjectionQualityAfterV18(FAILURE_DATABASE)
   await assertLegacyIssuedCredentialAfterV13(retainedV14Fixture.snapshotBeforeV13)
   await assertLegacyPublicationAfterV15(retainedV14Fixture.snapshotBeforeV15)
   await startCurrentApiAgainstDatabase(FAILURE_DATABASE)
@@ -1244,6 +1287,6 @@ if (mainError) throw mainError
 if (cleanupError) throw cleanupError
 if (completed) {
   console.log(
-    'Docker lifecycle smoke passed: fresh v17, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, durable v13-to-v14 provider backoff, exact v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, empty v16-to-v17 metadata-only Agent Memory projection, and bounded V1.4 backup/restore rollback.',
+    'Docker lifecycle smoke passed: fresh v18, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, durable v13-to-v14 provider backoff, exact v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, empty v16-to-v17 metadata-only Agent Memory projection, v17-to-v18 independent Memory quality audit versioning, and bounded V1.4 backup/restore rollback.',
   )
 }

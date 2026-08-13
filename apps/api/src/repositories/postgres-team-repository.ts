@@ -5,6 +5,7 @@ import {
   rollupTokenUsage,
   runtimeCostSummaryToTokenUsage,
   parseRemoteAgentRuntimeSummary,
+  parseRemoteAgentMemorySummary,
   type AgentEvent,
   type AgentEventKind,
   type AgentProviderConfig,
@@ -27,6 +28,7 @@ import {
   type ProviderCredentialMetadata,
   type RemoteCodingAgentSummary,
   type RemoteAgentRuntimeSummary,
+  type RemoteAgentMemorySummary,
   type RemoteRunSummary,
   type RuntimeBudgetApproval,
   type RuntimeBudgetPolicy,
@@ -367,6 +369,35 @@ type AgentRuntimeSummaryRow = {
   last_result_digest: string | null
   started_at: TimestampValue
   runtime_updated_at: TimestampValue
+  redacted: boolean
+}
+
+type AgentMemorySummaryRow = {
+  memory_id: string
+  project_id: string
+  run_id: string
+  node_id: string
+  runtime_id: string
+  owner_user_id: string
+  candidate_id: string
+  state_version: 1
+  projection_version: 1
+  current_revision: number
+  head_version: number
+  quality_version: number | string
+  lifecycle_status: RemoteAgentMemorySummary['lifecycleStatus']
+  visibility: RemoteAgentMemorySummary['visibility']
+  sensitivity: RemoteAgentMemorySummary['sensitivity']
+  retention_class: RemoteAgentMemorySummary['retentionClass']
+  provenance_digest: string
+  citation_ids: unknown
+  retrieval_count: number | string
+  accepted_context_count: number | string
+  expires_at: TimestampValue | null
+  deleted_at: TimestampValue | null
+  purge_status: RemoteAgentMemorySummary['purgeStatus']
+  purged_at: TimestampValue | null
+  memory_updated_at: TimestampValue
   redacted: boolean
 }
 
@@ -915,6 +946,37 @@ function mapAgentRuntimeSummary(row: AgentRuntimeSummaryRow): RemoteAgentRuntime
     updatedAt: timestamp(row.runtime_updated_at),
     redacted: row.redacted as true,
   }
+}
+
+function mapAgentMemorySummary(row: AgentMemorySummaryRow): RemoteAgentMemorySummary {
+  return parseRemoteAgentMemorySummary({
+    stateVersion: row.state_version,
+    projectionVersion: row.projection_version,
+    memoryId: row.memory_id,
+    projectId: row.project_id,
+    runId: row.run_id,
+    nodeId: fromTeamStoredNodeId(row.run_id, row.node_id),
+    runtimeId: row.runtime_id,
+    ownerUserId: row.owner_user_id,
+    candidateId: row.candidate_id,
+    currentRevision: Number(row.current_revision),
+    headVersion: Number(row.head_version),
+    qualityVersion: Number(row.quality_version),
+    lifecycleStatus: row.lifecycle_status,
+    visibility: row.visibility,
+    sensitivity: row.sensitivity,
+    retentionClass: row.retention_class,
+    provenanceDigest: row.provenance_digest,
+    citationIds: row.citation_ids,
+    retrievalCount: Number(row.retrieval_count),
+    acceptedContextCount: Number(row.accepted_context_count),
+    expiresAt: row.expires_at === null ? null : timestamp(row.expires_at),
+    deletedAt: row.deleted_at === null ? null : timestamp(row.deleted_at),
+    purgeStatus: row.purge_status,
+    purgedAt: row.purged_at === null ? null : timestamp(row.purged_at),
+    updatedAt: timestamp(row.memory_updated_at),
+    redacted: row.redacted,
+  })
 }
 
 function mapSkill(row: SkillRow): SkillDefinition {
@@ -1760,6 +1822,7 @@ export function createPostgresTeamRepository(
         providerRows,
         codingSummaryRows,
         agentRuntimeSummaryRows,
+        agentMemorySummaryRows,
         enforcementPolicyRows,
         gateOverrideRows,
         runtimeBudgetPolicyRows,
@@ -1833,6 +1896,15 @@ export function createPostgresTeamRepository(
           `,
           [context.organizationId],
         ),
+        db.query<AgentMemorySummaryRow>(
+          `
+            SELECT *
+            FROM agent_memory_summaries
+            WHERE organization_id = $1
+            ORDER BY memory_updated_at DESC, memory_id ASC
+          `,
+          [context.organizationId],
+        ),
         db.query<EnforcementPolicyRow>(
           `
             SELECT *
@@ -1884,6 +1956,7 @@ export function createPostgresTeamRepository(
       const agentReviews = agentReviewRows.map(mapAgentReview)
       const codingAgentSummaries = codingSummaryRows.map(mapCodingAgentSummary)
       const agentRuntimeSummaries = agentRuntimeSummaryRows.map(mapAgentRuntimeSummary)
+      const agentMemorySummaries = agentMemorySummaryRows.map(mapAgentMemorySummary)
       const codingTokenUsage = codingAgentSummaries
         .map((summary) => summary.costSummary)
         .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
@@ -1906,6 +1979,7 @@ export function createPostgresTeamRepository(
         agentTokenUsage: agentTokenRows.map(mapAgentTokenUsage),
         codingAgentSummaries,
         agentRuntimeSummaries,
+        agentMemorySummaries,
         policyAwareDeliverySummaries: buildPolicyAwareDeliverySummaries({
           projectIds: projectRows.map((project) => project.id),
           testEvidenceSummaries,
@@ -2679,6 +2753,218 @@ export function createPostgresTeamRepository(
           accepted: true,
           syncedAt: new Date().toISOString(),
           message: 'agent runtime summary written to Postgres repository',
+        }
+      })
+    },
+
+    async uploadAgentMemorySummary(summary: RemoteAgentMemorySummary, context) {
+      summary = parseRemoteAgentMemorySummary(summary)
+      if (summary.qualityVersion === 0) {
+        throw new RemoteChildSummaryConflictError(
+          summary.memoryId,
+          summary.runId,
+          summary.projectId,
+        )
+      }
+      if (summary.ownerUserId !== context.userId) {
+        throw new RemoteChildSummaryConflictError(
+          summary.memoryId,
+          summary.runId,
+          summary.projectId,
+        )
+      }
+      const syncedNodeId = toTeamStoredNodeId(summary.runId, summary.nodeId)
+      const projectionDigest = createHash('sha256')
+        .update(JSON.stringify(summary), 'utf8')
+        .digest('hex')
+
+      return withTeamDbTransaction(db, async (tx) => {
+        await assertCanonicalRunExists(tx, {
+          runId: summary.runId,
+          projectId: summary.projectId,
+          organizationId: context.organizationId,
+          userId: context.userId,
+        })
+        const [sourceRuntime] = await tx.query<{ runtime_id: string }>(
+          `
+            SELECT runtime_id
+            FROM agent_runtime_summaries
+            WHERE runtime_id = $1
+              AND organization_id = $2
+              AND project_id = $3
+              AND run_id = $4
+              AND node_id = $5
+            LIMIT 1
+          `,
+          [
+            summary.runtimeId,
+            context.organizationId,
+            summary.projectId,
+            summary.runId,
+            syncedNodeId,
+          ],
+        )
+        if (!sourceRuntime) {
+          throw new RemoteChildSummaryConflictError(
+            summary.memoryId,
+            summary.runId,
+            summary.projectId,
+          )
+        }
+        const [acceptedSummary] = await tx.query<{ memory_id: string }>(
+          `
+          INSERT INTO agent_memory_summaries (
+            memory_id, organization_id, project_id, run_id, node_id,
+            runtime_id, owner_user_id, candidate_id, state_version,
+            projection_version, current_revision, head_version, quality_version, lifecycle_status,
+            visibility, sensitivity, retention_class, provenance_digest,
+            citation_ids, retrieval_count, accepted_context_count, expires_at,
+            deleted_at, purge_status, purged_at, memory_updated_at,
+            projection_digest, redacted
+          ) VALUES (
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, $9,
+            $10, $11, $12, $13, $14,
+            $15, $16, $17, $18,
+            $19, $20, $21, $22,
+            $23, $24, $25, $26,
+            $27, $28
+          )
+          ON CONFLICT (memory_id) DO UPDATE SET
+            current_revision = excluded.current_revision,
+            head_version = excluded.head_version,
+            quality_version = excluded.quality_version,
+            lifecycle_status = excluded.lifecycle_status,
+            visibility = excluded.visibility,
+            sensitivity = excluded.sensitivity,
+            retention_class = excluded.retention_class,
+            citation_ids = excluded.citation_ids,
+            retrieval_count = excluded.retrieval_count,
+            accepted_context_count = excluded.accepted_context_count,
+            expires_at = excluded.expires_at,
+            deleted_at = excluded.deleted_at,
+            purge_status = excluded.purge_status,
+            purged_at = excluded.purged_at,
+            memory_updated_at = excluded.memory_updated_at,
+            projection_digest = excluded.projection_digest,
+            redacted = excluded.redacted,
+            updated_at = now()
+          WHERE agent_memory_summaries.organization_id = excluded.organization_id
+            AND agent_memory_summaries.project_id = excluded.project_id
+            AND agent_memory_summaries.run_id = excluded.run_id
+            AND agent_memory_summaries.node_id = excluded.node_id
+            AND agent_memory_summaries.runtime_id = excluded.runtime_id
+            AND agent_memory_summaries.owner_user_id = excluded.owner_user_id
+            AND agent_memory_summaries.candidate_id = excluded.candidate_id
+            AND agent_memory_summaries.provenance_digest = excluded.provenance_digest
+            AND (
+              agent_memory_summaries.projection_digest = excluded.projection_digest
+              OR (
+                agent_memory_summaries.lifecycle_status <> 'deleted'
+                AND agent_memory_summaries.head_version <= excluded.head_version
+                AND agent_memory_summaries.quality_version <= excluded.quality_version
+                AND (
+                  agent_memory_summaries.head_version < excluded.head_version
+                  OR agent_memory_summaries.quality_version < excluded.quality_version
+                )
+                AND agent_memory_summaries.current_revision <= excluded.current_revision
+                AND agent_memory_summaries.retrieval_count <= excluded.retrieval_count
+                AND agent_memory_summaries.accepted_context_count <= excluded.accepted_context_count
+                AND agent_memory_summaries.citation_ids <@ excluded.citation_ids
+                AND agent_memory_summaries.memory_updated_at <= excluded.memory_updated_at
+                AND (
+                  agent_memory_summaries.lifecycle_status <> 'purge_pending'
+                  OR excluded.lifecycle_status IN ('purge_pending', 'deleted')
+                )
+                AND (
+                  agent_memory_summaries.current_revision <> excluded.current_revision
+                  OR (
+                    agent_memory_summaries.visibility = excluded.visibility
+                    AND agent_memory_summaries.sensitivity = excluded.sensitivity
+                    AND agent_memory_summaries.retention_class = excluded.retention_class
+                    AND agent_memory_summaries.expires_at IS NOT DISTINCT FROM excluded.expires_at
+                  )
+                )
+                AND (
+                  agent_memory_summaries.head_version <> excluded.head_version
+                  OR (
+                    agent_memory_summaries.current_revision = excluded.current_revision
+                    AND agent_memory_summaries.lifecycle_status = excluded.lifecycle_status
+                    AND agent_memory_summaries.deleted_at IS NOT DISTINCT FROM excluded.deleted_at
+                    AND agent_memory_summaries.purge_status IS NOT DISTINCT FROM excluded.purge_status
+                    AND agent_memory_summaries.purged_at IS NOT DISTINCT FROM excluded.purged_at
+                  )
+                )
+              )
+            )
+          RETURNING memory_id
+          `,
+          [
+            summary.memoryId,
+            context.organizationId,
+            summary.projectId,
+            summary.runId,
+            syncedNodeId,
+            summary.runtimeId,
+            summary.ownerUserId,
+            summary.candidateId,
+            summary.stateVersion,
+            summary.projectionVersion,
+            summary.currentRevision,
+            summary.headVersion,
+            summary.qualityVersion,
+            summary.lifecycleStatus,
+            summary.visibility,
+            summary.sensitivity,
+            summary.retentionClass,
+            summary.provenanceDigest,
+            JSON.stringify(summary.citationIds),
+            summary.retrievalCount,
+            summary.acceptedContextCount,
+            summary.expiresAt,
+            summary.deletedAt,
+            summary.purgeStatus,
+            summary.purgedAt,
+            summary.updatedAt,
+            projectionDigest,
+            summary.redacted,
+          ],
+        )
+        if (!acceptedSummary) {
+          throw new RemoteChildSummaryConflictError(
+            summary.memoryId,
+            summary.runId,
+            summary.projectId,
+          )
+        }
+        await tx.query(
+          `
+            INSERT INTO agent_memory_projection_audits (
+              memory_id, head_version, quality_version, organization_id, project_id, run_id,
+              node_id, runtime_id, projection_digest, submitted_by_user_id,
+              desktop_token_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ON CONFLICT (memory_id, head_version, quality_version) DO NOTHING
+          `,
+          [
+            summary.memoryId,
+            summary.headVersion,
+            summary.qualityVersion,
+            context.organizationId,
+            summary.projectId,
+            summary.runId,
+            syncedNodeId,
+            summary.runtimeId,
+            projectionDigest,
+            context.userId,
+            context.tokenRecordId ?? null,
+          ],
+        )
+
+        return {
+          accepted: true,
+          syncedAt: new Date().toISOString(),
+          message: 'agent memory summary written to Postgres repository',
         }
       })
     },

@@ -17,12 +17,12 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
-  it('reserves Team schema v17 for an empty metadata-only Agent Memory projection', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(17)
+  it('reserves Team schema v18 for an independently versioned Memory quality projection', async () => {
+    expect(TEAM_SCHEMA_VERSION).toBe(18)
     expect(teamMigrationCatalog.at(-1)).toEqual({
-      version: 17,
-      name: '0017_agent_memory_team_projection',
-      fileName: '0017_agent_memory_team_projection.sql',
+      version: 18,
+      name: '0018_agent_memory_projection_quality_version',
+      fileName: '0018_agent_memory_projection_quality_version.sql',
     })
 
     const migrations = await readTeamMigrationCatalog()
@@ -33,6 +33,15 @@ describe('team database schema', () => {
     expect(migration?.sql).not.toMatch(
       /\b(?:statement|content_digest|prompt|reasoning|credential|raw_output|local_project_id|session_id)\b/iu,
     )
+    const qualityMigration = migrations.find((candidate) => candidate.version === 18)
+    expect(qualityMigration?.sql).toContain('ADD COLUMN quality_version bigint')
+    expect(qualityMigration?.sql).toContain(
+      'PRIMARY KEY (memory_id, head_version, quality_version)',
+    )
+    expect(qualityMigration?.sql).not.toContain(
+      'SET quality_version = accepted_context_count',
+    )
+    expect(qualityMigration?.sql).not.toMatch(/\b(?:statement|content_digest|prompt|reasoning|credential|raw_output|local_project_id|session_id)\b/iu)
 
     const summary = teamTableDefinitions.find(
       (table) => table.name === 'agent_memory_summaries',
@@ -50,6 +59,7 @@ describe('team database schema', () => {
       'projection_version',
       'current_revision',
       'head_version',
+      'quality_version',
       'lifecycle_status',
       'visibility',
       'sensitivity',
@@ -71,7 +81,7 @@ describe('team database schema', () => {
   })
 
   it('retains Team schema v16 as a safe Agent Runtime projection authority', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(17)
+    expect(TEAM_SCHEMA_VERSION).toBe(18)
     expect(teamMigrationCatalog.find((migration) => migration.version === 16)).toEqual({
       version: 16,
       name: '0016_agent_runtime_team_projection',
@@ -109,7 +119,7 @@ describe('team database schema', () => {
   })
 
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(17)
+    expect(TEAM_SCHEMA_VERSION).toBe(18)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -348,6 +358,11 @@ describe('team database schema', () => {
         version: 17,
         name: '0017_agent_memory_team_projection',
         fileName: '0017_agent_memory_team_projection.sql',
+      },
+      {
+        version: 18,
+        name: '0018_agent_memory_projection_quality_version',
+        fileName: '0018_agent_memory_projection_quality_version.sql',
       },
     ])
 

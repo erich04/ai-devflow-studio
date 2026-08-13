@@ -163,6 +163,36 @@ const overview: TeamOverviewResponse = {
       redacted: true,
     },
   ],
+  agentMemorySummaries: [
+    {
+      stateVersion: 1,
+      projectionVersion: 1,
+      memoryId: 'memory-team-1',
+      projectId: 'p-remote',
+      runId: 'run-remote',
+      nodeId: 'n-build',
+      runtimeId: 'agent-runtime-team-1',
+      ownerUserId: 'u-remote',
+      candidateId: 'memory-candidate-team-1',
+      currentRevision: 2,
+      headVersion: 3,
+      qualityVersion: 3,
+      lifecycleStatus: 'active',
+      visibility: 'project_shared',
+      sensitivity: 'internal',
+      retentionClass: 'until_deleted',
+      provenanceDigest: 'e'.repeat(64),
+      citationIds: ['knowledge-request-1', 'knowledge-request-2'],
+      retrievalCount: 2,
+      acceptedContextCount: 2,
+      expiresAt: null,
+      deletedAt: null,
+      purgeStatus: null,
+      purgedAt: null,
+      updatedAt: '2026-06-16T10:14:30.000Z',
+      redacted: true,
+    },
+  ],
   policyAwareDeliverySummaries: [
     {
       projectId: 'p-remote',
@@ -390,6 +420,16 @@ describe('web product shell page', () => {
           summary: 'Foreign coding run must stay hidden.',
         },
       ],
+      agentMemorySummaries: [
+        ...overview.agentMemorySummaries,
+        {
+          ...overview.agentMemorySummaries[0]!,
+          memoryId: 'memory-other',
+          projectId: otherProject.id,
+          runId: otherRun.id,
+          candidateId: 'memory-candidate-other',
+        },
+      ],
       agentReviews: [
         {
           ...overview.agentReviews[0]!,
@@ -416,6 +456,11 @@ describe('web product shell page', () => {
     expect(screen.getByText('Remote tests passed.')).toBeInTheDocument()
     expect(screen.getByText('Agent Runtime · n-build')).toBeInTheDocument()
     expect(screen.getByText('2 steps · 1 tools · v3')).toBeInTheDocument()
+    expect(screen.getByText('Memory · n-build')).toBeInTheDocument()
+    expect(screen.getByText(
+      '2 citations · 2 accepted contexts · quality v3 · revision 2',
+    )).toBeInTheDocument()
+    expect(screen.queryByText('Memory · memory-other')).not.toBeInTheDocument()
     expect(screen.queryByText('Foreign request summary.')).not.toBeInTheDocument()
     expect(screen.queryByText('Foreign tests must stay hidden.')).not.toBeInTheDocument()
     expect(screen.queryByText('Foreign coding run must stay hidden.')).not.toBeInTheDocument()
@@ -563,6 +608,11 @@ describe('web product shell page', () => {
     expect(screen.getByText('pnpm test')).toBeInTheDocument()
     expect(screen.getByText('Agent Runtime · n-build')).toBeInTheDocument()
     expect(screen.getByText('2 steps · 1 tools · v3')).toBeInTheDocument()
+    expect(screen.getByText('Memory · n-build')).toBeInTheDocument()
+    expect(screen.getByText(
+      '2 citations · 2 accepted contexts · quality v3 · revision 2',
+    )).toBeInTheDocument()
+    expect(screen.getByText('project_shared · internal · until_deleted')).toBeInTheDocument()
     expect(screen.getByText('No blocking knowledge gaps found.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Sign in with GitHub/ })).toHaveAttribute(
       'href',
@@ -680,6 +730,7 @@ describe('web product shell page', () => {
       testEvidenceSummaries: [],
       codingAgentSummaries: [],
       agentRuntimeSummaries: [],
+      agentMemorySummaries: [],
       policyAwareDeliverySummaries: [],
       agentReviews: [],
       agentTraces: [],

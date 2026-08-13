@@ -28,6 +28,7 @@ class FakeTeamDbClient implements TeamDbRepositoryClient {
   readonly acceptedChildSummaryWrites = new Map<string, unknown[]>()
   checkoutCount = 0
   releaseCount = 0
+  agentMemorySourceRuntimeExists = true
   private readonly childSummaryScopes = new Map<string, string>()
 
   constructor(
@@ -107,6 +108,27 @@ class FakeTeamDbClient implements TeamDbRepositoryClient {
     }
 
     if (sql.includes('INSERT INTO agent_runtime_projection_audits')) {
+      return []
+    }
+
+    if (sql.includes('FROM agent_runtime_summaries') && sql.includes('WHERE runtime_id = $1')) {
+      return (this.agentMemorySourceRuntimeExists
+        ? [{ runtime_id: params?.[0] }]
+        : []) as T[]
+    }
+
+    if (sql.includes('INSERT INTO agent_memory_summaries')) {
+      const values = params ?? []
+      const accepted = this.acceptScopedChildSummaryWrite(
+        'agent_memory_summaries',
+        values[0],
+        `${String(values[1])}:${String(values[2])}:${String(values[3])}:${String(values[4])}`,
+        values,
+      )
+      return (accepted ? [{ memory_id: values[0] }] : []) as T[]
+    }
+
+    if (sql.includes('INSERT INTO agent_memory_projection_audits')) {
       return []
     }
 
@@ -918,6 +940,155 @@ describe('Postgres team repository', () => {
     expect(JSON.stringify([write?.params, audit?.params])).not.toMatch(
       /localProjectId|userId|sessionId|source|path|output|checkpointData/i,
     )
+  })
+
+  it('writes a monotonic metadata-only Agent Memory projection and versioned audit', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+    const summary = {
+      stateVersion: 1 as const,
+      projectionVersion: 1 as const,
+      memoryId: 'agent-memory-team-1',
+      projectId: 'p-payments',
+      runId: 'run-remote-1',
+      nodeId: 'n-current',
+      runtimeId: 'agent-runtime-team-1',
+      ownerUserId: 'u-ling',
+      candidateId: 'agent-memory-candidate-team-1',
+      currentRevision: 1,
+      headVersion: 1,
+      qualityVersion: 2,
+      lifecycleStatus: 'active' as const,
+      visibility: 'user_project' as const,
+      sensitivity: 'private' as const,
+      retentionClass: 'until_deleted' as const,
+      provenanceDigest: 'a'.repeat(64),
+      citationIds: ['citation-a'],
+      retrievalCount: 1,
+      acceptedContextCount: 1,
+      expiresAt: null,
+      deletedAt: null,
+      purgeStatus: null,
+      purgedAt: null,
+      updatedAt: '2026-08-13T12:00:01.000Z',
+      redacted: true as const,
+    }
+    const context = {
+      organizationId: 'org-demo',
+      userId: 'u-ling',
+      tokenRecordId: 'desktop-token-1',
+    }
+
+    await expect(repository.uploadAgentMemorySummary({
+      ...summary,
+      qualityVersion: 0,
+    }, context)).rejects.toThrow('Remote child summary ID conflicts')
+    await expect(repository.uploadAgentMemorySummary(summary, context)).resolves.toMatchObject({
+      accepted: true,
+    })
+    await expect(repository.uploadAgentMemorySummary(
+      Object.fromEntries(Object.entries(summary).reverse()) as typeof summary,
+      context,
+    )).resolves.toMatchObject({ accepted: true })
+    await expect(repository.uploadAgentMemorySummary({
+      ...summary,
+      qualityVersion: 3,
+      citationIds: ['citation-a', 'citation-b'],
+      retrievalCount: 2,
+      acceptedContextCount: 2,
+      updatedAt: '2026-08-13T12:00:02.000Z',
+    }, context)).resolves.toMatchObject({ accepted: true })
+
+    const writes = db.queries.filter((query) =>
+      query.sql.includes('INSERT INTO agent_memory_summaries'),
+    )
+    const write = writes[0]
+    const audit = db.queries.find((query) =>
+      query.sql.includes('INSERT INTO agent_memory_projection_audits'),
+    )
+    expect(write?.sql).toContain("agent_memory_summaries.lifecycle_status <> 'deleted'")
+    expect(write?.sql).toContain(
+      'agent_memory_summaries.head_version <= excluded.head_version',
+    )
+    expect(write?.sql).toContain(
+      'agent_memory_summaries.quality_version < excluded.quality_version',
+    )
+    expect(write?.sql).toContain(
+      'agent_memory_summaries.memory_updated_at <= excluded.memory_updated_at',
+    )
+    expect(write?.sql).toContain(
+      'agent_memory_summaries.citation_ids <@ excluded.citation_ids',
+    )
+    expect(write?.sql).toContain(
+      'agent_memory_summaries.projection_digest = excluded.projection_digest',
+    )
+    expect(write?.params?.[4]).toBe('run-remote-1:n-current')
+    expect(writes).toHaveLength(3)
+    expect(writes[0]?.params?.[26]).toBe(writes[1]?.params?.[26])
+    expect(audit?.sql).toContain(
+      'ON CONFLICT (memory_id, head_version, quality_version) DO NOTHING',
+    )
+    expect(audit?.params?.slice(0, 9)).toEqual([
+      summary.memoryId,
+      summary.headVersion,
+      summary.qualityVersion,
+      'org-demo',
+      summary.projectId,
+      summary.runId,
+      'run-remote-1:n-current',
+      summary.runtimeId,
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+    ])
+    expect(JSON.stringify([write?.params, audit?.params])).not.toMatch(
+      /statement|contentDigest|localProjectId|sessionId|prompt|reasoning|credential|path|rawOutput/iu,
+    )
+    await expect(repository.uploadAgentMemorySummary({
+      ...summary,
+      ownerUserId: 'u-other',
+    }, context)).rejects.toThrow('Remote child summary ID conflicts')
+  })
+
+  it('rejects an Agent Memory projection whose source Runtime is outside the exact Run scope', async () => {
+    const db = new FakeTeamDbClient()
+    db.agentMemorySourceRuntimeExists = false
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(repository.uploadAgentMemorySummary({
+      stateVersion: 1,
+      projectionVersion: 1,
+      memoryId: 'agent-memory-cross-runtime',
+      projectId: 'p-payments',
+      runId: 'run-remote-1',
+      nodeId: 'n-current',
+      runtimeId: 'agent-runtime-foreign',
+      ownerUserId: 'u-ling',
+      candidateId: 'agent-memory-candidate-cross-runtime',
+      currentRevision: 1,
+      headVersion: 1,
+      qualityVersion: 1,
+      lifecycleStatus: 'active',
+      visibility: 'user_project',
+      sensitivity: 'private',
+      retentionClass: 'until_deleted',
+      provenanceDigest: 'a'.repeat(64),
+      citationIds: [],
+      retrievalCount: 0,
+      acceptedContextCount: 0,
+      expiresAt: null,
+      deletedAt: null,
+      purgeStatus: null,
+      purgedAt: null,
+      updatedAt: '2026-08-13T12:00:01.000Z',
+      redacted: true,
+    }, {
+      organizationId: 'org-demo',
+      userId: 'u-ling',
+      tokenRecordId: 'desktop-token-1',
+    })).rejects.toThrow('Remote child summary ID conflicts')
+
+    expect(db.queries.some((query) =>
+      query.sql.includes('INSERT INTO agent_memory_summaries'),
+    )).toBe(false)
   })
 
   it('does not inject a historical Gate override into a non-blocking Postgres enforcement decision', async () => {

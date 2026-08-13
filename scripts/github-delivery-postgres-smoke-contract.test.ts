@@ -118,9 +118,18 @@ describe('Postgres GitHub Delivery smoke contract', () => {
     expect(source).toContain('agentRuntimeSummaries')
   })
 
-  it('proves the retained Agent Memory projection migration starts empty', () => {
+  it('proves retained migration and same-head Agent Memory quality projection', () => {
     expect(source).toContain('agent_memory_summaries')
     expect(source).toContain('agent_memory_projection_audits')
     expect(source).toContain('V16-to-v17 migration invented Agent Memory projection rows.')
+    expect(source).toContain('0018_agent_memory_projection_quality_version')
+    expectInOrder(source, [
+      "'/api/sync/agent-memory-summary'",
+      'qualityVersion: 2',
+      'qualityVersion: 3',
+      'await assertAgentMemoryProjectionDatabaseState({',
+    ])
+    expect(source).toContain('memory_id,head_version,quality_version')
+    expect(source).toContain('agent_memory_summaries_quality_counts_are_exact')
   })
 })

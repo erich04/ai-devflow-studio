@@ -17,6 +17,7 @@ import type {
   Project,
   ProjectEnforcementPolicyOverride,
   RemoteCodingAgentSummary,
+  RemoteAgentMemorySummary,
   RemoteAgentRuntimeSummary,
   RemoteTestEvidenceSummary,
   RuntimeBudgetApproval,
@@ -35,6 +36,7 @@ import {
   parseWorkRequestRecord,
   parseGateCommandCreate,
   parseGateCommandRecord,
+  parseRemoteAgentMemorySummary,
   parseRemoteAgentRuntimeSummary,
   type CreateGateCommandInput,
   type CreateWorkRequestInput,
@@ -51,6 +53,7 @@ export type TeamOverviewResponse = {
   testEvidenceSummaries: RemoteTestEvidenceSummary[]
   codingAgentSummaries: RemoteCodingAgentSummary[]
   agentRuntimeSummaries: RemoteAgentRuntimeSummary[]
+  agentMemorySummaries: RemoteAgentMemorySummary[]
   policyAwareDeliverySummaries: PolicyAwareDeliverySummary[]
   agentReviews: AgentReviewResult[]
   agentTraces: AgentTrace[]
@@ -162,6 +165,16 @@ export async function fetchTeamOverview(
     )
   } catch {
     throw new Error('DevFlow API /api/team/overview returned an invalid Agent Runtime projection')
+  }
+  if (!Array.isArray(value.agentMemorySummaries)) {
+    throw new Error('DevFlow API /api/team/overview returned an invalid Agent Memory projection')
+  }
+  try {
+    value.agentMemorySummaries = value.agentMemorySummaries.map(
+      parseRemoteAgentMemorySummary,
+    )
+  } catch {
+    throw new Error('DevFlow API /api/team/overview returned an invalid Agent Memory projection')
   }
   return value
 }

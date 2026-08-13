@@ -8,6 +8,7 @@ import {
   redactRemoteCodingAgentSummaryForSync,
   redactRemoteAgentReviewSummaryForSync,
   parseRemoteAgentRuntimeSummary,
+  parseRemoteAgentMemorySummary,
   redactRemoteRunSummaryForSync,
   redactRemoteTestEvidenceSummaryForSync,
   resolveEffectivePolicy,
@@ -33,6 +34,7 @@ import {
   type ProjectEnforcementPolicyOverride,
   type RemoteAgentReviewSummary,
   type RemoteAgentRuntimeSummary,
+  type RemoteAgentMemorySummary,
   type RemoteCodingAgentSummary,
   type RemoteRunDeleteResult,
   type RuntimeBudgetApproval,
@@ -99,6 +101,7 @@ export type TeamOverviewPayload = {
   agentProviders: AgentProviderConfig[]
   codingAgentSummaries: RemoteCodingAgentSummary[]
   agentRuntimeSummaries: RemoteAgentRuntimeSummary[]
+  agentMemorySummaries: RemoteAgentMemorySummary[]
   policyAwareDeliverySummaries: PolicyAwareDeliverySummary[]
   enforcementPolicies: {
     organizationPolicy: OrganizationEnforcementPolicy
@@ -228,6 +231,10 @@ export type TeamRepository = WorkRequestRepository &
     summary: RemoteAgentRuntimeSummary,
     context: TeamRepositorySyncContext,
   ): Promise<RemoteSyncUploadResult>
+  uploadAgentMemorySummary(
+    summary: RemoteAgentMemorySummary,
+    context: TeamRepositorySyncContext,
+  ): Promise<RemoteSyncUploadResult>
   listAgentProviders(context: TeamRepositorySyncContext): Promise<AgentProviderConfig[]>
   saveAgentProviderCredential(
     metadata: ProviderCredentialMetadata,
@@ -355,6 +362,7 @@ export function createSeedTeamRepository(): TeamRepository {
   const agentTokenUsage: AgentTokenUsage[] = []
   const codingAgentSummaries: RemoteCodingAgentSummary[] = []
   const agentRuntimeSummaries: RemoteAgentRuntimeSummary[] = []
+  const agentMemorySummaries: RemoteAgentMemorySummary[] = []
   let organizationPolicy = createWarnOnlyDefaultPolicy({ organizationId: DEMO_ORGANIZATION_ID })
   const projectOverrides: ProjectEnforcementPolicyOverride[] = []
   const gateOverrides: GateOverrideDecision[] = []
@@ -865,6 +873,9 @@ export function createSeedTeamRepository(): TeamRepository {
       const scopedAgentRuntimeSummaries = agentRuntimeSummaries.filter(
         (summary) => projectIds.has(summary.projectId) && runIds.has(summary.runId),
       )
+      const scopedAgentMemorySummaries = agentMemorySummaries.filter(
+        (summary) => projectIds.has(summary.projectId) && runIds.has(summary.runId),
+      )
       const codingTokenUsage = scopedCodingAgentSummaries
         .map((summary) => summary.costSummary)
         .filter(
@@ -901,6 +912,7 @@ export function createSeedTeamRepository(): TeamRepository {
         agentProviders: agentProviderConfigs(context),
         codingAgentSummaries: scopedCodingAgentSummaries,
         agentRuntimeSummaries: scopedAgentRuntimeSummaries,
+        agentMemorySummaries: scopedAgentMemorySummaries,
         policyAwareDeliverySummaries: buildPolicyAwareDeliverySummaries({
           projectIds: scopedProjects.map((project) => project.id),
           testEvidenceSummaries: scopedTestEvidence,
@@ -1210,6 +1222,106 @@ export function createSeedTeamRepository(): TeamRepository {
         accepted: true,
         syncedAt: new Date().toISOString(),
         message: 'agent runtime summary accepted by seed repository',
+      }
+    },
+
+    async uploadAgentMemorySummary(summary, context) {
+      summary = parseRemoteAgentMemorySummary(summary)
+      assertCanonicalRun(summary, context)
+      if (summary.qualityVersion === 0) {
+        throw new RemoteChildSummaryConflictError(
+          summary.memoryId,
+          summary.runId,
+          summary.projectId,
+        )
+      }
+      const canonicalRun = syncedRuns.find((run) => run.id === summary.runId)!
+      if (
+        summary.ownerUserId !== context.userId ||
+        !canonicalRun.nodes.some((node) => node.id === summary.nodeId)
+      ) {
+        throw new RemoteChildSummaryConflictError(
+          summary.memoryId,
+          summary.runId,
+          summary.projectId,
+        )
+      }
+      const existing = agentMemorySummaries.find(
+        (candidate) => candidate.memoryId === summary.memoryId,
+      )
+      assertStableChildSummaryScope(
+        existing ? { ...existing, id: existing.memoryId } : undefined,
+        { ...summary, id: summary.memoryId },
+        context,
+      )
+      if (existing) {
+        const exactReplay = JSON.stringify(existing) === JSON.stringify(summary)
+        const stableIdentity =
+          existing.runtimeId === summary.runtimeId &&
+          existing.ownerUserId === summary.ownerUserId &&
+          existing.candidateId === summary.candidateId &&
+          existing.provenanceDigest === summary.provenanceDigest
+        const citationIdsMonotonic = existing.citationIds.every(
+          (citationId) => summary.citationIds.includes(citationId),
+        )
+        const sameRevisionAuthority = summary.currentRevision !== existing.currentRevision || (
+          summary.visibility === existing.visibility &&
+          summary.sensitivity === existing.sensitivity &&
+          summary.retentionClass === existing.retentionClass &&
+          summary.expiresAt === existing.expiresAt
+        )
+        const lifecycleMonotonic =
+          existing.lifecycleStatus !== 'deleted' &&
+          (existing.lifecycleStatus !== 'purge_pending' ||
+            summary.lifecycleStatus === 'purge_pending' ||
+            summary.lifecycleStatus === 'deleted')
+        const sameHeadAuthority = summary.headVersion !== existing.headVersion || (
+          summary.currentRevision === existing.currentRevision &&
+          summary.lifecycleStatus === existing.lifecycleStatus &&
+          summary.deletedAt === existing.deletedAt &&
+          summary.purgeStatus === existing.purgeStatus &&
+          summary.purgedAt === existing.purgedAt
+        )
+        if (
+          !stableIdentity ||
+          summary.headVersion < existing.headVersion ||
+          summary.qualityVersion < existing.qualityVersion ||
+          (summary.headVersion === existing.headVersion &&
+            summary.qualityVersion === existing.qualityVersion && !exactReplay) ||
+          summary.currentRevision < existing.currentRevision ||
+          summary.retrievalCount < existing.retrievalCount ||
+          summary.acceptedContextCount < existing.acceptedContextCount ||
+          !citationIdsMonotonic ||
+          !sameRevisionAuthority ||
+          !sameHeadAuthority ||
+          (!exactReplay && (
+            !lifecycleMonotonic ||
+            Date.parse(summary.updatedAt) < Date.parse(existing.updatedAt)
+          ))
+        ) {
+          throw new RemoteChildSummaryConflictError(
+            summary.memoryId,
+            summary.runId,
+            summary.projectId,
+          )
+        }
+        if (exactReplay) {
+          return {
+            accepted: true,
+            syncedAt: new Date().toISOString(),
+            message: 'agent memory summary replay accepted by seed repository',
+          }
+        }
+        const index = agentMemorySummaries.indexOf(existing)
+        agentMemorySummaries[index] = summary
+      } else {
+        agentMemorySummaries.unshift(summary)
+      }
+
+      return {
+        accepted: true,
+        syncedAt: new Date().toISOString(),
+        message: 'agent memory summary accepted by seed repository',
       }
     },
 

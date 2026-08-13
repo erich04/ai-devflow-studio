@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { TeamDbConfig, TeamDbRepositoryClient } from '../db/client'
+import { TEAM_SCHEMA_VERSION } from '../db/schema'
 import { createTeamRepositoryRuntime } from './repository-runtime'
 
 function createFakeDb(): TeamDbRepositoryClient {
@@ -77,7 +78,7 @@ describe('team repository runtime', () => {
   })
 
   it('reports Postgres readiness only at the current Team schema version', async () => {
-    const querySpy = vi.fn(async (_sql: string) => [{ value: '17' }])
+    const querySpy = vi.fn(async (_sql: string) => [{ value: String(TEAM_SCHEMA_VERSION) }])
     const query = async <T>(sql: string): Promise<T[]> =>
       (await querySpy(sql)) as T[]
     const runtime = await createTeamRepositoryRuntime({
@@ -106,8 +107,9 @@ describe('team repository runtime', () => {
     '14',
     '15',
     '16',
-    '17junk',
-    ' 17 ',
+    '17',
+    '18junk',
+    ' 18 ',
   ])(
     'rejects missing or non-canonical Team schema version %s',
     async (schemaVersion) => {

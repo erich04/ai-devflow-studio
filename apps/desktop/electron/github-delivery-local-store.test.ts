@@ -745,7 +745,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(26)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(27)
     await expect(migrated.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])
 
     const v2Check: GitHubDeliveryRevocationCheck = {
@@ -775,10 +775,10 @@ describe('GitHub Delivery Intent local persistence', () => {
     verified.close()
   })
 
-  it('keeps schema 17 revocation checks isolated after migrating through schema 26', async () => {
+  it('keeps schema 17 revocation checks isolated after migrating through schema 27', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
-    expect(await store.getSchemaVersion()).toBe(26)
+    expect(await store.getSchemaVersion()).toBe(27)
     store.close()
 
     const SQL = await initSqlJs()
@@ -1136,7 +1136,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     store.close()
   })
 
-  it('preserves an existing v14 JSON series and non-first attempt through schema 26', async () => {
+  it('preserves an existing v14 JSON series and non-first attempt through schema 27', async () => {
     const dbPath = await tempDbPath()
     const sources = createSources()
     const store = await createLocalStore({ dbPath })
@@ -1181,7 +1181,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(26)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(27)
     await expect(migrated.listGitHubDeliveryIntents(sources.run.id))
       .resolves.toEqual([attemptTwo])
     migrated.close()
@@ -1206,7 +1206,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(26)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(27)
     await expect(migrated.listGitHubDeliveryIntents(sources.run.id))
       .resolves.toEqual([completed])
     await expect(migrated.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])

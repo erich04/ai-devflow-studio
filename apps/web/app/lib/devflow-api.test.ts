@@ -447,6 +447,7 @@ describe('DevFlow web API client', () => {
           testEvidenceSummaries: [],
           codingAgentSummaries: [],
           agentRuntimeSummaries: [],
+          agentMemorySummaries: [],
           policyAwareDeliverySummaries: [],
           agentReviews: [],
           agentTraces: [],
@@ -476,7 +477,8 @@ describe('DevFlow web API client', () => {
       totalCost: '$0.000',
       testEvidenceSummaries: [],
       codingAgentSummaries: [],
-          agentRuntimeSummaries: [],
+      agentRuntimeSummaries: [],
+      agentMemorySummaries: [],
       policyAwareDeliverySummaries: [],
       agentReviews: [],
       agentTraces: [],
@@ -532,6 +534,45 @@ describe('DevFlow web API client', () => {
     )
   })
 
+  it('fails closed when an Agent Memory projection adds local content', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      agentRuntimeSummaries: [],
+      agentMemorySummaries: [{
+        stateVersion: 1,
+        projectionVersion: 1,
+        memoryId: 'memory-team-1',
+        projectId: 'p-payments',
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        runtimeId: 'agent-runtime-team-1',
+        ownerUserId: 'u-erich',
+        candidateId: 'memory-candidate-team-1',
+        currentRevision: 2,
+        headVersion: 3,
+        qualityVersion: 2,
+        lifecycleStatus: 'active',
+        visibility: 'project_shared',
+        sensitivity: 'internal',
+        retentionClass: 'until_deleted',
+        provenanceDigest: 'a'.repeat(64),
+        citationIds: ['knowledge-request-1'],
+        retrievalCount: 1,
+        acceptedContextCount: 1,
+        expiresAt: null,
+        deletedAt: null,
+        purgeStatus: null,
+        purgedAt: null,
+        updatedAt: '2026-08-12T20:00:01.000Z',
+        redacted: true,
+        statement: 'private local Memory content',
+      }],
+    }), { status: 200 }))
+
+    await expect(fetchTeamOverview({ apiBaseUrl: 'http://api.local', fetcher })).rejects.toThrow(
+      'invalid Agent Memory projection',
+    )
+  })
+
   it('uses explicit session headers only when a caller opts into them', async () => {
     const fetcher = vi.fn(async () =>
       new Response(
@@ -545,6 +586,7 @@ describe('DevFlow web API client', () => {
           testEvidenceSummaries: [],
           codingAgentSummaries: [],
           agentRuntimeSummaries: [],
+          agentMemorySummaries: [],
           policyAwareDeliverySummaries: [],
           agentReviews: [],
           agentTraces: [],

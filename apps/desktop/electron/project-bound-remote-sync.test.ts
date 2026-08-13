@@ -281,6 +281,7 @@ describe('project-bound Electron remote sync', () => {
     expect(Object.keys(boundRemoteSync).sort()).toEqual([
       'evaluateRuntimeBudget',
       'saveGateOverride',
+      'uploadCanonicalAgentMemorySummary',
       'uploadCanonicalAgentReviewSummary',
       'uploadCanonicalAgentRuntimeSummary',
       'uploadCanonicalCodingAgentSummary',
@@ -362,6 +363,82 @@ describe('project-bound Electron remote sync', () => {
       boundRemoteSync.uploadCanonicalAgentRuntimeSummary(runtime.id),
     ).rejects.toMatchObject({ code: 'scope_mismatch', entityKind: 'agent_runtime' })
     expect(uploadAgentRuntimeSummary).not.toHaveBeenCalled()
+  })
+
+  it('uploads an exact metadata-only Team Agent Memory projection from canonical local state', async () => {
+    const uploadAgentMemorySummary = vi.fn(async () => ({
+      accepted: true,
+      syncedAt: '2026-08-13T12:00:02.000Z',
+      message: 'accepted',
+    }))
+    const memory = {
+      memoryId: 'agent-memory-team-1',
+      headVersion: 1,
+      currentRevision: 1,
+      lifecycleStatus: 'active' as const,
+      revisionStatus: 'active' as const,
+      scope: {
+        kind: 'team' as const,
+        organizationId: pairingCredential.organizationId,
+        projectId: pairingCredential.projectId,
+        userId: pairingCredential.userId,
+        localProjectId: pairingCredential.localProjectId!,
+      },
+      visibility: 'user_project' as const,
+      statement: 'Local content must not leave Electron main.',
+      contentDigest: digest('c'),
+      provenanceDigest: digest('d'),
+      sourceCandidateId: 'agent-memory-candidate-team-1',
+      sensitivity: 'private' as const,
+      retentionClass: 'until_deleted' as const,
+      expiresAt: null,
+      promotionPolicyId: 'human-agent-memory-promotion',
+      promotionPolicyVersion: 1,
+      createdAt: '2026-08-13T12:00:00.000Z',
+      updatedAt: '2026-08-13T12:00:01.000Z',
+      tombstone: null,
+      redacted: true as const,
+    }
+    const boundRemoteSync = createProjectBoundRemoteSync({
+      remoteSync: { uploadAgentMemorySummary } as unknown as RemoteSyncClient,
+      credentialSource: {
+        getDesktopPairingCredential: async () => pairingCredential,
+        getAgentMemoryTeamProjectionInput: async () => ({
+          memory,
+          runId: localRun.id,
+          nodeId: 'n-build',
+          runtimeId: 'agent-runtime-team-1',
+          citationIds: ['citation-a'],
+          retrievalCount: 1,
+          acceptedContextCount: 1,
+          qualityVersion: 2,
+          qualityUpdatedAt: '2026-08-13T12:00:02.000Z',
+        }),
+        listRuns: async () => [localRun],
+        listTestEvidence: async () => [],
+        listAgentReviews: async () => [],
+        listCodingAgentRuns: async () => [],
+        listCodingDiffArtifacts: async () => [],
+      },
+    })
+
+    await boundRemoteSync.uploadCanonicalAgentMemorySummary(memory.memoryId)
+
+    expect(uploadAgentMemorySummary).toHaveBeenCalledWith(expect.objectContaining({
+      memoryId: memory.memoryId,
+      projectId: pairingCredential.projectId,
+      runId: localRun.id,
+      nodeId: 'n-build',
+      runtimeId: 'agent-runtime-team-1',
+      citationIds: ['citation-a'],
+      retrievalCount: 1,
+      acceptedContextCount: 1,
+      qualityVersion: 2,
+      redacted: true,
+    }))
+    expect(JSON.stringify(uploadAgentMemorySummary.mock.calls)).not.toMatch(
+      /statement|contentDigest|localProjectId|sessionId|prompt|reasoning|credential|path|rawOutput/iu,
+    )
   })
 
   it('returns a structured operator-safe error when the canonical Run entity is missing', async () => {

@@ -590,6 +590,57 @@ describe('Electron remote sync client', () => {
     )
   })
 
+  it('uploads a metadata-only Team Agent Memory summary through the exact safe endpoint', async () => {
+    const summary = {
+      stateVersion: 1 as const,
+      projectionVersion: 1 as const,
+      memoryId: 'agent-memory-team-1',
+      projectId: 'team-project-1',
+      runId: 'run-1',
+      nodeId: 'node-1',
+      runtimeId: 'agent-runtime-team-1',
+      ownerUserId: 'user-1',
+      candidateId: 'agent-memory-candidate-team-1',
+      currentRevision: 1,
+      headVersion: 1,
+      qualityVersion: 2,
+      lifecycleStatus: 'active' as const,
+      visibility: 'user_project' as const,
+      sensitivity: 'private' as const,
+      retentionClass: 'until_deleted' as const,
+      provenanceDigest: 'a'.repeat(64),
+      citationIds: ['citation-a'],
+      retrievalCount: 1,
+      acceptedContextCount: 1,
+      expiresAt: null,
+      deletedAt: null,
+      purgeStatus: null,
+      purgedAt: null,
+      updatedAt: '2026-08-13T12:00:01.000Z',
+      redacted: true as const,
+    }
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      accepted: true,
+      syncedAt: '2026-08-13T12:00:02.000Z',
+      message: 'accepted',
+    }), { status: 202 }))
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'desktop-secret',
+    })
+
+    await expect(client.uploadAgentMemorySummary(summary)).resolves.toMatchObject({ accepted: true })
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/sync/agent-memory-summary',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify(summary),
+        headers: expect.objectContaining({ authorization: 'Bearer desktop-secret' }),
+      }),
+    )
+  })
+
   it('maps a malformed successful response to a safe retryable invalid-response error', async () => {
     const client = createRemoteSyncClient({
       apiBaseUrl: 'http://api.local',

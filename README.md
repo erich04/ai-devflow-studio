@@ -57,7 +57,7 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
   pushed the exact same commit but failed before Draft creation; it does not mint another credential
   or push the branch again.
 - The V2.0 foundation provides a strict bounded Agent Runtime kernel, while current Desktop schema
-  v26 retains trajectory/checkpoint persistence, full main-owned Runtime Context attachments,
+  v27 retains trajectory/checkpoint persistence, full main-owned Runtime Context attachments,
   stale-before-action and grant-reservation Citation/Memory fencing, renderer projection v2 with
   metadata-only provenance, a separate bounded Agent Memory lifecycle view with exact revision/head
   versions, exact-digest human Candidate promotion, exact-version statement revision, confirmed
@@ -66,7 +66,8 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
   and main-owned
   trusted local stdio MCP authority; it adds the V2.1 retrieval index plus inert candidates,
   immutable durable Memory revisions, heads, tombstones, derived index entries, and metadata-only
-  audits without fabricating retained data.
+  audits without fabricating retained data. Its identifier-only outbox syncs the strict Team Memory
+  projection, and Web displays only redacted lifecycle and quality metadata with no local control.
   installation authority. Electron main owns strict Tool registration, opaque scoped
   grants, executable/digest verification, negotiated discovery, cancellation fencing, and bounded
   repository read, managed-workspace edit, saved-test, deterministic-evaluation, and MCP Tool
@@ -74,8 +75,9 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
   capability-negotiated, path-free request/permission/terminal contract. The narrow native executor
   now performs bounded plan/read/observation-bound-edit/test/evaluate/one-repair work through accepted main-owned Tools,
   recovers approved checkpoints without repeated side effects, and keeps publication/Gate authority outside.
-  Team schema v17 receives only monotonic redacted Runtime and Memory lifecycle metadata plus
-  versioned audit; the Web view is read-only and cannot resume Runtime or mutate local Memory.
+  Team schema v18 receives only monotonic redacted Runtime and Memory lifecycle/quality metadata;
+  lifecycle heads and accepted-Context quality advances use independent audit versions. The Web
+  view is read-only and cannot resume Runtime or mutate local Memory.
 - Bearer-token sync, API/Postgres persistence, reproducible unsigned pilot artifacts, and the Web console provide a self-hosted team-pilot path.
 
 ### Verification Evidence
@@ -86,10 +88,10 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 | `corepack pnpm verify:demo` | The default gate plus browser E2E and a real Electron main/preload/SQLite smoke path. |
 | `corepack pnpm test:postgres-smoke` | Migration, persistence, policy, approval, sync, and redacted team reads against Postgres. |
 | `corepack pnpm test:docker-smoke` | The containerized API/Web/Postgres stack, Desktop pairing, bearer auth, and safe overview data. |
-| `corepack pnpm test:docker-lifecycle-smoke` | Fresh Team schema v17, retained V1.4 schema v10 upgrade, transactional populated v11-to-v12 retry, fail-closed v12-to-v13 provider-authoritative expiry migration, durable v13-to-v14 provider backoff, v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, empty v16-to-v17 metadata-only Agent Memory projection, and bounded V1.4 backup/restore rollback. |
+| `corepack pnpm test:docker-lifecycle-smoke` | Fresh Team schema v18, retained V1.4 schema v10 upgrade, transactional populated v11-to-v12 retry, fail-closed v12-to-v13 provider-authoritative expiry migration, durable v13-to-v14 provider backoff, v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, empty v16-to-v17 metadata-only Agent Memory projection, v17-to-v18 independent Memory quality audit versioning, and bounded V1.4 backup/restore rollback. |
 | `corepack pnpm test:v15-github-delivery` | The full offline Delivery Intent → separate approval → exact branch → Draft PR → Acceptance story, including restart and revocation. |
 | `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive and packaged launch isolation; Local MCP and native Coding counts remain exact after cold restart, while one accepted Memory Candidate is promoted, revised, tombstoned, purged, and reopened with `memoryRestartDuplicateEffects: 0`. |
-| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v26 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
+| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v27 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
 | `corepack pnpm test:v20-agent-runtime-evaluator` | The clean-candidate V2.0 scenario collector and strict completion evaluator; provider credentials are removed and only a path/secret-free structured record is retained. |
 | Release-only opencode smoke | A paid, explicit signoff for the real local coding runtime; it is never part of default CI. |
 

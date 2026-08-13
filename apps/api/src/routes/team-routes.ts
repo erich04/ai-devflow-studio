@@ -13,6 +13,7 @@ import {
   type KnowledgeChunk,
   type KnowledgeDocument,
   parseBudgetGuardDecision,
+  parseRemoteAgentMemorySummary,
   parseRemoteAgentRuntimeSummary,
   type OrganizationEnforcementPolicy,
   resolveDevFlowRuntimeFlags,
@@ -28,6 +29,7 @@ import {
   validateEnforcementPolicy,
   type ProviderCredentialMetadata,
   type RemoteAgentReviewSummary,
+  type RemoteAgentMemorySummary,
   type RemoteAgentRuntimeSummary,
   type RemoteCodingAgentSummary,
   type RuntimeBudgetApproval,
@@ -784,6 +786,9 @@ function filterOverviewForSession(
       projectIds.has(summary.projectId) && runIds.has(summary.runId),
     ),
     agentRuntimeSummaries: overview.agentRuntimeSummaries.filter((summary) =>
+      projectIds.has(summary.projectId) && runIds.has(summary.runId),
+    ),
+    agentMemorySummaries: overview.agentMemorySummaries.filter((summary) =>
       projectIds.has(summary.projectId) && runIds.has(summary.runId),
     ),
     policyAwareDeliverySummaries: overview.policyAwareDeliverySummaries.filter(
@@ -1719,6 +1724,27 @@ export async function resolveTeamRoute(
 
     return acceptCanonicalRunEvidence(() =>
       repository.uploadAgentRuntimeSummary(summary, options.session!),
+    )
+  }
+
+  if (method === 'POST' && pathname === '/api/sync/agent-memory-summary') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    let summary: RemoteAgentMemorySummary
+    try {
+      summary = parseRemoteAgentMemorySummary(options.body)
+    } catch {
+      return badRequest('Invalid Agent Memory Team projection payload')
+    }
+
+    if (!canSyncProject(options.session, summary.projectId, 'member')) {
+      return forbidden('Project role member required')
+    }
+
+    return acceptCanonicalRunEvidence(() =>
+      repository.uploadAgentMemorySummary(summary, options.session!),
     )
   }
 

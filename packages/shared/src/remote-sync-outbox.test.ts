@@ -98,6 +98,27 @@ describe('remote sync outbox contract', () => {
     expect(JSON.stringify(operation)).not.toMatch(/payload|source|output|checkpoint/i)
   })
 
+  it('gives Agent Memory summaries one metadata-only logical operation identity', () => {
+    const operation = createRemoteSyncOperation({
+      id: 'sync-memory-1',
+      kind: 'agent-memory-summary',
+      localProjectId: 'local-1',
+      organizationId: 'org-1',
+      teamProjectId: 'team-1',
+      runId: 'run-1',
+      entityId: 'agent-memory-1',
+      createdAt: '2026-08-13T12:00:00.000Z',
+    })
+
+    expect(operation).toMatchObject({
+      kind: 'agent-memory-summary',
+      entityId: 'agent-memory-1',
+      idempotencyKey:
+        'remote-sync:v1:local-1:agent-memory-summary:run-1:agent-memory-1',
+    })
+    expect(JSON.stringify(operation)).not.toMatch(/payload|statement|content|prompt|reasoning/i)
+  })
+
   it('represents an operation awaiting its first Team binding with null scope', () => {
     const operation = createRemoteSyncOperation({
       id: 'sync-unbound',

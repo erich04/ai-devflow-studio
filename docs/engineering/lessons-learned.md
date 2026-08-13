@@ -62,13 +62,14 @@ Use this shape:
   external database.
 - **Checks**:
   - Run Postgres smoke only with an explicit `DEVFLOW_DATABASE_URL`.
-  - Prove a clean database reaches Team schema v17, a populated v11-to-v12 upgrade retains exact
+  - Prove a clean database reaches Team schema v18, a populated v11-to-v12 upgrade retains exact
     data, and a v12-to-v13 upgrade preserves a legacy issued credential without fabricating
     provider-authoritative expiry evidence; v13-to-v14 then adds only a bounded non-secret
     provider retry boundary; v14-to-v15 then adds verified publication adoption while retaining
     exact legacy grant-backed publication authority; v15-to-v16 then adds only metadata-only Agent
     Runtime summaries/audit without inventing rows for retained data; v16-to-v17 then adds only
-    metadata-only Agent Memory summaries/audit without inventing rows.
+    metadata-only Agent Memory summaries/audit without inventing rows; v17-to-v18 then separates
+    same-head quality audit versions from lifecycle head versions.
   - Confirm policy save/read, enforcement evaluation, override audit, stale policy rejection,
     approval-sync bypass rejection, and overview redaction.
   - Confirm the GitHub App repository binding, Delivery Request, signed approval, credential grant,

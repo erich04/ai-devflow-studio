@@ -6,14 +6,16 @@ retroactive TDD rewrites unless it is touched.
 
 ## Current Persistence Baseline
 
-- Team/API/Postgres uses Team schema v17. Migration tests must prove a fresh v17 database, the
+- Team/API/Postgres uses Team schema v18. Migration tests must prove a fresh v18 database, the
   populated v11-to-v12 delivery-series upgrade, and the v12-to-v13 provider-authoritative expiry
   contract without inventing expiry evidence for legacy issued credentials, followed by the
   v13-to-v14 bounded provider retry boundary, the v14-to-v15 verified publication adoption
   authority without changing legacy grant-backed publications, and the v15-to-v16 metadata-only
   Agent Runtime projection without inventing runtime summaries or audit rows, followed by the
-  v16-to-v17 metadata-only Agent Memory projection without inventing Memory summaries or audit rows.
-- Electron/SQLite uses Desktop schema v26. Local-store tests must prove a fresh v26 database, the
+  v16-to-v17 metadata-only Agent Memory projection without inventing Memory summaries or audit rows,
+  followed by v17-to-v18 independent same-head Memory quality audit versioning. Retained rows keep
+  reserved quality version 0 until the first new projection converges them; new writes start at 1.
+- Electron/SQLite uses Desktop schema v27. Local-store tests must prove a fresh v27 database, the
   Desktop schema 17-to-18 retained Runtime upgrade, the 18-to-19 metadata-only Native Tool audit
   upgrade with no invented grant or audit rows, and the 19-to-20 Local MCP installation/audit
   provenance upgrade with no invented installation or MCP audit, and the 20-to-21 retained outbox
@@ -23,8 +25,9 @@ retroactive TDD rewrites unless it is touched.
   revision/head/tombstone/derived-index/audit migration with zero fabricated lifecycle rows, plus
   the 24-to-25 retained migration that removes source-candidate uniqueness without losing revision,
   head, tombstone, index, or audit history, followed by the 25-to-26 additive Runtime Context
-  migration without fabricating attachments, plus rollback on migration failure and refusal of a newer
-  unknown schema.
+  migration without fabricating attachments, followed by the 26-to-27 retained metadata-only outbox
+  migration that admits exact Agent Memory summary IDs without changing existing rows, plus rollback
+  on migration failure and refusal of a newer unknown schema.
 - V2.1 retrieval-index tests prove atomic activation preserves the previous current snapshot when
   persistence fails, source update/delete removes stale current identities, and corrupt, mismatched,
   cross-scope, non-finite, or over-1024-chunk state fails closed. An explicit bounded rebuild restores
@@ -66,6 +69,11 @@ retroactive TDD rewrites unless it is touched.
   a second renderer confirmation, constructs deletion authority solely in Electron main, persists a
   tombstone before purge, and lets an exact `purge_pending` projection resume derived-state cleanup
   without recreating deletion authority.
+- The completed V2.1 Slice 6 matrix proves Team schema 18 fabricates zero Memory summaries, Desktop
+  schema 27 retains old outbox rows, exact lifecycle and accepted-Context changes coalesce one
+  identifier-only operation, Seed/Postgres independently version monotonic lifecycle and quality
+  projections, and Web
+  rejects extra local content while exposing no Memory or Runtime mutation action.
 - The packaged Desktop pilot must execute exactly one `scenario.evaluate` Local MCP Tool, persist
   one started and one succeeded installation-bound metadata-only audit, and retain one accepted
   action after cold restart without another grant, MCP call, or audit record. It must also complete

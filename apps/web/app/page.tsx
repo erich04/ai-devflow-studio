@@ -235,6 +235,11 @@ export default async function Page({ searchParams }: PageProps) {
         (item) => item.projectId === activeProject?.id && item.runId === activeRun.id,
       )
     : []
+  const currentAgentMemories = activeRun
+    ? overview.agentMemorySummaries.filter(
+        (item) => item.projectId === activeProject?.id && item.runId === activeRun.id,
+      )
+    : []
   const knowledgeReviewProviderId = overview.agentProviders[0]?.id ?? ''
   const policySummary = activeProject
     ? overview.policyAwareDeliverySummaries.find((item) => item.projectId === activeProject.id)
@@ -557,6 +562,25 @@ export default async function Page({ searchParams }: PageProps) {
               ))
             ) : (
               <CompactRow title="Planner / Code / Test" meta="等待 Desktop 同步真实 coding agent 运行" value="idle" />
+            )}
+          </SupportPanel>
+
+          <SupportPanel id="memory" icon={<Database size={17} />} title="Team Memory" action="元数据只读">
+            {currentAgentMemories.length > 0 ? (
+              currentAgentMemories.slice(0, 4).map((memory) => (
+                <CompactRow
+                  key={memory.memoryId}
+                  title={`Memory · ${memory.nodeId}`}
+                  meta={`${memory.citationIds.length} citations · ${memory.acceptedContextCount} accepted contexts · quality v${memory.qualityVersion} · revision ${memory.currentRevision}`}
+                  value={`${memory.visibility} · ${memory.sensitivity} · ${memory.retentionClass}`}
+                />
+              ))
+            ) : (
+              <CompactRow
+                title="暂无 Team Memory"
+                meta="Desktop 同步后仅显示脱敏元数据与质量计数"
+                value="read-only"
+              />
             )}
           </SupportPanel>
 

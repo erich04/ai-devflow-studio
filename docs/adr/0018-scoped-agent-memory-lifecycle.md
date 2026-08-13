@@ -26,9 +26,12 @@ Knowledge Source File, Governance Evidence, an Agent Checkpoint, or hidden reaso
   sensitivity, status, and audit metadata.
 
 Only Electron main may promote full-fidelity local Memory derived from repository work. Team/API may
-store an explicitly allowed redacted Memory projection only when product policy names that field set;
-it cannot request raw local text or promote local Memory. A model, renderer, retrieval hit, or MCP
-server cannot mint promotion authority.
+store an explicitly allowed redacted Memory projection only: the versioned strict field set named by
+product policy contains stable scope/source
+identities, lifecycle and revision/head versions, provenance digest, bounded canonical citation IDs,
+durable accepted-Context counts, retention metadata, and timestamps. It cannot request raw local
+text or promote local Memory. A model, renderer, retrieval hit, or MCP server cannot mint promotion
+authority.
 
 ### Scope And Retrieval
 
@@ -72,8 +75,8 @@ boundaries, delete/purge/restart, projection redaction, and no-resurrection repl
 ## Consequences
 
 - Checkpoint recovery and durable Memory remain independently understandable and testable.
-- Memory persistence starts locally; any Team projection is a later explicit slice with its own
-  allowlist and schema migration.
+- Memory persistence starts locally; the Team projection is an explicit one-way slice with its own
+  strict allowlist, schema migration, monotonic sync, and read-only Web consumer.
 - Deletion and scope filtering happen before retrieval/reranking, not as a UI-only filter.
 - V2.2 may delegate only memories already visible to the delegated scope; delegation creates no new
   visibility.

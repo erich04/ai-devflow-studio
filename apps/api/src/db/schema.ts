@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 17
+export const TEAM_SCHEMA_VERSION = 18
 
 export const requiredTeamTableNames = [
   'team_schema_migrations',
@@ -492,6 +492,7 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('projection_version', 'integer'),
       column('current_revision', 'integer'),
       column('head_version', 'integer'),
+      column('quality_version', 'bigint'),
       column('lifecycle_status', 'text'),
       column('visibility', 'text'),
       column('sensitivity', 'text'),
@@ -516,6 +517,7 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
     columns: [
       column('memory_id', 'text', { references: 'agent_memory_summaries.memory_id' }),
       column('head_version', 'integer'),
+      column('quality_version', 'bigint'),
       column('organization_id', 'text', { references: 'organizations.id' }),
       column('project_id', 'text', { references: 'projects.id' }),
       column('run_id', 'text', { references: 'workflow_runs.id' }),

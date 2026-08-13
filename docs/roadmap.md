@@ -90,8 +90,8 @@ contains the signoff-bound release artifacts.
 | Active version line | 2.x DevFlow-native Agent Runtime |
 | Completed 2.x milestone | V2.0 Native Agent Runtime Foundation |
 | V2.0 evidence | `docs/releases/v2.0.0/` |
-| Active milestone | V2.1 Slice 6 — Redacted Team Projection |
-| Next gate | Add retained Team schema 17 and exact metadata-only Memory projection |
+| Active milestone | V2.1 Slice 7 — Evaluation And Completion Gate |
+| Next gate | Freeze the exact V2.1 candidate and run the full completion matrix |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -126,17 +126,23 @@ restart, `memoryRestartDuplicateEffects` is zero, and Local MCP/native Tool coun
 
 ## Now / Next / Later
 
-### Now — Add V2.1 Redacted Team Projection
+### Now — Run V2.1 Evaluation And Completion Gate
 
 V1.5 and the finite 1.x line are released and complete. V2.0 is complete with immutable evaluator
 and gate evidence. V2.1 Slices 1 through 5 now provide evaluated retrieval, strict Citation and
 Memory contracts, a crash-safe local index, curated Memory lifecycle, bounded Runtime Context,
-exact Desktop human actions, and packaged cold-restart zero-repeat proof.
+exact Desktop human actions, packaged cold-restart zero-repeat proof, and the completed Slice 6 Team
+projection. Team schema 18 stores only strict monotonic redacted lifecycle/quality metadata with
+independent lifecycle-head and accepted-Context quality versions;
+Desktop schema 27 re-derives it through a metadata-only ID outbox; Web read-only Team Memory shows quality
+and lifecycle fields without local content or control authority.
 
-- Add the retained Team schema 17 migration without fabricating Memory projection rows.
-- Sync only monotonic allowlisted lifecycle and quality metadata; never local content, prompt,
-  reasoning, credentials, paths, raw output, or scope sessions.
-- Keep Web read-only: Team cannot promote/delete local Memory, rebuild an index, or resume Runtime.
+- Freeze exact candidate, corpus, contract, migration, and artifact digests.
+- Require deterministic retrieval/citation/Memory quality floors plus zero isolation, redaction,
+  deletion, paid-provider, and repeated-side-effect violations.
+- Run full unit/type/build, real Postgres, Docker lifecycle, Windows, macOS, Electron, packaged
+  restart, migration-retention, and exclusive artifact gates.
+- Record immutable completion evidence only as the clean direct child of the passing candidate.
 
 The V2.1 contract set is frozen in:
 
@@ -146,21 +152,22 @@ The V2.1 contract set is frozen in:
 - `docs/plans/v2.1-evaluated-retrieval-memory.md`
 - `scripts/fixtures/v2.1-retrieval-memory-evaluation.json`
 
-V2.1 Slices 1 through 5 are complete. Opaque main-owned capabilities gate promotion, revision, and
+V2.1 Slices 1 through 6 are complete. Opaque main-owned capabilities gate promotion, revision, and
 deletion; scope/lifecycle filtering happens before retrieval; restart-safe purge cannot revive an
 older revision; renderer projection v2 remains metadata-only; and the packaged Desktop records zero
-repeated retrieval/provider/Tool/Memory effects after cold restart.
+repeated retrieval/provider/Tool/Memory effects after cold restart. The Team projection is strictly
+metadata-only and monotonic, and neither its API nor Web view can control local execution or Memory.
 
-### Next — Run V2.1 Evaluation And Completion Gate
+### Next — Begin V2.2 Multi-Agent And Execution Tenancy
 
-- Freeze the exact V2.1 candidate/corpus/contract digests and run every deterministic evaluation.
-- Require quality floors plus zero isolation, redaction, deletion, and paid-provider violations.
-- Run the full cross-platform, migration, Postgres, Docker, packaged, and evidence matrix.
+- Begin only after V2.1 has immutable candidate-bound completion evidence.
+- Add bounded supervisor/specialist coordination and execution tenancy without widening Workflow or
+  Gate authority.
 
-### Later — V2.2 Multi-Agent And Execution Tenancy
+### Later — Continue The Accepted 2.x Sequence
 
-- V2.2 adds bounded supervisor/specialist coordination and execution tenancy only after V2.1 proves
-  retrieval, Memory, citation, and isolation behavior.
+- Advance later 2.x milestones only through the same contract, TDD, candidate, and immutable-evidence
+  sequence after V2.2 is complete.
 - New 1.x work is limited to release defects, security fixes, dependency maintenance, or hardening
   justified by real pilot evidence; there is no planned V1.6 feature milestone.
 

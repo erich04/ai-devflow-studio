@@ -21,6 +21,8 @@ export type RemoteSyncOutboxClientSource = Pick<
   | 'listAgentReviews'
   | 'listCodingAgentRuns'
   | 'listCodingDiffArtifacts'
+  | 'getAgentRuntime'
+  | 'getAgentMemoryTeamProjectionInput'
 >
 
 export type RemoteSyncOutboxClientFactoryInput = {
@@ -108,6 +110,9 @@ export async function createRemoteSyncOutboxClient(
       listAgentReviews: (runId) => input.source.listAgentReviews(runId),
       listCodingAgentRuns: (runId) => input.source.listCodingAgentRuns(runId),
       listCodingDiffArtifacts: (runId) => input.source.listCodingDiffArtifacts(runId),
+      getAgentRuntime: (runtimeId) => input.source.getAgentRuntime(runtimeId),
+      getAgentMemoryTeamProjectionInput: (memoryId) =>
+        input.source.getAgentMemoryTeamProjectionInput(memoryId),
     },
   })
 }
