@@ -12,6 +12,7 @@ import {
   type CoordinationSessionRequest,
 } from '@ai-devflow/shared'
 import { createLocalStore } from './local-store'
+import { createSpecialistRuntimeCoordinator } from './specialist-runtime-coordinator'
 import { createSpecialistTaskAuthorityBroker } from './specialist-task-authority'
 
 const tempDirs: string[] = []
@@ -304,6 +305,174 @@ describe('Specialist task authority broker', () => {
     await expect(broker.resolve(authorization.capability, fixture.now)).rejects.toThrowError(
       'specialist_task_authority_invalid',
     )
+    fixture.store.close()
+  })
+})
+
+describe('Specialist Runtime coordinator', () => {
+  it('atomically binds one attenuated child Runtime to the exact ready task', async () => {
+    const fixture = await authorityFixture()
+    const broker = createSpecialistTaskAuthorityBroker({ store: fixture.store })
+    const ids = {
+      allocation: 'specialist-allocation-main-1',
+      agent: 'specialist-agent-main-1',
+      runtime: 'specialist-runtime-main-1',
+      context: 'specialist-runtime-context-main-1',
+    }
+    const coordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: broker,
+      clock: () => fixture.now,
+      createId: (kind) => ids[kind],
+    })
+
+    const started = await coordinator.start({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: 1,
+      taskId: fixture.graph.nodes[0]!.id,
+      expectedTaskVersion: 1,
+    })
+
+    expect(started.runtime).toMatchObject({
+      id: ids.runtime,
+      status: 'checkpointed',
+      version: 1,
+      scope: {
+        kind: 'team',
+        organizationId: fixture.coordination.scope.organizationId,
+        projectId: fixture.coordination.scope.projectId,
+        userId: fixture.coordination.scope.userId,
+        sessionId: fixture.coordination.scope.sessionId,
+        localProjectId: fixture.coordination.scope.localProjectId,
+      },
+      authority: {
+        runId: fixture.coordination.authority.runId,
+        nodeId: fixture.coordination.authority.nodeId,
+        runVersion: fixture.coordination.authority.runVersion,
+        policyVersion: fixture.coordination.authority.policyVersion,
+      },
+      bounds: {
+        maxSteps: 2,
+        maxWallTimeMs: 120_000,
+        maxToolCalls: 2,
+        maxTokens: 5_000,
+        maxCostUsd: 0.5,
+      },
+    })
+    expect(started.coordination.tasks[0]).toMatchObject({
+      id: fixture.graph.nodes[0]!.id,
+      version: 2,
+      status: 'running',
+      agentId: ids.agent,
+      runtimeId: ids.runtime,
+      runtimeVersion: 1,
+    })
+    await expect(fixture.store.getAgentRuntime(ids.runtime)).resolves.toEqual(started.runtime)
+    await expect(fixture.store.getAgentRuntimeContextAttachment(ids.runtime)).resolves.toMatchObject({
+      id: ids.context,
+      runtimeId: ids.runtime,
+      knowledgeCitations: [],
+      memoryRevisions: [],
+    })
+    await expect(fixture.store.getCoordinationSession(fixture.coordination.id)).resolves.toMatchObject({
+      state: started.coordination,
+    })
+    await expect(fixture.store.listAgentRuntimeEvents(ids.runtime)).resolves.toHaveLength(3)
+    fixture.store.close()
+  })
+
+  it('rejects an opaque authority at a foreign LocalStore without partial writes', async () => {
+    const fixture = await authorityFixture()
+    const foreignDir = await mkdtemp(path.join(os.tmpdir(), 'devflow-specialist-foreign-'))
+    tempDirs.push(foreignDir)
+    const foreignStore = await createLocalStore({
+      dbPath: path.join(foreignDir, 'devflow.sqlite'),
+    })
+    const runtimeId = 'specialist-runtime-foreign-1'
+    const broker = createSpecialistTaskAuthorityBroker({ store: fixture.store })
+    const coordinator = createSpecialistRuntimeCoordinator({
+      store: foreignStore,
+      authorityBroker: broker,
+      clock: () => fixture.now,
+      createId: (kind) => ({
+        allocation: 'specialist-allocation-foreign-1',
+        agent: 'specialist-agent-foreign-1',
+        runtime: runtimeId,
+        context: 'specialist-runtime-context-foreign-1',
+      })[kind],
+    })
+
+    await expect(coordinator.start({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: 1,
+      taskId: fixture.graph.nodes[0]!.id,
+      expectedTaskVersion: 1,
+    })).rejects.toThrowError('specialist_runtime_start_failed')
+
+    await expect(foreignStore.getAgentRuntime(runtimeId)).resolves.toBeNull()
+    await expect(foreignStore.getAgentRuntimeContextAttachment(runtimeId)).resolves.toBeNull()
+    await expect(fixture.store.getCoordinationSession(fixture.coordination.id)).resolves.toMatchObject({
+      state: {
+        version: 1,
+        tasks: [{
+          id: fixture.graph.nodes[0]!.id,
+          version: 1,
+          status: 'ready',
+          agentId: null,
+          runtimeId: null,
+          runtimeVersion: null,
+        }],
+      },
+    })
+    foreignStore.close()
+    fixture.store.close()
+  })
+
+  it('lets one concurrent start win the task and creates one child Runtime', async () => {
+    const fixture = await authorityFixture()
+    const runtimeId = 'specialist-runtime-concurrent-1'
+    const coordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: fixture.store }),
+      clock: () => fixture.now,
+      createId: (kind) => ({
+        allocation: 'specialist-allocation-concurrent-1',
+        agent: 'specialist-agent-concurrent-1',
+        runtime: runtimeId,
+        context: 'specialist-runtime-context-concurrent-1',
+      })[kind],
+    })
+    const request = {
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: 1,
+      taskId: fixture.graph.nodes[0]!.id,
+      expectedTaskVersion: 1,
+    }
+
+    const results = await Promise.allSettled([
+      coordinator.start(request),
+      coordinator.start(request),
+    ])
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
+    await expect(fixture.store.getAgentRuntime(runtimeId)).resolves.toMatchObject({
+      id: runtimeId,
+      version: 1,
+    })
+    await expect(fixture.store.listAgentRuntimeEvents(runtimeId)).resolves.toHaveLength(3)
+    await expect(fixture.store.getCoordinationSession(fixture.coordination.id)).resolves.toMatchObject({
+      state: {
+        version: 2,
+        tasks: [{
+          id: fixture.graph.nodes[0]!.id,
+          version: 2,
+          status: 'running',
+          runtimeId,
+          runtimeVersion: 1,
+        }],
+      },
+    })
     fixture.store.close()
   })
 })

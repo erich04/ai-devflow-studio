@@ -3,6 +3,7 @@ import {
   type AgentTaskResourceRequirement,
   type CoordinationAuthority,
   type CoordinationScope,
+  type SpecialistBudget,
 } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
 import {
@@ -35,6 +36,7 @@ export type SpecialistTaskAuthoritySnapshot = {
   supervisorCapabilitySetDigest: string
   capabilityIds: string[]
   resourceRequirements: AgentTaskResourceRequirement[]
+  remainingBudget: SpecialistBudget
   deadline: string
 }
 
@@ -58,6 +60,7 @@ export type SpecialistTaskAuthorityBroker = {
 }
 
 type AuthorityStore = Pick<LocalStore,
+  | 'getSpecialistTaskAuthorityStoreIdentity'
   | 'getCoordinationRecoverySnapshot'
   | 'getAgentRuntime'
   | 'getRun'
@@ -72,6 +75,17 @@ type CreateSpecialistTaskAuthorityBrokerInput = {
 }
 
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u
+const capabilities = new WeakMap<object, {
+  storeIdentity: object
+  task: SpecialistTaskAuthoritySnapshot
+  validate: (request: {
+    coordinationId: string
+    expectedSessionVersion: number
+    taskId: string
+    expectedTaskVersion: number
+    now: string
+  }) => Promise<SpecialistTaskAuthoritySnapshot>
+}>()
 
 function isCanonicalTimestamp(value: unknown): value is string {
   if (typeof value !== 'string') return false
@@ -96,8 +110,6 @@ function invalidAuthority(): never {
 export function createSpecialistTaskAuthorityBroker(
   input: CreateSpecialistTaskAuthorityBrokerInput,
 ): SpecialistTaskAuthorityBroker {
-  const capabilities = new WeakMap<object, SpecialistTaskAuthoritySnapshot>()
-
   async function validateCurrent(request: {
     coordinationId: string
     expectedSessionVersion: number
@@ -197,6 +209,21 @@ export function createSpecialistTaskAuthorityBroker(
       !contextCurrent
     ) invalidAuthority()
 
+    const remainingBudget = {
+      maxSteps: coordination.bounds.maxSteps - state.counters.steps,
+      maxWallTimeMs: coordination.bounds.maxWallTimeMs,
+      maxToolCalls: coordination.bounds.maxToolCalls - state.counters.toolCalls,
+      maxTokens: coordination.bounds.maxTokens - state.counters.tokens,
+      maxCostUsd: coordination.bounds.maxCostUsd - state.counters.costUsd,
+    }
+    if (
+      remainingBudget.maxSteps <= 0 ||
+      remainingBudget.maxWallTimeMs <= 0 ||
+      remainingBudget.maxToolCalls <= 0 ||
+      remainingBudget.maxTokens <= 0 ||
+      remainingBudget.maxCostUsd <= 0
+    ) invalidAuthority()
+
     return {
       stateVersion: 1,
       coordinationId: coordination.id,
@@ -216,6 +243,7 @@ export function createSpecialistTaskAuthorityBroker(
       supervisorCapabilitySetDigest: supervisor.capabilitySetDigest,
       capabilityIds: [...graphTask.capabilityIds],
       resourceRequirements: graphTask.resourceRequirements.map((resource) => ({ ...resource })),
+      remainingBudget,
       deadline: new Date(Math.min(
         Date.parse(coordination.deadline),
         Date.parse(supervisor.deadline),
@@ -223,12 +251,16 @@ export function createSpecialistTaskAuthorityBroker(
     }
   }
 
-  return {
+  const broker: SpecialistTaskAuthorityBroker = {
     async authorize(request) {
       try {
         const task = await validateCurrent(request)
         const capability = Object.freeze({}) as SpecialistTaskAuthority
-        capabilities.set(capability, cloneSnapshot(task))
+        capabilities.set(capability, {
+          storeIdentity: input.store.getSpecialistTaskAuthorityStoreIdentity(),
+          task: cloneSnapshot(task),
+          validate: validateCurrent,
+        })
         return { capability, task: cloneSnapshot(task) }
       } catch {
         return invalidAuthority()
@@ -236,22 +268,35 @@ export function createSpecialistTaskAuthorityBroker(
     },
 
     async resolve(capability, now) {
-      try {
-        if (typeof capability !== 'object' || capability === null) invalidAuthority()
-        const expected = capabilities.get(capability)
-        if (expected === undefined) invalidAuthority()
-        const current = await validateCurrent({
-          coordinationId: expected.coordinationId,
-          expectedSessionVersion: expected.sessionVersion,
-          taskId: expected.taskId,
-          expectedTaskVersion: expected.taskVersion,
-          now,
-        })
-        if (!sameJson(current, expected)) invalidAuthority()
-        return cloneSnapshot(current)
-      } catch {
-        return invalidAuthority()
-      }
+      return resolveSpecialistTaskAuthority(input.store, capability, now)
     },
+  }
+  return broker
+}
+
+export async function resolveSpecialistTaskAuthority(
+  store: AuthorityStore,
+  capability: unknown,
+  now: string,
+): Promise<SpecialistTaskAuthoritySnapshot> {
+  try {
+    if (typeof capability !== 'object' || capability === null) invalidAuthority()
+    const entry = capabilities.get(capability)
+    if (
+      entry === undefined ||
+      entry.storeIdentity !== store.getSpecialistTaskAuthorityStoreIdentity()
+    ) invalidAuthority()
+    const expected = entry.task
+    const current = await entry.validate({
+      coordinationId: expected.coordinationId,
+      expectedSessionVersion: expected.sessionVersion,
+      taskId: expected.taskId,
+      expectedTaskVersion: expected.taskVersion,
+      now,
+    })
+    if (!sameJson(current, expected)) invalidAuthority()
+    return cloneSnapshot(current)
+  } catch {
+    return invalidAuthority()
   }
 }

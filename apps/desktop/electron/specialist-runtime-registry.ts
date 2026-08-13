@@ -1,3 +1,14 @@
+import { createHash } from 'node:crypto'
+
+export const SPECIALIST_RUNTIME_MAX_STEPS = 2
+export const SPECIALIST_RUNTIME_MAX_WALL_TIME_MS = 2 * 60_000
+export const SPECIALIST_RUNTIME_MAX_TOOL_CALLS = 2
+export const SPECIALIST_RUNTIME_MAX_TOKENS = 5_000
+export const SPECIALIST_RUNTIME_MAX_COST_USD = 0.5
+export const SPECIALIST_RUNTIME_MAX_TOOL_RESULT_BYTES = 64 * 1_024
+export const SPECIALIST_RUNTIME_MAX_TRAJECTORY_METADATA_BYTES = 16 * 1_024
+export const SPECIALIST_RUNTIME_MAX_CHECKPOINT_BYTES = 128 * 1_024
+
 export type SpecialistRoleId =
   | 'contract-analyst'
   | 'test-analyst'
@@ -61,4 +72,19 @@ export function resolveSpecialistDescriptor(roleId: unknown): SpecialistDescript
     : undefined
   if (descriptor === undefined) throw new Error('specialist_role_not_registered')
   return cloneDescriptor(descriptor)
+}
+
+export function digestSpecialistCapabilitySet(input: {
+  roleId: SpecialistRoleId
+  roleVersion: 1
+  taskContextDigest: string
+  capabilityIds: readonly string[]
+}): string {
+  return createHash('sha256').update(JSON.stringify({
+    stateVersion: 1,
+    roleId: input.roleId,
+    roleVersion: input.roleVersion,
+    taskContextDigest: input.taskContextDigest,
+    capabilityIds: [...input.capabilityIds],
+  })).digest('hex')
 }
