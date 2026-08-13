@@ -12,6 +12,7 @@ import type { LocalStore } from './local-store.js'
 import type { SpecialistRuntimeHandoffDraft } from './local-store.js'
 import {
   digestSpecialistCapabilitySet,
+  deriveSpecialistRecoveryEntityId,
   SPECIALIST_RUNTIME_MAX_CHECKPOINT_BYTES,
   SPECIALIST_RUNTIME_MAX_COST_USD,
   SPECIALIST_RUNTIME_MAX_STEPS,
@@ -48,12 +49,26 @@ export type SpecialistRuntimeCoordinator = {
     coordination: CoordinationSessionState
     handoffs: AgentHandoff[]
   }>
+  recover(input: {
+    recoveryId: string
+    coordinationId: string
+    expectedSessionVersion: number
+    taskId: string
+    expectedTaskVersion: number
+    expectedRuntimeVersion: number
+    transition: AgentRuntimeTransition
+  }): Promise<{
+    failedRuntime: AgentRuntimeState
+    runtime: AgentRuntimeState
+    coordination: CoordinationSessionState
+  }>
 }
 
 export type CreateSpecialistRuntimeCoordinatorInput = {
   store: Pick<LocalStore,
     | 'commitSpecialistRuntimeStart'
     | 'commitSpecialistRuntimeCompletion'
+    | 'commitSpecialistRuntimeRecovery'
   >
   authorityBroker: SpecialistTaskAuthorityBroker
   clock?: () => string
@@ -197,6 +212,75 @@ export function createSpecialistRuntimeCoordinator(
         }
       } catch {
         throw new Error('specialist_runtime_completion_failed')
+      }
+    },
+
+    async recover(request) {
+      try {
+        const failedRuntime = request.transition.runtime
+        const now = failedRuntime.updatedAt
+        const remainingBounds = {
+          maxSteps: failedRuntime.bounds.maxSteps - failedRuntime.counters.steps,
+          maxWallTimeMs: Date.parse(failedRuntime.deadline) - Date.parse(now),
+          maxToolCalls: failedRuntime.bounds.maxToolCalls - failedRuntime.counters.toolCalls,
+          maxToolResultBytes: failedRuntime.bounds.maxToolResultBytes,
+          maxTrajectoryMetadataBytes: failedRuntime.bounds.maxTrajectoryMetadataBytes,
+          maxCheckpointBytes: failedRuntime.bounds.maxCheckpointBytes,
+          maxTokens: failedRuntime.bounds.maxTokens - failedRuntime.counters.tokens,
+          maxCostUsd: failedRuntime.bounds.maxCostUsd - failedRuntime.counters.costUsd,
+        }
+        if (Object.values(remainingBounds).some((value) => value <= 0)) {
+          throw new Error('specialist_recovery_budget_exhausted')
+        }
+        const runtimeId = deriveSpecialistRecoveryEntityId(
+          'runtime',
+          request.recoveryId,
+          failedRuntime.id,
+        )
+        const contextAttachment = await assembleAgentRuntimeContext({
+          id: deriveSpecialistRecoveryEntityId(
+            'context',
+            request.recoveryId,
+            failedRuntime.id,
+          ),
+          runtimeId,
+          checkpointVersion: 1,
+          scope: failedRuntime.scope,
+          authority: failedRuntime.authority,
+          citationSources: [],
+          memorySources: [],
+          attachedAt: now,
+        })
+        const replacementTransition = createAgentRuntime({
+          stateVersion: 1,
+          id: runtimeId,
+          scope: failedRuntime.scope,
+          authority: failedRuntime.authority,
+          contextDigest: contextAttachment.contextDigest,
+          capabilitySetDigest: failedRuntime.capabilitySetDigest,
+          bounds: remainingBounds,
+          requestedAt: now,
+          deadline: failedRuntime.deadline,
+        })
+        const committed = await input.store.commitSpecialistRuntimeRecovery({
+          recoveryId: request.recoveryId,
+          coordinationId: request.coordinationId,
+          expectedSessionVersion: request.expectedSessionVersion,
+          taskId: request.taskId,
+          expectedTaskVersion: request.expectedTaskVersion,
+          expectedRuntimeVersion: request.expectedRuntimeVersion,
+          failureTransition: request.transition,
+          replacementTransition,
+          contextAttachment,
+        })
+        if (!committed.committed) throw new Error(committed.reason)
+        return {
+          failedRuntime: committed.failedRuntime,
+          runtime: committed.runtime,
+          coordination: committed.state,
+        }
+      } catch {
+        throw new Error('specialist_runtime_recovery_failed')
       }
     },
   }

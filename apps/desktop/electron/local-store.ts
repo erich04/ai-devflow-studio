@@ -15,6 +15,7 @@ import {
 } from './local-mcp-installation.js'
 import {
   digestSpecialistCapabilitySet,
+  deriveSpecialistRecoveryEntityId,
   getAcceptedSpecialistRoleIds,
   resolveSpecialistDescriptor,
   SPECIALIST_RUNTIME_MAX_CHECKPOINT_BYTES,
@@ -82,6 +83,7 @@ import {
   parseCoordinationSessionState,
   parseSpecialistAllocationRequest,
   recordCoordinationTaskResult,
+  retryCoordinationTask,
   parseWorkRequestRecord,
   promoteAgentMemoryCandidate,
   reviseAgentMemoryRevision,
@@ -804,6 +806,9 @@ export type LocalStore = {
   commitSpecialistRuntimeCompletion(
     input: CommitSpecialistRuntimeCompletionInput,
   ): Promise<CommitSpecialistRuntimeCompletionResult>
+  commitSpecialistRuntimeRecovery(
+    input: CommitSpecialistRuntimeRecoveryInput,
+  ): Promise<CommitSpecialistRuntimeRecoveryResult>
   commitCoordinationTaskStart(
     input: CommitCoordinationTaskStartInput,
   ): Promise<CommitCoordinationTaskStartResult>
@@ -1005,7 +1010,12 @@ export type DurableCoordinationSession = {
 export type CoordinationTrajectoryAudit = {
   id: string
   taskId: string | null
-  eventKind: 'session_started' | 'task_started' | 'task_result' | 'handoff_accepted'
+  eventKind:
+    | 'session_started'
+    | 'task_started'
+    | 'task_result'
+    | 'task_retried'
+    | 'handoff_accepted'
   sessionVersion: number
   metadata: Readonly<Record<string, string | number | null>>
   createdAt: string
@@ -1093,6 +1103,31 @@ export type CommitSpecialistRuntimeCompletionResult =
       runtime: AgentRuntimeState
       state: CoordinationSessionState
       handoffs: AgentHandoff[]
+    }
+  | {
+      committed: false
+      reason: 'invalid_input' | 'authority_mismatch' | 'not_found' | 'stale_state'
+    }
+
+export type CommitSpecialistRuntimeRecoveryInput = {
+  recoveryId: string
+  coordinationId: string
+  expectedSessionVersion: number
+  taskId: string
+  expectedTaskVersion: number
+  expectedRuntimeVersion: number
+  failureTransition: AgentRuntimeTransition
+  replacementTransition: AgentRuntimeTransition
+  contextAttachment: AgentRuntimeContextAttachment
+}
+
+export type CommitSpecialistRuntimeRecoveryResult =
+  | {
+      committed: true
+      replayed: boolean
+      failedRuntime: AgentRuntimeState
+      runtime: AgentRuntimeState
+      state: CoordinationSessionState
     }
   | {
       committed: false
@@ -3977,6 +4012,41 @@ function matchesSpecialistRuntimeFailure(
   )
 }
 
+function coordinationTaskRetryAuditMetadata(input: {
+  recoveryId: string
+  taskId: string
+  failedRuntimeId: string
+  failedRuntimeVersion: number
+  replacementRuntimeId: string
+  replacementRuntimeVersion: number
+  failure: CoordinationTaskFailure
+  usage: CoordinationUsageDelta
+}, state: CoordinationSessionState): Record<string, string | number> {
+  const task = state.tasks.find((candidate) => candidate.id === input.taskId)
+  if (
+    task === undefined ||
+    task.status !== 'running' ||
+    task.runtimeId !== input.replacementRuntimeId ||
+    task.runtimeVersion !== input.replacementRuntimeVersion
+  ) throw new Error('invalid_coordination_task_retry_audit')
+  return {
+    stateVersion: 1,
+    recoveryId: input.recoveryId,
+    taskId: input.taskId,
+    taskVersion: task.version,
+    failedRuntimeId: input.failedRuntimeId,
+    failedRuntimeVersion: input.failedRuntimeVersion,
+    replacementRuntimeId: input.replacementRuntimeId,
+    replacementRuntimeVersion: input.replacementRuntimeVersion,
+    failureCategory: input.failure.category,
+    failureCode: input.failure.code,
+    steps: input.usage.steps,
+    toolCalls: input.usage.toolCalls,
+    tokens: input.usage.tokens,
+    costUsd: input.usage.costUsd,
+  }
+}
+
 function coordinationHandoffAuditMetadata(
   handoff: AgentHandoff,
   state: CoordinationSessionState,
@@ -4206,7 +4276,13 @@ function selectCoordinationTrajectoryAudits(
     if (
       !coordinationIdentifierPattern.test(audit.id) ||
       (audit.taskId !== null && !coordinationIdentifierPattern.test(audit.taskId)) ||
-      !['session_started', 'task_started', 'task_result', 'handoff_accepted'].includes(eventKind) ||
+      ![
+        'session_started',
+        'task_started',
+        'task_result',
+        'task_retried',
+        'handoff_accepted',
+      ].includes(eventKind) ||
       !Number.isInteger(audit.sessionVersion) ||
       audit.sessionVersion < 1 ||
       !isCoordinationMetadataRecord(metadata) ||
@@ -4387,6 +4463,100 @@ function validateCoordinationTaskResultCheckpoint(
   }
 }
 
+function validateCoordinationTaskRetryCheckpoint(
+  previous: CoordinationSessionState,
+  current: CoordinationSessionState,
+  audit: CoordinationTrajectoryAudit,
+): boolean {
+  const metadata = audit.metadata
+  if (!hasExactCoordinationKeys(metadata, [
+    'stateVersion',
+    'recoveryId',
+    'taskId',
+    'taskVersion',
+    'failedRuntimeId',
+    'failedRuntimeVersion',
+    'replacementRuntimeId',
+    'replacementRuntimeVersion',
+    'failureCategory',
+    'failureCode',
+    'steps',
+    'toolCalls',
+    'tokens',
+    'costUsd',
+  ]) || metadata.stateVersion !== 1 ||
+    typeof metadata.recoveryId !== 'string' ||
+    !coordinationIdentifierPattern.test(metadata.recoveryId) ||
+    typeof metadata.taskId !== 'string' || audit.taskId !== metadata.taskId ||
+    typeof metadata.taskVersion !== 'number' ||
+    typeof metadata.failedRuntimeId !== 'string' ||
+    typeof metadata.failedRuntimeVersion !== 'number' ||
+    typeof metadata.replacementRuntimeId !== 'string' ||
+    typeof metadata.replacementRuntimeVersion !== 'number' ||
+    typeof metadata.failureCategory !== 'string' ||
+    typeof metadata.failureCode !== 'string' ||
+    !isNonNegativeCoordinationUsage(metadata.steps) ||
+    !isNonNegativeCoordinationUsage(metadata.toolCalls) ||
+    !isNonNegativeCoordinationUsage(metadata.tokens) ||
+    !isNonNegativeCoordinationUsage(metadata.costUsd)) return false
+  const previousTask = previous.tasks.find((task) => task.id === metadata.taskId)
+  const currentTask = current.tasks.find((task) => task.id === metadata.taskId)
+  if (
+    previousTask === undefined || currentTask === undefined ||
+    previousTask.status !== 'running' || currentTask.status !== 'running' ||
+    !coordinationIdentifierPattern.test(metadata.failedRuntimeId) ||
+    !coordinationIdentifierPattern.test(metadata.replacementRuntimeId) ||
+    !Number.isInteger(metadata.taskVersion) || metadata.taskVersion < 1 ||
+    !Number.isInteger(metadata.failedRuntimeVersion) || metadata.failedRuntimeVersion < 1 ||
+    !Number.isInteger(metadata.replacementRuntimeVersion) ||
+    metadata.replacementRuntimeVersion < 1 ||
+    metadata.taskVersion !== currentTask.version ||
+    currentTask.agentId !== previousTask.agentId ||
+    currentTask.runtimeId !== metadata.replacementRuntimeId ||
+    currentTask.runtimeVersion !== metadata.replacementRuntimeVersion
+  ) return false
+  const failure = {
+    category: metadata.failureCategory,
+    code: metadata.failureCode,
+    sourceTaskId: currentTask.id,
+  } as CoordinationTaskFailure
+  const usage = {
+    steps: metadata.steps,
+    toolCalls: metadata.toolCalls,
+    tokens: metadata.tokens,
+    costUsd: metadata.costUsd,
+  }
+  try {
+    const expected = retryCoordinationTask({
+      state: previous,
+      expectedSessionVersion: previous.version,
+      taskId: currentTask.id,
+      expectedTaskVersion: previousTask.version,
+      runtimeId: metadata.failedRuntimeId,
+      expectedRuntimeVersion: previousTask.runtimeVersion!,
+      runtimeVersion: metadata.failedRuntimeVersion,
+      failure,
+      replacementRuntimeId: metadata.replacementRuntimeId,
+      replacementRuntimeVersion: metadata.replacementRuntimeVersion,
+      usage,
+      now: current.updatedAt,
+    })
+    const expectedMetadata = coordinationTaskRetryAuditMetadata({
+      recoveryId: metadata.recoveryId,
+      taskId: currentTask.id,
+      failedRuntimeId: metadata.failedRuntimeId,
+      failedRuntimeVersion: metadata.failedRuntimeVersion,
+      replacementRuntimeId: metadata.replacementRuntimeId,
+      replacementRuntimeVersion: metadata.replacementRuntimeVersion,
+      failure,
+      usage,
+    }, current)
+    return sameJson(expected, current) && sameJson(expectedMetadata, metadata)
+  } catch {
+    return false
+  }
+}
+
 function selectCoordinationRecoverySnapshot(
   db: Database,
   coordinationId: string,
@@ -4447,6 +4617,12 @@ function selectCoordinationRecoverySnapshot(
       if (audit.eventKind === 'task_result') {
         if (!validateCoordinationTaskResultCheckpoint(previous, checkpoint.state, audit)) {
           throw new Error('invalid_coordination_task_result_trajectory')
+        }
+        continue
+      }
+      if (audit.eventKind === 'task_retried') {
+        if (!validateCoordinationTaskRetryCheckpoint(previous, checkpoint.state, audit)) {
+          throw new Error('invalid_coordination_task_retry_trajectory')
         }
         continue
       }
@@ -9568,6 +9744,331 @@ class SqlJsLocalStore implements LocalStore {
     }
   }
 
+  async commitSpecialistRuntimeRecovery(
+    input: CommitSpecialistRuntimeRecoveryInput,
+  ): Promise<CommitSpecialistRuntimeRecoveryResult> {
+    let failureTransition: AgentRuntimeTransition
+    let replacementTransition: AgentRuntimeTransition
+    let contextAttachment: AgentRuntimeContextAttachment
+    try {
+      failureTransition = parseAgentRuntimeTransition(input.failureTransition)
+      replacementTransition = parseAgentRuntimeTransition(input.replacementTransition)
+      contextAttachment = await parseAgentRuntimeContextAttachment(input.contextAttachment)
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    if (
+      !isNonEmptyIdentifier(input.recoveryId) ||
+      !isNonEmptyIdentifier(input.coordinationId) ||
+      !isNonEmptyIdentifier(input.taskId) ||
+      !Number.isInteger(input.expectedSessionVersion) ||
+      input.expectedSessionVersion < 1 ||
+      !Number.isInteger(input.expectedTaskVersion) ||
+      input.expectedTaskVersion < 1 ||
+      !Number.isInteger(input.expectedRuntimeVersion) ||
+      input.expectedRuntimeVersion < 1 ||
+      failureTransition.runtime.status !== 'terminal' ||
+      failureTransition.runtime.stopReason !== 'failure' ||
+      !isExactAgentRuntimeTransition(null, replacementTransition) ||
+      contextAttachment.runtimeId !== replacementTransition.runtime.id ||
+      contextAttachment.checkpointVersion !== replacementTransition.checkpoint.version ||
+      contextAttachment.contextDigest !== replacementTransition.runtime.contextDigest ||
+      contextAttachment.attachedAt !== replacementTransition.runtime.requestedAt ||
+      contextAttachment.knowledgeCitations.length !== 0 ||
+      contextAttachment.memoryRevisions.length !== 0
+    ) return { committed: false, reason: 'invalid_input' }
+
+    const stored = selectCoordinationRecoverySnapshot(this.db, input.coordinationId)
+    if (stored === null) return { committed: false, reason: 'not_found' }
+    const storedTask = stored.state.tasks.find((task) => task.id === input.taskId)
+    const graphTask = stored.graph.nodes.find((task) => task.id === input.taskId)
+    const failedRuntime = selectAgentRuntime(this.db, failureTransition.runtime.id)
+    const replacementRuntime = selectAgentRuntime(this.db, replacementTransition.runtime.id)
+    const storedReplacementContext = replacementRuntime === null
+      ? null
+      : await selectAgentRuntimeContextAttachment(this.db, replacementRuntime.id)
+    if (
+      storedTask !== undefined &&
+      graphTask !== undefined &&
+      failedRuntime !== null &&
+      replacementRuntime !== null &&
+      sameJson(failedRuntime, failureTransition.runtime) &&
+      sameJson(replacementRuntime, replacementTransition.runtime) &&
+      sameJson(storedReplacementContext, contextAttachment) &&
+      stored.state.version === input.expectedSessionVersion + 1 &&
+      storedTask.version === input.expectedTaskVersion + 1 &&
+      storedTask.status === 'running' &&
+      storedTask.runtimeId === replacementRuntime.id &&
+      storedTask.runtimeVersion === replacementRuntime.version &&
+      storedTask.attemptFailures.length > 0 &&
+      matchesSpecialistRuntimeFailure(
+        failedRuntime.stopReason,
+        storedTask.attemptFailures.at(-1) ?? null,
+      )
+    ) {
+      const failedEvents = selectAgentRuntimeEvents(
+        this.db,
+        failedRuntime.id,
+        failedRuntime.checkpointVersion,
+      )
+      const failedCheckpoint = selectAgentRuntimeCheckpoints(this.db, failedRuntime.id)
+        .find((candidate) => candidate.version === failureTransition.checkpoint.version)
+      return sameJson(failedEvents, failureTransition.events) &&
+        sameJson(failedCheckpoint, failureTransition.checkpoint)
+        ? {
+            committed: true,
+            replayed: true,
+            failedRuntime,
+            runtime: replacementRuntime,
+            state: stored.state,
+          }
+        : { committed: false, reason: 'stale_state' }
+    }
+    if (
+      stored.state.version !== input.expectedSessionVersion ||
+      storedTask === undefined ||
+      graphTask === undefined ||
+      storedTask.version !== input.expectedTaskVersion ||
+      storedTask.status !== 'running' ||
+      storedTask.runtimeId !== failureTransition.runtime.id ||
+      storedTask.runtimeVersion === null ||
+      failedRuntime === null ||
+      failedRuntime.version !== input.expectedRuntimeVersion ||
+      !isExactAgentRuntimeTransition(failedRuntime, failureTransition) ||
+      replacementRuntime !== null
+    ) return { committed: false, reason: 'stale_state' }
+    if (
+      !await this.isCoordinationSupervisorAuthorityCurrent(stored.coordination) ||
+      !await this.isAgentRuntimeContextCurrent(
+        failedRuntime.id,
+        failureTransition.runtime.updatedAt,
+      ) ||
+      !await this.areAgentRuntimeContextSourcesCurrent(
+        contextAttachment,
+        failureTransition.runtime.updatedAt,
+      )
+    ) return { committed: false, reason: 'authority_mismatch' }
+
+    let descriptor
+    try {
+      descriptor = resolveSpecialistDescriptor(graphTask.roleId)
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    const failure = specialistRuntimeFailure(failedRuntime, failureTransition, storedTask.id)
+    const expectedRuntimeScope = {
+      kind: 'team' as const,
+      organizationId: stored.coordination.scope.organizationId,
+      projectId: stored.coordination.scope.projectId,
+      userId: stored.coordination.scope.userId,
+      sessionId: stored.coordination.scope.sessionId,
+      localProjectId: stored.coordination.scope.localProjectId,
+    }
+    const expectedRuntimeAuthority = {
+      runId: stored.coordination.authority.runId,
+      nodeId: stored.coordination.authority.nodeId,
+      runVersion: stored.coordination.authority.runVersion,
+      policyVersion: stored.coordination.authority.policyVersion,
+    }
+    const expectedCapabilitySetDigest = digestSpecialistCapabilitySet({
+      roleId: descriptor.id,
+      roleVersion: descriptor.version,
+      taskContextDigest: graphTask.contextDigest,
+      capabilityIds: graphTask.capabilityIds,
+    })
+    const expectedBounds = {
+      maxSteps: failedRuntime.bounds.maxSteps - failureTransition.runtime.counters.steps,
+      maxWallTimeMs: Date.parse(failureTransition.runtime.deadline) -
+        Date.parse(failureTransition.runtime.updatedAt),
+      maxToolCalls: failedRuntime.bounds.maxToolCalls - failureTransition.runtime.counters.toolCalls,
+      maxToolResultBytes: failedRuntime.bounds.maxToolResultBytes,
+      maxTrajectoryMetadataBytes: failedRuntime.bounds.maxTrajectoryMetadataBytes,
+      maxCheckpointBytes: failedRuntime.bounds.maxCheckpointBytes,
+      maxTokens: failedRuntime.bounds.maxTokens - failureTransition.runtime.counters.tokens,
+      maxCostUsd: failedRuntime.bounds.maxCostUsd - failureTransition.runtime.counters.costUsd,
+    }
+    if (
+      descriptor.resourceMode !== 'read' ||
+      failedRuntime.activeAction?.kind !== 'tool' ||
+      failedRuntime.activeAction.capabilityId !== 'repository_read' ||
+      failure?.category !== 'tool_error' ||
+      stored.state.counters.activeSpecialists !== 1 ||
+      !sameJson(failedRuntime.scope, expectedRuntimeScope) ||
+      !sameJson(failedRuntime.authority, expectedRuntimeAuthority) ||
+      failedRuntime.capabilitySetDigest !== expectedCapabilitySetDigest ||
+      replacementTransition.runtime.id !== deriveSpecialistRecoveryEntityId(
+        'runtime',
+        input.recoveryId,
+        failedRuntime.id,
+      ) ||
+      contextAttachment.id !== deriveSpecialistRecoveryEntityId(
+        'context',
+        input.recoveryId,
+        failedRuntime.id,
+      ) ||
+      stored.state.counters.retries >= stored.coordination.bounds.maxSpecialistRetries ||
+      Object.values(expectedBounds).some((value) => value <= 0) ||
+      !sameJson(replacementTransition.runtime.scope, failedRuntime.scope) ||
+      !sameJson(replacementTransition.runtime.authority, failedRuntime.authority) ||
+      replacementTransition.runtime.capabilitySetDigest !== failedRuntime.capabilitySetDigest ||
+      replacementTransition.runtime.requestedAt !== failureTransition.runtime.updatedAt ||
+      replacementTransition.runtime.deadline !== failureTransition.runtime.deadline ||
+      !sameJson(replacementTransition.runtime.bounds, expectedBounds) ||
+      !sameJson(contextAttachment.scope, failedRuntime.scope) ||
+      !sameJson(contextAttachment.authority, failedRuntime.authority)
+    ) return { committed: false, reason: 'invalid_input' }
+
+    let nextState: CoordinationSessionState
+    try {
+      nextState = parseCoordinationSessionState(retryCoordinationTask({
+        state: stored.state,
+        expectedSessionVersion: stored.state.version,
+        taskId: storedTask.id,
+        expectedTaskVersion: storedTask.version,
+        runtimeId: failedRuntime.id,
+        expectedRuntimeVersion: storedTask.runtimeVersion,
+        runtimeVersion: failureTransition.runtime.version,
+        failure,
+        replacementRuntimeId: replacementTransition.runtime.id,
+        replacementRuntimeVersion: replacementTransition.runtime.version,
+        usage: { ...failureTransition.runtime.counters },
+        now: failureTransition.runtime.updatedAt,
+      }))
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    const nextTask = nextState.tasks.find((task) => task.id === storedTask.id)
+    if (nextTask === undefined) return { committed: false, reason: 'invalid_input' }
+    const auditMetadata = coordinationTaskRetryAuditMetadata({
+      recoveryId: input.recoveryId,
+      taskId: storedTask.id,
+      failedRuntimeId: failedRuntime.id,
+      failedRuntimeVersion: failureTransition.runtime.version,
+      replacementRuntimeId: replacementTransition.runtime.id,
+      replacementRuntimeVersion: replacementTransition.runtime.version,
+      failure,
+      usage: { ...failureTransition.runtime.counters },
+    }, nextState)
+
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      writeAgentRuntimeTransition(this.db, failureTransition)
+      writeAgentRuntimeTransition(this.db, replacementTransition)
+      writeAgentRuntimeContextAttachment(this.db, contextAttachment)
+      this.db.run(
+        `update agent_coordination_sessions
+         set version = ?, status = ?, stop_reason = ?, state_json = ?, updated_at = ?
+         where id = ? and version = ? and graph_id = ? and graph_version = ? and state_json = ?`,
+        [
+          nextState.version,
+          nextState.status,
+          nextState.stopReason,
+          JSON.stringify(nextState),
+          nextState.updatedAt,
+          stored.coordination.id,
+          stored.state.version,
+          stored.graph.id,
+          stored.graph.version,
+          JSON.stringify(stored.state),
+        ],
+      )
+      if (this.db.getRowsModified() !== 1) throw new Error('stale_coordination_session')
+      this.db.run(
+        `update agent_coordination_tasks
+         set version = ?, status = ?, agent_id = ?, runtime_id = ?, runtime_version = ?,
+             state_json = ?, updated_at = ?
+         where coordination_id = ? and task_id = ? and graph_id = ?
+           and version = ? and state_json = ?`,
+        [
+          nextTask.version,
+          nextTask.status,
+          nextTask.agentId,
+          nextTask.runtimeId,
+          nextTask.runtimeVersion,
+          JSON.stringify(nextTask),
+          nextState.updatedAt,
+          stored.coordination.id,
+          nextTask.id,
+          stored.graph.id,
+          storedTask.version,
+          JSON.stringify(storedTask),
+        ],
+      )
+      if (this.db.getRowsModified() !== 1) throw new Error('stale_coordination_task')
+      this.db.run(
+        `insert into agent_coordination_audits (
+           id, coordination_id, task_id, event_kind, session_version,
+           metadata_json, created_at
+         ) values (?, ?, ?, 'task_retried', ?, ?, ?)`,
+        [
+          coordinationTransitionAuditId(stored.coordination.id, nextState.version),
+          stored.coordination.id,
+          nextTask.id,
+          nextState.version,
+          JSON.stringify(auditMetadata),
+          nextState.updatedAt,
+        ],
+      )
+      this.db.run(
+        `insert into agent_coordination_checkpoints (
+           coordination_id, checkpoint_version, session_version, graph_version,
+           checkpoint_json, created_at
+         ) values (?, ?, ?, ?, ?, ?)`,
+        [
+          stored.coordination.id,
+          nextState.version,
+          nextState.version,
+          nextState.graphVersion,
+          JSON.stringify(nextState),
+          nextState.updatedAt,
+        ],
+      )
+      for (const runtime of [failureTransition.runtime, replacementTransition.runtime]) {
+        this.enqueueCanonicalRemoteSyncOperation({
+          kind: 'agent-runtime-summary',
+          localProjectId: runtime.scope.localProjectId,
+          runId: runtime.authority.runId,
+          entityId: runtime.id,
+          createdAt: runtime.updatedAt,
+        })
+      }
+      assertCoordinationMetadataBound(this.db, stored.coordination.id)
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return {
+        committed: true,
+        replayed: false,
+        failedRuntime: failureTransition.runtime,
+        runtime: replacementTransition.runtime,
+        state: nextState,
+      }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      if (
+        error instanceof Error &&
+        (error.message === 'stale_coordination_session' ||
+          error.message === 'stale_coordination_task')
+      ) return { committed: false, reason: 'stale_state' }
+      if (
+        error instanceof Error &&
+        (error.message === 'coordination_metadata_too_large' ||
+          /unique constraint failed: agent_runtimes\.id/iu.test(error.message))
+      ) return { committed: false, reason: 'invalid_input' }
+      throw error
+    }
+  }
+
   async commitCoordinationTaskResult(
     input: CommitCoordinationTaskResultInput,
   ): Promise<CommitCoordinationTaskResultOutcome> {
@@ -14363,6 +14864,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'createCoordinationSession',
   'commitSpecialistRuntimeStart',
   'commitSpecialistRuntimeCompletion',
+  'commitSpecialistRuntimeRecovery',
   'commitCoordinationTaskStart',
   'commitCoordinationTaskResult',
   'commitCoordinationHandoff',

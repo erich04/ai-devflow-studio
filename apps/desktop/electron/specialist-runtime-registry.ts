@@ -88,3 +88,15 @@ export function digestSpecialistCapabilitySet(input: {
     capabilityIds: [...input.capabilityIds],
   })).digest('hex')
 }
+
+export function deriveSpecialistRecoveryEntityId(
+  kind: 'runtime' | 'context',
+  recoveryId: string,
+  sourceRuntimeId: string,
+): string {
+  const digest = createHash('sha256')
+    .update(JSON.stringify({ stateVersion: 1, recoveryId, sourceRuntimeId, kind }))
+    .digest('hex')
+    .slice(0, 32)
+  return `specialist-recovery-${kind}-${digest}`
+}

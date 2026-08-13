@@ -331,6 +331,7 @@ export type CoordinationTaskRetryInput = {
   taskId: string
   expectedTaskVersion: number
   runtimeId: string
+  expectedRuntimeVersion: number
   runtimeVersion: number
   failure: CoordinationTaskFailure
   replacementRuntimeId: string
@@ -1501,7 +1502,9 @@ export function retryCoordinationTask(
     task.version !== input.expectedTaskVersion ||
     task.status !== 'running' ||
     task.runtimeId !== input.runtimeId ||
-    task.runtimeVersion !== input.runtimeVersion ||
+    task.runtimeVersion !== input.expectedRuntimeVersion ||
+    !isPositiveVersion(input.runtimeVersion) ||
+    input.runtimeVersion < input.expectedRuntimeVersion ||
     !directFailure ||
     input.state.counters.retries >= input.state.bounds.maxSpecialistRetries ||
     !isPlainRecord(input.usage) ||

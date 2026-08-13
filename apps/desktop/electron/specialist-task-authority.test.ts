@@ -834,4 +834,204 @@ describe('Specialist Runtime coordinator', () => {
       })
     reopenedStore.close()
   })
+
+  it('atomically replaces one explicitly recoverable read-only failure exactly once', async () => {
+    const fixture = await authorityFixture()
+    const ids = {
+      allocation: 'specialist-allocation-recovery-1',
+      agent: 'specialist-agent-recovery-1',
+      runtime: 'specialist-runtime-recovery-source-1',
+      context: 'specialist-runtime-context-recovery-source-1',
+    }
+    const coordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: fixture.store }),
+      clock: () => fixture.now,
+      createId: (kind) => ids[kind],
+    })
+    const started = await coordinator.start({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: 1,
+      taskId: 'specialist-task-1',
+      expectedTaskVersion: 1,
+    })
+    const resumed = resumeAgentRuntime({
+      runtime: started.runtime,
+      expectedCheckpointVersion: started.runtime.checkpointVersion,
+      authority: started.runtime.authority,
+      contextDigest: started.runtime.contextDigest,
+      capabilitySetDigest: started.runtime.capabilitySetDigest,
+      now: '2026-08-13T15:00:01.000Z',
+    })
+    await fixture.store.commitAgentRuntimeTransition({
+      expectedRuntime: started.runtime,
+      transition: resumed,
+    })
+    const waiting = requestAgentAction({
+      runtime: resumed.runtime,
+      expectedCheckpointVersion: resumed.runtime.checkpointVersion,
+      now: '2026-08-13T15:00:02.000Z',
+      action: {
+        id: 'specialist-action-recovery-1',
+        kind: 'tool',
+        capabilityId: 'repository_read',
+        capabilityVersion: 1,
+        requestDigest: '9'.repeat(64),
+        requiresPermission: false,
+      },
+    })
+    await fixture.store.commitAgentRuntimeTransition({
+      expectedRuntime: resumed.runtime,
+      transition: waiting,
+    })
+    const terminal = acceptAgentActionResult({
+      runtime: waiting.runtime,
+      expectedCheckpointVersion: waiting.runtime.checkpointVersion,
+      actionId: waiting.runtime.activeAction!.id,
+      requestDigest: waiting.runtime.activeAction!.requestDigest,
+      result: {
+        outcome: 'failure',
+        resultDigest: 'a'.repeat(64),
+        resultBytes: 128,
+        tokens: 50,
+        costUsd: 0.02,
+        evaluation: 'failure',
+        evaluationSummary: 'The idempotent repository read failed and is safe to retry once.',
+      },
+      now: '2026-08-13T15:00:03.000Z',
+    })
+    const recoveryInput = {
+      recoveryId: 'specialist-recovery-1',
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: started.coordination.version,
+      taskId: 'specialist-task-1',
+      expectedTaskVersion: 2,
+      expectedRuntimeVersion: waiting.runtime.version,
+      transition: terminal,
+    }
+
+    const recovered = await coordinator.recover(recoveryInput)
+
+    expect(recovered.failedRuntime).toEqual(terminal.runtime)
+    expect(recovered.runtime).toMatchObject({
+      status: 'checkpointed',
+      stopReason: null,
+      version: 1,
+      checkpointVersion: 1,
+      scope: started.runtime.scope,
+      authority: started.runtime.authority,
+      capabilitySetDigest: started.runtime.capabilitySetDigest,
+      bounds: {
+        maxSteps: 1,
+        maxToolCalls: 1,
+        maxTokens: 4_950,
+        maxCostUsd: 0.48,
+      },
+      requestedAt: terminal.runtime.updatedAt,
+      deadline: started.runtime.deadline,
+    })
+    expect(recovered.runtime.id).not.toBe(started.runtime.id)
+    expect(recovered.coordination).toMatchObject({
+      version: 3,
+      status: 'running',
+      stopReason: null,
+      counters: {
+        specialistStarts: 2,
+        activeSpecialists: 1,
+        retries: 1,
+        steps: 1,
+        toolCalls: 1,
+        tokens: 50,
+        costUsd: 0.02,
+      },
+      tasks: [{
+        id: 'specialist-task-1',
+        version: 3,
+        status: 'running',
+        agentId: ids.agent,
+        runtimeId: recovered.runtime.id,
+        runtimeVersion: 1,
+        resultDigest: null,
+        failure: null,
+        attemptFailures: [{
+          category: 'tool_error',
+          code: 'specialist_tool_failed',
+          sourceTaskId: 'specialist-task-1',
+        }],
+      }],
+    })
+    await expect(coordinator.recover(recoveryInput)).resolves.toEqual(recovered)
+    fixture.store.close()
+
+    const reopenedStore = await createLocalStore({ dbPath: fixture.dbPath })
+    const reopenedCoordinator = createSpecialistRuntimeCoordinator({
+      store: reopenedStore,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: reopenedStore }),
+    })
+    await expect(reopenedCoordinator.recover(recoveryInput)).resolves.toEqual(recovered)
+    await expect(reopenedStore.getCoordinationRecoverySnapshot(fixture.coordination.id))
+      .resolves.toMatchObject({
+        state: recovered.coordination,
+        handoffs: [],
+        audits: [{}, {}, {}],
+        checkpoints: [{}, {}, {}],
+      })
+    const retryResumed = resumeAgentRuntime({
+      runtime: recovered.runtime,
+      expectedCheckpointVersion: recovered.runtime.checkpointVersion,
+      authority: recovered.runtime.authority,
+      contextDigest: recovered.runtime.contextDigest,
+      capabilitySetDigest: recovered.runtime.capabilitySetDigest,
+      now: '2026-08-13T15:00:04.000Z',
+    })
+    await reopenedStore.commitAgentRuntimeTransition({
+      expectedRuntime: recovered.runtime,
+      transition: retryResumed,
+    })
+    const retryWaiting = requestAgentAction({
+      runtime: retryResumed.runtime,
+      expectedCheckpointVersion: retryResumed.runtime.checkpointVersion,
+      now: '2026-08-13T15:00:05.000Z',
+      action: {
+        id: 'specialist-action-recovery-2',
+        kind: 'tool',
+        capabilityId: 'repository_read',
+        capabilityVersion: 1,
+        requestDigest: 'b'.repeat(64),
+        requiresPermission: false,
+      },
+    })
+    await reopenedStore.commitAgentRuntimeTransition({
+      expectedRuntime: retryResumed.runtime,
+      transition: retryWaiting,
+    })
+    const retryTerminal = acceptAgentActionResult({
+      runtime: retryWaiting.runtime,
+      expectedCheckpointVersion: retryWaiting.runtime.checkpointVersion,
+      actionId: retryWaiting.runtime.activeAction!.id,
+      requestDigest: retryWaiting.runtime.activeAction!.requestDigest,
+      result: {
+        outcome: 'failure',
+        resultDigest: 'c'.repeat(64),
+        resultBytes: 128,
+        tokens: 10,
+        costUsd: 0.01,
+        evaluation: 'failure',
+        evaluationSummary: 'The bounded retry also failed.',
+      },
+      now: '2026-08-13T15:00:06.000Z',
+    })
+    await expect(reopenedCoordinator.recover({
+      recoveryId: 'specialist-recovery-2',
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: recovered.coordination.version,
+      taskId: 'specialist-task-1',
+      expectedTaskVersion: 3,
+      expectedRuntimeVersion: retryWaiting.runtime.version,
+      transition: retryTerminal,
+    })).rejects.toThrowError('specialist_runtime_recovery_failed')
+    await expect(reopenedStore.getCoordinationSession(fixture.coordination.id))
+      .resolves.toMatchObject({ state: recovered.coordination })
+    reopenedStore.close()
+  })
 })
