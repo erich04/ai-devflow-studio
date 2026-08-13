@@ -7,6 +7,7 @@ import {
   KNOWLEDGE_RETRIEVAL_TOP_K_MAX,
   KNOWLEDGE_RETRIEVAL_VECTOR_DIMENSIONS_MAX,
   mergeKnowledgeRetrievalCandidates,
+  parseCurrentKnowledgeCitation,
   parseKnowledgeCitation,
   parseKnowledgeRetrievalCandidateSet,
   parseKnowledgeRetrievalRequest,
@@ -311,6 +312,42 @@ describe('V2.1 Knowledge Citation contract', () => {
     }
 
     expect(parseKnowledgeCitation(citation, validRequest, reranked)).toEqual(citation)
+  })
+
+  it('rejects a citation after the current snapshot refresh changes its content hash', () => {
+    const currentSnapshot = {
+      stateVersion: 1 as const,
+      scope: validRequest.scope,
+      knowledgeSnapshotHash: validRequest.knowledgeSnapshotHash,
+      chunks: [{
+        documentId: validCitation.documentId,
+        chunkId: validCitation.chunkId,
+        sourcePath: validCitation.sourcePath,
+        headingPath: validCitation.headingPath,
+        contentHash: validCitation.contentHash,
+      }],
+      refreshedAt: '2026-08-13T07:00:03.000Z',
+    }
+
+    expect(parseCurrentKnowledgeCitation(
+      validCitation,
+      validRequest,
+      validLexicalCandidateSet,
+      currentSnapshot,
+    )).toEqual(validCitation)
+    expect(() => parseCurrentKnowledgeCitation(
+      validCitation,
+      validRequest,
+      validLexicalCandidateSet,
+      {
+        ...currentSnapshot,
+        knowledgeSnapshotHash: `sha256:${'b'.repeat(64)}`,
+        chunks: [{
+          ...currentSnapshot.chunks[0]!,
+          contentHash: 'kh-refreshed',
+        }],
+      },
+    )).toThrowError('invalid_knowledge_retrieval_request')
   })
 })
 

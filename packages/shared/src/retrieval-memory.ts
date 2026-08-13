@@ -816,6 +816,20 @@ export type KnowledgeCitation = {
   citedAt: string
 }
 
+export type KnowledgeSnapshotIdentitySet = {
+  stateVersion: typeof KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION
+  scope: KnowledgeRetrievalScope
+  knowledgeSnapshotHash: string
+  chunks: Array<{
+    documentId: string
+    chunkId: string
+    sourcePath: string
+    headingPath: string[]
+    contentHash: string
+  }>
+  refreshedAt: string
+}
+
 function stringArraysMatch(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((entry, index) => entry === right[index])
 }
@@ -897,6 +911,71 @@ export function parseKnowledgeCitation(
   ) fail()
 
   return value as KnowledgeCitation
+}
+
+export function parseCurrentKnowledgeCitation(
+  value: unknown,
+  request: KnowledgeRetrievalRequest,
+  retrievalResult:
+    | KnowledgeRetrievalCandidateSet
+    | KnowledgeHybridRetrievalResult
+    | KnowledgeRerankedRetrievalResult,
+  currentSnapshot: unknown,
+): KnowledgeCitation {
+  const citation = parseKnowledgeCitation(value, request, retrievalResult)
+  if (
+    !isPlainRecord(currentSnapshot) ||
+    !hasExactKeys(currentSnapshot, [
+      'stateVersion',
+      'scope',
+      'knowledgeSnapshotHash',
+      'chunks',
+      'refreshedAt',
+    ]) ||
+    currentSnapshot.stateVersion !== KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION ||
+    typeof currentSnapshot.knowledgeSnapshotHash !== 'string' ||
+    !snapshotHashPattern.test(currentSnapshot.knowledgeSnapshotHash) ||
+    currentSnapshot.knowledgeSnapshotHash !== citation.knowledgeSnapshotHash ||
+    !isCanonicalIso(currentSnapshot.refreshedAt) ||
+    !Array.isArray(currentSnapshot.chunks)
+  ) fail()
+
+  const scope = parseScope(currentSnapshot.scope)
+  if (!scopesMatch(scope, request.scope)) fail()
+  const chunks = currentSnapshot.chunks.map((chunk) => {
+    if (
+      !isPlainRecord(chunk) ||
+      !hasExactKeys(chunk, [
+        'documentId',
+        'chunkId',
+        'sourcePath',
+        'headingPath',
+        'contentHash',
+      ]) ||
+      !isIdentifier(chunk.documentId) ||
+      !isIdentifier(chunk.chunkId) ||
+      !isSafeSourceRelativePath(chunk.sourcePath) ||
+      !Array.isArray(chunk.headingPath) ||
+      chunk.headingPath.length === 0 ||
+      !chunk.headingPath.every((heading) =>
+        typeof heading === 'string' && heading.length > 0 && heading.trim() === heading
+      ) ||
+      !isIdentifier(chunk.contentHash)
+    ) fail()
+    return chunk
+  })
+  if (new Set(chunks.map((chunk) => chunk.chunkId)).size !== chunks.length) fail()
+
+  const currentChunk = chunks.find((chunk) =>
+    chunk.documentId === citation.documentId && chunk.chunkId === citation.chunkId
+  )
+  if (
+    currentChunk === undefined ||
+    currentChunk.sourcePath !== citation.sourcePath ||
+    !stringArraysMatch(currentChunk.headingPath as string[], citation.headingPath) ||
+    currentChunk.contentHash !== citation.contentHash
+  ) fail()
+  return citation
 }
 
 export type RetrievalMemoryEvaluationCorpus = {
