@@ -3,6 +3,7 @@ import {
   getAcceptedSpecialistRoleIds,
   listSpecialistDescriptors,
   resolveSpecialistDescriptor,
+  resolveSpecialistToolLeasePolicy,
 } from './specialist-runtime-registry'
 
 describe('main-owned Specialist registry', () => {
@@ -59,5 +60,27 @@ describe('main-owned Specialist registry', () => {
     expect(() => resolveSpecialistDescriptor({ id: 'contract-analyst' })).toThrowError(
       'specialist_role_not_registered',
     )
+  })
+
+  it('maps only fixed Native Tools to attenuated Specialist lease capabilities', () => {
+    expect([
+      'repo.list_entries',
+      'repo.read_text',
+      'workspace.write_text',
+      'project.run_saved_test',
+      'workspace.run_saved_test',
+      'scenario.evaluate',
+    ].map((toolId) => resolveSpecialistToolLeasePolicy(toolId))).toEqual([
+      { capabilityId: 'repository_read', acceptedModes: ['read', 'write'] },
+      { capabilityId: 'repository_read', acceptedModes: ['read', 'write'] },
+      { capabilityId: 'managed_workspace_edit', acceptedModes: ['write'] },
+      { capabilityId: 'saved_test', acceptedModes: ['read', 'write'] },
+      { capabilityId: 'saved_test', acceptedModes: ['read', 'write'] },
+      { capabilityId: 'deterministic_evaluation', acceptedModes: ['read', 'write'] },
+    ])
+    expect(() => resolveSpecialistToolLeasePolicy('renderer.tool'))
+      .toThrowError('specialist_tool_not_registered')
+    expect(() => resolveSpecialistToolLeasePolicy({ toolId: 'repo.read_text' }))
+      .toThrowError('specialist_tool_not_registered')
   })
 })

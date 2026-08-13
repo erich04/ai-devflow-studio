@@ -22,6 +22,15 @@ export type SpecialistDescriptor = {
   resourceMode: 'read' | 'write'
 }
 
+export type SpecialistToolLeasePolicy = {
+  capabilityId:
+    | 'repository_read'
+    | 'managed_workspace_edit'
+    | 'saved_test'
+    | 'deterministic_evaluation'
+  acceptedModes: Array<'read' | 'write'>
+}
+
 const descriptors: readonly Readonly<SpecialistDescriptor>[] = [
   {
     stateVersion: 1,
@@ -51,6 +60,33 @@ const descriptors: readonly Readonly<SpecialistDescriptor>[] = [
   },
 ]
 
+const toolLeasePolicies: Readonly<Record<string, Readonly<SpecialistToolLeasePolicy>>> = {
+  'repo.list_entries': {
+    capabilityId: 'repository_read',
+    acceptedModes: ['read', 'write'],
+  },
+  'repo.read_text': {
+    capabilityId: 'repository_read',
+    acceptedModes: ['read', 'write'],
+  },
+  'workspace.write_text': {
+    capabilityId: 'managed_workspace_edit',
+    acceptedModes: ['write'],
+  },
+  'project.run_saved_test': {
+    capabilityId: 'saved_test',
+    acceptedModes: ['read', 'write'],
+  },
+  'workspace.run_saved_test': {
+    capabilityId: 'saved_test',
+    acceptedModes: ['read', 'write'],
+  },
+  'scenario.evaluate': {
+    capabilityId: 'deterministic_evaluation',
+    acceptedModes: ['read', 'write'],
+  },
+}
+
 function cloneDescriptor(descriptor: Readonly<SpecialistDescriptor>): SpecialistDescriptor {
   return {
     ...descriptor,
@@ -72,6 +108,15 @@ export function resolveSpecialistDescriptor(roleId: unknown): SpecialistDescript
     : undefined
   if (descriptor === undefined) throw new Error('specialist_role_not_registered')
   return cloneDescriptor(descriptor)
+}
+
+export function resolveSpecialistToolLeasePolicy(toolId: unknown): SpecialistToolLeasePolicy {
+  const policy = typeof toolId === 'string' ? toolLeasePolicies[toolId] : undefined
+  if (policy === undefined) throw new Error('specialist_tool_not_registered')
+  return {
+    capabilityId: policy.capabilityId,
+    acceptedModes: [...policy.acceptedModes],
+  }
 }
 
 export function digestSpecialistCapabilitySet(input: {

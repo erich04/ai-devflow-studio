@@ -7,6 +7,7 @@ import {
 } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
 import {
+  digestSpecialistCapabilitySet,
   resolveSpecialistDescriptor,
   type SpecialistRoleId,
 } from './specialist-runtime-registry.js'
@@ -209,12 +210,70 @@ export function createSpecialistTaskAuthorityBroker(
       !contextCurrent
     ) invalidAuthority()
 
+    const runningTasks = state.tasks.filter((candidate) => candidate.status === 'running')
+    const activeRuntimes = await Promise.all(
+      runningTasks.map((candidate) => input.store.getAgentRuntime(candidate.runtimeId!)),
+    )
+    const reservedBudget: SpecialistBudget = {
+      maxSteps: 0,
+      maxWallTimeMs: 0,
+      maxToolCalls: 0,
+      maxTokens: 0,
+      maxCostUsd: 0,
+    }
+    for (let index = 0; index < runningTasks.length; index += 1) {
+      const runningTask = runningTasks[index]!
+      const runtime = activeRuntimes[index]
+      const runningGraphTask = graph.nodes.find((candidate) => candidate.id === runningTask.id)
+      if (runtime === null || runtime === undefined || runningGraphTask === undefined) {
+        invalidAuthority()
+      }
+      let runningDescriptor
+      try {
+        runningDescriptor = resolveSpecialistDescriptor(runningGraphTask.roleId)
+      } catch {
+        invalidAuthority()
+      }
+      if (
+        runtime.id !== runningTask.runtimeId ||
+        runningTask.runtimeVersion === null ||
+        runtime.version < runningTask.runtimeVersion ||
+        runtime.status === 'terminal' ||
+        runtime.scope.kind !== 'team' ||
+        runtime.scope.organizationId !== coordination.scope.organizationId ||
+        runtime.scope.projectId !== coordination.scope.projectId ||
+        runtime.scope.userId !== coordination.scope.userId ||
+        runtime.scope.sessionId !== coordination.scope.sessionId ||
+        runtime.scope.localProjectId !== coordination.scope.localProjectId ||
+        !sameJson(runtime.authority, {
+          runId: coordination.authority.runId,
+          nodeId: coordination.authority.nodeId,
+          runVersion: coordination.authority.runVersion,
+          policyVersion: coordination.authority.policyVersion,
+        }) ||
+        runtime.capabilitySetDigest !== digestSpecialistCapabilitySet({
+          roleId: runningDescriptor.id,
+          roleVersion: runningDescriptor.version,
+          taskContextDigest: runningGraphTask.contextDigest,
+          capabilityIds: runningGraphTask.capabilityIds,
+        }) ||
+        Date.parse(runtime.requestedAt) < Date.parse(coordination.requestedAt) ||
+        Date.parse(runtime.deadline) > Date.parse(coordination.deadline)
+      ) invalidAuthority()
+      reservedBudget.maxSteps += runtime.bounds.maxSteps
+      reservedBudget.maxWallTimeMs += runtime.bounds.maxWallTimeMs
+      reservedBudget.maxToolCalls += runtime.bounds.maxToolCalls
+      reservedBudget.maxTokens += runtime.bounds.maxTokens
+      reservedBudget.maxCostUsd += runtime.bounds.maxCostUsd
+    }
+
     const remainingBudget = {
-      maxSteps: coordination.bounds.maxSteps - state.counters.steps,
-      maxWallTimeMs: coordination.bounds.maxWallTimeMs,
-      maxToolCalls: coordination.bounds.maxToolCalls - state.counters.toolCalls,
-      maxTokens: coordination.bounds.maxTokens - state.counters.tokens,
-      maxCostUsd: coordination.bounds.maxCostUsd - state.counters.costUsd,
+      maxSteps: coordination.bounds.maxSteps - state.counters.steps - reservedBudget.maxSteps,
+      maxWallTimeMs: coordination.bounds.maxWallTimeMs - reservedBudget.maxWallTimeMs,
+      maxToolCalls:
+        coordination.bounds.maxToolCalls - state.counters.toolCalls - reservedBudget.maxToolCalls,
+      maxTokens: coordination.bounds.maxTokens - state.counters.tokens - reservedBudget.maxTokens,
+      maxCostUsd: coordination.bounds.maxCostUsd - state.counters.costUsd - reservedBudget.maxCostUsd,
     }
     if (
       remainingBudget.maxSteps <= 0 ||

@@ -12,9 +12,11 @@ import {
   resumeAgentRuntime,
   resolveEffectivePolicy,
   type AgentTaskGraph,
+  type CoordinationResourceLease,
   type CoordinationSessionRequest,
 } from '@ai-devflow/shared'
-import { createLocalStore } from './local-store'
+import { createLocalStore, type AgentRuntimeCapabilityGrant } from './local-store'
+import type { NativeToolAuditRecord } from './native-tool-registry'
 import { createSpecialistRuntimeCoordinator } from './specialist-runtime-coordinator'
 import { createSpecialistTaskAuthorityBroker } from './specialist-task-authority'
 
@@ -29,6 +31,8 @@ afterEach(async () => {
 async function authorityFixture(
   capabilityIds = ['repository_read'],
   withDependentTask = false,
+  withParallelTask = false,
+  coordinationBudgetOverrides: Partial<CoordinationSessionRequest['bounds']> = {},
 ) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'devflow-specialist-authority-'))
   tempDirs.push(dir)
@@ -140,6 +144,11 @@ async function authorityFixture(
     contextAttachment,
   })
 
+  const coordinationDeadline = new Date(Math.min(
+    Date.parse(deadline),
+    Date.parse(now) +
+      (coordinationBudgetOverrides.maxWallTimeMs ?? 10 * 60_000),
+  )).toISOString()
   const coordination: CoordinationSessionRequest = {
     stateVersion: 1,
     id: 'specialist-coordination-1',
@@ -171,16 +180,19 @@ async function authorityFixture(
       maxToolCalls: 4,
       maxTokens: 10_000,
       maxCostUsd: 1,
+      ...coordinationBudgetOverrides,
     },
     requestedAt: now,
-    deadline,
+    deadline: coordinationDeadline,
   }
   const graph: AgentTaskGraph = {
     stateVersion: 1,
     id: 'specialist-graph-1',
     coordinationId: coordination.id,
     version: 1,
-    entryTaskIds: ['specialist-task-1'],
+    entryTaskIds: withParallelTask
+      ? ['specialist-task-1', 'specialist-task-2']
+      : ['specialist-task-1'],
     nodes: [
       {
         id: 'specialist-task-1',
@@ -188,18 +200,18 @@ async function authorityFixture(
         contextDigest: 'c'.repeat(64),
         capabilityIds,
         resourceRequirements: [{
-          resourceId: 'specialist-repository-1',
+          resourceId: project.id,
           resourceDigest: 'd'.repeat(64),
           mode: 'read',
         }],
       },
-      ...(withDependentTask ? [{
+      ...(withDependentTask || withParallelTask ? [{
         id: 'specialist-task-2',
         roleId: 'test-analyst',
         contextDigest: 'e'.repeat(64),
         capabilityIds: ['repository_read'],
         resourceRequirements: [{
-          resourceId: 'specialist-repository-1',
+          resourceId: project.id,
           resourceDigest: 'd'.repeat(64),
           mode: 'read' as const,
         }],
@@ -226,8 +238,142 @@ async function authorityFixture(
     pairing,
     policy,
     supervisor: supervisor.runtime,
+    project,
     now,
   }
+}
+
+async function specialistToolFixture(input: {
+  withLease: boolean
+  toolId?: string
+  leaseExpiresAt?: string
+}) {
+  const toolId = input.toolId ?? 'repo.read_text'
+  const fixture = await authorityFixture()
+  const broker = createSpecialistTaskAuthorityBroker({ store: fixture.store })
+  const coordinator = createSpecialistRuntimeCoordinator({
+    store: fixture.store,
+    authorityBroker: broker,
+    clock: () => fixture.now,
+    createId: (kind) => ({
+      allocation: 'specialist-allocation-tool-1',
+      agent: 'specialist-agent-tool-1',
+      runtime: 'specialist-runtime-tool-1',
+      context: 'specialist-context-tool-1',
+    })[kind],
+  })
+  const started = await coordinator.start({
+    coordinationId: fixture.coordination.id,
+    expectedSessionVersion: 1,
+    taskId: 'specialist-task-1',
+    expectedTaskVersion: 1,
+  })
+  const resumed = resumeAgentRuntime({
+    runtime: started.runtime,
+    expectedCheckpointVersion: started.runtime.checkpointVersion,
+    authority: started.runtime.authority,
+    contextDigest: started.runtime.contextDigest,
+    capabilitySetDigest: started.runtime.capabilitySetDigest,
+    now: '2026-08-13T15:00:01.000Z',
+  })
+  await fixture.store.commitAgentRuntimeTransition({
+    expectedRuntime: started.runtime,
+    transition: resumed,
+  })
+  const waiting = requestAgentAction({
+    runtime: resumed.runtime,
+    expectedCheckpointVersion: resumed.runtime.checkpointVersion,
+    now: '2026-08-13T15:00:02.000Z',
+    action: {
+      id: 'specialist-tool-action-1',
+      kind: 'tool',
+      capabilityId: toolId,
+      capabilityVersion: 1,
+      requestDigest: '4'.repeat(64),
+      requiresPermission: false,
+    },
+  })
+  await fixture.store.commitAgentRuntimeTransition({
+    expectedRuntime: resumed.runtime,
+    transition: waiting,
+  })
+
+  let lease: CoordinationResourceLease | null = null
+  if (input.withLease) {
+    lease = {
+      stateVersion: 1,
+      id: 'specialist-resource-lease-tool-1',
+      coordinationId: fixture.coordination.id,
+      taskId: 'specialist-task-1',
+      taskVersion: 2,
+      runtimeId: waiting.runtime.id,
+      runtimeVersion: 1,
+      scope: fixture.coordination.scope,
+      capabilityId: 'repository_read',
+      capabilityVersion: 1,
+      resourceId: fixture.project.id,
+      resourceDigest: 'd'.repeat(64),
+      mode: 'read',
+      status: 'active',
+      version: 1,
+      acquiredAt: '2026-08-13T15:00:02.000Z',
+      expiresAt: input.leaseExpiresAt ?? '2026-08-13T15:01:02.000Z',
+      releasedAt: null,
+    }
+    await expect(fixture.store.acquireCoordinationResourceLease({
+      expectedState: started.coordination,
+      lease,
+    })).resolves.toEqual({ committed: true, replayed: false, lease })
+  }
+
+  const grant: AgentRuntimeCapabilityGrant = {
+    stateVersion: 1,
+    id: 'specialist-tool-grant-1',
+    runtimeId: waiting.runtime.id,
+    capabilityId: toolId,
+    capabilityVersion: 1,
+    requestDigest: waiting.runtime.activeAction!.requestDigest,
+    permissionClass: 'read',
+    resourceKind: 'local_project',
+    resourceId: fixture.project.id,
+    status: 'active',
+    grantedAt: '2026-08-13T15:00:03.000Z',
+    expiresAt: '2026-08-13T15:01:00.000Z',
+    settledAt: null,
+  }
+  await expect(fixture.store.reserveAgentRuntimeCapabilityGrant(grant)).resolves.toEqual({
+    reserved: true,
+    grant,
+  })
+  const audit: NativeToolAuditRecord = {
+    stateVersion: 1,
+    id: 'specialist-tool-audit-start-1',
+    runtimeId: waiting.runtime.id,
+    actionId: waiting.runtime.activeAction!.id,
+    grantId: grant.id,
+    organizationId: waiting.runtime.scope.organizationId,
+    projectId: waiting.runtime.scope.projectId,
+    userId: waiting.runtime.scope.userId,
+    sessionId: waiting.runtime.scope.sessionId,
+    localProjectId: waiting.runtime.scope.localProjectId,
+    toolId: grant.capabilityId,
+    toolVersion: grant.capabilityVersion,
+    source: 'native',
+    installationId: null,
+    installationVersion: null,
+    permissionClass: grant.permissionClass,
+    sideEffectClass: 'none',
+    resourceKind: grant.resourceKind,
+    resourceId: grant.resourceId,
+    status: 'started',
+    code: null,
+    inputDigest: grant.requestDigest,
+    resultDigest: null,
+    resultBytes: null,
+    redactionState: 'not_recorded',
+    createdAt: '2026-08-13T15:00:04.000Z',
+  }
+  return { ...fixture, started, waiting: waiting.runtime, lease, grant, audit }
 }
 
 describe('Specialist task authority broker', () => {
@@ -341,9 +487,197 @@ describe('Specialist task authority broker', () => {
     )
     fixture.store.close()
   })
+
+  it('subtracts active child Runtime reservations before authorizing a parallel task', async () => {
+    const fixture = await authorityFixture(['repository_read'], false, true)
+    const broker = createSpecialistTaskAuthorityBroker({ store: fixture.store })
+    const coordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: broker,
+      clock: () => fixture.now,
+      createId: (kind) => ({
+        allocation: 'specialist-allocation-budget-a',
+        agent: 'specialist-agent-budget-a',
+        runtime: 'specialist-runtime-budget-a',
+        context: 'specialist-context-budget-a',
+      })[kind],
+    })
+    const started = await coordinator.start({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: 1,
+      taskId: 'specialist-task-1',
+      expectedTaskVersion: 1,
+    })
+    const resumed = resumeAgentRuntime({
+      runtime: started.runtime,
+      expectedCheckpointVersion: started.runtime.checkpointVersion,
+      authority: started.runtime.authority,
+      contextDigest: started.runtime.contextDigest,
+      capabilitySetDigest: started.runtime.capabilitySetDigest,
+      now: '2026-08-13T15:00:01.000Z',
+    })
+    await fixture.store.commitAgentRuntimeTransition({
+      expectedRuntime: started.runtime,
+      transition: resumed,
+    })
+    const second = await broker.authorize({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: started.coordination.version,
+      taskId: 'specialist-task-2',
+      expectedTaskVersion: 1,
+      now: fixture.now,
+    })
+
+    expect(second.task.remainingBudget).toEqual({
+      maxSteps: 2,
+      maxWallTimeMs: 8 * 60_000,
+      maxToolCalls: 2,
+      maxTokens: 5_000,
+      maxCostUsd: 0.5,
+    })
+    fixture.store.close()
+  })
+
+  it('stops before a second child Runtime at the exact shared allocation boundary', async () => {
+    const fixture = await authorityFixture(['repository_read'], false, true, {
+      maxSteps: 2,
+      maxWallTimeMs: 2 * 60_000,
+      maxToolCalls: 2,
+      maxTokens: 5_000,
+      maxCostUsd: 0.5,
+    })
+    const broker = createSpecialistTaskAuthorityBroker({ store: fixture.store })
+    const startCommit = vi.spyOn(fixture.store, 'commitSpecialistRuntimeStart')
+    const ids = [
+      {
+        allocation: 'specialist-allocation-boundary-a',
+        agent: 'specialist-agent-boundary-a',
+        runtime: 'specialist-runtime-boundary-a',
+        context: 'specialist-context-boundary-a',
+      },
+      {
+        allocation: 'specialist-allocation-boundary-b',
+        agent: 'specialist-agent-boundary-b',
+        runtime: 'specialist-runtime-boundary-b',
+        context: 'specialist-context-boundary-b',
+      },
+    ]
+    let startIndex = 0
+    const coordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: broker,
+      clock: () => fixture.now,
+      createId: (kind) => ids[startIndex]![kind],
+    })
+    const first = await coordinator.start({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: 1,
+      taskId: 'specialist-task-1',
+      expectedTaskVersion: 1,
+    })
+    startIndex = 1
+    await expect(coordinator.start({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: first.coordination.version,
+      taskId: 'specialist-task-2',
+      expectedTaskVersion: 1,
+    })).rejects.toThrowError('specialist_runtime_start_failed')
+    expect(startCommit).toHaveBeenCalledTimes(1)
+    await expect(fixture.store.getAgentRuntime(
+      'specialist-runtime-boundary-b',
+    )).resolves.toBeNull()
+    fixture.store.close()
+  })
 })
 
 describe('Specialist Runtime coordinator', () => {
+  it('does not consume a Specialist Tool grant without an exact active resource lease', async () => {
+    const fixture = await specialistToolFixture({ withLease: false })
+
+    await expect(fixture.store.beginAgentRuntimeToolExecution({
+      expectedGrant: fixture.grant,
+      audit: fixture.audit,
+    })).resolves.toEqual({ consumed: false, reason: 'grant_stale' })
+    await expect(fixture.store.listAgentRuntimeCapabilityGrants(fixture.waiting.id))
+      .resolves.toEqual([fixture.grant])
+    await expect(fixture.store.listAgentRuntimeToolAudits(fixture.waiting.id))
+      .resolves.toEqual([])
+    fixture.store.close()
+  })
+
+  it('atomically consumes one Specialist Tool grant under its exact active resource lease', async () => {
+    const fixture = await specialistToolFixture({ withLease: true })
+
+    await expect(fixture.store.beginAgentRuntimeToolExecution({
+      expectedGrant: fixture.grant,
+      audit: fixture.audit,
+    })).resolves.toEqual({ consumed: true })
+    await expect(fixture.store.listAgentRuntimeCapabilityGrants(fixture.waiting.id))
+      .resolves.toEqual([{
+        ...fixture.grant,
+        status: 'consumed',
+        settledAt: fixture.audit.createdAt,
+      }])
+    await expect(fixture.store.listAgentRuntimeToolAudits(fixture.waiting.id))
+      .resolves.toEqual([fixture.audit])
+    await expect(fixture.store.getCoordinationRecoverySnapshot(fixture.coordination.id))
+      .resolves.toMatchObject({ leases: [fixture.lease] })
+    fixture.store.close()
+  })
+
+  it('rejects an unknown Specialist Tool without consuming its grant', async () => {
+    const fixture = await specialistToolFixture({
+      withLease: true,
+      toolId: 'renderer.tool',
+    })
+
+    await expect(fixture.store.beginAgentRuntimeToolExecution({
+      expectedGrant: fixture.grant,
+      audit: fixture.audit,
+    })).resolves.toEqual({ consumed: false, reason: 'grant_stale' })
+    await expect(fixture.store.listAgentRuntimeCapabilityGrants(fixture.waiting.id))
+      .resolves.toEqual([fixture.grant])
+    await expect(fixture.store.listAgentRuntimeToolAudits(fixture.waiting.id))
+      .resolves.toEqual([])
+    fixture.store.close()
+  })
+
+  it('requires the Tool grant lifetime to remain inside the Specialist lease', async () => {
+    const fixture = await specialistToolFixture({
+      withLease: true,
+      leaseExpiresAt: '2026-08-13T15:00:30.000Z',
+    })
+
+    await expect(fixture.store.beginAgentRuntimeToolExecution({
+      expectedGrant: fixture.grant,
+      audit: fixture.audit,
+    })).resolves.toEqual({ consumed: false, reason: 'grant_stale' })
+    await expect(fixture.store.listAgentRuntimeCapabilityGrants(fixture.waiting.id))
+      .resolves.toEqual([fixture.grant])
+    await expect(fixture.store.listAgentRuntimeToolAudits(fixture.waiting.id))
+      .resolves.toEqual([])
+    fixture.store.close()
+  })
+
+  it('rechecks Supervisor authority immediately before a Specialist Tool side effect', async () => {
+    const fixture = await specialistToolFixture({ withLease: true })
+    await fixture.store.saveDesktopPairingCredential({
+      ...fixture.pairing,
+      tokenId: 'specialist-session-rotated-before-tool',
+      createdAt: '2026-08-13T15:00:03.500Z',
+    }, 'rotated-before-tool-token')
+
+    await expect(fixture.store.beginAgentRuntimeToolExecution({
+      expectedGrant: fixture.grant,
+      audit: fixture.audit,
+    })).resolves.toEqual({ consumed: false, reason: 'grant_stale' })
+    await expect(fixture.store.listAgentRuntimeCapabilityGrants(fixture.waiting.id))
+      .resolves.toEqual([fixture.grant])
+    await expect(fixture.store.listAgentRuntimeToolAudits(fixture.waiting.id))
+      .resolves.toEqual([])
+    fixture.store.close()
+  })
+
   it('atomically binds one attenuated child Runtime to the exact ready task', async () => {
     const fixture = await authorityFixture()
     const broker = createSpecialistTaskAuthorityBroker({ store: fixture.store })

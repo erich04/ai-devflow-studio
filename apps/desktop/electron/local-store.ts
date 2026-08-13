@@ -18,9 +18,11 @@ import {
   deriveSpecialistRecoveryEntityId,
   getAcceptedSpecialistRoleIds,
   resolveSpecialistDescriptor,
+  resolveSpecialistToolLeasePolicy,
   SPECIALIST_RUNTIME_MAX_CHECKPOINT_BYTES,
   SPECIALIST_RUNTIME_MAX_TOOL_RESULT_BYTES,
   SPECIALIST_RUNTIME_MAX_TRAJECTORY_METADATA_BYTES,
+  type SpecialistToolLeasePolicy,
 } from './specialist-runtime-registry.js'
 import {
   resolveSpecialistTaskAuthority,
@@ -8520,6 +8522,96 @@ class SqlJsLocalStore implements LocalStore {
       runtime.scope.localProjectId !== audit.localProjectId
     ) {
       return { consumed: false, reason: 'grant_stale' }
+    }
+
+    const coordinationRows = this.db.exec(
+      `select distinct coordination_id from agent_coordination_tasks
+       where runtime_id = ? order by coordination_id asc`,
+      [runtime.id],
+    )[0]?.values ?? []
+    if (coordinationRows.length > 1) {
+      return { consumed: false, reason: 'grant_stale' }
+    }
+    if (coordinationRows.length === 1) {
+      let stored: CoordinationRecoverySnapshot
+      let policy: SpecialistToolLeasePolicy
+      try {
+        const coordinationId = String(coordinationRows[0]![0])
+        const snapshot = selectCoordinationRecoverySnapshot(this.db, coordinationId)
+        if (snapshot === null) throw new Error('specialist_runtime_lease_invalid')
+        stored = snapshot
+        policy = resolveSpecialistToolLeasePolicy(grant.capabilityId)
+      } catch {
+        return { consumed: false, reason: 'grant_stale' }
+      }
+      const task = stored.state.tasks.find((candidate) => candidate.runtimeId === runtime.id)
+      const graphTask = stored.graph.nodes.find((candidate) => candidate.id === task?.id)
+      if (task === undefined || graphTask === undefined) {
+        return { consumed: false, reason: 'grant_stale' }
+      }
+      let expectedCapabilitySetDigest: string
+      try {
+        const descriptor = resolveSpecialistDescriptor(graphTask.roleId)
+        expectedCapabilitySetDigest = digestSpecialistCapabilitySet({
+          roleId: descriptor.id,
+          roleVersion: descriptor.version,
+          taskContextDigest: graphTask.contextDigest,
+          capabilityIds: graphTask.capabilityIds,
+        })
+      } catch {
+        return { consumed: false, reason: 'grant_stale' }
+      }
+      const matchingLeases = stored.leases.filter((lease) =>
+        lease.coordinationId === stored.coordination.id &&
+        lease.taskId === task.id &&
+        lease.taskVersion === task.version &&
+        lease.runtimeId === runtime.id &&
+        lease.runtimeVersion === task.runtimeVersion &&
+        sameJson(lease.scope, stored.coordination.scope) &&
+        lease.capabilityId === policy.capabilityId &&
+        lease.capabilityVersion === 1 &&
+        lease.resourceId === grant.resourceId &&
+        policy.acceptedModes.includes(lease.mode) &&
+        lease.status === 'active' &&
+        lease.releasedAt === null &&
+        Date.parse(lease.acquiredAt) <= Date.parse(grant.grantedAt) &&
+        Date.parse(grant.expiresAt) <= Date.parse(lease.expiresAt) &&
+        Date.parse(audit.createdAt) < Date.parse(lease.expiresAt)
+      )
+      if (
+        task.status !== 'running' ||
+        task.runtimeVersion === null ||
+        matchingLeases.length !== 1 ||
+        runtime.scope.kind !== 'team' ||
+        runtime.scope.organizationId !== stored.coordination.scope.organizationId ||
+        runtime.scope.projectId !== stored.coordination.scope.projectId ||
+        runtime.scope.userId !== stored.coordination.scope.userId ||
+        runtime.scope.sessionId !== stored.coordination.scope.sessionId ||
+        runtime.scope.localProjectId !== stored.coordination.scope.localProjectId ||
+        runtime.authority.runId !== stored.coordination.authority.runId ||
+        runtime.authority.nodeId !== stored.coordination.authority.nodeId ||
+        runtime.authority.runVersion !== stored.coordination.authority.runVersion ||
+        runtime.authority.policyVersion !== stored.coordination.authority.policyVersion ||
+        runtime.capabilitySetDigest !== expectedCapabilitySetDigest ||
+        Date.parse(runtime.requestedAt) < Date.parse(stored.coordination.requestedAt) ||
+        Date.parse(runtime.deadline) > Date.parse(stored.coordination.deadline) ||
+        !await this.isCoordinationSupervisorAuthorityCurrent(stored.coordination)
+      ) {
+        return { consumed: false, reason: 'grant_stale' }
+      }
+      const current = selectCoordinationRecoverySnapshot(
+        this.db,
+        stored.coordination.id,
+      )
+      if (
+        current === null ||
+        !sameJson(current.coordination, stored.coordination) ||
+        !sameJson(current.graph, stored.graph) ||
+        !sameJson(current.state, stored.state) ||
+        !sameJson(current.leases, stored.leases)
+      ) {
+        return { consumed: false, reason: 'grant_stale' }
+      }
     }
 
     this.db.run('begin transaction')
