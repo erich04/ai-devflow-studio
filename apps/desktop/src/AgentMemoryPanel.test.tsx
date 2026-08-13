@@ -191,8 +191,8 @@ describe('AgentMemoryPanel', () => {
       localProjectId="local-project-1"
     />)
 
-    expect(await screen.findByText('Agent Memory')).toBeInTheDocument()
-    expect(screen.getByText('Working Memory')).toBeInTheDocument()
+    expect(await screen.findByText('Working Memory')).toBeInTheDocument()
+    expect(screen.getByText('Agent Memory')).toBeInTheDocument()
     expect(screen.getByText('Runtime checkpoint only')).toBeInTheDocument()
     expect(screen.getByText('2 Memory Candidates')).toBeInTheDocument()
     expect(screen.getByText('3 Durable Memories')).toBeInTheDocument()

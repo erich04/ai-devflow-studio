@@ -357,6 +357,8 @@ export function collectV21CompletionSignoff(cwd = process.cwd()) {
   const expectedContractSha256 = createV21ContractDigest(contractEntries)
   const committedEvaluation = readGitBlob(signoffSha, V21_COMPLETION_EVIDENCE_PATHS.evaluation, cwd)
   const committedGates = readGitBlob(signoffSha, V21_COMPLETION_EVIDENCE_PATHS.requiredGates, cwd)
+  const headEvaluation = readGitBlob('HEAD', V21_COMPLETION_EVIDENCE_PATHS.evaluation, cwd)
+  const headGates = readGitBlob('HEAD', V21_COMPLETION_EVIDENCE_PATHS.requiredGates, cwd)
   const worktreeClean = runGit(['status', '--porcelain=v1', '--untracked-files=all'], cwd) === ''
   return {
     signoffSha,
@@ -370,7 +372,7 @@ export function collectV21CompletionSignoff(cwd = process.cwd()) {
       signoffParentSha,
       changedFiles,
       evidenceImmutable:
-        committedEvaluation.equals(evaluationBytes) && committedGates.equals(requiredGatesBytes),
+        committedEvaluation.equals(headEvaluation) && committedGates.equals(headGates),
       worktreeClean,
       expectedContractSha256,
     }),

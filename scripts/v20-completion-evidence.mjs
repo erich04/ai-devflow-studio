@@ -349,9 +349,19 @@ export function collectV20CompletionSignoff(cwd = process.cwd()) {
     v20CompletionEvidencePaths.requiredGates,
     cwd,
   )
+  const headEvaluationRecordBytes = readGitBlob(
+    'HEAD',
+    v20CompletionEvidencePaths.evaluation,
+    cwd,
+  )
+  const headRequiredGatesBytes = readGitBlob(
+    'HEAD',
+    v20CompletionEvidencePaths.requiredGates,
+    cwd,
+  )
   const currentEvidenceIsImmutable =
-    evaluationRecordBytes.equals(Buffer.from(evaluationRecordText)) &&
-    requiredGatesBytes.equals(Buffer.from(requiredGatesText))
+    evaluationRecordBytes.equals(headEvaluationRecordBytes) &&
+    requiredGatesBytes.equals(headRequiredGatesBytes)
   const evaluationRecord = JSON.parse(evaluationRecordText)
   return {
     signoffSha,

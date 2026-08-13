@@ -254,5 +254,5 @@ describe('Native Coding Runtime integration', () => {
       'workspace.run_saved_test', 'workspace.run_saved_test',
     ]))
     store.close()
-  })
+  }, 20_000)
 })

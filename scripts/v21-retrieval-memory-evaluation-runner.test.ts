@@ -162,7 +162,7 @@ describe('V2.1 Retrieval and Memory evaluation runner', () => {
     expect(readCandidateState).toHaveBeenCalledTimes(2)
     expect(writeRecord).toHaveBeenCalledOnce()
     expect(writeRecord.mock.calls[0]?.[0]).toBe(
-      `/workspace/out/v21-evaluation/${candidateSha}.json`,
+      resolve('/workspace', `out/v21-evaluation/${candidateSha}.json`),
     )
     expect(JSON.parse(String(writeRecord.mock.calls[0]?.[1]))).toEqual(result.record)
   })
