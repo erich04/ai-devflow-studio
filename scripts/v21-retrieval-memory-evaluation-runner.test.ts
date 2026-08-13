@@ -1,4 +1,6 @@
+import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
   collectV21EvaluationRecord,
@@ -18,6 +20,22 @@ const contractEntries = V21_EVALUATION_CONTRACT_PATHS.map((path) => ({
 }))
 
 describe('V2.1 Retrieval and Memory evaluation runner', () => {
+  it('starts through the exact tsx CommonJS package runtime', () => {
+    const result = spawnSync(process.execPath, [
+      resolve('node_modules/tsx/dist/cli.mjs'),
+      'scripts/v21-retrieval-memory-evaluation-runner.ts',
+      '--candidate-sha',
+      'invalid',
+    ], {
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('v21_evaluation_arguments_invalid')
+    expect(result.stderr).not.toContain('Top-level await is currently not supported')
+  })
+
   it('is wired into the package scripts and exact-SHA Verify workflow', () => {
     const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {
       scripts: Record<string, string>
@@ -95,6 +113,16 @@ describe('V2.1 Retrieval and Memory evaluation runner', () => {
     })).toThrow('v21_evaluation_worktree_dirty')
 
     expect(parseV21EvaluationRunnerArguments([
+      '--candidate-sha',
+      candidateSha,
+      '--output',
+      `out/v21-evaluation/${candidateSha}.json`,
+    ])).toEqual({
+      candidateSha,
+      outputPath: `out/v21-evaluation/${candidateSha}.json`,
+    })
+    expect(parseV21EvaluationRunnerArguments([
+      '--',
       '--candidate-sha',
       candidateSha,
       '--output',

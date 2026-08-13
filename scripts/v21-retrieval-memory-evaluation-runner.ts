@@ -170,14 +170,15 @@ export async function runV21EvaluationCli(
 }
 
 export function parseV21EvaluationRunnerArguments(arguments_: string[]) {
+  const normalizedArguments = arguments_[0] === '--' ? arguments_.slice(1) : arguments_
   if (
-    arguments_.length !== 4 ||
-    arguments_[0] !== '--candidate-sha' ||
-    !sha1Pattern.test(String(arguments_[1])) ||
-    arguments_[2] !== '--output' ||
-    arguments_[3] !== `out/v21-evaluation/${arguments_[1]}.json`
+    normalizedArguments.length !== 4 ||
+    normalizedArguments[0] !== '--candidate-sha' ||
+    !sha1Pattern.test(String(normalizedArguments[1])) ||
+    normalizedArguments[2] !== '--output' ||
+    normalizedArguments[3] !== `out/v21-evaluation/${normalizedArguments[1]}.json`
   ) fail('v21_evaluation_arguments_invalid')
-  return { candidateSha: arguments_[1]!, outputPath: arguments_[3]! }
+  return { candidateSha: normalizedArguments[1]!, outputPath: normalizedArguments[3]! }
 }
 
 async function main() {
@@ -214,5 +215,5 @@ async function main() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main()
+  void main()
 }
