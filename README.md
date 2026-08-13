@@ -57,7 +57,8 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
   pushed the exact same commit but failed before Draft creation; it does not mint another credential
   or push the branch again.
 - The V2.0 foundation provides a strict bounded Agent Runtime kernel, while current Desktop schema
-  v25 retains trajectory/checkpoint persistence, durable metadata-only Tool audit, and main-owned
+  v26 retains trajectory/checkpoint persistence, full main-owned Runtime Context attachments,
+  stale-before-action Citation/Memory fencing, durable metadata-only Tool audit, and main-owned
   trusted local stdio MCP authority; it adds the V2.1 retrieval index plus inert candidates,
   immutable durable Memory revisions, heads, tombstones, derived index entries, and metadata-only
   audits without fabricating retained data.
@@ -83,7 +84,7 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 | `corepack pnpm test:docker-lifecycle-smoke` | Fresh Team schema v16, retained V1.4 schema v10 upgrade, transactional populated v11-to-v12 retry, fail-closed v12-to-v13 provider-authoritative expiry migration, durable v13-to-v14 provider backoff, v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, and bounded V1.4 backup/restore rollback. |
 | `corepack pnpm test:v15-github-delivery` | The full offline Delivery Intent → separate approval → exact branch → Draft PR → Acceptance story, including restart and revocation. |
 | `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive and packaged launch isolation; the Local MCP accepted action count remains exactly one after cold restart, while one approved native Coding repair also survives with exact audit/permission counts and zero repeated effects. |
-| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v25 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
+| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v26 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
 | `corepack pnpm test:v20-agent-runtime-evaluator` | The clean-candidate V2.0 scenario collector and strict completion evaluator; provider credentials are removed and only a path/secret-free structured record is retained. |
 | Release-only opencode smoke | A paid, explicit signoff for the real local coding runtime; it is never part of default CI. |
 

@@ -12,7 +12,7 @@ retroactive TDD rewrites unless it is touched.
   v13-to-v14 bounded provider retry boundary, the v14-to-v15 verified publication adoption
   authority without changing legacy grant-backed publications, and the v15-to-v16 metadata-only
   Agent Runtime projection without inventing runtime summaries or audit rows.
-- Electron/SQLite uses Desktop schema v25. Local-store tests must prove a fresh v25 database, the
+- Electron/SQLite uses Desktop schema v26. Local-store tests must prove a fresh v26 database, the
   Desktop schema 17-to-18 retained Runtime upgrade, the 18-to-19 metadata-only Native Tool audit
   upgrade with no invented grant or audit rows, and the 19-to-20 Local MCP installation/audit
   provenance upgrade with no invented installation or MCP audit, and the 20-to-21 retained outbox
@@ -21,7 +21,8 @@ retroactive TDD rewrites unless it is touched.
   Memory-candidate migration with zero fabricated candidates, followed by the 23-to-24 durable
   revision/head/tombstone/derived-index/audit migration with zero fabricated lifecycle rows, plus
   the 24-to-25 retained migration that removes source-candidate uniqueness without losing revision,
-  head, tombstone, index, or audit history, plus rollback on migration failure and refusal of a newer
+  head, tombstone, index, or audit history, followed by the 25-to-26 additive Runtime Context
+  migration without fabricating attachments, plus rollback on migration failure and refusal of a newer
   unknown schema.
 - V2.1 retrieval-index tests prove atomic activation preserves the previous current snapshot when
   persistence fails, source update/delete removes stale current identities, and corrupt, mismatched,
@@ -35,6 +36,12 @@ retroactive TDD rewrites unless it is touched.
   restart-safe derived-index purge, metadata-only audit, and old-replay fencing. It passed 152
   local-store tests and 48 shared retrieval/Memory tests; repository unit verification passed 192
   test files and 2743 tests after the active-Slice document contracts advanced to Slice 5.
+- The active V2.1 Slice 5 Context matrix proves schema 25-to-26 adds no fabricated attachments,
+  Runtime creation and full main-owned Context commit atomically, exact replay/cold reopen preserve
+  one attachment, refreshed Knowledge and revised/deleted/expired Memory fail the currentness fence,
+  and stale Context invokes zero external Tool work. The focused matrix passes 154 local-store,
+  17 Desktop Runtime, and 8 shared Context tests; repository unit verification passes 193 test files
+  and 2755 tests.
 - The packaged Desktop pilot must execute exactly one `scenario.evaluate` Local MCP Tool, persist
   one started and one succeeded installation-bound metadata-only audit, and retain one accepted
   action after cold restart without another grant, MCP call, or audit record. It must also complete

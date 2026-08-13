@@ -1,12 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto'
 import {
+  AGENT_RUNTIME_CONTEXT_MEMORY_REVISIONS_MAX,
   acceptAgentActionResult,
+  assembleAgentRuntimeContext,
   canRunAgentRuntimeOnNode,
   cancelAgentRuntime,
   createAgentRuntime,
   requestAgentAction,
   resumeAgentRuntime,
   type AgentRuntimeState,
+  type AgentRuntimeAuthority,
+  type AgentRuntimeContextAttachment,
+  type AgentRuntimeKnowledgeCitationSource,
+  type AgentRuntimeMemoryRevisionSource,
+  type AgentRuntimeScope,
   type AgentRuntimeTransition,
 } from '@ai-devflow/shared'
 import type {
@@ -100,6 +107,16 @@ export type CreateDesktopAgentRuntimeInput = {
     actionId: string
     requestDigest: string
   }) => Promise<{ resultDigest: string; evaluationSummary: string }>
+  resolveContextSources?: (input: {
+    runtimeId: string
+    checkpointVersion: number
+    scope: AgentRuntimeScope
+    authority: AgentRuntimeAuthority
+    attachedAt: string
+  }) => Promise<{
+    citationSources: AgentRuntimeKnowledgeCitationSource[]
+    memorySources: AgentRuntimeMemoryRevisionSource[]
+  }>
   fault?: (point: 'before_commit' | 'after_commit') => void
 }
 
@@ -165,7 +182,7 @@ export function createDesktopAgentRuntime(
     }
   }
 
-  async function executeNativeAction(runtime: AgentRuntimeState) {
+  async function executeNativeAction(runtime: AgentRuntimeState, actionNow: string) {
     const action = runtime.activeAction
     if (!nativeToolRegistry || action?.kind !== 'tool') {
       return failureResult('invalid_native_tool_action')
@@ -230,7 +247,7 @@ export function createDesktopAgentRuntime(
             permission: {
               decision: 'approved',
               permissionClass: 'execute',
-              decidedAt: canonicalNow(clock),
+              decidedAt: actionNow,
               expiresAt: runtime.deadline,
             },
             resourceScope,
@@ -269,9 +286,14 @@ export function createDesktopAgentRuntime(
   async function commit(
     expectedRuntime: AgentRuntimeState | null,
     transition: AgentRuntimeTransition,
+    contextAttachment?: AgentRuntimeContextAttachment,
   ): Promise<AgentRuntimeState> {
     input.fault?.('before_commit')
-    const result = await input.store.commitAgentRuntimeTransition({ expectedRuntime, transition })
+    const result = await input.store.commitAgentRuntimeTransition({
+      expectedRuntime,
+      transition,
+      ...(contextAttachment === undefined ? {} : { contextAttachment }),
+    })
     if (!result.committed) {
       if (result.reason === 'stale_checkpoint' || result.reason === 'runtime_exists') {
         const current = await input.store.getAgentRuntime(transition.runtime.id)
@@ -358,6 +380,10 @@ export function createDesktopAgentRuntime(
         },
       })
     } else if (runtime.status === 'waiting_action' && runtime.activeAction) {
+      const actionNow = canonicalNow(clock)
+      if (!await input.store.isAgentRuntimeContextCurrent(runtime.id, actionNow)) {
+        throw new Error('Desktop Agent Runtime context is stale')
+      }
       const result = executeFakeAction
         ? await executeFakeAction({
             runtimeId: runtime.id,
@@ -372,7 +398,7 @@ export function createDesktopAgentRuntime(
             evaluation: 'success' as const,
             evaluationSummary: value.evaluationSummary,
           }))
-        : await executeNativeAction(runtime)
+        : await executeNativeAction(runtime, actionNow)
       transition = acceptAgentActionResult({
         runtime,
         expectedCheckpointVersion: runtime.checkpointVersion,
@@ -429,19 +455,73 @@ export function createDesktopAgentRuntime(
             sessionId: `desktop-${sha256(`${run.id}:${nodeId}:${now}`).slice(0, 32)}`,
             localProjectId: project.id,
           }
+      const authority = {
+        runId: run.id,
+        nodeId,
+        runVersion: run.version,
+        policyVersion: policy?.version ?? 1,
+      }
+      const runtimeId = createId()
+      const contextSources = input.resolveContextSources
+        ? await input.resolveContextSources({
+            runtimeId,
+            checkpointVersion: 1,
+            scope,
+            authority,
+            attachedAt: now,
+          })
+        : await (async () => {
+            const [memoryRevisions, candidates] = await Promise.all([
+              input.store.retrieveAgentMemoryRevisions({
+                stateVersion: 1,
+                id: `runtime-memory-${sha256(runtimeId).slice(0, 32)}`,
+                scope,
+                runtimeId,
+                limit: AGENT_RUNTIME_CONTEXT_MEMORY_REVISIONS_MAX,
+                requestedAt: now,
+              }),
+              input.store.listAgentMemoryCandidates(project.id),
+            ])
+            const memorySources: AgentRuntimeMemoryRevisionSource[] = []
+            for (const revision of memoryRevisions) {
+              const head = await input.store.getAgentMemoryHead(revision.id)
+              const candidate = candidates.find((entry) => entry.id === revision.sourceCandidateId)
+              if (head === null || candidate === undefined) {
+                throw new Error('Desktop Agent Runtime Context source is stale')
+              }
+              memorySources.push({
+                revision,
+                current: {
+                  stateVersion: 1,
+                  memoryId: revision.id,
+                  revision: revision.revision,
+                  headVersion: head.version,
+                  status: 'active',
+                  scope: head.scope,
+                  sourceRuntimeId: candidate.provenance.runtimeId,
+                  contentDigest: revision.contentDigest,
+                  updatedAt: head.updatedAt,
+                },
+              })
+            }
+            return { citationSources: [], memorySources }
+          })()
+      const contextAttachment = await assembleAgentRuntimeContext({
+        id: `runtime-context-${sha256(runtimeId).slice(0, 32)}`,
+        runtimeId,
+        checkpointVersion: 1,
+        scope,
+        authority,
+        citationSources: contextSources.citationSources,
+        memorySources: contextSources.memorySources,
+        attachedAt: now,
+      })
       const transition = createAgentRuntime({
         stateVersion: 1,
-        id: createId(),
+        id: runtimeId,
         scope,
-        authority: {
-          runId: run.id,
-          nodeId,
-          runVersion: run.version,
-          policyVersion: policy?.version ?? 1,
-        },
-        contextDigest: sha256(
-          JSON.stringify({ runId: run.id, nodeId, runVersion: run.version }),
-        ),
+        authority,
+        contextDigest: contextAttachment.contextDigest,
         capabilitySetDigest: nativeCapabilitySetDigest,
         bounds: {
           maxSteps: 1,
@@ -456,7 +536,7 @@ export function createDesktopAgentRuntime(
         requestedAt: now,
         deadline: new Date(Date.parse(now) + DEFAULT_RUNTIME_WALL_TIME_MS).toISOString(),
       })
-      const committed = await commit(null, transition)
+      const committed = await commit(null, transition, contextAttachment)
       return snapshot(committed)
     },
 

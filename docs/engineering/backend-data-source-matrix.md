@@ -2,7 +2,7 @@
 
 本文件是 Airbnb-III 前端重构进入后端/IPC/local store 对接后的工程清单。目标不是新增一批接口，而是先把现有页面字段的来源讲清楚：哪些已经由 Electron IPC / 本地 SQLite / 远端 snapshot 驱动，哪些只是 renderer adapter 或 seed fallback，哪些需要后续 shared/API/IPC 合同变更。
 
-当前持久化基线是 Team schema v16 与 Desktop schema v25。Team 持久层记录非秘密的
+当前持久化基线是 Team schema v16 与 Desktop schema v26。Team 持久层记录非秘密的
 provider-authoritative expiry 合同与观测时间，不把本机时钟或 legacy NULL 当作清除授权。
 `v1.5.0` 已发布并完成 1.x；V2.0 Agent Runtime 实现正在按唯一 Roadmap 推进。
 
@@ -48,7 +48,7 @@ provider-authoritative expiry 合同与观测时间，不把本机时钟或 lega
 | Knowledge Review trace | `AgentTrace[]` | `local persisted` | 已可回写当前 Run/Node。 |
 | Token usage | `AgentTokenUsage[]` | `local persisted` | 保留 provider-reported/estimated source。 |
 | Coding Agent run | `runCodingAgent` / subscriptions | `real IPC/API` + `local persisted` | 继续接 permission relay、tool timeline、diff preview；Team summary 分别对白名单 structured metadata、model/cost、budget/reason 投影，净化允许字符串中的 secret/path，并丢弃未知嵌套键。 |
-| Agent Runtime | `startAgentRuntime` / `advanceAgentRuntime` / `cancelAgentRuntime` / `listAgentRuntimes` | `real IPC/API` + `local persisted` | Desktop schema v25 保留严格 trajectory、checkpoint、evaluation、terminal summary、trusted Local MCP/Tool audit 与 metadata-only outbox、main-owned retrieval index，并完成 inert candidate、opaque promotion/revision/deletion authority、durable Memory revision/head/tombstone/derived-index/audit、scope-first retrieval 与 restart-safe purge；Slice 5 下一步把 exact current Citation/Memory revision 接入 Context 并以 version/checkpoint CAS fence stale continuation。Team schema v16 仅接收 status/version/counters/digests 的 redacted summary 与 versioned audit，Web 只读；源码、路径、Memory 内容、raw output、checkpoint 和 capability authority 仍仅在 Electron main。 |
+| Agent Runtime | `startAgentRuntime` / `advanceAgentRuntime` / `cancelAgentRuntime` / `listAgentRuntimes` | `real IPC/API` + `local persisted` | Desktop schema v26 保留严格 trajectory、checkpoint、evaluation、terminal summary、trusted Local MCP/Tool audit、metadata-only outbox、main-owned retrieval index 与完整 Runtime Context attachment；Runtime 创建时原子绑定 exact current Citation/Memory revision，并在每次外部 Tool action 前重验 snapshot/head/tombstone/expiry/pairing，stale Context fail closed。Team schema v16 仅接收 status/version/counters/digests 的 redacted summary 与 versioned audit，Web 只读；源码、路径、Memory 内容、raw output、完整 Context、checkpoint 和 capability authority 仍仅在 Electron main。 |
 | Permission relay | `CodingPermissionRequest[]` + decisions | `real IPC/API` + `local persisted` | 已有 IPC；继续补真实 UI 状态。 |
 | Diff preview | `CodingDiffArtifact[]` | `local persisted` | 已可展示。 |
 

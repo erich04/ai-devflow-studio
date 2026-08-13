@@ -151,18 +151,19 @@ describe('V2.1 Evaluated Retrieval and Memory contract', () => {
     expect(plan).toContain('clean direct child')
   })
 
-  it('advances the single active Roadmap priority to V2.1 Slice 5 after Memory lifecycle passes', () => {
+  it('keeps the single active Roadmap priority on V2.1 Slice 5 while Context integration progresses', () => {
     const roadmap = read('docs/roadmap.md')
     const plan = read('docs/plans/v2.1-evaluated-retrieval-memory.md')
     const testing = read('docs/engineering/testing-strategy.md')
 
-    expect(plan).toContain('Status: Active — Slice 4 complete; Slice 5 next')
+    expect(plan).toContain('Status: Active — Slice 5 in progress')
     expect(plan).toContain('| Slice 1 | Complete |')
     expect(plan).toContain('| Slice 2 | Complete |')
     expect(plan).toContain('| Slice 3 | Complete |')
     expect(plan).toContain('| Slice 4 | Complete |')
-    expect(plan).toContain('| Slice 5 | Next |')
-    expect(plan).toContain('Desktop schema 25')
+    expect(plan).toContain('| Slice 5 | In progress |')
+    expect(plan).toContain('Desktop schema 26')
+    expect(plan).toMatch(/193 test files and 2755 tests/u)
     expect(plan).toMatch(/152\s+focused local-store\s+tests and 48\s+focused shared retrieval\/Memory tests/u)
     expect(plan).toMatch(/192 test files and 2743\s+tests/u)
     expect(roadmap).toContain('### Now — Integrate V2.1 Agent Runtime Context And Desktop UX')

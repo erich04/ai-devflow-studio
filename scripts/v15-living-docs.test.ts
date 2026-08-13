@@ -75,7 +75,7 @@ describe('V1.5 living documentation truth', () => {
       expect(markdown).toContain('does not authorize paid-provider smoke')
     }
 
-    expect(testingStrategy).toContain('Desktop schema v25')
+    expect(testingStrategy).toContain('Desktop schema v26')
     expect(testingStrategy).toContain('Desktop schema 17-to-18')
     expect(testingStrategy).toContain('18-to-19')
     expect(testingStrategy).toContain('19-to-20')
@@ -132,7 +132,7 @@ describe('V1.5 living documentation truth', () => {
     expect(postgres).toContain('redacted')
     expect(postgres).toContain('does not authorize paid-provider smoke')
 
-    expect(electron).toContain('Desktop schema v25')
+    expect(electron).toContain('Desktop schema v26')
     expect(electron).toContain('Local MCP')
     expect(electron).toContain('accepted action count remains exactly one after cold restart')
     expect(electron).toContain('corepack pnpm test:v15-github-delivery-packaged-smoke')
@@ -183,7 +183,7 @@ describe('V1.5 living documentation truth', () => {
     }
 
     expect(backendMatrix).toContain('Team schema v16')
-    expect(backendMatrix).toContain('Desktop schema v25')
+    expect(backendMatrix).toContain('Desktop schema v26')
     expect(backendMatrix).toContain('Agent Runtime')
     expect(backendMatrix).toContain('Local MCP')
     expect(backendMatrix).toContain('provider-authoritative expiry')

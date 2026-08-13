@@ -384,7 +384,6 @@ async function assembleAgentRuntimeContextUnchecked(
     value.citationSources.length > AGENT_RUNTIME_CONTEXT_CITATIONS_MAX ||
     !Array.isArray(value.memorySources) ||
     value.memorySources.length > AGENT_RUNTIME_CONTEXT_MEMORY_REVISIONS_MAX ||
-    value.citationSources.length + value.memorySources.length === 0 ||
     !isCanonicalIso(value.attachedAt)
   ) fail()
   const runtimeId = value.runtimeId as string
@@ -508,7 +507,6 @@ async function parseAgentRuntimeContextAttachmentUnchecked(
     value.memoryRevisions.length > AGENT_RUNTIME_CONTEXT_MEMORY_REVISIONS_MAX ||
     !Array.isArray(value.memoryRevisionIdentities) ||
     value.memoryRevisionIdentities.length !== value.memoryRevisions.length ||
-    value.knowledgeCitations.length + value.memoryRevisions.length === 0 ||
     !isDigest(value.knowledgeIdentityDigest) ||
     !isDigest(value.memoryIdentityDigest) ||
     !isDigest(value.contextDigest) ||

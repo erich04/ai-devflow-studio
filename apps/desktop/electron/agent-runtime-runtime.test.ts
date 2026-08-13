@@ -149,6 +149,67 @@ describe('Desktop Agent Runtime', () => {
     store.close()
   })
 
+  it('atomically persists the main-owned Context attachment with a new Runtime', async () => {
+    const { store, run } = await runtimeFixture()
+    const runtime = createDesktopAgentRuntime({
+      store,
+      clock: tickingClock('2026-08-12T20:30:00.000Z'),
+      createId: () => 'agent-runtime-context-persisted-1',
+    })
+
+    const started = await runtime.start({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      localProjectId: runtimeProjectId,
+    })
+    const attachment = await store.getAgentRuntimeContextAttachment(started.runtime.id)
+
+    expect(attachment).toMatchObject({
+      runtimeId: started.runtime.id,
+      checkpointVersion: 1,
+      scope: started.runtime.scope,
+      authority: started.runtime.authority,
+      knowledgeCitations: [],
+      memoryRevisions: [],
+    })
+    expect(started.runtime.contextDigest).toBe(attachment?.contextDigest)
+    store.close()
+  })
+
+  it('fences stale Context before invoking an external fake action', async () => {
+    const { store, run } = await runtimeFixture()
+    const executeFakeAction = vi.fn(async () => ({
+      resultDigest: 'd'.repeat(64),
+      evaluationSummary: 'This action must remain fenced.',
+    }))
+    const runtime = createDesktopAgentRuntime({
+      store,
+      clock: tickingClock(
+        '2026-08-12T20:30:00.000Z',
+        '2026-08-12T20:30:01.000Z',
+        '2026-08-12T20:30:02.000Z',
+        '2026-08-12T20:30:03.000Z',
+      ),
+      createId: () => 'agent-runtime-context-stale-1',
+      executeFakeAction,
+    })
+    const started = await runtime.start({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      localProjectId: runtimeProjectId,
+    })
+    const resumed = await runtime.advance(runtimeCommand(started))
+    const waiting = await runtime.advance(runtimeCommand(resumed))
+    vi.spyOn(store, 'isAgentRuntimeContextCurrent').mockResolvedValue(false)
+
+    await expect(runtime.advance(runtimeCommand(waiting))).rejects.toThrow(
+      'Desktop Agent Runtime context is stale',
+    )
+    expect(executeFakeAction).not.toHaveBeenCalled()
+    await expect(store.getAgentRuntime(started.runtime.id)).resolves.toEqual(waiting.runtime)
+    store.close()
+  })
+
   it('rejects a current Gate node before creating durable runtime state', async () => {
     const { store, run } = await runtimeFixture()
     const gateRun = {
@@ -485,6 +546,9 @@ describe('Desktop Agent Runtime', () => {
       'injected-before-commit',
     )
     await expect(store.getAgentRuntime('agent-runtime-crash-before-1')).resolves.toBeNull()
+    await expect(
+      store.getAgentRuntimeContextAttachment('agent-runtime-crash-before-1'),
+    ).resolves.toBeNull()
     store.close()
   })
 
@@ -514,6 +578,12 @@ describe('Desktop Agent Runtime', () => {
     await expect(store.getAgentRuntime('agent-runtime-crash-after-1')).resolves.toMatchObject({
       status: 'checkpointed',
       checkpointVersion: 1,
+    })
+    await expect(
+      store.getAgentRuntimeContextAttachment('agent-runtime-crash-after-1'),
+    ).resolves.toMatchObject({
+      runtimeId: 'agent-runtime-crash-after-1',
+      contextDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
     })
     store.close()
   })

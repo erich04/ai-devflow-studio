@@ -139,6 +139,28 @@ const input = {
 }
 
 describe('V2.1 Agent Runtime Context attachment', () => {
+  it('binds an empty retrieval result to the exact Runtime and checkpoint', async () => {
+    const attachment = await assembleAgentRuntimeContext({
+      ...input,
+      id: 'runtime-context-attachment-empty-1',
+      citationSources: [],
+      memorySources: [],
+    })
+
+    expect(await parseAgentRuntimeContextAttachment(attachment)).toEqual(attachment)
+    expect(attachment).toMatchObject({
+      runtimeId: input.runtimeId,
+      checkpointVersion: input.checkpointVersion,
+      knowledgeCitations: [],
+      memoryRevisions: [],
+      memoryRevisionIdentities: [],
+    })
+    expect(projectAgentRuntimeContextTrajectoryMetadata(attachment)).toMatchObject({
+      knowledgeCitationCount: 0,
+      memoryRevisionCount: 0,
+    })
+  })
+
   it('attaches exact current Citation and Memory content but projects metadata only', async () => {
     const attachment = await assembleAgentRuntimeContext(input)
 

@@ -52,6 +52,7 @@ import {
   createTestEvidenceEvent,
   normalizeWorkflowRunProgress,
   parseAgentMemoryCandidate,
+  parseAgentRuntimeContextAttachment,
   parseAgentMemoryRetrievalRequest,
   parseAgentMemoryTombstone,
   parseDurableAgentMemoryRevision,
@@ -79,6 +80,7 @@ import {
   type AgentMemoryTombstone,
   type AgentCheckpoint,
   type AgentRuntimeEvent,
+  type AgentRuntimeContextAttachment,
   type AgentRuntimeState,
   type AgentRuntimeStopReason,
   type AgentRuntimeTransition,
@@ -128,7 +130,7 @@ import {
   type WorkRequest,
   AGENT_MEMORY_ACTIVE_REVISIONS_MAX,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 25
+export const CURRENT_SCHEMA_VERSION = 26
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -640,6 +642,7 @@ export type RetryRemoteSyncOperationResult =
 export type CommitAgentRuntimeTransitionInput = {
   expectedRuntime: AgentRuntimeState | null
   transition: AgentRuntimeTransition
+  contextAttachment?: AgentRuntimeContextAttachment
 }
 
 export type CommitAgentRuntimeTransitionResult =
@@ -751,6 +754,10 @@ export type LocalStore = {
   commitAgentRuntimeTransition(
     input: CommitAgentRuntimeTransitionInput,
   ): Promise<CommitAgentRuntimeTransitionResult>
+  getAgentRuntimeContextAttachment(
+    runtimeId: string,
+  ): Promise<AgentRuntimeContextAttachment | null>
+  isAgentRuntimeContextCurrent(runtimeId: string, now: string): Promise<boolean>
   getAgentRuntime(runtimeId: string): Promise<AgentRuntimeState | null>
   listAgentRuntimes(): Promise<AgentRuntimeState[]>
   listRecoverableAgentRuntimes(): Promise<AgentRuntimeState[]>
@@ -3089,6 +3096,51 @@ const schemaMigrations: readonly SchemaMigration[] = [
       }
     },
   },
+  {
+    version: 26,
+    migrate(db) {
+      db.run(`
+    create table agent_runtime_context_attachments (
+      id text primary key,
+      runtime_id text not null unique,
+      checkpoint_version integer not null,
+      context_digest text not null unique,
+      knowledge_identity_digest text not null,
+      memory_identity_digest text not null,
+      knowledge_citation_count integer not null,
+      memory_revision_count integer not null,
+      state_version integer not null,
+      json text not null,
+      attached_at text not null,
+      foreign key (runtime_id) references agent_runtimes(id) on delete cascade,
+      check (length(trim(id)) > 0 and length(id) <= 200 and trim(id) = id),
+      check (length(trim(runtime_id)) > 0 and length(runtime_id) <= 200 and trim(runtime_id) = runtime_id),
+      check (checkpoint_version between 1 and 2147483647),
+      check (length(context_digest) = 64 and context_digest not glob '*[^0-9a-f]*'),
+      check (length(knowledge_identity_digest) = 64 and knowledge_identity_digest not glob '*[^0-9a-f]*'),
+      check (length(memory_identity_digest) = 64 and memory_identity_digest not glob '*[^0-9a-f]*'),
+      check (knowledge_citation_count between 0 and 20),
+      check (memory_revision_count between 0 and 32),
+      check (state_version = 1),
+      check (json_valid(json) and json_type(json) = 'object'),
+      check (length(cast(json as blob)) <= 524288),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.id') = id),
+      check (json_extract(json, '$.runtimeId') = runtime_id),
+      check (json_extract(json, '$.checkpointVersion') = checkpoint_version),
+      check (json_extract(json, '$.contextDigest') = context_digest),
+      check (json_extract(json, '$.knowledgeIdentityDigest') = knowledge_identity_digest),
+      check (json_extract(json, '$.memoryIdentityDigest') = memory_identity_digest),
+      check (json_array_length(json_extract(json, '$.knowledgeCitations')) = knowledge_citation_count),
+      check (json_array_length(json_extract(json, '$.memoryRevisions')) = memory_revision_count),
+      check (json_extract(json, '$.attachedAt') = attached_at)
+    );
+
+    create index idx_agent_runtime_context_attachments_attached
+      on agent_runtime_context_attachments(attached_at, runtime_id);
+      `)
+    },
+  },
 ]
 
 function migrateSchema(db: Database) {
@@ -3360,6 +3412,23 @@ function selectAgentRuntimeCheckpoints(
   ).map(parseStoredAgentCheckpoint)
 }
 
+async function selectAgentRuntimeContextAttachment(
+  db: Database,
+  runtimeId: string,
+): Promise<AgentRuntimeContextAttachment | null> {
+  const value = selectJson<unknown>(
+    db,
+    'select json from agent_runtime_context_attachments where runtime_id = ? limit 1',
+    [runtimeId],
+  )[0]
+  if (value === undefined) return null
+  try {
+    return await parseAgentRuntimeContextAttachment(value)
+  } catch {
+    throw new Error('Stored Agent Runtime Context attachment is invalid')
+  }
+}
+
 function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
@@ -3499,6 +3568,33 @@ function writeAgentRuntimeTransition(db: Database, transition: AgentRuntimeTrans
       ],
     )
   }
+}
+
+function writeAgentRuntimeContextAttachment(
+  db: Database,
+  attachment: AgentRuntimeContextAttachment,
+): void {
+  db.run(
+    `insert into agent_runtime_context_attachments (
+       id, runtime_id, checkpoint_version, context_digest,
+       knowledge_identity_digest, memory_identity_digest,
+       knowledge_citation_count, memory_revision_count,
+       state_version, json, attached_at
+     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      attachment.id,
+      attachment.runtimeId,
+      attachment.checkpointVersion,
+      attachment.contextDigest,
+      attachment.knowledgeIdentityDigest,
+      attachment.memoryIdentityDigest,
+      attachment.knowledgeCitations.length,
+      attachment.memoryRevisions.length,
+      attachment.stateVersion,
+      JSON.stringify(attachment),
+      attachment.attachedAt,
+    ],
+  )
 }
 
 function selectRemoteSyncOperations(
@@ -6927,19 +7023,129 @@ class SqlJsLocalStore implements LocalStore {
     )
   }
 
+  async getAgentRuntimeContextAttachment(
+    runtimeId: string,
+  ): Promise<AgentRuntimeContextAttachment | null> {
+    if (!isNonEmptyIdentifier(runtimeId) || runtimeId.length > 200) {
+      throw new Error('Invalid Agent Runtime id')
+    }
+    return selectAgentRuntimeContextAttachment(this.db, runtimeId)
+  }
+
+  private async areAgentRuntimeContextSourcesCurrent(
+    attachment: AgentRuntimeContextAttachment,
+    now: string,
+  ): Promise<boolean> {
+    if (!isCanonicalIsoTimestamp(now)) return false
+    if (attachment.scope.kind === 'team') {
+      const pairing = await this.getDesktopPairingCredential()
+      if (
+        pairing === null ||
+        pairing.organizationId !== attachment.scope.organizationId ||
+        pairing.projectId !== attachment.scope.projectId ||
+        pairing.userId !== attachment.scope.userId ||
+        pairing.tokenId !== attachment.scope.sessionId ||
+        pairing.localProjectId !== attachment.scope.localProjectId
+      ) return false
+    }
+
+    if (attachment.knowledgeCitations.length > 0) {
+      const current = await this.getCurrentKnowledgeSnapshotIdentitySet(attachment.scope)
+      if (current === null) return false
+      for (const citation of attachment.knowledgeCitations) {
+        const currentChunk = current.chunks.find((chunk) =>
+          chunk.documentId === citation.documentId && chunk.chunkId === citation.chunkId
+        )
+        if (
+          current.knowledgeSnapshotHash !== citation.knowledgeSnapshotHash ||
+          currentChunk === undefined ||
+          currentChunk.sourcePath !== citation.sourcePath ||
+          !sameJson(currentChunk.headingPath, citation.headingPath) ||
+          currentChunk.contentHash !== citation.contentHash
+        ) return false
+      }
+    }
+
+    const candidates = attachment.memoryRevisions.length === 0
+      ? []
+      : await this.listAgentMemoryCandidates(attachment.scope.localProjectId)
+    for (let index = 0; index < attachment.memoryRevisions.length; index += 1) {
+      const revision = attachment.memoryRevisions[index]!
+      const identity = attachment.memoryRevisionIdentities[index]
+      const [head, revisions, tombstone] = await Promise.all([
+        this.getAgentMemoryHead(revision.id),
+        this.listAgentMemoryRevisions(revision.id),
+        this.getAgentMemoryTombstone(revision.id),
+      ])
+      const storedRevision = revisions.find((candidate) => candidate.revision === revision.revision)
+      const sourceCandidate = candidates.find((candidate) => candidate.id === revision.sourceCandidateId)
+      if (
+        identity === undefined ||
+        head === null ||
+        tombstone !== null ||
+        storedRevision === undefined ||
+        sourceCandidate === undefined ||
+        head.status !== 'active' ||
+        head.currentRevision !== identity.revision ||
+        head.version !== identity.headVersion ||
+        head.updatedAt !== identity.updatedAt ||
+        identity.memoryId !== revision.id ||
+        identity.contentDigest !== revision.contentDigest ||
+        identity.sourceRuntimeId !== sourceCandidate.provenance.runtimeId ||
+        !sameJson(head.scope, identity.scope) ||
+        !sameJson(storedRevision, revision) ||
+        (revision.expiresAt !== null && Date.parse(revision.expiresAt) <= Date.parse(now))
+      ) return false
+    }
+    return true
+  }
+
+  async isAgentRuntimeContextCurrent(runtimeId: string, now: string): Promise<boolean> {
+    if (!isNonEmptyIdentifier(runtimeId) || runtimeId.length > 200) return false
+    const [runtime, attachment] = await Promise.all([
+      this.getAgentRuntime(runtimeId),
+      this.getAgentRuntimeContextAttachment(runtimeId),
+    ])
+    if (
+      runtime === null ||
+      attachment === null ||
+      attachment.runtimeId !== runtime.id ||
+      attachment.contextDigest !== runtime.contextDigest ||
+      !sameJson(attachment.scope, runtime.scope) ||
+      !sameJson(attachment.authority, runtime.authority)
+    ) return false
+    return this.areAgentRuntimeContextSourcesCurrent(attachment, now)
+  }
+
   async commitAgentRuntimeTransition(
     input: CommitAgentRuntimeTransitionInput,
   ): Promise<CommitAgentRuntimeTransitionResult> {
     let transition: AgentRuntimeTransition
+    let contextAttachment: AgentRuntimeContextAttachment | null = null
     try {
       transition = parseAgentRuntimeTransition(input.transition)
       if (input.expectedRuntime !== null) {
         parseAgentRuntimeState(input.expectedRuntime)
       }
+      if (input.contextAttachment !== undefined) {
+        contextAttachment = await parseAgentRuntimeContextAttachment(input.contextAttachment)
+      }
     } catch {
       return { committed: false, reason: 'invalid_transition' }
     }
 
+    if (
+      contextAttachment !== null &&
+      (
+        input.expectedRuntime !== null ||
+        contextAttachment.runtimeId !== transition.runtime.id ||
+        contextAttachment.checkpointVersion !== transition.checkpoint.version ||
+        contextAttachment.contextDigest !== transition.runtime.contextDigest ||
+        contextAttachment.attachedAt !== transition.runtime.requestedAt ||
+        !sameJson(contextAttachment.scope, transition.runtime.scope) ||
+        !sameJson(contextAttachment.authority, transition.runtime.authority)
+      )
+    ) return { committed: false, reason: 'invalid_transition' }
     const current = selectAgentRuntime(this.db, transition.runtime.id)
     if (current && sameJson(current, transition.runtime)) {
       const events = selectAgentRuntimeEvents(
@@ -6951,10 +7157,23 @@ class SqlJsLocalStore implements LocalStore {
         this.db,
         transition.runtime.id,
       ).find((candidate) => candidate.version === transition.checkpoint.version)
-      return sameJson(events, transition.events) && sameJson(checkpoint, transition.checkpoint)
+      const storedAttachment = await selectAgentRuntimeContextAttachment(
+        this.db,
+        transition.runtime.id,
+      )
+      return sameJson(events, transition.events) &&
+        sameJson(checkpoint, transition.checkpoint) &&
+        (contextAttachment === null || sameJson(storedAttachment, contextAttachment))
         ? { committed: true, replayed: true, runtime: current }
         : { committed: false, reason: 'invalid_transition' }
     }
+    if (
+      contextAttachment !== null &&
+      !await this.areAgentRuntimeContextSourcesCurrent(
+        contextAttachment,
+        contextAttachment.attachedAt,
+      )
+    ) return { committed: false, reason: 'invalid_transition' }
 
     if (input.expectedRuntime === null) {
       if (current) return { committed: false, reason: 'runtime_exists' }
@@ -7016,6 +7235,9 @@ class SqlJsLocalStore implements LocalStore {
       this.db.run('begin transaction')
       transactionOpen = true
       writeAgentRuntimeTransition(this.db, transition)
+      if (contextAttachment !== null) {
+        writeAgentRuntimeContextAttachment(this.db, contextAttachment)
+      }
       if (transition.runtime.scope.kind === 'team') {
         this.enqueueCanonicalRemoteSyncOperation({
           kind: 'agent-runtime-summary',
