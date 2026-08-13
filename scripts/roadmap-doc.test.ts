@@ -115,7 +115,7 @@ describe('product roadmap source of truth', () => {
     if (hasV20CompletionEvidence) {
       expect(priorities).toMatch(/^### Now — .*V2\.1/gmu)
       expect(priorities).toContain('V2.0 is complete')
-      expect(priorities).toContain('V2.1 Slices 1 through 4 are complete')
+      expect(priorities).toContain('V2.1 Slices 1 through 5 are complete')
     } else {
       expect(priorities).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
       expect(priorities).toContain('Slices 1–7 are complete')

@@ -1055,6 +1055,79 @@ describe('createLocalStore', () => {
     reopened.close()
   })
 
+  it('atomically commits one accepted Runtime observation with its inert Memory candidate', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    const created = createAgentRuntime(agentRuntimeStartRequest)
+    const resumed = resumeAgentRuntime({
+      runtime: created.runtime,
+      expectedCheckpointVersion: created.runtime.checkpointVersion,
+      authority: created.runtime.authority,
+      contextDigest: created.runtime.contextDigest,
+      capabilitySetDigest: created.runtime.capabilitySetDigest,
+      now: '2026-08-12T20:30:01.000Z',
+    })
+    const requested = requestAgentAction({
+      runtime: resumed.runtime,
+      expectedCheckpointVersion: resumed.runtime.checkpointVersion,
+      now: '2026-08-12T20:30:02.000Z',
+      action: {
+        id: 'memory-observation-atomic-1',
+        kind: 'tool',
+        capabilityId: 'test.observe',
+        capabilityVersion: 1,
+        requestDigest: 'e'.repeat(64),
+        requiresPermission: false,
+      },
+    })
+    const accepted = acceptAgentActionResult({
+      runtime: requested.runtime,
+      expectedCheckpointVersion: requested.runtime.checkpointVersion,
+      actionId: 'memory-observation-atomic-1',
+      requestDigest: 'e'.repeat(64),
+      result: {
+        outcome: 'success',
+        resultDigest: 'f'.repeat(64),
+        resultBytes: 64,
+        tokens: 0,
+        costUsd: 0,
+        evaluation: 'success',
+        evaluationSummary: 'The accepted atomic observation is ready for explicit human review.',
+      },
+      now: '2026-08-12T20:30:03.000Z',
+    })
+    const candidate = await createAgentMemoryCandidate({
+      id: 'memory-candidate-atomic-1',
+      statement: 'The accepted atomic observation is ready for explicit human review.',
+      previousRuntime: requested.runtime,
+      acceptedTransition: accepted,
+      createdAt: accepted.runtime.updatedAt,
+    })
+    await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: created })
+    await store.commitAgentRuntimeTransition({ expectedRuntime: created.runtime, transition: resumed })
+    await store.commitAgentRuntimeTransition({ expectedRuntime: resumed.runtime, transition: requested })
+
+    await expect(store.commitAgentRuntimeTransition({
+      expectedRuntime: requested.runtime,
+      transition: accepted,
+      memoryCandidate: candidate,
+    })).resolves.toEqual({ committed: true, replayed: false, runtime: accepted.runtime })
+    await expect(store.commitAgentRuntimeTransition({
+      expectedRuntime: requested.runtime,
+      transition: accepted,
+      memoryCandidate: candidate,
+    })).resolves.toEqual({ committed: true, replayed: true, runtime: accepted.runtime })
+    await expect(store.listAgentMemoryCandidates(project.id)).resolves.toEqual([candidate])
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getAgentRuntime(accepted.runtime.id)).resolves.toEqual(accepted.runtime)
+    await expect(reopened.listAgentMemoryCandidates(project.id)).resolves.toEqual([candidate])
+    reopened.close()
+  })
+
   it('promotes one candidate through an exact main-owned capability and rejects its clone', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })

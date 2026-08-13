@@ -39,6 +39,7 @@ import {
   canApproveGateNow,
   canRunAgentRuntimeOnNode,
   createAgentMemoryTombstone,
+  createAgentMemoryCandidate,
   createGitHubDeliveryCompletion,
   createGitHubDeliveryIntent,
   createRemoteSyncIdempotencyKey,
@@ -643,6 +644,7 @@ export type CommitAgentRuntimeTransitionInput = {
   expectedRuntime: AgentRuntimeState | null
   transition: AgentRuntimeTransition
   contextAttachment?: AgentRuntimeContextAttachment
+  memoryCandidate?: AgentMemoryCandidate
 }
 
 export type CommitAgentRuntimeTransitionResult =
@@ -3434,6 +3436,49 @@ function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
+function selectAgentMemoryCandidate(
+  db: Database,
+  candidateId: string,
+): unknown | undefined {
+  return selectJson<unknown>(
+    db,
+    'select json from agent_memory_candidates where id = ? limit 1',
+    [candidateId],
+  )[0]
+}
+
+function writeAgentMemoryCandidate(db: Database, candidate: AgentMemoryCandidate): void {
+  db.run(
+    `insert into agent_memory_candidates (
+       id, scope_kind, local_project_id, organization_id, team_project_id,
+       user_id, session_id, runtime_id, action_id, checkpoint_version,
+       observation_sequence, result_digest, statement, content_digest,
+       provenance_digest, status, state_version, json, created_at
+     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      candidate.id,
+      candidate.scope.kind,
+      candidate.scope.localProjectId,
+      candidate.scope.organizationId,
+      candidate.scope.projectId,
+      candidate.scope.userId,
+      candidate.scope.sessionId,
+      candidate.provenance.runtimeId,
+      candidate.provenance.actionId,
+      candidate.provenance.checkpointVersion,
+      candidate.provenance.sequence,
+      candidate.provenance.resultDigest,
+      candidate.statement,
+      candidate.contentDigest,
+      candidate.provenanceDigest,
+      candidate.status,
+      candidate.stateVersion,
+      JSON.stringify(candidate),
+      candidate.createdAt,
+    ],
+  )
+}
+
 function createAgentRuntimeTerminalSummary(
   runtime: AgentRuntimeState & { status: 'terminal'; stopReason: AgentRuntimeStopReason },
 ): AgentRuntimeTerminalSummary {
@@ -5429,11 +5474,7 @@ class SqlJsLocalStore implements LocalStore {
       }
     }
 
-    const existingValue = selectJson<unknown>(
-      this.db,
-      'select json from agent_memory_candidates where id = ? limit 1',
-      [candidate.id],
-    )[0]
+    const existingValue = selectAgentMemoryCandidate(this.db, candidate.id)
     if (existingValue !== undefined) {
       const existing = await parseAgentMemoryCandidate(existingValue)
       return JSON.stringify(existing) === JSON.stringify(candidate)
@@ -5450,35 +5491,7 @@ class SqlJsLocalStore implements LocalStore {
       return { committed: false, reason: 'id_conflict' }
     }
 
-    this.db.run(
-      `insert into agent_memory_candidates (
-         id, scope_kind, local_project_id, organization_id, team_project_id,
-         user_id, session_id, runtime_id, action_id, checkpoint_version,
-         observation_sequence, result_digest, statement, content_digest,
-         provenance_digest, status, state_version, json, created_at
-       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        candidate.id,
-        candidate.scope.kind,
-        candidate.scope.localProjectId,
-        candidate.scope.organizationId,
-        candidate.scope.projectId,
-        candidate.scope.userId,
-        candidate.scope.sessionId,
-        candidate.provenance.runtimeId,
-        candidate.provenance.actionId,
-        candidate.provenance.checkpointVersion,
-        candidate.provenance.sequence,
-        candidate.provenance.resultDigest,
-        candidate.statement,
-        candidate.contentDigest,
-        candidate.provenanceDigest,
-        candidate.status,
-        candidate.stateVersion,
-        JSON.stringify(candidate),
-        candidate.createdAt,
-      ],
-    )
+    writeAgentMemoryCandidate(this.db, candidate)
     await this.persist()
     return { committed: true, replayed: false, candidate }
   }
@@ -7165,6 +7178,7 @@ class SqlJsLocalStore implements LocalStore {
   ): Promise<CommitAgentRuntimeTransitionResult> {
     let transition: AgentRuntimeTransition
     let contextAttachment: AgentRuntimeContextAttachment | null = null
+    let memoryCandidate: AgentMemoryCandidate | null = null
     try {
       transition = parseAgentRuntimeTransition(input.transition)
       if (input.expectedRuntime !== null) {
@@ -7173,8 +7187,31 @@ class SqlJsLocalStore implements LocalStore {
       if (input.contextAttachment !== undefined) {
         contextAttachment = await parseAgentRuntimeContextAttachment(input.contextAttachment)
       }
+      if (input.memoryCandidate !== undefined) {
+        memoryCandidate = await parseAgentMemoryCandidate(input.memoryCandidate)
+      }
     } catch {
       return { committed: false, reason: 'invalid_transition' }
+    }
+
+    if (memoryCandidate !== null) {
+      if (input.expectedRuntime === null) {
+        return { committed: false, reason: 'invalid_transition' }
+      }
+      try {
+        const expectedCandidate = await createAgentMemoryCandidate({
+          id: memoryCandidate.id,
+          statement: memoryCandidate.statement,
+          previousRuntime: input.expectedRuntime,
+          acceptedTransition: transition,
+          createdAt: memoryCandidate.createdAt,
+        })
+        if (!sameJson(expectedCandidate, memoryCandidate)) {
+          return { committed: false, reason: 'invalid_transition' }
+        }
+      } catch {
+        return { committed: false, reason: 'invalid_transition' }
+      }
     }
 
     if (
@@ -7204,9 +7241,13 @@ class SqlJsLocalStore implements LocalStore {
         this.db,
         transition.runtime.id,
       )
+      const storedCandidate = memoryCandidate === null
+        ? undefined
+        : selectAgentMemoryCandidate(this.db, memoryCandidate.id)
       return sameJson(events, transition.events) &&
         sameJson(checkpoint, transition.checkpoint) &&
-        (contextAttachment === null || sameJson(storedAttachment, contextAttachment))
+        (contextAttachment === null || sameJson(storedAttachment, contextAttachment)) &&
+        (memoryCandidate === null || sameJson(storedCandidate, memoryCandidate))
         ? { committed: true, replayed: true, runtime: current }
         : { committed: false, reason: 'invalid_transition' }
     }
@@ -7272,6 +7313,26 @@ class SqlJsLocalStore implements LocalStore {
       return { committed: false, reason: 'invalid_transition' }
     }
 
+    if (memoryCandidate !== null) {
+      if (
+        memoryCandidate.scope.localProjectId !== currentProject.id ||
+        !sameJson(memoryCandidate.scope, transition.runtime.scope) ||
+        selectAgentMemoryCandidate(this.db, memoryCandidate.id) !== undefined ||
+        selectJson<unknown>(
+          this.db,
+          `select json from agent_memory_candidates
+           where local_project_id = ? and provenance_digest = ? and content_digest = ? limit 1`,
+          [
+            memoryCandidate.scope.localProjectId,
+            memoryCandidate.provenanceDigest,
+            memoryCandidate.contentDigest,
+          ],
+        )[0] !== undefined
+      ) {
+        return { committed: false, reason: 'invalid_transition' }
+      }
+    }
+
     const snapshot = this.db.export()
     let transactionOpen = false
     try {
@@ -7280,6 +7341,9 @@ class SqlJsLocalStore implements LocalStore {
       writeAgentRuntimeTransition(this.db, transition)
       if (contextAttachment !== null) {
         writeAgentRuntimeContextAttachment(this.db, contextAttachment)
+      }
+      if (memoryCandidate !== null) {
+        writeAgentMemoryCandidate(this.db, memoryCandidate)
       }
       if (transition.runtime.scope.kind === 'team') {
         this.enqueueCanonicalRemoteSyncOperation({

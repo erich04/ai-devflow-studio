@@ -5,11 +5,13 @@ import {
   assembleAgentRuntimeContext,
   canRunAgentRuntimeOnNode,
   cancelAgentRuntime,
+  createAgentMemoryCandidate,
   createAgentRuntime,
   requestAgentAction,
   resumeAgentRuntime,
   projectAgentRuntimeContextTrajectoryMetadata,
   type AgentRuntimeState,
+  type AgentMemoryCandidate,
   type AgentRuntimeAuthority,
   type AgentRuntimeContextAttachment,
   type AgentRuntimeContextTrajectoryMetadata,
@@ -298,12 +300,14 @@ export function createDesktopAgentRuntime(
     expectedRuntime: AgentRuntimeState | null,
     transition: AgentRuntimeTransition,
     contextAttachment?: AgentRuntimeContextAttachment,
+    memoryCandidate?: AgentMemoryCandidate,
   ): Promise<AgentRuntimeState> {
     input.fault?.('before_commit')
     const result = await input.store.commitAgentRuntimeTransition({
       expectedRuntime,
       transition,
       ...(contextAttachment === undefined ? {} : { contextAttachment }),
+      ...(memoryCandidate === undefined ? {} : { memoryCandidate }),
     })
     if (!result.committed) {
       if (result.reason === 'stale_checkpoint' || result.reason === 'runtime_exists') {
@@ -418,6 +422,21 @@ export function createDesktopAgentRuntime(
         result,
         now: canonicalNow(clock),
       })
+      const evaluation = transition.events.find((event) => event.type === 'evaluation_recorded')
+      if (evaluation === undefined) {
+        throw new Error('Desktop Agent Runtime accepted result has no evaluation')
+      }
+      const memoryCandidate = result.outcome === 'success'
+        ? await createAgentMemoryCandidate({
+            id: `agent-memory-candidate-${sha256(`${runtime.id}:${runtime.activeAction.id}:${result.resultDigest}`).slice(0, 32)}`,
+            statement: String(evaluation.metadata.summary),
+            previousRuntime: runtime,
+            acceptedTransition: transition,
+            createdAt: transition.runtime.updatedAt,
+          })
+        : undefined
+      const committed = await commit(runtime, transition, undefined, memoryCandidate)
+      return snapshot(committed)
     } else {
       throw new Error('Desktop Agent Runtime is waiting for an unsupported permission transition')
     }

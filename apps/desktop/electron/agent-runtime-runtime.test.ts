@@ -399,6 +399,17 @@ describe('Desktop Agent Runtime', () => {
     expect(capabilityGrants).toMatchObject([
       { status: 'consumed', capabilityId: 'scenario.evaluate' },
     ])
+    await expect(store.listAgentMemoryCandidates(project.id)).resolves.toMatchObject([{
+      status: 'candidate',
+      scope: completed.runtime.scope,
+      statement: 'The deterministic Native Tool scenario satisfied every bound.',
+      provenance: {
+        kind: 'agent_observation',
+        runtimeId: completed.runtime.id,
+        actionId: completed.runtime.acceptedActionIds[0],
+        resultDigest: completed.runtime.lastResultDigest,
+      },
+    }])
     store.close()
   })
 

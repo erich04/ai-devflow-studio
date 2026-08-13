@@ -329,8 +329,8 @@ preserving the evidence needed for human review.
   durable Memory are complete, while Runtime Context now has strict renderer provenance and a
   bounded Desktop Memory lifecycle view. Exact-digest human Candidate promotion and exact-version
   statement revision are now main-owned; explicit exact-version deletion is tombstone-first and can
-  resume a pending purge after restart. Packaged restart evidence and later Team projection/evidence
-  still require their ordered plan slices and completion gates.
+  resume a pending purge after restart. The packaged Desktop proves the full exact Memory lifecycle
+  reopens with zero repeated effects; Team projection and completion evidence remain ordered slices.
 - Runtime Operations and Collaboration Hardening remain evidence-promoted backlog items unless the
   Roadmap assigns milestone priority.
 - UI refactor work should preserve the Evidence Chain as the center of gravity: current stage,

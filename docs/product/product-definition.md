@@ -247,11 +247,12 @@ V1.5 is released as `v1.5.0`, and the finite 1.x product line is complete. Its c
 CI, packaged Desktop, Postgres, lifecycle, restart, revocation, redaction, and private GitHub sandbox
 evidence is immutable under `docs/releases/v1.5.0/`. V2.0 Native Agent Runtime is complete with
 immutable evidence under `docs/releases/v2.0.0/`; V2.1 Evaluated Retrieval and Memory is the active
-Roadmap priority, with local retrieval/Memory complete and Runtime Context/Desktop UX in progress.
+Roadmap priority, with local retrieval/Memory and Runtime Context/Desktop UX complete and the
+metadata-only Team projection in progress.
 Desktop now exposes a strict bounded Agent Memory lifecycle view; exact-version human lifecycle
 promotion and statement revision are available through main-owned exact-digest/version actions,
-and explicit deletion commits a tombstone before restart-safe derived-state purge. Packaged restart
-evidence remains before Slice 5 can complete.
+and explicit deletion commits a tombstone before restart-safe derived-state purge. The packaged
+Desktop proves exact lifecycle recovery with zero repeated Runtime, Tool, provider, or Memory effects.
 
 The released product baseline provides:
 

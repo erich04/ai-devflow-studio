@@ -182,6 +182,95 @@ try {
     throw new Error('Packaged Agent Runtime did not accept exactly one deterministic action.')
   }
 
+  const memoryBeforeRestart = await page.evaluate(async (selection) => {
+    let lifecycle = await window.aiDevFlowDesktop.listAgentMemoryLifecycle(selection)
+    const pending = lifecycle.candidates.filter(
+      (candidate) => candidate.lifecycleStatus === 'pending',
+    )
+    const candidate = pending[0]
+    if (pending.length !== 1 || candidate === undefined || lifecycle.memoryCount !== 0) {
+      throw new Error('Packaged Agent Runtime did not produce one inert Memory Candidate.')
+    }
+    lifecycle = await window.aiDevFlowDesktop.promoteAgentMemoryCandidate({
+      ...selection,
+      candidateId: candidate.id,
+      expectedContentDigest: candidate.contentDigest,
+      expectedProvenanceDigest: candidate.provenanceDigest,
+    })
+    const promoted = lifecycle.memories[0]
+    if (
+      lifecycle.memoryCount !== 1 ||
+      promoted === undefined ||
+      promoted.lifecycleStatus !== 'active' ||
+      promoted.currentRevision !== 1 ||
+      promoted.headVersion !== 1
+    ) {
+      throw new Error('Packaged Agent Memory promotion did not commit exact revision one.')
+    }
+    lifecycle = await window.aiDevFlowDesktop.reviseAgentMemory({
+      ...selection,
+      memoryId: promoted.memoryId,
+      expectedRevision: promoted.currentRevision,
+      expectedHeadVersion: promoted.headVersion,
+      expectedContentDigest: promoted.contentDigest,
+      expectedProvenanceDigest: promoted.provenanceDigest,
+      statement: 'The packaged Runtime observation remains useful after exact human review.',
+    })
+    const revised = lifecycle.memories[0]
+    if (
+      revised === undefined ||
+      revised.lifecycleStatus !== 'active' ||
+      revised.currentRevision !== 2 ||
+      revised.headVersion !== 2
+    ) {
+      throw new Error('Packaged Agent Memory revision did not advance exact optimistic concurrency.')
+    }
+    lifecycle = await window.aiDevFlowDesktop.deleteAgentMemory({
+      ...selection,
+      memoryId: revised.memoryId,
+      expectedRevision: revised.currentRevision,
+      expectedHeadVersion: revised.headVersion,
+      expectedContentDigest: revised.contentDigest,
+      expectedProvenanceDigest: revised.provenanceDigest,
+    })
+    const deleted = lifecycle.memories[0]
+    if (
+      deleted === undefined ||
+      deleted.lifecycleStatus !== 'deleted' ||
+      deleted.revisionStatus !== 'active' ||
+      deleted.currentRevision !== 2 ||
+      deleted.headVersion !== 4 ||
+      deleted.statement !== null ||
+      deleted.tombstone?.purgeStatus !== 'completed' ||
+      deleted.tombstone.lastRevision !== 2 ||
+      deleted.tombstone.deletionVersion !== 3 ||
+      deleted.tombstone.purgedAt === null
+    ) {
+      throw new Error(`Packaged Agent Memory deletion did not complete tombstone-first purge: ${JSON.stringify({
+        lifecycleStatus: deleted?.lifecycleStatus ?? null,
+        revisionStatus: deleted?.revisionStatus ?? null,
+        currentRevision: deleted?.currentRevision ?? null,
+        headVersion: deleted?.headVersion ?? null,
+        statementRedacted: deleted?.statement === null,
+        tombstone: deleted?.tombstone ?? null,
+      })}`)
+    }
+    return {
+      selection,
+      candidateId: candidate.id,
+      memoryId: deleted.memoryId,
+      currentRevision: deleted.currentRevision,
+      headVersion: deleted.headVersion,
+      contentDigest: deleted.contentDigest,
+      provenanceDigest: deleted.provenanceDigest,
+      tombstone: deleted.tombstone,
+    }
+  }, {
+    runtimeId: runtimeBeforeRestart.runtime.runtimeId,
+    runId: runtimeBeforeRestart.runtime.runId,
+    localProjectId: runtimeBeforeRestart.runtime.localProjectId,
+  })
+
   const nativeCodingBeforeRestart = await page.evaluate(async () => {
     const project = await window.aiDevFlowDesktop.selectLocalProject()
     if (!project) throw new Error('Packaged Native Coding project was not selected')
@@ -318,6 +407,27 @@ try {
   ) {
     throw new Error('Packaged Agent Runtime was not restored exactly after restart.')
   }
+  const memoryAfterRestart = await secondLaunch.page.evaluate(async (identity) => {
+    const lifecycle = await window.aiDevFlowDesktop.listAgentMemoryLifecycle(identity.selection)
+    return {
+      candidate: lifecycle.candidates.find((entry) => entry.id === identity.candidateId),
+      memory: lifecycle.memories.find((entry) => entry.memoryId === identity.memoryId),
+    }
+  }, memoryBeforeRestart)
+  if (
+    memoryAfterRestart.candidate?.lifecycleStatus !== 'promoted' ||
+    memoryAfterRestart.memory?.lifecycleStatus !== 'deleted' ||
+    memoryAfterRestart.memory.revisionStatus !== 'active' ||
+    memoryAfterRestart.memory.currentRevision !== memoryBeforeRestart.currentRevision ||
+    memoryAfterRestart.memory.headVersion !== memoryBeforeRestart.headVersion ||
+    memoryAfterRestart.memory.contentDigest !== memoryBeforeRestart.contentDigest ||
+    memoryAfterRestart.memory.provenanceDigest !== memoryBeforeRestart.provenanceDigest ||
+    memoryAfterRestart.memory.statement !== null ||
+    JSON.stringify(memoryAfterRestart.memory.tombstone) !==
+      JSON.stringify(memoryBeforeRestart.tombstone)
+  ) {
+    throw new Error('Packaged Agent Memory was not restored exactly after restart.')
+  }
   const nativeCodingAfterRestart = await secondLaunch.page.evaluate(async (identity) => {
     const codingRun = (await window.aiDevFlowDesktop.listCodingAgentRuns({
       runId: identity.workflowRunId,
@@ -382,6 +492,32 @@ try {
       [nativeCodingBeforeRestart.codingRunId],
     )[0]?.values[0]?.[0],
   )
+  const memoryLifecycleRows = {
+    candidates: Number(database.exec(
+      'select count(*) from agent_memory_candidates where id = ?',
+      [memoryBeforeRestart.candidateId],
+    )[0]?.values[0]?.[0]),
+    revisions: Number(database.exec(
+      'select count(*) from agent_memory_revisions where memory_id = ?',
+      [memoryBeforeRestart.memoryId],
+    )[0]?.values[0]?.[0]),
+    tombstones: Number(database.exec(
+      'select count(*) from agent_memory_tombstones where memory_id = ?',
+      [memoryBeforeRestart.memoryId],
+    )[0]?.values[0]?.[0]),
+    derivedIndexEntries: Number(database.exec(
+      'select count(*) from agent_memory_index_entries where memory_id = ?',
+      [memoryBeforeRestart.memoryId],
+    )[0]?.values[0]?.[0]),
+    audits: database.exec(
+      `select event_kind, count(*)
+         from agent_memory_audits
+        where memory_id = ?
+        group by event_kind
+        order by event_kind`,
+      [memoryBeforeRestart.memoryId],
+    )[0]?.values ?? [],
+  }
   database.close()
   if (schemaVersion !== 26) {
     throw new Error(`Packaged Desktop did not initialize schema 26: ${schemaVersion}`)
@@ -420,6 +556,22 @@ try {
     throw new Error('Packaged Native Coding repeated or escaped its bounded Tool/permission effects.')
   }
   const nativeCodingRestartDuplicateEffects = 0
+  const expectedMemoryAudits = [
+    ['candidate_promoted', 1],
+    ['memory_deleted', 1],
+    ['memory_revised', 1],
+    ['purge_completed', 1],
+  ]
+  if (
+    memoryLifecycleRows.candidates !== 1 ||
+    memoryLifecycleRows.revisions !== 2 ||
+    memoryLifecycleRows.tombstones !== 1 ||
+    memoryLifecycleRows.derivedIndexEntries !== 0 ||
+    JSON.stringify(memoryLifecycleRows.audits) !== JSON.stringify(expectedMemoryAudits)
+  ) {
+    throw new Error('Packaged Agent Memory repeated or escaped its exact lifecycle effects.')
+  }
+  const memoryRestartDuplicateEffects = 0
 
   console.log(
     JSON.stringify(
@@ -450,6 +602,14 @@ try {
           permissionDecisions: nativeCodingPermissionDecisions,
           durableToolAuditRows: nativeCodingAudits.length,
           nativeCodingRestartDuplicateEffects,
+        },
+        agentMemory: {
+          lifecycleStatus: memoryAfterRestart.memory.lifecycleStatus,
+          currentRevision: memoryAfterRestart.memory.currentRevision,
+          headVersion: memoryAfterRestart.memory.headVersion,
+          purgeStatus: memoryAfterRestart.memory.tombstone.purgeStatus,
+          durableLifecycleRows: memoryLifecycleRows,
+          memoryRestartDuplicateEffects,
         },
       },
       null,

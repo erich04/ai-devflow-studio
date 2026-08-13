@@ -36,18 +36,18 @@ retroactive TDD rewrites unless it is touched.
   restart-safe derived-index purge, metadata-only audit, and old-replay fencing. It passed 152
   local-store tests and 48 shared retrieval/Memory tests; repository unit verification passed 192
   test files and 2743 tests after the active-Slice document contracts advanced to Slice 5.
-- The active V2.1 Slice 5 Context matrix proves schema 25-to-26 adds no fabricated attachments,
+- The completed V2.1 Slice 5 Context matrix proves schema 25-to-26 adds no fabricated attachments,
   Runtime creation and full main-owned Context commit atomically, exact replay/cold reopen preserve
   one attachment, refreshed Knowledge and revised/deleted/expired Memory fail the currentness fence,
   and stale Context invokes zero external Tool work even when authority changes between the initial
   check and durable capability grant reservation. The renderer projection v2 strictly exposes only
   attachment/count/identity-digest provenance, with Knowledge Citation and Durable Memory counts
   visible in Desktop while source paths, bodies, and scope sessions remain in Electron main. The
-  focused matrix passes 154 local-store, 18 Desktop Runtime, 8 shared Context, 3 renderer-projection,
+  focused matrix passes 155 local-store, 18 Desktop Runtime, 8 shared Context, 3 renderer-projection,
   1 renderer-access, 1 console-state, and 3 Runtime-panel tests.
   The separate Memory lifecycle matrix passes 4 shared projection, 6 main-owned access, 6
   main-owned human-action, and 7 panel tests. Repository unit verification passes 197 test files and
-  2788 tests after the exact-version deletion/purge tracer.
+  2790 tests after the packaged zero-repeat tracer.
 - Agent Memory lifecycle UI identifies one selected Run and exact persisted Agent Runtime through an
   identifier-only IPC. Electron main derives the complete user/session/Local Project scope from that
   Runtime, rechecks the canonical Run and exact current Team pairing before and after loading
@@ -69,7 +69,10 @@ retroactive TDD rewrites unless it is touched.
   one started and one succeeded installation-bound metadata-only audit, and retain one accepted
   action after cold restart without another grant, MCP call, or audit record. It must also complete
   one approved deterministic native Coding repair, persist one permission decision and the exact
-  read/write/saved-test audit pairs, and cold-start without repeating a Tool effect.
+  read/write/saved-test audit pairs, and cold-start without repeating a Tool effect. The same
+  packaged run must atomically receive one inert Candidate from an accepted observation, promote it,
+  revise it once, tombstone and purge it, then reopen one candidate, two revisions, one tombstone,
+  four exact Memory audits, zero derived index rows, and `memoryRestartDuplicateEffects: 0`.
 - Coding Executor contract tests must prove capability denial before provider/workspace side effects,
   a path-free main-owned request, ordered bounded permission turns, repeated-permission rejection,
   no-permission completion, and uniform success/failure/cancel/timeout cleanup-aware terminal results.

@@ -56,4 +56,16 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).toContain("'workspace.run_saved_test'")
     expect(smoke).toContain('nativeCodingRestartDuplicateEffects')
   })
+
+  it('promotes, revises, deletes, and reopens one exact Agent Memory without repeated effects', () => {
+    expect(smoke).toContain('listAgentMemoryLifecycle')
+    expect(smoke).toContain('promoteAgentMemoryCandidate')
+    expect(smoke).toContain('reviseAgentMemory')
+    expect(smoke).toContain('deleteAgentMemory')
+    expect(smoke).toContain('memoryAfterRestart')
+    expect(smoke).toContain('agent_memory_candidates')
+    expect(smoke).toContain('agent_memory_revisions')
+    expect(smoke).toContain('agent_memory_tombstones')
+    expect(smoke).toContain('memoryRestartDuplicateEffects')
+  })
 })
