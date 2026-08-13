@@ -56,6 +56,8 @@ import type {
 import {
   createLocalStore,
   gateCommandExecutionFingerprint,
+  KNOWLEDGE_INDEX_CHUNK_COUNT_MAX,
+  type ActivateKnowledgeIndexSnapshotInput,
   type WorkRequestMaterializationExpectedPairing,
   type SettleRemoteSyncOperationInput,
 } from './local-store'
@@ -766,9 +768,9 @@ describe('createLocalStore', () => {
         stateVersion: 1 as const,
         id: 'knowledge-snapshot-1',
         scope: {
-          kind: 'team' as const,
-          organizationId: 'org-1',
-          projectId: 'team-project-1',
+          kind: 'local' as const,
+          organizationId: null,
+          projectId: null,
           localProjectId: project.id,
         },
         knowledgeSnapshotHash: `sha256:${'1'.repeat(64)}`,
@@ -1006,6 +1008,218 @@ describe('createLocalStore', () => {
     expect(() => parseCurrentKnowledgeCitation(citation, request, candidates, afterRefresh))
       .toThrowError('invalid_knowledge_retrieval_request')
     store.close()
+  })
+
+  it('keeps a valid current index through corrupt, mismatched, and unbounded rebuilds', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    const baseChunk = {
+      stateVersion: 1 as const,
+      documentId: 'knowledge-document-bounded',
+      chunkId: 'knowledge-chunk-bounded',
+      sourcePath: 'docs/bounded.md',
+      headingPath: ['Bounded rebuild'],
+      contentHash: `sha256:${'5'.repeat(64)}`,
+      content: 'Only a valid bounded replacement may become current.',
+      ordinal: 0,
+      vector: {
+        modelId: 'fixture-embedding',
+        modelVersion: '1',
+        dimensions: 3,
+        values: [1, 0, 0],
+        createdAt: '2026-08-13T10:00:00.000Z',
+      },
+    }
+    const baseActivation: ActivateKnowledgeIndexSnapshotInput = {
+      expectedCurrentSnapshotId: null,
+      snapshot: {
+        stateVersion: 1,
+        id: 'knowledge-snapshot-bounded-base',
+        scope: {
+          kind: 'local',
+          organizationId: null,
+          projectId: null,
+          localProjectId: project.id,
+        },
+        knowledgeSnapshotHash: `sha256:${'6'.repeat(64)}`,
+        embedding: {
+          modelId: 'fixture-embedding',
+          modelVersion: '1',
+          dimensions: 3,
+        },
+        createdAt: '2026-08-13T10:00:00.000Z',
+      },
+      chunks: [baseChunk],
+      activatedAt: '2026-08-13T10:00:01.000Z',
+    }
+    const activated = await store.activateKnowledgeIndexSnapshot(baseActivation)
+    expect(activated).toMatchObject({ activated: true, replayed: false })
+    const expectedCurrent = await store.getCurrentKnowledgeIndexSnapshot(project.id)
+
+    const replacement = (id: string): ActivateKnowledgeIndexSnapshotInput => ({
+      ...baseActivation,
+      expectedCurrentSnapshotId: baseActivation.snapshot.id,
+      snapshot: {
+        ...baseActivation.snapshot,
+        id,
+        knowledgeSnapshotHash: `sha256:${'7'.repeat(64)}`,
+        createdAt: '2026-08-13T10:01:00.000Z',
+      },
+      chunks: [{
+        ...baseChunk,
+        chunkId: `${baseChunk.chunkId}-${id}`,
+        vector: {
+          ...baseChunk.vector,
+          createdAt: '2026-08-13T10:01:00.000Z',
+        },
+      }],
+      activatedAt: '2026-08-13T10:01:01.000Z',
+    })
+    const modelMismatch = replacement('model-mismatch')
+    modelMismatch.chunks[0]!.vector.modelId = 'other-embedding'
+    const dimensionMismatch = replacement('dimension-mismatch')
+    dimensionMismatch.chunks[0]!.vector.dimensions = 2
+    dimensionMismatch.chunks[0]!.vector.values = [1, 0]
+    const nonFiniteVector = replacement('non-finite-vector')
+    nonFiniteVector.chunks[0]!.vector.values = [1, Number.NaN, 0]
+    const scopeMismatch = replacement('scope-mismatch')
+    scopeMismatch.snapshot.scope = {
+      kind: 'team',
+      organizationId: 'other-organization',
+      projectId: 'other-project',
+      localProjectId: project.id,
+    }
+    const unbounded = replacement('unbounded-rebuild')
+    unbounded.chunks = Array.from(
+      { length: KNOWLEDGE_INDEX_CHUNK_COUNT_MAX + 1 },
+      (_, index) => ({
+        ...unbounded.chunks[0]!,
+        documentId: `knowledge-document-${index}`,
+        chunkId: `knowledge-chunk-${index}`,
+        ordinal: index,
+      }),
+    )
+
+    for (const [input, reason] of [
+      [modelMismatch, 'invalid_input'],
+      [dimensionMismatch, 'invalid_input'],
+      [nonFiniteVector, 'invalid_input'],
+      [scopeMismatch, 'scope_mismatch'],
+      [unbounded, 'invalid_input'],
+    ] as const) {
+      const result = await store.activateKnowledgeIndexSnapshot(input)
+      expect(result.activated).toBe(false)
+      if (!result.activated) expect(result.reason).toBe(reason)
+      await expect(store.getCurrentKnowledgeIndexSnapshot(project.id)).resolves.toEqual(
+        expectedCurrent,
+      )
+    }
+
+    const validReplacement = replacement('knowledge-snapshot-bounded-replacement')
+    await expect(store.activateKnowledgeIndexSnapshot(validReplacement)).resolves.toMatchObject({
+      activated: true,
+      replayed: false,
+      snapshot: { id: validReplacement.snapshot.id, status: 'current' },
+    })
+    store.close()
+  })
+
+  it('fails closed on corrupt durable index state and rebuilds only derived project data', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(run)
+    const activation: ActivateKnowledgeIndexSnapshotInput = {
+      expectedCurrentSnapshotId: null,
+      snapshot: {
+        stateVersion: 1,
+        id: 'knowledge-snapshot-corrupt',
+        scope: {
+          kind: 'local',
+          organizationId: null,
+          projectId: null,
+          localProjectId: project.id,
+        },
+        knowledgeSnapshotHash: `sha256:${'8'.repeat(64)}`,
+        embedding: {
+          modelId: 'fixture-embedding',
+          modelVersion: '1',
+          dimensions: 3,
+        },
+        createdAt: '2026-08-13T11:00:00.000Z',
+      },
+      chunks: [{
+        stateVersion: 1,
+        documentId: 'knowledge-document-corrupt',
+        chunkId: 'knowledge-chunk-corrupt',
+        sourcePath: 'docs/corrupt.md',
+        headingPath: ['Corrupt recovery'],
+        contentHash: `sha256:${'9'.repeat(64)}`,
+        content: 'Corrupt derived state must not become retrieval context.',
+        ordinal: 0,
+        vector: {
+          modelId: 'fixture-embedding',
+          modelVersion: '1',
+          dimensions: 3,
+          values: [1, 0, 0],
+          createdAt: '2026-08-13T11:00:00.000Z',
+        },
+      }],
+      activatedAt: '2026-08-13T11:00:01.000Z',
+    }
+    await store.activateKnowledgeIndexSnapshot(activation)
+    store.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const corrupted = new SQL.Database(await readFile(dbPath))
+    corrupted.run(
+      "update knowledge_index_vectors set model_version = 'corrupt' where snapshot_id = ?",
+      [activation.snapshot.id],
+    )
+    await writeFile(dbPath, Buffer.from(corrupted.export()))
+    corrupted.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getCurrentKnowledgeIndexSnapshot(project.id)).rejects.toThrow(
+      'Stored Knowledge index snapshot is invalid',
+    )
+    const replacement: ActivateKnowledgeIndexSnapshotInput = {
+      ...activation,
+      expectedCurrentSnapshotId: activation.snapshot.id,
+      snapshot: {
+        ...activation.snapshot,
+        id: 'knowledge-snapshot-rebuilt',
+        knowledgeSnapshotHash: `sha256:${'a'.repeat(64)}`,
+        createdAt: '2026-08-13T11:01:00.000Z',
+      },
+      chunks: [{
+        ...activation.chunks[0]!,
+        chunkId: 'knowledge-chunk-rebuilt',
+        contentHash: `sha256:${'b'.repeat(64)}`,
+        content: 'The bounded rebuild restores a valid current index.',
+        vector: {
+          ...activation.chunks[0]!.vector,
+          values: [0, 1, 0],
+          createdAt: '2026-08-13T11:01:00.000Z',
+        },
+      }],
+      activatedAt: '2026-08-13T11:01:01.000Z',
+    }
+    await expect(reopened.rebuildKnowledgeIndexSnapshot(replacement)).resolves.toMatchObject({
+      activated: true,
+      replayed: false,
+      snapshot: { id: replacement.snapshot.id, status: 'current' },
+    })
+    await expect(reopened.listProjects()).resolves.toEqual([project])
+    await expect(reopened.listRuns()).resolves.toEqual([run])
+    await expect(reopened.getCurrentKnowledgeIndexSnapshot(project.id)).resolves.toMatchObject({
+      id: replacement.snapshot.id,
+      chunks: [{ chunkId: 'knowledge-chunk-rebuilt' }],
+    })
+    reopened.close()
   })
 
   it('migrates Desktop schema 19 without promoting Team MCP metadata into local authority', async () => {

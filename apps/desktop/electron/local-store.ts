@@ -17,6 +17,7 @@ import {
   activateKnowledgeIndexSnapshot as activateKnowledgeIndexSnapshotInDatabase,
   getCurrentKnowledgeIndexSnapshot as readCurrentKnowledgeIndexSnapshot,
   getCurrentKnowledgeSnapshotIdentitySet as readCurrentKnowledgeSnapshotIdentitySet,
+  rebuildKnowledgeIndexSnapshot as rebuildKnowledgeIndexSnapshotInDatabase,
   type ActivateKnowledgeIndexSnapshotInput,
   type ActivateKnowledgeIndexSnapshotResult,
   type KnowledgeIndexSnapshot,
@@ -30,6 +31,7 @@ export type {
   KnowledgeIndexSnapshotInput,
   KnowledgeIndexSnapshotScope,
 } from './knowledge-index-local-store.js'
+export { KNOWLEDGE_INDEX_CHUNK_COUNT_MAX } from './knowledge-index-local-store.js'
 import {
   applyWorkflowCommand,
   assertFullGitCommitSha,
@@ -675,6 +677,9 @@ export type LocalStore = {
   getCurrentKnowledgeSnapshotIdentitySet(
     scope: KnowledgeRetrievalScope,
   ): Promise<KnowledgeSnapshotIdentitySet | null>
+  rebuildKnowledgeIndexSnapshot(
+    input: ActivateKnowledgeIndexSnapshotInput,
+  ): Promise<ActivateKnowledgeIndexSnapshotResult>
   saveRun(run: WorkflowRun): Promise<void>
   deleteRun(runId: string): Promise<void>
   getRun(runId: string): Promise<WorkflowRun | null>
@@ -4637,6 +4642,14 @@ class SqlJsLocalStore implements LocalStore {
     scope: KnowledgeRetrievalScope,
   ): Promise<KnowledgeSnapshotIdentitySet | null> {
     return readCurrentKnowledgeSnapshotIdentitySet(this.db, scope)
+  }
+
+  async rebuildKnowledgeIndexSnapshot(
+    input: ActivateKnowledgeIndexSnapshotInput,
+  ): Promise<ActivateKnowledgeIndexSnapshotResult> {
+    const result = rebuildKnowledgeIndexSnapshotInDatabase(this.db, input)
+    if (result.activated) await this.persist()
+    return result
   }
 
   async getAgentRuntime(runtimeId: string): Promise<AgentRuntimeState | null> {
@@ -9236,6 +9249,7 @@ class SqlJsLocalStore implements LocalStore {
 const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'upsertProject',
   'activateKnowledgeIndexSnapshot',
+  'rebuildKnowledgeIndexSnapshot',
   'saveRun',
   'deleteRun',
   'enqueueRemoteSyncOperation',

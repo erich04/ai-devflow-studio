@@ -72,8 +72,15 @@ export type ActivateKnowledgeIndexSnapshotResult =
     }
   | {
       activated: false
-      reason: 'invalid_input' | 'project_not_found' | 'snapshot_conflict' | 'id_conflict'
+      reason:
+        | 'invalid_input'
+        | 'project_not_found'
+        | 'snapshot_conflict'
+        | 'scope_mismatch'
+        | 'id_conflict'
     }
+
+export const KNOWLEDGE_INDEX_CHUNK_COUNT_MAX = 1_024
 
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u
 const hashPattern = /^sha256:[a-f0-9]{64}$/u
@@ -171,7 +178,8 @@ function parseActivation(value: unknown): ActivateKnowledgeIndexSnapshotInput {
       'localProjectId',
     ]) ||
     !isIdentifier(value.snapshot.scope.localProjectId) ||
-    !Array.isArray(value.chunks)
+    !Array.isArray(value.chunks) ||
+    value.chunks.length > KNOWLEDGE_INDEX_CHUNK_COUNT_MAX
   ) throw new Error('invalid_knowledge_index_snapshot')
 
   const scope: KnowledgeIndexSnapshotScope = (() => {
@@ -412,6 +420,87 @@ function hasRow(db: Database, sql: string, value: string): boolean {
   return (db.exec(sql, [value])[0]?.values.length ?? 0) > 0
 }
 
+function scopeMatchesPairing(
+  db: Database,
+  scope: KnowledgeIndexSnapshotScope,
+): boolean {
+  if (scope.kind === 'local') return true
+  const stored = db.exec(
+    "select json from desktop_pairing_credentials where id = 'default' limit 1",
+  )[0]?.values[0]?.[0]
+  if (stored === undefined) return false
+  try {
+    const pairing = JSON.parse(String(stored)) as unknown
+    return isPlainRecord(pairing) &&
+      pairing.organizationId === scope.organizationId &&
+      pairing.projectId === scope.projectId &&
+      pairing.localProjectId === scope.localProjectId
+  } catch {
+    return false
+  }
+}
+
+function writeSnapshot(
+  db: Database,
+  input: ActivateKnowledgeIndexSnapshotInput,
+): void {
+  db.run(
+    `insert into knowledge_index_snapshots (
+       id, local_project_id, organization_id, team_project_id, snapshot_hash,
+       embedding_model_id, embedding_model_version, vector_dimensions,
+       status, state_version, created_at, updated_at, activated_at
+     ) values (?, ?, ?, ?, ?, ?, ?, ?, 'current', ?, ?, ?, ?)`,
+    [
+      input.snapshot.id,
+      input.snapshot.scope.localProjectId,
+      input.snapshot.scope.organizationId,
+      input.snapshot.scope.projectId,
+      input.snapshot.knowledgeSnapshotHash,
+      input.snapshot.embedding.modelId,
+      input.snapshot.embedding.modelVersion,
+      input.snapshot.embedding.dimensions,
+      input.snapshot.stateVersion,
+      input.snapshot.createdAt,
+      input.activatedAt,
+      input.activatedAt,
+    ],
+  )
+  for (const chunk of input.chunks) {
+    db.run(
+      `insert into knowledge_index_chunks (
+         snapshot_id, document_id, chunk_id, source_path, heading_path_json,
+         content_hash, content_text, ordinal, state_version
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        input.snapshot.id,
+        chunk.documentId,
+        chunk.chunkId,
+        chunk.sourcePath,
+        JSON.stringify(chunk.headingPath),
+        chunk.contentHash,
+        chunk.content,
+        chunk.ordinal,
+        chunk.stateVersion,
+      ],
+    )
+    db.run(
+      `insert into knowledge_index_vectors (
+         snapshot_id, chunk_id, model_id, model_version,
+         vector_dimensions, vector_json, created_at
+       ) values (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        input.snapshot.id,
+        chunk.chunkId,
+        chunk.vector.modelId,
+        chunk.vector.modelVersion,
+        chunk.vector.dimensions,
+        JSON.stringify(chunk.vector.values),
+        chunk.vector.createdAt,
+      ],
+    )
+  }
+}
+
 export function activateKnowledgeIndexSnapshot(
   db: Database,
   value: ActivateKnowledgeIndexSnapshotInput,
@@ -424,6 +513,9 @@ export function activateKnowledgeIndexSnapshot(
   }
   if (!hasRow(db, 'select id from local_projects where id = ? limit 1', input.snapshot.scope.localProjectId)) {
     return { activated: false, reason: 'project_not_found' }
+  }
+  if (!scopeMatchesPairing(db, input.snapshot.scope)) {
+    return { activated: false, reason: 'scope_mismatch' }
   }
 
   const desired = materializeSnapshot(input)
@@ -444,6 +536,14 @@ export function activateKnowledgeIndexSnapshot(
   if ((current?.id ?? null) !== input.expectedCurrentSnapshotId) {
     return { activated: false, reason: 'snapshot_conflict' }
   }
+  if (
+    current !== null &&
+    (
+      current.scope.kind !== input.snapshot.scope.kind ||
+      current.scope.organizationId !== input.snapshot.scope.organizationId ||
+      current.scope.projectId !== input.snapshot.scope.projectId
+    )
+  ) return { activated: false, reason: 'scope_mismatch' }
 
   db.run('begin transaction')
   try {
@@ -455,67 +555,82 @@ export function activateKnowledgeIndexSnapshot(
         [input.activatedAt, current.id],
       )
     }
-    db.run(
-      `insert into knowledge_index_snapshots (
-         id, local_project_id, organization_id, team_project_id, snapshot_hash,
-         embedding_model_id, embedding_model_version, vector_dimensions,
-         status, state_version, created_at, updated_at, activated_at
-       ) values (?, ?, ?, ?, ?, ?, ?, ?, 'current', ?, ?, ?, ?)`,
-      [
-        input.snapshot.id,
-        input.snapshot.scope.localProjectId,
-        input.snapshot.scope.organizationId,
-        input.snapshot.scope.projectId,
-        input.snapshot.knowledgeSnapshotHash,
-        input.snapshot.embedding.modelId,
-        input.snapshot.embedding.modelVersion,
-        input.snapshot.embedding.dimensions,
-        input.snapshot.stateVersion,
-        input.snapshot.createdAt,
-        input.activatedAt,
-        input.activatedAt,
-      ],
-    )
-    for (const chunk of input.chunks) {
-      db.run(
-        `insert into knowledge_index_chunks (
-           snapshot_id, document_id, chunk_id, source_path, heading_path_json,
-           content_hash, content_text, ordinal, state_version
-         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          input.snapshot.id,
-          chunk.documentId,
-          chunk.chunkId,
-          chunk.sourcePath,
-          JSON.stringify(chunk.headingPath),
-          chunk.contentHash,
-          chunk.content,
-          chunk.ordinal,
-          chunk.stateVersion,
-        ],
-      )
-      db.run(
-        `insert into knowledge_index_vectors (
-           snapshot_id, chunk_id, model_id, model_version,
-           vector_dimensions, vector_json, created_at
-         ) values (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          input.snapshot.id,
-          chunk.chunkId,
-          chunk.vector.modelId,
-          chunk.vector.modelVersion,
-          chunk.vector.dimensions,
-          JSON.stringify(chunk.vector.values),
-          chunk.vector.createdAt,
-        ],
-      )
-    }
+    writeSnapshot(db, input)
     db.run('commit')
   } catch (error) {
     db.run('rollback')
     throw error
   }
   return { activated: true, replayed: false, snapshot: desired }
+}
+
+export function rebuildKnowledgeIndexSnapshot(
+  db: Database,
+  value: ActivateKnowledgeIndexSnapshotInput,
+): ActivateKnowledgeIndexSnapshotResult {
+  let input: ActivateKnowledgeIndexSnapshotInput
+  try {
+    input = parseActivation(value)
+  } catch {
+    return { activated: false, reason: 'invalid_input' }
+  }
+  if (input.expectedCurrentSnapshotId === null) {
+    return { activated: false, reason: 'invalid_input' }
+  }
+  if (!hasRow(
+    db,
+    'select id from local_projects where id = ? limit 1',
+    input.snapshot.scope.localProjectId,
+  )) return { activated: false, reason: 'project_not_found' }
+  if (!scopeMatchesPairing(db, input.snapshot.scope)) {
+    return { activated: false, reason: 'scope_mismatch' }
+  }
+  const currentRow = db.exec(
+    `select id, organization_id, team_project_id
+       from knowledge_index_snapshots
+      where local_project_id = ? and status = 'current' limit 1`,
+    [input.snapshot.scope.localProjectId],
+  )[0]?.values[0]
+  if (!currentRow || String(currentRow[0]) !== input.expectedCurrentSnapshotId) {
+    return { activated: false, reason: 'snapshot_conflict' }
+  }
+  const currentOrganizationId = currentRow[1] === null ? null : String(currentRow[1])
+  const currentProjectId = currentRow[2] === null ? null : String(currentRow[2])
+  if (
+    currentOrganizationId !== input.snapshot.scope.organizationId ||
+    currentProjectId !== input.snapshot.scope.projectId
+  ) return { activated: false, reason: 'scope_mismatch' }
+  if (hasRow(db, 'select id from knowledge_index_snapshots where id = ? limit 1', input.snapshot.id)) {
+    return { activated: false, reason: 'id_conflict' }
+  }
+
+  const snapshotIds = (
+    db.exec(
+      'select id from knowledge_index_snapshots where local_project_id = ? order by id asc',
+      [input.snapshot.scope.localProjectId],
+    )[0]?.values ?? []
+  ).map((row) => String(row[0]))
+  db.run('begin transaction')
+  try {
+    for (const snapshotId of snapshotIds) {
+      db.run('delete from knowledge_citations where snapshot_id = ?', [snapshotId])
+      db.run('delete from knowledge_index_vectors where snapshot_id = ?', [snapshotId])
+      db.run('delete from knowledge_index_chunks where snapshot_id = ?', [snapshotId])
+    }
+    db.run('delete from knowledge_index_snapshots where local_project_id = ?', [
+      input.snapshot.scope.localProjectId,
+    ])
+    writeSnapshot(db, input)
+    db.run('commit')
+  } catch (error) {
+    db.run('rollback')
+    throw error
+  }
+  return {
+    activated: true,
+    replayed: false,
+    snapshot: materializeSnapshot(input),
+  }
 }
 
 export function getCurrentKnowledgeIndexSnapshot(
