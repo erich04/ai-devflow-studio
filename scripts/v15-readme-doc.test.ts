@@ -1,14 +1,22 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+
+const hasV20CompletionEvidence = existsSync('docs/releases/v2.0.0/required-gates.json') &&
+  existsSync('docs/releases/v2.0.0/agent-runtime-evaluation.json')
 
 describe('V1.5 README truth', () => {
   it('records the released V1.5 GitHub Delivery baseline and active V2.0 line', () => {
     const readme = readFileSync('README.md', 'utf8')
 
     expect(readme).toContain('`v1.5.0` is released and the finite 1.x line is complete')
-    expect(readme).toContain('V2.0 Native Agent Runtime implementation is now the active priority')
-    expect(readme).toContain('Slice 7 is complete')
-    expect(readme).toContain('Slice 8 evaluation and completion gate is in progress')
+    if (hasV20CompletionEvidence) {
+      expect(readme).toContain('V2.0 Native Agent Runtime is complete')
+      expect(readme).toContain('V2.1 Evaluated Retrieval and Memory is now the active priority')
+    } else {
+      expect(readme).toContain('V2.0 Native Agent Runtime implementation is now the active priority')
+      expect(readme).toContain('Slice 7 is complete')
+      expect(readme).toContain('Slice 8 evaluation and completion gate is in progress')
+    }
     expect(readme).toContain('Delivery Intent')
     expect(readme).toContain('signed Web approval')
     expect(readme).toContain('GitHub App')

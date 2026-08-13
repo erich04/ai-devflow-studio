@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -8,6 +8,11 @@ const releaseEvidencePaths = [
   'docs/releases/v1.5.0/required-gates.json',
   'docs/releases/v1.5.0/github-sandbox.json',
 ]
+const hasV20CompletionEvidence = existsSync(
+  join(process.cwd(), 'docs/releases/v2.0.0/required-gates.json'),
+) && existsSync(
+  join(process.cwd(), 'docs/releases/v2.0.0/agent-runtime-evaluation.json'),
+)
 
 describe('product roadmap source of truth', () => {
   it('keeps one roadmap with explicit major-version charters', () => {
@@ -82,7 +87,9 @@ describe('product roadmap source of truth', () => {
     expect(markdown).toContain(
       'V1.5 and the finite 1.x line are released and complete',
     )
-    expect(markdown).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
+    expect(markdown).toContain(hasV20CompletionEvidence
+      ? '### Now — Define V2.1 Evaluated Retrieval And Memory Contracts'
+      : '### Now — Run The V2.0 Evaluation And Completion Gate')
     expect(markdown).not.toContain('Slice 7, the candidate-bound completion gate, remains in progress')
     expect(markdown).toContain('v1.5-github-delivery-prd.md')
     expect(markdown).toContain('0013-github-app-delivery-authority.md')
@@ -91,7 +98,7 @@ describe('product roadmap source of truth', () => {
     expect(markdown).not.toContain('### v1.7 Candidate:')
   })
 
-  it('records V1.5 as released and makes V2.0 the single active priority', () => {
+  it('records V1.5 as released and keeps exactly one 2.x active priority', () => {
     const markdown = readFileSync(roadmapPath, 'utf8')
     const currentRelease = markdown.match(
       /## Current Release[\s\S]*?(?=\n## Now \/ Next \/ Later)/u,
@@ -103,12 +110,17 @@ describe('product roadmap source of truth', () => {
     expect(currentRelease).toContain('`v1.5.0` is the released baseline')
     expect(currentRelease).toContain('The finite 1.x product line is complete')
     expect(currentRelease).not.toContain('release and 1.x completion gate remain pending')
-    expect(priorities).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
-    expect(priorities).toContain('Slices 1–7 are complete')
-    expect(priorities).toMatch(/Slice 7\s+is complete/)
-    expect(priorities).toContain(
-      '### Next — Begin V2.1 Evaluated Retrieval And Memory After V2.0 Completion',
-    )
+    if (hasV20CompletionEvidence) {
+      expect(priorities).toContain('### Now — Define V2.1 Evaluated Retrieval And Memory Contracts')
+      expect(priorities).toContain('V2.0 is complete')
+    } else {
+      expect(priorities).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
+      expect(priorities).toContain('Slices 1–7 are complete')
+      expect(priorities).toMatch(/Slice 7\s+is complete/)
+      expect(priorities).toContain(
+        '### Next — Begin V2.1 Evaluated Retrieval And Memory After V2.0 Completion',
+      )
+    }
     expect(markdown).not.toContain('current V1.4 runtime already implements every layer')
     expect(currentRelease).toContain('real private GitHub sandbox')
     expect(markdown).toContain('### v1.5: GitHub Delivery Integration')

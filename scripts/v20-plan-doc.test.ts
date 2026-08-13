@@ -1,7 +1,9 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const read = (path: string) => readFileSync(path, 'utf8')
+const hasCompletionEvidence = existsSync('docs/releases/v2.0.0/required-gates.json') &&
+  existsSync('docs/releases/v2.0.0/agent-runtime-evaluation.json')
 
 describe('V2.0 Native Agent Runtime contract', () => {
   it('records the bounded runtime and observable trajectory decision', () => {
@@ -82,9 +84,14 @@ describe('V2.0 Native Agent Runtime contract', () => {
       expect(roadmap).toContain(path)
     }
 
-    expect(roadmap).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
-    expect(roadmap).toContain('Slices 1–7 are complete')
-    expect(roadmap).toContain('### Next — Begin V2.1 Evaluated Retrieval And Memory After V2.0 Completion')
+    if (hasCompletionEvidence) {
+      expect(roadmap).toContain('### Now — Define V2.1 Evaluated Retrieval And Memory Contracts')
+      expect(roadmap).toContain('V2.0 is complete')
+    } else {
+      expect(roadmap).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
+      expect(roadmap).toContain('Slices 1–7 are complete')
+      expect(roadmap).toContain('### Next — Begin V2.1 Evaluated Retrieval And Memory After V2.0 Completion')
+    }
   })
 
   it('provides an executable TDD slice plan before product code starts', () => {
@@ -119,12 +126,17 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(plan).toContain('| Slice 5 | Complete |')
     expect(plan).toContain('| Slice 6 | Complete |')
     expect(plan).toContain('| Slice 7 | Complete |')
-    expect(plan).toContain('| Slice 8 | In progress |')
+    expect(plan).toContain(hasCompletionEvidence
+      ? '| Slice 8 | Complete |'
+      : '| Slice 8 | In progress |')
     expect(plan).toContain('scripts/fixtures/v2.0-agent-runtime-scenarios.json')
     expect(plan).toContain('scripts/v20-agent-runtime-evaluator.mjs')
     expect(plan).toContain('scripts/v20-agent-runtime-evaluation-runner.mjs')
     expect(packageJson.scripts?.['test:v20-agent-runtime-evaluator']).toBe(
       'node scripts/v20-agent-runtime-evaluation-runner.mjs',
+    )
+    expect(packageJson.scripts?.['v20:completion-status']).toBe(
+      'node scripts/v20-completion-evidence.mjs',
     )
     expect(plan).toContain('strict main-owned renderer projection')
     expect(plan).toContain('exact version/checkpoint optimistic concurrency')
@@ -142,7 +154,9 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(plan).toContain('negotiated capability-set digest')
 
     expect(roadmap).toMatch(/Slice 7\s+is complete/)
-    expect(roadmap).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
+    expect(roadmap).toContain(hasCompletionEvidence
+      ? '### Now — Define V2.1 Evaluated Retrieval And Memory Contracts'
+      : '### Now — Run The V2.0 Evaluation And Completion Gate')
   })
 
   it('adds stable V2.0 domain language without redefining workflow authority', () => {
