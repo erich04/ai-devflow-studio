@@ -41,6 +41,9 @@ const dropKnowledgeIndexSchemaSql = `
   drop table if exists knowledge_index_chunks;
   drop table if exists knowledge_index_snapshots;
 `
+const dropAgentMemorySchemaSql = `
+  drop table if exists agent_memory_candidates;
+`
 
 afterEach(async () => {
   await Promise.all(tempDirs.map((directory) => rm(directory, { recursive: true, force: true })))
@@ -696,6 +699,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     const SQL = await initSqlJs()
     const database = new SQL.Database(await readFile(dbPath))
     database.run(`
+      ${dropAgentMemorySchemaSql}
       ${dropKnowledgeIndexSchemaSql}
       ${dropAgentRuntimeSchemaSql}
       drop table github_delivery_revocation_checks;
@@ -735,7 +739,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(22)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(23)
     await expect(migrated.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])
 
     const v2Check: GitHubDeliveryRevocationCheck = {
@@ -765,10 +769,10 @@ describe('GitHub Delivery Intent local persistence', () => {
     verified.close()
   })
 
-  it('keeps schema 17 revocation checks isolated after migrating through schema 22', async () => {
+  it('keeps schema 17 revocation checks isolated after migrating through schema 23', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
-    expect(await store.getSchemaVersion()).toBe(22)
+    expect(await store.getSchemaVersion()).toBe(23)
     store.close()
 
     const SQL = await initSqlJs()
@@ -1126,7 +1130,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     store.close()
   })
 
-  it('preserves an existing v14 JSON series and non-first attempt through schema 22', async () => {
+  it('preserves an existing v14 JSON series and non-first attempt through schema 23', async () => {
     const dbPath = await tempDbPath()
     const sources = createSources()
     const store = await createLocalStore({ dbPath })
@@ -1163,14 +1167,15 @@ describe('GitHub Delivery Intent local persistence', () => {
 
     const SQL = await initSqlJs()
     const database = new SQL.Database(await readFile(dbPath))
-    database.run(`${dropKnowledgeIndexSchemaSql}
+    database.run(`${dropAgentMemorySchemaSql}
+      ${dropKnowledgeIndexSchemaSql}
       ${dropAgentRuntimeSchemaSql}
       update schema_meta set value = '14' where key = 'schema_version';`)
     await writeFile(dbPath, database.export())
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(22)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(23)
     await expect(migrated.listGitHubDeliveryIntents(sources.run.id))
       .resolves.toEqual([attemptTwo])
     migrated.close()
@@ -1186,7 +1191,8 @@ describe('GitHub Delivery Intent local persistence', () => {
 
     const SQL = await initSqlJs()
     const database = new SQL.Database(await readFile(dbPath))
-    database.run(`${dropKnowledgeIndexSchemaSql}
+    database.run(`${dropAgentMemorySchemaSql}
+      ${dropKnowledgeIndexSchemaSql}
       ${dropAgentRuntimeSchemaSql}
       drop table github_delivery_revocation_checks;
       update schema_meta set value = '15' where key = 'schema_version';`)
@@ -1194,7 +1200,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(22)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(23)
     await expect(migrated.listGitHubDeliveryIntents(sources.run.id))
       .resolves.toEqual([completed])
     await expect(migrated.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])

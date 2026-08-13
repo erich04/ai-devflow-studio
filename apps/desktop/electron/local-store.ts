@@ -113,7 +113,7 @@ import {
   type WorkflowRun,
   type WorkRequest,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 22
+export const CURRENT_SCHEMA_VERSION = 23
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -2456,6 +2456,81 @@ const schemaMigrations: readonly SchemaMigration[] = [
 
     create index idx_knowledge_citations_request
       on knowledge_citations(request_id, rank, id);
+      `)
+    },
+  },
+  {
+    version: 23,
+    migrate(db) {
+      db.run(`
+    create table agent_memory_candidates (
+      id text primary key,
+      scope_kind text not null,
+      local_project_id text not null,
+      organization_id text,
+      team_project_id text,
+      user_id text not null,
+      session_id text not null,
+      runtime_id text not null,
+      action_id text not null,
+      checkpoint_version integer not null,
+      observation_sequence integer not null,
+      result_digest text not null,
+      statement text not null,
+      content_digest text not null,
+      provenance_digest text not null,
+      status text not null,
+      state_version integer not null,
+      json text not null,
+      created_at text not null,
+      foreign key (local_project_id) references local_projects(id) on delete cascade,
+      unique (local_project_id, provenance_digest, content_digest),
+      check (scope_kind in ('team', 'local')),
+      check (
+        (scope_kind = 'team' and organization_id is not null and team_project_id is not null) or
+        (scope_kind = 'local' and organization_id is null and team_project_id is null)
+      ),
+      check (length(trim(id)) > 0 and length(id) <= 200 and trim(id) = id),
+      check (length(trim(local_project_id)) > 0 and length(local_project_id) <= 200 and trim(local_project_id) = local_project_id),
+      check (organization_id is null or (length(trim(organization_id)) > 0 and length(organization_id) <= 200 and trim(organization_id) = organization_id)),
+      check (team_project_id is null or (length(trim(team_project_id)) > 0 and length(team_project_id) <= 200 and trim(team_project_id) = team_project_id)),
+      check (length(trim(user_id)) > 0 and length(user_id) <= 200 and trim(user_id) = user_id),
+      check (length(trim(session_id)) > 0 and length(session_id) <= 200 and trim(session_id) = session_id),
+      check (length(trim(runtime_id)) > 0 and length(runtime_id) <= 200 and trim(runtime_id) = runtime_id),
+      check (length(trim(action_id)) > 0 and length(action_id) <= 200 and trim(action_id) = action_id),
+      check (checkpoint_version between 1 and 2147483647),
+      check (observation_sequence between 1 and 2147483647),
+      check (length(result_digest) = 64 and result_digest not glob '*[^0-9a-f]*'),
+      check (length(cast(statement as blob)) between 1 and 8192 and trim(statement) = statement),
+      check (length(content_digest) = 64 and content_digest not glob '*[^0-9a-f]*'),
+      check (length(provenance_digest) = 64 and provenance_digest not glob '*[^0-9a-f]*'),
+      check (status = 'candidate'),
+      check (state_version = 1),
+      check (json_valid(json) and json_type(json) = 'object'),
+      check (json_extract(json, '$.id') = id),
+      check (json_extract(json, '$.status') = status),
+      check (json_extract(json, '$.scope.kind') = scope_kind),
+      check (json_extract(json, '$.scope.localProjectId') = local_project_id),
+      check (json_extract(json, '$.scope.organizationId') is organization_id),
+      check (json_extract(json, '$.scope.projectId') is team_project_id),
+      check (json_extract(json, '$.scope.userId') = user_id),
+      check (json_extract(json, '$.scope.sessionId') = session_id),
+      check (json_extract(json, '$.provenance.runtimeId') = runtime_id),
+      check (json_extract(json, '$.provenance.actionId') = action_id),
+      check (json_extract(json, '$.provenance.checkpointVersion') = checkpoint_version),
+      check (json_extract(json, '$.provenance.sequence') = observation_sequence),
+      check (json_extract(json, '$.provenance.resultDigest') = result_digest),
+      check (json_extract(json, '$.statement') = statement),
+      check (json_extract(json, '$.contentDigest') = content_digest),
+      check (json_extract(json, '$.provenanceDigest') = provenance_digest),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.createdAt') = created_at)
+    );
+
+    create index idx_agent_memory_candidates_scope
+      on agent_memory_candidates(
+        organization_id, team_project_id, user_id, session_id, local_project_id, created_at, id
+      );
       `)
     },
   },
