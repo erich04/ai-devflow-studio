@@ -126,7 +126,7 @@ lines.on('line', (line) => {
       },
     }) + '\\n', () => {
       if (mode !== 'exit-before-stdio-close') return
-      spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600)'], {
+      spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], {
         stdio: ['ignore', process.stdout, process.stderr],
         windowsHide: true,
       })
@@ -313,7 +313,7 @@ describe('main-owned local stdio MCP client', () => {
     await vi.waitFor(() => expect(readFile(markerPath, 'utf8')).resolves.toBe('parent-exiting'))
     await delay(75)
     expect(client.closed).toBe(false)
-    await vi.waitFor(() => expect(client.closed).toBe(true))
+    await vi.waitFor(() => expect(client.closed).toBe(true), { timeout: 5_000 })
   })
 
   it('rechecks main-owned installation authority immediately before every Tool call', async () => {
