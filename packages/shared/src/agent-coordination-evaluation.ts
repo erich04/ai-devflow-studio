@@ -15,6 +15,7 @@ const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u
 type EvaluationScenario = {
   id: string
   version: number
+  category: string
   selectedForQualityComparison: boolean
   expected: Record<string, unknown>
 }
@@ -27,7 +28,18 @@ export type ParsedV22EvaluationDataset = {
   executionTenancyContractVersion: 1
   defaultNoCost: true
   bounds: Record<string, number>
-  metricThresholds: Record<string, number> & { paidProviderCalls: 0 }
+  metricThresholds: {
+    minimumAggregateImprovementOverSingle: number
+    maxCostMultiplierOverSingle: number
+    maxLatencyMultiplierOverSingle: number
+    maxAdditionalHumanInterventions: number
+    maxIsolationViolations: number
+    maxAuthorityViolations: number
+    maxTerminationViolations: number
+    maxReplayViolations: number
+    maxRedactionViolations: number
+    paidProviderCalls: 0
+  }
   roles: Array<Record<string, unknown>>
   scenarios: EvaluationScenario[]
 }
@@ -46,6 +58,37 @@ export type V22SingleAgentBaseline = {
   aggregateQuality: number
   paidProviderCalls: 0
   status: 'passed'
+}
+
+export type V22MultiAgentCandidate = {
+  schemaVersion: 1
+  datasetId: string
+  datasetVersion: number
+  candidateContract: 'v2.2-bounded-multi-agent'
+  selectedScenarios: Array<{
+    scenarioId: string
+    scenarioVersion: number
+    singleQuality: number
+    multiQuality: number
+    singleCostUnits: number
+    multiCostUnits: number
+    singleLatencyUnits: number
+    multiLatencyUnits: number
+    humanInterventions: number
+  }>
+  aggregateSingleQuality: number
+  aggregateMultiQuality: number
+  aggregateImprovementOverSingle: number
+  costMultiplierOverSingle: number
+  latencyMultiplierOverSingle: number
+  additionalHumanInterventions: number
+  isolationViolations: number
+  authorityViolations: number
+  terminationViolations: number
+  replayViolations: number
+  redactionViolations: number
+  paidProviderCalls: 0
+  status: 'passed' | 'failed'
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -89,6 +132,10 @@ function parseScenarios(value: unknown, acceptedRoleIds: ReadonlySet<string>): E
     single_agent_baseline: [
       'singleQuality',
       'multiQuality',
+      'singleCostUnits',
+      'multiCostUnits',
+      'singleLatencyUnits',
+      'multiLatencyUnits',
       'stopReason',
       'humanInterventions',
       'isolationViolations',
@@ -99,12 +146,17 @@ function parseScenarios(value: unknown, acceptedRoleIds: ReadonlySet<string>): E
     multi_agent_quality: [
       'singleQuality',
       'multiQuality',
+      'singleCostUnits',
+      'multiCostUnits',
+      'singleLatencyUnits',
+      'multiLatencyUnits',
       'stopReason',
       'humanInterventions',
       'isolationViolations',
       'authorityViolations',
       'terminationViolations',
       'replayViolations',
+      'redactionViolations',
     ],
     dependency_join: ['acceptedHandoffs', 'joinCount', 'stopReason', 'replayViolations'],
     cycle_rejection: ['rejectionCode', 'specialistStarts', 'sideEffects'],
@@ -232,14 +284,24 @@ function parseScenarios(value: unknown, acceptedRoleIds: ReadonlySet<string>): E
     }
     const hasCycle = visited !== tasks.length
     if ((category === 'cycle_rejection') !== hasCycle) fail()
+    const scenarioExpected = scenario.expected as Record<string, unknown>
     if (scenario.selectedForQualityComparison) {
       if (
-        typeof scenario.expected.singleQuality !== 'number' ||
-        !Number.isFinite(scenario.expected.singleQuality) ||
-        scenario.expected.singleQuality < 0 ||
-        scenario.expected.singleQuality > 1 ||
-        !Number.isInteger(scenario.expected.humanInterventions) ||
-        Number(scenario.expected.humanInterventions) < 0
+        typeof scenarioExpected.singleQuality !== 'number' ||
+        !Number.isFinite(scenarioExpected.singleQuality) ||
+        scenarioExpected.singleQuality < 0 ||
+        scenarioExpected.singleQuality > 1 ||
+        typeof scenarioExpected.multiQuality !== 'number' ||
+        !Number.isFinite(scenarioExpected.multiQuality) ||
+        scenarioExpected.multiQuality < 0 ||
+        scenarioExpected.multiQuality > 1 ||
+        !['singleCostUnits', 'multiCostUnits', 'singleLatencyUnits', 'multiLatencyUnits']
+          .every((key) =>
+            typeof scenarioExpected[key] === 'number' &&
+            Number.isFinite(scenarioExpected[key]) &&
+            Number(scenarioExpected[key]) > 0) ||
+        !Number.isInteger(scenarioExpected.humanInterventions) ||
+        Number(scenarioExpected.humanInterventions) < 0
       ) fail()
     }
   }
@@ -377,5 +439,93 @@ export function evaluateV22SingleAgentBaseline(value: unknown): V22SingleAgentBa
     aggregateQuality,
     paidProviderCalls: 0,
     status: 'passed',
+  }
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) fail()
+  return values.reduce((total, value) => total + value, 0) / values.length
+}
+
+function sumExpectedCount(
+  scenarios: EvaluationScenario[],
+  key: string,
+): number {
+  return scenarios.reduce((total, scenario) => {
+    const value = scenario.expected[key]
+    return total + (typeof value === 'number' && Number.isSafeInteger(value) ? value : 0)
+  }, 0)
+}
+
+export function evaluateV22MultiAgentCandidate(value: unknown): V22MultiAgentCandidate {
+  const dataset = parseV22EvaluationDataset(value)
+  const selectedScenarios = dataset.scenarios
+    .filter((scenario) => scenario.selectedForQualityComparison)
+    .map((scenario) => ({
+      scenarioId: scenario.id,
+      scenarioVersion: scenario.version,
+      singleQuality: Number(scenario.expected.singleQuality),
+      multiQuality: Number(scenario.expected.multiQuality),
+      singleCostUnits: Number(scenario.expected.singleCostUnits),
+      multiCostUnits: Number(scenario.expected.multiCostUnits),
+      singleLatencyUnits: Number(scenario.expected.singleLatencyUnits),
+      multiLatencyUnits: Number(scenario.expected.multiLatencyUnits),
+      humanInterventions: Number(scenario.expected.humanInterventions),
+    }))
+    .sort((left, right) => left.scenarioId.localeCompare(right.scenarioId))
+  const aggregateSingleQuality = average(
+    selectedScenarios.map((scenario) => scenario.singleQuality),
+  )
+  const aggregateMultiQuality = average(
+    selectedScenarios.map((scenario) => scenario.multiQuality),
+  )
+  const aggregateImprovementOverSingle = aggregateMultiQuality - aggregateSingleQuality
+  const costMultiplierOverSingle = average(
+    selectedScenarios.map((scenario) => scenario.multiCostUnits),
+  ) / average(selectedScenarios.map((scenario) => scenario.singleCostUnits))
+  const latencyMultiplierOverSingle = average(
+    selectedScenarios.map((scenario) => scenario.multiLatencyUnits),
+  ) / average(selectedScenarios.map((scenario) => scenario.singleLatencyUnits))
+  const additionalHumanInterventions = selectedScenarios.reduce(
+    (total, scenario) => total + scenario.humanInterventions,
+    0,
+  )
+  const isolationViolations = sumExpectedCount(dataset.scenarios, 'isolationViolations')
+  const authorityViolations = sumExpectedCount(dataset.scenarios, 'authorityViolations')
+  const terminationViolations = sumExpectedCount(dataset.scenarios, 'terminationViolations')
+  const replayViolations = sumExpectedCount(dataset.scenarios, 'replayViolations')
+  const redactionViolations = sumExpectedCount(dataset.scenarios, 'redactionViolations')
+  const thresholds = dataset.metricThresholds
+  const status = aggregateImprovementOverSingle >=
+      thresholds.minimumAggregateImprovementOverSingle &&
+    costMultiplierOverSingle <= thresholds.maxCostMultiplierOverSingle &&
+    latencyMultiplierOverSingle <= thresholds.maxLatencyMultiplierOverSingle &&
+    additionalHumanInterventions <= thresholds.maxAdditionalHumanInterventions &&
+    isolationViolations <= thresholds.maxIsolationViolations &&
+    authorityViolations <= thresholds.maxAuthorityViolations &&
+    terminationViolations <= thresholds.maxTerminationViolations &&
+    replayViolations <= thresholds.maxReplayViolations &&
+    redactionViolations <= thresholds.maxRedactionViolations
+    ? 'passed'
+    : 'failed'
+  return {
+    schemaVersion: 1,
+    datasetId: dataset.datasetId,
+    datasetVersion: dataset.datasetVersion,
+    candidateContract: 'v2.2-bounded-multi-agent',
+    selectedScenarios,
+    aggregateSingleQuality,
+    aggregateMultiQuality,
+    aggregateImprovementOverSingle,
+    costMultiplierOverSingle,
+    latencyMultiplierOverSingle,
+    additionalHumanInterventions,
+    isolationViolations,
+    authorityViolations,
+    terminationViolations,
+    replayViolations,
+    redactionViolations,
+    paidProviderCalls: 0,
+    status,
   }
 }

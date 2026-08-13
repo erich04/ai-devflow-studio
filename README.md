@@ -97,6 +97,8 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 | `corepack pnpm test:v20-agent-runtime-evaluator` | The clean-candidate V2.0 scenario collector and strict completion evaluator; provider credentials are removed and only a path/secret-free structured record is retained. |
 | `corepack pnpm test:v21-retrieval-memory-evaluator` | The clean-candidate V2.1 evaluator; it binds the corpus and contract digests, compares lexical/hybrid and no-Memory/Memory outcomes, and requires zero paid-provider, isolation, deletion, resurrection, or redaction violations. |
 | `corepack pnpm v21:completion-status` | The V2.1 direct-child signoff validator; it requires exact evaluator, first-attempt Verify, Desktop artifact, local matrix, and immutable evidence identity. |
+| `corepack pnpm test:v22-multi-agent-evaluator` | The clean-candidate V2.2 evaluator; it binds ten frozen single/Multi-Agent scenarios to exact tests, measures selected-task quality, cost, latency, and intervention, and requires zero paid-provider, authority, isolation, termination, replay, or redaction violations. |
+| `corepack pnpm v22:completion-status` | The V2.2 direct-child signoff validator; it requires the exact evaluator, first-attempt Verify, Desktop artifact, local matrix, immutable evidence identity, and a clean finite-2.x close. |
 | Release-only opencode smoke | A paid, explicit signoff for the real local coding runtime; it is never part of default CI. |
 
 Deterministic results become release evidence only when `required-gates.json` binds them to the clean

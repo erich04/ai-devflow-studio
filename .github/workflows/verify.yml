@@ -36,6 +36,8 @@ jobs:
       - run: corepack pnpm verify
       - name: V2.1 candidate-bound evaluator
         run: corepack pnpm test:v21-retrieval-memory-evaluator -- --candidate-sha "${GITHUB_SHA}" --output "out/v21-evaluation/${GITHUB_SHA}.json"
+      - name: V2.2 candidate-bound evaluator
+        run: corepack pnpm test:v22-multi-agent-evaluator -- --candidate-sha "${GITHUB_SHA}" --output "out/v22-evaluation/${GITHUB_SHA}.json"
       - run: corepack pnpm build
       - run: corepack pnpm test:build-output-smoke
       - run: corepack pnpm test:e2e

@@ -85,6 +85,10 @@
       "expected": {
         "singleQuality": 0.5,
         "multiQuality": 0.5,
+        "singleCostUnits": 1,
+        "multiCostUnits": 1,
+        "singleLatencyUnits": 1,
+        "multiLatencyUnits": 1,
         "stopReason": "success",
         "humanInterventions": 0,
         "isolationViolations": 0,
@@ -136,12 +140,17 @@
       "expected": {
         "singleQuality": 0.5,
         "multiQuality": 1,
+        "singleCostUnits": 1,
+        "multiCostUnits": 1.5,
+        "singleLatencyUnits": 1,
+        "multiLatencyUnits": 1.5,
         "stopReason": "success",
         "humanInterventions": 0,
         "isolationViolations": 0,
         "authorityViolations": 0,
         "terminationViolations": 0,
-        "replayViolations": 0
+        "replayViolations": 0,
+        "redactionViolations": 0
       }
     },
     {

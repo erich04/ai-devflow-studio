@@ -21,6 +21,8 @@
     "v20:completion-status": "node scripts/v20-completion-evidence.mjs",
     "test:v21-retrieval-memory-evaluator": "tsx scripts/v21-retrieval-memory-evaluation-runner.ts",
     "v21:completion-status": "tsx scripts/v21-completion-evidence.ts",
+    "test:v22-multi-agent-evaluator": "tsx scripts/v22-multi-agent-evaluation-runner.ts",
+    "v22:completion-status": "tsx scripts/v22-completion-evidence.ts",
     "test:cross-platform": "node scripts/check-cross-platform.mjs",
     "test:postgres-smoke": "node scripts/postgres-smoke.mjs",
     "test:docker-smoke": "tsx scripts/docker-smoke.mjs",
