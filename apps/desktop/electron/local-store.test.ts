@@ -785,9 +785,9 @@ const coordinationTaskGraph: AgentTaskGraph = {
   nodes: [
     {
       id: 'coordination-task-research',
-      roleId: 'specialist.research',
+      roleId: 'contract-analyst',
       contextDigest: 'c'.repeat(64),
-      capabilityIds: ['repository.read'],
+      capabilityIds: ['repository_read'],
       resourceRequirements: [{
         resourceId: 'repository-source',
         resourceDigest: 'd'.repeat(64),
@@ -796,9 +796,9 @@ const coordinationTaskGraph: AgentTaskGraph = {
     },
     {
       id: 'coordination-task-review',
-      roleId: 'specialist.review',
+      roleId: 'test-analyst',
       contextDigest: 'e'.repeat(64),
-      capabilityIds: ['repository.read'],
+      capabilityIds: ['repository_read'],
       resourceRequirements: [{
         resourceId: 'repository-source',
         resourceDigest: 'd'.repeat(64),
@@ -820,13 +820,13 @@ const specialistAllocationRequest: SpecialistAllocationRequest = {
   taskGraphId: coordinationTaskGraph.id,
   taskGraphVersion: coordinationTaskGraph.version,
   taskId: 'coordination-task-research',
-  roleId: 'specialist.research',
+  roleId: 'contract-analyst',
   agentId: 'specialist-agent-research-1',
   delegationDepth: 1,
   scope: coordinationSessionRequest.scope,
   authority: coordinationSessionRequest.authority,
   contextDigest: 'c'.repeat(64),
-  capabilityIds: ['repository.read'],
+  capabilityIds: ['repository_read'],
   resourceRequirements: [{
     resourceId: 'repository-source',
     resourceDigest: 'd'.repeat(64),
@@ -892,7 +892,6 @@ async function persistCompletedResearchCoordination(store: LocalStore) {
   await store.createCoordinationSession({
     coordination: coordinationSessionRequest,
     graph: coordinationTaskGraph,
-    acceptedRoleIds: ['specialist.research', 'specialist.review'],
     startedAt: coordinationSessionRequest.requestedAt,
   })
   const startedState = startCoordinationTask({
@@ -907,7 +906,7 @@ async function persistCompletedResearchCoordination(store: LocalStore) {
   await store.commitCoordinationTaskStart({
     expectedState: initialState,
     allocation: specialistAllocationRequest,
-    supervisorCapabilityIds: ['repository.read'],
+    supervisorCapabilityIds: ['repository_read'],
     supervisorResourceRequirements: [{
       resourceId: 'repository-source',
       resourceDigest: 'd'.repeat(64),
@@ -3098,7 +3097,6 @@ describe('createLocalStore', () => {
     const input = {
       coordination: coordinationSessionRequest,
       graph: coordinationTaskGraph,
-      acceptedRoleIds: ['specialist.research', 'specialist.review'],
       startedAt: coordinationSessionRequest.requestedAt,
     }
     await expect(store.createCoordinationSession(input)).resolves.toEqual({
@@ -3158,6 +3156,46 @@ describe('createLocalStore', () => {
     reopened.close()
   })
 
+  it('rejects a caller-created Specialist role even when the caller claims it is accepted', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    const supervisor = createAgentRuntime(teamAgentRuntimeStartRequest)
+    await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: supervisor })
+
+    const coordination = {
+      ...coordinationSessionRequest,
+      id: 'coordination-caller-created-role',
+    }
+    const graph = {
+      ...coordinationTaskGraph,
+      id: 'coordination-graph-caller-created-role',
+      coordinationId: coordination.id,
+      nodes: coordinationTaskGraph.nodes.map((node) => ({
+        ...node,
+        roleId: 'renderer-created-specialist',
+      })),
+    }
+    const callerControlledInput = {
+      coordination,
+      graph,
+      acceptedRoleIds: ['renderer-created-specialist'],
+      startedAt: coordination.requestedAt,
+    }
+
+    await expect(store.createCoordinationSession(callerControlledInput)).resolves.toEqual({
+      committed: false,
+      reason: 'invalid_input',
+    })
+    await expect(store.getCoordinationSession(coordination.id)).resolves.toBeNull()
+    store.close()
+  })
+
   it('restores all coordination tables when session persistence fails', async () => {
     const dbPath = await tempDbPath()
     const backupPath = `${dbPath}.backup`
@@ -3176,7 +3214,6 @@ describe('createLocalStore', () => {
     await expect(store.createCoordinationSession({
       coordination: coordinationSessionRequest,
       graph: coordinationTaskGraph,
-      acceptedRoleIds: ['specialist.research', 'specialist.review'],
       startedAt: coordinationSessionRequest.requestedAt,
     })).rejects.toThrow(persistenceFailurePattern)
     await expect(store.getCoordinationSession(coordinationSessionRequest.id)).resolves.toBeNull()
@@ -3217,7 +3254,7 @@ describe('createLocalStore', () => {
         entryTaskIds: ['coordination-task-research'],
         nodes: [{
           id: 'coordination-task-research',
-          roleId: 'specialist.research',
+          roleId: 'contract-analyst',
           contextDigest: 'c'.repeat(64),
           capabilityIds,
           resourceRequirements: [],
@@ -3230,7 +3267,6 @@ describe('createLocalStore', () => {
     await expect(store.createCoordinationSession({
       coordination: coordinationSessionRequest,
       graph,
-      acceptedRoleIds: ['specialist.research'],
       startedAt: coordinationSessionRequest.requestedAt,
     })).resolves.toEqual({ committed: false, reason: 'invalid_input' })
     expect(await store.getCoordinationSession(coordinationSessionRequest.id)).toBeNull()
@@ -3256,14 +3292,13 @@ describe('createLocalStore', () => {
     await store.createCoordinationSession({
       coordination: coordinationSessionRequest,
       graph: coordinationTaskGraph,
-      acceptedRoleIds: ['specialist.research', 'specialist.review'],
       startedAt: coordinationSessionRequest.requestedAt,
     })
 
     const taskStartInput = {
       expectedState: initialState,
       allocation: specialistAllocationRequest,
-      supervisorCapabilityIds: ['repository.read'],
+      supervisorCapabilityIds: ['repository_read'],
       supervisorResourceRequirements: [{
         resourceId: 'repository-source',
         resourceDigest: 'd'.repeat(64),
@@ -3357,7 +3392,6 @@ describe('createLocalStore', () => {
     await store.createCoordinationSession({
       coordination: coordinationSessionRequest,
       graph: coordinationTaskGraph,
-      acceptedRoleIds: ['specialist.research', 'specialist.review'],
       startedAt: coordinationSessionRequest.requestedAt,
     })
     const startedState = startCoordinationTask({
@@ -3372,7 +3406,7 @@ describe('createLocalStore', () => {
     await store.commitCoordinationTaskStart({
       expectedState: initialState,
       allocation: specialistAllocationRequest,
-      supervisorCapabilityIds: ['repository.read'],
+      supervisorCapabilityIds: ['repository_read'],
       supervisorResourceRequirements: [{
         resourceId: 'repository-source',
         resourceDigest: 'd'.repeat(64),

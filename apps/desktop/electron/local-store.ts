@@ -13,6 +13,7 @@ import {
   parseLocalMcpInstallation,
   type LocalMcpInstallation,
 } from './local-mcp-installation.js'
+import { getAcceptedSpecialistRoleIds } from './specialist-runtime-registry.js'
 import {
   activateKnowledgeIndexSnapshot as activateKnowledgeIndexSnapshotInDatabase,
   getCurrentKnowledgeIndexSnapshot as readCurrentKnowledgeIndexSnapshot,
@@ -973,7 +974,6 @@ export type LocalStore = {
 export type CreateCoordinationSessionInput = {
   coordination: CoordinationSessionRequest
   graph: AgentTaskGraph
-  acceptedRoleIds: readonly string[]
   startedAt: string
 }
 
@@ -3911,17 +3911,9 @@ function selectDurableCoordinationSession(
   }
 
   const coordination = parseCoordinationSessionRequest(coordinationValue, state.bounds)
-  const graphRoleIds = typeof graphValue === 'object' && graphValue !== null &&
-    'nodes' in graphValue && Array.isArray(graphValue.nodes)
-    ? graphValue.nodes.flatMap((node) =>
-        typeof node === 'object' && node !== null &&
-        'roleId' in node && typeof node.roleId === 'string'
-          ? [node.roleId]
-          : [])
-    : []
   const graph = parseAgentTaskGraph(graphValue, {
     coordinationId: coordination.id,
-    acceptedRoleIds: graphRoleIds,
+    acceptedRoleIds: getAcceptedSpecialistRoleIds(),
     maxTaskNodes: coordination.bounds.maxTaskNodes,
     maxDependencyEdges: coordination.bounds.maxDependencyEdges,
   }).graph
@@ -8381,7 +8373,7 @@ class SqlJsLocalStore implements LocalStore {
       )
       graph = parseAgentTaskGraph(input.graph, {
         coordinationId: coordination.id,
-        acceptedRoleIds: input.acceptedRoleIds,
+        acceptedRoleIds: getAcceptedSpecialistRoleIds(),
         maxTaskNodes: coordination.bounds.maxTaskNodes,
         maxDependencyEdges: coordination.bounds.maxDependencyEdges,
       }).graph
