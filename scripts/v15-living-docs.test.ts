@@ -26,7 +26,8 @@ describe('V1.5 living documentation truth', () => {
     expect(productDefinition).toContain('V1.5 is released as `v1.5.0`')
     expect(productDefinition).toContain('finite 1.x product line is complete')
     expect(currentPrd).toContain('finite 1.x completion gate passed')
-    expect(currentPrd).toContain('V2.0 Native Agent Runtime implementation')
+    expect(currentPrd).toContain('V2.0 Native Agent Runtime is complete')
+    expect(currentPrd).toContain('V2.1 Evaluated Retrieval and Memory is the active Roadmap priority')
     expect(currentPrd).not.toContain(
       'Real GitHub PR creation, pushing, merging, and branch publication require a future scoped PRD',
     )

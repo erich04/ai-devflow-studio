@@ -39,9 +39,13 @@ retroactive TDD rewrites unless it is touched.
 - The active V2.1 Slice 5 Context matrix proves schema 25-to-26 adds no fabricated attachments,
   Runtime creation and full main-owned Context commit atomically, exact replay/cold reopen preserve
   one attachment, refreshed Knowledge and revised/deleted/expired Memory fail the currentness fence,
-  and stale Context invokes zero external Tool work. The focused matrix passes 154 local-store,
-  17 Desktop Runtime, and 8 shared Context tests; repository unit verification passes 193 test files
-  and 2755 tests.
+  and stale Context invokes zero external Tool work even when authority changes between the initial
+  check and durable capability grant reservation. The renderer projection v2 strictly exposes only
+  attachment/count/identity-digest provenance, with Knowledge Citation and Durable Memory counts
+  visible in Desktop while source paths, bodies, and scope sessions remain in Electron main. The
+  focused matrix passes 154 local-store, 18 Desktop Runtime, 8 shared Context, 3 renderer-projection,
+  1 renderer-access, 1 console-state, and 3 Runtime-panel tests; repository unit verification passes
+  193 test files and 2757 tests.
 - The packaged Desktop pilot must execute exactly one `scenario.evaluate` Local MCP Tool, persist
   one started and one succeeded installation-bound metadata-only audit, and retain one accepted
   action after cold restart without another grant, MCP call, or audit record. It must also complete

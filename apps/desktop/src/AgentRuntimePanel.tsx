@@ -334,6 +334,50 @@ export function AgentRuntimePanel({
               Source, local paths, raw Tool output, scope sessions, and complete checkpoints remain in Electron main.
             </p>
           </article>
+
+          <article className="agent-evidence-card">
+            <div className="section-heading">
+              <span>Runtime Context</span>
+              <strong><CheckCircle2 size={15} /> redacted provenance</strong>
+            </div>
+            {detail.context ? (
+              <>
+                <div className="compact-row">
+                  <span>Knowledge</span>
+                  <strong>
+                    {detail.context.knowledgeCitationCount} Knowledge Citation
+                    {detail.context.knowledgeCitationCount === 1 ? '' : 's'}
+                  </strong>
+                </div>
+                <div className="compact-row">
+                  <span>Durable Memory</span>
+                  <strong>
+                    {detail.context.memoryRevisionCount} Durable Memory revision
+                    {detail.context.memoryRevisionCount === 1 ? '' : 's'}
+                  </strong>
+                </div>
+                <div className="compact-row">
+                  <span>Attachment ID</span>
+                  <code>{detail.context.attachmentId}</code>
+                </div>
+                <div className="compact-row">
+                  <span>Knowledge identity digest</span>
+                  <code>{detail.context.knowledgeIdentityDigest}</code>
+                </div>
+                <div className="compact-row">
+                  <span>Memory identity digest</span>
+                  <code>{detail.context.memoryIdentityDigest}</code>
+                </div>
+                <p className="empty-note">
+                  Citation and Memory bodies remain available only to Electron main.
+                </p>
+              </>
+            ) : (
+              <p className="empty-note">
+                This retained Runtime predates durable Context attachment metadata.
+              </p>
+            )}
+          </article>
         </div>
       ) : null}
     </section>

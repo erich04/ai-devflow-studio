@@ -173,6 +173,17 @@ describe('Desktop Agent Runtime', () => {
       memoryRevisions: [],
     })
     expect(started.runtime.contextDigest).toBe(attachment?.contextDigest)
+    expect(started.contextMetadata).toEqual({
+      attachmentId: attachment?.id,
+      contextDigest: attachment?.contextDigest,
+      knowledgeCitationCount: 0,
+      memoryRevisionCount: 0,
+      knowledgeIdentityDigest: attachment?.knowledgeIdentityDigest,
+      memoryIdentityDigest: attachment?.memoryIdentityDigest,
+    })
+    expect(JSON.stringify(started.contextMetadata)).not.toMatch(
+      /sourcePath|headingPath|content|scope|authority|session/,
+    )
     store.close()
   })
 

@@ -58,7 +58,8 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
   or push the branch again.
 - The V2.0 foundation provides a strict bounded Agent Runtime kernel, while current Desktop schema
   v26 retains trajectory/checkpoint persistence, full main-owned Runtime Context attachments,
-  stale-before-action Citation/Memory fencing, durable metadata-only Tool audit, and main-owned
+  stale-before-action and grant-reservation Citation/Memory fencing, renderer projection v2 with
+  metadata-only provenance, durable metadata-only Tool audit, and main-owned
   trusted local stdio MCP authority; it adds the V2.1 retrieval index plus inert candidates,
   immutable durable Memory revisions, heads, tombstones, derived index entries, and metadata-only
   audits without fabricating retained data.

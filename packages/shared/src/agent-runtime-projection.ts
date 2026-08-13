@@ -1,4 +1,9 @@
 import {
+  AGENT_RUNTIME_CONTEXT_CITATIONS_MAX,
+  AGENT_RUNTIME_CONTEXT_MEMORY_REVISIONS_MAX,
+  type AgentRuntimeContextTrajectoryMetadata,
+} from './agent-runtime-context'
+import {
   AGENT_RUNTIME_CONTRACT_VERSION,
   parseAgentRuntimeEvent,
   parseAgentRuntimeState,
@@ -12,7 +17,7 @@ import {
 } from './agent-runtime'
 import { redactSensitiveText } from './redaction'
 
-export const AGENT_RUNTIME_RENDERER_PROJECTION_VERSION = 1 as const
+export const AGENT_RUNTIME_RENDERER_PROJECTION_VERSION = 2 as const
 
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u
 const digestPattern = /^[a-f0-9]{64}$/u
@@ -87,9 +92,14 @@ export type AgentRuntimeRendererEvaluation = {
   redacted: true
 }
 
+export type AgentRuntimeRendererContext = AgentRuntimeContextTrajectoryMetadata & {
+  redacted: true
+}
+
 export type AgentRuntimeRendererSnapshot = {
   projectionVersion: typeof AGENT_RUNTIME_RENDERER_PROJECTION_VERSION
   runtime: AgentRuntimeRendererSummary
+  context: AgentRuntimeRendererContext | null
   events: AgentRuntimeRendererEvent[]
   latestEvaluation: AgentRuntimeRendererEvaluation | null
   terminalSummary: AgentRuntimeRendererTerminalSummary | null
@@ -485,6 +495,55 @@ function parseRendererEvaluation(value: unknown): AgentRuntimeRendererEvaluation
   }
 }
 
+function projectRendererContext(value: unknown): AgentRuntimeRendererContext {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      'attachmentId',
+      'contextDigest',
+      'knowledgeCitationCount',
+      'memoryRevisionCount',
+      'knowledgeIdentityDigest',
+      'memoryIdentityDigest',
+    ]) ||
+    !isIdentifier(value.attachmentId) ||
+    !isDigest(value.contextDigest) ||
+    !isCount(value.knowledgeCitationCount) ||
+    Number(value.knowledgeCitationCount) > AGENT_RUNTIME_CONTEXT_CITATIONS_MAX ||
+    !isCount(value.memoryRevisionCount) ||
+    Number(value.memoryRevisionCount) > AGENT_RUNTIME_CONTEXT_MEMORY_REVISIONS_MAX ||
+    !isDigest(value.knowledgeIdentityDigest) ||
+    !isDigest(value.memoryIdentityDigest)
+  ) fail()
+  return {
+    attachmentId: value.attachmentId,
+    contextDigest: value.contextDigest,
+    knowledgeCitationCount: value.knowledgeCitationCount,
+    memoryRevisionCount: value.memoryRevisionCount,
+    knowledgeIdentityDigest: value.knowledgeIdentityDigest,
+    memoryIdentityDigest: value.memoryIdentityDigest,
+    redacted: true,
+  }
+}
+
+function parseRendererContext(value: unknown): AgentRuntimeRendererContext {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      'attachmentId',
+      'contextDigest',
+      'knowledgeCitationCount',
+      'memoryRevisionCount',
+      'knowledgeIdentityDigest',
+      'memoryIdentityDigest',
+      'redacted',
+    ]) ||
+    value.redacted !== true
+  ) fail()
+  const { redacted: _redacted, ...metadata } = value
+  return projectRendererContext(metadata)
+}
+
 function projectRuntime(runtime: AgentRuntimeState): AgentRuntimeRendererSummary {
   return {
     projectionVersion: AGENT_RUNTIME_RENDERER_PROJECTION_VERSION,
@@ -519,15 +578,21 @@ export function createAgentRuntimeRendererSnapshot(value: {
   runtime: unknown
   events: unknown[]
   terminalSummary: unknown | null
+  contextMetadata: AgentRuntimeContextTrajectoryMetadata | null
 }): AgentRuntimeRendererSnapshot {
   const runtime = parseAgentRuntimeState(value.runtime)
   const events = value.events.map(parseAgentRuntimeEvent)
+  const context = value.contextMetadata === null
+    ? null
+    : projectRendererContext(value.contextMetadata)
+  if (context !== null && context.contextDigest !== runtime.contextDigest) fail()
   const latestEvaluationEvent = events
     .filter((event) => event.type === 'evaluation_recorded')
     .at(-1)
   const snapshot = {
     projectionVersion: AGENT_RUNTIME_RENDERER_PROJECTION_VERSION,
     runtime: projectRuntime(runtime),
+    context,
     events: events.map((event) => ({
       projectionVersion: AGENT_RUNTIME_RENDERER_PROJECTION_VERSION,
       runtimeId: event.runtimeId,
@@ -581,7 +646,7 @@ export function parseAgentRuntimeRendererListItem(
     value.redacted !== true
   ) fail()
   const parsed = parseAgentRuntimeRendererEnvelope(
-    { ...value, events: [], latestEvaluation: null },
+    { ...value, context: null, events: [], latestEvaluation: null },
     false,
   )
   return {
@@ -601,6 +666,7 @@ function parseAgentRuntimeRendererEnvelope(
     !hasExactKeys(value, [
       'projectionVersion',
       'runtime',
+      'context',
       'events',
       'latestEvaluation',
       'terminalSummary',
@@ -611,8 +677,10 @@ function parseAgentRuntimeRendererEnvelope(
     value.redacted !== true
   ) fail()
   const runtime = parseRendererSummary(value.runtime)
+  const context = value.context === null ? null : parseRendererContext(value.context)
   const events = value.events.map(parseRendererEvent)
   if (
+    (context !== null && context.contextDigest !== runtime.contextDigest) ||
     events.some((event) => event.runtimeId !== runtime.runtimeId) ||
     events.some((event, index) => index > 0 && event.sequence <= events[index - 1]!.sequence) ||
     (requireFullTrajectory && (
@@ -651,6 +719,7 @@ function parseAgentRuntimeRendererEnvelope(
   return {
     projectionVersion: AGENT_RUNTIME_RENDERER_PROJECTION_VERSION,
     runtime,
+    context,
     events,
     latestEvaluation,
     terminalSummary,

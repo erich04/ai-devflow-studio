@@ -106,8 +106,11 @@ was `0.5`, citation precision and faithfulness remained `1.0`, and isolation/pro
 remained zero. Slice 3 then completed the retained schema 21 → 22 migration, atomic current-snapshot
 activation, stale identity invalidation, strict corrupt-state rejection, and bounded local rebuild.
 Slice 4 then completed Desktop-main-owned scoped Memory candidate, promotion, revision, conflict,
-retrieval, expiry, tombstone, and restart-safe purge semantics. Slice 5 Agent Runtime Context and
-Desktop UX is now the only active product priority.
+retrieval, expiry, tombstone, and restart-safe purge semantics. Slice 5 now persists exact bounded
+Runtime Context, rechecks it both before an external action and at durable Tool grant reservation,
+and exposes renderer projection v2 with metadata-only Knowledge Citation and Durable Memory
+provenance. The remaining Desktop lifecycle UX and packaged zero-repeat proof are the only active
+product priority.
 
 ## Now / Next / Later
 
@@ -122,7 +125,8 @@ isolated, expiring, tombstone-first durable Memory lifecycle.
 - Attach exact current Knowledge Citations and durable Memory revisions to bounded Agent Runtime
   Context without persisting hidden reasoning or widening scope.
 - Revalidate attached Context after checkpoints and fence stale, expired, deleted, or revoked inputs
-  before any later Tool, MCP, provider, or Coding Executor action.
+  before any later Tool, MCP, provider, or Coding Executor action; durable grant reservation repeats
+  the check at the Tool side-effect linearization boundary.
 - Expose Knowledge, Working Memory, Candidate, Durable Memory, conflict, expiry, and deletion with
   exact human-action versions in Desktop.
 - Prove cold restart preserves accepted Context and repeats zero retrieval, provider, Tool, or MCP
@@ -139,7 +143,8 @@ The V2.1 contract set is frozen in:
 V2.1 Slices 1 through 4 are complete. Slice 4 passed 152 focused local-store tests and 48 focused
 shared retrieval/Memory tests. Opaque main-owned capabilities gate promotion, revision, and deletion;
 scope/lifecycle filtering happens before retrieval; and restart-safe purge cannot revive an older
-revision. Slice 5 remains Desktop-main-owned; Team projection stays outside this slice.
+revision. Slice 5 keeps complete Context in Electron main while renderer projection v2 exposes only
+attachment/count/identity digests; Team projection stays outside this slice.
 
 ### Next — Add V2.1 Redacted Team Projection
 

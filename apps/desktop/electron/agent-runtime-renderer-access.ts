@@ -1,6 +1,7 @@
 import {
   createAgentRuntimeRendererListItem,
   createAgentRuntimeRendererSnapshot,
+  projectAgentRuntimeContextTrajectoryMetadata,
   type AgentRuntimeRendererListItem,
   type AgentRuntimeRendererSnapshot,
 } from '@ai-devflow/shared'
@@ -13,6 +14,7 @@ type AgentRuntimeRendererStore = Pick<
   | 'getAgentRuntime'
   | 'listAgentRuntimeEvents'
   | 'getAgentRuntimeTerminalSummary'
+  | 'getAgentRuntimeContextAttachment'
 >
 
 export type AgentRuntimeRendererAccess = {
@@ -54,11 +56,19 @@ export function createAgentRuntimeRendererAccess(
       if (!matchesSelection(runtime, input)) {
         throw new Error('Agent Runtime renderer selection is stale')
       }
-      const [events, terminalSummary] = await Promise.all([
+      const [events, terminalSummary, contextAttachment] = await Promise.all([
         store.listAgentRuntimeEvents(runtime.id),
         store.getAgentRuntimeTerminalSummary(runtime.id),
+        store.getAgentRuntimeContextAttachment(runtime.id),
       ])
-      return createAgentRuntimeRendererSnapshot({ runtime, events, terminalSummary })
+      return createAgentRuntimeRendererSnapshot({
+        runtime,
+        events,
+        terminalSummary,
+        contextMetadata: contextAttachment === null
+          ? null
+          : projectAgentRuntimeContextTrajectoryMetadata(contextAttachment),
+      })
     },
   }
 }

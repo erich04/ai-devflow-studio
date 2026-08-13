@@ -54,6 +54,14 @@ describe('Agent Runtime renderer projection', () => {
       runtime: transition.runtime,
       events: transition.events,
       terminalSummary: null,
+      contextMetadata: {
+        attachmentId: 'runtime-context-1',
+        contextDigest: transition.runtime.contextDigest,
+        knowledgeCitationCount: 2,
+        memoryRevisionCount: 1,
+        knowledgeIdentityDigest: digest('c'),
+        memoryIdentityDigest: digest('d'),
+      },
     })
 
     expect(snapshot.runtime).toMatchObject({
@@ -68,7 +76,7 @@ describe('Agent Runtime renderer projection', () => {
     })
     expect(snapshot.events).toEqual([
       {
-        projectionVersion: 1,
+        projectionVersion: 2,
         runtimeId: 'agent-runtime-1',
         sequence: 1,
         checkpointVersion: 1,
@@ -77,7 +85,7 @@ describe('Agent Runtime renderer projection', () => {
         redacted: true,
       },
       {
-        projectionVersion: 1,
+        projectionVersion: 2,
         runtimeId: 'agent-runtime-1',
         sequence: 2,
         checkpointVersion: 1,
@@ -86,7 +94,7 @@ describe('Agent Runtime renderer projection', () => {
         redacted: true,
       },
       {
-        projectionVersion: 1,
+        projectionVersion: 2,
         runtimeId: 'agent-runtime-1',
         sequence: 3,
         checkpointVersion: 1,
@@ -95,6 +103,15 @@ describe('Agent Runtime renderer projection', () => {
         redacted: true,
       },
     ])
+    expect(snapshot).toHaveProperty('context', {
+      attachmentId: 'runtime-context-1',
+      contextDigest: digest('a'),
+      knowledgeCitationCount: 2,
+      memoryRevisionCount: 1,
+      knowledgeIdentityDigest: digest('c'),
+      memoryIdentityDigest: digest('d'),
+      redacted: true,
+    })
     expect(JSON.stringify(snapshot)).not.toMatch(
       /session-secret-boundary|organizationId|team-project-1|metadata|source|rawOutput|\/Users\//,
     )
@@ -113,6 +130,10 @@ describe('Agent Runtime renderer projection', () => {
           index === snapshot.events.length - 1 ? { ...event, sequence: 4 } : event,
         ),
       },
+      { ...snapshot, context: { ...snapshot.context, sourcePath: '/Users/example/repo' } },
+      { ...snapshot, context: { ...snapshot.context, contextDigest: digest('f') } },
+      { ...snapshot, context: { ...snapshot.context, knowledgeCitationCount: 21 } },
+      { ...snapshot, context: { ...snapshot.context, memoryRevisionCount: 33 } },
       { ...snapshot, events: [] },
     ]) {
       expect(() => parseAgentRuntimeRendererSnapshot(tampered)).toThrow(
@@ -128,6 +149,7 @@ describe('Agent Runtime renderer projection', () => {
     const terminalSnapshot = createAgentRuntimeRendererSnapshot({
       runtime: cancelled.runtime,
       events: [...transition.events, ...cancelled.events],
+      contextMetadata: null,
       terminalSummary: {
         stateVersion: 1,
         runtimeId: cancelled.runtime.id,
@@ -259,6 +281,7 @@ describe('Agent Runtime renderer projection', () => {
       runtime: accepted.runtime,
       events: [...created.events, ...resumed.events, ...requested.events, ...accepted.events],
       terminalSummary: null,
+      contextMetadata: null,
     })
 
     expect(snapshot).toHaveProperty('latestEvaluation', {

@@ -1,7 +1,7 @@
 # DevFlow Studio Current Product PRD
 
-Status: Current released baseline; V2.0 Native Agent Runtime implementation active
-Last updated: 2026-08-12
+Status: Current released baseline; V2.1 Evaluated Retrieval and Memory implementation active
+Last updated: 2026-08-13
 
 ## Source Documents
 
@@ -315,7 +315,7 @@ preserving the evidence needed for human review.
 - A first-class `TestEvidence.skipped` state; it requires a future shared/API/store/UI contract.
 - Replacing GitHub, CI, or issue trackers.
 - Uploading raw local logs, prompts, patches, paths, or secrets.
-- Real MCP process execution and MCP policy enforcement.
+- Untrusted or remote MCP process execution outside the installed main-owned Local MCP authority.
 - Full RAG/vector retrieval provider integration.
 - Large-organization concurrency, administration, and audit depth.
 - HoneyAI bridge or multi-agent orchestration.
@@ -324,9 +324,10 @@ preserving the evidence needed for human review.
 
 - V1.5 is released as `v1.5.0`, and the finite 1.x completion gate passed with immutable
   candidate-bound evidence under `docs/releases/v1.5.0/`.
-- V2.0 Native Agent Runtime implementation is the active Roadmap priority. The shared bounded kernel
-  and durable Desktop fake runtime are implemented; Native Tool, MCP, Coding Executor, and later
-  V2.x claims still require their ordered plan slices and completion evidence.
+- V2.0 Native Agent Runtime is complete with immutable evidence under `docs/releases/v2.0.0/`.
+  V2.1 Evaluated Retrieval and Memory is the active Roadmap priority; retrieval/index and scoped
+  durable Memory are complete, while Runtime Context/Desktop UX and later Team projection/evidence
+  still require their ordered plan slices and completion gates.
 - Runtime Operations and Collaboration Hardening remain evidence-promoted backlog items unless the
   Roadmap assigns milestone priority.
 - UI refactor work should preserve the Evidence Chain as the center of gravity: current stage,

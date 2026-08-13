@@ -245,9 +245,9 @@ rules, and non-goals. The Roadmap remains authoritative for release status and s
 
 V1.5 is released as `v1.5.0`, and the finite 1.x product line is complete. Its candidate-bound local,
 CI, packaged Desktop, Postgres, lifecycle, restart, revocation, redaction, and private GitHub sandbox
-evidence is immutable under `docs/releases/v1.5.0/`. V2.0 Native Agent Runtime implementation is the
-active Roadmap priority; the shared kernel and durable Desktop runtime are complete, while native
-Tool/MCP/Coding execution remains sequenced work.
+evidence is immutable under `docs/releases/v1.5.0/`. V2.0 Native Agent Runtime is complete with
+immutable evidence under `docs/releases/v2.0.0/`; V2.1 Evaluated Retrieval and Memory is the active
+Roadmap priority, with local retrieval/Memory complete and Runtime Context/Desktop UX in progress.
 
 The released product baseline provides:
 

@@ -65,6 +65,24 @@ describe('Agent Runtime renderer access', () => {
       listAgentRuntimeEvents: vi.fn(async (runtimeId: string) =>
         runtimeId === selected.runtime.id ? selected.events : other.events),
       getAgentRuntimeTerminalSummary: vi.fn(async () => null),
+      getAgentRuntimeContextAttachment: vi.fn(async (runtimeId: string) =>
+        runtimeId === selected.runtime.id
+          ? {
+              stateVersion: 1 as const,
+              id: 'runtime-context-selected',
+              runtimeId: selected.runtime.id,
+              checkpointVersion: 1,
+              scope: selected.runtime.scope,
+              authority: selected.runtime.authority,
+              knowledgeCitations: [],
+              memoryRevisions: [],
+              memoryRevisionIdentities: [],
+              knowledgeIdentityDigest: digest('c'),
+              memoryIdentityDigest: digest('d'),
+              contextDigest: selected.runtime.contextDigest,
+              attachedAt: selected.runtime.requestedAt,
+            }
+          : null),
     }
     const access = createAgentRuntimeRendererAccess(store)
 
@@ -94,6 +112,17 @@ describe('Agent Runtime renderer access', () => {
       localProjectId: 'project-selected',
     })
     expect(detail.events).toHaveLength(3)
-    expect(JSON.stringify(detail.events)).not.toContain('metadata')
+    expect(detail.context).toEqual({
+      attachmentId: 'runtime-context-selected',
+      contextDigest: selected.runtime.contextDigest,
+      knowledgeCitationCount: 0,
+      memoryRevisionCount: 0,
+      knowledgeIdentityDigest: digest('c'),
+      memoryIdentityDigest: digest('d'),
+      redacted: true,
+    })
+    expect(JSON.stringify(detail)).not.toMatch(
+      /session-agent-runtime-selected|scope|metadata|sourcePath|headingPath|content|\/Users\//,
+    )
   })
 })

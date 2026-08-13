@@ -8,9 +8,11 @@ import {
   createAgentRuntime,
   requestAgentAction,
   resumeAgentRuntime,
+  projectAgentRuntimeContextTrajectoryMetadata,
   type AgentRuntimeState,
   type AgentRuntimeAuthority,
   type AgentRuntimeContextAttachment,
+  type AgentRuntimeContextTrajectoryMetadata,
   type AgentRuntimeKnowledgeCitationSource,
   type AgentRuntimeMemoryRevisionSource,
   type AgentRuntimeScope,
@@ -76,6 +78,7 @@ export type DesktopAgentRuntimeSnapshot = {
   runtime: AgentRuntimeState
   events: Awaited<ReturnType<LocalStore['listAgentRuntimeEvents']>>
   terminalSummary: AgentRuntimeTerminalSummary | null
+  contextMetadata: AgentRuntimeContextTrajectoryMetadata | null
 }
 
 export type DesktopAgentRuntimeCommand = {
@@ -276,10 +279,18 @@ export function createDesktopAgentRuntime(
   }
 
   async function snapshot(runtime: AgentRuntimeState): Promise<DesktopAgentRuntimeSnapshot> {
+    const [events, terminalSummary, contextAttachment] = await Promise.all([
+      input.store.listAgentRuntimeEvents(runtime.id),
+      input.store.getAgentRuntimeTerminalSummary(runtime.id),
+      input.store.getAgentRuntimeContextAttachment(runtime.id),
+    ])
     return {
       runtime,
-      events: await input.store.listAgentRuntimeEvents(runtime.id),
-      terminalSummary: await input.store.getAgentRuntimeTerminalSummary(runtime.id),
+      events,
+      terminalSummary,
+      contextMetadata: contextAttachment === null
+        ? null
+        : projectAgentRuntimeContextTrajectoryMetadata(contextAttachment),
     }
   }
 

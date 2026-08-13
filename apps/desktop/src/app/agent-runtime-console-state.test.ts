@@ -69,16 +69,18 @@ describe('Agent Runtime console state', () => {
       runtime: resumed.runtime,
       events: [...started.events, ...resumed.events],
       terminalSummary: null,
+      contextMetadata: null,
     })
     const stale = createAgentRuntimeRendererSnapshot({
       runtime: started.runtime,
       events: started.events,
       terminalSummary: null,
+      contextMetadata: null,
     })
     const state = createAgentRuntimeConsoleState({
       selection: { runId: 'run-1', localProjectId: 'project-1' },
       list: [{
-        projectionVersion: 1,
+        projectionVersion: 2,
         runtime: current.runtime,
         terminalSummary: current.terminalSummary,
         redacted: true,
@@ -106,6 +108,7 @@ describe('Agent Runtime console state', () => {
       runtime: foreign.runtime,
       events: foreign.events,
       terminalSummary: null,
+      contextMetadata: null,
     })
     expect(mergeAgentRuntimeConsoleSnapshot({ state, snapshot: foreignSnapshot })).toEqual({
       state,

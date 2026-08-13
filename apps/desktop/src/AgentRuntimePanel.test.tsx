@@ -45,10 +45,19 @@ function runtimeProjection() {
     requestedAt: '2026-08-12T20:00:00.000Z',
     deadline: '2026-08-12T20:02:00.000Z',
   })
+  const contextMetadata = {
+    attachmentId: 'runtime-context-panel-1',
+    contextDigest: started.runtime.contextDigest,
+    knowledgeCitationCount: 2,
+    memoryRevisionCount: 1,
+    knowledgeIdentityDigest: digest('e'),
+    memoryIdentityDigest: digest('f'),
+  }
   const startedSnapshot = createAgentRuntimeRendererSnapshot({
     runtime: started.runtime,
     events: started.events,
     terminalSummary: null,
+    contextMetadata,
   })
   const resumed = resumeAgentRuntime({
     runtime: started.runtime,
@@ -62,6 +71,7 @@ function runtimeProjection() {
     runtime: resumed.runtime,
     events: [...started.events, ...resumed.events],
     terminalSummary: null,
+    contextMetadata,
   })
   const requested = requestAgentAction({
     runtime: resumed.runtime,
@@ -96,16 +106,44 @@ function runtimeProjection() {
     runtime: evaluated.runtime,
     events: [...started.events, ...resumed.events, ...requested.events, ...evaluated.events],
     terminalSummary: null,
+    contextMetadata,
   })
   return { startedSnapshot, resumedSnapshot, evaluatedSnapshot }
 }
 
 describe('AgentRuntimePanel', () => {
+  it('shows metadata-only Knowledge and Durable Memory provenance', async () => {
+    const { startedSnapshot } = runtimeProjection()
+    const api = {
+      listAgentRuntimes: vi.fn().mockResolvedValue([{
+        projectionVersion: 2,
+        runtime: startedSnapshot.runtime,
+        terminalSummary: null,
+        redacted: true,
+      }]),
+      getAgentRuntime: vi.fn().mockResolvedValue(startedSnapshot),
+      advanceAgentRuntime: vi.fn(),
+      cancelAgentRuntime: vi.fn(),
+      onAgentRuntimeUpdated: vi.fn(() => () => undefined),
+    } as unknown as DevFlowDesktopApi
+
+    render(<AgentRuntimePanel desktopApi={api} runId="run-1" localProjectId="project-1" />)
+
+    expect(await screen.findByText('Runtime Context')).toBeInTheDocument()
+    expect(screen.getByText('2 Knowledge Citations')).toBeInTheDocument()
+    expect(screen.getByText('1 Durable Memory revision')).toBeInTheDocument()
+    expect(screen.getByText('runtime-context-panel-1')).toBeInTheDocument()
+    expect(screen.getByText(digest('e'))).toBeInTheDocument()
+    expect(screen.getByText(digest('f'))).toBeInTheDocument()
+    expect(screen.queryByText(/sourcePath|headingPath|memory content|\/Users\//i))
+      .not.toBeInTheDocument()
+  })
+
   it('shows bounded trajectory evidence and resumes with an exact current CAS', async () => {
     const { startedSnapshot, resumedSnapshot } = runtimeProjection()
     const listAgentRuntimes = vi.fn().mockResolvedValue([
       {
-        projectionVersion: 1,
+        projectionVersion: 2,
         runtime: startedSnapshot.runtime,
         terminalSummary: null,
         redacted: true,
@@ -154,7 +192,7 @@ describe('AgentRuntimePanel', () => {
     const { evaluatedSnapshot } = runtimeProjection()
     const api = {
       listAgentRuntimes: vi.fn().mockResolvedValue([{
-        projectionVersion: 1,
+        projectionVersion: 2,
         runtime: evaluatedSnapshot.runtime,
         terminalSummary: null,
         redacted: true,
