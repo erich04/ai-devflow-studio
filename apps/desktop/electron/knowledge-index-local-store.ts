@@ -2,6 +2,8 @@ import type { Database } from 'sql.js'
 import {
   KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION,
   KNOWLEDGE_RETRIEVAL_VECTOR_DIMENSIONS_MAX,
+  type KnowledgeRetrievalScope,
+  type KnowledgeSnapshotIdentitySet,
 } from '@ai-devflow/shared'
 
 export type KnowledgeIndexSnapshotScope =
@@ -526,4 +528,59 @@ export function getCurrentKnowledgeIndexSnapshot(
     "local_project_id = ? and status = 'current'",
     localProjectId,
   )
+}
+
+export function getCurrentKnowledgeSnapshotIdentitySet(
+  db: Database,
+  value: KnowledgeRetrievalScope,
+): KnowledgeSnapshotIdentitySet | null {
+  if (
+    !isPlainRecord(value) ||
+    !hasExactKeys(value, [
+      'kind',
+      'organizationId',
+      'projectId',
+      'userId',
+      'sessionId',
+      'localProjectId',
+    ]) ||
+    !isIdentifier(value.userId) ||
+    !isIdentifier(value.sessionId) ||
+    !isIdentifier(value.localProjectId) ||
+    !(
+      (value.kind === 'local' && value.organizationId === null && value.projectId === null) ||
+      (value.kind === 'team' &&
+        isIdentifier(value.organizationId) &&
+        isIdentifier(value.projectId))
+    )
+  ) throw new Error('Invalid Knowledge retrieval scope')
+
+  const current = getCurrentKnowledgeIndexSnapshot(db, value.localProjectId)
+  if (
+    current === null ||
+    current.scope.kind !== value.kind ||
+    current.scope.organizationId !== value.organizationId ||
+    current.scope.projectId !== value.projectId
+  ) return null
+
+  return {
+    stateVersion: KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION,
+    scope: {
+      kind: value.kind,
+      organizationId: value.organizationId,
+      projectId: value.projectId,
+      userId: value.userId,
+      sessionId: value.sessionId,
+      localProjectId: value.localProjectId,
+    } as KnowledgeRetrievalScope,
+    knowledgeSnapshotHash: current.knowledgeSnapshotHash,
+    chunks: current.chunks.map((chunk) => ({
+      documentId: chunk.documentId,
+      chunkId: chunk.chunkId,
+      sourcePath: chunk.sourcePath,
+      headingPath: [...chunk.headingPath],
+      contentHash: chunk.contentHash,
+    })),
+    refreshedAt: current.activatedAt,
+  }
 }

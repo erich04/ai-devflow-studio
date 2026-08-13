@@ -14,6 +14,7 @@ import {
   createRemoteSyncOperation,
   createWorkflowRunFromRequest,
   createWarnOnlyDefaultPolicy,
+  parseCurrentKnowledgeCitation,
   redactTestEvidenceForStorage,
   requestAgentAction,
   resumeAgentRuntime,
@@ -40,6 +41,9 @@ import type {
   GateCommandReceipt,
   GateAdvisory,
   LocalProject,
+  KnowledgeCitation,
+  KnowledgeRetrievalCandidateSet,
+  KnowledgeRetrievalRequest,
   McpServerDefinition,
   ManagedCodingWorkspace,
   PolicySnapshot,
@@ -851,6 +855,157 @@ describe('createLocalStore', () => {
     const reopened = await createLocalStore({ dbPath })
     await expect(reopened.getCurrentKnowledgeIndexSnapshot(project.id)).resolves.toEqual(firstSnapshot)
     reopened.close()
+  })
+
+  it('invalidates updated and deleted Knowledge identities before later citation use', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    const scope = {
+      kind: 'local' as const,
+      organizationId: null,
+      projectId: null,
+      userId: 'user-1',
+      sessionId: 'session-1',
+      localProjectId: project.id,
+    }
+    const firstSnapshotHash = `sha256:${'3'.repeat(64)}`
+    const updatedChunk = {
+      stateVersion: 1 as const,
+      documentId: 'knowledge-document-update',
+      chunkId: 'knowledge-chunk-update',
+      sourcePath: 'docs/update.md',
+      headingPath: ['Update'],
+      contentHash: `sha256:${'c'.repeat(64)}`,
+      content: 'This content will be replaced by the next source snapshot.',
+      ordinal: 0,
+      vector: {
+        modelId: 'fixture-embedding',
+        modelVersion: '1',
+        dimensions: 3,
+        values: [1, 0, 0],
+        createdAt: '2026-08-13T09:00:00.000Z',
+      },
+    }
+    const deletedChunk = {
+      ...updatedChunk,
+      documentId: 'knowledge-document-delete',
+      chunkId: 'knowledge-chunk-delete',
+      sourcePath: 'docs/delete.md',
+      headingPath: ['Delete'],
+      contentHash: `sha256:${'d'.repeat(64)}`,
+      content: 'This source will be deleted before the next retrieval.',
+      ordinal: 1,
+      vector: {
+        ...updatedChunk.vector,
+        values: [0, 1, 0],
+      },
+    }
+    const firstActivation = {
+      expectedCurrentSnapshotId: null,
+      snapshot: {
+        stateVersion: 1 as const,
+        id: 'knowledge-snapshot-before-refresh',
+        scope: {
+          kind: 'local' as const,
+          organizationId: null,
+          projectId: null,
+          localProjectId: project.id,
+        },
+        knowledgeSnapshotHash: firstSnapshotHash,
+        embedding: {
+          modelId: 'fixture-embedding',
+          modelVersion: '1',
+          dimensions: 3,
+        },
+        createdAt: '2026-08-13T09:00:00.000Z',
+      },
+      chunks: [updatedChunk, deletedChunk],
+      activatedAt: '2026-08-13T09:00:01.000Z',
+    }
+    await expect(store.activateKnowledgeIndexSnapshot(firstActivation)).resolves.toMatchObject({
+      activated: true,
+      replayed: false,
+    })
+
+    const request: KnowledgeRetrievalRequest = {
+      stateVersion: 1,
+      id: 'knowledge-request-before-refresh',
+      scope,
+      target: { runId: run.id, nodeId: 'node-build', runVersion: 1 },
+      knowledgeSnapshotHash: firstSnapshotHash,
+      query: { text: 'deleted source', categories: [], tags: [], topK: 1 },
+      requestedAt: '2026-08-13T09:00:02.000Z',
+    }
+    const candidates: KnowledgeRetrievalCandidateSet = {
+      stateVersion: 1,
+      requestId: request.id,
+      scope,
+      knowledgeSnapshotHash: firstSnapshotHash,
+      strategy: 'lexical',
+      embedding: null,
+      candidates: [{
+        documentId: deletedChunk.documentId,
+        chunkId: deletedChunk.chunkId,
+        organizationId: null,
+        projectId: null,
+        localProjectId: project.id,
+        sourcePath: deletedChunk.sourcePath,
+        headingPath: deletedChunk.headingPath,
+        contentHash: deletedChunk.contentHash,
+        score: 1,
+        vectorDimensions: null,
+      }],
+      evaluatedAt: '2026-08-13T09:00:03.000Z',
+    }
+    const citation: KnowledgeCitation = {
+      stateVersion: 1,
+      requestId: request.id,
+      scope,
+      knowledgeSnapshotHash: firstSnapshotHash,
+      documentId: deletedChunk.documentId,
+      chunkId: deletedChunk.chunkId,
+      sourcePath: deletedChunk.sourcePath,
+      headingPath: deletedChunk.headingPath,
+      contentHash: deletedChunk.contentHash,
+      strategyChain: ['lexical'],
+      rank: 1,
+      score: 1,
+      citedAt: '2026-08-13T09:00:04.000Z',
+    }
+    const beforeRefresh = await store.getCurrentKnowledgeSnapshotIdentitySet(scope)
+    expect(parseCurrentKnowledgeCitation(citation, request, candidates, beforeRefresh)).toEqual(
+      citation,
+    )
+
+    const replacementChunk = {
+      ...updatedChunk,
+      contentHash: `sha256:${'e'.repeat(64)}`,
+      content: 'This is the only current source content after refresh.',
+      vector: {
+        ...updatedChunk.vector,
+        values: [0, 0, 1],
+        createdAt: '2026-08-13T09:01:00.000Z',
+      },
+    }
+    await expect(store.activateKnowledgeIndexSnapshot({
+      expectedCurrentSnapshotId: firstActivation.snapshot.id,
+      snapshot: {
+        ...firstActivation.snapshot,
+        id: 'knowledge-snapshot-after-refresh',
+        knowledgeSnapshotHash: `sha256:${'4'.repeat(64)}`,
+        createdAt: '2026-08-13T09:01:00.000Z',
+      },
+      chunks: [replacementChunk],
+      activatedAt: '2026-08-13T09:01:01.000Z',
+    })).resolves.toMatchObject({ activated: true, replayed: false })
+
+    const current = await store.getCurrentKnowledgeIndexSnapshot(project.id)
+    expect(current?.chunks).toEqual([replacementChunk])
+    const afterRefresh = await store.getCurrentKnowledgeSnapshotIdentitySet(scope)
+    expect(() => parseCurrentKnowledgeCitation(citation, request, candidates, afterRefresh))
+      .toThrowError('invalid_knowledge_retrieval_request')
+    store.close()
   })
 
   it('migrates Desktop schema 19 without promoting Team MCP metadata into local authority', async () => {

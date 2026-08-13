@@ -16,6 +16,7 @@ import {
 import {
   activateKnowledgeIndexSnapshot as activateKnowledgeIndexSnapshotInDatabase,
   getCurrentKnowledgeIndexSnapshot as readCurrentKnowledgeIndexSnapshot,
+  getCurrentKnowledgeSnapshotIdentitySet as readCurrentKnowledgeSnapshotIdentitySet,
   type ActivateKnowledgeIndexSnapshotInput,
   type ActivateKnowledgeIndexSnapshotResult,
   type KnowledgeIndexSnapshot,
@@ -79,6 +80,8 @@ import {
   type DesktopPairingCredential,
   type LocalExecutionState,
   type LocalProject,
+  type KnowledgeRetrievalScope,
+  type KnowledgeSnapshotIdentitySet,
   type LocalSettings,
   type ManagedCodingWorkspace,
   type McpServerDefinition,
@@ -669,6 +672,9 @@ export type LocalStore = {
   getCurrentKnowledgeIndexSnapshot(
     localProjectId: string,
   ): Promise<KnowledgeIndexSnapshot | null>
+  getCurrentKnowledgeSnapshotIdentitySet(
+    scope: KnowledgeRetrievalScope,
+  ): Promise<KnowledgeSnapshotIdentitySet | null>
   saveRun(run: WorkflowRun): Promise<void>
   deleteRun(runId: string): Promise<void>
   getRun(runId: string): Promise<WorkflowRun | null>
@@ -4625,6 +4631,12 @@ class SqlJsLocalStore implements LocalStore {
     localProjectId: string,
   ): Promise<KnowledgeIndexSnapshot | null> {
     return readCurrentKnowledgeIndexSnapshot(this.db, localProjectId)
+  }
+
+  async getCurrentKnowledgeSnapshotIdentitySet(
+    scope: KnowledgeRetrievalScope,
+  ): Promise<KnowledgeSnapshotIdentitySet | null> {
+    return readCurrentKnowledgeSnapshotIdentitySet(this.db, scope)
   }
 
   async getAgentRuntime(runtimeId: string): Promise<AgentRuntimeState | null> {
