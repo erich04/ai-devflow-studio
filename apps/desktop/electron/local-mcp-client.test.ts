@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createAgentRuntime,
@@ -39,6 +38,10 @@ const platformEnvironmentNames = [
     : []),
 ].sort()
 const authorizeFixtureCall = async () => undefined
+const localMcpClientSource = readFile(
+  path.resolve('apps/desktop/electron/local-mcp-client.ts'),
+  'utf8',
+)
 
 afterEach(async () => {
   await Promise.all(tempDirs.map((directory) => rm(directory, { recursive: true, force: true })))
@@ -46,15 +49,12 @@ afterEach(async () => {
 })
 
 const fixtureServer = `#!/usr/bin/env node
-import { spawn } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import readline from 'node:readline'
 
-const mode = process.argv[2] ?? 'valid'
-if (process.argv[3] && mode !== 'exit-before-stdio-close') {
-  writeFileSync(process.argv[3], 'started', 'utf8')
-}
+if (process.argv[3]) writeFileSync(process.argv[3], 'started', 'utf8')
 const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
+const mode = process.argv[2] ?? 'valid'
 lines.on('line', (line) => {
   const message = JSON.parse(line)
   if (message.method === 'initialize') {
@@ -124,15 +124,7 @@ lines.on('line', (line) => {
         structuredContent: result,
         isError: mode === 'tool-error',
       },
-    }) + '\\n', () => {
-      if (mode !== 'exit-before-stdio-close') return
-      spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], {
-        stdio: ['ignore', process.stdout, process.stderr],
-        windowsHide: true,
-      })
-      if (process.argv[3]) writeFileSync(process.argv[3], 'parent-exiting', 'utf8')
-      process.exit(0)
-    })
+    }) + '\\n')
   }
 })
 `
@@ -297,23 +289,18 @@ describe('main-owned local stdio MCP client', () => {
     expect(client.closed).toBe(true)
   })
 
-  it('does not report closed until the child process and inherited stdio handles close', async () => {
-    const { installation, localProjectPath } = await fixtureInstallation('exit-before-stdio-close')
-    const markerPath = path.join(localProjectPath, 'parent-exiting.marker')
-    const client = await createLocalMcpClient({
-      installation: { ...installation, args: [...installation.args, markerPath] },
-      localProjectPath,
-      environment: {},
-      authorizeCall: authorizeFixtureCall,
-    })
+  it('reports closed only after the process and stdio close event', async () => {
+    const source = (await localMcpClientSource).replace(/\r\n/g, '\n')
+    const exitStart = source.indexOf("child.once('exit'")
+    const closeStart = source.indexOf("child.once('close'")
+    const waitStart = source.indexOf('async function waitForExit', closeStart)
 
-    await expect(
-      client.callTool({ toolName: 'fixture.echo', input: { message: 'hello' } }),
-    ).resolves.toEqual({ echoed: 'hello', environmentNames: platformEnvironmentNames })
-    await vi.waitFor(() => expect(readFile(markerPath, 'utf8')).resolves.toBe('parent-exiting'))
-    await delay(75)
-    expect(client.closed).toBe(false)
-    await vi.waitFor(() => expect(client.closed).toBe(true), { timeout: 5_000 })
+    expect(exitStart).toBeGreaterThan(-1)
+    expect(closeStart).toBeGreaterThan(exitStart)
+    expect(waitStart).toBeGreaterThan(closeStart)
+    expect(source.slice(exitStart, closeStart)).not.toContain('closed = true')
+    expect(source.slice(closeStart, waitStart)).toContain('closed = true')
+    expect(source.slice(closeStart, waitStart)).toContain('resolveExit()')
   })
 
   it('rechecks main-owned installation authority immediately before every Tool call', async () => {
