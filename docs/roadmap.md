@@ -90,8 +90,8 @@ contains the signoff-bound release artifacts.
 | Active version line | 2.x DevFlow-native Agent Runtime |
 | Completed 2.x milestones | V2.0 Native Agent Runtime Foundation; V2.1 Evaluated Retrieval And Memory |
 | Completion evidence | `docs/releases/v2.0.0/`; `docs/releases/v2.1.0/` |
-| Active milestone | V2.2 Slice 2 — Durable Desktop Coordinator |
-| Next gate | Migrate retained Desktop schema 27 to schema 28 with zero fabricated coordination state |
+| Active milestone | V2.2 Slice 3 — Specialist Runtime And Attenuated Authority |
+| Next gate | Bind one fixed Specialist registry to main-owned attenuated authority and child Runtime join |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -165,14 +165,14 @@ The superseded implementation-period markers `### Now — Run V2.1 Evaluation An
 `| Next gate | Freeze the exact V2.1 candidate and run the full completion matrix |` remain here only
 as auditable phase vocabulary; the current table and the single `Now` heading below are authoritative.
 
-### Now — Implement V2.2 Durable Desktop Coordinator
+### Now — Implement V2.2 Specialist Runtime And Attenuated Authority
 
-- Migrate retained Desktop schema 27 to schema 28 without fabricating a Coordination Session, Agent
-  Task, Agent Handoff, lease, audit record, or checkpoint.
-- Persist one exact frozen graph and Supervisor-owned Coordination Session atomically, then apply
-  task, result, handoff, join, counter, and checkpoint changes only through versioned CAS.
-- Keep coordination metadata bounded and reject source, patch, prompt, raw output, credentials, and
-  absolute paths before durable storage.
+- Register one fixed Electron-main-owned Specialist descriptor and role set; renderer, model, and
+  Team input cannot create or widen a Specialist role.
+- Derive one opaque task authority from exact current Supervisor, Coordination Session, Agent Task,
+  Runtime Context, policy, pairing, capability, budget, and tenancy state before child creation.
+- Start and join one bounded V2.0 child Agent Runtime with exact identity and strict authority
+  attenuation; reject stale, sibling, foreign-tenant, or forged authority before any child effect.
 
 The V2.2 contract set is frozen in:
 
@@ -181,11 +181,14 @@ The V2.2 contract set is frozen in:
 - `docs/plans/v2.2-multi-agent-execution-tenancy.md`
 - `scripts/fixtures/v2.2-multi-agent-evaluation.json`
 
-Slices 0 and 1 are complete. The pure shared domain now enforces the frozen DAG, attenuated
+Slices 0 through 2 are complete. The pure shared domain enforces the frozen DAG, attenuated
 Specialist authority, immutable handoffs, monotonic transitions, shared bounds, exact tenancy, and
-the unchanged deterministic V2.0 single-Agent baseline. Slice 2 adds only Desktop-main-owned durable
-coordination; no open-ended swarm, remote executor, hosted tenancy, or new publication authority is
-implied by this milestone.
+the unchanged deterministic V2.0 single-Agent baseline. Desktop schema 28 now persists one exact
+Supervisor-owned Coordination Session and frozen graph, applies task/result/handoff/join/checkpoint
+changes through versioned CAS, enforces the 256 KiB metadata boundary before commit, and reconstructs
+the exact trajectory after restart while rejecting tampered history. Slice 3 now binds a fixed
+Specialist registry to main-owned attenuated child Runtime authority; no open-ended swarm, remote
+executor, hosted tenancy, or new publication authority is implied by this milestone.
 
 ### Next — Implement And Evaluate V2.2
 
