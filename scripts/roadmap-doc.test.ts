@@ -82,7 +82,7 @@ describe('product roadmap source of truth', () => {
     expect(markdown).toContain(
       'V1.5 and the finite 1.x line are released and complete',
     )
-    expect(markdown).toContain('### Now — Implement V2.0 Native Agent Runtime')
+    expect(markdown).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
     expect(markdown).not.toContain('Slice 7, the candidate-bound completion gate, remains in progress')
     expect(markdown).toContain('v1.5-github-delivery-prd.md')
     expect(markdown).toContain('0013-github-app-delivery-authority.md')
@@ -103,11 +103,11 @@ describe('product roadmap source of truth', () => {
     expect(currentRelease).toContain('`v1.5.0` is the released baseline')
     expect(currentRelease).toContain('The finite 1.x product line is complete')
     expect(currentRelease).not.toContain('release and 1.x completion gate remain pending')
-    expect(priorities).toContain('### Now — Implement V2.0 Native Agent Runtime')
+    expect(priorities).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
     expect(priorities).toContain('Slices 1–7 are complete')
     expect(priorities).toMatch(/Slice 7\s+is complete/)
     expect(priorities).toContain(
-      '### Next — Run The V2.0 Evaluation And Completion Gate',
+      '### Next — Begin V2.1 Evaluated Retrieval And Memory After V2.0 Completion',
     )
     expect(markdown).not.toContain('current V1.4 runtime already implements every layer')
     expect(currentRelease).toContain('real private GitHub sandbox')

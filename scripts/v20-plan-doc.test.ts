@@ -81,9 +81,9 @@ describe('V2.0 Native Agent Runtime contract', () => {
       expect(roadmap).toContain(path)
     }
 
-    expect(roadmap).toContain('### Now — Implement V2.0 Native Agent Runtime')
+    expect(roadmap).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
     expect(roadmap).toContain('Slices 1–7 are complete')
-    expect(roadmap).toContain('### Next — Run The V2.0 Evaluation And Completion Gate')
+    expect(roadmap).toContain('### Next — Begin V2.1 Evaluated Retrieval And Memory After V2.0 Completion')
   })
 
   it('provides an executable TDD slice plan before product code starts', () => {
@@ -117,6 +117,9 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(plan).toContain('| Slice 5 | Complete |')
     expect(plan).toContain('| Slice 6 | Complete |')
     expect(plan).toContain('| Slice 7 | Complete |')
+    expect(plan).toContain('| Slice 8 | In progress |')
+    expect(plan).toContain('scripts/fixtures/v2.0-agent-runtime-scenarios.json')
+    expect(plan).toContain('scripts/v20-agent-runtime-evaluator.mjs')
     expect(plan).toContain('strict main-owned renderer projection')
     expect(plan).toContain('exact version/checkpoint optimistic concurrency')
     expect(plan).toContain('Desktop schema 21')
@@ -133,7 +136,7 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(plan).toContain('negotiated capability-set digest')
 
     expect(roadmap).toMatch(/Slice 7\s+is complete/)
-    expect(roadmap).toContain('### Next — Run The V2.0 Evaluation And Completion Gate')
+    expect(roadmap).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
   })
 
   it('adds stable V2.0 domain language without redefining workflow authority', () => {

@@ -1,0 +1,340 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "v2.0-native-agent-runtime-completion",
+  "datasetVersion": 1,
+  "runtimeContractVersion": 1,
+  "codingExecutorContractVersion": 1,
+  "nativeToolContractVersion": 1,
+  "scenarios": [
+    {
+      "category": "native_tool",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "native-tool-no-side-effect",
+        "version": 1,
+        "name": "Native Tool bounded read",
+        "objective": "Complete one bounded repository read with no write or process side effect.",
+        "executorKind": "none",
+        "expected": {
+          "stopReason": "success",
+          "maxSteps": 2,
+          "requiredEventTypes": ["runtime_started", "action_requested", "action_result", "runtime_stopped"],
+          "evidenceKinds": ["agent_trajectory", "native_tool_audit"],
+          "cleanupStatus": "not_required"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "apps/desktop/electron/agent-runtime-runtime.test.ts",
+      "testName": "derives authority in Electron main and completes one durable native Tool runtime",
+      "defaultNoCost": true
+    },
+    {
+      "category": "native_coding",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "native-coding-repair",
+        "version": 1,
+        "name": "Native Coding bounded repair",
+        "objective": "Complete one approved edit, saved test, one bounded repair, and cleanup.",
+        "executorKind": "native",
+        "expected": {
+          "stopReason": "success",
+          "maxSteps": 12,
+          "requiredEventTypes": ["runtime_started", "permission_decided", "action_result", "evaluation_recorded", "runtime_stopped"],
+          "evidenceKinds": ["agent_trajectory", "coding_diff", "test_evidence"],
+          "cleanupStatus": "completed"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "apps/desktop/electron/native-coding-runtime.test.ts",
+      "testName": "completes one approved repair without an unbounded test loop",
+      "defaultNoCost": true
+    },
+    {
+      "category": "opencode_coding",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "opencode-coding-contract",
+        "version": 1,
+        "name": "OpenCode observable contract",
+        "objective": "Map observable OpenCode execution into the governed executor event, evidence, terminal, and cleanup contract.",
+        "executorKind": "opencode",
+        "expected": {
+          "stopReason": "success",
+          "maxSteps": 12,
+          "requiredEventTypes": ["runtime_started", "permission_decided", "action_result", "evaluation_recorded", "runtime_stopped"],
+          "evidenceKinds": ["agent_trajectory", "coding_diff", "test_evidence"],
+          "cleanupStatus": "completed"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "apps/desktop/electron/coding-executor-compatibility.test.ts",
+      "testName": "maps observable OpenCode continuations and completion without inventing private events",
+      "defaultNoCost": true
+    },
+    {
+      "category": "local_mcp",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "local-mcp-discovery-call",
+        "version": 1,
+        "name": "Trusted Local MCP discovery and call",
+        "objective": "Discover and execute one exact installation-owned Tool without inherited authority.",
+        "executorKind": "none",
+        "expected": {
+          "stopReason": "success",
+          "maxSteps": 2,
+          "requiredEventTypes": ["runtime_started", "action_requested", "action_result", "runtime_stopped"],
+          "evidenceKinds": ["agent_trajectory", "native_tool_audit"],
+          "cleanupStatus": "completed"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "apps/desktop/electron/local-mcp-runtime.test.ts",
+      "testName": "persists, enables, discovers, and reuses one exact installation across restart",
+      "defaultNoCost": true
+    },
+    {
+      "category": "checkpoint_resume",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "checkpoint-resume",
+        "version": 1,
+        "name": "Checkpoint resume without replay",
+        "objective": "Recover one exact active action after restart without issuing another action.",
+        "executorKind": "none",
+        "expected": {
+          "stopReason": "success",
+          "maxSteps": 2,
+          "requiredEventTypes": ["runtime_started", "checkpointed", "runtime_resumed", "runtime_stopped"],
+          "evidenceKinds": ["agent_checkpoint", "agent_trajectory"],
+          "cleanupStatus": "not_required"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "apps/desktop/electron/agent-runtime-runtime.test.ts",
+      "testName": "recovers the exact active action after restart without creating another action",
+      "defaultNoCost": true
+    },
+    {
+      "category": "cancellation",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "tool-cancellation",
+        "version": 1,
+        "name": "Native Tool cancellation fencing",
+        "objective": "Cancel in-flight Tool work and reject every late result.",
+        "executorKind": "none",
+        "expected": {
+          "stopReason": "cancelled",
+          "maxSteps": 2,
+          "requiredEventTypes": ["runtime_started", "action_requested", "runtime_stopped"],
+          "evidenceKinds": ["agent_trajectory"],
+          "cleanupStatus": "not_required"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "apps/desktop/electron/agent-runtime-runtime.test.ts",
+      "testName": "aborts an in-flight native Tool when Runtime cancellation wins the checkpoint race",
+      "defaultNoCost": true
+    },
+    {
+      "category": "cancellation",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "executor-cancellation",
+        "version": 1,
+        "name": "Coding Executor cancellation and cleanup",
+        "objective": "Cancel executor work, reject late completion, and record cleanup outcome.",
+        "executorKind": "opencode",
+        "expected": {
+          "stopReason": "cancelled",
+          "maxSteps": 12,
+          "requiredEventTypes": ["runtime_started", "runtime_stopped"],
+          "evidenceKinds": ["agent_trajectory", "coding_terminal_result"],
+          "cleanupStatus": "completed"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "apps/desktop/electron/coding-runtime.test.ts",
+      "testName": "cancels a running coding run, cleans up the worktree, and appends cleanup evidence",
+      "defaultNoCost": true
+    },
+    {
+      "category": "bounds",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "step-limit",
+        "version": 1,
+        "name": "Exact step limit",
+        "objective": "Stop before another action at the exact configured step bound.",
+        "executorKind": "none",
+        "expected": {
+          "stopReason": "step_limit",
+          "maxSteps": 2,
+          "requiredEventTypes": ["runtime_started", "runtime_stopped"],
+          "evidenceKinds": ["agent_trajectory"],
+          "cleanupStatus": "not_required"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "packages/shared/src/agent-runtime.test.ts",
+      "testName": "stops before another action at the exact deadline or step/tool bound",
+      "defaultNoCost": true
+    },
+    {
+      "category": "bounds",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "deadline-timeout",
+        "version": 1,
+        "name": "Exact deadline timeout",
+        "objective": "Stop at the exact durable deadline before another action starts.",
+        "executorKind": "none",
+        "expected": {
+          "stopReason": "timeout",
+          "maxSteps": 2,
+          "requiredEventTypes": ["runtime_started", "runtime_stopped"],
+          "evidenceKinds": ["agent_checkpoint", "agent_trajectory"],
+          "cleanupStatus": "not_required"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "apps/desktop/electron/agent-runtime-runtime.test.ts",
+      "testName": "stops recovery at the exact durable deadline without requesting an action",
+      "defaultNoCost": true
+    },
+    {
+      "category": "bounds",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "tool-call-limit",
+        "version": 1,
+        "name": "Exact Tool-call limit",
+        "objective": "Stop before issuing another Tool call after the configured Tool-call bound.",
+        "executorKind": "none",
+        "expected": {
+          "stopReason": "step_limit",
+          "maxSteps": 3,
+          "requiredEventTypes": ["runtime_started", "action_result", "runtime_stopped"],
+          "evidenceKinds": ["agent_trajectory", "native_tool_audit"],
+          "cleanupStatus": "not_required"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "packages/shared/src/agent-runtime.test.ts",
+      "testName": "stops before another action at the exact deadline or step/tool bound",
+      "defaultNoCost": true
+    },
+    {
+      "category": "bounds",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "budget-exhaustion",
+        "version": 1,
+        "name": "Exact cost and token budget exhaustion",
+        "objective": "Persist the accepted observation and stop before another action when usage exhausts budget.",
+        "executorKind": "none",
+        "expected": {
+          "stopReason": "budget_exhausted",
+          "maxSteps": 3,
+          "requiredEventTypes": ["runtime_started", "action_result", "runtime_stopped"],
+          "evidenceKinds": ["agent_trajectory"],
+          "cleanupStatus": "not_required"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "packages/shared/src/agent-runtime.test.ts",
+      "testName": "accepts the result but stops when observed usage exhausts the budget",
+      "defaultNoCost": true
+    },
+    {
+      "category": "schema_rejection",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "malformed-tool-schema",
+        "version": 1,
+        "name": "Malformed Tool schema rejection",
+        "objective": "Reject unknown or coerced Tool input and output before execution or evidence acceptance.",
+        "executorKind": "none",
+        "expected": {
+          "stopReason": "policy_denied",
+          "maxSteps": 1,
+          "requiredEventTypes": ["runtime_started", "runtime_stopped"],
+          "evidenceKinds": ["agent_trajectory"],
+          "cleanupStatus": "not_required"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "packages/shared/src/native-tool.test.ts",
+      "testName": "validates exact input and output values without coercion",
+      "defaultNoCost": true
+    },
+    {
+      "category": "schema_rejection",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "oversized-tool-result",
+        "version": 1,
+        "name": "Oversized Tool result rejection",
+        "objective": "Reject an oversized Tool result without persisting result metadata.",
+        "executorKind": "none",
+        "expected": {
+          "stopReason": "failure",
+          "maxSteps": 2,
+          "requiredEventTypes": ["runtime_started", "action_requested", "runtime_stopped"],
+          "evidenceKinds": ["agent_trajectory"],
+          "cleanupStatus": "not_required"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "packages/shared/src/agent-runtime.test.ts",
+      "testName": "fails closed on an oversized result without persisting the result metadata",
+      "defaultNoCost": true
+    },
+    {
+      "category": "stale_authority",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "stale-authority",
+        "version": 1,
+        "name": "Stale checkpoint and authority rejection",
+        "objective": "Reject stale checkpoint, Workflow, policy, capability, and Local Project authority.",
+        "executorKind": "none",
+        "expected": {
+          "stopReason": "policy_denied",
+          "maxSteps": 1,
+          "requiredEventTypes": ["runtime_started", "runtime_stopped"],
+          "evidenceKinds": ["agent_trajectory"],
+          "cleanupStatus": "not_required"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "apps/desktop/electron/agent-runtime-runtime.test.ts",
+      "testName": "rejects mismatched and stale renderer commands before advancing a Runtime",
+      "defaultNoCost": true
+    },
+    {
+      "category": "tenant_isolation",
+      "scenario": {
+        "stateVersion": 1,
+        "id": "tenant-scope-isolation",
+        "version": 1,
+        "name": "Tenant and Local Project isolation",
+        "objective": "Reject cross-organization, project, user, session, and Local Project authority before execution.",
+        "executorKind": "none",
+        "expected": {
+          "stopReason": "policy_denied",
+          "maxSteps": 1,
+          "requiredEventTypes": ["runtime_started", "runtime_stopped"],
+          "evidenceKinds": ["agent_trajectory"],
+          "cleanupStatus": "not_required"
+        },
+        "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
+      },
+      "testFile": "apps/desktop/electron/agent-runtime-runtime.test.ts",
+      "testName": "rejects a renderer-selected local project that does not own the Run",
+      "defaultNoCost": true
+    }
+  ]
+}

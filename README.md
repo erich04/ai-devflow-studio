@@ -12,7 +12,8 @@ _A real Electron workbench showing the six-stage workflow, local repository cont
 > V2.0 Native Agent Runtime implementation is now the active priority. The shared bounded kernel,
 > durable Desktop runtime, Native Tool Registry, trusted local MCP boundary, and governed Coding
 > Executor, bounded native coding loop, Runtime UX, and Team redacted projection are complete;
-> Slice 7 is complete and Slice 8 is the next evaluation/completion gate. The [Roadmap](docs/roadmap.md) is the single source of truth; package
+> Slice 7 is complete; the Slice 8 evaluation and completion gate is in progress with a frozen
+> deterministic dataset and fail-closed evaluator contract. The [Roadmap](docs/roadmap.md) is the single source of truth; package
 > labels and this README do not substitute for immutable proof under `docs/releases/`.
 
 ## Why It Exists

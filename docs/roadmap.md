@@ -88,8 +88,8 @@ contains the signoff-bound release artifacts.
 | V1.5 execution history | `docs/plans/v1.5-github-delivery.md` and the four immutable release evidence files |
 | Completed version line | 1.x governed self-hosted delivery |
 | Active version line | 2.x DevFlow-native Agent Runtime |
-| Active milestone | V2.0 Native Agent Runtime implementation |
-| Next gate | Commit the green Slice 7 boundary, then run the Slice 8 V2.0 completion gate |
+| Active milestone | V2.0 evaluation and completion gate |
+| Next gate | Execute the frozen Slice 8 dataset and produce candidate-bound completion evidence |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -102,12 +102,12 @@ production build gates. Slice 8 is the remaining V2.0 evaluation and completion 
 
 ## Now / Next / Later
 
-### Now — Implement V2.0 Native Agent Runtime
+### Now — Run The V2.0 Evaluation And Completion Gate
 
 V1.5 and the finite 1.x line are released and complete. Slices 1–7 are complete; Slice 7
 is complete after its retained migration, redaction, Postgres, Docker, packaged Desktop, full
-verification, and production build gates passed. V2.0 continues through the accepted contract and
-executable slice plan:
+verification, and production build gates passed. Slice 8 is in progress as the only remaining V2.0
+gate and continues through the accepted contract and executable slice plan:
 
 - `docs/product/prd/v2.0-native-agent-runtime-prd.md`
 - `docs/adr/0014-bounded-agent-runtime.md`
@@ -138,18 +138,21 @@ executable slice plan:
   outbox sync, Team schema 16 monotonic summaries/audit, and a read-only Web manager projection.
 - Slice 7 passed its retained migration, real Postgres, Docker lifecycle, redaction, packaged
   Desktop, full verification, and production build gates without widening Team authority.
+- Slice 8 now has a frozen 15-scenario no-cost dataset and a strict evaluator contract that binds
+  candidate SHA, dataset SHA, Runtime/Executor/Tool contract versions, executor parity, paid-provider
+  call count, and secret/path/source/output/isolation scans.
+- Complete the executable observation collector, full gate aggregation, exact-SHA CI, artifact
+  integrity, and direct-child evidence-only signoff before marking V2.0 complete.
 
-### Next — Run The V2.0 Evaluation And Completion Gate
+### Next — Begin V2.1 Evaluated Retrieval And Memory After V2.0 Completion
 
-- Freeze the Slice 8 dataset and evaluator only after the Slice 7 candidate is green and committed.
-- Prove native Tool, Local MCP, checkpoint/resume, cancellation/bounds, native coding, and OpenCode
-  parity without secrets, paths, source, isolation leaks, or unexpected paid-provider calls.
-- Produce candidate-bound completion evidence before marking V2.0 complete.
+- Begin V2.1 only after the Slice 8 completion record is candidate-bound, green, and committed.
+- Add evaluated hybrid retrieval and scoped Agent Memory without changing Workflow, Knowledge, or
+  Governance Evidence authority.
+- Require benchmark improvement without citation, privacy, or cross-tenant isolation regression.
 
-### Later — V2.1 Retrieval/Memory And V2.2 Multi-Agent/Tenancy
+### Later — V2.2 Multi-Agent And Execution Tenancy
 
-- V2.1 adds evaluated hybrid retrieval and scoped Agent Memory only after the V2.0 single-Agent
-  baseline is durable.
 - V2.2 adds bounded supervisor/specialist coordination and execution tenancy only after V2.1 proves
   retrieval, Memory, citation, and isolation behavior.
 - New 1.x work is limited to release defects, security fixes, dependency maintenance, or hardening
