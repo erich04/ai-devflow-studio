@@ -90,8 +90,8 @@ contains the signoff-bound release artifacts.
 | Active version line | 2.x DevFlow-native Agent Runtime |
 | Completed 2.x milestones | V2.0 Native Agent Runtime Foundation; V2.1 Evaluated Retrieval And Memory |
 | Completion evidence | `docs/releases/v2.0.0/`; `docs/releases/v2.1.0/` |
-| Active milestone | V2.2 Slice 5 — Recovery, Cancellation, And Desktop UX |
-| Next gate | Propagate one monotonic parent cancellation through every child Runtime and active lease |
+| Active milestone | V2.2 Slice 6 — Redacted Team Projection |
+| Next gate | Migrate Team schema 18 to 19 with zero fabricated coordination rows |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -165,14 +165,15 @@ The superseded implementation-period markers `### Now — Run V2.1 Evaluation An
 `| Next gate | Freeze the exact V2.1 candidate and run the full completion matrix |` remain here only
 as auditable phase vocabulary; the current table and the single `Now` heading below are authoritative.
 
-### Now — Implement V2.2 Recovery, Cancellation, And Desktop UX
+### Now — Implement V2.2 Redacted Team Projection
 
-- Propagate one parent cancellation monotonically through every ready/running Specialist, active
-  Tool/MCP/Coding action, pending handoff, and resource lease before a late result can commit.
-- Reopen an exact partially completed DAG after cold restart without repeating accepted Specialist
-  starts, Tool calls, workspace writes, handoffs, joins, or terminal events.
-- Expose only a strict metadata-only Desktop projection and keep every start/retry/cancel authority
-  inside Electron main while the existing single-Agent runtime remains unchanged.
+- Migrate Team schema 18 to 19 with empty coordination summary and audit tables; retained databases
+  must fabricate zero sessions, tasks, handoffs, quality results, or lifecycle events.
+- Upload one strict monotonic metadata-only summary bound to the exact Team Project, Run, Node,
+  Coordination Session, and lifecycle version while rejecting stale, conflicting, and cross-project
+  input before mutation.
+- Expose a read-only Web view of bounded lifecycle and comparative quality fields with no start,
+  assign, retry, resume, cancel, lease, Tool, or workspace authority.
 
 The V2.2 contract set is frozen in:
 
@@ -181,7 +182,7 @@ The V2.2 contract set is frozen in:
 - `docs/plans/v2.2-multi-agent-execution-tenancy.md`
 - `scripts/fixtures/v2.2-multi-agent-evaluation.json`
 
-Slices 0 through 4 are complete. The pure shared domain enforces the frozen DAG, attenuated
+Slices 0 through 5 are complete. The pure shared domain enforces the frozen DAG, attenuated
 Specialist authority, immutable handoffs, monotonic transitions, shared bounds, exact tenancy, and
 the unchanged deterministic V2.0 single-Agent baseline. Desktop schema 28 now persists one exact
 Supervisor-owned Coordination Session and frozen graph, applies task/result/handoff/join/checkpoint
@@ -195,13 +196,21 @@ results, handoffs, or retries. Slice 4 adds exact concurrent-reader and single-w
 atomically reserves child budgets, binds Native Tool, trusted Local MCP, and Coding Executor grants
 to the exact active Specialist lease, rejects transferred or repeated action authority, and settles
 release, expiry, and cancellation monotonically before completion or bounded recovery. The full unit
-suite, production build, and Electron smoke pass with the unchanged V2.0 single-Agent path. No
+suite, production build, and Electron smoke pass with the unchanged V2.0 single-Agent path. Slice 5
+adds the strict metadata-only Desktop projection plus main-owned fixed-plan creation, resume,
+Specialist start, and confirmed cancellation. Parent cancellation terminalizes every child Runtime
+and active lease before returning. The packaged Desktop closes with one partial three-task DAG and
+one started read-only Specialist, cold-starts it without another session, task, runtime, audit, or
+checkpoint, records `coordinationRestartDuplicateEffects: 0`, cancels the exact child, and then
+completes the unchanged single-Agent/GitHub Delivery path. Generic Agent Runtime startup recovery now
+excludes runtimes owned by a Coordination Session through durable relational ownership instead of an
+ID prefix. No
 open-ended swarm, remote executor, hosted tenancy, or new
 publication authority is implied by this milestone.
 
-### Next — Implement And Evaluate V2.2
+### Next — Evaluate And Close V2.2
 
-- Deliver V2.2 through contract-first TDD slices, then run the same clean-candidate and immutable
+- Complete the frozen single-vs-Multi evaluator, then run the same clean-candidate and immutable
   evidence discipline used by V2.0 and V2.1.
 
 ### Later — Continue The Accepted 2.x Sequence

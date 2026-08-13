@@ -11,6 +11,8 @@ import type {
 } from '@ai-devflow/shared'
 import { createBoundedAgentCoordinationPlan } from './agent-coordination-plan'
 import { createLocalStore } from './local-store'
+import { createSpecialistRuntimeCoordinator } from './specialist-runtime-coordinator'
+import { createSpecialistTaskAuthorityBroker } from './specialist-task-authority'
 
 const now = '2026-08-13T18:00:00.000Z'
 
@@ -137,6 +139,63 @@ describe('main-owned bounded Agent Coordination plan', () => {
           ],
         },
       })
+    } finally {
+      store.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('resumes one running fixed-plan Specialist after closing and reopening the real LocalStore', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'devflow-coordination-restart-'))
+    const dbPath = path.join(directory, 'devflow.sqlite')
+    const store = await createLocalStore({ dbPath })
+    try {
+      await store.upsertProject(project)
+      await store.saveRun(run)
+      await store.saveDesktopPairingCredential(
+        { ...pairing, localProjectId: project.id },
+        'encrypted-test-token',
+      )
+      const planner = createBoundedAgentCoordinationPlan({ store, clock: () => now })
+      const created = await planner.start(request)
+      const coordinator = createSpecialistRuntimeCoordinator({
+        store,
+        authorityBroker: createSpecialistTaskAuthorityBroker({ store }),
+        clock: () => '2026-08-13T18:00:01.000Z',
+        createId: (kind) => `restart-specialist-${kind}-1`,
+      })
+      const started = await coordinator.start({
+        coordinationId: created.coordinationId,
+        expectedSessionVersion: 1,
+        taskId: 'inspect-contract',
+        expectedTaskVersion: 1,
+      })
+      const beforeRestart = await store.getCoordinationRecoverySnapshot(created.coordinationId)
+      store.close()
+
+      const reopened = await createLocalStore({ dbPath })
+      try {
+        await expect(reopened.listRecoverableAgentRuntimes()).resolves.toEqual([])
+        await expect(reopened.listAgentRuntimes()).resolves.toHaveLength(2)
+        const reopenedCoordinator = createSpecialistRuntimeCoordinator({
+          store: reopened,
+          authorityBroker: createSpecialistTaskAuthorityBroker({ store: reopened }),
+          clock: () => '2026-08-13T18:00:02.000Z',
+        })
+
+        await expect(reopenedCoordinator.resume({
+          coordinationId: created.coordinationId,
+          expectedSessionVersion: started.coordination.version,
+        })).resolves.toMatchObject({
+          coordination: started.coordination,
+          runtimes: [{ id: started.runtime.id, status: 'checkpointed' }],
+          readyTaskIds: ['inspect-tests'],
+        })
+        await expect(reopened.getCoordinationRecoverySnapshot(created.coordinationId))
+          .resolves.toEqual(beforeRestart)
+      } finally {
+        reopened.close()
+      }
     } finally {
       store.close()
       await rm(directory, { recursive: true, force: true })

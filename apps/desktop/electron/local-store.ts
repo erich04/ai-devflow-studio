@@ -8457,8 +8457,17 @@ class SqlJsLocalStore implements LocalStore {
   async listRecoverableAgentRuntimes(): Promise<AgentRuntimeState[]> {
     return selectJson<unknown>(
       this.db,
-      `select json from agent_runtimes
-       where status <> 'terminal' order by updated_at asc, id asc`,
+      `select runtime.json from agent_runtimes runtime
+       where runtime.status <> 'terminal'
+         and not exists (
+           select 1 from agent_coordination_sessions session
+           where session.supervisor_runtime_id = runtime.id
+         )
+         and not exists (
+           select 1 from agent_coordination_tasks task
+           where task.runtime_id = runtime.id
+         )
+       order by runtime.updated_at asc, runtime.id asc`,
     ).map(parseStoredAgentRuntime)
   }
 
@@ -9140,10 +9149,12 @@ class SqlJsLocalStore implements LocalStore {
       ...authorizedRuntimes.map((runtime) =>
         this.isAgentRuntimeContextCurrent(runtime.id, input.now)),
     ])
-    if (
-      contextsCurrent.some((current) => !current) ||
-      !await this.isCoordinationSupervisorAuthorityCurrent(stored.coordination)
-    ) return { authorized: false, reason: 'authority_mismatch' }
+    if (contextsCurrent.some((current) => !current)) {
+      return { authorized: false, reason: 'authority_mismatch' }
+    }
+    if (!await this.isCoordinationSupervisorAuthorityCurrent(stored.coordination)) {
+      return { authorized: false, reason: 'authority_mismatch' }
+    }
 
     const current = selectCoordinationRecoverySnapshot(this.db, input.coordinationId)
     const currentRuntimes = runningTasks.map((task) =>

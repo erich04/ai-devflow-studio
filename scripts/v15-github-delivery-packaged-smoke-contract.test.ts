@@ -14,7 +14,7 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     expect(packageJson.scripts?.['v15-github-delivery-packaged-smoke']).toBeUndefined()
   })
 
-  it('launches the built executable twice through an isolated packaged file renderer', () => {
+  it('launches the built executable three times through one isolated packaged file renderer', () => {
     const smoke = readFileSync(
       'scripts/v15-github-delivery-packaged-smoke.mjs',
       'utf8',
@@ -25,6 +25,7 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     expect(smoke).toContain('DEVFLOW_USER_DATA_DIR')
     expect(smoke).toContain("startsWith('file://')")
     expect(smoke).toContain('launchPackagedDesktop')
+    expect(smoke.match(/await launchPackagedDesktop\(\{/gu)).toHaveLength(3)
     expect(smoke).toContain('restartSnapshot')
     expect(smoke).toContain("'--password-store=gnome-libsecret'")
     expect(smoke).toContain("'--disable-background-networking'")
@@ -46,7 +47,10 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     )
 
     const preCloseEffectsIndex = smoke.indexOf('const gitEffectsBeforeClose =')
-    const firstCloseIndex = smoke.indexOf('await firstLaunch.electronApp.close()')
+    const firstCloseIndex = smoke.indexOf(
+      'await firstLaunch.electronApp.close()',
+      preCloseEffectsIndex,
+    )
     const idleIndex = smoke.indexOf(
       'await gitBoundary.waitForIdle()',
       firstCloseIndex + 1,
@@ -66,6 +70,43 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     expect(secondLaunchIndex).toBeGreaterThan(gitBaselineIndex)
     expect(smoke).toContain('snapshotGitBoundaryEffects(gitBoundary.metrics)')
     expect(smoke).not.toContain('{ ...gitBoundary.metrics }')
+  })
+
+  it('cold-restarts one partial coordination graph without duplicating specialist effects', () => {
+    const smoke = readFileSync(
+      'scripts/v15-github-delivery-packaged-smoke.mjs',
+      'utf8',
+    )
+
+    const planStartIndex = smoke.indexOf("'startCoordinationPlan'")
+    const taskStartIndex = smoke.indexOf("'startCoordinationTask'")
+    const coordinationCloseIndex = smoke.indexOf(
+      'await firstLaunch.electronApp.close()',
+      taskStartIndex,
+    )
+    const coordinationRestartIndex = smoke.indexOf(
+      "'resumeCoordinationSession'",
+      coordinationCloseIndex,
+    )
+    const coordinationCancelIndex = smoke.indexOf(
+      "'cancelCoordinationSession'",
+      coordinationRestartIndex,
+    )
+    const singleAgentIndex = smoke.indexOf('await advanceToPr(', coordinationCancelIndex)
+
+    expect(planStartIndex).toBeGreaterThan(-1)
+    expect(taskStartIndex).toBeGreaterThan(planStartIndex)
+    expect(coordinationCloseIndex).toBeGreaterThan(taskStartIndex)
+    expect(coordinationRestartIndex).toBeGreaterThan(coordinationCloseIndex)
+    expect(coordinationCancelIndex).toBeGreaterThan(coordinationRestartIndex)
+    expect(singleAgentIndex).toBeGreaterThan(coordinationCancelIndex)
+    expect(smoke).toContain('readLocalCoordinationEvidence')
+    expect(smoke).toContain('coordinationEffectsBeforeRestart')
+    expect(smoke).toContain('coordinationEffectsAfterRestart')
+    expect(smoke).toContain('specialistStarts === 1')
+    expect(smoke).toContain("confirmation: 'cancel-coordination'")
+    expect(smoke).toContain('coordinationRestartDuplicateEffects: 0')
+    expect(smoke).toContain("coordinationCancellation: 'passed'")
   })
 
   it('runs once in both Verify and Release after building the packaged application', () => {

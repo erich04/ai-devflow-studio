@@ -981,6 +981,78 @@ async function readLocalDeliveryRecords(storePath) {
   }
 }
 
+async function readLocalCoordinationEvidence(storePath, coordinationId) {
+  const SQL = await initSqlJs({
+    locateFile: (file) => requireFromDesktop.resolve(`sql.js/dist/${file}`),
+  })
+  const database = new SQL.Database(await readFile(storePath))
+  const select = (sql) => {
+    const statement = database.prepare(sql)
+    try {
+      statement.bind([coordinationId])
+      const rows = []
+      while (statement.step()) rows.push(statement.getAsObject())
+      return rows
+    } finally {
+      statement.free()
+    }
+  }
+  try {
+    const sessions = select(`
+      SELECT id, version, status, stop_reason
+      FROM agent_coordination_sessions WHERE id = ? ORDER BY id
+    `)
+    const graphs = select(`
+      SELECT id, version, node_count, edge_count
+      FROM agent_coordination_graphs WHERE coordination_id = ? ORDER BY id
+    `)
+    const tasks = select(`
+      SELECT task_id, version, status, runtime_id, runtime_version
+      FROM agent_coordination_tasks WHERE coordination_id = ? ORDER BY task_id
+    `)
+    const leases = select(`
+      SELECT id, task_id, mode, status, version
+      FROM agent_coordination_leases WHERE coordination_id = ? ORDER BY id
+    `)
+    const audits = select(`
+      SELECT id, task_id, event_kind, session_version
+      FROM agent_coordination_audits WHERE coordination_id = ?
+      ORDER BY session_version, id
+    `)
+    const checkpoints = select(`
+      SELECT checkpoint_version, session_version, graph_version
+      FROM agent_coordination_checkpoints WHERE coordination_id = ?
+      ORDER BY checkpoint_version
+    `)
+    const runtimes = select(`
+      SELECT runtime.id, runtime.version, runtime.status, runtime.stop_reason
+      FROM agent_runtimes AS runtime
+      JOIN agent_coordination_tasks AS task ON task.runtime_id = runtime.id
+      WHERE task.coordination_id = ? ORDER BY runtime.id
+    `)
+    return {
+      counts: {
+        sessions: sessions.length,
+        graphs: graphs.length,
+        tasks: tasks.length,
+        leases: leases.length,
+        audits: audits.length,
+        checkpoints: checkpoints.length,
+        runtimes: runtimes.length,
+      },
+      sessions,
+      graphs,
+      tasks,
+      leases,
+      audits,
+      checkpoints,
+      runtimes,
+    }
+  } finally {
+    database.close()
+  }
+}
+
 async function readRemoteDeliveryEvidence(databaseUrl, requestId, bindingId) {
   const client = createPostgresClient(databaseUrl)
   await client.connect()
@@ -1039,6 +1111,7 @@ try {
   cleanup.push(() => rm(temporaryDirectory, { recursive: true, force: true }))
   const runtimeTemporaryDirectory = path.join(temporaryDirectory, 'runtime-tmp')
   const userDataDirectory = path.join(temporaryDirectory, 'user-data')
+  const storePath = path.join(userDataDirectory, 'devflow.sqlite')
   await mkdir(runtimeTemporaryDirectory, { recursive: true })
 
   const database = await provisionDatabase(temporaryDirectory)
@@ -1236,6 +1309,191 @@ try {
     workRequestId: listedRequest.id,
     expectedVersion: listedRequest.version,
   })
+
+  const coordinationNode = currentNode(materialized.run)
+  const createdCoordination = await callDesktop(firstLaunch.page, 'startCoordinationPlan', {
+    planId: 'bounded-repair-v1',
+    runId: materialized.run.id,
+    nodeId: coordinationNode.id,
+    localProjectId: localProject.id,
+    expectedRunVersion: materialized.run.version,
+  })
+  assert(
+    createdCoordination.session.status === 'running' &&
+      createdCoordination.session.version === 1 &&
+      createdCoordination.session.taskCount === 3 &&
+      createdCoordination.session.edgeCount === 2 &&
+      stableJson(createdCoordination.readyTaskIds) ===
+        stableJson(['inspect-contract', 'inspect-tests']),
+    'Packaged main did not create the exact bounded coordination graph.',
+  )
+  const coordinationTask = createdCoordination.tasks.find(
+    (candidate) => candidate.taskId === 'inspect-contract',
+  )
+  assert(
+    coordinationTask?.status === 'ready' && coordinationTask.version === 1,
+    'Packaged bounded coordination did not expose its first read-only specialist.',
+  )
+  const startedCoordination = await callDesktop(firstLaunch.page, 'startCoordinationTask', {
+    coordinationId: createdCoordination.session.coordinationId,
+    runId: materialized.run.id,
+    localProjectId: localProject.id,
+    expectedSessionVersion: createdCoordination.session.version,
+    taskId: coordinationTask.taskId,
+    expectedTaskVersion: coordinationTask.version,
+  })
+  const runningCoordinationTask = startedCoordination.tasks.find(
+    (candidate) => candidate.taskId === coordinationTask.taskId,
+  )
+  assert(
+    startedCoordination.session.version === 2 &&
+      startedCoordination.session.counters.specialistStarts === 1 &&
+      startedCoordination.session.counters.activeSpecialists === 1 &&
+      runningCoordinationTask?.status === 'running' &&
+      typeof runningCoordinationTask.runtimeId === 'string' &&
+      runningCoordinationTask.runtimeVersion === 1 &&
+      startedCoordination.leases.length === 0,
+    `Packaged main did not start one exact bounded specialist (${stableJson({
+      sessionVersion: startedCoordination.session.version,
+      counters: startedCoordination.session.counters,
+      taskStatus: runningCoordinationTask?.status,
+      hasRuntimeId: typeof runningCoordinationTask?.runtimeId === 'string',
+      runtimeVersion: runningCoordinationTask?.runtimeVersion,
+      leases: startedCoordination.leases.map((lease) => ({
+        mode: lease.mode,
+        status: lease.status,
+      })),
+    })}).`,
+  )
+  const coordinationId = startedCoordination.session.coordinationId
+  await firstLaunch.electronApp.close()
+  firstLaunch = null
+  const coordinationEffectsBeforeRestart = await readLocalCoordinationEvidence(
+    storePath,
+    coordinationId,
+  )
+  assert(
+    stableJson(coordinationEffectsBeforeRestart.counts) === stableJson({
+      sessions: 1,
+      graphs: 1,
+      tasks: 3,
+      leases: 0,
+      audits: 2,
+      checkpoints: 2,
+      runtimes: 1,
+    }),
+    'Packaged coordination did not persist one exact partial DAG before restart.',
+  )
+
+  firstLaunch = await launchPackagedDesktop({
+    executablePath,
+    appDirectory,
+    env: desktopEnvironment,
+  })
+  const restartedCoordinationSessions = await callDesktop(
+    firstLaunch.page,
+    'listCoordinationSessions',
+    { runId: materialized.run.id, localProjectId: localProject.id },
+  )
+  assert(
+    restartedCoordinationSessions.length === 1 &&
+      stableJson(restartedCoordinationSessions[0]) === stableJson(startedCoordination),
+    'Packaged coordination projection changed across a cold restart.',
+  )
+  const restartedLocalState = await callDesktop(firstLaunch.page, 'loadState')
+  const restartedCoordinationRun = findRun(restartedLocalState, materialized.run.id)
+  const restartedPairing = await callDesktop(firstLaunch.page, 'loadDesktopPairing')
+  assert(
+    restartedCoordinationRun.currentNodeId === startedCoordination.session.nodeId &&
+      restartedCoordinationRun.version === startedCoordination.session.runVersion &&
+      restartedPairing?.organizationId === pairing.credential.organizationId &&
+      restartedPairing?.projectId === pairing.credential.projectId &&
+      restartedPairing?.userId === pairing.credential.userId &&
+      restartedPairing?.tokenId === pairing.credential.tokenId &&
+      restartedPairing?.localProjectId === localProject.id,
+    `Packaged coordination authority changed across restart (${stableJson({
+      run: {
+        nodeId: restartedCoordinationRun.currentNodeId,
+        version: restartedCoordinationRun.version,
+      },
+      coordination: {
+        nodeId: startedCoordination.session.nodeId,
+        runVersion: startedCoordination.session.runVersion,
+        policyVersion: startedCoordination.session.policyVersion,
+      },
+      pairing: restartedPairing === null ? null : {
+        organizationId: restartedPairing.organizationId,
+        projectId: restartedPairing.projectId,
+        userId: restartedPairing.userId,
+        tokenId: restartedPairing.tokenId,
+        localProjectId: restartedPairing.localProjectId,
+      },
+    })}).`,
+  )
+  const resumedCoordination = await callDesktop(
+    firstLaunch.page,
+    'resumeCoordinationSession',
+    {
+      coordinationId,
+      runId: materialized.run.id,
+      localProjectId: localProject.id,
+      expectedSessionVersion: startedCoordination.session.version,
+    },
+  )
+  assert(
+    stableJson(resumedCoordination) === stableJson(startedCoordination) &&
+      resumedCoordination.session.counters.specialistStarts === 1,
+    'Packaged coordination recovery duplicated or rewrote specialist state.',
+  )
+  const coordinationEffectsAfterRestart = await readLocalCoordinationEvidence(
+    storePath,
+    coordinationId,
+  )
+  assert(
+    stableJson(coordinationEffectsAfterRestart) ===
+      stableJson(coordinationEffectsBeforeRestart),
+    'Packaged coordination recovery duplicated a durable side effect.',
+  )
+  const cancelledCoordination = await callDesktop(
+    firstLaunch.page,
+    'cancelCoordinationSession',
+    {
+      coordinationId,
+      runId: materialized.run.id,
+      localProjectId: localProject.id,
+      expectedSessionVersion: resumedCoordination.session.version,
+      confirmation: 'cancel-coordination',
+    },
+  )
+  assert(
+    cancelledCoordination.session.status === 'terminal' &&
+      cancelledCoordination.session.stopReason === 'cancelled' &&
+      cancelledCoordination.session.version === 3 &&
+      cancelledCoordination.session.counters.specialistStarts === 1 &&
+      cancelledCoordination.session.counters.activeSpecialists === 0 &&
+      cancelledCoordination.tasks.every((candidate) => candidate.status === 'cancelled') &&
+      cancelledCoordination.leases.length === 0,
+    'Packaged coordination cancellation did not settle every child and lease.',
+  )
+  const cancelledCoordinationEffects = await readLocalCoordinationEvidence(
+    storePath,
+    coordinationId,
+  )
+  assert(
+    stableJson(cancelledCoordinationEffects.counts) === stableJson({
+      sessions: 1,
+      graphs: 1,
+      tasks: 3,
+      leases: 0,
+      audits: 3,
+      checkpoints: 3,
+      runtimes: 1,
+    }) &&
+      cancelledCoordinationEffects.runtimes[0]?.status === 'terminal' &&
+      cancelledCoordinationEffects.runtimes[0]?.stop_reason === 'cancelled',
+    'Packaged coordination cancellation did not persist one exact terminal trajectory.',
+  )
+
   const workflow = await advanceToPr(
     firstLaunch.page,
     materialized,
@@ -1756,7 +2014,6 @@ try {
   )
 
   await secondLaunch.electronApp.close()
-  const storePath = path.join(userDataDirectory, 'devflow.sqlite')
   assertNoSecretMaterial(
     await readFile(storePath),
     [
@@ -1813,6 +2070,8 @@ try {
     branchPublication: 'exact-non-force-once',
     draftPullRequests: finalMetrics.pullRequestCreates,
     restartDuplicateEffects: 0,
+    coordinationRestartDuplicateEffects: 0,
+    coordinationCancellation: 'passed',
     acceptance: 'completed',
     bindingRevocation: 'passed',
     typedOutcomes: {

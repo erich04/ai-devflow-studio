@@ -36,6 +36,13 @@ retroactive TDD rewrites unless it is touched.
   `repository_read` recovery recorded as `task_retried`. Same-process and cold-restart replay do not
   repeat a Specialist start, result, handoff, or retry; mutable and ambiguous effects remain
   ineligible. The focused coordination/store/registry/authority matrix passes 275 tests.
+- The completed V2.2 Slice 5 matrix proves strict metadata-only Desktop projection, identifier- and
+  version-only renderer commands, main-owned fixed-plan construction, exact Specialist start/resume,
+  and confirmed monotonic cancellation. Cold restart leaves generic Agent Runtime recovery unable to
+  claim Supervisor or Specialist runtimes referenced by coordination tables. The packaged gate
+  persists one partial three-task DAG and one started read-only Specialist, reopens it with identical
+  session/task/runtime/audit/checkpoint evidence, records `coordinationRestartDuplicateEffects: 0`,
+  cancels it, and then completes the unchanged single-Agent GitHub Delivery path.
 - V2.1 retrieval-index tests prove atomic activation preserves the previous current snapshot when
   persistence fails, source update/delete removes stale current identities, and corrupt, mismatched,
   cross-scope, non-finite, or over-1024-chunk state fails closed. An explicit bounded rebuild restores
@@ -98,6 +105,10 @@ retroactive TDD rewrites unless it is touched.
   packaged run must atomically receive one inert Candidate from an accepted observation, promote it,
   revise it once, tombstone and purge it, then reopen one candidate, two revisions, one tombstone,
   four exact Memory audits, zero derived index rows, and `memoryRestartDuplicateEffects: 0`.
+  It must additionally cold-restart one partially active V2.2 Coordination Session without another
+  accepted start or durable record, cancel its child Runtime, and return
+  `coordinationRestartDuplicateEffects: 0` plus `coordinationCancellation: passed` before continuing
+  the original single-Agent comparison.
 - Coding Executor contract tests must prove capability denial before provider/workspace side effects,
   a path-free main-owned request, ordered bounded permission turns, repeated-permission rejection,
   no-permission completion, and uniform success/failure/cancel/timeout cleanup-aware terminal results.
