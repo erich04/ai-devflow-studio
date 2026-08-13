@@ -21,17 +21,41 @@ function fixture() {
     start: vi.fn().mockResolvedValue({ coordination: {}, runtime: {} }),
     cancel: vi.fn().mockResolvedValue({ coordination: {}, runtimes: [], leases: [] }),
   }
+  const planner = {
+    start: vi.fn().mockResolvedValue({ coordinationId: 'coordination-1', replayed: false }),
+  }
   return {
     access,
     coordinator,
+    planner,
     commands: createAgentCoordinationCommands({
       access: access as never,
       coordinator: coordinator as never,
+      planner: planner as never,
     }),
   }
 }
 
 describe('Agent Coordination commands', () => {
+  it('starts only the fixed main-owned plan and returns its exact projection', async () => {
+    const { access, planner, commands } = fixture()
+    const input = {
+      planId: 'bounded-repair-v1' as const,
+      runId: 'run-1',
+      nodeId: 'run-1-build',
+      localProjectId: 'project-1',
+      expectedRunVersion: 3,
+    }
+
+    await expect(commands.startPlan(input)).resolves.toBe(snapshot)
+    expect(planner.start).toHaveBeenCalledWith(input)
+    expect(access.get).toHaveBeenCalledWith({
+      coordinationId: 'coordination-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+    })
+  })
+
   it('revalidates the exact renderer selection before and after a recovery resume', async () => {
     const { access, coordinator, commands } = fixture()
     const input = {

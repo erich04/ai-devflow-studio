@@ -57,6 +57,7 @@ import { createDesktopAgentRuntime, type DesktopAgentRuntime } from './agent-run
 import { createAgentRuntimeRendererAccess } from './agent-runtime-renderer-access.js'
 import { createAgentCoordinationRendererAccess } from './agent-coordination-renderer-access.js'
 import { createAgentCoordinationCommands } from './agent-coordination-commands.js'
+import { createBoundedAgentCoordinationPlan } from './agent-coordination-plan.js'
 import { createSpecialistTaskAuthorityBroker } from './specialist-task-authority.js'
 import { createSpecialistRuntimeCoordinator } from './specialist-runtime-coordinator.js'
 import { createAgentMemoryRendererAccess } from './agent-memory-renderer-access.js'
@@ -96,6 +97,7 @@ import {
   parseGetAgentRuntimeInput,
   parseListCoordinationSessionsInput,
   parseGetCoordinationSessionInput,
+  parseStartCoordinationPlanInput,
   parseResumeCoordinationSessionInput,
   parseStartCoordinationTaskInput,
   parseCancelCoordinationSessionInput,
@@ -2178,11 +2180,26 @@ function registerIpcHandlers() {
     return createAgentCoordinationRendererAccess(store).get(input)
   })
 
+  ipcMain.handle(ipcChannels.startCoordinationPlan, async (_, payload: unknown) => {
+    const input = parseStartCoordinationPlanInput(payload)
+    const store = await getStore()
+    const commands = createAgentCoordinationCommands({
+      access: createAgentCoordinationRendererAccess(store),
+      planner: createBoundedAgentCoordinationPlan({ store }),
+      coordinator: createSpecialistRuntimeCoordinator({
+        store,
+        authorityBroker: createSpecialistTaskAuthorityBroker({ store }),
+      }),
+    })
+    return commands.startPlan(input)
+  })
+
   ipcMain.handle(ipcChannels.resumeCoordinationSession, async (_, payload: unknown) => {
     const input = parseResumeCoordinationSessionInput(payload)
     const store = await getStore()
     const commands = createAgentCoordinationCommands({
       access: createAgentCoordinationRendererAccess(store),
+      planner: createBoundedAgentCoordinationPlan({ store }),
       coordinator: createSpecialistRuntimeCoordinator({
         store,
         authorityBroker: createSpecialistTaskAuthorityBroker({ store }),
@@ -2196,6 +2213,7 @@ function registerIpcHandlers() {
     const store = await getStore()
     const commands = createAgentCoordinationCommands({
       access: createAgentCoordinationRendererAccess(store),
+      planner: createBoundedAgentCoordinationPlan({ store }),
       coordinator: createSpecialistRuntimeCoordinator({
         store,
         authorityBroker: createSpecialistTaskAuthorityBroker({ store }),
@@ -2209,6 +2227,7 @@ function registerIpcHandlers() {
     const store = await getStore()
     const commands = createAgentCoordinationCommands({
       access: createAgentCoordinationRendererAccess(store),
+      planner: createBoundedAgentCoordinationPlan({ store }),
       coordinator: createSpecialistRuntimeCoordinator({
         store,
         authorityBroker: createSpecialistTaskAuthorityBroker({ store }),

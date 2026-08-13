@@ -44,6 +44,8 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.listCoordinationSessions, input),
   getCoordinationSession: (input) =>
     ipcRenderer.invoke(ipcChannels.getCoordinationSession, input),
+  startCoordinationPlan: (input) =>
+    ipcRenderer.invoke(ipcChannels.startCoordinationPlan, input),
   resumeCoordinationSession: (input) =>
     ipcRenderer.invoke(ipcChannels.resumeCoordinationSession, input),
   startCoordinationTask: (input) =>

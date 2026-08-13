@@ -92,6 +92,14 @@ export type GetCoordinationSessionInput = ListCoordinationSessionsInput & {
   coordinationId: string
 }
 
+export type StartCoordinationPlanInput = {
+  planId: 'bounded-repair-v1'
+  runId: string
+  nodeId: string
+  localProjectId: string
+  expectedRunVersion: number
+}
+
 export type ResumeCoordinationSessionInput = GetCoordinationSessionInput & {
   expectedSessionVersion: number
 }
@@ -165,6 +173,7 @@ export const ipcChannels = {
   agentRuntimeUpdated: 'devflow:agent-runtime:updated',
   listCoordinationSessions: 'devflow:agent-coordination:list',
   getCoordinationSession: 'devflow:agent-coordination:get',
+  startCoordinationPlan: 'devflow:agent-coordination:plan:start',
   resumeCoordinationSession: 'devflow:agent-coordination:resume',
   startCoordinationTask: 'devflow:agent-coordination:task:start',
   cancelCoordinationSession: 'devflow:agent-coordination:cancel',
@@ -529,6 +538,9 @@ export type DevFlowDesktopApi = {
   ) => Promise<CoordinationSessionSnapshot[]>
   getCoordinationSession: (
     input: GetCoordinationSessionInput,
+  ) => Promise<CoordinationSessionSnapshot>
+  startCoordinationPlan: (
+    input: StartCoordinationPlanInput,
   ) => Promise<CoordinationSessionSnapshot>
   resumeCoordinationSession: (
     input: ResumeCoordinationSessionInput,
@@ -933,6 +945,25 @@ export function parseGetCoordinationSessionInput(
     coordinationId: readExactRequiredIdentifier(value, 'coordinationId'),
     runId: readExactRequiredIdentifier(value, 'runId'),
     localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+  }
+}
+
+export function parseStartCoordinationPlanInput(
+  value: unknown,
+): StartCoordinationPlanInput {
+  if (!isRecord(value)) throw new Error('Invalid start Agent Coordination plan payload')
+  rejectUnexpectedFields(
+    value,
+    ['planId', 'runId', 'nodeId', 'localProjectId', 'expectedRunVersion'],
+    'start Agent Coordination plan payload',
+  )
+  if (value.planId !== 'bounded-repair-v1') throw new Error('Invalid planId')
+  return {
+    planId: value.planId,
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    nodeId: readExactRequiredIdentifier(value, 'nodeId'),
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+    expectedRunVersion: readExactPositiveVersion(value, 'expectedRunVersion'),
   }
 }
 

@@ -2,9 +2,11 @@ import type {
   CancelCoordinationSessionInput,
   CoordinationSessionSnapshot,
   ResumeCoordinationSessionInput,
+  StartCoordinationPlanInput,
   StartCoordinationTaskInput,
 } from './ipc-contract.js'
 import type { AgentCoordinationRendererAccess } from './agent-coordination-renderer-access.js'
+import type { BoundedAgentCoordinationPlan } from './agent-coordination-plan.js'
 import type { SpecialistRuntimeCoordinator } from './specialist-runtime-coordinator.js'
 
 type CoordinationCommandCoordinator = Pick<
@@ -13,6 +15,7 @@ type CoordinationCommandCoordinator = Pick<
 >
 
 export type AgentCoordinationCommands = {
+  startPlan(input: StartCoordinationPlanInput): Promise<CoordinationSessionSnapshot>
   resume(input: ResumeCoordinationSessionInput): Promise<CoordinationSessionSnapshot>
   startTask(input: StartCoordinationTaskInput): Promise<CoordinationSessionSnapshot>
   cancel(input: CancelCoordinationSessionInput): Promise<CoordinationSessionSnapshot>
@@ -29,12 +32,22 @@ function selection(input: ResumeCoordinationSessionInput) {
 export function createAgentCoordinationCommands(input: {
   access: Pick<AgentCoordinationRendererAccess, 'get'>
   coordinator: CoordinationCommandCoordinator
+  planner: BoundedAgentCoordinationPlan
 }): AgentCoordinationCommands {
   async function revalidate(command: ResumeCoordinationSessionInput) {
     return input.access.get(selection(command))
   }
 
   return {
+    async startPlan(command) {
+      const result = await input.planner.start(command)
+      return input.access.get({
+        coordinationId: result.coordinationId,
+        runId: command.runId,
+        localProjectId: command.localProjectId,
+      })
+    },
+
     async resume(command) {
       await revalidate(command)
       await input.coordinator.resume({

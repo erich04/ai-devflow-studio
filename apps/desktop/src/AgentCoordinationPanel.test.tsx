@@ -150,6 +150,7 @@ function apiWith(snapshots: unknown[]) {
       if (!match) throw new Error('missing')
       return match
     }),
+    startCoordinationPlan: vi.fn().mockResolvedValue(snapshots[0]),
     resumeCoordinationSession: vi.fn().mockResolvedValue(snapshots[0]),
     startCoordinationTask: vi.fn().mockResolvedValue(snapshots[0]),
     cancelCoordinationSession: vi.fn().mockResolvedValue(snapshots[0]),
@@ -157,6 +158,31 @@ function apiWith(snapshots: unknown[]) {
 }
 
 describe('AgentCoordinationPanel', () => {
+  it('starts the fixed bounded plan from the exact selected Run and current node', async () => {
+    const created = coordinationSnapshot()
+    const api = apiWith([])
+    vi.mocked(api.startCoordinationPlan).mockResolvedValue(created)
+    render(
+      <AgentCoordinationPanel
+        desktopApi={api}
+        runId="run-1"
+        nodeId="run-1-build"
+        expectedRunVersion={3}
+        localProjectId="project-1"
+      />,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start bounded coordination' }))
+    await waitFor(() => expect(api.startCoordinationPlan).toHaveBeenCalledWith({
+      planId: 'bounded-repair-v1',
+      runId: 'run-1',
+      nodeId: 'run-1-build',
+      localProjectId: 'project-1',
+      expectedRunVersion: 3,
+    }))
+    expect(await screen.findByText('coordination-ui-1')).toBeInTheDocument()
+  })
+
   it('preserves an unobtrusive empty state when the selected Run has no coordination session', async () => {
     const api = apiWith([])
     render(<AgentCoordinationPanel desktopApi={api} runId="run-1" localProjectId="project-1" />)

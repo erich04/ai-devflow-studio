@@ -65,12 +65,16 @@ describe('Electron Agent Runtime production wiring', () => {
 
   it('routes exact Coordination commands through the main-owned authority broker', () => {
     const handlers = main.slice(
-      main.indexOf('ipcMain.handle(ipcChannels.resumeCoordinationSession'),
+      main.indexOf('ipcMain.handle(ipcChannels.startCoordinationPlan'),
       main.indexOf('ipcMain.handle(ipcChannels.listAgentMemoryLifecycle'),
     )
     expect(main).toContain("from './agent-coordination-commands.js'")
+    expect(main).toContain("from './agent-coordination-plan.js'")
     expect(main).toContain("from './specialist-task-authority.js'")
     expect(main).toContain("from './specialist-runtime-coordinator.js'")
+    expect(handlers).toMatch(
+      /parseStartCoordinationPlanInput\(payload\)[\s\S]*?commands\.startPlan\(input\)/,
+    )
     expect(handlers).toMatch(
       /parseResumeCoordinationSessionInput\(payload\)[\s\S]*?commands\.resume\(input\)/,
     )

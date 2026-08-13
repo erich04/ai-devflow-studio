@@ -26,6 +26,7 @@ import {
   parseLoadRepositoryKnowledgeInput,
   parseGetAgentRuntimeInput,
   parseGetCoordinationSessionInput,
+  parseStartCoordinationPlanInput,
   parseResumeCoordinationSessionInput,
   parseStartCoordinationTaskInput,
   parseCancelCoordinationSessionInput,
@@ -228,6 +229,14 @@ describe('IPC contract parsers', () => {
   })
 
   it('keeps Coordination commands identifier-only, version-exact, and main-owned', () => {
+    const start = {
+      planId: 'bounded-repair-v1',
+      runId: 'run-1',
+      nodeId: 'run-1-build',
+      localProjectId: 'project-1',
+      expectedRunVersion: 3,
+    }
+    expect(parseStartCoordinationPlanInput(start)).toEqual(start)
     const command = {
       coordinationId: 'coordination-1',
       runId: 'run-1',
@@ -262,7 +271,11 @@ describe('IPC contract parsers', () => {
     ]) {
       expect(() => parseResumeCoordinationSessionInput({ ...command, ...forbidden }))
         .toThrow(/unexpected field/i)
+      expect(() => parseStartCoordinationPlanInput({ ...start, ...forbidden }))
+        .toThrow(/unexpected field/i)
     }
+    expect(() => parseStartCoordinationPlanInput({ ...start, planId: 'renderer-plan' }))
+      .toThrow(/planId/)
     for (const expectedSessionVersion of [0, -1, 1.5, 2_147_483_648, '4']) {
       expect(() => parseResumeCoordinationSessionInput({
         ...command,

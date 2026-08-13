@@ -549,6 +549,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       new Error('Agent Runtime is not configured for this test.'),
     ),
     listCoordinationSessions: async () => [],
+    startCoordinationPlan: async () => Promise.reject(new Error('not configured')),
     resumeCoordinationSession: async () => Promise.reject(new Error('not configured')),
     startCoordinationTask: async () => Promise.reject(new Error('not configured')),
     cancelCoordinationSession: async () => Promise.reject(new Error('not configured')),

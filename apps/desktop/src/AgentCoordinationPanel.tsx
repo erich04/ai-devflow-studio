@@ -9,6 +9,8 @@ import type { DevFlowDesktopApi } from './desktop-api'
 type AgentCoordinationPanelProps = {
   desktopApi: DevFlowDesktopApi | null
   runId: string | undefined
+  nodeId?: string | undefined
+  expectedRunVersion?: number | undefined
   localProjectId: string | undefined
 }
 
@@ -33,6 +35,8 @@ function parseSelectedSnapshot(
 export function AgentCoordinationPanel({
   desktopApi,
   runId,
+  nodeId,
+  expectedRunVersion,
   localProjectId,
 }: AgentCoordinationPanelProps) {
   const [sessions, setSessions] = useState<CoordinationRendererSnapshot[]>([])
@@ -103,6 +107,36 @@ export function AgentCoordinationPanel({
       setError('Multi-Agent Coordination detail could not be loaded safely.')
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  async function startPlan() {
+    if (
+      !desktopApi ||
+      !runId ||
+      !nodeId ||
+      !localProjectId ||
+      expectedRunVersion === undefined ||
+      isLoading ||
+      isActing
+    ) return
+    const selection = { runId, localProjectId }
+    setIsActing(true)
+    setError(null)
+    try {
+      const parsed = parseSelectedSnapshot(await desktopApi.startCoordinationPlan({
+        planId: 'bounded-repair-v1',
+        runId,
+        nodeId,
+        localProjectId,
+        expectedRunVersion,
+      }), selection)
+      setDetail(parsed)
+      setSessions([parsed])
+    } catch {
+      setError('Multi-Agent Coordination plan start was rejected safely.')
+    } finally {
+      setIsActing(false)
     }
   }
 
@@ -201,6 +235,17 @@ export function AgentCoordinationPanel({
           <p className="empty-note">
             No Multi-Agent Coordination has been recorded for this Run.
           </p>
+          {nodeId && expectedRunVersion !== undefined ? (
+            <button
+              className="primary-button"
+              type="button"
+              aria-label="Start bounded coordination"
+              disabled={isActing}
+              onClick={() => void startPlan()}
+            >
+              Start bounded coordination
+            </button>
+          ) : null}
         </article>
       ) : null}
 

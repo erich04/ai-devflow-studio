@@ -63,6 +63,7 @@ import type {
   StopGitHubDeliveryInput,
   StopGitHubDeliveryResult,
   StartAgentRuntimeInput,
+  StartCoordinationPlanInput,
   VerifyGitHubDeliveryRevocationInput,
   VerifyGitHubDeliveryRevocationResult,
   RetryRemoteSyncOperationInput,
@@ -254,6 +255,9 @@ export type DevFlowDesktopApi = {
   ) => Promise<CoordinationSessionSnapshot[]>
   getCoordinationSession: (
     input: GetCoordinationSessionInput,
+  ) => Promise<CoordinationSessionSnapshot>
+  startCoordinationPlan: (
+    input: StartCoordinationPlanInput,
   ) => Promise<CoordinationSessionSnapshot>
   resumeCoordinationSession: (
     input: ResumeCoordinationSessionInput,

@@ -409,6 +409,8 @@ export function AgentWorkbenchView({
         <AgentCoordinationPanel
           desktopApi={desktopApi}
           runId={selectedRun?.id}
+          nodeId={selectedRun?.currentNodeId}
+          expectedRunVersion={selectedRun?.version}
           localProjectId={localProjectId}
         />
 

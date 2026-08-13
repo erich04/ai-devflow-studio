@@ -48,6 +48,13 @@ type ExposedDesktopApi = {
     runId: string
     localProjectId: string
   }) => Promise<unknown>
+  startCoordinationPlan: (input: {
+    planId: 'bounded-repair-v1'
+    runId: string
+    nodeId: string
+    localProjectId: string
+    expectedRunVersion: number
+  }) => Promise<unknown>
   resumeCoordinationSession: (input: {
     coordinationId: string
     runId: string
@@ -175,6 +182,14 @@ describe('Electron preload remote sync operator surface', () => {
       coordinationId: 'coordination-1',
       ...selection,
     })).resolves.toBe(snapshot)
+    const coordinationPlan = {
+      planId: 'bounded-repair-v1' as const,
+      runId: 'run-1',
+      nodeId: 'run-1-build',
+      localProjectId: 'project-1',
+      expectedRunVersion: 3,
+    }
+    await expect(exposedApi.startCoordinationPlan(coordinationPlan)).resolves.toBe(snapshot)
     const coordinationCommand = {
       coordinationId: 'coordination-1',
       ...selection,
@@ -244,6 +259,10 @@ describe('Electron preload remote sync operator surface', () => {
       coordinationId: 'coordination-1',
       ...selection,
     })
+    expect(electron.invoke).toHaveBeenCalledWith(
+      ipcChannels.startCoordinationPlan,
+      coordinationPlan,
+    )
     expect(electron.invoke).toHaveBeenCalledWith(
       ipcChannels.resumeCoordinationSession,
       coordinationCommand,
