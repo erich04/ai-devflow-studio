@@ -721,6 +721,24 @@ export type BeginAgentRuntimeToolExecutionResult =
   | { consumed: true }
   | { consumed: false; reason: 'invalid_input' | 'grant_stale' }
 
+export type AuthorizeCoordinationSessionRecoveryInput = {
+  coordinationId: string
+  expectedSessionVersion: number
+  now: string
+}
+
+export type AuthorizeCoordinationSessionRecoveryResult =
+  | {
+      authorized: true
+      snapshot: CoordinationRecoverySnapshot
+      runtimes: AgentRuntimeState[]
+      readyTaskIds: string[]
+    }
+  | {
+      authorized: false
+      reason: 'invalid_input' | 'authority_mismatch' | 'not_found' | 'stale_state'
+    }
+
 export type CommitLocalMcpInstallationResult =
   | { committed: true; installation: LocalMcpInstallation }
   | { committed: false; reason: 'invalid_installation' | 'version_conflict' }
@@ -839,6 +857,9 @@ export type LocalStore = {
   getCoordinationRecoverySnapshot(
     coordinationId: string,
   ): Promise<CoordinationRecoverySnapshot | null>
+  authorizeCoordinationSessionRecovery(
+    input: AuthorizeCoordinationSessionRecoveryInput,
+  ): Promise<AuthorizeCoordinationSessionRecoveryResult>
   getAgentRuntimeContextAttachment(
     runtimeId: string,
   ): Promise<AgentRuntimeContextAttachment | null>
@@ -9008,6 +9029,142 @@ class SqlJsLocalStore implements LocalStore {
   ): Promise<CoordinationRecoverySnapshot | null> {
     if (!isNonEmptyIdentifier(coordinationId) || coordinationId.length > 200) return null
     return selectCoordinationRecoverySnapshot(this.db, coordinationId)
+  }
+
+  async authorizeCoordinationSessionRecovery(
+    input: AuthorizeCoordinationSessionRecoveryInput,
+  ): Promise<AuthorizeCoordinationSessionRecoveryResult> {
+    if (
+      !isNonEmptyIdentifier(input.coordinationId) ||
+      input.coordinationId.length > 200 ||
+      !Number.isInteger(input.expectedSessionVersion) ||
+      input.expectedSessionVersion < 1 ||
+      !isCanonicalTimestamp(input.now)
+    ) return { authorized: false, reason: 'invalid_input' }
+
+    const stored = selectCoordinationRecoverySnapshot(this.db, input.coordinationId)
+    if (stored === null) return { authorized: false, reason: 'not_found' }
+    if (stored.state.version !== input.expectedSessionVersion) {
+      return { authorized: false, reason: 'stale_state' }
+    }
+    if (
+      stored.state.status !== 'running' ||
+      stored.state.stopReason !== null ||
+      Date.parse(input.now) < Date.parse(stored.state.updatedAt) ||
+      Date.parse(input.now) >= Date.parse(stored.coordination.deadline)
+    ) return { authorized: false, reason: 'authority_mismatch' }
+
+    const runningTasks = stored.state.tasks.filter((task) => task.status === 'running')
+    const runtimes = runningTasks.map((task) =>
+      task.runtimeId === null ? null : selectAgentRuntime(this.db, task.runtimeId))
+    for (let index = 0; index < runningTasks.length; index += 1) {
+      const task = runningTasks[index]!
+      const runtime = runtimes[index]
+      const graphTask = stored.graph.nodes.find((candidate) => candidate.id === task.id)
+      if (
+        runtime === null ||
+        runtime === undefined ||
+        graphTask === undefined ||
+        task.runtimeId !== runtime.id ||
+        task.runtimeVersion === null ||
+        runtime.version < task.runtimeVersion ||
+        runtime.status === 'terminal' ||
+        runtime.stopReason !== null ||
+        runtime.scope.kind !== 'team' ||
+        runtime.scope.organizationId !== stored.coordination.scope.organizationId ||
+        runtime.scope.projectId !== stored.coordination.scope.projectId ||
+        runtime.scope.userId !== stored.coordination.scope.userId ||
+        runtime.scope.sessionId !== stored.coordination.scope.sessionId ||
+        runtime.scope.localProjectId !== stored.coordination.scope.localProjectId ||
+        !sameJson(runtime.authority, {
+          runId: stored.coordination.authority.runId,
+          nodeId: stored.coordination.authority.nodeId,
+          runVersion: stored.coordination.authority.runVersion,
+          policyVersion: stored.coordination.authority.policyVersion,
+        }) ||
+        runtime.contextDigest.length === 0 ||
+        Date.parse(runtime.requestedAt) < Date.parse(stored.coordination.requestedAt) ||
+        Date.parse(runtime.requestedAt) > Date.parse(input.now) ||
+        Date.parse(input.now) >= Date.parse(runtime.deadline) ||
+        Date.parse(runtime.deadline) > Date.parse(stored.coordination.deadline)
+      ) return { authorized: false, reason: 'authority_mismatch' }
+      try {
+        const descriptor = resolveSpecialistDescriptor(graphTask.roleId)
+        if (runtime.capabilitySetDigest !== digestSpecialistCapabilitySet({
+          roleId: descriptor.id,
+          roleVersion: descriptor.version,
+          taskContextDigest: graphTask.contextDigest,
+          capabilityIds: graphTask.capabilityIds,
+        })) return { authorized: false, reason: 'authority_mismatch' }
+      } catch {
+        return { authorized: false, reason: 'authority_mismatch' }
+      }
+    }
+    const authorizedRuntimes = runtimes.filter(
+      (runtime): runtime is AgentRuntimeState => runtime !== null,
+    )
+
+    const activeLeases = stored.leases.filter((lease) => lease.status === 'active')
+    if (activeLeases.some((lease) => {
+      const task = runningTasks.find((candidate) => candidate.id === lease.taskId)
+      const runtime = authorizedRuntimes.find((candidate) => candidate.id === lease.runtimeId)
+      return (
+        task === undefined ||
+        runtime === undefined ||
+        runtime === null ||
+        task.version !== lease.taskVersion ||
+        task.runtimeId !== lease.runtimeId ||
+        task.runtimeVersion !== lease.runtimeVersion ||
+        !sameJson(lease.scope, stored.coordination.scope) ||
+        lease.releasedAt !== null ||
+        Date.parse(lease.acquiredAt) > Date.parse(input.now) ||
+        Date.parse(input.now) >= Date.parse(lease.expiresAt)
+      )
+    })) return { authorized: false, reason: 'authority_mismatch' }
+
+    const contextsCurrent = await Promise.all([
+      this.isAgentRuntimeContextCurrent(
+        stored.coordination.authority.supervisorRuntimeId,
+        input.now,
+      ),
+      ...authorizedRuntimes.map((runtime) =>
+        this.isAgentRuntimeContextCurrent(runtime.id, input.now)),
+    ])
+    if (
+      contextsCurrent.some((current) => !current) ||
+      !await this.isCoordinationSupervisorAuthorityCurrent(stored.coordination)
+    ) return { authorized: false, reason: 'authority_mismatch' }
+
+    const current = selectCoordinationRecoverySnapshot(this.db, input.coordinationId)
+    const currentRuntimes = runningTasks.map((task) =>
+      task.runtimeId === null ? null : selectAgentRuntime(this.db, task.runtimeId))
+    if (
+      current === null ||
+      !sameJson(current, stored) ||
+      !sameJson(currentRuntimes, runtimes) ||
+      !await this.isCoordinationSupervisorAuthorityCurrent(stored.coordination)
+    ) return { authorized: false, reason: 'stale_state' }
+    const currentContexts = await Promise.all([
+      this.isAgentRuntimeContextCurrent(
+        stored.coordination.authority.supervisorRuntimeId,
+        input.now,
+      ),
+      ...authorizedRuntimes.map((runtime) =>
+        this.isAgentRuntimeContextCurrent(runtime.id, input.now)),
+    ])
+    if (currentContexts.some((currentContext) => !currentContext)) {
+      return { authorized: false, reason: 'authority_mismatch' }
+    }
+
+    return {
+      authorized: true,
+      snapshot: stored,
+      runtimes: authorizedRuntimes,
+      readyTaskIds: stored.state.tasks
+        .filter((task) => task.status === 'ready')
+        .map((task) => task.id)
+        .sort((left, right) => left.localeCompare(right)),
+    }
   }
 
   async acquireCoordinationResourceLease(

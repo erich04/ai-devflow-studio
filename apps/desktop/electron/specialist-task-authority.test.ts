@@ -1106,6 +1106,156 @@ describe('Specialist Runtime coordinator', () => {
     reopened.close()
   })
 
+  it('recovers the exact running Specialist after cold restart without repeating a start', async () => {
+    const fixture = await authorityFixture()
+    const coordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: fixture.store }),
+      clock: () => fixture.now,
+      createId: (kind) => ({
+        allocation: 'specialist-allocation-cold-recovery-1',
+        agent: 'specialist-agent-cold-recovery-1',
+        runtime: 'specialist-runtime-cold-recovery-1',
+        context: 'specialist-context-cold-recovery-1',
+      })[kind],
+    })
+    const started = await coordinator.start({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: 1,
+      taskId: 'specialist-task-1',
+      expectedTaskVersion: 1,
+    })
+    const before = await fixture.store.getCoordinationRecoverySnapshot(fixture.coordination.id)
+    const beforeRuntimes = await fixture.store.listAgentRuntimes()
+    fixture.store.close()
+
+    const reopened = await createLocalStore({ dbPath: fixture.dbPath })
+    const recoveredCoordinator = createSpecialistRuntimeCoordinator({
+      store: reopened,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: reopened }),
+    })
+    const recoveryInput = {
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: started.coordination.version,
+      now: '2026-08-13T15:00:01.000Z',
+    }
+    const recovered = await recoveredCoordinator.resume(recoveryInput)
+    expect(recovered).toEqual({
+      coordination: started.coordination,
+      runtimes: [started.runtime],
+      readyTaskIds: [],
+    })
+    await expect(recoveredCoordinator.resume(recoveryInput)).resolves.toEqual(recovered)
+    await expect(reopened.getCoordinationRecoverySnapshot(fixture.coordination.id))
+      .resolves.toEqual(before)
+    await expect(reopened.listAgentRuntimes()).resolves.toEqual(beforeRuntimes)
+    reopened.close()
+  })
+
+  it('rejects cold recovery when the Supervisor Context is no longer current', async () => {
+    const fixture = await authorityFixture()
+    const coordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: fixture.store }),
+      clock: () => fixture.now,
+      createId: (kind) => ({
+        allocation: 'specialist-allocation-stale-supervisor-1',
+        agent: 'specialist-agent-stale-supervisor-1',
+        runtime: 'specialist-runtime-stale-supervisor-1',
+        context: 'specialist-context-stale-supervisor-1',
+      })[kind],
+    })
+    const started = await coordinator.start({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: 1,
+      taskId: 'specialist-task-1',
+      expectedTaskVersion: 1,
+    })
+    fixture.store.close()
+
+    const reopened = await createLocalStore({ dbPath: fixture.dbPath })
+    const contextCheck = vi.spyOn(reopened, 'isAgentRuntimeContextCurrent')
+      .mockImplementation(async (runtimeId) => runtimeId !== fixture.supervisor.id)
+    const recoveredCoordinator = createSpecialistRuntimeCoordinator({
+      store: reopened,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: reopened }),
+    })
+    const before = await reopened.getCoordinationRecoverySnapshot(fixture.coordination.id)
+    await expect(recoveredCoordinator.resume({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: started.coordination.version,
+      now: '2026-08-13T15:00:01.000Z',
+    })).rejects.toThrowError('specialist_runtime_resume_failed')
+    expect(contextCheck).toHaveBeenCalledWith(fixture.supervisor.id, '2026-08-13T15:00:01.000Z')
+    await expect(reopened.getCoordinationRecoverySnapshot(fixture.coordination.id))
+      .resolves.toEqual(before)
+    reopened.close()
+  })
+
+  it('blocks cold recovery at the exact expiry of an unsettled active resource lease', async () => {
+    const fixture = await specialistToolFixture({
+      withLease: true,
+      leaseExpiresAt: '2026-08-13T15:00:30.000Z',
+    })
+    const before = await fixture.store.getCoordinationRecoverySnapshot(fixture.coordination.id)
+    fixture.store.close()
+
+    const reopened = await createLocalStore({ dbPath: fixture.dbPath })
+    const recoveredCoordinator = createSpecialistRuntimeCoordinator({
+      store: reopened,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: reopened }),
+    })
+    await expect(recoveredCoordinator.resume({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: fixture.started.coordination.version,
+      now: '2026-08-13T15:00:30.000Z',
+    })).rejects.toThrowError('specialist_runtime_resume_failed')
+    await expect(reopened.getCoordinationRecoverySnapshot(fixture.coordination.id))
+      .resolves.toEqual(before)
+    await expect(reopened.listAgentRuntimeCapabilityGrants(fixture.waiting.id))
+      .resolves.toEqual([fixture.grant])
+    await expect(reopened.listAgentRuntimeToolAudits(fixture.waiting.id))
+      .resolves.toEqual([])
+    reopened.close()
+  })
+
+  it('reopens one in-flight Specialist Tool boundary without repeating its grant or audit', async () => {
+    const fixture = await specialistToolFixture({ withLease: true })
+    await expect(fixture.store.beginAgentRuntimeToolExecution({
+      expectedGrant: fixture.grant,
+      audit: fixture.audit,
+    })).resolves.toEqual({ consumed: true })
+    const before = await fixture.store.getCoordinationRecoverySnapshot(fixture.coordination.id)
+    const grantsBefore = await fixture.store.listAgentRuntimeCapabilityGrants(fixture.waiting.id)
+    const auditsBefore = await fixture.store.listAgentRuntimeToolAudits(fixture.waiting.id)
+    fixture.store.close()
+
+    const reopened = await createLocalStore({ dbPath: fixture.dbPath })
+    const recoveredCoordinator = createSpecialistRuntimeCoordinator({
+      store: reopened,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: reopened }),
+    })
+    const recoveryInput = {
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: fixture.started.coordination.version,
+      now: '2026-08-13T15:00:05.000Z',
+    }
+    const recovered = await recoveredCoordinator.resume(recoveryInput)
+    expect(recovered).toEqual({
+      coordination: fixture.started.coordination,
+      runtimes: [fixture.waiting],
+      readyTaskIds: [],
+    })
+    await expect(recoveredCoordinator.resume(recoveryInput)).resolves.toEqual(recovered)
+    await expect(reopened.getCoordinationRecoverySnapshot(fixture.coordination.id))
+      .resolves.toEqual(before)
+    await expect(reopened.listAgentRuntimeCapabilityGrants(fixture.waiting.id))
+      .resolves.toEqual(grantsBefore)
+    await expect(reopened.listAgentRuntimeToolAudits(fixture.waiting.id))
+      .resolves.toEqual(auditsBefore)
+    reopened.close()
+  })
+
   it('atomically binds one attenuated child Runtime to the exact ready task', async () => {
     const fixture = await authorityFixture()
     const broker = createSpecialistTaskAuthorityBroker({ store: fixture.store })
@@ -1433,6 +1583,22 @@ describe('Specialist Runtime coordinator', () => {
       store: reopenedStore,
       authorityBroker: createSpecialistTaskAuthorityBroker({ store: reopenedStore }),
     })
+    const beforeResume = await reopenedStore.getCoordinationRecoverySnapshot(
+      fixture.coordination.id,
+    )
+    const runtimesBeforeResume = await reopenedStore.listAgentRuntimes()
+    await expect(reopenedCoordinator.resume({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: completed.coordination.version,
+      now: '2026-08-13T15:00:04.000Z',
+    })).resolves.toEqual({
+      coordination: completed.coordination,
+      runtimes: [],
+      readyTaskIds: ['specialist-task-2'],
+    })
+    await expect(reopenedStore.getCoordinationRecoverySnapshot(fixture.coordination.id))
+      .resolves.toEqual(beforeResume)
+    await expect(reopenedStore.listAgentRuntimes()).resolves.toEqual(runtimesBeforeResume)
     await expect(reopenedCoordinator.complete(completionInput)).resolves.toEqual(completed)
     await expect(reopenedStore.getCoordinationRecoverySnapshot(fixture.coordination.id))
       .resolves.toMatchObject({

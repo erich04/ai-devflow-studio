@@ -26,6 +26,15 @@ import {
 import type { SpecialistTaskAuthorityBroker } from './specialist-task-authority.js'
 
 export type SpecialistRuntimeCoordinator = {
+  resume(input: {
+    coordinationId: string
+    expectedSessionVersion: number
+    now?: string
+  }): Promise<{
+    coordination: CoordinationSessionState
+    runtimes: AgentRuntimeState[]
+    readyTaskIds: string[]
+  }>
   start(input: {
     coordinationId: string
     expectedSessionVersion: number
@@ -80,6 +89,7 @@ export type CreateSpecialistRuntimeCoordinatorInput = {
     | 'commitSpecialistRuntimeCompletion'
     | 'commitSpecialistRuntimeRecovery'
     | 'commitCoordinationSessionCancellation'
+    | 'authorizeCoordinationSessionRecovery'
   >
   authorityBroker: SpecialistTaskAuthorityBroker
   cancelRuntimeEffects?: (runtimeIds: string[]) => Promise<void> | void
@@ -103,6 +113,24 @@ export function createSpecialistRuntimeCoordinator(
   const createId = input.createId ?? ((kind) => `specialist-${kind}-${randomUUID()}`)
 
   return {
+    async resume(request) {
+      try {
+        const authorized = await input.store.authorizeCoordinationSessionRecovery({
+          coordinationId: request.coordinationId,
+          expectedSessionVersion: request.expectedSessionVersion,
+          now: request.now ?? canonicalNow(clock),
+        })
+        if (!authorized.authorized) throw new Error(authorized.reason)
+        return {
+          coordination: authorized.snapshot.state,
+          runtimes: authorized.runtimes,
+          readyTaskIds: authorized.readyTaskIds,
+        }
+      } catch {
+        throw new Error('specialist_runtime_resume_failed')
+      }
+    },
+
     async start(request) {
       try {
         const now = canonicalNow(clock)
