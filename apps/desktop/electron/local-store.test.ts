@@ -22,6 +22,7 @@ import {
   requestAgentAction,
   resumeAgentRuntime,
   resolveEffectivePolicy,
+  startCoordinationTask,
 } from '@ai-devflow/shared'
 import type {
   AgentTaskGraph,
@@ -31,6 +32,7 @@ import type {
   AgentTokenUsage,
   AgentRuntimeStartRequest,
   CoordinationSessionRequest,
+  SpecialistAllocationRequest,
   AgentMemoryPromotionAuthority,
   Artifact,
   CodingAgentEvent,
@@ -805,6 +807,36 @@ const coordinationTaskGraph: AgentTaskGraph = {
     sourceTaskId: 'coordination-task-research',
     targetTaskId: 'coordination-task-review',
   }],
+}
+
+const specialistAllocationRequest: SpecialistAllocationRequest = {
+  stateVersion: 1,
+  id: 'specialist-allocation-research-1',
+  coordinationId: coordinationSessionRequest.id,
+  taskGraphId: coordinationTaskGraph.id,
+  taskGraphVersion: coordinationTaskGraph.version,
+  taskId: 'coordination-task-research',
+  roleId: 'specialist.research',
+  agentId: 'specialist-agent-research-1',
+  delegationDepth: 1,
+  scope: coordinationSessionRequest.scope,
+  authority: coordinationSessionRequest.authority,
+  contextDigest: 'c'.repeat(64),
+  capabilityIds: ['repository.read'],
+  resourceRequirements: [{
+    resourceId: 'repository-source',
+    resourceDigest: 'd'.repeat(64),
+    mode: 'read',
+  }],
+  budget: {
+    maxSteps: 2,
+    maxWallTimeMs: 30_000,
+    maxToolCalls: 2,
+    maxTokens: 5_000,
+    maxCostUsd: 0.5,
+  },
+  requestedAt: coordinationSessionRequest.requestedAt,
+  deadline: '2026-08-12T20:30:30.000Z',
 }
 
 async function persistAcceptedMemoryCandidate(
@@ -3021,6 +3053,107 @@ describe('createLocalStore', () => {
     await expect(reopened.getAgentRuntime(teamAgentRuntimeStartRequest.id)).resolves.toEqual(
       supervisor.runtime,
     )
+    reopened.close()
+  })
+
+  it('CAS-starts one Specialist task and rejects a competing owner without partial state', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    const supervisor = createAgentRuntime(teamAgentRuntimeStartRequest)
+    await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: supervisor })
+    const initialState = createCoordinationSessionState({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      startedAt: coordinationSessionRequest.requestedAt,
+    })
+    await store.createCoordinationSession({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      acceptedRoleIds: ['specialist.research', 'specialist.review'],
+      startedAt: coordinationSessionRequest.requestedAt,
+    })
+
+    const taskStartInput = {
+      expectedState: initialState,
+      allocation: specialistAllocationRequest,
+      supervisorCapabilityIds: ['repository.read'],
+      supervisorResourceRequirements: [{
+        resourceId: 'repository-source',
+        resourceDigest: 'd'.repeat(64),
+        mode: 'read' as const,
+      }],
+      remainingBudget: {
+        maxSteps: 4,
+        maxWallTimeMs: 60_000,
+        maxToolCalls: 4,
+        maxTokens: 10_000,
+        maxCostUsd: 1,
+      },
+      runtimeId: 'specialist-runtime-research-1',
+      runtimeVersion: 1,
+      now: '2026-08-12T20:30:01.000Z',
+    }
+    const expectedState = startCoordinationTask({
+      state: initialState,
+      allocation: specialistAllocationRequest,
+      expectedSessionVersion: initialState.version,
+      expectedTaskVersion: 1,
+      runtimeId: taskStartInput.runtimeId,
+      runtimeVersion: taskStartInput.runtimeVersion,
+      now: taskStartInput.now,
+    })
+    await expect(store.commitCoordinationTaskStart(taskStartInput)).resolves.toEqual({
+      committed: true,
+      replayed: false,
+      state: expectedState,
+    })
+    await expect(store.commitCoordinationTaskStart(taskStartInput)).resolves.toEqual({
+      committed: true,
+      replayed: true,
+      state: expectedState,
+    })
+
+    const competingAllocation = {
+      ...specialistAllocationRequest,
+      id: 'specialist-allocation-research-competing',
+      agentId: 'specialist-agent-research-competing',
+    }
+    await expect(store.commitCoordinationTaskStart({
+      ...taskStartInput,
+      allocation: competingAllocation,
+      runtimeId: 'specialist-runtime-research-competing',
+    })).resolves.toEqual({ committed: false, reason: 'stale_state' })
+    await expect(store.getCoordinationSession(coordinationSessionRequest.id)).resolves.toEqual({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      state: expectedState,
+    })
+    store.close()
+
+    const inspected = new (await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })).Database(await readFile(dbPath))
+    expect(inspected.exec(`
+      select
+        (select count(*) from agent_coordination_audits),
+        (select count(*) from agent_coordination_checkpoints),
+        (select count(*) from agent_coordination_tasks where status = 'running'),
+        (select count(*) from agent_coordination_tasks where status = 'pending')
+    `)[0]?.values[0]?.map(Number)).toEqual([2, 2, 1, 1])
+    inspected.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getCoordinationSession(coordinationSessionRequest.id)).resolves.toEqual({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      state: expectedState,
+    })
     reopened.close()
   })
 
