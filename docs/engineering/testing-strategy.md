@@ -15,7 +15,7 @@ retroactive TDD rewrites unless it is touched.
   v16-to-v17 metadata-only Agent Memory projection without inventing Memory summaries or audit rows,
   followed by v17-to-v18 independent same-head Memory quality audit versioning. Retained rows keep
   reserved quality version 0 until the first new projection converges them; new writes start at 1.
-- Electron/SQLite uses Desktop schema v27. Local-store tests must prove a fresh v27 database, the
+- Electron/SQLite uses Desktop schema v28. Local-store tests must prove a fresh v28 database, the
   Desktop schema 17-to-18 retained Runtime upgrade, the 18-to-19 metadata-only Native Tool audit
   upgrade with no invented grant or audit rows, and the 19-to-20 Local MCP installation/audit
   provenance upgrade with no invented installation or MCP audit, and the 20-to-21 retained outbox
@@ -26,8 +26,16 @@ retroactive TDD rewrites unless it is touched.
   the 24-to-25 retained migration that removes source-candidate uniqueness without losing revision,
   head, tombstone, index, or audit history, followed by the 25-to-26 additive Runtime Context
   migration without fabricating attachments, followed by the 26-to-27 retained metadata-only outbox
-  migration that admits exact Agent Memory summary IDs without changing existing rows, plus rollback
-  on migration failure and refusal of a newer unknown schema.
+  migration that admits exact Agent Memory summary IDs without changing existing rows, followed by
+  the 27-to-28 Coordination Session migration with zero fabricated sessions, tasks, graphs,
+  handoffs, leases, audits, or checkpoints, plus rollback on migration failure and refusal of a
+  newer unknown schema.
+- The completed V2.2 Slice 3 matrix proves a fixed Electron-main-owned Specialist registry, opaque
+  task authority revalidation, exact child Runtime/Context creation, atomic terminal result and
+  deterministic dependency join, fixed fail-fast attribution, and one read-only
+  `repository_read` recovery recorded as `task_retried`. Same-process and cold-restart replay do not
+  repeat a Specialist start, result, handoff, or retry; mutable and ambiguous effects remain
+  ineligible. The focused coordination/store/registry/authority matrix passes 275 tests.
 - V2.1 retrieval-index tests prove atomic activation preserves the previous current snapshot when
   persistence fails, source update/delete removes stale current identities, and corrupt, mismatched,
   cross-scope, non-finite, or over-1024-chunk state fails closed. An explicit bounded rebuild restores

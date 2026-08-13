@@ -90,8 +90,8 @@ contains the signoff-bound release artifacts.
 | Active version line | 2.x DevFlow-native Agent Runtime |
 | Completed 2.x milestones | V2.0 Native Agent Runtime Foundation; V2.1 Evaluated Retrieval And Memory |
 | Completion evidence | `docs/releases/v2.0.0/`; `docs/releases/v2.1.0/` |
-| Active milestone | V2.2 Slice 3 — Specialist Runtime And Attenuated Authority |
-| Next gate | Bind one fixed Specialist registry to main-owned attenuated authority and child Runtime join |
+| Active milestone | V2.2 Slice 4 — Execution Tenancy And Resource Arbitration |
+| Next gate | Bind exact read and single-writer leases to Specialist task authority |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -165,14 +165,13 @@ The superseded implementation-period markers `### Now — Run V2.1 Evaluation An
 `| Next gate | Freeze the exact V2.1 candidate and run the full completion matrix |` remain here only
 as auditable phase vocabulary; the current table and the single `Now` heading below are authoritative.
 
-### Now — Implement V2.2 Specialist Runtime And Attenuated Authority
+### Now — Implement V2.2 Execution Tenancy And Resource Arbitration
 
-- Register one fixed Electron-main-owned Specialist descriptor and role set; renderer, model, and
-  Team input cannot create or widen a Specialist role.
-- Derive one opaque task authority from exact current Supervisor, Coordination Session, Agent Task,
-  Runtime Context, policy, pairing, capability, budget, and tenancy state before child creation.
-- Start and join one bounded V2.0 child Agent Runtime with exact identity and strict authority
-  attenuation; reject stale, sibling, foreign-tenant, or forged authority before any child effect.
+- Permit parallel reads only through exact task/capability/resource-bound leases.
+- Enforce one Electron-main-owned writer lease and reject a second writer, stale lease, wrong task,
+  reader-to-writer upgrade, or expired/cancelled commit.
+- Deduct Tool, token, cost, retry, and time use from the same Specialist and Coordination bounds
+  before the next side effect, while reusing the accepted V2.0 Tool/MCP/Coding boundaries.
 
 The V2.2 contract set is frozen in:
 
@@ -181,14 +180,18 @@ The V2.2 contract set is frozen in:
 - `docs/plans/v2.2-multi-agent-execution-tenancy.md`
 - `scripts/fixtures/v2.2-multi-agent-evaluation.json`
 
-Slices 0 through 2 are complete. The pure shared domain enforces the frozen DAG, attenuated
+Slices 0 through 3 are complete. The pure shared domain enforces the frozen DAG, attenuated
 Specialist authority, immutable handoffs, monotonic transitions, shared bounds, exact tenancy, and
 the unchanged deterministic V2.0 single-Agent baseline. Desktop schema 28 now persists one exact
 Supervisor-owned Coordination Session and frozen graph, applies task/result/handoff/join/checkpoint
 changes through versioned CAS, enforces the 256 KiB metadata boundary before commit, and reconstructs
-the exact trajectory after restart while rejecting tampered history. Slice 3 now binds a fixed
-Specialist registry to main-owned attenuated child Runtime authority; no open-ended swarm, remote
-executor, hosted tenancy, or new publication authority is implied by this milestone.
+the exact trajectory after restart while rejecting tampered history. Slice 3 binds a fixed three-role
+Specialist registry to opaque main-owned task authority; atomically starts child Runtimes, derives
+terminal result and usage from accepted Runtime transitions, joins exact dependencies once, records
+fail-fast attribution without a handoff, and permits one deterministic `repository_read` recovery
+through a `task_retried` checkpoint. Same-process and cold-restart replay repeat zero accepted starts,
+results, handoffs, or retries. No open-ended swarm, remote executor, hosted tenancy, or new
+publication authority is implied by this milestone.
 
 ### Next — Implement And Evaluate V2.2
 
