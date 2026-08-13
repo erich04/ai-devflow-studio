@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   acceptAgentHandoff,
+  applyCoordinationHandoff,
+  cancelCoordinationSession,
   COORDINATION_CONTRACT_VERSION,
+  createCoordinationSessionState,
   parseAgentTaskGraph,
   parseCoordinationSessionRequest,
+  parseCoordinationSessionState,
   parseSpecialistAllocationRequest,
+  recordCoordinationTaskResult,
+  retryCoordinationTask,
+  startCoordinationTask,
   type AgentTaskGraph,
   type AgentHandoff,
   type AgentHandoffAcceptOptions,
@@ -417,6 +424,21 @@ describe('Agent Task Graph contract', () => {
       ...taskGraph,
       edges: taskGraph.edges.map((edge, index) =>
         index === 0 ? { ...edge, targetTaskId: 'missing-task' } : edge),
+    }, {
+      coordinationId: request.id,
+      acceptedRoleIds: ['contract-analyst', 'integration-analyst', 'test-analyst'],
+      maxTaskNodes: request.bounds.maxTaskNodes,
+      maxDependencyEdges: request.bounds.maxDependencyEdges,
+    })).toThrowError('invalid_agent_task_graph')
+  })
+
+  it('rejects duplicate dependency relations hidden behind distinct edge identities', () => {
+    expect(() => parseAgentTaskGraph({
+      ...taskGraph,
+      edges: [
+        ...taskGraph.edges,
+        { id: 'edge-a-c-duplicate', sourceTaskId: 'task-a', targetTaskId: 'task-c' },
+      ],
     }, {
       coordinationId: request.id,
       acceptedRoleIds: ['contract-analyst', 'integration-analyst', 'test-analyst'],
@@ -1115,5 +1137,714 @@ describe('Agent Handoff contract', () => {
       expectedSequence: 2,
       existingHandoff: agentHandoff,
     }))).toThrowError('conflicting_agent_handoff_replay')
+  })
+})
+
+describe('Coordination state transition contract', () => {
+  it('creates one exact running session with deterministic ready tasks', () => {
+    expect(createCoordinationSessionState({
+      coordination: request,
+      graph: taskGraph,
+      startedAt: '2026-08-13T15:00:00.001Z',
+    })).toEqual({
+      stateVersion: 1,
+      id: request.id,
+      version: 1,
+      graphId: taskGraph.id,
+      graphVersion: taskGraph.version,
+      scope: request.scope,
+      authority: request.authority,
+      contextDigest: request.contextDigest,
+      capabilitySetDigest: request.capabilitySetDigest,
+      bounds: request.bounds,
+      status: 'running',
+      stopReason: null,
+      tasks: [
+        {
+          id: 'task-a',
+          version: 1,
+          status: 'ready',
+          agentId: null,
+          runtimeId: null,
+          runtimeVersion: null,
+          resultDigest: null,
+          failure: null,
+          attemptFailures: [],
+          acceptedDependencyHandoffIds: [],
+        },
+        {
+          id: 'task-b',
+          version: 1,
+          status: 'ready',
+          agentId: null,
+          runtimeId: null,
+          runtimeVersion: null,
+          resultDigest: null,
+          failure: null,
+          attemptFailures: [],
+          acceptedDependencyHandoffIds: [],
+        },
+        {
+          id: 'task-c',
+          version: 1,
+          status: 'pending',
+          agentId: null,
+          runtimeId: null,
+          runtimeVersion: null,
+          resultDigest: null,
+          failure: null,
+          attemptFailures: [],
+          acceptedDependencyHandoffIds: [],
+        },
+      ],
+      counters: {
+        specialistStarts: 0,
+        activeSpecialists: 0,
+        acceptedHandoffs: 0,
+        retries: 0,
+        steps: 0,
+        toolCalls: 0,
+        tokens: 0,
+        costUsd: 0,
+      },
+      acceptedHandoffIds: [],
+      requestedAt: request.requestedAt,
+      startedAt: '2026-08-13T15:00:00.001Z',
+      updatedAt: '2026-08-13T15:00:00.001Z',
+      deadline: request.deadline,
+    })
+  })
+
+  it('round-trips one strict session state and rejects unknown persisted metadata', () => {
+    const state = createCoordinationSessionState({
+      coordination: request,
+      graph: taskGraph,
+      startedAt: '2026-08-13T15:00:00.001Z',
+    })
+    expect(parseCoordinationSessionState(JSON.parse(JSON.stringify(state)))).toEqual(state)
+    expect(() => parseCoordinationSessionState({
+      ...state,
+      hiddenPrompt: 'do not persist me',
+    })).toThrowError('invalid_coordination_session_state')
+  })
+
+  it('rejects counter, identity, and terminal-state corruption after serialization', () => {
+    const state = createCoordinationSessionState({
+      coordination: request,
+      graph: taskGraph,
+      startedAt: '2026-08-13T15:00:00.001Z',
+    })
+    const corrupted = [
+      {
+        ...state,
+        counters: { ...state.counters, activeSpecialists: 1 },
+      },
+      {
+        ...state,
+        tasks: state.tasks.map((task, index) =>
+          index === 1 ? { ...task, id: state.tasks[0]?.id ?? task.id } : task),
+      },
+      { ...state, status: 'terminal', stopReason: 'success' },
+      {
+        ...state,
+        status: 'terminal',
+        stopReason: 'success',
+        tasks: state.tasks.map((task) => ({
+          ...task,
+          version: task.version + 1,
+          status: 'cancelled' as const,
+        })),
+      },
+      {
+        ...state,
+        counters: { ...state.counters, acceptedHandoffs: 1 },
+      },
+    ]
+    for (const candidate of corrupted) {
+      expect(() => parseCoordinationSessionState(candidate)).toThrowError(
+        'invalid_coordination_session_state',
+      )
+    }
+  })
+
+  it('starts one ready task with exact session and task versions', () => {
+    const state = createCoordinationSessionState({
+      coordination: request,
+      graph: taskGraph,
+      startedAt: '2026-08-13T15:00:00.001Z',
+    })
+
+    const next = startCoordinationTask({
+      state,
+      allocation: specialistAllocation,
+      expectedSessionVersion: 1,
+      expectedTaskVersion: 1,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      now: '2026-08-13T15:00:01.001Z',
+    })
+
+    expect(next.version).toBe(2)
+    expect(next.updatedAt).toBe('2026-08-13T15:00:01.001Z')
+    expect(next.tasks.find((task) => task.id === 'task-a')).toEqual({
+      id: 'task-a',
+      version: 2,
+      status: 'running',
+      agentId: specialistAllocation.agentId,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      resultDigest: null,
+      failure: null,
+      attemptFailures: [],
+      acceptedDependencyHandoffIds: [],
+    })
+    expect(next.counters).toEqual({
+      ...state.counters,
+      specialistStarts: 1,
+      activeSpecialists: 1,
+    })
+    expect(parseCoordinationSessionState(next)).toEqual(next)
+  })
+
+  it('rejects stale, deadline, concurrency, and remaining-budget start boundaries without mutation', () => {
+    const initial = createCoordinationSessionState({
+      coordination: request,
+      graph: taskGraph,
+      startedAt: '2026-08-13T15:00:00.001Z',
+    })
+    const cases = [
+      { state: initial, expectedSessionVersion: 0, expectedTaskVersion: 1, now: '2026-08-13T15:00:01.001Z' },
+      { state: initial, expectedSessionVersion: 1, expectedTaskVersion: 2, now: '2026-08-13T15:00:01.001Z' },
+      { state: initial, expectedSessionVersion: 1, expectedTaskVersion: 1, now: specialistAllocation.deadline },
+      {
+        state: {
+          ...initial,
+          counters: {
+            ...initial.counters,
+            activeSpecialists: request.bounds.maxParallelSpecialists,
+          },
+        },
+        expectedSessionVersion: 1,
+        expectedTaskVersion: 1,
+        now: '2026-08-13T15:00:01.001Z',
+      },
+      {
+        state: {
+          ...initial,
+          counters: {
+            ...initial.counters,
+            steps: request.bounds.maxSteps - specialistAllocation.budget.maxSteps + 1,
+          },
+        },
+        expectedSessionVersion: 1,
+        expectedTaskVersion: 1,
+        now: '2026-08-13T15:00:01.001Z',
+      },
+    ]
+
+    for (const candidate of cases) {
+      const before = JSON.stringify(candidate.state)
+      expect(() => startCoordinationTask({
+        state: candidate.state,
+        allocation: specialistAllocation,
+        expectedSessionVersion: candidate.expectedSessionVersion,
+        expectedTaskVersion: candidate.expectedTaskVersion,
+        runtimeId: 'specialist-runtime-1',
+        runtimeVersion: 1,
+        now: candidate.now,
+      })).toThrowError('invalid_coordination_transition')
+      expect(JSON.stringify(candidate.state)).toBe(before)
+    }
+    expect(() => startCoordinationTask({
+      state: initial,
+      allocation: {
+        ...specialistAllocation,
+        budget: { ...specialistAllocation.budget, maxCostUsd: Number.NaN },
+      },
+      expectedSessionVersion: 1,
+      expectedTaskVersion: 1,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      now: '2026-08-13T15:00:01.001Z',
+    })).toThrowError('invalid_coordination_transition')
+  })
+
+  it('records one exact succeeded result and releases its active Specialist slot', () => {
+    const started = startCoordinationTask({
+      state: createCoordinationSessionState({
+        coordination: request,
+        graph: taskGraph,
+        startedAt: '2026-08-13T15:00:00.001Z',
+      }),
+      allocation: specialistAllocation,
+      expectedSessionVersion: 1,
+      expectedTaskVersion: 1,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      now: '2026-08-13T15:00:01.001Z',
+    })
+
+    const next = recordCoordinationTaskResult({
+      state: started,
+      expectedSessionVersion: 2,
+      taskId: 'task-a',
+      expectedTaskVersion: 2,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      result: {
+        status: 'succeeded',
+        resultDigest: '1'.repeat(64),
+        failure: null,
+      },
+      usage: {
+        steps: 2,
+        toolCalls: 1,
+        tokens: 800,
+        costUsd: 0.25,
+      },
+      now: '2026-08-13T15:03:00.000Z',
+    })
+
+    expect(next.version).toBe(3)
+    expect(next.tasks.find((task) => task.id === 'task-a')).toEqual({
+      id: 'task-a',
+      version: 3,
+      status: 'succeeded',
+      agentId: specialistAllocation.agentId,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      resultDigest: '1'.repeat(64),
+      failure: null,
+      attemptFailures: [],
+      acceptedDependencyHandoffIds: [],
+    })
+    expect(next.counters).toEqual({
+      specialistStarts: 1,
+      activeSpecialists: 0,
+      acceptedHandoffs: 0,
+      retries: 0,
+      steps: 2,
+      toolCalls: 1,
+      tokens: 800,
+      costUsd: 0.25,
+    })
+    expect(parseCoordinationSessionState(next)).toEqual(next)
+  })
+
+  it('attributes one Specialist failure and terminates every remaining task fail-closed', () => {
+    const started = startCoordinationTask({
+      state: createCoordinationSessionState({
+        coordination: request,
+        graph: taskGraph,
+        startedAt: '2026-08-13T15:00:00.001Z',
+      }),
+      allocation: specialistAllocation,
+      expectedSessionVersion: 1,
+      expectedTaskVersion: 1,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      now: '2026-08-13T15:00:01.001Z',
+    })
+
+    const next = recordCoordinationTaskResult({
+      state: started,
+      expectedSessionVersion: 2,
+      taskId: 'task-a',
+      expectedTaskVersion: 2,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      result: {
+        status: 'failed',
+        resultDigest: null,
+        failure: {
+          category: 'tool_error',
+          code: 'tool_execution_failed',
+          sourceTaskId: 'task-a',
+        },
+      },
+      usage: { steps: 1, toolCalls: 1, tokens: 200, costUsd: 0.1 },
+      now: '2026-08-13T15:02:00.000Z',
+    })
+
+    expect(next.status).toBe('terminal')
+    expect(next.stopReason).toBe('failure')
+    expect(next.counters.activeSpecialists).toBe(0)
+    expect(next.tasks.map((task) => ({
+      id: task.id,
+      version: task.version,
+      status: task.status,
+      failure: task.failure,
+    }))).toEqual([
+      {
+        id: 'task-a',
+        version: 3,
+        status: 'failed',
+        failure: {
+          category: 'tool_error',
+          code: 'tool_execution_failed',
+          sourceTaskId: 'task-a',
+        },
+      },
+      { id: 'task-b', version: 2, status: 'cancelled', failure: null },
+      {
+        id: 'task-c',
+        version: 2,
+        status: 'blocked',
+        failure: {
+          category: 'dependency_failed',
+          code: 'dependency_task_failed',
+          sourceTaskId: 'task-a',
+        },
+      },
+    ])
+    expect(parseCoordinationSessionState(next)).toEqual(next)
+  })
+
+  it('propagates parent cancellation to every active or waiting task and rejects a late result', () => {
+    const initial = createCoordinationSessionState({
+      coordination: request,
+      graph: taskGraph,
+      startedAt: '2026-08-13T15:00:00.001Z',
+    })
+    const left = startCoordinationTask({
+      state: initial,
+      allocation: specialistAllocation,
+      expectedSessionVersion: 1,
+      expectedTaskVersion: 1,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      now: '2026-08-13T15:00:01.001Z',
+    })
+    const both = startCoordinationTask({
+      state: left,
+      allocation: {
+        ...specialistAllocation,
+        id: 'specialist-allocation-2',
+        taskId: 'task-b',
+        roleId: 'test-analyst',
+        agentId: 'specialist-2',
+        contextDigest: 'd'.repeat(64),
+        capabilityIds: ['repository_read', 'saved_test'],
+      },
+      expectedSessionVersion: 2,
+      expectedTaskVersion: 1,
+      runtimeId: 'specialist-runtime-2',
+      runtimeVersion: 1,
+      now: '2026-08-13T15:00:02.001Z',
+    })
+
+    const cancelled = cancelCoordinationSession({
+      state: both,
+      expectedSessionVersion: 3,
+      now: '2026-08-13T15:00:03.001Z',
+    })
+
+    expect(cancelled.status).toBe('terminal')
+    expect(cancelled.stopReason).toBe('cancelled')
+    expect(cancelled.counters.activeSpecialists).toBe(0)
+    expect(cancelled.tasks.map((task) => [task.id, task.version, task.status])).toEqual([
+      ['task-a', 3, 'cancelled'],
+      ['task-b', 3, 'cancelled'],
+      ['task-c', 2, 'cancelled'],
+    ])
+    expect(parseCoordinationSessionState(cancelled)).toEqual(cancelled)
+    expect(() => recordCoordinationTaskResult({
+      state: cancelled,
+      expectedSessionVersion: 4,
+      taskId: 'task-a',
+      expectedTaskVersion: 3,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      result: { status: 'succeeded', resultDigest: '1'.repeat(64), failure: null },
+      usage: { steps: 1, toolCalls: 0, tokens: 0, costUsd: 0 },
+      now: '2026-08-13T15:00:04.001Z',
+    })).toThrowError('invalid_coordination_transition')
+  })
+
+  it('makes a dependent task ready only after every distinct dependency handoff is accepted', () => {
+    const initial = createCoordinationSessionState({
+      coordination: request,
+      graph: taskGraph,
+      startedAt: '2026-08-13T15:00:00.001Z',
+    })
+    const startedA = startCoordinationTask({
+      state: initial,
+      allocation: specialistAllocation,
+      expectedSessionVersion: 1,
+      expectedTaskVersion: 1,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      now: '2026-08-13T15:00:01.001Z',
+    })
+    const completedA = recordCoordinationTaskResult({
+      state: startedA,
+      expectedSessionVersion: 2,
+      taskId: 'task-a',
+      expectedTaskVersion: 2,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      result: { status: 'succeeded', resultDigest: '1'.repeat(64), failure: null },
+      usage: { steps: 1, toolCalls: 0, tokens: 100, costUsd: 0.1 },
+      now: '2026-08-13T15:03:00.000Z',
+    })
+    const handoffA: AgentHandoff = {
+      ...agentHandoff,
+      sourceTaskVersion: 3,
+      sourceRuntimeVersion: 1,
+      targetTaskVersion: 1,
+    }
+    const joinedA = applyCoordinationHandoff({
+      state: completedA,
+      coordination: request,
+      graph: taskGraph,
+      handoff: handoffA,
+      sourceResult: {
+        taskId: 'task-a',
+        taskVersion: 3,
+        runtimeId: 'specialist-runtime-1',
+        runtimeVersion: 1,
+        status: 'succeeded',
+        resultDigest: '1'.repeat(64),
+        evidenceDigests: ['2'.repeat(64), '3'.repeat(64)],
+        contextDigest: 'e'.repeat(64),
+        resourceLeaseOutcome: 'not_required',
+      },
+      expectedSessionVersion: 3,
+      expectedTargetTaskVersion: 1,
+      priorAcceptedHandoffs: [],
+    })
+
+    expect(joinedA.version).toBe(4)
+    expect(joinedA.counters.acceptedHandoffs).toBe(1)
+    expect(joinedA.tasks.find((task) => task.id === 'task-c')).toMatchObject({
+      version: 2,
+      status: 'pending',
+      acceptedDependencyHandoffIds: [handoffA.id],
+    })
+
+    const allocationB: SpecialistAllocationRequest = {
+      ...specialistAllocation,
+      id: 'specialist-allocation-2',
+      taskId: 'task-b',
+      roleId: 'test-analyst',
+      agentId: 'specialist-2',
+      contextDigest: 'd'.repeat(64),
+      capabilityIds: ['repository_read', 'saved_test'],
+    }
+    const startedB = startCoordinationTask({
+      state: joinedA,
+      allocation: allocationB,
+      expectedSessionVersion: 4,
+      expectedTaskVersion: 1,
+      runtimeId: 'specialist-runtime-2',
+      runtimeVersion: 1,
+      now: '2026-08-13T15:04:10.000Z',
+    })
+    const completedB = recordCoordinationTaskResult({
+      state: startedB,
+      expectedSessionVersion: 5,
+      taskId: 'task-b',
+      expectedTaskVersion: 2,
+      runtimeId: 'specialist-runtime-2',
+      runtimeVersion: 1,
+      result: { status: 'succeeded', resultDigest: '4'.repeat(64), failure: null },
+      usage: { steps: 1, toolCalls: 1, tokens: 100, costUsd: 0.1 },
+      now: '2026-08-13T15:04:20.000Z',
+    })
+    const handoffB: AgentHandoff = {
+      ...handoffA,
+      id: 'handoff-task-b-task-c-2',
+      sequence: 2,
+      sourceTaskId: 'task-b',
+      sourceTaskVersion: 3,
+      sourceRuntimeId: 'specialist-runtime-2',
+      targetTaskVersion: 2,
+      resultDigest: '4'.repeat(64),
+      evidenceDigests: ['5'.repeat(64)],
+      contextDigest: 'd'.repeat(64),
+      summary: 'Test analysis completed with one bounded Evidence reference.',
+      createdAt: '2026-08-13T15:04:30.000Z',
+    }
+    const joinedB = applyCoordinationHandoff({
+      state: completedB,
+      coordination: request,
+      graph: taskGraph,
+      handoff: handoffB,
+      sourceResult: {
+        taskId: 'task-b',
+        taskVersion: 3,
+        runtimeId: 'specialist-runtime-2',
+        runtimeVersion: 1,
+        status: 'succeeded',
+        resultDigest: '4'.repeat(64),
+        evidenceDigests: ['5'.repeat(64)],
+        contextDigest: 'd'.repeat(64),
+        resourceLeaseOutcome: 'not_required',
+      },
+      expectedSessionVersion: 6,
+      expectedTargetTaskVersion: 2,
+      priorAcceptedHandoffs: [handoffA],
+    })
+
+    expect(joinedB.version).toBe(7)
+    expect(joinedB.counters.acceptedHandoffs).toBe(2)
+    expect(joinedB.tasks.find((task) => task.id === 'task-c')).toMatchObject({
+      version: 3,
+      status: 'ready',
+      acceptedDependencyHandoffIds: [handoffA.id, handoffB.id],
+    })
+    expect(parseCoordinationSessionState(joinedB)).toEqual(joinedB)
+    expect(applyCoordinationHandoff({
+      state: joinedB,
+      coordination: request,
+      graph: taskGraph,
+      handoff: handoffA,
+      sourceResult: {
+        taskId: 'task-a',
+        taskVersion: 3,
+        runtimeId: 'specialist-runtime-1',
+        runtimeVersion: 1,
+        status: 'succeeded',
+        resultDigest: '1'.repeat(64),
+        evidenceDigests: ['2'.repeat(64), '3'.repeat(64)],
+        contextDigest: 'e'.repeat(64),
+        resourceLeaseOutcome: 'not_required',
+      },
+      expectedSessionVersion: 7,
+      expectedTargetTaskVersion: 3,
+      priorAcceptedHandoffs: [handoffA, handoffB],
+    })).toBe(joinedB)
+  })
+
+  it('stops at the exact shared budget boundary and rejects usage one unit beyond it', () => {
+    const started = startCoordinationTask({
+      state: createCoordinationSessionState({
+        coordination: request,
+        graph: taskGraph,
+        startedAt: '2026-08-13T15:00:00.001Z',
+      }),
+      allocation: specialistAllocation,
+      expectedSessionVersion: 1,
+      expectedTaskVersion: 1,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      now: '2026-08-13T15:00:01.001Z',
+    })
+    const atBoundary = recordCoordinationTaskResult({
+      state: started,
+      expectedSessionVersion: 2,
+      taskId: 'task-a',
+      expectedTaskVersion: 2,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      result: { status: 'succeeded', resultDigest: '1'.repeat(64), failure: null },
+      usage: {
+        steps: request.bounds.maxSteps,
+        toolCalls: request.bounds.maxToolCalls,
+        tokens: request.bounds.maxTokens,
+        costUsd: request.bounds.maxCostUsd,
+      },
+      now: '2026-08-13T15:03:00.000Z',
+    })
+
+    expect(atBoundary.status).toBe('terminal')
+    expect(atBoundary.stopReason).toBe('budget_exhausted')
+    expect(atBoundary.counters).toMatchObject({
+      activeSpecialists: 0,
+      steps: request.bounds.maxSteps,
+      toolCalls: request.bounds.maxToolCalls,
+      tokens: request.bounds.maxTokens,
+      costUsd: request.bounds.maxCostUsd,
+    })
+    expect(atBoundary.tasks.map((task) => task.status)).toEqual([
+      'succeeded',
+      'cancelled',
+      'cancelled',
+    ])
+    expect(() => recordCoordinationTaskResult({
+      state: started,
+      expectedSessionVersion: 2,
+      taskId: 'task-a',
+      expectedTaskVersion: 2,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      result: { status: 'succeeded', resultDigest: '1'.repeat(64), failure: null },
+      usage: {
+        steps: request.bounds.maxSteps + 1,
+        toolCalls: 0,
+        tokens: 0,
+        costUsd: 0,
+      },
+      now: '2026-08-13T15:03:00.000Z',
+    })).toThrowError('invalid_coordination_transition')
+  })
+
+  it('records one explicit bounded Specialist retry without silently reassigning the task', () => {
+    const started = startCoordinationTask({
+      state: createCoordinationSessionState({
+        coordination: request,
+        graph: taskGraph,
+        startedAt: '2026-08-13T15:00:00.001Z',
+      }),
+      allocation: specialistAllocation,
+      expectedSessionVersion: 1,
+      expectedTaskVersion: 1,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      now: '2026-08-13T15:00:01.001Z',
+    })
+    const failure = {
+      category: 'tool_error' as const,
+      code: 'recoverable_tool_error',
+      sourceTaskId: 'task-a',
+    }
+    const retried = retryCoordinationTask({
+      state: started,
+      expectedSessionVersion: 2,
+      taskId: 'task-a',
+      expectedTaskVersion: 2,
+      runtimeId: 'specialist-runtime-1',
+      runtimeVersion: 1,
+      failure,
+      replacementRuntimeId: 'specialist-runtime-1-retry-1',
+      replacementRuntimeVersion: 1,
+      usage: { steps: 1, toolCalls: 1, tokens: 100, costUsd: 0.1 },
+      now: '2026-08-13T15:01:00.000Z',
+    })
+
+    expect(retried.version).toBe(3)
+    expect(retried.tasks.find((task) => task.id === 'task-a')).toMatchObject({
+      version: 3,
+      status: 'running',
+      agentId: specialistAllocation.agentId,
+      runtimeId: 'specialist-runtime-1-retry-1',
+      runtimeVersion: 1,
+      resultDigest: null,
+      failure: null,
+      attemptFailures: [failure],
+    })
+    expect(retried.counters).toMatchObject({
+      specialistStarts: 2,
+      activeSpecialists: 1,
+      retries: 1,
+      steps: 1,
+      toolCalls: 1,
+      tokens: 100,
+      costUsd: 0.1,
+    })
+    expect(parseCoordinationSessionState(retried)).toEqual(retried)
+    expect(() => retryCoordinationTask({
+      state: retried,
+      expectedSessionVersion: 3,
+      taskId: 'task-a',
+      expectedTaskVersion: 3,
+      runtimeId: 'specialist-runtime-1-retry-1',
+      runtimeVersion: 1,
+      failure,
+      replacementRuntimeId: 'specialist-runtime-1-retry-2',
+      replacementRuntimeVersion: 1,
+      usage: { steps: 0, toolCalls: 0, tokens: 0, costUsd: 0 },
+      now: '2026-08-13T15:02:00.000Z',
+    })).toThrowError('invalid_coordination_transition')
   })
 })

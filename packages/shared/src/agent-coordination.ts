@@ -187,6 +187,157 @@ export type AcceptedAgentHandoff = {
   replayed: boolean
 }
 
+export type CoordinationTaskStatus =
+  | 'pending'
+  | 'ready'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'blocked'
+
+export type CoordinationFailureCategory =
+  | 'timeout'
+  | 'budget_exhausted'
+  | 'policy_denied'
+  | 'tool_error'
+  | 'coding_executor_error'
+  | 'invalid_result'
+  | 'dependency_failed'
+
+export type CoordinationTaskFailure = {
+  category: CoordinationFailureCategory
+  code: string
+  sourceTaskId: string | null
+}
+
+export type CoordinationTaskState = {
+  id: string
+  version: number
+  status: CoordinationTaskStatus
+  agentId: string | null
+  runtimeId: string | null
+  runtimeVersion: number | null
+  resultDigest: string | null
+  failure: CoordinationTaskFailure | null
+  attemptFailures: CoordinationTaskFailure[]
+  acceptedDependencyHandoffIds: string[]
+}
+
+export type CoordinationCounters = {
+  specialistStarts: number
+  activeSpecialists: number
+  acceptedHandoffs: number
+  retries: number
+  steps: number
+  toolCalls: number
+  tokens: number
+  costUsd: number
+}
+
+export type CoordinationSessionStopReason =
+  | 'success'
+  | 'failure'
+  | 'cancelled'
+  | 'timeout'
+  | 'budget_exhausted'
+  | 'policy_denied'
+  | 'blocked_dependency'
+
+export type CoordinationSessionState = {
+  stateVersion: typeof COORDINATION_CONTRACT_VERSION
+  id: string
+  version: number
+  graphId: string
+  graphVersion: number
+  scope: CoordinationScope
+  authority: CoordinationAuthority
+  contextDigest: string
+  capabilitySetDigest: string
+  bounds: CoordinationBounds
+  status: 'running' | 'terminal'
+  stopReason: CoordinationSessionStopReason | null
+  tasks: CoordinationTaskState[]
+  counters: CoordinationCounters
+  acceptedHandoffIds: string[]
+  requestedAt: string
+  startedAt: string
+  updatedAt: string
+  deadline: string
+}
+
+export type CoordinationSessionStartInput = {
+  coordination: CoordinationSessionRequest
+  graph: AgentTaskGraph
+  startedAt: string
+}
+
+export type CoordinationTaskStartInput = {
+  state: CoordinationSessionState
+  allocation: SpecialistAllocationRequest
+  expectedSessionVersion: number
+  expectedTaskVersion: number
+  runtimeId: string
+  runtimeVersion: number
+  now: string
+}
+
+export type CoordinationTaskResult = {
+  status: 'succeeded' | 'failed'
+  resultDigest: string | null
+  failure: CoordinationTaskFailure | null
+}
+
+export type CoordinationUsageDelta = {
+  steps: number
+  toolCalls: number
+  tokens: number
+  costUsd: number
+}
+
+export type CoordinationTaskResultInput = {
+  state: CoordinationSessionState
+  expectedSessionVersion: number
+  taskId: string
+  expectedTaskVersion: number
+  runtimeId: string
+  runtimeVersion: number
+  result: CoordinationTaskResult
+  usage: CoordinationUsageDelta
+  now: string
+}
+
+export type CoordinationSessionCancelInput = {
+  state: CoordinationSessionState
+  expectedSessionVersion: number
+  now: string
+}
+
+export type CoordinationHandoffTransitionInput = {
+  state: CoordinationSessionState
+  coordination: CoordinationSessionRequest
+  graph: AgentTaskGraph
+  handoff: AgentHandoff
+  sourceResult: AcceptedSpecialistResult
+  expectedSessionVersion: number
+  expectedTargetTaskVersion: number
+  priorAcceptedHandoffs: AgentHandoff[]
+}
+
+export type CoordinationTaskRetryInput = {
+  state: CoordinationSessionState
+  expectedSessionVersion: number
+  taskId: string
+  expectedTaskVersion: number
+  runtimeId: string
+  runtimeVersion: number
+  failure: CoordinationTaskFailure
+  replacementRuntimeId: string
+  replacementRuntimeVersion: number
+  usage: CoordinationUsageDelta
+  now: string
+}
+
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actual = Object.keys(value).sort()
   const expected = [...keys].sort()
@@ -504,6 +655,8 @@ export function parseAgentTaskGraph(
 
   const taskIdSet = new Set(taskIds)
   const edgeIds = graph.edges.map((edge) => edge.id)
+  const edgeRelations = graph.edges.map((edge) =>
+    `${edge.sourceTaskId}\u0000${edge.targetTaskId}`)
   if (
     graph.edges.some((edge) => !hasExactKeys(edge as unknown as Record<string, unknown>, [
       'id',
@@ -512,6 +665,7 @@ export function parseAgentTaskGraph(
     ])) ||
     edgeIds.some((edgeId) => !isIdentifier(edgeId)) ||
     new Set(edgeIds).size !== edgeIds.length ||
+    new Set(edgeRelations).size !== edgeRelations.length ||
     graph.edges.some((edge) =>
       !taskIdSet.has(edge.sourceTaskId) ||
       !taskIdSet.has(edge.targetTaskId) ||
@@ -773,4 +927,720 @@ export function acceptAgentHandoff(
     return { handoff: options.existingHandoff, replayed: true }
   }
   return { handoff: value as AgentHandoff, replayed: false }
+}
+
+function isCoordinationTaskFailure(
+  value: unknown,
+  taskId: string,
+  allowDependency: boolean,
+): value is CoordinationTaskFailure {
+  return isPlainRecord(value) &&
+    hasExactKeys(value, ['category', 'code', 'sourceTaskId']) &&
+    (
+      value.category === 'timeout' ||
+      value.category === 'budget_exhausted' ||
+      value.category === 'policy_denied' ||
+      value.category === 'tool_error' ||
+      value.category === 'coding_executor_error' ||
+      value.category === 'invalid_result' ||
+      (allowDependency && value.category === 'dependency_failed')
+    ) &&
+    isIdentifier(value.code) &&
+    redactSensitiveText(value.code).value === value.code &&
+    (value.sourceTaskId === taskId ||
+      (allowDependency && isIdentifier(value.sourceTaskId)))
+}
+
+export function parseCoordinationSessionState(value: unknown): CoordinationSessionState {
+  if (
+    !isPlainRecord(value) ||
+    value.stateVersion !== COORDINATION_CONTRACT_VERSION ||
+    !hasExactKeys(value, [
+      'stateVersion',
+      'id',
+      'version',
+      'graphId',
+      'graphVersion',
+      'scope',
+      'authority',
+      'contextDigest',
+      'capabilitySetDigest',
+      'bounds',
+      'status',
+      'stopReason',
+      'tasks',
+      'counters',
+      'acceptedHandoffIds',
+      'requestedAt',
+      'startedAt',
+      'updatedAt',
+      'deadline',
+    ]) ||
+    !isIdentifier(value.id) ||
+    !isPositiveVersion(value.version) ||
+    !isIdentifier(value.graphId) ||
+    !isPositiveVersion(value.graphVersion) ||
+    !isExactCoordinationScope(value.scope) ||
+    !isExactCoordinationAuthority(value.authority) ||
+    !isDigest(value.contextDigest) ||
+    !isDigest(value.capabilitySetDigest) ||
+    !isPlainRecord(value.bounds) ||
+    !Array.isArray(value.tasks) ||
+    value.tasks.length === 0 ||
+    !isPlainRecord(value.counters) ||
+    !Array.isArray(value.acceptedHandoffIds) ||
+    !isCanonicalIso(value.requestedAt) ||
+    !isCanonicalIso(value.startedAt) ||
+    !isCanonicalIso(value.updatedAt) ||
+    !isCanonicalIso(value.deadline)
+  ) {
+    throw new Error('invalid_coordination_session_state')
+  }
+  try {
+    parseCoordinationSessionRequest({
+      stateVersion: value.stateVersion,
+      id: value.id,
+      scope: value.scope,
+      authority: value.authority,
+      contextDigest: value.contextDigest,
+      capabilitySetDigest: value.capabilitySetDigest,
+      bounds: value.bounds,
+      requestedAt: value.requestedAt,
+      deadline: value.deadline,
+    }, value.bounds as CoordinationParentBounds)
+  } catch {
+    throw new Error('invalid_coordination_session_state')
+  }
+  const state = value as CoordinationSessionState
+  const stopReasons: CoordinationSessionStopReason[] = [
+    'success',
+    'failure',
+    'cancelled',
+    'timeout',
+    'budget_exhausted',
+    'policy_denied',
+    'blocked_dependency',
+  ]
+  const counterKeys = [
+    'specialistStarts',
+    'activeSpecialists',
+    'acceptedHandoffs',
+    'retries',
+    'steps',
+    'toolCalls',
+    'tokens',
+    'costUsd',
+  ] as const
+  const taskIds = state.tasks.map((task) => isPlainRecord(task) ? task.id : null)
+  const taskShapesValid = state.tasks.every((task) => {
+    if (!isPlainRecord(task) || !hasExactKeys(task, [
+      'id',
+      'version',
+      'status',
+      'agentId',
+      'runtimeId',
+      'runtimeVersion',
+      'resultDigest',
+      'failure',
+      'attemptFailures',
+      'acceptedDependencyHandoffIds',
+    ]) || !isIdentifier(task.id) || !isPositiveVersion(task.version) ||
+      !Array.isArray(task.attemptFailures) ||
+      !task.attemptFailures.every((failure) =>
+        isCoordinationTaskFailure(failure, task.id, false)) ||
+      !Array.isArray(task.acceptedDependencyHandoffIds) ||
+      task.acceptedDependencyHandoffIds.some((id) => !isIdentifier(id)) ||
+      new Set(task.acceptedDependencyHandoffIds).size !==
+        task.acceptedDependencyHandoffIds.length) {
+      return false
+    }
+    const hasRuntime = isIdentifier(task.agentId) &&
+      isIdentifier(task.runtimeId) &&
+      isPositiveVersion(task.runtimeVersion)
+    const hasNoRuntime = task.agentId === null && task.runtimeId === null &&
+      task.runtimeVersion === null
+    if (task.status === 'pending' || task.status === 'ready') {
+      return hasNoRuntime && task.resultDigest === null && task.failure === null
+    }
+    if (task.status === 'running') {
+      return hasRuntime && task.resultDigest === null && task.failure === null
+    }
+    if (task.status === 'succeeded') {
+      return hasRuntime && isDigest(task.resultDigest) && task.failure === null
+    }
+    if (task.status === 'failed') {
+      return hasRuntime && task.resultDigest === null &&
+        isCoordinationTaskFailure(task.failure, task.id, false)
+    }
+    if (task.status === 'cancelled') {
+      return (hasRuntime || hasNoRuntime) && task.resultDigest === null && task.failure === null
+    }
+    if (task.status === 'blocked') {
+      return (hasRuntime || hasNoRuntime) && task.resultDigest === null &&
+        isCoordinationTaskFailure(task.failure, task.id, true) &&
+        task.failure.category === 'dependency_failed'
+    }
+    return false
+  })
+  const runningTasks = state.tasks.filter((task) => task.status === 'running').length
+  const counters = state.counters
+  const hasFailedCategory = (category: CoordinationFailureCategory): boolean =>
+    state.tasks.some((task) => task.failure?.category === category)
+  const terminalReasonValid = state.status === 'running' ||
+    (state.stopReason === 'success' &&
+      state.tasks.every((task) => task.status === 'succeeded')) ||
+    (state.stopReason === 'failure' && state.tasks.some((task) => task.status === 'failed')) ||
+    (state.stopReason === 'cancelled' &&
+      state.tasks.some((task) => task.status === 'cancelled') &&
+      state.tasks.every((task) => task.status === 'succeeded' || task.status === 'cancelled')) ||
+    (state.stopReason === 'timeout' &&
+      (hasFailedCategory('timeout') || Date.parse(state.updatedAt) >= Date.parse(state.deadline))) ||
+    (state.stopReason === 'budget_exhausted' &&
+      (hasFailedCategory('budget_exhausted') ||
+        counters.steps >= state.bounds.maxSteps ||
+        counters.toolCalls >= state.bounds.maxToolCalls ||
+        counters.tokens >= state.bounds.maxTokens ||
+        counters.costUsd >= state.bounds.maxCostUsd)) ||
+    (state.stopReason === 'policy_denied' && hasFailedCategory('policy_denied')) ||
+    (state.stopReason === 'blocked_dependency' &&
+      state.tasks.some((task) => task.status === 'blocked'))
+  if (
+    state.tasks.length > state.bounds.maxTaskNodes ||
+    !taskShapesValid ||
+    taskIds.some((id) => !isIdentifier(id)) ||
+    new Set(taskIds).size !== taskIds.length ||
+    taskIds.some((id, index) => index > 0 &&
+      String(taskIds[index - 1]).localeCompare(String(id)) >= 0) ||
+    !hasExactKeys(counters as unknown as Record<string, unknown>, counterKeys) ||
+    !isNonNegativeIntegerAtMost(counters.specialistStarts, state.tasks.length + state.bounds.maxSpecialistRetries) ||
+    !isNonNegativeIntegerAtMost(counters.activeSpecialists, state.bounds.maxParallelSpecialists) ||
+    !isNonNegativeIntegerAtMost(counters.acceptedHandoffs, state.bounds.maxAcceptedHandoffs) ||
+    !isNonNegativeIntegerAtMost(counters.retries, state.bounds.maxSpecialistRetries) ||
+    !isNonNegativeIntegerAtMost(counters.steps, state.bounds.maxSteps) ||
+    !isNonNegativeIntegerAtMost(counters.toolCalls, state.bounds.maxToolCalls) ||
+    !isNonNegativeIntegerAtMost(counters.tokens, state.bounds.maxTokens) ||
+    typeof counters.costUsd !== 'number' ||
+    !Number.isFinite(counters.costUsd) ||
+    counters.costUsd < 0 ||
+    counters.costUsd > state.bounds.maxCostUsd ||
+    counters.activeSpecialists !== runningTasks ||
+    counters.specialistStarts < counters.activeSpecialists ||
+    counters.acceptedHandoffs !== state.acceptedHandoffIds.length ||
+    state.acceptedHandoffIds.some((id) => !isIdentifier(id)) ||
+    new Set(state.acceptedHandoffIds).size !== state.acceptedHandoffIds.length ||
+    state.tasks.some((task) => task.acceptedDependencyHandoffIds.some((id) =>
+      !state.acceptedHandoffIds.includes(id))) ||
+    Date.parse(state.startedAt) < Date.parse(state.requestedAt) ||
+    Date.parse(state.startedAt) > Date.parse(state.deadline) ||
+    Date.parse(state.updatedAt) < Date.parse(state.startedAt) ||
+    (state.status !== 'running' && state.status !== 'terminal') ||
+    (state.status === 'running' && state.stopReason !== null) ||
+    (state.status === 'running' && Date.parse(state.updatedAt) >= Date.parse(state.deadline)) ||
+    (state.status === 'terminal' && !stopReasons.includes(
+      state.stopReason as CoordinationSessionStopReason,
+    )) ||
+    !terminalReasonValid ||
+    (state.status === 'terminal' && state.tasks.some((task) =>
+      task.status === 'pending' || task.status === 'ready' || task.status === 'running'))
+  ) {
+    throw new Error('invalid_coordination_session_state')
+  }
+  return state
+}
+
+export function createCoordinationSessionState(
+  input: CoordinationSessionStartInput,
+): CoordinationSessionState {
+  if (
+    input.graph.coordinationId !== input.coordination.id ||
+    !isCanonicalIso(input.startedAt) ||
+    Date.parse(input.startedAt) < Date.parse(input.coordination.requestedAt) ||
+    Date.parse(input.startedAt) >= Date.parse(input.coordination.deadline)
+  ) {
+    throw new Error('invalid_coordination_session_state')
+  }
+  const dependentTaskIds = new Set(input.graph.edges.map((edge) => edge.targetTaskId))
+  const tasks = input.graph.nodes
+    .map<CoordinationTaskState>((node) => ({
+      id: node.id,
+      version: 1,
+      status: dependentTaskIds.has(node.id) ? 'pending' : 'ready',
+      agentId: null,
+      runtimeId: null,
+      runtimeVersion: null,
+      resultDigest: null,
+      failure: null,
+      attemptFailures: [],
+      acceptedDependencyHandoffIds: [],
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id))
+
+  return {
+    stateVersion: COORDINATION_CONTRACT_VERSION,
+    id: input.coordination.id,
+    version: 1,
+    graphId: input.graph.id,
+    graphVersion: input.graph.version,
+    scope: { ...input.coordination.scope },
+    authority: { ...input.coordination.authority },
+    contextDigest: input.coordination.contextDigest,
+    capabilitySetDigest: input.coordination.capabilitySetDigest,
+    bounds: { ...input.coordination.bounds },
+    status: 'running',
+    stopReason: null,
+    tasks,
+    counters: {
+      specialistStarts: 0,
+      activeSpecialists: 0,
+      acceptedHandoffs: 0,
+      retries: 0,
+      steps: 0,
+      toolCalls: 0,
+      tokens: 0,
+      costUsd: 0,
+    },
+    acceptedHandoffIds: [],
+    requestedAt: input.coordination.requestedAt,
+    startedAt: input.startedAt,
+    updatedAt: input.startedAt,
+    deadline: input.coordination.deadline,
+  }
+}
+
+export function startCoordinationTask(
+  input: CoordinationTaskStartInput,
+): CoordinationSessionState {
+  const task = input.state.tasks.find((item) => item.id === input.allocation.taskId)
+  const assignedAgentIds = new Set(
+    input.state.tasks
+      .map((item) => item.agentId)
+      .filter((agentId): agentId is string => agentId !== null),
+  )
+  if (
+    input.state.status !== 'running' ||
+    input.state.stopReason !== null ||
+    input.state.version !== input.expectedSessionVersion ||
+    task === undefined ||
+    task.version !== input.expectedTaskVersion ||
+    task.status !== 'ready' ||
+    input.allocation.coordinationId !== input.state.id ||
+    input.allocation.taskGraphId !== input.state.graphId ||
+    input.allocation.taskGraphVersion !== input.state.graphVersion ||
+    input.allocation.taskId !== task.id ||
+    !isIdentifier(input.allocation.id) ||
+    !isIdentifier(input.allocation.agentId) ||
+    !isExactCoordinationScope(input.allocation.scope) ||
+    !hasSameCoordinationScope(input.allocation.scope, input.state.scope) ||
+    !isExactCoordinationAuthority(input.allocation.authority) ||
+    !hasSameCoordinationAuthority(input.allocation.authority, input.state.authority) ||
+    !isPlainRecord(input.allocation.budget) ||
+    !hasExactKeys(input.allocation.budget, [
+      'maxSteps',
+      'maxWallTimeMs',
+      'maxToolCalls',
+      'maxTokens',
+      'maxCostUsd',
+    ]) ||
+    !isPositiveIntegerAtMost(
+      input.allocation.budget.maxSteps,
+      input.state.bounds.maxSteps - input.state.counters.steps,
+    ) ||
+    !isPositiveIntegerAtMost(
+      input.allocation.budget.maxWallTimeMs,
+      input.state.bounds.maxWallTimeMs,
+    ) ||
+    !isPositiveIntegerAtMost(
+      input.allocation.budget.maxToolCalls,
+      input.state.bounds.maxToolCalls - input.state.counters.toolCalls,
+    ) ||
+    !isPositiveIntegerAtMost(
+      input.allocation.budget.maxTokens,
+      input.state.bounds.maxTokens - input.state.counters.tokens,
+    ) ||
+    typeof input.allocation.budget.maxCostUsd !== 'number' ||
+    !Number.isFinite(input.allocation.budget.maxCostUsd) ||
+    input.allocation.budget.maxCostUsd <= 0 ||
+    input.allocation.budget.maxCostUsd >
+      input.state.bounds.maxCostUsd - input.state.counters.costUsd ||
+    !isCanonicalIso(input.allocation.requestedAt) ||
+    !isCanonicalIso(input.allocation.deadline) ||
+    !isIdentifier(input.runtimeId) ||
+    !isPositiveVersion(input.runtimeVersion) ||
+    !isCanonicalIso(input.now) ||
+    Date.parse(input.now) < Date.parse(input.state.updatedAt) ||
+    Date.parse(input.now) < Date.parse(input.allocation.requestedAt) ||
+    Date.parse(input.now) >= Date.parse(input.allocation.deadline) ||
+    Date.parse(input.now) >= Date.parse(input.state.deadline) ||
+    input.state.counters.activeSpecialists >= input.state.bounds.maxParallelSpecialists ||
+    (!assignedAgentIds.has(input.allocation.agentId) &&
+      assignedAgentIds.size >= input.state.bounds.maxSpecialists)
+  ) {
+    throw new Error('invalid_coordination_transition')
+  }
+
+  return {
+    ...input.state,
+    version: input.state.version + 1,
+    tasks: input.state.tasks.map((item) => item.id === task.id
+      ? {
+          ...item,
+          version: item.version + 1,
+          status: 'running',
+          agentId: input.allocation.agentId,
+          runtimeId: input.runtimeId,
+          runtimeVersion: input.runtimeVersion,
+        }
+      : item),
+    counters: {
+      ...input.state.counters,
+      specialistStarts: input.state.counters.specialistStarts + 1,
+      activeSpecialists: input.state.counters.activeSpecialists + 1,
+    },
+    updatedAt: input.now,
+  }
+}
+
+export function recordCoordinationTaskResult(
+  input: CoordinationTaskResultInput,
+): CoordinationSessionState {
+  const task = input.state.tasks.find((item) => item.id === input.taskId)
+  const failure = input.result.failure
+  const succeededResult = input.result.status === 'succeeded' &&
+    isDigest(input.result.resultDigest) &&
+    failure === null
+  const failedResult = input.result.status === 'failed' &&
+    input.result.resultDigest === null &&
+    isPlainRecord(failure) &&
+    hasExactKeys(failure, ['category', 'code', 'sourceTaskId']) &&
+    (
+      failure.category === 'timeout' ||
+      failure.category === 'budget_exhausted' ||
+      failure.category === 'policy_denied' ||
+      failure.category === 'tool_error' ||
+      failure.category === 'coding_executor_error' ||
+      failure.category === 'invalid_result'
+    ) &&
+    isIdentifier(failure.code) &&
+    redactSensitiveText(failure.code).value === failure.code &&
+    failure.sourceTaskId === input.taskId
+  const nextSteps = input.state.counters.steps + input.usage.steps
+  const nextToolCalls = input.state.counters.toolCalls + input.usage.toolCalls
+  const nextTokens = input.state.counters.tokens + input.usage.tokens
+  const nextCostUsd = input.state.counters.costUsd + input.usage.costUsd
+  if (
+    input.state.status !== 'running' ||
+    input.state.stopReason !== null ||
+    input.state.version !== input.expectedSessionVersion ||
+    task === undefined ||
+    task.version !== input.expectedTaskVersion ||
+    task.status !== 'running' ||
+    task.runtimeId !== input.runtimeId ||
+    task.runtimeVersion !== input.runtimeVersion ||
+    !isPlainRecord(input.result) ||
+    !hasExactKeys(input.result, ['status', 'resultDigest', 'failure']) ||
+    (!succeededResult && !failedResult) ||
+    !isPlainRecord(input.usage) ||
+    !hasExactKeys(input.usage, ['steps', 'toolCalls', 'tokens', 'costUsd']) ||
+    !isNonNegativeIntegerAtMost(input.usage.steps, input.state.bounds.maxSteps) ||
+    !isNonNegativeIntegerAtMost(input.usage.toolCalls, input.state.bounds.maxToolCalls) ||
+    !isNonNegativeIntegerAtMost(input.usage.tokens, input.state.bounds.maxTokens) ||
+    typeof input.usage.costUsd !== 'number' ||
+    !Number.isFinite(input.usage.costUsd) ||
+    input.usage.costUsd < 0 ||
+    nextSteps > input.state.bounds.maxSteps ||
+    nextToolCalls > input.state.bounds.maxToolCalls ||
+    nextTokens > input.state.bounds.maxTokens ||
+    nextCostUsd > input.state.bounds.maxCostUsd ||
+    input.state.counters.activeSpecialists <= 0 ||
+    !isCanonicalIso(input.now) ||
+    Date.parse(input.now) < Date.parse(input.state.updatedAt) ||
+    Date.parse(input.now) > Date.parse(input.state.deadline)
+  ) {
+    throw new Error('invalid_coordination_transition')
+  }
+
+  const resultTasks = input.state.tasks.map((item): CoordinationTaskState => {
+    if (item.id === task.id) {
+      return {
+        ...item,
+        version: item.version + 1,
+        status: succeededResult ? 'succeeded' : 'failed',
+        resultDigest: succeededResult ? input.result.resultDigest : null,
+        failure: failedResult ? failure : null,
+      }
+    }
+    if (!failedResult || item.status === 'succeeded' || item.status === 'failed' ||
+      item.status === 'cancelled' || item.status === 'blocked') {
+      return item
+    }
+    if (item.status === 'pending') {
+      return {
+        ...item,
+        version: item.version + 1,
+        status: 'blocked',
+        failure: {
+          category: 'dependency_failed',
+          code: 'dependency_task_failed',
+          sourceTaskId: task.id,
+        },
+      }
+    }
+    return {
+      ...item,
+      version: item.version + 1,
+      status: 'cancelled',
+    }
+  })
+  const completed = resultTasks.every((item) => item.status === 'succeeded')
+  const deadlineReached = Date.parse(input.now) >= Date.parse(input.state.deadline)
+  const budgetExhausted = nextSteps >= input.state.bounds.maxSteps ||
+    nextToolCalls >= input.state.bounds.maxToolCalls ||
+    nextTokens >= input.state.bounds.maxTokens ||
+    nextCostUsd >= input.state.bounds.maxCostUsd
+  const stopReason: CoordinationSessionStopReason | null = failedResult
+    ? failure?.category === 'timeout'
+      ? 'timeout'
+      : failure?.category === 'budget_exhausted'
+        ? 'budget_exhausted'
+        : failure?.category === 'policy_denied'
+          ? 'policy_denied'
+          : 'failure'
+    : completed
+      ? 'success'
+      : budgetExhausted
+        ? 'budget_exhausted'
+        : deadlineReached ? 'timeout' : null
+  const tasks = stopReason === 'budget_exhausted' || stopReason === 'timeout'
+    ? resultTasks.map((item): CoordinationTaskState =>
+        item.status === 'pending' || item.status === 'ready' || item.status === 'running'
+          ? { ...item, version: item.version + 1, status: 'cancelled' }
+          : item)
+    : resultTasks
+  return {
+    ...input.state,
+    version: input.state.version + 1,
+    status: stopReason === null ? 'running' : 'terminal',
+    stopReason,
+    tasks,
+    counters: {
+      ...input.state.counters,
+      activeSpecialists: stopReason === null
+        ? input.state.counters.activeSpecialists - 1
+        : 0,
+      steps: nextSteps,
+      toolCalls: nextToolCalls,
+      tokens: nextTokens,
+      costUsd: nextCostUsd,
+    },
+    updatedAt: input.now,
+  }
+}
+
+export function cancelCoordinationSession(
+  input: CoordinationSessionCancelInput,
+): CoordinationSessionState {
+  if (
+    input.state.status !== 'running' ||
+    input.state.stopReason !== null ||
+    input.state.version !== input.expectedSessionVersion ||
+    !isCanonicalIso(input.now) ||
+    Date.parse(input.now) < Date.parse(input.state.updatedAt)
+  ) {
+    throw new Error('invalid_coordination_transition')
+  }
+  return {
+    ...input.state,
+    version: input.state.version + 1,
+    status: 'terminal',
+    stopReason: 'cancelled',
+    tasks: input.state.tasks.map((task): CoordinationTaskState =>
+      task.status === 'succeeded' || task.status === 'failed' ||
+      task.status === 'cancelled' || task.status === 'blocked'
+        ? task
+        : {
+            ...task,
+            version: task.version + 1,
+            status: 'cancelled',
+          }),
+    counters: {
+      ...input.state.counters,
+      activeSpecialists: 0,
+    },
+    updatedAt: input.now,
+  }
+}
+
+export function retryCoordinationTask(
+  input: CoordinationTaskRetryInput,
+): CoordinationSessionState {
+  const task = input.state.tasks.find((item) => item.id === input.taskId)
+  const nextSteps = input.state.counters.steps + input.usage.steps
+  const nextToolCalls = input.state.counters.toolCalls + input.usage.toolCalls
+  const nextTokens = input.state.counters.tokens + input.usage.tokens
+  const nextCostUsd = input.state.counters.costUsd + input.usage.costUsd
+  const directFailure = isPlainRecord(input.failure) &&
+    hasExactKeys(input.failure, ['category', 'code', 'sourceTaskId']) &&
+    (
+      input.failure.category === 'timeout' ||
+      input.failure.category === 'tool_error' ||
+      input.failure.category === 'coding_executor_error' ||
+      input.failure.category === 'invalid_result'
+    ) &&
+    isIdentifier(input.failure.code) &&
+    redactSensitiveText(input.failure.code).value === input.failure.code &&
+    input.failure.sourceTaskId === input.taskId
+  if (
+    input.state.status !== 'running' ||
+    input.state.stopReason !== null ||
+    input.state.version !== input.expectedSessionVersion ||
+    task === undefined ||
+    task.version !== input.expectedTaskVersion ||
+    task.status !== 'running' ||
+    task.runtimeId !== input.runtimeId ||
+    task.runtimeVersion !== input.runtimeVersion ||
+    !directFailure ||
+    input.state.counters.retries >= input.state.bounds.maxSpecialistRetries ||
+    !isPlainRecord(input.usage) ||
+    !hasExactKeys(input.usage, ['steps', 'toolCalls', 'tokens', 'costUsd']) ||
+    !isNonNegativeIntegerAtMost(input.usage.steps, input.state.bounds.maxSteps) ||
+    !isNonNegativeIntegerAtMost(input.usage.toolCalls, input.state.bounds.maxToolCalls) ||
+    !isNonNegativeIntegerAtMost(input.usage.tokens, input.state.bounds.maxTokens) ||
+    typeof input.usage.costUsd !== 'number' ||
+    !Number.isFinite(input.usage.costUsd) ||
+    input.usage.costUsd < 0 ||
+    nextSteps >= input.state.bounds.maxSteps ||
+    nextToolCalls >= input.state.bounds.maxToolCalls ||
+    nextTokens >= input.state.bounds.maxTokens ||
+    nextCostUsd >= input.state.bounds.maxCostUsd ||
+    !isIdentifier(input.replacementRuntimeId) ||
+    input.replacementRuntimeId === input.runtimeId ||
+    !isPositiveVersion(input.replacementRuntimeVersion) ||
+    !isCanonicalIso(input.now) ||
+    Date.parse(input.now) < Date.parse(input.state.updatedAt) ||
+    Date.parse(input.now) >= Date.parse(input.state.deadline)
+  ) {
+    throw new Error('invalid_coordination_transition')
+  }
+  return {
+    ...input.state,
+    version: input.state.version + 1,
+    tasks: input.state.tasks.map((item): CoordinationTaskState => item.id === task.id
+      ? {
+          ...item,
+          version: item.version + 1,
+          runtimeId: input.replacementRuntimeId,
+          runtimeVersion: input.replacementRuntimeVersion,
+          resultDigest: null,
+          failure: null,
+          attemptFailures: [...item.attemptFailures, input.failure],
+        }
+      : item),
+    counters: {
+      ...input.state.counters,
+      specialistStarts: input.state.counters.specialistStarts + 1,
+      retries: input.state.counters.retries + 1,
+      steps: nextSteps,
+      toolCalls: nextToolCalls,
+      tokens: nextTokens,
+      costUsd: nextCostUsd,
+    },
+    updatedAt: input.now,
+  }
+}
+
+export function applyCoordinationHandoff(
+  input: CoordinationHandoffTransitionInput,
+): CoordinationSessionState {
+  const sourceTask = input.state.tasks.find((task) => task.id === input.handoff.sourceTaskId)
+  const targetTask = input.state.tasks.find((task) => task.id === input.handoff.targetTaskId)
+  const existingHandoff = input.priorAcceptedHandoffs.find(
+    (handoff) => handoff.id === input.handoff.id,
+  ) ?? null
+  const priorIds = input.priorAcceptedHandoffs.map((handoff) => handoff.id)
+  const incomingSourceIds = input.graph.edges
+    .filter((edge) => edge.targetTaskId === input.handoff.targetTaskId)
+    .map((edge) => edge.sourceTaskId)
+  const previouslyAcceptedSources = new Set(
+    input.priorAcceptedHandoffs
+      .filter((handoff) => handoff.targetTaskId === input.handoff.targetTaskId)
+      .map((handoff) => handoff.sourceTaskId),
+  )
+  if (
+    input.state.status !== 'running' ||
+    input.state.stopReason !== null ||
+    input.state.version !== input.expectedSessionVersion ||
+    input.coordination.id !== input.state.id ||
+    input.graph.id !== input.state.graphId ||
+    input.graph.version !== input.state.graphVersion ||
+    input.graph.coordinationId !== input.state.id ||
+    !hasSameCoordinationScope(input.coordination.scope, input.state.scope) ||
+    !hasSameCoordinationAuthority(input.coordination.authority, input.state.authority) ||
+    input.coordination.contextDigest !== input.state.contextDigest ||
+    input.coordination.capabilitySetDigest !== input.state.capabilitySetDigest ||
+    canonicalJson(input.coordination.bounds) !== canonicalJson(input.state.bounds) ||
+    input.coordination.requestedAt !== input.state.requestedAt ||
+    input.coordination.deadline !== input.state.deadline ||
+    priorIds.length !== input.state.acceptedHandoffIds.length ||
+    new Set(priorIds).size !== priorIds.length ||
+    priorIds.some((id, index) => id !== input.state.acceptedHandoffIds[index]) ||
+    sourceTask === undefined ||
+    sourceTask.status !== 'succeeded' ||
+    sourceTask.version !== input.sourceResult.taskVersion ||
+    sourceTask.runtimeId !== input.sourceResult.runtimeId ||
+    sourceTask.runtimeVersion !== input.sourceResult.runtimeVersion ||
+    sourceTask.resultDigest !== input.sourceResult.resultDigest ||
+    input.sourceResult.taskId !== sourceTask.id ||
+    targetTask === undefined ||
+    (existingHandoff === null &&
+      Date.parse(input.handoff.createdAt) < Date.parse(input.state.updatedAt)) ||
+    (existingHandoff === null &&
+      Date.parse(input.handoff.createdAt) >= Date.parse(input.state.deadline))
+  ) {
+    throw new Error('invalid_coordination_transition')
+  }
+
+  acceptAgentHandoff(input.handoff, {
+    coordination: input.coordination,
+    graph: input.graph,
+    sourceResult: input.sourceResult,
+    targetTaskVersion: input.expectedTargetTaskVersion,
+    expectedSequence: input.state.counters.acceptedHandoffs + 1,
+    maxSummaryBytes: input.state.bounds.maxHandoffSummaryBytes,
+    existingHandoff,
+  })
+
+  if (existingHandoff !== null) return input.state
+  if (
+    targetTask.status !== 'pending' ||
+    targetTask.version !== input.expectedTargetTaskVersion ||
+    input.state.counters.acceptedHandoffs >= input.state.bounds.maxAcceptedHandoffs ||
+    previouslyAcceptedSources.has(input.handoff.sourceTaskId)
+  ) {
+    throw new Error('invalid_coordination_transition')
+  }
+
+  previouslyAcceptedSources.add(input.handoff.sourceTaskId)
+  const targetReady = incomingSourceIds.length > 0 &&
+    incomingSourceIds.every((sourceTaskId) => previouslyAcceptedSources.has(sourceTaskId))
+  return {
+    ...input.state,
+    version: input.state.version + 1,
+    tasks: input.state.tasks.map((task): CoordinationTaskState => task.id === targetTask.id
+      ? {
+          ...task,
+          version: task.version + 1,
+          status: targetReady ? 'ready' : 'pending',
+          acceptedDependencyHandoffIds: [
+            ...task.acceptedDependencyHandoffIds,
+            input.handoff.id,
+          ],
+        }
+      : task),
+    counters: {
+      ...input.state.counters,
+      acceptedHandoffs: input.state.counters.acceptedHandoffs + 1,
+    },
+    acceptedHandoffIds: [...input.state.acceptedHandoffIds, input.handoff.id],
+    updatedAt: input.handoff.createdAt,
+  }
 }
