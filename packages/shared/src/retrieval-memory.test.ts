@@ -8,6 +8,7 @@ import {
 } from './agent-runtime'
 import {
   createAgentMemoryCandidate,
+  createAgentMemoryTombstone,
   evaluateHybridRetrievalCandidate,
   evaluateLexicalRetrievalBaseline,
   KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION,
@@ -17,6 +18,7 @@ import {
   mergeKnowledgeRetrievalCandidates,
   parseCurrentKnowledgeCitation,
   parseAgentMemoryCandidate,
+  parseAgentMemoryTombstone,
   parseAgentMemoryRetrievalRequest,
   parseDurableAgentMemoryRevision,
   parseKnowledgeCitation,
@@ -353,6 +355,84 @@ describe('V2.1 Agent Memory candidate contract', () => {
     await expect(reviseAgentMemoryRevision({
       currentRevision: current,
       statement,
+      authority: { ...authority, rawPrompt: 'must-not-cross-the-boundary' },
+    })).rejects.toThrowError('invalid_agent_memory_candidate')
+  })
+
+  it('creates one monotonic pending tombstone only from exact deletion authority', async () => {
+    const current = await parseDurableAgentMemoryRevision({
+      stateVersion: 1,
+      id: 'memory-health-regression',
+      revision: 2,
+      status: 'active',
+      scope: {
+        kind: 'team',
+        organizationId: 'org-1',
+        projectId: 'project-1',
+        userId: 'user-1',
+        sessionId: 'session-1',
+        localProjectId: 'local-project-1',
+      },
+      visibility: 'user_project',
+      statement: 'The saved health test must run before dependency upgrades are accepted.',
+      contentDigest: '9af95e5c935332699bbbf9538031a2ab51aec901ac85f74fc4b319b3404d4bcc',
+      provenanceDigest: 'aad5fd68277b6b347c2ee50b6493cf3b7e4da0b99c3db571a427023e6ecc0a05',
+      sourceCandidateId: 'memory-candidate-1',
+      supersedesRevision: 1,
+      sensitivity: 'internal',
+      retentionClass: 'until_deleted',
+      expiresAt: null,
+      promotionDecisionId: 'memory-revision-decision-2',
+      promotionActorKind: 'human',
+      promotionActorId: 'user-1',
+      promotionPolicyId: 'memory-policy-1',
+      promotionPolicyVersion: 2,
+      promotionAuthorityDigest: '6'.repeat(64),
+      createdAt: '2026-08-13T08:00:06.000Z',
+    })
+    const authority = {
+      stateVersion: 1,
+      decisionId: 'memory-deletion-decision-1',
+      memoryId: current.id,
+      expectedRevision: current.revision,
+      expectedHeadVersion: 2,
+      expectedContentDigest: current.contentDigest,
+      scope: current.scope,
+      actorKind: 'human',
+      actorId: 'user-1',
+      policyId: 'memory-policy-1',
+      policyVersion: 3,
+      authorityDigest: '7'.repeat(64),
+      decidedAt: '2026-08-13T08:00:07.000Z',
+    }
+    const tombstone = await createAgentMemoryTombstone({ currentRevision: current, authority })
+    expect(tombstone).toEqual({
+      stateVersion: 1,
+      memoryId: current.id,
+      deletionVersion: 3,
+      lastRevision: 2,
+      scope: current.scope,
+      decisionId: 'memory-deletion-decision-1',
+      actorKind: 'human',
+      actorId: 'user-1',
+      policyId: 'memory-policy-1',
+      policyVersion: 3,
+      authorityDigest: '7'.repeat(64),
+      purgeStatus: 'pending',
+      deletedAt: '2026-08-13T08:00:07.000Z',
+      purgedAt: null,
+    })
+    expect(parseAgentMemoryTombstone(tombstone)).toEqual(tombstone)
+    await expect(createAgentMemoryTombstone({
+      currentRevision: current,
+      authority: { ...authority, expectedHeadVersion: 1 },
+    })).rejects.toThrowError('invalid_agent_memory_candidate')
+    await expect(createAgentMemoryTombstone({
+      currentRevision: current,
+      authority: { ...authority, actorKind: 'model' },
+    })).rejects.toThrowError('invalid_agent_memory_candidate')
+    await expect(createAgentMemoryTombstone({
+      currentRevision: current,
       authority: { ...authority, rawPrompt: 'must-not-cross-the-boundary' },
     })).rejects.toThrowError('invalid_agent_memory_candidate')
   })

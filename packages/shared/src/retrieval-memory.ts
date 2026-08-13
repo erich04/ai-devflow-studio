@@ -150,6 +150,39 @@ export type AgentMemoryRevisionAuthority = {
   decidedAt: string
 }
 
+export type AgentMemoryDeletionAuthority = {
+  stateVersion: typeof AGENT_MEMORY_CONTRACT_VERSION
+  decisionId: string
+  memoryId: string
+  expectedRevision: number
+  expectedHeadVersion: number
+  expectedContentDigest: string
+  scope: KnowledgeRetrievalScope
+  actorKind: 'human' | 'policy'
+  actorId: string
+  policyId: string
+  policyVersion: number
+  authorityDigest: string
+  decidedAt: string
+}
+
+export type AgentMemoryTombstone = {
+  stateVersion: typeof AGENT_MEMORY_CONTRACT_VERSION
+  memoryId: string
+  deletionVersion: number
+  lastRevision: number
+  scope: KnowledgeRetrievalScope
+  decisionId: string
+  actorKind: 'human' | 'policy'
+  actorId: string
+  policyId: string
+  policyVersion: number
+  authorityDigest: string
+  purgeStatus: 'pending' | 'completed'
+  deletedAt: string
+  purgedAt: string | null
+}
+
 export type DurableAgentMemoryRevision = {
   stateVersion: typeof AGENT_MEMORY_CONTRACT_VERSION
   id: string
@@ -574,6 +607,66 @@ function parseMemoryRevisionAuthority(value: unknown): AgentMemoryRevisionAuthor
   }
 }
 
+function parseMemoryDeletionAuthority(value: unknown): AgentMemoryDeletionAuthority {
+  if (
+    !isPlainRecord(value) ||
+    !hasExactKeys(value, [
+      'stateVersion',
+      'decisionId',
+      'memoryId',
+      'expectedRevision',
+      'expectedHeadVersion',
+      'expectedContentDigest',
+      'scope',
+      'actorKind',
+      'actorId',
+      'policyId',
+      'policyVersion',
+      'authorityDigest',
+      'decidedAt',
+    ]) ||
+    value.stateVersion !== AGENT_MEMORY_CONTRACT_VERSION ||
+    !isIdentifier(value.decisionId) ||
+    !isIdentifier(value.memoryId) ||
+    !isPositiveVersion(value.expectedRevision) ||
+    !isPositiveVersion(value.expectedHeadVersion) ||
+    value.expectedHeadVersion < value.expectedRevision ||
+    value.expectedHeadVersion >= 2_147_483_647 ||
+    typeof value.expectedContentDigest !== 'string' ||
+    !digestPattern.test(value.expectedContentDigest) ||
+    (value.actorKind !== 'human' && value.actorKind !== 'policy') ||
+    !isIdentifier(value.actorId) ||
+    !isIdentifier(value.policyId) ||
+    !isPositiveVersion(value.policyVersion) ||
+    typeof value.authorityDigest !== 'string' ||
+    !digestPattern.test(value.authorityDigest) ||
+    !isCanonicalIso(value.decidedAt)
+  ) {
+    failMemoryCandidate()
+  }
+  let scope: KnowledgeRetrievalScope
+  try {
+    scope = parseScope(value.scope)
+  } catch {
+    failMemoryCandidate()
+  }
+  return {
+    stateVersion: AGENT_MEMORY_CONTRACT_VERSION,
+    decisionId: value.decisionId,
+    memoryId: value.memoryId,
+    expectedRevision: value.expectedRevision,
+    expectedHeadVersion: value.expectedHeadVersion,
+    expectedContentDigest: value.expectedContentDigest,
+    scope,
+    actorKind: value.actorKind,
+    actorId: value.actorId,
+    policyId: value.policyId,
+    policyVersion: value.policyVersion,
+    authorityDigest: value.authorityDigest,
+    decidedAt: value.decidedAt,
+  }
+}
+
 export async function promoteAgentMemoryCandidate(input: unknown): Promise<DurableAgentMemoryRevision> {
   if (
     !isPlainRecord(input) ||
@@ -762,6 +855,106 @@ export async function reviseAgentMemoryRevision(input: unknown): Promise<Durable
     promotionPolicyVersion: authority.policyVersion,
     promotionAuthorityDigest: authority.authorityDigest,
     createdAt: authority.decidedAt,
+  })
+}
+
+export function parseAgentMemoryTombstone(value: unknown): AgentMemoryTombstone {
+  if (
+    !isPlainRecord(value) ||
+    !hasExactKeys(value, [
+      'stateVersion',
+      'memoryId',
+      'deletionVersion',
+      'lastRevision',
+      'scope',
+      'decisionId',
+      'actorKind',
+      'actorId',
+      'policyId',
+      'policyVersion',
+      'authorityDigest',
+      'purgeStatus',
+      'deletedAt',
+      'purgedAt',
+    ]) ||
+    value.stateVersion !== AGENT_MEMORY_CONTRACT_VERSION ||
+    !isIdentifier(value.memoryId) ||
+    !isPositiveVersion(value.deletionVersion) ||
+    !isPositiveVersion(value.lastRevision) ||
+    value.deletionVersion <= value.lastRevision ||
+    !isIdentifier(value.decisionId) ||
+    (value.actorKind !== 'human' && value.actorKind !== 'policy') ||
+    !isIdentifier(value.actorId) ||
+    !isIdentifier(value.policyId) ||
+    !isPositiveVersion(value.policyVersion) ||
+    typeof value.authorityDigest !== 'string' ||
+    !digestPattern.test(value.authorityDigest) ||
+    (value.purgeStatus !== 'pending' && value.purgeStatus !== 'completed') ||
+    !isCanonicalIso(value.deletedAt) ||
+    (value.purgeStatus === 'pending'
+      ? value.purgedAt !== null
+      : !isCanonicalIso(value.purgedAt) || Date.parse(value.purgedAt) < Date.parse(value.deletedAt))
+  ) {
+    failMemoryCandidate()
+  }
+  let scope: KnowledgeRetrievalScope
+  try {
+    scope = parseScope(value.scope)
+  } catch {
+    failMemoryCandidate()
+  }
+  return {
+    stateVersion: AGENT_MEMORY_CONTRACT_VERSION,
+    memoryId: value.memoryId,
+    deletionVersion: value.deletionVersion,
+    lastRevision: value.lastRevision,
+    scope,
+    decisionId: value.decisionId,
+    actorKind: value.actorKind,
+    actorId: value.actorId,
+    policyId: value.policyId,
+    policyVersion: value.policyVersion,
+    authorityDigest: value.authorityDigest,
+    purgeStatus: value.purgeStatus,
+    deletedAt: value.deletedAt,
+    purgedAt: value.purgedAt as string | null,
+  }
+}
+
+export async function createAgentMemoryTombstone(input: unknown): Promise<AgentMemoryTombstone> {
+  if (
+    !isPlainRecord(input) ||
+    !hasExactKeys(input, ['currentRevision', 'authority'])
+  ) {
+    failMemoryCandidate()
+  }
+  const current = await parseDurableAgentMemoryRevision(input.currentRevision)
+  const authority = parseMemoryDeletionAuthority(input.authority)
+  if (
+    authority.memoryId !== current.id ||
+    authority.expectedRevision !== current.revision ||
+    authority.expectedContentDigest !== current.contentDigest ||
+    JSON.stringify(authority.scope) !== JSON.stringify(current.scope) ||
+    Date.parse(authority.decidedAt) <= Date.parse(current.createdAt) ||
+    (authority.actorKind === 'human' && authority.actorId !== current.scope.userId)
+  ) {
+    failMemoryCandidate()
+  }
+  return parseAgentMemoryTombstone({
+    stateVersion: AGENT_MEMORY_CONTRACT_VERSION,
+    memoryId: current.id,
+    deletionVersion: authority.expectedHeadVersion + 1,
+    lastRevision: current.revision,
+    scope: { ...current.scope },
+    decisionId: authority.decisionId,
+    actorKind: authority.actorKind,
+    actorId: authority.actorId,
+    policyId: authority.policyId,
+    policyVersion: authority.policyVersion,
+    authorityDigest: authority.authorityDigest,
+    purgeStatus: 'pending',
+    deletedAt: authority.decidedAt,
+    purgedAt: null,
   })
 }
 

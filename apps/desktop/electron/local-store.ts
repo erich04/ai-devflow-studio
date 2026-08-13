@@ -38,6 +38,7 @@ import {
   assertSafeGitHubBranch,
   canApproveGateNow,
   canRunAgentRuntimeOnNode,
+  createAgentMemoryTombstone,
   createGitHubDeliveryCompletion,
   createGitHubDeliveryIntent,
   createRemoteSyncIdempotencyKey,
@@ -52,6 +53,7 @@ import {
   normalizeWorkflowRunProgress,
   parseAgentMemoryCandidate,
   parseAgentMemoryRetrievalRequest,
+  parseAgentMemoryTombstone,
   parseDurableAgentMemoryRevision,
   parseAgentCheckpoint,
   parseAgentRuntimeEvent,
@@ -70,9 +72,11 @@ import {
   parseGateCommandReceiptRecord,
   type AgentEvent,
   type AgentMemoryCandidate,
+  type AgentMemoryDeletionAuthority,
   type AgentMemoryPromotionAuthority,
   type AgentMemoryRetrievalRequest,
   type AgentMemoryRevisionAuthority,
+  type AgentMemoryTombstone,
   type AgentCheckpoint,
   type AgentRuntimeEvent,
   type AgentRuntimeState,
@@ -714,6 +718,17 @@ export type LocalStore = {
     input: CommitAgentMemoryRevisionInput,
     capability: AgentMemoryRevisionCapability,
   ): Promise<CommitAgentMemoryRevisionResult>
+  authorizeAgentMemoryDeletion(
+    input: AuthorizeAgentMemoryDeletionInput,
+  ): Promise<AuthorizeAgentMemoryDeletionResult>
+  commitAgentMemoryDeletion(
+    input: CommitAgentMemoryDeletionInput,
+    capability: AgentMemoryDeletionCapability,
+  ): Promise<CommitAgentMemoryDeletionResult>
+  getAgentMemoryTombstone(memoryId: string): Promise<AgentMemoryTombstone | null>
+  purgeAgentMemoryDerivedState(
+    input: PurgeAgentMemoryDerivedStateInput,
+  ): Promise<PurgeAgentMemoryDerivedStateResult>
   saveRun(run: WorkflowRun): Promise<void>
   deleteRun(runId: string): Promise<void>
   getRun(runId: string): Promise<WorkflowRun | null>
@@ -1031,6 +1046,77 @@ type AgentMemoryRevisionCapabilityDescriptor = {
 const agentMemoryRevisionCapabilities = new WeakMap<
   object,
   AgentMemoryRevisionCapabilityDescriptor
+>()
+
+declare const agentMemoryDeletionCapabilityBrand: unique symbol
+
+export type AgentMemoryDeletionCapability = Readonly<{
+  [agentMemoryDeletionCapabilityBrand]: true
+}>
+
+export type AuthorizeAgentMemoryDeletionInput = {
+  authority: AgentMemoryDeletionAuthority
+}
+
+export type AuthorizeAgentMemoryDeletionResult =
+  | {
+      authorized: true
+      capability: AgentMemoryDeletionCapability
+      tombstone: AgentMemoryTombstone
+    }
+  | {
+      authorized: false
+      reason:
+        | 'invalid_input'
+        | 'memory_not_found'
+        | 'scope_mismatch'
+        | 'version_conflict'
+        | 'already_deleted'
+        | 'id_conflict'
+    }
+
+export type CommitAgentMemoryDeletionInput = {
+  tombstone: AgentMemoryTombstone
+}
+
+export type CommitAgentMemoryDeletionResult =
+  | {
+      committed: true
+      replayed: boolean
+      tombstone: AgentMemoryTombstone
+    }
+  | {
+      committed: false
+      reason: 'invalid_authority' | 'invalid_tombstone' | 'source_stale' | 'id_conflict'
+    }
+
+export type PurgeAgentMemoryDerivedStateInput = {
+  memoryId: string
+  expectedDeletionVersion: number
+  purgedAt: string
+}
+
+export type PurgeAgentMemoryDerivedStateResult =
+  | {
+      purged: true
+      replayed: boolean
+      tombstone: AgentMemoryTombstone
+    }
+  | {
+      purged: false
+      reason: 'invalid_input' | 'not_found' | 'version_conflict' | 'source_stale'
+    }
+
+type AgentMemoryDeletionCapabilityDescriptor = {
+  owner: object
+  expectedHeadVersion: number
+  currentRevision: DurableAgentMemoryRevision
+  tombstone: AgentMemoryTombstone
+}
+
+const agentMemoryDeletionCapabilities = new WeakMap<
+  object,
+  AgentMemoryDeletionCapabilityDescriptor
 >()
 
 function agentMemoryScopeMatchesPairing(
@@ -6136,6 +6222,443 @@ class SqlJsLocalStore implements LocalStore {
     }
   }
 
+  async authorizeAgentMemoryDeletion(
+    input: AuthorizeAgentMemoryDeletionInput,
+  ): Promise<AuthorizeAgentMemoryDeletionResult> {
+    if (
+      typeof input !== 'object' ||
+      input === null ||
+      typeof input.authority !== 'object' ||
+      input.authority === null ||
+      !isNonEmptyIdentifier(input.authority.memoryId) ||
+      input.authority.memoryId.length > 200
+    ) {
+      return { authorized: false, reason: 'invalid_input' }
+    }
+    const head = await this.getAgentMemoryHead(input.authority.memoryId)
+    if (head === null) {
+      return { authorized: false, reason: 'memory_not_found' }
+    }
+    if (head.status === 'purge_pending' || head.status === 'deleted') {
+      return { authorized: false, reason: 'already_deleted' }
+    }
+    if (
+      head.currentRevision !== input.authority.expectedRevision ||
+      head.version !== input.authority.expectedHeadVersion
+    ) {
+      return { authorized: false, reason: 'version_conflict' }
+    }
+    const currentValue = selectJson<unknown>(
+      this.db,
+      `select json from agent_memory_revisions
+       where memory_id = ? and revision = ? limit 1`,
+      [head.memoryId, head.currentRevision],
+    )[0]
+    if (currentValue === undefined) {
+      return { authorized: false, reason: 'memory_not_found' }
+    }
+    let currentRevision: DurableAgentMemoryRevision
+    let tombstone: AgentMemoryTombstone
+    try {
+      currentRevision = await parseDurableAgentMemoryRevision(currentValue)
+      tombstone = await createAgentMemoryTombstone({
+        currentRevision,
+        authority: input.authority,
+      })
+    } catch {
+      return { authorized: false, reason: 'invalid_input' }
+    }
+    if (!stableJsonMatches(currentRevision.scope, head.scope)) {
+      return { authorized: false, reason: 'scope_mismatch' }
+    }
+    const pairing = currentRevision.scope.kind === 'team'
+      ? await this.getDesktopPairingCredential()
+      : null
+    if (!agentMemoryScopeMatchesPairing(currentRevision.scope, pairing)) {
+      return { authorized: false, reason: 'scope_mismatch' }
+    }
+    const existingTombstone = this.db.exec(
+      'select 1 from agent_memory_tombstones where memory_id = ? limit 1',
+      [tombstone.memoryId],
+    )[0]?.values[0] !== undefined
+    if (existingTombstone) {
+      return { authorized: false, reason: 'already_deleted' }
+    }
+    const identityConflict = this.db.exec(
+      `select 1 from agent_memory_tombstones
+       where json_extract(json, '$.decisionId') = ?
+       union all
+       select 1 from agent_memory_audits where id = ?
+       limit 1`,
+      [tombstone.decisionId, `memory-deletion-audit-${tombstone.decisionId}`],
+    )[0]?.values[0] !== undefined
+    if (identityConflict) {
+      return { authorized: false, reason: 'id_conflict' }
+    }
+
+    const capability = Object.freeze(
+      new Proxy(Object.create(null), {}),
+    ) as AgentMemoryDeletionCapability
+    const internalCurrentRevision = structuredClone(currentRevision)
+    const internalTombstone = structuredClone(tombstone)
+    agentMemoryDeletionCapabilities.set(capability, {
+      owner: this.agentMemoryPromotionOwner,
+      expectedHeadVersion: input.authority.expectedHeadVersion,
+      currentRevision: internalCurrentRevision,
+      tombstone: internalTombstone,
+    })
+    return {
+      authorized: true,
+      capability,
+      tombstone: structuredClone(internalTombstone),
+    }
+  }
+
+  async commitAgentMemoryDeletion(
+    input: CommitAgentMemoryDeletionInput,
+    capability: AgentMemoryDeletionCapability,
+  ): Promise<CommitAgentMemoryDeletionResult> {
+    if (typeof capability !== 'object' || capability === null) {
+      return { committed: false, reason: 'invalid_authority' }
+    }
+    const descriptor = agentMemoryDeletionCapabilities.get(capability)
+    if (descriptor === undefined || descriptor.owner !== this.agentMemoryPromotionOwner) {
+      return { committed: false, reason: 'invalid_authority' }
+    }
+    agentMemoryDeletionCapabilities.delete(capability)
+
+    let tombstone: AgentMemoryTombstone
+    try {
+      tombstone = parseAgentMemoryTombstone(input.tombstone)
+    } catch {
+      return { committed: false, reason: 'invalid_tombstone' }
+    }
+    if (!stableJsonMatches(tombstone, descriptor.tombstone)) {
+      return { committed: false, reason: 'invalid_tombstone' }
+    }
+
+    const auditMetadata = {
+      decisionId: tombstone.decisionId,
+      lastRevision: tombstone.lastRevision,
+      deletionVersion: tombstone.deletionVersion,
+      purgeStatus: tombstone.purgeStatus,
+      policyId: tombstone.policyId,
+      policyVersion: tombstone.policyVersion,
+    }
+    const existing = await this.getAgentMemoryTombstone(tombstone.memoryId)
+    if (existing !== null) {
+      const existingPendingShape = existing.purgeStatus === 'completed'
+        ? { ...existing, purgeStatus: 'pending' as const, purgedAt: null }
+        : existing
+      const sameDeletion = stableJsonMatches(existingPendingShape, tombstone)
+      const head = sameDeletion
+        ? await this.getAgentMemoryHead(tombstone.memoryId)
+        : null
+      const existingAuditMetadata = selectJson<unknown>(
+        this.db,
+        `select metadata_json from agent_memory_audits
+         where id = ? and memory_id = ? and revision = ?
+           and event_kind = 'memory_deleted' and authority_digest = ? limit 1`,
+        [
+          `memory-deletion-audit-${tombstone.decisionId}`,
+          tombstone.memoryId,
+          tombstone.lastRevision,
+          tombstone.authorityDigest,
+        ],
+      )[0]
+      const headMatches = existing.purgeStatus === 'pending'
+        ? head?.status === 'purge_pending' && head.version === tombstone.deletionVersion
+        : head?.status === 'deleted' && head.version === tombstone.deletionVersion + 1
+      return head !== null &&
+        stableJsonMatches(existingAuditMetadata, auditMetadata) &&
+        head.currentRevision === tombstone.lastRevision &&
+        stableJsonMatches(head.scope, tombstone.scope) &&
+        headMatches
+        ? { committed: true, replayed: true, tombstone: existing }
+        : { committed: false, reason: 'id_conflict' }
+    }
+
+    const currentHead = await this.getAgentMemoryHead(tombstone.memoryId)
+    const currentValue = currentHead === null
+      ? undefined
+      : selectJson<unknown>(
+          this.db,
+          `select json from agent_memory_revisions
+           where memory_id = ? and revision = ? limit 1`,
+          [currentHead.memoryId, currentHead.currentRevision],
+        )[0]
+    if (currentHead === null || currentValue === undefined) {
+      return { committed: false, reason: 'source_stale' }
+    }
+    let currentRevision: DurableAgentMemoryRevision
+    try {
+      currentRevision = await parseDurableAgentMemoryRevision(currentValue)
+    } catch {
+      return { committed: false, reason: 'source_stale' }
+    }
+    const pairing = currentRevision.scope.kind === 'team'
+      ? await this.getDesktopPairingCredential()
+      : null
+    if (
+      !agentMemoryScopeMatchesPairing(currentRevision.scope, pairing) ||
+      !stableJsonMatches(currentRevision, descriptor.currentRevision) ||
+      !stableJsonMatches(currentRevision.scope, tombstone.scope) ||
+      currentHead.currentRevision !== tombstone.lastRevision ||
+      currentHead.version !== descriptor.expectedHeadVersion ||
+      !['active', 'conflict', 'expired'].includes(currentHead.status)
+    ) {
+      return { committed: false, reason: 'source_stale' }
+    }
+
+    const scope = tombstone.scope
+    this.db.run(
+      `insert into agent_memory_tombstones (
+         memory_id, deletion_version, last_revision, local_project_id, scope_kind,
+         organization_id, team_project_id, user_id, session_id, actor_kind,
+         actor_id, authority_digest, purge_status, state_version, json,
+         deleted_at, purged_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        tombstone.memoryId,
+        tombstone.deletionVersion,
+        tombstone.lastRevision,
+        scope.localProjectId,
+        scope.kind,
+        scope.organizationId,
+        scope.projectId,
+        scope.userId,
+        scope.sessionId,
+        tombstone.actorKind,
+        tombstone.actorId,
+        tombstone.authorityDigest,
+        tombstone.purgeStatus,
+        tombstone.stateVersion,
+        JSON.stringify(tombstone),
+        tombstone.deletedAt,
+        tombstone.purgedAt,
+      ],
+    )
+    this.db.run(
+      `update agent_memory_heads
+       set status = 'purge_pending', version = version + 1, updated_at = ?
+       where memory_id = ? and current_revision = ? and version = ?
+         and status in ('active', 'conflict', 'expired')`,
+      [
+        tombstone.deletedAt,
+        tombstone.memoryId,
+        tombstone.lastRevision,
+        descriptor.expectedHeadVersion,
+      ],
+    )
+    if (this.db.getRowsModified() !== 1) {
+      throw new Error('Agent Memory deletion CAS was lost')
+    }
+    this.db.run(
+      `insert into agent_memory_audits (
+         id, memory_id, revision, local_project_id, scope_kind, organization_id,
+         team_project_id, user_id, session_id, event_kind, actor_kind, actor_id,
+         authority_digest, state_version, metadata_json, created_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        `memory-deletion-audit-${tombstone.decisionId}`,
+        tombstone.memoryId,
+        tombstone.lastRevision,
+        scope.localProjectId,
+        scope.kind,
+        scope.organizationId,
+        scope.projectId,
+        scope.userId,
+        scope.sessionId,
+        'memory_deleted',
+        tombstone.actorKind,
+        tombstone.actorId,
+        tombstone.authorityDigest,
+        tombstone.stateVersion,
+        JSON.stringify(auditMetadata),
+        tombstone.deletedAt,
+      ],
+    )
+    await this.persist()
+    return { committed: true, replayed: false, tombstone }
+  }
+
+  async getAgentMemoryTombstone(memoryId: string): Promise<AgentMemoryTombstone | null> {
+    if (!isNonEmptyIdentifier(memoryId) || memoryId.length > 200) {
+      throw new Error('Invalid Agent Memory id')
+    }
+    const value = selectJson<unknown>(
+      this.db,
+      'select json from agent_memory_tombstones where memory_id = ? limit 1',
+      [memoryId],
+    )[0]
+    if (value === undefined) return null
+    try {
+      const tombstone = parseAgentMemoryTombstone(value)
+      if (tombstone.memoryId !== memoryId) {
+        throw new Error('Stored Agent Memory tombstone identity does not match')
+      }
+      return tombstone
+    } catch {
+      throw new Error('Stored Agent Memory tombstone is invalid')
+    }
+  }
+
+  async purgeAgentMemoryDerivedState(
+    input: PurgeAgentMemoryDerivedStateInput,
+  ): Promise<PurgeAgentMemoryDerivedStateResult> {
+    if (
+      typeof input !== 'object' ||
+      input === null ||
+      !isNonEmptyIdentifier(input.memoryId) ||
+      input.memoryId.length > 200 ||
+      !Number.isInteger(input.expectedDeletionVersion) ||
+      input.expectedDeletionVersion < 1 ||
+      !isCanonicalIsoTimestamp(input.purgedAt)
+    ) {
+      return { purged: false, reason: 'invalid_input' }
+    }
+    const tombstone = await this.getAgentMemoryTombstone(input.memoryId)
+    if (tombstone === null) {
+      return { purged: false, reason: 'not_found' }
+    }
+    if (tombstone.deletionVersion !== input.expectedDeletionVersion) {
+      return { purged: false, reason: 'version_conflict' }
+    }
+    const completed = tombstone.purgeStatus === 'completed'
+    if (completed) {
+      const head = await this.getAgentMemoryHead(tombstone.memoryId)
+      const metadata = {
+        deletionVersion: tombstone.deletionVersion,
+        lastRevision: tombstone.lastRevision,
+        purgeStatus: tombstone.purgeStatus,
+      }
+      const authorityDigest = sha256Canonical({
+        stateVersion: tombstone.stateVersion,
+        memoryId: tombstone.memoryId,
+        deletionVersion: tombstone.deletionVersion,
+        lastRevision: tombstone.lastRevision,
+        purgeStatus: tombstone.purgeStatus,
+      })
+      const existingAuditMetadata = selectJson<unknown>(
+        this.db,
+        `select metadata_json from agent_memory_audits
+         where id = ? and memory_id = ? and revision = ?
+           and event_kind = 'purge_completed' and authority_digest = ? limit 1`,
+        [
+          `memory-purge-audit-${tombstone.memoryId}-${tombstone.deletionVersion}`,
+          tombstone.memoryId,
+          tombstone.lastRevision,
+          authorityDigest,
+        ],
+      )[0]
+      return tombstone.purgedAt === input.purgedAt &&
+        head !== null &&
+        head.status === 'deleted' &&
+        head.version === tombstone.deletionVersion + 1 &&
+        head.currentRevision === tombstone.lastRevision &&
+        stableJsonMatches(head.scope, tombstone.scope) &&
+        stableJsonMatches(existingAuditMetadata, metadata)
+        ? { purged: true, replayed: true, tombstone }
+        : { purged: false, reason: 'version_conflict' }
+    }
+    if (Date.parse(input.purgedAt) < Date.parse(tombstone.deletedAt)) {
+      return { purged: false, reason: 'invalid_input' }
+    }
+    const head = await this.getAgentMemoryHead(tombstone.memoryId)
+    if (
+      head === null ||
+      head.status !== 'purge_pending' ||
+      head.currentRevision !== tombstone.lastRevision ||
+      head.version !== tombstone.deletionVersion ||
+      !stableJsonMatches(head.scope, tombstone.scope)
+    ) {
+      return { purged: false, reason: 'source_stale' }
+    }
+    let completedTombstone: AgentMemoryTombstone
+    try {
+      completedTombstone = parseAgentMemoryTombstone({
+        ...tombstone,
+        purgeStatus: 'completed',
+        purgedAt: input.purgedAt,
+      })
+    } catch {
+      return { purged: false, reason: 'invalid_input' }
+    }
+
+    this.db.run(
+      'delete from agent_memory_index_entries where memory_id = ?',
+      [tombstone.memoryId],
+    )
+    this.db.run(
+      `update agent_memory_tombstones
+       set purge_status = 'completed', json = ?, purged_at = ?
+       where memory_id = ? and deletion_version = ? and purge_status = 'pending'`,
+      [
+        JSON.stringify(completedTombstone),
+        completedTombstone.purgedAt,
+        tombstone.memoryId,
+        tombstone.deletionVersion,
+      ],
+    )
+    if (this.db.getRowsModified() !== 1) {
+      throw new Error('Agent Memory purge tombstone CAS was lost')
+    }
+    this.db.run(
+      `update agent_memory_heads
+       set status = 'deleted', version = version + 1, updated_at = ?
+       where memory_id = ? and current_revision = ? and version = ?
+         and status = 'purge_pending'`,
+      [
+        completedTombstone.purgedAt,
+        tombstone.memoryId,
+        tombstone.lastRevision,
+        tombstone.deletionVersion,
+      ],
+    )
+    if (this.db.getRowsModified() !== 1) {
+      throw new Error('Agent Memory purge head CAS was lost')
+    }
+    const authorityDigest = sha256Canonical({
+      stateVersion: tombstone.stateVersion,
+      memoryId: tombstone.memoryId,
+      deletionVersion: tombstone.deletionVersion,
+      lastRevision: tombstone.lastRevision,
+      purgeStatus: completedTombstone.purgeStatus,
+    })
+    const metadata = {
+      deletionVersion: tombstone.deletionVersion,
+      lastRevision: tombstone.lastRevision,
+      purgeStatus: completedTombstone.purgeStatus,
+    }
+    this.db.run(
+      `insert into agent_memory_audits (
+         id, memory_id, revision, local_project_id, scope_kind, organization_id,
+         team_project_id, user_id, session_id, event_kind, actor_kind, actor_id,
+         authority_digest, state_version, metadata_json, created_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        `memory-purge-audit-${tombstone.memoryId}-${tombstone.deletionVersion}`,
+        tombstone.memoryId,
+        tombstone.lastRevision,
+        tombstone.scope.localProjectId,
+        tombstone.scope.kind,
+        tombstone.scope.organizationId,
+        tombstone.scope.projectId,
+        tombstone.scope.userId,
+        tombstone.scope.sessionId,
+        'purge_completed',
+        'system',
+        'electron-main-memory-purge',
+        authorityDigest,
+        tombstone.stateVersion,
+        JSON.stringify(metadata),
+        completedTombstone.purgedAt,
+      ],
+    )
+    await this.persist()
+    return { purged: true, replayed: false, tombstone: completedTombstone }
+  }
+
   async getAgentRuntime(runtimeId: string): Promise<AgentRuntimeState | null> {
     if (!isNonEmptyIdentifier(runtimeId) || runtimeId.length > 200) {
       throw new Error('Invalid Agent Runtime id')
@@ -10737,6 +11260,8 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'saveAgentMemoryCandidate',
   'commitAgentMemoryPromotion',
   'commitAgentMemoryRevision',
+  'commitAgentMemoryDeletion',
+  'purgeAgentMemoryDerivedState',
   'retrieveAgentMemoryRevisions',
   'saveRun',
   'deleteRun',

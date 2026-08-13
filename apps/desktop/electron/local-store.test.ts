@@ -1507,6 +1507,283 @@ describe('createLocalStore', () => {
     inspected.close()
   })
 
+  it('tombstones before retrieval, purges derived state after restart, and blocks old replay', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    const { candidate } = await persistAcceptedMemoryCandidate(initial)
+    const promotion = await initial.authorizeAgentMemoryPromotion({
+      candidateId: candidate.id,
+      memoryId: 'memory-delete-purge-local-store',
+      authority: {
+        stateVersion: 1,
+        decisionId: 'memory-delete-purge-promotion',
+        candidateId: candidate.id,
+        candidateContentDigest: candidate.contentDigest,
+        scope: candidate.scope,
+        actorKind: 'human',
+        actorId: candidate.scope.userId,
+        policyId: 'memory-policy-local-store-1',
+        policyVersion: 1,
+        visibility: 'user_project',
+        sensitivity: 'private',
+        retentionClass: 'until_deleted',
+        expiresAt: null,
+        authorityDigest: '7'.repeat(64),
+        decidedAt: '2026-08-12T20:30:05.000Z',
+      },
+    })
+    expect(promotion.authorized).toBe(true)
+    if (!promotion.authorized) throw new Error('expected promotion authority')
+    await initial.commitAgentMemoryPromotion(
+      { revision: promotion.revision },
+      promotion.capability,
+    )
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const indexed = new SQL.Database(await readFile(dbPath))
+    indexed.run(
+      `insert into agent_memory_index_entries (
+         memory_id, revision, model_id, model_version,
+         vector_dimensions, vector_json, created_at
+       ) values (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        promotion.revision.id,
+        promotion.revision.revision,
+        'fixture-memory-embedding',
+        '1',
+        1,
+        '[0.5]',
+        '2026-08-12T20:30:05.000Z',
+      ],
+    )
+    await writeFile(dbPath, Buffer.from(indexed.export()))
+    indexed.close()
+
+    const deleting = await createLocalStore({ dbPath })
+    const oldRevision = await deleting.authorizeAgentMemoryRevision({
+      memoryId: promotion.revision.id,
+      expectedHeadVersion: 1,
+      statement: 'An old authorized revision must not survive a later deletion.',
+      authority: {
+        stateVersion: 1,
+        decisionId: 'memory-delete-purge-old-revision',
+        memoryId: promotion.revision.id,
+        expectedRevision: 1,
+        expectedContentDigest: promotion.revision.contentDigest,
+        scope: promotion.revision.scope,
+        actorKind: 'human',
+        actorId: promotion.revision.scope.userId,
+        policyId: 'memory-policy-local-store-1',
+        policyVersion: 2,
+        visibility: 'user_project',
+        sensitivity: 'private',
+        retentionClass: 'until_deleted',
+        expiresAt: null,
+        authorityDigest: '8'.repeat(64),
+        decidedAt: '2026-08-12T20:30:06.000Z',
+      },
+    })
+    expect(oldRevision.authorized).toBe(true)
+    if (!oldRevision.authorized) throw new Error('expected old revision authority')
+    const deletion = await deleting.authorizeAgentMemoryDeletion({
+      authority: {
+        stateVersion: 1,
+        decisionId: 'memory-delete-purge-deletion',
+        memoryId: promotion.revision.id,
+        expectedRevision: 1,
+        expectedHeadVersion: 1,
+        expectedContentDigest: promotion.revision.contentDigest,
+        scope: promotion.revision.scope,
+        actorKind: 'human',
+        actorId: promotion.revision.scope.userId,
+        policyId: 'memory-policy-local-store-1',
+        policyVersion: 3,
+        authorityDigest: '9'.repeat(64),
+        decidedAt: '2026-08-12T20:30:07.000Z',
+      },
+    })
+    expect(deletion.authorized).toBe(true)
+    if (!deletion.authorized) throw new Error('expected deletion authority')
+    expect(Object.keys(deletion.capability)).toEqual([])
+    expect(Object.isFrozen(deletion.capability)).toBe(true)
+    expect(() => structuredClone(deletion.capability)).toThrow()
+    const concurrentDeletion = await deleting.authorizeAgentMemoryDeletion({
+      authority: {
+        stateVersion: 1,
+        decisionId: 'memory-delete-purge-deletion',
+        memoryId: promotion.revision.id,
+        expectedRevision: 1,
+        expectedHeadVersion: 1,
+        expectedContentDigest: promotion.revision.contentDigest,
+        scope: promotion.revision.scope,
+        actorKind: 'human',
+        actorId: promotion.revision.scope.userId,
+        policyId: 'memory-policy-local-store-1',
+        policyVersion: 3,
+        authorityDigest: '9'.repeat(64),
+        decidedAt: '2026-08-12T20:30:07.000Z',
+      },
+    })
+    expect(concurrentDeletion.authorized).toBe(true)
+    if (!concurrentDeletion.authorized) throw new Error('expected concurrent deletion authority')
+    const mutatedDeletion = await deleting.authorizeAgentMemoryDeletion({
+      authority: {
+        stateVersion: 1,
+        decisionId: 'memory-delete-purge-deletion',
+        memoryId: promotion.revision.id,
+        expectedRevision: 1,
+        expectedHeadVersion: 1,
+        expectedContentDigest: promotion.revision.contentDigest,
+        scope: promotion.revision.scope,
+        actorKind: 'human',
+        actorId: promotion.revision.scope.userId,
+        policyId: 'memory-policy-local-store-1',
+        policyVersion: 3,
+        authorityDigest: '9'.repeat(64),
+        decidedAt: '2026-08-12T20:30:07.000Z',
+      },
+    })
+    expect(mutatedDeletion.authorized).toBe(true)
+    if (!mutatedDeletion.authorized) throw new Error('expected mutation-test deletion authority')
+    mutatedDeletion.tombstone.authorityDigest = 'b'.repeat(64)
+    await expect(deleting.commitAgentMemoryDeletion(
+      { tombstone: mutatedDeletion.tombstone },
+      mutatedDeletion.capability,
+    )).resolves.toEqual({ committed: false, reason: 'invalid_tombstone' })
+    await expect(deleting.commitAgentMemoryDeletion(
+      { tombstone: deletion.tombstone },
+      { ...deletion.capability },
+    )).resolves.toEqual({ committed: false, reason: 'invalid_authority' })
+    await expect(deleting.commitAgentMemoryDeletion(
+      { tombstone: deletion.tombstone },
+      deletion.capability,
+    )).resolves.toEqual({
+      committed: true,
+      replayed: false,
+      tombstone: deletion.tombstone,
+    })
+    await expect(deleting.commitAgentMemoryDeletion(
+      { tombstone: concurrentDeletion.tombstone },
+      concurrentDeletion.capability,
+    )).resolves.toEqual({
+      committed: true,
+      replayed: true,
+      tombstone: deletion.tombstone,
+    })
+    await expect(deleting.retrieveAgentMemoryRevisions({
+      stateVersion: 1,
+      id: 'memory-retrieval-after-delete',
+      scope: promotion.revision.scope,
+      runtimeId: agentRuntimeStartRequest.id,
+      limit: 20,
+      requestedAt: '2026-08-12T20:30:07.000Z',
+    })).resolves.toEqual([])
+    await expect(deleting.commitAgentMemoryRevision(
+      { revision: oldRevision.revision, recordedAt: '2026-08-12T20:30:08.000Z' },
+      oldRevision.capability,
+    )).resolves.toEqual({ committed: false, reason: 'source_stale' })
+    await expect(deleting.getAgentMemoryTombstone(promotion.revision.id)).resolves.toEqual(
+      deletion.tombstone,
+    )
+    await expect(deleting.getAgentMemoryHead(promotion.revision.id)).resolves.toMatchObject({
+      currentRevision: 1,
+      status: 'purge_pending',
+      version: 2,
+      updatedAt: '2026-08-12T20:30:07.000Z',
+    })
+    deleting.close()
+
+    const restarted = await createLocalStore({ dbPath })
+    await expect(restarted.getAgentMemoryTombstone(promotion.revision.id)).resolves.toEqual(
+      deletion.tombstone,
+    )
+    const purgeInput = {
+      memoryId: promotion.revision.id,
+      expectedDeletionVersion: deletion.tombstone.deletionVersion,
+      purgedAt: '2026-08-12T20:30:09.000Z',
+    }
+    const backupPath = `${dbPath}.backup`
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+    await expect(restarted.purgeAgentMemoryDerivedState(purgeInput)).rejects.toThrow(
+      persistenceFailurePattern,
+    )
+    await expect(restarted.getAgentMemoryTombstone(promotion.revision.id)).resolves.toEqual(
+      deletion.tombstone,
+    )
+    await expect(restarted.getAgentMemoryHead(promotion.revision.id)).resolves.toMatchObject({
+      status: 'purge_pending',
+      version: 2,
+    })
+    await rm(dbPath, { recursive: true })
+    await rename(backupPath, dbPath)
+    const purged = await restarted.purgeAgentMemoryDerivedState(purgeInput)
+    expect(purged).toEqual({
+      purged: true,
+      replayed: false,
+      tombstone: {
+        ...deletion.tombstone,
+        purgeStatus: 'completed',
+        purgedAt: '2026-08-12T20:30:09.000Z',
+      },
+    })
+    await expect(restarted.purgeAgentMemoryDerivedState(purgeInput)).resolves.toEqual({
+      ...purged,
+      replayed: true,
+    })
+    await expect(restarted.getAgentMemoryHead(promotion.revision.id)).resolves.toMatchObject({
+      currentRevision: 1,
+      status: 'deleted',
+      version: 3,
+      updatedAt: '2026-08-12T20:30:09.000Z',
+    })
+    await expect(restarted.authorizeAgentMemoryRevision({
+      memoryId: promotion.revision.id,
+      expectedHeadVersion: 3,
+      statement: oldRevision.revision.statement,
+      authority: {
+        stateVersion: 1,
+        decisionId: 'memory-delete-purge-resurrection',
+        memoryId: promotion.revision.id,
+        expectedRevision: 1,
+        expectedContentDigest: promotion.revision.contentDigest,
+        scope: promotion.revision.scope,
+        actorKind: 'human',
+        actorId: promotion.revision.scope.userId,
+        policyId: 'memory-policy-local-store-1',
+        policyVersion: 4,
+        visibility: 'user_project',
+        sensitivity: 'private',
+        retentionClass: 'until_deleted',
+        expiresAt: null,
+        authorityDigest: 'a'.repeat(64),
+        decidedAt: '2026-08-12T20:30:10.000Z',
+      },
+    })).resolves.toEqual({ authorized: false, reason: 'version_conflict' })
+    restarted.close()
+
+    const inspected = new SQL.Database(await readFile(dbPath))
+    expect(inspected.exec(
+      "select count(*) from agent_memory_index_entries where memory_id = 'memory-delete-purge-local-store'",
+    )[0]?.values[0]?.[0]).toBe(0)
+    const auditRows = inspected.exec(
+      `select event_kind, metadata_json from agent_memory_audits
+       where memory_id = 'memory-delete-purge-local-store'
+       order by created_at asc, id asc`,
+    )[0]?.values ?? []
+    expect(auditRows.map((row) => row[0])).toEqual([
+      'candidate_promoted',
+      'memory_deleted',
+      'purge_completed',
+    ])
+    expect(JSON.stringify(auditRows)).not.toContain(promotion.revision.statement)
+    expect(JSON.stringify(auditRows)).not.toContain(oldRevision.revision.statement)
+    inspected.close()
+  })
+
   it('keeps the prior Knowledge index snapshot current when replacement persistence fails', async () => {
     const dbPath = await tempDbPath()
     const backupPath = `${dbPath}.backup`
