@@ -50,6 +50,7 @@ import {
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   normalizeWorkflowRunProgress,
+  parseAgentMemoryCandidate,
   parseAgentCheckpoint,
   parseAgentRuntimeEvent,
   parseAgentRuntimeState,
@@ -64,6 +65,7 @@ import {
   parseGateCommandAcknowledgementRecord,
   parseGateCommandReceiptRecord,
   type AgentEvent,
+  type AgentMemoryCandidate,
   type AgentCheckpoint,
   type AgentRuntimeEvent,
   type AgentRuntimeState,
@@ -680,6 +682,10 @@ export type LocalStore = {
   rebuildKnowledgeIndexSnapshot(
     input: ActivateKnowledgeIndexSnapshotInput,
   ): Promise<ActivateKnowledgeIndexSnapshotResult>
+  saveAgentMemoryCandidate(
+    candidate: AgentMemoryCandidate,
+  ): Promise<SaveAgentMemoryCandidateResult>
+  listAgentMemoryCandidates(localProjectId?: string): Promise<AgentMemoryCandidate[]>
   saveRun(run: WorkflowRun): Promise<void>
   deleteRun(runId: string): Promise<void>
   getRun(runId: string): Promise<WorkflowRun | null>
@@ -870,6 +876,13 @@ export type LocalStore = {
   loadState(): Promise<LocalExecutionState>
   close(): void
 }
+
+export type SaveAgentMemoryCandidateResult =
+  | { committed: true; replayed: boolean; candidate: AgentMemoryCandidate }
+  | {
+      committed: false
+      reason: 'invalid_candidate' | 'source_not_found' | 'scope_mismatch' | 'id_conflict'
+    }
 
 type SchemaMigration = {
   version: number
@@ -4725,6 +4738,130 @@ class SqlJsLocalStore implements LocalStore {
     const result = rebuildKnowledgeIndexSnapshotInDatabase(this.db, input)
     if (result.activated) await this.persist()
     return result
+  }
+
+  async saveAgentMemoryCandidate(
+    value: AgentMemoryCandidate,
+  ): Promise<SaveAgentMemoryCandidateResult> {
+    let candidate: AgentMemoryCandidate
+    try {
+      candidate = await parseAgentMemoryCandidate(value)
+    } catch {
+      return { committed: false, reason: 'invalid_candidate' }
+    }
+
+    const localProjectExists = Boolean(selectJson<unknown>(
+      this.db,
+      'select json from local_projects where id = ? limit 1',
+      [candidate.scope.localProjectId],
+    )[0])
+    const runtime = selectAgentRuntime(this.db, candidate.provenance.runtimeId)
+    if (!localProjectExists || runtime === null) {
+      return { committed: false, reason: 'source_not_found' }
+    }
+    if (JSON.stringify(runtime.scope) !== JSON.stringify(candidate.scope)) {
+      return { committed: false, reason: 'scope_mismatch' }
+    }
+    const observation = selectAgentRuntimeEvents(this.db, runtime.id).find(
+      (event) => event.sequence === candidate.provenance.sequence,
+    )
+    if (
+      observation?.type !== 'observation_recorded' ||
+      observation.checkpointVersion !== candidate.provenance.checkpointVersion ||
+      observation.metadata.actionId !== candidate.provenance.actionId ||
+      observation.metadata.resultDigest !== candidate.provenance.resultDigest ||
+      !runtime.acceptedActionIds.includes(candidate.provenance.actionId) ||
+      Date.parse(candidate.createdAt) < Date.parse(observation.createdAt)
+    ) {
+      return { committed: false, reason: 'source_not_found' }
+    }
+    if (candidate.scope.kind === 'team') {
+      const pairing = await this.getDesktopPairingCredential()
+      if (
+        pairing === null ||
+        pairing.organizationId !== candidate.scope.organizationId ||
+        pairing.projectId !== candidate.scope.projectId ||
+        pairing.userId !== candidate.scope.userId ||
+        pairing.tokenId !== candidate.scope.sessionId ||
+        pairing.localProjectId !== candidate.scope.localProjectId
+      ) {
+        return { committed: false, reason: 'scope_mismatch' }
+      }
+    }
+
+    const existingValue = selectJson<unknown>(
+      this.db,
+      'select json from agent_memory_candidates where id = ? limit 1',
+      [candidate.id],
+    )[0]
+    if (existingValue !== undefined) {
+      const existing = await parseAgentMemoryCandidate(existingValue)
+      return JSON.stringify(existing) === JSON.stringify(candidate)
+        ? { committed: true, replayed: true, candidate: existing }
+        : { committed: false, reason: 'id_conflict' }
+    }
+    const sameSource = selectJson<unknown>(
+      this.db,
+      `select json from agent_memory_candidates
+       where local_project_id = ? and provenance_digest = ? and content_digest = ? limit 1`,
+      [candidate.scope.localProjectId, candidate.provenanceDigest, candidate.contentDigest],
+    )[0]
+    if (sameSource !== undefined) {
+      return { committed: false, reason: 'id_conflict' }
+    }
+
+    this.db.run(
+      `insert into agent_memory_candidates (
+         id, scope_kind, local_project_id, organization_id, team_project_id,
+         user_id, session_id, runtime_id, action_id, checkpoint_version,
+         observation_sequence, result_digest, statement, content_digest,
+         provenance_digest, status, state_version, json, created_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        candidate.id,
+        candidate.scope.kind,
+        candidate.scope.localProjectId,
+        candidate.scope.organizationId,
+        candidate.scope.projectId,
+        candidate.scope.userId,
+        candidate.scope.sessionId,
+        candidate.provenance.runtimeId,
+        candidate.provenance.actionId,
+        candidate.provenance.checkpointVersion,
+        candidate.provenance.sequence,
+        candidate.provenance.resultDigest,
+        candidate.statement,
+        candidate.contentDigest,
+        candidate.provenanceDigest,
+        candidate.status,
+        candidate.stateVersion,
+        JSON.stringify(candidate),
+        candidate.createdAt,
+      ],
+    )
+    await this.persist()
+    return { committed: true, replayed: false, candidate }
+  }
+
+  async listAgentMemoryCandidates(localProjectId?: string): Promise<AgentMemoryCandidate[]> {
+    if (
+      localProjectId !== undefined &&
+      (!isNonEmptyIdentifier(localProjectId) || localProjectId.length > 200)
+    ) {
+      throw new Error('Invalid Local Project id')
+    }
+    const values = localProjectId === undefined
+      ? selectJson<unknown>(
+          this.db,
+          'select json from agent_memory_candidates order by created_at asc, id asc',
+        )
+      : selectJson<unknown>(
+          this.db,
+          `select json from agent_memory_candidates
+           where local_project_id = ? order by created_at asc, id asc`,
+          [localProjectId],
+        )
+    return Promise.all(values.map(parseAgentMemoryCandidate))
   }
 
   async getAgentRuntime(runtimeId: string): Promise<AgentRuntimeState | null> {
@@ -9325,6 +9462,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'upsertProject',
   'activateKnowledgeIndexSnapshot',
   'rebuildKnowledgeIndexSnapshot',
+  'saveAgentMemoryCandidate',
   'saveRun',
   'deleteRun',
   'enqueueRemoteSyncOperation',

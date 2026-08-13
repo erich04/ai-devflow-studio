@@ -16,6 +16,7 @@ export const KNOWLEDGE_RETRIEVAL_VECTOR_DIMENSIONS_MAX = 4_096
 
 const MAX_VERSION = 2_147_483_647
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u
+const digestPattern = /^[a-f0-9]{64}$/u
 const snapshotHashPattern = /^sha256:[a-f0-9]{64}$/u
 const tagPattern = /^[a-z0-9][a-z0-9._:-]{0,63}$/u
 const knowledgeCategories = new Set<KnowledgeDocumentCategory>([
@@ -229,7 +230,7 @@ export async function createAgentMemoryCandidate(input: unknown): Promise<AgentM
     sequence: observationEvent.sequence,
     resultDigest: String(observationEvent.metadata.resultDigest),
   }
-  return {
+  return parseAgentMemoryCandidate({
     stateVersion: AGENT_MEMORY_CONTRACT_VERSION,
     id: input.id,
     status: 'candidate',
@@ -239,6 +240,86 @@ export async function createAgentMemoryCandidate(input: unknown): Promise<AgentM
     provenance,
     provenanceDigest: await sha256Hex(JSON.stringify(provenance)),
     createdAt: input.createdAt,
+  })
+}
+
+export async function parseAgentMemoryCandidate(value: unknown): Promise<AgentMemoryCandidate> {
+  if (
+    !isPlainRecord(value) ||
+    !hasExactKeys(value, [
+      'stateVersion',
+      'id',
+      'status',
+      'scope',
+      'statement',
+      'contentDigest',
+      'provenance',
+      'provenanceDigest',
+      'createdAt',
+    ]) ||
+    value.stateVersion !== AGENT_MEMORY_CONTRACT_VERSION ||
+    !isIdentifier(value.id) ||
+    value.status !== 'candidate' ||
+    typeof value.statement !== 'string' ||
+    value.statement.length === 0 ||
+    value.statement.trim() !== value.statement ||
+    new TextEncoder().encode(value.statement).byteLength > AGENT_MEMORY_CANDIDATE_TEXT_MAX_BYTES ||
+    redactSensitiveText(value.statement).value !== value.statement ||
+    typeof value.contentDigest !== 'string' ||
+    !digestPattern.test(value.contentDigest) ||
+    typeof value.provenanceDigest !== 'string' ||
+    !digestPattern.test(value.provenanceDigest) ||
+    !isCanonicalIso(value.createdAt) ||
+    !isPlainRecord(value.provenance) ||
+    !hasExactKeys(value.provenance, [
+      'kind',
+      'runtimeId',
+      'actionId',
+      'checkpointVersion',
+      'sequence',
+      'resultDigest',
+    ]) ||
+    value.provenance.kind !== 'agent_observation' ||
+    !isIdentifier(value.provenance.runtimeId) ||
+    !isIdentifier(value.provenance.actionId) ||
+    !isPositiveVersion(value.provenance.checkpointVersion) ||
+    !isPositiveVersion(value.provenance.sequence) ||
+    typeof value.provenance.resultDigest !== 'string' ||
+    !digestPattern.test(value.provenance.resultDigest)
+  ) {
+    failMemoryCandidate()
+  }
+
+  let scope: KnowledgeRetrievalScope
+  try {
+    scope = parseScope(value.scope)
+  } catch {
+    failMemoryCandidate()
+  }
+  const provenance: AgentMemoryCandidateProvenance = {
+    kind: 'agent_observation',
+    runtimeId: value.provenance.runtimeId,
+    actionId: value.provenance.actionId,
+    checkpointVersion: value.provenance.checkpointVersion,
+    sequence: value.provenance.sequence,
+    resultDigest: value.provenance.resultDigest,
+  }
+  if (
+    await sha256Hex(value.statement) !== value.contentDigest ||
+    await sha256Hex(JSON.stringify(provenance)) !== value.provenanceDigest
+  ) {
+    failMemoryCandidate()
+  }
+  return {
+    stateVersion: AGENT_MEMORY_CONTRACT_VERSION,
+    id: value.id,
+    status: 'candidate',
+    scope,
+    statement: value.statement,
+    contentDigest: value.contentDigest,
+    provenance,
+    provenanceDigest: value.provenanceDigest,
+    createdAt: value.createdAt,
   }
 }
 

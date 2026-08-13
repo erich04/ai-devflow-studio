@@ -8,6 +8,7 @@ import {
   applyWorkflowCommand,
   acceptAgentActionResult,
   cancelAgentRuntime,
+  createAgentMemoryCandidate,
   createAgentRuntime,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
@@ -790,6 +791,80 @@ describe('createLocalStore', () => {
       inspected.exec('select count(*) from agent_memory_candidates')[0]?.values[0]?.[0],
     ).toBe(0)
     inspected.close()
+  })
+
+  it('persists one accepted inert Memory candidate exactly once across restart', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+
+    const created = createAgentRuntime(agentRuntimeStartRequest)
+    const resumed = resumeAgentRuntime({
+      runtime: created.runtime,
+      expectedCheckpointVersion: created.runtime.checkpointVersion,
+      authority: created.runtime.authority,
+      contextDigest: created.runtime.contextDigest,
+      capabilitySetDigest: created.runtime.capabilitySetDigest,
+      now: '2026-08-12T20:30:01.000Z',
+    })
+    const requested = requestAgentAction({
+      runtime: resumed.runtime,
+      expectedCheckpointVersion: resumed.runtime.checkpointVersion,
+      now: '2026-08-12T20:30:02.000Z',
+      action: {
+        id: 'memory-observation-action-1',
+        kind: 'tool',
+        capabilityId: 'test.observe',
+        capabilityVersion: 1,
+        requestDigest: 'c'.repeat(64),
+        requiresPermission: false,
+      },
+    })
+    const accepted = acceptAgentActionResult({
+      runtime: requested.runtime,
+      expectedCheckpointVersion: requested.runtime.checkpointVersion,
+      actionId: 'memory-observation-action-1',
+      requestDigest: 'c'.repeat(64),
+      result: {
+        outcome: 'success',
+        resultDigest: 'd'.repeat(64),
+        resultBytes: 128,
+        tokens: 0,
+        costUsd: 0,
+        evaluation: 'continue',
+        evaluationSummary: 'The accepted observation can propose one inert Memory candidate.',
+      },
+      now: '2026-08-12T20:30:03.000Z',
+    })
+    await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: created })
+    await store.commitAgentRuntimeTransition({ expectedRuntime: created.runtime, transition: resumed })
+    await store.commitAgentRuntimeTransition({ expectedRuntime: resumed.runtime, transition: requested })
+    await store.commitAgentRuntimeTransition({ expectedRuntime: requested.runtime, transition: accepted })
+    const candidate = await createAgentMemoryCandidate({
+      id: 'memory-candidate-local-store-1',
+      statement: 'The saved health test is the regression check for dependency degradation.',
+      previousRuntime: requested.runtime,
+      acceptedTransition: accepted,
+      createdAt: '2026-08-12T20:30:04.000Z',
+    })
+
+    await expect(store.saveAgentMemoryCandidate(candidate)).resolves.toEqual({
+      committed: true,
+      replayed: false,
+      candidate,
+    })
+    await expect(store.listAgentMemoryCandidates(project.id)).resolves.toEqual([candidate])
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.listAgentMemoryCandidates(project.id)).resolves.toEqual([candidate])
+    await expect(reopened.saveAgentMemoryCandidate(candidate)).resolves.toEqual({
+      committed: true,
+      replayed: true,
+      candidate,
+    })
+    reopened.close()
   })
 
   it('keeps the prior Knowledge index snapshot current when replacement persistence fails', async () => {
