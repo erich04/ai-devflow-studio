@@ -133,7 +133,7 @@ import {
   type WorkRequest,
   AGENT_MEMORY_ACTIVE_REVISIONS_MAX,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 27
+export const CURRENT_SCHEMA_VERSION = 28
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -3211,6 +3211,197 @@ const schemaMigrations: readonly SchemaMigration[] = [
 
     create index idx_remote_sync_outbox_due
       on remote_sync_outbox(status, next_attempt_at, created_at);
+      `)
+    },
+  },
+  {
+    version: 28,
+    migrate(db) {
+      db.run(`
+    create table agent_coordination_sessions (
+      id text primary key,
+      contract_version integer not null,
+      local_project_id text not null,
+      organization_id text not null,
+      team_project_id text not null,
+      user_id text not null,
+      scope_session_id text not null,
+      run_id text not null,
+      node_id text not null,
+      supervisor_runtime_id text not null,
+      graph_id text not null unique,
+      graph_version integer not null,
+      version integer not null,
+      status text not null,
+      stop_reason text,
+      context_digest text not null,
+      capability_set_digest text not null,
+      request_json text not null,
+      state_json text not null,
+      requested_at text not null,
+      started_at text not null,
+      updated_at text not null,
+      deadline text not null,
+      foreign key (local_project_id) references local_projects(id) on delete restrict,
+      foreign key (run_id) references workflow_runs(id) on delete restrict,
+      foreign key (supervisor_runtime_id) references agent_runtimes(id) on delete restrict,
+      check (contract_version = 1),
+      check (graph_version between 1 and 2147483647),
+      check (version between 1 and 2147483647),
+      check (status in ('running', 'terminal')),
+      check (stop_reason is null or stop_reason in (
+        'success', 'failure', 'cancelled', 'timeout', 'budget_exhausted',
+        'policy_denied', 'blocked_dependency'
+      )),
+      check (
+        (status = 'running' and stop_reason is null) or
+        (status = 'terminal' and stop_reason is not null)
+      ),
+      check (length(context_digest) = 64 and context_digest not glob '*[^0-9a-f]*'),
+      check (length(capability_set_digest) = 64 and capability_set_digest not glob '*[^0-9a-f]*'),
+      check (json_valid(request_json) and json_type(request_json) = 'object'),
+      check (json_valid(state_json) and json_type(state_json) = 'object'),
+      check (length(cast(request_json as blob)) <= 262144),
+      check (length(cast(state_json as blob)) <= 262144),
+      check (requested_at <= started_at and started_at <= updated_at and updated_at < deadline)
+    );
+
+    create index idx_agent_coordination_sessions_scope
+      on agent_coordination_sessions(
+        organization_id, team_project_id, user_id, scope_session_id,
+        local_project_id, run_id, status, id
+      );
+
+    create table agent_coordination_graphs (
+      id text primary key,
+      coordination_id text not null unique,
+      version integer not null,
+      node_count integer not null,
+      edge_count integer not null,
+      graph_json text not null,
+      created_at text not null,
+      foreign key (coordination_id) references agent_coordination_sessions(id) on delete cascade,
+      check (version between 1 and 2147483647),
+      check (node_count between 1 and 12),
+      check (edge_count between 0 and 24),
+      check (json_valid(graph_json) and json_type(graph_json) = 'object'),
+      check (length(cast(graph_json as blob)) <= 262144)
+    );
+
+    create table agent_coordination_tasks (
+      coordination_id text not null,
+      task_id text not null,
+      graph_id text not null,
+      role_id text not null,
+      version integer not null,
+      status text not null,
+      agent_id text,
+      runtime_id text,
+      runtime_version integer,
+      state_json text not null,
+      updated_at text not null,
+      primary key (coordination_id, task_id),
+      foreign key (coordination_id) references agent_coordination_sessions(id) on delete cascade,
+      foreign key (graph_id) references agent_coordination_graphs(id) on delete cascade,
+      check (version between 1 and 2147483647),
+      check (status in ('pending', 'ready', 'running', 'succeeded', 'failed', 'cancelled', 'blocked')),
+      check (
+        (runtime_id is null and runtime_version is null) or
+        (runtime_id is not null and runtime_version between 1 and 2147483647)
+      ),
+      check (json_valid(state_json) and json_type(state_json) = 'object'),
+      check (length(cast(state_json as blob)) <= 65536)
+    );
+
+    create index idx_agent_coordination_tasks_status
+      on agent_coordination_tasks(coordination_id, status, task_id);
+
+    create table agent_coordination_handoffs (
+      id text primary key,
+      coordination_id text not null,
+      sequence integer not null,
+      source_task_id text not null,
+      target_task_id text not null,
+      result_digest text not null,
+      handoff_json text not null,
+      created_at text not null,
+      foreign key (coordination_id, source_task_id)
+        references agent_coordination_tasks(coordination_id, task_id) on delete cascade,
+      foreign key (coordination_id, target_task_id)
+        references agent_coordination_tasks(coordination_id, task_id) on delete cascade,
+      unique (coordination_id, sequence),
+      check (sequence between 1 and 16),
+      check (source_task_id <> target_task_id),
+      check (length(result_digest) = 64 and result_digest not glob '*[^0-9a-f]*'),
+      check (json_valid(handoff_json) and json_type(handoff_json) = 'object'),
+      check (length(cast(handoff_json as blob)) <= 65536)
+    );
+
+    create table agent_coordination_leases (
+      id text primary key,
+      coordination_id text not null,
+      task_id text not null,
+      resource_id text not null,
+      resource_digest text not null,
+      mode text not null,
+      status text not null,
+      version integer not null,
+      lease_json text not null,
+      acquired_at text not null,
+      expires_at text not null,
+      released_at text,
+      foreign key (coordination_id, task_id)
+        references agent_coordination_tasks(coordination_id, task_id) on delete cascade,
+      check (mode in ('read', 'write')),
+      check (status in ('active', 'released', 'expired', 'cancelled')),
+      check (version between 1 and 2147483647),
+      check (length(resource_digest) = 64 and resource_digest not glob '*[^0-9a-f]*'),
+      check (json_valid(lease_json) and json_type(lease_json) = 'object'),
+      check (length(cast(lease_json as blob)) <= 65536),
+      check (acquired_at < expires_at),
+      check (
+        (status = 'active' and released_at is null) or
+        (status <> 'active' and released_at is not null and released_at >= acquired_at)
+      )
+    );
+
+    create index idx_agent_coordination_leases_resource
+      on agent_coordination_leases(coordination_id, resource_id, status, mode, id);
+
+    create table agent_coordination_audits (
+      id text primary key,
+      coordination_id text not null,
+      task_id text,
+      event_kind text not null,
+      session_version integer not null,
+      metadata_json text not null,
+      created_at text not null,
+      foreign key (coordination_id) references agent_coordination_sessions(id) on delete cascade,
+      foreign key (coordination_id, task_id)
+        references agent_coordination_tasks(coordination_id, task_id) on delete cascade,
+      check (session_version between 1 and 2147483647),
+      check (json_valid(metadata_json) and json_type(metadata_json) = 'object'),
+      check (length(cast(metadata_json as blob)) <= 65536)
+    );
+
+    create index idx_agent_coordination_audits_session
+      on agent_coordination_audits(coordination_id, created_at, id);
+
+    create table agent_coordination_checkpoints (
+      coordination_id text not null,
+      checkpoint_version integer not null,
+      session_version integer not null,
+      graph_version integer not null,
+      checkpoint_json text not null,
+      created_at text not null,
+      primary key (coordination_id, checkpoint_version),
+      foreign key (coordination_id) references agent_coordination_sessions(id) on delete cascade,
+      check (checkpoint_version between 1 and 2147483647),
+      check (session_version between 1 and 2147483647),
+      check (graph_version between 1 and 2147483647),
+      check (json_valid(checkpoint_json) and json_type(checkpoint_json) = 'object'),
+      check (length(cast(checkpoint_json as blob)) <= 262144)
+    );
       `)
     },
   },
