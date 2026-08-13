@@ -10,6 +10,7 @@ import {
   assembleAgentRuntimeContext,
   cancelAgentRuntime,
   createAgentMemoryCandidate,
+  createCoordinationSessionState,
   createAgentRuntime,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
@@ -23,11 +24,13 @@ import {
   resolveEffectivePolicy,
 } from '@ai-devflow/shared'
 import type {
+  AgentTaskGraph,
   AgentEvent,
   AgentReviewResult,
   AgentTrace,
   AgentTokenUsage,
   AgentRuntimeStartRequest,
+  CoordinationSessionRequest,
   AgentMemoryPromotionAuthority,
   Artifact,
   CodingAgentEvent,
@@ -729,6 +732,79 @@ const teamAgentRuntimeStartRequest: AgentRuntimeStartRequest = {
     sessionId: desktopPairingCredential.tokenId,
     localProjectId: project.id,
   },
+}
+
+const coordinationSessionRequest: CoordinationSessionRequest = {
+  stateVersion: 1,
+  id: 'coordination-local-store-1',
+  scope: {
+    organizationId: desktopPairingCredential.organizationId,
+    projectId: desktopPairingCredential.projectId,
+    userId: desktopPairingCredential.userId,
+    sessionId: desktopPairingCredential.tokenId,
+    localProjectId: project.id,
+  },
+  authority: {
+    ...teamAgentRuntimeStartRequest.authority,
+    supervisorRuntimeId: teamAgentRuntimeStartRequest.id,
+    supervisorRuntimeVersion: 1,
+  },
+  contextDigest: teamAgentRuntimeStartRequest.contextDigest,
+  capabilitySetDigest: teamAgentRuntimeStartRequest.capabilitySetDigest,
+  bounds: {
+    maxSpecialists: 2,
+    maxTaskNodes: 3,
+    maxDependencyEdges: 2,
+    maxDelegationDepth: 1,
+    maxParallelSpecialists: 2,
+    maxAcceptedHandoffs: 2,
+    maxSpecialistRetries: 1,
+    maxHandoffSummaryBytes: 4_096,
+    maxSteps: teamAgentRuntimeStartRequest.bounds.maxSteps,
+    maxWallTimeMs: teamAgentRuntimeStartRequest.bounds.maxWallTimeMs,
+    maxToolCalls: teamAgentRuntimeStartRequest.bounds.maxToolCalls,
+    maxTokens: teamAgentRuntimeStartRequest.bounds.maxTokens,
+    maxCostUsd: teamAgentRuntimeStartRequest.bounds.maxCostUsd,
+  },
+  requestedAt: teamAgentRuntimeStartRequest.requestedAt,
+  deadline: teamAgentRuntimeStartRequest.deadline,
+}
+
+const coordinationTaskGraph: AgentTaskGraph = {
+  stateVersion: 1,
+  id: 'coordination-graph-local-store-1',
+  coordinationId: coordinationSessionRequest.id,
+  version: 1,
+  entryTaskIds: ['coordination-task-research'],
+  nodes: [
+    {
+      id: 'coordination-task-research',
+      roleId: 'specialist.research',
+      contextDigest: 'c'.repeat(64),
+      capabilityIds: ['repository.read'],
+      resourceRequirements: [{
+        resourceId: 'repository-source',
+        resourceDigest: 'd'.repeat(64),
+        mode: 'read',
+      }],
+    },
+    {
+      id: 'coordination-task-review',
+      roleId: 'specialist.review',
+      contextDigest: 'e'.repeat(64),
+      capabilityIds: ['repository.read'],
+      resourceRequirements: [{
+        resourceId: 'repository-source',
+        resourceDigest: 'd'.repeat(64),
+        mode: 'read',
+      }],
+    },
+  ],
+  edges: [{
+    id: 'coordination-edge-research-review',
+    sourceTaskId: 'coordination-task-research',
+    targetTaskId: 'coordination-task-review',
+  }],
 }
 
 async function persistAcceptedMemoryCandidate(
@@ -2829,6 +2905,123 @@ describe('createLocalStore', () => {
       ),
     ).toEqual(expect.arrayContaining(['permission_class', 'resource_kind', 'resource_id']))
     inspected.close()
+  })
+
+  it('atomically creates, replays, and reopens one Supervisor-owned coordination session', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    const supervisor = createAgentRuntime(teamAgentRuntimeStartRequest)
+    await expect(store.commitAgentRuntimeTransition({
+      expectedRuntime: null,
+      transition: supervisor,
+    })).resolves.toMatchObject({ committed: true, replayed: false })
+
+    const expectedState = createCoordinationSessionState({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      startedAt: coordinationSessionRequest.requestedAt,
+    })
+    const input = {
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      acceptedRoleIds: ['specialist.research', 'specialist.review'],
+      startedAt: coordinationSessionRequest.requestedAt,
+    }
+    await expect(store.createCoordinationSession(input)).resolves.toEqual({
+      committed: true,
+      replayed: false,
+      state: expectedState,
+    })
+    await expect(store.createCoordinationSession(input)).resolves.toEqual({
+      committed: true,
+      replayed: true,
+      state: expectedState,
+    })
+    await expect(store.getCoordinationSession(coordinationSessionRequest.id)).resolves.toEqual({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      state: expectedState,
+    })
+
+    const crossProjectCoordination = {
+      ...coordinationSessionRequest,
+      id: 'coordination-cross-project',
+      scope: { ...coordinationSessionRequest.scope, projectId: 'team-project-other' },
+    }
+    await expect(store.createCoordinationSession({
+      ...input,
+      coordination: crossProjectCoordination,
+      graph: {
+        ...coordinationTaskGraph,
+        id: 'coordination-graph-cross-project',
+        coordinationId: crossProjectCoordination.id,
+      },
+    })).resolves.toEqual({ committed: false, reason: 'authority_mismatch' })
+    store.close()
+
+    const inspected = new (await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })).Database(await readFile(dbPath))
+    const counts = inspected.exec(`
+      select
+        (select count(*) from agent_coordination_sessions),
+        (select count(*) from agent_coordination_graphs),
+        (select count(*) from agent_coordination_tasks),
+        (select count(*) from agent_coordination_audits),
+        (select count(*) from agent_coordination_checkpoints),
+        (select count(*) from agent_coordination_handoffs),
+        (select count(*) from agent_coordination_leases)
+    `)[0]?.values[0]?.map(Number)
+    expect(counts).toEqual([1, 1, 2, 1, 1, 0, 0])
+    inspected.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getCoordinationSession(coordinationSessionRequest.id)).resolves.toEqual({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      state: expectedState,
+    })
+    reopened.close()
+  })
+
+  it('restores all coordination tables when session persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const backupPath = `${dbPath}.backup`
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    const supervisor = createAgentRuntime(teamAgentRuntimeStartRequest)
+    await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: supervisor })
+
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+    await expect(store.createCoordinationSession({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      acceptedRoleIds: ['specialist.research', 'specialist.review'],
+      startedAt: coordinationSessionRequest.requestedAt,
+    })).rejects.toThrow(persistenceFailurePattern)
+    await expect(store.getCoordinationSession(coordinationSessionRequest.id)).resolves.toBeNull()
+    await rm(dbPath, { recursive: true })
+    await rename(backupPath, dbPath)
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getCoordinationSession(coordinationSessionRequest.id)).resolves.toBeNull()
+    await expect(reopened.getAgentRuntime(teamAgentRuntimeStartRequest.id)).resolves.toEqual(
+      supervisor.runtime,
+    )
+    reopened.close()
   })
 
   it('atomically persists exact Agent Runtime events and checkpoints across restart', async () => {
