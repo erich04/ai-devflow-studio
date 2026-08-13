@@ -92,7 +92,7 @@ import {
   type WorkflowRun,
   type WorkRequest,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 21
+export const CURRENT_SCHEMA_VERSION = 22
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -2297,6 +2297,132 @@ const schemaMigrations: readonly SchemaMigration[] = [
 
     create index idx_remote_sync_outbox_due
       on remote_sync_outbox(status, next_attempt_at, created_at);
+      `)
+    },
+  },
+  {
+    version: 22,
+    migrate(db) {
+      db.run(`
+    create table knowledge_index_snapshots (
+      id text primary key,
+      local_project_id text not null,
+      organization_id text,
+      team_project_id text,
+      snapshot_hash text not null,
+      embedding_model_id text not null,
+      embedding_model_version text not null,
+      vector_dimensions integer not null,
+      status text not null,
+      state_version integer not null,
+      created_at text not null,
+      updated_at text not null,
+      activated_at text,
+      foreign key (local_project_id) references local_projects(id) on delete cascade,
+      check (length(trim(id)) > 0 and length(id) <= 200 and trim(id) = id),
+      check (length(trim(local_project_id)) > 0 and length(local_project_id) <= 200 and trim(local_project_id) = local_project_id),
+      check (
+        (organization_id is null and team_project_id is null) or
+        (organization_id is not null and team_project_id is not null)
+      ),
+      check (organization_id is null or (length(trim(organization_id)) > 0 and length(organization_id) <= 200 and trim(organization_id) = organization_id)),
+      check (team_project_id is null or (length(trim(team_project_id)) > 0 and length(team_project_id) <= 200 and trim(team_project_id) = team_project_id)),
+      check (
+        length(snapshot_hash) = 71 and
+        substr(snapshot_hash, 1, 7) = 'sha256:' and
+        substr(snapshot_hash, 8) not glob '*[^0-9a-f]*'
+      ),
+      check (length(trim(embedding_model_id)) > 0 and length(embedding_model_id) <= 200 and trim(embedding_model_id) = embedding_model_id),
+      check (length(trim(embedding_model_version)) > 0 and length(embedding_model_version) <= 200 and trim(embedding_model_version) = embedding_model_version),
+      check (vector_dimensions between 1 and 4096),
+      check (status in ('building', 'current', 'superseded', 'failed')),
+      check (state_version = 1),
+      check (updated_at >= created_at),
+      check (
+        (status in ('current', 'superseded') and activated_at is not null) or
+        (status in ('building', 'failed') and activated_at is null)
+      )
+    );
+
+    create unique index idx_knowledge_index_snapshots_current
+      on knowledge_index_snapshots(local_project_id)
+      where status = 'current';
+    create index idx_knowledge_index_snapshots_scope
+      on knowledge_index_snapshots(organization_id, team_project_id, local_project_id, created_at);
+
+    create table knowledge_index_chunks (
+      snapshot_id text not null,
+      document_id text not null,
+      chunk_id text not null,
+      source_path text not null,
+      heading_path_json text not null,
+      content_hash text not null,
+      content_text text not null,
+      ordinal integer not null,
+      state_version integer not null,
+      primary key (snapshot_id, chunk_id),
+      unique (snapshot_id, document_id, chunk_id, content_hash),
+      foreign key (snapshot_id) references knowledge_index_snapshots(id) on delete cascade,
+      check (length(trim(document_id)) > 0 and length(document_id) <= 200 and trim(document_id) = document_id),
+      check (length(trim(chunk_id)) > 0 and length(chunk_id) <= 200 and trim(chunk_id) = chunk_id),
+      check (length(trim(source_path)) > 0 and length(source_path) <= 500 and trim(source_path) = source_path),
+      check (substr(source_path, 1, 1) <> '/' and instr(source_path, '\\') = 0 and instr(source_path, '//') = 0),
+      check (json_valid(heading_path_json) and json_type(heading_path_json) = 'array' and json_array_length(heading_path_json) > 0),
+      check (length(trim(content_hash)) > 0 and length(content_hash) <= 200 and trim(content_hash) = content_hash),
+      check (length(content_text) between 1 and 65536 and trim(content_text) = content_text),
+      check (ordinal between 0 and 2147483647),
+      check (state_version = 1)
+    );
+
+    create index idx_knowledge_index_chunks_document
+      on knowledge_index_chunks(snapshot_id, document_id, ordinal, chunk_id);
+
+    create table knowledge_index_vectors (
+      snapshot_id text not null,
+      chunk_id text not null,
+      model_id text not null,
+      model_version text not null,
+      vector_dimensions integer not null,
+      vector_json text not null,
+      created_at text not null,
+      primary key (snapshot_id, chunk_id),
+      foreign key (snapshot_id, chunk_id)
+        references knowledge_index_chunks(snapshot_id, chunk_id) on delete cascade,
+      check (length(trim(model_id)) > 0 and length(model_id) <= 200 and trim(model_id) = model_id),
+      check (length(trim(model_version)) > 0 and length(model_version) <= 200 and trim(model_version) = model_version),
+      check (vector_dimensions between 1 and 4096),
+      check (
+        json_valid(vector_json) and
+        json_type(vector_json) = 'array' and
+        json_array_length(vector_json) = vector_dimensions
+      )
+    );
+
+    create table knowledge_citations (
+      id text primary key,
+      snapshot_id text not null,
+      request_id text not null,
+      document_id text not null,
+      chunk_id text not null,
+      content_hash text not null,
+      strategy_chain_json text not null,
+      rank integer not null,
+      score real not null,
+      state_version integer not null,
+      cited_at text not null,
+      foreign key (snapshot_id, document_id, chunk_id, content_hash)
+        references knowledge_index_chunks(snapshot_id, document_id, chunk_id, content_hash)
+        on delete cascade,
+      check (length(trim(id)) > 0 and length(id) <= 200 and trim(id) = id),
+      check (length(trim(request_id)) > 0 and length(request_id) <= 200 and trim(request_id) = request_id),
+      check (json_valid(strategy_chain_json) and json_type(strategy_chain_json) = 'array' and json_array_length(strategy_chain_json) between 1 and 4),
+      check (rank between 1 and 20),
+      check (score between 0 and 1),
+      check (state_version = 1)
+    );
+
+    create index idx_knowledge_citations_request
+      on knowledge_citations(request_id, rank, id);
       `)
     },
   },

@@ -2,7 +2,7 @@
 
 本文件是 Airbnb-III 前端重构进入后端/IPC/local store 对接后的工程清单。目标不是新增一批接口，而是先把现有页面字段的来源讲清楚：哪些已经由 Electron IPC / 本地 SQLite / 远端 snapshot 驱动，哪些只是 renderer adapter 或 seed fallback，哪些需要后续 shared/API/IPC 合同变更。
 
-当前持久化基线是 Team schema v16 与 Desktop schema v21。Team 持久层记录非秘密的
+当前持久化基线是 Team schema v16 与 Desktop schema v22。Team 持久层记录非秘密的
 provider-authoritative expiry 合同与观测时间，不把本机时钟或 legacy NULL 当作清除授权。
 `v1.5.0` 已发布并完成 1.x；V2.0 Agent Runtime 实现正在按唯一 Roadmap 推进。
 
@@ -48,7 +48,7 @@ provider-authoritative expiry 合同与观测时间，不把本机时钟或 lega
 | Knowledge Review trace | `AgentTrace[]` | `local persisted` | 已可回写当前 Run/Node。 |
 | Token usage | `AgentTokenUsage[]` | `local persisted` | 保留 provider-reported/estimated source。 |
 | Coding Agent run | `runCodingAgent` / subscriptions | `real IPC/API` + `local persisted` | 继续接 permission relay、tool timeline、diff preview；Team summary 分别对白名单 structured metadata、model/cost、budget/reason 投影，净化允许字符串中的 secret/path，并丢弃未知嵌套键。 |
-| Agent Runtime | `startAgentRuntime` / `advanceAgentRuntime` / `cancelAgentRuntime` / `listAgentRuntimes` | `real IPC/API` + `local persisted` | Desktop schema v21 持久化严格 trajectory、checkpoint、evaluation、terminal summary、trusted Local MCP/Tool audit 与 metadata-only outbox；main-owned UX 使用 exact version/checkpoint CAS。Team schema v16 仅接收 status/version/counters/digests 的 redacted summary 与 versioned audit，Web 只读；源码、路径、raw output、checkpoint 和 capability authority 仍仅在 Electron main。 |
+| Agent Runtime | `startAgentRuntime` / `advanceAgentRuntime` / `cancelAgentRuntime` / `listAgentRuntimes` | `real IPC/API` + `local persisted` | Desktop schema v22 保留严格 trajectory、checkpoint、evaluation、terminal summary、trusted Local MCP/Tool audit 与 metadata-only outbox，并增加 main-owned retrieval index 表；main-owned UX 使用 exact version/checkpoint CAS。Team schema v16 仅接收 status/version/counters/digests 的 redacted summary 与 versioned audit，Web 只读；源码、路径、raw output、checkpoint 和 capability authority 仍仅在 Electron main。 |
 | Permission relay | `CodingPermissionRequest[]` + decisions | `real IPC/API` + `local persisted` | 已有 IPC；继续补真实 UI 状态。 |
 | Diff preview | `CodingDiffArtifact[]` | `local persisted` | 已可展示。 |
 

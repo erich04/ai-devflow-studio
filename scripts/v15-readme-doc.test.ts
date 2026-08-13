@@ -35,7 +35,7 @@ describe('V1.5 README truth', () => {
     expect(readme).toContain('corepack pnpm test:v15-github-delivery-packaged-smoke')
     expect(readme).toContain('docs/guides/devflow-studio-v1.5-walkthrough.md')
     expect(readme).toContain('Team schema v16')
-    expect(readme).toContain('Desktop schema v21')
+    expect(readme).toContain('Desktop schema v22')
     expect(readme).toContain('trusted local stdio MCP')
     expect(readme).toContain('accepted action count remains exactly one after cold restart')
     expect(readme).toContain('provider-authoritative expiry')
