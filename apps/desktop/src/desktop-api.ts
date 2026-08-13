@@ -33,6 +33,7 @@ import type {
   AgentRuntimeSnapshot,
   AgentMemoryLifecycleSnapshot,
   GetAgentRuntimeInput,
+  DeleteAgentMemoryInput,
   ListAgentMemoryLifecycleInput,
   PromoteAgentMemoryCandidateInput,
   ReviseAgentMemoryInput,
@@ -250,6 +251,9 @@ export type DevFlowDesktopApi = {
   ) => Promise<AgentMemoryLifecycleSnapshot>
   reviseAgentMemory: (
     input: ReviseAgentMemoryInput,
+  ) => Promise<AgentMemoryLifecycleSnapshot>
+  deleteAgentMemory: (
+    input: DeleteAgentMemoryInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>

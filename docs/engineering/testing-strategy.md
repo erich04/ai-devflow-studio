@@ -45,9 +45,9 @@ retroactive TDD rewrites unless it is touched.
   visible in Desktop while source paths, bodies, and scope sessions remain in Electron main. The
   focused matrix passes 154 local-store, 18 Desktop Runtime, 8 shared Context, 3 renderer-projection,
   1 renderer-access, 1 console-state, and 3 Runtime-panel tests.
-  The separate Memory lifecycle matrix passes 4 shared projection, 6 main-owned access, 4
-  main-owned human-action, and 5 panel tests. Repository unit verification passes 197 test files and
-  2782 tests after the exact-version statement-revision tracer.
+  The separate Memory lifecycle matrix passes 4 shared projection, 6 main-owned access, 6
+  main-owned human-action, and 7 panel tests. Repository unit verification passes 197 test files and
+  2788 tests after the exact-version deletion/purge tracer.
 - Agent Memory lifecycle UI identifies one selected Run and exact persisted Agent Runtime through an
   identifier-only IPC. Electron main derives the complete user/session/Local Project scope from that
   Runtime, rechecks the canonical Run and exact current Team pairing before and after loading
@@ -61,7 +61,10 @@ retroactive TDD rewrites unless it is touched.
   strict projection. Statement revision accepts the exact Memory ID, current revision/head versions,
   current content/provenance digests, and a bounded replacement statement; Electron main preserves
   visibility, sensitivity, retention, expiry, and scope authority before consuming the opaque
-  revision capability.
+  revision capability. Deletion accepts the same exact identity/version/digest boundary only after
+  a second renderer confirmation, constructs deletion authority solely in Electron main, persists a
+  tombstone before purge, and lets an exact `purge_pending` projection resume derived-state cleanup
+  without recreating deletion authority.
 - The packaged Desktop pilot must execute exactly one `scenario.evaluate` Local MCP Tool, persist
   one started and one succeeded installation-bound metadata-only audit, and retain one accepted
   action after cold restart without another grant, MCP call, or audit record. It must also complete

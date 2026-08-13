@@ -91,6 +91,7 @@ import {
   parseListAgentRuntimesInput,
   parseGetAgentRuntimeInput,
   parseListAgentMemoryLifecycleInput,
+  parseDeleteAgentMemoryInput,
   parsePromoteAgentMemoryCandidateInput,
   parseReviseAgentMemoryInput,
   parseReplyCodingPermissionInput,
@@ -2173,6 +2174,13 @@ function registerIpcHandlers() {
     const input = parseReviseAgentMemoryInput(payload)
     const store = await getStore()
     await createAgentMemoryHumanActions({ store }).revise(input)
+    return createAgentMemoryRendererAccess(store).list(input)
+  })
+
+  ipcMain.handle(ipcChannels.deleteAgentMemory, async (_, payload: unknown) => {
+    const input = parseDeleteAgentMemoryInput(payload)
+    const store = await getStore()
+    await createAgentMemoryHumanActions({ store }).delete(input)
     return createAgentMemoryRendererAccess(store).list(input)
   })
 

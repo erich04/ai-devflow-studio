@@ -32,6 +32,8 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
   const [isRevising, setIsRevising] = useState(false)
   const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null)
   const [revisionStatement, setRevisionStatement] = useState('')
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [deletingMemoryId, setDeletingMemoryId] = useState<string | null>(null)
   const [hasRuntimeScope, setHasRuntimeScope] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const selectionVersion = useRef(0)
@@ -46,6 +48,8 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
       setIsRevising(false)
       setEditingMemoryId(null)
       setRevisionStatement('')
+      setIsDeleting(false)
+      setDeletingMemoryId(null)
       setHasRuntimeScope(true)
       setError(null)
       return
@@ -58,6 +62,8 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
     setIsRevising(false)
     setEditingMemoryId(null)
     setRevisionStatement('')
+    setIsDeleting(false)
+    setDeletingMemoryId(null)
     setHasRuntimeScope(true)
     setError(null)
     void (async () => {
@@ -176,6 +182,51 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
       }
     } finally {
       if (operationVersion === selectionVersion.current) setIsRevising(false)
+    }
+  }
+
+  async function deleteMemory(memory: AgentMemoryRendererSnapshot['memories'][number]) {
+    if (
+      !desktopApi ||
+      runtimeSelection === null ||
+      runtimeSelection.runId !== runId ||
+      runtimeSelection.localProjectId !== localProjectId ||
+      memory.revisionStatus !== 'active' ||
+      !(
+        memory.lifecycleStatus === 'active' ||
+        (
+          memory.lifecycleStatus === 'purge_pending' &&
+          memory.tombstone?.purgeStatus === 'pending' &&
+          memory.tombstone.deletionVersion === memory.headVersion &&
+          memory.tombstone.lastRevision === memory.currentRevision
+        )
+      )
+    ) return
+    const operationVersion = selectionVersion.current
+    setIsDeleting(true)
+    setError(null)
+    try {
+      const value = await desktopApi.deleteAgentMemory({
+        ...runtimeSelection,
+        memoryId: memory.memoryId,
+        expectedRevision: memory.currentRevision,
+        expectedHeadVersion: memory.headVersion,
+        expectedContentDigest: memory.contentDigest,
+        expectedProvenanceDigest: memory.provenanceDigest,
+      })
+      const parsed = parseAgentMemoryRendererSnapshot(value)
+      if (
+        parsed.localProjectId !== runtimeSelection.localProjectId ||
+        operationVersion !== selectionVersion.current
+      ) throw new Error('Agent Memory deletion result is stale')
+      setSnapshot(parsed)
+      setDeletingMemoryId(null)
+    } catch {
+      if (operationVersion === selectionVersion.current) {
+        setError('Agent Memory deletion or purge was rejected safely. Refresh and review the current version again.')
+      }
+    } finally {
+      if (operationVersion === selectionVersion.current) setIsDeleting(false)
     }
   }
 
@@ -367,6 +418,55 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                         Revise exact Memory
                       </button>
                     )
+                  ) : null}
+                  {memory.lifecycleStatus === 'active' &&
+                  memory.revisionStatus === 'active' ? (
+                    deletingMemoryId === memory.memoryId ? (
+                      <div className="agent-advisory">
+                        <span>This tombstones the exact current Memory before derived-state purge.</span>
+                        <div className="button-row">
+                          <button
+                            type="button"
+                            className="primary-button"
+                            disabled={isDeleting}
+                            onClick={() => { void deleteMemory(memory) }}
+                          >
+                            {isDeleting ? 'Deleting exact Memory…' : 'Confirm exact deletion'}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            disabled={isDeleting}
+                            onClick={() => setDeletingMemoryId(null)}
+                          >
+                            Cancel deletion
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        disabled={isPromoting || isRevising || isDeleting || editingMemoryId !== null}
+                        onClick={() => setDeletingMemoryId(memory.memoryId)}
+                      >
+                        Delete exact Memory
+                      </button>
+                    )
+                  ) : null}
+                  {memory.lifecycleStatus === 'purge_pending' &&
+                  memory.revisionStatus === 'active' &&
+                  memory.tombstone?.purgeStatus === 'pending' &&
+                  memory.tombstone.deletionVersion === memory.headVersion &&
+                  memory.tombstone.lastRevision === memory.currentRevision ? (
+                    <button
+                      type="button"
+                      className="primary-button"
+                      disabled={isDeleting}
+                      onClick={() => { void deleteMemory(memory) }}
+                    >
+                      {isDeleting ? 'Completing exact purge…' : 'Complete exact purge'}
+                    </button>
                   ) : null}
                   <p className="empty-note">{scopeLabel(memory.scope)}</p>
                 </article>

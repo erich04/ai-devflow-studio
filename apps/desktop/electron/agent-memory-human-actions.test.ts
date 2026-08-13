@@ -4,8 +4,10 @@ import {
   createAgentRuntime,
   createWorkflowRunFromRequest,
   type AgentMemoryCandidate,
+  type AgentMemoryDeletionAuthority,
   type AgentMemoryPromotionAuthority,
   type AgentMemoryRevisionAuthority,
+  type AgentMemoryTombstone,
   type DesktopPairingCredential,
   type DurableAgentMemoryRevision,
 } from '@ai-devflow/shared'
@@ -152,6 +154,10 @@ describe('Agent Memory human actions', () => {
       listAgentMemoryRevisions: vi.fn(),
       authorizeAgentMemoryRevision: vi.fn(),
       commitAgentMemoryRevision: vi.fn(),
+      getAgentMemoryTombstone: vi.fn(),
+      authorizeAgentMemoryDeletion: vi.fn(),
+      commitAgentMemoryDeletion: vi.fn(),
+      purgeAgentMemoryDerivedState: vi.fn(),
     }
     const createId = vi.fn((prefix: string) => `${prefix}-generated`)
     const service = createAgentMemoryHumanActions({
@@ -218,6 +224,10 @@ describe('Agent Memory human actions', () => {
       listAgentMemoryRevisions: vi.fn(),
       authorizeAgentMemoryRevision: vi.fn(),
       commitAgentMemoryRevision: vi.fn(),
+      getAgentMemoryTombstone: vi.fn(),
+      authorizeAgentMemoryDeletion: vi.fn(),
+      commitAgentMemoryDeletion: vi.fn(),
+      purgeAgentMemoryDerivedState: vi.fn(),
     }
     const createId = vi.fn()
 
@@ -249,6 +259,10 @@ describe('Agent Memory human actions', () => {
       listAgentMemoryRevisions: vi.fn(),
       authorizeAgentMemoryRevision: vi.fn(),
       commitAgentMemoryRevision: vi.fn(),
+      getAgentMemoryTombstone: vi.fn(),
+      authorizeAgentMemoryDeletion: vi.fn(),
+      commitAgentMemoryDeletion: vi.fn(),
+      purgeAgentMemoryDerivedState: vi.fn(),
     }
 
     await expect(createAgentMemoryHumanActions({ store }).promote({
@@ -332,6 +346,10 @@ describe('Agent Memory human actions', () => {
       listAgentMemoryRevisions: vi.fn(async () => [currentRevision]),
       authorizeAgentMemoryRevision,
       commitAgentMemoryRevision,
+      getAgentMemoryTombstone: vi.fn(),
+      authorizeAgentMemoryDeletion: vi.fn(),
+      commitAgentMemoryDeletion: vi.fn(),
+      purgeAgentMemoryDerivedState: vi.fn(),
     }
     const createId = vi.fn((prefix: string) => `${prefix}-generated`)
     const service = createAgentMemoryHumanActions({
@@ -391,5 +409,239 @@ describe('Agent Memory human actions', () => {
       { revision: result, recordedAt: '2026-08-13T12:00:03.000Z' },
       capability,
     )
+  })
+
+  it('tombstones and purges one exact active Memory through main-owned human authority', async () => {
+    const currentRevision = revisionFromAuthority('agent-memory-current', {
+      stateVersion: 1,
+      decisionId: 'agent-memory-promotion-current',
+      candidateId: candidate.id,
+      candidateContentDigest: candidate.contentDigest,
+      scope,
+      actorKind: 'human',
+      actorId: scope.userId,
+      policyId: 'desktop-human-memory-promotion',
+      policyVersion: 1,
+      visibility: 'user_project',
+      sensitivity: 'private',
+      retentionClass: 'until_deleted',
+      expiresAt: null,
+      authorityDigest: digest('d'),
+      decidedAt: '2026-08-13T12:00:02.000Z',
+    })
+    const head = {
+      memoryId: currentRevision.id,
+      currentRevision: currentRevision.revision,
+      scope,
+      status: 'active' as const,
+      version: 4,
+      updatedAt: currentRevision.createdAt,
+    }
+    const capability = Object.freeze(Object.create(null))
+    let tombstone: AgentMemoryTombstone | undefined
+    const authorizeAgentMemoryDeletion = vi.fn(async (input: {
+      authority: AgentMemoryDeletionAuthority
+    }) => {
+      tombstone = {
+        stateVersion: 1,
+        memoryId: currentRevision.id,
+        deletionVersion: 5,
+        lastRevision: currentRevision.revision,
+        scope,
+        decisionId: input.authority.decisionId,
+        actorKind: input.authority.actorKind,
+        actorId: input.authority.actorId,
+        policyId: input.authority.policyId,
+        policyVersion: input.authority.policyVersion,
+        authorityDigest: input.authority.authorityDigest,
+        purgeStatus: 'pending',
+        deletedAt: input.authority.decidedAt,
+        purgedAt: null,
+      }
+      return { authorized: true as const, capability, tombstone }
+    })
+    const commitAgentMemoryDeletion = vi.fn(async () => ({
+      committed: true as const,
+      replayed: false,
+      tombstone: tombstone!,
+    }))
+    const purgeAgentMemoryDerivedState = vi.fn(async (input: {
+      memoryId: string
+      expectedDeletionVersion: number
+      purgedAt: string
+    }) => ({
+      purged: true as const,
+      replayed: false,
+      tombstone: { ...tombstone!, purgeStatus: 'completed' as const, purgedAt: input.purgedAt },
+    }))
+    const store = {
+      getAgentRuntime: vi.fn(async () => runtime),
+      getRun: vi.fn(async () => run),
+      getDesktopPairingCredential: vi.fn(async () => pairing()),
+      listAgentMemoryCandidates: vi.fn(async () => [candidate]),
+      authorizeAgentMemoryPromotion: vi.fn(),
+      commitAgentMemoryPromotion: vi.fn(),
+      getAgentMemoryHead: vi.fn(async () => head),
+      listAgentMemoryRevisions: vi.fn(async () => [currentRevision]),
+      authorizeAgentMemoryRevision: vi.fn(),
+      commitAgentMemoryRevision: vi.fn(),
+      getAgentMemoryTombstone: vi.fn(async () => null),
+      authorizeAgentMemoryDeletion,
+      commitAgentMemoryDeletion,
+      purgeAgentMemoryDerivedState,
+    }
+    const createId = vi.fn((prefix: string) => `${prefix}-generated`)
+    const service = createAgentMemoryHumanActions({
+      store,
+      clock: () => '2026-08-13T12:00:03.000Z',
+      createId,
+    })
+
+    const result = await service.delete({
+      runtimeId: runtime.id,
+      runId: run.id,
+      localProjectId: scope.localProjectId,
+      memoryId: currentRevision.id,
+      expectedRevision: 1,
+      expectedHeadVersion: 4,
+      expectedContentDigest: currentRevision.contentDigest,
+      expectedProvenanceDigest: currentRevision.provenanceDigest,
+    })
+
+    expect(result).toMatchObject({
+      memoryId: currentRevision.id,
+      deletionVersion: 5,
+      lastRevision: 1,
+      purgeStatus: 'completed',
+      purgedAt: '2026-08-13T12:00:03.000Z',
+    })
+    const authorization = authorizeAgentMemoryDeletion.mock.calls[0]?.[0]
+    expect(authorization).toMatchObject({
+      authority: {
+        stateVersion: 1,
+        decisionId: 'agent-memory-deletion-generated',
+        memoryId: currentRevision.id,
+        expectedRevision: 1,
+        expectedHeadVersion: 4,
+        expectedContentDigest: currentRevision.contentDigest,
+        scope,
+        actorKind: 'human',
+        actorId: scope.userId,
+        policyId: 'desktop-human-memory-deletion',
+        policyVersion: 1,
+        decidedAt: '2026-08-13T12:00:03.000Z',
+      },
+    })
+    const authority = authorization!.authority
+    const { authorityDigest, ...unsignedAuthority } = authority
+    expect(authorityDigest).toBe(
+      createHash('sha256').update(JSON.stringify(unsignedAuthority)).digest('hex'),
+    )
+    expect(commitAgentMemoryDeletion).toHaveBeenCalledWith(
+      { tombstone },
+      capability,
+    )
+    expect(purgeAgentMemoryDerivedState).toHaveBeenCalledWith({
+      memoryId: currentRevision.id,
+      expectedDeletionVersion: 5,
+      purgedAt: '2026-08-13T12:00:03.000Z',
+    })
+  })
+
+  it('resumes an exact pending purge after a restart without creating deletion authority again', async () => {
+    const currentRevision = revisionFromAuthority('agent-memory-current', {
+      stateVersion: 1,
+      decisionId: 'agent-memory-promotion-current',
+      candidateId: candidate.id,
+      candidateContentDigest: candidate.contentDigest,
+      scope,
+      actorKind: 'human',
+      actorId: scope.userId,
+      policyId: 'desktop-human-memory-promotion',
+      policyVersion: 1,
+      visibility: 'user_project',
+      sensitivity: 'private',
+      retentionClass: 'until_deleted',
+      expiresAt: null,
+      authorityDigest: digest('d'),
+      decidedAt: '2026-08-13T12:00:02.000Z',
+    })
+    const tombstone: AgentMemoryTombstone = {
+      stateVersion: 1,
+      memoryId: currentRevision.id,
+      deletionVersion: 5,
+      lastRevision: 1,
+      scope,
+      decisionId: 'agent-memory-deletion-existing',
+      actorKind: 'human',
+      actorId: scope.userId,
+      policyId: 'desktop-human-memory-deletion',
+      policyVersion: 1,
+      authorityDigest: digest('f'),
+      purgeStatus: 'pending',
+      deletedAt: '2026-08-13T12:00:03.000Z',
+      purgedAt: null,
+    }
+    const authorizeAgentMemoryDeletion = vi.fn()
+    const commitAgentMemoryDeletion = vi.fn()
+    const purgeAgentMemoryDerivedState = vi.fn(async (input: {
+      memoryId: string
+      expectedDeletionVersion: number
+      purgedAt: string
+    }) => ({
+      purged: true as const,
+      replayed: false,
+      tombstone: { ...tombstone, purgeStatus: 'completed' as const, purgedAt: input.purgedAt },
+    }))
+    const store = {
+      getAgentRuntime: vi.fn(async () => runtime),
+      getRun: vi.fn(async () => run),
+      getDesktopPairingCredential: vi.fn(async () => pairing()),
+      listAgentMemoryCandidates: vi.fn(async () => [candidate]),
+      authorizeAgentMemoryPromotion: vi.fn(),
+      commitAgentMemoryPromotion: vi.fn(),
+      getAgentMemoryHead: vi.fn(async () => ({
+        memoryId: currentRevision.id,
+        currentRevision: 1,
+        scope,
+        status: 'purge_pending' as const,
+        version: 5,
+        updatedAt: tombstone.deletedAt,
+      })),
+      listAgentMemoryRevisions: vi.fn(async () => [currentRevision]),
+      authorizeAgentMemoryRevision: vi.fn(),
+      commitAgentMemoryRevision: vi.fn(),
+      getAgentMemoryTombstone: vi.fn(async () => tombstone),
+      authorizeAgentMemoryDeletion,
+      commitAgentMemoryDeletion,
+      purgeAgentMemoryDerivedState,
+    }
+    const service = createAgentMemoryHumanActions({
+      store,
+      clock: () => '2026-08-13T12:00:04.000Z',
+    })
+
+    await expect(service.delete({
+      runtimeId: runtime.id,
+      runId: run.id,
+      localProjectId: scope.localProjectId,
+      memoryId: currentRevision.id,
+      expectedRevision: 1,
+      expectedHeadVersion: 5,
+      expectedContentDigest: currentRevision.contentDigest,
+      expectedProvenanceDigest: currentRevision.provenanceDigest,
+    })).resolves.toMatchObject({
+      memoryId: currentRevision.id,
+      deletionVersion: 5,
+      purgeStatus: 'completed',
+      purgedAt: '2026-08-13T12:00:04.000Z',
+    })
+    expect(authorizeAgentMemoryDeletion).not.toHaveBeenCalled()
+    expect(commitAgentMemoryDeletion).not.toHaveBeenCalled()
+    expect(purgeAgentMemoryDerivedState).toHaveBeenCalledWith({
+      memoryId: currentRevision.id,
+      expectedDeletionVersion: 5,
+      purgedAt: '2026-08-13T12:00:04.000Z',
+    })
   })
 })

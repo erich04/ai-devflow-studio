@@ -46,6 +46,8 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.promoteAgentMemoryCandidate, input),
   reviseAgentMemory: (input) =>
     ipcRenderer.invoke(ipcChannels.reviseAgentMemory, input),
+  deleteAgentMemory: (input) =>
+    ipcRenderer.invoke(ipcChannels.deleteAgentMemory, input),
   completeWorkflowAgentNode: (input) =>
     ipcRenderer.invoke(ipcChannels.completeWorkflowAgentNode, input),
   createPrDraft: (input) => ipcRenderer.invoke(ipcChannels.createPrDraft, input),

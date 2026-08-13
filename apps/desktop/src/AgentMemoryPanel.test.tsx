@@ -355,4 +355,130 @@ describe('AgentMemoryPanel', () => {
       /"(?:authorityDigest|policyId|policyVersion|actorId|actorKind|sessionId|capability|retentionClass|sensitivity|visibility)"/,
     )
   })
+
+  it('requires explicit confirmation before deleting one exact active Memory', async () => {
+    const activeMemory = {
+      ...snapshot.memories[0]!,
+      lifecycleStatus: 'active' as const,
+      revisionStatus: 'active' as const,
+    }
+    const initialSnapshot: AgentMemoryRendererSnapshot = {
+      ...snapshot,
+      memories: [activeMemory, ...snapshot.memories.slice(1)],
+    }
+    const deletedSnapshot: AgentMemoryRendererSnapshot = {
+      ...initialSnapshot,
+      memories: initialSnapshot.memories.map((entry) => entry.memoryId === activeMemory.memoryId
+        ? {
+            ...entry,
+            headVersion: 6,
+            lifecycleStatus: 'deleted' as const,
+            statement: null,
+            updatedAt: '2026-08-13T12:00:02.000Z',
+            tombstone: {
+              deletionVersion: 5,
+              lastRevision: entry.currentRevision,
+              purgeStatus: 'completed' as const,
+              deletedAt: '2026-08-13T12:00:01.000Z',
+              purgedAt: '2026-08-13T12:00:02.000Z',
+            },
+          }
+        : entry),
+    }
+    const deleteAgentMemory = vi.fn().mockResolvedValue(deletedSnapshot)
+    const api = {
+      listAgentRuntimes: vi.fn().mockResolvedValue([runtimeListItem]),
+      listAgentMemoryLifecycle: vi.fn().mockResolvedValue(initialSnapshot),
+      deleteAgentMemory,
+    } as unknown as DevFlowDesktopApi
+
+    render(<AgentMemoryPanel
+      desktopApi={api}
+      runId="run-selected"
+      localProjectId="local-project-1"
+    />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete exact Memory' }))
+    expect(deleteAgentMemory).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm exact deletion' }))
+
+    await waitFor(() => expect(deleteAgentMemory).toHaveBeenCalledWith({
+      runtimeId: runtime.id,
+      runId: runtime.authority.runId,
+      localProjectId: runtime.scope.localProjectId,
+      memoryId: activeMemory.memoryId,
+      expectedRevision: activeMemory.currentRevision,
+      expectedHeadVersion: activeMemory.headVersion,
+      expectedContentDigest: activeMemory.contentDigest,
+      expectedProvenanceDigest: activeMemory.provenanceDigest,
+    }))
+    expect(await screen.findAllByText('Content unavailable after deletion.')).toHaveLength(2)
+    expect(screen.getByText('purge completed · deletion v5')).toBeInTheDocument()
+    expect(JSON.stringify(deleteAgentMemory.mock.calls)).not.toMatch(
+      /"(?:authorityDigest|policyId|policyVersion|actorId|actorKind|sessionId|capability|purgedAt)"/,
+    )
+  })
+
+  it('resumes one exact pending Memory purge without asking for deletion authority again', async () => {
+    const pendingMemory = {
+      ...snapshot.memories[0]!,
+      headVersion: 5,
+      lifecycleStatus: 'purge_pending' as const,
+      revisionStatus: 'active' as const,
+      tombstone: {
+        deletionVersion: 5,
+        lastRevision: snapshot.memories[0]!.currentRevision,
+        purgeStatus: 'pending' as const,
+        deletedAt: '2026-08-13T12:00:01.000Z',
+        purgedAt: null,
+      },
+    }
+    const initialSnapshot: AgentMemoryRendererSnapshot = {
+      ...snapshot,
+      memories: [pendingMemory, ...snapshot.memories.slice(1)],
+    }
+    const deletedSnapshot: AgentMemoryRendererSnapshot = {
+      ...initialSnapshot,
+      memories: initialSnapshot.memories.map((entry) => entry.memoryId === pendingMemory.memoryId
+        ? {
+            ...entry,
+            headVersion: 6,
+            lifecycleStatus: 'deleted' as const,
+            statement: null,
+            updatedAt: '2026-08-13T12:00:02.000Z',
+            tombstone: {
+              ...pendingMemory.tombstone,
+              purgeStatus: 'completed' as const,
+              purgedAt: '2026-08-13T12:00:02.000Z',
+            },
+          }
+        : entry),
+    }
+    const deleteAgentMemory = vi.fn().mockResolvedValue(deletedSnapshot)
+    const api = {
+      listAgentRuntimes: vi.fn().mockResolvedValue([runtimeListItem]),
+      listAgentMemoryLifecycle: vi.fn().mockResolvedValue(initialSnapshot),
+      deleteAgentMemory,
+    } as unknown as DevFlowDesktopApi
+
+    render(<AgentMemoryPanel
+      desktopApi={api}
+      runId="run-selected"
+      localProjectId="local-project-1"
+    />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Complete exact purge' }))
+
+    await waitFor(() => expect(deleteAgentMemory).toHaveBeenCalledWith({
+      runtimeId: runtime.id,
+      runId: runtime.authority.runId,
+      localProjectId: runtime.scope.localProjectId,
+      memoryId: pendingMemory.memoryId,
+      expectedRevision: pendingMemory.currentRevision,
+      expectedHeadVersion: pendingMemory.headVersion,
+      expectedContentDigest: pendingMemory.contentDigest,
+      expectedProvenanceDigest: pendingMemory.provenanceDigest,
+    }))
+    expect(screen.getByText('purge completed · deletion v5')).toBeInTheDocument()
+  })
 })

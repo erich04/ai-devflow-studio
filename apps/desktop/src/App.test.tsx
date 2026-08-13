@@ -569,6 +569,9 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     reviseAgentMemory: vi.fn().mockRejectedValue(
       new Error('Agent Memory revision is not configured for this test.'),
     ),
+    deleteAgentMemory: vi.fn().mockRejectedValue(
+      new Error('Agent Memory deletion is not configured for this test.'),
+    ),
     completeWorkflowAgentNode: vi.fn().mockImplementation(async (input) => {
       const created = createWorkflowRunFromRequest({
         runId: 'run-created-from-request',

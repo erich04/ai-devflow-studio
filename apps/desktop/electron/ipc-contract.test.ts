@@ -26,6 +26,7 @@ import {
   parseLoadRepositoryKnowledgeInput,
   parseGetAgentRuntimeInput,
   parseListAgentMemoryLifecycleInput,
+  parseDeleteAgentMemoryInput,
   parsePromoteAgentMemoryCandidateInput,
   parseReviseAgentMemoryInput,
   parseListAgentRuntimesInput,
@@ -296,6 +297,43 @@ describe('IPC contract parsers', () => {
       { ...payload, statement: 'x'.repeat(8_193) },
     ]) {
       expect(() => parseReviseAgentMemoryInput(malformed)).toThrow()
+    }
+  })
+
+  it('accepts only exact current versions and digests for a human Memory deletion', () => {
+    const payload = {
+      runtimeId: 'agent-runtime-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+      memoryId: 'agent-memory-1',
+      expectedRevision: 2,
+      expectedHeadVersion: 3,
+      expectedContentDigest: 'a'.repeat(64),
+      expectedProvenanceDigest: 'b'.repeat(64),
+    }
+    expect(parseDeleteAgentMemoryInput(payload)).toEqual(payload)
+
+    for (const forbidden of [
+      { decisionId: 'renderer-decision-1' },
+      { actorId: 'spoofed-user' },
+      { actorKind: 'policy' },
+      { policyId: 'renderer-policy' },
+      { policyVersion: 99 },
+      { capability: {} },
+      { authorityDigest: 'c'.repeat(64) },
+      { purgedAt: '2026-08-13T13:00:00.000Z' },
+      { scope: { kind: 'local' } },
+    ]) {
+      expect(() => parseDeleteAgentMemoryInput({ ...payload, ...forbidden })).toThrow()
+    }
+    for (const malformed of [
+      { ...payload, memoryId: '' },
+      { ...payload, expectedRevision: 0 },
+      { ...payload, expectedHeadVersion: 1.5 },
+      { ...payload, expectedContentDigest: 'A'.repeat(64) },
+      { ...payload, expectedProvenanceDigest: 'b'.repeat(63) },
+    ]) {
+      expect(() => parseDeleteAgentMemoryInput(malformed)).toThrow()
     }
   })
 

@@ -250,7 +250,8 @@ immutable evidence under `docs/releases/v2.0.0/`; V2.1 Evaluated Retrieval and M
 Roadmap priority, with local retrieval/Memory complete and Runtime Context/Desktop UX in progress.
 Desktop now exposes a strict bounded Agent Memory lifecycle view; exact-version human lifecycle
 promotion and statement revision are available through main-owned exact-digest/version actions,
-while exact-version deletion/purge and packaged restart evidence remain before Slice 5 can complete.
+and explicit deletion commits a tombstone before restart-safe derived-state purge. Packaged restart
+evidence remains before Slice 5 can complete.
 
 The released product baseline provides:
 

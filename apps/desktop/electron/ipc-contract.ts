@@ -104,6 +104,14 @@ export type ReviseAgentMemoryInput = GetAgentRuntimeInput & {
   statement: string
 }
 
+export type DeleteAgentMemoryInput = GetAgentRuntimeInput & {
+  memoryId: string
+  expectedRevision: number
+  expectedHeadVersion: number
+  expectedContentDigest: string
+  expectedProvenanceDigest: string
+}
+
 export type RetryRemoteSyncOperationInput = {
   operationId: string
 }
@@ -136,6 +144,7 @@ export const ipcChannels = {
   listAgentMemoryLifecycle: 'devflow:agent-memory:lifecycle:list',
   promoteAgentMemoryCandidate: 'devflow:agent-memory:candidate:promote',
   reviseAgentMemory: 'devflow:agent-memory:revise',
+  deleteAgentMemory: 'devflow:agent-memory:delete',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   createPrDraft: 'devflow:pr-draft:create',
   prepareGitHubDelivery: 'devflow:github-delivery:prepare',
@@ -496,6 +505,9 @@ export type DevFlowDesktopApi = {
   ) => Promise<AgentMemoryLifecycleSnapshot>
   reviseAgentMemory: (
     input: ReviseAgentMemoryInput,
+  ) => Promise<AgentMemoryLifecycleSnapshot>
+  deleteAgentMemory: (
+    input: DeleteAgentMemoryInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
@@ -920,6 +932,34 @@ export function parseReviseAgentMemoryInput(value: unknown): ReviseAgentMemoryIn
     expectedContentDigest: readExactRequiredDigest(value, 'expectedContentDigest'),
     expectedProvenanceDigest: readExactRequiredDigest(value, 'expectedProvenanceDigest'),
     statement: readExactAgentMemoryStatement(value, 'statement'),
+  }
+}
+
+export function parseDeleteAgentMemoryInput(value: unknown): DeleteAgentMemoryInput {
+  if (!isRecord(value)) throw new Error('Invalid delete Agent Memory payload')
+  rejectUnexpectedFields(
+    value,
+    [
+      'runtimeId',
+      'runId',
+      'localProjectId',
+      'memoryId',
+      'expectedRevision',
+      'expectedHeadVersion',
+      'expectedContentDigest',
+      'expectedProvenanceDigest',
+    ],
+    'delete Agent Memory payload',
+  )
+  return {
+    runtimeId: readExactRequiredIdentifier(value, 'runtimeId'),
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+    memoryId: readExactRequiredIdentifier(value, 'memoryId'),
+    expectedRevision: readExactPositiveVersion(value, 'expectedRevision'),
+    expectedHeadVersion: readExactPositiveVersion(value, 'expectedHeadVersion'),
+    expectedContentDigest: readExactRequiredDigest(value, 'expectedContentDigest'),
+    expectedProvenanceDigest: readExactRequiredDigest(value, 'expectedProvenanceDigest'),
   }
 }
 

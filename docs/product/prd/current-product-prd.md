@@ -328,8 +328,9 @@ preserving the evidence needed for human review.
   V2.1 Evaluated Retrieval and Memory is the active Roadmap priority; retrieval/index and scoped
   durable Memory are complete, while Runtime Context now has strict renderer provenance and a
   bounded Desktop Memory lifecycle view. Exact-digest human Candidate promotion and exact-version
-  statement revision are now main-owned; exact-version deletion/purge, packaged restart evidence,
-  and later Team projection/evidence still require their ordered plan slices and completion gates.
+  statement revision are now main-owned; explicit exact-version deletion is tombstone-first and can
+  resume a pending purge after restart. Packaged restart evidence and later Team projection/evidence
+  still require their ordered plan slices and completion gates.
 - Runtime Operations and Collaboration Hardening remain evidence-promoted backlog items unless the
   Roadmap assigns milestone priority.
 - UI refactor work should preserve the Evidence Chain as the center of gravity: current stage,

@@ -63,6 +63,16 @@ type ExposedDesktopApi = {
     expectedProvenanceDigest: string
     statement: string
   }) => Promise<unknown>
+  deleteAgentMemory: (input: {
+    runtimeId: string
+    runId: string
+    localProjectId: string
+    memoryId: string
+    expectedRevision: number
+    expectedHeadVersion: number
+    expectedContentDigest: string
+    expectedProvenanceDigest: string
+  }) => Promise<unknown>
   prepareGitHubDelivery: (input: { runId: string; nodeId: string }) => Promise<unknown>
   reviseGitHubDelivery: (input: {
     intentId: string
@@ -153,6 +163,16 @@ describe('Electron preload remote sync operator surface', () => {
       statement: 'Use the revised exact Memory statement.',
     }
     await expect(exposedApi.reviseAgentMemory(revision)).resolves.toBe(snapshot)
+    const deletion = {
+      runtimeId: 'agent-runtime-1',
+      ...selection,
+      memoryId: 'agent-memory-1',
+      expectedRevision: 2,
+      expectedHeadVersion: 2,
+      expectedContentDigest: 'e'.repeat(64),
+      expectedProvenanceDigest: 'f'.repeat(64),
+    }
+    await expect(exposedApi.deleteAgentMemory(deletion)).resolves.toBe(snapshot)
 
     expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.startAgentRuntime, {
       runId: 'run-1',
@@ -177,6 +197,10 @@ describe('Electron preload remote sync operator surface', () => {
     expect(electron.invoke).toHaveBeenCalledWith(
       ipcChannels.reviseAgentMemory,
       revision,
+    )
+    expect(electron.invoke).toHaveBeenCalledWith(
+      ipcChannels.deleteAgentMemory,
+      deletion,
     )
 
     const listener = vi.fn()
