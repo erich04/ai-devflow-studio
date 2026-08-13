@@ -282,6 +282,36 @@ describe('V2.1 Knowledge Citation contract', () => {
     expect(() => parseKnowledgeCitation(value, validRequest, validLexicalCandidateSet))
       .toThrowError('invalid_knowledge_retrieval_request')
   })
+
+  it('parses an exact citation from the reranked result strategy chain', () => {
+    const hybrid = mergeKnowledgeRetrievalCandidates(
+      validRequest,
+      validLexicalCandidateSet,
+      validVectorCandidateSet,
+    )
+    const reranked = rerankKnowledgeRetrievalCandidates(validRequest, hybrid, [
+      { chunkId: 'chunk-api-health-test', score: 0.1 },
+      { chunkId: 'chunk-delivery-non-force', score: 0.95 },
+    ])
+    const candidate = reranked.candidates[0]!
+    const citation: KnowledgeCitation = {
+      stateVersion: 1,
+      requestId: validRequest.id,
+      scope: validRequest.scope,
+      knowledgeSnapshotHash: validRequest.knowledgeSnapshotHash,
+      documentId: candidate.documentId,
+      chunkId: candidate.chunkId,
+      sourcePath: candidate.sourcePath,
+      headingPath: candidate.headingPath,
+      contentHash: candidate.contentHash,
+      strategyChain: candidate.strategyChain,
+      rank: 1,
+      score: candidate.score,
+      citedAt: '2026-08-13T07:00:02.000Z',
+    }
+
+    expect(parseKnowledgeCitation(citation, validRequest, reranked)).toEqual(citation)
+  })
 })
 
 describe('V2.1 deterministic hybrid retrieval', () => {

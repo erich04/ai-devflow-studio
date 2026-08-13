@@ -711,6 +711,95 @@ export function rerankKnowledgeRetrievalCandidates(
   }
 }
 
+export function parseKnowledgeRerankedRetrievalResult(
+  value: unknown,
+  request: KnowledgeRetrievalRequest,
+): KnowledgeRerankedRetrievalResult {
+  if (
+    !isPlainRecord(value) ||
+    !hasExactKeys(value, [
+      'stateVersion',
+      'requestId',
+      'scope',
+      'knowledgeSnapshotHash',
+      'ranking',
+      'embedding',
+      'reranking',
+      'candidates',
+      'evaluatedAt',
+    ]) ||
+    !isPlainRecord(value.reranking) ||
+    !hasExactKeys(value.reranking, ['contractId', 'contractVersion']) ||
+    value.reranking.contractId !== 'deterministic-fixture-reranker' ||
+    value.reranking.contractVersion !== 1 ||
+    !Array.isArray(value.candidates)
+  ) fail()
+
+  const projectedCandidates = value.candidates.map((candidate) => {
+    if (
+      !isPlainRecord(candidate) ||
+      !hasExactKeys(candidate, [
+        'documentId',
+        'chunkId',
+        'organizationId',
+        'projectId',
+        'localProjectId',
+        'sourcePath',
+        'headingPath',
+        'contentHash',
+        'score',
+        'vectorDimensions',
+        'lexicalRank',
+        'vectorRank',
+        'hybridScore',
+        'strategyChain',
+      ]) ||
+      typeof candidate.hybridScore !== 'number' ||
+      !Number.isFinite(candidate.hybridScore) ||
+      candidate.hybridScore <= 0 ||
+      typeof candidate.score !== 'number' ||
+      !Number.isFinite(candidate.score) ||
+      candidate.score < 0 ||
+      candidate.score > 1 ||
+      !Array.isArray(candidate.strategyChain) ||
+      candidate.strategyChain.at(-1) !== 'reranked'
+    ) fail()
+    const {
+      hybridScore,
+      score: _rerankerScore,
+      strategyChain,
+      ...identity
+    } = candidate
+    return {
+      ...identity,
+      score: hybridScore,
+      strategyChain: strategyChain.slice(0, -1),
+    }
+  })
+  parseKnowledgeHybridRetrievalResult({
+    stateVersion: value.stateVersion,
+    requestId: value.requestId,
+    scope: value.scope,
+    knowledgeSnapshotHash: value.knowledgeSnapshotHash,
+    ranking: value.ranking,
+    embedding: value.embedding,
+    candidates: projectedCandidates,
+    evaluatedAt: value.evaluatedAt,
+  }, request)
+  const rerankedCandidates = value.candidates as unknown as KnowledgeRerankedRetrievalCandidate[]
+  if (rerankedCandidates.some((candidate, index) => {
+    const previous = rerankedCandidates[index - 1]
+    return previous !== undefined && (
+      previous.score < candidate.score ||
+      (previous.score === candidate.score && previous.hybridScore < candidate.hybridScore) ||
+      (previous.score === candidate.score &&
+        previous.hybridScore === candidate.hybridScore &&
+        previous.chunkId.localeCompare(candidate.chunkId) > 0)
+    )
+  })) fail()
+  return value as KnowledgeRerankedRetrievalResult
+}
+
 export type KnowledgeCitation = {
   stateVersion: typeof KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION
   requestId: string
@@ -734,9 +823,35 @@ function stringArraysMatch(left: readonly string[], right: readonly string[]): b
 export function parseKnowledgeCitation(
   value: unknown,
   request: KnowledgeRetrievalRequest,
-  candidateSet: KnowledgeRetrievalCandidateSet,
+  retrievalResult:
+    | KnowledgeRetrievalCandidateSet
+    | KnowledgeHybridRetrievalResult
+    | KnowledgeRerankedRetrievalResult,
 ): KnowledgeCitation {
-  parseKnowledgeRetrievalCandidateSet(candidateSet, request)
+  const source = (() => {
+    if ('reranking' in retrievalResult) {
+      const parsed = parseKnowledgeRerankedRetrievalResult(retrievalResult, request)
+      return {
+        candidates: parsed.candidates,
+        evaluatedAt: parsed.evaluatedAt,
+        strategyChains: parsed.candidates.map((candidate) => candidate.strategyChain),
+      }
+    }
+    if ('ranking' in retrievalResult) {
+      const parsed = parseKnowledgeHybridRetrievalResult(retrievalResult, request)
+      return {
+        candidates: parsed.candidates,
+        evaluatedAt: parsed.evaluatedAt,
+        strategyChains: parsed.candidates.map((candidate) => candidate.strategyChain),
+      }
+    }
+    const parsed = parseKnowledgeRetrievalCandidateSet(retrievalResult, request)
+    return {
+      candidates: parsed.candidates,
+      evaluatedAt: parsed.evaluatedAt,
+      strategyChains: parsed.candidates.map(() => [parsed.strategy]),
+    }
+  })()
   if (
     !isPlainRecord(value) ||
     !hasExactKeys(value, [
@@ -759,14 +874,15 @@ export function parseKnowledgeCitation(
     value.knowledgeSnapshotHash !== request.knowledgeSnapshotHash ||
     !Number.isInteger(value.rank) ||
     Number(value.rank) < 1 ||
-    Number(value.rank) > candidateSet.candidates.length ||
+    Number(value.rank) > source.candidates.length ||
     !isCanonicalIso(value.citedAt) ||
-    Date.parse(value.citedAt) < Date.parse(candidateSet.evaluatedAt)
+    Date.parse(value.citedAt) < Date.parse(source.evaluatedAt)
   ) fail()
 
   const scope = parseScope(value.scope)
   if (!scopesMatch(scope, request.scope)) fail()
-  const candidate = candidateSet.candidates[Number(value.rank) - 1]
+  const candidateIndex = Number(value.rank) - 1
+  const candidate = source.candidates[candidateIndex]
   if (
     candidate === undefined ||
     value.documentId !== candidate.documentId ||
@@ -776,7 +892,7 @@ export function parseKnowledgeCitation(
     !stringArraysMatch(value.headingPath, candidate.headingPath) ||
     value.contentHash !== candidate.contentHash ||
     !Array.isArray(value.strategyChain) ||
-    !stringArraysMatch(value.strategyChain, [candidateSet.strategy]) ||
+    !stringArraysMatch(value.strategyChain, source.strategyChains[candidateIndex] ?? []) ||
     value.score !== candidate.score
   ) fail()
 
