@@ -82,7 +82,7 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 | `corepack pnpm test:docker-lifecycle-smoke` | Fresh Team schema v16, retained V1.4 schema v10 upgrade, transactional populated v11-to-v12 retry, fail-closed v12-to-v13 provider-authoritative expiry migration, durable v13-to-v14 provider backoff, v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, and bounded V1.4 backup/restore rollback. |
 | `corepack pnpm test:v15-github-delivery` | The full offline Delivery Intent → separate approval → exact branch → Draft PR → Acceptance story, including restart and revocation. |
 | `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive and packaged launch isolation; the Local MCP accepted action count remains exactly one after cold restart, while one approved native Coding repair also survives with exact audit/permission counts and zero repeated effects. |
-| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v23 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
+| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v24 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
 | `corepack pnpm test:v20-agent-runtime-evaluator` | The clean-candidate V2.0 scenario collector and strict completion evaluator; provider credentials are removed and only a path/secret-free structured record is retained. |
 | Release-only opencode smoke | A paid, explicit signoff for the real local coding runtime; it is never part of default CI. |
 

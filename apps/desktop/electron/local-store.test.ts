@@ -96,6 +96,11 @@ const dropKnowledgeIndexSchemaSql = `
   drop table if exists knowledge_index_snapshots;
 `
 const dropAgentMemorySchemaSql = `
+  drop table if exists agent_memory_audits;
+  drop table if exists agent_memory_index_entries;
+  drop table if exists agent_memory_tombstones;
+  drop table if exists agent_memory_heads;
+  drop table if exists agent_memory_revisions;
   drop table if exists agent_memory_candidates;
 `
 
@@ -713,15 +718,15 @@ const teamAgentRuntimeStartRequest: AgentRuntimeStartRequest = {
 }
 
 describe('createLocalStore', () => {
-  it('initializes schema version 23 and keeps it stable across reopen', async () => {
+  it('initializes schema version 24 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(23)
+    expect(await first.getSchemaVersion()).toBe(24)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(23)
+    expect(await second.getSchemaVersion()).toBe(24)
     second.close()
   })
 
@@ -745,7 +750,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(23)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(24)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     await expect(migrated.listRuns()).resolves.toEqual([run])
     migrated.close()
@@ -774,14 +779,14 @@ describe('createLocalStore', () => {
     })
     const retained = new SQL.Database(await readFile(dbPath))
     retained.run(`
-      drop table if exists agent_memory_candidates;
+      ${dropAgentMemorySchemaSql}
       update schema_meta set value = '22' where key = 'schema_version';
     `)
     await writeFile(dbPath, Buffer.from(retained.export()))
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(23)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(24)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     await expect(migrated.listRuns()).resolves.toEqual([run])
     migrated.close()
@@ -790,6 +795,45 @@ describe('createLocalStore', () => {
     expect(
       inspected.exec('select count(*) from agent_memory_candidates')[0]?.values[0]?.[0],
     ).toBe(0)
+    inspected.close()
+  })
+
+  it('migrates retained schema 23 to 24 without fabricating durable Memory lifecycle rows', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    await initial.upsertProject(project)
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const retained = new SQL.Database(await readFile(dbPath))
+    retained.run(`
+      drop table if exists agent_memory_audits;
+      drop table if exists agent_memory_index_entries;
+      drop table if exists agent_memory_tombstones;
+      drop table if exists agent_memory_heads;
+      drop table if exists agent_memory_revisions;
+      update schema_meta set value = '23' where key = 'schema_version';
+    `)
+    await writeFile(dbPath, Buffer.from(retained.export()))
+    retained.close()
+
+    const migrated = await createLocalStore({ dbPath })
+    await expect(migrated.getSchemaVersion()).resolves.toBe(24)
+    await expect(migrated.listProjects()).resolves.toEqual([project])
+    migrated.close()
+
+    const inspected = new SQL.Database(await readFile(dbPath))
+    for (const table of [
+      'agent_memory_revisions',
+      'agent_memory_heads',
+      'agent_memory_tombstones',
+      'agent_memory_index_entries',
+      'agent_memory_audits',
+    ]) {
+      expect(inspected.exec(`select count(*) from ${table}`)[0]?.values[0]?.[0]).toBe(0)
+    }
     inspected.close()
   })
 
@@ -1358,7 +1402,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(23)
+    expect(await migrated.getSchemaVersion()).toBe(24)
     expect(await migrated.listMcpServers()).toEqual([mcpServer])
     expect(await migrated.listLocalMcpInstallations()).toEqual([])
     migrated.close()
@@ -1394,7 +1438,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(23)
+    expect(await migrated.getSchemaVersion()).toBe(24)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     migrated.close()
@@ -1463,7 +1507,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(23)
+    expect(await migrated.getSchemaVersion()).toBe(24)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     expect(await migrated.listAgentRuntimeCapabilityGrants()).toEqual([])
@@ -5052,13 +5096,13 @@ describe('createLocalStore', () => {
     second.close()
   })
 
-  it('migrates an existing v1 database to v23 without losing local projects or runs', async () => {
+  it('migrates an existing v1 database to v24 without losing local projects or runs', async () => {
     const dbPath = await tempDbPath()
     await writeLegacyV1Database(dbPath)
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(23)
+    expect(await store.getSchemaVersion()).toBe(24)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -5069,7 +5113,7 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const db = new SQL.Database(await readFile(dbPath))
-    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('23')
+    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('24')
     expect(db.exec("select name from sqlite_master where type = 'table' and name = 'workflow_nodes'")[0]?.values[0]?.[0]).toBe('workflow_nodes')
     db.close()
   })
@@ -5097,7 +5141,7 @@ describe('createLocalStore', () => {
     v8Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(23)
+    expect(await migrated.getSchemaVersion()).toBe(24)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     migrated.close()
@@ -5111,7 +5155,7 @@ describe('createLocalStore', () => {
     expect(columnNames).not.toEqual(expect.arrayContaining(['json', 'payload', 'raw_body']))
   })
 
-  it('migrates a retained v20 outbox through schema 23 without losing queued metadata', async () => {
+  it('migrates a retained v20 outbox through schema 24 without losing queued metadata', async () => {
     const dbPath = await tempDbPath()
     const retainedOperation = createRemoteSyncOperation({
       id: 'sync-retained-v20',
@@ -5181,7 +5225,7 @@ describe('createLocalStore', () => {
     v20Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(23)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(24)
     await expect(migrated.listRemoteSyncOperations()).resolves.toEqual([retainedOperation])
     await expect(migrated.enqueueRemoteSyncOperation(createRemoteSyncOperation({
       id: 'sync-runtime-v21',
@@ -5217,7 +5261,7 @@ describe('createLocalStore', () => {
     v9Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(23)
+    expect(await migrated.getSchemaVersion()).toBe(24)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -5255,7 +5299,7 @@ describe('createLocalStore', () => {
     v10Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(23)
+    expect(await migrated.getSchemaVersion()).toBe(24)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -5325,7 +5369,7 @@ describe('createLocalStore', () => {
     v11Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(23)
+    expect(await migrated.getSchemaVersion()).toBe(24)
     await expect(
       migrated.getGateCommandReceiptObservation(receipt.id),
     ).resolves.toMatchObject({
@@ -5602,19 +5646,19 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const newerDb = new SQL.Database(await readFile(dbPath))
-    newerDb.run("update schema_meta set value = '24' where key = 'schema_version'")
+    newerDb.run("update schema_meta set value = '25' where key = 'schema_version'")
     await writeFile(dbPath, Buffer.from(newerDb.export()))
     newerDb.close()
 
     await expect(createLocalStore({ dbPath })).rejects.toThrow(
-      /schema version 24 is newer than supported version 23/,
+      /schema version 25 is newer than supported version 24/,
     )
 
     const unchangedDb = new SQL.Database(await readFile(dbPath))
     expect(
       unchangedDb.exec("select value from schema_meta where key = 'schema_version'")[0]
         ?.values[0]?.[0],
-    ).toBe('24')
+    ).toBe('25')
     unchangedDb.close()
   })
 
@@ -5657,7 +5701,7 @@ describe('createLocalStore', () => {
     unchangedDb.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(23)
+    expect(await migrated.getSchemaVersion()).toBe(24)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
   })

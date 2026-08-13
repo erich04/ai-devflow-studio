@@ -115,7 +115,7 @@ import {
   type WorkflowRun,
   type WorkRequest,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 23
+export const CURRENT_SCHEMA_VERSION = 24
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -2544,6 +2544,197 @@ const schemaMigrations: readonly SchemaMigration[] = [
       on agent_memory_candidates(
         organization_id, team_project_id, user_id, session_id, local_project_id, created_at, id
       );
+      `)
+    },
+  },
+  {
+    version: 24,
+    migrate(db) {
+      db.run(`
+    create table agent_memory_revisions (
+      memory_id text not null,
+      revision integer not null,
+      local_project_id text not null,
+      scope_kind text not null,
+      organization_id text,
+      team_project_id text,
+      user_id text not null,
+      session_id text not null,
+      visibility text not null,
+      statement text not null,
+      content_digest text not null,
+      provenance_digest text not null,
+      source_candidate_id text not null unique,
+      supersedes_revision integer,
+      sensitivity text not null,
+      retention_class text not null,
+      expires_at text,
+      promotion_decision_id text not null unique,
+      promotion_actor_kind text not null,
+      promotion_actor_id text not null,
+      promotion_policy_id text not null,
+      promotion_policy_version integer not null,
+      promotion_authority_digest text not null,
+      status text not null,
+      state_version integer not null,
+      json text not null,
+      created_at text not null,
+      primary key (memory_id, revision),
+      foreign key (local_project_id) references local_projects(id) on delete cascade,
+      foreign key (source_candidate_id) references agent_memory_candidates(id),
+      check (length(trim(memory_id)) > 0 and length(memory_id) <= 200 and trim(memory_id) = memory_id),
+      check (revision between 1 and 2147483647),
+      check (
+        (revision = 1 and supersedes_revision is null) or
+        (revision > 1 and supersedes_revision = revision - 1)
+      ),
+      check (scope_kind in ('team', 'local')),
+      check (
+        (scope_kind = 'team' and organization_id is not null and team_project_id is not null) or
+        (scope_kind = 'local' and organization_id is null and team_project_id is null)
+      ),
+      check (visibility in ('runtime', 'user_project', 'project_shared')),
+      check (visibility <> 'project_shared' or scope_kind = 'team'),
+      check (length(cast(statement as blob)) between 1 and 8192 and trim(statement) = statement),
+      check (length(content_digest) = 64 and content_digest not glob '*[^0-9a-f]*'),
+      check (length(provenance_digest) = 64 and provenance_digest not glob '*[^0-9a-f]*'),
+      check (sensitivity in ('private', 'internal')),
+      check (retention_class in ('session', 'thirty_days', 'until_deleted')),
+      check (
+        (retention_class = 'until_deleted' and expires_at is null) or
+        (retention_class <> 'until_deleted' and expires_at is not null and expires_at > created_at)
+      ),
+      check (promotion_actor_kind in ('human', 'policy')),
+      check (promotion_policy_version between 1 and 2147483647),
+      check (length(promotion_authority_digest) = 64 and promotion_authority_digest not glob '*[^0-9a-f]*'),
+      check (status in ('active', 'conflict')),
+      check (state_version = 1),
+      check (json_valid(json) and json_type(json) = 'object'),
+      check (json_extract(json, '$.id') = memory_id),
+      check (json_extract(json, '$.revision') = revision),
+      check (json_extract(json, '$.sourceCandidateId') = source_candidate_id),
+      check (json_extract(json, '$.contentDigest') = content_digest),
+      check (json_extract(json, '$.provenanceDigest') = provenance_digest),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.createdAt') = created_at)
+    );
+
+    create table agent_memory_heads (
+      memory_id text primary key,
+      current_revision integer not null,
+      local_project_id text not null,
+      scope_kind text not null,
+      organization_id text,
+      team_project_id text,
+      user_id text not null,
+      session_id text not null,
+      status text not null,
+      version integer not null,
+      updated_at text not null,
+      foreign key (memory_id, current_revision)
+        references agent_memory_revisions(memory_id, revision),
+      check (current_revision between 1 and 2147483647),
+      check (scope_kind in ('team', 'local')),
+      check (
+        (scope_kind = 'team' and organization_id is not null and team_project_id is not null) or
+        (scope_kind = 'local' and organization_id is null and team_project_id is null)
+      ),
+      check (status in ('active', 'conflict', 'expired', 'purge_pending', 'deleted')),
+      check (version between 1 and 2147483647)
+    );
+
+    create index idx_agent_memory_heads_scope
+      on agent_memory_heads(
+        organization_id, team_project_id, user_id, session_id, local_project_id, status, memory_id
+      );
+
+    create table agent_memory_tombstones (
+      memory_id text primary key,
+      deletion_version integer not null,
+      last_revision integer not null,
+      local_project_id text not null,
+      scope_kind text not null,
+      organization_id text,
+      team_project_id text,
+      user_id text not null,
+      session_id text not null,
+      actor_kind text not null,
+      actor_id text not null,
+      authority_digest text not null,
+      purge_status text not null,
+      state_version integer not null,
+      json text not null,
+      deleted_at text not null,
+      purged_at text,
+      foreign key (memory_id, last_revision)
+        references agent_memory_revisions(memory_id, revision),
+      check (deletion_version between 1 and 2147483647),
+      check (last_revision between 1 and 2147483647),
+      check (scope_kind in ('team', 'local')),
+      check (
+        (scope_kind = 'team' and organization_id is not null and team_project_id is not null) or
+        (scope_kind = 'local' and organization_id is null and team_project_id is null)
+      ),
+      check (actor_kind in ('human', 'policy')),
+      check (length(authority_digest) = 64 and authority_digest not glob '*[^0-9a-f]*'),
+      check (purge_status in ('pending', 'completed')),
+      check (
+        (purge_status = 'pending' and purged_at is null) or
+        (purge_status = 'completed' and purged_at is not null and purged_at >= deleted_at)
+      ),
+      check (state_version = 1),
+      check (json_valid(json) and json_type(json) = 'object')
+    );
+
+    create table agent_memory_index_entries (
+      memory_id text not null,
+      revision integer not null,
+      model_id text not null,
+      model_version text not null,
+      vector_dimensions integer not null,
+      vector_json text not null,
+      created_at text not null,
+      primary key (memory_id, revision, model_id, model_version),
+      foreign key (memory_id, revision)
+        references agent_memory_revisions(memory_id, revision) on delete cascade,
+      check (vector_dimensions between 1 and 4096),
+      check (
+        json_valid(vector_json) and json_type(vector_json) = 'array' and
+        json_array_length(vector_json) = vector_dimensions
+      )
+    );
+
+    create table agent_memory_audits (
+      id text primary key,
+      memory_id text not null,
+      revision integer not null,
+      local_project_id text not null,
+      scope_kind text not null,
+      organization_id text,
+      team_project_id text,
+      user_id text not null,
+      session_id text not null,
+      event_kind text not null,
+      actor_kind text not null,
+      actor_id text not null,
+      authority_digest text not null,
+      state_version integer not null,
+      metadata_json text not null,
+      created_at text not null,
+      foreign key (memory_id, revision)
+        references agent_memory_revisions(memory_id, revision),
+      check (event_kind in (
+        'candidate_promoted', 'memory_revised', 'conflict_recorded',
+        'memory_expired', 'memory_deleted', 'purge_completed'
+      )),
+      check (actor_kind in ('human', 'policy', 'system')),
+      check (length(authority_digest) = 64 and authority_digest not glob '*[^0-9a-f]*'),
+      check (state_version = 1),
+      check (json_valid(metadata_json) and json_type(metadata_json) = 'object')
+    );
+
+    create index idx_agent_memory_audits_memory
+      on agent_memory_audits(memory_id, revision, created_at, id);
       `)
     },
   },
