@@ -12,7 +12,7 @@ retroactive TDD rewrites unless it is touched.
   v13-to-v14 bounded provider retry boundary, the v14-to-v15 verified publication adoption
   authority without changing legacy grant-backed publications, and the v15-to-v16 metadata-only
   Agent Runtime projection without inventing runtime summaries or audit rows.
-- Electron/SQLite uses Desktop schema v24. Local-store tests must prove a fresh v24 database, the
+- Electron/SQLite uses Desktop schema v25. Local-store tests must prove a fresh v25 database, the
   Desktop schema 17-to-18 retained Runtime upgrade, the 18-to-19 metadata-only Native Tool audit
   upgrade with no invented grant or audit rows, and the 19-to-20 Local MCP installation/audit
   provenance upgrade with no invented installation or MCP audit, and the 20-to-21 retained outbox

@@ -119,7 +119,7 @@ import {
   type WorkflowRun,
   type WorkRequest,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 24
+export const CURRENT_SCHEMA_VERSION = 25
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -2826,6 +2826,108 @@ const schemaMigrations: readonly SchemaMigration[] = [
     create index idx_agent_memory_audits_memory
       on agent_memory_audits(memory_id, revision, created_at, id);
       `)
+    },
+  },
+  {
+    version: 25,
+    migrate(db) {
+      db.run('pragma legacy_alter_table = on')
+      try {
+        db.run(`
+    alter table agent_memory_revisions rename to agent_memory_revisions_v24;
+
+    create table agent_memory_revisions (
+      memory_id text not null,
+      revision integer not null,
+      local_project_id text not null,
+      scope_kind text not null,
+      organization_id text,
+      team_project_id text,
+      user_id text not null,
+      session_id text not null,
+      visibility text not null,
+      statement text not null,
+      content_digest text not null,
+      provenance_digest text not null,
+      source_candidate_id text not null,
+      supersedes_revision integer,
+      sensitivity text not null,
+      retention_class text not null,
+      expires_at text,
+      promotion_decision_id text not null unique,
+      promotion_actor_kind text not null,
+      promotion_actor_id text not null,
+      promotion_policy_id text not null,
+      promotion_policy_version integer not null,
+      promotion_authority_digest text not null,
+      status text not null,
+      state_version integer not null,
+      json text not null,
+      created_at text not null,
+      primary key (memory_id, revision),
+      foreign key (local_project_id) references local_projects(id) on delete cascade,
+      foreign key (source_candidate_id) references agent_memory_candidates(id),
+      check (length(trim(memory_id)) > 0 and length(memory_id) <= 200 and trim(memory_id) = memory_id),
+      check (revision between 1 and 2147483647),
+      check (
+        (revision = 1 and supersedes_revision is null) or
+        (revision > 1 and supersedes_revision = revision - 1)
+      ),
+      check (scope_kind in ('team', 'local')),
+      check (
+        (scope_kind = 'team' and organization_id is not null and team_project_id is not null) or
+        (scope_kind = 'local' and organization_id is null and team_project_id is null)
+      ),
+      check (visibility in ('runtime', 'user_project', 'project_shared')),
+      check (visibility <> 'project_shared' or scope_kind = 'team'),
+      check (length(cast(statement as blob)) between 1 and 8192 and trim(statement) = statement),
+      check (length(content_digest) = 64 and content_digest not glob '*[^0-9a-f]*'),
+      check (length(provenance_digest) = 64 and provenance_digest not glob '*[^0-9a-f]*'),
+      check (sensitivity in ('private', 'internal')),
+      check (retention_class in ('session', 'thirty_days', 'until_deleted')),
+      check (
+        (retention_class = 'until_deleted' and expires_at is null) or
+        (retention_class <> 'until_deleted' and expires_at is not null and expires_at > created_at)
+      ),
+      check (promotion_actor_kind in ('human', 'policy')),
+      check (promotion_policy_version between 1 and 2147483647),
+      check (length(promotion_authority_digest) = 64 and promotion_authority_digest not glob '*[^0-9a-f]*'),
+      check (status in ('active', 'conflict')),
+      check (state_version = 1),
+      check (json_valid(json) and json_type(json) = 'object'),
+      check (json_extract(json, '$.id') = memory_id),
+      check (json_extract(json, '$.revision') = revision),
+      check (json_extract(json, '$.sourceCandidateId') = source_candidate_id),
+      check (json_extract(json, '$.contentDigest') = content_digest),
+      check (json_extract(json, '$.provenanceDigest') = provenance_digest),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.createdAt') = created_at)
+    );
+
+    insert into agent_memory_revisions (
+      memory_id, revision, local_project_id, scope_kind, organization_id,
+      team_project_id, user_id, session_id, visibility, statement,
+      content_digest, provenance_digest, source_candidate_id, supersedes_revision,
+      sensitivity, retention_class, expires_at, promotion_decision_id,
+      promotion_actor_kind, promotion_actor_id, promotion_policy_id,
+      promotion_policy_version, promotion_authority_digest, status,
+      state_version, json, created_at
+    )
+    select
+      memory_id, revision, local_project_id, scope_kind, organization_id,
+      team_project_id, user_id, session_id, visibility, statement,
+      content_digest, provenance_digest, source_candidate_id, supersedes_revision,
+      sensitivity, retention_class, expires_at, promotion_decision_id,
+      promotion_actor_kind, promotion_actor_id, promotion_policy_id,
+      promotion_policy_version, promotion_authority_digest, status,
+      state_version, json, created_at
+    from agent_memory_revisions_v24;
+
+    drop table agent_memory_revisions_v24;
+        `)
+      } finally {
+        db.run('pragma legacy_alter_table = off')
+      }
     },
   },
 ]
