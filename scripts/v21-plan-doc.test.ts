@@ -151,16 +151,19 @@ describe('V2.1 Evaluated Retrieval and Memory contract', () => {
     expect(plan).toContain('clean direct child')
   })
 
-  it('advances the single active Roadmap priority to V2.1 Slice 2 after shared contracts pass', () => {
+  it('advances the single active Roadmap priority to V2.1 Slice 3 after hybrid quality passes', () => {
     const roadmap = read('docs/roadmap.md')
     const plan = read('docs/plans/v2.1-evaluated-retrieval-memory.md')
 
-    expect(plan).toContain('Status: Active — Slice 1 complete; Slice 2 next')
+    expect(plan).toContain('Status: Active — Slice 2 complete; Slice 3 next')
     expect(plan).toContain('| Slice 1 | Complete |')
-    expect(plan).toContain('| Slice 2 | Next |')
-    expect(roadmap).toContain('### Now — Implement V2.1 Deterministic Hybrid Retrieval')
-    expect(roadmap).toContain('| Active milestone | V2.1 Slice 2 — deterministic hybrid retrieval |')
-    expect(roadmap).toContain('| Next gate | Prove frozen-corpus hybrid improvement with exact citation and zero isolation regression before local persistence |')
+    expect(plan).toContain('| Slice 2 | Complete |')
+    expect(plan).toContain('| Slice 3 | Next |')
+    expect(plan).toContain('Recall@K, nDCG@K, and mean reciprocal rank all reached `1.0`')
+    expect(plan).toMatch(/aggregate improvement over lexical was\s+`0\.5`/u)
+    expect(roadmap).toContain('### Now — Implement V2.1 Durable Local Retrieval Index')
+    expect(roadmap).toContain('| Active milestone | V2.1 Slice 3 — durable local retrieval index |')
+    expect(roadmap).toContain('| Next gate | Prove retained schema 21 → 22 migration, atomic snapshot activation, and stale identity invalidation |')
     expect(roadmap).not.toContain('### Now — Implement V2.1 Shared Retrieval, Citation, And Evaluation Contracts')
     expect(roadmap.match(/^### Now —/gmu)).toHaveLength(1)
   })

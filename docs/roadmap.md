@@ -90,8 +90,8 @@ contains the signoff-bound release artifacts.
 | Active version line | 2.x DevFlow-native Agent Runtime |
 | Completed 2.x milestone | V2.0 Native Agent Runtime Foundation |
 | V2.0 evidence | `docs/releases/v2.0.0/` |
-| Active milestone | V2.1 Slice 2 — deterministic hybrid retrieval |
-| Next gate | Prove frozen-corpus hybrid improvement with exact citation and zero isolation regression before local persistence |
+| Active milestone | V2.1 Slice 3 — durable local retrieval index |
+| Next gate | Prove retained schema 21 → 22 migration, atomic snapshot activation, and stale identity invalidation |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -100,23 +100,25 @@ V2.0 is complete. Candidate `dfc74831552a0e8910529420c6383b6474e8a12c` passed th
 15-scenario evaluator, native/OpenCode parity, zero-leak scans, exact-SHA first-attempt Verify across
 five jobs, real Postgres, Docker lifecycle, Windows, macOS, Electron, packaged Desktop, and exclusive
 artifact integrity gates. Its immutable records are under `docs/releases/v2.0.0/`. The V2.1 contract
-set is frozen. Slice 1 shared contracts and the strict no-cost corpus evaluator are complete; Slice 2
-deterministic hybrid retrieval is now the only active product priority.
+set is frozen. V2.1 Slice 1 is complete, and Slice 2 proved deterministic no-cost hybrid retrieval:
+Recall@K, nDCG@K, and mean reciprocal rank each reached `1.0`, aggregate improvement over lexical
+was `0.5`, citation precision and faithfulness remained `1.0`, and isolation/provider violations
+remained zero. Slice 3 durable local retrieval indexing is now the only active product priority.
 
 ## Now / Next / Later
 
-### Now — Implement V2.1 Deterministic Hybrid Retrieval
+### Now — Implement V2.1 Durable Local Retrieval Index
 
 V1.5 and the finite 1.x line are released and complete. V2.0 is complete with immutable evaluator
-and gate evidence. The V2.1 contract set is frozen, and Slice 1 now provides strict scoped requests,
-finite lexical/vector candidate contracts, exact candidate-backed Citations, a strict versioned
-corpus parser, and deterministic lexical baseline metrics with no persistence or provider I/O.
+and gate evidence. The V2.1 contract set is frozen; Slices 1 and 2 now provide strict scoped
+requests, lexical/vector/RRF/reranked result contracts, exact current Citations, and a deterministic
+no-cost evaluator that exceeds every frozen hybrid quality threshold without widening scope.
 
-- Merge lexical and deterministic fixture-vector candidates with stable tie-breaking.
-- Rerank only the exact admitted organization/project/local-project scope and reject foreign or
-  stale candidates before scoring.
-- Refresh changed content hashes, reject stale Citations, and prove frozen-corpus hybrid improvement
-  without citation or isolation regression.
+- Migrate retained Desktop schema 21 to schema 22 without fabricating vector or index rows.
+- Activate exact project-scoped snapshots atomically and keep the prior snapshot current after a
+  failed or interrupted refresh.
+- Invalidate changed/deleted chunk, vector, and Citation identities before later retrieval, and
+  fail closed on corrupt, wrong-model, wrong-dimension, or cross-scope index state.
 
 The V2.1 contract set is frozen in:
 
@@ -126,15 +128,14 @@ The V2.1 contract set is frozen in:
 - `docs/plans/v2.1-evaluated-retrieval-memory.md`
 - `scripts/fixtures/v2.1-retrieval-memory-evaluation.json`
 
-V2.1 Slice 1 is complete. Slice 2 remains in-memory and no-cost; storage/provider choices stay
-behind the hybrid-quality and isolation gate.
+V2.1 Slices 1 and 2 are complete. Slice 3 adds only Desktop-main-owned local persistence; provider
+and Team schema choices remain outside this slice.
 
-### Next — Implement V2.1 Durable Local Retrieval Index
+### Next — Implement V2.1 Scoped Agent Memory Lifecycle
 
-- Migrate retained Desktop schema 21 to schema 22 without fabricating vector/index rows.
-- Activate exact project-scoped snapshots atomically and preserve the previous snapshot after a
-  crash.
-- Invalidate changed/deleted chunk, vector, and Citation identities before later retrieval.
+- Create inert Memory Candidates from accepted observable results.
+- Promote and revise Memory only through exact authority and optimistic concurrency.
+- Exclude conflict, expired, deleted, purge-pending, and cross-scope rows before ranking.
 
 ### Later — V2.2 Multi-Agent And Execution Tenancy
 

@@ -85,7 +85,7 @@ describe('V2.0 Native Agent Runtime contract', () => {
     }
 
     if (hasCompletionEvidence) {
-      expect(roadmap).toContain('### Now — Implement V2.1 Deterministic Hybrid Retrieval')
+      expect(roadmap).toContain('### Now — Implement V2.1 Durable Local Retrieval Index')
       expect(roadmap).toContain('V2.0 is complete')
     } else {
       expect(roadmap).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
@@ -155,7 +155,7 @@ describe('V2.0 Native Agent Runtime contract', () => {
 
     expect(roadmap).toMatch(/Slice 7\s+is complete/)
     expect(roadmap).toContain(hasCompletionEvidence
-      ? '### Now — Implement V2.1 Deterministic Hybrid Retrieval'
+      ? '### Now — Implement V2.1 Durable Local Retrieval Index'
       : '### Now — Run The V2.0 Evaluation And Completion Gate')
   })
 
