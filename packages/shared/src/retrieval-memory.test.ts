@@ -6,11 +6,13 @@ import {
   KNOWLEDGE_RETRIEVAL_QUERY_MAX_LENGTH,
   KNOWLEDGE_RETRIEVAL_TOP_K_MAX,
   KNOWLEDGE_RETRIEVAL_VECTOR_DIMENSIONS_MAX,
+  mergeKnowledgeRetrievalCandidates,
   parseKnowledgeCitation,
   parseKnowledgeRetrievalCandidateSet,
   parseKnowledgeRetrievalRequest,
   parseRetrievalMemoryEvaluationCorpus,
   type KnowledgeCitation,
+  type KnowledgeHybridRetrievalResult,
   type KnowledgeRetrievalCandidateSet,
   type KnowledgeRetrievalRequest,
 } from './retrieval-memory'
@@ -80,6 +82,36 @@ const validCitation: KnowledgeCitation = {
   score: 0.75,
   citedAt: '2026-08-13T07:00:02.000Z',
 }
+
+const validVectorCandidateSet = {
+  ...validLexicalCandidateSet,
+  strategy: 'vector',
+  embedding: {
+    modelId: 'fixture-embedding',
+    modelVersion: '1',
+    dimensions: 3,
+  },
+  candidates: [
+    {
+      documentId: 'knowledge-doc-delivery-safety',
+      chunkId: 'chunk-delivery-non-force',
+      organizationId: 'org-1',
+      projectId: 'project-1',
+      localProjectId: 'local-project-1',
+      sourcePath: 'docs/knowledge/checklists/delivery-safety.md',
+      headingPath: ['Branch Publication'],
+      contentHash: 'kh-33333333',
+      score: 0.8,
+      vectorDimensions: 3,
+    },
+    {
+      ...validLexicalCandidateSet.candidates[0]!,
+      score: 0.7,
+      vectorDimensions: 3,
+    },
+  ],
+  evaluatedAt: '2026-08-13T07:00:01.500Z',
+} satisfies KnowledgeRetrievalCandidateSet
 
 describe('V2.1 Knowledge Retrieval request contract', () => {
   it('parses one exact canonical Team-scoped request', () => {
@@ -247,6 +279,47 @@ describe('V2.1 Knowledge Citation contract', () => {
   ])('rejects %s', (_label, value) => {
     expect(() => parseKnowledgeCitation(value, validRequest, validLexicalCandidateSet))
       .toThrowError('invalid_knowledge_retrieval_request')
+  })
+})
+
+describe('V2.1 deterministic hybrid retrieval', () => {
+  it('merges lexical and vector candidates with versioned RRF and stable identity tie-breaks', () => {
+    const expected: KnowledgeHybridRetrievalResult = {
+      stateVersion: 1,
+      requestId: validRequest.id,
+      scope: validRequest.scope,
+      knowledgeSnapshotHash: validRequest.knowledgeSnapshotHash,
+      ranking: {
+        contractId: 'reciprocal-rank-fusion',
+        contractVersion: 1,
+        rankConstant: 60,
+      },
+      embedding: validVectorCandidateSet.embedding,
+      candidates: [
+        {
+          ...validLexicalCandidateSet.candidates[0]!,
+          score: (1 / 61) + (1 / 62),
+          vectorDimensions: 3,
+          lexicalRank: 1,
+          vectorRank: 2,
+          strategyChain: ['lexical', 'vector', 'hybrid'],
+        },
+        {
+          ...validVectorCandidateSet.candidates[0]!,
+          score: 1 / 61,
+          lexicalRank: null,
+          vectorRank: 1,
+          strategyChain: ['vector', 'hybrid'],
+        },
+      ],
+      evaluatedAt: '2026-08-13T07:00:01.500Z',
+    }
+
+    expect(mergeKnowledgeRetrievalCandidates(
+      validRequest,
+      validLexicalCandidateSet,
+      validVectorCandidateSet,
+    )).toEqual(expected)
   })
 })
 

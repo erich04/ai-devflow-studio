@@ -437,6 +437,115 @@ export function parseKnowledgeRetrievalCandidateSet(
   return value as KnowledgeRetrievalCandidateSet
 }
 
+export type KnowledgeHybridRetrievalCandidate = Omit<
+  KnowledgeRetrievalCandidate,
+  'score' | 'vectorDimensions'
+> & {
+  score: number
+  vectorDimensions: number
+  lexicalRank: number | null
+  vectorRank: number | null
+  strategyChain: Array<'lexical' | 'vector' | 'hybrid'>
+}
+
+export type KnowledgeHybridRetrievalResult = {
+  stateVersion: typeof KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION
+  requestId: string
+  scope: KnowledgeRetrievalScope
+  knowledgeSnapshotHash: string
+  ranking: {
+    contractId: 'reciprocal-rank-fusion'
+    contractVersion: 1
+    rankConstant: 60
+  }
+  embedding: Exclude<KnowledgeRetrievalCandidateSet['embedding'], null>
+  candidates: KnowledgeHybridRetrievalCandidate[]
+  evaluatedAt: string
+}
+
+function candidatesHaveSameIdentity(
+  left: KnowledgeRetrievalCandidate,
+  right: KnowledgeRetrievalCandidate,
+): boolean {
+  return left.documentId === right.documentId &&
+    left.chunkId === right.chunkId &&
+    left.organizationId === right.organizationId &&
+    left.projectId === right.projectId &&
+    left.localProjectId === right.localProjectId &&
+    left.sourcePath === right.sourcePath &&
+    stringArraysMatch(left.headingPath, right.headingPath) &&
+    left.contentHash === right.contentHash
+}
+
+export function mergeKnowledgeRetrievalCandidates(
+  request: KnowledgeRetrievalRequest,
+  lexicalCandidateSet: KnowledgeRetrievalCandidateSet,
+  vectorCandidateSet: KnowledgeRetrievalCandidateSet,
+): KnowledgeHybridRetrievalResult {
+  parseKnowledgeRetrievalRequest(request)
+  parseKnowledgeRetrievalCandidateSet(lexicalCandidateSet, request)
+  parseKnowledgeRetrievalCandidateSet(vectorCandidateSet, request)
+  if (
+    lexicalCandidateSet.strategy !== 'lexical' ||
+    lexicalCandidateSet.embedding !== null ||
+    vectorCandidateSet.strategy !== 'vector' ||
+    vectorCandidateSet.embedding === null
+  ) fail()
+
+  const rankConstant = 60
+  const candidates = new Map<string, KnowledgeHybridRetrievalCandidate>()
+  lexicalCandidateSet.candidates.forEach((candidate, index) => {
+    candidates.set(candidate.chunkId, {
+      ...candidate,
+      score: 1 / (rankConstant + index + 1),
+      vectorDimensions: vectorCandidateSet.embedding!.dimensions,
+      lexicalRank: index + 1,
+      vectorRank: null,
+      strategyChain: ['lexical', 'hybrid'],
+    })
+  })
+  vectorCandidateSet.candidates.forEach((candidate, index) => {
+    const existing = candidates.get(candidate.chunkId)
+    if (existing !== undefined) {
+      if (!candidatesHaveSameIdentity(existing, candidate)) fail()
+      candidates.set(candidate.chunkId, {
+        ...existing,
+        score: existing.score + (1 / (rankConstant + index + 1)),
+        vectorRank: index + 1,
+        strategyChain: ['lexical', 'vector', 'hybrid'],
+      })
+      return
+    }
+    candidates.set(candidate.chunkId, {
+      ...candidate,
+      score: 1 / (rankConstant + index + 1),
+      vectorDimensions: vectorCandidateSet.embedding!.dimensions,
+      lexicalRank: null,
+      vectorRank: index + 1,
+      strategyChain: ['vector', 'hybrid'],
+    })
+  })
+
+  return {
+    stateVersion: KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION,
+    requestId: request.id,
+    scope: request.scope,
+    knowledgeSnapshotHash: request.knowledgeSnapshotHash,
+    ranking: {
+      contractId: 'reciprocal-rank-fusion',
+      contractVersion: 1,
+      rankConstant,
+    },
+    embedding: vectorCandidateSet.embedding,
+    candidates: [...candidates.values()]
+      .sort((left, right) => right.score - left.score || left.chunkId.localeCompare(right.chunkId))
+      .slice(0, request.query.topK),
+    evaluatedAt: lexicalCandidateSet.evaluatedAt > vectorCandidateSet.evaluatedAt
+      ? lexicalCandidateSet.evaluatedAt
+      : vectorCandidateSet.evaluatedAt,
+  }
+}
+
 export type KnowledgeCitation = {
   stateVersion: typeof KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION
   requestId: string
