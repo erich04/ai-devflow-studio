@@ -20,10 +20,25 @@ vi.mock('electron', () => ({
 await import('./preload')
 
 type ExposedDesktopApi = {
-  startAgentRuntime: (input: { runId: string; nodeId: string }) => Promise<unknown>
-  advanceAgentRuntime: (input: { runtimeId: string }) => Promise<unknown>
-  cancelAgentRuntime: (input: { runtimeId: string }) => Promise<unknown>
-  listAgentRuntimes: () => Promise<unknown>
+  startAgentRuntime: (input: {
+    runId: string
+    nodeId: string
+    localProjectId: string
+  }) => Promise<unknown>
+  advanceAgentRuntime: (input: {
+    runtimeId: string
+    runId: string
+    localProjectId: string
+    expectedVersion: number
+    expectedCheckpointVersion: number
+  }) => Promise<unknown>
+  cancelAgentRuntime: ExposedDesktopApi['advanceAgentRuntime']
+  listAgentRuntimes: (input: { runId: string; localProjectId: string }) => Promise<unknown>
+  getAgentRuntime: (input: {
+    runtimeId: string
+    runId: string
+    localProjectId: string
+  }) => Promise<unknown>
   prepareGitHubDelivery: (input: { runId: string; nodeId: string }) => Promise<unknown>
   reviseGitHubDelivery: (input: {
     intentId: string
@@ -66,27 +81,44 @@ describe('Electron preload remote sync operator surface', () => {
     electron.invoke.mockResolvedValue(snapshot)
 
     await expect(
-      exposedApi.startAgentRuntime({ runId: 'run-1', nodeId: 'run-1-build' }),
+      exposedApi.startAgentRuntime({
+        runId: 'run-1',
+        nodeId: 'run-1-build',
+        localProjectId: 'project-1',
+      }),
+    ).resolves.toBe(snapshot)
+    const command = {
+      runtimeId: 'agent-runtime-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+      expectedVersion: 2,
+      expectedCheckpointVersion: 2,
+    }
+    await expect(
+      exposedApi.advanceAgentRuntime(command),
     ).resolves.toBe(snapshot)
     await expect(
-      exposedApi.advanceAgentRuntime({ runtimeId: 'agent-runtime-1' }),
+      exposedApi.cancelAgentRuntime(command),
     ).resolves.toBe(snapshot)
-    await expect(
-      exposedApi.cancelAgentRuntime({ runtimeId: 'agent-runtime-1' }),
-    ).resolves.toBe(snapshot)
-    await expect(exposedApi.listAgentRuntimes()).resolves.toBe(snapshot)
+    const selection = { runId: 'run-1', localProjectId: 'project-1' }
+    await expect(exposedApi.listAgentRuntimes(selection)).resolves.toBe(snapshot)
+    await expect(exposedApi.getAgentRuntime({
+      runtimeId: 'agent-runtime-1',
+      ...selection,
+    })).resolves.toBe(snapshot)
 
     expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.startAgentRuntime, {
       runId: 'run-1',
       nodeId: 'run-1-build',
+      localProjectId: 'project-1',
     })
-    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.advanceAgentRuntime, {
+    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.advanceAgentRuntime, command)
+    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.cancelAgentRuntime, command)
+    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.listAgentRuntimes, selection)
+    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.getAgentRuntime, {
       runtimeId: 'agent-runtime-1',
+      ...selection,
     })
-    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.cancelAgentRuntime, {
-      runtimeId: 'agent-runtime-1',
-    })
-    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.listAgentRuntimes)
 
     const listener = vi.fn()
     const unsubscribe = exposedApi.onAgentRuntimeUpdated(listener)

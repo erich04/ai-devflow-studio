@@ -88,6 +88,7 @@ describe('V2.0 Native Agent Runtime contract', () => {
 
   it('provides an executable TDD slice plan before product code starts', () => {
     const plan = read('docs/plans/v2.0-native-agent-runtime.md')
+    const roadmap = read('docs/roadmap.md')
 
     for (const slice of [
       'Slice 0 — Contract Freeze',
@@ -115,6 +116,10 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(plan).toContain('| Slice 4 | Complete |')
     expect(plan).toContain('| Slice 5 | Complete |')
     expect(plan).toContain('| Slice 6 | Complete |')
+    expect(plan).toContain('| Slice 7 | In progress |')
+    expect(plan).toContain('strict main-owned renderer projection')
+    expect(plan).toContain('exact version/checkpoint optimistic concurrency')
+    expect(plan).toContain('Team schema 16 projection remains pending')
     expect(plan).toContain('path-free main-owned request')
     expect(plan).toContain('no-permission completion')
     expect(plan).toContain('uniform terminal result')
@@ -122,6 +127,9 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(plan).toContain('Desktop schema 20')
     expect(plan).toContain('local_mcp_installations')
     expect(plan).toContain('negotiated capability-set digest')
+
+    expect(roadmap).toMatch(/Slice 7 Desktop\s+runtime observability is complete/)
+    expect(roadmap).toMatch(/Team schema 16 redacted projection remains next/)
   })
 
   it('adds stable V2.0 domain language without redefining workflow authority', () => {

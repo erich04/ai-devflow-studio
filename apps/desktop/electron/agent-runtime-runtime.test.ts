@@ -4,11 +4,13 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAgentRuntime, createWorkflowRunFromRequest } from '@ai-devflow/shared'
 import { createDesktopAgentRuntime } from './agent-runtime-runtime'
+import type { DesktopAgentRuntimeSnapshot } from './agent-runtime-runtime'
 import { createLocalStore } from './local-store'
 import { createNativeToolRegistry } from './native-tool-registry'
 import { createAcceptedNativeToolRegistrations } from './native-tools'
 
 const tempDirs: string[] = []
+const runtimeProjectId = 'agent-runtime-project-1'
 
 afterEach(async () => {
   await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })))
@@ -20,7 +22,7 @@ async function runtimeFixture() {
   tempDirs.push(dir)
   const store = await createLocalStore({ dbPath: path.join(dir, 'devflow.sqlite') })
   const project = {
-    id: 'agent-runtime-project-1',
+    id: runtimeProjectId,
     name: 'agent-runtime-fixture',
     path: '/tmp/agent-runtime-fixture',
     packageManager: 'pnpm' as const,
@@ -53,7 +55,72 @@ function tickingClock(...values: string[]) {
   }
 }
 
+function runtimeCommand(snapshot: DesktopAgentRuntimeSnapshot) {
+  return {
+    runtimeId: snapshot.runtime.id,
+    runId: snapshot.runtime.authority.runId,
+    localProjectId: snapshot.runtime.scope.localProjectId,
+    expectedVersion: snapshot.runtime.version,
+    expectedCheckpointVersion: snapshot.runtime.checkpointVersion,
+  }
+}
+
 describe('Desktop Agent Runtime', () => {
+  it('rejects a renderer-selected local project that does not own the Run', async () => {
+    const { store, run } = await runtimeFixture()
+    const runtime = createDesktopAgentRuntime({
+      store,
+      clock: tickingClock('2026-08-12T20:30:00.000Z'),
+      createId: () => 'agent-runtime-wrong-project-1',
+    })
+
+    await expect(runtime.start({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      localProjectId: 'another-local-project',
+    })).rejects.toThrow('Desktop Agent Runtime start authority is invalid')
+    await expect(store.getAgentRuntime('agent-runtime-wrong-project-1')).resolves.toBeNull()
+    store.close()
+  })
+
+  it('rejects mismatched and stale renderer commands before advancing a Runtime', async () => {
+    const { store, run } = await runtimeFixture()
+    const runtime = createDesktopAgentRuntime({
+      store,
+      clock: tickingClock(
+        '2026-08-12T20:30:00.000Z',
+        '2026-08-12T20:30:01.000Z',
+      ),
+      createId: () => 'agent-runtime-command-fence-1',
+    })
+    const started = await runtime.start({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      localProjectId: runtimeProjectId,
+    })
+    const command = {
+      runtimeId: started.runtime.id,
+      runId: run.id,
+      localProjectId: runtimeProjectId,
+      expectedVersion: started.runtime.version,
+      expectedCheckpointVersion: started.runtime.checkpointVersion,
+    }
+
+    await expect(runtime.advance({ ...command, runId: 'another-run' }))
+      .rejects.toThrow('Desktop Agent Runtime selection is stale')
+    await expect(store.getAgentRuntime(started.runtime.id)).resolves.toEqual(started.runtime)
+
+    const advanced = await runtime.advance(command)
+    expect(advanced.runtime).toMatchObject({ status: 'running', version: 2 })
+    await expect(runtime.advance(command)).rejects.toThrow(
+      'Desktop Agent Runtime command is stale',
+    )
+    await expect(runtime.cancel(command)).rejects.toThrow(
+      'Desktop Agent Runtime command is stale',
+    )
+    store.close()
+  })
+
   it('binds a new Runtime to the registry-negotiated capability set digest', async () => {
     const { store, run, project } = await runtimeFixture()
     const capabilitySetDigest = 'c'.repeat(64)
@@ -72,7 +139,11 @@ describe('Desktop Agent Runtime', () => {
       createId: () => 'agent-runtime-negotiated-capability-1',
     })
 
-    const started = await runtime.start({ runId: run.id, nodeId: run.currentNodeId })
+    const started = await runtime.start({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      localProjectId: runtimeProjectId,
+    })
 
     expect(started.runtime.capabilitySetDigest).toBe(capabilitySetDigest)
     store.close()
@@ -94,7 +165,7 @@ describe('Desktop Agent Runtime', () => {
     })
 
     await expect(
-      runtime.start({ runId: run.id, nodeId: run.currentNodeId }),
+      runtime.start({ runId: run.id, nodeId: run.currentNodeId, localProjectId: runtimeProjectId }),
     ).rejects.toThrow('Desktop Agent Runtime start authority is invalid')
     await expect(store.getAgentRuntime('agent-runtime-ineligible-gate-1')).resolves.toBeNull()
     store.close()
@@ -117,7 +188,11 @@ describe('Desktop Agent Runtime', () => {
       createId: () => 'agent-runtime-main-1',
     })
 
-    const started = await runtime.start({ runId: run.id, nodeId: run.currentNodeId })
+    const started = await runtime.start({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      localProjectId: runtimeProjectId,
+    })
     expect(started.runtime).toMatchObject({
       id: 'agent-runtime-main-1',
       status: 'checkpointed',
@@ -132,9 +207,9 @@ describe('Desktop Agent Runtime', () => {
     })
     expect(JSON.stringify(started)).not.toContain(project.path)
 
-    await runtime.advance(started.runtime.id)
-    await runtime.advance(started.runtime.id)
-    const completed = await runtime.advance(started.runtime.id)
+    const resumed = await runtime.advance(runtimeCommand(started))
+    const waiting = await runtime.advance(runtimeCommand(resumed))
+    const completed = await runtime.advance(runtimeCommand(waiting))
     const toolAudits = await store.listAgentRuntimeToolAudits(started.runtime.id)
     const capabilityGrants = await store.listAgentRuntimeCapabilityGrants(started.runtime.id)
 
@@ -196,7 +271,7 @@ describe('Desktop Agent Runtime', () => {
     })
 
     await expect(
-      runtime.start({ runId: run.id, nodeId: run.currentNodeId }),
+      runtime.start({ runId: run.id, nodeId: run.currentNodeId, localProjectId: runtimeProjectId }),
     ).resolves.toMatchObject({
       runtime: {
         scope: {
@@ -228,9 +303,13 @@ describe('Desktop Agent Runtime', () => {
       createId: () => 'agent-runtime-restart-1',
       executeFakeAction: firstExecutor,
     })
-    const started = await first.start({ runId: run.id, nodeId: run.currentNodeId })
-    await first.advance(started.runtime.id)
-    const waiting = await first.advance(started.runtime.id)
+    const started = await first.start({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      localProjectId: runtimeProjectId,
+    })
+    const resumed = await first.advance(runtimeCommand(started))
+    const waiting = await first.advance(runtimeCommand(resumed))
     expect(waiting.runtime.status).toBe('waiting_action')
     expect(firstExecutor).not.toHaveBeenCalled()
 
@@ -326,10 +405,14 @@ describe('Desktop Agent Runtime', () => {
         }
       },
     })
-    const started = await first.start({ runId: run.id, nodeId: run.currentNodeId })
-    await first.advance(started.runtime.id)
-    await first.advance(started.runtime.id)
-    await expect(first.advance(started.runtime.id)).rejects.toThrow(
+    const started = await first.start({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      localProjectId: runtimeProjectId,
+    })
+    const resumed = await first.advance(runtimeCommand(started))
+    const waiting = await first.advance(runtimeCommand(resumed))
+    await expect(first.advance(runtimeCommand(waiting))).rejects.toThrow(
       'injected-after-native-tool-before-runtime-commit',
     )
     expect(await store.getAgentRuntime(started.runtime.id)).toMatchObject({
@@ -357,7 +440,7 @@ describe('Desktop Agent Runtime', () => {
       clock: tickingClock('2026-08-12T20:30:00.000Z'),
       createId: () => 'agent-runtime-deadline-1',
     })
-    await first.start({ runId: run.id, nodeId: run.currentNodeId })
+    await first.start({ runId: run.id, nodeId: run.currentNodeId, localProjectId: runtimeProjectId })
 
     const executeFakeAction = vi.fn()
     const restarted = createDesktopAgentRuntime({
@@ -394,7 +477,11 @@ describe('Desktop Agent Runtime', () => {
       fault,
     })
 
-    await expect(runtime.start({ runId: run.id, nodeId: run.currentNodeId })).rejects.toThrow(
+    await expect(runtime.start({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      localProjectId: runtimeProjectId,
+    })).rejects.toThrow(
       'injected-before-commit',
     )
     await expect(store.getAgentRuntime('agent-runtime-crash-before-1')).resolves.toBeNull()
@@ -417,7 +504,11 @@ describe('Desktop Agent Runtime', () => {
       fault,
     })
 
-    await expect(runtime.start({ runId: run.id, nodeId: run.currentNodeId })).rejects.toThrow(
+    await expect(runtime.start({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      localProjectId: runtimeProjectId,
+    })).rejects.toThrow(
       'injected-after-commit',
     )
     await expect(store.getAgentRuntime('agent-runtime-crash-after-1')).resolves.toMatchObject({
@@ -439,11 +530,15 @@ describe('Desktop Agent Runtime', () => {
       createId: () => 'agent-runtime-cancel-1',
       executeFakeAction,
     })
-    const started = await runtime.start({ runId: run.id, nodeId: run.currentNodeId })
-    const cancelled = await runtime.cancel(started.runtime.id)
+    const started = await runtime.start({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      localProjectId: runtimeProjectId,
+    })
+    const cancelled = await runtime.cancel(runtimeCommand(started))
 
     expect(cancelled.runtime).toMatchObject({ status: 'terminal', stopReason: 'cancelled' })
-    await expect(runtime.advance(started.runtime.id)).resolves.toEqual(cancelled)
+    await expect(runtime.advance(runtimeCommand(cancelled))).resolves.toEqual(cancelled)
     expect(executeFakeAction).not.toHaveBeenCalled()
     store.close()
   })
@@ -472,13 +567,17 @@ describe('Desktop Agent Runtime', () => {
       createId: () => 'agent-runtime-cancel-race-1',
       executeFakeAction,
     })
-    const started = await runtime.start({ runId: run.id, nodeId: run.currentNodeId })
-    await runtime.advance(started.runtime.id)
-    await runtime.advance(started.runtime.id)
+    const started = await runtime.start({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      localProjectId: runtimeProjectId,
+    })
+    const resumed = await runtime.advance(runtimeCommand(started))
+    const waiting = await runtime.advance(runtimeCommand(resumed))
 
-    const lateAdvance = runtime.advance(started.runtime.id)
+    const lateAdvance = runtime.advance(runtimeCommand(waiting))
     await vi.waitFor(() => expect(executeFakeAction).toHaveBeenCalledTimes(1))
-    const cancelled = await runtime.cancel(started.runtime.id)
+    const cancelled = await runtime.cancel(runtimeCommand(waiting))
     releaseAction({
       resultDigest: 'd'.repeat(64),
       evaluationSummary: 'This late result must not be accepted.',
@@ -538,17 +637,21 @@ describe('Desktop Agent Runtime', () => {
       ),
       createId: () => 'agent-runtime-native-cancel-race-1',
     })
-    const started = await runtime.start({ runId: run.id, nodeId: run.currentNodeId })
-    await runtime.advance(started.runtime.id)
-    await runtime.advance(started.runtime.id)
+    const started = await runtime.start({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      localProjectId: runtimeProjectId,
+    })
+    const resumed = await runtime.advance(runtimeCommand(started))
+    const waiting = await runtime.advance(runtimeCommand(resumed))
 
-    const lateAdvance = runtime.advance(started.runtime.id)
+    const lateAdvance = runtime.advance(runtimeCommand(waiting))
     await vi.waitFor(() =>
       expect(
         registrations.find((item) => item.definition.id === 'scenario.evaluate')?.handler,
       ).toHaveBeenCalledTimes(1),
     )
-    const cancelled = await runtime.cancel(started.runtime.id)
+    const cancelled = await runtime.cancel(runtimeCommand(waiting))
     releaseTool({ passed: true, failures: [] })
 
     await expect(lateAdvance).resolves.toEqual(cancelled)

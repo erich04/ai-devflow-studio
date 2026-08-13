@@ -47,12 +47,14 @@ import {
   type WorkflowNode,
   type WorkflowRun,
   createDemoTeamSessionHeaders,
+  createAgentRuntimeRendererSnapshot,
   resolveDevFlowCodingExecutorSelection,
   resolveDevFlowRuntimeFlags,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import { createLocalStore, type LocalStore } from './local-store.js'
 import { createDesktopAgentRuntime, type DesktopAgentRuntime } from './agent-runtime-runtime.js'
+import { createAgentRuntimeRendererAccess } from './agent-runtime-renderer-access.js'
 import {
   createFixtureLocalMcpRuntime,
   type FixtureLocalMcpRuntime,
@@ -84,6 +86,8 @@ import {
   parseAdvanceAgentRuntimeInput,
   parseCompleteWorkflowAgentNodeInput,
   parseListAgentReviewsInput,
+  parseListAgentRuntimesInput,
+  parseGetAgentRuntimeInput,
   parseReplyCodingPermissionInput,
   parseRemoteSnapshotInput,
   parseRetryRemoteSyncOperationInput,
@@ -2113,34 +2117,38 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.startAgentRuntime, async (_, payload: unknown) => {
     const input = parseStartAgentRuntimeInput(payload)
-    const snapshot = await (await getDesktopAgentRuntime()).start(input)
+    const runtimeSnapshot = await (await getDesktopAgentRuntime()).start(input)
+    const snapshot = createAgentRuntimeRendererSnapshot(runtimeSnapshot)
     broadcastToRenderers(ipcChannels.agentRuntimeUpdated, snapshot)
     return snapshot
   })
 
   ipcMain.handle(ipcChannels.advanceAgentRuntime, async (_, payload: unknown) => {
     const input = parseAdvanceAgentRuntimeInput(payload)
-    const snapshot = await (await getDesktopAgentRuntime()).advance(input.runtimeId)
+    const runtimeSnapshot = await (await getDesktopAgentRuntime()).advance(input)
+    const snapshot = createAgentRuntimeRendererSnapshot(runtimeSnapshot)
     broadcastToRenderers(ipcChannels.agentRuntimeUpdated, snapshot)
     return snapshot
   })
 
   ipcMain.handle(ipcChannels.cancelAgentRuntime, async (_, payload: unknown) => {
     const input = parseCancelAgentRuntimeInput(payload)
-    const snapshot = await (await getDesktopAgentRuntime()).cancel(input.runtimeId)
+    const runtimeSnapshot = await (await getDesktopAgentRuntime()).cancel(input)
+    const snapshot = createAgentRuntimeRendererSnapshot(runtimeSnapshot)
     broadcastToRenderers(ipcChannels.agentRuntimeUpdated, snapshot)
     return snapshot
   })
 
-  ipcMain.handle(ipcChannels.listAgentRuntimes, async () => {
+  ipcMain.handle(ipcChannels.listAgentRuntimes, async (_, payload: unknown) => {
+    const input = parseListAgentRuntimesInput(payload)
     const store = await getStore()
-    const runtimes = await store.listAgentRuntimes()
-    return Promise.all(
-      runtimes.map(async (runtime) => ({
-        runtime,
-        terminalSummary: await store.getAgentRuntimeTerminalSummary(runtime.id),
-      })),
-    )
+    return createAgentRuntimeRendererAccess(store).list(input)
+  })
+
+  ipcMain.handle(ipcChannels.getAgentRuntime, async (_, payload: unknown) => {
+    const input = parseGetAgentRuntimeInput(payload)
+    const store = await getStore()
+    return createAgentRuntimeRendererAccess(store).get(input)
   })
 
   ipcMain.handle(ipcChannels.deleteRun, async (_, payload: unknown) => {
@@ -2819,7 +2827,10 @@ if (hasSingleInstanceLock) {
       .then((runtime) => runtime.recover())
       .then((snapshots) => {
         for (const snapshot of snapshots) {
-          broadcastToRenderers(ipcChannels.agentRuntimeUpdated, snapshot)
+          broadcastToRenderers(
+            ipcChannels.agentRuntimeUpdated,
+            createAgentRuntimeRendererSnapshot(snapshot),
+          )
         }
       })
       .catch(() => {

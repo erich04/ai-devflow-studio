@@ -18,10 +18,10 @@ describe('Electron Agent Runtime production wiring', () => {
       /parseStartAgentRuntimeInput\(payload\)[\s\S]*?getDesktopAgentRuntime\(\)[\s\S]*?\.start\(input\)/,
     )
     expect(handlers).toMatch(
-      /parseAdvanceAgentRuntimeInput\(payload\)[\s\S]*?\.advance\(input\.runtimeId\)/,
+      /parseAdvanceAgentRuntimeInput\(payload\)[\s\S]*?\.advance\(input\)/,
     )
     expect(handlers).toMatch(
-      /parseCancelAgentRuntimeInput\(payload\)[\s\S]*?\.cancel\(input\.runtimeId\)/,
+      /parseCancelAgentRuntimeInput\(payload\)[\s\S]*?\.cancel\(input\)/,
     )
     expect(handlers).not.toMatch(
       /worktreePath|command|capabilitySet|checkpoint|resultDigest|stopReason/,
@@ -36,8 +36,13 @@ describe('Electron Agent Runtime production wiring', () => {
     expect(handlers.match(/broadcastToRenderers\(ipcChannels\.agentRuntimeUpdated, snapshot\)/g))
       .toHaveLength(3)
     expect(handlers).toMatch(
-      /ipcChannels\.listAgentRuntimes[\s\S]*?store\.listAgentRuntimes\(\)[\s\S]*?getAgentRuntimeTerminalSummary\(runtime\.id\)/,
+      /ipcChannels\.listAgentRuntimes[\s\S]*?parseListAgentRuntimesInput\(payload\)[\s\S]*?createAgentRuntimeRendererAccess\(store\)\.list\(input\)/,
     )
+    expect(handlers).toMatch(
+      /ipcChannels\.getAgentRuntime[\s\S]*?parseGetAgentRuntimeInput\(payload\)[\s\S]*?createAgentRuntimeRendererAccess\(store\)\.get\(input\)/,
+    )
+    expect(handlers.match(/createAgentRuntimeRendererSnapshot\(runtimeSnapshot\)/g))
+      .toHaveLength(3)
     expect(handlers).not.toContain('loadState()')
   })
 

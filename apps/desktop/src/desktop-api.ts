@@ -31,6 +31,8 @@ import type {
   AgentRuntimeCommandInput,
   AgentRuntimeListItem,
   AgentRuntimeSnapshot,
+  GetAgentRuntimeInput,
+  ListAgentRuntimesInput,
   CreateRunInput,
   DeleteRunInput,
   DeleteRunResult,
@@ -234,7 +236,8 @@ export type DevFlowDesktopApi = {
   startAgentRuntime: (input: StartAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
   advanceAgentRuntime: (input: AgentRuntimeCommandInput) => Promise<AgentRuntimeSnapshot>
   cancelAgentRuntime: (input: AgentRuntimeCommandInput) => Promise<AgentRuntimeSnapshot>
-  listAgentRuntimes: () => Promise<AgentRuntimeListItem[]>
+  listAgentRuntimes: (input: ListAgentRuntimesInput) => Promise<AgentRuntimeListItem[]>
+  getAgentRuntime: (input: GetAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
   prepareGitHubDelivery: (

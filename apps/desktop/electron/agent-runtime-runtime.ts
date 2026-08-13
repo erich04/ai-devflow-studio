@@ -71,11 +71,23 @@ export type DesktopAgentRuntimeSnapshot = {
   terminalSummary: AgentRuntimeTerminalSummary | null
 }
 
+export type DesktopAgentRuntimeCommand = {
+  runtimeId: string
+  runId: string
+  localProjectId: string
+  expectedVersion: number
+  expectedCheckpointVersion: number
+}
+
 export type DesktopAgentRuntime = {
-  start(input: { runId: string; nodeId: string }): Promise<DesktopAgentRuntimeSnapshot>
-  advance(runtimeId: string): Promise<DesktopAgentRuntimeSnapshot>
+  start(input: {
+    runId: string
+    nodeId: string
+    localProjectId: string
+  }): Promise<DesktopAgentRuntimeSnapshot>
+  advance(command: DesktopAgentRuntimeCommand): Promise<DesktopAgentRuntimeSnapshot>
   recover(): Promise<DesktopAgentRuntimeSnapshot[]>
-  cancel(runtimeId: string): Promise<DesktopAgentRuntimeSnapshot>
+  cancel(command: DesktopAgentRuntimeCommand): Promise<DesktopAgentRuntimeSnapshot>
 }
 
 export type CreateDesktopAgentRuntimeInput = {
@@ -295,9 +307,25 @@ export function createDesktopAgentRuntime(
     }
   }
 
-  async function advance(runtimeId: string): Promise<DesktopAgentRuntimeSnapshot> {
-    const runtime = await input.store.getAgentRuntime(runtimeId)
-    if (!runtime) throw new Error('Desktop Agent Runtime was not found')
+  function assertRendererCommand(
+    runtime: AgentRuntimeState,
+    command: DesktopAgentRuntimeCommand,
+  ): void {
+    if (
+      runtime.authority.runId !== command.runId ||
+      runtime.scope.localProjectId !== command.localProjectId
+    ) {
+      throw new Error('Desktop Agent Runtime selection is stale')
+    }
+    if (
+      runtime.version !== command.expectedVersion ||
+      runtime.checkpointVersion !== command.expectedCheckpointVersion
+    ) {
+      throw new Error('Desktop Agent Runtime command is stale')
+    }
+  }
+
+  async function advanceRuntime(runtime: AgentRuntimeState): Promise<DesktopAgentRuntimeSnapshot> {
     if (runtime.status === 'terminal') return snapshot(runtime)
     await assertCurrentAuthority(runtime)
 
@@ -362,7 +390,7 @@ export function createDesktopAgentRuntime(
   }
 
   return {
-    async start({ runId, nodeId }) {
+    async start({ runId, nodeId, localProjectId }) {
       const now = canonicalNow(clock)
       const [run, projects, pairing] = await Promise.all([
         input.store.getRun(runId),
@@ -376,6 +404,7 @@ export function createDesktopAgentRuntime(
       if (
         !run ||
         !project ||
+        project.id !== localProjectId ||
         run.currentNodeId !== nodeId ||
         !node ||
         !canRunAgentRuntimeOnNode(node)
@@ -431,7 +460,12 @@ export function createDesktopAgentRuntime(
       return snapshot(committed)
     },
 
-    advance,
+    async advance(command) {
+      const runtime = await input.store.getAgentRuntime(command.runtimeId)
+      if (!runtime) throw new Error('Desktop Agent Runtime was not found')
+      assertRendererCommand(runtime, command)
+      return advanceRuntime(runtime)
+    },
 
     async recover() {
       const recoverable = await input.store.listRecoverableAgentRuntimes()
@@ -441,7 +475,7 @@ export function createDesktopAgentRuntime(
         let current = await snapshot(original)
         for (let iteration = 0; iteration <= original.bounds.maxSteps * 3 + 3; iteration += 1) {
           if (current.runtime.status === 'terminal') break
-          current = await advance(original.id)
+          current = await advanceRuntime(current.runtime)
         }
         if (current.runtime.status !== 'terminal') {
           throw new Error('Desktop Agent Runtime recovery exceeded its deterministic transition bound')
@@ -451,11 +485,12 @@ export function createDesktopAgentRuntime(
       return recovered
     },
 
-    async cancel(runtimeId) {
-      const runtime = await input.store.getAgentRuntime(runtimeId)
+    async cancel(command) {
+      const runtime = await input.store.getAgentRuntime(command.runtimeId)
       if (!runtime) throw new Error('Desktop Agent Runtime was not found')
+      assertRendererCommand(runtime, command)
       if (runtime.status === 'terminal') return snapshot(runtime)
-      nativeToolRegistry?.cancelRuntime(runtimeId)
+      nativeToolRegistry?.cancelRuntime(command.runtimeId)
       const transition = cancelAgentRuntime({
         runtime,
         expectedCheckpointVersion: runtime.checkpointVersion,

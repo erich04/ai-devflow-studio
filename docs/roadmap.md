@@ -102,8 +102,9 @@ bounded native coding loop are implemented; Runtime UX and redacted Team project
 
 ### Now — Implement V2.0 Native Agent Runtime
 
-V1.5 and the finite 1.x line are released and complete. Slices 1–6 are complete; V2.0 now proceeds
-through the accepted contract and executable slice plan:
+V1.5 and the finite 1.x line are released and complete. Slices 1–6 are complete; Slice 7 Desktop
+runtime observability is complete, and Team schema 16 redacted projection remains next. V2.0
+continues through the accepted contract and executable slice plan:
 
 - `docs/product/prd/v2.0-native-agent-runtime-prd.md`
 - `docs/adr/0014-bounded-agent-runtime.md`
@@ -128,13 +129,16 @@ through the accepted contract and executable slice plan:
 - Slice 6 added deterministic and explicitly configured metered decision providers plus a bounded
   plan/read/observation-bound-edit/test/evaluate/one-repair loop using only accepted main-owned Tools, with durable
   permission/checkpoint recovery and packaged cold-restart evidence showing zero repeated effects.
-- Continue with Slice 7 while preserving complete local trajectory authority and projecting only
-  strict redacted summaries to Team.
+- Slice 7 now has a strict main-owned renderer projection, current Run/Local Project selection,
+  exact version/checkpoint CAS commands, monotonic list/detail state, safe trajectory/evaluation UX,
+  and packaged cold-restart evidence with zero repeated Tool effects.
+- Complete Slice 7 by projecting only strict redacted summaries to Team while preserving complete
+  local trajectory and checkpoint authority in Electron main.
 
 ### Next — Add Runtime UX And Team Projection
 
-- Add Desktop list/detail/trajectory/bounds/permission/cancel/resume/Evidence UX for the completed
-  Runtime without exposing paths, source, raw Tool output, or hidden reasoning.
+- Desktop list/detail/trajectory/bounds/permission/cancel/resume/Evidence UX is complete without
+  exposing paths, source, raw Tool output, checkpoints, scope metadata, or hidden reasoning.
 - Add the Team schema 16 redacted runtime summary/audit projection with optimistic concurrency and a
   read-only Web manager view; Team must not gain resume, Tool-result, capability, or Workflow authority.
 

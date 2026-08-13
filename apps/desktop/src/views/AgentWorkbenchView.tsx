@@ -22,10 +22,14 @@ import {
   type AgentConsoleAction,
   type AgentConsoleEvidenceGroup,
 } from '../app/agent-console-view-model'
+import { AgentRuntimePanel } from '../AgentRuntimePanel'
 import { codingRuntimeLabel, codingTerminalLabel, type SupportContext } from '../app/desktop-view-model'
+import type { DevFlowDesktopApi } from '../desktop-api'
 import type { PendingInspectorAction } from '../app/node-inspector-view-model'
 
 export function AgentWorkbenchView({
+  desktopApi,
+  localProjectId,
   providers,
   selectedProviderId,
   onProviderChange,
@@ -72,6 +76,8 @@ export function AgentWorkbenchView({
   supportContext,
   onReturnToInspector,
 }: {
+  desktopApi: DevFlowDesktopApi | null
+  localProjectId: string | undefined
   providers: AgentProviderConfig[]
   selectedProviderId: string
   onProviderChange: (providerId: string) => void
@@ -391,6 +397,12 @@ export function AgentWorkbenchView({
             </div>
           </article>
         ) : null}
+
+        <AgentRuntimePanel
+          desktopApi={desktopApi}
+          runId={selectedRun?.id}
+          localProjectId={localProjectId}
+        />
 
         <section className="agent-console-section" aria-label="Evidence and Trace">
           <div className="section-heading section-heading--inline">

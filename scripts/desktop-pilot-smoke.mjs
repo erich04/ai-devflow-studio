@@ -155,10 +155,15 @@ try {
     let snapshot = await window.aiDevFlowDesktop.startAgentRuntime({
       runId: run.id,
       nodeId: run.currentNodeId,
+      localProjectId: project.id,
     })
     for (let iteration = 0; iteration < 3; iteration += 1) {
       snapshot = await window.aiDevFlowDesktop.advanceAgentRuntime({
-        runtimeId: snapshot.runtime.id,
+        runtimeId: snapshot.runtime.runtimeId,
+        runId: run.id,
+        localProjectId: project.id,
+        expectedVersion: snapshot.runtime.version,
+        expectedCheckpointVersion: snapshot.runtime.checkpointVersion,
       })
     }
     return snapshot
@@ -170,7 +175,7 @@ try {
     throw new Error('Packaged Agent Runtime did not reach the exact success terminal state.')
   }
   if (
-    runtimeBeforeRestart.runtime.acceptedActionIds.length !== 1 ||
+    runtimeBeforeRestart.runtime.acceptedActionCount !== 1 ||
     runtimeBeforeRestart.events.filter((event) => event.type === 'action_requested').length !== 1 ||
     runtimeBeforeRestart.terminalSummary?.acceptedActionCount !== 1
   ) {
@@ -247,8 +252,11 @@ try {
       comment: 'Approve one bounded packaged Native Coding edit.',
     })
     const [completed] = await window.aiDevFlowDesktop.listCodingAgentRuns({ runId: run.id })
-    const runtime = (await window.aiDevFlowDesktop.listAgentRuntimes())
-      .find((candidate) => candidate.runtime.id === `agent-runtime-coding-${started.codingRun.id}`)
+    const runtime = (await window.aiDevFlowDesktop.listAgentRuntimes({
+      runId: run.id,
+      localProjectId: project.id,
+    }))
+      .find((candidate) => candidate.runtime.runtimeId === `agent-runtime-coding-${started.codingRun.id}`)
     const state = await window.aiDevFlowDesktop.loadState()
     const completedWorkflow = state.runs.find((candidate) => candidate.id === run.id)
     const workflowNode = completedWorkflow?.nodes.find(
@@ -278,10 +286,11 @@ try {
     return {
       workflowRunId: run.id,
       codingRunId: completed.id,
-      runtimeId: runtime.runtime.id,
+      runtimeId: runtime.runtime.runtimeId,
+      localProjectId: project.id,
       status: completed.status,
       changedPaths: completed.changedPaths,
-      acceptedActionIds: runtime.runtime.acceptedActionIds,
+      acceptedActionCount: runtime.runtime.acceptedActionCount,
     }
   })
 
@@ -289,15 +298,22 @@ try {
   electronApp = undefined
   const secondLaunch = await launchPackagedDesktop()
   electronApp = secondLaunch.app
-  const runtimeAfterRestart = await secondLaunch.page.evaluate(async (runtimeId) => {
-    const runtimes = await window.aiDevFlowDesktop.listAgentRuntimes()
-    return runtimes.find((candidate) => candidate.runtime.id === runtimeId)
-  }, runtimeBeforeRestart.runtime.id)
+  const runtimeAfterRestart = await secondLaunch.page.evaluate(async (identity) => {
+    const runtimes = await window.aiDevFlowDesktop.listAgentRuntimes({
+      runId: identity.runId,
+      localProjectId: identity.localProjectId,
+    })
+    return runtimes.find((candidate) => candidate.runtime.runtimeId === identity.runtimeId)
+  }, {
+    runtimeId: runtimeBeforeRestart.runtime.runtimeId,
+    runId: runtimeBeforeRestart.runtime.runId,
+    localProjectId: runtimeBeforeRestart.runtime.localProjectId,
+  })
   if (
     !runtimeAfterRestart ||
     runtimeAfterRestart.runtime.status !== 'terminal' ||
     runtimeAfterRestart.runtime.stopReason !== 'success' ||
-    runtimeAfterRestart.runtime.acceptedActionIds.length !== 1 ||
+    runtimeAfterRestart.runtime.acceptedActionCount !== 1 ||
     runtimeAfterRestart.terminalSummary?.acceptedActionCount !== 1
   ) {
     throw new Error('Packaged Agent Runtime was not restored exactly after restart.')
@@ -306,8 +322,11 @@ try {
     const codingRun = (await window.aiDevFlowDesktop.listCodingAgentRuns({
       runId: identity.workflowRunId,
     })).find((candidate) => candidate.id === identity.codingRunId)
-    const runtime = (await window.aiDevFlowDesktop.listAgentRuntimes())
-      .find((candidate) => candidate.runtime.id === identity.runtimeId)
+    const runtime = (await window.aiDevFlowDesktop.listAgentRuntimes({
+      runId: identity.workflowRunId,
+      localProjectId: identity.localProjectId,
+    }))
+      .find((candidate) => candidate.runtime.runtimeId === identity.runtimeId)
     return { codingRun, runtime }
   }, nativeCodingBeforeRestart)
   if (
@@ -316,8 +335,8 @@ try {
     nativeCodingAfterRestart.codingRun.changedPaths[0] !== 'devflow-native-change.txt' ||
     nativeCodingAfterRestart.runtime?.runtime.status !== 'terminal' ||
     nativeCodingAfterRestart.runtime.runtime.stopReason !== 'success' ||
-    JSON.stringify(nativeCodingAfterRestart.runtime.runtime.acceptedActionIds) !==
-      JSON.stringify(nativeCodingBeforeRestart.acceptedActionIds)
+    nativeCodingAfterRestart.runtime.runtime.acceptedActionCount !==
+      nativeCodingBeforeRestart.acceptedActionCount
   ) {
     throw new Error('Packaged Native Coding was not restored exactly after restart.')
   }
@@ -340,7 +359,7 @@ try {
        from agent_runtime_tool_audits
       where runtime_id = ?
       group by tool_id, source, installation_id, installation_version`,
-    [runtimeBeforeRestart.runtime.id],
+    [runtimeBeforeRestart.runtime.runtimeId],
   )[0]?.values[0]
   const localMcpInstallations = database.exec(
     `select id, version, enabled

@@ -1,6 +1,7 @@
 export * from './cost'
 export * from './agent-review'
 export * from './agent-runtime'
+export * from './agent-runtime-projection'
 export * from './coding-agent'
 export * from './coding-executor'
 export * from './command-safety'

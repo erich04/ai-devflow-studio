@@ -1281,6 +1281,8 @@ export function App() {
 
         {activeView === 'agents' && (
           <AgentWorkbenchView
+            desktopApi={desktopApi}
+            localProjectId={selectedLocalProject?.id}
             providers={agentProviders}
             selectedProviderId={selectedAgentProviderId}
             onProviderChange={setSelectedAgentProviderId}

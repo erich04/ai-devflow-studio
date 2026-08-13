@@ -544,7 +544,10 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     cancelAgentRuntime: vi.fn().mockRejectedValue(
       new Error('Agent Runtime is not configured for this test.'),
     ),
-    listAgentRuntimes: vi.fn().mockResolvedValue([]),
+    listAgentRuntimes: async () => [],
+    getAgentRuntime: vi.fn().mockRejectedValue(
+      new Error('Agent Runtime is not configured for this test.'),
+    ),
     completeWorkflowAgentNode: vi.fn().mockImplementation(async (input) => {
       const created = createWorkflowRunFromRequest({
         runId: 'run-created-from-request',
@@ -1435,6 +1438,23 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
     expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('not indexed')
+  })
+
+  it('mounts Agent Runtime observability for the exact selected Run and local project', async () => {
+    const listAgentRuntimes = vi.fn().mockResolvedValue([])
+    const api = installDesktopApi({ listAgentRuntimes })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+
+    expect(await screen.findByRole('region', { name: 'Agent Runtime observability' })).toBeInTheDocument()
+    await waitFor(() => expect(listAgentRuntimes).toHaveBeenCalledWith({
+      runId: fixtureRuns[0]!.id,
+      localProjectId: localProject.id,
+    }))
+    expect(screen.getByText('No Agent Runtime has been recorded for this Run.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Start Agent Runtime/ })).not.toBeInTheDocument()
   })
 
   it('labels Electron local state as empty when no persisted runs exist', async () => {

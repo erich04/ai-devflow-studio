@@ -24,6 +24,8 @@ import {
   parseOpenManagedWorktreeInput,
   parseReplyCodingPermissionInput,
   parseLoadRepositoryKnowledgeInput,
+  parseGetAgentRuntimeInput,
+  parseListAgentRuntimesInput,
   parseListWorkRequestsInput,
   parseMaterializeWorkRequestInput,
   parseRefreshRepositoryKnowledgeInput,
@@ -103,17 +105,36 @@ describe('IPC contract parsers', () => {
     ).toThrow(/unexpected field/i)
   })
 
-  it('keeps Agent Runtime commands identifier-only and rejects renderer-owned execution state', () => {
-    expect(parseStartAgentRuntimeInput({ runId: 'run-1', nodeId: 'node-1' })).toEqual({
+  it('binds Agent Runtime commands to the selected project, Run, and exact checkpoint', () => {
+    expect(parseStartAgentRuntimeInput({
       runId: 'run-1',
       nodeId: 'node-1',
+      localProjectId: 'project-1',
+    })).toEqual({
+      runId: 'run-1',
+      nodeId: 'node-1',
+      localProjectId: 'project-1',
     })
-    expect(parseAdvanceAgentRuntimeInput({ runtimeId: 'agent-runtime-1' })).toEqual({
+    const command = {
       runtimeId: 'agent-runtime-1',
-    })
-    expect(parseCancelAgentRuntimeInput({ runtimeId: 'agent-runtime-1' })).toEqual({
-      runtimeId: 'agent-runtime-1',
-    })
+      runId: 'run-1',
+      localProjectId: 'project-1',
+      expectedVersion: 4,
+      expectedCheckpointVersion: 4,
+    }
+    expect(parseAdvanceAgentRuntimeInput(command)).toEqual(command)
+    expect(parseCancelAgentRuntimeInput(command)).toEqual(command)
+
+    for (const incomplete of [
+      { runtimeId: 'agent-runtime-1' },
+      { ...command, runId: '' },
+      { ...command, localProjectId: '' },
+      { ...command, expectedVersion: 0 },
+      { ...command, expectedCheckpointVersion: 1.5 },
+    ]) {
+      expect(() => parseAdvanceAgentRuntimeInput(incomplete)).toThrow()
+      expect(() => parseCancelAgentRuntimeInput(incomplete)).toThrow()
+    }
 
     for (const forbidden of [
       { path: '/tmp/repository' },
@@ -126,12 +147,48 @@ describe('IPC contract parsers', () => {
       { policyVersion: 99 },
     ]) {
       expect(() =>
-        parseStartAgentRuntimeInput({ runId: 'run-1', nodeId: 'node-1', ...forbidden }),
+        parseStartAgentRuntimeInput({
+          runId: 'run-1',
+          nodeId: 'node-1',
+          localProjectId: 'project-1',
+          ...forbidden,
+        }),
       ).toThrow(/unexpected field/i)
       expect(() =>
-        parseAdvanceAgentRuntimeInput({ runtimeId: 'agent-runtime-1', ...forbidden }),
+        parseAdvanceAgentRuntimeInput({ ...command, ...forbidden }),
       ).toThrow(/unexpected field/i)
     }
+  })
+
+  it('binds Agent Runtime list and detail reads to one selected Run and local project', () => {
+    expect(parseListAgentRuntimesInput({
+      runId: 'run-1',
+      localProjectId: 'project-1',
+    })).toEqual({ runId: 'run-1', localProjectId: 'project-1' })
+    expect(parseGetAgentRuntimeInput({
+      runtimeId: 'agent-runtime-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+    })).toEqual({
+      runtimeId: 'agent-runtime-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+    })
+
+    for (const payload of [
+      undefined,
+      {},
+      { runId: 'run-1' },
+      { runId: 'run-1', localProjectId: 'project-1', source: 'raw' },
+    ]) {
+      expect(() => parseListAgentRuntimesInput(payload)).toThrow()
+    }
+    expect(() => parseGetAgentRuntimeInput({
+      runtimeId: 'agent-runtime-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+      path: '/Users/example/repo',
+    })).toThrow(/unexpected field/i)
   })
 
   it('keeps Gate override input command-only and rejects derived trust fields', () => {

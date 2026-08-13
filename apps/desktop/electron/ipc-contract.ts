@@ -4,8 +4,8 @@ import type {
   AgentEvent,
   AgentProviderConfig,
   AgentReviewExecutionResult,
-  AgentRuntimeEvent,
-  AgentRuntimeState,
+  AgentRuntimeRendererListItem,
+  AgentRuntimeRendererSnapshot,
   Artifact,
   CommandSafetyResult,
   CodingAgentEvent,
@@ -55,36 +55,31 @@ export type DeleteRunResult = {
 export type StartAgentRuntimeInput = {
   runId: string
   nodeId: string
+  localProjectId: string
 }
 
 export type AgentRuntimeCommandInput = {
   runtimeId: string
+  runId: string
+  localProjectId: string
+  expectedVersion: number
+  expectedCheckpointVersion: number
 }
 
 export type AdvanceAgentRuntimeInput = AgentRuntimeCommandInput
 export type CancelAgentRuntimeInput = AgentRuntimeCommandInput
 
-export type AgentRuntimeSnapshot = {
-  runtime: AgentRuntimeState
-  events: AgentRuntimeEvent[]
-  terminalSummary: {
-    stateVersion: 1
-    runtimeId: string
-    checkpointVersion: number
-    stopReason: NonNullable<AgentRuntimeState['stopReason']>
-    counters: AgentRuntimeState['counters']
-    acceptedActionCount: number
-    lastObservationDigest: string
-    lastResultDigest: string | null
-    completedAt: string
-    redacted: true
-  } | null
+export type ListAgentRuntimesInput = {
+  runId: string
+  localProjectId: string
 }
 
-export type AgentRuntimeListItem = {
-  runtime: AgentRuntimeState
-  terminalSummary: AgentRuntimeSnapshot['terminalSummary']
+export type GetAgentRuntimeInput = ListAgentRuntimesInput & {
+  runtimeId: string
 }
+
+export type AgentRuntimeSnapshot = AgentRuntimeRendererSnapshot
+export type AgentRuntimeListItem = AgentRuntimeRendererListItem
 
 export type RetryRemoteSyncOperationInput = {
   operationId: string
@@ -113,6 +108,7 @@ export const ipcChannels = {
   advanceAgentRuntime: 'devflow:agent-runtime:advance',
   cancelAgentRuntime: 'devflow:agent-runtime:cancel',
   listAgentRuntimes: 'devflow:agent-runtime:list',
+  getAgentRuntime: 'devflow:agent-runtime:get',
   agentRuntimeUpdated: 'devflow:agent-runtime:updated',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   createPrDraft: 'devflow:pr-draft:create',
@@ -464,7 +460,8 @@ export type DevFlowDesktopApi = {
   startAgentRuntime: (input: StartAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
   advanceAgentRuntime: (input: AdvanceAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
   cancelAgentRuntime: (input: CancelAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
-  listAgentRuntimes: () => Promise<AgentRuntimeListItem[]>
+  listAgentRuntimes: (input: ListAgentRuntimesInput) => Promise<AgentRuntimeListItem[]>
+  getAgentRuntime: (input: GetAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
   prepareGitHubDelivery: (
@@ -697,10 +694,15 @@ export function parseStartAgentRuntimeInput(value: unknown): StartAgentRuntimeIn
   if (!isRecord(value)) {
     throw new Error('Invalid start Agent Runtime payload')
   }
-  rejectUnexpectedFields(value, ['runId', 'nodeId'], 'start Agent Runtime payload')
+  rejectUnexpectedFields(
+    value,
+    ['runId', 'nodeId', 'localProjectId'],
+    'start Agent Runtime payload',
+  )
   return {
     runId: readExactRequiredIdentifier(value, 'runId'),
     nodeId: readExactRequiredIdentifier(value, 'nodeId'),
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
   }
 }
 
@@ -709,8 +711,36 @@ function parseAgentRuntimeCommandInput(
   payloadName: string,
 ): AgentRuntimeCommandInput {
   if (!isRecord(value)) throw new Error(`Invalid ${payloadName}`)
-  rejectUnexpectedFields(value, ['runtimeId'], payloadName)
-  return { runtimeId: readExactRequiredIdentifier(value, 'runtimeId') }
+  rejectUnexpectedFields(
+    value,
+    [
+      'runtimeId',
+      'runId',
+      'localProjectId',
+      'expectedVersion',
+      'expectedCheckpointVersion',
+    ],
+    payloadName,
+  )
+  const expectedVersion = value.expectedVersion
+  const expectedCheckpointVersion = value.expectedCheckpointVersion
+  if (
+    !Number.isInteger(expectedVersion) ||
+    Number(expectedVersion) <= 0 ||
+    Number(expectedVersion) > 2_147_483_647 ||
+    !Number.isInteger(expectedCheckpointVersion) ||
+    Number(expectedCheckpointVersion) <= 0 ||
+    Number(expectedCheckpointVersion) > 2_147_483_647
+  ) {
+    throw new Error(`Invalid ${payloadName} version`)
+  }
+  return {
+    runtimeId: readExactRequiredIdentifier(value, 'runtimeId'),
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+    expectedVersion: Number(expectedVersion),
+    expectedCheckpointVersion: Number(expectedCheckpointVersion),
+  }
 }
 
 export function parseAdvanceAgentRuntimeInput(value: unknown): AdvanceAgentRuntimeInput {
@@ -719,6 +749,33 @@ export function parseAdvanceAgentRuntimeInput(value: unknown): AdvanceAgentRunti
 
 export function parseCancelAgentRuntimeInput(value: unknown): CancelAgentRuntimeInput {
   return parseAgentRuntimeCommandInput(value, 'cancel Agent Runtime payload')
+}
+
+export function parseListAgentRuntimesInput(value: unknown): ListAgentRuntimesInput {
+  if (!isRecord(value)) throw new Error('Invalid list Agent Runtimes payload')
+  rejectUnexpectedFields(
+    value,
+    ['runId', 'localProjectId'],
+    'list Agent Runtimes payload',
+  )
+  return {
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+  }
+}
+
+export function parseGetAgentRuntimeInput(value: unknown): GetAgentRuntimeInput {
+  if (!isRecord(value)) throw new Error('Invalid get Agent Runtime payload')
+  rejectUnexpectedFields(
+    value,
+    ['runtimeId', 'runId', 'localProjectId'],
+    'get Agent Runtime payload',
+  )
+  return {
+    runtimeId: readExactRequiredIdentifier(value, 'runtimeId'),
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+  }
 }
 
 export function parseCompleteWorkflowAgentNodeInput(value: unknown): CompleteWorkflowAgentNodeInput {

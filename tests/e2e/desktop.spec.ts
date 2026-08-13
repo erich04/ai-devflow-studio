@@ -732,9 +732,23 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
         id: workspaceId,
         deletedAt: '2026-06-15T00:06:00.000Z',
       }),
+      startAgentRuntime: async () => {
+        throw new Error('Agent Runtime start is not available in the E2E renderer fixture.')
+      },
+      advanceAgentRuntime: async () => {
+        throw new Error('Agent Runtime advance is not available in the E2E renderer fixture.')
+      },
+      cancelAgentRuntime: async () => {
+        throw new Error('Agent Runtime cancel is not available in the E2E renderer fixture.')
+      },
+      listAgentRuntimes: async () => [],
+      getAgentRuntime: async () => {
+        throw new Error('Agent Runtime detail is not available in the E2E renderer fixture.')
+      },
       onCodingRunStatusUpdated: () => () => undefined,
       onCodingEventAppended: () => () => undefined,
       onCodingPermissionUpdated: () => () => undefined,
+      onAgentRuntimeUpdated: () => () => undefined,
       onLocalStateUpdated: () => () => undefined,
     }
   })

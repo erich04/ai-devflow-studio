@@ -26,7 +26,7 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).toContain('listAgentRuntimes')
     expect(smoke).toContain("stopReason !== 'success'")
     expect(smoke).toContain('runtimeAfterRestart')
-    expect(smoke).toContain('acceptedActionIds.length !== 1')
+    expect(smoke).toContain('acceptedActionCount !== 1')
     expect(smoke).toContain('agent_runtime_tool_audits')
     expect(smoke).toContain('local_mcp_installations')
     expect(smoke).toContain("source !== 'mcp'")
@@ -34,6 +34,16 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).toContain('installation_version')
     expect(smoke).toContain("toolId !== 'scenario.evaluate'")
     expect(smoke).toContain('schemaVersion !== 20')
+    expect(smoke).toMatch(
+      /startAgentRuntime\(\{\s*runId: run\.id,\s*nodeId: run\.currentNodeId,\s*localProjectId: project\.id,\s*\}\)/,
+    )
+    expect(smoke).toContain('expectedVersion: snapshot.runtime.version')
+    expect(smoke).toContain('expectedCheckpointVersion: snapshot.runtime.checkpointVersion')
+    expect(smoke).toContain('runtimeId: snapshot.runtime.runtimeId')
+    expect(smoke).toMatch(
+      /listAgentRuntimes\(\{\s*runId: run\.id,\s*localProjectId: project\.id,\s*\}\)/,
+    )
+    expect(smoke).not.toContain('.runtime.acceptedActionIds')
   })
 
   it('completes and reopens one bounded Native Coding run without repeated Tool effects', () => {
