@@ -98,6 +98,52 @@ export type AgentMemoryCandidate = {
   createdAt: string
 }
 
+export type AgentMemoryVisibility = 'runtime' | 'user_project' | 'project_shared'
+export type AgentMemorySensitivity = 'private' | 'internal'
+export type AgentMemoryRetentionClass = 'session' | 'thirty_days' | 'until_deleted'
+
+export type AgentMemoryPromotionAuthority = {
+  stateVersion: typeof AGENT_MEMORY_CONTRACT_VERSION
+  decisionId: string
+  candidateId: string
+  candidateContentDigest: string
+  scope: KnowledgeRetrievalScope
+  actorKind: 'human' | 'policy'
+  actorId: string
+  policyId: string
+  policyVersion: number
+  visibility: AgentMemoryVisibility
+  sensitivity: AgentMemorySensitivity
+  retentionClass: AgentMemoryRetentionClass
+  expiresAt: string | null
+  authorityDigest: string
+  decidedAt: string
+}
+
+export type DurableAgentMemoryRevision = {
+  stateVersion: typeof AGENT_MEMORY_CONTRACT_VERSION
+  id: string
+  revision: number
+  status: 'active' | 'conflict'
+  scope: KnowledgeRetrievalScope
+  visibility: AgentMemoryVisibility
+  statement: string
+  contentDigest: string
+  provenanceDigest: string
+  sourceCandidateId: string
+  supersedesRevision: number | null
+  sensitivity: AgentMemorySensitivity
+  retentionClass: AgentMemoryRetentionClass
+  expiresAt: string | null
+  promotionDecisionId: string
+  promotionActorKind: 'human' | 'policy'
+  promotionActorId: string
+  promotionPolicyId: string
+  promotionPolicyVersion: number
+  promotionAuthorityDigest: string
+  createdAt: string
+}
+
 export type KnowledgeRetrievalRequest = {
   stateVersion: typeof KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION
   id: string
@@ -320,6 +366,121 @@ export async function parseAgentMemoryCandidate(value: unknown): Promise<AgentMe
     provenance,
     provenanceDigest: value.provenanceDigest,
     createdAt: value.createdAt,
+  }
+}
+
+function parseMemoryPromotionAuthority(value: unknown): AgentMemoryPromotionAuthority {
+  if (
+    !isPlainRecord(value) ||
+    !hasExactKeys(value, [
+      'stateVersion',
+      'decisionId',
+      'candidateId',
+      'candidateContentDigest',
+      'scope',
+      'actorKind',
+      'actorId',
+      'policyId',
+      'policyVersion',
+      'visibility',
+      'sensitivity',
+      'retentionClass',
+      'expiresAt',
+      'authorityDigest',
+      'decidedAt',
+    ]) ||
+    value.stateVersion !== AGENT_MEMORY_CONTRACT_VERSION ||
+    !isIdentifier(value.decisionId) ||
+    !isIdentifier(value.candidateId) ||
+    typeof value.candidateContentDigest !== 'string' ||
+    !digestPattern.test(value.candidateContentDigest) ||
+    (value.actorKind !== 'human' && value.actorKind !== 'policy') ||
+    !isIdentifier(value.actorId) ||
+    !isIdentifier(value.policyId) ||
+    !isPositiveVersion(value.policyVersion) ||
+    !['runtime', 'user_project', 'project_shared'].includes(String(value.visibility)) ||
+    !['private', 'internal'].includes(String(value.sensitivity)) ||
+    !['session', 'thirty_days', 'until_deleted'].includes(String(value.retentionClass)) ||
+    typeof value.authorityDigest !== 'string' ||
+    !digestPattern.test(value.authorityDigest) ||
+    !isCanonicalIso(value.decidedAt)
+  ) {
+    failMemoryCandidate()
+  }
+  let scope: KnowledgeRetrievalScope
+  try {
+    scope = parseScope(value.scope)
+  } catch {
+    failMemoryCandidate()
+  }
+  if (
+    (value.retentionClass === 'until_deleted' && value.expiresAt !== null) ||
+    (value.retentionClass !== 'until_deleted' &&
+      (!isCanonicalIso(value.expiresAt) || Date.parse(value.expiresAt) <= Date.parse(value.decidedAt))) ||
+    (value.visibility === 'project_shared' && scope.kind !== 'team')
+  ) {
+    failMemoryCandidate()
+  }
+  return {
+    stateVersion: AGENT_MEMORY_CONTRACT_VERSION,
+    decisionId: value.decisionId,
+    candidateId: value.candidateId,
+    candidateContentDigest: value.candidateContentDigest,
+    scope,
+    actorKind: value.actorKind,
+    actorId: value.actorId,
+    policyId: value.policyId,
+    policyVersion: value.policyVersion,
+    visibility: value.visibility as AgentMemoryVisibility,
+    sensitivity: value.sensitivity as AgentMemorySensitivity,
+    retentionClass: value.retentionClass as AgentMemoryRetentionClass,
+    expiresAt: value.expiresAt as string | null,
+    authorityDigest: value.authorityDigest,
+    decidedAt: value.decidedAt,
+  }
+}
+
+export async function promoteAgentMemoryCandidate(input: unknown): Promise<DurableAgentMemoryRevision> {
+  if (
+    !isPlainRecord(input) ||
+    !hasExactKeys(input, ['candidate', 'memoryId', 'authority']) ||
+    !isIdentifier(input.memoryId)
+  ) {
+    failMemoryCandidate()
+  }
+  const candidate = await parseAgentMemoryCandidate(input.candidate)
+  const authority = parseMemoryPromotionAuthority(input.authority)
+  if (
+    authority.candidateId !== candidate.id ||
+    authority.candidateContentDigest !== candidate.contentDigest ||
+    JSON.stringify(authority.scope) !== JSON.stringify(candidate.scope) ||
+    Date.parse(authority.decidedAt) < Date.parse(candidate.createdAt) ||
+    (authority.actorKind === 'human' && authority.actorId !== candidate.scope.userId)
+  ) {
+    failMemoryCandidate()
+  }
+  return {
+    stateVersion: AGENT_MEMORY_CONTRACT_VERSION,
+    id: input.memoryId,
+    revision: 1,
+    status: 'active',
+    scope: { ...candidate.scope },
+    visibility: authority.visibility,
+    statement: candidate.statement,
+    contentDigest: candidate.contentDigest,
+    provenanceDigest: candidate.provenanceDigest,
+    sourceCandidateId: candidate.id,
+    supersedesRevision: null,
+    sensitivity: authority.sensitivity,
+    retentionClass: authority.retentionClass,
+    expiresAt: authority.expiresAt,
+    promotionDecisionId: authority.decisionId,
+    promotionActorKind: authority.actorKind,
+    promotionActorId: authority.actorId,
+    promotionPolicyId: authority.policyId,
+    promotionPolicyVersion: authority.policyVersion,
+    promotionAuthorityDigest: authority.authorityDigest,
+    createdAt: authority.decidedAt,
   }
 }
 

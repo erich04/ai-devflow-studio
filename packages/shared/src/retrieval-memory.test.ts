@@ -16,11 +16,13 @@ import {
   KNOWLEDGE_RETRIEVAL_VECTOR_DIMENSIONS_MAX,
   mergeKnowledgeRetrievalCandidates,
   parseCurrentKnowledgeCitation,
+  parseAgentMemoryCandidate,
   parseKnowledgeCitation,
   parseKnowledgeRetrievalCandidateSet,
   parseKnowledgeRetrievalRequest,
   parseRetrievalMemoryEvaluationCorpus,
   rerankKnowledgeRetrievalCandidates,
+  promoteAgentMemoryCandidate,
   type KnowledgeCitation,
   type KnowledgeHybridRetrievalResult,
   type KnowledgeRerankedRetrievalResult,
@@ -124,6 +126,99 @@ describe('V2.1 Agent Memory candidate contract', () => {
       provenanceDigest: 'aad5fd68277b6b347c2ee50b6493cf3b7e4da0b99c3db571a427023e6ecc0a05',
       createdAt: '2026-08-13T08:00:04.000Z',
     })
+  })
+
+  it('promotes an inert candidate to immutable revision one through exact authority', async () => {
+    const candidate = await parseAgentMemoryCandidate({
+      stateVersion: 1,
+      id: 'memory-candidate-1',
+      status: 'candidate',
+      scope: {
+        kind: 'team',
+        organizationId: 'org-1',
+        projectId: 'project-1',
+        userId: 'user-1',
+        sessionId: 'session-1',
+        localProjectId: 'local-project-1',
+      },
+      statement: 'The saved health test is the regression check for dependency degradation.',
+      contentDigest: '59abd35566d90929a62e012cdddffbb120bc22d141c53528670ba08fc0e0e660',
+      provenance: {
+        kind: 'agent_observation',
+        runtimeId: 'runtime-memory-1',
+        actionId: 'action-memory-1',
+        checkpointVersion: 4,
+        sequence: 10,
+        resultDigest: '3'.repeat(64),
+      },
+      provenanceDigest: 'aad5fd68277b6b347c2ee50b6493cf3b7e4da0b99c3db571a427023e6ecc0a05',
+      createdAt: '2026-08-13T08:00:04.000Z',
+    })
+    const unchangedCandidate = structuredClone(candidate)
+    const authority = {
+      stateVersion: 1,
+      decisionId: 'memory-promotion-decision-1',
+      candidateId: candidate.id,
+      candidateContentDigest: candidate.contentDigest,
+      scope: candidate.scope,
+      actorKind: 'human',
+      actorId: 'user-1',
+      policyId: 'memory-policy-1',
+      policyVersion: 1,
+      visibility: 'user_project',
+      sensitivity: 'private',
+      retentionClass: 'until_deleted',
+      expiresAt: null,
+      authorityDigest: '5'.repeat(64),
+      decidedAt: '2026-08-13T08:00:05.000Z',
+    }
+
+    await expect(promoteAgentMemoryCandidate({
+      candidate,
+      memoryId: 'memory-health-regression',
+      authority,
+    })).resolves.toEqual({
+      stateVersion: 1,
+      id: 'memory-health-regression',
+      revision: 1,
+      status: 'active',
+      scope: candidate.scope,
+      visibility: 'user_project',
+      statement: candidate.statement,
+      contentDigest: candidate.contentDigest,
+      provenanceDigest: candidate.provenanceDigest,
+      sourceCandidateId: candidate.id,
+      supersedesRevision: null,
+      sensitivity: 'private',
+      retentionClass: 'until_deleted',
+      expiresAt: null,
+      promotionDecisionId: 'memory-promotion-decision-1',
+      promotionActorKind: 'human',
+      promotionActorId: 'user-1',
+      promotionPolicyId: 'memory-policy-1',
+      promotionPolicyVersion: 1,
+      promotionAuthorityDigest: '5'.repeat(64),
+      createdAt: '2026-08-13T08:00:05.000Z',
+    })
+    expect(candidate).toEqual(unchangedCandidate)
+
+    for (const actorKind of ['model', 'renderer', 'mcp']) {
+      await expect(promoteAgentMemoryCandidate({
+        candidate,
+        memoryId: 'memory-health-regression',
+        authority: { ...authority, actorKind },
+      })).rejects.toThrowError('invalid_agent_memory_candidate')
+    }
+    await expect(promoteAgentMemoryCandidate({
+      candidate,
+      memoryId: 'memory-health-regression',
+      authority: { ...authority, actorId: 'user-foreign' },
+    })).rejects.toThrowError('invalid_agent_memory_candidate')
+    await expect(promoteAgentMemoryCandidate({
+      candidate,
+      memoryId: 'memory-health-regression',
+      authority: { ...authority, rawPrompt: 'must-not-cross-the-boundary' },
+    })).rejects.toThrowError('invalid_agent_memory_candidate')
   })
 })
 
