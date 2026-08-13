@@ -19,6 +19,12 @@ retroactive TDD rewrites unless it is touched.
   upgrade that accepts only metadata-only Agent Runtime summaries, and the 21-to-22 retrieval-index
   migration with zero fabricated snapshot/chunk/vector/Citation rows, plus rollback on migration
   failure and refusal of a newer unknown schema.
+- V2.1 retrieval-index tests prove atomic activation preserves the previous current snapshot when
+  persistence fails, source update/delete removes stale current identities, and corrupt, mismatched,
+  cross-scope, non-finite, or over-1024-chunk state fails closed. An explicit bounded rebuild restores
+  only derived index state while preserving its Local Project and Run. The completed Slice 3 matrix
+  passed 143 local-store tests and 43 shared retrieval tests; the repository verification passed 192
+  test files and 2729 tests.
 - The packaged Desktop pilot must execute exactly one `scenario.evaluate` Local MCP Tool, persist
   one started and one succeeded installation-bound metadata-only audit, and retain one accepted
   action after cold restart without another grant, MCP call, or audit record. It must also complete

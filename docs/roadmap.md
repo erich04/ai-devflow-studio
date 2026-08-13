@@ -90,8 +90,8 @@ contains the signoff-bound release artifacts.
 | Active version line | 2.x DevFlow-native Agent Runtime |
 | Completed 2.x milestone | V2.0 Native Agent Runtime Foundation |
 | V2.0 evidence | `docs/releases/v2.0.0/` |
-| Active milestone | V2.1 Slice 3 — durable local retrieval index |
-| Next gate | Prove retained schema 21 → 22 migration, atomic snapshot activation, and stale identity invalidation |
+| Active milestone | V2.1 Slice 4 — scoped Agent Memory lifecycle |
+| Next gate | Prove candidate, promotion, revision, conflict, expiry, deletion, and replay-safe purge semantics |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -103,22 +103,24 @@ artifact integrity gates. Its immutable records are under `docs/releases/v2.0.0/
 set is frozen. V2.1 Slice 1 is complete, and Slice 2 proved deterministic no-cost hybrid retrieval:
 Recall@K, nDCG@K, and mean reciprocal rank each reached `1.0`, aggregate improvement over lexical
 was `0.5`, citation precision and faithfulness remained `1.0`, and isolation/provider violations
-remained zero. Slice 3 durable local retrieval indexing is now the only active product priority.
+remained zero. Slice 3 then completed the retained schema 21 → 22 migration, atomic current-snapshot
+activation, stale identity invalidation, strict corrupt-state rejection, and bounded local rebuild.
+Slice 4 scoped Agent Memory lifecycle is now the only active product priority.
 
 ## Now / Next / Later
 
-### Now — Implement V2.1 Durable Local Retrieval Index
+### Now — Implement V2.1 Scoped Agent Memory Lifecycle
 
 V1.5 and the finite 1.x line are released and complete. V2.0 is complete with immutable evaluator
-and gate evidence. The V2.1 contract set is frozen; Slices 1 and 2 now provide strict scoped
-requests, lexical/vector/RRF/reranked result contracts, exact current Citations, and a deterministic
-no-cost evaluator that exceeds every frozen hybrid quality threshold without widening scope.
+and gate evidence. The V2.1 contract set is frozen; Slices 1 through 3 now provide strict scoped
+requests, lexical/vector/RRF/reranked result contracts, exact current Citations, a deterministic
+no-cost evaluator, and a crash-safe Desktop-main-owned retrieval index.
 
-- Migrate retained Desktop schema 21 to schema 22 without fabricating vector or index rows.
-- Activate exact project-scoped snapshots atomically and keep the prior snapshot current after a
-  failed or interrupted refresh.
-- Invalidate changed/deleted chunk, vector, and Citation identities before later retrieval, and
-  fail closed on corrupt, wrong-model, wrong-dimension, or cross-scope index state.
+- Create inert Memory Candidates only from accepted observable results.
+- Promote and revise Memory only through exact authority, immutable history, and optimistic
+  concurrency; preserve explicit conflicts rather than silently merging them.
+- Exclude cross-scope, expired, tombstoned, and purge-pending rows before ranking, then prove restart,
+  deletion, purge, and old replay cannot resurrect Memory.
 
 The V2.1 contract set is frozen in:
 
@@ -128,14 +130,16 @@ The V2.1 contract set is frozen in:
 - `docs/plans/v2.1-evaluated-retrieval-memory.md`
 - `scripts/fixtures/v2.1-retrieval-memory-evaluation.json`
 
-V2.1 Slices 1 and 2 are complete. Slice 3 adds only Desktop-main-owned local persistence; provider
-and Team schema choices remain outside this slice.
+V2.1 Slices 1 through 3 are complete. Slice 3 passed 143 focused local-store tests, 43 focused shared
+retrieval tests, and the repository matrix of 192 test files and 2729 tests. Slice 4 remains
+Desktop-main-owned; provider and Team projection choices stay outside this slice.
 
-### Next — Implement V2.1 Scoped Agent Memory Lifecycle
+### Next — Integrate V2.1 Agent Runtime And Desktop UX
 
-- Create inert Memory Candidates from accepted observable results.
-- Promote and revise Memory only through exact authority and optimistic concurrency.
-- Exclude conflict, expired, deleted, purge-pending, and cross-scope rows before ranking.
+- Attach exact current Citations and Memory revisions to bounded Agent Runtime Context.
+- Fence stale, deleted, or revoked continuation before another external action.
+- Expose provenance and lifecycle states through explicit Desktop controls without changing
+  Workflow, Gate, or Team authority.
 
 ### Later — V2.2 Multi-Agent And Execution Tenancy
 
