@@ -1,6 +1,15 @@
 import type { KnowledgeDocumentCategory } from './domain'
+import {
+  isExactAgentRuntimeTransition,
+  parseAgentRuntimeState,
+  parseAgentRuntimeTransition,
+  type AgentRuntimeState,
+} from './agent-runtime'
+import { redactSensitiveText } from './redaction'
 
 export const KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION = 1 as const
+export const AGENT_MEMORY_CONTRACT_VERSION = 1 as const
+export const AGENT_MEMORY_CANDIDATE_TEXT_MAX_BYTES = 8 * 1_024
 export const KNOWLEDGE_RETRIEVAL_QUERY_MAX_LENGTH = 8 * 1_024
 export const KNOWLEDGE_RETRIEVAL_TOP_K_MAX = 20
 export const KNOWLEDGE_RETRIEVAL_VECTOR_DIMENSIONS_MAX = 4_096
@@ -67,6 +76,27 @@ export type KnowledgeRetrievalTarget = {
   runVersion: number
 }
 
+export type AgentMemoryCandidateProvenance = {
+  kind: 'agent_observation'
+  runtimeId: string
+  actionId: string
+  checkpointVersion: number
+  sequence: number
+  resultDigest: string
+}
+
+export type AgentMemoryCandidate = {
+  stateVersion: typeof AGENT_MEMORY_CONTRACT_VERSION
+  id: string
+  status: 'candidate'
+  scope: KnowledgeRetrievalScope
+  statement: string
+  contentDigest: string
+  provenance: AgentMemoryCandidateProvenance
+  provenanceDigest: string
+  createdAt: string
+}
+
 export type KnowledgeRetrievalRequest = {
   stateVersion: typeof KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION
   id: string
@@ -88,6 +118,16 @@ export class KnowledgeRetrievalContractError extends Error {
   constructor(code: string) {
     super(code)
     this.name = 'KnowledgeRetrievalContractError'
+    this.code = code
+  }
+}
+
+export class AgentMemoryContractError extends Error {
+  readonly code: string
+
+  constructor(code: string) {
+    super(code)
+    this.name = 'AgentMemoryContractError'
     this.code = code
   }
 }
@@ -118,6 +158,88 @@ function isCanonicalIso(value: unknown): value is string {
   if (typeof value !== 'string') return false
   const parsed = Date.parse(value)
   return Number.isFinite(parsed) && new Date(parsed).toISOString() === value
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+function failMemoryCandidate(): never {
+  throw new AgentMemoryContractError('invalid_agent_memory_candidate')
+}
+
+export async function createAgentMemoryCandidate(input: unknown): Promise<AgentMemoryCandidate> {
+  if (
+    !isPlainRecord(input) ||
+    !hasExactKeys(input, [
+      'id',
+      'statement',
+      'previousRuntime',
+      'acceptedTransition',
+      'createdAt',
+    ]) ||
+    !isIdentifier(input.id) ||
+    typeof input.statement !== 'string' ||
+    input.statement.length === 0 ||
+    input.statement.trim() !== input.statement ||
+    new TextEncoder().encode(input.statement).byteLength > AGENT_MEMORY_CANDIDATE_TEXT_MAX_BYTES ||
+    redactSensitiveText(input.statement).value !== input.statement ||
+    !isCanonicalIso(input.createdAt)
+  ) {
+    failMemoryCandidate()
+  }
+
+  let previousRuntime: AgentRuntimeState
+  try {
+    previousRuntime = parseAgentRuntimeState(input.previousRuntime)
+  } catch {
+    failMemoryCandidate()
+  }
+  if (!isExactAgentRuntimeTransition(previousRuntime, input.acceptedTransition)) {
+    failMemoryCandidate()
+  }
+
+  const transition = parseAgentRuntimeTransition(input.acceptedTransition)
+  if (Date.parse(input.createdAt) < Date.parse(transition.runtime.updatedAt)) {
+    failMemoryCandidate()
+  }
+  const resultEvents = transition.events.filter((event) => event.type === 'action_result')
+  const observationEvents = transition.events.filter((event) => event.type === 'observation_recorded')
+  const resultEvent = resultEvents[0]
+  const observationEvent = observationEvents[0]
+  if (
+    resultEvents.length !== 1 ||
+    observationEvents.length !== 1 ||
+    resultEvent === undefined ||
+    observationEvent === undefined ||
+    resultEvent.metadata.actionId !== observationEvent.metadata.actionId ||
+    resultEvent.metadata.resultDigest !== observationEvent.metadata.resultDigest
+  ) {
+    failMemoryCandidate()
+  }
+
+  const provenance: AgentMemoryCandidateProvenance = {
+    kind: 'agent_observation',
+    runtimeId: transition.runtime.id,
+    actionId: String(observationEvent.metadata.actionId),
+    checkpointVersion: observationEvent.checkpointVersion,
+    sequence: observationEvent.sequence,
+    resultDigest: String(observationEvent.metadata.resultDigest),
+  }
+  return {
+    stateVersion: AGENT_MEMORY_CONTRACT_VERSION,
+    id: input.id,
+    status: 'candidate',
+    scope: { ...transition.runtime.scope },
+    statement: input.statement,
+    contentDigest: await sha256Hex(input.statement),
+    provenance,
+    provenanceDigest: await sha256Hex(JSON.stringify(provenance)),
+    createdAt: input.createdAt,
+  }
 }
 
 function isSafeSourceRelativePath(value: unknown): value is string {

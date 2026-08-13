@@ -1,6 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
+  acceptAgentActionResult,
+  createAgentRuntime,
+  requestAgentAction,
+  resumeAgentRuntime,
+} from './agent-runtime'
+import {
+  createAgentMemoryCandidate,
   evaluateHybridRetrievalCandidate,
   evaluateLexicalRetrievalBaseline,
   KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION,
@@ -20,6 +27,105 @@ import {
   type KnowledgeRetrievalCandidateSet,
   type KnowledgeRetrievalRequest,
 } from './retrieval-memory'
+
+describe('V2.1 Agent Memory candidate contract', () => {
+  it('creates one inert candidate from an exact accepted observable result', async () => {
+    const created = createAgentRuntime({
+      stateVersion: 1,
+      id: 'runtime-memory-1',
+      scope: {
+        kind: 'team',
+        organizationId: 'org-1',
+        projectId: 'project-1',
+        userId: 'user-1',
+        sessionId: 'session-1',
+        localProjectId: 'local-project-1',
+      },
+      authority: {
+        runId: 'run-1',
+        nodeId: 'node-1',
+        runVersion: 7,
+        policyVersion: 2,
+      },
+      contextDigest: '1'.repeat(64),
+      capabilitySetDigest: '2'.repeat(64),
+      bounds: {
+        maxSteps: 4,
+        maxWallTimeMs: 60_000,
+        maxToolCalls: 4,
+        maxToolResultBytes: 4_096,
+        maxTrajectoryMetadataBytes: 4_096,
+        maxCheckpointBytes: 16_384,
+        maxTokens: 1_000,
+        maxCostUsd: 10,
+      },
+      requestedAt: '2026-08-13T08:00:00.000Z',
+      deadline: '2026-08-13T08:01:00.000Z',
+    })
+    const resumed = resumeAgentRuntime({
+      runtime: created.runtime,
+      expectedCheckpointVersion: created.runtime.checkpointVersion,
+      authority: created.runtime.authority,
+      contextDigest: created.runtime.contextDigest,
+      capabilitySetDigest: created.runtime.capabilitySetDigest,
+      now: '2026-08-13T08:00:01.000Z',
+    })
+    const requested = requestAgentAction({
+      runtime: resumed.runtime,
+      expectedCheckpointVersion: resumed.runtime.checkpointVersion,
+      now: '2026-08-13T08:00:02.000Z',
+      action: {
+        id: 'action-memory-1',
+        kind: 'tool',
+        capabilityId: 'test.observe',
+        capabilityVersion: 1,
+        requestDigest: '4'.repeat(64),
+        requiresPermission: false,
+      },
+    })
+    const acceptedTransition = acceptAgentActionResult({
+      runtime: requested.runtime,
+      expectedCheckpointVersion: requested.runtime.checkpointVersion,
+      actionId: 'action-memory-1',
+      requestDigest: '4'.repeat(64),
+      result: {
+        outcome: 'success',
+        resultDigest: '3'.repeat(64),
+        resultBytes: 128,
+        tokens: 0,
+        costUsd: 0,
+        evaluation: 'continue',
+        evaluationSummary: 'The accepted observation can propose a bounded Memory candidate.',
+      },
+      now: '2026-08-13T08:00:03.000Z',
+    })
+
+    await expect(createAgentMemoryCandidate({
+      id: 'memory-candidate-1',
+      statement: 'The saved health test is the regression check for dependency degradation.',
+      previousRuntime: requested.runtime,
+      acceptedTransition,
+      createdAt: '2026-08-13T08:00:04.000Z',
+    })).resolves.toEqual({
+      stateVersion: 1,
+      id: 'memory-candidate-1',
+      status: 'candidate',
+      scope: requested.runtime.scope,
+      statement: 'The saved health test is the regression check for dependency degradation.',
+      contentDigest: '59abd35566d90929a62e012cdddffbb120bc22d141c53528670ba08fc0e0e660',
+      provenance: {
+        kind: 'agent_observation',
+        runtimeId: 'runtime-memory-1',
+        actionId: 'action-memory-1',
+        checkpointVersion: 4,
+        sequence: 10,
+        resultDigest: '3'.repeat(64),
+      },
+      provenanceDigest: 'aad5fd68277b6b347c2ee50b6493cf3b7e4da0b99c3db571a427023e6ecc0a05',
+      createdAt: '2026-08-13T08:00:04.000Z',
+    })
+  })
+})
 
 const validRequest: KnowledgeRetrievalRequest = {
   stateVersion: 1,
