@@ -34,7 +34,7 @@ describe('V1.5 README truth', () => {
     expect(readme).toContain('corepack pnpm test:v15-github-delivery')
     expect(readme).toContain('corepack pnpm test:v15-github-delivery-packaged-smoke')
     expect(readme).toContain('docs/guides/devflow-studio-v1.5-walkthrough.md')
-    expect(readme).toContain('Team schema v16')
+    expect(readme).toContain('Team schema v17')
     expect(readme).toContain('Desktop schema v26')
     expect(readme).toContain('trusted local stdio MCP')
     expect(readme).toContain('Memory Candidate is promoted, revised, tombstoned, purged, and reopened')

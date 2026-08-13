@@ -6,7 +6,7 @@ finite 1.x completion gate passed, and its immutable candidate-bound evidence li
 
 ## Baseline Prerequisites
 
-- Team/API/Postgres must report Team schema v16 with provider-authoritative expiry, bounded
+- Team/API/Postgres must report Team schema v17 with provider-authoritative expiry, bounded
   provider retry, verified publication adoption, and metadata-only Agent Runtime projection
   contracts.
 - Electron/SQLite must report Desktop schema v17.
@@ -89,13 +89,14 @@ export DEVFLOW_DATABASE_URL='postgres://postgres:devflow@127.0.0.1:55432/devflow
 corepack pnpm test:postgres-smoke
 ```
 
-The Postgres smoke must prove fresh Team schema v16, populated v11-to-v12 retention, a v12-to-v13
+The Postgres smoke must prove fresh Team schema v17, populated v11-to-v12 retention, a v12-to-v13
 legacy issued credential that remains fail closed when its raw provider expiry is NULL, and the
 v13-to-v14 nullable bounded provider retry field. It must also prove v14-to-v15
 `source_publication_id` retention and the exact grant-or-adoption authority constraint. The
 v15-to-v16 migration must retain all prior state, create empty `agent_runtime_summaries` and
 `agent_runtime_projection_audits` tables, and reject non-redacted or structurally incoherent
-runtime rows.
+runtime rows. The v16-to-v17 migration must create empty `agent_memory_summaries` and
+`agent_memory_projection_audits` tables without local content or fabricated lifecycle rows.
 It also proves repository binding and revocation, exact Delivery Request approval, credential
 grant, remote verification, Draft completion, recovery/audit behavior, and redaction.
 

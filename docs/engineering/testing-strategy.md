@@ -6,12 +6,13 @@ retroactive TDD rewrites unless it is touched.
 
 ## Current Persistence Baseline
 
-- Team/API/Postgres uses Team schema v16. Migration tests must prove a fresh v16 database, the
+- Team/API/Postgres uses Team schema v17. Migration tests must prove a fresh v17 database, the
   populated v11-to-v12 delivery-series upgrade, and the v12-to-v13 provider-authoritative expiry
   contract without inventing expiry evidence for legacy issued credentials, followed by the
   v13-to-v14 bounded provider retry boundary, the v14-to-v15 verified publication adoption
   authority without changing legacy grant-backed publications, and the v15-to-v16 metadata-only
-  Agent Runtime projection without inventing runtime summaries or audit rows.
+  Agent Runtime projection without inventing runtime summaries or audit rows, followed by the
+  v16-to-v17 metadata-only Agent Memory projection without inventing Memory summaries or audit rows.
 - Electron/SQLite uses Desktop schema v26. Local-store tests must prove a fresh v26 database, the
   Desktop schema 17-to-18 retained Runtime upgrade, the 18-to-19 metadata-only Native Tool audit
   upgrade with no invented grant or audit rows, and the 19-to-20 Local MCP installation/audit

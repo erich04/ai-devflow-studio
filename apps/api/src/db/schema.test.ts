@@ -17,9 +17,62 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
-  it('defines Team schema v16 as a safe Agent Runtime projection authority', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(16)
+  it('reserves Team schema v17 for an empty metadata-only Agent Memory projection', async () => {
+    expect(TEAM_SCHEMA_VERSION).toBe(17)
     expect(teamMigrationCatalog.at(-1)).toEqual({
+      version: 17,
+      name: '0017_agent_memory_team_projection',
+      fileName: '0017_agent_memory_team_projection.sql',
+    })
+
+    const migrations = await readTeamMigrationCatalog()
+    const migration = migrations.find((candidate) => candidate.version === 17)
+    expect(migration?.sql).toContain('CREATE TABLE agent_memory_summaries')
+    expect(migration?.sql).toContain('CREATE TABLE agent_memory_projection_audits')
+    expect(migration?.sql).not.toMatch(/INSERT\s+INTO\s+agent_memory_/iu)
+    expect(migration?.sql).not.toMatch(
+      /\b(?:statement|content_digest|prompt|reasoning|credential|raw_output|local_project_id|session_id)\b/iu,
+    )
+
+    const summary = teamTableDefinitions.find(
+      (table) => table.name === 'agent_memory_summaries',
+    )
+    expect(summary?.columns.map((column) => column.name)).toEqual([
+      'memory_id',
+      'organization_id',
+      'project_id',
+      'run_id',
+      'node_id',
+      'runtime_id',
+      'owner_user_id',
+      'candidate_id',
+      'state_version',
+      'projection_version',
+      'current_revision',
+      'head_version',
+      'lifecycle_status',
+      'visibility',
+      'sensitivity',
+      'retention_class',
+      'provenance_digest',
+      'citation_ids',
+      'retrieval_count',
+      'accepted_context_count',
+      'expires_at',
+      'deleted_at',
+      'purge_status',
+      'purged_at',
+      'memory_updated_at',
+      'projection_digest',
+      'redacted',
+      'created_at',
+      'updated_at',
+    ])
+  })
+
+  it('retains Team schema v16 as a safe Agent Runtime projection authority', async () => {
+    expect(TEAM_SCHEMA_VERSION).toBe(17)
+    expect(teamMigrationCatalog.find((migration) => migration.version === 16)).toEqual({
       version: 16,
       name: '0016_agent_runtime_team_projection',
       fileName: '0016_agent_runtime_team_projection.sql',
@@ -56,7 +109,7 @@ describe('team database schema', () => {
   })
 
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(16)
+    expect(TEAM_SCHEMA_VERSION).toBe(17)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -83,6 +136,8 @@ describe('team database schema', () => {
       'coding_agent_summaries',
       'agent_runtime_summaries',
       'agent_runtime_projection_audits',
+      'agent_memory_summaries',
+      'agent_memory_projection_audits',
       'enforcement_policies',
       'gate_override_decisions',
       'runtime_budget_policies',
@@ -223,6 +278,8 @@ describe('team database schema', () => {
       'github_pull_request_outcomes',
       'agent_runtime_summaries',
       'agent_runtime_projection_audits',
+      'agent_memory_summaries',
+      'agent_memory_projection_audits',
     ])
 
     for (const tableName of requiredTeamTableNames.filter((name) => !v14TableNames.has(name))) {
@@ -286,6 +343,11 @@ describe('team database schema', () => {
         version: 16,
         name: '0016_agent_runtime_team_projection',
         fileName: '0016_agent_runtime_team_projection.sql',
+      },
+      {
+        version: 17,
+        name: '0017_agent_memory_team_projection',
+        fileName: '0017_agent_memory_team_projection.sql',
       },
     ])
 

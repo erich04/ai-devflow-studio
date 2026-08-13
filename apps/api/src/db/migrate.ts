@@ -71,6 +71,11 @@ export const teamMigrationCatalog = [
     name: '0016_agent_runtime_team_projection',
     fileName: '0016_agent_runtime_team_projection.sql',
   },
+  {
+    version: 17,
+    name: '0017_agent_memory_team_projection',
+    fileName: '0017_agent_memory_team_projection.sql',
+  },
 ] as const
 
 export function splitSqlStatements(sql: string): string[] {

@@ -846,7 +846,7 @@ async function prepareRetainedV12CredentialFixture() {
 async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
   const pool = new Pool({
     connectionString: databaseUrl,
-    application_name: 'ai-devflow-postgres-smoke-v16-assertion',
+    application_name: 'ai-devflow-postgres-smoke-v17-assertion',
     statement_timeout: 10_000,
   })
   const connection = await pool.connect()
@@ -856,8 +856,8 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
       "SELECT value FROM schema_meta WHERE key = 'schema_version'",
     )
     expect(
-      schemaVersion.rows[0]?.value === '16',
-      'Team database did not migrate the retained fixture to schema v16.',
+      schemaVersion.rows[0]?.value === '17',
+      'Team database did not migrate the retained fixture to schema v17.',
     )
     const retained = await connection.query(
       `SELECT to_jsonb(retained) AS snapshot
@@ -973,6 +973,34 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
       stableJson(retainedRuntimeProjectionCounts.rows[0]) ===
         stableJson({ summaries: 0, audits: 0 }),
       'V15-to-v16 migration invented Agent Runtime projection rows.',
+    )
+    const memoryProjectionTables = await connection.query(
+      `SELECT table_name
+       FROM information_schema.tables
+       WHERE table_schema = 'public'
+         AND table_name IN (
+           'agent_memory_summaries',
+           'agent_memory_projection_audits'
+         )
+       ORDER BY table_name`,
+    )
+    expect(
+      stableJson(memoryProjectionTables.rows.map((row) => row.table_name)) ===
+        stableJson([
+          'agent_memory_projection_audits',
+          'agent_memory_summaries',
+        ]),
+      'V17 Agent Memory projection table inventory was incomplete.',
+    )
+    const retainedMemoryProjectionCounts = await connection.query(
+      `SELECT
+         (SELECT count(*)::integer FROM agent_memory_summaries) AS summaries,
+         (SELECT count(*)::integer FROM agent_memory_projection_audits) AS audits`,
+    )
+    expect(
+      stableJson(retainedMemoryProjectionCounts.rows[0]) ===
+        stableJson({ summaries: 0, audits: 0 }),
+      'V16-to-v17 migration invented Agent Memory projection rows.',
     )
 
     await connection.query('BEGIN')

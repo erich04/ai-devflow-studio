@@ -421,6 +421,43 @@ async function assertAgentRuntimeProjectionAfterV16(database) {
   )
 }
 
+async function assertAgentMemoryProjectionAfterV17(database) {
+  const inventory = await psql(
+    database,
+    `SELECT string_agg(table_name, ',' ORDER BY table_name)
+     FROM information_schema.tables
+     WHERE table_schema = 'public'
+       AND table_name IN (
+         'agent_memory_summaries',
+         'agent_memory_projection_audits'
+       );\n`,
+  )
+  expect(
+    inventory.stdout.trim() ===
+      'agent_memory_projection_audits,agent_memory_summaries',
+    `${database} did not create the exact V17 Agent Memory projection tables.`,
+  )
+  const counts = await psql(
+    database,
+    `SELECT
+       (SELECT count(*) FROM agent_memory_summaries)::text || '|' ||
+       (SELECT count(*) FROM agent_memory_projection_audits)::text;\n`,
+  )
+  expect(
+    counts.stdout.trim() === '0|0',
+    'V16-to-v17 migration invented Agent Memory projection rows.',
+  )
+  const migrationHistory = await psql(
+    database,
+    `SELECT count(*) FROM team_schema_migrations
+     WHERE version = 17 AND name = '0017_agent_memory_team_projection';\n`,
+  )
+  expect(
+    migrationHistory.stdout.trim() === '1',
+    `${database} did not record the exact V17 Agent Memory migration.`,
+  )
+}
+
 async function expectColumnMissing(database, table, column) {
   const result = await psql(
     database,
@@ -874,7 +911,7 @@ async function expectV14ApiRejectsNewerSchema(database) {
     const readinessResponse = await fetch(`${apiUrl}/ready`)
     expect(
       readinessResponse.status === 503,
-      `Exact V1.4 API did not fail closed on Team schema v16; received ${readinessResponse.status}.`,
+      `Exact V1.4 API did not fail closed on Team schema v17; received ${readinessResponse.status}.`,
     )
   } finally {
     await runDocker(['rm', '-f', rollbackApiContainerName])
@@ -1076,8 +1113,9 @@ try {
   }
 
   await runCurrentMigration(FRESH_DATABASE)
-  await expectSchemaVersion(FRESH_DATABASE, 16)
+  await expectSchemaVersion(FRESH_DATABASE, 17)
   await assertAgentRuntimeProjectionAfterV16(FRESH_DATABASE)
+  await assertAgentMemoryProjectionAfterV17(FRESH_DATABASE)
   await startCurrentApiAgainstDatabase(FRESH_DATABASE)
 
   await runV14Migration(UPGRADE_DATABASE)
@@ -1096,8 +1134,9 @@ try {
 
   await restartPostgresWithRetainedVolume()
   await runCurrentMigration(UPGRADE_DATABASE)
-  await expectSchemaVersion(UPGRADE_DATABASE, 16)
+  await expectSchemaVersion(UPGRADE_DATABASE, 17)
   await assertAgentRuntimeProjectionAfterV16(UPGRADE_DATABASE)
+  await assertAgentMemoryProjectionAfterV17(UPGRADE_DATABASE)
   const snapshotAfterV15Upgrade = await readV14RunSnapshot(UPGRADE_DATABASE)
   expect(
     snapshotAfterV15Upgrade === snapshotBeforeV10Upgrade,
@@ -1176,8 +1215,9 @@ try {
   await expectMigrationHistoryMissing(FAILURE_DATABASE, 13)
   const retainedV14Fixture = await prepareV12LegacyIssuedCredentialFixture()
   await runCurrentMigration(FAILURE_DATABASE)
-  await expectSchemaVersion(FAILURE_DATABASE, 16)
+  await expectSchemaVersion(FAILURE_DATABASE, 17)
   await assertAgentRuntimeProjectionAfterV16(FAILURE_DATABASE)
+  await assertAgentMemoryProjectionAfterV17(FAILURE_DATABASE)
   await assertLegacyIssuedCredentialAfterV13(retainedV14Fixture.snapshotBeforeV13)
   await assertLegacyPublicationAfterV15(retainedV14Fixture.snapshotBeforeV15)
   await startCurrentApiAgainstDatabase(FAILURE_DATABASE)
@@ -1204,6 +1244,6 @@ if (mainError) throw mainError
 if (cleanupError) throw cleanupError
 if (completed) {
   console.log(
-    'Docker lifecycle smoke passed: fresh v16, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, durable v13-to-v14 provider backoff, exact v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, and bounded V1.4 backup/restore rollback.',
+    'Docker lifecycle smoke passed: fresh v17, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, durable v13-to-v14 provider backoff, exact v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, empty v16-to-v17 metadata-only Agent Memory projection, and bounded V1.4 backup/restore rollback.',
   )
 }
