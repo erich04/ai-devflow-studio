@@ -19,6 +19,8 @@
     "test:v15-github-delivery": "vitest run scripts/v15-github-delivery-deterministic-gate.test.ts",
     "test:v20-agent-runtime-evaluator": "node scripts/v20-agent-runtime-evaluation-runner.mjs",
     "v20:completion-status": "node scripts/v20-completion-evidence.mjs",
+    "test:v21-retrieval-memory-evaluator": "tsx scripts/v21-retrieval-memory-evaluation-runner.ts",
+    "v21:completion-status": "tsx scripts/v21-completion-evidence.ts",
     "test:cross-platform": "node scripts/check-cross-platform.mjs",
     "test:postgres-smoke": "node scripts/postgres-smoke.mjs",
     "test:docker-smoke": "tsx scripts/docker-smoke.mjs",

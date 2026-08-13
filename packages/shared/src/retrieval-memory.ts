@@ -2540,3 +2540,155 @@ export function evaluateHybridRetrievalCandidate(value: unknown): HybridRetrieva
     observations,
   }
 }
+
+export type AgentMemoryTaskEvaluation = {
+  contractVersion: 1
+  corpusId: RetrievalMemoryEvaluationCorpus['corpusId']
+  corpusVersion: 1
+  evaluatedCaseCount: number
+  qualityCaseCount: number
+  noMemoryTaskSuccessRate: number
+  memoryTaskSuccessRate: number
+  aggregateImprovementOverNoMemory: number
+  additionalHumanInterventions: 0
+  lifecycleViolations: number
+  isolationViolations: number
+  resurrectionViolations: number
+  paidProviderCalls: 0
+  observations: Array<{
+    caseId: string
+    admittedMemoryIds: string[]
+    blockedMemoryIds: string[]
+    expectedMemoryIds: string[]
+    taskSucceededWithoutMemory: boolean | null
+    taskSucceededWithMemory: boolean | null
+  }>
+}
+
+type MemoryEvaluationFixture = {
+  id: string
+  organizationId: string
+  projectId: string
+  userId: string
+  visibility: 'user_project'
+  status: 'active' | 'conflict' | 'expired' | 'deleted'
+}
+
+type MemoryEvaluationCase = {
+  id: string
+  category:
+    | 'memory_quality'
+    | 'memory_conflict'
+    | 'memory_expiry'
+    | 'memory_deletion'
+    | 'memory_isolation'
+  scope: {
+    organizationId: string
+    projectId: string
+    userId: string
+    sessionId: string
+  }
+  memoryFixtureIds: string[]
+  expectedMemoryIds?: string[]
+}
+
+function exactStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+export function evaluateAgentMemoryTaskCandidate(value: unknown): AgentMemoryTaskEvaluation {
+  const corpus = parseRetrievalMemoryEvaluationCorpus(value)
+  const fixtures = corpus.memoryFixtures as unknown as MemoryEvaluationFixture[]
+  const cases = corpus.cases.filter(
+    (entry) => String(entry.category).startsWith('memory_'),
+  ) as unknown as MemoryEvaluationCase[]
+  if (cases.length !== 5) {
+    throw new KnowledgeRetrievalContractError('invalid_retrieval_memory_evaluation_corpus')
+  }
+
+  const observations = cases.map((evaluationCase) => {
+    const selected = evaluationCase.memoryFixtureIds.map((fixtureId) => {
+      const fixture = fixtures.find((candidate) => candidate.id === fixtureId)
+      if (fixture === undefined) {
+        throw new KnowledgeRetrievalContractError('invalid_retrieval_memory_evaluation_corpus')
+      }
+      return fixture
+    })
+    const admittedMemoryIds = selected
+      .filter((fixture) =>
+        fixture.status === 'active' &&
+        fixture.organizationId === evaluationCase.scope.organizationId &&
+        fixture.projectId === evaluationCase.scope.projectId &&
+        fixture.userId === evaluationCase.scope.userId
+      )
+      .map((fixture) => fixture.id)
+      .sort()
+    const blockedMemoryIds = selected
+      .map((fixture) => fixture.id)
+      .filter((fixtureId) => !admittedMemoryIds.includes(fixtureId))
+      .sort()
+    const expectedMemoryIds = (
+      evaluationCase.category === 'memory_quality'
+        ? evaluationCase.memoryFixtureIds
+        : evaluationCase.expectedMemoryIds ?? []
+    ).slice().sort()
+    const qualityCase = evaluationCase.category === 'memory_quality'
+
+    return {
+      caseId: evaluationCase.id,
+      admittedMemoryIds,
+      blockedMemoryIds,
+      expectedMemoryIds,
+      taskSucceededWithoutMemory: qualityCase ? expectedMemoryIds.length === 0 : null,
+      taskSucceededWithMemory: qualityCase
+        ? exactStringArray(admittedMemoryIds, expectedMemoryIds)
+        : null,
+    }
+  })
+  const qualityObservations = observations.filter((observation) =>
+    observation.taskSucceededWithMemory !== null
+  )
+  const successRate = (key: 'taskSucceededWithoutMemory' | 'taskSucceededWithMemory') =>
+    qualityObservations.length === 0
+      ? 0
+      : qualityObservations.filter((observation) => observation[key] === true).length /
+        qualityObservations.length
+  const noMemoryTaskSuccessRate = successRate('taskSucceededWithoutMemory')
+  const memoryTaskSuccessRate = successRate('taskSucceededWithMemory')
+  const observationByCase = new Map(observations.map((observation) => [observation.caseId, observation]))
+  const lifecycleCategories = new Set(['memory_conflict', 'memory_expiry', 'memory_deletion'])
+  const lifecycleViolations = cases
+    .filter((evaluationCase) => lifecycleCategories.has(evaluationCase.category))
+    .filter((evaluationCase) => {
+      const observation = observationByCase.get(evaluationCase.id)
+      return observation === undefined ||
+        !exactStringArray(observation.admittedMemoryIds, observation.expectedMemoryIds)
+    }).length
+  const isolationViolations = cases
+    .filter((evaluationCase) => evaluationCase.category === 'memory_isolation')
+    .reduce((total, evaluationCase) =>
+      total + (observationByCase.get(evaluationCase.id)?.admittedMemoryIds.length ?? 1), 0
+    )
+  const resurrectionViolations = cases
+    .filter((evaluationCase) => evaluationCase.category === 'memory_deletion')
+    .reduce((total, evaluationCase) =>
+      total + (observationByCase.get(evaluationCase.id)?.admittedMemoryIds.length ?? 1), 0
+    )
+
+  return {
+    contractVersion: 1,
+    corpusId: corpus.corpusId,
+    corpusVersion: corpus.corpusVersion,
+    evaluatedCaseCount: cases.length,
+    qualityCaseCount: qualityObservations.length,
+    noMemoryTaskSuccessRate,
+    memoryTaskSuccessRate,
+    aggregateImprovementOverNoMemory: memoryTaskSuccessRate - noMemoryTaskSuccessRate,
+    additionalHumanInterventions: 0,
+    lifecycleViolations,
+    isolationViolations,
+    resurrectionViolations,
+    paidProviderCalls: 0,
+    observations,
+  }
+}

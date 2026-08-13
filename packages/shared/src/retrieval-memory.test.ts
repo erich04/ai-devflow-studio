@@ -9,6 +9,7 @@ import {
 import {
   createAgentMemoryCandidate,
   createAgentMemoryTombstone,
+  evaluateAgentMemoryTaskCandidate,
   evaluateHybridRetrievalCandidate,
   evaluateLexicalRetrievalBaseline,
   KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION,
@@ -971,6 +972,66 @@ describe('V2.1 Retrieval and Memory evaluation corpus contract', () => {
           rankedChunkIds: ['chunk-api-health-contract'],
           forbiddenHitIds: [],
           citationOutcome: null,
+        },
+      ],
+    })
+  })
+
+  it('proves scoped active Memory improves the frozen task without lifecycle or isolation leaks', () => {
+    expect(evaluateAgentMemoryTaskCandidate(corpusFixture)).toEqual({
+      contractVersion: 1,
+      corpusId: 'v2.1-evaluated-retrieval-memory',
+      corpusVersion: 1,
+      evaluatedCaseCount: 5,
+      qualityCaseCount: 1,
+      noMemoryTaskSuccessRate: 0,
+      memoryTaskSuccessRate: 1,
+      aggregateImprovementOverNoMemory: 1,
+      additionalHumanInterventions: 0,
+      lifecycleViolations: 0,
+      isolationViolations: 0,
+      resurrectionViolations: 0,
+      paidProviderCalls: 0,
+      observations: [
+        {
+          caseId: 'project-memory-improves-repair',
+          admittedMemoryIds: ['memory-health-regression-test-v1'],
+          blockedMemoryIds: [],
+          expectedMemoryIds: ['memory-health-regression-test-v1'],
+          taskSucceededWithoutMemory: false,
+          taskSucceededWithMemory: true,
+        },
+        {
+          caseId: 'stale-memory-revision-conflict',
+          admittedMemoryIds: [],
+          blockedMemoryIds: ['memory-conflict-v1', 'memory-conflict-v2'],
+          expectedMemoryIds: [],
+          taskSucceededWithoutMemory: null,
+          taskSucceededWithMemory: null,
+        },
+        {
+          caseId: 'deleted-memory-never-returns',
+          admittedMemoryIds: [],
+          blockedMemoryIds: ['memory-deleted-tombstone-v2'],
+          expectedMemoryIds: [],
+          taskSucceededWithoutMemory: null,
+          taskSucceededWithMemory: null,
+        },
+        {
+          caseId: 'expired-memory-never-returns',
+          admittedMemoryIds: [],
+          blockedMemoryIds: ['memory-expired-v1'],
+          expectedMemoryIds: [],
+          taskSucceededWithoutMemory: null,
+          taskSucceededWithMemory: null,
+        },
+        {
+          caseId: 'cross-scope-memory-never-returns',
+          admittedMemoryIds: [],
+          blockedMemoryIds: ['memory-foreign-v1'],
+          expectedMemoryIds: [],
+          taskSucceededWithoutMemory: null,
+          taskSucceededWithMemory: null,
         },
       ],
     })

@@ -34,6 +34,8 @@ jobs:
       - run: node scripts/ensure-electron-install.mjs
       - run: corepack pnpm exec playwright install chromium
       - run: corepack pnpm verify
+      - name: V2.1 candidate-bound evaluator
+        run: corepack pnpm test:v21-retrieval-memory-evaluator -- --candidate-sha "${GITHUB_SHA}" --output "out/v21-evaluation/${GITHUB_SHA}.json"
       - run: corepack pnpm build
       - run: corepack pnpm test:build-output-smoke
       - run: corepack pnpm test:e2e

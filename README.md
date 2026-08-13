@@ -93,6 +93,8 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 | `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive and packaged launch isolation; Local MCP and native Coding counts remain exact after cold restart, while one accepted Memory Candidate is promoted, revised, tombstoned, purged, and reopened with `memoryRestartDuplicateEffects: 0`. |
 | `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v27 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
 | `corepack pnpm test:v20-agent-runtime-evaluator` | The clean-candidate V2.0 scenario collector and strict completion evaluator; provider credentials are removed and only a path/secret-free structured record is retained. |
+| `corepack pnpm test:v21-retrieval-memory-evaluator` | The clean-candidate V2.1 evaluator; it binds the corpus and contract digests, compares lexical/hybrid and no-Memory/Memory outcomes, and requires zero paid-provider, isolation, deletion, resurrection, or redaction violations. |
+| `corepack pnpm v21:completion-status` | The V2.1 direct-child signoff validator; it requires exact evaluator, first-attempt Verify, Desktop artifact, local matrix, and immutable evidence identity. |
 | Release-only opencode smoke | A paid, explicit signoff for the real local coding runtime; it is never part of default CI. |
 
 Deterministic results become release evidence only when `required-gates.json` binds them to the clean

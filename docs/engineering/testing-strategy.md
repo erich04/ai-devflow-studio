@@ -74,6 +74,14 @@ retroactive TDD rewrites unless it is touched.
   identifier-only operation, Seed/Postgres independently version monotonic lifecycle and quality
   projections, and Web
   rejects extra local content while exposing no Memory or Runtime mutation action.
+- The V2.1 candidate-bound evaluator runs with provider and credential authority removed. It binds
+  the exact candidate SHA, frozen corpus SHA-256, and combined ADR/PRD/shared-contract SHA-256;
+  compares lexical with hybrid retrieval and no-Memory with scoped active Memory; and requires exact
+  citation floors plus zero paid-provider, lifecycle, isolation, deletion, resurrection, source,
+  raw-output, path, or secret violations. Team projection quality uses independent `qualityVersion`
+  evidence and never substitutes for the local Memory content or promotion authority. Completion
+  status accepts only the immutable two-file evidence set and truth-document updates in the clean
+  direct child of the passing candidate.
 - The packaged Desktop pilot must execute exactly one `scenario.evaluate` Local MCP Tool, persist
   one started and one succeeded installation-bound metadata-only audit, and retain one accepted
   action after cold restart without another grant, MCP call, or audit record. It must also complete
