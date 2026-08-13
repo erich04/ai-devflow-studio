@@ -20,6 +20,7 @@ import {
   parseCurrentKnowledgeCitation,
   redactTestEvidenceForStorage,
   requestAgentAction,
+  recordCoordinationTaskResult,
   resumeAgentRuntime,
   resolveEffectivePolicy,
   startCoordinationTask,
@@ -3146,6 +3147,124 @@ describe('createLocalStore', () => {
         (select count(*) from agent_coordination_tasks where status = 'running'),
         (select count(*) from agent_coordination_tasks where status = 'pending')
     `)[0]?.values[0]?.map(Number)).toEqual([2, 2, 1, 1])
+    inspected.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getCoordinationSession(coordinationSessionRequest.id)).resolves.toEqual({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      state: expectedState,
+    })
+    reopened.close()
+  })
+
+  it('CAS-records one Specialist result with shared counters and rejects a conflicting replay', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    const supervisor = createAgentRuntime(teamAgentRuntimeStartRequest)
+    await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: supervisor })
+    const initialState = createCoordinationSessionState({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      startedAt: coordinationSessionRequest.requestedAt,
+    })
+    await store.createCoordinationSession({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      acceptedRoleIds: ['specialist.research', 'specialist.review'],
+      startedAt: coordinationSessionRequest.requestedAt,
+    })
+    const startedState = startCoordinationTask({
+      state: initialState,
+      allocation: specialistAllocationRequest,
+      expectedSessionVersion: initialState.version,
+      expectedTaskVersion: 1,
+      runtimeId: 'specialist-runtime-research-1',
+      runtimeVersion: 1,
+      now: '2026-08-12T20:30:01.000Z',
+    })
+    await store.commitCoordinationTaskStart({
+      expectedState: initialState,
+      allocation: specialistAllocationRequest,
+      supervisorCapabilityIds: ['repository.read'],
+      supervisorResourceRequirements: [{
+        resourceId: 'repository-source',
+        resourceDigest: 'd'.repeat(64),
+        mode: 'read',
+      }],
+      remainingBudget: {
+        maxSteps: 4,
+        maxWallTimeMs: 60_000,
+        maxToolCalls: 4,
+        maxTokens: 10_000,
+        maxCostUsd: 1,
+      },
+      runtimeId: 'specialist-runtime-research-1',
+      runtimeVersion: 1,
+      now: startedState.updatedAt,
+    })
+
+    const resultInput = {
+      expectedState: startedState,
+      taskId: 'coordination-task-research',
+      runtimeId: 'specialist-runtime-research-1',
+      runtimeVersion: 1,
+      result: {
+        status: 'succeeded' as const,
+        resultDigest: 'f'.repeat(64),
+        failure: null,
+      },
+      usage: { steps: 1, toolCalls: 1, tokens: 500, costUsd: 0.1 },
+      now: '2026-08-12T20:30:02.000Z',
+    }
+    const expectedState = recordCoordinationTaskResult({
+      state: startedState,
+      expectedSessionVersion: startedState.version,
+      taskId: resultInput.taskId,
+      expectedTaskVersion: 2,
+      runtimeId: resultInput.runtimeId,
+      runtimeVersion: resultInput.runtimeVersion,
+      result: resultInput.result,
+      usage: resultInput.usage,
+      now: resultInput.now,
+    })
+    await expect(store.commitCoordinationTaskResult(resultInput)).resolves.toEqual({
+      committed: true,
+      replayed: false,
+      state: expectedState,
+    })
+    await expect(store.commitCoordinationTaskResult(resultInput)).resolves.toEqual({
+      committed: true,
+      replayed: true,
+      state: expectedState,
+    })
+    await expect(store.commitCoordinationTaskResult({
+      ...resultInput,
+      result: { ...resultInput.result, resultDigest: '1'.repeat(64) },
+    })).resolves.toEqual({ committed: false, reason: 'stale_state' })
+    await expect(store.getCoordinationSession(coordinationSessionRequest.id)).resolves.toEqual({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      state: expectedState,
+    })
+    store.close()
+
+    const inspected = new (await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })).Database(await readFile(dbPath))
+    expect(inspected.exec(`
+      select
+        (select count(*) from agent_coordination_audits),
+        (select count(*) from agent_coordination_checkpoints),
+        (select count(*) from agent_coordination_tasks where status = 'succeeded'),
+        (select count(*) from agent_coordination_tasks where status = 'pending')
+    `)[0]?.values[0]?.map(Number)).toEqual([3, 3, 1, 1])
     inspected.close()
 
     const reopened = await createLocalStore({ dbPath })
