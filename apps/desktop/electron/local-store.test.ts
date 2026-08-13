@@ -751,6 +751,108 @@ describe('createLocalStore', () => {
     inspected.close()
   })
 
+  it('keeps the prior Knowledge index snapshot current when replacement persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const backupPath = `${dbPath}.backup`
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    const firstActivation = {
+      expectedCurrentSnapshotId: null,
+      snapshot: {
+        stateVersion: 1 as const,
+        id: 'knowledge-snapshot-1',
+        scope: {
+          kind: 'team' as const,
+          organizationId: 'org-1',
+          projectId: 'team-project-1',
+          localProjectId: project.id,
+        },
+        knowledgeSnapshotHash: `sha256:${'1'.repeat(64)}`,
+        embedding: {
+          modelId: 'fixture-embedding',
+          modelVersion: '1',
+          dimensions: 3,
+        },
+        createdAt: '2026-08-13T08:00:00.000Z',
+      },
+      chunks: [
+        {
+          stateVersion: 1 as const,
+          documentId: 'knowledge-document-1',
+          chunkId: 'knowledge-chunk-1',
+          sourcePath: 'docs/knowledge.md',
+          headingPath: ['Knowledge', 'Atomic refresh'],
+          contentHash: `sha256:${'a'.repeat(64)}`,
+          content: 'The current index changes only after the replacement is durable.',
+          ordinal: 0,
+          vector: {
+            modelId: 'fixture-embedding',
+            modelVersion: '1',
+            dimensions: 3,
+            values: [1, 0, 0],
+            createdAt: '2026-08-13T08:00:00.000Z',
+          },
+        },
+      ],
+      activatedAt: '2026-08-13T08:00:01.000Z',
+    }
+    const firstSnapshot = {
+      ...firstActivation.snapshot,
+      status: 'current' as const,
+      updatedAt: firstActivation.activatedAt,
+      activatedAt: firstActivation.activatedAt,
+      chunks: firstActivation.chunks,
+    }
+
+    await expect(store.activateKnowledgeIndexSnapshot(firstActivation)).resolves.toEqual({
+      activated: true,
+      replayed: false,
+      snapshot: firstSnapshot,
+    })
+    await expect(store.getCurrentKnowledgeIndexSnapshot(project.id)).resolves.toEqual(firstSnapshot)
+
+    const firstChunk = firstActivation.chunks[0]!
+    const secondActivation = {
+      ...firstActivation,
+      expectedCurrentSnapshotId: firstSnapshot.id,
+      snapshot: {
+        ...firstActivation.snapshot,
+        id: 'knowledge-snapshot-2',
+        knowledgeSnapshotHash: `sha256:${'2'.repeat(64)}`,
+        createdAt: '2026-08-13T08:01:00.000Z',
+      },
+      chunks: [
+        {
+          ...firstChunk,
+          chunkId: 'knowledge-chunk-2',
+          contentHash: `sha256:${'b'.repeat(64)}`,
+          content: 'A failed replacement cannot displace the prior current snapshot.',
+          vector: {
+            ...firstChunk.vector,
+            values: [0, 1, 0],
+            createdAt: '2026-08-13T08:01:00.000Z',
+          },
+        },
+      ],
+      activatedAt: '2026-08-13T08:01:01.000Z',
+    }
+
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+    await expect(store.activateKnowledgeIndexSnapshot(secondActivation)).rejects.toThrow(
+      persistenceFailurePattern,
+    )
+    await expect(store.getCurrentKnowledgeIndexSnapshot(project.id)).resolves.toEqual(firstSnapshot)
+
+    await rm(dbPath, { recursive: true, force: true })
+    await rename(backupPath, dbPath)
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getCurrentKnowledgeIndexSnapshot(project.id)).resolves.toEqual(firstSnapshot)
+    reopened.close()
+  })
+
   it('migrates Desktop schema 19 without promoting Team MCP metadata into local authority', async () => {
     const dbPath = await tempDbPath()
     const initial = await createLocalStore({ dbPath })

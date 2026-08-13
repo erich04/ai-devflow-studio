@@ -14,6 +14,22 @@ import {
   type LocalMcpInstallation,
 } from './local-mcp-installation.js'
 import {
+  activateKnowledgeIndexSnapshot as activateKnowledgeIndexSnapshotInDatabase,
+  getCurrentKnowledgeIndexSnapshot as readCurrentKnowledgeIndexSnapshot,
+  type ActivateKnowledgeIndexSnapshotInput,
+  type ActivateKnowledgeIndexSnapshotResult,
+  type KnowledgeIndexSnapshot,
+} from './knowledge-index-local-store.js'
+export type {
+  ActivateKnowledgeIndexSnapshotInput,
+  ActivateKnowledgeIndexSnapshotResult,
+  KnowledgeIndexChunk,
+  KnowledgeIndexEmbedding,
+  KnowledgeIndexSnapshot,
+  KnowledgeIndexSnapshotInput,
+  KnowledgeIndexSnapshotScope,
+} from './knowledge-index-local-store.js'
+import {
   applyWorkflowCommand,
   assertFullGitCommitSha,
   assertSafeGitHubBranch,
@@ -647,6 +663,12 @@ export type DeleteLocalMcpInstallationResult =
 export type LocalStore = {
   upsertProject(project: LocalProject): Promise<void>
   listProjects(): Promise<LocalProject[]>
+  activateKnowledgeIndexSnapshot(
+    input: ActivateKnowledgeIndexSnapshotInput,
+  ): Promise<ActivateKnowledgeIndexSnapshotResult>
+  getCurrentKnowledgeIndexSnapshot(
+    localProjectId: string,
+  ): Promise<KnowledgeIndexSnapshot | null>
   saveRun(run: WorkflowRun): Promise<void>
   deleteRun(runId: string): Promise<void>
   getRun(runId: string): Promise<WorkflowRun | null>
@@ -4589,6 +4611,20 @@ class SqlJsLocalStore implements LocalStore {
       this.db,
       'select json from local_projects order by updated_at desc, created_at desc',
     )
+  }
+
+  async activateKnowledgeIndexSnapshot(
+    input: ActivateKnowledgeIndexSnapshotInput,
+  ): Promise<ActivateKnowledgeIndexSnapshotResult> {
+    const result = activateKnowledgeIndexSnapshotInDatabase(this.db, input)
+    if (result.activated && !result.replayed) await this.persist()
+    return result
+  }
+
+  async getCurrentKnowledgeIndexSnapshot(
+    localProjectId: string,
+  ): Promise<KnowledgeIndexSnapshot | null> {
+    return readCurrentKnowledgeIndexSnapshot(this.db, localProjectId)
   }
 
   async getAgentRuntime(runtimeId: string): Promise<AgentRuntimeState | null> {
@@ -9187,6 +9223,7 @@ class SqlJsLocalStore implements LocalStore {
 
 const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'upsertProject',
+  'activateKnowledgeIndexSnapshot',
   'saveRun',
   'deleteRun',
   'enqueueRemoteSyncOperation',
