@@ -681,4 +681,157 @@ describe('Specialist Runtime coordinator', () => {
       })
     reopenedStore.close()
   })
+
+  it('atomically attributes one fail-fast result and blocks its dependency without a handoff', async () => {
+    const fixture = await authorityFixture(['repository_read'], true)
+    const ids = {
+      allocation: 'specialist-allocation-failure-1',
+      agent: 'specialist-agent-failure-1',
+      runtime: 'specialist-runtime-failure-1',
+      context: 'specialist-runtime-context-failure-1',
+    }
+    const coordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: fixture.store }),
+      clock: () => fixture.now,
+      createId: (kind) => ids[kind],
+    })
+    const started = await coordinator.start({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: 1,
+      taskId: 'specialist-task-1',
+      expectedTaskVersion: 1,
+    })
+    const resumed = resumeAgentRuntime({
+      runtime: started.runtime,
+      expectedCheckpointVersion: started.runtime.checkpointVersion,
+      authority: started.runtime.authority,
+      contextDigest: started.runtime.contextDigest,
+      capabilitySetDigest: started.runtime.capabilitySetDigest,
+      now: '2026-08-13T15:00:01.000Z',
+    })
+    await fixture.store.commitAgentRuntimeTransition({
+      expectedRuntime: started.runtime,
+      transition: resumed,
+    })
+    const waiting = requestAgentAction({
+      runtime: resumed.runtime,
+      expectedCheckpointVersion: resumed.runtime.checkpointVersion,
+      now: '2026-08-13T15:00:02.000Z',
+      action: {
+        id: 'specialist-action-failure-1',
+        kind: 'tool',
+        capabilityId: 'repository_read',
+        capabilityVersion: 1,
+        requestDigest: '7'.repeat(64),
+        requiresPermission: false,
+      },
+    })
+    await fixture.store.commitAgentRuntimeTransition({
+      expectedRuntime: resumed.runtime,
+      transition: waiting,
+    })
+    const terminal = acceptAgentActionResult({
+      runtime: waiting.runtime,
+      expectedCheckpointVersion: waiting.runtime.checkpointVersion,
+      actionId: waiting.runtime.activeAction!.id,
+      requestDigest: waiting.runtime.activeAction!.requestDigest,
+      result: {
+        outcome: 'failure',
+        resultDigest: '8'.repeat(64),
+        resultBytes: 128,
+        tokens: 50,
+        costUsd: 0.02,
+        evaluation: 'failure',
+        evaluationSummary: 'The bounded repository read failed.',
+      },
+      now: '2026-08-13T15:00:03.000Z',
+    })
+    const completionInput: Parameters<typeof coordinator.complete>[0] = {
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: started.coordination.version,
+      taskId: 'specialist-task-1',
+      expectedTaskVersion: 2,
+      expectedRuntimeVersion: waiting.runtime.version,
+      transition: terminal,
+      evidenceDigests: [],
+      resourceLeaseOutcome: 'not_required',
+      handoffs: [],
+    }
+
+    const completed = await coordinator.complete(completionInput)
+
+    expect(completed).toMatchObject({
+      runtime: {
+        id: ids.runtime,
+        version: terminal.runtime.version,
+        status: 'terminal',
+        stopReason: 'failure',
+      },
+      coordination: {
+        version: 3,
+        status: 'terminal',
+        stopReason: 'failure',
+        counters: {
+          specialistStarts: 1,
+          activeSpecialists: 0,
+          acceptedHandoffs: 0,
+          steps: 1,
+          toolCalls: 1,
+          tokens: 50,
+          costUsd: 0.02,
+        },
+        tasks: [
+          {
+            id: 'specialist-task-1',
+            version: 3,
+            status: 'failed',
+            runtimeId: ids.runtime,
+            runtimeVersion: terminal.runtime.version,
+            resultDigest: null,
+            failure: {
+              category: 'tool_error',
+              code: 'specialist_tool_failed',
+              sourceTaskId: 'specialist-task-1',
+            },
+          },
+          {
+            id: 'specialist-task-2',
+            version: 2,
+            status: 'blocked',
+            failure: {
+              category: 'dependency_failed',
+              code: 'dependency_task_failed',
+              sourceTaskId: 'specialist-task-1',
+            },
+          },
+        ],
+      },
+      handoffs: [],
+    })
+    await expect(coordinator.complete(completionInput)).resolves.toEqual(completed)
+    await expect(fixture.store.getCoordinationRecoverySnapshot(fixture.coordination.id))
+      .resolves.toMatchObject({
+        state: completed.coordination,
+        handoffs: [],
+        audits: [{}, {}, {}],
+        checkpoints: [{}, {}, {}],
+      })
+    fixture.store.close()
+
+    const reopenedStore = await createLocalStore({ dbPath: fixture.dbPath })
+    const reopenedCoordinator = createSpecialistRuntimeCoordinator({
+      store: reopenedStore,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: reopenedStore }),
+    })
+    await expect(reopenedCoordinator.complete(completionInput)).resolves.toEqual(completed)
+    await expect(reopenedStore.getCoordinationRecoverySnapshot(fixture.coordination.id))
+      .resolves.toMatchObject({
+        state: completed.coordination,
+        handoffs: [],
+        audits: [{}, {}, {}],
+        checkpoints: [{}, {}, {}],
+      })
+    reopenedStore.close()
+  })
 })

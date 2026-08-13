@@ -123,6 +123,7 @@ import {
   type CodingPermissionRequest,
   type CoordinationSessionRequest,
   type CoordinationSessionState,
+  type CoordinationTaskFailure,
   type CoordinationTaskResult,
   type CoordinationUsageDelta,
   type SpecialistAllocationRequest,
@@ -3900,6 +3901,80 @@ function coordinationTaskResultAuditMetadata(
     tokens: input.usage.tokens,
     costUsd: input.usage.costUsd,
   }
+}
+
+function specialistRuntimeFailure(
+  currentRuntime: AgentRuntimeState,
+  transition: AgentRuntimeTransition,
+  taskId: string,
+): CoordinationTaskFailure | null {
+  const stopReason = transition.runtime.stopReason
+  if (stopReason === 'timeout') {
+    return { category: 'timeout', code: 'specialist_runtime_timeout', sourceTaskId: taskId }
+  }
+  if (stopReason === 'step_limit' || stopReason === 'budget_exhausted') {
+    return {
+      category: 'budget_exhausted',
+      code: 'specialist_budget_exhausted',
+      sourceTaskId: taskId,
+    }
+  }
+  if (stopReason === 'policy_denied') {
+    return {
+      category: 'policy_denied',
+      code: 'specialist_policy_denied',
+      sourceTaskId: taskId,
+    }
+  }
+  if (stopReason !== 'failure') return null
+  const resultTooLarge = transition.events.some((event) =>
+    event.type === 'runtime_stopped' && event.metadata.failureCode === 'result_too_large')
+  if (resultTooLarge) {
+    return {
+      category: 'invalid_result',
+      code: 'specialist_result_too_large',
+      sourceTaskId: taskId,
+    }
+  }
+  if (currentRuntime.activeAction?.kind === 'tool') {
+    return { category: 'tool_error', code: 'specialist_tool_failed', sourceTaskId: taskId }
+  }
+  if (currentRuntime.activeAction?.kind === 'coding_executor') {
+    return {
+      category: 'coding_executor_error',
+      code: 'specialist_coding_executor_failed',
+      sourceTaskId: taskId,
+    }
+  }
+  return { category: 'invalid_result', code: 'specialist_runtime_failed', sourceTaskId: taskId }
+}
+
+function matchesSpecialistRuntimeFailure(
+  stopReason: AgentRuntimeStopReason | null,
+  failure: CoordinationTaskFailure | null,
+): boolean {
+  if (failure === null) return false
+  if (stopReason === 'timeout') {
+    return failure.category === 'timeout' && failure.code === 'specialist_runtime_timeout'
+  }
+  if (stopReason === 'step_limit' || stopReason === 'budget_exhausted') {
+    return failure.category === 'budget_exhausted' &&
+      failure.code === 'specialist_budget_exhausted'
+  }
+  if (stopReason === 'policy_denied') {
+    return failure.category === 'policy_denied' && failure.code === 'specialist_policy_denied'
+  }
+  if (stopReason !== 'failure') return false
+  return (
+    failure.category === 'tool_error' && failure.code === 'specialist_tool_failed'
+  ) || (
+    failure.category === 'coding_executor_error' &&
+    failure.code === 'specialist_coding_executor_failed'
+  ) || (
+    failure.category === 'invalid_result' &&
+    (failure.code === 'specialist_result_too_large' ||
+      failure.code === 'specialist_runtime_failed')
+  )
 }
 
 function coordinationHandoffAuditMetadata(
@@ -9029,6 +9104,12 @@ class SqlJsLocalStore implements LocalStore {
     } catch {
       return { committed: false, reason: 'invalid_input' }
     }
+    const successfulCompletion = transition.runtime.stopReason === 'success'
+    const failedCompletion = transition.runtime.stopReason === 'failure' ||
+      transition.runtime.stopReason === 'timeout' ||
+      transition.runtime.stopReason === 'step_limit' ||
+      transition.runtime.stopReason === 'budget_exhausted' ||
+      transition.runtime.stopReason === 'policy_denied'
     if (
       !isNonEmptyIdentifier(input.coordinationId) ||
       !isNonEmptyIdentifier(input.taskId) ||
@@ -9039,8 +9120,8 @@ class SqlJsLocalStore implements LocalStore {
       !Number.isInteger(input.expectedRuntimeVersion) ||
       input.expectedRuntimeVersion < 1 ||
       transition.runtime.status !== 'terminal' ||
-      transition.runtime.stopReason !== 'success' ||
-      transition.runtime.lastResultDigest === null ||
+      (!successfulCompletion && !failedCompletion) ||
+      (successfulCompletion && transition.runtime.lastResultDigest === null) ||
       !Array.isArray(input.evidenceDigests) ||
       (input.resourceLeaseOutcome !== 'not_required' &&
         input.resourceLeaseOutcome !== 'released') ||
@@ -9054,7 +9135,10 @@ class SqlJsLocalStore implements LocalStore {
     const currentRuntime = selectAgentRuntime(this.db, transition.runtime.id)
     const outgoingEdges = stored.graph.edges.filter((edge) => edge.sourceTaskId === input.taskId)
     if (
-      input.handoffs.length !== outgoingEdges.length ||
+      (successfulCompletion
+        ? input.handoffs.length !== outgoingEdges.length
+        : input.handoffs.length !== 0 || input.evidenceDigests.length !== 0) ||
+      (input.handoffs.length === 0 && input.evidenceDigests.length !== 0) ||
       new Set(input.handoffs.map((handoff) => handoff.id)).size !== input.handoffs.length ||
       input.handoffs.some((handoff, index) =>
         handoff.targetTaskId !== outgoingEdges[index]?.targetTaskId)
@@ -9066,10 +9150,14 @@ class SqlJsLocalStore implements LocalStore {
       sameJson(currentRuntime, transition.runtime) &&
       stored.state.version === input.expectedSessionVersion + 1 + input.handoffs.length &&
       storedTask.version === input.expectedTaskVersion + 1 &&
-      storedTask.status === 'succeeded' &&
+      storedTask.status === (successfulCompletion ? 'succeeded' : 'failed') &&
       storedTask.runtimeId === transition.runtime.id &&
       storedTask.runtimeVersion === transition.runtime.version &&
-      storedTask.resultDigest === transition.runtime.lastResultDigest
+      (successfulCompletion
+        ? storedTask.resultDigest === transition.runtime.lastResultDigest &&
+          storedTask.failure === null
+        : storedTask.resultDigest === null &&
+          matchesSpecialistRuntimeFailure(transition.runtime.stopReason, storedTask.failure))
     ) {
       const events = selectAgentRuntimeEvents(
         this.db,
@@ -9172,16 +9260,25 @@ class SqlJsLocalStore implements LocalStore {
       transition.runtime.updatedAt > transition.runtime.deadline
     ) return { committed: false, reason: 'authority_mismatch' }
 
+    const failure = successfulCompletion
+      ? null
+      : specialistRuntimeFailure(currentRuntime, transition, storedTask.id)
+    if (!successfulCompletion && failure === null) {
+      return { committed: false, reason: 'invalid_input' }
+    }
+
     const resultInput: CommitCoordinationTaskResultInput = {
       expectedState: stored.state,
       taskId: storedTask.id,
       runtimeId: currentRuntime.id,
       runtimeVersion: transition.runtime.version,
-      result: {
-        status: 'succeeded',
-        resultDigest: transition.runtime.lastResultDigest,
-        failure: null,
-      },
+      result: successfulCompletion
+        ? {
+            status: 'succeeded',
+            resultDigest: transition.runtime.lastResultDigest,
+            failure: null,
+          }
+        : { status: 'failed', resultDigest: null, failure },
       usage: { ...transition.runtime.counters },
       now: transition.runtime.updatedAt,
     }
@@ -9201,69 +9298,77 @@ class SqlJsLocalStore implements LocalStore {
         usage: resultInput.usage,
         now: resultInput.now,
       }))
+      if (
+        resultState.status === 'terminal' &&
+        stored.state.tasks.some((task) =>
+          task.id !== storedTask.id && task.status === 'running')
+      ) throw new Error('specialist_runtime_cancellation_required')
       const sourceTask = resultState.tasks.find((task) => task.id === storedTask.id)
       if (
         sourceTask === undefined ||
-        sourceTask.status !== 'succeeded' ||
         sourceTask.runtimeId === null ||
         sourceTask.runtimeVersion === null ||
-        sourceTask.resultDigest === null
+        (successfulCompletion
+          ? sourceTask.status !== 'succeeded' || sourceTask.resultDigest === null
+          : sourceTask.status !== 'failed' || sourceTask.failure === null)
       ) throw new Error('invalid_specialist_result')
-      const sourceResult: AcceptedSpecialistResult = {
-        taskId: sourceTask.id,
-        taskVersion: sourceTask.version,
-        runtimeId: sourceTask.runtimeId,
-        runtimeVersion: sourceTask.runtimeVersion,
-        status: 'succeeded',
-        resultDigest: sourceTask.resultDigest,
-        evidenceDigests: [...input.evidenceDigests],
-        contextDigest: graphTask.contextDigest,
-        resourceLeaseOutcome: input.resourceLeaseOutcome,
-      }
       finalState = resultState
-      for (const draft of input.handoffs) {
-        const targetTask = finalState.tasks.find((task) => task.id === draft.targetTaskId)
-        if (targetTask === undefined || targetTask.version !== draft.expectedTargetTaskVersion) {
-          throw new Error('invalid_specialist_handoff_target')
+      if (successfulCompletion) {
+        const sourceResult: AcceptedSpecialistResult = {
+          taskId: sourceTask.id,
+          taskVersion: sourceTask.version,
+          runtimeId: sourceTask.runtimeId,
+          runtimeVersion: sourceTask.runtimeVersion,
+          status: 'succeeded',
+          resultDigest: sourceTask.resultDigest!,
+          evidenceDigests: [...input.evidenceDigests],
+          contextDigest: graphTask.contextDigest,
+          resourceLeaseOutcome: input.resourceLeaseOutcome,
         }
-        const handoff = acceptAgentHandoff({
-          stateVersion: 1,
-          id: draft.id,
-          coordinationId: stored.coordination.id,
-          sequence: finalState.counters.acceptedHandoffs + 1,
-          scope: { ...stored.coordination.scope },
-          sourceTaskId: sourceResult.taskId,
-          sourceTaskVersion: sourceResult.taskVersion,
-          sourceRuntimeId: sourceResult.runtimeId,
-          sourceRuntimeVersion: sourceResult.runtimeVersion,
-          targetTaskId: draft.targetTaskId,
-          targetTaskVersion: draft.expectedTargetTaskVersion,
-          resultDigest: sourceResult.resultDigest,
-          evidenceDigests: [...sourceResult.evidenceDigests],
-          contextDigest: sourceResult.contextDigest,
-          resourceLeaseOutcome: sourceResult.resourceLeaseOutcome,
-          summary: draft.summary,
-          createdAt: transition.runtime.updatedAt,
-        }, {
-          coordination: stored.coordination,
-          graph: stored.graph,
-          sourceResult,
-          targetTaskVersion: targetTask.version,
-          expectedSequence: finalState.counters.acceptedHandoffs + 1,
-          maxSummaryBytes: stored.coordination.bounds.maxHandoffSummaryBytes,
-          existingHandoff: null,
-        }).handoff
-        finalState = parseCoordinationSessionState(applyCoordinationHandoff({
-          state: finalState,
-          coordination: stored.coordination,
-          graph: stored.graph,
-          handoff,
-          sourceResult,
-          expectedSessionVersion: finalState.version,
-          expectedTargetTaskVersion: targetTask.version,
-          priorAcceptedHandoffs: acceptedHandoffs,
-        }))
-        acceptedHandoffs.push(handoff)
+        for (const draft of input.handoffs) {
+          const targetTask = finalState.tasks.find((task) => task.id === draft.targetTaskId)
+          if (targetTask === undefined || targetTask.version !== draft.expectedTargetTaskVersion) {
+            throw new Error('invalid_specialist_handoff_target')
+          }
+          const handoff = acceptAgentHandoff({
+            stateVersion: 1,
+            id: draft.id,
+            coordinationId: stored.coordination.id,
+            sequence: finalState.counters.acceptedHandoffs + 1,
+            scope: { ...stored.coordination.scope },
+            sourceTaskId: sourceResult.taskId,
+            sourceTaskVersion: sourceResult.taskVersion,
+            sourceRuntimeId: sourceResult.runtimeId,
+            sourceRuntimeVersion: sourceResult.runtimeVersion,
+            targetTaskId: draft.targetTaskId,
+            targetTaskVersion: draft.expectedTargetTaskVersion,
+            resultDigest: sourceResult.resultDigest,
+            evidenceDigests: [...sourceResult.evidenceDigests],
+            contextDigest: sourceResult.contextDigest,
+            resourceLeaseOutcome: sourceResult.resourceLeaseOutcome,
+            summary: draft.summary,
+            createdAt: transition.runtime.updatedAt,
+          }, {
+            coordination: stored.coordination,
+            graph: stored.graph,
+            sourceResult,
+            targetTaskVersion: targetTask.version,
+            expectedSequence: finalState.counters.acceptedHandoffs + 1,
+            maxSummaryBytes: stored.coordination.bounds.maxHandoffSummaryBytes,
+            existingHandoff: null,
+          }).handoff
+          finalState = parseCoordinationSessionState(applyCoordinationHandoff({
+            state: finalState,
+            coordination: stored.coordination,
+            graph: stored.graph,
+            handoff,
+            sourceResult,
+            expectedSessionVersion: finalState.version,
+            expectedTargetTaskVersion: targetTask.version,
+            priorAcceptedHandoffs: acceptedHandoffs,
+          }))
+          acceptedHandoffs.push(handoff)
+        }
       }
     } catch {
       return { committed: false, reason: 'invalid_input' }
