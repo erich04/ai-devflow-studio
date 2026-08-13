@@ -955,6 +955,26 @@ async function persistCompletedResearchCoordination(store: LocalStore) {
   return { supervisor, initialState, startedState, completedState }
 }
 
+async function persistJoinedResearchCoordination(store: LocalStore) {
+  const completed = await persistCompletedResearchCoordination(store)
+  const joinedState = applyCoordinationHandoff({
+    state: completed.completedState,
+    coordination: coordinationSessionRequest,
+    graph: coordinationTaskGraph,
+    handoff: researchReviewHandoff,
+    sourceResult: acceptedResearchResult,
+    expectedSessionVersion: completed.completedState.version,
+    expectedTargetTaskVersion: 1,
+    priorAcceptedHandoffs: [],
+  })
+  await store.commitCoordinationHandoff({
+    expectedState: completed.completedState,
+    handoff: researchReviewHandoff,
+    sourceResult: acceptedResearchResult,
+  })
+  return { ...completed, joinedState }
+}
+
 async function persistAcceptedMemoryCandidate(
   store: LocalStore,
   startRequest: AgentRuntimeStartRequest = agentRuntimeStartRequest,
@@ -3172,6 +3192,51 @@ describe('createLocalStore', () => {
     reopened.close()
   })
 
+  it('rejects a coordination session whose aggregate durable metadata exceeds 256 KiB', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    const supervisor = createAgentRuntime(teamAgentRuntimeStartRequest)
+    await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: supervisor })
+
+    const capabilityIds: string[] = []
+    let graph: AgentTaskGraph
+    do {
+      const index = String(capabilityIds.length).padStart(4, '0')
+      capabilityIds.push(`capability.${index}.${'x'.repeat(174)}`)
+      graph = {
+        stateVersion: 1,
+        id: 'coordination-graph-metadata-limit-1',
+        coordinationId: coordinationSessionRequest.id,
+        version: 1,
+        entryTaskIds: ['coordination-task-research'],
+        nodes: [{
+          id: 'coordination-task-research',
+          roleId: 'specialist.research',
+          contextDigest: 'c'.repeat(64),
+          capabilityIds,
+          resourceRequirements: [],
+        }],
+        edges: [],
+      }
+    } while (Buffer.byteLength(JSON.stringify(graph)) < 260_000)
+    expect(Buffer.byteLength(JSON.stringify(graph))).toBeLessThanOrEqual(256 * 1_024)
+
+    await expect(store.createCoordinationSession({
+      coordination: coordinationSessionRequest,
+      graph,
+      acceptedRoleIds: ['specialist.research'],
+      startedAt: coordinationSessionRequest.requestedAt,
+    })).resolves.toEqual({ committed: false, reason: 'invalid_input' })
+    expect(await store.getCoordinationSession(coordinationSessionRequest.id)).toBeNull()
+    store.close()
+  })
+
   it('CAS-starts one Specialist task and rejects a competing owner without partial state', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
@@ -3451,6 +3516,161 @@ describe('createLocalStore', () => {
       state: expectedState,
     })
     reopened.close()
+  })
+
+  it('reopens one bounded metadata-only coordination trajectory without recreating identities', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const {
+      initialState,
+      startedState,
+      completedState,
+      joinedState,
+    } = await persistJoinedResearchCoordination(store)
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    const snapshot = await reopened.getCoordinationRecoverySnapshot(
+      coordinationSessionRequest.id,
+    )
+    expect(snapshot).not.toBeNull()
+    expect(snapshot).toMatchObject({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      state: joinedState,
+      handoffs: [researchReviewHandoff],
+      audits: [
+        {
+          eventKind: 'session_started',
+          sessionVersion: 1,
+          taskId: null,
+          createdAt: initialState.updatedAt,
+        },
+        {
+          eventKind: 'task_started',
+          sessionVersion: 2,
+          taskId: acceptedResearchResult.taskId,
+          createdAt: startedState.updatedAt,
+        },
+        {
+          eventKind: 'task_result',
+          sessionVersion: 3,
+          taskId: acceptedResearchResult.taskId,
+          createdAt: completedState.updatedAt,
+        },
+        {
+          eventKind: 'handoff_accepted',
+          sessionVersion: 4,
+          taskId: researchReviewHandoff.targetTaskId,
+          createdAt: joinedState.updatedAt,
+        },
+      ],
+      checkpoints: [
+        {
+          checkpointVersion: 1,
+          sessionVersion: 1,
+          graphVersion: coordinationTaskGraph.version,
+          state: initialState,
+          createdAt: initialState.updatedAt,
+        },
+        {
+          checkpointVersion: 2,
+          sessionVersion: 2,
+          graphVersion: coordinationTaskGraph.version,
+          state: startedState,
+          createdAt: startedState.updatedAt,
+        },
+        {
+          checkpointVersion: 3,
+          sessionVersion: 3,
+          graphVersion: coordinationTaskGraph.version,
+          state: completedState,
+          createdAt: completedState.updatedAt,
+        },
+        {
+          checkpointVersion: 4,
+          sessionVersion: 4,
+          graphVersion: coordinationTaskGraph.version,
+          state: joinedState,
+          createdAt: joinedState.updatedAt,
+        },
+      ],
+    })
+    expect(snapshot?.audits.map((audit) => audit.id)).toHaveLength(4)
+    expect(new Set(snapshot?.audits.map((audit) => audit.id)).size).toBe(4)
+    const serialized = JSON.stringify(snapshot)
+    expect(Buffer.byteLength(serialized)).toBeLessThanOrEqual(256 * 1_024)
+    expect(serialized).not.toMatch(
+      /(?:"prompt"|"patch"|"rawOutput"|"stdout"|"stderr"|"credential"|"encryptedSecret"|\/Users\/|\/home\/|[A-Za-z]:\\\\Users\\\\)/u,
+    )
+    reopened.close()
+  })
+
+  it.each([
+    {
+      tamper: 'handoff relational identity',
+      apply(db: import('sql.js').Database) {
+        db.run(
+          `update agent_coordination_handoffs
+           set result_digest = ? where id = ?`,
+          ['0'.repeat(64), researchReviewHandoff.id],
+        )
+      },
+    },
+    {
+      tamper: 'audit metadata payload',
+      apply(db: import('sql.js').Database) {
+        db.run(
+          `update agent_coordination_audits
+           set metadata_json = ? where event_kind = 'task_result'`,
+          [JSON.stringify({ prompt: 'API_TOKEN=must-never-survive' })],
+        )
+      },
+    },
+    {
+      tamper: 'checkpoint authority identity',
+      apply(db: import('sql.js').Database) {
+        db.run(
+          `update agent_coordination_checkpoints
+           set checkpoint_json = json_set(checkpoint_json, '$.contextDigest', ?)
+           where checkpoint_version = 4`,
+          ['9'.repeat(64)],
+        )
+      },
+    },
+  ])('fails closed on $tamper tamper without fabricating recovery state', async ({ apply }) => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await persistJoinedResearchCoordination(store)
+    store.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const tampered = new SQL.Database(await readFile(dbPath))
+    apply(tampered)
+    await writeFile(dbPath, Buffer.from(tampered.export()))
+    tampered.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getCoordinationSession(
+      coordinationSessionRequest.id,
+    )).rejects.toThrowError('Stored Agent Coordination trajectory is invalid')
+    await expect(reopened.getCoordinationRecoverySnapshot(
+      coordinationSessionRequest.id,
+    )).rejects.toThrowError('Stored Agent Coordination trajectory is invalid')
+    reopened.close()
+
+    const inspected = new SQL.Database(await readFile(dbPath))
+    expect(inspected.exec(`
+      select
+        (select count(*) from agent_coordination_sessions),
+        (select count(*) from agent_coordination_tasks),
+        (select count(*) from agent_coordination_handoffs),
+        (select count(*) from agent_coordination_audits),
+        (select count(*) from agent_coordination_checkpoints)
+    `)[0]?.values[0]?.map(Number)).toEqual([1, 2, 1, 4, 4])
+    inspected.close()
   })
 
   it('atomically persists exact Agent Runtime events and checkpoints across restart', async () => {

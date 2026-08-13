@@ -33,6 +33,7 @@ export type {
 } from './knowledge-index-local-store.js'
 export { KNOWLEDGE_INDEX_CHUNK_COUNT_MAX } from './knowledge-index-local-store.js'
 import {
+  acceptAgentHandoff,
   applyWorkflowCommand,
   applyCoordinationHandoff,
   assertFullGitCommitSha,
@@ -793,6 +794,9 @@ export type LocalStore = {
     input: CommitCoordinationHandoffInput,
   ): Promise<CommitCoordinationHandoffResult>
   getCoordinationSession(coordinationId: string): Promise<DurableCoordinationSession | null>
+  getCoordinationRecoverySnapshot(
+    coordinationId: string,
+  ): Promise<CoordinationRecoverySnapshot | null>
   getAgentRuntimeContextAttachment(
     runtimeId: string,
   ): Promise<AgentRuntimeContextAttachment | null>
@@ -977,6 +981,29 @@ export type DurableCoordinationSession = {
   coordination: CoordinationSessionRequest
   graph: AgentTaskGraph
   state: CoordinationSessionState
+}
+
+export type CoordinationTrajectoryAudit = {
+  id: string
+  taskId: string | null
+  eventKind: 'session_started' | 'task_started' | 'task_result' | 'handoff_accepted'
+  sessionVersion: number
+  metadata: Readonly<Record<string, string | number | null>>
+  createdAt: string
+}
+
+export type DurableCoordinationCheckpoint = {
+  checkpointVersion: number
+  sessionVersion: number
+  graphVersion: number
+  state: CoordinationSessionState
+  createdAt: string
+}
+
+export type CoordinationRecoverySnapshot = DurableCoordinationSession & {
+  handoffs: AgentHandoff[]
+  audits: CoordinationTrajectoryAudit[]
+  checkpoints: DurableCoordinationCheckpoint[]
 }
 
 export type CreateCoordinationSessionResult =
@@ -3825,12 +3852,36 @@ function selectAgentCoordinationHandoffs(
   db: Database,
   coordinationId: string,
 ): AgentHandoff[] {
-  return selectJson<AgentHandoff>(
-    db,
-    `select handoff_json from agent_coordination_handoffs
+  const rows = db.exec(
+    `select id, coordination_id, sequence, source_task_id, target_task_id,
+            result_digest, handoff_json, created_at
+     from agent_coordination_handoffs
      where coordination_id = ? order by sequence asc`,
     [coordinationId],
-  )
+  )[0]?.values ?? []
+  return rows.map((row) => {
+    let value: unknown
+    try {
+      value = JSON.parse(String(row[6]))
+    } catch {
+      throw new Error('Stored Agent Coordination handoff is invalid')
+    }
+    if (
+      typeof value !== 'object' || value === null || Array.isArray(value) ||
+      !('id' in value) || value.id !== String(row[0]) ||
+      !('coordinationId' in value) || value.coordinationId !== String(row[1]) ||
+      value.coordinationId !== coordinationId ||
+      !('sequence' in value) || value.sequence !== Number(row[2]) ||
+      !('sourceTaskId' in value) || value.sourceTaskId !== String(row[3]) ||
+      !('targetTaskId' in value) || value.targetTaskId !== String(row[4]) ||
+      !('resultDigest' in value) || value.resultDigest !== String(row[5]) ||
+      !('createdAt' in value) || value.createdAt !== String(row[7]) ||
+      !isCanonicalIsoTimestamp(value.createdAt)
+    ) {
+      throw new Error('Stored Agent Coordination handoff is invalid')
+    }
+    return value as AgentHandoff
+  })
 }
 
 function selectDurableCoordinationSession(
@@ -3921,6 +3972,424 @@ function selectDurableCoordinationSession(
   }
 
   return { coordination, graph, state }
+}
+
+const COORDINATION_METADATA_MAX_BYTES = 256 * 1_024
+const coordinationIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u
+
+function assertCoordinationMetadataBound(db: Database, coordinationId: string): void {
+  const value = db.exec(
+    `select coalesce(sum(bytes), 0) from (
+       select length(cast(request_json as blob)) + length(cast(state_json as blob)) as bytes
+         from agent_coordination_sessions where id = ?
+       union all
+       select length(cast(graph_json as blob))
+         from agent_coordination_graphs where coordination_id = ?
+       union all
+       select length(cast(state_json as blob))
+         from agent_coordination_tasks where coordination_id = ?
+       union all
+       select length(cast(handoff_json as blob))
+         from agent_coordination_handoffs where coordination_id = ?
+       union all
+       select length(cast(lease_json as blob))
+         from agent_coordination_leases where coordination_id = ?
+       union all
+       select length(cast(metadata_json as blob))
+         from agent_coordination_audits where coordination_id = ?
+       union all
+       select length(cast(checkpoint_json as blob))
+         from agent_coordination_checkpoints where coordination_id = ?
+     )`,
+    Array.from({ length: 7 }, () => coordinationId),
+  )[0]?.values[0]?.[0]
+  const bytes = Number(value)
+  if (!Number.isSafeInteger(bytes) || bytes > COORDINATION_METADATA_MAX_BYTES) {
+    throw new Error('coordination_metadata_too_large')
+  }
+}
+
+function hasExactCoordinationKeys(
+  value: Record<string, unknown>,
+  expectedKeys: readonly string[],
+): boolean {
+  const actual = Object.keys(value).sort()
+  const expected = [...expectedKeys].sort()
+  return actual.length === expected.length &&
+    actual.every((key, index) => key === expected[index])
+}
+
+function isCoordinationMetadataRecord(
+  value: unknown,
+): value is Record<string, string | number | null> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  return Object.entries(value).every(([key, item]) =>
+    coordinationIdentifierPattern.test(key) &&
+    (
+      item === null ||
+      (typeof item === 'number' && Number.isFinite(item)) ||
+      (
+        typeof item === 'string' &&
+        item.length <= 200 &&
+        redactSensitiveText(item).value === item
+      )
+    )) &&
+    new TextEncoder().encode(JSON.stringify(value)).byteLength <= 65_536
+}
+
+function selectCoordinationTrajectoryAudits(
+  db: Database,
+  coordinationId: string,
+): CoordinationTrajectoryAudit[] {
+  const rows = db.exec(
+    `select id, task_id, event_kind, session_version, metadata_json, created_at
+     from agent_coordination_audits
+     where coordination_id = ? order by session_version asc, id asc`,
+    [coordinationId],
+  )[0]?.values ?? []
+  return rows.map((row) => {
+    let metadata: unknown
+    try {
+      metadata = JSON.parse(String(row[4]))
+    } catch {
+      throw new Error('Stored Agent Coordination trajectory is invalid')
+    }
+    const eventKind = String(row[2])
+    const audit: CoordinationTrajectoryAudit = {
+      id: String(row[0]),
+      taskId: row[1] === null ? null : String(row[1]),
+      eventKind: eventKind as CoordinationTrajectoryAudit['eventKind'],
+      sessionVersion: Number(row[3]),
+      metadata: metadata as CoordinationTrajectoryAudit['metadata'],
+      createdAt: String(row[5]),
+    }
+    if (
+      !coordinationIdentifierPattern.test(audit.id) ||
+      (audit.taskId !== null && !coordinationIdentifierPattern.test(audit.taskId)) ||
+      !['session_started', 'task_started', 'task_result', 'handoff_accepted'].includes(eventKind) ||
+      !Number.isInteger(audit.sessionVersion) ||
+      audit.sessionVersion < 1 ||
+      !isCoordinationMetadataRecord(metadata) ||
+      !isCanonicalIsoTimestamp(audit.createdAt)
+    ) {
+      throw new Error('Stored Agent Coordination trajectory is invalid')
+    }
+    return audit
+  })
+}
+
+function selectCoordinationCheckpoints(
+  db: Database,
+  coordinationId: string,
+): DurableCoordinationCheckpoint[] {
+  const rows = db.exec(
+    `select checkpoint_version, session_version, graph_version, checkpoint_json, created_at
+     from agent_coordination_checkpoints
+     where coordination_id = ? order by checkpoint_version asc`,
+    [coordinationId],
+  )[0]?.values ?? []
+  return rows.map((row) => {
+    let stateValue: unknown
+    try {
+      stateValue = JSON.parse(String(row[3]))
+    } catch {
+      throw new Error('Stored Agent Coordination trajectory is invalid')
+    }
+    const checkpoint: DurableCoordinationCheckpoint = {
+      checkpointVersion: Number(row[0]),
+      sessionVersion: Number(row[1]),
+      graphVersion: Number(row[2]),
+      state: parseCoordinationSessionState(stateValue),
+      createdAt: String(row[4]),
+    }
+    if (
+      !Number.isInteger(checkpoint.checkpointVersion) ||
+      !Number.isInteger(checkpoint.sessionVersion) ||
+      !Number.isInteger(checkpoint.graphVersion) ||
+      checkpoint.checkpointVersion < 1 ||
+      checkpoint.sessionVersion < 1 ||
+      checkpoint.graphVersion < 1 ||
+      !isCanonicalIsoTimestamp(checkpoint.createdAt)
+    ) {
+      throw new Error('Stored Agent Coordination trajectory is invalid')
+    }
+    return checkpoint
+  })
+}
+
+function isNonNegativeCoordinationUsage(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+function validateCoordinationTaskStartCheckpoint(
+  previous: CoordinationSessionState,
+  current: CoordinationSessionState,
+  audit: CoordinationTrajectoryAudit,
+): boolean {
+  const metadata = audit.metadata
+  if (!hasExactCoordinationKeys(metadata, [
+    'stateVersion',
+    'allocationId',
+    'taskId',
+    'taskVersion',
+    'agentId',
+    'runtimeId',
+    'runtimeVersion',
+  ]) || metadata.stateVersion !== 1 ||
+    typeof metadata.allocationId !== 'string' ||
+    !coordinationIdentifierPattern.test(metadata.allocationId) ||
+    typeof metadata.taskId !== 'string' || audit.taskId !== metadata.taskId) return false
+  const previousTask = previous.tasks.find((task) => task.id === metadata.taskId)
+  const currentTask = current.tasks.find((task) => task.id === metadata.taskId)
+  if (
+    previousTask === undefined || currentTask === undefined ||
+    previousTask.status !== 'ready' ||
+    currentTask.status !== 'running' ||
+    currentTask.version !== previousTask.version + 1 ||
+    currentTask.agentId === null || currentTask.runtimeId === null ||
+    currentTask.runtimeVersion === null ||
+    metadata.taskVersion !== currentTask.version ||
+    metadata.agentId !== currentTask.agentId ||
+    metadata.runtimeId !== currentTask.runtimeId ||
+    metadata.runtimeVersion !== currentTask.runtimeVersion
+  ) return false
+  const expected: CoordinationSessionState = {
+    ...previous,
+    version: previous.version + 1,
+    tasks: previous.tasks.map((task) => task.id === currentTask.id ? currentTask : task),
+    counters: {
+      ...previous.counters,
+      specialistStarts: previous.counters.specialistStarts + 1,
+      activeSpecialists: previous.counters.activeSpecialists + 1,
+    },
+    updatedAt: current.updatedAt,
+  }
+  return sameJson(expected, current)
+}
+
+function validateCoordinationTaskResultCheckpoint(
+  previous: CoordinationSessionState,
+  current: CoordinationSessionState,
+  audit: CoordinationTrajectoryAudit,
+): boolean {
+  const metadata = audit.metadata
+  if (!hasExactCoordinationKeys(metadata, [
+    'stateVersion',
+    'taskId',
+    'taskVersion',
+    'runtimeId',
+    'runtimeVersion',
+    'status',
+    'resultDigest',
+    'failureCategory',
+    'failureCode',
+    'steps',
+    'toolCalls',
+    'tokens',
+    'costUsd',
+  ]) || metadata.stateVersion !== 1 ||
+    typeof metadata.taskId !== 'string' || audit.taskId !== metadata.taskId ||
+    typeof metadata.runtimeId !== 'string' ||
+    typeof metadata.runtimeVersion !== 'number' ||
+    !isNonNegativeCoordinationUsage(metadata.steps) ||
+    !isNonNegativeCoordinationUsage(metadata.toolCalls) ||
+    !isNonNegativeCoordinationUsage(metadata.tokens) ||
+    !isNonNegativeCoordinationUsage(metadata.costUsd)) return false
+  const previousTask = previous.tasks.find((task) => task.id === metadata.taskId)
+  const currentTask = current.tasks.find((task) => task.id === metadata.taskId)
+  if (
+    previousTask === undefined || currentTask === undefined ||
+    previousTask.status !== 'running' ||
+    (currentTask.status !== 'succeeded' && currentTask.status !== 'failed') ||
+    metadata.taskVersion !== currentTask.version ||
+    metadata.runtimeId !== currentTask.runtimeId ||
+    metadata.runtimeVersion !== currentTask.runtimeVersion ||
+    metadata.status !== currentTask.status ||
+    metadata.resultDigest !== currentTask.resultDigest ||
+    metadata.failureCategory !== (currentTask.failure?.category ?? null) ||
+    metadata.failureCode !== (currentTask.failure?.code ?? null)
+  ) return false
+  try {
+    const transitionInput: CommitCoordinationTaskResultInput = {
+      expectedState: previous,
+      taskId: currentTask.id,
+      runtimeId: metadata.runtimeId,
+      runtimeVersion: metadata.runtimeVersion,
+      result: {
+        status: currentTask.status,
+        resultDigest: currentTask.resultDigest,
+        failure: currentTask.failure,
+      },
+      usage: {
+        steps: metadata.steps,
+        toolCalls: metadata.toolCalls,
+        tokens: metadata.tokens,
+        costUsd: metadata.costUsd,
+      },
+      now: current.updatedAt,
+    }
+    const expected = recordCoordinationTaskResult({
+      state: previous,
+      taskId: transitionInput.taskId,
+      runtimeId: transitionInput.runtimeId,
+      runtimeVersion: transitionInput.runtimeVersion,
+      result: transitionInput.result,
+      usage: transitionInput.usage,
+      now: transitionInput.now,
+      expectedSessionVersion: previous.version,
+      expectedTaskVersion: previousTask.version,
+    })
+    const expectedMetadata = coordinationTaskResultAuditMetadata(transitionInput, current)
+    return sameJson(expected, current) && sameJson(expectedMetadata, metadata)
+  } catch {
+    return false
+  }
+}
+
+function selectCoordinationRecoverySnapshot(
+  db: Database,
+  coordinationId: string,
+): CoordinationRecoverySnapshot | null {
+  const durable = selectDurableCoordinationSession(db, coordinationId)
+  if (durable === null) return null
+  try {
+    const audits = selectCoordinationTrajectoryAudits(db, coordinationId)
+    const checkpoints = selectCoordinationCheckpoints(db, coordinationId)
+    const rawHandoffs = selectAgentCoordinationHandoffs(db, coordinationId)
+    if (
+      audits.length !== durable.state.version ||
+      checkpoints.length !== durable.state.version
+    ) throw new Error('invalid_coordination_trajectory_length')
+
+    const acceptedHandoffs: AgentHandoff[] = []
+    const initialState = parseCoordinationSessionState(createCoordinationSessionState({
+      coordination: durable.coordination,
+      graph: durable.graph,
+      startedAt: durable.state.startedAt,
+    }))
+    for (let index = 0; index < checkpoints.length; index += 1) {
+      const expectedVersion = index + 1
+      const checkpoint = checkpoints[index]
+      const audit = audits[index]
+      if (
+        checkpoint === undefined || audit === undefined ||
+        checkpoint.checkpointVersion !== expectedVersion ||
+        checkpoint.sessionVersion !== expectedVersion ||
+        checkpoint.graphVersion !== durable.graph.version ||
+        checkpoint.state.id !== durable.coordination.id ||
+        checkpoint.state.version !== expectedVersion ||
+        checkpoint.state.graphId !== durable.graph.id ||
+        checkpoint.state.graphVersion !== durable.graph.version ||
+        checkpoint.state.updatedAt !== checkpoint.createdAt ||
+        audit.id !== coordinationTransitionAuditId(coordinationId, expectedVersion) ||
+        audit.sessionVersion !== expectedVersion ||
+        audit.createdAt !== checkpoint.createdAt
+      ) throw new Error('invalid_coordination_trajectory_identity')
+
+      if (expectedVersion === 1) {
+        if (
+          audit.eventKind !== 'session_started' || audit.taskId !== null ||
+          !sameJson(audit.metadata, coordinationStartAuditMetadata(durable.graph)) ||
+          !sameJson(checkpoint.state, initialState)
+        ) throw new Error('invalid_coordination_start_trajectory')
+        continue
+      }
+
+      const previous = checkpoints[index - 1]?.state
+      if (previous === undefined) throw new Error('invalid_coordination_trajectory_predecessor')
+      if (audit.eventKind === 'task_started') {
+        if (!validateCoordinationTaskStartCheckpoint(previous, checkpoint.state, audit)) {
+          throw new Error('invalid_coordination_task_start_trajectory')
+        }
+        continue
+      }
+      if (audit.eventKind === 'task_result') {
+        if (!validateCoordinationTaskResultCheckpoint(previous, checkpoint.state, audit)) {
+          throw new Error('invalid_coordination_task_result_trajectory')
+        }
+        continue
+      }
+      if (audit.eventKind !== 'handoff_accepted') {
+        throw new Error('invalid_coordination_trajectory_event')
+      }
+      const metadata = audit.metadata
+      if (!hasExactCoordinationKeys(metadata, [
+        'stateVersion',
+        'handoffId',
+        'sequence',
+        'sourceTaskId',
+        'sourceTaskVersion',
+        'targetTaskId',
+        'targetTaskVersion',
+        'targetStatus',
+        'resultDigest',
+      ]) || metadata.stateVersion !== 1 || typeof metadata.handoffId !== 'string') {
+        throw new Error('invalid_coordination_handoff_metadata')
+      }
+      const rawHandoff = rawHandoffs.find((handoff) => handoff.id === metadata.handoffId)
+      const previousTargetTask = previous.tasks.find(
+        (task) => task.id === rawHandoff?.targetTaskId,
+      )
+      if (rawHandoff === undefined || previousTargetTask === undefined) {
+        throw new Error('invalid_coordination_handoff_identity')
+      }
+      const sourceResult: AcceptedSpecialistResult = {
+        taskId: rawHandoff.sourceTaskId,
+        taskVersion: rawHandoff.sourceTaskVersion,
+        runtimeId: rawHandoff.sourceRuntimeId,
+        runtimeVersion: rawHandoff.sourceRuntimeVersion,
+        status: 'succeeded',
+        resultDigest: rawHandoff.resultDigest,
+        evidenceDigests: rawHandoff.evidenceDigests,
+        contextDigest: rawHandoff.contextDigest,
+        resourceLeaseOutcome: rawHandoff.resourceLeaseOutcome,
+      }
+      const handoff = acceptAgentHandoff(rawHandoff, {
+        coordination: durable.coordination,
+        graph: durable.graph,
+        sourceResult,
+        targetTaskVersion: previousTargetTask.version,
+        expectedSequence: acceptedHandoffs.length + 1,
+        maxSummaryBytes: durable.coordination.bounds.maxHandoffSummaryBytes,
+        existingHandoff: null,
+      }).handoff
+      const expected = applyCoordinationHandoff({
+        state: previous,
+        coordination: durable.coordination,
+        graph: durable.graph,
+        handoff,
+        sourceResult,
+        expectedSessionVersion: previous.version,
+        expectedTargetTaskVersion: previousTargetTask.version,
+        priorAcceptedHandoffs: acceptedHandoffs,
+      })
+      if (
+        audit.taskId !== handoff.targetTaskId ||
+        !sameJson(expected, checkpoint.state) ||
+        !sameJson(coordinationHandoffAuditMetadata(handoff, checkpoint.state), metadata)
+      ) throw new Error('invalid_coordination_handoff_trajectory')
+      acceptedHandoffs.push(handoff)
+    }
+
+    if (
+      acceptedHandoffs.length !== rawHandoffs.length ||
+      !sameJson(acceptedHandoffs.map((handoff) => handoff.id), durable.state.acceptedHandoffIds) ||
+      !sameJson(checkpoints.at(-1)?.state, durable.state)
+    ) throw new Error('invalid_coordination_trajectory_terminal')
+
+    const snapshot: CoordinationRecoverySnapshot = {
+      ...durable,
+      handoffs: acceptedHandoffs,
+      audits,
+      checkpoints,
+    }
+    if (new TextEncoder().encode(JSON.stringify(snapshot)).byteLength > COORDINATION_METADATA_MAX_BYTES) {
+      throw new Error('invalid_coordination_trajectory_size')
+    }
+    return snapshot
+  } catch {
+    throw new Error('Stored Agent Coordination trajectory is invalid')
+  }
 }
 
 function selectAgentRuntimeEvents(
@@ -7882,7 +8351,21 @@ class SqlJsLocalStore implements LocalStore {
     coordinationId: string,
   ): Promise<DurableCoordinationSession | null> {
     if (!isNonEmptyIdentifier(coordinationId) || coordinationId.length > 200) return null
-    return selectDurableCoordinationSession(this.db, coordinationId)
+    const snapshot = selectCoordinationRecoverySnapshot(this.db, coordinationId)
+    return snapshot === null
+      ? null
+      : {
+          coordination: snapshot.coordination,
+          graph: snapshot.graph,
+          state: snapshot.state,
+        }
+  }
+
+  async getCoordinationRecoverySnapshot(
+    coordinationId: string,
+  ): Promise<CoordinationRecoverySnapshot | null> {
+    if (!isNonEmptyIdentifier(coordinationId) || coordinationId.length > 200) return null
+    return selectCoordinationRecoverySnapshot(this.db, coordinationId)
   }
 
   async createCoordinationSession(
@@ -7911,7 +8394,7 @@ class SqlJsLocalStore implements LocalStore {
       return { committed: false, reason: 'invalid_input' }
     }
 
-    const existing = selectDurableCoordinationSession(this.db, coordination.id)
+    const existing = selectCoordinationRecoverySnapshot(this.db, coordination.id)
     if (existing !== null) {
       return sameJson(existing.coordination, coordination) &&
         sameJson(existing.graph, graph) &&
@@ -8030,9 +8513,13 @@ class SqlJsLocalStore implements LocalStore {
           state.startedAt,
         ],
       )
+      assertCoordinationMetadataBound(this.db, coordination.id)
       this.db.run('commit')
     } catch (error) {
       this.db.run('rollback')
+      if (error instanceof Error && error.message === 'coordination_metadata_too_large') {
+        return { committed: false, reason: 'invalid_input' }
+      }
       throw error
     }
     await this.persist()
@@ -8048,7 +8535,7 @@ class SqlJsLocalStore implements LocalStore {
     } catch {
       return { committed: false, reason: 'invalid_input' }
     }
-    const stored = selectDurableCoordinationSession(this.db, expectedState.id)
+    const stored = selectCoordinationRecoverySnapshot(this.db, expectedState.id)
     if (stored === null) return { committed: false, reason: 'not_found' }
 
     let allocation: SpecialistAllocationRequest
@@ -8194,9 +8681,13 @@ class SqlJsLocalStore implements LocalStore {
           nextState.updatedAt,
         ],
       )
+      assertCoordinationMetadataBound(this.db, stored.coordination.id)
       this.db.run('commit')
     } catch (error) {
       this.db.run('rollback')
+      if (error instanceof Error && error.message === 'coordination_metadata_too_large') {
+        return { committed: false, reason: 'invalid_input' }
+      }
       if (
         error instanceof Error &&
         (error.message === 'stale_coordination_session' || error.message === 'stale_coordination_task')
@@ -8230,7 +8721,7 @@ class SqlJsLocalStore implements LocalStore {
     } catch {
       return { committed: false, reason: 'invalid_input' }
     }
-    const stored = selectDurableCoordinationSession(this.db, expectedState.id)
+    const stored = selectCoordinationRecoverySnapshot(this.db, expectedState.id)
     if (stored === null) return { committed: false, reason: 'not_found' }
     const auditMetadata = coordinationTaskResultAuditMetadata(input, nextState)
     if (sameJson(stored.state, nextState)) {
@@ -8349,9 +8840,13 @@ class SqlJsLocalStore implements LocalStore {
           nextState.updatedAt,
         ],
       )
+      assertCoordinationMetadataBound(this.db, stored.coordination.id)
       this.db.run('commit')
     } catch (error) {
       this.db.run('rollback')
+      if (error instanceof Error && error.message === 'coordination_metadata_too_large') {
+        return { committed: false, reason: 'invalid_input' }
+      }
       if (
         error instanceof Error &&
         (error.message === 'stale_coordination_session' || error.message === 'stale_coordination_task')
@@ -8371,7 +8866,7 @@ class SqlJsLocalStore implements LocalStore {
     } catch {
       return { committed: false, reason: 'invalid_input' }
     }
-    const stored = selectDurableCoordinationSession(this.db, expectedState.id)
+    const stored = selectCoordinationRecoverySnapshot(this.db, expectedState.id)
     if (stored === null) return { committed: false, reason: 'not_found' }
     const priorAcceptedHandoffs = selectAgentCoordinationHandoffs(
       this.db,
@@ -8506,9 +9001,13 @@ class SqlJsLocalStore implements LocalStore {
           nextState.updatedAt,
         ],
       )
+      assertCoordinationMetadataBound(this.db, stored.coordination.id)
       this.db.run('commit')
     } catch (error) {
       this.db.run('rollback')
+      if (error instanceof Error && error.message === 'coordination_metadata_too_large') {
+        return { committed: false, reason: 'invalid_input' }
+      }
       if (
         error instanceof Error &&
         (error.message === 'stale_coordination_session' || error.message === 'stale_coordination_task')
