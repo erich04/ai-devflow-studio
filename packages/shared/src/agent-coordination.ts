@@ -232,6 +232,13 @@ export type AcceptedCoordinationResourceLease = {
   replayed: boolean
 }
 
+export type CoordinationResourceLeaseSettlementInput = {
+  lease: CoordinationResourceLease
+  expectedVersion: number
+  outcome: Exclude<CoordinationResourceLeaseStatus, 'active'>
+  now: string
+}
+
 export type CoordinationTaskStatus =
   | 'pending'
   | 'ready'
@@ -1165,6 +1172,49 @@ export function acceptCoordinationResourceLease(
   if (hasConflict) throw new Error('coordination_resource_conflict')
 
   return { lease, replayed: false }
+}
+
+export function settleCoordinationResourceLease(
+  input: CoordinationResourceLeaseSettlementInput,
+  options: CoordinationResourceLeaseParseOptions,
+): CoordinationResourceLease {
+  let lease: CoordinationResourceLease
+  try {
+    lease = parseCoordinationResourceLease(input.lease, options)
+  } catch {
+    throw new Error('invalid_coordination_resource_lease_transition')
+  }
+  if (
+    !isPositiveVersion(input.expectedVersion) ||
+    input.expectedVersion !== lease.version ||
+    lease.status !== 'active' ||
+    lease.releasedAt !== null ||
+    (input.outcome !== 'released' &&
+      input.outcome !== 'expired' &&
+      input.outcome !== 'cancelled') ||
+    !isCanonicalIso(input.now)
+  ) {
+    throw new Error('invalid_coordination_resource_lease_transition')
+  }
+  const now = Date.parse(input.now)
+  const acquiredAt = Date.parse(lease.acquiredAt)
+  const expiresAt = Date.parse(lease.expiresAt)
+  if (
+    now < acquiredAt ||
+    (input.outcome === 'expired' ? now < expiresAt : now >= expiresAt)
+  ) {
+    throw new Error('invalid_coordination_resource_lease_transition')
+  }
+  try {
+    return parseCoordinationResourceLease({
+      ...lease,
+      status: input.outcome,
+      version: lease.version + 1,
+      releasedAt: input.now,
+    }, options)
+  } catch {
+    throw new Error('invalid_coordination_resource_lease_transition')
+  }
 }
 
 function isCoordinationTaskFailure(

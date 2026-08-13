@@ -376,6 +376,84 @@ async function specialistToolFixture(input: {
   return { ...fixture, started, waiting: waiting.runtime, lease, grant, audit }
 }
 
+async function specialistLeaseCompletionFixture() {
+  const fixture = await specialistToolFixture({ withLease: true })
+  await expect(fixture.store.beginAgentRuntimeToolExecution({
+    expectedGrant: fixture.grant,
+    audit: fixture.audit,
+  })).resolves.toEqual({ consumed: true })
+  const terminal = acceptAgentActionResult({
+    runtime: fixture.waiting,
+    expectedCheckpointVersion: fixture.waiting.checkpointVersion,
+    actionId: fixture.waiting.activeAction!.id,
+    requestDigest: fixture.waiting.activeAction!.requestDigest,
+    result: {
+      outcome: 'success',
+      resultDigest: '5'.repeat(64),
+      resultBytes: 128,
+      tokens: 200,
+      costUsd: 0.1,
+      evaluation: 'success',
+      evaluationSummary: 'The leased repository read completed with bounded evidence.',
+    },
+    now: '2026-08-13T15:00:05.000Z',
+  })
+  const coordinator = createSpecialistRuntimeCoordinator({
+    store: fixture.store,
+    authorityBroker: createSpecialistTaskAuthorityBroker({ store: fixture.store }),
+  })
+  const completionInput: Parameters<typeof coordinator.complete>[0] = {
+    coordinationId: fixture.coordination.id,
+    expectedSessionVersion: fixture.started.coordination.version,
+    taskId: 'specialist-task-1',
+    expectedTaskVersion: 2,
+    expectedRuntimeVersion: fixture.waiting.version,
+    transition: terminal,
+    evidenceDigests: [],
+    resourceLeaseOutcome: 'released',
+    handoffs: [],
+  }
+  return { ...fixture, coordinator, terminal, completionInput }
+}
+
+async function specialistLeaseRecoveryFixture() {
+  const fixture = await specialistToolFixture({ withLease: true })
+  await expect(fixture.store.beginAgentRuntimeToolExecution({
+    expectedGrant: fixture.grant,
+    audit: fixture.audit,
+  })).resolves.toEqual({ consumed: true })
+  const terminal = acceptAgentActionResult({
+    runtime: fixture.waiting,
+    expectedCheckpointVersion: fixture.waiting.checkpointVersion,
+    actionId: fixture.waiting.activeAction!.id,
+    requestDigest: fixture.waiting.activeAction!.requestDigest,
+    result: {
+      outcome: 'failure',
+      resultDigest: '6'.repeat(64),
+      resultBytes: 128,
+      tokens: 100,
+      costUsd: 0.05,
+      evaluation: 'failure',
+      evaluationSummary: 'The idempotent leased repository read failed before producing a result.',
+    },
+    now: '2026-08-13T15:00:05.000Z',
+  })
+  const coordinator = createSpecialistRuntimeCoordinator({
+    store: fixture.store,
+    authorityBroker: createSpecialistTaskAuthorityBroker({ store: fixture.store }),
+  })
+  const recoveryInput: Parameters<typeof coordinator.recover>[0] = {
+    recoveryId: 'specialist-lease-recovery-1',
+    coordinationId: fixture.coordination.id,
+    expectedSessionVersion: fixture.started.coordination.version,
+    taskId: 'specialist-task-1',
+    expectedTaskVersion: 2,
+    expectedRuntimeVersion: fixture.waiting.version,
+    transition: terminal,
+  }
+  return { ...fixture, coordinator, terminal, recoveryInput }
+}
+
 describe('Specialist task authority broker', () => {
   it('derives one opaque main-owned authority and rechecks it before child creation', async () => {
     const fixture = await authorityFixture()
@@ -612,6 +690,10 @@ describe('Specialist Runtime coordinator', () => {
       expectedGrant: fixture.grant,
       audit: fixture.audit,
     })).resolves.toEqual({ consumed: true })
+    await expect(fixture.store.reserveAgentRuntimeCapabilityGrant({
+      ...fixture.grant,
+      id: 'specialist-tool-grant-duplicate-action',
+    })).resolves.toEqual({ reserved: false, reason: 'grant_exists' })
     await expect(fixture.store.listAgentRuntimeCapabilityGrants(fixture.waiting.id))
       .resolves.toEqual([{
         ...fixture.grant,
@@ -675,6 +757,83 @@ describe('Specialist Runtime coordinator', () => {
       .resolves.toEqual([fixture.grant])
     await expect(fixture.store.listAgentRuntimeToolAudits(fixture.waiting.id))
       .resolves.toEqual([])
+    fixture.store.close()
+  })
+
+  it('refuses to commit a Specialist result while its resource lease remains active', async () => {
+    const fixture = await specialistLeaseCompletionFixture()
+
+    await expect(fixture.coordinator.complete(fixture.completionInput))
+      .rejects.toThrowError('specialist_runtime_completion_failed')
+    await expect(fixture.store.getAgentRuntime(fixture.waiting.id))
+      .resolves.toEqual(fixture.waiting)
+    await expect(fixture.store.getCoordinationSession(fixture.coordination.id))
+      .resolves.toMatchObject({ state: fixture.started.coordination })
+    fixture.store.close()
+  })
+
+  it('commits a Specialist result only after its exact lease is durably released', async () => {
+    const fixture = await specialistLeaseCompletionFixture()
+    await expect(fixture.store.settleCoordinationResourceLease({
+      expectedState: fixture.started.coordination,
+      expectedLease: fixture.lease!,
+      outcome: 'released',
+      now: '2026-08-13T15:00:04.500Z',
+    })).resolves.toMatchObject({
+      committed: true,
+      replayed: false,
+      lease: { status: 'released', version: 2 },
+    })
+
+    const completed = await fixture.coordinator.complete(fixture.completionInput)
+    expect(completed).toMatchObject({
+      runtime: fixture.terminal.runtime,
+      coordination: {
+        status: 'terminal',
+        tasks: [{ status: 'succeeded' }],
+      },
+    })
+    await expect(fixture.coordinator.complete(fixture.completionInput)).resolves.toEqual(completed)
+    fixture.store.close()
+  })
+
+  it('refuses to replace a failed Specialist while its resource lease remains active', async () => {
+    const fixture = await specialistLeaseRecoveryFixture()
+
+    await expect(fixture.coordinator.recover(fixture.recoveryInput))
+      .rejects.toThrowError('specialist_runtime_recovery_failed')
+    await expect(fixture.store.getAgentRuntime(fixture.waiting.id))
+      .resolves.toEqual(fixture.waiting)
+    await expect(fixture.store.getCoordinationSession(fixture.coordination.id))
+      .resolves.toMatchObject({ state: fixture.started.coordination })
+    fixture.store.close()
+  })
+
+  it('replaces one failed read-only Specialist after its exact lease is released', async () => {
+    const fixture = await specialistLeaseRecoveryFixture()
+    await expect(fixture.store.settleCoordinationResourceLease({
+      expectedState: fixture.started.coordination,
+      expectedLease: fixture.lease!,
+      outcome: 'released',
+      now: '2026-08-13T15:00:04.500Z',
+    })).resolves.toMatchObject({ committed: true, replayed: false })
+
+    await expect(fixture.coordinator.recover(fixture.recoveryInput)).resolves.toMatchObject({
+      failedRuntime: fixture.terminal.runtime,
+      runtime: {
+        status: 'checkpointed',
+        bounds: {
+          maxSteps: 1,
+          maxToolCalls: 1,
+          maxTokens: 4_900,
+          maxCostUsd: 0.45,
+        },
+      },
+      coordination: {
+        status: 'running',
+        counters: { retries: 1, activeSpecialists: 1 },
+      },
+    })
     fixture.store.close()
   })
 
@@ -1208,7 +1367,7 @@ describe('Specialist Runtime coordinator', () => {
       action: {
         id: 'specialist-action-recovery-1',
         kind: 'tool',
-        capabilityId: 'repository_read',
+        capabilityId: 'repo.read_text',
         capabilityVersion: 1,
         requestDigest: '9'.repeat(64),
         requiresPermission: false,
@@ -1218,6 +1377,36 @@ describe('Specialist Runtime coordinator', () => {
       expectedRuntime: resumed.runtime,
       transition: waiting,
     })
+    const lease: CoordinationResourceLease = {
+      stateVersion: 1,
+      id: 'specialist-resource-lease-recovery-1',
+      coordinationId: fixture.coordination.id,
+      taskId: 'specialist-task-1',
+      taskVersion: 2,
+      runtimeId: waiting.runtime.id,
+      runtimeVersion: 1,
+      scope: fixture.coordination.scope,
+      capabilityId: 'repository_read',
+      capabilityVersion: 1,
+      resourceId: fixture.project.id,
+      resourceDigest: 'd'.repeat(64),
+      mode: 'read',
+      status: 'active',
+      version: 1,
+      acquiredAt: '2026-08-13T15:00:02.000Z',
+      expiresAt: '2026-08-13T15:01:02.000Z',
+      releasedAt: null,
+    }
+    await expect(fixture.store.acquireCoordinationResourceLease({
+      expectedState: started.coordination,
+      lease,
+    })).resolves.toMatchObject({ committed: true, replayed: false })
+    await expect(fixture.store.settleCoordinationResourceLease({
+      expectedState: started.coordination,
+      expectedLease: lease,
+      outcome: 'released',
+      now: '2026-08-13T15:00:02.500Z',
+    })).resolves.toMatchObject({ committed: true, replayed: false })
     const terminal = acceptAgentActionResult({
       runtime: waiting.runtime,
       expectedCheckpointVersion: waiting.runtime.checkpointVersion,
@@ -1329,7 +1518,7 @@ describe('Specialist Runtime coordinator', () => {
       action: {
         id: 'specialist-action-recovery-2',
         kind: 'tool',
-        capabilityId: 'repository_read',
+        capabilityId: 'repo.read_text',
         capabilityVersion: 1,
         requestDigest: 'b'.repeat(64),
         requiresPermission: false,
@@ -1339,6 +1528,24 @@ describe('Specialist Runtime coordinator', () => {
       expectedRuntime: retryResumed.runtime,
       transition: retryWaiting,
     })
+    const retryLease: CoordinationResourceLease = {
+      ...lease,
+      id: 'specialist-resource-lease-recovery-2',
+      taskVersion: 3,
+      runtimeId: retryWaiting.runtime.id,
+      acquiredAt: '2026-08-13T15:00:05.000Z',
+      expiresAt: '2026-08-13T15:01:05.000Z',
+    }
+    await expect(reopenedStore.acquireCoordinationResourceLease({
+      expectedState: recovered.coordination,
+      lease: retryLease,
+    })).resolves.toMatchObject({ committed: true, replayed: false })
+    await expect(reopenedStore.settleCoordinationResourceLease({
+      expectedState: recovered.coordination,
+      expectedLease: retryLease,
+      outcome: 'released',
+      now: '2026-08-13T15:00:05.500Z',
+    })).resolves.toMatchObject({ committed: true, replayed: false })
     const retryTerminal = acceptAgentActionResult({
       runtime: retryWaiting.runtime,
       expectedCheckpointVersion: retryWaiting.runtime.checkpointVersion,

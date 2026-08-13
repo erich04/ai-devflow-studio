@@ -12,6 +12,7 @@ import {
   parseSpecialistAllocationRequest,
   recordCoordinationTaskResult,
   retryCoordinationTask,
+  settleCoordinationResourceLease,
   startCoordinationTask,
   type AgentTaskGraph,
   type AgentHandoff,
@@ -2212,5 +2213,91 @@ describe('Coordination resource lease contract', () => {
       state: runningState(),
       existingLeases: [],
     })).toThrowError('invalid_coordination_resource_lease')
+  })
+
+  it('releases and cancels an active lease through one monotonic version transition', () => {
+    const reader = lease(
+      'lease-reader-a',
+      'lease-task-a',
+      'lease-runtime-a',
+      'repository_read',
+      'read',
+    )
+    expect(settleCoordinationResourceLease({
+      lease: reader,
+      expectedVersion: 1,
+      outcome: 'released',
+      now: '2026-08-13T15:00:30.000Z',
+    }, { coordination: request, graph: leaseGraph })).toEqual({
+      ...reader,
+      status: 'released',
+      version: 2,
+      releasedAt: '2026-08-13T15:00:30.000Z',
+    })
+    expect(settleCoordinationResourceLease({
+      lease: reader,
+      expectedVersion: 1,
+      outcome: 'cancelled',
+      now: '2026-08-13T15:00:30.000Z',
+    }, { coordination: request, graph: leaseGraph })).toEqual({
+      ...reader,
+      status: 'cancelled',
+      version: 2,
+      releasedAt: '2026-08-13T15:00:30.000Z',
+    })
+  })
+
+  it('expires a lease only at the exact durable expiry boundary', () => {
+    const reader = lease(
+      'lease-reader-a',
+      'lease-task-a',
+      'lease-runtime-a',
+      'repository_read',
+      'read',
+    )
+    expect(() => settleCoordinationResourceLease({
+      lease: reader,
+      expectedVersion: 1,
+      outcome: 'expired',
+      now: '2026-08-13T15:01:01.999Z',
+    }, { coordination: request, graph: leaseGraph }))
+      .toThrowError('invalid_coordination_resource_lease_transition')
+    expect(settleCoordinationResourceLease({
+      lease: reader,
+      expectedVersion: 1,
+      outcome: 'expired',
+      now: reader.expiresAt,
+    }, { coordination: request, graph: leaseGraph })).toEqual({
+      ...reader,
+      status: 'expired',
+      version: 2,
+      releasedAt: reader.expiresAt,
+    })
+  })
+
+  it('rejects stale versions, late release, and terminal outcome rewrites', () => {
+    const reader = lease(
+      'lease-reader-a',
+      'lease-task-a',
+      'lease-runtime-a',
+      'repository_read',
+      'read',
+    )
+    const released = {
+      ...reader,
+      status: 'released' as const,
+      version: 2,
+      releasedAt: '2026-08-13T15:00:30.000Z',
+    }
+    for (const candidate of [
+      { lease: reader, expectedVersion: 2, outcome: 'released' as const, now: released.releasedAt },
+      { lease: reader, expectedVersion: 1, outcome: 'released' as const, now: reader.expiresAt },
+      { lease: released, expectedVersion: 2, outcome: 'cancelled' as const, now: released.releasedAt },
+    ]) {
+      expect(() => settleCoordinationResourceLease(candidate, {
+        coordination: request,
+        graph: leaseGraph,
+      })).toThrowError('invalid_coordination_resource_lease_transition')
+    }
   })
 })

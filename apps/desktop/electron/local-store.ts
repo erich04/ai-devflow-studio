@@ -92,6 +92,7 @@ import {
   promoteAgentMemoryCandidate,
   reviseAgentMemoryRevision,
   startCoordinationTask,
+  settleCoordinationResourceLease,
   redactCodingAgentEventForStorage,
   redactSensitiveText,
   redactTestEvidenceForStorage,
@@ -817,6 +818,9 @@ export type LocalStore = {
   acquireCoordinationResourceLease(
     input: AcquireCoordinationResourceLeaseInput,
   ): Promise<AcquireCoordinationResourceLeaseResult>
+  settleCoordinationResourceLease(
+    input: SettleCoordinationResourceLeaseInput,
+  ): Promise<SettleCoordinationResourceLeaseResult>
   commitCoordinationTaskStart(
     input: CommitCoordinationTaskStartInput,
   ): Promise<CommitCoordinationTaskStartResult>
@@ -1063,6 +1067,20 @@ export type AcquireCoordinationResourceLeaseResult =
         | 'conflicting_lease'
         | 'not_found'
         | 'stale_state'
+    }
+
+export type SettleCoordinationResourceLeaseInput = {
+  expectedState: CoordinationSessionState
+  expectedLease: CoordinationResourceLease
+  outcome: Exclude<CoordinationResourceLease['status'], 'active'>
+  now: string
+}
+
+export type SettleCoordinationResourceLeaseResult =
+  | { committed: true; replayed: boolean; lease: CoordinationResourceLease }
+  | {
+      committed: false
+      reason: 'invalid_input' | 'authority_mismatch' | 'not_found' | 'stale_state'
     }
 
 export type CommitCoordinationTaskStartInput = {
@@ -8450,9 +8468,24 @@ class SqlJsLocalStore implements LocalStore {
     }
     if (
       this.db.exec(
-        `select 1 from agent_runtime_capability_grants
-         where id = ? or (runtime_id = ? and capability_id = ? and status = 'active') limit 1`,
-        [grant.id, grant.runtimeId, grant.capabilityId],
+        `select 1
+         from agent_runtime_capability_grants grants
+         left join agent_runtime_tool_audits audits
+           on audits.grant_id = grants.id and audits.status = 'started'
+         where grants.id = ? or (
+           grants.runtime_id = ? and grants.capability_id = ? and (
+             grants.status = 'active' or (
+               grants.request_digest = ? and audits.action_id = ?
+             )
+           )
+         ) limit 1`,
+        [
+          grant.id,
+          grant.runtimeId,
+          grant.capabilityId,
+          grant.requestDigest,
+          runtime.activeAction.id,
+        ],
       )[0]
     ) {
       return { reserved: false, reason: 'grant_exists' }
@@ -8971,6 +9004,110 @@ class SqlJsLocalStore implements LocalStore {
     }
     await this.persist()
     return { committed: true, replayed: false, lease }
+  }
+
+  async settleCoordinationResourceLease(
+    input: SettleCoordinationResourceLeaseInput,
+  ): Promise<SettleCoordinationResourceLeaseResult> {
+    let expectedState: CoordinationSessionState
+    try {
+      expectedState = parseCoordinationSessionState(input.expectedState)
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    const stored = selectCoordinationRecoverySnapshot(this.db, expectedState.id)
+    if (stored === null) return { committed: false, reason: 'not_found' }
+    let expectedLease: CoordinationResourceLease
+    let nextLease: CoordinationResourceLease
+    try {
+      expectedLease = parseCoordinationResourceLease(input.expectedLease, {
+        coordination: stored.coordination,
+        graph: stored.graph,
+      })
+      nextLease = settleCoordinationResourceLease({
+        lease: expectedLease,
+        expectedVersion: expectedLease.version,
+        outcome: input.outcome,
+        now: input.now,
+      }, {
+        coordination: stored.coordination,
+        graph: stored.graph,
+      })
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    if (!sameJson(stored.state, expectedState)) {
+      return { committed: false, reason: 'stale_state' }
+    }
+    const durableLease = stored.leases.find((lease) => lease.id === expectedLease.id)
+    if (sameJson(durableLease, nextLease)) {
+      return { committed: true, replayed: true, lease: nextLease }
+    }
+    if (!sameJson(durableLease, expectedLease)) {
+      return { committed: false, reason: 'stale_state' }
+    }
+    if (!await this.isCoordinationSupervisorAuthorityCurrent(stored.coordination)) {
+      return { committed: false, reason: 'authority_mismatch' }
+    }
+    const current = selectCoordinationRecoverySnapshot(this.db, expectedState.id)
+    if (
+      current === null ||
+      !sameJson(current.coordination, stored.coordination) ||
+      !sameJson(current.graph, stored.graph) ||
+      !sameJson(current.state, stored.state) ||
+      !sameJson(current.leases, stored.leases)
+    ) return { committed: false, reason: 'stale_state' }
+
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      this.db.run(
+        `update agent_coordination_leases
+         set status = ?, version = ?, lease_json = ?, released_at = ?
+         where id = ? and coordination_id = ? and task_id = ?
+           and resource_id = ? and resource_digest = ? and mode = ?
+           and status = 'active' and version = ? and lease_json = ?
+           and released_at is null`,
+        [
+          nextLease.status,
+          nextLease.version,
+          JSON.stringify(nextLease),
+          nextLease.releasedAt,
+          expectedLease.id,
+          expectedLease.coordinationId,
+          expectedLease.taskId,
+          expectedLease.resourceId,
+          expectedLease.resourceDigest,
+          expectedLease.mode,
+          expectedLease.version,
+          JSON.stringify(expectedLease),
+        ],
+      )
+      if (this.db.getRowsModified() !== 1) throw new Error('stale_coordination_lease')
+      assertCoordinationMetadataBound(this.db, expectedState.id)
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return { committed: true, replayed: false, lease: nextLease }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      if (error instanceof Error && error.message === 'stale_coordination_lease') {
+        return { committed: false, reason: 'stale_state' }
+      }
+      if (error instanceof Error && error.message === 'coordination_metadata_too_large') {
+        return { committed: false, reason: 'invalid_input' }
+      }
+      throw error
+    }
   }
 
   async createCoordinationSession(
@@ -9593,7 +9730,17 @@ class SqlJsLocalStore implements LocalStore {
     const graphTask = stored.graph.nodes.find((task) => task.id === input.taskId)
     const currentRuntime = selectAgentRuntime(this.db, transition.runtime.id)
     const outgoingEdges = stored.graph.edges.filter((edge) => edge.sourceTaskId === input.taskId)
+    const runtimeLeases = stored.leases.filter((lease) =>
+      lease.taskId === input.taskId && lease.runtimeId === transition.runtime.id
+    )
+    const allRuntimeLeasesReleased = runtimeLeases.length > 0 &&
+      runtimeLeases.every((lease) => lease.status === 'released')
     if (
+      runtimeLeases.some((lease) => lease.status === 'active') ||
+      (successfulCompletion && (
+        input.resourceLeaseOutcome !== (runtimeLeases.length === 0 ? 'not_required' : 'released') ||
+        (runtimeLeases.length > 0 && !allRuntimeLeasesReleased)
+      )) ||
       (successfulCompletion
         ? input.handoffs.length !== outgoingEdges.length
         : input.handoffs.length !== 0 || input.evidenceDigests.length !== 0) ||
@@ -10066,10 +10213,17 @@ class SqlJsLocalStore implements LocalStore {
     const storedTask = stored.state.tasks.find((task) => task.id === input.taskId)
     const graphTask = stored.graph.nodes.find((task) => task.id === input.taskId)
     const failedRuntime = selectAgentRuntime(this.db, failureTransition.runtime.id)
+    const failedRuntimeLeases = stored.leases.filter((lease) =>
+      lease.taskId === input.taskId && lease.runtimeId === failureTransition.runtime.id
+    )
     const replacementRuntime = selectAgentRuntime(this.db, replacementTransition.runtime.id)
     const storedReplacementContext = replacementRuntime === null
       ? null
       : await selectAgentRuntimeContextAttachment(this.db, replacementRuntime.id)
+    if (
+      failedRuntimeLeases.length === 0 ||
+      failedRuntimeLeases.some((lease) => lease.status !== 'released')
+    ) return { committed: false, reason: 'invalid_input' }
     if (
       storedTask !== undefined &&
       graphTask !== undefined &&
@@ -10170,10 +10324,18 @@ class SqlJsLocalStore implements LocalStore {
       maxTokens: failedRuntime.bounds.maxTokens - failureTransition.runtime.counters.tokens,
       maxCostUsd: failedRuntime.bounds.maxCostUsd - failureTransition.runtime.counters.costUsd,
     }
+    let failedToolLeaseCapabilityId: string
+    try {
+      failedToolLeaseCapabilityId = resolveSpecialistToolLeasePolicy(
+        failedRuntime.activeAction?.capabilityId,
+      ).capabilityId
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
     if (
       descriptor.resourceMode !== 'read' ||
       failedRuntime.activeAction?.kind !== 'tool' ||
-      failedRuntime.activeAction.capabilityId !== 'repository_read' ||
+      failedToolLeaseCapabilityId !== 'repository_read' ||
       failure?.category !== 'tool_error' ||
       stored.state.counters.activeSpecialists !== 1 ||
       !sameJson(failedRuntime.scope, expectedRuntimeScope) ||
@@ -15149,6 +15311,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'commitSpecialistRuntimeCompletion',
   'commitSpecialistRuntimeRecovery',
   'acquireCoordinationResourceLease',
+  'settleCoordinationResourceLease',
   'commitCoordinationTaskStart',
   'commitCoordinationTaskResult',
   'commitCoordinationHandoff',

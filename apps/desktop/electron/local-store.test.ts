@@ -24,6 +24,7 @@ import {
   recordCoordinationTaskResult,
   resumeAgentRuntime,
   resolveEffectivePolicy,
+  settleCoordinationResourceLease,
   startCoordinationTask,
 } from '@ai-devflow/shared'
 import type {
@@ -3557,6 +3558,70 @@ describe('createLocalStore', () => {
     rejected.close()
   })
 
+  it('CAS-settles one resource lease monotonically and replays only the exact outcome', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const startedState = await persistRunningResearchCoordination(store)
+    const lease: CoordinationResourceLease = {
+      stateVersion: 1,
+      id: 'coordination-lease-settlement-1',
+      coordinationId: coordinationSessionRequest.id,
+      taskId: acceptedResearchResult.taskId,
+      taskVersion: 2,
+      runtimeId: acceptedResearchResult.runtimeId,
+      runtimeVersion: acceptedResearchResult.runtimeVersion,
+      scope: coordinationSessionRequest.scope,
+      capabilityId: 'repository_read',
+      capabilityVersion: 1,
+      resourceId: 'repository-source',
+      resourceDigest: 'd'.repeat(64),
+      mode: 'read',
+      status: 'active',
+      version: 1,
+      acquiredAt: '2026-08-12T20:30:02.000Z',
+      expiresAt: '2026-08-12T20:30:30.000Z',
+      releasedAt: null,
+    }
+    await store.acquireCoordinationResourceLease({ expectedState: startedState, lease })
+    const expectedLease = settleCoordinationResourceLease({
+      lease,
+      expectedVersion: lease.version,
+      outcome: 'released',
+      now: '2026-08-12T20:30:03.000Z',
+    }, { coordination: coordinationSessionRequest, graph: coordinationTaskGraph })
+    const input = {
+      expectedState: startedState,
+      expectedLease: lease,
+      outcome: 'released' as const,
+      now: expectedLease.releasedAt!,
+    }
+
+    await expect(store.settleCoordinationResourceLease(input)).resolves.toEqual({
+      committed: true,
+      replayed: false,
+      lease: expectedLease,
+    })
+    await expect(store.settleCoordinationResourceLease(input)).resolves.toEqual({
+      committed: true,
+      replayed: true,
+      lease: expectedLease,
+    })
+    await expect(store.settleCoordinationResourceLease({
+      ...input,
+      outcome: 'cancelled',
+    })).resolves.toEqual({ committed: false, reason: 'stale_state' })
+    await expect(store.getCoordinationRecoverySnapshot(
+      coordinationSessionRequest.id,
+    )).resolves.toMatchObject({ leases: [expectedLease] })
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getCoordinationRecoverySnapshot(
+      coordinationSessionRequest.id,
+    )).resolves.toMatchObject({ leases: [expectedLease] })
+    reopened.close()
+  })
+
   it('persists concurrent readers and rejects one competing writer without a lease row', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
@@ -3824,6 +3889,55 @@ describe('createLocalStore', () => {
     await expect(reopened.getCoordinationRecoverySnapshot(
       coordinationSessionRequest.id,
     )).resolves.toMatchObject({ leases: [] })
+    reopened.close()
+  })
+
+  it('restores an active lease when durable lease settlement persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const backupPath = `${dbPath}.backup`
+    const store = await createLocalStore({ dbPath })
+    const startedState = await persistRunningResearchCoordination(store)
+    const lease: CoordinationResourceLease = {
+      stateVersion: 1,
+      id: 'coordination-lease-settlement-persistence-failure',
+      coordinationId: coordinationSessionRequest.id,
+      taskId: acceptedResearchResult.taskId,
+      taskVersion: 2,
+      runtimeId: acceptedResearchResult.runtimeId,
+      runtimeVersion: acceptedResearchResult.runtimeVersion,
+      scope: coordinationSessionRequest.scope,
+      capabilityId: 'repository_read',
+      capabilityVersion: 1,
+      resourceId: 'repository-source',
+      resourceDigest: 'd'.repeat(64),
+      mode: 'read',
+      status: 'active',
+      version: 1,
+      acquiredAt: '2026-08-12T20:30:02.000Z',
+      expiresAt: '2026-08-12T20:30:30.000Z',
+      releasedAt: null,
+    }
+    await store.acquireCoordinationResourceLease({ expectedState: startedState, lease })
+
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+    await expect(store.settleCoordinationResourceLease({
+      expectedState: startedState,
+      expectedLease: lease,
+      outcome: 'released',
+      now: '2026-08-12T20:30:03.000Z',
+    })).rejects.toThrow(persistenceFailurePattern)
+    await expect(store.getCoordinationRecoverySnapshot(
+      coordinationSessionRequest.id,
+    )).resolves.toMatchObject({ leases: [lease] })
+    await rm(dbPath, { recursive: true })
+    await rename(backupPath, dbPath)
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getCoordinationRecoverySnapshot(
+      coordinationSessionRequest.id,
+    )).resolves.toMatchObject({ leases: [lease] })
     reopened.close()
   })
 
