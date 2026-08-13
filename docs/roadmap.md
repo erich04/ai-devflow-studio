@@ -138,11 +138,11 @@ gate and continues through the accepted contract and executable slice plan:
   outbox sync, Team schema 16 monotonic summaries/audit, and a read-only Web manager projection.
 - Slice 7 passed its retained migration, real Postgres, Docker lifecycle, redaction, packaged
   Desktop, full verification, and production build gates without widening Team authority.
-- Slice 8 now has a frozen 15-scenario no-cost dataset and a strict evaluator contract that binds
-  candidate SHA, dataset SHA, Runtime/Executor/Tool contract versions, executor parity, paid-provider
-  call count, and secret/path/source/output/isolation scans.
-- Complete the executable observation collector, full gate aggregation, exact-SHA CI, artifact
-  integrity, and direct-child evidence-only signoff before marking V2.0 complete.
+- Slice 8 now has a frozen 15-scenario no-cost dataset, a strict evaluator contract, and a
+  clean-candidate executable collector that removes provider credentials, runs every named
+  scenario, discards raw process output, and retains only the bounded record.
+- Complete clean candidate execution, full gate aggregation, exact-SHA CI, artifact integrity, and
+  direct-child evidence-only signoff before marking V2.0 complete.
 
 ### Next — Begin V2.1 Evaluated Retrieval And Memory After V2.0 Completion
 

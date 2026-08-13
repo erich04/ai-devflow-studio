@@ -89,6 +89,7 @@ describe('V2.0 Native Agent Runtime contract', () => {
   it('provides an executable TDD slice plan before product code starts', () => {
     const plan = read('docs/plans/v2.0-native-agent-runtime.md')
     const roadmap = read('docs/roadmap.md')
+    const packageJson = JSON.parse(read('package.json')) as { scripts?: Record<string, string> }
 
     for (const slice of [
       'Slice 0 — Contract Freeze',
@@ -120,6 +121,10 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(plan).toContain('| Slice 8 | In progress |')
     expect(plan).toContain('scripts/fixtures/v2.0-agent-runtime-scenarios.json')
     expect(plan).toContain('scripts/v20-agent-runtime-evaluator.mjs')
+    expect(plan).toContain('scripts/v20-agent-runtime-evaluation-runner.mjs')
+    expect(packageJson.scripts?.['test:v20-agent-runtime-evaluator']).toBe(
+      'node scripts/v20-agent-runtime-evaluation-runner.mjs',
+    )
     expect(plan).toContain('strict main-owned renderer projection')
     expect(plan).toContain('exact version/checkpoint optimistic concurrency')
     expect(plan).toContain('Desktop schema 21')

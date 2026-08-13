@@ -47,7 +47,7 @@
         "metricDimensions": ["quality", "cost", "latency", "human_intervention", "recovery", "isolation"]
       },
       "testFile": "apps/desktop/electron/native-coding-runtime.test.ts",
-      "testName": "completes one approved repair without an unbounded test loop",
+      "testName": "completes one approved repair",
       "defaultNoCost": true
     },
     {
