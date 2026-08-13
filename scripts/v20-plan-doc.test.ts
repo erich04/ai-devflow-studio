@@ -85,7 +85,7 @@ describe('V2.0 Native Agent Runtime contract', () => {
     }
 
     if (hasCompletionEvidence) {
-      expect(roadmap).toContain('### Now — Define V2.1 Evaluated Retrieval And Memory Contracts')
+      expect(roadmap).toContain('### Now — Implement V2.1 Shared Retrieval, Citation, And Evaluation Contracts')
       expect(roadmap).toContain('V2.0 is complete')
     } else {
       expect(roadmap).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
@@ -155,7 +155,7 @@ describe('V2.0 Native Agent Runtime contract', () => {
 
     expect(roadmap).toMatch(/Slice 7\s+is complete/)
     expect(roadmap).toContain(hasCompletionEvidence
-      ? '### Now — Define V2.1 Evaluated Retrieval And Memory Contracts'
+      ? '### Now — Implement V2.1 Shared Retrieval, Citation, And Evaluation Contracts'
       : '### Now — Run The V2.0 Evaluation And Completion Gate')
   })
 

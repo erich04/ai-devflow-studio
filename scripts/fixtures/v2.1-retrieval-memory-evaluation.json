@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 1,
+  "corpusId": "v2.1-evaluated-retrieval-memory",
+  "corpusVersion": 1,
+  "retrievalContractVersion": 1,
+  "memoryContractVersion": 1,
+  "defaultNoCost": true,
+  "metricThresholds": {
+    "topK": 3,
+    "hybridRecallAtKMin": 1,
+    "hybridNdcgAtKMin": 0.8,
+    "hybridMeanReciprocalRankMin": 0.8,
+    "minimumAggregateImprovementOverLexical": 0.1,
+    "citationPrecisionMin": 1,
+    "citationFaithfulnessMin": 1,
+    "maxIsolationViolations": 0,
+    "paidProviderCalls": 0
+  },
+  "documents": [
+    {
+      "documentId": "knowledge-doc-api-health",
+      "organizationId": "org-alpha",
+      "projectId": "project-api",
+      "sourcePath": "docs/knowledge/standards/api-health.md",
+      "chunks": [
+        {
+          "chunkId": "chunk-api-health-contract",
+          "headingPath": ["API Health Contract"],
+          "contentHash": "kh-11111111",
+          "content": "Health responses distinguish ok, degraded dependency, and unavailable service states."
+        },
+        {
+          "chunkId": "chunk-api-health-test",
+          "headingPath": ["Health Test Evidence"],
+          "contentHash": "kh-22222222",
+          "content": "Integration tests must exercise a failed dependency and record degraded status evidence."
+        }
+      ]
+    },
+    {
+      "documentId": "knowledge-doc-delivery-safety",
+      "organizationId": "org-alpha",
+      "projectId": "project-api",
+      "sourcePath": "docs/knowledge/checklists/delivery-safety.md",
+      "chunks": [
+        {
+          "chunkId": "chunk-delivery-non-force",
+          "headingPath": ["Branch Publication"],
+          "contentHash": "kh-33333333",
+          "content": "Publication must use the expected commit and a non-force branch push after approval."
+        }
+      ]
+    },
+    {
+      "documentId": "knowledge-doc-foreign-private",
+      "organizationId": "org-foreign",
+      "projectId": "project-foreign",
+      "sourcePath": "docs/knowledge/private/foreign.md",
+      "chunks": [
+        {
+          "chunkId": "chunk-foreign-secret",
+          "headingPath": ["Foreign Tenant Only"],
+          "contentHash": "kh-44444444",
+          "content": "This semantically similar health policy belongs only to another tenant."
+        }
+      ]
+    }
+  ],
+  "memoryFixtures": [
+    {
+      "id": "memory-health-regression-test-v1",
+      "organizationId": "org-alpha",
+      "projectId": "project-api",
+      "userId": "user-a",
+      "visibility": "user_project",
+      "revision": 1,
+      "status": "active",
+      "content": "The saved degraded-dependency test is the required regression check for health changes.",
+      "contentHash": "mh-11111111",
+      "provenanceDigest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "expiresAt": null
+    },
+    {
+      "id": "memory-conflict-v1",
+      "organizationId": "org-alpha",
+      "projectId": "project-api",
+      "userId": "user-a",
+      "visibility": "user_project",
+      "revision": 1,
+      "status": "conflict",
+      "content": "The dependency regression command uses the legacy health script.",
+      "contentHash": "mh-22222222",
+      "provenanceDigest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "expiresAt": null
+    },
+    {
+      "id": "memory-conflict-v2",
+      "organizationId": "org-alpha",
+      "projectId": "project-api",
+      "userId": "user-a",
+      "visibility": "user_project",
+      "revision": 2,
+      "status": "conflict",
+      "content": "The dependency regression command uses the current integration test.",
+      "contentHash": "mh-33333333",
+      "provenanceDigest": "3333333333333333333333333333333333333333333333333333333333333333",
+      "expiresAt": null
+    },
+    {
+      "id": "memory-expired-v1",
+      "organizationId": "org-alpha",
+      "projectId": "project-api",
+      "userId": "user-a",
+      "visibility": "user_project",
+      "revision": 1,
+      "status": "expired",
+      "contentHash": "mh-44444444",
+      "provenanceDigest": "4444444444444444444444444444444444444444444444444444444444444444",
+      "expiresAt": "2026-08-12T00:00:00.000Z"
+    },
+    {
+      "id": "memory-deleted-tombstone-v2",
+      "organizationId": "org-alpha",
+      "projectId": "project-api",
+      "userId": "user-a",
+      "visibility": "user_project",
+      "revision": 2,
+      "status": "deleted",
+      "contentHash": "mh-55555555",
+      "provenanceDigest": "5555555555555555555555555555555555555555555555555555555555555555",
+      "expiresAt": null
+    },
+    {
+      "id": "memory-foreign-v1",
+      "organizationId": "org-foreign",
+      "projectId": "project-foreign",
+      "userId": "user-foreign",
+      "visibility": "user_project",
+      "revision": 1,
+      "status": "active",
+      "content": "Foreign tenant deployment memory must never be visible to org-alpha.",
+      "contentHash": "mh-66666666",
+      "provenanceDigest": "6666666666666666666666666666666666666666666666666666666666666666",
+      "expiresAt": null
+    }
+  ],
+  "cases": [
+    {
+      "id": "lexical-health-baseline",
+      "category": "retrieval_baseline",
+      "scope": {"organizationId": "org-alpha", "projectId": "project-api", "userId": "user-a", "sessionId": "session-a"},
+      "query": "health degraded dependency test",
+      "relevantChunkIds": ["chunk-api-health-contract", "chunk-api-health-test"],
+      "forbiddenChunkIds": ["chunk-foreign-secret"],
+      "topK": 3
+    },
+    {
+      "id": "semantic-outage-recall",
+      "category": "hybrid_improvement",
+      "scope": {"organizationId": "org-alpha", "projectId": "project-api", "userId": "user-a", "sessionId": "session-a"},
+      "query": "what proof is needed when an upstream service stops responding",
+      "relevantChunkIds": ["chunk-api-health-test"],
+      "forbiddenChunkIds": ["chunk-foreign-secret"],
+      "topK": 3
+    },
+    {
+      "id": "citation-current-hash",
+      "category": "citation",
+      "scope": {"organizationId": "org-alpha", "projectId": "project-api", "userId": "user-a", "sessionId": "session-a"},
+      "query": "may branch publication force push",
+      "relevantChunkIds": ["chunk-delivery-non-force"],
+      "forbiddenChunkIds": [],
+      "topK": 2,
+      "requiredCitationContentHashes": ["kh-33333333"]
+    },
+    {
+      "id": "citation-stale-hash-rejected",
+      "category": "citation_staleness",
+      "scope": {"organizationId": "org-alpha", "projectId": "project-api", "userId": "user-a", "sessionId": "session-a"},
+      "query": "branch publication evidence",
+      "relevantChunkIds": [],
+      "forbiddenChunkIds": ["chunk-delivery-non-force"],
+      "topK": 2,
+      "staleContentHashes": ["kh-deadbeef"]
+    },
+    {
+      "id": "cross-tenant-retrieval-isolation",
+      "category": "tenant_isolation",
+      "scope": {"organizationId": "org-alpha", "projectId": "project-api", "userId": "user-a", "sessionId": "session-a"},
+      "query": "semantically similar health policy",
+      "relevantChunkIds": [],
+      "forbiddenChunkIds": ["chunk-foreign-secret"],
+      "topK": 5
+    },
+    {
+      "id": "project-memory-improves-repair",
+      "category": "memory_quality",
+      "scope": {"organizationId": "org-alpha", "projectId": "project-api", "userId": "user-a", "sessionId": "session-b"},
+      "query": "which saved test previously exposed the degraded dependency bug",
+      "relevantChunkIds": ["chunk-api-health-test"],
+      "forbiddenChunkIds": [],
+      "topK": 3,
+      "memoryFixtureIds": ["memory-health-regression-test-v1"]
+    },
+    {
+      "id": "stale-memory-revision-conflict",
+      "category": "memory_conflict",
+      "scope": {"organizationId": "org-alpha", "projectId": "project-api", "userId": "user-a", "sessionId": "session-b"},
+      "query": "current dependency test command",
+      "relevantChunkIds": [],
+      "forbiddenChunkIds": [],
+      "topK": 3,
+      "memoryFixtureIds": ["memory-conflict-v1", "memory-conflict-v2"]
+    },
+    {
+      "id": "deleted-memory-never-returns",
+      "category": "memory_deletion",
+      "scope": {"organizationId": "org-alpha", "projectId": "project-api", "userId": "user-a", "sessionId": "session-c"},
+      "query": "deleted deployment note",
+      "relevantChunkIds": [],
+      "forbiddenChunkIds": [],
+      "topK": 3,
+      "memoryFixtureIds": ["memory-deleted-tombstone-v2"],
+      "expectedMemoryIds": []
+    },
+    {
+      "id": "expired-memory-never-returns",
+      "category": "memory_expiry",
+      "scope": {"organizationId": "org-alpha", "projectId": "project-api", "userId": "user-a", "sessionId": "session-c"},
+      "query": "expired deployment note",
+      "relevantChunkIds": [],
+      "forbiddenChunkIds": [],
+      "topK": 3,
+      "memoryFixtureIds": ["memory-expired-v1"],
+      "expectedMemoryIds": []
+    },
+    {
+      "id": "cross-scope-memory-never-returns",
+      "category": "memory_isolation",
+      "scope": {"organizationId": "org-alpha", "projectId": "project-api", "userId": "user-a", "sessionId": "session-c"},
+      "query": "foreign tenant deployment memory",
+      "relevantChunkIds": [],
+      "forbiddenChunkIds": [],
+      "topK": 3,
+      "memoryFixtureIds": ["memory-foreign-v1"],
+      "expectedMemoryIds": []
+    }
+  ]
+}

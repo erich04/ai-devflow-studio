@@ -90,8 +90,8 @@ contains the signoff-bound release artifacts.
 | Active version line | 2.x DevFlow-native Agent Runtime |
 | Completed 2.x milestone | V2.0 Native Agent Runtime Foundation |
 | V2.0 evidence | `docs/releases/v2.0.0/` |
-| Active milestone | V2.1 Evaluated Retrieval And Memory contract freeze |
-| Next gate | Approve the V2.1 PRD, ADRs, versioned corpus, and executable TDD slice plan before product code |
+| Active milestone | V2.1 Slice 1 — shared retrieval, citation, and evaluation contracts |
+| Next gate | Complete the pure shared Slice 1 contracts and frozen-corpus parser before persistence or provider I/O |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -99,30 +99,41 @@ restart with zero repeated remote effects, Acceptance, and a versioned credentia
 V2.0 is complete. Candidate `dfc74831552a0e8910529420c6383b6474e8a12c` passed the frozen
 15-scenario evaluator, native/OpenCode parity, zero-leak scans, exact-SHA first-attempt Verify across
 five jobs, real Postgres, Docker lifecycle, Windows, macOS, Electron, packaged Desktop, and exclusive
-artifact integrity gates. Its immutable records are under `docs/releases/v2.0.0/`. V2.1 contract
-freeze is now the only active product priority.
+artifact integrity gates. Its immutable records are under `docs/releases/v2.0.0/`. The V2.1 contract
+set is frozen, and Slice 1 is now the only active product priority.
 
 ## Now / Next / Later
 
-### Now — Define V2.1 Evaluated Retrieval And Memory Contracts
+### Now — Implement V2.1 Shared Retrieval, Citation, And Evaluation Contracts
 
 V1.5 and the finite 1.x line are released and complete. V2.0 is complete with immutable evaluator
-and gate evidence. Before V2.1 product code, freeze one scoped PRD, the required retrieval/Memory
-authority ADRs, stable domain language, a versioned evaluation corpus, and an executable TDD plan.
+and gate evidence. The V2.1 contract set is frozen; Slice 1 now adds pure shared contracts and a
+strict corpus parser without persistence, provider calls, renderer authority, or external I/O.
 
-- Preserve the lexical retrieval baseline and ADR 0007 rule that retrieval is not Governance
-  Evidence.
-- Define hybrid retrieval, reranking, citation, Memory scope, conflict/version, retention, expiry,
-  promotion, deletion, audit, and tenant isolation before persistence or provider integration.
-- Make benchmark improvement, citation faithfulness, privacy, deletion, and cross-tenant negative
-  paths executable completion criteria rather than treating a vector store as completion.
+- Parse one exact organization/project/user/session-scoped retrieval request with bounded TopK and
+  reject unknown, malformed, stale, or scope-incomplete input.
+- Validate finite lexical/vector candidates and exact Knowledge Citation identities before later
+  hybrid ranking work.
+- Parse the frozen corpus and compute the deterministic lexical baseline before adding persistence
+  or selecting a provider/storage implementation.
 
-### Next — Implement V2.1 In Ordered TDD Slices
+The V2.1 contract set is frozen in:
 
-- Implement only after the V2.1 contract set is accepted and the Roadmap points to its exact plan.
-- Keep default CI deterministic and no-cost; any provider-backed embedding or reranking evidence is
-  explicit, bounded, and separate.
-- Complete V2.1 candidate-bound evaluation before starting V2.2 coordination.
+- `docs/product/prd/v2.1-evaluated-retrieval-memory-prd.md`
+- `docs/adr/0017-evaluated-hybrid-retrieval-and-citation.md`
+- `docs/adr/0018-scoped-agent-memory-lifecycle.md`
+- `docs/plans/v2.1-evaluated-retrieval-memory.md`
+- `scripts/fixtures/v2.1-retrieval-memory-evaluation.json`
+
+V2.1 product code begins with Slice 1: shared versioned retrieval, citation, and evaluation
+contracts. Storage/provider choices remain behind that behavior-first gate.
+
+### Next — Implement V2.1 Deterministic Hybrid Retrieval
+
+- Merge lexical and deterministic fixture-vector candidates with stable tie-breaking.
+- Rerank only the exact admitted scope and reject foreign/stale candidates before scoring.
+- Prove measurable frozen-corpus improvement with no citation or isolation regression before local
+  index persistence begins.
 
 ### Later — V2.2 Multi-Agent And Execution Tenancy
 

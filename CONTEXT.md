@@ -195,6 +195,44 @@ decision. Retrieval recommends references; it does not decide whether a standard
 
 A scored retrieval result that explains which Knowledge Chunk matched a workflow context and why.
 
+## Knowledge Citation
+
+The exact, inspectable link from an Agent answer or observation to one current Knowledge Chunk. It
+binds document, chunk, source-relative path, heading, content hash, Knowledge snapshot, retrieval
+strategy, and rank provenance. A citation is Context and does not become Governance Evidence by
+itself.
+
+## Retrieval Evaluation Corpus
+
+A versioned, reviewable set of synthetic Knowledge, scoped queries, relevant and forbidden chunk
+identities, citation expectations, Memory fixtures, and metric thresholds. It compares the lexical
+baseline with a candidate retriever deterministically and records retrieval quality, citation
+faithfulness, latency, and isolation without paid provider calls by default.
+
+## Memory Candidate
+
+An inert, bounded statement proposed from an accepted observable Agent result. It has exact scope
+and provenance but cannot be retrieved as durable Memory until main-owned policy and actor authority
+promote it.
+
+## Durable Agent Memory
+
+A promoted, immutable, scoped Memory revision that may be recalled across later Agent sessions. It
+records visibility, provenance digest, retention, expiry, sensitivity, and audit metadata. Agent Memory is not Workflow State,
+an Agent Checkpoint, repository Knowledge, hidden reasoning, or Governance Evidence.
+
+## Memory Revision
+
+One immutable version of Durable Agent Memory. An update requires the exact current revision and
+creates a new revision linked by `supersedes`; conflicting revisions remain explicit instead of using
+silent last-write-wins. For Memory visibility, scope is an intersection, never a fallback.
+
+## Memory Tombstone
+
+The monotonic deletion record for one Durable Agent Memory identity. It excludes every revision from
+retrieval, drives purge of derived index entries, survives restart and stale sync replay, and cannot
+be reversed into live Memory by an older record.
+
 ## Knowledge Reference
 
 A relationship between a Run, Node, Artifact, Test Evidence, or Gate decision and a Knowledge
