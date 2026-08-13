@@ -102,4 +102,19 @@ describe('Postgres GitHub Delivery smoke contract', () => {
       'await assertGitHubDeliveryDatabaseState({',
     )
   })
+
+  it('exercises the metadata-only Agent Runtime projection through the public sync API', () => {
+    expectInOrder(source, [
+      "'/api/sync/run-summary'",
+      "'/api/sync/agent-runtime-summary'",
+      'await assertAgentRuntimeProjectionDatabaseState({',
+    ])
+    expect(source).toContain('agent_runtime_summaries')
+    expect(source).toContain('agent_runtime_projection_audits')
+    expect(source).toContain("runtimeConstraintError?.code === '23514'")
+    expect(source).toContain('runtimeVersion: 2')
+    expect(source).toContain('checkpointVersion: 2')
+    expect(source).toContain('rawOutput')
+    expect(source).toContain('agentRuntimeSummaries')
+  })
 })

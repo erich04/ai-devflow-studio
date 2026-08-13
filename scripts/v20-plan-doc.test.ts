@@ -82,8 +82,8 @@ describe('V2.0 Native Agent Runtime contract', () => {
     }
 
     expect(roadmap).toContain('### Now — Implement V2.0 Native Agent Runtime')
-    expect(roadmap).toContain('Slices 1–6 are complete')
-    expect(roadmap).toContain('### Next — Add Runtime UX And Team Projection')
+    expect(roadmap).toContain('Slices 1–7 are complete')
+    expect(roadmap).toContain('### Next — Run The V2.0 Evaluation And Completion Gate')
   })
 
   it('provides an executable TDD slice plan before product code starts', () => {
@@ -116,10 +116,14 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(plan).toContain('| Slice 4 | Complete |')
     expect(plan).toContain('| Slice 5 | Complete |')
     expect(plan).toContain('| Slice 6 | Complete |')
-    expect(plan).toContain('| Slice 7 | In progress |')
+    expect(plan).toContain('| Slice 7 | Complete |')
     expect(plan).toContain('strict main-owned renderer projection')
     expect(plan).toContain('exact version/checkpoint optimistic concurrency')
-    expect(plan).toContain('Team schema 16 projection remains pending')
+    expect(plan).toContain('Desktop schema 21')
+    expect(plan).toContain('agent_runtime_summaries')
+    expect(plan).toContain('agent_runtime_projection_audits')
+    expect(plan).toContain('/api/sync/agent-runtime-summary')
+    expect(plan).toContain('Team cannot resume, issue capabilities, or advance Workflow')
     expect(plan).toContain('path-free main-owned request')
     expect(plan).toContain('no-permission completion')
     expect(plan).toContain('uniform terminal result')
@@ -128,8 +132,8 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(plan).toContain('local_mcp_installations')
     expect(plan).toContain('negotiated capability-set digest')
 
-    expect(roadmap).toMatch(/Slice 7 Desktop\s+runtime observability is complete/)
-    expect(roadmap).toMatch(/Team schema 16 redacted projection remains next/)
+    expect(roadmap).toMatch(/Slice 7\s+is complete/)
+    expect(roadmap).toContain('### Next — Run The V2.0 Evaluation And Completion Gate')
   })
 
   it('adds stable V2.0 domain language without redefining workflow authority', () => {

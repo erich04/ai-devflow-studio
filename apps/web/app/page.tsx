@@ -230,6 +230,11 @@ export default async function Page({ searchParams }: PageProps) {
         (item) => item.projectId === activeProject?.id && item.runId === activeRun.id,
       )
     : []
+  const currentAgentRuntimes = activeRun
+    ? overview.agentRuntimeSummaries.filter(
+        (item) => item.projectId === activeProject?.id && item.runId === activeRun.id,
+      )
+    : []
   const knowledgeReviewProviderId = overview.agentProviders[0]?.id ?? ''
   const policySummary = activeProject
     ? overview.policyAwareDeliverySummaries.find((item) => item.projectId === activeProject.id)
@@ -248,7 +253,7 @@ export default async function Page({ searchParams }: PageProps) {
     (run) => !['completed', 'failed', 'cancelled'].includes(run.status),
   ).length
   const gateCount = projectRuns.filter((run) => run.status === 'paused_at_gate').length
-  const evidenceCount = currentEvidence.length + currentReviews.length + currentCodingRuns.length
+  const evidenceCount = currentEvidence.length + currentReviews.length + currentCodingRuns.length + currentAgentRuntimes.length
   const progress = activeRun ? calculateProgress(activeRun.nodes) : 0
 
   return (
@@ -537,7 +542,16 @@ export default async function Page({ searchParams }: PageProps) {
 
         <section className="studio-support-grid">
       <SupportPanel id="agents" icon={<Bot size={17} />} title="Active Agents" action="查看 Agents">
-            {currentCodingRuns.length > 0 ? (
+            {currentAgentRuntimes.length > 0 ? (
+              currentAgentRuntimes.slice(0, 4).map((runtime) => (
+                <CompactRow
+                  key={runtime.runtimeId}
+                  title={`Agent Runtime · ${runtime.nodeId}`}
+                  meta={`${runtime.counters.steps} steps · ${runtime.counters.toolCalls} tools · v${runtime.runtimeVersion}`}
+                  value={runtime.stopReason ?? runtime.status}
+                />
+              ))
+            ) : currentCodingRuns.length > 0 ? (
               currentCodingRuns.slice(0, 4).map((run) => (
                 <CompactRow key={run.id} title={run.providerId} meta={run.summary} value={run.status} />
               ))
@@ -776,6 +790,9 @@ function evidenceCountForNode(overview: TeamOverviewResponse, run: WorkflowRun, 
       (item) => item.projectId === run.projectId && item.runId === run.id && item.nodeId === node.id,
     ).length +
     overview.codingAgentSummaries.filter(
+      (item) => item.projectId === run.projectId && item.runId === run.id && item.nodeId === node.id,
+    ).length +
+    overview.agentRuntimeSummaries.filter(
       (item) => item.projectId === run.projectId && item.runId === run.id && item.nodeId === node.id,
     ).length +
     node.artifactIds.length

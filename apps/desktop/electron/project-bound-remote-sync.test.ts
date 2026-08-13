@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type {
+  AgentRuntimeState,
   AgentReviewResult,
   CodingAgentRun,
   CodingDiffArtifact,
@@ -11,6 +12,7 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
+import { createAgentRuntime, resumeAgentRuntime } from '@ai-devflow/shared'
 import { RemoteSyncHttpError, type RemoteSyncClient } from './remote-sync'
 import {
   CanonicalRemoteSyncEntityError,
@@ -217,6 +219,51 @@ const canonicalCodingDiff: CodingDiffArtifact = {
   createdAt: codingSummary.completedAt!,
 }
 
+const digest = (character: string) => character.repeat(64)
+
+function canonicalAgentRuntime(): AgentRuntimeState {
+  const created = createAgentRuntime({
+    stateVersion: 1,
+    id: 'agent-runtime-team-1',
+    scope: {
+      kind: 'team',
+      organizationId: pairingCredential.organizationId,
+      projectId: pairingCredential.projectId,
+      userId: pairingCredential.userId,
+      sessionId: pairingCredential.tokenId,
+      localProjectId: pairingCredential.localProjectId!,
+    },
+    authority: {
+      runId: localRun.id,
+      nodeId: 'n-build',
+      runVersion: localRun.version,
+      policyVersion: 2,
+    },
+    contextDigest: digest('a'),
+    capabilitySetDigest: digest('b'),
+    bounds: {
+      maxSteps: 4,
+      maxWallTimeMs: 120_000,
+      maxToolCalls: 2,
+      maxToolResultBytes: 8_192,
+      maxTrajectoryMetadataBytes: 4_096,
+      maxCheckpointBytes: 16_384,
+      maxTokens: 1_024,
+      maxCostUsd: 1,
+    },
+    requestedAt: '2026-06-20T00:05:00.000Z',
+    deadline: '2026-06-20T00:07:00.000Z',
+  })
+  return resumeAgentRuntime({
+    runtime: created.runtime,
+    expectedCheckpointVersion: created.runtime.checkpointVersion,
+    authority: created.runtime.authority,
+    contextDigest: created.runtime.contextDigest,
+    capabilitySetDigest: created.runtime.capabilitySetDigest,
+    now: '2026-06-20T00:05:01.000Z',
+  }).runtime
+}
+
 describe('project-bound Electron remote sync', () => {
   it('exposes only canonical identifier uploads and project-bound commands', () => {
     const boundRemoteSync = createProjectBoundRemoteSync({
@@ -235,12 +282,86 @@ describe('project-bound Electron remote sync', () => {
       'evaluateRuntimeBudget',
       'saveGateOverride',
       'uploadCanonicalAgentReviewSummary',
+      'uploadCanonicalAgentRuntimeSummary',
       'uploadCanonicalCodingAgentSummary',
       'uploadCanonicalRunSummary',
       'uploadCanonicalTestEvidenceSummary',
     ])
     expect('uploadAgentReviewSummary' in boundRemoteSync).toBe(false)
     expect('uploadCodingAgentSummary' in boundRemoteSync).toBe(false)
+  })
+
+  it('uploads an exact metadata-only Team Agent Runtime projection', async () => {
+    const runtime = canonicalAgentRuntime()
+    const uploadAgentRuntimeSummary = vi.fn(async () => ({
+      accepted: true,
+      syncedAt: '2026-06-20T00:06:00.000Z',
+      message: 'accepted',
+    }))
+    const boundRemoteSync = createProjectBoundRemoteSync({
+      remoteSync: { uploadAgentRuntimeSummary } as unknown as RemoteSyncClient,
+      credentialSource: {
+        getDesktopPairingCredential: async () => pairingCredential,
+        getAgentRuntime: async (runtimeId) => runtimeId === runtime.id ? runtime : null,
+        listRuns: async () => [localRun],
+        listTestEvidence: async () => [],
+        listAgentReviews: async () => [],
+        listCodingAgentRuns: async () => [],
+        listCodingDiffArtifacts: async () => [],
+      },
+    })
+
+    await boundRemoteSync.uploadCanonicalAgentRuntimeSummary(runtime.id)
+
+    expect(uploadAgentRuntimeSummary).toHaveBeenCalledWith({
+      stateVersion: 1,
+      projectionVersion: 1,
+      runtimeId: runtime.id,
+      projectId: pairingCredential.projectId,
+      runId: localRun.id,
+      nodeId: 'n-build',
+      runtimeVersion: 2,
+      checkpointVersion: 2,
+      status: 'running',
+      stopReason: null,
+      counters: { steps: 0, toolCalls: 0, tokens: 0, costUsd: 0 },
+      acceptedActionCount: 0,
+      contextDigest: digest('a'),
+      capabilitySetDigest: digest('b'),
+      lastObservationDigest: digest('a'),
+      lastResultDigest: null,
+      startedAt: '2026-06-20T00:05:00.000Z',
+      updatedAt: '2026-06-20T00:05:01.000Z',
+      redacted: true,
+    })
+    expect(JSON.stringify(uploadAgentRuntimeSummary.mock.calls)).not.toMatch(
+      /localProjectId|userId|sessionId|source|path|output|checkpointData/i,
+    )
+  })
+
+  it('rejects a mismatched Agent Runtime scope before remote upload', async () => {
+    const runtime = canonicalAgentRuntime()
+    const uploadAgentRuntimeSummary = vi.fn()
+    const boundRemoteSync = createProjectBoundRemoteSync({
+      remoteSync: { uploadAgentRuntimeSummary } as unknown as RemoteSyncClient,
+      credentialSource: {
+        getDesktopPairingCredential: async () => pairingCredential,
+        getAgentRuntime: async () => ({
+          ...runtime,
+          scope: { ...runtime.scope, organizationId: 'org-attacker' },
+        }) as AgentRuntimeState,
+        listRuns: async () => [localRun],
+        listTestEvidence: async () => [],
+        listAgentReviews: async () => [],
+        listCodingAgentRuns: async () => [],
+        listCodingDiffArtifacts: async () => [],
+      },
+    })
+
+    await expect(
+      boundRemoteSync.uploadCanonicalAgentRuntimeSummary(runtime.id),
+    ).rejects.toMatchObject({ code: 'scope_mismatch', entityKind: 'agent_runtime' })
+    expect(uploadAgentRuntimeSummary).not.toHaveBeenCalled()
   })
 
   it('returns a structured operator-safe error when the canonical Run entity is missing', async () => {

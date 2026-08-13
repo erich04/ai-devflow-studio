@@ -77,6 +77,27 @@ describe('remote sync outbox contract', () => {
     })
   })
 
+  it('gives Agent Runtime summaries one metadata-only logical operation identity', () => {
+    const operation = createRemoteSyncOperation({
+      id: 'sync-runtime-1',
+      kind: 'agent-runtime-summary',
+      localProjectId: 'local-1',
+      organizationId: 'org-1',
+      teamProjectId: 'team-1',
+      runId: 'run-1',
+      entityId: 'agent-runtime-1',
+      createdAt: '2026-08-12T20:00:00.000Z',
+    })
+
+    expect(operation).toMatchObject({
+      kind: 'agent-runtime-summary',
+      entityId: 'agent-runtime-1',
+      idempotencyKey:
+        'remote-sync:v1:local-1:agent-runtime-summary:run-1:agent-runtime-1',
+    })
+    expect(JSON.stringify(operation)).not.toMatch(/payload|source|output|checkpoint/i)
+  })
+
   it('represents an operation awaiting its first Team binding with null scope', () => {
     const operation = createRemoteSyncOperation({
       id: 'sync-unbound',

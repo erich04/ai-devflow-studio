@@ -6,16 +6,18 @@ retroactive TDD rewrites unless it is touched.
 
 ## Current Persistence Baseline
 
-- Team/API/Postgres uses Team schema v15. Migration tests must prove a fresh v15 database, the
+- Team/API/Postgres uses Team schema v16. Migration tests must prove a fresh v16 database, the
   populated v11-to-v12 delivery-series upgrade, and the v12-to-v13 provider-authoritative expiry
   contract without inventing expiry evidence for legacy issued credentials, followed by the
-  v13-to-v14 bounded provider retry boundary, and the v14-to-v15 verified publication adoption
-  authority without changing legacy grant-backed publications.
-- Electron/SQLite uses Desktop schema v20. Local-store tests must prove a fresh v20 database, the
+  v13-to-v14 bounded provider retry boundary, the v14-to-v15 verified publication adoption
+  authority without changing legacy grant-backed publications, and the v15-to-v16 metadata-only
+  Agent Runtime projection without inventing runtime summaries or audit rows.
+- Electron/SQLite uses Desktop schema v21. Local-store tests must prove a fresh v21 database, the
   Desktop schema 17-to-18 retained Runtime upgrade, the 18-to-19 metadata-only Native Tool audit
   upgrade with no invented grant or audit rows, and the 19-to-20 Local MCP installation/audit
-  provenance upgrade with no invented installation or MCP audit, plus rollback on migration failure
-  and refusal of a newer unknown schema.
+  provenance upgrade with no invented installation or MCP audit, and the 20-to-21 retained outbox
+  upgrade that accepts only metadata-only Agent Runtime summaries, plus rollback on migration
+  failure and refusal of a newer unknown schema.
 - The packaged Desktop pilot must execute exactly one `scenario.evaluate` Local MCP Tool, persist
   one started and one succeeded installation-bound metadata-only audit, and retain one accepted
   action after cold restart without another grant, MCP call, or audit record. It must also complete

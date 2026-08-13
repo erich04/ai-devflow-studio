@@ -846,7 +846,7 @@ async function prepareRetainedV12CredentialFixture() {
 async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
   const pool = new Pool({
     connectionString: databaseUrl,
-    application_name: 'ai-devflow-postgres-smoke-v15-assertion',
+    application_name: 'ai-devflow-postgres-smoke-v16-assertion',
     statement_timeout: 10_000,
   })
   const connection = await pool.connect()
@@ -856,8 +856,8 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
       "SELECT value FROM schema_meta WHERE key = 'schema_version'",
     )
     expect(
-      schemaVersion.rows[0]?.value === '15',
-      'Team database did not migrate the retained fixture to schema v15.',
+      schemaVersion.rows[0]?.value === '16',
+      'Team database did not migrate the retained fixture to schema v16.',
     )
     const retained = await connection.query(
       `SELECT to_jsonb(retained) AS snapshot
@@ -946,6 +946,34 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
       publicationColumns.rows.length === 1,
       'V15 source_publication_id column was missing.',
     )
+    const runtimeProjectionTables = await connection.query(
+      `SELECT table_name
+       FROM information_schema.tables
+       WHERE table_schema = 'public'
+         AND table_name IN (
+           'agent_runtime_summaries',
+           'agent_runtime_projection_audits'
+         )
+       ORDER BY table_name`,
+    )
+    expect(
+      stableJson(runtimeProjectionTables.rows.map((row) => row.table_name)) ===
+        stableJson([
+          'agent_runtime_projection_audits',
+          'agent_runtime_summaries',
+        ]),
+      'V16 Agent Runtime projection table inventory was incomplete.',
+    )
+    const retainedRuntimeProjectionCounts = await connection.query(
+      `SELECT
+         (SELECT count(*)::integer FROM agent_runtime_summaries) AS summaries,
+         (SELECT count(*)::integer FROM agent_runtime_projection_audits) AS audits`,
+    )
+    expect(
+      stableJson(retainedRuntimeProjectionCounts.rows[0]) ===
+        stableJson({ summaries: 0, audits: 0 }),
+      'V15-to-v16 migration invented Agent Runtime projection rows.',
+    )
 
     await connection.query('BEGIN')
     transactionOpen = true
@@ -987,6 +1015,122 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
         publicationAuthorityError?.constraint ===
           'github_branch_publications_authority_exactly_one',
       'V15 accepted a publication without exact grant or adoption authority.',
+    )
+    await connection.query('ROLLBACK')
+    transactionOpen = false
+  } finally {
+    if (transactionOpen) {
+      await connection.query('ROLLBACK').catch(() => undefined)
+    }
+    connection.release()
+    await pool.end()
+  }
+}
+
+async function assertAgentRuntimeProjectionDatabaseState({
+  runtimeId,
+  runId,
+  nodeId,
+  summary,
+}) {
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    application_name: 'ai-devflow-postgres-smoke-agent-runtime-projection',
+    statement_timeout: 10_000,
+  })
+  const connection = await pool.connect()
+  let transactionOpen = false
+  try {
+    const state = await connection.query(
+      `SELECT
+         summary.runtime_id,
+         summary.project_id,
+         summary.run_id,
+         summary.node_id,
+         summary.runtime_version,
+         summary.checkpoint_version,
+         summary.status,
+         summary.stop_reason,
+         summary.steps,
+         summary.tool_calls,
+         summary.tokens,
+         summary.cost_usd::text,
+         summary.accepted_action_count,
+         summary.context_digest,
+         summary.capability_set_digest,
+         summary.last_observation_digest,
+         summary.last_result_digest,
+         summary.redacted,
+         count(audit.runtime_version)::integer AS audit_count,
+         array_agg(audit.runtime_version ORDER BY audit.runtime_version) AS audit_versions
+       FROM agent_runtime_summaries AS summary
+       LEFT JOIN agent_runtime_projection_audits AS audit
+         ON audit.runtime_id = summary.runtime_id
+       WHERE summary.runtime_id = $1
+       GROUP BY summary.runtime_id`,
+      [runtimeId],
+    )
+    expect(state.rows.length === 1, 'Agent Runtime projection did not persist exactly once.')
+    const row = state.rows[0]
+    expect(
+      row.project_id === summary.projectId &&
+        row.run_id === runId &&
+        row.node_id === `${runId}:${nodeId}` &&
+        row.runtime_version === 2 &&
+        row.checkpoint_version === 2 &&
+        row.status === 'terminal' &&
+        row.stop_reason === 'success' &&
+        Number(row.steps) === 2 &&
+        Number(row.tool_calls) === 1 &&
+        Number(row.tokens) === 20 &&
+        Number(row.cost_usd) === 0.02 &&
+        Number(row.accepted_action_count) === 2 &&
+        row.context_digest === summary.contextDigest &&
+        row.capability_set_digest === summary.capabilitySetDigest &&
+        row.last_observation_digest === summary.lastObservationDigest &&
+        row.last_result_digest === summary.lastResultDigest &&
+        row.redacted === true &&
+        row.audit_count === 2 &&
+        stableJson(row.audit_versions) === stableJson([1, 2]),
+      `Agent Runtime projection state was not exact: ${stableJson(row)}`,
+    )
+
+    const forbiddenColumns = await connection.query(
+      `SELECT column_name
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name IN (
+           'agent_runtime_summaries',
+           'agent_runtime_projection_audits'
+         )
+         AND lower(column_name) ~ '(prompt|source|patch|stdout|stderr|credential|path|checkpoint_data|raw_output)'`,
+    )
+    expect(
+      forbiddenColumns.rows.length === 0,
+      `Agent Runtime Team projection exposed forbidden columns: ${stableJson(
+        forbiddenColumns.rows,
+      )}`,
+    )
+
+    await connection.query('BEGIN')
+    transactionOpen = true
+    let runtimeConstraintError
+    try {
+      await connection.query(
+        `UPDATE agent_runtime_summaries
+         SET redacted = false
+         WHERE runtime_id = $1`,
+        [runtimeId],
+      )
+    } catch (error) {
+      runtimeConstraintError = error
+    }
+    expect(
+      runtimeConstraintError?.code === '23514' &&
+        String(runtimeConstraintError?.constraint ?? '').includes(
+          'agent_runtime_summaries',
+        ),
+      'V16 accepted a non-redacted Agent Runtime Team projection.',
     )
     await connection.query('ROLLBACK')
     transactionOpen = false
@@ -1500,6 +1644,7 @@ function expectMissingReviewBlock(decision, label) {
 const suffix = Date.now()
 const runId = `run-postgres-smoke-${suffix}`
 const pairedRunId = `run-postgres-paired-smoke-${suffix}`
+const agentRuntimeId = `agent-runtime-postgres-smoke-${suffix}`
 const gateRunId = `run-postgres-gate-smoke-${suffix}`
 const githubRunId = `run-postgres-github-smoke-${suffix}`
 const gateNodeId = 'n-design-gate'
@@ -2271,6 +2416,89 @@ try {
   const serializedPairedOverview = JSON.stringify(pairedOverview)
   expect(!serializedPairedOverview.includes(pairingCode.code), 'Team overview leaked the copy-once pairing code.')
   expect(!serializedPairedOverview.includes(desktopPairing.token), 'Team overview leaked the Desktop bearer token.')
+  const agentRuntimeSummaryV1 = {
+    stateVersion: 1,
+    projectionVersion: 1,
+    runtimeId: agentRuntimeId,
+    projectId: 'p-payments',
+    runId: pairedRunId,
+    nodeId: 'n-test',
+    runtimeVersion: 1,
+    checkpointVersion: 1,
+    status: 'running',
+    stopReason: null,
+    counters: { steps: 1, toolCalls: 0, tokens: 10, costUsd: 0.01 },
+    acceptedActionCount: 1,
+    contextDigest: '1'.repeat(64),
+    capabilitySetDigest: '2'.repeat(64),
+    lastObservationDigest: '3'.repeat(64),
+    lastResultDigest: null,
+    startedAt: timestamp,
+    updatedAt: timestamp,
+    redacted: true,
+  }
+  await postJsonWithBearer(
+    '/api/sync/agent-runtime-summary',
+    agentRuntimeSummaryV1,
+    desktopPairing.token,
+  )
+  await postJsonWithBearer(
+    '/api/sync/agent-runtime-summary',
+    agentRuntimeSummaryV1,
+    desktopPairing.token,
+  )
+  await expectPostRejected(
+    '/api/sync/agent-runtime-summary',
+    { ...agentRuntimeSummaryV1, rawOutput: 'must-not-cross-team-boundary' },
+    { authorization: `Bearer ${desktopPairing.token}` },
+    400,
+    'Agent Runtime raw output projection',
+  )
+  const agentRuntimeSummaryV2 = {
+    ...agentRuntimeSummaryV1,
+    runtimeVersion: 2,
+    checkpointVersion: 2,
+    status: 'terminal',
+    stopReason: 'success',
+    counters: { steps: 2, toolCalls: 1, tokens: 20, costUsd: 0.02 },
+    acceptedActionCount: 2,
+    lastResultDigest: '4'.repeat(64),
+    updatedAt: completedTimestamp,
+  }
+  await postJsonWithBearer(
+    '/api/sync/agent-runtime-summary',
+    agentRuntimeSummaryV2,
+    desktopPairing.token,
+  )
+  await expectPostRejected(
+    '/api/sync/agent-runtime-summary',
+    agentRuntimeSummaryV1,
+    { authorization: `Bearer ${desktopPairing.token}` },
+    409,
+    'stale Agent Runtime projection',
+  )
+  const runtimeOverview = await fetchOverview(
+    '/api/team/overview after Agent Runtime sync',
+    leadSessionHeaders,
+  )
+  expect(
+    runtimeOverview.agentRuntimeSummaries?.filter(
+      (summary) =>
+        summary.runtimeId === agentRuntimeId &&
+        summary.runtimeVersion === 2 &&
+        summary.status === 'terminal' &&
+        summary.stopReason === 'success' &&
+        summary.redacted === true,
+    ).length === 1,
+    'Postgres overview did not expose the exact terminal Agent Runtime summary.',
+  )
+  expectNoLocalOnlyFields(runtimeOverview.agentRuntimeSummaries, 'Agent Runtime overview')
+  await assertAgentRuntimeProjectionDatabaseState({
+    runtimeId: agentRuntimeId,
+    runId: pairedRunId,
+    nodeId: 'n-test',
+    summary: agentRuntimeSummaryV2,
+  })
   await expectPostRejected(
     '/api/sync/run-summary',
     {

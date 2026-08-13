@@ -13,6 +13,7 @@ import {
   type KnowledgeChunk,
   type KnowledgeDocument,
   parseBudgetGuardDecision,
+  parseRemoteAgentRuntimeSummary,
   type OrganizationEnforcementPolicy,
   resolveDevFlowRuntimeFlags,
   redactLocalAbsolutePaths,
@@ -27,6 +28,7 @@ import {
   validateEnforcementPolicy,
   type ProviderCredentialMetadata,
   type RemoteAgentReviewSummary,
+  type RemoteAgentRuntimeSummary,
   type RemoteCodingAgentSummary,
   type RuntimeBudgetApproval,
   type RuntimeBudgetPolicy,
@@ -779,6 +781,9 @@ function filterOverviewForSession(
     ),
     agentProviders: overview.agentProviders,
     codingAgentSummaries: overview.codingAgentSummaries.filter((summary) =>
+      projectIds.has(summary.projectId) && runIds.has(summary.runId),
+    ),
+    agentRuntimeSummaries: overview.agentRuntimeSummaries.filter((summary) =>
       projectIds.has(summary.projectId) && runIds.has(summary.runId),
     ),
     policyAwareDeliverySummaries: overview.policyAwareDeliverySummaries.filter(
@@ -1693,6 +1698,27 @@ export async function resolveTeamRoute(
 
     return acceptCanonicalRunEvidence(() =>
       repository.uploadCodingAgentSummary(summary, options.session!),
+    )
+  }
+
+  if (method === 'POST' && pathname === '/api/sync/agent-runtime-summary') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    let summary: RemoteAgentRuntimeSummary
+    try {
+      summary = parseRemoteAgentRuntimeSummary(options.body)
+    } catch {
+      return badRequest('Invalid Agent Runtime Team projection payload')
+    }
+
+    if (!canSyncProject(options.session, summary.projectId, 'member')) {
+      return forbidden('Project role member required')
+    }
+
+    return acceptCanonicalRunEvidence(() =>
+      repository.uploadAgentRuntimeSummary(summary, options.session!),
     )
   }
 

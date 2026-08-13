@@ -17,6 +17,7 @@ import {
   type BudgetGuardDecision,
   type MaterializeWorkRequestInput,
   type RemoteAgentReviewSummary,
+  type RemoteAgentRuntimeSummary,
   type RemoteCodingAgentSummary,
   type RemoteRunDeleteResult,
   type RemoteRunSummary,
@@ -127,6 +128,7 @@ export type RemoteSyncClient = {
   uploadTestEvidenceSummary(summary: RemoteTestEvidenceSummary): Promise<RemoteSyncUploadResult>
   uploadAgentReviewSummary(summary: RemoteAgentReviewSummary): Promise<RemoteSyncUploadResult>
   uploadCodingAgentSummary(summary: RemoteCodingAgentSummary): Promise<RemoteSyncUploadResult>
+  uploadAgentRuntimeSummary(summary: RemoteAgentRuntimeSummary): Promise<RemoteSyncUploadResult>
   saveGateOverride(input: RemoteGateOverrideInput): Promise<GateOverrideDecision>
   evaluateRuntimeBudget(input: RemoteRuntimeBudgetEvaluateInput): Promise<BudgetGuardDecision>
 }
@@ -1117,6 +1119,17 @@ export function createRemoteSyncClient(
         buildUrl(apiBaseUrl, '/api/sync/coding-agent-summary'),
         summary,
         '/api/sync/coding-agent-summary',
+        requirePostHeaders({ authToken, sessionHeaders }),
+        signal,
+      )
+    },
+
+    async uploadAgentRuntimeSummary(summary) {
+      return postRemoteSyncUpload(
+        fetcher,
+        buildUrl(apiBaseUrl, '/api/sync/agent-runtime-summary'),
+        summary,
+        '/api/sync/agent-runtime-summary',
         requirePostHeaders({ authToken, sessionHeaders }),
         signal,
       )

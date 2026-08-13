@@ -92,6 +92,67 @@ async function materializeSeedGateRun(
 describe('seed team repository', () => {
   const syncContext = { organizationId: 'org-demo', userId: 'u-erich' }
 
+  it('stores only a monotonic metadata-only Agent Runtime Team projection', async () => {
+    const repository = createSeedTeamRepository()
+    await repository.uploadRunSummary({
+      kind: 'run',
+      runId: 'run-runtime-projection-1',
+      version: 3,
+      projectId: 'p-payments',
+      title: 'Runtime projection',
+      status: 'building',
+      currentNodeId: 'node-build',
+      currentNode: { id: 'node-build', stage: 'build', kind: 'task', status: 'running' },
+      branchName: 'codex/runtime-projection',
+      updatedAt: '2026-08-12T20:00:00.000Z',
+    }, syncContext)
+    const summary = {
+      stateVersion: 1 as const,
+      projectionVersion: 1 as const,
+      runtimeId: 'agent-runtime-team-1',
+      projectId: 'p-payments',
+      runId: 'run-runtime-projection-1',
+      nodeId: 'node-build',
+      runtimeVersion: 2,
+      checkpointVersion: 2,
+      status: 'running' as const,
+      stopReason: null,
+      counters: { steps: 1, toolCalls: 0, tokens: 10, costUsd: 0.01 },
+      acceptedActionCount: 1,
+      contextDigest: 'a'.repeat(64),
+      capabilitySetDigest: 'b'.repeat(64),
+      lastObservationDigest: 'c'.repeat(64),
+      lastResultDigest: null,
+      startedAt: '2026-08-12T20:00:00.000Z',
+      updatedAt: '2026-08-12T20:00:01.000Z',
+      redacted: true as const,
+    }
+
+    await expect(repository.uploadAgentRuntimeSummary(summary, syncContext)).resolves.toMatchObject({
+      accepted: true,
+    })
+    const reorderedSummary = Object.fromEntries(
+      Object.entries(summary).reverse(),
+    ) as typeof summary
+    await expect(
+      repository.uploadAgentRuntimeSummary(reorderedSummary, syncContext),
+    ).resolves.toMatchObject({ accepted: true })
+    await expect(repository.uploadAgentRuntimeSummary(summary, syncContext)).resolves.toMatchObject({
+      accepted: true,
+    })
+    await expect(repository.uploadAgentRuntimeSummary({
+      ...summary,
+      runtimeVersion: 1,
+      checkpointVersion: 1,
+    }, syncContext)).rejects.toThrow('Remote child summary ID conflicts')
+
+    const overview = await repository.getTeamOverview(syncContext)
+    expect(overview.agentRuntimeSummaries).toEqual([summary])
+    expect(JSON.stringify(overview.agentRuntimeSummaries)).not.toMatch(
+      /localProjectId|userId|sessionId|source|path|output|checkpointData/i,
+    )
+  })
+
   it('exposes GitHub Delivery repository authority through the unified Team repository', async () => {
     const repository = createSeedTeamRepository()
 

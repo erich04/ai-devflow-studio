@@ -201,6 +201,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
           uploadCanonicalTestEvidenceSummary: vi.fn(),
           uploadCanonicalAgentReviewSummary: vi.fn(),
           uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
         }
       },
     })
@@ -238,6 +239,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
         uploadCanonicalTestEvidenceSummary: vi.fn(),
         uploadCanonicalAgentReviewSummary: vi.fn(),
         uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
       }),
     })
 
@@ -270,6 +272,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
       uploadCanonicalTestEvidenceSummary: vi.fn(),
       uploadCanonicalAgentReviewSummary: vi.fn(),
       uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
     }))
     const processor = createRemoteSyncOutboxProcessor({ store, getRemoteSync })
 
@@ -308,6 +311,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
       uploadCanonicalTestEvidenceSummary: vi.fn(),
       uploadCanonicalAgentReviewSummary: vi.fn(),
       uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
     }))
     const processor = createRemoteSyncOutboxProcessor({ store, getRemoteSync })
 
@@ -367,6 +371,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
         uploadCanonicalTestEvidenceSummary: vi.fn(),
         uploadCanonicalAgentReviewSummary: vi.fn(),
         uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
       }),
       onStateChanged,
     })
@@ -401,6 +406,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
         uploadCanonicalTestEvidenceSummary: vi.fn(),
         uploadCanonicalAgentReviewSummary: vi.fn(),
         uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
       }),
     })
 
@@ -457,6 +463,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
         uploadCanonicalTestEvidenceSummary: vi.fn(),
         uploadCanonicalAgentReviewSummary: vi.fn(),
         uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
       }),
     })
 
@@ -492,6 +499,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
         uploadCanonicalTestEvidenceSummary,
         uploadCanonicalAgentReviewSummary: vi.fn(),
         uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
       }),
     })
 
@@ -521,6 +529,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
         uploadCanonicalTestEvidenceSummary: vi.fn(),
         uploadCanonicalAgentReviewSummary: vi.fn(),
         uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
       }),
     })
 
@@ -599,6 +608,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
       uploadCanonicalTestEvidenceSummary: vi.fn(),
       uploadCanonicalAgentReviewSummary: vi.fn(),
       uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
     })
     const processor = createRemoteSyncOutboxProcessor({ store, getRemoteSync })
 
@@ -639,6 +649,11 @@ describe('createRemoteSyncOutboxProcessor', () => {
         kind: 'coding-agent-summary',
         entityId: 'coding-entity',
       }),
+      operation({
+        id: 'runtime-op',
+        kind: 'agent-runtime-summary',
+        entityId: 'runtime-entity',
+      }),
     ])
     const accepted = { accepted: true, syncedAt: now, message: 'accepted' }
     const methods = {
@@ -646,6 +661,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
       uploadCanonicalTestEvidenceSummary: vi.fn().mockResolvedValue(accepted),
       uploadCanonicalAgentReviewSummary: vi.fn().mockResolvedValue(accepted),
       uploadCanonicalCodingAgentSummary: vi.fn().mockResolvedValue(accepted),
+      uploadCanonicalAgentRuntimeSummary: vi.fn().mockResolvedValue(accepted),
     }
     const processor = createRemoteSyncOutboxProcessor({
       store,
@@ -658,7 +674,9 @@ describe('createRemoteSyncOutboxProcessor', () => {
     expect(methods.uploadCanonicalTestEvidenceSummary).toHaveBeenCalledWith('test-entity')
     expect(methods.uploadCanonicalAgentReviewSummary).toHaveBeenCalledWith('review-entity')
     expect(methods.uploadCanonicalCodingAgentSummary).toHaveBeenCalledWith('coding-entity')
+    expect(methods.uploadCanonicalAgentRuntimeSummary).toHaveBeenCalledWith('runtime-entity')
     expect(store.operations.map((item) => item.status)).toEqual([
+      'completed',
       'completed',
       'completed',
       'completed',
@@ -690,6 +708,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
           uploadCanonicalTestEvidenceSummary: vi.fn(),
           uploadCanonicalAgentReviewSummary: vi.fn(),
           uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
         }),
       })
 
@@ -727,6 +746,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
           uploadCanonicalTestEvidenceSummary: vi.fn(),
           uploadCanonicalAgentReviewSummary: vi.fn(),
           uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
         }),
       })
 
@@ -763,6 +783,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
         uploadCanonicalTestEvidenceSummary: vi.fn(),
         uploadCanonicalAgentReviewSummary: vi.fn(),
         uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
       }),
       onStateChanged,
     })
@@ -797,6 +818,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
         uploadCanonicalTestEvidenceSummary: vi.fn(),
         uploadCanonicalAgentReviewSummary: vi.fn(),
         uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
       }),
     })
 
@@ -832,6 +854,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
           uploadCanonicalTestEvidenceSummary: vi.fn(),
           uploadCanonicalAgentReviewSummary: vi.fn(),
           uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
         }),
       })
 
@@ -856,6 +879,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
         uploadCanonicalTestEvidenceSummary: vi.fn(),
         uploadCanonicalAgentReviewSummary: vi.fn(),
         uploadCanonicalCodingAgentSummary: vi.fn(),
+        uploadCanonicalAgentRuntimeSummary: vi.fn(),
       }),
     })
 

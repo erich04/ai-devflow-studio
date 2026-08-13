@@ -115,6 +115,11 @@ describe('team database migration runner', () => {
         name: '0015_github_verified_publication_adoption',
         fileName: '0015_github_verified_publication_adoption.sql',
       },
+      {
+        version: 16,
+        name: '0016_agent_runtime_team_projection',
+        fileName: '0016_agent_runtime_team_projection.sql',
+      },
     ])
 
     const [
@@ -127,6 +132,7 @@ describe('team database migration runner', () => {
       githubCredentialProviderExpiry,
       githubPullRequestRetryAfter,
       githubVerifiedPublicationAdoption,
+      agentRuntimeTeamProjection,
     ] = await readTeamMigrationCatalog()
     expect(baseline).toMatchObject({ version: 7, name: '0001_initial' })
     expect(baseline?.sql).toMatch(/^BEGIN;/)
@@ -180,6 +186,13 @@ describe('team database migration runner', () => {
     })
     expect(githubVerifiedPublicationAdoption?.sql).toContain(
       'source_publication_id',
+    )
+    expect(agentRuntimeTeamProjection).toMatchObject({
+      version: 16,
+      name: '0016_agent_runtime_team_projection',
+    })
+    expect(agentRuntimeTeamProjection?.sql).toContain(
+      'CREATE TABLE agent_runtime_projection_audits',
     )
   })
 

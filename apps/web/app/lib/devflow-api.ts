@@ -17,6 +17,7 @@ import type {
   Project,
   ProjectEnforcementPolicyOverride,
   RemoteCodingAgentSummary,
+  RemoteAgentRuntimeSummary,
   RemoteTestEvidenceSummary,
   RuntimeBudgetApproval,
   RuntimeBudgetPolicy,
@@ -34,6 +35,7 @@ import {
   parseWorkRequestRecord,
   parseGateCommandCreate,
   parseGateCommandRecord,
+  parseRemoteAgentRuntimeSummary,
   type CreateGateCommandInput,
   type CreateWorkRequestInput,
 } from '@ai-devflow/shared'
@@ -48,6 +50,7 @@ export type TeamOverviewResponse = {
   totalCost: string
   testEvidenceSummaries: RemoteTestEvidenceSummary[]
   codingAgentSummaries: RemoteCodingAgentSummary[]
+  agentRuntimeSummaries: RemoteAgentRuntimeSummary[]
   policyAwareDeliverySummaries: PolicyAwareDeliverySummary[]
   agentReviews: AgentReviewResult[]
   agentTraces: AgentTrace[]
@@ -149,7 +152,18 @@ export async function fetchTeamOverview(
     throw new Error(`DevFlow API /api/team/overview failed with ${response.status}`)
   }
 
-  return response.json() as Promise<TeamOverviewResponse>
+  const value = await response.json() as TeamOverviewResponse
+  if (!Array.isArray(value.agentRuntimeSummaries)) {
+    throw new Error('DevFlow API /api/team/overview returned an invalid Agent Runtime projection')
+  }
+  try {
+    value.agentRuntimeSummaries = value.agentRuntimeSummaries.map(
+      parseRemoteAgentRuntimeSummary,
+    )
+  } catch {
+    throw new Error('DevFlow API /api/team/overview returned an invalid Agent Runtime projection')
+  }
+  return value
 }
 
 export type RunKnowledgeReviewOptions = FetchTeamOverviewOptions & {

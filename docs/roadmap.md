@@ -89,22 +89,25 @@ contains the signoff-bound release artifacts.
 | Completed version line | 1.x governed self-hosted delivery |
 | Active version line | 2.x DevFlow-native Agent Runtime |
 | Active milestone | V2.0 Native Agent Runtime implementation |
-| Next gate | Slice 7 Runtime UX and redacted Team projection |
+| Next gate | Commit the green Slice 7 boundary, then run the Slice 8 V2.0 completion gate |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
 restart with zero repeated remote effects, Acceptance, and a versioned credential-revocation proof.
-V2.0 implementation is active. Slices 1–6 are complete: the shared kernel, durable Desktop Runtime,
+V2.0 implementation is active. Slices 1–7 are complete: the shared kernel, durable Desktop Runtime,
 main-owned Native Tool boundary, trusted local stdio MCP boundary, governed Coding Executor, and
-bounded native coding loop are implemented; Runtime UX and redacted Team projection are next.
+bounded native coding loop are implemented, while the Runtime UX and redacted Team projection passed
+their retained migration, real Postgres, Docker, packaged Desktop, redaction, full verification, and
+production build gates. Slice 8 is the remaining V2.0 evaluation and completion gate.
 
 ## Now / Next / Later
 
 ### Now — Implement V2.0 Native Agent Runtime
 
-V1.5 and the finite 1.x line are released and complete. Slices 1–6 are complete; Slice 7 Desktop
-runtime observability is complete, and Team schema 16 redacted projection remains next. V2.0
-continues through the accepted contract and executable slice plan:
+V1.5 and the finite 1.x line are released and complete. Slices 1–7 are complete; Slice 7
+is complete after its retained migration, redaction, Postgres, Docker, packaged Desktop, full
+verification, and production build gates passed. V2.0 continues through the accepted contract and
+executable slice plan:
 
 - `docs/product/prd/v2.0-native-agent-runtime-prd.md`
 - `docs/adr/0014-bounded-agent-runtime.md`
@@ -131,16 +134,17 @@ continues through the accepted contract and executable slice plan:
   permission/checkpoint recovery and packaged cold-restart evidence showing zero repeated effects.
 - Slice 7 now has a strict main-owned renderer projection, current Run/Local Project selection,
   exact version/checkpoint CAS commands, monotonic list/detail state, safe trajectory/evaluation UX,
-  and packaged cold-restart evidence with zero repeated Tool effects.
-- Complete Slice 7 by projecting only strict redacted summaries to Team while preserving complete
-  local trajectory and checkpoint authority in Electron main.
+  packaged cold-restart evidence with zero repeated Tool effects, Desktop schema 21 metadata-only
+  outbox sync, Team schema 16 monotonic summaries/audit, and a read-only Web manager projection.
+- Slice 7 passed its retained migration, real Postgres, Docker lifecycle, redaction, packaged
+  Desktop, full verification, and production build gates without widening Team authority.
 
-### Next — Add Runtime UX And Team Projection
+### Next — Run The V2.0 Evaluation And Completion Gate
 
-- Desktop list/detail/trajectory/bounds/permission/cancel/resume/Evidence UX is complete without
-  exposing paths, source, raw Tool output, checkpoints, scope metadata, or hidden reasoning.
-- Add the Team schema 16 redacted runtime summary/audit projection with optimistic concurrency and a
-  read-only Web manager view; Team must not gain resume, Tool-result, capability, or Workflow authority.
+- Freeze the Slice 8 dataset and evaluator only after the Slice 7 candidate is green and committed.
+- Prove native Tool, Local MCP, checkpoint/resume, cancellation/bounds, native coding, and OpenCode
+  parity without secrets, paths, source, isolation leaks, or unexpected paid-provider calls.
+- Produce candidate-bound completion evidence before marking V2.0 complete.
 
 ### Later — V2.1 Retrieval/Memory And V2.2 Multi-Agent/Tenancy
 

@@ -7,6 +7,7 @@ import {
   createWarnOnlyDefaultPolicy,
   redactRemoteCodingAgentSummaryForSync,
   redactRemoteAgentReviewSummaryForSync,
+  parseRemoteAgentRuntimeSummary,
   redactRemoteRunSummaryForSync,
   redactRemoteTestEvidenceSummaryForSync,
   resolveEffectivePolicy,
@@ -31,6 +32,7 @@ import {
   type ProviderCredentialMetadata,
   type ProjectEnforcementPolicyOverride,
   type RemoteAgentReviewSummary,
+  type RemoteAgentRuntimeSummary,
   type RemoteCodingAgentSummary,
   type RemoteRunDeleteResult,
   type RuntimeBudgetApproval,
@@ -96,6 +98,7 @@ export type TeamOverviewPayload = {
   agentTokenUsage: AgentTokenUsage[]
   agentProviders: AgentProviderConfig[]
   codingAgentSummaries: RemoteCodingAgentSummary[]
+  agentRuntimeSummaries: RemoteAgentRuntimeSummary[]
   policyAwareDeliverySummaries: PolicyAwareDeliverySummary[]
   enforcementPolicies: {
     organizationPolicy: OrganizationEnforcementPolicy
@@ -219,6 +222,10 @@ export type TeamRepository = WorkRequestRepository &
   ): Promise<RemoteSyncUploadResult>
   uploadCodingAgentSummary(
     summary: RemoteCodingAgentSummary,
+    context: TeamRepositorySyncContext,
+  ): Promise<RemoteSyncUploadResult>
+  uploadAgentRuntimeSummary(
+    summary: RemoteAgentRuntimeSummary,
     context: TeamRepositorySyncContext,
   ): Promise<RemoteSyncUploadResult>
   listAgentProviders(context: TeamRepositorySyncContext): Promise<AgentProviderConfig[]>
@@ -347,6 +354,7 @@ export function createSeedTeamRepository(): TeamRepository {
   const agentTraces: AgentTrace[] = []
   const agentTokenUsage: AgentTokenUsage[] = []
   const codingAgentSummaries: RemoteCodingAgentSummary[] = []
+  const agentRuntimeSummaries: RemoteAgentRuntimeSummary[] = []
   let organizationPolicy = createWarnOnlyDefaultPolicy({ organizationId: DEMO_ORGANIZATION_ID })
   const projectOverrides: ProjectEnforcementPolicyOverride[] = []
   const gateOverrides: GateOverrideDecision[] = []
@@ -854,6 +862,9 @@ export function createSeedTeamRepository(): TeamRepository {
       const scopedCodingAgentSummaries = codingAgentSummaries.filter(
         (summary) => projectIds.has(summary.projectId) && runIds.has(summary.runId),
       )
+      const scopedAgentRuntimeSummaries = agentRuntimeSummaries.filter(
+        (summary) => projectIds.has(summary.projectId) && runIds.has(summary.runId),
+      )
       const codingTokenUsage = scopedCodingAgentSummaries
         .map((summary) => summary.costSummary)
         .filter(
@@ -889,6 +900,7 @@ export function createSeedTeamRepository(): TeamRepository {
         agentTokenUsage: scopedAgentTokenUsage,
         agentProviders: agentProviderConfigs(context),
         codingAgentSummaries: scopedCodingAgentSummaries,
+        agentRuntimeSummaries: scopedAgentRuntimeSummaries,
         policyAwareDeliverySummaries: buildPolicyAwareDeliverySummaries({
           projectIds: scopedProjects.map((project) => project.id),
           testEvidenceSummaries: scopedTestEvidence,
@@ -1146,6 +1158,58 @@ export function createSeedTeamRepository(): TeamRepository {
         accepted: true,
         syncedAt: new Date().toISOString(),
         message: 'coding agent summary accepted by seed repository',
+      }
+    },
+
+    async uploadAgentRuntimeSummary(summary, context) {
+      summary = parseRemoteAgentRuntimeSummary(summary)
+      assertCanonicalRun(summary, context)
+      const canonicalRun = syncedRuns.find((run) => run.id === summary.runId)!
+      if (!canonicalRun.nodes.some((node) => node.id === summary.nodeId)) {
+        throw new RemoteChildSummaryConflictError(
+          summary.runtimeId,
+          summary.runId,
+          summary.projectId,
+        )
+      }
+      const existing = agentRuntimeSummaries.find(
+        (candidate) => candidate.runtimeId === summary.runtimeId,
+      )
+      assertStableChildSummaryScope(
+        existing ? { ...existing, id: existing.runtimeId } : undefined,
+        { ...summary, id: summary.runtimeId },
+        context,
+      )
+      if (existing) {
+        const exactReplay = JSON.stringify(existing) === JSON.stringify(summary)
+        if (
+          summary.runtimeVersion < existing.runtimeVersion ||
+          (summary.runtimeVersion === existing.runtimeVersion && !exactReplay) ||
+          (existing.status === 'terminal' && !exactReplay)
+        ) {
+          throw new RemoteChildSummaryConflictError(
+            summary.runtimeId,
+            summary.runId,
+            summary.projectId,
+          )
+        }
+        if (exactReplay) {
+          return {
+            accepted: true,
+            syncedAt: new Date().toISOString(),
+            message: 'agent runtime summary replay accepted by seed repository',
+          }
+        }
+        const index = agentRuntimeSummaries.indexOf(existing)
+        agentRuntimeSummaries[index] = summary
+      } else {
+        agentRuntimeSummaries.unshift(summary)
+      }
+
+      return {
+        accepted: true,
+        syncedAt: new Date().toISOString(),
+        message: 'agent runtime summary accepted by seed repository',
       }
     },
 

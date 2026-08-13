@@ -140,6 +140,29 @@ const overview: TeamOverviewResponse = {
       redacted: true,
     },
   ],
+  agentRuntimeSummaries: [
+    {
+      stateVersion: 1,
+      projectionVersion: 1,
+      runtimeId: 'agent-runtime-team-1',
+      projectId: 'p-remote',
+      runId: 'run-remote',
+      nodeId: 'n-build',
+      runtimeVersion: 3,
+      checkpointVersion: 3,
+      status: 'waiting_permission',
+      stopReason: null,
+      counters: { steps: 2, toolCalls: 1, tokens: 120, costUsd: 0.02 },
+      acceptedActionCount: 1,
+      contextDigest: 'a'.repeat(64),
+      capabilitySetDigest: 'b'.repeat(64),
+      lastObservationDigest: 'c'.repeat(64),
+      lastResultDigest: 'd'.repeat(64),
+      startedAt: '2026-06-16T10:13:00.000Z',
+      updatedAt: '2026-06-16T10:14:00.000Z',
+      redacted: true,
+    },
+  ],
   policyAwareDeliverySummaries: [
     {
       projectId: 'p-remote',
@@ -391,14 +414,15 @@ describe('web product shell page', () => {
 
     expect(screen.getAllByText('Remote run').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Remote tests passed.')).toBeInTheDocument()
-    expect(screen.getByText('Coding Agent completed with redacted changed paths.')).toBeInTheDocument()
+    expect(screen.getByText('Agent Runtime · n-build')).toBeInTheDocument()
+    expect(screen.getByText('2 steps · 1 tools · v3')).toBeInTheDocument()
     expect(screen.queryByText('Foreign request summary.')).not.toBeInTheDocument()
     expect(screen.queryByText('Foreign tests must stay hidden.')).not.toBeInTheDocument()
     expect(screen.queryByText('Foreign coding run must stay hidden.')).not.toBeInTheDocument()
     expect(screen.queryByText('Foreign review must stay hidden.')).not.toBeInTheDocument()
     expect(screen.getByText('此 Run 尚无 Review 结论。')).toBeInTheDocument()
     expect(screen.getByText('Active Runs').closest('article')).toHaveTextContent('1')
-    expect(screen.getByText('Evidence Items').closest('article')).toHaveTextContent('2')
+    expect(screen.getByText('Evidence Items').closest('article')).toHaveTextContent('3')
   })
 
   it('offers copy-once Desktop pairing only for the explicitly selected project', async () => {
@@ -537,7 +561,8 @@ describe('web product shell page', () => {
     expect(screen.getByText('Lead review')).toBeInTheDocument()
     expect(screen.getByText('Remote tests passed.')).toBeInTheDocument()
     expect(screen.getByText('pnpm test')).toBeInTheDocument()
-    expect(screen.getByText('Coding Agent completed with redacted changed paths.')).toBeInTheDocument()
+    expect(screen.getByText('Agent Runtime · n-build')).toBeInTheDocument()
+    expect(screen.getByText('2 steps · 1 tools · v3')).toBeInTheDocument()
     expect(screen.getByText('No blocking knowledge gaps found.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Sign in with GitHub/ })).toHaveAttribute(
       'href',
@@ -654,6 +679,7 @@ describe('web product shell page', () => {
       totalCost: '$0.000',
       testEvidenceSummaries: [],
       codingAgentSummaries: [],
+      agentRuntimeSummaries: [],
       policyAwareDeliverySummaries: [],
       agentReviews: [],
       agentTraces: [],

@@ -546,6 +546,50 @@ describe('Electron remote sync client', () => {
     })
   })
 
+  it('uploads a Team Agent Runtime summary through the exact safe endpoint', async () => {
+    const summary = {
+      stateVersion: 1 as const,
+      projectionVersion: 1 as const,
+      runtimeId: 'agent-runtime-team-1',
+      projectId: 'team-project-1',
+      runId: 'run-1',
+      nodeId: 'node-1',
+      runtimeVersion: 2,
+      checkpointVersion: 2,
+      status: 'running' as const,
+      stopReason: null,
+      counters: { steps: 1, toolCalls: 0, tokens: 10, costUsd: 0.01 },
+      acceptedActionCount: 1,
+      contextDigest: 'a'.repeat(64),
+      capabilitySetDigest: 'b'.repeat(64),
+      lastObservationDigest: 'c'.repeat(64),
+      lastResultDigest: null,
+      startedAt: '2026-08-12T20:00:00.000Z',
+      updatedAt: '2026-08-12T20:00:01.000Z',
+      redacted: true as const,
+    }
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      accepted: true,
+      syncedAt: '2026-08-12T20:00:02.000Z',
+      message: 'accepted',
+    }), { status: 202 }))
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'desktop-secret',
+    })
+
+    await expect(client.uploadAgentRuntimeSummary(summary)).resolves.toMatchObject({ accepted: true })
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/sync/agent-runtime-summary',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify(summary),
+        headers: expect.objectContaining({ authorization: 'Bearer desktop-secret' }),
+      }),
+    )
+  })
+
   it('maps a malformed successful response to a safe retryable invalid-response error', async () => {
     const client = createRemoteSyncClient({
       apiBaseUrl: 'http://api.local',

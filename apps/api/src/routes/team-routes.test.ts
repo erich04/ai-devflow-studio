@@ -383,6 +383,7 @@ function createRepository(): TeamRepository & GateCommandRepository {
     agentTraces: [],
     agentTokenUsage: [],
     codingAgentSummaries: [],
+    agentRuntimeSummaries: [],
     policyAwareDeliverySummaries: [],
     agentProviders: [
       {
@@ -529,6 +530,7 @@ function createRepository(): TeamRepository & GateCommandRepository {
             agentTokenUsage: [],
             agentProviders: [],
             codingAgentSummaries: [],
+            agentRuntimeSummaries: [],
             policyAwareDeliverySummaries: [],
             enforcementPolicies: {
               organizationPolicy: createWarnOnlyDefaultPolicy({
@@ -568,6 +570,11 @@ function createRepository(): TeamRepository & GateCommandRepository {
       accepted: true,
       syncedAt: '2026-06-16T00:00:00.000Z',
       message: 'coding agent summary accepted',
+    })),
+    uploadAgentRuntimeSummary: vi.fn(async () => ({
+      accepted: true,
+      syncedAt: '2026-06-16T00:00:00.000Z',
+      message: 'agent runtime summary accepted',
     })),
     listAgentProviders: vi.fn(async () => overview.agentProviders),
     getEnforcementPolicy: vi.fn(async () => ({
@@ -2598,6 +2605,74 @@ describe('team API route resolver', () => {
 
     expect(result?.status).toBe(202)
     expect(repository.uploadCodingAgentSummary).toHaveBeenCalledWith(summary, memberSession)
+  })
+
+  it('routes an exact metadata-only Agent Runtime Team projection', async () => {
+    const repository = createRepository()
+    const summary = {
+      stateVersion: 1 as const,
+      projectionVersion: 1 as const,
+      runtimeId: 'agent-runtime-team-1',
+      projectId: 'p-payments',
+      runId: 'run-payments',
+      nodeId: 'node-build',
+      runtimeVersion: 2,
+      checkpointVersion: 2,
+      status: 'running' as const,
+      stopReason: null,
+      counters: { steps: 1, toolCalls: 0, tokens: 10, costUsd: 0.01 },
+      acceptedActionCount: 1,
+      contextDigest: 'a'.repeat(64),
+      capabilitySetDigest: 'b'.repeat(64),
+      lastObservationDigest: 'c'.repeat(64),
+      lastResultDigest: null,
+      startedAt: '2026-08-12T20:00:00.000Z',
+      updatedAt: '2026-08-12T20:00:01.000Z',
+      redacted: true as const,
+    }
+
+    const result = await resolveTeamRoute('POST', '/api/sync/agent-runtime-summary', repository, {
+      body: summary,
+      session: memberSession,
+    })
+
+    expect(result?.status).toBe(202)
+    expect(repository.uploadAgentRuntimeSummary).toHaveBeenCalledWith(summary, memberSession)
+  })
+
+  it('rejects non-exact Agent Runtime projections before repository persistence', async () => {
+    const repository = createRepository()
+    const result = await resolveTeamRoute('POST', '/api/sync/agent-runtime-summary', repository, {
+      body: {
+        stateVersion: 1,
+        projectionVersion: 1,
+        runtimeId: 'agent-runtime-team-1',
+        projectId: 'p-payments',
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        runtimeVersion: 2,
+        checkpointVersion: 2,
+        status: 'running',
+        stopReason: null,
+        counters: { steps: 1, toolCalls: 0, tokens: 10, costUsd: 0.01 },
+        acceptedActionCount: 1,
+        contextDigest: 'a'.repeat(64),
+        capabilitySetDigest: 'b'.repeat(64),
+        lastObservationDigest: 'c'.repeat(64),
+        lastResultDigest: null,
+        startedAt: '2026-08-12T20:00:00.000Z',
+        updatedAt: '2026-08-12T20:00:01.000Z',
+        redacted: true,
+        rawOutput: 'secret',
+      },
+      session: memberSession,
+    })
+
+    expect(result).toEqual({
+      status: 400,
+      body: { error: 'bad_request', message: 'Invalid Agent Runtime Team projection payload' },
+    })
+    expect(repository.uploadAgentRuntimeSummary).not.toHaveBeenCalled()
   })
 
   it('projects hostile nested coding metadata before repository persistence', async () => {

@@ -683,16 +683,29 @@ const agentRuntimeStartRequest: AgentRuntimeStartRequest = {
   deadline: '2026-08-12T20:31:00.000Z',
 }
 
+const teamAgentRuntimeStartRequest: AgentRuntimeStartRequest = {
+  ...agentRuntimeStartRequest,
+  id: 'agent-runtime-team-sync-1',
+  scope: {
+    kind: 'team',
+    organizationId: desktopPairingCredential.organizationId,
+    projectId: desktopPairingCredential.projectId,
+    userId: desktopPairingCredential.userId,
+    sessionId: desktopPairingCredential.tokenId,
+    localProjectId: project.id,
+  },
+}
+
 describe('createLocalStore', () => {
-  it('initializes schema version 20 and keeps it stable across reopen', async () => {
+  it('initializes schema version 21 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(20)
+    expect(await first.getSchemaVersion()).toBe(21)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(20)
+    expect(await second.getSchemaVersion()).toBe(21)
     second.close()
   })
 
@@ -720,7 +733,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(20)
+    expect(await migrated.getSchemaVersion()).toBe(21)
     expect(await migrated.listMcpServers()).toEqual([mcpServer])
     expect(await migrated.listLocalMcpInstallations()).toEqual([])
     migrated.close()
@@ -754,7 +767,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(20)
+    expect(await migrated.getSchemaVersion()).toBe(21)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     migrated.close()
@@ -821,7 +834,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(20)
+    expect(await migrated.getSchemaVersion()).toBe(21)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     expect(await migrated.listAgentRuntimeCapabilityGrants()).toEqual([])
@@ -904,6 +917,57 @@ describe('createLocalStore', () => {
       resumed.checkpoint,
     ])
     reopened.close()
+  })
+
+  it('atomically coalesces one metadata-only Team Runtime outbox operation per transition', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.upsertProject(project)
+    await store.saveRun(gateWorkflowCreation.run)
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+
+    const created = createAgentRuntime(teamAgentRuntimeStartRequest)
+    await expect(store.commitAgentRuntimeTransition({
+      expectedRuntime: null,
+      transition: created,
+    })).resolves.toMatchObject({ committed: true, replayed: false })
+    const first = (await store.listRemoteSyncOperations()).filter(
+      (operation) => operation.kind === 'agent-runtime-summary',
+    )
+    expect(first).toMatchObject([{
+      localProjectId: project.id,
+      organizationId: desktopPairingCredential.organizationId,
+      teamProjectId: desktopPairingCredential.projectId,
+      runId: gateWorkflowCreation.run.id,
+      entityId: teamAgentRuntimeStartRequest.id,
+      generation: 1,
+      status: 'pending',
+    }])
+    expect(JSON.stringify(first)).not.toMatch(/encrypted-token|payload|source|output|checkpoint/i)
+
+    const resumed = resumeAgentRuntime({
+      runtime: created.runtime,
+      expectedCheckpointVersion: created.runtime.checkpointVersion,
+      authority: created.runtime.authority,
+      contextDigest: created.runtime.contextDigest,
+      capabilitySetDigest: created.runtime.capabilitySetDigest,
+      now: '2026-08-12T20:30:01.000Z',
+    })
+    await store.commitAgentRuntimeTransition({
+      expectedRuntime: created.runtime,
+      transition: resumed,
+    })
+    await expect(store.commitAgentRuntimeTransition({
+      expectedRuntime: created.runtime,
+      transition: resumed,
+    })).resolves.toMatchObject({ committed: true, replayed: true })
+    expect((await store.listRemoteSyncOperations()).filter(
+      (operation) => operation.kind === 'agent-runtime-summary',
+    )).toMatchObject([{ generation: 2, status: 'pending' }])
+    store.close()
   })
 
   it('rejects a structurally valid transition that was not produced by the runtime kernel', async () => {
@@ -4359,13 +4423,13 @@ describe('createLocalStore', () => {
     second.close()
   })
 
-  it('migrates an existing v1 database to v20 without losing local projects or runs', async () => {
+  it('migrates an existing v1 database to v21 without losing local projects or runs', async () => {
     const dbPath = await tempDbPath()
     await writeLegacyV1Database(dbPath)
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(20)
+    expect(await store.getSchemaVersion()).toBe(21)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -4376,7 +4440,7 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const db = new SQL.Database(await readFile(dbPath))
-    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('20')
+    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('21')
     expect(db.exec("select name from sqlite_master where type = 'table' and name = 'workflow_nodes'")[0]?.values[0]?.[0]).toBe('workflow_nodes')
     db.close()
   })
@@ -4402,7 +4466,7 @@ describe('createLocalStore', () => {
     v8Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(20)
+    expect(await migrated.getSchemaVersion()).toBe(21)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     migrated.close()
@@ -4414,6 +4478,87 @@ describe('createLocalStore', () => {
     expect(columnNames).toContain('idempotency_key')
     expect(columnNames).toContain('lease_expires_at')
     expect(columnNames).not.toEqual(expect.arrayContaining(['json', 'payload', 'raw_body']))
+  })
+
+  it('migrates a retained v20 outbox to schema 21 without losing queued metadata', async () => {
+    const dbPath = await tempDbPath()
+    const retainedOperation = createRemoteSyncOperation({
+      id: 'sync-retained-v20',
+      kind: 'run-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: run.id,
+      createdAt: '2026-08-12T20:00:00.000Z',
+    })
+    const initial = await createLocalStore({ dbPath })
+    await initial.enqueueRemoteSyncOperation(retainedOperation)
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const v20Db = new SQL.Database(await readFile(dbPath))
+    v20Db.run(`
+      drop index idx_remote_sync_outbox_due;
+      alter table remote_sync_outbox rename to remote_sync_outbox_v21;
+      create table remote_sync_outbox (
+        id text primary key,
+        kind text not null,
+        local_project_id text not null,
+        organization_id text,
+        team_project_id text,
+        run_id text not null,
+        entity_id text not null,
+        idempotency_key text not null unique,
+        status text not null,
+        generation integer not null,
+        attempt_count integer not null,
+        next_attempt_at text,
+        lease_expires_at text,
+        last_attempt_at text,
+        last_error_code text,
+        last_error_message text,
+        recovery text not null,
+        completed_at text,
+        created_at text not null,
+        updated_at text not null,
+        check (kind in (
+          'run-summary', 'test-evidence-summary', 'agent-review-summary',
+          'coding-agent-summary'
+        )),
+        check (status in ('pending', 'sending', 'retry-scheduled', 'completed', 'terminal')),
+        check (generation >= 1),
+        check (attempt_count >= 0),
+        check (
+          (status = 'sending' and lease_expires_at is not null) or
+          (status <> 'sending' and lease_expires_at is null)
+        ),
+        check (
+          (organization_id is null and team_project_id is null) or
+          (organization_id is not null and team_project_id is not null)
+        )
+      );
+      insert into remote_sync_outbox select * from remote_sync_outbox_v21;
+      drop table remote_sync_outbox_v21;
+      create index idx_remote_sync_outbox_due
+        on remote_sync_outbox(status, next_attempt_at, created_at);
+      update schema_meta set value = '20' where key = 'schema_version';
+    `)
+    await writeFile(dbPath, Buffer.from(v20Db.export()))
+    v20Db.close()
+
+    const migrated = await createLocalStore({ dbPath })
+    await expect(migrated.getSchemaVersion()).resolves.toBe(21)
+    await expect(migrated.listRemoteSyncOperations()).resolves.toEqual([retainedOperation])
+    await expect(migrated.enqueueRemoteSyncOperation(createRemoteSyncOperation({
+      id: 'sync-runtime-v21',
+      kind: 'agent-runtime-summary',
+      localProjectId: project.id,
+      runId: run.id,
+      entityId: 'agent-runtime-team-1',
+      createdAt: '2026-08-12T20:01:00.000Z',
+    }))).resolves.toMatchObject({ operation: { kind: 'agent-runtime-summary' } })
+    migrated.close()
   })
 
   it('migrates a retained v9 database to the Work Request materialization schema', async () => {
@@ -4437,7 +4582,7 @@ describe('createLocalStore', () => {
     v9Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(20)
+    expect(await migrated.getSchemaVersion()).toBe(21)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -4473,7 +4618,7 @@ describe('createLocalStore', () => {
     v10Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(20)
+    expect(await migrated.getSchemaVersion()).toBe(21)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -4541,7 +4686,7 @@ describe('createLocalStore', () => {
     v11Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(20)
+    expect(await migrated.getSchemaVersion()).toBe(21)
     await expect(
       migrated.getGateCommandReceiptObservation(receipt.id),
     ).resolves.toMatchObject({
@@ -4812,19 +4957,19 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const newerDb = new SQL.Database(await readFile(dbPath))
-    newerDb.run("update schema_meta set value = '21' where key = 'schema_version'")
+    newerDb.run("update schema_meta set value = '22' where key = 'schema_version'")
     await writeFile(dbPath, Buffer.from(newerDb.export()))
     newerDb.close()
 
     await expect(createLocalStore({ dbPath })).rejects.toThrow(
-      /schema version 21 is newer than supported version 20/,
+      /schema version 22 is newer than supported version 21/,
     )
 
     const unchangedDb = new SQL.Database(await readFile(dbPath))
     expect(
       unchangedDb.exec("select value from schema_meta where key = 'schema_version'")[0]
         ?.values[0]?.[0],
-    ).toBe('21')
+    ).toBe('22')
     unchangedDb.close()
   })
 
@@ -4865,7 +5010,7 @@ describe('createLocalStore', () => {
     unchangedDb.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(20)
+    expect(await migrated.getSchemaVersion()).toBe(21)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
   })

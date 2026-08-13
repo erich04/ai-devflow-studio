@@ -17,12 +17,12 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
-  it('defines Team schema v15 as an exact verified-publication adoption authority', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(15)
+  it('defines Team schema v16 as a safe Agent Runtime projection authority', async () => {
+    expect(TEAM_SCHEMA_VERSION).toBe(16)
     expect(teamMigrationCatalog.at(-1)).toEqual({
-      version: 15,
-      name: '0015_github_verified_publication_adoption',
-      fileName: '0015_github_verified_publication_adoption.sql',
+      version: 16,
+      name: '0016_agent_runtime_team_projection',
+      fileName: '0016_agent_runtime_team_projection.sql',
     })
     const migrations = await readTeamMigrationCatalog()
     const migration = migrations.find((candidate) => candidate.version === 15)
@@ -49,10 +49,14 @@ describe('team database schema', () => {
       nullable: true,
       references: 'github_branch_publications.id',
     })
+    const runtimeMigration = migrations.find((candidate) => candidate.version === 16)
+    expect(runtimeMigration?.sql).toContain('CREATE TABLE agent_runtime_summaries')
+    expect(runtimeMigration?.sql).toContain('CREATE TABLE agent_runtime_projection_audits')
+    expect(runtimeMigration?.sql).not.toMatch(/raw_(?:output|prompt)|checkpoint_data|local_project_id/i)
   })
 
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(15)
+    expect(TEAM_SCHEMA_VERSION).toBe(16)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -77,6 +81,8 @@ describe('team database schema', () => {
       'agent_traces',
       'agent_token_usage',
       'coding_agent_summaries',
+      'agent_runtime_summaries',
+      'agent_runtime_projection_audits',
       'enforcement_policies',
       'gate_override_decisions',
       'runtime_budget_policies',
@@ -215,6 +221,8 @@ describe('team database schema', () => {
       'github_delivery_credential_grants',
       'github_branch_publications',
       'github_pull_request_outcomes',
+      'agent_runtime_summaries',
+      'agent_runtime_projection_audits',
     ])
 
     for (const tableName of requiredTeamTableNames.filter((name) => !v14TableNames.has(name))) {
@@ -273,6 +281,11 @@ describe('team database schema', () => {
         version: 15,
         name: '0015_github_verified_publication_adoption',
         fileName: '0015_github_verified_publication_adoption.sql',
+      },
+      {
+        version: 16,
+        name: '0016_agent_runtime_team_projection',
+        fileName: '0016_agent_runtime_team_projection.sql',
       },
     ])
 

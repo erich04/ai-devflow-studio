@@ -4,6 +4,7 @@ import {
   buildPolicyAwareDeliverySummaries,
   rollupTokenUsage,
   runtimeCostSummaryToTokenUsage,
+  parseRemoteAgentRuntimeSummary,
   type AgentEvent,
   type AgentEventKind,
   type AgentProviderConfig,
@@ -25,6 +26,7 @@ import {
   type ProjectMembership,
   type ProviderCredentialMetadata,
   type RemoteCodingAgentSummary,
+  type RemoteAgentRuntimeSummary,
   type RemoteRunSummary,
   type RuntimeBudgetApproval,
   type RuntimeBudgetPolicy,
@@ -47,6 +49,7 @@ import {
   redactRemoteTestEvidenceSummaryForSync,
   resolveEffectivePolicy,
   toTeamStoredNodeId,
+  fromTeamStoredNodeId,
   type EffectiveEnforcementPolicy,
   type GateOverrideDecision,
   type OrganizationEnforcementPolicy,
@@ -339,6 +342,31 @@ type CodingAgentSummaryRow = {
   cost_cache_read_tokens: number | null
   cost_usd: string | number | null
   cost_source: NonNullable<RemoteCodingAgentSummary['costSummary']>['source'] | null
+  redacted: boolean
+}
+
+type AgentRuntimeSummaryRow = {
+  runtime_id: string
+  project_id: string
+  run_id: string
+  node_id: string
+  state_version: 1
+  projection_version: 1
+  runtime_version: number
+  checkpoint_version: number
+  status: RemoteAgentRuntimeSummary['status']
+  stop_reason: RemoteAgentRuntimeSummary['stopReason']
+  steps: number | string
+  tool_calls: number | string
+  tokens: number | string
+  cost_usd: number | string
+  accepted_action_count: number | string
+  context_digest: string
+  capability_set_digest: string
+  last_observation_digest: string
+  last_result_digest: string | null
+  started_at: TimestampValue
+  runtime_updated_at: TimestampValue
   redacted: boolean
 }
 
@@ -860,6 +888,35 @@ function mapCodingAgentSummary(row: CodingAgentSummaryRow): RemoteCodingAgentSum
   return summary
 }
 
+function mapAgentRuntimeSummary(row: AgentRuntimeSummaryRow): RemoteAgentRuntimeSummary {
+  return {
+    stateVersion: row.state_version,
+    projectionVersion: row.projection_version,
+    runtimeId: row.runtime_id,
+    projectId: row.project_id,
+    runId: row.run_id,
+    nodeId: fromTeamStoredNodeId(row.run_id, row.node_id),
+    runtimeVersion: Number(row.runtime_version),
+    checkpointVersion: Number(row.checkpoint_version),
+    status: row.status,
+    stopReason: row.stop_reason,
+    counters: {
+      steps: Number(row.steps),
+      toolCalls: Number(row.tool_calls),
+      tokens: Number(row.tokens),
+      costUsd: Number(row.cost_usd),
+    },
+    acceptedActionCount: Number(row.accepted_action_count),
+    contextDigest: row.context_digest,
+    capabilitySetDigest: row.capability_set_digest,
+    lastObservationDigest: row.last_observation_digest,
+    lastResultDigest: row.last_result_digest,
+    startedAt: timestamp(row.started_at),
+    updatedAt: timestamp(row.runtime_updated_at),
+    redacted: row.redacted as true,
+  }
+}
+
 function mapSkill(row: SkillRow): SkillDefinition {
   return {
     id: row.id,
@@ -924,7 +981,7 @@ function remoteNodePosition(stage: WorkflowNode['stage'], kind: WorkflowNode['ki
 }
 
 async function assertCanonicalRunExists(
-  db: TeamDbClient,
+  db: Pick<TeamDbClient, 'query'>,
   input: { runId: string; projectId: string; organizationId: string; userId: string },
 ): Promise<{ id: string; currentNodeId: string }> {
   const rows = await db.query<{ id: string; current_node_id: string }>(
@@ -1702,6 +1759,7 @@ export function createPostgresTeamRepository(
         agentTokenRows,
         providerRows,
         codingSummaryRows,
+        agentRuntimeSummaryRows,
         enforcementPolicyRows,
         gateOverrideRows,
         runtimeBudgetPolicyRows,
@@ -1766,6 +1824,15 @@ export function createPostgresTeamRepository(
           `,
           [context.organizationId],
         ),
+        db.query<AgentRuntimeSummaryRow>(
+          `
+            SELECT *
+            FROM agent_runtime_summaries
+            WHERE organization_id = $1
+            ORDER BY runtime_updated_at DESC, runtime_id ASC
+          `,
+          [context.organizationId],
+        ),
         db.query<EnforcementPolicyRow>(
           `
             SELECT *
@@ -1816,6 +1883,7 @@ export function createPostgresTeamRepository(
       const testEvidenceSummaries = evidenceRows.map(mapTestEvidenceSummary)
       const agentReviews = agentReviewRows.map(mapAgentReview)
       const codingAgentSummaries = codingSummaryRows.map(mapCodingAgentSummary)
+      const agentRuntimeSummaries = agentRuntimeSummaryRows.map(mapAgentRuntimeSummary)
       const codingTokenUsage = codingAgentSummaries
         .map((summary) => summary.costSummary)
         .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
@@ -1837,6 +1905,7 @@ export function createPostgresTeamRepository(
         agentTraces: agentTraceRows.map(mapAgentTrace),
         agentTokenUsage: agentTokenRows.map(mapAgentTokenUsage),
         codingAgentSummaries,
+        agentRuntimeSummaries,
         policyAwareDeliverySummaries: buildPolicyAwareDeliverySummaries({
           projectIds: projectRows.map((project) => project.id),
           testEvidenceSummaries,
@@ -2488,6 +2557,130 @@ export function createPostgresTeamRepository(
         syncedAt: new Date().toISOString(),
         message: 'coding agent summary written to Postgres repository',
       }
+    },
+
+    async uploadAgentRuntimeSummary(summary: RemoteAgentRuntimeSummary, context) {
+      summary = parseRemoteAgentRuntimeSummary(summary)
+      const syncedNodeId = remoteNodeId(summary.runId, summary.nodeId)
+      const summaryDigest = createHash('sha256')
+        .update(JSON.stringify(summary), 'utf8')
+        .digest('hex')
+
+      return withTeamDbTransaction(db, async (tx) => {
+        await assertCanonicalRunExists(tx, {
+          runId: summary.runId,
+          projectId: summary.projectId,
+          organizationId: context.organizationId,
+          userId: context.userId,
+        })
+        const [acceptedSummary] = await tx.query<{ runtime_id: string }>(
+          `
+          INSERT INTO agent_runtime_summaries (
+            runtime_id, organization_id, project_id, run_id, node_id,
+            state_version, projection_version, runtime_version, checkpoint_version,
+            status, stop_reason, steps, tool_calls, tokens, cost_usd,
+            accepted_action_count, context_digest, capability_set_digest,
+            last_observation_digest, last_result_digest, summary_digest,
+            started_at, runtime_updated_at, redacted
+          ) VALUES (
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, $9,
+            $10, $11, $12, $13, $14, $15,
+            $16, $17, $18, $19, $20, $21, $22, $23, $24
+          )
+          ON CONFLICT (runtime_id) DO UPDATE SET
+            runtime_version = excluded.runtime_version,
+            checkpoint_version = excluded.checkpoint_version,
+            status = excluded.status,
+            stop_reason = excluded.stop_reason,
+            steps = excluded.steps,
+            tool_calls = excluded.tool_calls,
+            tokens = excluded.tokens,
+            cost_usd = excluded.cost_usd,
+            accepted_action_count = excluded.accepted_action_count,
+            context_digest = excluded.context_digest,
+            capability_set_digest = excluded.capability_set_digest,
+            last_observation_digest = excluded.last_observation_digest,
+            last_result_digest = excluded.last_result_digest,
+            summary_digest = excluded.summary_digest,
+            started_at = excluded.started_at,
+            runtime_updated_at = excluded.runtime_updated_at,
+            redacted = excluded.redacted,
+            updated_at = now()
+          WHERE agent_runtime_summaries.organization_id = excluded.organization_id
+            AND agent_runtime_summaries.project_id = excluded.project_id
+            AND agent_runtime_summaries.run_id = excluded.run_id
+            AND agent_runtime_summaries.node_id = excluded.node_id
+            AND (
+              agent_runtime_summaries.summary_digest = excluded.summary_digest
+              OR (
+                agent_runtime_summaries.status <> 'terminal'
+                AND agent_runtime_summaries.runtime_version < excluded.runtime_version
+              )
+            )
+          RETURNING runtime_id
+          `,
+          [
+            summary.runtimeId,
+            context.organizationId,
+            summary.projectId,
+            summary.runId,
+            syncedNodeId,
+            summary.stateVersion,
+            summary.projectionVersion,
+            summary.runtimeVersion,
+            summary.checkpointVersion,
+            summary.status,
+            summary.stopReason,
+            summary.counters.steps,
+            summary.counters.toolCalls,
+            summary.counters.tokens,
+            summary.counters.costUsd,
+            summary.acceptedActionCount,
+            summary.contextDigest,
+            summary.capabilitySetDigest,
+            summary.lastObservationDigest,
+            summary.lastResultDigest,
+            summaryDigest,
+            summary.startedAt,
+            summary.updatedAt,
+            summary.redacted,
+          ],
+        )
+        if (!acceptedSummary) {
+          throw new RemoteChildSummaryConflictError(
+            summary.runtimeId,
+            summary.runId,
+            summary.projectId,
+          )
+        }
+        await tx.query(
+          `
+            INSERT INTO agent_runtime_projection_audits (
+              runtime_id, runtime_version, organization_id, project_id, run_id,
+              node_id, summary_digest, submitted_by_user_id, desktop_token_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (runtime_id, runtime_version) DO NOTHING
+          `,
+          [
+            summary.runtimeId,
+            summary.runtimeVersion,
+            context.organizationId,
+            summary.projectId,
+            summary.runId,
+            syncedNodeId,
+            summaryDigest,
+            context.userId,
+            context.tokenRecordId ?? null,
+          ],
+        )
+
+        return {
+          accepted: true,
+          syncedAt: new Date().toISOString(),
+          message: 'agent runtime summary written to Postgres repository',
+        }
+      })
     },
 
     async listAgentProviders(context) {

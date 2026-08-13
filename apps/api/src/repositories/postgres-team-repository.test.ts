@@ -95,6 +95,21 @@ class FakeTeamDbClient implements TeamDbRepositoryClient {
       return (accepted ? [{ id: values[0] }] : []) as T[]
     }
 
+    if (sql.includes('INSERT INTO agent_runtime_summaries')) {
+      const values = params ?? []
+      const accepted = this.acceptScopedChildSummaryWrite(
+        'agent_runtime_summaries',
+        values[0],
+        `${String(values[1])}:${String(values[2])}:${String(values[3])}:${String(values[4])}`,
+        values,
+      )
+      return (accepted ? [{ runtime_id: values[0] }] : []) as T[]
+    }
+
+    if (sql.includes('INSERT INTO agent_runtime_projection_audits')) {
+      return []
+    }
+
     if (sql.includes('INSERT INTO workflow_runs')) {
       return (this.runSummaryAccepted ? [{ id: params?.[0] }] : []) as T[]
     }
@@ -835,6 +850,76 @@ class OrganizationScopedReadDbClient implements TeamDbRepositoryClient {
 }
 
 describe('Postgres team repository', () => {
+  it('writes a monotonic metadata-only Agent Runtime projection and versioned audit', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+    const summary = {
+      stateVersion: 1 as const,
+      projectionVersion: 1 as const,
+      runtimeId: 'agent-runtime-team-1',
+      projectId: 'p-payments',
+      runId: 'run-remote-1',
+      nodeId: 'n-current',
+      runtimeVersion: 2,
+      checkpointVersion: 2,
+      status: 'running' as const,
+      stopReason: null,
+      counters: { steps: 1, toolCalls: 0, tokens: 10, costUsd: 0.01 },
+      acceptedActionCount: 1,
+      contextDigest: 'a'.repeat(64),
+      capabilitySetDigest: 'b'.repeat(64),
+      lastObservationDigest: 'c'.repeat(64),
+      lastResultDigest: null,
+      startedAt: '2026-08-12T20:00:00.000Z',
+      updatedAt: '2026-08-12T20:00:01.000Z',
+      redacted: true as const,
+    }
+
+    await expect(repository.uploadAgentRuntimeSummary(summary, {
+      organizationId: 'org-demo',
+      userId: 'u-ling',
+      tokenRecordId: 'desktop-token-1',
+    })).resolves.toMatchObject({ accepted: true })
+    await expect(repository.uploadAgentRuntimeSummary(
+      Object.fromEntries(Object.entries(summary).reverse()) as typeof summary,
+      {
+        organizationId: 'org-demo',
+        userId: 'u-ling',
+        tokenRecordId: 'desktop-token-1',
+      },
+    )).resolves.toMatchObject({ accepted: true })
+
+    const writes = db.queries.filter((query) =>
+      query.sql.includes('INSERT INTO agent_runtime_summaries'),
+    )
+    const write = writes[0]
+    const audit = db.queries.find((query) =>
+      query.sql.includes('INSERT INTO agent_runtime_projection_audits'),
+    )
+    expect(write?.sql).toContain("agent_runtime_summaries.status <> 'terminal'")
+    expect(write?.sql).toContain(
+      'agent_runtime_summaries.runtime_version < excluded.runtime_version',
+    )
+    expect(write?.sql).toContain(
+      'agent_runtime_summaries.summary_digest = excluded.summary_digest',
+    )
+    expect(write?.params?.[4]).toBe('run-remote-1:n-current')
+    expect(writes).toHaveLength(2)
+    expect(writes[0]?.params?.[20]).toBe(writes[1]?.params?.[20])
+    expect(audit?.sql).toContain('ON CONFLICT (runtime_id, runtime_version) DO NOTHING')
+    expect(audit?.params?.slice(0, 6)).toEqual([
+      summary.runtimeId,
+      summary.runtimeVersion,
+      'org-demo',
+      summary.projectId,
+      summary.runId,
+      'run-remote-1:n-current',
+    ])
+    expect(JSON.stringify([write?.params, audit?.params])).not.toMatch(
+      /localProjectId|userId|sessionId|source|path|output|checkpointData/i,
+    )
+  })
+
   it('does not inject a historical Gate override into a non-blocking Postgres enforcement decision', async () => {
     const repository = createPostgresTeamRepository(
       new HistoricalGateOverrideDbClient(),

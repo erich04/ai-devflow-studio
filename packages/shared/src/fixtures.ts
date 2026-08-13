@@ -718,7 +718,7 @@ title: Electron Demo Readiness Checklist
 category: review_checklist
 ownerId: u-erich
 tags: electron, demo, smoke, local, github-delivery
-summary: Electron demos should prove Desktop schema v20, production boundaries, durable Agent Runtime and Local MCP audit recovery, governed GitHub Delivery, and credential containment.
+summary: Electron demos should prove Desktop schema v21, production boundaries, durable Agent Runtime and Local MCP audit recovery, governed GitHub Delivery, and credential containment.
 ---
 
 # Electron Demo Readiness Checklist
@@ -730,7 +730,8 @@ Before using the desktop app for a demo or signoff, confirm the real Electron pa
 - Confirm Electron launched \`apps/desktop\`, not \`default_app.asar\`.
 - Confirm the intended desktop renderer is listening on \`127.0.0.1:5173\`.
 - Clear stale DevFlow listeners on \`5173\` before trusting a demo run.
-- Confirm the local SQLite database reports Desktop schema v20 and refuses an unknown newer schema.
+- Confirm the local SQLite database reports Desktop schema v21, retains the v20 outbox across the
+  metadata-only Runtime operation upgrade, and refuses an unknown newer schema.
 - Run the packaged pilot Runtime probe and confirm its accepted action count remains exactly one after cold restart and that it retains one started and one succeeded Local MCP Tool audit bound to the exact installation revision.
 - Open the Workbench and select a Gate node to confirm Inspector state is live.
 - Use \`corepack pnpm test:electron-smoke\` for automated signoff of preload, main process, SQLite, and local execution behavior.
@@ -764,7 +765,7 @@ title: Postgres Smoke Readiness Checklist
 category: review_checklist
 ownerId: u-erich
 tags: postgres, api, smoke, policy, github-delivery
-summary: Postgres smoke should prove Team schema v15, retained migration, governed GitHub Delivery, policy, sync, and redaction.
+summary: Postgres smoke should prove Team schema v16, retained migration, governed GitHub Delivery, Agent Runtime projection, policy, sync, and redaction.
 ---
 
 # Postgres Smoke Readiness Checklist
@@ -773,7 +774,7 @@ Use this checklist when API, repository, migration, policy, override, sync, GitH
 manager-summary code changes.
 
 - Set \`DEVFLOW_DATABASE_URL\` explicitly before running Postgres smoke.
-- Prove a disposable fresh database reaches Team schema v15.
+- Prove a disposable fresh database reaches Team schema v16.
 - Prove a populated v11-to-v12 migration retains exact repository binding, Delivery Request,
   approval, publication, recovery, and audit data.
 - Prove a failed v11-to-v12 migration rolls back transactionally and succeeds once on explicit
@@ -784,6 +785,9 @@ manager-summary code changes.
 - Prove v13-to-v14 adds only a nullable bounded Draft PR provider retry not-before.
 - Prove v14-to-v15 adds nullable \`source_publication_id\`, retains every legacy grant-backed
   publication exactly, and rejects rows that have neither or both publication authorities.
+- Prove v15-to-v16 creates empty \`agent_runtime_summaries\` and
+  \`agent_runtime_projection_audits\` tables, retains all prior rows, and rejects non-redacted,
+  incoherent-version, or invalid terminal Runtime summaries.
 - Verify seeded team data can be read through the API repository boundary.
 - Verify policy save/read and enforcement evaluation behavior.
 - Verify override rejection for owner, member, and conflicted lead cases.

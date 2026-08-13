@@ -92,7 +92,7 @@ import {
   type WorkflowRun,
   type WorkRequest,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 20
+export const CURRENT_SCHEMA_VERSION = 21
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -1144,7 +1144,10 @@ const schemaMigrations: readonly SchemaMigration[] = [
       completed_at text,
       created_at text not null,
       updated_at text not null,
-      check (kind in ('run-summary', 'test-evidence-summary', 'agent-review-summary', 'coding-agent-summary')),
+      check (kind in (
+        'run-summary', 'test-evidence-summary', 'agent-review-summary',
+        'coding-agent-summary', 'agent-runtime-summary'
+      )),
       check (status in ('pending', 'sending', 'retry-scheduled', 'completed', 'terminal')),
       check (generation >= 1),
       check (attempt_count >= 0),
@@ -2232,6 +2235,71 @@ const schemaMigrations: readonly SchemaMigration[] = [
       `)
     },
   },
+  {
+    version: 21,
+    migrate(db) {
+      db.run(`
+    drop index if exists idx_remote_sync_outbox_due;
+    alter table remote_sync_outbox rename to remote_sync_outbox_v20;
+
+    create table remote_sync_outbox (
+      id text primary key,
+      kind text not null,
+      local_project_id text not null,
+      organization_id text,
+      team_project_id text,
+      run_id text not null,
+      entity_id text not null,
+      idempotency_key text not null unique,
+      status text not null,
+      generation integer not null,
+      attempt_count integer not null,
+      next_attempt_at text,
+      lease_expires_at text,
+      last_attempt_at text,
+      last_error_code text,
+      last_error_message text,
+      recovery text not null,
+      completed_at text,
+      created_at text not null,
+      updated_at text not null,
+      check (kind in (
+        'run-summary', 'test-evidence-summary', 'agent-review-summary',
+        'coding-agent-summary', 'agent-runtime-summary'
+      )),
+      check (status in ('pending', 'sending', 'retry-scheduled', 'completed', 'terminal')),
+      check (generation >= 1),
+      check (attempt_count >= 0),
+      check (
+        (status = 'sending' and lease_expires_at is not null) or
+        (status <> 'sending' and lease_expires_at is null)
+      ),
+      check (
+        (organization_id is null and team_project_id is null) or
+        (organization_id is not null and team_project_id is not null)
+      )
+    );
+
+    insert into remote_sync_outbox (
+      id, kind, local_project_id, organization_id, team_project_id,
+      run_id, entity_id, idempotency_key, status, generation, attempt_count,
+      next_attempt_at, lease_expires_at, last_attempt_at, last_error_code,
+      last_error_message, recovery, completed_at, created_at, updated_at
+    )
+    select
+      id, kind, local_project_id, organization_id, team_project_id,
+      run_id, entity_id, idempotency_key, status, generation, attempt_count,
+      next_attempt_at, lease_expires_at, last_attempt_at, last_error_code,
+      last_error_message, recovery, completed_at, created_at, updated_at
+    from remote_sync_outbox_v20;
+
+    drop table remote_sync_outbox_v20;
+
+    create index idx_remote_sync_outbox_due
+      on remote_sync_outbox(status, next_attempt_at, created_at);
+      `)
+    },
+  },
 ]
 
 function migrateSchema(db: Database) {
@@ -2686,6 +2754,7 @@ const REMOTE_SYNC_OPERATION_KINDS: readonly RemoteSyncOperation['kind'][] = [
   'test-evidence-summary',
   'agent-review-summary',
   'coding-agent-summary',
+  'agent-runtime-summary',
 ]
 
 function isNonEmptyIdentifier(value: unknown): value is string {
@@ -4753,6 +4822,15 @@ class SqlJsLocalStore implements LocalStore {
       this.db.run('begin transaction')
       transactionOpen = true
       writeAgentRuntimeTransition(this.db, transition)
+      if (transition.runtime.scope.kind === 'team') {
+        this.enqueueCanonicalRemoteSyncOperation({
+          kind: 'agent-runtime-summary',
+          localProjectId: transition.runtime.scope.localProjectId,
+          runId: transition.runtime.authority.runId,
+          entityId: transition.runtime.id,
+          createdAt: transition.runtime.updatedAt,
+        })
+      }
       this.db.run('commit')
       transactionOpen = false
       await this.persist()

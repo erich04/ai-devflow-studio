@@ -64,7 +64,7 @@ describe('V1.5 living documentation truth', () => {
     const v15Prd = read('docs/product/prd/v1.5-github-delivery-prd.md')
 
     for (const markdown of [testingStrategy, demoAndSmoke]) {
-      expect(markdown).toContain('Team schema v15')
+      expect(markdown).toContain('Team schema v16')
       expect(markdown).toContain('provider-authoritative expiry')
       expect(markdown).toContain('verified publication adoption')
       expect(markdown).toContain('corepack pnpm test:v15-github-delivery')
@@ -75,10 +75,11 @@ describe('V1.5 living documentation truth', () => {
       expect(markdown).toContain('does not authorize paid-provider smoke')
     }
 
-    expect(testingStrategy).toContain('Desktop schema v20')
+    expect(testingStrategy).toContain('Desktop schema v21')
     expect(testingStrategy).toContain('Desktop schema 17-to-18')
     expect(testingStrategy).toContain('18-to-19')
     expect(testingStrategy).toContain('19-to-20')
+    expect(testingStrategy).toContain('20-to-21')
     expect(testingStrategy).toContain('Local MCP')
     expect(testingStrategy).toContain('accepted action count remains exactly one after cold restart')
     expect(demoAndSmoke).toContain('Desktop schema v17')
@@ -109,10 +110,13 @@ describe('V1.5 living documentation truth', () => {
     const postgres = read('docs/knowledge/checklists/postgres-smoke-readiness.md')
     const electron = read('docs/knowledge/checklists/electron-demo-readiness.md')
 
-    expect(postgres).toContain('Team schema v15')
+    expect(postgres).toContain('Team schema v16')
     expect(postgres).toContain('v11-to-v12')
     expect(postgres).toContain('v12-to-v13')
     expect(postgres).toContain('v14-to-v15')
+    expect(postgres).toContain('v15-to-v16')
+    expect(postgres).toContain('agent_runtime_summaries')
+    expect(postgres).toContain('agent_runtime_projection_audits')
     expect(postgres).toContain('provider_credential_expires_at')
     expect(postgres).toContain('source_publication_id')
     expect(postgres).toContain('legacy issued credential')
@@ -127,7 +131,7 @@ describe('V1.5 living documentation truth', () => {
     expect(postgres).toContain('redacted')
     expect(postgres).toContain('does not authorize paid-provider smoke')
 
-    expect(electron).toContain('Desktop schema v20')
+    expect(electron).toContain('Desktop schema v21')
     expect(electron).toContain('Local MCP')
     expect(electron).toContain('accepted action count remains exactly one after cold restart')
     expect(electron).toContain('corepack pnpm test:v15-github-delivery-packaged-smoke')
@@ -177,8 +181,8 @@ describe('V1.5 living documentation truth', () => {
       expect(markdown).toContain('Stop')
     }
 
-    expect(backendMatrix).toContain('Team schema v15')
-    expect(backendMatrix).toContain('Desktop schema v20')
+    expect(backendMatrix).toContain('Team schema v16')
+    expect(backendMatrix).toContain('Desktop schema v21')
     expect(backendMatrix).toContain('Agent Runtime')
     expect(backendMatrix).toContain('Local MCP')
     expect(backendMatrix).toContain('provider-authoritative expiry')
@@ -220,7 +224,7 @@ describe('V1.5 living documentation truth', () => {
     expect(prdIndex).toContain('Implemented final 1.x feature contract')
     expect(prdIndex).toContain('release/signoff pending')
 
-    expect(lessons).toContain('Team schema v15')
+    expect(lessons).toContain('Team schema v16')
     expect(lessons).toContain('v11-to-v12')
     expect(lessons).toContain('v12-to-v13')
     expect(lessons).toContain('provider-authoritative expiry')

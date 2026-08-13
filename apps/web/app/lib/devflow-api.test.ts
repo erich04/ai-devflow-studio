@@ -446,6 +446,7 @@ describe('DevFlow web API client', () => {
           totalCost: '$0.000',
           testEvidenceSummaries: [],
           codingAgentSummaries: [],
+          agentRuntimeSummaries: [],
           policyAwareDeliverySummaries: [],
           agentReviews: [],
           agentTraces: [],
@@ -475,6 +476,7 @@ describe('DevFlow web API client', () => {
       totalCost: '$0.000',
       testEvidenceSummaries: [],
       codingAgentSummaries: [],
+          agentRuntimeSummaries: [],
       policyAwareDeliverySummaries: [],
       agentReviews: [],
       agentTraces: [],
@@ -499,6 +501,37 @@ describe('DevFlow web API client', () => {
     })
   })
 
+  it('fails closed when an Agent Runtime projection adds local-only fields', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      agentRuntimeSummaries: [{
+        stateVersion: 1,
+        projectionVersion: 1,
+        runtimeId: 'agent-runtime-team-1',
+        projectId: 'p-payments',
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        runtimeVersion: 2,
+        checkpointVersion: 2,
+        status: 'running',
+        stopReason: null,
+        counters: { steps: 1, toolCalls: 0, tokens: 10, costUsd: 0.01 },
+        acceptedActionCount: 1,
+        contextDigest: 'a'.repeat(64),
+        capabilitySetDigest: 'b'.repeat(64),
+        lastObservationDigest: 'c'.repeat(64),
+        lastResultDigest: null,
+        startedAt: '2026-08-12T20:00:00.000Z',
+        updatedAt: '2026-08-12T20:00:01.000Z',
+        redacted: true,
+        localProjectId: 'private-local-project',
+      }],
+    }), { status: 200 }))
+
+    await expect(fetchTeamOverview({ apiBaseUrl: 'http://api.local', fetcher })).rejects.toThrow(
+      'invalid Agent Runtime projection',
+    )
+  })
+
   it('uses explicit session headers only when a caller opts into them', async () => {
     const fetcher = vi.fn(async () =>
       new Response(
@@ -511,6 +544,7 @@ describe('DevFlow web API client', () => {
           totalCost: '$0.000',
           testEvidenceSummaries: [],
           codingAgentSummaries: [],
+          agentRuntimeSummaries: [],
           policyAwareDeliverySummaries: [],
           agentReviews: [],
           agentTraces: [],

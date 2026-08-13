@@ -5,6 +5,7 @@ export type RemoteSyncOperationKind =
   | 'test-evidence-summary'
   | 'agent-review-summary'
   | 'coding-agent-summary'
+  | 'agent-runtime-summary'
 
 export type RemoteSyncOperationMetadata = {
   kind: RemoteSyncOperationKind

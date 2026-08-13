@@ -2,7 +2,7 @@
 
 本文件是 Airbnb-III 前端重构进入后端/IPC/local store 对接后的工程清单。目标不是新增一批接口，而是先把现有页面字段的来源讲清楚：哪些已经由 Electron IPC / 本地 SQLite / 远端 snapshot 驱动，哪些只是 renderer adapter 或 seed fallback，哪些需要后续 shared/API/IPC 合同变更。
 
-当前持久化基线是 Team schema v15 与 Desktop schema v20。Team 持久层记录非秘密的
+当前持久化基线是 Team schema v16 与 Desktop schema v21。Team 持久层记录非秘密的
 provider-authoritative expiry 合同与观测时间，不把本机时钟或 legacy NULL 当作清除授权。
 `v1.5.0` 已发布并完成 1.x；V2.0 Agent Runtime 实现正在按唯一 Roadmap 推进。
 
@@ -48,7 +48,7 @@ provider-authoritative expiry 合同与观测时间，不把本机时钟或 lega
 | Knowledge Review trace | `AgentTrace[]` | `local persisted` | 已可回写当前 Run/Node。 |
 | Token usage | `AgentTokenUsage[]` | `local persisted` | 保留 provider-reported/estimated source。 |
 | Coding Agent run | `runCodingAgent` / subscriptions | `real IPC/API` + `local persisted` | 继续接 permission relay、tool timeline、diff preview；Team summary 分别对白名单 structured metadata、model/cost、budget/reason 投影，净化允许字符串中的 secret/path，并丢弃未知嵌套键。 |
-| Agent Runtime | `startAgentRuntime` / `advanceAgentRuntime` / `cancelAgentRuntime` / `listAgentRuntimes` | `real IPC` + `local persisted` | Desktop schema v20 已持久化严格 trajectory、checkpoint、evaluation、terminal summary、`local_mcp_installations` 与 installation-bound metadata-only Tool audit；Native Tool、trusted Local MCP、governed Coding Executor 与 bounded native coding 均已由主进程接线，支持 deterministic/model decision、一次 repair、permission/checkpoint restart recovery；完整 UX 与 Team redacted projection 留给 Slice 7。 |
+| Agent Runtime | `startAgentRuntime` / `advanceAgentRuntime` / `cancelAgentRuntime` / `listAgentRuntimes` | `real IPC/API` + `local persisted` | Desktop schema v21 持久化严格 trajectory、checkpoint、evaluation、terminal summary、trusted Local MCP/Tool audit 与 metadata-only outbox；main-owned UX 使用 exact version/checkpoint CAS。Team schema v16 仅接收 status/version/counters/digests 的 redacted summary 与 versioned audit，Web 只读；源码、路径、raw output、checkpoint 和 capability authority 仍仅在 Electron main。 |
 | Permission relay | `CodingPermissionRequest[]` + decisions | `real IPC/API` + `local persisted` | 已有 IPC；继续补真实 UI 状态。 |
 | Diff preview | `CodingDiffArtifact[]` | `local persisted` | 已可展示。 |
 
@@ -80,11 +80,12 @@ provider-authoritative expiry 合同与观测时间，不把本机时钟或 lega
 | Gate re-evaluation summary | `evaluateGateEnforcement` decision | `real IPC/API` | 当前只针对 selected Run/Node；批量历史需要新合同。 |
 | Canonical Run sync | Electron main 从 LocalStore 读取 Run/current Node 后生成白名单 summary | `real IPC/API` | Renderer 无上传接口；只有原 authenticated sync creator 可更新。Run Summary 独占 status/current Node 推进，并收敛旧 active Node；child summary 不推进或合成 Run。 |
 | Dependent summary sync | canonical local Test/Review/Coding 对象生成 child summary | `real IPC/API` + `local persisted` | Child-first；`remote_sync_outbox` 持久化 metadata-only 操作、租约、退避、失败和显式恢复；ID 固定绑定 organization/project/Run/Node，重绑定返回 409，迟到 child 不激活旧 Node。 |
+| Agent Runtime Team projection | `agent-runtime-summary` outbox → `/api/sync/agent-runtime-summary` → `agent_runtime_summaries` / `agent_runtime_projection_audits` | `real IPC/API` + `local persisted` | 仅 Team-scoped Runtime 可上传；Seed/Postgres 校验 canonical Run/Node、固定 scope、严格单调版本与 terminal 不可变；Team 不得 resume、注入 Tool result、发 capability 或推进 Workflow。 |
 | Remote policy findings | redacted Agent Review `policyFindings` | `real IPC/API` + `local persisted` | 保留重建 exact blocker ID 所需的最小明细；count-only payload 被拒绝，本地 evidence/reference ID 与敏感文本不进入 Team read model。 |
 | Gate override sync | main 提交 identifier/reason-only override；remote snapshot 回灌 accepted audit | `real IPC/API` + `local persisted` | 独立 Lead 不重传 creator-owned Run。API 规范化 Postgres node namespace、重算 exact blocker/policy；持久化 audit 恢复 namespaced FK，同 scope 幂等更新保持该命名空间。 |
 | GitHub App repository binding | owner-managed API route + Postgres binding/version/revocation state | `real IPC/API` | API 验证 installation/repository/default branch；private key 不进入 Postgres、Desktop 或 renderer。 |
 | Delivery Request / approval | redacted request + immutable signed Web approval | `real IPC/API` | Desktop Bearer authority 不能审批自身请求；approval 精确绑定 binding、series/attempt/revision、commit 与 evidence digests。 |
-| Credential / publication / Draft | API credential grant、Desktop publication report、API remote verification 与 PR result | `real IPC/API` + `local persisted` | Electron main 内存中短暂使用 repository-scoped token；Team schema v15 只持久化 provider-authoritative expiry、观测时间、合同版本、bounded provider retry not-before 与 verified publication adoption 来源，不持久化 token/header/body；API 独立确认 remote head 后创建或 reconcile 一个 Draft pull request。后续同 series 的已批准 attempt 仅可在前一 attempt 已 verified publication 且 Draft 阶段失败时采用该证据，避免重复 credential/push。 |
+| Credential / publication / Draft | API credential grant、Desktop publication report、API remote verification 与 PR result | `real IPC/API` + `local persisted` | Electron main 内存中短暂使用 repository-scoped token；Team schema v16 保留 provider-authoritative expiry、观测时间、合同版本、bounded provider retry not-before 与 verified publication adoption 来源，不持久化 token/header/body；API 独立确认 remote head 后创建或 reconcile 一个 Draft pull request。后续同 series 的已批准 attempt 仅可在前一 attempt 已 verified publication 且 Draft 阶段失败时采用该证据，避免重复 credential/push。 |
 | Snapshot history | 当前只有 latest snapshot | `missing contract` | 后续单独设计历史查询合同。 |
 
 ## Browser Preview Boundary
