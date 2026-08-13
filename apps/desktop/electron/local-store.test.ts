@@ -1181,6 +1181,154 @@ describe('createLocalStore', () => {
     reopened.close()
   })
 
+  it('revises Memory with exact head CAS and records a stale writer conflict', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const { candidate } = await persistAcceptedMemoryCandidate(store)
+    const promotion = await store.authorizeAgentMemoryPromotion({
+      candidateId: candidate.id,
+      memoryId: 'memory-local-store-revision-cas',
+      authority: {
+        stateVersion: 1,
+        decisionId: 'memory-local-store-revision-cas-promotion',
+        candidateId: candidate.id,
+        candidateContentDigest: candidate.contentDigest,
+        scope: candidate.scope,
+        actorKind: 'human',
+        actorId: candidate.scope.userId,
+        policyId: 'memory-policy-local-store-1',
+        policyVersion: 1,
+        visibility: 'user_project',
+        sensitivity: 'private',
+        retentionClass: 'until_deleted',
+        expiresAt: null,
+        authorityDigest: '1'.repeat(64),
+        decidedAt: '2026-08-12T20:30:05.000Z',
+      },
+    })
+    expect(promotion.authorized).toBe(true)
+    if (!promotion.authorized) throw new Error('expected promotion authority')
+    await expect(store.commitAgentMemoryPromotion(
+      { revision: promotion.revision },
+      promotion.capability,
+    )).resolves.toMatchObject({ committed: true, replayed: false })
+
+    const firstWriter = await store.authorizeAgentMemoryRevision({
+      memoryId: promotion.revision.id,
+      expectedHeadVersion: 1,
+      statement: 'The saved health test must run before dependency upgrades are accepted.',
+      authority: {
+        stateVersion: 1,
+        decisionId: 'memory-local-store-revision-decision-2a',
+        memoryId: promotion.revision.id,
+        expectedRevision: 1,
+        expectedContentDigest: promotion.revision.contentDigest,
+        scope: promotion.revision.scope,
+        actorKind: 'human',
+        actorId: promotion.revision.scope.userId,
+        policyId: 'memory-policy-local-store-1',
+        policyVersion: 2,
+        visibility: 'user_project',
+        sensitivity: 'internal',
+        retentionClass: 'until_deleted',
+        expiresAt: null,
+        authorityDigest: '2'.repeat(64),
+        decidedAt: '2026-08-12T20:30:06.000Z',
+      },
+    })
+    expect(firstWriter.authorized).toBe(true)
+    if (!firstWriter.authorized) throw new Error('expected first revision authority')
+    const staleWriter = await store.authorizeAgentMemoryRevision({
+      memoryId: promotion.revision.id,
+      expectedHeadVersion: 1,
+      statement: 'The saved health test is optional after dependency upgrades.',
+      authority: {
+        stateVersion: 1,
+        decisionId: 'memory-local-store-revision-decision-2b',
+        memoryId: promotion.revision.id,
+        expectedRevision: 1,
+        expectedContentDigest: promotion.revision.contentDigest,
+        scope: promotion.revision.scope,
+        actorKind: 'human',
+        actorId: promotion.revision.scope.userId,
+        policyId: 'memory-policy-local-store-1',
+        policyVersion: 2,
+        visibility: 'user_project',
+        sensitivity: 'internal',
+        retentionClass: 'until_deleted',
+        expiresAt: null,
+        authorityDigest: '3'.repeat(64),
+        decidedAt: '2026-08-12T20:30:07.000Z',
+      },
+    })
+    expect(staleWriter.authorized).toBe(true)
+    if (!staleWriter.authorized) throw new Error('expected stale revision authority')
+
+    await expect(store.commitAgentMemoryRevision(
+      { revision: firstWriter.revision, recordedAt: '2026-08-12T20:30:06.000Z' },
+      firstWriter.capability,
+    )).resolves.toEqual({
+      committed: true,
+      replayed: false,
+      revision: firstWriter.revision,
+    })
+    await expect(store.commitAgentMemoryRevision(
+      { revision: staleWriter.revision, recordedAt: '2026-08-12T20:30:08.000Z' },
+      staleWriter.capability,
+    )).resolves.toEqual({
+      committed: false,
+      reason: 'version_conflict',
+      currentRevision: firstWriter.revision,
+      currentHead: {
+        memoryId: promotion.revision.id,
+        currentRevision: 2,
+        scope: promotion.revision.scope,
+        status: 'active',
+        version: 2,
+        updatedAt: '2026-08-12T20:30:06.000Z',
+      },
+    })
+    await expect(store.listAgentMemoryRevisions(promotion.revision.id)).resolves.toEqual([
+      promotion.revision,
+      firstWriter.revision,
+    ])
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getAgentMemoryHead(promotion.revision.id)).resolves.toMatchObject({
+      currentRevision: 2,
+      status: 'active',
+      version: 2,
+    })
+    reopened.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const inspected = new SQL.Database(await readFile(dbPath))
+    const auditRows = inspected.exec(
+      `select event_kind, metadata_json from agent_memory_audits
+       where memory_id = 'memory-local-store-revision-cas'
+       order by created_at asc, id asc`,
+    )[0]?.values ?? []
+    expect(auditRows.map((row) => row[0])).toEqual([
+      'candidate_promoted',
+      'memory_revised',
+      'conflict_recorded',
+    ])
+    expect(JSON.parse(String(auditRows[2]?.[1]))).toEqual({
+      decisionId: 'memory-local-store-revision-decision-2b',
+      expectedRevision: 1,
+      expectedHeadVersion: 1,
+      currentRevision: 2,
+      currentHeadVersion: 2,
+      proposedContentDigest: staleWriter.revision.contentDigest,
+    })
+    expect(JSON.stringify(auditRows)).not.toContain(firstWriter.revision.statement)
+    expect(JSON.stringify(auditRows)).not.toContain(staleWriter.revision.statement)
+    inspected.close()
+  })
+
   it('keeps the prior Knowledge index snapshot current when replacement persistence fails', async () => {
     const dbPath = await tempDbPath()
     const backupPath = `${dbPath}.backup`

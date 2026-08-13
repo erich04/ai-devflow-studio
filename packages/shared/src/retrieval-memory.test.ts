@@ -24,6 +24,7 @@ import {
   parseRetrievalMemoryEvaluationCorpus,
   rerankKnowledgeRetrievalCandidates,
   promoteAgentMemoryCandidate,
+  reviseAgentMemoryRevision,
   type KnowledgeCitation,
   type KnowledgeHybridRetrievalResult,
   type KnowledgeRerankedRetrievalResult,
@@ -228,6 +229,104 @@ describe('V2.1 Agent Memory candidate contract', () => {
     await expect(promoteAgentMemoryCandidate({
       candidate,
       memoryId: 'memory-health-regression',
+      authority: { ...authority, rawPrompt: 'must-not-cross-the-boundary' },
+    })).rejects.toThrowError('invalid_agent_memory_candidate')
+  })
+
+  it('creates immutable revision two only from exact current-version authority', async () => {
+    const current = await parseDurableAgentMemoryRevision({
+      stateVersion: 1,
+      id: 'memory-health-regression',
+      revision: 1,
+      status: 'active',
+      scope: {
+        kind: 'team',
+        organizationId: 'org-1',
+        projectId: 'project-1',
+        userId: 'user-1',
+        sessionId: 'session-1',
+        localProjectId: 'local-project-1',
+      },
+      visibility: 'user_project',
+      statement: 'The saved health test is the regression check for dependency degradation.',
+      contentDigest: '59abd35566d90929a62e012cdddffbb120bc22d141c53528670ba08fc0e0e660',
+      provenanceDigest: 'aad5fd68277b6b347c2ee50b6493cf3b7e4da0b99c3db571a427023e6ecc0a05',
+      sourceCandidateId: 'memory-candidate-1',
+      supersedesRevision: null,
+      sensitivity: 'private',
+      retentionClass: 'until_deleted',
+      expiresAt: null,
+      promotionDecisionId: 'memory-promotion-decision-1',
+      promotionActorKind: 'human',
+      promotionActorId: 'user-1',
+      promotionPolicyId: 'memory-policy-1',
+      promotionPolicyVersion: 1,
+      promotionAuthorityDigest: '5'.repeat(64),
+      createdAt: '2026-08-13T08:00:05.000Z',
+    })
+    const unchangedCurrent = structuredClone(current)
+    const statement = 'The saved health test must run before dependency upgrades are accepted.'
+    const authority = {
+      stateVersion: 1,
+      decisionId: 'memory-revision-decision-2',
+      memoryId: current.id,
+      expectedRevision: current.revision,
+      expectedContentDigest: current.contentDigest,
+      scope: current.scope,
+      actorKind: 'human',
+      actorId: 'user-1',
+      policyId: 'memory-policy-1',
+      policyVersion: 2,
+      visibility: 'user_project',
+      sensitivity: 'internal',
+      retentionClass: 'thirty_days',
+      expiresAt: '2026-09-12T08:00:06.000Z',
+      authorityDigest: '6'.repeat(64),
+      decidedAt: '2026-08-13T08:00:06.000Z',
+    }
+
+    await expect(reviseAgentMemoryRevision({
+      currentRevision: current,
+      statement,
+      authority,
+    })).resolves.toEqual({
+      stateVersion: 1,
+      id: current.id,
+      revision: 2,
+      status: 'active',
+      scope: current.scope,
+      visibility: 'user_project',
+      statement,
+      contentDigest: '9af95e5c935332699bbbf9538031a2ab51aec901ac85f74fc4b319b3404d4bcc',
+      provenanceDigest: current.provenanceDigest,
+      sourceCandidateId: current.sourceCandidateId,
+      supersedesRevision: 1,
+      sensitivity: 'internal',
+      retentionClass: 'thirty_days',
+      expiresAt: '2026-09-12T08:00:06.000Z',
+      promotionDecisionId: 'memory-revision-decision-2',
+      promotionActorKind: 'human',
+      promotionActorId: 'user-1',
+      promotionPolicyId: 'memory-policy-1',
+      promotionPolicyVersion: 2,
+      promotionAuthorityDigest: '6'.repeat(64),
+      createdAt: '2026-08-13T08:00:06.000Z',
+    })
+    expect(current).toEqual(unchangedCurrent)
+
+    await expect(reviseAgentMemoryRevision({
+      currentRevision: current,
+      statement,
+      authority: { ...authority, expectedRevision: 2 },
+    })).rejects.toThrowError('invalid_agent_memory_candidate')
+    await expect(reviseAgentMemoryRevision({
+      currentRevision: current,
+      statement,
+      authority: { ...authority, actorKind: 'model' },
+    })).rejects.toThrowError('invalid_agent_memory_candidate')
+    await expect(reviseAgentMemoryRevision({
+      currentRevision: current,
+      statement,
       authority: { ...authority, rawPrompt: 'must-not-cross-the-boundary' },
     })).rejects.toThrowError('invalid_agent_memory_candidate')
   })
