@@ -1,4 +1,6 @@
+import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createV21EvaluationRecord } from './v21-retrieval-memory-evaluator'
 import {
@@ -106,6 +108,20 @@ function evaluate(overrides: Record<string, unknown> = {}) {
 }
 
 describe('V2.1 completion evidence', () => {
+  it('starts through the exact tsx CommonJS package runtime', () => {
+    const result = spawnSync(process.execPath, [
+      resolve('node_modules/tsx/dist/cli.mjs'),
+      'scripts/v21-completion-evidence.ts',
+    ], {
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('v21_completion_evidence_unavailable')
+    expect(result.stderr).not.toContain('Top-level await is currently not supported')
+  })
+
   it('accepts one exact direct-child signoff bound to evaluator, CI, and artifact', () => {
     expect(evaluate()).toEqual({ ready: true, failures: [] })
   })
