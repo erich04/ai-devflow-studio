@@ -13,6 +13,11 @@ const hasV20CompletionEvidence = existsSync(
 ) && existsSync(
   join(process.cwd(), 'docs/releases/v2.0.0/agent-runtime-evaluation.json'),
 )
+const hasV21CompletionEvidence = existsSync(
+  join(process.cwd(), 'docs/releases/v2.1.0/required-gates.json'),
+) && existsSync(
+  join(process.cwd(), 'docs/releases/v2.1.0/retrieval-memory-evaluation.json'),
+)
 
 describe('product roadmap source of truth', () => {
   it('keeps one roadmap with explicit major-version charters', () => {
@@ -87,7 +92,9 @@ describe('product roadmap source of truth', () => {
     expect(markdown).toContain(
       'V1.5 and the finite 1.x line are released and complete',
     )
-    if (hasV20CompletionEvidence) {
+    if (hasV21CompletionEvidence) {
+      expect(markdown).toMatch(/^### Now — .*V2\.2/gmu)
+    } else if (hasV20CompletionEvidence) {
       expect(markdown).toMatch(/^### Now — .*V2\.1/gmu)
     } else {
       expect(markdown).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
@@ -112,7 +119,12 @@ describe('product roadmap source of truth', () => {
     expect(currentRelease).toContain('`v1.5.0` is the released baseline')
     expect(currentRelease).toContain('The finite 1.x product line is complete')
     expect(currentRelease).not.toContain('release and 1.x completion gate remain pending')
-    if (hasV20CompletionEvidence) {
+    if (hasV21CompletionEvidence) {
+      expect(priorities).toMatch(/^### Now — .*V2\.2/gmu)
+      expect(priorities).toContain('V2.0 is complete')
+      expect(priorities).toContain('V2.1 Slices 1 through 6 are complete')
+      expect(priorities).toContain('docs/releases/v2.1.0/')
+    } else if (hasV20CompletionEvidence) {
       expect(priorities).toMatch(/^### Now — .*V2\.1/gmu)
       expect(priorities).toContain('V2.0 is complete')
       expect(priorities).toContain('V2.1 Slices 1 through 6 are complete')

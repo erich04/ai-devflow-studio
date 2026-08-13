@@ -90,8 +90,8 @@ contains the signoff-bound release artifacts.
 | Active version line | 2.x DevFlow-native Agent Runtime |
 | Completed 2.x milestones | V2.0 Native Agent Runtime Foundation; V2.1 Evaluated Retrieval And Memory |
 | Completion evidence | `docs/releases/v2.0.0/`; `docs/releases/v2.1.0/` |
-| Active milestone | V2.2 Multi-Agent And Execution Tenancy |
-| Next gate | Freeze the V2.2 contract, single-Agent baseline, and bounded coordination scenarios |
+| Active milestone | V2.2 Slice 1 — Shared Coordination Domain |
+| Next gate | Implement strict graph, handoff, authority-attenuation, and evaluation-corpus contracts |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -165,11 +165,23 @@ The superseded implementation-period markers `### Now — Run V2.1 Evaluation An
 `| Next gate | Freeze the exact V2.1 candidate and run the full completion matrix |` remain here only
 as auditable phase vocabulary; the current table and the single `Now` heading below are authoritative.
 
-### Now — Begin V2.2 Multi-Agent And Execution Tenancy
+### Now — Implement V2.2 Shared Coordination Contracts
 
-- Freeze the bounded supervisor/specialist contract and execution-tenancy authority model.
-- Establish the exact V2.0 single-Agent comparison baseline and selected coordination scenarios.
+- Implement the pure versioned Agent Task Graph, Coordination Session, Specialist descriptor,
+  Agent Handoff, shared-bound, and execution-tenancy contracts.
+- Preserve the exact V2.0 single-Agent baseline and add no execution or persistence before the shared
+  parsers and transition rules pass their negative matrix.
 - Add coordination without widening Workflow, Gate, Tool, publication, or Team authority.
+
+The V2.2 contract set is frozen in:
+
+- `docs/product/prd/v2.2-multi-agent-execution-tenancy-prd.md`
+- `docs/adr/0019-bounded-multi-agent-coordination.md`
+- `docs/plans/v2.2-multi-agent-execution-tenancy.md`
+- `scripts/fixtures/v2.2-multi-agent-evaluation.json`
+
+Slice 0 is complete. V2.2 product code begins only with Slice 1; no open-ended swarm, remote
+executor, hosted tenancy, or new publication authority is implied by this milestone.
 
 ### Next — Implement And Evaluate V2.2
 

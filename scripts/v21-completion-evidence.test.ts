@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createV21EvaluationRecord } from './v21-retrieval-memory-evaluator'
@@ -117,8 +117,25 @@ describe('V2.1 completion evidence', () => {
       windowsHide: true,
     })
 
-    expect(result.status).toBe(1)
-    expect(result.stderr).toContain('v21_completion_evidence_unavailable')
+    const evidenceExists = V21_COMPLETION_SIGNOFF_FILES.every((path) => existsSync(path))
+
+    if (evidenceExists) {
+      const output = JSON.parse(result.stdout) as {
+        status: string
+        candidateSha: string
+        signoffSha: string
+        failures: string[]
+      }
+      expect([0, 1]).toContain(result.status)
+      expect(output.status).toMatch(/^(passed|failed)$/u)
+      expect(output.candidateSha).toMatch(/^[0-9a-f]{40}$/u)
+      expect(output.signoffSha).toMatch(/^[0-9a-f]{40}$/u)
+      expect(Array.isArray(output.failures)).toBe(true)
+      expect(result.stderr).not.toContain('v21_completion_evidence_unavailable')
+    } else {
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('v21_completion_evidence_unavailable')
+    }
     expect(result.stderr).not.toContain('Top-level await is currently not supported')
   })
 

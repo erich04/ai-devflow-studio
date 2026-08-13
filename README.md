@@ -214,6 +214,7 @@ platform work.
 | V1.5 governed GitHub Delivery | [v1.5 Walkthrough](docs/guides/devflow-studio-v1.5-walkthrough.md) |
 | V2.0 Native Agent Runtime contract | [V2.0 PRD](docs/product/prd/v2.0-native-agent-runtime-prd.md) and [implementation plan](docs/plans/v2.0-native-agent-runtime.md) |
 | V2.1 Evaluated Retrieval and Memory | [V2.1 PRD](docs/product/prd/v2.1-evaluated-retrieval-memory-prd.md), [implementation plan](docs/plans/v2.1-evaluated-retrieval-memory.md), and [completion evidence](docs/releases/v2.1.0/) |
+| V2.2 Multi-Agent and Execution Tenancy | [V2.2 PRD](docs/product/prd/v2.2-multi-agent-execution-tenancy-prd.md), [architecture decision](docs/adr/0019-bounded-multi-agent-coordination.md), and [implementation plan](docs/plans/v2.2-multi-agent-execution-tenancy.md) |
 | Self-hosted API/Web/Postgres pilot | [Self-Hosted Pilot](docs/guides/devflow-studio-self-hosted-pilot.md) |
 | Windows source and ZIP validation | [Windows ZIP Smoke Guide](docs/guides/windows-zip-smoke.md) |
 | Test layers and quality gates | [Testing Strategy](docs/engineering/testing-strategy.md) |

@@ -1,0 +1,451 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "v2.2-multi-agent-execution-tenancy",
+  "datasetVersion": 1,
+  "coordinationContractVersion": 1,
+  "executionTenancyContractVersion": 1,
+  "defaultNoCost": true,
+  "bounds": {
+    "maxSpecialists": 4,
+    "maxTaskNodes": 12,
+    "maxDependencyEdges": 24,
+    "maxDelegationDepth": 1,
+    "maxParallelSpecialists": 3,
+    "maxAcceptedHandoffs": 16,
+    "maxSpecialistRetries": 1,
+    "maxHandoffSummaryBytes": 16384
+  },
+  "metricThresholds": {
+    "minimumAggregateImprovementOverSingle": 0.25,
+    "maxCostMultiplierOverSingle": 1.5,
+    "maxLatencyMultiplierOverSingle": 1.5,
+    "maxAdditionalHumanInterventions": 0,
+    "maxIsolationViolations": 0,
+    "maxAuthorityViolations": 0,
+    "maxTerminationViolations": 0,
+    "maxReplayViolations": 0,
+    "maxRedactionViolations": 0,
+    "paidProviderCalls": 0
+  },
+  "roles": [
+    {
+      "id": "contract-analyst",
+      "version": 1,
+      "capabilities": [
+        "repository_read"
+      ],
+      "resourceMode": "read"
+    },
+    {
+      "id": "test-analyst",
+      "version": 1,
+      "capabilities": [
+        "repository_read",
+        "saved_test"
+      ],
+      "resourceMode": "read"
+    },
+    {
+      "id": "bounded-implementer",
+      "version": 1,
+      "capabilities": [
+        "repository_read",
+        "managed_workspace_edit",
+        "saved_test",
+        "deterministic_evaluation"
+      ],
+      "resourceMode": "write"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "single-agent-cross-file-baseline",
+      "version": 1,
+      "category": "single_agent_baseline",
+      "selectedForQualityComparison": true,
+      "scope": {
+        "organizationId": "org-v22-eval",
+        "projectId": "project-v22-eval",
+        "userId": "user-v22-eval",
+        "sessionId": "session-v22-eval",
+        "localProjectId": "local-v22-eval",
+        "runId": "run-v22-baseline",
+        "nodeId": "node-build"
+      },
+      "graph": {
+        "tasks": [
+          {
+            "id": "baseline-task",
+            "roleId": "bounded-implementer",
+            "dependsOn": []
+          }
+        ],
+        "edges": []
+      },
+      "expected": {
+        "singleQuality": 0.5,
+        "multiQuality": 0.5,
+        "stopReason": "success",
+        "humanInterventions": 0,
+        "isolationViolations": 0,
+        "authorityViolations": 0,
+        "terminationViolations": 0,
+        "replayViolations": 0
+      }
+    },
+    {
+      "id": "multi-agent-cross-file-quality",
+      "version": 1,
+      "category": "multi_agent_quality",
+      "selectedForQualityComparison": true,
+      "scope": {
+        "organizationId": "org-v22-eval",
+        "projectId": "project-v22-eval",
+        "userId": "user-v22-eval",
+        "sessionId": "session-v22-eval",
+        "localProjectId": "local-v22-eval",
+        "runId": "run-v22-quality",
+        "nodeId": "node-build"
+      },
+      "graph": {
+        "tasks": [
+          {
+            "id": "analyze-contract",
+            "roleId": "contract-analyst",
+            "dependsOn": []
+          },
+          {
+            "id": "analyze-tests",
+            "roleId": "test-analyst",
+            "dependsOn": []
+          },
+          {
+            "id": "implement-repair",
+            "roleId": "bounded-implementer",
+            "dependsOn": [
+              "analyze-contract",
+              "analyze-tests"
+            ]
+          }
+        ],
+        "edges": [
+          "analyze-contract->implement-repair",
+          "analyze-tests->implement-repair"
+        ]
+      },
+      "expected": {
+        "singleQuality": 0.5,
+        "multiQuality": 1,
+        "stopReason": "success",
+        "humanInterventions": 0,
+        "isolationViolations": 0,
+        "authorityViolations": 0,
+        "terminationViolations": 0,
+        "replayViolations": 0
+      }
+    },
+    {
+      "id": "dependency-join-once",
+      "version": 1,
+      "category": "dependency_join",
+      "selectedForQualityComparison": false,
+      "scope": {
+        "organizationId": "org-v22-eval",
+        "projectId": "project-v22-eval",
+        "userId": "user-v22-eval",
+        "sessionId": "session-v22-eval",
+        "localProjectId": "local-v22-eval",
+        "runId": "run-v22-join",
+        "nodeId": "node-build"
+      },
+      "graph": {
+        "tasks": [
+          {
+            "id": "left-read",
+            "roleId": "contract-analyst",
+            "dependsOn": []
+          },
+          {
+            "id": "right-read",
+            "roleId": "test-analyst",
+            "dependsOn": []
+          },
+          {
+            "id": "join-result",
+            "roleId": "bounded-implementer",
+            "dependsOn": [
+              "left-read",
+              "right-read"
+            ]
+          }
+        ],
+        "edges": [
+          "left-read->join-result",
+          "right-read->join-result"
+        ]
+      },
+      "expected": {
+        "acceptedHandoffs": 2,
+        "joinCount": 1,
+        "stopReason": "success",
+        "replayViolations": 0
+      }
+    },
+    {
+      "id": "cycle-rejected-before-start",
+      "version": 1,
+      "category": "cycle_rejection",
+      "selectedForQualityComparison": false,
+      "scope": {
+        "organizationId": "org-v22-eval",
+        "projectId": "project-v22-eval",
+        "userId": "user-v22-eval",
+        "sessionId": "session-v22-eval",
+        "localProjectId": "local-v22-eval",
+        "runId": "run-v22-cycle",
+        "nodeId": "node-build"
+      },
+      "graph": {
+        "tasks": [
+          {
+            "id": "cycle-a",
+            "roleId": "contract-analyst",
+            "dependsOn": [
+              "cycle-b"
+            ]
+          },
+          {
+            "id": "cycle-b",
+            "roleId": "test-analyst",
+            "dependsOn": [
+              "cycle-a"
+            ]
+          }
+        ],
+        "edges": [
+          "cycle-a->cycle-b",
+          "cycle-b->cycle-a"
+        ]
+      },
+      "expected": {
+        "rejectionCode": "coordination_graph_cycle",
+        "specialistStarts": 0,
+        "sideEffects": 0
+      }
+    },
+    {
+      "id": "shared-budget-exact-boundary",
+      "version": 1,
+      "category": "shared_budget",
+      "selectedForQualityComparison": false,
+      "scope": {
+        "organizationId": "org-v22-eval",
+        "projectId": "project-v22-eval",
+        "userId": "user-v22-eval",
+        "sessionId": "session-v22-eval",
+        "localProjectId": "local-v22-eval",
+        "runId": "run-v22-budget",
+        "nodeId": "node-build"
+      },
+      "graph": {
+        "tasks": [
+          {
+            "id": "budget-read",
+            "roleId": "contract-analyst",
+            "dependsOn": []
+          },
+          {
+            "id": "budget-test",
+            "roleId": "test-analyst",
+            "dependsOn": []
+          }
+        ],
+        "edges": []
+      },
+      "expected": {
+        "stopReason": "budget_exhausted",
+        "actionsAfterBoundary": 0,
+        "authorityViolations": 0
+      }
+    },
+    {
+      "id": "parent-cancellation-propagates",
+      "version": 1,
+      "category": "cancellation",
+      "selectedForQualityComparison": false,
+      "scope": {
+        "organizationId": "org-v22-eval",
+        "projectId": "project-v22-eval",
+        "userId": "user-v22-eval",
+        "sessionId": "session-v22-eval",
+        "localProjectId": "local-v22-eval",
+        "runId": "run-v22-cancel",
+        "nodeId": "node-build"
+      },
+      "graph": {
+        "tasks": [
+          {
+            "id": "cancel-left",
+            "roleId": "contract-analyst",
+            "dependsOn": []
+          },
+          {
+            "id": "cancel-right",
+            "roleId": "test-analyst",
+            "dependsOn": []
+          }
+        ],
+        "edges": []
+      },
+      "expected": {
+        "stopReason": "cancelled",
+        "terminalSpecialists": 2,
+        "lateCommits": 0,
+        "terminationViolations": 0
+      }
+    },
+    {
+      "id": "foreign-project-nondisclosure",
+      "version": 1,
+      "category": "tenant_isolation",
+      "selectedForQualityComparison": false,
+      "scope": {
+        "organizationId": "org-v22-eval",
+        "projectId": "project-v22-eval",
+        "userId": "user-v22-eval",
+        "sessionId": "session-v22-eval",
+        "localProjectId": "local-v22-eval",
+        "runId": "run-v22-isolation",
+        "nodeId": "node-build"
+      },
+      "graph": {
+        "tasks": [
+          {
+            "id": "isolated-read",
+            "roleId": "contract-analyst",
+            "dependsOn": []
+          }
+        ],
+        "edges": []
+      },
+      "expected": {
+        "rejectionCode": "coordination_not_found",
+        "providerCalls": 0,
+        "toolCalls": 0,
+        "isolationViolations": 0
+      }
+    },
+    {
+      "id": "specialist-capability-cannot-widen",
+      "version": 1,
+      "category": "capability_attenuation",
+      "selectedForQualityComparison": false,
+      "scope": {
+        "organizationId": "org-v22-eval",
+        "projectId": "project-v22-eval",
+        "userId": "user-v22-eval",
+        "sessionId": "session-v22-eval",
+        "localProjectId": "local-v22-eval",
+        "runId": "run-v22-capability",
+        "nodeId": "node-build"
+      },
+      "graph": {
+        "tasks": [
+          {
+            "id": "read-only-specialist",
+            "roleId": "contract-analyst",
+            "dependsOn": []
+          }
+        ],
+        "edges": []
+      },
+      "expected": {
+        "rejectionCode": "specialist_authority_invalid",
+        "writerLeases": 0,
+        "toolCalls": 0,
+        "authorityViolations": 0
+      }
+    },
+    {
+      "id": "specialist-failure-attributed",
+      "version": 1,
+      "category": "failure_attribution",
+      "selectedForQualityComparison": false,
+      "scope": {
+        "organizationId": "org-v22-eval",
+        "projectId": "project-v22-eval",
+        "userId": "user-v22-eval",
+        "sessionId": "session-v22-eval",
+        "localProjectId": "local-v22-eval",
+        "runId": "run-v22-failure",
+        "nodeId": "node-build"
+      },
+      "graph": {
+        "tasks": [
+          {
+            "id": "failing-analysis",
+            "roleId": "contract-analyst",
+            "dependsOn": []
+          },
+          {
+            "id": "blocked-implementation",
+            "roleId": "bounded-implementer",
+            "dependsOn": [
+              "failing-analysis"
+            ]
+          }
+        ],
+        "edges": [
+          "failing-analysis->blocked-implementation"
+        ]
+      },
+      "expected": {
+        "failedTaskId": "failing-analysis",
+        "blockedTaskId": "blocked-implementation",
+        "stopReason": "failure",
+        "silentReassignments": 0
+      }
+    },
+    {
+      "id": "restart-zero-repeat",
+      "version": 1,
+      "category": "restart_recovery",
+      "selectedForQualityComparison": false,
+      "scope": {
+        "organizationId": "org-v22-eval",
+        "projectId": "project-v22-eval",
+        "userId": "user-v22-eval",
+        "sessionId": "session-v22-eval",
+        "localProjectId": "local-v22-eval",
+        "runId": "run-v22-restart",
+        "nodeId": "node-build"
+      },
+      "graph": {
+        "tasks": [
+          {
+            "id": "completed-before-restart",
+            "roleId": "contract-analyst",
+            "dependsOn": []
+          },
+          {
+            "id": "resume-after-restart",
+            "roleId": "bounded-implementer",
+            "dependsOn": [
+              "completed-before-restart"
+            ]
+          }
+        ],
+        "edges": [
+          "completed-before-restart->resume-after-restart"
+        ]
+      },
+      "expected": {
+        "specialistRestartDuplicateEffects": 0,
+        "handoffRestartDuplicateEffects": 0,
+        "writerRestartDuplicateEffects": 0,
+        "replayViolations": 0,
+        "stopReason": "success"
+      }
+    }
+  ]
+}

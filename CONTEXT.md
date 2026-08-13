@@ -288,6 +288,46 @@ The explicit terminal reason for a bounded Agent Runtime: success, failure, canc
 step limit, budget exhausted, or policy denied. Agent success produces reviewable Evidence but is not
 itself a Workflow transition or Gate decision.
 
+## Coordination Session
+
+The bounded Electron-main-owned container for one Supervisor Agent, its fixed Agent Task Graph, and
+the small set of Specialist Agent Runtimes it may start. It binds one exact Run/Node authority,
+execution-tenancy scope, Context digest, shared bounds, accepted handoffs, and terminal outcome. A
+Coordination Session cannot advance Workflow State, approve a Gate, or publish.
+
+## Supervisor Agent
+
+The only Agent in a Coordination Session allowed to assign ready task nodes to accepted Specialist
+Agents, join their bounded results, attribute failure, and stop the session. It can attenuate existing
+authority but cannot create Tool, Workflow, Gate, credential, repository, or delivery authority.
+
+## Specialist Agent
+
+A bounded Agent Runtime selected for one exact task node and role. Its scope, capabilities, Context,
+deadline, and budget are strict subsets of the Coordination Session. Specialist Agents cannot create
+or delegate to another Agent and cannot write outside an explicitly leased resource.
+
+## Agent Task Graph
+
+A versioned directed acyclic graph of bounded task nodes and dependency edges fixed before specialist
+side effects. A node becomes ready only after every dependency has an accepted terminal result.
+Cycles, unknown dependencies, unbounded fan-out, duplicate ownership, and graph mutation by a model
+fail closed.
+
+## Agent Handoff
+
+An immutable metadata-only transfer from one exact task/runtime version to another. It carries scope,
+result, Evidence, Context, and resource digests plus an allowlisted summary; it contains no hidden
+reasoning, source, patch, prompt, stdout/stderr, credential, or absolute path. The receiver rechecks
+current scope and authority before accepting it.
+
+## Execution Tenancy
+
+The isolation contract binding every coordination, task, specialist, capability grant, resource
+lease, checkpoint, handoff, and audit to the exact organization, project, user, session, Local
+Project, Run/Node, and coordination identity that owns it. Its core rule is: scope, capabilities, and budget are intersections, never fallbacks.
+A cross-tenant identifier reveals no data or execution authority.
+
 ## Tool Definition
 
 A main-owned, versioned executable capability description with strict input/output schemas,

@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 const read = (path: string) => readFileSync(path, 'utf8')
 const hasCompletionEvidence = existsSync('docs/releases/v2.0.0/required-gates.json') &&
   existsSync('docs/releases/v2.0.0/agent-runtime-evaluation.json')
+const hasV21CompletionEvidence = existsSync('docs/releases/v2.1.0/required-gates.json') &&
+  existsSync('docs/releases/v2.1.0/retrieval-memory-evaluation.json')
 
 describe('V2.0 Native Agent Runtime contract', () => {
   it('records the bounded runtime and observable trajectory decision', () => {
@@ -84,7 +86,10 @@ describe('V2.0 Native Agent Runtime contract', () => {
       expect(roadmap).toContain(path)
     }
 
-    if (hasCompletionEvidence) {
+    if (hasV21CompletionEvidence) {
+      expect(roadmap).toMatch(/^### Now — .*V2\.2/gmu)
+      expect(roadmap).toContain('V2.0 and V2.1 are complete')
+    } else if (hasCompletionEvidence) {
       expect(roadmap).toMatch(/^### Now — .*V2\.1/gmu)
       expect(roadmap).toContain('V2.0 is complete')
     } else {
@@ -154,7 +159,9 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(plan).toContain('negotiated capability-set digest')
 
     expect(roadmap).toMatch(/Slice 7\s+is complete/)
-    if (hasCompletionEvidence) {
+    if (hasV21CompletionEvidence) {
+      expect(roadmap).toMatch(/^### Now — .*V2\.2/gmu)
+    } else if (hasCompletionEvidence) {
       expect(roadmap).toMatch(/^### Now — .*V2\.1/gmu)
     } else {
       expect(roadmap).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
