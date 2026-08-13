@@ -69,4 +69,16 @@ describe('Electron Agent Runtime production wiring', () => {
       /authorizeAgentMemory|commitAgentMemory|purgeAgentMemory|capability|statement|sessionId/,
     )
   })
+
+  it('promotes one exact Candidate through main-owned authority and returns only the projection', () => {
+    const handlers = main.slice(
+      main.indexOf('ipcMain.handle(ipcChannels.promoteAgentMemoryCandidate'),
+      main.indexOf('ipcMain.handle(ipcChannels.deleteRun'),
+    )
+    expect(main).toContain("from './agent-memory-human-actions.js'")
+    expect(handlers).toMatch(
+      /parsePromoteAgentMemoryCandidateInput\(payload\)[\s\S]*?getStore\(\)[\s\S]*?createAgentMemoryHumanActions\(\{ store \}\)\.promote\(input\)[\s\S]*?createAgentMemoryRendererAccess\(store\)\.list\(input\)/,
+    )
+    expect(handlers).not.toMatch(/authorityDigest|sessionId|statement|capability/)
+  })
 })

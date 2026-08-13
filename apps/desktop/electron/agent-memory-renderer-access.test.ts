@@ -71,7 +71,7 @@ function candidateFixture(input: {
     contentDigest: digest('a'),
     provenance: {
       kind: 'agent_observation',
-      runtimeId: `runtime-${input.id}`,
+      runtimeId: 'agent-runtime-selected',
       actionId: `action-${input.id}`,
       checkpointVersion: 1,
       sequence: 1,
@@ -125,6 +125,12 @@ describe('Agent Memory renderer access', () => {
       projectId: 'team-project-foreign',
       tokenId: 'pairing-token-1',
     })
+    const otherRuntimeCandidate = candidateFixture({
+      id: 'candidate-other-runtime',
+      projectId: 'team-project-1',
+      tokenId: 'pairing-token-1',
+    })
+    otherRuntimeCandidate.provenance.runtimeId = 'agent-runtime-other'
     const selectedRevision = revisionFixture(selectedCandidate)
     const staleRevision = revisionFixture(staleCandidate)
     const selectedHead = {
@@ -150,6 +156,7 @@ describe('Agent Memory renderer access', () => {
         selectedCandidate,
         staleCandidate,
         foreignCandidate,
+        otherRuntimeCandidate,
       ]),
       listAgentMemoryHeads: vi.fn(async () => [
         selectedHead,
@@ -196,7 +203,7 @@ describe('Agent Memory renderer access', () => {
     expect(store.listAgentMemoryRevisions).not.toHaveBeenCalledWith(staleRevision.id)
     expect(store.getDesktopPairingCredential).toHaveBeenCalledTimes(2)
     expect(JSON.stringify(snapshot)).not.toMatch(
-      /pairing-token-1|old-pairing-token|sessionId|candidate-stale|candidate-foreign|capability/,
+      /pairing-token-1|old-pairing-token|sessionId|candidate-stale|candidate-foreign|candidate-other-runtime|capability/,
     )
   })
 

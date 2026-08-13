@@ -563,6 +563,9 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       memories: [],
       redacted: true as const,
     })),
+    promoteAgentMemoryCandidate: vi.fn().mockRejectedValue(
+      new Error('Agent Memory promotion is not configured for this test.'),
+    ),
     completeWorkflowAgentNode: vi.fn().mockImplementation(async (input) => {
       const created = createWorkflowRunFromRequest({
         runId: 'run-created-from-request',

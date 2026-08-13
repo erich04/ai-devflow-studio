@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import {
   createAgentRuntime,
@@ -252,5 +252,46 @@ describe('AgentMemoryPanel', () => {
     expect(await screen.findByText('No exact Agent Runtime is available for Memory scope.'))
       .toBeInTheDocument()
     expect(listAgentMemoryLifecycle).not.toHaveBeenCalled()
+  })
+
+  it('promotes only a pending Candidate with exact renderer-observed digests', async () => {
+    const promotedSnapshot: AgentMemoryRendererSnapshot = {
+      ...snapshot,
+      candidates: snapshot.candidates.map((entry) => entry.id === 'candidate-pending'
+        ? { ...entry, lifecycleStatus: 'promoted' as const }
+        : entry),
+    }
+    const promoteAgentMemoryCandidate = vi.fn().mockResolvedValue(promotedSnapshot)
+    const api = {
+      listAgentRuntimes: vi.fn().mockResolvedValue([runtimeListItem]),
+      listAgentMemoryLifecycle: vi.fn().mockResolvedValue(snapshot),
+      promoteAgentMemoryCandidate,
+    } as unknown as DevFlowDesktopApi
+
+    render(<AgentMemoryPanel
+      desktopApi={api}
+      runId="run-selected"
+      localProjectId="local-project-1"
+    />)
+
+    const button = await screen.findByRole('button', {
+      name: 'Promote private user-project Memory',
+    })
+    fireEvent.click(button)
+
+    await waitFor(() => expect(promoteAgentMemoryCandidate).toHaveBeenCalledWith({
+      runtimeId: runtime.id,
+      runId: runtime.authority.runId,
+      localProjectId: runtime.scope.localProjectId,
+      candidateId: snapshot.candidates[0]!.id,
+      expectedContentDigest: snapshot.candidates[0]!.contentDigest,
+      expectedProvenanceDigest: snapshot.candidates[0]!.provenanceDigest,
+    }))
+    await waitFor(() => expect(screen.queryByRole('button', {
+      name: 'Promote private user-project Memory',
+    })).not.toBeInTheDocument())
+    expect(JSON.stringify(promoteAgentMemoryCandidate.mock.calls)).not.toMatch(
+      /authority|policy|actor|memoryId|sessionId|capability|statement/,
+    )
   })
 })

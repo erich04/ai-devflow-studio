@@ -56,6 +56,7 @@ import { createLocalStore, type LocalStore } from './local-store.js'
 import { createDesktopAgentRuntime, type DesktopAgentRuntime } from './agent-runtime-runtime.js'
 import { createAgentRuntimeRendererAccess } from './agent-runtime-renderer-access.js'
 import { createAgentMemoryRendererAccess } from './agent-memory-renderer-access.js'
+import { createAgentMemoryHumanActions } from './agent-memory-human-actions.js'
 import {
   createFixtureLocalMcpRuntime,
   type FixtureLocalMcpRuntime,
@@ -90,6 +91,7 @@ import {
   parseListAgentRuntimesInput,
   parseGetAgentRuntimeInput,
   parseListAgentMemoryLifecycleInput,
+  parsePromoteAgentMemoryCandidateInput,
   parseReplyCodingPermissionInput,
   parseRemoteSnapshotInput,
   parseRetryRemoteSyncOperationInput,
@@ -2156,6 +2158,13 @@ function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.listAgentMemoryLifecycle, async (_, payload: unknown) => {
     const input = parseListAgentMemoryLifecycleInput(payload)
     const store = await getStore()
+    return createAgentMemoryRendererAccess(store).list(input)
+  })
+
+  ipcMain.handle(ipcChannels.promoteAgentMemoryCandidate, async (_, payload: unknown) => {
+    const input = parsePromoteAgentMemoryCandidateInput(payload)
+    const store = await getStore()
+    await createAgentMemoryHumanActions({ store }).promote(input)
     return createAgentMemoryRendererAccess(store).list(input)
   })
 

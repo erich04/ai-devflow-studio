@@ -45,9 +45,9 @@ retroactive TDD rewrites unless it is touched.
   visible in Desktop while source paths, bodies, and scope sessions remain in Electron main. The
   focused matrix passes 154 local-store, 18 Desktop Runtime, 8 shared Context, 3 renderer-projection,
   1 renderer-access, 1 console-state, and 3 Runtime-panel tests.
-  The separate Memory lifecycle matrix passes 4 shared projection, 6 main-owned access, and 3 panel
-  tests. Repository unit verification passes 196 test files and 2772 tests after the strict read-only
-  Agent Memory lifecycle tracer.
+  The separate Memory lifecycle matrix passes 4 shared projection, 6 main-owned access, 3
+  main-owned human-action, and 4 panel tests. Repository unit verification passes 197 test files and
+  2778 tests after the exact-digest Candidate promotion tracer.
 - Agent Memory lifecycle UI identifies one selected Run and exact persisted Agent Runtime through an
   identifier-only IPC. Electron main derives the complete user/session/Local Project scope from that
   Runtime, rechecks the canonical Run and exact current Team pairing before and after loading
@@ -55,7 +55,10 @@ retroactive TDD rewrites unless it is touched.
   emits a bounded strict projection for Candidate pending/promoted and Durable
   active/conflict/expired/purge/deleted state with exact revision/head versions. Renderer parsing
   rejects extra keys; scope sessions, opaque capabilities, authority digests, raw output, local
-  paths, and deleted statements remain main-only.
+  paths, and deleted statements remain main-only. Promotion accepts only the selected Runtime/Run/
+  Local Project, Candidate ID, and renderer-observed content/provenance digests; Electron main
+  derives human policy/actor authority, consumes the opaque capability, and returns a newly read
+  strict projection.
 - The packaged Desktop pilot must execute exactly one `scenario.evaluate` Local MCP Tool, persist
   one started and one succeeded installation-bound metadata-only audit, and retain one accepted
   action after cold restart without another grant, MCP call, or audit record. It must also complete

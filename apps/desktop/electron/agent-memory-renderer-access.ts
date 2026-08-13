@@ -145,6 +145,7 @@ export function createAgentMemoryRendererAccess(
         store.listAgentMemoryHeads(input.localProjectId),
       ])
       const candidates = candidateSources.filter((candidate) =>
+        candidate.provenance.runtimeId === runtime.id &&
         scopesMatch(candidate.scope, runtime.scope))
       const visibleHeads = headSources.filter((head) =>
         scopesMatch(head.scope, runtime.scope))

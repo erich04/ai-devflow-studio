@@ -60,7 +60,8 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
   v26 retains trajectory/checkpoint persistence, full main-owned Runtime Context attachments,
   stale-before-action and grant-reservation Citation/Memory fencing, renderer projection v2 with
   metadata-only provenance, a separate bounded Agent Memory lifecycle view with exact revision/head
-  versions and no scope sessions/capabilities/deleted statements, durable metadata-only Tool audit,
+  versions, one exact-digest human Candidate promotion action, and no renderer-owned authority,
+  scope sessions/capabilities/deleted statements, durable metadata-only Tool audit,
   and main-owned
   trusted local stdio MCP authority; it adds the V2.1 retrieval index plus inert candidates,
   immutable durable Memory revisions, heads, tombstones, derived index entries, and metadata-only

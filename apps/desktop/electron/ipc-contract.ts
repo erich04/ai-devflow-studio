@@ -86,6 +86,12 @@ export type ListAgentMemoryLifecycleInput = GetAgentRuntimeInput
 
 export type AgentMemoryLifecycleSnapshot = AgentMemoryRendererSnapshot
 
+export type PromoteAgentMemoryCandidateInput = GetAgentRuntimeInput & {
+  candidateId: string
+  expectedContentDigest: string
+  expectedProvenanceDigest: string
+}
+
 export type RetryRemoteSyncOperationInput = {
   operationId: string
 }
@@ -116,6 +122,7 @@ export const ipcChannels = {
   getAgentRuntime: 'devflow:agent-runtime:get',
   agentRuntimeUpdated: 'devflow:agent-runtime:updated',
   listAgentMemoryLifecycle: 'devflow:agent-memory:lifecycle:list',
+  promoteAgentMemoryCandidate: 'devflow:agent-memory:candidate:promote',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   createPrDraft: 'devflow:pr-draft:create',
   prepareGitHubDelivery: 'devflow:github-delivery:prepare',
@@ -471,6 +478,9 @@ export type DevFlowDesktopApi = {
   listAgentMemoryLifecycle: (
     input: ListAgentMemoryLifecycleInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
+  promoteAgentMemoryCandidate: (
+    input: PromoteAgentMemoryCandidateInput,
+  ) => Promise<AgentMemoryLifecycleSnapshot>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
   prepareGitHubDelivery: (
@@ -548,6 +558,17 @@ function readExactRequiredIdentifier(
     throw new Error(`Invalid ${key}`)
   }
 
+  return raw
+}
+
+function readExactRequiredDigest(
+  value: Record<string, unknown>,
+  key: string,
+): string {
+  const raw = value[key]
+  if (typeof raw !== 'string' || !/^[a-f0-9]{64}$/u.test(raw)) {
+    throw new Error(`Invalid ${key}`)
+  }
   return raw
 }
 
@@ -800,6 +821,32 @@ export function parseListAgentMemoryLifecycleInput(
     runtimeId: readExactRequiredIdentifier(value, 'runtimeId'),
     runId: readExactRequiredIdentifier(value, 'runId'),
     localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+  }
+}
+
+export function parsePromoteAgentMemoryCandidateInput(
+  value: unknown,
+): PromoteAgentMemoryCandidateInput {
+  if (!isRecord(value)) throw new Error('Invalid promote Agent Memory candidate payload')
+  rejectUnexpectedFields(
+    value,
+    [
+      'runtimeId',
+      'runId',
+      'localProjectId',
+      'candidateId',
+      'expectedContentDigest',
+      'expectedProvenanceDigest',
+    ],
+    'promote Agent Memory candidate payload',
+  )
+  return {
+    runtimeId: readExactRequiredIdentifier(value, 'runtimeId'),
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+    candidateId: readExactRequiredIdentifier(value, 'candidateId'),
+    expectedContentDigest: readExactRequiredDigest(value, 'expectedContentDigest'),
+    expectedProvenanceDigest: readExactRequiredDigest(value, 'expectedProvenanceDigest'),
   }
 }
 

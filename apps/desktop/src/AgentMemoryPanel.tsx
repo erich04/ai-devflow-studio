@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { BrainCircuit, CheckCircle2, ShieldAlert } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { BrainCircuit, ShieldAlert } from 'lucide-react'
 import {
   parseAgentRuntimeRendererListItem,
   parseAgentMemoryRendererSnapshot,
@@ -22,21 +22,33 @@ function scopeLabel(scope: AgentMemoryRendererScope) {
 
 export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMemoryPanelProps) {
   const [snapshot, setSnapshot] = useState<AgentMemoryRendererSnapshot | null>(null)
+  const [runtimeSelection, setRuntimeSelection] = useState<{
+    runtimeId: string
+    runId: string
+    localProjectId: string
+  } | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [isPromoting, setIsPromoting] = useState(false)
   const [hasRuntimeScope, setHasRuntimeScope] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const selectionVersion = useRef(0)
 
   useEffect(() => {
+    selectionVersion.current += 1
     if (!desktopApi || !runId || !localProjectId) {
       setSnapshot(null)
+      setRuntimeSelection(null)
       setIsLoading(false)
+      setIsPromoting(false)
       setHasRuntimeScope(true)
       setError(null)
       return
     }
     let disposed = false
     setSnapshot(null)
+    setRuntimeSelection(null)
     setIsLoading(true)
+    setIsPromoting(false)
     setHasRuntimeScope(true)
     setError(null)
     void (async () => {
@@ -59,11 +71,17 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
         runtimeId: selected.runtime.runtimeId,
         ...selection,
       })
-        const parsed = parseAgentMemoryRendererSnapshot(value)
-        if (parsed.localProjectId !== localProjectId) {
-          throw new Error('Agent Memory renderer selection is stale')
-        }
-        if (!disposed) setSnapshot(parsed)
+      const parsed = parseAgentMemoryRendererSnapshot(value)
+      if (parsed.localProjectId !== localProjectId) {
+        throw new Error('Agent Memory renderer selection is stale')
+      }
+      if (!disposed) {
+        setRuntimeSelection({
+          runtimeId: selected.runtime.runtimeId,
+          ...selection,
+        })
+        setSnapshot(parsed)
+      }
     })()
       .catch(() => {
         if (!disposed) setError('Agent Memory lifecycle could not be loaded safely.')
@@ -75,6 +93,39 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
       disposed = true
     }
   }, [desktopApi, localProjectId, runId])
+
+  async function promoteCandidate(candidate: AgentMemoryRendererSnapshot['candidates'][number]) {
+    if (
+      !desktopApi ||
+      runtimeSelection === null ||
+      runtimeSelection.runId !== runId ||
+      runtimeSelection.localProjectId !== localProjectId ||
+      candidate.lifecycleStatus !== 'pending'
+    ) return
+    const operationVersion = selectionVersion.current
+    setIsPromoting(true)
+    setError(null)
+    try {
+      const value = await desktopApi.promoteAgentMemoryCandidate({
+        ...runtimeSelection,
+        candidateId: candidate.id,
+        expectedContentDigest: candidate.contentDigest,
+        expectedProvenanceDigest: candidate.provenanceDigest,
+      })
+      const parsed = parseAgentMemoryRendererSnapshot(value)
+      if (
+        parsed.localProjectId !== runtimeSelection.localProjectId ||
+        operationVersion !== selectionVersion.current
+      ) throw new Error('Agent Memory promotion result is stale')
+      setSnapshot(parsed)
+    } catch {
+      if (operationVersion === selectionVersion.current) {
+        setError('Agent Memory promotion was rejected safely. Refresh and review the Candidate again.')
+      }
+    } finally {
+      if (operationVersion === selectionVersion.current) setIsPromoting(false)
+    }
+  }
 
   return (
     <section className="agent-console-section" aria-label="Agent Memory lifecycle">
@@ -146,6 +197,16 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                     </strong>
                   </div>
                   <p className="empty-note">{scopeLabel(candidate.scope)}</p>
+                  {candidate.lifecycleStatus === 'pending' ? (
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      disabled={isPromoting}
+                      onClick={() => { void promoteCandidate(candidate) }}
+                    >
+                      {isPromoting ? 'Promoting Memory…' : 'Promote private user-project Memory'}
+                    </button>
+                  ) : null}
                 </article>
               ))}
             </div>

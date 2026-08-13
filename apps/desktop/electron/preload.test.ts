@@ -44,6 +44,14 @@ type ExposedDesktopApi = {
     runId: string
     localProjectId: string
   }) => Promise<unknown>
+  promoteAgentMemoryCandidate: (input: {
+    runtimeId: string
+    runId: string
+    localProjectId: string
+    candidateId: string
+    expectedContentDigest: string
+    expectedProvenanceDigest: string
+  }) => Promise<unknown>
   prepareGitHubDelivery: (input: { runId: string; nodeId: string }) => Promise<unknown>
   reviseGitHubDelivery: (input: {
     intentId: string
@@ -115,6 +123,14 @@ describe('Electron preload remote sync operator surface', () => {
       runtimeId: 'agent-runtime-1',
       ...selection,
     })).resolves.toBe(snapshot)
+    const promotion = {
+      runtimeId: 'agent-runtime-1',
+      ...selection,
+      candidateId: 'memory-candidate-1',
+      expectedContentDigest: 'a'.repeat(64),
+      expectedProvenanceDigest: 'b'.repeat(64),
+    }
+    await expect(exposedApi.promoteAgentMemoryCandidate(promotion)).resolves.toBe(snapshot)
 
     expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.startAgentRuntime, {
       runId: 'run-1',
@@ -132,6 +148,10 @@ describe('Electron preload remote sync operator surface', () => {
       runtimeId: 'agent-runtime-1',
       ...selection,
     })
+    expect(electron.invoke).toHaveBeenCalledWith(
+      ipcChannels.promoteAgentMemoryCandidate,
+      promotion,
+    )
 
     const listener = vi.fn()
     const unsubscribe = exposedApi.onAgentRuntimeUpdated(listener)

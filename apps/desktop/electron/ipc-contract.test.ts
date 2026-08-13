@@ -26,6 +26,7 @@ import {
   parseLoadRepositoryKnowledgeInput,
   parseGetAgentRuntimeInput,
   parseListAgentMemoryLifecycleInput,
+  parsePromoteAgentMemoryCandidateInput,
   parseListAgentRuntimesInput,
   parseListWorkRequestsInput,
   parseMaterializeWorkRequestInput,
@@ -216,6 +217,40 @@ describe('IPC contract parsers', () => {
       { runtimeId: 'agent-runtime-1', runId: 'run-1', localProjectId: 'project-1', statement: 'untrusted renderer text' },
     ]) {
       expect(() => parseListAgentMemoryLifecycleInput(payload)).toThrow()
+    }
+  })
+
+  it('accepts only exact candidate identities for a human Memory promotion command', () => {
+    const payload = {
+      runtimeId: 'agent-runtime-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+      candidateId: 'memory-candidate-1',
+      expectedContentDigest: 'a'.repeat(64),
+      expectedProvenanceDigest: 'b'.repeat(64),
+    }
+    expect(parsePromoteAgentMemoryCandidateInput(payload)).toEqual(payload)
+
+    for (const forbidden of [
+      { memoryId: 'renderer-memory-1' },
+      { decisionId: 'renderer-decision-1' },
+      { actorId: 'spoofed-user' },
+      { actorKind: 'policy' },
+      { policyId: 'renderer-policy' },
+      { policyVersion: 99 },
+      { capability: {} },
+      { authorityDigest: 'c'.repeat(64) },
+      { statement: 'Renderer replacement text.' },
+      { scope: { kind: 'local' } },
+    ]) {
+      expect(() => parsePromoteAgentMemoryCandidateInput({ ...payload, ...forbidden })).toThrow()
+    }
+    for (const malformed of [
+      { ...payload, candidateId: '' },
+      { ...payload, expectedContentDigest: 'A'.repeat(64) },
+      { ...payload, expectedProvenanceDigest: 'b'.repeat(63) },
+    ]) {
+      expect(() => parsePromoteAgentMemoryCandidateInput(malformed)).toThrow()
     }
   })
 
