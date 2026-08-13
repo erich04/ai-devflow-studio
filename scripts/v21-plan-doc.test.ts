@@ -20,7 +20,7 @@ describe('V2.1 Evaluated Retrieval and Memory contract', () => {
     }
 
     expect(roadmap).toContain('V2.1 contract set is frozen')
-    expect(roadmap).toContain('V2.1 product code begins with Slice 1')
+    expect(roadmap).toContain('V2.1 Slice 1 is complete')
   })
 
   it('defines stable citation, corpus, and Memory lifecycle language without changing authority', () => {
@@ -151,13 +151,17 @@ describe('V2.1 Evaluated Retrieval and Memory contract', () => {
     expect(plan).toContain('clean direct child')
   })
 
-  it('advances the single active Roadmap priority to V2.1 Slice 1 after contract freeze', () => {
+  it('advances the single active Roadmap priority to V2.1 Slice 2 after shared contracts pass', () => {
     const roadmap = read('docs/roadmap.md')
+    const plan = read('docs/plans/v2.1-evaluated-retrieval-memory.md')
 
-    expect(roadmap).toContain('### Now — Implement V2.1 Shared Retrieval, Citation, And Evaluation Contracts')
-    expect(roadmap).toContain('| Active milestone | V2.1 Slice 1 — shared retrieval, citation, and evaluation contracts |')
-    expect(roadmap).toContain('| Next gate | Complete the pure shared Slice 1 contracts and frozen-corpus parser before persistence or provider I/O |')
-    expect(roadmap).not.toContain('### Now — Define V2.1 Evaluated Retrieval And Memory Contracts')
+    expect(plan).toContain('Status: Active — Slice 1 complete; Slice 2 next')
+    expect(plan).toContain('| Slice 1 | Complete |')
+    expect(plan).toContain('| Slice 2 | Next |')
+    expect(roadmap).toContain('### Now — Implement V2.1 Deterministic Hybrid Retrieval')
+    expect(roadmap).toContain('| Active milestone | V2.1 Slice 2 — deterministic hybrid retrieval |')
+    expect(roadmap).toContain('| Next gate | Prove frozen-corpus hybrid improvement with exact citation and zero isolation regression before local persistence |')
+    expect(roadmap).not.toContain('### Now — Implement V2.1 Shared Retrieval, Citation, And Evaluation Contracts')
     expect(roadmap.match(/^### Now —/gmu)).toHaveLength(1)
   })
 })

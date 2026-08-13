@@ -88,7 +88,7 @@ describe('product roadmap source of truth', () => {
       'V1.5 and the finite 1.x line are released and complete',
     )
     expect(markdown).toContain(hasV20CompletionEvidence
-      ? '### Now — Implement V2.1 Shared Retrieval, Citation, And Evaluation Contracts'
+      ? '### Now — Implement V2.1 Deterministic Hybrid Retrieval'
       : '### Now — Run The V2.0 Evaluation And Completion Gate')
     expect(markdown).not.toContain('Slice 7, the candidate-bound completion gate, remains in progress')
     expect(markdown).toContain('v1.5-github-delivery-prd.md')
@@ -111,7 +111,7 @@ describe('product roadmap source of truth', () => {
     expect(currentRelease).toContain('The finite 1.x product line is complete')
     expect(currentRelease).not.toContain('release and 1.x completion gate remain pending')
     if (hasV20CompletionEvidence) {
-      expect(priorities).toContain('### Now — Implement V2.1 Shared Retrieval, Citation, And Evaluation Contracts')
+      expect(priorities).toContain('### Now — Implement V2.1 Deterministic Hybrid Retrieval')
       expect(priorities).toContain('V2.0 is complete')
     } else {
       expect(priorities).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
