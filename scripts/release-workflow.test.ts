@@ -185,17 +185,17 @@ describe('GitHub release workflow', () => {
 })
 
 describe('GitHub verify workflow', () => {
-  it('can be dispatched against an exact release-candidate ref with its parent history', () => {
+  it('checks out full history before validating immutable completion ancestry', () => {
     const workflow = readWorkflow(verifyWorkflowPath)
     const macosJob = jobBlock(workflow, 'macos-verify')
     const windowsJob = jobBlock(workflow, 'windows-compatibility')
 
     expect(workflow).toMatch(/on:\n(?:.|\n)*?workflow_dispatch:/)
     expect(macosJob).toMatch(
-      /- uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 2[\s\S]*?corepack pnpm verify/,
+      /- uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 0[\s\S]*?corepack pnpm verify/,
     )
     expect(windowsJob).toMatch(
-      /- uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 2[\s\S]*?corepack pnpm test/,
+      /- uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 0[\s\S]*?corepack pnpm test/,
     )
   })
 
