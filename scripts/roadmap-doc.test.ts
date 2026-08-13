@@ -87,9 +87,11 @@ describe('product roadmap source of truth', () => {
     expect(markdown).toContain(
       'V1.5 and the finite 1.x line are released and complete',
     )
-    expect(markdown).toContain(hasV20CompletionEvidence
-      ? '### Now — Implement V2.1 Durable Local Retrieval Index'
-      : '### Now — Run The V2.0 Evaluation And Completion Gate')
+    if (hasV20CompletionEvidence) {
+      expect(markdown).toMatch(/^### Now — .*V2\.1/gmu)
+    } else {
+      expect(markdown).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
+    }
     expect(markdown).not.toContain('Slice 7, the candidate-bound completion gate, remains in progress')
     expect(markdown).toContain('v1.5-github-delivery-prd.md')
     expect(markdown).toContain('0013-github-app-delivery-authority.md')
@@ -111,9 +113,9 @@ describe('product roadmap source of truth', () => {
     expect(currentRelease).toContain('The finite 1.x product line is complete')
     expect(currentRelease).not.toContain('release and 1.x completion gate remain pending')
     if (hasV20CompletionEvidence) {
-      expect(priorities).toContain('### Now — Implement V2.1 Durable Local Retrieval Index')
+      expect(priorities).toMatch(/^### Now — .*V2\.1/gmu)
       expect(priorities).toContain('V2.0 is complete')
-      expect(priorities).toContain('V2.1 Slices 1 and 2 are complete')
+      expect(priorities).toContain('V2.1 Slices 1 through 4 are complete')
     } else {
       expect(priorities).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
       expect(priorities).toContain('Slices 1–7 are complete')

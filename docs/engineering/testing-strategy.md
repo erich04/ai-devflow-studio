@@ -20,13 +20,21 @@ retroactive TDD rewrites unless it is touched.
   migration with zero fabricated snapshot/chunk/vector/Citation rows, followed by the 22-to-23 inert
   Memory-candidate migration with zero fabricated candidates, followed by the 23-to-24 durable
   revision/head/tombstone/derived-index/audit migration with zero fabricated lifecycle rows, plus
-  rollback on migration failure and refusal of a newer unknown schema.
+  the 24-to-25 retained migration that removes source-candidate uniqueness without losing revision,
+  head, tombstone, index, or audit history, plus rollback on migration failure and refusal of a newer
+  unknown schema.
 - V2.1 retrieval-index tests prove atomic activation preserves the previous current snapshot when
   persistence fails, source update/delete removes stale current identities, and corrupt, mismatched,
   cross-scope, non-finite, or over-1024-chunk state fails closed. An explicit bounded rebuild restores
   only derived index state while preserving its Local Project and Run. The completed Slice 3 matrix
   passed 143 local-store tests and 43 shared retrieval tests; the repository verification passed 192
   test files and 2729 tests.
+- The completed V2.1 Slice 4 Memory matrix proves accepted-result-only inert candidates, opaque
+  main-owned promotion/revision/deletion capabilities, immutable history, explicit optimistic
+  conflicts, scope/visibility/expiry filtering, tombstone-before-retrieval, persistence rollback,
+  restart-safe derived-index purge, metadata-only audit, and old-replay fencing. It passed 152
+  local-store tests and 48 shared retrieval/Memory tests; repository unit verification passed 192
+  test files and 2743 tests after the active-Slice document contracts advanced to Slice 5.
 - The packaged Desktop pilot must execute exactly one `scenario.evaluate` Local MCP Tool, persist
   one started and one succeeded installation-bound metadata-only audit, and retain one accepted
   action after cold restart without another grant, MCP call, or audit record. It must also complete

@@ -90,8 +90,8 @@ contains the signoff-bound release artifacts.
 | Active version line | 2.x DevFlow-native Agent Runtime |
 | Completed 2.x milestone | V2.0 Native Agent Runtime Foundation |
 | V2.0 evidence | `docs/releases/v2.0.0/` |
-| Active milestone | V2.1 Slice 4 — scoped Agent Memory lifecycle |
-| Next gate | Prove candidate, promotion, revision, conflict, expiry, deletion, and replay-safe purge semantics |
+| Active milestone | V2.1 Slice 5 — Agent Runtime Context and Desktop UX |
+| Next gate | Prove exact Context attachment, stale continuation fencing, visible provenance, and zero-repeat restart |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -105,22 +105,28 @@ Recall@K, nDCG@K, and mean reciprocal rank each reached `1.0`, aggregate improve
 was `0.5`, citation precision and faithfulness remained `1.0`, and isolation/provider violations
 remained zero. Slice 3 then completed the retained schema 21 → 22 migration, atomic current-snapshot
 activation, stale identity invalidation, strict corrupt-state rejection, and bounded local rebuild.
-Slice 4 scoped Agent Memory lifecycle is now the only active product priority.
+Slice 4 then completed Desktop-main-owned scoped Memory candidate, promotion, revision, conflict,
+retrieval, expiry, tombstone, and restart-safe purge semantics. Slice 5 Agent Runtime Context and
+Desktop UX is now the only active product priority.
 
 ## Now / Next / Later
 
-### Now — Implement V2.1 Scoped Agent Memory Lifecycle
+### Now — Integrate V2.1 Agent Runtime Context And Desktop UX
 
 V1.5 and the finite 1.x line are released and complete. V2.0 is complete with immutable evaluator
-and gate evidence. The V2.1 contract set is frozen; Slices 1 through 3 now provide strict scoped
+and gate evidence. The V2.1 contract set is frozen; Slices 1 through 4 now provide strict scoped
 requests, lexical/vector/RRF/reranked result contracts, exact current Citations, a deterministic
-no-cost evaluator, and a crash-safe Desktop-main-owned retrieval index.
+no-cost evaluator, a crash-safe Desktop-main-owned retrieval index, and a curated, versioned,
+isolated, expiring, tombstone-first durable Memory lifecycle.
 
-- Create inert Memory Candidates only from accepted observable results.
-- Promote and revise Memory only through exact authority, immutable history, and optimistic
-  concurrency; preserve explicit conflicts rather than silently merging them.
-- Exclude cross-scope, expired, tombstoned, and purge-pending rows before ranking, then prove restart,
-  deletion, purge, and old replay cannot resurrect Memory.
+- Attach exact current Knowledge Citations and durable Memory revisions to bounded Agent Runtime
+  Context without persisting hidden reasoning or widening scope.
+- Revalidate attached Context after checkpoints and fence stale, expired, deleted, or revoked inputs
+  before any later Tool, MCP, provider, or Coding Executor action.
+- Expose Knowledge, Working Memory, Candidate, Durable Memory, conflict, expiry, and deletion with
+  exact human-action versions in Desktop.
+- Prove cold restart preserves accepted Context and repeats zero retrieval, provider, Tool, or MCP
+  effects.
 
 The V2.1 contract set is frozen in:
 
@@ -130,16 +136,17 @@ The V2.1 contract set is frozen in:
 - `docs/plans/v2.1-evaluated-retrieval-memory.md`
 - `scripts/fixtures/v2.1-retrieval-memory-evaluation.json`
 
-V2.1 Slices 1 through 3 are complete. Slice 3 passed 143 focused local-store tests, 43 focused shared
-retrieval tests, and the repository matrix of 192 test files and 2729 tests. Slice 4 remains
-Desktop-main-owned; provider and Team projection choices stay outside this slice.
+V2.1 Slices 1 through 4 are complete. Slice 4 passed 152 focused local-store tests and 48 focused
+shared retrieval/Memory tests. Opaque main-owned capabilities gate promotion, revision, and deletion;
+scope/lifecycle filtering happens before retrieval; and restart-safe purge cannot revive an older
+revision. Slice 5 remains Desktop-main-owned; Team projection stays outside this slice.
 
-### Next — Integrate V2.1 Agent Runtime And Desktop UX
+### Next — Add V2.1 Redacted Team Projection
 
-- Attach exact current Citations and Memory revisions to bounded Agent Runtime Context.
-- Fence stale, deleted, or revoked continuation before another external action.
-- Expose provenance and lifecycle states through explicit Desktop controls without changing
-  Workflow, Gate, or Team authority.
+- Add the retained Team schema migration without fabricating Memory projection rows.
+- Sync only monotonic allowlisted lifecycle and quality metadata; never local content, prompt,
+  reasoning, credentials, paths, or raw output.
+- Keep Web read-only: Team cannot promote/delete local Memory, rebuild an index, or resume Runtime.
 
 ### Later — V2.2 Multi-Agent And Execution Tenancy
 

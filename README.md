@@ -57,9 +57,10 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
   pushed the exact same commit but failed before Draft creation; it does not mint another credential
   or push the branch again.
 - The V2.0 foundation provides a strict bounded Agent Runtime kernel, while current Desktop schema
-  v22 retains its schema v21 trajectory/checkpoint persistence, durable metadata-only Tool audit,
-  and main-owned trusted local stdio MCP authority and adds empty-by-default V2.1 retrieval index
-  snapshot/chunk/vector/Citation tables without fabricating retained data.
+  v25 retains trajectory/checkpoint persistence, durable metadata-only Tool audit, and main-owned
+  trusted local stdio MCP authority; it adds the V2.1 retrieval index plus inert candidates,
+  immutable durable Memory revisions, heads, tombstones, derived index entries, and metadata-only
+  audits without fabricating retained data.
   installation authority. Electron main owns strict Tool registration, opaque scoped
   grants, executable/digest verification, negotiated discovery, cancellation fencing, and bounded
   repository read, managed-workspace edit, saved-test, deterministic-evaluation, and MCP Tool
