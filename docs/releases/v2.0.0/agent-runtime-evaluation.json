@@ -1,0 +1,435 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "v2.0-native-agent-runtime-completion",
+  "datasetVersion": 1,
+  "datasetSha256": "e6258552e826df677b7346a89918c2a4d4d07361bb1908ef686451049fc5f7aa",
+  "runtimeContractVersion": 1,
+  "codingExecutorContractVersion": 1,
+  "nativeToolContractVersion": 1,
+  "candidateSha": "dfc74831552a0e8910529420c6383b6474e8a12c",
+  "recordedAt": "2026-08-13T06:29:18.012Z",
+  "scenarioResults": [
+    {
+      "scenarioId": "native-tool-no-side-effect",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "success",
+        "steps": 2,
+        "eventTypes": [
+          "runtime_started",
+          "action_requested",
+          "action_result",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_trajectory",
+          "native_tool_audit"
+        ],
+        "cleanupStatus": "not_required",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 1074,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "native-coding-repair",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "success",
+        "steps": 12,
+        "eventTypes": [
+          "runtime_started",
+          "permission_decided",
+          "action_result",
+          "evaluation_recorded",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_trajectory",
+          "coding_diff",
+          "test_evidence"
+        ],
+        "cleanupStatus": "completed",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 1625,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "opencode-coding-contract",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "success",
+        "steps": 12,
+        "eventTypes": [
+          "runtime_started",
+          "permission_decided",
+          "action_result",
+          "evaluation_recorded",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_trajectory",
+          "coding_diff",
+          "test_evidence"
+        ],
+        "cleanupStatus": "completed",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 912,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "local-mcp-discovery-call",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "success",
+        "steps": 2,
+        "eventTypes": [
+          "runtime_started",
+          "action_requested",
+          "action_result",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_trajectory",
+          "native_tool_audit"
+        ],
+        "cleanupStatus": "completed",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 1133,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "checkpoint-resume",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "success",
+        "steps": 2,
+        "eventTypes": [
+          "runtime_started",
+          "checkpointed",
+          "runtime_resumed",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_checkpoint",
+          "agent_trajectory"
+        ],
+        "cleanupStatus": "not_required",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 1049,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "tool-cancellation",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "cancelled",
+        "steps": 2,
+        "eventTypes": [
+          "runtime_started",
+          "action_requested",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_trajectory"
+        ],
+        "cleanupStatus": "not_required",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 1107,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "executor-cancellation",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "cancelled",
+        "steps": 12,
+        "eventTypes": [
+          "runtime_started",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_trajectory",
+          "coding_terminal_result"
+        ],
+        "cleanupStatus": "completed",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 1006,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "step-limit",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "step_limit",
+        "steps": 2,
+        "eventTypes": [
+          "runtime_started",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_trajectory"
+        ],
+        "cleanupStatus": "not_required",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 844,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "deadline-timeout",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "timeout",
+        "steps": 2,
+        "eventTypes": [
+          "runtime_started",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_checkpoint",
+          "agent_trajectory"
+        ],
+        "cleanupStatus": "not_required",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 1053,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "tool-call-limit",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "step_limit",
+        "steps": 3,
+        "eventTypes": [
+          "runtime_started",
+          "action_result",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_trajectory",
+          "native_tool_audit"
+        ],
+        "cleanupStatus": "not_required",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 840,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "budget-exhaustion",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "budget_exhausted",
+        "steps": 3,
+        "eventTypes": [
+          "runtime_started",
+          "action_result",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_trajectory"
+        ],
+        "cleanupStatus": "not_required",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 851,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "malformed-tool-schema",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "policy_denied",
+        "steps": 1,
+        "eventTypes": [
+          "runtime_started",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_trajectory"
+        ],
+        "cleanupStatus": "not_required",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 807,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "oversized-tool-result",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "failure",
+        "steps": 2,
+        "eventTypes": [
+          "runtime_started",
+          "action_requested",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_trajectory"
+        ],
+        "cleanupStatus": "not_required",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 833,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "stale-authority",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "policy_denied",
+        "steps": 1,
+        "eventTypes": [
+          "runtime_started",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_trajectory"
+        ],
+        "cleanupStatus": "not_required",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 1045,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "tenant-scope-isolation",
+      "scenarioVersion": 1,
+      "status": "passed",
+      "observation": {
+        "stopReason": "policy_denied",
+        "steps": 1,
+        "eventTypes": [
+          "runtime_started",
+          "runtime_stopped"
+        ],
+        "evidenceKinds": [
+          "agent_trajectory"
+        ],
+        "cleanupStatus": "not_required",
+        "metrics": {
+          "qualityPassed": true,
+          "costUsd": 0,
+          "latencyMs": 1156,
+          "humanInterventions": 0,
+          "recoverySucceeded": true,
+          "isolationViolations": 0
+        }
+      }
+    }
+  ],
+  "executorParity": [
+    {
+      "groupId": "governed-coding-repair",
+      "nativeScenarioId": "native-coding-repair",
+      "opencodeScenarioId": "opencode-coding-contract",
+      "eventContract": true,
+      "cancellation": true,
+      "evidence": true,
+      "terminalResult": true,
+      "cleanup": true
+    }
+  ],
+  "scans": {
+    "secretLeaks": 0,
+    "absolutePathLeaks": 0,
+    "sourceLeaks": 0,
+    "rawOutputLeaks": 0,
+    "isolationViolations": 0
+  },
+  "paidProviderCalls": 0,
+  "status": "passed"
+}

@@ -9,12 +9,10 @@ DevFlow turns an AI-assisted code change into a governed delivery flow with loca
 _A real Electron workbench showing the six-stage workflow, local repository controls, Gate Enforcement, knowledge evidence, and agent actions._
 
 > **Current release and roadmap status:** `v1.5.0` is released and the finite 1.x line is complete.
-> V2.0 Native Agent Runtime implementation is now the active priority. The shared bounded kernel,
-> durable Desktop runtime, Native Tool Registry, trusted local MCP boundary, and governed Coding
-> Executor, bounded native coding loop, Runtime UX, and Team redacted projection are complete;
-> Slice 7 is complete; the Slice 8 evaluation and completion gate is in progress with a frozen
-> deterministic dataset and fail-closed evaluator contract. The [Roadmap](docs/roadmap.md) is the single source of truth; package
-> labels and this README do not substitute for immutable proof under `docs/releases/`.
+> V2.0 Native Agent Runtime is complete, with candidate-bound evaluator and gate evidence under
+> `docs/releases/v2.0.0/`. V2.1 Evaluated Retrieval and Memory is now the active priority. The
+> [Roadmap](docs/roadmap.md) is the single source of truth; package labels and this README do not
+> substitute for immutable proof under `docs/releases/`.
 
 ## Why It Exists
 
@@ -186,8 +184,9 @@ For the API/Web/Postgres team path, use the [self-hosted pilot guide](docs/guide
 - Full real-window validation is macOS-local. Windows has CI compatibility checks and a source-validation guide, but no signed installer or full Electron release signoff.
 - The current product is a self-hosted team pilot, not a managed public SaaS offering.
 
-The [roadmap](docs/roadmap.md) is the source of truth for the completed 1.x line, the active V2.0
-Agent Runtime implementation, the V2.1/V2.2 sequence, and deferred platform work.
+The [roadmap](docs/roadmap.md) is the source of truth for the completed 1.x line, completed V2.0
+Agent Runtime foundation, active V2.1 retrieval/Memory milestone, V2.2 sequence, and deferred
+platform work.
 
 ## Documentation Map
 

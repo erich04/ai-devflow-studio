@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "targetMilestone": "v2.0",
+  "candidateSha": "dfc74831552a0e8910529420c6383b6474e8a12c",
+  "status": "passed",
+  "recordedAt": "2026-08-13T06:37:19.000Z",
+  "localMatrix": {
+    "candidateSha": "dfc74831552a0e8910529420c6383b6474e8a12c",
+    "verify": "passed",
+    "evaluator": "passed",
+    "worktreeCleanAfter": true
+  },
+  "verifyRun": {
+    "workflow": "Verify",
+    "event": "workflow_dispatch",
+    "runId": 31674040872,
+    "runAttempt": 1,
+    "url": "https://github.com/erich04/ai-devflow-studio/actions/runs/31674040872",
+    "headSha": "dfc74831552a0e8910529420c6383b6474e8a12c",
+    "conclusion": "success",
+    "jobs": {
+      "Docker smoke": "success",
+      "Postgres integration": "success",
+      "Windows compatibility": "success",
+      "Docker lifecycle smoke": "success",
+      "macOS verify": "success"
+    }
+  },
+  "desktopArtifact": {
+    "name": "ai-devflow-studio-v15-candidate-desktop",
+    "productVersion": "1.5.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "electronVersion": "33.4.11",
+    "archiveSha256": "456dad1f42e56d0d846db10faeff5a473109af7962e6924bd50c5e360f3625ba",
+    "archiveSizeBytes": 107068016,
+    "signed": false,
+    "installer": false
+  },
+  "evaluation": {
+    "path": "docs/releases/v2.0.0/agent-runtime-evaluation.json",
+    "datasetId": "v2.0-native-agent-runtime-completion",
+    "datasetVersion": 1,
+    "datasetSha256": "e6258552e826df677b7346a89918c2a4d4d07361bb1908ef686451049fc5f7aa",
+    "scenarioCount": 15,
+    "passedScenarioCount": 15,
+    "totalLatencyMs": 15335,
+    "totalCostUsd": 0,
+    "totalHumanInterventions": 0,
+    "paidProviderCalls": 0,
+    "scans": {
+      "secretLeaks": 0,
+      "absolutePathLeaks": 0,
+      "sourceLeaks": 0,
+      "rawOutputLeaks": 0,
+      "isolationViolations": 0
+    },
+    "status": "passed"
+  }
+}

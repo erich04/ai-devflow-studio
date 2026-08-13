@@ -58,7 +58,7 @@ rules.
 | --- | --- | --- | --- | --- |
 | 0.x | Engineering foundation | Real Electron execution, durable local state, team sync, Knowledge Governance, Gate policy, a managed external Coding Agent Adapter, runtime observability, and release discipline. | Fake and explicitly authorized real Coding paths can execute in managed worktrees, preserve auditable evidence, obey human Gates, sync only redacted summaries, and pass reproducible verification. | Completed at v0.9.0. |
 | 1.x | Governed self-hosted delivery | Authenticated team pilot, Desktop pairing, project scope, policy and budget controls, durable sync, repository knowledge, Web collaboration commands, reproducible lifecycle, and human-approved GitHub delivery. | One authenticated Work Request becomes one canonical local Run, reaches tested and evidence-backed delivery, and publishes a branch and pull request only after explicit human approval. V1.5 is the final planned 1.x feature milestone. | Completed at v1.5.0. |
-| 2.x | DevFlow-native Agent Runtime | A bounded first-party Agent loop, native Tool and MCP execution, pluggable Coding Executors, trajectory and evaluation, scoped Context and Memory, evaluated RAG, Multi-Agent orchestration, and tenant-scoped execution. | Benchmarked scenarios demonstrate bounded single- and Multi-Agent execution, native and delegated coding, MCP/tool use, evaluated retrieval and Memory, failure recovery, tenant isolation, and auditable trajectories while Workflow and Gate authority remains intact. | Active; V2.0 implementation is the current priority. |
+| 2.x | DevFlow-native Agent Runtime | A bounded first-party Agent loop, native Tool and MCP execution, pluggable Coding Executors, trajectory and evaluation, scoped Context and Memory, evaluated RAG, Multi-Agent orchestration, and tenant-scoped execution. | Benchmarked scenarios demonstrate bounded single- and Multi-Agent execution, native and delegated coding, MCP/tool use, evaluated retrieval and Memory, failure recovery, tenant isolation, and auditable trajectories while Workflow and Gate authority remains intact. | Active; V2.0 is complete and V2.1 is the current priority. |
 
 The version lines are finite product contracts, not an instruction to keep adding versions. A line
 ends when its completion gate passes; remaining ideas move to maintenance, evidence-promoted work,
@@ -88,68 +88,41 @@ contains the signoff-bound release artifacts.
 | V1.5 execution history | `docs/plans/v1.5-github-delivery.md` and the four immutable release evidence files |
 | Completed version line | 1.x governed self-hosted delivery |
 | Active version line | 2.x DevFlow-native Agent Runtime |
-| Active milestone | V2.0 evaluation and completion gate |
-| Next gate | Execute the frozen Slice 8 dataset and produce candidate-bound completion evidence |
+| Completed 2.x milestone | V2.0 Native Agent Runtime Foundation |
+| V2.0 evidence | `docs/releases/v2.0.0/` |
+| Active milestone | V2.1 Evaluated Retrieval And Memory contract freeze |
+| Next gate | Approve the V2.1 PRD, ADRs, versioned corpus, and executable TDD slice plan before product code |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
 restart with zero repeated remote effects, Acceptance, and a versioned credential-revocation proof.
-V2.0 implementation is active. Slices 1–7 are complete: the shared kernel, durable Desktop Runtime,
-main-owned Native Tool boundary, trusted local stdio MCP boundary, governed Coding Executor, and
-bounded native coding loop are implemented, while the Runtime UX and redacted Team projection passed
-their retained migration, real Postgres, Docker, packaged Desktop, redaction, full verification, and
-production build gates. Slice 8 is the remaining V2.0 evaluation and completion gate.
+V2.0 is complete. Candidate `dfc74831552a0e8910529420c6383b6474e8a12c` passed the frozen
+15-scenario evaluator, native/OpenCode parity, zero-leak scans, exact-SHA first-attempt Verify across
+five jobs, real Postgres, Docker lifecycle, Windows, macOS, Electron, packaged Desktop, and exclusive
+artifact integrity gates. Its immutable records are under `docs/releases/v2.0.0/`. V2.1 contract
+freeze is now the only active product priority.
 
 ## Now / Next / Later
 
-### Now — Run The V2.0 Evaluation And Completion Gate
+### Now — Define V2.1 Evaluated Retrieval And Memory Contracts
 
-V1.5 and the finite 1.x line are released and complete. Slices 1–7 are complete; Slice 7
-is complete after its retained migration, redaction, Postgres, Docker, packaged Desktop, full
-verification, and production build gates passed. Slice 8 is in progress as the only remaining V2.0
-gate and continues through the accepted contract and executable slice plan:
+V1.5 and the finite 1.x line are released and complete. V2.0 is complete with immutable evaluator
+and gate evidence. Before V2.1 product code, freeze one scoped PRD, the required retrieval/Memory
+authority ADRs, stable domain language, a versioned evaluation corpus, and an executable TDD plan.
 
-- `docs/product/prd/v2.0-native-agent-runtime-prd.md`
-- `docs/adr/0014-bounded-agent-runtime.md`
-- `docs/adr/0015-governed-coding-executor.md`
-- `docs/adr/0016-tool-mcp-execution-authority.md`
-- `docs/plans/v2.0-native-agent-runtime.md`
+- Preserve the lexical retrieval baseline and ADR 0007 rule that retrieval is not Governance
+  Evidence.
+- Define hybrid retrieval, reranking, citation, Memory scope, conflict/version, retention, expiry,
+  promotion, deletion, audit, and tenant isolation before persistence or provider integration.
+- Make benchmark improvement, citation faithfulness, privacy, deletion, and cross-tenant negative
+  paths executable completion criteria rather than treating a vector store as completion.
 
-- Slice 0 froze the accepted bounded Runtime, Coding Executor, and Tool/MCP authority contracts.
-- Slice 1 added the versioned shared deterministic kernel, strict transitions, bounds, scenario
-  parser, and evaluation metrics without performing I/O.
-- Slice 2 added Desktop schema 18, atomic trajectory/checkpoint persistence, strict IPC, startup
-  recovery, cancellation fencing, and a packaged no-side-effect Runtime restart probe.
-- Slice 3 added Desktop schema 19, immutable Tool definitions, opaque one-shot grants, bounded
-  repository read/workspace edit/saved-test/scenario Tools, durable metadata-only audit, restart
-  reconciliation, and a packaged Native Tool probe with zero repeat execution.
-- Slice 4 added Desktop schema 20, main-owned `LocalMcpInstallation` authority, exact executable
-  verification, bounded stdio discovery and calls, a negotiated capability-set digest,
-  installation-bound audit, and a packaged Local MCP probe with zero repeat execution.
-- Slice 5 added the versioned Coding Executor descriptor, capability negotiation, path-free
-  main-owned request, bounded permission turns, no-permission completion, observable OpenCode
-  compatibility mapping, and one uniform terminal result including cleanup state.
-- Slice 6 added deterministic and explicitly configured metered decision providers plus a bounded
-  plan/read/observation-bound-edit/test/evaluate/one-repair loop using only accepted main-owned Tools, with durable
-  permission/checkpoint recovery and packaged cold-restart evidence showing zero repeated effects.
-- Slice 7 now has a strict main-owned renderer projection, current Run/Local Project selection,
-  exact version/checkpoint CAS commands, monotonic list/detail state, safe trajectory/evaluation UX,
-  packaged cold-restart evidence with zero repeated Tool effects, Desktop schema 21 metadata-only
-  outbox sync, Team schema 16 monotonic summaries/audit, and a read-only Web manager projection.
-- Slice 7 passed its retained migration, real Postgres, Docker lifecycle, redaction, packaged
-  Desktop, full verification, and production build gates without widening Team authority.
-- Slice 8 now has a frozen 15-scenario no-cost dataset, a strict evaluator contract, and a
-  clean-candidate executable collector that removes provider credentials, runs every named
-  scenario, discards raw process output, and retains only the bounded record.
-- Complete clean candidate execution, full gate aggregation, exact-SHA CI, artifact integrity, and
-  direct-child evidence-only signoff before marking V2.0 complete.
+### Next — Implement V2.1 In Ordered TDD Slices
 
-### Next — Begin V2.1 Evaluated Retrieval And Memory After V2.0 Completion
-
-- Begin V2.1 only after the Slice 8 completion record is candidate-bound, green, and committed.
-- Add evaluated hybrid retrieval and scoped Agent Memory without changing Workflow, Knowledge, or
-  Governance Evidence authority.
-- Require benchmark improvement without citation, privacy, or cross-tenant isolation regression.
+- Implement only after the V2.1 contract set is accepted and the Roadmap points to its exact plan.
+- Keep default CI deterministic and no-cost; any provider-backed embedding or reranking evidence is
+  explicit, bounded, and separate.
+- Complete V2.1 candidate-bound evaluation before starting V2.2 coordination.
 
 ### Later — V2.2 Multi-Agent And Execution Tenancy
 
@@ -159,6 +132,27 @@ gate and continues through the accepted contract and executable slice plan:
   justified by real pilot evidence; there is no planned V1.6 feature milestone.
 
 ## Completed Milestones
+
+### v2.0: Native Agent Runtime Foundation
+
+- The completed contract set is
+  `docs/product/prd/v2.0-native-agent-runtime-prd.md`,
+  `docs/adr/0014-bounded-agent-runtime.md`,
+  `docs/adr/0015-governed-coding-executor.md`,
+  `docs/adr/0016-tool-mcp-execution-authority.md`, and
+  `docs/plans/v2.0-native-agent-runtime.md`.
+- Added the bounded checkpointed Agent Runtime, observable trajectory, exact stop reasons, native
+  Tool registry, opaque scoped grants, trusted local stdio MCP, and governed Coding Executor parity.
+- Added a narrow DevFlow-owned Coding Agent, durable Desktop recovery, metadata-only Team projection,
+  read-only Web visibility, and restart-safe permission/Tool execution with no Workflow/Gate bypass.
+- Passed the frozen 15-scenario no-cost evaluator on candidate
+  `dfc74831552a0e8910529420c6383b6474e8a12c`: quality/recovery passed, native/OpenCode parity passed,
+  paid-provider calls and isolation/redaction leaks were zero.
+- Passed exact-SHA Verify attempt 1 on Docker, lifecycle, Postgres/Linux packaged, Windows, and macOS,
+  then independently verified the exclusive Desktop artifact trio. Immutable completion evidence is
+  stored under `docs/releases/v2.0.0/`.
+- Slice 7 is complete with the frozen 15-scenario evaluator; Slice 8 is complete with the immutable
+  candidate-bound release records.
 
 ### v0.1: Fixture-Backed Team Workbench
 
@@ -522,8 +516,8 @@ layer.
 | --- | --- | --- | --- |
 | Deterministic Workflow | Run state, identity, policy, budget, Evidence, human Gates, and whether an operation may start or advance. | Every governed delivery path. | Exists in 1.x and remains the outer control plane in 2.x. |
 | Single-Call LLM Operation | One bounded provider request with assembled Context and a validated result; it has no autonomous Tool loop. | The input is already sufficient for a narrow summary, classification, review, or artifact generation. | Current Knowledge Review is an example: a persisted trace and Artifact do not make it an iterative Agent loop. |
-| DevFlow Agent Runtime | A bounded observe, decide, act, checkpoint, evaluation, and stop loop. | The task must explore, react to Tool/MCP results, revise a plan, or choose an approved executor. | Planned for V2.0 and owned by DevFlow. It is neither the Workflow nor a Coding Executor. |
-| Coding Executor | Scoped repository reads and changes, commands, tests, and structured diff/test/terminal results. | Approved work must inspect or modify code. | OpenCode is the current external executor. A later DevFlow-owned Coding Agent implements the same executor contract. |
+| DevFlow Agent Runtime | A bounded observe, decide, act, checkpoint, evaluation, and stop loop. | The task must explore, react to Tool/MCP results, revise a plan, or choose an approved executor. | Implemented in V2.0 and owned by DevFlow. It is neither the Workflow nor a Coding Executor. |
+| Coding Executor | Scoped repository reads and changes, commands, tests, and structured diff/test/terminal results. | Approved work must inspect or modify code. | OpenCode and the narrow DevFlow-owned Coding Agent implement the same governed executor contract. |
 
 The deterministic Workflow remains the outer authority. It establishes scope, policy, budget, and
 human approval before work starts, then persists accepted Evidence and controls stage transitions.
@@ -548,10 +542,10 @@ current Run.
 
 ### Executor Adoption
 
-- First, V2.0 adds the DevFlow Agent Runtime while retaining OpenCode as the first external Coding
+- V2.0 added the DevFlow Agent Runtime while retaining OpenCode as the first external Coding
   Executor. DevFlow owns orchestration, Context, Tool/MCP policy, checkpoints, evaluation, and routing.
-- Next, V2.0 adds a deliberately narrow DevFlow-owned Coding Agent behind the same executor contract.
-  It proves a native code loop without claiming immediate feature parity with OpenCode.
+- V2.0 also added a deliberately narrow DevFlow-owned Coding Agent behind the same executor contract.
+  It proves a native code loop without claiming feature parity with OpenCode.
 - Later, additional CLI adapters may be evaluated behind that contract. Codex CLI and Kimi Code are
   implementation candidates, not committed integrations.
 - Executor selection must be capability-based, policy-bound, observable, cancellable, and measured
@@ -563,9 +557,9 @@ Test Evidence, and terminal results; it does not claim OpenCode's private intern
 Delegating from one DevFlow Agent to OpenCode does not by itself satisfy the V2.2 Multi-Agent claim.
 That claim requires DevFlow-owned coordination, handoff, termination, and comparative evaluation.
 
-Before native Coding Agent implementation, approve an ADR that explicitly evolves ADR 0009 and the
-current `CONTEXT.md` external-only Coding Agent definitions. The Roadmap does not silently supersede
-accepted architecture decisions.
+ADR 0015 explicitly evolves ADR 0009's external-only Coding Agent definition and superseded it
+before the native executor was implemented; ADRs 0014 and 0016 froze the Runtime and Tool/MCP
+authority boundaries.
 
 ## 2.x Planned Milestones
 
