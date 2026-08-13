@@ -11,8 +11,10 @@ import {
   parseKnowledgeRetrievalCandidateSet,
   parseKnowledgeRetrievalRequest,
   parseRetrievalMemoryEvaluationCorpus,
+  rerankKnowledgeRetrievalCandidates,
   type KnowledgeCitation,
   type KnowledgeHybridRetrievalResult,
+  type KnowledgeRerankedRetrievalResult,
   type KnowledgeRetrievalCandidateSet,
   type KnowledgeRetrievalRequest,
 } from './retrieval-memory'
@@ -320,6 +322,60 @@ describe('V2.1 deterministic hybrid retrieval', () => {
       validLexicalCandidateSet,
       validVectorCandidateSet,
     )).toEqual(expected)
+  })
+
+  it('reranks only the admitted hybrid set with exact deterministic fixture scores', () => {
+    const hybrid = mergeKnowledgeRetrievalCandidates(
+      validRequest,
+      validLexicalCandidateSet,
+      validVectorCandidateSet,
+    )
+    const expected: KnowledgeRerankedRetrievalResult = {
+      ...hybrid,
+      reranking: {
+        contractId: 'deterministic-fixture-reranker',
+        contractVersion: 1,
+      },
+      candidates: [
+        {
+          ...hybrid.candidates[1]!,
+          hybridScore: hybrid.candidates[1]!.score,
+          score: 0.95,
+          strategyChain: ['vector', 'hybrid', 'reranked'],
+        },
+        {
+          ...hybrid.candidates[0]!,
+          hybridScore: hybrid.candidates[0]!.score,
+          score: 0.1,
+          strategyChain: ['lexical', 'vector', 'hybrid', 'reranked'],
+        },
+      ],
+    }
+
+    expect(rerankKnowledgeRetrievalCandidates(validRequest, hybrid, [
+      { chunkId: 'chunk-api-health-test', score: 0.1 },
+      { chunkId: 'chunk-delivery-non-force', score: 0.95 },
+    ])).toEqual(expected)
+  })
+
+  it('rejects a foreign hybrid candidate before reading any reranker score', () => {
+    const hybrid = mergeKnowledgeRetrievalCandidates(
+      validRequest,
+      validLexicalCandidateSet,
+      validVectorCandidateSet,
+    )
+    hybrid.candidates[0] = { ...hybrid.candidates[0]!, projectId: 'project-foreign' }
+    let scoreReads = 0
+    const unreadScores = new Proxy([] as Array<{ chunkId: string; score: number }>, {
+      get(target, property, receiver) {
+        scoreReads += 1
+        return Reflect.get(target, property, receiver)
+      },
+    })
+
+    expect(() => rerankKnowledgeRetrievalCandidates(validRequest, hybrid, unreadScores))
+      .toThrowError('invalid_knowledge_retrieval_request')
+    expect(scoreReads).toBe(0)
   })
 })
 

@@ -546,6 +546,171 @@ export function mergeKnowledgeRetrievalCandidates(
   }
 }
 
+function expectedHybridStrategyChain(
+  lexicalRank: number | null,
+  vectorRank: number | null,
+): KnowledgeHybridRetrievalCandidate['strategyChain'] | null {
+  if (lexicalRank !== null && vectorRank !== null) return ['lexical', 'vector', 'hybrid']
+  if (lexicalRank !== null) return ['lexical', 'hybrid']
+  if (vectorRank !== null) return ['vector', 'hybrid']
+  return null
+}
+
+function isOptionalCandidateRank(value: unknown): value is number | null {
+  return value === null || isPositiveVersion(value)
+}
+
+export function parseKnowledgeHybridRetrievalResult(
+  value: unknown,
+  request: KnowledgeRetrievalRequest,
+): KnowledgeHybridRetrievalResult {
+  parseKnowledgeRetrievalRequest(request)
+  if (
+    !isPlainRecord(value) ||
+    !hasExactKeys(value, [
+      'stateVersion',
+      'requestId',
+      'scope',
+      'knowledgeSnapshotHash',
+      'ranking',
+      'embedding',
+      'candidates',
+      'evaluatedAt',
+    ]) ||
+    value.stateVersion !== KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION ||
+    value.requestId !== request.id ||
+    value.knowledgeSnapshotHash !== request.knowledgeSnapshotHash ||
+    !isPlainRecord(value.ranking) ||
+    !hasExactKeys(value.ranking, ['contractId', 'contractVersion', 'rankConstant']) ||
+    value.ranking.contractId !== 'reciprocal-rank-fusion' ||
+    value.ranking.contractVersion !== 1 ||
+    value.ranking.rankConstant !== 60 ||
+    !isEmbeddingDescriptor(value.embedding) ||
+    !Array.isArray(value.candidates) ||
+    value.candidates.length > request.query.topK ||
+    !isCanonicalIso(value.evaluatedAt)
+  ) fail()
+
+  const scope = parseScope(value.scope)
+  if (!scopesMatch(scope, request.scope)) fail()
+  const embedding = value.embedding as Exclude<KnowledgeRetrievalCandidateSet['embedding'], null>
+  if (!value.candidates.every((candidate) => {
+    if (
+      !isPlainRecord(candidate) ||
+      !hasExactKeys(candidate, [
+        'documentId',
+        'chunkId',
+        'organizationId',
+        'projectId',
+        'localProjectId',
+        'sourcePath',
+        'headingPath',
+        'contentHash',
+        'score',
+        'vectorDimensions',
+        'lexicalRank',
+        'vectorRank',
+        'strategyChain',
+      ]) ||
+      !isIdentifier(candidate.documentId) ||
+      !isIdentifier(candidate.chunkId) ||
+      candidate.organizationId !== request.scope.organizationId ||
+      candidate.projectId !== request.scope.projectId ||
+      candidate.localProjectId !== request.scope.localProjectId ||
+      !isSafeSourceRelativePath(candidate.sourcePath) ||
+      !Array.isArray(candidate.headingPath) ||
+      candidate.headingPath.length === 0 ||
+      !candidate.headingPath.every((heading) =>
+        typeof heading === 'string' && heading.length > 0 && heading.trim() === heading
+      ) ||
+      !isIdentifier(candidate.contentHash) ||
+      typeof candidate.score !== 'number' ||
+      !Number.isFinite(candidate.score) ||
+      candidate.score <= 0 ||
+      candidate.vectorDimensions !== embedding.dimensions ||
+      !isOptionalCandidateRank(candidate.lexicalRank) ||
+      !isOptionalCandidateRank(candidate.vectorRank) ||
+      !Array.isArray(candidate.strategyChain)
+    ) return false
+    const expectedChain = expectedHybridStrategyChain(
+      candidate.lexicalRank,
+      candidate.vectorRank,
+    )
+    return expectedChain !== null && stringArraysMatch(candidate.strategyChain, expectedChain)
+  })) fail()
+
+  const chunkIds = value.candidates.map(
+    (candidate) => (candidate as Record<string, unknown>).chunkId as string,
+  )
+  if (new Set(chunkIds).size !== chunkIds.length) fail()
+  return value as KnowledgeHybridRetrievalResult
+}
+
+export type KnowledgeRerankedRetrievalCandidate = Omit<
+  KnowledgeHybridRetrievalCandidate,
+  'score' | 'strategyChain'
+> & {
+  hybridScore: number
+  score: number
+  strategyChain: Array<'lexical' | 'vector' | 'hybrid' | 'reranked'>
+}
+
+export type KnowledgeRerankedRetrievalResult = Omit<
+  KnowledgeHybridRetrievalResult,
+  'candidates'
+> & {
+  reranking: {
+    contractId: 'deterministic-fixture-reranker'
+    contractVersion: 1
+  }
+  candidates: KnowledgeRerankedRetrievalCandidate[]
+}
+
+export function rerankKnowledgeRetrievalCandidates(
+  request: KnowledgeRetrievalRequest,
+  hybridResult: KnowledgeHybridRetrievalResult,
+  scores: Array<{ chunkId: string; score: number }>,
+): KnowledgeRerankedRetrievalResult {
+  const parsedHybrid = parseKnowledgeHybridRetrievalResult(hybridResult, request)
+  if (
+    !Array.isArray(scores) ||
+    scores.length !== parsedHybrid.candidates.length ||
+    !scores.every((entry) =>
+      isPlainRecord(entry) &&
+      hasExactKeys(entry, ['chunkId', 'score']) &&
+      isIdentifier(entry.chunkId) &&
+      typeof entry.score === 'number' &&
+      Number.isFinite(entry.score) &&
+      entry.score >= 0 &&
+      entry.score <= 1
+    ) ||
+    new Set(scores.map((entry) => entry.chunkId)).size !== scores.length
+  ) fail()
+
+  const scoreByChunkId = new Map(scores.map((entry) => [entry.chunkId, entry.score]))
+  if (parsedHybrid.candidates.some((candidate) => !scoreByChunkId.has(candidate.chunkId))) fail()
+  return {
+    ...parsedHybrid,
+    reranking: {
+      contractId: 'deterministic-fixture-reranker',
+      contractVersion: 1,
+    },
+    candidates: parsedHybrid.candidates
+      .map((candidate) => ({
+        ...candidate,
+        hybridScore: candidate.score,
+        score: scoreByChunkId.get(candidate.chunkId)!,
+        strategyChain: [...candidate.strategyChain, 'reranked'] as
+          KnowledgeRerankedRetrievalCandidate['strategyChain'],
+      }))
+      .sort((left, right) =>
+        right.score - left.score ||
+        right.hybridScore - left.hybridScore ||
+        left.chunkId.localeCompare(right.chunkId)
+      ),
+  }
+}
+
 export type KnowledgeCitation = {
   stateVersion: typeof KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION
   requestId: string
