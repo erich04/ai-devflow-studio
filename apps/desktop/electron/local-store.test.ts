@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import initSqlJs from 'sql.js'
 import {
   applyWorkflowCommand,
+  applyCoordinationHandoff,
   acceptAgentActionResult,
   assembleAgentRuntimeContext,
   cancelAgentRuntime,
@@ -27,6 +28,7 @@ import {
 } from '@ai-devflow/shared'
 import type {
   AgentTaskGraph,
+  AgentHandoff,
   AgentEvent,
   AgentReviewResult,
   AgentTrace,
@@ -34,6 +36,7 @@ import type {
   AgentRuntimeStartRequest,
   CoordinationSessionRequest,
   SpecialistAllocationRequest,
+  AcceptedSpecialistResult,
   AgentMemoryPromotionAuthority,
   Artifact,
   CodingAgentEvent,
@@ -838,6 +841,118 @@ const specialistAllocationRequest: SpecialistAllocationRequest = {
   },
   requestedAt: coordinationSessionRequest.requestedAt,
   deadline: '2026-08-12T20:30:30.000Z',
+}
+
+const acceptedResearchResult: AcceptedSpecialistResult = {
+  taskId: 'coordination-task-research',
+  taskVersion: 3,
+  runtimeId: 'specialist-runtime-research-1',
+  runtimeVersion: 1,
+  status: 'succeeded',
+  resultDigest: 'f'.repeat(64),
+  evidenceDigests: ['1'.repeat(64)],
+  contextDigest: 'c'.repeat(64),
+  resourceLeaseOutcome: 'not_required',
+}
+
+const researchReviewHandoff: AgentHandoff = {
+  stateVersion: 1,
+  id: 'handoff-research-review-1',
+  coordinationId: coordinationSessionRequest.id,
+  sequence: 1,
+  scope: coordinationSessionRequest.scope,
+  sourceTaskId: acceptedResearchResult.taskId,
+  sourceTaskVersion: acceptedResearchResult.taskVersion,
+  sourceRuntimeId: acceptedResearchResult.runtimeId,
+  sourceRuntimeVersion: acceptedResearchResult.runtimeVersion,
+  targetTaskId: 'coordination-task-review',
+  targetTaskVersion: 1,
+  resultDigest: acceptedResearchResult.resultDigest,
+  evidenceDigests: acceptedResearchResult.evidenceDigests,
+  contextDigest: acceptedResearchResult.contextDigest,
+  resourceLeaseOutcome: acceptedResearchResult.resourceLeaseOutcome,
+  summary: 'Research completed with one bounded Evidence reference.',
+  createdAt: '2026-08-12T20:30:03.000Z',
+}
+
+async function persistCompletedResearchCoordination(store: LocalStore) {
+  await store.upsertProject(project)
+  await store.saveRun(gateWorkflowCreation.run)
+  await store.saveDesktopPairingCredential(
+    { ...desktopPairingCredential, localProjectId: project.id },
+    'encrypted-token',
+  )
+  const supervisor = createAgentRuntime(teamAgentRuntimeStartRequest)
+  await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: supervisor })
+  const initialState = createCoordinationSessionState({
+    coordination: coordinationSessionRequest,
+    graph: coordinationTaskGraph,
+    startedAt: coordinationSessionRequest.requestedAt,
+  })
+  await store.createCoordinationSession({
+    coordination: coordinationSessionRequest,
+    graph: coordinationTaskGraph,
+    acceptedRoleIds: ['specialist.research', 'specialist.review'],
+    startedAt: coordinationSessionRequest.requestedAt,
+  })
+  const startedState = startCoordinationTask({
+    state: initialState,
+    allocation: specialistAllocationRequest,
+    expectedSessionVersion: initialState.version,
+    expectedTaskVersion: 1,
+    runtimeId: acceptedResearchResult.runtimeId,
+    runtimeVersion: acceptedResearchResult.runtimeVersion,
+    now: '2026-08-12T20:30:01.000Z',
+  })
+  await store.commitCoordinationTaskStart({
+    expectedState: initialState,
+    allocation: specialistAllocationRequest,
+    supervisorCapabilityIds: ['repository.read'],
+    supervisorResourceRequirements: [{
+      resourceId: 'repository-source',
+      resourceDigest: 'd'.repeat(64),
+      mode: 'read',
+    }],
+    remainingBudget: {
+      maxSteps: 4,
+      maxWallTimeMs: 60_000,
+      maxToolCalls: 4,
+      maxTokens: 10_000,
+      maxCostUsd: 1,
+    },
+    runtimeId: acceptedResearchResult.runtimeId,
+    runtimeVersion: acceptedResearchResult.runtimeVersion,
+    now: startedState.updatedAt,
+  })
+  const completedState = recordCoordinationTaskResult({
+    state: startedState,
+    expectedSessionVersion: startedState.version,
+    taskId: acceptedResearchResult.taskId,
+    expectedTaskVersion: 2,
+    runtimeId: acceptedResearchResult.runtimeId,
+    runtimeVersion: acceptedResearchResult.runtimeVersion,
+    result: {
+      status: 'succeeded',
+      resultDigest: acceptedResearchResult.resultDigest,
+      failure: null,
+    },
+    usage: { steps: 1, toolCalls: 1, tokens: 500, costUsd: 0.1 },
+    now: '2026-08-12T20:30:02.000Z',
+  })
+  await store.commitCoordinationTaskResult({
+    expectedState: startedState,
+    taskId: acceptedResearchResult.taskId,
+    runtimeId: acceptedResearchResult.runtimeId,
+    runtimeVersion: acceptedResearchResult.runtimeVersion,
+    result: {
+      status: 'succeeded',
+      resultDigest: acceptedResearchResult.resultDigest,
+      failure: null,
+    },
+    usage: { steps: 1, toolCalls: 1, tokens: 500, costUsd: 0.1 },
+    now: completedState.updatedAt,
+  })
+  return { supervisor, initialState, startedState, completedState }
 }
 
 async function persistAcceptedMemoryCandidate(
@@ -3265,6 +3380,68 @@ describe('createLocalStore', () => {
         (select count(*) from agent_coordination_tasks where status = 'succeeded'),
         (select count(*) from agent_coordination_tasks where status = 'pending')
     `)[0]?.values[0]?.map(Number)).toEqual([3, 3, 1, 1])
+    inspected.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.getCoordinationSession(coordinationSessionRequest.id)).resolves.toEqual({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      state: expectedState,
+    })
+    reopened.close()
+  })
+
+  it('CAS-accepts one immutable handoff and makes its dependency target ready exactly once', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const { completedState } = await persistCompletedResearchCoordination(store)
+    const expectedState = applyCoordinationHandoff({
+      state: completedState,
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      handoff: researchReviewHandoff,
+      sourceResult: acceptedResearchResult,
+      expectedSessionVersion: completedState.version,
+      expectedTargetTaskVersion: 1,
+      priorAcceptedHandoffs: [],
+    })
+    const input = {
+      expectedState: completedState,
+      handoff: researchReviewHandoff,
+      sourceResult: acceptedResearchResult,
+    }
+    await expect(store.commitCoordinationHandoff(input)).resolves.toEqual({
+      committed: true,
+      replayed: false,
+      state: expectedState,
+    })
+    await expect(store.commitCoordinationHandoff(input)).resolves.toEqual({
+      committed: true,
+      replayed: true,
+      state: expectedState,
+    })
+    await expect(store.commitCoordinationHandoff({
+      ...input,
+      handoff: { ...researchReviewHandoff, summary: 'Conflicting replacement summary.' },
+    })).resolves.toEqual({ committed: false, reason: 'conflicting_handoff' })
+    await expect(store.getCoordinationSession(coordinationSessionRequest.id)).resolves.toEqual({
+      coordination: coordinationSessionRequest,
+      graph: coordinationTaskGraph,
+      state: expectedState,
+    })
+    store.close()
+
+    const inspected = new (await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })).Database(await readFile(dbPath))
+    expect(inspected.exec(`
+      select
+        (select count(*) from agent_coordination_handoffs),
+        (select count(*) from agent_coordination_audits),
+        (select count(*) from agent_coordination_checkpoints),
+        (select count(*) from agent_coordination_tasks where status = 'ready'),
+        (select count(*) from agent_coordination_tasks where status = 'succeeded')
+    `)[0]?.values[0]?.map(Number)).toEqual([1, 4, 4, 1, 1])
     inspected.close()
 
     const reopened = await createLocalStore({ dbPath })

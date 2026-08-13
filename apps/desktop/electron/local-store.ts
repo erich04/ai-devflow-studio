@@ -34,6 +34,7 @@ export type {
 export { KNOWLEDGE_INDEX_CHUNK_COUNT_MAX } from './knowledge-index-local-store.js'
 import {
   applyWorkflowCommand,
+  applyCoordinationHandoff,
   assertFullGitCommitSha,
   assertSafeGitHubBranch,
   canApproveGateNow,
@@ -96,6 +97,8 @@ import {
   type AgentRuntimeTransition,
   type AgentTaskGraph,
   type AgentTaskResourceRequirement,
+  type AgentHandoff,
+  type AcceptedSpecialistResult,
   type AgentReviewResult,
   type AgentTrace,
   type AgentTokenUsage,
@@ -786,6 +789,9 @@ export type LocalStore = {
   commitCoordinationTaskResult(
     input: CommitCoordinationTaskResultInput,
   ): Promise<CommitCoordinationTaskResultOutcome>
+  commitCoordinationHandoff(
+    input: CommitCoordinationHandoffInput,
+  ): Promise<CommitCoordinationHandoffResult>
   getCoordinationSession(coordinationId: string): Promise<DurableCoordinationSession | null>
   getAgentRuntimeContextAttachment(
     runtimeId: string,
@@ -1005,6 +1011,19 @@ export type CommitCoordinationTaskResultInput = {
 export type CommitCoordinationTaskResultOutcome =
   | { committed: true; replayed: boolean; state: CoordinationSessionState }
   | { committed: false; reason: 'invalid_input' | 'authority_mismatch' | 'not_found' | 'stale_state' }
+
+export type CommitCoordinationHandoffInput = {
+  expectedState: CoordinationSessionState
+  handoff: AgentHandoff
+  sourceResult: AcceptedSpecialistResult
+}
+
+export type CommitCoordinationHandoffResult =
+  | { committed: true; replayed: boolean; state: CoordinationSessionState }
+  | {
+      committed: false
+      reason: 'invalid_input' | 'authority_mismatch' | 'conflicting_handoff' | 'not_found' | 'stale_state'
+    }
 
 export type SaveAgentMemoryCandidateResult =
   | { committed: true; replayed: boolean; candidate: AgentMemoryCandidate }
@@ -3781,6 +3800,37 @@ function coordinationTaskResultAuditMetadata(
     tokens: input.usage.tokens,
     costUsd: input.usage.costUsd,
   }
+}
+
+function coordinationHandoffAuditMetadata(
+  handoff: AgentHandoff,
+  state: CoordinationSessionState,
+): Record<string, string | number> {
+  const targetTask = state.tasks.find((candidate) => candidate.id === handoff.targetTaskId)
+  if (targetTask === undefined) throw new Error('invalid_coordination_handoff_audit')
+  return {
+    stateVersion: 1,
+    handoffId: handoff.id,
+    sequence: handoff.sequence,
+    sourceTaskId: handoff.sourceTaskId,
+    sourceTaskVersion: handoff.sourceTaskVersion,
+    targetTaskId: handoff.targetTaskId,
+    targetTaskVersion: targetTask.version,
+    targetStatus: targetTask.status,
+    resultDigest: handoff.resultDigest,
+  }
+}
+
+function selectAgentCoordinationHandoffs(
+  db: Database,
+  coordinationId: string,
+): AgentHandoff[] {
+  return selectJson<AgentHandoff>(
+    db,
+    `select handoff_json from agent_coordination_handoffs
+     where coordination_id = ? order by sequence asc`,
+    [coordinationId],
+  )
 }
 
 function selectDurableCoordinationSession(
@@ -8312,6 +8362,163 @@ class SqlJsLocalStore implements LocalStore {
     return { committed: true, replayed: false, state: nextState }
   }
 
+  async commitCoordinationHandoff(
+    input: CommitCoordinationHandoffInput,
+  ): Promise<CommitCoordinationHandoffResult> {
+    let expectedState: CoordinationSessionState
+    try {
+      expectedState = parseCoordinationSessionState(input.expectedState)
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    const stored = selectDurableCoordinationSession(this.db, expectedState.id)
+    if (stored === null) return { committed: false, reason: 'not_found' }
+    const priorAcceptedHandoffs = selectAgentCoordinationHandoffs(
+      this.db,
+      stored.coordination.id,
+    )
+    const existingHandoff = priorAcceptedHandoffs.find(
+      (candidate) => candidate.id === input.handoff.id,
+    )
+    if (existingHandoff !== undefined) {
+      if (!sameJson(existingHandoff, input.handoff)) {
+        return { committed: false, reason: 'conflicting_handoff' }
+      }
+      return stored.state.acceptedHandoffIds.includes(existingHandoff.id)
+        ? { committed: true, replayed: true, state: stored.state }
+        : { committed: false, reason: 'stale_state' }
+    }
+    if (!sameJson(stored.state, expectedState)) {
+      return { committed: false, reason: 'stale_state' }
+    }
+
+    let nextState: CoordinationSessionState
+    const targetTask = expectedState.tasks.find(
+      (candidate) => candidate.id === input.handoff.targetTaskId,
+    )
+    if (targetTask === undefined) return { committed: false, reason: 'invalid_input' }
+    try {
+      nextState = parseCoordinationSessionState(applyCoordinationHandoff({
+        state: expectedState,
+        coordination: stored.coordination,
+        graph: stored.graph,
+        handoff: input.handoff,
+        sourceResult: input.sourceResult,
+        expectedSessionVersion: expectedState.version,
+        expectedTargetTaskVersion: targetTask.version,
+        priorAcceptedHandoffs,
+      }))
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    if (!await this.isCoordinationSupervisorAuthorityCurrent(stored.coordination)) {
+      return { committed: false, reason: 'authority_mismatch' }
+    }
+    const nextTargetTask = nextState.tasks.find(
+      (candidate) => candidate.id === input.handoff.targetTaskId,
+    )
+    if (nextTargetTask === undefined) return { committed: false, reason: 'invalid_input' }
+    const auditMetadata = coordinationHandoffAuditMetadata(input.handoff, nextState)
+
+    this.db.run('begin transaction')
+    try {
+      this.db.run(
+        `update agent_coordination_sessions
+         set version = ?, status = ?, stop_reason = ?, state_json = ?, updated_at = ?
+         where id = ? and version = ? and graph_id = ? and graph_version = ? and state_json = ?`,
+        [
+          nextState.version,
+          nextState.status,
+          nextState.stopReason,
+          JSON.stringify(nextState),
+          nextState.updatedAt,
+          stored.coordination.id,
+          stored.state.version,
+          stored.graph.id,
+          stored.graph.version,
+          JSON.stringify(stored.state),
+        ],
+      )
+      if (this.db.getRowsModified() !== 1) throw new Error('stale_coordination_session')
+      this.db.run(
+        `update agent_coordination_tasks
+         set version = ?, status = ?, agent_id = ?, runtime_id = ?, runtime_version = ?,
+             state_json = ?, updated_at = ?
+         where coordination_id = ? and task_id = ? and graph_id = ?
+           and version = ? and state_json = ?`,
+        [
+          nextTargetTask.version,
+          nextTargetTask.status,
+          nextTargetTask.agentId,
+          nextTargetTask.runtimeId,
+          nextTargetTask.runtimeVersion,
+          JSON.stringify(nextTargetTask),
+          nextState.updatedAt,
+          stored.coordination.id,
+          nextTargetTask.id,
+          stored.graph.id,
+          targetTask.version,
+          JSON.stringify(targetTask),
+        ],
+      )
+      if (this.db.getRowsModified() !== 1) throw new Error('stale_coordination_task')
+      this.db.run(
+        `insert into agent_coordination_handoffs (
+           id, coordination_id, sequence, source_task_id, target_task_id,
+           result_digest, handoff_json, created_at
+         ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          input.handoff.id,
+          stored.coordination.id,
+          input.handoff.sequence,
+          input.handoff.sourceTaskId,
+          input.handoff.targetTaskId,
+          input.handoff.resultDigest,
+          JSON.stringify(input.handoff),
+          input.handoff.createdAt,
+        ],
+      )
+      this.db.run(
+        `insert into agent_coordination_audits (
+           id, coordination_id, task_id, event_kind, session_version,
+           metadata_json, created_at
+         ) values (?, ?, ?, 'handoff_accepted', ?, ?, ?)`,
+        [
+          coordinationTransitionAuditId(stored.coordination.id, nextState.version),
+          stored.coordination.id,
+          input.handoff.targetTaskId,
+          nextState.version,
+          JSON.stringify(auditMetadata),
+          nextState.updatedAt,
+        ],
+      )
+      this.db.run(
+        `insert into agent_coordination_checkpoints (
+           coordination_id, checkpoint_version, session_version, graph_version,
+           checkpoint_json, created_at
+         ) values (?, ?, ?, ?, ?, ?)`,
+        [
+          stored.coordination.id,
+          nextState.version,
+          nextState.version,
+          nextState.graphVersion,
+          JSON.stringify(nextState),
+          nextState.updatedAt,
+        ],
+      )
+      this.db.run('commit')
+    } catch (error) {
+      this.db.run('rollback')
+      if (
+        error instanceof Error &&
+        (error.message === 'stale_coordination_session' || error.message === 'stale_coordination_task')
+      ) return { committed: false, reason: 'stale_state' }
+      throw error
+    }
+    await this.persist()
+    return { committed: true, replayed: false, state: nextState }
+  }
+
   async commitAgentRuntimeTransition(
     input: CommitAgentRuntimeTransitionInput,
   ): Promise<CommitAgentRuntimeTransitionResult> {
@@ -12773,6 +12980,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'createCoordinationSession',
   'commitCoordinationTaskStart',
   'commitCoordinationTaskResult',
+  'commitCoordinationHandoff',
   'reserveAgentRuntimeCapabilityGrant',
   'beginAgentRuntimeToolExecution',
   'appendAgentRuntimeToolAudit',
