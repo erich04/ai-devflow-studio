@@ -108,6 +108,37 @@ export type ParsedAgentTaskGraph = {
   readyTaskIds: string[]
 }
 
+export type SpecialistBudget = CoordinationParentBounds
+
+export type SpecialistAllocationRequest = {
+  stateVersion: typeof COORDINATION_CONTRACT_VERSION
+  id: string
+  coordinationId: string
+  taskGraphId: string
+  taskGraphVersion: number
+  taskId: string
+  roleId: string
+  agentId: string
+  delegationDepth: number
+  scope: CoordinationScope
+  authority: CoordinationAuthority
+  contextDigest: string
+  capabilityIds: string[]
+  resourceRequirements: AgentTaskResourceRequirement[]
+  budget: SpecialistBudget
+  requestedAt: string
+  deadline: string
+}
+
+export type SpecialistAllocationParseOptions = {
+  coordination: CoordinationSessionRequest
+  graph: AgentTaskGraph
+  readyTaskIds: readonly string[]
+  supervisorCapabilityIds: readonly string[]
+  supervisorResourceRequirements: readonly AgentTaskResourceRequirement[]
+  remainingBudget: SpecialistBudget
+}
+
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actual = Object.keys(value).sort()
   const expected = [...keys].sort()
@@ -160,6 +191,14 @@ function isExactCoordinationScope(value: unknown): value is CoordinationScope {
     isIdentifier(value.localProjectId)
 }
 
+function hasSameCoordinationScope(left: CoordinationScope, right: CoordinationScope): boolean {
+  return left.organizationId === right.organizationId &&
+    left.projectId === right.projectId &&
+    left.userId === right.userId &&
+    left.sessionId === right.sessionId &&
+    left.localProjectId === right.localProjectId
+}
+
 function isExactCoordinationAuthority(value: unknown): value is CoordinationAuthority {
   return isPlainRecord(value) &&
     hasExactKeys(value, [
@@ -178,12 +217,42 @@ function isExactCoordinationAuthority(value: unknown): value is CoordinationAuth
     isPositiveVersion(value.supervisorRuntimeVersion)
 }
 
+function hasSameCoordinationAuthority(
+  left: CoordinationAuthority,
+  right: CoordinationAuthority,
+): boolean {
+  return left.runId === right.runId &&
+    left.nodeId === right.nodeId &&
+    left.runVersion === right.runVersion &&
+    left.policyVersion === right.policyVersion &&
+    left.supervisorRuntimeId === right.supervisorRuntimeId &&
+    left.supervisorRuntimeVersion === right.supervisorRuntimeVersion
+}
+
 function isExactResourceRequirement(value: unknown): value is AgentTaskResourceRequirement {
   return isPlainRecord(value) &&
     hasExactKeys(value, ['resourceId', 'resourceDigest', 'mode']) &&
     isIdentifier(value.resourceId) &&
     isDigest(value.resourceDigest) &&
     (value.mode === 'read' || value.mode === 'write')
+}
+
+function hasSameResourceRequirement(
+  left: AgentTaskResourceRequirement,
+  right: AgentTaskResourceRequirement,
+): boolean {
+  return left.resourceId === right.resourceId &&
+    left.resourceDigest === right.resourceDigest &&
+    left.mode === right.mode
+}
+
+function coversResourceRequirement(
+  parent: AgentTaskResourceRequirement,
+  child: AgentTaskResourceRequirement,
+): boolean {
+  return parent.resourceId === child.resourceId &&
+    parent.resourceDigest === child.resourceDigest &&
+    (parent.mode === child.mode || (parent.mode === 'write' && child.mode === 'read'))
 }
 
 export function parseCoordinationSessionRequest(
@@ -409,4 +478,116 @@ export function parseAgentTaskGraph(
     graph,
     readyTaskIds: [...graph.entryTaskIds].sort((left, right) => left.localeCompare(right)),
   }
+}
+
+export function parseSpecialistAllocationRequest(
+  value: unknown,
+  options: SpecialistAllocationParseOptions,
+): SpecialistAllocationRequest {
+  if (
+    !isPlainRecord(value) ||
+    value.stateVersion !== COORDINATION_CONTRACT_VERSION ||
+    !hasExactKeys(value, [
+      'stateVersion',
+      'id',
+      'coordinationId',
+      'taskGraphId',
+      'taskGraphVersion',
+      'taskId',
+      'roleId',
+      'agentId',
+      'delegationDepth',
+      'scope',
+      'authority',
+      'contextDigest',
+      'capabilityIds',
+      'resourceRequirements',
+      'budget',
+      'requestedAt',
+      'deadline',
+    ]) ||
+    !isIdentifier(value.id) ||
+    value.coordinationId !== options.coordination.id ||
+    value.taskGraphId !== options.graph.id ||
+    value.taskGraphVersion !== options.graph.version ||
+    !isIdentifier(value.agentId) ||
+    !isIdentifier(value.taskId) ||
+    !options.readyTaskIds.includes(value.taskId) ||
+    !options.graph.nodes.some((node) => node.id === value.taskId)
+  ) {
+    throw new Error('invalid_specialist_allocation_request')
+  }
+  const task = options.graph.nodes.find((node) => node.id === value.taskId)
+  const supervisorCapabilities = new Set(options.supervisorCapabilityIds)
+  if (
+    task === undefined ||
+    value.roleId !== task.roleId ||
+    value.contextDigest !== task.contextDigest ||
+    value.delegationDepth !== COORDINATION_MAX_DELEGATION_DEPTH ||
+    !isExactCoordinationScope(value.scope) ||
+    !hasSameCoordinationScope(value.scope, options.coordination.scope) ||
+    !isExactCoordinationAuthority(value.authority) ||
+    !hasSameCoordinationAuthority(value.authority, options.coordination.authority) ||
+    !isPlainRecord(value.budget) ||
+    !hasExactKeys(value.budget, [
+      'maxSteps',
+      'maxWallTimeMs',
+      'maxToolCalls',
+      'maxTokens',
+      'maxCostUsd',
+    ]) ||
+    !isPositiveIntegerAtMost(
+      value.budget.maxSteps,
+      Math.min(options.remainingBudget.maxSteps, options.coordination.bounds.maxSteps),
+    ) ||
+    !isPositiveIntegerAtMost(
+      value.budget.maxWallTimeMs,
+      Math.min(
+        options.remainingBudget.maxWallTimeMs,
+        options.coordination.bounds.maxWallTimeMs,
+      ),
+    ) ||
+    !isPositiveIntegerAtMost(
+      value.budget.maxToolCalls,
+      Math.min(options.remainingBudget.maxToolCalls, options.coordination.bounds.maxToolCalls),
+    ) ||
+    !isPositiveIntegerAtMost(
+      value.budget.maxTokens,
+      Math.min(options.remainingBudget.maxTokens, options.coordination.bounds.maxTokens),
+    ) ||
+    typeof value.budget.maxCostUsd !== 'number' ||
+    !Number.isFinite(value.budget.maxCostUsd) ||
+    value.budget.maxCostUsd <= 0 ||
+    value.budget.maxCostUsd > Math.min(
+      options.remainingBudget.maxCostUsd,
+      options.coordination.bounds.maxCostUsd,
+    ) ||
+    !isCanonicalIso(value.requestedAt) ||
+    !isCanonicalIso(value.deadline) ||
+    Date.parse(value.requestedAt) < Date.parse(options.coordination.requestedAt) ||
+    Date.parse(value.deadline) <= Date.parse(value.requestedAt) ||
+    Date.parse(value.deadline) > Date.parse(options.coordination.deadline) ||
+    Date.parse(value.deadline) - Date.parse(value.requestedAt) >
+      Number(value.budget.maxWallTimeMs) ||
+    !Array.isArray(value.capabilityIds) ||
+    value.capabilityIds.length !== task.capabilityIds.length ||
+    value.capabilityIds.some((capabilityId, index) =>
+      capabilityId !== task.capabilityIds[index] ||
+      !supervisorCapabilities.has(capabilityId)
+    ) ||
+    !Array.isArray(value.resourceRequirements) ||
+    !value.resourceRequirements.every(isExactResourceRequirement) ||
+    value.resourceRequirements.length !== task.resourceRequirements.length ||
+    value.resourceRequirements.some((resource, index) => {
+      const taskResource = task.resourceRequirements[index]
+      return taskResource === undefined ||
+        !hasSameResourceRequirement(resource, taskResource) ||
+        !options.supervisorResourceRequirements.some((supervisorResource) =>
+          coversResourceRequirement(supervisorResource, resource)
+        )
+    })
+  ) {
+    throw new Error('invalid_specialist_allocation_request')
+  }
+  return value as SpecialistAllocationRequest
 }

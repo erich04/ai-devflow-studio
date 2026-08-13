@@ -3,8 +3,10 @@ import {
   COORDINATION_CONTRACT_VERSION,
   parseAgentTaskGraph,
   parseCoordinationSessionRequest,
+  parseSpecialistAllocationRequest,
   type AgentTaskGraph,
   type CoordinationSessionRequest,
+  type SpecialistAllocationRequest,
 } from './agent-coordination'
 
 const digestA = 'a'.repeat(64)
@@ -82,6 +84,32 @@ const taskGraph: AgentTaskGraph = {
     { id: 'edge-a-c', sourceTaskId: 'task-a', targetTaskId: 'task-c' },
     { id: 'edge-b-c', sourceTaskId: 'task-b', targetTaskId: 'task-c' },
   ],
+}
+
+const specialistAllocation: SpecialistAllocationRequest = {
+  stateVersion: 1,
+  id: 'specialist-allocation-1',
+  coordinationId: request.id,
+  taskGraphId: taskGraph.id,
+  taskGraphVersion: taskGraph.version,
+  taskId: 'task-a',
+  roleId: 'contract-analyst',
+  agentId: 'specialist-1',
+  delegationDepth: 1,
+  scope: request.scope,
+  authority: request.authority,
+  contextDigest: 'e'.repeat(64),
+  capabilityIds: ['repository_read'],
+  resourceRequirements: [],
+  budget: {
+    maxSteps: 4,
+    maxWallTimeMs: 300_000,
+    maxToolCalls: 4,
+    maxTokens: 10_000,
+    maxCostUsd: 1,
+  },
+  requestedAt: '2026-08-13T15:00:01.000Z',
+  deadline: '2026-08-13T15:05:01.000Z',
 }
 
 describe('Coordination Session request contract', () => {
@@ -469,5 +497,386 @@ describe('Agent Task Graph contract', () => {
       maxTaskNodes: request.bounds.maxTaskNodes,
       maxDependencyEdges: request.bounds.maxDependencyEdges,
     })).toThrowError('invalid_agent_task_graph')
+  })
+})
+
+describe('Specialist allocation contract', () => {
+  it('accepts one ready task with an exact attenuated Specialist authority', () => {
+    expect(parseSpecialistAllocationRequest(specialistAllocation, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toEqual(specialistAllocation)
+  })
+
+  it('attenuates a Supervisor write resource to the ready task read requirement', () => {
+    const readResource = {
+      resourceId: 'workspace-1',
+      resourceDigest: 'f'.repeat(64),
+      mode: 'read' as const,
+    }
+    const graphWithResource: AgentTaskGraph = {
+      ...taskGraph,
+      nodes: taskGraph.nodes.map((node) => node.id === specialistAllocation.taskId
+        ? { ...node, resourceRequirements: [readResource] }
+        : node),
+    }
+    const allocationWithResource: SpecialistAllocationRequest = {
+      ...specialistAllocation,
+      resourceRequirements: [readResource],
+    }
+
+    expect(parseSpecialistAllocationRequest(allocationWithResource, {
+      coordination: request,
+      graph: graphWithResource,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [{ ...readResource, mode: 'write' }],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toEqual(allocationWithResource)
+  })
+
+  it('rejects escalation from a Supervisor read resource to Specialist write', () => {
+    const writeResource = {
+      resourceId: 'workspace-1',
+      resourceDigest: 'f'.repeat(64),
+      mode: 'write' as const,
+    }
+    const graphWithResource: AgentTaskGraph = {
+      ...taskGraph,
+      nodes: taskGraph.nodes.map((node) => node.id === specialistAllocation.taskId
+        ? { ...node, resourceRequirements: [writeResource] }
+        : node),
+    }
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      resourceRequirements: [writeResource],
+    }, {
+      coordination: request,
+      graph: graphWithResource,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [{ ...writeResource, mode: 'read' }],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
+  })
+
+  it('rejects a task capability absent from the Supervisor grant', () => {
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      taskId: 'task-b',
+      roleId: 'test-analyst',
+      contextDigest: 'd'.repeat(64),
+      capabilityIds: ['repository_read', 'saved_test'],
+    }, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read'],
+      supervisorResourceRequirements: [],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
+  })
+
+  it('rejects allocation for a task whose dependencies are not ready', () => {
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      taskId: 'task-c',
+      roleId: 'integration-analyst',
+      contextDigest: 'c'.repeat(64),
+    }, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
+  })
+
+  it('rejects a Specialist role wider than the ready task declaration', () => {
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      roleId: 'test-analyst',
+    }, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
+  })
+
+  it('rejects Context outside the ready task declaration', () => {
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      contextDigest: 'f'.repeat(64),
+    }, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
+  })
+
+  it('rejects a Supervisor capability not requested by the ready task', () => {
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      capabilityIds: ['repository_read', 'saved_test'],
+    }, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
+  })
+
+  it('rejects a Specialist allocation crossing the project tenancy boundary', () => {
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      scope: { ...specialistAllocation.scope, projectId: 'project-2' },
+    }, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
+  })
+
+  it('rejects a stale parent Supervisor runtime version', () => {
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      authority: {
+        ...specialistAllocation.authority,
+        supervisorRuntimeVersion: specialistAllocation.authority.supervisorRuntimeVersion - 1,
+      },
+    }, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
+  })
+
+  it('rejects recursive Specialist delegation', () => {
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      delegationDepth: 2,
+    }, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
+  })
+
+  it('rejects a Specialist sub-budget above the remaining shared budget', () => {
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      budget: { ...specialistAllocation.budget, maxSteps: 13 },
+    }, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
+  })
+
+  it.each([
+    ['wall time', 'maxWallTimeMs', 600_001],
+    ['Tool calls', 'maxToolCalls', 17],
+    ['tokens', 'maxTokens', 50_001],
+    ['cost', 'maxCostUsd', 5.01],
+  ] as const)('rejects Specialist %s above the remaining shared budget', (_label, key, value) => {
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      budget: { ...specialistAllocation.budget, [key]: value },
+    }, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
+  })
+
+  it('rejects a Supervisor resource not requested by the ready task', () => {
+    const resource = {
+      resourceId: 'workspace-1',
+      resourceDigest: 'f'.repeat(64),
+      mode: 'read' as const,
+    }
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      resourceRequirements: [resource],
+    }, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [resource],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
+  })
+
+  it('rejects an unknown Specialist allocation field', () => {
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      canSpawnAgent: true,
+    }, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
+  })
+
+  it('rejects a stale Agent Task Graph version', () => {
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      taskGraphVersion: taskGraph.version + 1,
+    }, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
+  })
+
+  it('rejects a Specialist deadline outside its attenuated wall-time budget', () => {
+    expect(() => parseSpecialistAllocationRequest({
+      ...specialistAllocation,
+      deadline: '2026-08-13T15:05:01.001Z',
+    }, {
+      coordination: request,
+      graph: taskGraph,
+      readyTaskIds: ['task-a', 'task-b'],
+      supervisorCapabilityIds: ['repository_read', 'saved_test'],
+      supervisorResourceRequirements: [],
+      remainingBudget: {
+        maxSteps: 12,
+        maxWallTimeMs: 600_000,
+        maxToolCalls: 16,
+        maxTokens: 50_000,
+        maxCostUsd: 5,
+      },
+    })).toThrowError('invalid_specialist_allocation_request')
   })
 })
