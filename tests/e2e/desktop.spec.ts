@@ -745,6 +745,22 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
       getAgentRuntime: async () => {
         throw new Error('Agent Runtime detail is not available in the E2E renderer fixture.')
       },
+      listCoordinationSessions: async () => [],
+      startCoordinationPlan: async () => {
+        throw new Error('Agent Coordination start is not available in the E2E renderer fixture.')
+      },
+      getCoordinationSession: async () => {
+        throw new Error('Agent Coordination detail is not available in the E2E renderer fixture.')
+      },
+      resumeCoordinationSession: async () => {
+        throw new Error('Agent Coordination resume is not available in the E2E renderer fixture.')
+      },
+      startCoordinationTask: async () => {
+        throw new Error('Agent Coordination task start is not available in the E2E renderer fixture.')
+      },
+      cancelCoordinationSession: async () => {
+        throw new Error('Agent Coordination cancellation is not available in the E2E renderer fixture.')
+      },
       onCodingRunStatusUpdated: () => () => undefined,
       onCodingEventAppended: () => () => undefined,
       onCodingPermissionUpdated: () => () => undefined,
@@ -803,6 +819,8 @@ test.describe('AI DevFlow desktop workbench', () => {
   })
 
   test('supports manager, knowledge, skill, MCP, and test views', async ({ page }) => {
+    const pageErrors: string[] = []
+    page.on('pageerror', (error) => pageErrors.push(error.message))
     await installDesktopApi(page)
     await page.goto('/')
     await createFixtureRun(page)
@@ -857,5 +875,6 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('toast')).toContainText('只能执行当前运行中或失败的测试节点')
     await expect(page.getByTestId('tests-view')).not.toContainText('Local test evidence')
     await expect(page.getByTestId('tests-view')).not.toContainText('passed')
+    expect(pageErrors).toEqual([])
   })
 })
