@@ -19,7 +19,9 @@ describe('V2.2 Multi-Agent and Execution Tenancy contract', () => {
     }
 
     expect(roadmap).toContain('V2.2 contract set is frozen')
-    expect(roadmap).toContain('### Now — Implement V2.2 Shared Coordination Contracts')
+    expect(roadmap).toContain('### Now — Implement V2.2 Durable Desktop Coordinator')
+    expect(roadmap).toContain('| Active milestone | V2.2 Slice 2 — Durable Desktop Coordinator |')
+    expect(roadmap).toContain('| Next gate | Migrate retained Desktop schema 27 to schema 28 with zero fabricated coordination state |')
     expect(roadmap.match(/^### Now —/gmu)).toHaveLength(1)
   })
 
@@ -89,6 +91,9 @@ describe('V2.2 Multi-Agent and Execution Tenancy contract', () => {
     expect(plan).toContain('Team schema 19')
     expect(plan).toContain('full single-Agent baseline remains executable')
     expect(plan).toContain('clean direct child')
+    expect(plan).toContain('Status: Active — Slice 2 in progress')
+    expect(plan).toMatch(/\| Slice 1 \| Complete \|/u)
+    expect(plan).toMatch(/\| Slice 2 \| In progress \|/u)
   })
 
   it('freezes no-cost quality, termination, replay, and isolation scenarios', () => {
