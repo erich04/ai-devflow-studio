@@ -5,6 +5,7 @@ import {
   createWorkflowRunFromRequest,
   type AgentMemoryCandidate,
   type AgentMemoryPromotionAuthority,
+  type AgentMemoryRevisionAuthority,
   type DesktopPairingCredential,
   type DurableAgentMemoryRevision,
 } from '@ai-devflow/shared'
@@ -147,6 +148,10 @@ describe('Agent Memory human actions', () => {
       listAgentMemoryCandidates: vi.fn(async () => [candidate]),
       authorizeAgentMemoryPromotion,
       commitAgentMemoryPromotion,
+      getAgentMemoryHead: vi.fn(),
+      listAgentMemoryRevisions: vi.fn(),
+      authorizeAgentMemoryRevision: vi.fn(),
+      commitAgentMemoryRevision: vi.fn(),
     }
     const createId = vi.fn((prefix: string) => `${prefix}-generated`)
     const service = createAgentMemoryHumanActions({
@@ -209,6 +214,10 @@ describe('Agent Memory human actions', () => {
       listAgentMemoryCandidates: vi.fn(async () => [candidate]),
       authorizeAgentMemoryPromotion: vi.fn(),
       commitAgentMemoryPromotion: vi.fn(),
+      getAgentMemoryHead: vi.fn(),
+      listAgentMemoryRevisions: vi.fn(),
+      authorizeAgentMemoryRevision: vi.fn(),
+      commitAgentMemoryRevision: vi.fn(),
     }
     const createId = vi.fn()
 
@@ -236,6 +245,10 @@ describe('Agent Memory human actions', () => {
       }]),
       authorizeAgentMemoryPromotion: vi.fn(),
       commitAgentMemoryPromotion: vi.fn(),
+      getAgentMemoryHead: vi.fn(),
+      listAgentMemoryRevisions: vi.fn(),
+      authorizeAgentMemoryRevision: vi.fn(),
+      commitAgentMemoryRevision: vi.fn(),
     }
 
     await expect(createAgentMemoryHumanActions({ store }).promote({
@@ -248,5 +261,135 @@ describe('Agent Memory human actions', () => {
     })).rejects.toThrow('Agent Memory promotion was rejected')
     expect(store.authorizeAgentMemoryPromotion).not.toHaveBeenCalled()
     expect(store.commitAgentMemoryPromotion).not.toHaveBeenCalled()
+  })
+
+  it('constructs one main-owned exact-version human revision authority', async () => {
+    const currentRevision = revisionFromAuthority('agent-memory-current', {
+      stateVersion: 1,
+      decisionId: 'agent-memory-promotion-current',
+      candidateId: candidate.id,
+      candidateContentDigest: candidate.contentDigest,
+      scope,
+      actorKind: 'human',
+      actorId: scope.userId,
+      policyId: 'desktop-human-memory-promotion',
+      policyVersion: 1,
+      visibility: 'user_project',
+      sensitivity: 'private',
+      retentionClass: 'until_deleted',
+      expiresAt: null,
+      authorityDigest: digest('d'),
+      decidedAt: '2026-08-13T12:00:02.000Z',
+    })
+    const head = {
+      memoryId: currentRevision.id,
+      currentRevision: currentRevision.revision,
+      scope,
+      status: 'active' as const,
+      version: 4,
+      updatedAt: currentRevision.createdAt,
+    }
+    const capability = Object.freeze(Object.create(null))
+    const authorizeAgentMemoryRevision = vi.fn(async (input: {
+      memoryId: string
+      expectedHeadVersion: number
+      statement: string
+      authority: AgentMemoryRevisionAuthority
+    }) => ({
+      authorized: true as const,
+      capability,
+      revision: {
+        ...currentRevision,
+        revision: 2,
+        statement: input.statement,
+        contentDigest: digest('e'),
+        supersedesRevision: 1,
+        promotionDecisionId: input.authority.decisionId,
+        promotionActorKind: input.authority.actorKind,
+        promotionActorId: input.authority.actorId,
+        promotionPolicyId: input.authority.policyId,
+        promotionPolicyVersion: input.authority.policyVersion,
+        promotionAuthorityDigest: input.authority.authorityDigest,
+        createdAt: input.authority.decidedAt,
+      } as DurableAgentMemoryRevision,
+    }))
+    const commitAgentMemoryRevision = vi.fn(async (input: {
+      revision: DurableAgentMemoryRevision
+      recordedAt: string
+    }) => ({
+      committed: true as const,
+      replayed: false,
+      revision: input.revision,
+    }))
+    const store = {
+      getAgentRuntime: vi.fn(async () => runtime),
+      getRun: vi.fn(async () => run),
+      getDesktopPairingCredential: vi.fn(async () => pairing()),
+      listAgentMemoryCandidates: vi.fn(async () => [candidate]),
+      authorizeAgentMemoryPromotion: vi.fn(),
+      commitAgentMemoryPromotion: vi.fn(),
+      getAgentMemoryHead: vi.fn(async () => head),
+      listAgentMemoryRevisions: vi.fn(async () => [currentRevision]),
+      authorizeAgentMemoryRevision,
+      commitAgentMemoryRevision,
+    }
+    const createId = vi.fn((prefix: string) => `${prefix}-generated`)
+    const service = createAgentMemoryHumanActions({
+      store,
+      clock: () => '2026-08-13T12:00:03.000Z',
+      createId,
+    })
+
+    const result = await service.revise({
+      runtimeId: runtime.id,
+      runId: run.id,
+      localProjectId: scope.localProjectId,
+      memoryId: currentRevision.id,
+      expectedRevision: 1,
+      expectedHeadVersion: 4,
+      expectedContentDigest: currentRevision.contentDigest,
+      expectedProvenanceDigest: currentRevision.provenanceDigest,
+      statement: 'Use the reviewed exact retry boundary.',
+    })
+
+    expect(result).toMatchObject({
+      id: currentRevision.id,
+      revision: 2,
+      statement: 'Use the reviewed exact retry boundary.',
+      supersedesRevision: 1,
+    })
+    expect(createId).toHaveBeenCalledWith('agent-memory-revision')
+    const authorization = authorizeAgentMemoryRevision.mock.calls[0]?.[0]
+    expect(authorization).toMatchObject({
+      memoryId: currentRevision.id,
+      expectedHeadVersion: 4,
+      statement: 'Use the reviewed exact retry boundary.',
+      authority: {
+        stateVersion: 1,
+        decisionId: 'agent-memory-revision-generated',
+        memoryId: currentRevision.id,
+        expectedRevision: 1,
+        expectedContentDigest: currentRevision.contentDigest,
+        scope,
+        actorKind: 'human',
+        actorId: scope.userId,
+        policyId: 'desktop-human-memory-revision',
+        policyVersion: 1,
+        visibility: currentRevision.visibility,
+        sensitivity: currentRevision.sensitivity,
+        retentionClass: currentRevision.retentionClass,
+        expiresAt: currentRevision.expiresAt,
+        decidedAt: '2026-08-13T12:00:03.000Z',
+      },
+    })
+    const authority = authorization!.authority
+    const { authorityDigest, ...unsignedAuthority } = authority
+    expect(authorityDigest).toBe(
+      createHash('sha256').update(JSON.stringify(unsignedAuthority)).digest('hex'),
+    )
+    expect(commitAgentMemoryRevision).toHaveBeenCalledWith(
+      { revision: result, recordedAt: '2026-08-13T12:00:03.000Z' },
+      capability,
+    )
   })
 })

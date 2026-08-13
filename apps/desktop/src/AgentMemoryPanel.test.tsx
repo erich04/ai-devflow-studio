@@ -294,4 +294,65 @@ describe('AgentMemoryPanel', () => {
       /authority|policy|actor|memoryId|sessionId|capability|statement/,
     )
   })
+
+  it('revises only one active Memory with exact renderer-observed versions and digests', async () => {
+    const activeMemory = {
+      ...snapshot.memories[0]!,
+      lifecycleStatus: 'active' as const,
+      revisionStatus: 'active' as const,
+    }
+    const initialSnapshot: AgentMemoryRendererSnapshot = {
+      ...snapshot,
+      memories: [activeMemory, ...snapshot.memories.slice(1)],
+    }
+    const revisedStatement = 'Use the newly reviewed bounded conflict policy.'
+    const revisedSnapshot: AgentMemoryRendererSnapshot = {
+      ...initialSnapshot,
+      memories: initialSnapshot.memories.map((entry) => entry.memoryId === activeMemory.memoryId
+        ? {
+            ...entry,
+            currentRevision: entry.currentRevision + 1,
+            headVersion: entry.headVersion + 1,
+            statement: revisedStatement,
+            contentDigest: digest('9'),
+            updatedAt: '2026-08-13T12:00:01.000Z',
+          }
+        : entry),
+    }
+    const reviseAgentMemory = vi.fn().mockResolvedValue(revisedSnapshot)
+    const api = {
+      listAgentRuntimes: vi.fn().mockResolvedValue([runtimeListItem]),
+      listAgentMemoryLifecycle: vi.fn().mockResolvedValue(initialSnapshot),
+      reviseAgentMemory,
+    } as unknown as DevFlowDesktopApi
+
+    render(<AgentMemoryPanel
+      desktopApi={api}
+      runId="run-selected"
+      localProjectId="local-project-1"
+    />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Revise exact Memory' }))
+    fireEvent.change(screen.getByLabelText(
+      `Revised Memory statement for ${activeMemory.memoryId}`,
+    ), { target: { value: revisedStatement } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save exact revision' }))
+
+    await waitFor(() => expect(reviseAgentMemory).toHaveBeenCalledWith({
+      runtimeId: runtime.id,
+      runId: runtime.authority.runId,
+      localProjectId: runtime.scope.localProjectId,
+      memoryId: activeMemory.memoryId,
+      expectedRevision: activeMemory.currentRevision,
+      expectedHeadVersion: activeMemory.headVersion,
+      expectedContentDigest: activeMemory.contentDigest,
+      expectedProvenanceDigest: activeMemory.provenanceDigest,
+      statement: revisedStatement,
+    }))
+    expect(await screen.findByText(revisedStatement)).toBeInTheDocument()
+    expect(screen.getByText('revision 3 · head v5')).toBeInTheDocument()
+    expect(JSON.stringify(reviseAgentMemory.mock.calls)).not.toMatch(
+      /"(?:authorityDigest|policyId|policyVersion|actorId|actorKind|sessionId|capability|retentionClass|sensitivity|visibility)"/,
+    )
+  })
 })

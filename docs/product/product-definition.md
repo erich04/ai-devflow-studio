@@ -249,8 +249,8 @@ evidence is immutable under `docs/releases/v1.5.0/`. V2.0 Native Agent Runtime i
 immutable evidence under `docs/releases/v2.0.0/`; V2.1 Evaluated Retrieval and Memory is the active
 Roadmap priority, with local retrieval/Memory complete and Runtime Context/Desktop UX in progress.
 Desktop now exposes a strict bounded Agent Memory lifecycle view; exact-version human lifecycle
-promotion is available through a main-owned exact-digest action, while exact-version revision,
-deletion, and packaged restart evidence remain before Slice 5 can complete.
+promotion and statement revision are available through main-owned exact-digest/version actions,
+while exact-version deletion/purge and packaged restart evidence remain before Slice 5 can complete.
 
 The released product baseline provides:
 

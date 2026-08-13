@@ -27,6 +27,7 @@ import {
   parseGetAgentRuntimeInput,
   parseListAgentMemoryLifecycleInput,
   parsePromoteAgentMemoryCandidateInput,
+  parseReviseAgentMemoryInput,
   parseListAgentRuntimesInput,
   parseListWorkRequestsInput,
   parseMaterializeWorkRequestInput,
@@ -251,6 +252,50 @@ describe('IPC contract parsers', () => {
       { ...payload, expectedProvenanceDigest: 'b'.repeat(63) },
     ]) {
       expect(() => parsePromoteAgentMemoryCandidateInput(malformed)).toThrow()
+    }
+  })
+
+  it('accepts only exact current versions and replacement text for a human Memory revision', () => {
+    const payload = {
+      runtimeId: 'agent-runtime-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+      memoryId: 'agent-memory-1',
+      expectedRevision: 2,
+      expectedHeadVersion: 3,
+      expectedContentDigest: 'a'.repeat(64),
+      expectedProvenanceDigest: 'b'.repeat(64),
+      statement: 'Use the newly reviewed bounded retry policy.',
+    }
+    expect(parseReviseAgentMemoryInput(payload)).toEqual(payload)
+
+    for (const forbidden of [
+      { decisionId: 'renderer-decision-1' },
+      { actorId: 'spoofed-user' },
+      { actorKind: 'policy' },
+      { policyId: 'renderer-policy' },
+      { policyVersion: 99 },
+      { visibility: 'project_shared' },
+      { sensitivity: 'internal' },
+      { retentionClass: 'session' },
+      { expiresAt: '2026-08-13T13:00:00.000Z' },
+      { capability: {} },
+      { authorityDigest: 'c'.repeat(64) },
+      { scope: { kind: 'local' } },
+    ]) {
+      expect(() => parseReviseAgentMemoryInput({ ...payload, ...forbidden })).toThrow()
+    }
+    for (const malformed of [
+      { ...payload, memoryId: '' },
+      { ...payload, expectedRevision: 0 },
+      { ...payload, expectedHeadVersion: 1.5 },
+      { ...payload, expectedContentDigest: 'A'.repeat(64) },
+      { ...payload, expectedProvenanceDigest: 'b'.repeat(63) },
+      { ...payload, statement: '' },
+      { ...payload, statement: ' padded ' },
+      { ...payload, statement: 'x'.repeat(8_193) },
+    ]) {
+      expect(() => parseReviseAgentMemoryInput(malformed)).toThrow()
     }
   })
 

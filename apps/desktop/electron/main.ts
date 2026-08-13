@@ -92,6 +92,7 @@ import {
   parseGetAgentRuntimeInput,
   parseListAgentMemoryLifecycleInput,
   parsePromoteAgentMemoryCandidateInput,
+  parseReviseAgentMemoryInput,
   parseReplyCodingPermissionInput,
   parseRemoteSnapshotInput,
   parseRetryRemoteSyncOperationInput,
@@ -2165,6 +2166,13 @@ function registerIpcHandlers() {
     const input = parsePromoteAgentMemoryCandidateInput(payload)
     const store = await getStore()
     await createAgentMemoryHumanActions({ store }).promote(input)
+    return createAgentMemoryRendererAccess(store).list(input)
+  })
+
+  ipcMain.handle(ipcChannels.reviseAgentMemory, async (_, payload: unknown) => {
+    const input = parseReviseAgentMemoryInput(payload)
+    const store = await getStore()
+    await createAgentMemoryHumanActions({ store }).revise(input)
     return createAgentMemoryRendererAccess(store).list(input)
   })
 

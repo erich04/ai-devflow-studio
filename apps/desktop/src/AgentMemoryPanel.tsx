@@ -29,6 +29,9 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
   } | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isPromoting, setIsPromoting] = useState(false)
+  const [isRevising, setIsRevising] = useState(false)
+  const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null)
+  const [revisionStatement, setRevisionStatement] = useState('')
   const [hasRuntimeScope, setHasRuntimeScope] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const selectionVersion = useRef(0)
@@ -40,6 +43,9 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
       setRuntimeSelection(null)
       setIsLoading(false)
       setIsPromoting(false)
+      setIsRevising(false)
+      setEditingMemoryId(null)
+      setRevisionStatement('')
       setHasRuntimeScope(true)
       setError(null)
       return
@@ -49,6 +55,9 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
     setRuntimeSelection(null)
     setIsLoading(true)
     setIsPromoting(false)
+    setIsRevising(false)
+    setEditingMemoryId(null)
+    setRevisionStatement('')
     setHasRuntimeScope(true)
     setError(null)
     void (async () => {
@@ -124,6 +133,49 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
       }
     } finally {
       if (operationVersion === selectionVersion.current) setIsPromoting(false)
+    }
+  }
+
+  async function reviseMemory(memory: AgentMemoryRendererSnapshot['memories'][number]) {
+    if (
+      !desktopApi ||
+      runtimeSelection === null ||
+      runtimeSelection.runId !== runId ||
+      runtimeSelection.localProjectId !== localProjectId ||
+      memory.lifecycleStatus !== 'active' ||
+      memory.revisionStatus !== 'active' ||
+      memory.statement === null ||
+      revisionStatement.length === 0 ||
+      revisionStatement.trim() !== revisionStatement ||
+      revisionStatement === memory.statement
+    ) return
+    const operationVersion = selectionVersion.current
+    setIsRevising(true)
+    setError(null)
+    try {
+      const value = await desktopApi.reviseAgentMemory({
+        ...runtimeSelection,
+        memoryId: memory.memoryId,
+        expectedRevision: memory.currentRevision,
+        expectedHeadVersion: memory.headVersion,
+        expectedContentDigest: memory.contentDigest,
+        expectedProvenanceDigest: memory.provenanceDigest,
+        statement: revisionStatement,
+      })
+      const parsed = parseAgentMemoryRendererSnapshot(value)
+      if (
+        parsed.localProjectId !== runtimeSelection.localProjectId ||
+        operationVersion !== selectionVersion.current
+      ) throw new Error('Agent Memory revision result is stale')
+      setSnapshot(parsed)
+      setEditingMemoryId(null)
+      setRevisionStatement('')
+    } catch {
+      if (operationVersion === selectionVersion.current) {
+        setError('Agent Memory revision was rejected safely. Refresh and review the current version again.')
+      }
+    } finally {
+      if (operationVersion === selectionVersion.current) setIsRevising(false)
     }
   }
 
@@ -260,6 +312,61 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                         {memory.tombstone.deletionVersion}
                       </strong>
                     </div>
+                  ) : null}
+                  {memory.lifecycleStatus === 'active' &&
+                  memory.revisionStatus === 'active' &&
+                  memory.statement !== null ? (
+                    editingMemoryId === memory.memoryId ? (
+                      <div className="form-stack">
+                        <label>
+                          Revised Memory statement
+                          <textarea
+                            aria-label={`Revised Memory statement for ${memory.memoryId}`}
+                            value={revisionStatement}
+                            disabled={isRevising}
+                            onChange={(event) => setRevisionStatement(event.target.value)}
+                          />
+                        </label>
+                        <div className="button-row">
+                          <button
+                            type="button"
+                            className="primary-button"
+                            disabled={
+                              isRevising ||
+                              revisionStatement.length === 0 ||
+                              revisionStatement.trim() !== revisionStatement ||
+                              revisionStatement === memory.statement
+                            }
+                            onClick={() => { void reviseMemory(memory) }}
+                          >
+                            {isRevising ? 'Saving exact revision…' : 'Save exact revision'}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            disabled={isRevising}
+                            onClick={() => {
+                              setEditingMemoryId(null)
+                              setRevisionStatement('')
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="ghost-button"
+                        disabled={isPromoting || isRevising}
+                        onClick={() => {
+                          setEditingMemoryId(memory.memoryId)
+                          setRevisionStatement(memory.statement ?? '')
+                        }}
+                      >
+                        Revise exact Memory
+                      </button>
+                    )
                   ) : null}
                   <p className="empty-note">{scopeLabel(memory.scope)}</p>
                 </article>

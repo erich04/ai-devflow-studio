@@ -91,7 +91,7 @@ contains the signoff-bound release artifacts.
 | Completed 2.x milestone | V2.0 Native Agent Runtime Foundation |
 | V2.0 evidence | `docs/releases/v2.0.0/` |
 | Active milestone | V2.1 Slice 5 — Agent Runtime Context and Desktop UX |
-| Next gate | Prove exact-version Memory revision/deletion and zero-repeat packaged restart |
+| Next gate | Prove exact-version Memory deletion/purge and zero-repeat packaged restart |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -115,8 +115,10 @@ revision/head versions, and allowlisted statements while omitting scope sessions
 capabilities, deleted content, authority digests, raw output, and local paths. Main-owned
 human Candidate promotion now binds the selected Runtime, Candidate ID, content digest, and
 provenance digest, constructs its fixed private user-project authority only in Electron main, and
-returns only the refreshed renderer projection. Exact-version revision/deletion actions and packaged
-zero-repeat proof remain the active product priority.
+returns only the refreshed renderer projection. Exact-version statement revision additionally binds
+the selected Runtime, current revision/head versions, and current content/provenance digests while
+preserving main-owned visibility, sensitivity, retention, and scope authority. Exact-version
+deletion/purge actions and packaged zero-repeat proof remain the active product priority.
 
 ## Now / Next / Later
 

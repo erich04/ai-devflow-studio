@@ -52,6 +52,17 @@ type ExposedDesktopApi = {
     expectedContentDigest: string
     expectedProvenanceDigest: string
   }) => Promise<unknown>
+  reviseAgentMemory: (input: {
+    runtimeId: string
+    runId: string
+    localProjectId: string
+    memoryId: string
+    expectedRevision: number
+    expectedHeadVersion: number
+    expectedContentDigest: string
+    expectedProvenanceDigest: string
+    statement: string
+  }) => Promise<unknown>
   prepareGitHubDelivery: (input: { runId: string; nodeId: string }) => Promise<unknown>
   reviseGitHubDelivery: (input: {
     intentId: string
@@ -131,6 +142,17 @@ describe('Electron preload remote sync operator surface', () => {
       expectedProvenanceDigest: 'b'.repeat(64),
     }
     await expect(exposedApi.promoteAgentMemoryCandidate(promotion)).resolves.toBe(snapshot)
+    const revision = {
+      runtimeId: 'agent-runtime-1',
+      ...selection,
+      memoryId: 'agent-memory-1',
+      expectedRevision: 1,
+      expectedHeadVersion: 1,
+      expectedContentDigest: 'c'.repeat(64),
+      expectedProvenanceDigest: 'd'.repeat(64),
+      statement: 'Use the revised exact Memory statement.',
+    }
+    await expect(exposedApi.reviseAgentMemory(revision)).resolves.toBe(snapshot)
 
     expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.startAgentRuntime, {
       runId: 'run-1',
@@ -152,6 +174,10 @@ describe('Electron preload remote sync operator surface', () => {
       ipcChannels.promoteAgentMemoryCandidate,
       promotion,
     )
+    expect(electron.invoke).toHaveBeenCalledWith(
+      ipcChannels.reviseAgentMemory,
+      revision,
+    )
 
     const listener = vi.fn()
     const unsubscribe = exposedApi.onAgentRuntimeUpdated(listener)
@@ -172,7 +198,7 @@ describe('Electron preload remote sync operator surface', () => {
 
     expect(Object.keys(exposedApi)).not.toContain('commitAgentRuntimeTransition')
     expect(JSON.stringify(electron.invoke.mock.calls)).not.toMatch(
-      /worktreePath|command|capabilitySet|checkpoint|resultDigest|stopReason|sessionId|statement/,
+      /worktreePath|command|capabilitySet|checkpoint|resultDigest|stopReason|sessionId/,
     )
   })
 

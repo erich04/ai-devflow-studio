@@ -1,4 +1,7 @@
-import { WORK_REQUEST_ID_MAX_LENGTH } from '@ai-devflow/shared'
+import {
+  AGENT_MEMORY_CANDIDATE_TEXT_MAX_BYTES,
+  WORK_REQUEST_ID_MAX_LENGTH,
+} from '@ai-devflow/shared'
 import type { GitHubDeliveryProcessorResult } from './github-delivery-processor.js'
 import type {
   AgentEvent,
@@ -92,6 +95,15 @@ export type PromoteAgentMemoryCandidateInput = GetAgentRuntimeInput & {
   expectedProvenanceDigest: string
 }
 
+export type ReviseAgentMemoryInput = GetAgentRuntimeInput & {
+  memoryId: string
+  expectedRevision: number
+  expectedHeadVersion: number
+  expectedContentDigest: string
+  expectedProvenanceDigest: string
+  statement: string
+}
+
 export type RetryRemoteSyncOperationInput = {
   operationId: string
 }
@@ -123,6 +135,7 @@ export const ipcChannels = {
   agentRuntimeUpdated: 'devflow:agent-runtime:updated',
   listAgentMemoryLifecycle: 'devflow:agent-memory:lifecycle:list',
   promoteAgentMemoryCandidate: 'devflow:agent-memory:candidate:promote',
+  reviseAgentMemory: 'devflow:agent-memory:revise',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   createPrDraft: 'devflow:pr-draft:create',
   prepareGitHubDelivery: 'devflow:github-delivery:prepare',
@@ -481,6 +494,9 @@ export type DevFlowDesktopApi = {
   promoteAgentMemoryCandidate: (
     input: PromoteAgentMemoryCandidateInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
+  reviseAgentMemory: (
+    input: ReviseAgentMemoryInput,
+  ) => Promise<AgentMemoryLifecycleSnapshot>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
   prepareGitHubDelivery: (
@@ -567,6 +583,33 @@ function readExactRequiredDigest(
 ): string {
   const raw = value[key]
   if (typeof raw !== 'string' || !/^[a-f0-9]{64}$/u.test(raw)) {
+    throw new Error(`Invalid ${key}`)
+  }
+  return raw
+}
+
+function readExactPositiveVersion(
+  value: Record<string, unknown>,
+  key: string,
+): number {
+  const raw = value[key]
+  if (!Number.isInteger(raw) || Number(raw) < 1 || Number(raw) > 2_147_483_647) {
+    throw new Error(`Invalid ${key}`)
+  }
+  return Number(raw)
+}
+
+function readExactAgentMemoryStatement(
+  value: Record<string, unknown>,
+  key: string,
+): string {
+  const raw = value[key]
+  if (
+    typeof raw !== 'string' ||
+    raw.length === 0 ||
+    raw.trim() !== raw ||
+    new TextEncoder().encode(raw).byteLength > AGENT_MEMORY_CANDIDATE_TEXT_MAX_BYTES
+  ) {
     throw new Error(`Invalid ${key}`)
   }
   return raw
@@ -847,6 +890,36 @@ export function parsePromoteAgentMemoryCandidateInput(
     candidateId: readExactRequiredIdentifier(value, 'candidateId'),
     expectedContentDigest: readExactRequiredDigest(value, 'expectedContentDigest'),
     expectedProvenanceDigest: readExactRequiredDigest(value, 'expectedProvenanceDigest'),
+  }
+}
+
+export function parseReviseAgentMemoryInput(value: unknown): ReviseAgentMemoryInput {
+  if (!isRecord(value)) throw new Error('Invalid revise Agent Memory payload')
+  rejectUnexpectedFields(
+    value,
+    [
+      'runtimeId',
+      'runId',
+      'localProjectId',
+      'memoryId',
+      'expectedRevision',
+      'expectedHeadVersion',
+      'expectedContentDigest',
+      'expectedProvenanceDigest',
+      'statement',
+    ],
+    'revise Agent Memory payload',
+  )
+  return {
+    runtimeId: readExactRequiredIdentifier(value, 'runtimeId'),
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+    memoryId: readExactRequiredIdentifier(value, 'memoryId'),
+    expectedRevision: readExactPositiveVersion(value, 'expectedRevision'),
+    expectedHeadVersion: readExactPositiveVersion(value, 'expectedHeadVersion'),
+    expectedContentDigest: readExactRequiredDigest(value, 'expectedContentDigest'),
+    expectedProvenanceDigest: readExactRequiredDigest(value, 'expectedProvenanceDigest'),
+    statement: readExactAgentMemoryStatement(value, 'statement'),
   }
 }
 
