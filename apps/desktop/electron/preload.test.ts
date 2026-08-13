@@ -39,6 +39,11 @@ type ExposedDesktopApi = {
     runId: string
     localProjectId: string
   }) => Promise<unknown>
+  listAgentMemoryLifecycle: (input: {
+    runtimeId: string
+    runId: string
+    localProjectId: string
+  }) => Promise<unknown>
   prepareGitHubDelivery: (input: { runId: string; nodeId: string }) => Promise<unknown>
   reviseGitHubDelivery: (input: {
     intentId: string
@@ -106,6 +111,10 @@ describe('Electron preload remote sync operator surface', () => {
       runtimeId: 'agent-runtime-1',
       ...selection,
     })).resolves.toBe(snapshot)
+    await expect(exposedApi.listAgentMemoryLifecycle({
+      runtimeId: 'agent-runtime-1',
+      ...selection,
+    })).resolves.toBe(snapshot)
 
     expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.startAgentRuntime, {
       runId: 'run-1',
@@ -116,6 +125,10 @@ describe('Electron preload remote sync operator surface', () => {
     expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.cancelAgentRuntime, command)
     expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.listAgentRuntimes, selection)
     expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.getAgentRuntime, {
+      runtimeId: 'agent-runtime-1',
+      ...selection,
+    })
+    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.listAgentMemoryLifecycle, {
       runtimeId: 'agent-runtime-1',
       ...selection,
     })
@@ -139,7 +152,7 @@ describe('Electron preload remote sync operator surface', () => {
 
     expect(Object.keys(exposedApi)).not.toContain('commitAgentRuntimeTransition')
     expect(JSON.stringify(electron.invoke.mock.calls)).not.toMatch(
-      /worktreePath|command|capabilitySet|checkpoint|resultDigest|stopReason/,
+      /worktreePath|command|capabilitySet|checkpoint|resultDigest|stopReason|sessionId|statement/,
     )
   })
 

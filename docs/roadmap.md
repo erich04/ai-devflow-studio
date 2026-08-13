@@ -109,7 +109,11 @@ Slice 4 then completed Desktop-main-owned scoped Memory candidate, promotion, re
 retrieval, expiry, tombstone, and restart-safe purge semantics. Slice 5 now persists exact bounded
 Runtime Context, rechecks it both before an external action and at durable Tool grant reservation,
 and exposes renderer projection v2 with metadata-only Knowledge Citation and Durable Memory
-provenance. The remaining Desktop lifecycle UX and packaged zero-repeat proof are the only active
+provenance. A separate strict Desktop projection now shows bounded Working Memory, Candidate, and
+Durable Memory lifecycle state, including conflict, effective expiry, tombstone/purge status, exact
+revision/head versions, and allowlisted statements while omitting scope sessions, opaque
+capabilities, deleted content, authority digests, raw output, and local paths. Main-owned
+exact-version promotion/revision/deletion actions and packaged zero-repeat proof remain the active
 product priority.
 
 ## Now / Next / Later

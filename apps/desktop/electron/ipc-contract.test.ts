@@ -25,6 +25,7 @@ import {
   parseReplyCodingPermissionInput,
   parseLoadRepositoryKnowledgeInput,
   parseGetAgentRuntimeInput,
+  parseListAgentMemoryLifecycleInput,
   parseListAgentRuntimesInput,
   parseListWorkRequestsInput,
   parseMaterializeWorkRequestInput,
@@ -189,6 +190,33 @@ describe('IPC contract parsers', () => {
       localProjectId: 'project-1',
       path: '/Users/example/repo',
     })).toThrow(/unexpected field/i)
+  })
+
+  it('keeps Agent Memory lifecycle reads bound to one exact Runtime selection', () => {
+    expect(parseListAgentMemoryLifecycleInput({
+      runtimeId: 'agent-runtime-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+    })).toEqual({
+      runtimeId: 'agent-runtime-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+    })
+
+    for (const payload of [
+      undefined,
+      {},
+      { runtimeId: 'agent-runtime-1', runId: 'run-1', localProjectId: '' },
+      { runtimeId: 'agent-runtime-1', localProjectId: 'project-1' },
+      { runId: 'run-1', localProjectId: 'project-1' },
+      { runtimeId: 'agent-runtime-1', runId: 'run-1', localProjectId: 'project-1', memoryId: 'memory-1' },
+      { runtimeId: 'agent-runtime-1', runId: 'run-1', localProjectId: 'project-1', candidateId: 'candidate-1' },
+      { runtimeId: 'agent-runtime-1', runId: 'run-1', localProjectId: 'project-1', sessionId: 'pairing-token' },
+      { runtimeId: 'agent-runtime-1', runId: 'run-1', localProjectId: 'project-1', capability: {} },
+      { runtimeId: 'agent-runtime-1', runId: 'run-1', localProjectId: 'project-1', statement: 'untrusted renderer text' },
+    ]) {
+      expect(() => parseListAgentMemoryLifecycleInput(payload)).toThrow()
+    }
   })
 
   it('keeps Gate override input command-only and rejects derived trust fields', () => {

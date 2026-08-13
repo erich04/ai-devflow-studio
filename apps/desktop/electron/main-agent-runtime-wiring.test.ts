@@ -55,4 +55,18 @@ describe('Electron Agent Runtime production wiring', () => {
       ready.indexOf('registerIpcHandlers()'),
     )
   })
+
+  it('exposes Agent Memory lifecycle through one read-only main-owned projection', () => {
+    const handlers = main.slice(
+      main.indexOf('ipcMain.handle(ipcChannels.listAgentMemoryLifecycle'),
+      main.indexOf('ipcMain.handle(ipcChannels.deleteRun'),
+    )
+    expect(main).toContain("from './agent-memory-renderer-access.js'")
+    expect(handlers).toMatch(
+      /parseListAgentMemoryLifecycleInput\(payload\)[\s\S]*?getStore\(\)[\s\S]*?createAgentMemoryRendererAccess\(store\)\.list\(input\)/,
+    )
+    expect(handlers).not.toMatch(
+      /authorizeAgentMemory|commitAgentMemory|purgeAgentMemory|capability|statement|sessionId/,
+    )
+  })
 })

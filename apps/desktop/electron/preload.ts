@@ -40,6 +40,8 @@ const desktopApi: DevFlowDesktopApi = {
   cancelAgentRuntime: (input) => ipcRenderer.invoke(ipcChannels.cancelAgentRuntime, input),
   listAgentRuntimes: (input) => ipcRenderer.invoke(ipcChannels.listAgentRuntimes, input),
   getAgentRuntime: (input) => ipcRenderer.invoke(ipcChannels.getAgentRuntime, input),
+  listAgentMemoryLifecycle: (input) =>
+    ipcRenderer.invoke(ipcChannels.listAgentMemoryLifecycle, input),
   completeWorkflowAgentNode: (input) =>
     ipcRenderer.invoke(ipcChannels.completeWorkflowAgentNode, input),
   createPrDraft: (input) => ipcRenderer.invoke(ipcChannels.createPrDraft, input),

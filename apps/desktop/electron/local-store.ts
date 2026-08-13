@@ -710,6 +710,7 @@ export type LocalStore = {
     capability: AgentMemoryPromotionCapability,
   ): Promise<CommitAgentMemoryPromotionResult>
   listAgentMemoryRevisions(memoryId: string): Promise<DurableAgentMemoryRevision[]>
+  listAgentMemoryHeads(localProjectId?: string): Promise<AgentMemoryHeadRecord[]>
   getAgentMemoryHead(memoryId: string): Promise<AgentMemoryHeadRecord | null>
   retrieveAgentMemoryRevisions(
     input: AgentMemoryRetrievalRequest,
@@ -5764,6 +5765,30 @@ class SqlJsLocalStore implements LocalStore {
       [memoryId],
     )
     return Promise.all(values.map(parseDurableAgentMemoryRevision))
+  }
+
+  async listAgentMemoryHeads(localProjectId?: string): Promise<AgentMemoryHeadRecord[]> {
+    if (
+      localProjectId !== undefined &&
+      (!isNonEmptyIdentifier(localProjectId) || localProjectId.length > 200)
+    ) {
+      throw new Error('Invalid Local Project id')
+    }
+    const rows = localProjectId === undefined
+      ? this.db.exec(
+          `select memory_id from agent_memory_heads
+           order by updated_at desc, memory_id asc`,
+        )[0]?.values ?? []
+      : this.db.exec(
+          `select memory_id from agent_memory_heads
+           where local_project_id = ? order by updated_at desc, memory_id asc`,
+          [localProjectId],
+        )[0]?.values ?? []
+    return Promise.all(rows.map(async (row) => {
+      const head = await this.getAgentMemoryHead(String(row[0]))
+      if (head === null) throw new Error('Stored Agent Memory head is invalid')
+      return head
+    }))
   }
 
   async getAgentMemoryHead(memoryId: string): Promise<AgentMemoryHeadRecord | null> {

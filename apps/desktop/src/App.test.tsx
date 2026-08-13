@@ -548,6 +548,21 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     getAgentRuntime: vi.fn().mockRejectedValue(
       new Error('Agent Runtime is not configured for this test.'),
     ),
+    listAgentMemoryLifecycle: vi.fn(async ({ localProjectId }: {
+      runtimeId: string
+      runId: string
+      localProjectId: string
+    }) => ({
+      projectionVersion: 1 as const,
+      localProjectId,
+      observedAt: '2026-08-13T12:00:00.000Z',
+      candidateCount: 0,
+      memoryCount: 0,
+      truncated: false,
+      candidates: [],
+      memories: [],
+      redacted: true as const,
+    })),
     completeWorkflowAgentNode: vi.fn().mockImplementation(async (input) => {
       const created = createWorkflowRunFromRequest({
         runId: 'run-created-from-request',

@@ -1144,6 +1144,16 @@ describe('createLocalStore', () => {
       version: 1,
       updatedAt: '2026-08-12T20:30:05.000Z',
     })
+    await expect(reopened.listAgentMemoryHeads(project.id)).resolves.toEqual([{
+      memoryId: 'memory-local-store-1',
+      currentRevision: 1,
+      scope: candidate.scope,
+      status: 'active',
+      version: 1,
+      updatedAt: '2026-08-12T20:30:05.000Z',
+    }])
+    await expect(reopened.listAgentMemoryHeads('project-with-no-memory')).resolves.toEqual([])
+    await expect(reopened.listAgentMemoryHeads('')).rejects.toThrow('Invalid Local Project id')
     reopened.close()
 
     const SQL = await initSqlJs({

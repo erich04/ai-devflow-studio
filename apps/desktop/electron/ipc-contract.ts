@@ -6,6 +6,7 @@ import type {
   AgentReviewExecutionResult,
   AgentRuntimeRendererListItem,
   AgentRuntimeRendererSnapshot,
+  AgentMemoryRendererSnapshot,
   Artifact,
   CommandSafetyResult,
   CodingAgentEvent,
@@ -81,6 +82,10 @@ export type GetAgentRuntimeInput = ListAgentRuntimesInput & {
 export type AgentRuntimeSnapshot = AgentRuntimeRendererSnapshot
 export type AgentRuntimeListItem = AgentRuntimeRendererListItem
 
+export type ListAgentMemoryLifecycleInput = GetAgentRuntimeInput
+
+export type AgentMemoryLifecycleSnapshot = AgentMemoryRendererSnapshot
+
 export type RetryRemoteSyncOperationInput = {
   operationId: string
 }
@@ -110,6 +115,7 @@ export const ipcChannels = {
   listAgentRuntimes: 'devflow:agent-runtime:list',
   getAgentRuntime: 'devflow:agent-runtime:get',
   agentRuntimeUpdated: 'devflow:agent-runtime:updated',
+  listAgentMemoryLifecycle: 'devflow:agent-memory:lifecycle:list',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   createPrDraft: 'devflow:pr-draft:create',
   prepareGitHubDelivery: 'devflow:github-delivery:prepare',
@@ -462,6 +468,9 @@ export type DevFlowDesktopApi = {
   cancelAgentRuntime: (input: CancelAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
   listAgentRuntimes: (input: ListAgentRuntimesInput) => Promise<AgentRuntimeListItem[]>
   getAgentRuntime: (input: GetAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
+  listAgentMemoryLifecycle: (
+    input: ListAgentMemoryLifecycleInput,
+  ) => Promise<AgentMemoryLifecycleSnapshot>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
   prepareGitHubDelivery: (
@@ -770,6 +779,22 @@ export function parseGetAgentRuntimeInput(value: unknown): GetAgentRuntimeInput 
     value,
     ['runtimeId', 'runId', 'localProjectId'],
     'get Agent Runtime payload',
+  )
+  return {
+    runtimeId: readExactRequiredIdentifier(value, 'runtimeId'),
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+  }
+}
+
+export function parseListAgentMemoryLifecycleInput(
+  value: unknown,
+): ListAgentMemoryLifecycleInput {
+  if (!isRecord(value)) throw new Error('Invalid list Agent Memory lifecycle payload')
+  rejectUnexpectedFields(
+    value,
+    ['runtimeId', 'runId', 'localProjectId'],
+    'list Agent Memory lifecycle payload',
   )
   return {
     runtimeId: readExactRequiredIdentifier(value, 'runtimeId'),
