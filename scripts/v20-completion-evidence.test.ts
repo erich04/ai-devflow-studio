@@ -158,6 +158,7 @@ function evaluate(overrides: Record<string, unknown> = {}) {
     candidateSha,
     signoffParentSha: candidateSha,
     changedFiles: [...v20CompletionSignoffFiles],
+    evidenceImmutable: true,
     worktreeClean: true,
     ...overrides,
   })
@@ -181,6 +182,7 @@ describe('V2.0 completion evidence', () => {
 
   it('requires a clean direct child whose candidate identity matches every layer', () => {
     expect(evaluate({ signoffParentSha: '4'.repeat(40) }).failures).toContain('not_direct_child')
+    expect(evaluate({ evidenceImmutable: false }).failures).toContain('evidence_history_mismatch')
     expect(evaluate({ worktreeClean: false }).failures).toContain('worktree_dirty')
 
     const gates = requiredGates()

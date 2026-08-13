@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import {
   collectV20CompletionSignoff,
@@ -11,7 +12,14 @@ describe('V2.0 completion signoff boundary', () => {
     expect(new Set(evidenceExists).size).toBe(1)
 
     if (evidenceExists[0]) {
-      expect(collectV20CompletionSignoff().result).toEqual({ ready: true, failures: [] })
+      const worktreeClean = execFileSync(
+        'git',
+        ['status', '--porcelain=v1', '--untracked-files=all'],
+        { encoding: 'utf8' },
+      ) === ''
+      expect(collectV20CompletionSignoff().result).toEqual(worktreeClean
+        ? { ready: true, failures: [] }
+        : { ready: false, failures: ['worktree_dirty'] })
     }
   })
 })

@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { readBoundedJsonFileSync } from './release-evidence-file.mjs'
+import { readBoundedUtf8FileSync } from './release-evidence-file.mjs'
 import {
   evaluateV20CompletionRecord,
   parseV20EvaluationDataset,
@@ -238,6 +237,7 @@ export function evaluateV20CompletionSignoff(input) {
   ) add('signoff_identity')
   if (input.signoffParentSha !== input.candidateSha) add('not_direct_child')
   if (!sameStringSet(input.changedFiles, v20CompletionSignoffFiles)) add('signoff_file_set')
+  if (input.evidenceImmutable !== true) add('evidence_history_mismatch')
   if (input.worktreeClean !== true) add('worktree_dirty')
 
   if (
@@ -287,16 +287,72 @@ function runGit(arguments_, cwd) {
   return execFileSync('git', arguments_, { cwd, encoding: 'utf8' }).trim()
 }
 
+function readGitBlob(commitSha, path, cwd) {
+  const bytes = execFileSync('git', ['show', `${commitSha}:${path}`], {
+    cwd,
+    encoding: 'buffer',
+    maxBuffer: 64 * 1024,
+  })
+  if (bytes.byteLength > 64 * 1024) throw new Error('v20_completion_evidence_unavailable')
+  return bytes
+}
+
+function findV20SignoffSha(candidateSha, cwd) {
+  const ancestry = runGit(
+    ['rev-list', '--parents', '--ancestry-path', `${candidateSha}..HEAD`],
+    cwd,
+  )
+  const directChildren = ancestry
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => line.split(' '))
+    .filter(([_commitSha, ...parentShas]) => parentShas.includes(candidateSha))
+    .map(([commitSha]) => commitSha)
+    .filter((commitSha) => {
+      const changedFiles = runGit(
+        ['diff', '--name-only', `${candidateSha}..${commitSha}`],
+        cwd,
+      ).split('\n').filter(Boolean)
+      return sameStringSet(changedFiles, v20CompletionSignoffFiles)
+    })
+  if (directChildren.length !== 1) throw new Error('v20_completion_evidence_unavailable')
+  return directChildren[0]
+}
+
 export function collectV20CompletionSignoff(cwd = process.cwd()) {
-  const signoffSha = runGit(['rev-parse', 'HEAD'], cwd)
-  const candidateSha = runGit(['rev-parse', 'HEAD^'], cwd)
+  const requiredGatesText = readBoundedUtf8FileSync(
+    resolve(cwd, v20CompletionEvidencePaths.requiredGates),
+  )
+  const evaluationRecordText = readBoundedUtf8FileSync(
+    resolve(cwd, v20CompletionEvidencePaths.evaluation),
+  )
+  const requiredGates = parseV20RequiredGates(JSON.parse(requiredGatesText))
+  const candidateSha = requiredGates.candidateSha
+  const signoffSha = findV20SignoffSha(candidateSha, cwd)
+  const signoffParentSha = runGit(['rev-parse', `${signoffSha}^`], cwd)
   const changedFiles = runGit(['diff', '--name-only', `${candidateSha}..${signoffSha}`], cwd)
     .split('\n')
     .filter(Boolean)
   const worktreeClean = runGit(['status', '--porcelain=v1', '--untracked-files=all'], cwd) === ''
-  const datasetBytes = readFileSync(resolve(cwd, 'scripts/fixtures/v2.0-agent-runtime-scenarios.json'))
-  const evaluationRecord = readBoundedJsonFileSync(resolve(cwd, v20CompletionEvidencePaths.evaluation))
-  const requiredGates = readBoundedJsonFileSync(resolve(cwd, v20CompletionEvidencePaths.requiredGates))
+  const datasetBytes = readGitBlob(
+    signoffSha,
+    'scripts/fixtures/v2.0-agent-runtime-scenarios.json',
+    cwd,
+  )
+  const evaluationRecordBytes = readGitBlob(
+    signoffSha,
+    v20CompletionEvidencePaths.evaluation,
+    cwd,
+  )
+  const requiredGatesBytes = readGitBlob(
+    signoffSha,
+    v20CompletionEvidencePaths.requiredGates,
+    cwd,
+  )
+  const currentEvidenceIsImmutable =
+    evaluationRecordBytes.equals(Buffer.from(evaluationRecordText)) &&
+    requiredGatesBytes.equals(Buffer.from(requiredGatesText))
+  const evaluationRecord = JSON.parse(evaluationRecordText)
   return {
     signoffSha,
     candidateSha,
@@ -306,8 +362,9 @@ export function collectV20CompletionSignoff(cwd = process.cwd()) {
       requiredGates,
       signoffSha,
       candidateSha,
-      signoffParentSha: candidateSha,
+      signoffParentSha,
       changedFiles,
+      evidenceImmutable: currentEvidenceIsImmutable,
       worktreeClean,
     }),
   }
