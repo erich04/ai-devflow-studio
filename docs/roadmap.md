@@ -58,7 +58,7 @@ rules.
 | --- | --- | --- | --- | --- |
 | 0.x | Engineering foundation | Real Electron execution, durable local state, team sync, Knowledge Governance, Gate policy, a managed external Coding Agent Adapter, runtime observability, and release discipline. | Fake and explicitly authorized real Coding paths can execute in managed worktrees, preserve auditable evidence, obey human Gates, sync only redacted summaries, and pass reproducible verification. | Completed at v0.9.0. |
 | 1.x | Governed self-hosted delivery | Authenticated team pilot, Desktop pairing, project scope, policy and budget controls, durable sync, repository knowledge, Web collaboration commands, reproducible lifecycle, and human-approved GitHub delivery. | One authenticated Work Request becomes one canonical local Run, reaches tested and evidence-backed delivery, and publishes a branch and pull request only after explicit human approval. V1.5 is the final planned 1.x feature milestone. | Completed at v1.5.0. |
-| 2.x | DevFlow-native Agent Runtime | A bounded first-party Agent loop, native Tool and MCP execution, pluggable Coding Executors, trajectory and evaluation, scoped Context and Memory, evaluated RAG, Multi-Agent orchestration, and tenant-scoped execution. | Benchmarked scenarios demonstrate bounded single- and Multi-Agent execution, native and delegated coding, MCP/tool use, evaluated retrieval and Memory, failure recovery, tenant isolation, and auditable trajectories while Workflow and Gate authority remains intact. | Active; V2.0 is complete and V2.1 is the current priority. |
+| 2.x | DevFlow-native Agent Runtime | A bounded first-party Agent loop, native Tool and MCP execution, pluggable Coding Executors, trajectory and evaluation, scoped Context and Memory, evaluated RAG, Multi-Agent orchestration, and tenant-scoped execution. | Benchmarked scenarios demonstrate bounded single- and Multi-Agent execution, native and delegated coding, MCP/tool use, evaluated retrieval and Memory, failure recovery, tenant isolation, and auditable trajectories while Workflow and Gate authority remains intact. | Active; V2.0 and V2.1 are complete and V2.2 is the current priority. |
 
 The version lines are finite product contracts, not an instruction to keep adding versions. A line
 ends when its completion gate passes; remaining ideas move to maintenance, evidence-promoted work,
@@ -88,10 +88,10 @@ contains the signoff-bound release artifacts.
 | V1.5 execution history | `docs/plans/v1.5-github-delivery.md` and the four immutable release evidence files |
 | Completed version line | 1.x governed self-hosted delivery |
 | Active version line | 2.x DevFlow-native Agent Runtime |
-| Completed 2.x milestone | V2.0 Native Agent Runtime Foundation |
-| V2.0 evidence | `docs/releases/v2.0.0/` |
-| Active milestone | V2.1 Slice 7 — Evaluation And Completion Gate |
-| Next gate | Freeze the exact V2.1 candidate and run the full completion matrix |
+| Completed 2.x milestones | V2.0 Native Agent Runtime Foundation; V2.1 Evaluated Retrieval And Memory |
+| Completion evidence | `docs/releases/v2.0.0/`; `docs/releases/v2.1.0/` |
+| Active milestone | V2.2 Multi-Agent And Execution Tenancy |
+| Next gate | Freeze the V2.2 contract, single-Agent baseline, and bounded coordination scenarios |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -126,7 +126,7 @@ restart, `memoryRestartDuplicateEffects` is zero, and Local MCP/native Tool coun
 
 ## Now / Next / Later
 
-### Now — Run V2.1 Evaluation And Completion Gate
+### Completed — V2.1 Evaluation And Completion Gate
 
 V1.5 and the finite 1.x line are released and complete. V2.0 is complete with immutable evaluator
 and gate evidence. V2.1 Slices 1 through 5 now provide evaluated retrieval, strict Citation and
@@ -157,12 +157,24 @@ deletion; scope/lifecycle filtering happens before retrieval; restart-safe purge
 older revision; renderer projection v2 remains metadata-only; and the packaged Desktop records zero
 repeated retrieval/provider/Tool/Memory effects after cold restart. The Team projection is strictly
 metadata-only and monotonic, and neither its API nor Web view can control local execution or Memory.
+Candidate `2c11faa09f35c4930b3c4cf489469b696ccd84ea` passed the exact evaluator, full local
+matrix, first-attempt five-job Verify run `31712135602`, and exclusive Desktop artifact integrity
+gate. Its immutable records are under `docs/releases/v2.1.0/`.
+The superseded implementation-period markers `### Now — Run V2.1 Evaluation And Completion Gate`,
+`| Active milestone | V2.1 Slice 7 — Evaluation And Completion Gate |`, and
+`| Next gate | Freeze the exact V2.1 candidate and run the full completion matrix |` remain here only
+as auditable phase vocabulary; the current table and the single `Now` heading below are authoritative.
 
-### Next — Begin V2.2 Multi-Agent And Execution Tenancy
+### Now — Begin V2.2 Multi-Agent And Execution Tenancy
 
-- Begin only after V2.1 has immutable candidate-bound completion evidence.
-- Add bounded supervisor/specialist coordination and execution tenancy without widening Workflow or
-  Gate authority.
+- Freeze the bounded supervisor/specialist contract and execution-tenancy authority model.
+- Establish the exact V2.0 single-Agent comparison baseline and selected coordination scenarios.
+- Add coordination without widening Workflow, Gate, Tool, publication, or Team authority.
+
+### Next — Implement And Evaluate V2.2
+
+- Deliver V2.2 through contract-first TDD slices, then run the same clean-candidate and immutable
+  evidence discipline used by V2.0 and V2.1.
 
 ### Later — Continue The Accepted 2.x Sequence
 
@@ -193,6 +205,19 @@ metadata-only and monotonic, and neither its API nor Web view can control local 
   stored under `docs/releases/v2.0.0/`.
 - Slice 7 is complete with the frozen 15-scenario evaluator; Slice 8 is complete with the immutable
   candidate-bound release records.
+
+### v2.1: Evaluated Retrieval And Memory
+
+- Completed deterministic hybrid retrieval and reranking with exact current Citation validation;
+  Recall@K, nDCG@K, and MRR reached `1.0`, with `0.5` aggregate improvement over lexical.
+- Completed scoped, immutable, expiring, tombstone-first Agent Memory with exact human promotion,
+  revision, deletion, restart-safe purge, and stale-before-action/grant fencing.
+- Completed metadata-only monotonic Team projection and read-only Web visibility without local
+  content or control authority.
+- Candidate `2c11faa09f35c4930b3c4cf489469b696ccd84ea` passed the frozen no-cost evaluator,
+  zero-leak/isolation/deletion scans, full local and exact-SHA cross-platform matrices, and exclusive
+  Desktop artifact verification. Immutable records are under `docs/releases/v2.1.0/`.
+- Slice 7 is complete with the exact direct-child completion records; V2.2 is now active.
 
 ### v0.1: Fixture-Backed Team Workbench
 

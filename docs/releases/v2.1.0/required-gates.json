@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "targetMilestone": "v2.1",
+  "candidateSha": "2c11faa09f35c4930b3c4cf489469b696ccd84ea",
+  "status": "passed",
+  "recordedAt": "2026-08-13T14:56:15.000Z",
+  "localMatrix": {
+    "candidateSha": "2c11faa09f35c4930b3c4cf489469b696ccd84ea",
+    "verify": "passed",
+    "evaluator": "passed",
+    "postgres": "passed",
+    "docker": "passed",
+    "packagedDesktop": "passed",
+    "worktreeCleanAfter": true
+  },
+  "verifyRun": {
+    "workflow": "Verify",
+    "event": "workflow_dispatch",
+    "runId": 31712135602,
+    "runAttempt": 1,
+    "url": "https://github.com/erich04/ai-devflow-studio/actions/runs/31712135602",
+    "headSha": "2c11faa09f35c4930b3c4cf489469b696ccd84ea",
+    "conclusion": "success",
+    "jobs": {
+      "Docker lifecycle smoke": "success",
+      "Docker smoke": "success",
+      "Postgres integration": "success",
+      "Windows compatibility": "success",
+      "macOS verify": "success"
+    }
+  },
+  "desktopArtifact": {
+    "name": "ai-devflow-studio-v15-candidate-desktop",
+    "productVersion": "1.5.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "electronVersion": "33.4.11",
+    "archiveSha256": "abb5793fa40a1cdf845bf51d839b2f19aaced8ad90c263a3cb2a0ec9342a2c53",
+    "archiveSizeBytes": 107098203,
+    "signed": false,
+    "installer": false
+  },
+  "evaluation": {
+    "path": "docs/releases/v2.1.0/retrieval-memory-evaluation.json",
+    "corpusId": "v2.1-evaluated-retrieval-memory",
+    "corpusVersion": 1,
+    "corpusSha256": "052b6ea8f2fe06ed4f2614b00b102d6b05e147b790196687bf5d7f299d3b3008",
+    "contractSha256": "8a0f40d3dd4467d6b97dbf120ae95ef773507595fc96abebde927e39cfc001cd",
+    "retrievalContractVersion": 1,
+    "memoryContractVersion": 1,
+    "lexicalRecallAtK": 0.5,
+    "hybridRecallAtK": 1,
+    "hybridNdcgAtK": 1,
+    "hybridMeanReciprocalRank": 1,
+    "aggregateImprovementOverLexical": 0.5,
+    "citationPrecision": 1,
+    "citationFaithfulness": 1,
+    "noMemoryTaskSuccessRate": 0,
+    "memoryTaskSuccessRate": 1,
+    "aggregateImprovementOverNoMemory": 1,
+    "additionalHumanInterventions": 0,
+    "paidProviderCalls": 0,
+    "scans": {
+      "secretLeaks": 0,
+      "absolutePathLeaks": 0,
+      "sourceContentLeaks": 0,
+      "rawOutputLeaks": 0,
+      "isolationViolations": 0,
+      "deletionViolations": 0
+    },
+    "status": "passed"
+  }
+}
