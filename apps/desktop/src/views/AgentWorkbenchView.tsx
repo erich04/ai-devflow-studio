@@ -23,6 +23,7 @@ import {
   type AgentConsoleEvidenceGroup,
 } from '../app/agent-console-view-model'
 import { AgentRuntimePanel } from '../AgentRuntimePanel'
+import { AgentCoordinationPanel } from '../AgentCoordinationPanel'
 import { AgentMemoryPanel } from '../AgentMemoryPanel'
 import { codingRuntimeLabel, codingTerminalLabel, type SupportContext } from '../app/desktop-view-model'
 import type { DevFlowDesktopApi } from '../desktop-api'
@@ -400,6 +401,12 @@ export function AgentWorkbenchView({
         ) : null}
 
         <AgentRuntimePanel
+          desktopApi={desktopApi}
+          runId={selectedRun?.id}
+          localProjectId={localProjectId}
+        />
+
+        <AgentCoordinationPanel
           desktopApi={desktopApi}
           runId={selectedRun?.id}
           localProjectId={localProjectId}

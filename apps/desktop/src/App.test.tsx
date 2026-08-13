@@ -1468,9 +1468,10 @@ describe('App', () => {
     expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('not indexed')
   })
 
-  it('mounts Agent Runtime observability for the exact selected Run and local project', async () => {
+  it('mounts single and Multi-Agent observability for the exact selected Run and local project', async () => {
     const listAgentRuntimes = vi.fn().mockResolvedValue([])
-    const api = installDesktopApi({ listAgentRuntimes })
+    const listCoordinationSessions = vi.fn().mockResolvedValue([])
+    const api = installDesktopApi({ listAgentRuntimes, listCoordinationSessions })
     render(<App />)
 
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
@@ -1483,6 +1484,14 @@ describe('App', () => {
     }))
     expect(screen.getByText('No Agent Runtime has been recorded for this Run.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Start Agent Runtime/ })).not.toBeInTheDocument()
+    expect(await screen.findByRole('region', { name: 'Multi-Agent Coordination' }))
+      .toBeInTheDocument()
+    await waitFor(() => expect(listCoordinationSessions).toHaveBeenCalledWith({
+      runId: fixtureRuns[0]!.id,
+      localProjectId: localProject.id,
+    }))
+    expect(screen.getByText('No Multi-Agent Coordination has been recorded for this Run.'))
+      .toBeInTheDocument()
   })
 
   it('labels Electron local state as empty when no persisted runs exist', async () => {
