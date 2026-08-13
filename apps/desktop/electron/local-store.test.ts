@@ -27,6 +27,7 @@ import type {
   AgentTrace,
   AgentTokenUsage,
   AgentRuntimeStartRequest,
+  AgentMemoryPromotionAuthority,
   Artifact,
   CodingAgentEvent,
   CodingAgentRun,
@@ -59,6 +60,7 @@ import {
   gateCommandExecutionFingerprint,
   KNOWLEDGE_INDEX_CHUNK_COUNT_MAX,
   type ActivateKnowledgeIndexSnapshotInput,
+  type LocalStore,
   type WorkRequestMaterializationExpectedPairing,
   type SettleRemoteSyncOperationInput,
 } from './local-store'
@@ -717,6 +719,63 @@ const teamAgentRuntimeStartRequest: AgentRuntimeStartRequest = {
   },
 }
 
+async function persistAcceptedMemoryCandidate(store: LocalStore) {
+  await store.upsertProject(project)
+  await store.saveRun(gateWorkflowCreation.run)
+
+  const created = createAgentRuntime(agentRuntimeStartRequest)
+  const resumed = resumeAgentRuntime({
+    runtime: created.runtime,
+    expectedCheckpointVersion: created.runtime.checkpointVersion,
+    authority: created.runtime.authority,
+    contextDigest: created.runtime.contextDigest,
+    capabilitySetDigest: created.runtime.capabilitySetDigest,
+    now: '2026-08-12T20:30:01.000Z',
+  })
+  const requested = requestAgentAction({
+    runtime: resumed.runtime,
+    expectedCheckpointVersion: resumed.runtime.checkpointVersion,
+    now: '2026-08-12T20:30:02.000Z',
+    action: {
+      id: 'memory-observation-action-1',
+      kind: 'tool',
+      capabilityId: 'test.observe',
+      capabilityVersion: 1,
+      requestDigest: 'c'.repeat(64),
+      requiresPermission: false,
+    },
+  })
+  const accepted = acceptAgentActionResult({
+    runtime: requested.runtime,
+    expectedCheckpointVersion: requested.runtime.checkpointVersion,
+    actionId: 'memory-observation-action-1',
+    requestDigest: 'c'.repeat(64),
+    result: {
+      outcome: 'success',
+      resultDigest: 'd'.repeat(64),
+      resultBytes: 128,
+      tokens: 0,
+      costUsd: 0,
+      evaluation: 'continue',
+      evaluationSummary: 'The accepted observation can propose one inert Memory candidate.',
+    },
+    now: '2026-08-12T20:30:03.000Z',
+  })
+  await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: created })
+  await store.commitAgentRuntimeTransition({ expectedRuntime: created.runtime, transition: resumed })
+  await store.commitAgentRuntimeTransition({ expectedRuntime: resumed.runtime, transition: requested })
+  await store.commitAgentRuntimeTransition({ expectedRuntime: requested.runtime, transition: accepted })
+  const candidate = await createAgentMemoryCandidate({
+    id: 'memory-candidate-local-store-1',
+    statement: 'The saved health test is the regression check for dependency degradation.',
+    previousRuntime: requested.runtime,
+    acceptedTransition: accepted,
+    createdAt: '2026-08-12T20:30:04.000Z',
+  })
+  const firstSave = await store.saveAgentMemoryCandidate(candidate)
+  return { candidate, firstSave }
+}
+
 describe('createLocalStore', () => {
   it('initializes schema version 24 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
@@ -840,60 +899,9 @@ describe('createLocalStore', () => {
   it('persists one accepted inert Memory candidate exactly once across restart', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
-    await store.upsertProject(project)
-    await store.saveRun(gateWorkflowCreation.run)
+    const { candidate, firstSave } = await persistAcceptedMemoryCandidate(store)
 
-    const created = createAgentRuntime(agentRuntimeStartRequest)
-    const resumed = resumeAgentRuntime({
-      runtime: created.runtime,
-      expectedCheckpointVersion: created.runtime.checkpointVersion,
-      authority: created.runtime.authority,
-      contextDigest: created.runtime.contextDigest,
-      capabilitySetDigest: created.runtime.capabilitySetDigest,
-      now: '2026-08-12T20:30:01.000Z',
-    })
-    const requested = requestAgentAction({
-      runtime: resumed.runtime,
-      expectedCheckpointVersion: resumed.runtime.checkpointVersion,
-      now: '2026-08-12T20:30:02.000Z',
-      action: {
-        id: 'memory-observation-action-1',
-        kind: 'tool',
-        capabilityId: 'test.observe',
-        capabilityVersion: 1,
-        requestDigest: 'c'.repeat(64),
-        requiresPermission: false,
-      },
-    })
-    const accepted = acceptAgentActionResult({
-      runtime: requested.runtime,
-      expectedCheckpointVersion: requested.runtime.checkpointVersion,
-      actionId: 'memory-observation-action-1',
-      requestDigest: 'c'.repeat(64),
-      result: {
-        outcome: 'success',
-        resultDigest: 'd'.repeat(64),
-        resultBytes: 128,
-        tokens: 0,
-        costUsd: 0,
-        evaluation: 'continue',
-        evaluationSummary: 'The accepted observation can propose one inert Memory candidate.',
-      },
-      now: '2026-08-12T20:30:03.000Z',
-    })
-    await store.commitAgentRuntimeTransition({ expectedRuntime: null, transition: created })
-    await store.commitAgentRuntimeTransition({ expectedRuntime: created.runtime, transition: resumed })
-    await store.commitAgentRuntimeTransition({ expectedRuntime: resumed.runtime, transition: requested })
-    await store.commitAgentRuntimeTransition({ expectedRuntime: requested.runtime, transition: accepted })
-    const candidate = await createAgentMemoryCandidate({
-      id: 'memory-candidate-local-store-1',
-      statement: 'The saved health test is the regression check for dependency degradation.',
-      previousRuntime: requested.runtime,
-      acceptedTransition: accepted,
-      createdAt: '2026-08-12T20:30:04.000Z',
-    })
-
-    await expect(store.saveAgentMemoryCandidate(candidate)).resolves.toEqual({
+    expect(firstSave).toEqual({
       committed: true,
       replayed: false,
       candidate,
@@ -908,6 +916,170 @@ describe('createLocalStore', () => {
       replayed: true,
       candidate,
     })
+    reopened.close()
+  })
+
+  it('promotes one candidate through an exact main-owned capability and rejects its clone', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const { candidate } = await persistAcceptedMemoryCandidate(store)
+    const authority: AgentMemoryPromotionAuthority = {
+      stateVersion: 1,
+      decisionId: 'memory-promotion-local-store-1',
+      candidateId: candidate.id,
+      candidateContentDigest: candidate.contentDigest,
+      scope: candidate.scope,
+      actorKind: 'human',
+      actorId: candidate.scope.userId,
+      policyId: 'memory-policy-local-store-1',
+      policyVersion: 1,
+      visibility: 'user_project',
+      sensitivity: 'private',
+      retentionClass: 'until_deleted',
+      expiresAt: null,
+      authorityDigest: 'e'.repeat(64),
+      decidedAt: '2026-08-12T20:30:05.000Z',
+    }
+    const authorization = await store.authorizeAgentMemoryPromotion({
+      candidateId: candidate.id,
+      memoryId: 'memory-local-store-1',
+      authority,
+    })
+    expect(authorization.authorized).toBe(true)
+    if (!authorization.authorized) throw new Error('expected promotion authority')
+    expect(Object.keys(authorization.capability)).toEqual([])
+    expect(Object.isFrozen(authorization.capability)).toBe(true)
+    expect(() => structuredClone(authorization.capability)).toThrow()
+    const concurrentAuthorization = await store.authorizeAgentMemoryPromotion({
+      candidateId: candidate.id,
+      memoryId: 'memory-local-store-1',
+      authority,
+    })
+    expect(concurrentAuthorization.authorized).toBe(true)
+    if (!concurrentAuthorization.authorized) throw new Error('expected concurrent promotion authority')
+    const mutatedAuthorization = await store.authorizeAgentMemoryPromotion({
+      candidateId: candidate.id,
+      memoryId: 'memory-local-store-1',
+      authority,
+    })
+    expect(mutatedAuthorization.authorized).toBe(true)
+    if (!mutatedAuthorization.authorized) throw new Error('expected mutation-test authority')
+    mutatedAuthorization.revision.sensitivity = 'internal'
+    await expect(store.commitAgentMemoryPromotion(
+      { revision: mutatedAuthorization.revision },
+      mutatedAuthorization.capability,
+    )).resolves.toEqual({ committed: false, reason: 'invalid_revision' })
+
+    await expect(store.commitAgentMemoryPromotion(
+      { revision: authorization.revision },
+      { ...authorization.capability },
+    )).resolves.toEqual({ committed: false, reason: 'invalid_authority' })
+    await expect(store.commitAgentMemoryPromotion(
+      { revision: authorization.revision },
+      authorization.capability,
+    )).resolves.toEqual({
+      committed: true,
+      replayed: false,
+      revision: authorization.revision,
+    })
+    await expect(store.commitAgentMemoryPromotion(
+      { revision: authorization.revision },
+      authorization.capability,
+    )).resolves.toEqual({ committed: false, reason: 'invalid_authority' })
+    await expect(store.commitAgentMemoryPromotion(
+      { revision: concurrentAuthorization.revision },
+      concurrentAuthorization.capability,
+    )).resolves.toEqual({
+      committed: true,
+      replayed: true,
+      revision: authorization.revision,
+    })
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.listAgentMemoryRevisions('memory-local-store-1')).resolves.toEqual([
+      authorization.revision,
+    ])
+    await expect(reopened.getAgentMemoryHead('memory-local-store-1')).resolves.toEqual({
+      memoryId: 'memory-local-store-1',
+      currentRevision: 1,
+      scope: candidate.scope,
+      status: 'active',
+      version: 1,
+      updatedAt: '2026-08-12T20:30:05.000Z',
+    })
+    reopened.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const inspected = new SQL.Database(await readFile(dbPath))
+    const metadataJson = inspected.exec(
+      "select metadata_json from agent_memory_audits where event_kind = 'candidate_promoted'",
+    )[0]?.values[0]?.[0]
+    expect(inspected.exec(
+      "select count(*) from agent_memory_audits where event_kind = 'candidate_promoted'",
+    )[0]?.values[0]?.[0]).toBe(1)
+    expect(JSON.parse(String(metadataJson))).toEqual({
+      candidateId: candidate.id,
+      contentDigest: candidate.contentDigest,
+      provenanceDigest: candidate.provenanceDigest,
+      visibility: 'user_project',
+      sensitivity: 'private',
+      retentionClass: 'until_deleted',
+      expiresAt: null,
+      status: 'active',
+      policyId: 'memory-policy-local-store-1',
+      policyVersion: 1,
+    })
+    expect(String(metadataJson)).not.toContain(candidate.statement)
+    inspected.close()
+  })
+
+  it('restores candidate-only state when Memory promotion persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const backupPath = `${dbPath}.backup`
+    const store = await createLocalStore({ dbPath })
+    const { candidate } = await persistAcceptedMemoryCandidate(store)
+    const authorization = await store.authorizeAgentMemoryPromotion({
+      candidateId: candidate.id,
+      memoryId: 'memory-local-store-persistence-failure',
+      authority: {
+        stateVersion: 1,
+        decisionId: 'memory-promotion-persistence-failure',
+        candidateId: candidate.id,
+        candidateContentDigest: candidate.contentDigest,
+        scope: candidate.scope,
+        actorKind: 'human',
+        actorId: candidate.scope.userId,
+        policyId: 'memory-policy-local-store-1',
+        policyVersion: 1,
+        visibility: 'user_project',
+        sensitivity: 'private',
+        retentionClass: 'until_deleted',
+        expiresAt: null,
+        authorityDigest: 'f'.repeat(64),
+        decidedAt: '2026-08-12T20:30:05.000Z',
+      },
+    })
+    expect(authorization.authorized).toBe(true)
+    if (!authorization.authorized) throw new Error('expected promotion authority')
+
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+    await expect(store.commitAgentMemoryPromotion(
+      { revision: authorization.revision },
+      authorization.capability,
+    )).rejects.toThrow(persistenceFailurePattern)
+    await expect(store.listAgentMemoryRevisions(authorization.revision.id)).resolves.toEqual([])
+    await expect(store.getAgentMemoryHead(authorization.revision.id)).resolves.toBeNull()
+    await rm(dbPath, { recursive: true })
+    await rename(backupPath, dbPath)
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.listAgentMemoryCandidates(project.id)).resolves.toEqual([candidate])
+    await expect(reopened.listAgentMemoryRevisions(authorization.revision.id)).resolves.toEqual([])
     reopened.close()
   })
 

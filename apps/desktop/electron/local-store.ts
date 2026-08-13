@@ -51,11 +51,13 @@ import {
   createTestEvidenceEvent,
   normalizeWorkflowRunProgress,
   parseAgentMemoryCandidate,
+  parseDurableAgentMemoryRevision,
   parseAgentCheckpoint,
   parseAgentRuntimeEvent,
   parseAgentRuntimeState,
   parseAgentRuntimeTransition,
   parseWorkRequestRecord,
+  promoteAgentMemoryCandidate,
   redactCodingAgentEventForStorage,
   redactSensitiveText,
   redactTestEvidenceForStorage,
@@ -66,6 +68,7 @@ import {
   parseGateCommandReceiptRecord,
   type AgentEvent,
   type AgentMemoryCandidate,
+  type AgentMemoryPromotionAuthority,
   type AgentCheckpoint,
   type AgentRuntimeEvent,
   type AgentRuntimeState,
@@ -82,6 +85,7 @@ import {
   type CodingPermissionRequest,
   type DependencyBootstrapEvidence,
   type DesktopPairingCredential,
+  type DurableAgentMemoryRevision,
   type LocalExecutionState,
   type LocalProject,
   type KnowledgeRetrievalScope,
@@ -686,6 +690,15 @@ export type LocalStore = {
     candidate: AgentMemoryCandidate,
   ): Promise<SaveAgentMemoryCandidateResult>
   listAgentMemoryCandidates(localProjectId?: string): Promise<AgentMemoryCandidate[]>
+  authorizeAgentMemoryPromotion(
+    input: AuthorizeAgentMemoryPromotionInput,
+  ): Promise<AuthorizeAgentMemoryPromotionResult>
+  commitAgentMemoryPromotion(
+    input: CommitAgentMemoryPromotionInput,
+    capability: AgentMemoryPromotionCapability,
+  ): Promise<CommitAgentMemoryPromotionResult>
+  listAgentMemoryRevisions(memoryId: string): Promise<DurableAgentMemoryRevision[]>
+  getAgentMemoryHead(memoryId: string): Promise<AgentMemoryHeadRecord | null>
   saveRun(run: WorkflowRun): Promise<void>
   deleteRun(runId: string): Promise<void>
   getRun(runId: string): Promise<WorkflowRun | null>
@@ -883,6 +896,83 @@ export type SaveAgentMemoryCandidateResult =
       committed: false
       reason: 'invalid_candidate' | 'source_not_found' | 'scope_mismatch' | 'id_conflict'
     }
+
+declare const agentMemoryPromotionCapabilityBrand: unique symbol
+
+export type AgentMemoryPromotionCapability = Readonly<{
+  [agentMemoryPromotionCapabilityBrand]: true
+}>
+
+export type AuthorizeAgentMemoryPromotionInput = {
+  candidateId: string
+  memoryId: string
+  authority: AgentMemoryPromotionAuthority
+}
+
+export type AuthorizeAgentMemoryPromotionResult =
+  | {
+      authorized: true
+      capability: AgentMemoryPromotionCapability
+      revision: DurableAgentMemoryRevision
+    }
+  | {
+      authorized: false
+      reason:
+        | 'invalid_input'
+        | 'candidate_not_found'
+        | 'scope_mismatch'
+        | 'already_promoted'
+        | 'id_conflict'
+    }
+
+export type CommitAgentMemoryPromotionInput = {
+  revision: DurableAgentMemoryRevision
+}
+
+export type CommitAgentMemoryPromotionResult =
+  | {
+      committed: true
+      replayed: boolean
+      revision: DurableAgentMemoryRevision
+    }
+  | {
+      committed: false
+      reason: 'invalid_authority' | 'invalid_revision' | 'source_stale' | 'id_conflict'
+    }
+
+export type AgentMemoryHeadRecord = {
+  memoryId: string
+  currentRevision: number
+  scope: KnowledgeRetrievalScope
+  status: 'active' | 'conflict' | 'expired' | 'purge_pending' | 'deleted'
+  version: number
+  updatedAt: string
+}
+
+type AgentMemoryPromotionCapabilityDescriptor = {
+  owner: object
+  candidate: AgentMemoryCandidate
+  revision: DurableAgentMemoryRevision
+}
+
+const agentMemoryPromotionCapabilities = new WeakMap<
+  object,
+  AgentMemoryPromotionCapabilityDescriptor
+>()
+
+function agentMemoryScopeMatchesPairing(
+  scope: KnowledgeRetrievalScope,
+  pairing: DesktopPairingCredential | null,
+): boolean {
+  return scope.kind === 'local' || (
+    pairing !== null &&
+    pairing.organizationId === scope.organizationId &&
+    pairing.projectId === scope.projectId &&
+    pairing.userId === scope.userId &&
+    pairing.tokenId === scope.sessionId &&
+    pairing.localProjectId === scope.localProjectId
+  )
+}
 
 type SchemaMigration = {
   version: number
@@ -4877,6 +4967,7 @@ function replayCanonicalGateTransition(input: {
 
 class SqlJsLocalStore implements LocalStore {
   private persistenceQueue: Promise<void> = Promise.resolve()
+  private readonly agentMemoryPromotionOwner = Object.freeze(Object.create(null)) as object
 
   constructor(
     private readonly sql: SqlJsStatic,
@@ -5053,6 +5144,335 @@ class SqlJsLocalStore implements LocalStore {
           [localProjectId],
         )
     return Promise.all(values.map(parseAgentMemoryCandidate))
+  }
+
+  async authorizeAgentMemoryPromotion(
+    input: AuthorizeAgentMemoryPromotionInput,
+  ): Promise<AuthorizeAgentMemoryPromotionResult> {
+    if (
+      typeof input !== 'object' ||
+      input === null ||
+      !isNonEmptyIdentifier(input.candidateId) ||
+      input.candidateId.length > 200 ||
+      !isNonEmptyIdentifier(input.memoryId) ||
+      input.memoryId.length > 200
+    ) {
+      return { authorized: false, reason: 'invalid_input' }
+    }
+    const candidateValue = selectJson<unknown>(
+      this.db,
+      'select json from agent_memory_candidates where id = ? limit 1',
+      [input.candidateId],
+    )[0]
+    if (candidateValue === undefined) {
+      return { authorized: false, reason: 'candidate_not_found' }
+    }
+    let candidate: AgentMemoryCandidate
+    let revision: DurableAgentMemoryRevision
+    try {
+      candidate = await parseAgentMemoryCandidate(candidateValue)
+      revision = await promoteAgentMemoryCandidate({
+        candidate,
+        memoryId: input.memoryId,
+        authority: input.authority,
+      })
+    } catch {
+      return { authorized: false, reason: 'invalid_input' }
+    }
+    const pairing = candidate.scope.kind === 'team'
+      ? await this.getDesktopPairingCredential()
+      : null
+    if (!agentMemoryScopeMatchesPairing(candidate.scope, pairing)) {
+      return { authorized: false, reason: 'scope_mismatch' }
+    }
+    const sourceAlreadyPromoted = this.db.exec(
+      'select 1 from agent_memory_revisions where source_candidate_id = ? limit 1',
+      [candidate.id],
+    )[0]?.values[0] !== undefined
+    if (sourceAlreadyPromoted) {
+      return { authorized: false, reason: 'already_promoted' }
+    }
+    const identityConflict = this.db.exec(
+      `select 1 from agent_memory_revisions
+       where memory_id = ? or promotion_decision_id = ? limit 1`,
+      [revision.id, revision.promotionDecisionId],
+    )[0]?.values[0] !== undefined
+    if (identityConflict) {
+      return { authorized: false, reason: 'id_conflict' }
+    }
+
+    const capability = Object.freeze(
+      new Proxy(Object.create(null), {}),
+    ) as AgentMemoryPromotionCapability
+    const internalRevision = structuredClone(revision)
+    agentMemoryPromotionCapabilities.set(capability, {
+      owner: this.agentMemoryPromotionOwner,
+      candidate,
+      revision: internalRevision,
+    })
+    return { authorized: true, capability, revision: structuredClone(internalRevision) }
+  }
+
+  async commitAgentMemoryPromotion(
+    input: CommitAgentMemoryPromotionInput,
+    capability: AgentMemoryPromotionCapability,
+  ): Promise<CommitAgentMemoryPromotionResult> {
+    if (typeof capability !== 'object' || capability === null) {
+      return { committed: false, reason: 'invalid_authority' }
+    }
+    const descriptor = agentMemoryPromotionCapabilities.get(capability)
+    if (descriptor === undefined || descriptor.owner !== this.agentMemoryPromotionOwner) {
+      return { committed: false, reason: 'invalid_authority' }
+    }
+    agentMemoryPromotionCapabilities.delete(capability)
+
+    let revision: DurableAgentMemoryRevision
+    try {
+      revision = await parseDurableAgentMemoryRevision(input.revision)
+    } catch {
+      return { committed: false, reason: 'invalid_revision' }
+    }
+    if (!stableJsonMatches(revision, descriptor.revision)) {
+      return { committed: false, reason: 'invalid_revision' }
+    }
+    const candidateValue = selectJson<unknown>(
+      this.db,
+      'select json from agent_memory_candidates where id = ? limit 1',
+      [descriptor.candidate.id],
+    )[0]
+    if (candidateValue === undefined) {
+      return { committed: false, reason: 'source_stale' }
+    }
+    let candidate: AgentMemoryCandidate
+    try {
+      candidate = await parseAgentMemoryCandidate(candidateValue)
+    } catch {
+      return { committed: false, reason: 'source_stale' }
+    }
+    if (!stableJsonMatches(candidate, descriptor.candidate)) {
+      return { committed: false, reason: 'source_stale' }
+    }
+    const pairing = candidate.scope.kind === 'team'
+      ? await this.getDesktopPairingCredential()
+      : null
+    if (!agentMemoryScopeMatchesPairing(candidate.scope, pairing)) {
+      return { committed: false, reason: 'source_stale' }
+    }
+
+    const existingValue = selectJson<unknown>(
+      this.db,
+      `select json from agent_memory_revisions
+       where memory_id = ? or source_candidate_id = ? or promotion_decision_id = ?
+       order by revision asc limit 1`,
+      [revision.id, revision.sourceCandidateId, revision.promotionDecisionId],
+    )[0]
+    if (existingValue !== undefined) {
+      try {
+        const existing = await parseDurableAgentMemoryRevision(existingValue)
+        const head = stableJsonMatches(existing, revision)
+          ? await this.getAgentMemoryHead(revision.id)
+          : null
+        const auditExists = this.db.exec(
+          `select 1 from agent_memory_audits
+           where id = ? and memory_id = ? and revision = ?
+             and event_kind = 'candidate_promoted' and authority_digest = ? limit 1`,
+          [
+            `memory-promotion-audit-${revision.promotionDecisionId}`,
+            revision.id,
+            revision.revision,
+            revision.promotionAuthorityDigest,
+          ],
+        )[0]?.values[0] !== undefined
+        return head !== null &&
+          auditExists &&
+          head.currentRevision === revision.revision &&
+          head.status === revision.status &&
+          stableJsonMatches(head.scope, revision.scope)
+            ? { committed: true, replayed: true, revision: existing }
+            : { committed: false, reason: 'id_conflict' }
+      } catch {
+        return { committed: false, reason: 'id_conflict' }
+      }
+    }
+
+    const scope = revision.scope
+    this.db.run(
+      `insert into agent_memory_revisions (
+         memory_id, revision, local_project_id, scope_kind, organization_id,
+         team_project_id, user_id, session_id, visibility, statement,
+         content_digest, provenance_digest, source_candidate_id, supersedes_revision,
+         sensitivity, retention_class, expires_at, promotion_decision_id,
+         promotion_actor_kind, promotion_actor_id, promotion_policy_id,
+         promotion_policy_version, promotion_authority_digest, status,
+         state_version, json, created_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        revision.id,
+        revision.revision,
+        scope.localProjectId,
+        scope.kind,
+        scope.organizationId,
+        scope.projectId,
+        scope.userId,
+        scope.sessionId,
+        revision.visibility,
+        revision.statement,
+        revision.contentDigest,
+        revision.provenanceDigest,
+        revision.sourceCandidateId,
+        revision.supersedesRevision,
+        revision.sensitivity,
+        revision.retentionClass,
+        revision.expiresAt,
+        revision.promotionDecisionId,
+        revision.promotionActorKind,
+        revision.promotionActorId,
+        revision.promotionPolicyId,
+        revision.promotionPolicyVersion,
+        revision.promotionAuthorityDigest,
+        revision.status,
+        revision.stateVersion,
+        JSON.stringify(revision),
+        revision.createdAt,
+      ],
+    )
+    this.db.run(
+      `insert into agent_memory_heads (
+         memory_id, current_revision, local_project_id, scope_kind, organization_id,
+         team_project_id, user_id, session_id, status, version, updated_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        revision.id,
+        revision.revision,
+        scope.localProjectId,
+        scope.kind,
+        scope.organizationId,
+        scope.projectId,
+        scope.userId,
+        scope.sessionId,
+        revision.status,
+        1,
+        revision.createdAt,
+      ],
+    )
+    const auditMetadata = {
+      candidateId: candidate.id,
+      contentDigest: revision.contentDigest,
+      provenanceDigest: revision.provenanceDigest,
+      visibility: revision.visibility,
+      sensitivity: revision.sensitivity,
+      retentionClass: revision.retentionClass,
+      expiresAt: revision.expiresAt,
+      status: revision.status,
+      policyId: revision.promotionPolicyId,
+      policyVersion: revision.promotionPolicyVersion,
+    }
+    this.db.run(
+      `insert into agent_memory_audits (
+         id, memory_id, revision, local_project_id, scope_kind, organization_id,
+         team_project_id, user_id, session_id, event_kind, actor_kind, actor_id,
+         authority_digest, state_version, metadata_json, created_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        `memory-promotion-audit-${revision.promotionDecisionId}`,
+        revision.id,
+        revision.revision,
+        scope.localProjectId,
+        scope.kind,
+        scope.organizationId,
+        scope.projectId,
+        scope.userId,
+        scope.sessionId,
+        'candidate_promoted',
+        revision.promotionActorKind,
+        revision.promotionActorId,
+        revision.promotionAuthorityDigest,
+        revision.stateVersion,
+        JSON.stringify(auditMetadata),
+        revision.createdAt,
+      ],
+    )
+    await this.persist()
+    return { committed: true, replayed: false, revision }
+  }
+
+  async listAgentMemoryRevisions(memoryId: string): Promise<DurableAgentMemoryRevision[]> {
+    if (!isNonEmptyIdentifier(memoryId) || memoryId.length > 200) {
+      throw new Error('Invalid Agent Memory id')
+    }
+    const values = selectJson<unknown>(
+      this.db,
+      `select json from agent_memory_revisions
+       where memory_id = ? order by revision asc`,
+      [memoryId],
+    )
+    return Promise.all(values.map(parseDurableAgentMemoryRevision))
+  }
+
+  async getAgentMemoryHead(memoryId: string): Promise<AgentMemoryHeadRecord | null> {
+    if (!isNonEmptyIdentifier(memoryId) || memoryId.length > 200) {
+      throw new Error('Invalid Agent Memory id')
+    }
+    const row = this.db.exec(
+      `select h.memory_id, h.current_revision, h.local_project_id, h.scope_kind,
+              h.organization_id, h.team_project_id, h.user_id, h.session_id,
+              h.status, h.version, h.updated_at, r.json
+       from agent_memory_heads h
+       join agent_memory_revisions r
+         on r.memory_id = h.memory_id and r.revision = h.current_revision
+       where h.memory_id = ? limit 1`,
+      [memoryId],
+    )[0]?.values[0]
+    if (row === undefined) return null
+    const currentRevision = Number(row[1])
+    const version = Number(row[9])
+    const scope: KnowledgeRetrievalScope = row[3] === 'team'
+      ? {
+          kind: 'team',
+          organizationId: String(row[4]),
+          projectId: String(row[5]),
+          userId: String(row[6]),
+          sessionId: String(row[7]),
+          localProjectId: String(row[2]),
+        }
+      : {
+          kind: 'local',
+          organizationId: null,
+          projectId: null,
+          userId: String(row[6]),
+          sessionId: String(row[7]),
+          localProjectId: String(row[2]),
+        }
+    const status = String(row[8])
+    const updatedAt = String(row[10])
+    let revision: DurableAgentMemoryRevision
+    try {
+      revision = await parseDurableAgentMemoryRevision(JSON.parse(String(row[11])))
+    } catch {
+      throw new Error('Stored Agent Memory head is invalid')
+    }
+    if (
+      row[0] !== memoryId ||
+      !Number.isInteger(currentRevision) ||
+      currentRevision < 1 ||
+      !Number.isInteger(version) ||
+      version < 1 ||
+      !['active', 'conflict', 'expired', 'purge_pending', 'deleted'].includes(status) ||
+      !isCanonicalIsoTimestamp(updatedAt) ||
+      revision.id !== memoryId ||
+      revision.revision !== currentRevision ||
+      !stableJsonMatches(revision.scope, scope)
+    ) {
+      throw new Error('Stored Agent Memory head is invalid')
+    }
+    return {
+      memoryId,
+      currentRevision,
+      scope,
+      status: status as AgentMemoryHeadRecord['status'],
+      version,
+      updatedAt,
+    }
   }
 
   async getAgentRuntime(runtimeId: string): Promise<AgentRuntimeState | null> {
@@ -9654,6 +10074,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'activateKnowledgeIndexSnapshot',
   'rebuildKnowledgeIndexSnapshot',
   'saveAgentMemoryCandidate',
+  'commitAgentMemoryPromotion',
   'saveRun',
   'deleteRun',
   'enqueueRemoteSyncOperation',

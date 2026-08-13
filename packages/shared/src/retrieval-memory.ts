@@ -459,7 +459,7 @@ export async function promoteAgentMemoryCandidate(input: unknown): Promise<Durab
   ) {
     failMemoryCandidate()
   }
-  return {
+  return parseDurableAgentMemoryRevision({
     stateVersion: AGENT_MEMORY_CONTRACT_VERSION,
     id: input.memoryId,
     revision: 1,
@@ -481,6 +481,106 @@ export async function promoteAgentMemoryCandidate(input: unknown): Promise<Durab
     promotionPolicyVersion: authority.policyVersion,
     promotionAuthorityDigest: authority.authorityDigest,
     createdAt: authority.decidedAt,
+  })
+}
+
+export async function parseDurableAgentMemoryRevision(
+  value: unknown,
+): Promise<DurableAgentMemoryRevision> {
+  if (
+    !isPlainRecord(value) ||
+    !hasExactKeys(value, [
+      'stateVersion',
+      'id',
+      'revision',
+      'status',
+      'scope',
+      'visibility',
+      'statement',
+      'contentDigest',
+      'provenanceDigest',
+      'sourceCandidateId',
+      'supersedesRevision',
+      'sensitivity',
+      'retentionClass',
+      'expiresAt',
+      'promotionDecisionId',
+      'promotionActorKind',
+      'promotionActorId',
+      'promotionPolicyId',
+      'promotionPolicyVersion',
+      'promotionAuthorityDigest',
+      'createdAt',
+    ]) ||
+    value.stateVersion !== AGENT_MEMORY_CONTRACT_VERSION ||
+    !isIdentifier(value.id) ||
+    !isPositiveVersion(value.revision) ||
+    (value.status !== 'active' && value.status !== 'conflict') ||
+    typeof value.statement !== 'string' ||
+    value.statement.length === 0 ||
+    value.statement.trim() !== value.statement ||
+    new TextEncoder().encode(value.statement).byteLength > AGENT_MEMORY_CANDIDATE_TEXT_MAX_BYTES ||
+    redactSensitiveText(value.statement).value !== value.statement ||
+    typeof value.contentDigest !== 'string' ||
+    !digestPattern.test(value.contentDigest) ||
+    typeof value.provenanceDigest !== 'string' ||
+    !digestPattern.test(value.provenanceDigest) ||
+    !isIdentifier(value.sourceCandidateId) ||
+    (value.revision === 1
+      ? value.supersedesRevision !== null
+      : value.supersedesRevision !== value.revision - 1) ||
+    !isCanonicalIso(value.createdAt)
+  ) {
+    failMemoryCandidate()
+  }
+  let scope: KnowledgeRetrievalScope
+  try {
+    scope = parseScope(value.scope)
+  } catch {
+    failMemoryCandidate()
+  }
+  const authority = parseMemoryPromotionAuthority({
+    stateVersion: value.stateVersion,
+    decisionId: value.promotionDecisionId,
+    candidateId: value.sourceCandidateId,
+    candidateContentDigest: value.contentDigest,
+    scope,
+    actorKind: value.promotionActorKind,
+    actorId: value.promotionActorId,
+    policyId: value.promotionPolicyId,
+    policyVersion: value.promotionPolicyVersion,
+    visibility: value.visibility,
+    sensitivity: value.sensitivity,
+    retentionClass: value.retentionClass,
+    expiresAt: value.expiresAt,
+    authorityDigest: value.promotionAuthorityDigest,
+    decidedAt: value.createdAt,
+  })
+  if (await sha256Hex(value.statement) !== value.contentDigest) {
+    failMemoryCandidate()
+  }
+  return {
+    stateVersion: AGENT_MEMORY_CONTRACT_VERSION,
+    id: value.id,
+    revision: value.revision,
+    status: value.status,
+    scope,
+    visibility: authority.visibility,
+    statement: value.statement,
+    contentDigest: value.contentDigest,
+    provenanceDigest: value.provenanceDigest,
+    sourceCandidateId: value.sourceCandidateId,
+    supersedesRevision: value.supersedesRevision as number | null,
+    sensitivity: authority.sensitivity,
+    retentionClass: authority.retentionClass,
+    expiresAt: authority.expiresAt,
+    promotionDecisionId: authority.decisionId,
+    promotionActorKind: authority.actorKind,
+    promotionActorId: authority.actorId,
+    promotionPolicyId: authority.policyId,
+    promotionPolicyVersion: authority.policyVersion,
+    promotionAuthorityDigest: authority.authorityDigest,
+    createdAt: value.createdAt,
   }
 }
 

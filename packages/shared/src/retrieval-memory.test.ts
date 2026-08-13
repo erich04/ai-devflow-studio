@@ -17,6 +17,7 @@ import {
   mergeKnowledgeRetrievalCandidates,
   parseCurrentKnowledgeCitation,
   parseAgentMemoryCandidate,
+  parseDurableAgentMemoryRevision,
   parseKnowledgeCitation,
   parseKnowledgeRetrievalCandidateSet,
   parseKnowledgeRetrievalRequest,
@@ -173,11 +174,12 @@ describe('V2.1 Agent Memory candidate contract', () => {
       decidedAt: '2026-08-13T08:00:05.000Z',
     }
 
-    await expect(promoteAgentMemoryCandidate({
+    const promoted = await promoteAgentMemoryCandidate({
       candidate,
       memoryId: 'memory-health-regression',
       authority,
-    })).resolves.toEqual({
+    })
+    expect(promoted).toEqual({
       stateVersion: 1,
       id: 'memory-health-regression',
       revision: 1,
@@ -200,6 +202,15 @@ describe('V2.1 Agent Memory candidate contract', () => {
       promotionAuthorityDigest: '5'.repeat(64),
       createdAt: '2026-08-13T08:00:05.000Z',
     })
+    await expect(parseDurableAgentMemoryRevision(promoted)).resolves.toEqual(promoted)
+    await expect(parseDurableAgentMemoryRevision({
+      ...promoted,
+      statement: `${promoted.statement} changed`,
+    })).rejects.toThrowError('invalid_agent_memory_candidate')
+    await expect(parseDurableAgentMemoryRevision({
+      ...promoted,
+      rawPrompt: 'must-not-cross-the-boundary',
+    })).rejects.toThrowError('invalid_agent_memory_candidate')
     expect(candidate).toEqual(unchangedCandidate)
 
     for (const actorKind of ['model', 'renderer', 'mcp']) {
