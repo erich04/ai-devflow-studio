@@ -1,4 +1,5 @@
 import {
+  createRemoteAgentCoordinationSummary,
   createRemoteAgentRuntimeSummary,
   createRemoteAgentMemorySummary,
   createRemoteAgentReviewSummary,
@@ -7,6 +8,7 @@ import {
   createRemoteTestEvidenceSummary,
   resolveTeamProjectId,
   type AgentReviewResult,
+  type CoordinationRendererSnapshot,
   type AgentRuntimeState,
   type CreateRemoteAgentMemorySummaryInput,
   type CodingAgentRun,
@@ -24,6 +26,9 @@ type PairingCredentialSource = {
   getAgentMemoryTeamProjectionInput?(
     memoryId: string,
   ): Promise<CreateRemoteAgentMemorySummaryInput | null>
+  getAgentCoordinationTeamProjectionInput?(
+    coordinationId: string,
+  ): Promise<CoordinationRendererSnapshot | null>
   listRuns(): Promise<WorkflowRun[]>
   listTestEvidence(runId?: string): Promise<TestEvidence[]>
   listAgentReviews(runId?: string): Promise<AgentReviewResult[]>
@@ -42,6 +47,7 @@ export type CanonicalRemoteSyncEntityKind =
   | 'agent_review'
   | 'agent_runtime'
   | 'agent_memory'
+  | 'agent_coordination'
   | 'coding_agent_run'
   | 'coding_diff'
 
@@ -79,6 +85,9 @@ export type ProjectBoundRemoteSync = Pick<
   uploadCanonicalCodingAgentSummary(codingRunId: string): Promise<RemoteSyncUploadResult>
   uploadCanonicalAgentRuntimeSummary(runtimeId: string): Promise<RemoteSyncUploadResult>
   uploadCanonicalAgentMemorySummary(memoryId: string): Promise<RemoteSyncUploadResult>
+  uploadCanonicalAgentCoordinationSummary(
+    coordinationId: string,
+  ): Promise<RemoteSyncUploadResult>
 }
 
 async function bindProjectId<T extends { projectId: string }>(
@@ -387,6 +396,39 @@ export function createProjectBoundRemoteSync(input: {
       )
       return uploadDependentSummary(source.runId, scope, 'agent_memory', () =>
         input.remoteSync.uploadAgentMemorySummary(summary),
+      )
+    },
+    async uploadCanonicalAgentCoordinationSummary(coordinationId) {
+      const scope = await freezeCanonicalScope()
+      const source = await input.credentialSource.getAgentCoordinationTeamProjectionInput?.(
+        coordinationId,
+      )
+      if (!source || source.session.coordinationId !== coordinationId) {
+        throw new CanonicalRemoteSyncEntityError('entity_missing', 'agent_coordination')
+      }
+      const canonicalRun = (await input.credentialSource.listRuns()).find(
+        (candidate) => candidate.id === source.session.runId,
+      )
+      if (!canonicalRun) {
+        throw new CanonicalRemoteSyncEntityError('entity_missing', 'workflow_run')
+      }
+      if (
+        source.session.localProjectId !== scope.localProjectId ||
+        canonicalRun.projectId !== scope.localProjectId ||
+        source.session.runVersion !== canonicalRun.version ||
+        !canonicalRun.nodes.some((node) => node.id === source.session.nodeId)
+      ) {
+        throw new CanonicalRemoteSyncEntityError('scope_mismatch', 'agent_coordination')
+      }
+      const summary = bindCanonicalProjectId(
+        buildCanonicalSummary('agent_coordination', () =>
+          createRemoteAgentCoordinationSummary(source),
+        ),
+        scope,
+        'agent_coordination',
+      )
+      return uploadDependentSummary(source.session.runId, scope, 'agent_coordination', () =>
+        input.remoteSync.uploadAgentCoordinationSummary(summary),
       )
     },
     async saveGateOverride(override) {

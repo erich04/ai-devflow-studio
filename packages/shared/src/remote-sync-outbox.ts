@@ -7,6 +7,7 @@ export type RemoteSyncOperationKind =
   | 'coding-agent-summary'
   | 'agent-runtime-summary'
   | 'agent-memory-summary'
+  | 'agent-coordination-summary'
 
 export type RemoteSyncOperationMetadata = {
   kind: RemoteSyncOperationKind

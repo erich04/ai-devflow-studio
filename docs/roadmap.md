@@ -90,8 +90,8 @@ contains the signoff-bound release artifacts.
 | Active version line | 2.x DevFlow-native Agent Runtime |
 | Completed 2.x milestones | V2.0 Native Agent Runtime Foundation; V2.1 Evaluated Retrieval And Memory |
 | Completion evidence | `docs/releases/v2.0.0/`; `docs/releases/v2.1.0/` |
-| Active milestone | V2.2 Slice 6 — Redacted Team Projection |
-| Next gate | Migrate Team schema 18 to 19 with zero fabricated coordination rows |
+| Active milestone | V2.2 Slice 7 — Evaluation And 2.x Completion Gate |
+| Next gate | Freeze the exact V2.2 candidate and run the full completion matrix |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -165,15 +165,15 @@ The superseded implementation-period markers `### Now — Run V2.1 Evaluation An
 `| Next gate | Freeze the exact V2.1 candidate and run the full completion matrix |` remain here only
 as auditable phase vocabulary; the current table and the single `Now` heading below are authoritative.
 
-### Now — Implement V2.2 Redacted Team Projection
+### Now — Evaluate And Close V2.2
 
-- Migrate Team schema 18 to 19 with empty coordination summary and audit tables; retained databases
-  must fabricate zero sessions, tasks, handoffs, quality results, or lifecycle events.
-- Upload one strict monotonic metadata-only summary bound to the exact Team Project, Run, Node,
-  Coordination Session, and lifecycle version while rejecting stale, conflicting, and cross-project
-  input before mutation.
-- Expose a read-only Web view of bounded lifecycle and comparative quality fields with no start,
-  assign, retry, resume, cancel, lease, Tool, or workspace authority.
+- Complete the frozen single-vs-Multi evaluator and require the selected-task quality improvement,
+  bounded cost/latency/intervention, zero paid calls, and zero authority, isolation, termination,
+  replay, or redaction violations.
+- Freeze one exact candidate and run the full unit/type/build, real Postgres, Docker lifecycle,
+  Windows, macOS, Electron, packaged restart, single-Agent regression, and artifact matrix.
+- Record immutable candidate-bound evaluator and required-gates evidence as the clean direct child of
+  the passing candidate, then close the finite accepted 2.x line without an automatic V2.3.
 
 The V2.2 contract set is frozen in:
 
@@ -182,7 +182,7 @@ The V2.2 contract set is frozen in:
 - `docs/plans/v2.2-multi-agent-execution-tenancy.md`
 - `scripts/fixtures/v2.2-multi-agent-evaluation.json`
 
-Slices 0 through 5 are complete. The pure shared domain enforces the frozen DAG, attenuated
+Slices 0 through 6 are complete. The pure shared domain enforces the frozen DAG, attenuated
 Specialist authority, immutable handoffs, monotonic transitions, shared bounds, exact tenancy, and
 the unchanged deterministic V2.0 single-Agent baseline. Desktop schema 28 now persists one exact
 Supervisor-owned Coordination Session and frozen graph, applies task/result/handoff/join/checkpoint
@@ -204,19 +204,23 @@ one started read-only Specialist, cold-starts it without another session, task, 
 checkpoint, records `coordinationRestartDuplicateEffects: 0`, cancels the exact child, and then
 completes the unchanged single-Agent/GitHub Delivery path. Generic Agent Runtime startup recovery now
 excludes runtimes owned by a Coordination Session through durable relational ownership instead of an
-ID prefix. No
-open-ended swarm, remote executor, hosted tenancy, or new
+ID prefix. Slice 6 migrates Team schema 18 to 19 without fabricating coordination state, derives one
+strict metadata-only Desktop summary through the schema 29 ID-only outbox, persists monotonic
+lifecycle/quality/usage/violation metadata with immutable audits, and renders an exact-key read-only
+Web projection. Seed/Postgres parity, full unit/type/build, real PG16, Docker smoke, and retained
+lifecycle migration/rollback gates pass. No open-ended swarm, remote executor, hosted tenancy, or new
 publication authority is implied by this milestone.
 
-### Next — Evaluate And Close V2.2
+### Next — Close The Finite Accepted 2.x Line
 
-- Complete the frozen single-vs-Multi evaluator, then run the same clean-candidate and immutable
-  evidence discipline used by V2.0 and V2.1.
+- Publish no further 2.x feature milestone unless a separately approved future charter changes the
+  single Roadmap after V2.2 completion.
 
-### Later — Continue The Accepted 2.x Sequence
+### Later — Evidence-Promoted Maintenance Or A Separately Approved Charter
 
-- Advance later 2.x milestones only through the same contract, TDD, candidate, and immutable-evidence
-  sequence after V2.2 is complete.
+- Do not create an automatic V2.3. Any future feature milestone requires a separately approved
+  charter promoted through this single Roadmap and the same contract, TDD, candidate, and immutable-
+  evidence discipline.
 - New 1.x work is limited to release defects, security fixes, dependency maintenance, or hardening
   justified by real pilot evidence; there is no planned V1.6 feature milestone.
 

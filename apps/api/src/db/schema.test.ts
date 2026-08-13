@@ -17,9 +17,72 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
-  it('reserves Team schema v18 for an independently versioned Memory quality projection', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(18)
+  it('reserves Team schema v19 for an empty metadata-only Coordination projection', async () => {
+    expect(TEAM_SCHEMA_VERSION).toBe(19)
     expect(teamMigrationCatalog.at(-1)).toEqual({
+      version: 19,
+      name: '0019_agent_coordination_team_projection',
+      fileName: '0019_agent_coordination_team_projection.sql',
+    })
+
+    const migration = (await readTeamMigrationCatalog()).find(
+      (candidate) => candidate.version === 19,
+    )
+    expect(migration?.sql).toContain('CREATE TABLE agent_coordination_summaries')
+    expect(migration?.sql).toContain('CREATE TABLE agent_coordination_projection_audits')
+    expect(migration?.sql).not.toMatch(/INSERT\s+INTO\s+agent_coordination_/iu)
+    expect(migration?.sql).not.toMatch(
+      /\b(?:local_project_id|user_id|session_id|context_digest|capability|resource|handoff_summary|source|path|prompt|raw_output|patch)\b/iu,
+    )
+
+    const summary = teamTableDefinitions.find(
+      (table) => table.name === 'agent_coordination_summaries',
+    )
+    expect(summary?.columns.map((column) => column.name)).toEqual([
+      'coordination_id',
+      'organization_id',
+      'project_id',
+      'run_id',
+      'node_id',
+      'state_version',
+      'projection_version',
+      'coordination_version',
+      'graph_version',
+      'status',
+      'stop_reason',
+      'role_counts',
+      'task_status_counts',
+      'failure_category_counts',
+      'task_count',
+      'edge_count',
+      'specialist_starts',
+      'accepted_handoff_count',
+      'retry_count',
+      'step_count',
+      'tool_call_count',
+      'token_count',
+      'cost_usd',
+      'single_agent_quality',
+      'coordination_quality',
+      'latency_ms',
+      'human_intervention_count',
+      'authority_violation_count',
+      'isolation_violation_count',
+      'termination_violation_count',
+      'replay_violation_count',
+      'redaction_violation_count',
+      'coordination_updated_at',
+      'isolated',
+      'redacted',
+      'summary_digest',
+      'created_at',
+      'updated_at',
+    ])
+  })
+
+  it('reserves Team schema v18 for an independently versioned Memory quality projection', async () => {
+    expect(TEAM_SCHEMA_VERSION).toBe(19)
+    expect(teamMigrationCatalog.find((migration) => migration.version === 18)).toEqual({
       version: 18,
       name: '0018_agent_memory_projection_quality_version',
       fileName: '0018_agent_memory_projection_quality_version.sql',
@@ -81,7 +144,7 @@ describe('team database schema', () => {
   })
 
   it('retains Team schema v16 as a safe Agent Runtime projection authority', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(18)
+    expect(TEAM_SCHEMA_VERSION).toBe(19)
     expect(teamMigrationCatalog.find((migration) => migration.version === 16)).toEqual({
       version: 16,
       name: '0016_agent_runtime_team_projection',
@@ -119,7 +182,7 @@ describe('team database schema', () => {
   })
 
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(18)
+    expect(TEAM_SCHEMA_VERSION).toBe(19)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -148,6 +211,8 @@ describe('team database schema', () => {
       'agent_runtime_projection_audits',
       'agent_memory_summaries',
       'agent_memory_projection_audits',
+      'agent_coordination_summaries',
+      'agent_coordination_projection_audits',
       'enforcement_policies',
       'gate_override_decisions',
       'runtime_budget_policies',
@@ -290,6 +355,8 @@ describe('team database schema', () => {
       'agent_runtime_projection_audits',
       'agent_memory_summaries',
       'agent_memory_projection_audits',
+      'agent_coordination_summaries',
+      'agent_coordination_projection_audits',
     ])
 
     for (const tableName of requiredTeamTableNames.filter((name) => !v14TableNames.has(name))) {
@@ -363,6 +430,11 @@ describe('team database schema', () => {
         version: 18,
         name: '0018_agent_memory_projection_quality_version',
         fileName: '0018_agent_memory_projection_quality_version.sql',
+      },
+      {
+        version: 19,
+        name: '0019_agent_coordination_team_projection',
+        fileName: '0019_agent_coordination_team_projection.sql',
       },
     ])
 

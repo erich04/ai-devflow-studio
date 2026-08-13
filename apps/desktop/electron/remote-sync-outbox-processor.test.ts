@@ -199,10 +199,11 @@ describe('createRemoteSyncOutboxProcessor', () => {
         return {
           uploadCanonicalRunSummary,
           uploadCanonicalTestEvidenceSummary: vi.fn(),
-        uploadCanonicalAgentReviewSummary: vi.fn(),
-        uploadCanonicalCodingAgentSummary: vi.fn(),
-        uploadCanonicalAgentMemorySummary: vi.fn(),
-        uploadCanonicalAgentRuntimeSummary: vi.fn(),
+          uploadCanonicalAgentReviewSummary: vi.fn(),
+          uploadCanonicalCodingAgentSummary: vi.fn(),
+          uploadCanonicalAgentMemorySummary: vi.fn(),
+          uploadCanonicalAgentCoordinationSummary: vi.fn(),
+          uploadCanonicalAgentRuntimeSummary: vi.fn(),
         }
       },
     })
@@ -669,6 +670,11 @@ describe('createRemoteSyncOutboxProcessor', () => {
         kind: 'agent-memory-summary',
         entityId: 'memory-entity',
       }),
+      operation({
+        id: 'coordination-op',
+        kind: 'agent-coordination-summary',
+        entityId: 'coordination-entity',
+      }),
     ])
     const accepted = { accepted: true, syncedAt: now, message: 'accepted' }
     const methods = {
@@ -678,6 +684,7 @@ describe('createRemoteSyncOutboxProcessor', () => {
       uploadCanonicalCodingAgentSummary: vi.fn().mockResolvedValue(accepted),
       uploadCanonicalAgentRuntimeSummary: vi.fn().mockResolvedValue(accepted),
       uploadCanonicalAgentMemorySummary: vi.fn().mockResolvedValue(accepted),
+      uploadCanonicalAgentCoordinationSummary: vi.fn().mockResolvedValue(accepted),
     }
     const processor = createRemoteSyncOutboxProcessor({
       store,
@@ -692,7 +699,11 @@ describe('createRemoteSyncOutboxProcessor', () => {
     expect(methods.uploadCanonicalCodingAgentSummary).toHaveBeenCalledWith('coding-entity')
     expect(methods.uploadCanonicalAgentRuntimeSummary).toHaveBeenCalledWith('runtime-entity')
     expect(methods.uploadCanonicalAgentMemorySummary).toHaveBeenCalledWith('memory-entity')
+    expect(methods.uploadCanonicalAgentCoordinationSummary).toHaveBeenCalledWith(
+      'coordination-entity',
+    )
     expect(store.operations.map((item) => item.status)).toEqual([
+      'completed',
       'completed',
       'completed',
       'completed',

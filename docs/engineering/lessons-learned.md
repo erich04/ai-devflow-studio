@@ -62,7 +62,7 @@ Use this shape:
   external database.
 - **Checks**:
   - Run Postgres smoke only with an explicit `DEVFLOW_DATABASE_URL`.
-  - Prove a clean database reaches Team schema v18, a populated v11-to-v12 upgrade retains exact
+  - Prove a clean database reaches Team schema v19, a populated v11-to-v12 upgrade retains exact
     data, and a v12-to-v13 upgrade preserves a legacy issued credential without fabricating
     provider-authoritative expiry evidence; v13-to-v14 then adds only a bounded non-secret
     provider retry boundary; v14-to-v15 then adds verified publication adoption while retaining

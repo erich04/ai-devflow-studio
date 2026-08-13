@@ -27,7 +27,8 @@ describe('V1.5 living documentation truth', () => {
     expect(productDefinition).toContain('finite 1.x product line is complete')
     expect(currentPrd).toContain('finite 1.x completion gate passed')
     expect(currentPrd).toContain('V2.0 Native Agent Runtime is complete')
-    expect(currentPrd).toContain('V2.1 Evaluated Retrieval and Memory is the active Roadmap priority')
+    expect(currentPrd).toContain('V2.1 Evaluated Retrieval and Memory is complete')
+    expect(currentPrd).toContain('V2.2 Multi-Agent and Execution Tenancy is the')
     expect(currentPrd).not.toContain(
       'Real GitHub PR creation, pushing, merging, and branch publication require a future scoped PRD',
     )
@@ -65,7 +66,7 @@ describe('V1.5 living documentation truth', () => {
     const v15Prd = read('docs/product/prd/v1.5-github-delivery-prd.md')
 
     for (const markdown of [testingStrategy, demoAndSmoke]) {
-      expect(markdown).toContain('Team schema v18')
+      expect(markdown).toContain('Team schema v19')
       expect(markdown).toContain('provider-authoritative expiry')
       expect(markdown).toContain('verified publication adoption')
       expect(markdown).toContain('corepack pnpm test:v15-github-delivery')
@@ -76,7 +77,7 @@ describe('V1.5 living documentation truth', () => {
       expect(markdown).toContain('does not authorize paid-provider smoke')
     }
 
-    expect(testingStrategy).toContain('Desktop schema v27')
+    expect(testingStrategy).toContain('Desktop schema v29')
     expect(testingStrategy).toContain('Desktop schema 17-to-18')
     expect(testingStrategy).toContain('18-to-19')
     expect(testingStrategy).toContain('19-to-20')
@@ -84,7 +85,7 @@ describe('V1.5 living documentation truth', () => {
     expect(testingStrategy).toContain('21-to-22')
     expect(testingStrategy).toContain('Local MCP')
     expect(testingStrategy).toContain('accepted action count remains exactly one after cold restart')
-    expect(demoAndSmoke).toContain('Desktop schema v17')
+    expect(demoAndSmoke).toContain('Desktop schema v29')
 
     for (const command of [
       'corepack pnpm test:build-output-smoke',
@@ -112,13 +113,14 @@ describe('V1.5 living documentation truth', () => {
     const postgres = read('docs/knowledge/checklists/postgres-smoke-readiness.md')
     const electron = read('docs/knowledge/checklists/electron-demo-readiness.md')
 
-    expect(postgres).toContain('Team schema v18')
+    expect(postgres).toContain('Team schema v19')
     expect(postgres).toContain('v11-to-v12')
     expect(postgres).toContain('v12-to-v13')
     expect(postgres).toContain('v14-to-v15')
     expect(postgres).toContain('v15-to-v16')
     expect(postgres).toContain('v16-to-v17')
     expect(postgres).toContain('v17-to-v18')
+    expect(postgres).toContain('Coordination')
     expect(postgres).toContain('agent_runtime_summaries')
     expect(postgres).toContain('agent_runtime_projection_audits')
     expect(postgres).toContain('agent_memory_summaries')
@@ -187,8 +189,8 @@ describe('V1.5 living documentation truth', () => {
       expect(markdown).toContain('Stop')
     }
 
-    expect(backendMatrix).toContain('Team schema v18')
-    expect(backendMatrix).toContain('Desktop schema v27')
+    expect(backendMatrix).toContain('Team schema v19')
+    expect(backendMatrix).toContain('Desktop schema v29')
     expect(backendMatrix).toContain('Agent Runtime')
     expect(backendMatrix).toContain('Local MCP')
     expect(backendMatrix).toContain('provider-authoritative expiry')
@@ -230,7 +232,7 @@ describe('V1.5 living documentation truth', () => {
     expect(prdIndex).toContain('Implemented final 1.x feature contract')
     expect(prdIndex).toContain('release/signoff pending')
 
-    expect(lessons).toContain('Team schema v18')
+    expect(lessons).toContain('Team schema v19')
     expect(lessons).toContain('v11-to-v12')
     expect(lessons).toContain('v12-to-v13')
     expect(lessons).toContain('provider-authoritative expiry')

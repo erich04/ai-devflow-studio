@@ -9,6 +9,7 @@ import {
   redactRemoteAgentReviewSummaryForSync,
   parseRemoteAgentRuntimeSummary,
   parseRemoteAgentMemorySummary,
+  parseRemoteAgentCoordinationSummary,
   redactRemoteRunSummaryForSync,
   redactRemoteTestEvidenceSummaryForSync,
   resolveEffectivePolicy,
@@ -35,6 +36,7 @@ import {
   type RemoteAgentReviewSummary,
   type RemoteAgentRuntimeSummary,
   type RemoteAgentMemorySummary,
+  type RemoteAgentCoordinationSummary,
   type RemoteCodingAgentSummary,
   type RemoteRunDeleteResult,
   type RuntimeBudgetApproval,
@@ -102,6 +104,7 @@ export type TeamOverviewPayload = {
   codingAgentSummaries: RemoteCodingAgentSummary[]
   agentRuntimeSummaries: RemoteAgentRuntimeSummary[]
   agentMemorySummaries: RemoteAgentMemorySummary[]
+  agentCoordinationSummaries: RemoteAgentCoordinationSummary[]
   policyAwareDeliverySummaries: PolicyAwareDeliverySummary[]
   enforcementPolicies: {
     organizationPolicy: OrganizationEnforcementPolicy
@@ -235,6 +238,10 @@ export type TeamRepository = WorkRequestRepository &
     summary: RemoteAgentMemorySummary,
     context: TeamRepositorySyncContext,
   ): Promise<RemoteSyncUploadResult>
+  uploadAgentCoordinationSummary(
+    summary: RemoteAgentCoordinationSummary,
+    context: TeamRepositorySyncContext,
+  ): Promise<RemoteSyncUploadResult>
   listAgentProviders(context: TeamRepositorySyncContext): Promise<AgentProviderConfig[]>
   saveAgentProviderCredential(
     metadata: ProviderCredentialMetadata,
@@ -363,6 +370,7 @@ export function createSeedTeamRepository(): TeamRepository {
   const codingAgentSummaries: RemoteCodingAgentSummary[] = []
   const agentRuntimeSummaries: RemoteAgentRuntimeSummary[] = []
   const agentMemorySummaries: RemoteAgentMemorySummary[] = []
+  const agentCoordinationSummaries: RemoteAgentCoordinationSummary[] = []
   let organizationPolicy = createWarnOnlyDefaultPolicy({ organizationId: DEMO_ORGANIZATION_ID })
   const projectOverrides: ProjectEnforcementPolicyOverride[] = []
   const gateOverrides: GateOverrideDecision[] = []
@@ -876,6 +884,9 @@ export function createSeedTeamRepository(): TeamRepository {
       const scopedAgentMemorySummaries = agentMemorySummaries.filter(
         (summary) => projectIds.has(summary.projectId) && runIds.has(summary.runId),
       )
+      const scopedAgentCoordinationSummaries = agentCoordinationSummaries.filter(
+        (summary) => projectIds.has(summary.projectId) && runIds.has(summary.runId),
+      )
       const codingTokenUsage = scopedCodingAgentSummaries
         .map((summary) => summary.costSummary)
         .filter(
@@ -913,6 +924,7 @@ export function createSeedTeamRepository(): TeamRepository {
         codingAgentSummaries: scopedCodingAgentSummaries,
         agentRuntimeSummaries: scopedAgentRuntimeSummaries,
         agentMemorySummaries: scopedAgentMemorySummaries,
+        agentCoordinationSummaries: scopedAgentCoordinationSummaries,
         policyAwareDeliverySummaries: buildPolicyAwareDeliverySummaries({
           projectIds: scopedProjects.map((project) => project.id),
           testEvidenceSummaries: scopedTestEvidence,
@@ -1322,6 +1334,81 @@ export function createSeedTeamRepository(): TeamRepository {
         accepted: true,
         syncedAt: new Date().toISOString(),
         message: 'agent memory summary accepted by seed repository',
+      }
+    },
+
+    async uploadAgentCoordinationSummary(summary, context) {
+      summary = parseRemoteAgentCoordinationSummary(summary)
+      const existing = agentCoordinationSummaries.find(
+        (candidate) => candidate.coordinationId === summary.coordinationId,
+      )
+      assertStableChildSummaryScope(
+        existing ? { ...existing, id: existing.coordinationId } : undefined,
+        { ...summary, id: summary.coordinationId },
+        context,
+      )
+      assertCanonicalRun(summary, context)
+      const canonicalRun = syncedRuns.find((run) => run.id === summary.runId)!
+      if (!canonicalRun.nodes.some((node) => node.id === summary.nodeId)) {
+        throw new RemoteChildSummaryConflictError(
+          summary.coordinationId,
+          summary.runId,
+          summary.projectId,
+        )
+      }
+      if (existing) {
+        const exactReplay = JSON.stringify(existing) === JSON.stringify(summary)
+        const immutableGraph =
+          existing.graphVersion === summary.graphVersion &&
+          existing.taskCount === summary.taskCount &&
+          existing.edgeCount === summary.edgeCount &&
+          JSON.stringify(existing.roleCounts) === JSON.stringify(summary.roleCounts)
+        const monotonicCounts =
+          existing.specialistStarts <= summary.specialistStarts &&
+          existing.acceptedHandoffCount <= summary.acceptedHandoffCount &&
+          existing.retryCount <= summary.retryCount &&
+          existing.stepCount <= summary.stepCount &&
+          existing.toolCallCount <= summary.toolCallCount &&
+          existing.tokenCount <= summary.tokenCount &&
+          existing.costUsd <= summary.costUsd &&
+          existing.latencyMs <= summary.latencyMs &&
+          existing.humanInterventionCount <= summary.humanInterventionCount &&
+          existing.authorityViolationCount <= summary.authorityViolationCount &&
+          existing.isolationViolationCount <= summary.isolationViolationCount &&
+          existing.terminationViolationCount <= summary.terminationViolationCount &&
+          existing.replayViolationCount <= summary.replayViolationCount &&
+          existing.redactionViolationCount <= summary.redactionViolationCount &&
+          Date.parse(existing.updatedAt) <= Date.parse(summary.updatedAt)
+        if (
+          summary.coordinationVersion < existing.coordinationVersion ||
+          (summary.coordinationVersion === existing.coordinationVersion && !exactReplay) ||
+          (existing.status === 'terminal' && !exactReplay) ||
+          !immutableGraph ||
+          !monotonicCounts
+        ) {
+          throw new RemoteChildSummaryConflictError(
+            summary.coordinationId,
+            summary.runId,
+            summary.projectId,
+          )
+        }
+        if (exactReplay) {
+          return {
+            accepted: true,
+            syncedAt: new Date().toISOString(),
+            message: 'agent coordination summary replay accepted by seed repository',
+          }
+        }
+        const index = agentCoordinationSummaries.indexOf(existing)
+        agentCoordinationSummaries[index] = summary
+      } else {
+        agentCoordinationSummaries.unshift(summary)
+      }
+
+      return {
+        accepted: true,
+        syncedAt: new Date().toISOString(),
+        message: 'agent coordination summary accepted by seed repository',
       }
     },
 

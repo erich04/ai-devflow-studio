@@ -50,6 +50,9 @@ export type IdentifierOnlyProjectBoundRemoteSync = {
   ): Promise<RemoteSyncUploadResult>
   uploadCanonicalAgentRuntimeSummary(runtimeId: string): Promise<RemoteSyncUploadResult>
   uploadCanonicalAgentMemorySummary(memoryId: string): Promise<RemoteSyncUploadResult>
+  uploadCanonicalAgentCoordinationSummary?(
+    coordinationId: string,
+  ): Promise<RemoteSyncUploadResult>
 }
 
 type ProcessorDependencies = {
@@ -86,6 +89,11 @@ async function uploadOperation(
       return remoteSync.uploadCanonicalAgentRuntimeSummary(operation.entityId)
     case 'agent-memory-summary':
       return remoteSync.uploadCanonicalAgentMemorySummary(operation.entityId)
+    case 'agent-coordination-summary':
+      if (!remoteSync.uploadCanonicalAgentCoordinationSummary) {
+        throw new CanonicalRemoteSyncEntityError('entity_missing', 'agent_coordination')
+      }
+      return remoteSync.uploadCanonicalAgentCoordinationSummary(operation.entityId)
   }
 }
 

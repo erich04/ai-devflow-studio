@@ -1,6 +1,6 @@
 # DevFlow Studio Current Product PRD
 
-Status: Current released baseline; V2.1 Evaluated Retrieval and Memory implementation active
+Status: Current released baseline; V2.2 Multi-Agent and Execution Tenancy implementation active
 Last updated: 2026-08-13
 
 ## Source Documents
@@ -11,6 +11,8 @@ Last updated: 2026-08-13
 - [`v1.3 Delivery Flow Completion`](../../plans/v1.3-delivery-flow-completion.md)
 - [`V1.5 GitHub Delivery PRD`](./v1.5-github-delivery-prd.md)
 - [`V2.0 Native Agent Runtime PRD`](./v2.0-native-agent-runtime-prd.md)
+- [`V2.1 Evaluated Retrieval and Memory PRD`](./v2.1-evaluated-retrieval-memory-prd.md)
+- [`V2.2 Multi-Agent and Execution Tenancy PRD`](./v2.2-multi-agent-execution-tenancy-prd.md)
 - [`Bounded Agent Runtime`](../../adr/0014-bounded-agent-runtime.md)
 - [`Governed Coding Executor`](../../adr/0015-governed-coding-executor.md)
 - [`Tool And MCP Execution Authority`](../../adr/0016-tool-mcp-execution-authority.md)
@@ -325,15 +327,11 @@ preserving the evidence needed for human review.
 - V1.5 is released as `v1.5.0`, and the finite 1.x completion gate passed with immutable
   candidate-bound evidence under `docs/releases/v1.5.0/`.
 - V2.0 Native Agent Runtime is complete with immutable evidence under `docs/releases/v2.0.0/`.
-  V2.1 Evaluated Retrieval and Memory is the active Roadmap priority; retrieval/index and scoped
-  durable Memory are complete, while Runtime Context now has strict renderer provenance and a
-  bounded Desktop Memory lifecycle view. Exact-digest human Candidate promotion and exact-version
-  statement revision are now main-owned; explicit exact-version deletion is tombstone-first and can
-  resume a pending purge after restart. The packaged Desktop proves the full exact Memory lifecycle
-  reopens with zero repeated effects. Team schema 18 now stores only monotonic redacted Memory
-  lifecycle/quality metadata with independent head/quality audit versions, Desktop schema 27
-  transports only identifier operations, and Web is
-  read-only; candidate-bound completion evidence remains the active ordered slice.
+  V2.1 Evaluated Retrieval and Memory is complete. V2.2 Multi-Agent and Execution Tenancy is the
+  active Roadmap priority. Team schema 19 now stores only strict monotonic redacted Runtime, Memory,
+  and Coordination metadata; Desktop schema 29 transports Coordination updates through a durable
+  identifier-only outbox, and Web exposes a read-only coordination lifecycle/comparison view with no
+  local execution authority.
 - Runtime Operations and Collaboration Hardening remain evidence-promoted backlog items unless the
   Roadmap assigns milestone priority.
 - UI refactor work should preserve the Evidence Chain as the center of gravity: current stage,

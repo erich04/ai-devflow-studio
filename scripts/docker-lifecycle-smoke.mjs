@@ -498,6 +498,43 @@ async function assertAgentMemoryProjectionQualityAfterV18(database) {
   )
 }
 
+async function assertAgentCoordinationProjectionAfterV19(database) {
+  const tables = await psql(
+    database,
+    `SELECT string_agg(table_name, ',' ORDER BY table_name)
+     FROM information_schema.tables
+     WHERE table_schema = 'public'
+       AND table_name IN (
+         'agent_coordination_summaries',
+         'agent_coordination_projection_audits'
+       );\n`,
+  )
+  expect(
+    tables.stdout.trim() ===
+      'agent_coordination_projection_audits,agent_coordination_summaries',
+    `${database} did not create the exact V19 Agent Coordination projection tables.`,
+  )
+  const rowCounts = await psql(
+    database,
+    `SELECT
+       (SELECT count(*) FROM agent_coordination_summaries),
+       (SELECT count(*) FROM agent_coordination_projection_audits);\n`,
+  )
+  expect(
+    rowCounts.stdout.trim() === '0|0',
+    `${database} V18-to-v19 migration invented Agent Coordination projection rows.`,
+  )
+  const migrationHistory = await psql(
+    database,
+    `SELECT count(*) FROM team_schema_migrations
+     WHERE version = 19 AND name = '0019_agent_coordination_team_projection';\n`,
+  )
+  expect(
+    migrationHistory.stdout.trim() === '1',
+    `${database} did not record the exact V19 Agent Coordination migration.`,
+  )
+}
+
 async function expectColumnMissing(database, table, column) {
   const result = await psql(
     database,
@@ -951,7 +988,7 @@ async function expectV14ApiRejectsNewerSchema(database) {
     const readinessResponse = await fetch(`${apiUrl}/ready`)
     expect(
       readinessResponse.status === 503,
-      `Exact V1.4 API did not fail closed on Team schema v18; received ${readinessResponse.status}.`,
+      `Exact V1.4 API did not fail closed on Team schema v19; received ${readinessResponse.status}.`,
     )
   } finally {
     await runDocker(['rm', '-f', rollbackApiContainerName])
@@ -1153,10 +1190,11 @@ try {
   }
 
   await runCurrentMigration(FRESH_DATABASE)
-  await expectSchemaVersion(FRESH_DATABASE, 18)
+  await expectSchemaVersion(FRESH_DATABASE, 19)
   await assertAgentRuntimeProjectionAfterV16(FRESH_DATABASE)
   await assertAgentMemoryProjectionAfterV17(FRESH_DATABASE)
   await assertAgentMemoryProjectionQualityAfterV18(FRESH_DATABASE)
+  await assertAgentCoordinationProjectionAfterV19(FRESH_DATABASE)
   await startCurrentApiAgainstDatabase(FRESH_DATABASE)
 
   await runV14Migration(UPGRADE_DATABASE)
@@ -1175,10 +1213,11 @@ try {
 
   await restartPostgresWithRetainedVolume()
   await runCurrentMigration(UPGRADE_DATABASE)
-  await expectSchemaVersion(UPGRADE_DATABASE, 18)
+  await expectSchemaVersion(UPGRADE_DATABASE, 19)
   await assertAgentRuntimeProjectionAfterV16(UPGRADE_DATABASE)
   await assertAgentMemoryProjectionAfterV17(UPGRADE_DATABASE)
   await assertAgentMemoryProjectionQualityAfterV18(UPGRADE_DATABASE)
+  await assertAgentCoordinationProjectionAfterV19(UPGRADE_DATABASE)
   const snapshotAfterV15Upgrade = await readV14RunSnapshot(UPGRADE_DATABASE)
   expect(
     snapshotAfterV15Upgrade === snapshotBeforeV10Upgrade,
@@ -1257,10 +1296,11 @@ try {
   await expectMigrationHistoryMissing(FAILURE_DATABASE, 13)
   const retainedV14Fixture = await prepareV12LegacyIssuedCredentialFixture()
   await runCurrentMigration(FAILURE_DATABASE)
-  await expectSchemaVersion(FAILURE_DATABASE, 18)
+  await expectSchemaVersion(FAILURE_DATABASE, 19)
   await assertAgentRuntimeProjectionAfterV16(FAILURE_DATABASE)
   await assertAgentMemoryProjectionAfterV17(FAILURE_DATABASE)
   await assertAgentMemoryProjectionQualityAfterV18(FAILURE_DATABASE)
+  await assertAgentCoordinationProjectionAfterV19(FAILURE_DATABASE)
   await assertLegacyIssuedCredentialAfterV13(retainedV14Fixture.snapshotBeforeV13)
   await assertLegacyPublicationAfterV15(retainedV14Fixture.snapshotBeforeV15)
   await startCurrentApiAgainstDatabase(FAILURE_DATABASE)
@@ -1287,6 +1327,6 @@ if (mainError) throw mainError
 if (cleanupError) throw cleanupError
 if (completed) {
   console.log(
-    'Docker lifecycle smoke passed: fresh v18, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, durable v13-to-v14 provider backoff, exact v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, empty v16-to-v17 metadata-only Agent Memory projection, v17-to-v18 independent Memory quality audit versioning, and bounded V1.4 backup/restore rollback.',
+    'Docker lifecycle smoke passed: fresh v19, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, durable v13-to-v14 provider backoff, exact v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, empty v16-to-v17 metadata-only Agent Memory projection, v17-to-v18 independent Memory quality audit versioning, v18-to-v19 metadata-only Agent Coordination projection, and bounded V1.4 backup/restore rollback.',
   )
 }

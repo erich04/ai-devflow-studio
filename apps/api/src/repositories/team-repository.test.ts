@@ -153,6 +153,119 @@ describe('seed team repository', () => {
     )
   })
 
+  it('stores only one monotonic metadata-only Agent Coordination Team projection', async () => {
+    const repository = createSeedTeamRepository()
+    await repository.uploadRunSummary({
+      kind: 'run',
+      runId: 'run-coordination-projection-1',
+      version: 3,
+      projectId: 'p-payments',
+      title: 'Coordination projection',
+      status: 'building',
+      currentNodeId: 'node-build',
+      currentNode: { id: 'node-build', stage: 'build', kind: 'task', status: 'running' },
+      branchName: 'codex/coordination-projection',
+      updatedAt: '2026-08-13T21:00:00.000Z',
+    }, syncContext)
+    const summary = {
+      stateVersion: 1 as const,
+      projectionVersion: 1 as const,
+      coordinationId: 'coordination-team-1',
+      projectId: 'p-payments',
+      runId: 'run-coordination-projection-1',
+      nodeId: 'node-build',
+      coordinationVersion: 2,
+      graphVersion: 1,
+      status: 'running' as const,
+      stopReason: null,
+      roleCounts: [{ roleId: 'contract-reviewer', count: 1 }],
+      taskStatusCounts: {
+        pending: 0,
+        ready: 0,
+        running: 1,
+        succeeded: 0,
+        failed: 0,
+        cancelled: 0,
+        blocked: 0,
+      },
+      failureCategoryCounts: {
+        timeout: 0,
+        budget_exhausted: 0,
+        policy_denied: 0,
+        tool_error: 0,
+        coding_executor_error: 0,
+        invalid_result: 0,
+        dependency_failed: 0,
+      },
+      taskCount: 1,
+      edgeCount: 0,
+      specialistStarts: 1,
+      acceptedHandoffCount: 0,
+      retryCount: 0,
+      stepCount: 0,
+      toolCallCount: 0,
+      tokenCount: 0,
+      costUsd: 0,
+      singleAgentQuality: null,
+      coordinationQuality: null,
+      latencyMs: 500,
+      humanInterventionCount: 0,
+      authorityViolationCount: 0,
+      isolationViolationCount: 0,
+      terminationViolationCount: 0,
+      replayViolationCount: 0,
+      redactionViolationCount: 0,
+      updatedAt: '2026-08-13T21:00:00.500Z',
+      isolated: true as const,
+      redacted: true as const,
+    }
+
+    await expect(
+      repository.uploadAgentCoordinationSummary(summary, syncContext),
+    ).resolves.toMatchObject({ accepted: true })
+    await expect(repository.uploadAgentCoordinationSummary(
+      Object.fromEntries(Object.entries(summary).reverse()) as typeof summary,
+      syncContext,
+    )).resolves.toMatchObject({ accepted: true })
+    await expect(repository.uploadAgentCoordinationSummary({
+      ...summary,
+      coordinationVersion: 1,
+    }, syncContext)).rejects.toThrow('Remote child summary ID conflicts')
+    await expect(repository.uploadAgentCoordinationSummary({
+      ...summary,
+      projectId: 'p-platform',
+    }, syncContext)).rejects.toThrow('Remote child summary ID conflicts')
+
+    const terminal = {
+      ...summary,
+      coordinationVersion: 3,
+      status: 'terminal' as const,
+      stopReason: 'success' as const,
+      taskStatusCounts: {
+        ...summary.taskStatusCounts,
+        running: 0,
+        succeeded: 1,
+      },
+      singleAgentQuality: 0.5,
+      coordinationQuality: 0.8,
+      latencyMs: 1_000,
+      updatedAt: '2026-08-13T21:00:01.000Z',
+    }
+    await expect(
+      repository.uploadAgentCoordinationSummary(terminal, syncContext),
+    ).resolves.toMatchObject({ accepted: true })
+    await expect(repository.uploadAgentCoordinationSummary({
+      ...terminal,
+      latencyMs: 1_001,
+    }, syncContext)).rejects.toThrow('Remote child summary ID conflicts')
+
+    const overview = await repository.getTeamOverview(syncContext)
+    expect(overview.agentCoordinationSummaries).toEqual([terminal])
+    expect(JSON.stringify(overview.agentCoordinationSummaries)).not.toMatch(
+      /localProjectId|userId|sessionId|contextDigest|capability|resource|source|path|output|patch/iu,
+    )
+  })
+
   it('stores only a monotonic metadata-only Agent Memory Team projection', async () => {
     const repository = createSeedTeamRepository()
     await repository.uploadRunSummary({

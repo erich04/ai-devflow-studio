@@ -79,6 +79,7 @@ function makeSource(
     listCodingDiffArtifacts: async () => [],
     getAgentRuntime: async () => null,
     getAgentMemoryTeamProjectionInput: async () => null,
+    getAgentCoordinationTeamProjectionInput: async () => null,
   }
 }
 

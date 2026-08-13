@@ -385,6 +385,7 @@ function createRepository(): TeamRepository & GateCommandRepository {
     codingAgentSummaries: [],
     agentRuntimeSummaries: [],
     agentMemorySummaries: [],
+    agentCoordinationSummaries: [],
     policyAwareDeliverySummaries: [],
     agentProviders: [
       {
@@ -533,6 +534,7 @@ function createRepository(): TeamRepository & GateCommandRepository {
             codingAgentSummaries: [],
             agentRuntimeSummaries: [],
             agentMemorySummaries: [],
+            agentCoordinationSummaries: [],
             policyAwareDeliverySummaries: [],
             enforcementPolicies: {
               organizationPolicy: createWarnOnlyDefaultPolicy({
@@ -582,6 +584,11 @@ function createRepository(): TeamRepository & GateCommandRepository {
       accepted: true,
       syncedAt: '2026-06-16T00:00:00.000Z',
       message: 'agent memory summary accepted',
+    })),
+    uploadAgentCoordinationSummary: vi.fn(async () => ({
+      accepted: true,
+      syncedAt: '2026-06-16T00:00:00.000Z',
+      message: 'agent coordination summary accepted',
     })),
     listAgentProviders: vi.fn(async () => overview.agentProviders),
     getEnforcementPolicy: vi.fn(async () => ({
@@ -2680,6 +2687,139 @@ describe('team API route resolver', () => {
       body: { error: 'bad_request', message: 'Invalid Agent Runtime Team projection payload' },
     })
     expect(repository.uploadAgentRuntimeSummary).not.toHaveBeenCalled()
+  })
+
+  it('routes an exact metadata-only Agent Coordination Team projection', async () => {
+    const repository = createRepository()
+    const summary = {
+      stateVersion: 1 as const,
+      projectionVersion: 1 as const,
+      coordinationId: 'coordination-team-1',
+      projectId: 'p-payments',
+      runId: 'run-payments',
+      nodeId: 'node-build',
+      coordinationVersion: 2,
+      graphVersion: 1,
+      status: 'running' as const,
+      stopReason: null,
+      roleCounts: [{ roleId: 'contract-reviewer', count: 1 }],
+      taskStatusCounts: {
+        pending: 0,
+        ready: 0,
+        running: 1,
+        succeeded: 0,
+        failed: 0,
+        cancelled: 0,
+        blocked: 0,
+      },
+      failureCategoryCounts: {
+        timeout: 0,
+        budget_exhausted: 0,
+        policy_denied: 0,
+        tool_error: 0,
+        coding_executor_error: 0,
+        invalid_result: 0,
+        dependency_failed: 0,
+      },
+      taskCount: 1,
+      edgeCount: 0,
+      specialistStarts: 1,
+      acceptedHandoffCount: 0,
+      retryCount: 0,
+      stepCount: 0,
+      toolCallCount: 0,
+      tokenCount: 0,
+      costUsd: 0,
+      singleAgentQuality: null,
+      coordinationQuality: null,
+      latencyMs: 500,
+      humanInterventionCount: 0,
+      authorityViolationCount: 0,
+      isolationViolationCount: 0,
+      terminationViolationCount: 0,
+      replayViolationCount: 0,
+      redactionViolationCount: 0,
+      updatedAt: '2026-08-13T21:00:00.500Z',
+      isolated: true as const,
+      redacted: true as const,
+    }
+
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/sync/agent-coordination-summary',
+      repository,
+      { body: summary, session: memberSession },
+    )
+
+    expect(result?.status).toBe(202)
+    expect(repository.uploadAgentCoordinationSummary).toHaveBeenCalledWith(
+      summary,
+      memberSession,
+    )
+  })
+
+  it('rejects non-exact Agent Coordination projections before repository persistence', async () => {
+    const repository = createRepository()
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/sync/agent-coordination-summary',
+      repository,
+      {
+        session: memberSession,
+        body: {
+          stateVersion: 1,
+          projectionVersion: 1,
+          coordinationId: 'coordination-team-1',
+          projectId: 'p-payments',
+          runId: 'run-payments',
+          nodeId: 'node-build',
+          coordinationVersion: 2,
+          graphVersion: 1,
+          status: 'running',
+          stopReason: null,
+          roleCounts: [{ roleId: 'contract-reviewer', count: 1 }],
+          taskStatusCounts: {
+            pending: 0, ready: 0, running: 1, succeeded: 0,
+            failed: 0, cancelled: 0, blocked: 0,
+          },
+          failureCategoryCounts: {
+            timeout: 0, budget_exhausted: 0, policy_denied: 0, tool_error: 0,
+            coding_executor_error: 0, invalid_result: 0, dependency_failed: 0,
+          },
+          taskCount: 1,
+          edgeCount: 0,
+          specialistStarts: 1,
+          acceptedHandoffCount: 0,
+          retryCount: 0,
+          stepCount: 0,
+          toolCallCount: 0,
+          tokenCount: 0,
+          costUsd: 0,
+          singleAgentQuality: null,
+          coordinationQuality: null,
+          latencyMs: 500,
+          humanInterventionCount: 0,
+          authorityViolationCount: 0,
+          isolationViolationCount: 0,
+          terminationViolationCount: 0,
+          replayViolationCount: 0,
+          redactionViolationCount: 0,
+          updatedAt: '2026-08-13T21:00:00.500Z',
+          isolated: true,
+          redacted: true,
+          localProjectId: 'private-local-project',
+        },
+      },
+    )
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: 'bad_request',
+        message: 'Invalid Agent Coordination Team projection payload',
+      },
+    })
+    expect(repository.uploadAgentCoordinationSummary).not.toHaveBeenCalled()
   })
 
   it('routes an exact metadata-only Agent Memory Team projection', async () => {

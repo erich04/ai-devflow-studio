@@ -6,16 +6,17 @@ retroactive TDD rewrites unless it is touched.
 
 ## Current Persistence Baseline
 
-- Team/API/Postgres uses Team schema v18. Migration tests must prove a fresh v18 database, the
+- Team/API/Postgres uses Team schema v19. Migration tests must prove a fresh v19 database, the
   populated v11-to-v12 delivery-series upgrade, and the v12-to-v13 provider-authoritative expiry
   contract without inventing expiry evidence for legacy issued credentials, followed by the
   v13-to-v14 bounded provider retry boundary, the v14-to-v15 verified publication adoption
   authority without changing legacy grant-backed publications, and the v15-to-v16 metadata-only
   Agent Runtime projection without inventing runtime summaries or audit rows, followed by the
   v16-to-v17 metadata-only Agent Memory projection without inventing Memory summaries or audit rows,
-  followed by v17-to-v18 independent same-head Memory quality audit versioning. Retained rows keep
-  reserved quality version 0 until the first new projection converges them; new writes start at 1.
-- Electron/SQLite uses Desktop schema v28. Local-store tests must prove a fresh v28 database, the
+  followed by v17-to-v18 independent same-head Memory quality audit versioning, then an empty
+  v18-to-v19 metadata-only Agent Coordination projection. Retained rows keep reserved quality
+  version 0 until the first new projection converges them; new writes start at 1.
+- Electron/SQLite uses Desktop schema v29. Local-store tests must prove a fresh v29 database, the
   Desktop schema 17-to-18 retained Runtime upgrade, the 18-to-19 metadata-only Native Tool audit
   upgrade with no invented grant or audit rows, and the 19-to-20 Local MCP installation/audit
   provenance upgrade with no invented installation or MCP audit, and the 20-to-21 retained outbox
@@ -28,8 +29,9 @@ retroactive TDD rewrites unless it is touched.
   migration without fabricating attachments, followed by the 26-to-27 retained metadata-only outbox
   migration that admits exact Agent Memory summary IDs without changing existing rows, followed by
   the 27-to-28 Coordination Session migration with zero fabricated sessions, tasks, graphs,
-  handoffs, leases, audits, or checkpoints, plus rollback on migration failure and refusal of a
-  newer unknown schema.
+  handoffs, leases, audits, or checkpoints, followed by the 28-to-29 retained outbox migration that
+  admits exact Coordination Session IDs without changing existing operations, plus rollback on
+  migration failure and refusal of a newer unknown schema.
 - The completed V2.2 Slice 3 matrix proves a fixed Electron-main-owned Specialist registry, opaque
   task authority revalidation, exact child Runtime/Context creation, atomic terminal result and
   deterministic dependency join, fixed fail-fast attribution, and one read-only

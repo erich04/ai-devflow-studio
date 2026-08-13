@@ -130,6 +130,11 @@ describe('team database migration runner', () => {
         name: '0018_agent_memory_projection_quality_version',
         fileName: '0018_agent_memory_projection_quality_version.sql',
       },
+      {
+        version: 19,
+        name: '0019_agent_coordination_team_projection',
+        fileName: '0019_agent_coordination_team_projection.sql',
+      },
     ])
 
     const [

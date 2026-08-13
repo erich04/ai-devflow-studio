@@ -15,6 +15,7 @@ import {
   parseBudgetGuardDecision,
   parseRemoteAgentMemorySummary,
   parseRemoteAgentRuntimeSummary,
+  parseRemoteAgentCoordinationSummary,
   type OrganizationEnforcementPolicy,
   resolveDevFlowRuntimeFlags,
   redactLocalAbsolutePaths,
@@ -31,6 +32,7 @@ import {
   type RemoteAgentReviewSummary,
   type RemoteAgentMemorySummary,
   type RemoteAgentRuntimeSummary,
+  type RemoteAgentCoordinationSummary,
   type RemoteCodingAgentSummary,
   type RuntimeBudgetApproval,
   type RuntimeBudgetPolicy,
@@ -789,6 +791,9 @@ function filterOverviewForSession(
       projectIds.has(summary.projectId) && runIds.has(summary.runId),
     ),
     agentMemorySummaries: overview.agentMemorySummaries.filter((summary) =>
+      projectIds.has(summary.projectId) && runIds.has(summary.runId),
+    ),
+    agentCoordinationSummaries: overview.agentCoordinationSummaries.filter((summary) =>
       projectIds.has(summary.projectId) && runIds.has(summary.runId),
     ),
     policyAwareDeliverySummaries: overview.policyAwareDeliverySummaries.filter(
@@ -1745,6 +1750,27 @@ export async function resolveTeamRoute(
 
     return acceptCanonicalRunEvidence(() =>
       repository.uploadAgentMemorySummary(summary, options.session!),
+    )
+  }
+
+  if (method === 'POST' && pathname === '/api/sync/agent-coordination-summary') {
+    if (!options.session) {
+      return unauthorized()
+    }
+
+    let summary: RemoteAgentCoordinationSummary
+    try {
+      summary = parseRemoteAgentCoordinationSummary(options.body)
+    } catch {
+      return badRequest('Invalid Agent Coordination Team projection payload')
+    }
+
+    if (!canSyncProject(options.session, summary.projectId, 'member')) {
+      return forbidden('Project role member required')
+    }
+
+    return acceptCanonicalRunEvidence(() =>
+      repository.uploadAgentCoordinationSummary(summary, options.session!),
     )
   }
 

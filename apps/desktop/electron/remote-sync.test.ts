@@ -641,6 +641,72 @@ describe('Electron remote sync client', () => {
     )
   })
 
+  it('uploads a metadata-only Team Agent Coordination summary through the exact safe endpoint', async () => {
+    const summary = {
+      stateVersion: 1 as const,
+      projectionVersion: 1 as const,
+      coordinationId: 'coordination-team-1',
+      projectId: 'team-project-1',
+      runId: 'run-team-1',
+      nodeId: 'run-team-1-build',
+      coordinationVersion: 2,
+      graphVersion: 1,
+      status: 'running' as const,
+      stopReason: null,
+      roleCounts: [{ roleId: 'contract-reviewer', count: 1 }],
+      taskStatusCounts: {
+        pending: 0, ready: 0, running: 1, succeeded: 0, failed: 0, cancelled: 0, blocked: 0,
+      },
+      failureCategoryCounts: {
+        timeout: 0, budget_exhausted: 0, policy_denied: 0, tool_error: 0,
+        coding_executor_error: 0, invalid_result: 0, dependency_failed: 0,
+      },
+      taskCount: 1,
+      edgeCount: 0,
+      specialistStarts: 1,
+      acceptedHandoffCount: 0,
+      retryCount: 0,
+      stepCount: 0,
+      toolCallCount: 0,
+      tokenCount: 0,
+      costUsd: 0,
+      singleAgentQuality: null,
+      coordinationQuality: null,
+      latencyMs: 1_000,
+      humanInterventionCount: 0,
+      authorityViolationCount: 0,
+      isolationViolationCount: 0,
+      terminationViolationCount: 0,
+      replayViolationCount: 0,
+      redactionViolationCount: 0,
+      updatedAt: '2026-08-13T12:00:01.000Z',
+      isolated: true as const,
+      redacted: true as const,
+    }
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      accepted: true,
+      syncedAt: '2026-08-13T12:00:02.000Z',
+      message: 'accepted',
+    }), { status: 202 }))
+    const client = createRemoteSyncClient({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      authToken: 'desktop-secret',
+    })
+
+    await expect(client.uploadAgentCoordinationSummary(summary)).resolves.toMatchObject({
+      accepted: true,
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/sync/agent-coordination-summary',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify(summary),
+        headers: expect.objectContaining({ authorization: 'Bearer desktop-secret' }),
+      }),
+    )
+  })
+
   it('maps a malformed successful response to a safe retryable invalid-response error', async () => {
     const client = createRemoteSyncClient({
       apiBaseUrl: 'http://api.local',

@@ -32,12 +32,16 @@ class FakeTeamDbClient implements TeamDbRepositoryClient {
   private readonly childSummaryScopes = new Map<string, string>()
 
   constructor(
-    private readonly canonicalRunExists = true,
+    private canonicalRunExists = true,
     private readonly runSummaryAccepted = true,
     private readonly desktopUserRole: 'owner' | 'lead' | 'member' = 'lead',
     private readonly failOnSqlFragment?: string,
     private readonly nodeSummaryAccepted = true,
   ) {}
+
+  setCanonicalRunExists(value: boolean): void {
+    this.canonicalRunExists = value
+  }
 
   private acceptScopedChildSummaryWrite(
     table: string,
@@ -130,6 +134,38 @@ class FakeTeamDbClient implements TeamDbRepositoryClient {
 
     if (sql.includes('INSERT INTO agent_memory_projection_audits')) {
       return []
+    }
+
+    if (sql.includes('INSERT INTO agent_coordination_summaries')) {
+      const values = params ?? []
+      const accepted = this.acceptScopedChildSummaryWrite(
+        'agent_coordination_summaries',
+        values[0],
+        `${String(values[1])}:${String(values[2])}:${String(values[3])}:${String(values[4])}`,
+        values,
+      )
+      return (accepted ? [{ coordination_id: values[0] }] : []) as T[]
+    }
+
+    if (sql.includes('INSERT INTO agent_coordination_projection_audits')) {
+      return []
+    }
+
+    if (
+      sql.includes('FROM agent_coordination_summaries') &&
+      sql.includes('WHERE coordination_id = $1')
+    ) {
+      const values = this.acceptedChildSummaryWrites.get(
+        `agent_coordination_summaries:${String(params?.[0])}`,
+      )
+      return (values
+        ? [{
+            coordination_id: values[0],
+            organization_id: values[1],
+            project_id: values[2],
+            run_id: values[3],
+          }]
+        : []) as T[]
     }
 
     if (sql.includes('INSERT INTO workflow_runs')) {
@@ -1046,6 +1082,127 @@ describe('Postgres team repository', () => {
       ...summary,
       ownerUserId: 'u-other',
     }, context)).rejects.toThrow('Remote child summary ID conflicts')
+  })
+
+  it('writes a monotonic metadata-only Agent Coordination projection and versioned audit', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+    const summary = {
+      stateVersion: 1 as const,
+      projectionVersion: 1 as const,
+      coordinationId: 'coordination-team-1',
+      projectId: 'p-payments',
+      runId: 'run-remote-1',
+      nodeId: 'n-current',
+      coordinationVersion: 2,
+      graphVersion: 1,
+      status: 'running' as const,
+      stopReason: null,
+      roleCounts: [{ roleId: 'contract-reviewer', count: 1 }],
+      taskStatusCounts: {
+        pending: 0,
+        ready: 0,
+        running: 1,
+        succeeded: 0,
+        failed: 0,
+        cancelled: 0,
+        blocked: 0,
+      },
+      failureCategoryCounts: {
+        timeout: 0,
+        budget_exhausted: 0,
+        policy_denied: 0,
+        tool_error: 0,
+        coding_executor_error: 0,
+        invalid_result: 0,
+        dependency_failed: 0,
+      },
+      taskCount: 1,
+      edgeCount: 0,
+      specialistStarts: 1,
+      acceptedHandoffCount: 0,
+      retryCount: 0,
+      stepCount: 0,
+      toolCallCount: 0,
+      tokenCount: 0,
+      costUsd: 0,
+      singleAgentQuality: null,
+      coordinationQuality: null,
+      latencyMs: 500,
+      humanInterventionCount: 0,
+      authorityViolationCount: 0,
+      isolationViolationCount: 0,
+      terminationViolationCount: 0,
+      replayViolationCount: 0,
+      redactionViolationCount: 0,
+      updatedAt: '2026-08-13T21:00:00.500Z',
+      isolated: true as const,
+      redacted: true as const,
+    }
+    const context = {
+      organizationId: 'org-demo',
+      userId: 'u-ling',
+      tokenRecordId: 'desktop-token-1',
+    }
+
+    await expect(
+      repository.uploadAgentCoordinationSummary(summary, context),
+    ).resolves.toMatchObject({ accepted: true })
+    await expect(repository.uploadAgentCoordinationSummary(
+      Object.fromEntries(Object.entries(summary).reverse()) as typeof summary,
+      context,
+    )).resolves.toMatchObject({ accepted: true })
+
+    const writes = db.queries.filter((query) =>
+      query.sql.includes('INSERT INTO agent_coordination_summaries'),
+    )
+    const write = writes[0]
+    const audit = db.queries.find((query) =>
+      query.sql.includes('INSERT INTO agent_coordination_projection_audits'),
+    )
+    expect(write?.sql).toContain("agent_coordination_summaries.status <> 'terminal'")
+    expect(write?.sql).toContain(
+      'agent_coordination_summaries.coordination_version < excluded.coordination_version',
+    )
+    expect(write?.sql).toContain(
+      'agent_coordination_summaries.summary_digest = excluded.summary_digest',
+    )
+    expect(write?.sql).toContain(
+      'agent_coordination_summaries.role_counts = excluded.role_counts',
+    )
+    expect(write?.sql).toContain(
+      'agent_coordination_summaries.specialist_starts <= excluded.specialist_starts',
+    )
+    expect(write?.params?.[4]).toBe('run-remote-1:n-current')
+    expect(writes).toHaveLength(2)
+    expect(writes[0]?.params?.[35]).toBe(writes[1]?.params?.[35])
+    expect(audit?.sql).toContain(
+      'ON CONFLICT (coordination_id, coordination_version) DO NOTHING',
+    )
+    expect(audit?.params?.slice(0, 7)).toEqual([
+      summary.coordinationId,
+      summary.coordinationVersion,
+      'org-demo',
+      summary.projectId,
+      summary.runId,
+      'run-remote-1:n-current',
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+    ])
+    expect(JSON.stringify([write?.params, audit?.params])).not.toMatch(
+      /localProjectId|userId|sessionId|contextDigest|capability|resource|source|path|output|patch/iu,
+    )
+
+    db.setCanonicalRunExists(false)
+    await expect(repository.uploadAgentCoordinationSummary({
+      ...summary,
+      projectId: 'project-cross-scope',
+      runId: 'run-cross-scope',
+    }, context)).rejects.toMatchObject({ name: 'RemoteChildSummaryConflictError' })
+    const crossScopeQueries = db.queries.slice(-3)
+    expect(crossScopeQueries.some((query) =>
+      query.sql.includes('FROM agent_coordination_summaries'),
+    )).toBe(true)
+    expect(crossScopeQueries.some((query) => query.sql.includes('FROM workflow_runs'))).toBe(false)
   })
 
   it('rejects an Agent Memory projection whose source Runtime is outside the exact Run scope', async () => {

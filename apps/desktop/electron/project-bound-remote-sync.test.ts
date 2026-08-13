@@ -4,6 +4,7 @@ import type {
   AgentReviewResult,
   CodingAgentRun,
   CodingDiffArtifact,
+  CoordinationRendererSnapshot,
   DesktopPairingCredential,
   RemoteAgentReviewSummary,
   RemoteCodingAgentSummary,
@@ -264,6 +265,68 @@ function canonicalAgentRuntime(): AgentRuntimeState {
   }).runtime
 }
 
+function canonicalCoordinationSnapshot(): CoordinationRendererSnapshot {
+  return {
+    projectionVersion: 1,
+    session: {
+      projectionVersion: 1,
+      coordinationId: 'coordination-team-1',
+      graphId: 'coordination-graph-team-1',
+      graphVersion: 1,
+      runId: localRun.id,
+      nodeId: 'n-build',
+      localProjectId: pairingCredential.localProjectId!,
+      runVersion: localRun.version,
+      policyVersion: 1,
+      version: 2,
+      status: 'running',
+      stopReason: null,
+      bounds: {
+        maxSpecialists: 1, maxTaskNodes: 1, maxDependencyEdges: 1,
+        maxDelegationDepth: 1, maxParallelSpecialists: 1, maxAcceptedHandoffs: 1,
+        maxSpecialistRetries: 0, maxHandoffSummaryBytes: 4_096,
+        maxSteps: 4, maxWallTimeMs: 60_000, maxToolCalls: 4,
+        maxTokens: 10_000, maxCostUsd: 1,
+      },
+      counters: {
+        specialistStarts: 1, activeSpecialists: 1, acceptedHandoffs: 0,
+        retries: 0, steps: 0, toolCalls: 0, tokens: 0, costUsd: 0,
+      },
+      taskCount: 1,
+      edgeCount: 0,
+      acceptedHandoffCount: 0,
+      requestedAt: '2026-08-13T12:00:00.000Z',
+      startedAt: '2026-08-13T12:00:00.000Z',
+      updatedAt: '2026-08-13T12:00:01.000Z',
+      deadline: '2026-08-13T12:01:00.000Z',
+      redacted: true,
+    },
+    tasks: [{
+      projectionVersion: 1,
+      taskId: 'task-contract',
+      version: 2,
+      roleId: 'contract-reviewer',
+      dependencyTaskIds: [],
+      capabilityIds: ['repository_read'],
+      contextDigest: 'a'.repeat(64),
+      resources: [],
+      status: 'running',
+      agentId: 'specialist-contract',
+      runtimeId: 'runtime-contract',
+      runtimeVersion: 1,
+      resultDigest: null,
+      failure: null,
+      attemptFailures: [],
+      acceptedDependencyHandoffIds: [],
+      redacted: true,
+    }],
+    handoffs: [],
+    leases: [],
+    readyTaskIds: [],
+    redacted: true,
+  }
+}
+
 describe('project-bound Electron remote sync', () => {
   it('exposes only canonical identifier uploads and project-bound commands', () => {
     const boundRemoteSync = createProjectBoundRemoteSync({
@@ -281,6 +344,7 @@ describe('project-bound Electron remote sync', () => {
     expect(Object.keys(boundRemoteSync).sort()).toEqual([
       'evaluateRuntimeBudget',
       'saveGateOverride',
+      'uploadCanonicalAgentCoordinationSummary',
       'uploadCanonicalAgentMemorySummary',
       'uploadCanonicalAgentReviewSummary',
       'uploadCanonicalAgentRuntimeSummary',
@@ -290,6 +354,49 @@ describe('project-bound Electron remote sync', () => {
     ])
     expect('uploadAgentReviewSummary' in boundRemoteSync).toBe(false)
     expect('uploadCodingAgentSummary' in boundRemoteSync).toBe(false)
+  })
+
+  it('uploads an exact metadata-only Team Agent Coordination projection', async () => {
+    const snapshot = canonicalCoordinationSnapshot()
+    const uploadAgentCoordinationSummary = vi.fn(async () => ({
+      accepted: true,
+      syncedAt: '2026-08-13T12:00:02.000Z',
+      message: 'accepted',
+    }))
+    const boundRemoteSync = createProjectBoundRemoteSync({
+      remoteSync: { uploadAgentCoordinationSummary } as unknown as RemoteSyncClient,
+      credentialSource: {
+        getDesktopPairingCredential: async () => pairingCredential,
+        getAgentCoordinationTeamProjectionInput: async (coordinationId) =>
+          coordinationId === snapshot.session.coordinationId ? snapshot : null,
+        listRuns: async () => [localRun],
+        listTestEvidence: async () => [],
+        listAgentReviews: async () => [],
+        listCodingAgentRuns: async () => [],
+        listCodingDiffArtifacts: async () => [],
+      },
+    })
+
+    await boundRemoteSync.uploadCanonicalAgentCoordinationSummary(
+      snapshot.session.coordinationId,
+    )
+
+    expect(uploadAgentCoordinationSummary).toHaveBeenCalledWith(expect.objectContaining({
+      coordinationId: snapshot.session.coordinationId,
+      projectId: pairingCredential.projectId,
+      runId: localRun.id,
+      nodeId: 'n-build',
+      coordinationVersion: 2,
+      status: 'running',
+      roleCounts: [{ roleId: 'contract-reviewer', count: 1 }],
+      singleAgentQuality: null,
+      coordinationQuality: null,
+      isolated: true,
+      redacted: true,
+    }))
+    expect(JSON.stringify(uploadAgentCoordinationSummary.mock.calls)).not.toMatch(
+      /localProjectId|contextDigest|capability|resource|agentId|runtimeId|graphId/iu,
+    )
   })
 
   it('uploads an exact metadata-only Team Agent Runtime projection', async () => {

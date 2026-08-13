@@ -193,6 +193,53 @@ const overview: TeamOverviewResponse = {
       redacted: true,
     },
   ],
+  agentCoordinationSummaries: [
+    {
+      stateVersion: 1,
+      projectionVersion: 1,
+      coordinationId: 'coordination-team-1',
+      projectId: 'p-remote',
+      runId: 'run-remote',
+      nodeId: 'n-build',
+      coordinationVersion: 7,
+      graphVersion: 1,
+      status: 'terminal',
+      stopReason: 'success',
+      roleCounts: [
+        { roleId: 'contract-reviewer', count: 1 },
+        { roleId: 'test-reviewer', count: 2 },
+      ],
+      taskStatusCounts: {
+        pending: 0, ready: 0, running: 0, succeeded: 3,
+        failed: 0, cancelled: 0, blocked: 0,
+      },
+      failureCategoryCounts: {
+        timeout: 0, budget_exhausted: 0, policy_denied: 0, tool_error: 0,
+        coding_executor_error: 0, invalid_result: 0, dependency_failed: 0,
+      },
+      taskCount: 3,
+      edgeCount: 2,
+      specialistStarts: 3,
+      acceptedHandoffCount: 2,
+      retryCount: 0,
+      stepCount: 6,
+      toolCallCount: 2,
+      tokenCount: 0,
+      costUsd: 0,
+      singleAgentQuality: 0.5,
+      coordinationQuality: 0.8,
+      latencyMs: 1_500,
+      humanInterventionCount: 0,
+      authorityViolationCount: 0,
+      isolationViolationCount: 0,
+      terminationViolationCount: 0,
+      replayViolationCount: 0,
+      redactionViolationCount: 0,
+      updatedAt: '2026-06-16T10:15:00.000Z',
+      isolated: true,
+      redacted: true,
+    },
+  ],
   policyAwareDeliverySummaries: [
     {
       projectId: 'p-remote',
@@ -613,6 +660,10 @@ describe('web product shell page', () => {
       '2 citations · 2 accepted contexts · quality v3 · revision 2',
     )).toBeInTheDocument()
     expect(screen.getByText('project_shared · internal · until_deleted')).toBeInTheDocument()
+    expect(screen.getByText('Multi-Agent Coordination')).toBeInTheDocument()
+    expect(screen.getByText('Coordination · n-build')).toBeInTheDocument()
+    expect(screen.getByText('3 tasks · 2 handoffs · 1500 ms · 0 interventions')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /start coordination|cancel coordination|resume coordination|retry coordination/iu })).not.toBeInTheDocument()
     expect(screen.getByText('No blocking knowledge gaps found.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Sign in with GitHub/ })).toHaveAttribute(
       'href',
@@ -731,6 +782,7 @@ describe('web product shell page', () => {
       codingAgentSummaries: [],
       agentRuntimeSummaries: [],
       agentMemorySummaries: [],
+      agentCoordinationSummaries: [],
       policyAwareDeliverySummaries: [],
       agentReviews: [],
       agentTraces: [],

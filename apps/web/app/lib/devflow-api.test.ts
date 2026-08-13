@@ -448,6 +448,7 @@ describe('DevFlow web API client', () => {
           codingAgentSummaries: [],
           agentRuntimeSummaries: [],
           agentMemorySummaries: [],
+          agentCoordinationSummaries: [],
           policyAwareDeliverySummaries: [],
           agentReviews: [],
           agentTraces: [],
@@ -479,6 +480,7 @@ describe('DevFlow web API client', () => {
       codingAgentSummaries: [],
       agentRuntimeSummaries: [],
       agentMemorySummaries: [],
+      agentCoordinationSummaries: [],
       policyAwareDeliverySummaries: [],
       agentReviews: [],
       agentTraces: [],
@@ -573,6 +575,60 @@ describe('DevFlow web API client', () => {
     )
   })
 
+  it('fails closed when an Agent Coordination projection adds local authority', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      agentRuntimeSummaries: [],
+      agentMemorySummaries: [],
+      agentCoordinationSummaries: [{
+        stateVersion: 1,
+        projectionVersion: 1,
+        coordinationId: 'coordination-team-1',
+        projectId: 'p-payments',
+        runId: 'run-payments',
+        nodeId: 'node-build',
+        coordinationVersion: 2,
+        graphVersion: 1,
+        status: 'running',
+        stopReason: null,
+        roleCounts: [{ roleId: 'contract-reviewer', count: 1 }],
+        taskStatusCounts: {
+          pending: 0, ready: 0, running: 1, succeeded: 0,
+          failed: 0, cancelled: 0, blocked: 0,
+        },
+        failureCategoryCounts: {
+          timeout: 0, budget_exhausted: 0, policy_denied: 0, tool_error: 0,
+          coding_executor_error: 0, invalid_result: 0, dependency_failed: 0,
+        },
+        taskCount: 1,
+        edgeCount: 0,
+        specialistStarts: 1,
+        acceptedHandoffCount: 0,
+        retryCount: 0,
+        stepCount: 0,
+        toolCallCount: 0,
+        tokenCount: 0,
+        costUsd: 0,
+        singleAgentQuality: null,
+        coordinationQuality: null,
+        latencyMs: 500,
+        humanInterventionCount: 0,
+        authorityViolationCount: 0,
+        isolationViolationCount: 0,
+        terminationViolationCount: 0,
+        replayViolationCount: 0,
+        redactionViolationCount: 0,
+        updatedAt: '2026-08-13T21:00:00.500Z',
+        isolated: true,
+        redacted: true,
+        sessionId: 'private-desktop-session',
+      }],
+    }), { status: 200 }))
+
+    await expect(fetchTeamOverview({ apiBaseUrl: 'http://api.local', fetcher })).rejects.toThrow(
+      'invalid Agent Coordination projection',
+    )
+  })
+
   it('uses explicit session headers only when a caller opts into them', async () => {
     const fetcher = vi.fn(async () =>
       new Response(
@@ -587,6 +643,7 @@ describe('DevFlow web API client', () => {
           codingAgentSummaries: [],
           agentRuntimeSummaries: [],
           agentMemorySummaries: [],
+          agentCoordinationSummaries: [],
           policyAwareDeliverySummaries: [],
           agentReviews: [],
           agentTraces: [],

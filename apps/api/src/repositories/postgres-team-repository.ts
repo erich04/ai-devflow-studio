@@ -6,6 +6,7 @@ import {
   runtimeCostSummaryToTokenUsage,
   parseRemoteAgentRuntimeSummary,
   parseRemoteAgentMemorySummary,
+  parseRemoteAgentCoordinationSummary,
   type AgentEvent,
   type AgentEventKind,
   type AgentProviderConfig,
@@ -29,6 +30,7 @@ import {
   type RemoteCodingAgentSummary,
   type RemoteAgentRuntimeSummary,
   type RemoteAgentMemorySummary,
+  type RemoteAgentCoordinationSummary,
   type RemoteRunSummary,
   type RuntimeBudgetApproval,
   type RuntimeBudgetPolicy,
@@ -398,6 +400,43 @@ type AgentMemorySummaryRow = {
   purge_status: RemoteAgentMemorySummary['purgeStatus']
   purged_at: TimestampValue | null
   memory_updated_at: TimestampValue
+  redacted: boolean
+}
+
+type AgentCoordinationSummaryRow = {
+  coordination_id: string
+  project_id: string
+  run_id: string
+  node_id: string
+  state_version: 1
+  projection_version: 1
+  coordination_version: number
+  graph_version: number
+  status: RemoteAgentCoordinationSummary['status']
+  stop_reason: RemoteAgentCoordinationSummary['stopReason']
+  role_counts: unknown
+  task_status_counts: unknown
+  failure_category_counts: unknown
+  task_count: number | string
+  edge_count: number | string
+  specialist_starts: number | string
+  accepted_handoff_count: number | string
+  retry_count: number | string
+  step_count: number | string
+  tool_call_count: number | string
+  token_count: number | string
+  cost_usd: number | string
+  single_agent_quality: number | string | null
+  coordination_quality: number | string | null
+  latency_ms: number | string
+  human_intervention_count: number | string
+  authority_violation_count: number | string
+  isolation_violation_count: number | string
+  termination_violation_count: number | string
+  replay_violation_count: number | string
+  redaction_violation_count: number | string
+  coordination_updated_at: TimestampValue
+  isolated: boolean
   redacted: boolean
 }
 
@@ -975,6 +1014,51 @@ function mapAgentMemorySummary(row: AgentMemorySummaryRow): RemoteAgentMemorySum
     purgeStatus: row.purge_status,
     purgedAt: row.purged_at === null ? null : timestamp(row.purged_at),
     updatedAt: timestamp(row.memory_updated_at),
+    redacted: row.redacted,
+  })
+}
+
+function mapAgentCoordinationSummary(
+  row: AgentCoordinationSummaryRow,
+): RemoteAgentCoordinationSummary {
+  return parseRemoteAgentCoordinationSummary({
+    stateVersion: row.state_version,
+    projectionVersion: row.projection_version,
+    coordinationId: row.coordination_id,
+    projectId: row.project_id,
+    runId: row.run_id,
+    nodeId: fromTeamStoredNodeId(row.run_id, row.node_id),
+    coordinationVersion: Number(row.coordination_version),
+    graphVersion: Number(row.graph_version),
+    status: row.status,
+    stopReason: row.stop_reason,
+    roleCounts: row.role_counts,
+    taskStatusCounts: row.task_status_counts,
+    failureCategoryCounts: row.failure_category_counts,
+    taskCount: Number(row.task_count),
+    edgeCount: Number(row.edge_count),
+    specialistStarts: Number(row.specialist_starts),
+    acceptedHandoffCount: Number(row.accepted_handoff_count),
+    retryCount: Number(row.retry_count),
+    stepCount: Number(row.step_count),
+    toolCallCount: Number(row.tool_call_count),
+    tokenCount: Number(row.token_count),
+    costUsd: Number(row.cost_usd),
+    singleAgentQuality: row.single_agent_quality === null
+      ? null
+      : Number(row.single_agent_quality),
+    coordinationQuality: row.coordination_quality === null
+      ? null
+      : Number(row.coordination_quality),
+    latencyMs: Number(row.latency_ms),
+    humanInterventionCount: Number(row.human_intervention_count),
+    authorityViolationCount: Number(row.authority_violation_count),
+    isolationViolationCount: Number(row.isolation_violation_count),
+    terminationViolationCount: Number(row.termination_violation_count),
+    replayViolationCount: Number(row.replay_violation_count),
+    redactionViolationCount: Number(row.redaction_violation_count),
+    updatedAt: timestamp(row.coordination_updated_at),
+    isolated: row.isolated,
     redacted: row.redacted,
   })
 }
@@ -1823,6 +1907,7 @@ export function createPostgresTeamRepository(
         codingSummaryRows,
         agentRuntimeSummaryRows,
         agentMemorySummaryRows,
+        agentCoordinationSummaryRows,
         enforcementPolicyRows,
         gateOverrideRows,
         runtimeBudgetPolicyRows,
@@ -1905,6 +1990,15 @@ export function createPostgresTeamRepository(
           `,
           [context.organizationId],
         ),
+        db.query<AgentCoordinationSummaryRow>(
+          `
+            SELECT *
+            FROM agent_coordination_summaries
+            WHERE organization_id = $1
+            ORDER BY coordination_updated_at DESC, coordination_id ASC
+          `,
+          [context.organizationId],
+        ),
         db.query<EnforcementPolicyRow>(
           `
             SELECT *
@@ -1957,6 +2051,9 @@ export function createPostgresTeamRepository(
       const codingAgentSummaries = codingSummaryRows.map(mapCodingAgentSummary)
       const agentRuntimeSummaries = agentRuntimeSummaryRows.map(mapAgentRuntimeSummary)
       const agentMemorySummaries = agentMemorySummaryRows.map(mapAgentMemorySummary)
+      const agentCoordinationSummaries = agentCoordinationSummaryRows.map(
+        mapAgentCoordinationSummary,
+      )
       const codingTokenUsage = codingAgentSummaries
         .map((summary) => summary.costSummary)
         .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
@@ -1980,6 +2077,7 @@ export function createPostgresTeamRepository(
         codingAgentSummaries,
         agentRuntimeSummaries,
         agentMemorySummaries,
+        agentCoordinationSummaries,
         policyAwareDeliverySummaries: buildPolicyAwareDeliverySummaries({
           projectIds: projectRows.map((project) => project.id),
           testEvidenceSummaries,
@@ -2753,6 +2851,207 @@ export function createPostgresTeamRepository(
           accepted: true,
           syncedAt: new Date().toISOString(),
           message: 'agent runtime summary written to Postgres repository',
+        }
+      })
+    },
+
+    async uploadAgentCoordinationSummary(
+      summary: RemoteAgentCoordinationSummary,
+      context,
+    ) {
+      summary = parseRemoteAgentCoordinationSummary(summary)
+      const syncedNodeId = toTeamStoredNodeId(summary.runId, summary.nodeId)
+      const summaryDigest = createHash('sha256')
+        .update(JSON.stringify(summary), 'utf8')
+        .digest('hex')
+
+      return withTeamDbTransaction(db, async (tx) => {
+        const [existingScope] = await tx.query<{
+          coordination_id: string
+          organization_id: string
+          project_id: string
+          run_id: string
+        }>(
+          `
+            SELECT coordination_id, organization_id, project_id, run_id
+            FROM agent_coordination_summaries
+            WHERE coordination_id = $1
+            LIMIT 1
+            FOR UPDATE
+          `,
+          [summary.coordinationId],
+        )
+        if (
+          existingScope &&
+          (existingScope.organization_id !== context.organizationId ||
+            existingScope.project_id !== summary.projectId ||
+            existingScope.run_id !== summary.runId)
+        ) {
+          throw new RemoteChildSummaryConflictError(
+            summary.coordinationId,
+            summary.runId,
+            summary.projectId,
+          )
+        }
+        await assertCanonicalRunExists(tx, {
+          runId: summary.runId,
+          projectId: summary.projectId,
+          organizationId: context.organizationId,
+          userId: context.userId,
+        })
+        const [acceptedSummary] = await tx.query<{ coordination_id: string }>(
+          `
+          INSERT INTO agent_coordination_summaries (
+            coordination_id, organization_id, project_id, run_id, node_id,
+            state_version, projection_version, coordination_version, graph_version,
+            status, stop_reason, role_counts, task_status_counts, failure_category_counts,
+            task_count, edge_count, specialist_starts, accepted_handoff_count, retry_count,
+            step_count, tool_call_count, token_count, cost_usd,
+            single_agent_quality, coordination_quality, latency_ms,
+            human_intervention_count, authority_violation_count, isolation_violation_count,
+            termination_violation_count, replay_violation_count, redaction_violation_count,
+            coordination_updated_at, isolated, redacted, summary_digest
+          ) VALUES (
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, $9,
+            $10, $11, $12, $13, $14,
+            $15, $16, $17, $18, $19,
+            $20, $21, $22, $23,
+            $24, $25, $26,
+            $27, $28, $29,
+            $30, $31, $32,
+            $33, $34, $35, $36
+          )
+          ON CONFLICT (coordination_id) DO UPDATE SET
+            coordination_version = excluded.coordination_version,
+            status = excluded.status,
+            stop_reason = excluded.stop_reason,
+            task_status_counts = excluded.task_status_counts,
+            failure_category_counts = excluded.failure_category_counts,
+            specialist_starts = excluded.specialist_starts,
+            accepted_handoff_count = excluded.accepted_handoff_count,
+            retry_count = excluded.retry_count,
+            step_count = excluded.step_count,
+            tool_call_count = excluded.tool_call_count,
+            token_count = excluded.token_count,
+            cost_usd = excluded.cost_usd,
+            single_agent_quality = excluded.single_agent_quality,
+            coordination_quality = excluded.coordination_quality,
+            latency_ms = excluded.latency_ms,
+            human_intervention_count = excluded.human_intervention_count,
+            authority_violation_count = excluded.authority_violation_count,
+            isolation_violation_count = excluded.isolation_violation_count,
+            termination_violation_count = excluded.termination_violation_count,
+            replay_violation_count = excluded.replay_violation_count,
+            redaction_violation_count = excluded.redaction_violation_count,
+            coordination_updated_at = excluded.coordination_updated_at,
+            isolated = excluded.isolated,
+            redacted = excluded.redacted,
+            summary_digest = excluded.summary_digest,
+            updated_at = now()
+          WHERE agent_coordination_summaries.organization_id = excluded.organization_id
+            AND agent_coordination_summaries.project_id = excluded.project_id
+            AND agent_coordination_summaries.run_id = excluded.run_id
+            AND agent_coordination_summaries.node_id = excluded.node_id
+            AND agent_coordination_summaries.graph_version = excluded.graph_version
+            AND agent_coordination_summaries.task_count = excluded.task_count
+            AND agent_coordination_summaries.edge_count = excluded.edge_count
+            AND agent_coordination_summaries.role_counts = excluded.role_counts
+            AND (
+              agent_coordination_summaries.summary_digest = excluded.summary_digest
+              OR (
+                agent_coordination_summaries.status <> 'terminal'
+                AND agent_coordination_summaries.coordination_version < excluded.coordination_version
+                AND agent_coordination_summaries.specialist_starts <= excluded.specialist_starts
+                AND agent_coordination_summaries.accepted_handoff_count <= excluded.accepted_handoff_count
+                AND agent_coordination_summaries.retry_count <= excluded.retry_count
+                AND agent_coordination_summaries.step_count <= excluded.step_count
+                AND agent_coordination_summaries.tool_call_count <= excluded.tool_call_count
+                AND agent_coordination_summaries.token_count <= excluded.token_count
+                AND agent_coordination_summaries.cost_usd <= excluded.cost_usd
+                AND agent_coordination_summaries.latency_ms <= excluded.latency_ms
+                AND agent_coordination_summaries.human_intervention_count <= excluded.human_intervention_count
+                AND agent_coordination_summaries.authority_violation_count <= excluded.authority_violation_count
+                AND agent_coordination_summaries.isolation_violation_count <= excluded.isolation_violation_count
+                AND agent_coordination_summaries.termination_violation_count <= excluded.termination_violation_count
+                AND agent_coordination_summaries.replay_violation_count <= excluded.replay_violation_count
+                AND agent_coordination_summaries.redaction_violation_count <= excluded.redaction_violation_count
+                AND agent_coordination_summaries.coordination_updated_at <= excluded.coordination_updated_at
+              )
+            )
+          RETURNING coordination_id
+          `,
+          [
+            summary.coordinationId,
+            context.organizationId,
+            summary.projectId,
+            summary.runId,
+            syncedNodeId,
+            summary.stateVersion,
+            summary.projectionVersion,
+            summary.coordinationVersion,
+            summary.graphVersion,
+            summary.status,
+            summary.stopReason,
+            JSON.stringify(summary.roleCounts),
+            JSON.stringify(summary.taskStatusCounts),
+            JSON.stringify(summary.failureCategoryCounts),
+            summary.taskCount,
+            summary.edgeCount,
+            summary.specialistStarts,
+            summary.acceptedHandoffCount,
+            summary.retryCount,
+            summary.stepCount,
+            summary.toolCallCount,
+            summary.tokenCount,
+            summary.costUsd,
+            summary.singleAgentQuality,
+            summary.coordinationQuality,
+            summary.latencyMs,
+            summary.humanInterventionCount,
+            summary.authorityViolationCount,
+            summary.isolationViolationCount,
+            summary.terminationViolationCount,
+            summary.replayViolationCount,
+            summary.redactionViolationCount,
+            summary.updatedAt,
+            summary.isolated,
+            summary.redacted,
+            summaryDigest,
+          ],
+        )
+        if (!acceptedSummary) {
+          throw new RemoteChildSummaryConflictError(
+            summary.coordinationId,
+            summary.runId,
+            summary.projectId,
+          )
+        }
+        await tx.query(
+          `
+            INSERT INTO agent_coordination_projection_audits (
+              coordination_id, coordination_version, organization_id, project_id,
+              run_id, node_id, summary_digest, submitted_by_user_id, desktop_token_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (coordination_id, coordination_version) DO NOTHING
+          `,
+          [
+            summary.coordinationId,
+            summary.coordinationVersion,
+            context.organizationId,
+            summary.projectId,
+            summary.runId,
+            syncedNodeId,
+            summaryDigest,
+            context.userId,
+            context.tokenRecordId ?? null,
+          ],
+        )
+
+        return {
+          accepted: true,
+          syncedAt: new Date().toISOString(),
+          message: 'agent coordination summary written to Postgres repository',
         }
       })
     },

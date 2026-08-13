@@ -240,6 +240,11 @@ export default async function Page({ searchParams }: PageProps) {
         (item) => item.projectId === activeProject?.id && item.runId === activeRun.id,
       )
     : []
+  const currentAgentCoordinations = activeRun
+    ? overview.agentCoordinationSummaries.filter(
+        (item) => item.projectId === activeProject?.id && item.runId === activeRun.id,
+      )
+    : []
   const knowledgeReviewProviderId = overview.agentProviders[0]?.id ?? ''
   const policySummary = activeProject
     ? overview.policyAwareDeliverySummaries.find((item) => item.projectId === activeProject.id)
@@ -579,6 +584,30 @@ export default async function Page({ searchParams }: PageProps) {
               <CompactRow
                 title="暂无 Team Memory"
                 meta="Desktop 同步后仅显示脱敏元数据与质量计数"
+                value="read-only"
+              />
+            )}
+          </SupportPanel>
+
+          <SupportPanel
+            id="coordination"
+            icon={<Bot size={17} />}
+            title="Multi-Agent Coordination"
+            action="元数据只读"
+          >
+            {currentAgentCoordinations.length > 0 ? (
+              currentAgentCoordinations.slice(0, 4).map((coordination) => (
+                <CompactRow
+                  key={coordination.coordinationId}
+                  title={`Coordination · ${coordination.nodeId}`}
+                  meta={`${coordination.taskCount} tasks · ${coordination.acceptedHandoffCount} handoffs · ${coordination.latencyMs} ms · ${coordination.humanInterventionCount} interventions`}
+                  value={coordination.stopReason ?? coordination.status}
+                />
+              ))
+            ) : (
+              <CompactRow
+                title="暂无 Multi-Agent Coordination"
+                meta="Desktop 同步后仅显示脱敏生命周期、计数与比较指标"
                 value="read-only"
               />
             )}

@@ -846,7 +846,7 @@ async function prepareRetainedV12CredentialFixture() {
 async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
   const pool = new Pool({
     connectionString: databaseUrl,
-    application_name: 'ai-devflow-postgres-smoke-v18-assertion',
+    application_name: 'ai-devflow-postgres-smoke-v19-assertion',
     statement_timeout: 10_000,
   })
   const connection = await pool.connect()
@@ -856,8 +856,8 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
       "SELECT value FROM schema_meta WHERE key = 'schema_version'",
     )
     expect(
-      schemaVersion.rows[0]?.value === '18',
-      'Team database did not migrate the retained fixture to schema v18.',
+      schemaVersion.rows[0]?.value === '19',
+      'Team database did not migrate the retained fixture to schema v19.',
     )
     const retained = await connection.query(
       `SELECT to_jsonb(retained) AS snapshot
@@ -1041,6 +1041,32 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
     expect(
       memoryQualityMigration.rows[0]?.count === 1,
       'V18 Agent Memory quality-version migration history was missing.',
+    )
+    const coordinationProjection = await connection.query(
+      `SELECT
+         to_regclass('public.agent_coordination_summaries')::text AS summaries,
+         to_regclass('public.agent_coordination_projection_audits')::text AS audits,
+         (SELECT count(*)::integer FROM agent_coordination_summaries) AS summary_count,
+         (SELECT count(*)::integer FROM agent_coordination_projection_audits) AS audit_count`,
+    )
+    expect(
+      stableJson(coordinationProjection.rows[0]) === stableJson({
+        summaries: 'agent_coordination_summaries',
+        audits: 'agent_coordination_projection_audits',
+        summary_count: 0,
+        audit_count: 0,
+      }),
+      'V19 Agent Coordination projection tables were missing or fabricated rows.',
+    )
+    const coordinationMigration = await connection.query(
+      `SELECT count(*)::integer AS count
+       FROM team_schema_migrations
+       WHERE version = 19
+         AND name = '0019_agent_coordination_team_projection'`,
+    )
+    expect(
+      coordinationMigration.rows[0]?.count === 1,
+      'V19 Agent Coordination projection migration history was missing.',
     )
 
     await connection.query('BEGIN')
@@ -1277,6 +1303,151 @@ async function assertAgentMemoryProjectionDatabaseState({ memoryId, runId, nodeI
         qualityConstraintError?.constraint ===
           'agent_memory_summaries_quality_counts_are_exact',
       'V18 accepted an incoherent Agent Memory quality version.',
+    )
+    await connection.query('ROLLBACK')
+    transactionOpen = false
+  } finally {
+    if (transactionOpen) {
+      await connection.query('ROLLBACK').catch(() => undefined)
+    }
+    connection.release()
+    await pool.end()
+  }
+}
+
+async function assertAgentCoordinationProjectionDatabaseState({
+  coordinationId,
+  runId,
+  nodeId,
+  summary,
+}) {
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    application_name: 'ai-devflow-postgres-smoke-agent-coordination-projection',
+    statement_timeout: 10_000,
+  })
+  const connection = await pool.connect()
+  let transactionOpen = false
+  try {
+    const state = await connection.query(
+      `SELECT
+         summary.project_id,
+         summary.run_id,
+         summary.node_id,
+         summary.coordination_version,
+         summary.graph_version,
+         summary.status,
+         summary.stop_reason,
+         summary.role_counts,
+         summary.task_status_counts,
+         summary.failure_category_counts,
+         summary.task_count,
+         summary.edge_count,
+         summary.specialist_starts,
+         summary.accepted_handoff_count,
+         summary.retry_count,
+         summary.step_count,
+         summary.tool_call_count,
+         summary.token_count,
+         summary.cost_usd::text,
+         summary.single_agent_quality::text,
+         summary.coordination_quality::text,
+         summary.latency_ms,
+         summary.human_intervention_count,
+         summary.authority_violation_count,
+         summary.isolation_violation_count,
+         summary.termination_violation_count,
+         summary.replay_violation_count,
+         summary.redaction_violation_count,
+         summary.isolated,
+         summary.redacted,
+         count(audit.coordination_version)::integer AS audit_count,
+         array_agg(audit.coordination_version ORDER BY audit.coordination_version) AS audit_versions
+       FROM agent_coordination_summaries AS summary
+       LEFT JOIN agent_coordination_projection_audits AS audit
+         ON audit.coordination_id = summary.coordination_id
+       WHERE summary.coordination_id = $1
+       GROUP BY summary.coordination_id`,
+      [coordinationId],
+    )
+    expect(
+      state.rows.length === 1,
+      'Agent Coordination projection did not persist exactly once.',
+    )
+    const row = state.rows[0]
+    expect(
+      row.project_id === summary.projectId &&
+        row.run_id === runId &&
+        row.node_id === `${runId}:${nodeId}` &&
+        Number(row.coordination_version) === 2 &&
+        Number(row.graph_version) === 1 &&
+        row.status === 'terminal' &&
+        row.stop_reason === 'success' &&
+        stableJson(row.role_counts) === stableJson(summary.roleCounts) &&
+        stableJson(row.task_status_counts) === stableJson(summary.taskStatusCounts) &&
+        stableJson(row.failure_category_counts) ===
+          stableJson(summary.failureCategoryCounts) &&
+        Number(row.task_count) === 2 &&
+        Number(row.edge_count) === 1 &&
+        Number(row.specialist_starts) === 2 &&
+        Number(row.accepted_handoff_count) === 1 &&
+        Number(row.retry_count) === 0 &&
+        Number(row.step_count) === 4 &&
+        Number(row.tool_call_count) === 2 &&
+        Number(row.token_count) === 40 &&
+        Number(row.cost_usd) === 0.04 &&
+        Number(row.single_agent_quality) === 0.7 &&
+        Number(row.coordination_quality) === 0.9 &&
+        Number(row.latency_ms) === 1_000 &&
+        Number(row.human_intervention_count) === 0 &&
+        Number(row.authority_violation_count) === 0 &&
+        Number(row.isolation_violation_count) === 0 &&
+        Number(row.termination_violation_count) === 0 &&
+        Number(row.replay_violation_count) === 0 &&
+        Number(row.redaction_violation_count) === 0 &&
+        row.isolated === true &&
+        row.redacted === true &&
+        row.audit_count === 2 &&
+        stableJson(row.audit_versions.map(Number)) === stableJson([1, 2]),
+      `Agent Coordination projection state was not exact: ${stableJson(row)}`,
+    )
+
+    const forbiddenColumns = await connection.query(
+      `SELECT column_name
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name IN (
+           'agent_coordination_summaries',
+           'agent_coordination_projection_audits'
+         )
+         AND lower(column_name) ~ '(prompt|source|patch|stdout|stderr|credential|path|checkpoint_data|raw_output)'`,
+    )
+    expect(
+      forbiddenColumns.rows.length === 0,
+      `Agent Coordination Team projection exposed forbidden columns: ${stableJson(
+        forbiddenColumns.rows,
+      )}`,
+    )
+
+    await connection.query('BEGIN')
+    transactionOpen = true
+    let isolationConstraintError
+    try {
+      await connection.query(
+        `UPDATE agent_coordination_summaries
+         SET isolated = false
+         WHERE coordination_id = $1`,
+        [coordinationId],
+      )
+    } catch (error) {
+      isolationConstraintError = error
+    }
+    expect(
+      isolationConstraintError?.code === '23514' &&
+        String(isolationConstraintError?.constraint ?? '').includes(
+          'agent_coordination_summaries',
+        ),
+      'V19 accepted a non-isolated Agent Coordination Team projection.',
     )
     await connection.query('ROLLBACK')
     transactionOpen = false
@@ -1792,6 +1963,7 @@ const runId = `run-postgres-smoke-${suffix}`
 const pairedRunId = `run-postgres-paired-smoke-${suffix}`
 const agentRuntimeId = `agent-runtime-postgres-smoke-${suffix}`
 const agentMemoryId = `agent-memory-postgres-smoke-${suffix}`
+const agentCoordinationId = `agent-coordination-postgres-smoke-${suffix}`
 const gateRunId = `run-postgres-gate-smoke-${suffix}`
 const githubRunId = `run-postgres-github-smoke-${suffix}`
 const gateNodeId = 'n-design-gate'
@@ -2645,6 +2817,144 @@ try {
     runId: pairedRunId,
     nodeId: 'n-test',
     summary: agentRuntimeSummaryV2,
+  })
+  const zeroCoordinationFailureCounts = {
+    timeout: 0,
+    budget_exhausted: 0,
+    policy_denied: 0,
+    tool_error: 0,
+    coding_executor_error: 0,
+    invalid_result: 0,
+    dependency_failed: 0,
+  }
+  const agentCoordinationSummaryV1 = {
+    stateVersion: 1,
+    projectionVersion: 1,
+    coordinationId: agentCoordinationId,
+    projectId: 'p-payments',
+    runId: pairedRunId,
+    nodeId: 'n-test',
+    coordinationVersion: 1,
+    graphVersion: 1,
+    status: 'running',
+    stopReason: null,
+    roleCounts: [
+      { roleId: 'coordinator', count: 1 },
+      { roleId: 'implementer', count: 1 },
+    ],
+    taskStatusCounts: {
+      pending: 0,
+      ready: 1,
+      running: 1,
+      succeeded: 0,
+      failed: 0,
+      cancelled: 0,
+      blocked: 0,
+    },
+    failureCategoryCounts: zeroCoordinationFailureCounts,
+    taskCount: 2,
+    edgeCount: 1,
+    specialistStarts: 1,
+    acceptedHandoffCount: 0,
+    retryCount: 0,
+    stepCount: 2,
+    toolCallCount: 1,
+    tokenCount: 20,
+    costUsd: 0.02,
+    singleAgentQuality: null,
+    coordinationQuality: null,
+    latencyMs: 500,
+    humanInterventionCount: 0,
+    authorityViolationCount: 0,
+    isolationViolationCount: 0,
+    terminationViolationCount: 0,
+    replayViolationCount: 0,
+    redactionViolationCount: 0,
+    updatedAt: timestamp,
+    isolated: true,
+    redacted: true,
+  }
+  await postJsonWithBearer(
+    '/api/sync/agent-coordination-summary',
+    agentCoordinationSummaryV1,
+    desktopPairing.token,
+  )
+  await postJsonWithBearer(
+    '/api/sync/agent-coordination-summary',
+    agentCoordinationSummaryV1,
+    desktopPairing.token,
+  )
+  await expectPostRejected(
+    '/api/sync/agent-coordination-summary',
+    { ...agentCoordinationSummaryV1, taskDetails: ['must-not-cross-team-boundary'] },
+    { authorization: `Bearer ${desktopPairing.token}` },
+    400,
+    'Agent Coordination task-detail projection',
+  )
+  const agentCoordinationSummaryV2 = {
+    ...agentCoordinationSummaryV1,
+    coordinationVersion: 2,
+    status: 'terminal',
+    stopReason: 'success',
+    taskStatusCounts: {
+      pending: 0,
+      ready: 0,
+      running: 0,
+      succeeded: 2,
+      failed: 0,
+      cancelled: 0,
+      blocked: 0,
+    },
+    specialistStarts: 2,
+    acceptedHandoffCount: 1,
+    stepCount: 4,
+    toolCallCount: 2,
+    tokenCount: 40,
+    costUsd: 0.04,
+    singleAgentQuality: 0.7,
+    coordinationQuality: 0.9,
+    latencyMs: 1_000,
+    updatedAt: completedTimestamp,
+  }
+  await postJsonWithBearer(
+    '/api/sync/agent-coordination-summary',
+    agentCoordinationSummaryV2,
+    desktopPairing.token,
+  )
+  await expectPostRejected(
+    '/api/sync/agent-coordination-summary',
+    agentCoordinationSummaryV1,
+    { authorization: `Bearer ${desktopPairing.token}` },
+    409,
+    'stale Agent Coordination projection',
+  )
+  const coordinationOverview = await fetchOverview(
+    '/api/team/overview after Agent Coordination sync',
+    leadSessionHeaders,
+  )
+  expect(
+    coordinationOverview.agentCoordinationSummaries?.filter(
+      (summary) =>
+        summary.coordinationId === agentCoordinationId &&
+        summary.coordinationVersion === 2 &&
+        summary.status === 'terminal' &&
+        summary.stopReason === 'success' &&
+        summary.singleAgentQuality === 0.7 &&
+        summary.coordinationQuality === 0.9 &&
+        summary.isolated === true &&
+        summary.redacted === true,
+    ).length === 1,
+    'Postgres overview did not expose the exact terminal Agent Coordination summary.',
+  )
+  expectNoLocalOnlyFields(
+    coordinationOverview.agentCoordinationSummaries,
+    'Agent Coordination overview',
+  )
+  await assertAgentCoordinationProjectionDatabaseState({
+    coordinationId: agentCoordinationId,
+    runId: pairedRunId,
+    nodeId: 'n-test',
+    summary: agentCoordinationSummaryV2,
   })
   const agentMemorySummaryV1 = {
     stateVersion: 1,

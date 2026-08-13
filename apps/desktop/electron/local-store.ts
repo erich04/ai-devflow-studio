@@ -61,6 +61,7 @@ import {
   createAgentMemoryTombstone,
   createAgentMemoryCandidate,
   createAgentMemoryRendererSnapshot,
+  createCoordinationRendererSnapshot,
   createCoordinationSessionState,
   createGitHubDeliveryCompletion,
   createGitHubDeliveryIntent,
@@ -131,6 +132,7 @@ import {
   type CodingPermissionDecision,
   type CodingPermissionRequest,
   type CoordinationSessionRequest,
+  type CoordinationRendererSnapshot,
   type CoordinationResourceLease,
   type CoordinationSessionState,
   type CoordinationTaskFailure,
@@ -175,7 +177,7 @@ import {
   type WorkRequest,
   AGENT_MEMORY_ACTIVE_REVISIONS_MAX,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 28
+export const CURRENT_SCHEMA_VERSION = 29
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -857,6 +859,9 @@ export type LocalStore = {
   getCoordinationRecoverySnapshot(
     coordinationId: string,
   ): Promise<CoordinationRecoverySnapshot | null>
+  getAgentCoordinationTeamProjectionInput(
+    coordinationId: string,
+  ): Promise<CoordinationRendererSnapshot | null>
   listCoordinationRecoverySnapshots(): Promise<CoordinationRecoverySnapshot[]>
   authorizeCoordinationSessionRecovery(
     input: AuthorizeCoordinationSessionRecoveryInput,
@@ -3722,6 +3727,72 @@ const schemaMigrations: readonly SchemaMigration[] = [
       `)
     },
   },
+  {
+    version: 29,
+    migrate(db) {
+      db.run(`
+    drop index if exists idx_remote_sync_outbox_due;
+    alter table remote_sync_outbox rename to remote_sync_outbox_v28;
+
+    create table remote_sync_outbox (
+      id text primary key,
+      kind text not null,
+      local_project_id text not null,
+      organization_id text,
+      team_project_id text,
+      run_id text not null,
+      entity_id text not null,
+      idempotency_key text not null unique,
+      status text not null,
+      generation integer not null,
+      attempt_count integer not null,
+      next_attempt_at text,
+      lease_expires_at text,
+      last_attempt_at text,
+      last_error_code text,
+      last_error_message text,
+      recovery text not null,
+      completed_at text,
+      created_at text not null,
+      updated_at text not null,
+      check (kind in (
+        'run-summary', 'test-evidence-summary', 'agent-review-summary',
+        'coding-agent-summary', 'agent-runtime-summary', 'agent-memory-summary',
+        'agent-coordination-summary'
+      )),
+      check (status in ('pending', 'sending', 'retry-scheduled', 'completed', 'terminal')),
+      check (generation >= 1),
+      check (attempt_count >= 0),
+      check (
+        (status = 'sending' and lease_expires_at is not null) or
+        (status <> 'sending' and lease_expires_at is null)
+      ),
+      check (
+        (organization_id is null and team_project_id is null) or
+        (organization_id is not null and team_project_id is not null)
+      )
+    );
+
+    insert into remote_sync_outbox (
+      id, kind, local_project_id, organization_id, team_project_id,
+      run_id, entity_id, idempotency_key, status, generation, attempt_count,
+      next_attempt_at, lease_expires_at, last_attempt_at, last_error_code,
+      last_error_message, recovery, completed_at, created_at, updated_at
+    )
+    select
+      id, kind, local_project_id, organization_id, team_project_id,
+      run_id, entity_id, idempotency_key, status, generation, attempt_count,
+      next_attempt_at, lease_expires_at, last_attempt_at, last_error_code,
+      last_error_message, recovery, completed_at, created_at, updated_at
+    from remote_sync_outbox_v28;
+
+    drop table remote_sync_outbox_v28;
+
+    create index idx_remote_sync_outbox_due
+      on remote_sync_outbox(status, next_attempt_at, created_at);
+      `)
+    },
+  },
 ]
 
 function migrateSchema(db: Database) {
@@ -5225,6 +5296,7 @@ const REMOTE_SYNC_OPERATION_KINDS: readonly RemoteSyncOperation['kind'][] = [
   'coding-agent-summary',
   'agent-runtime-summary',
   'agent-memory-summary',
+  'agent-coordination-summary',
 ]
 
 function isNonEmptyIdentifier(value: unknown): value is string {
@@ -9041,6 +9113,27 @@ class SqlJsLocalStore implements LocalStore {
     return selectCoordinationRecoverySnapshot(this.db, coordinationId)
   }
 
+  async getAgentCoordinationTeamProjectionInput(
+    coordinationId: string,
+  ): Promise<CoordinationRendererSnapshot | null> {
+    const snapshot = await this.getCoordinationRecoverySnapshot(coordinationId)
+    if (snapshot === null) return null
+    const pairing = await this.getDesktopPairingCredential()
+    if (
+      pairing === null ||
+      pairing.organizationId !== snapshot.coordination.scope.organizationId ||
+      pairing.projectId !== snapshot.coordination.scope.projectId ||
+      pairing.userId !== snapshot.coordination.scope.userId ||
+      pairing.tokenId !== snapshot.coordination.scope.sessionId ||
+      pairing.localProjectId !== snapshot.coordination.scope.localProjectId
+    ) return null
+    try {
+      return createCoordinationRendererSnapshot(snapshot)
+    } catch {
+      return null
+    }
+  }
+
   async listCoordinationRecoverySnapshots(): Promise<CoordinationRecoverySnapshot[]> {
     return selectStringColumn(
       this.db,
@@ -9523,6 +9616,7 @@ class SqlJsLocalStore implements LocalStore {
           state.startedAt,
         ],
       )
+      this.enqueueCanonicalAgentCoordinationProjection(coordination, state)
       assertCoordinationMetadataBound(this.db, coordination.id)
       this.db.run('commit')
     } catch (error) {
@@ -9691,6 +9785,7 @@ class SqlJsLocalStore implements LocalStore {
           nextState.updatedAt,
         ],
       )
+      this.enqueueCanonicalAgentCoordinationProjection(stored.coordination, nextState)
       assertCoordinationMetadataBound(this.db, stored.coordination.id)
       this.db.run('commit')
     } catch (error) {
@@ -9926,6 +10021,7 @@ class SqlJsLocalStore implements LocalStore {
         entityId: transition.runtime.id,
         createdAt: transition.runtime.updatedAt,
       })
+      this.enqueueCanonicalAgentCoordinationProjection(stored.coordination, nextState)
       assertCoordinationMetadataBound(this.db, stored.coordination.id)
       this.db.run('commit')
       transactionOpen = false
@@ -10410,6 +10506,7 @@ class SqlJsLocalStore implements LocalStore {
         entityId: transition.runtime.id,
         createdAt: transition.runtime.updatedAt,
       })
+      this.enqueueCanonicalAgentCoordinationProjection(stored.coordination, finalState)
       assertCoordinationMetadataBound(this.db, stored.coordination.id)
       this.db.run('commit')
       transactionOpen = false
@@ -10748,6 +10845,7 @@ class SqlJsLocalStore implements LocalStore {
           createdAt: runtime.updatedAt,
         })
       }
+      this.enqueueCanonicalAgentCoordinationProjection(stored.coordination, nextState)
       assertCoordinationMetadataBound(this.db, stored.coordination.id)
       this.db.run('commit')
       transactionOpen = false
@@ -11026,6 +11124,7 @@ class SqlJsLocalStore implements LocalStore {
           createdAt: transition.runtime.updatedAt,
         })
       }
+      this.enqueueCanonicalAgentCoordinationProjection(stored.coordination, nextState)
       assertCoordinationMetadataBound(this.db, stored.coordination.id)
       this.db.run('commit')
       transactionOpen = false
@@ -11215,6 +11314,7 @@ class SqlJsLocalStore implements LocalStore {
           nextState.updatedAt,
         ],
       )
+      this.enqueueCanonicalAgentCoordinationProjection(stored.coordination, nextState)
       assertCoordinationMetadataBound(this.db, stored.coordination.id)
       this.db.run('commit')
     } catch (error) {
@@ -11376,6 +11476,7 @@ class SqlJsLocalStore implements LocalStore {
           nextState.updatedAt,
         ],
       )
+      this.enqueueCanonicalAgentCoordinationProjection(stored.coordination, nextState)
       assertCoordinationMetadataBound(this.db, stored.coordination.id)
       this.db.run('commit')
     } catch (error) {
@@ -11748,6 +11849,19 @@ class SqlJsLocalStore implements LocalStore {
       runId: source.runId,
       entityId: memoryId,
       createdAt,
+    })
+  }
+
+  private enqueueCanonicalAgentCoordinationProjection(
+    coordination: CoordinationSessionRequest,
+    state: CoordinationSessionState,
+  ): void {
+    this.enqueueCanonicalRemoteSyncOperation({
+      kind: 'agent-coordination-summary',
+      localProjectId: coordination.scope.localProjectId,
+      runId: coordination.authority.runId,
+      entityId: coordination.id,
+      createdAt: state.updatedAt,
     })
   }
 
