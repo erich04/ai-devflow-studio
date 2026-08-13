@@ -5,6 +5,7 @@ import {
   type AgentHandoff,
   type AgentRuntimeState,
   type AgentRuntimeTransition,
+  type CoordinationResourceLease,
   type CoordinationSessionState,
   type SpecialistAllocationRequest,
 } from '@ai-devflow/shared'
@@ -62,6 +63,15 @@ export type SpecialistRuntimeCoordinator = {
     runtime: AgentRuntimeState
     coordination: CoordinationSessionState
   }>
+  cancel(input: {
+    coordinationId: string
+    expectedSessionVersion: number
+    now?: string
+  }): Promise<{
+    coordination: CoordinationSessionState
+    runtimes: AgentRuntimeState[]
+    leases: CoordinationResourceLease[]
+  }>
 }
 
 export type CreateSpecialistRuntimeCoordinatorInput = {
@@ -69,8 +79,10 @@ export type CreateSpecialistRuntimeCoordinatorInput = {
     | 'commitSpecialistRuntimeStart'
     | 'commitSpecialistRuntimeCompletion'
     | 'commitSpecialistRuntimeRecovery'
+    | 'commitCoordinationSessionCancellation'
   >
   authorityBroker: SpecialistTaskAuthorityBroker
+  cancelRuntimeEffects?: (runtimeIds: string[]) => Promise<void> | void
   clock?: () => string
   createId?: (kind: 'allocation' | 'agent' | 'runtime' | 'context') => string
 }
@@ -281,6 +293,25 @@ export function createSpecialistRuntimeCoordinator(
         }
       } catch {
         throw new Error('specialist_runtime_recovery_failed')
+      }
+    },
+
+    async cancel(request) {
+      try {
+        const committed = await input.store.commitCoordinationSessionCancellation({
+          coordinationId: request.coordinationId,
+          expectedSessionVersion: request.expectedSessionVersion,
+          now: request.now ?? canonicalNow(clock),
+        })
+        if (!committed.committed) throw new Error(committed.reason)
+        await input.cancelRuntimeEffects?.(committed.runtimes.map((runtime) => runtime.id))
+        return {
+          coordination: committed.state,
+          runtimes: committed.runtimes,
+          leases: committed.leases,
+        }
+      } catch {
+        throw new Error('specialist_runtime_cancellation_failed')
       }
     },
   }

@@ -56,6 +56,8 @@ import {
   assertSafeGitHubBranch,
   canApproveGateNow,
   canRunAgentRuntimeOnNode,
+  cancelAgentRuntime,
+  cancelCoordinationSession,
   createAgentMemoryTombstone,
   createAgentMemoryCandidate,
   createAgentMemoryRendererSnapshot,
@@ -815,6 +817,9 @@ export type LocalStore = {
   commitSpecialistRuntimeRecovery(
     input: CommitSpecialistRuntimeRecoveryInput,
   ): Promise<CommitSpecialistRuntimeRecoveryResult>
+  commitCoordinationSessionCancellation(
+    input: CommitCoordinationSessionCancellationInput,
+  ): Promise<CommitCoordinationSessionCancellationResult>
   acquireCoordinationResourceLease(
     input: AcquireCoordinationResourceLeaseInput,
   ): Promise<AcquireCoordinationResourceLeaseResult>
@@ -1028,6 +1033,7 @@ export type CoordinationTrajectoryAudit = {
     | 'task_result'
     | 'task_retried'
     | 'handoff_accepted'
+    | 'session_cancelled'
   sessionVersion: number
   metadata: Readonly<Record<string, string | number | null>>
   createdAt: string
@@ -1176,6 +1182,25 @@ export type CommitSpecialistRuntimeRecoveryResult =
   | {
       committed: false
       reason: 'invalid_input' | 'authority_mismatch' | 'not_found' | 'stale_state'
+    }
+
+export type CommitCoordinationSessionCancellationInput = {
+  coordinationId: string
+  expectedSessionVersion: number
+  now: string
+}
+
+export type CommitCoordinationSessionCancellationResult =
+  | {
+      committed: true
+      replayed: boolean
+      state: CoordinationSessionState
+      runtimes: AgentRuntimeState[]
+      leases: CoordinationResourceLease[]
+    }
+  | {
+      committed: false
+      reason: 'invalid_input' | 'not_found' | 'stale_state'
     }
 
 export type CommitCoordinationTaskResultInput = {
@@ -3957,6 +3982,17 @@ function coordinationTaskStartedAuditMetadata(
   }
 }
 
+function coordinationSessionCancelledAuditMetadata(
+  previous: CoordinationSessionState,
+): Record<string, string | number> {
+  return {
+    stateVersion: 1,
+    runtimeCount: previous.tasks.filter((task) =>
+      task.status === 'running' && task.runtimeId !== null
+    ).length,
+  }
+}
+
 function coordinationTaskResultAuditMetadata(
   input: CommitCoordinationTaskResultInput,
   state: CoordinationSessionState,
@@ -4405,6 +4441,7 @@ function selectCoordinationTrajectoryAudits(
         'task_result',
         'task_retried',
         'handoff_accepted',
+        'session_cancelled',
       ].includes(eventKind) ||
       !Number.isInteger(audit.sessionVersion) ||
       audit.sessionVersion < 1 ||
@@ -4680,6 +4717,29 @@ function validateCoordinationTaskRetryCheckpoint(
   }
 }
 
+function validateCoordinationSessionCancellationCheckpoint(
+  previous: CoordinationSessionState,
+  current: CoordinationSessionState,
+  audit: CoordinationTrajectoryAudit,
+): boolean {
+  if (
+    audit.taskId !== null ||
+    !hasExactCoordinationKeys(audit.metadata, ['stateVersion', 'runtimeCount']) ||
+    audit.metadata.stateVersion !== 1 ||
+    !Number.isInteger(audit.metadata.runtimeCount) ||
+    Number(audit.metadata.runtimeCount) < 0
+  ) return false
+  try {
+    return sameJson(current, cancelCoordinationSession({
+      state: previous,
+      expectedSessionVersion: previous.version,
+      now: current.updatedAt,
+    })) && sameJson(audit.metadata, coordinationSessionCancelledAuditMetadata(previous))
+  } catch {
+    return false
+  }
+}
+
 function selectCoordinationRecoverySnapshot(
   db: Database,
   coordinationId: string,
@@ -4747,6 +4807,12 @@ function selectCoordinationRecoverySnapshot(
       if (audit.eventKind === 'task_retried') {
         if (!validateCoordinationTaskRetryCheckpoint(previous, checkpoint.state, audit)) {
           throw new Error('invalid_coordination_task_retry_trajectory')
+        }
+        continue
+      }
+      if (audit.eventKind === 'session_cancelled') {
+        if (!validateCoordinationSessionCancellationCheckpoint(previous, checkpoint.state, audit)) {
+          throw new Error('invalid_coordination_session_cancellation_trajectory')
         }
         continue
       }
@@ -8699,6 +8765,30 @@ class SqlJsLocalStore implements LocalStore {
     if (!sameNativeToolAuditIdentity(started, audit) || audit.createdAt < started.createdAt) {
       throw new Error('invalid_native_tool_audit')
     }
+    const existingTerminalValue = selectJson<unknown>(
+      this.db,
+      `select json from agent_runtime_tool_audits
+       where grant_id = ? and status <> 'started' limit 1`,
+      [audit.grantId],
+    )[0]
+    if (existingTerminalValue !== undefined) {
+      const existingTerminal = parseNativeToolAuditRecord(existingTerminalValue)
+      if (
+        sameJson(existingTerminal, audit) ||
+        (
+          existingTerminal.status === 'cancelled' &&
+          existingTerminal.code === 'cancelled' &&
+          audit.status === 'cancelled' &&
+          audit.code === 'cancelled' &&
+          sameNativeToolAuditIdentity(existingTerminal, audit) &&
+          existingTerminal.resultDigest === null &&
+          existingTerminal.resultBytes === null &&
+          existingTerminal.redactionState === audit.redactionState &&
+          existingTerminal.createdAt <= audit.createdAt
+        )
+      ) return
+      throw new Error('invalid_native_tool_audit')
+    }
     writeNativeToolAudit(this.db, audit)
     await this.persist()
   }
@@ -10510,6 +10600,283 @@ class SqlJsLocalStore implements LocalStore {
         (error.message === 'coordination_metadata_too_large' ||
           /unique constraint failed: agent_runtimes\.id/iu.test(error.message))
       ) return { committed: false, reason: 'invalid_input' }
+      throw error
+    }
+  }
+
+  async commitCoordinationSessionCancellation(
+    input: CommitCoordinationSessionCancellationInput,
+  ): Promise<CommitCoordinationSessionCancellationResult> {
+    if (
+      !isNonEmptyIdentifier(input.coordinationId) ||
+      !Number.isInteger(input.expectedSessionVersion) ||
+      input.expectedSessionVersion < 1 ||
+      !isCanonicalIsoTimestamp(input.now)
+    ) return { committed: false, reason: 'invalid_input' }
+
+    const stored = selectCoordinationRecoverySnapshot(this.db, input.coordinationId)
+    if (stored === null) return { committed: false, reason: 'not_found' }
+    const cancelledRuntimeIds = [...new Set(stored.state.tasks.flatMap((task) =>
+      task.status === 'cancelled' && task.runtimeId !== null ? [task.runtimeId] : []
+    ))].sort((left, right) => left.localeCompare(right))
+    if (
+      stored.state.status === 'terminal' &&
+      stored.state.stopReason === 'cancelled' &&
+      stored.state.version === input.expectedSessionVersion + 1 &&
+      stored.state.updatedAt === input.now
+    ) {
+      const runtimes = cancelledRuntimeIds.map((runtimeId) => selectAgentRuntime(this.db, runtimeId))
+      if (
+        runtimes.some((runtime) => runtime === null || runtime.status !== 'terminal') ||
+        stored.leases.some((lease) => lease.status === 'active')
+      ) return { committed: false, reason: 'stale_state' }
+      return {
+        committed: true,
+        replayed: true,
+        state: stored.state,
+        runtimes: runtimes as AgentRuntimeState[],
+        leases: stored.leases,
+      }
+    }
+    if (stored.state.version !== input.expectedSessionVersion) {
+      return { committed: false, reason: 'stale_state' }
+    }
+
+    let nextState: CoordinationSessionState
+    try {
+      nextState = parseCoordinationSessionState(cancelCoordinationSession({
+        state: stored.state,
+        expectedSessionVersion: input.expectedSessionVersion,
+        now: input.now,
+      }))
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    const runtimeIds = [...new Set(stored.state.tasks.flatMap((task) =>
+      task.status === 'running' && task.runtimeId !== null ? [task.runtimeId] : []
+    ))].sort((left, right) => left.localeCompare(right))
+    const currentRuntimes = runtimeIds.map((runtimeId) => selectAgentRuntime(this.db, runtimeId))
+    if (currentRuntimes.some((runtime) => runtime === null)) {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    const runtimeTransitions: AgentRuntimeTransition[] = []
+    const nextRuntimes: AgentRuntimeState[] = []
+    try {
+      for (const runtime of currentRuntimes as AgentRuntimeState[]) {
+        if (runtime.status === 'terminal') {
+          nextRuntimes.push(runtime)
+          continue
+        }
+        const transition = cancelAgentRuntime({
+          runtime,
+          expectedCheckpointVersion: runtime.checkpointVersion,
+          now: input.now,
+        })
+        runtimeTransitions.push(transition)
+        nextRuntimes.push(transition.runtime)
+      }
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    const nextLeases: CoordinationResourceLease[] = []
+    try {
+      for (const lease of stored.leases) {
+        nextLeases.push(lease.status === 'active'
+          ? settleCoordinationResourceLease({
+              lease,
+              expectedVersion: lease.version,
+              outcome: Date.parse(input.now) >= Date.parse(lease.expiresAt)
+                ? 'expired'
+                : 'cancelled',
+              now: input.now,
+            }, { coordination: stored.coordination, graph: stored.graph })
+          : lease)
+      }
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    const cancelledToolAudits: NativeToolAuditRecord[] = []
+    try {
+      for (const runtimeId of runtimeIds) {
+        const startedAudits = selectJson<unknown>(
+          this.db,
+          `select started.json
+             from agent_runtime_tool_audits started
+            where started.runtime_id = ? and started.status = 'started'
+              and not exists (
+                select 1 from agent_runtime_tool_audits terminal
+                 where terminal.grant_id = started.grant_id and terminal.status <> 'started'
+              )
+            order by started.created_at asc, started.id asc`,
+          [runtimeId],
+        ).map(parseNativeToolAuditRecord)
+        for (const started of startedAudits) {
+          if (started.createdAt > input.now) throw new Error('invalid_tool_cancellation_time')
+          cancelledToolAudits.push({
+            ...started,
+            id: `specialist-tool-cancel-${createHash('sha256').update(
+              `${stored.coordination.id}:${started.grantId}`,
+            ).digest('hex').slice(0, 32)}`,
+            status: 'cancelled',
+            code: 'cancelled',
+            createdAt: input.now,
+          })
+        }
+      }
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    const changedTasks = nextState.tasks.flatMap((nextTask) => {
+      const storedTask = stored.state.tasks.find((task) => task.id === nextTask.id)
+      return storedTask === undefined || sameJson(storedTask, nextTask)
+        ? []
+        : [{ storedTask, nextTask }]
+    })
+    const auditMetadata = coordinationSessionCancelledAuditMetadata(stored.state)
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      for (const transition of runtimeTransitions) writeAgentRuntimeTransition(this.db, transition)
+      this.db.run(
+        `update agent_coordination_sessions
+         set version = ?, status = ?, stop_reason = ?, state_json = ?, updated_at = ?
+         where id = ? and version = ? and graph_id = ? and graph_version = ? and state_json = ?`,
+        [
+          nextState.version,
+          nextState.status,
+          nextState.stopReason,
+          JSON.stringify(nextState),
+          nextState.updatedAt,
+          stored.coordination.id,
+          stored.state.version,
+          stored.graph.id,
+          stored.graph.version,
+          JSON.stringify(stored.state),
+        ],
+      )
+      if (this.db.getRowsModified() !== 1) throw new Error('stale_coordination_session')
+      for (const { storedTask, nextTask } of changedTasks) {
+        this.db.run(
+          `update agent_coordination_tasks
+           set version = ?, status = ?, agent_id = ?, runtime_id = ?, runtime_version = ?,
+               state_json = ?, updated_at = ?
+           where coordination_id = ? and task_id = ? and graph_id = ?
+             and version = ? and state_json = ?`,
+          [
+            nextTask.version,
+            nextTask.status,
+            nextTask.agentId,
+            nextTask.runtimeId,
+            nextTask.runtimeVersion,
+            JSON.stringify(nextTask),
+            nextState.updatedAt,
+            stored.coordination.id,
+            nextTask.id,
+            stored.graph.id,
+            storedTask.version,
+            JSON.stringify(storedTask),
+          ],
+        )
+        if (this.db.getRowsModified() !== 1) throw new Error('stale_coordination_task')
+      }
+      for (let index = 0; index < stored.leases.length; index += 1) {
+        const previousLease = stored.leases[index]!
+        const nextLease = nextLeases[index]!
+        if (sameJson(previousLease, nextLease)) continue
+        this.db.run(
+          `update agent_coordination_leases
+           set status = ?, version = ?, lease_json = ?, released_at = ?
+           where id = ? and coordination_id = ? and version = ?
+             and status = 'active' and lease_json = ? and released_at is null`,
+          [
+            nextLease.status,
+            nextLease.version,
+            JSON.stringify(nextLease),
+            nextLease.releasedAt,
+            previousLease.id,
+            previousLease.coordinationId,
+            previousLease.version,
+            JSON.stringify(previousLease),
+          ],
+        )
+        if (this.db.getRowsModified() !== 1) throw new Error('stale_coordination_lease')
+      }
+      for (const runtimeId of runtimeIds) {
+        this.db.run(
+          `update agent_runtime_capability_grants
+           set status = 'cancelled', settled_at = ?
+           where runtime_id = ? and status = 'active' and settled_at is null`,
+          [input.now, runtimeId],
+        )
+      }
+      for (const audit of cancelledToolAudits) writeNativeToolAudit(this.db, audit)
+      this.db.run(
+        `insert into agent_coordination_audits (
+           id, coordination_id, task_id, event_kind, session_version,
+           metadata_json, created_at
+         ) values (?, ?, null, 'session_cancelled', ?, ?, ?)`,
+        [
+          coordinationTransitionAuditId(stored.coordination.id, nextState.version),
+          stored.coordination.id,
+          nextState.version,
+          JSON.stringify(auditMetadata),
+          nextState.updatedAt,
+        ],
+      )
+      this.db.run(
+        `insert into agent_coordination_checkpoints (
+           coordination_id, checkpoint_version, session_version, graph_version,
+           checkpoint_json, created_at
+         ) values (?, ?, ?, ?, ?, ?)`,
+        [
+          stored.coordination.id,
+          nextState.version,
+          nextState.version,
+          nextState.graphVersion,
+          JSON.stringify(nextState),
+          nextState.updatedAt,
+        ],
+      )
+      for (const transition of runtimeTransitions) {
+        this.enqueueCanonicalRemoteSyncOperation({
+          kind: 'agent-runtime-summary',
+          localProjectId: transition.runtime.scope.localProjectId,
+          runId: transition.runtime.authority.runId,
+          entityId: transition.runtime.id,
+          createdAt: transition.runtime.updatedAt,
+        })
+      }
+      assertCoordinationMetadataBound(this.db, stored.coordination.id)
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return {
+        committed: true,
+        replayed: false,
+        state: nextState,
+        runtimes: nextRuntimes,
+        leases: nextLeases,
+      }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      if (
+        error instanceof Error &&
+        (error.message === 'stale_coordination_session' ||
+          error.message === 'stale_coordination_task' ||
+          error.message === 'stale_coordination_lease')
+      ) return { committed: false, reason: 'stale_state' }
+      if (error instanceof Error && error.message === 'coordination_metadata_too_large') {
+        return { committed: false, reason: 'invalid_input' }
+      }
       throw error
     }
   }
@@ -15310,6 +15677,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'commitSpecialistRuntimeStart',
   'commitSpecialistRuntimeCompletion',
   'commitSpecialistRuntimeRecovery',
+  'commitCoordinationSessionCancellation',
   'acquireCoordinationResourceLease',
   'settleCoordinationResourceLease',
   'commitCoordinationTaskStart',

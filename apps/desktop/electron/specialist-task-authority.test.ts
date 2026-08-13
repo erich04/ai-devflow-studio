@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -835,6 +835,275 @@ describe('Specialist Runtime coordinator', () => {
       },
     })
     fixture.store.close()
+  })
+
+  it('durably cancels every child boundary before invoking the live Runtime cancellation hook', async () => {
+    const fixture = await specialistToolFixture({ withLease: true })
+    const cancellationHook = vi.fn(async (runtimeIds: string[]) => {
+      await expect(fixture.store.getCoordinationRecoverySnapshot(fixture.coordination.id))
+        .resolves.toMatchObject({
+          state: { status: 'terminal', stopReason: 'cancelled' },
+          leases: [{ status: 'cancelled', version: 2 }],
+        })
+      await expect(fixture.store.getAgentRuntime(fixture.waiting.id)).resolves.toMatchObject({
+        status: 'terminal',
+        stopReason: 'cancelled',
+      })
+      expect(runtimeIds).toEqual([fixture.waiting.id])
+    })
+    const coordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: fixture.store }),
+      cancelRuntimeEffects: cancellationHook,
+    })
+    const cancellationInput = {
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: fixture.started.coordination.version,
+      now: '2026-08-13T15:00:04.500Z',
+    }
+
+    const cancelled = await coordinator.cancel(cancellationInput)
+    expect(cancelled).toMatchObject({
+      coordination: {
+        status: 'terminal',
+        stopReason: 'cancelled',
+        tasks: [{ status: 'cancelled' }],
+      },
+      runtimes: [{ id: fixture.waiting.id, status: 'terminal', stopReason: 'cancelled' }],
+      leases: [{ id: fixture.lease!.id, status: 'cancelled', version: 2 }],
+    })
+    await expect(fixture.store.listAgentRuntimeCapabilityGrants(fixture.waiting.id))
+      .resolves.toEqual([{ ...fixture.grant, status: 'cancelled', settledAt: cancellationInput.now }])
+    await expect(fixture.store.beginAgentRuntimeToolExecution({
+      expectedGrant: fixture.grant,
+      audit: fixture.audit,
+    })).resolves.toEqual({ consumed: false, reason: 'grant_stale' })
+    await expect(coordinator.cancel(cancellationInput)).resolves.toEqual(cancelled)
+    expect(cancellationHook).toHaveBeenCalledTimes(2)
+    fixture.store.close()
+
+    const reopenedStore = await createLocalStore({ dbPath: fixture.dbPath })
+    const reopenedCancellationHook = vi.fn(async (runtimeIds: string[]) => {
+      await expect(reopenedStore.getCoordinationRecoverySnapshot(fixture.coordination.id))
+        .resolves.toMatchObject({
+          state: { status: 'terminal', stopReason: 'cancelled' },
+          leases: [{ status: 'cancelled', version: 2 }],
+        })
+      expect(runtimeIds).toEqual([fixture.waiting.id])
+    })
+    const reopenedCoordinator = createSpecialistRuntimeCoordinator({
+      store: reopenedStore,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: reopenedStore }),
+      cancelRuntimeEffects: reopenedCancellationHook,
+    })
+    await expect(reopenedCoordinator.cancel(cancellationInput)).resolves.toEqual(cancelled)
+    expect(cancellationHook).toHaveBeenCalledTimes(2)
+    expect(reopenedCancellationHook).toHaveBeenCalledTimes(1)
+    reopenedStore.close()
+  })
+
+  it('terminalizes one in-flight Tool audit and rejects a late Specialist result after cancellation', async () => {
+    const fixture = await specialistLeaseCompletionFixture()
+    const coordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: fixture.store }),
+    })
+    const cancellationInput = {
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: fixture.started.coordination.version,
+      now: '2026-08-13T15:00:04.500Z',
+    }
+
+    await expect(coordinator.cancel(cancellationInput)).resolves.toMatchObject({
+      coordination: { status: 'terminal', stopReason: 'cancelled' },
+      runtimes: [{ status: 'terminal', stopReason: 'cancelled' }],
+      leases: [{ status: 'cancelled' }],
+    })
+    const cancelledAudit = {
+      ...fixture.audit,
+      id: expect.stringMatching(/^specialist-tool-cancel-/u),
+      status: 'cancelled' as const,
+      code: 'cancelled' as const,
+      createdAt: cancellationInput.now,
+    }
+    await expect(fixture.store.listAgentRuntimeToolAudits(fixture.waiting.id)).resolves.toEqual([
+      fixture.audit,
+      cancelledAudit,
+    ])
+    await expect(fixture.store.appendAgentRuntimeToolAudit({
+      ...fixture.audit,
+      id: 'specialist-tool-cancel-late-process-callback',
+      status: 'cancelled',
+      code: 'cancelled',
+      createdAt: '2026-08-13T15:00:04.600Z',
+    })).resolves.toBeUndefined()
+    await expect(fixture.store.listAgentRuntimeToolAudits(fixture.waiting.id)).resolves.toHaveLength(2)
+    await expect(coordinator.complete(fixture.completionInput))
+      .rejects.toThrowError('specialist_runtime_completion_failed')
+    fixture.store.close()
+  })
+
+  it('cancels two parallel Specialist Runtimes and both concurrent read leases atomically', async () => {
+    const fixture = await authorityFixture(['repository_read'], false, true)
+    const ids = [
+      {
+        allocation: 'specialist-allocation-cancel-a',
+        agent: 'specialist-agent-cancel-a',
+        runtime: 'specialist-runtime-cancel-a',
+        context: 'specialist-context-cancel-a',
+      },
+      {
+        allocation: 'specialist-allocation-cancel-b',
+        agent: 'specialist-agent-cancel-b',
+        runtime: 'specialist-runtime-cancel-b',
+        context: 'specialist-context-cancel-b',
+      },
+    ]
+    let index = 0
+    const cancelledRuntimeIds: string[][] = []
+    const coordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: fixture.store }),
+      clock: () => fixture.now,
+      createId: (kind) => ids[index]![kind],
+      cancelRuntimeEffects: (runtimeIds) => {
+        cancelledRuntimeIds.push(runtimeIds)
+      },
+    })
+    const first = await coordinator.start({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: 1,
+      taskId: 'specialist-task-1',
+      expectedTaskVersion: 1,
+    })
+    index = 1
+    const second = await coordinator.start({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: first.coordination.version,
+      taskId: 'specialist-task-2',
+      expectedTaskVersion: 1,
+    })
+    const leases: CoordinationResourceLease[] = ids.map((identity, leaseIndex) => ({
+      stateVersion: 1,
+      id: `specialist-resource-lease-cancel-${leaseIndex + 1}`,
+      coordinationId: fixture.coordination.id,
+      taskId: `specialist-task-${leaseIndex + 1}`,
+      taskVersion: 2,
+      runtimeId: identity.runtime,
+      runtimeVersion: 1,
+      scope: fixture.coordination.scope,
+      capabilityId: 'repository_read',
+      capabilityVersion: 1,
+      resourceId: fixture.project.id,
+      resourceDigest: 'd'.repeat(64),
+      mode: 'read',
+      status: 'active',
+      version: 1,
+      acquiredAt: '2026-08-13T15:00:00.000Z',
+      expiresAt: '2026-08-13T15:01:00.000Z',
+      releasedAt: null,
+    }))
+    for (const lease of leases) {
+      await expect(fixture.store.acquireCoordinationResourceLease({
+        expectedState: second.coordination,
+        lease,
+      })).resolves.toMatchObject({ committed: true, replayed: false })
+    }
+
+    await expect(coordinator.cancel({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: second.coordination.version,
+      now: '2026-08-13T15:00:10.000Z',
+    })).resolves.toMatchObject({
+      coordination: {
+        status: 'terminal',
+        stopReason: 'cancelled',
+        counters: { activeSpecialists: 0 },
+        tasks: [{ status: 'cancelled' }, { status: 'cancelled' }],
+      },
+      runtimes: [
+        { id: ids[0]!.runtime, status: 'terminal', stopReason: 'cancelled' },
+        { id: ids[1]!.runtime, status: 'terminal', stopReason: 'cancelled' },
+      ],
+      leases: [
+        { id: leases[0]!.id, status: 'cancelled' },
+        { id: leases[1]!.id, status: 'cancelled' },
+      ],
+    })
+    expect(cancelledRuntimeIds).toEqual([[ids[0]!.runtime, ids[1]!.runtime]])
+    fixture.store.close()
+  })
+
+  it('keeps the durable cancellation fence when the live hook fails and converges on replay', async () => {
+    const fixture = await specialistToolFixture({ withLease: true })
+    const failingCoordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: fixture.store }),
+      cancelRuntimeEffects: () => {
+        throw new Error('injected_live_cancel_failure')
+      },
+    })
+    const cancellationInput = {
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: fixture.started.coordination.version,
+      now: '2026-08-13T15:00:04.500Z',
+    }
+
+    await expect(failingCoordinator.cancel(cancellationInput))
+      .rejects.toThrowError('specialist_runtime_cancellation_failed')
+    await expect(fixture.store.getCoordinationRecoverySnapshot(fixture.coordination.id))
+      .resolves.toMatchObject({
+        state: { status: 'terminal', stopReason: 'cancelled' },
+        leases: [{ status: 'cancelled' }],
+      })
+    const recoveredHook = vi.fn()
+    const recoveredCoordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: fixture.store }),
+      cancelRuntimeEffects: recoveredHook,
+    })
+    await expect(recoveredCoordinator.cancel(cancellationInput)).resolves.toMatchObject({
+      coordination: { status: 'terminal', stopReason: 'cancelled' },
+    })
+    expect(recoveredHook).toHaveBeenCalledWith([fixture.waiting.id])
+    fixture.store.close()
+  })
+
+  it('rolls every cancellation boundary back when durable persistence fails', async () => {
+    const fixture = await specialistToolFixture({ withLease: true })
+    const backupPath = `${fixture.dbPath}.backup`
+    const cancellationHook = vi.fn()
+    const coordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: fixture.store }),
+      cancelRuntimeEffects: cancellationHook,
+    })
+    await rename(fixture.dbPath, backupPath)
+    await mkdir(fixture.dbPath)
+
+    await expect(coordinator.cancel({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: fixture.started.coordination.version,
+      now: '2026-08-13T15:00:04.500Z',
+    })).rejects.toThrowError('specialist_runtime_cancellation_failed')
+    expect(cancellationHook).not.toHaveBeenCalled()
+    await expect(fixture.store.getCoordinationRecoverySnapshot(fixture.coordination.id))
+      .resolves.toMatchObject({
+        state: fixture.started.coordination,
+        leases: [fixture.lease],
+      })
+    await expect(fixture.store.getAgentRuntime(fixture.waiting.id)).resolves.toEqual(fixture.waiting)
+    await expect(fixture.store.listAgentRuntimeCapabilityGrants(fixture.waiting.id))
+      .resolves.toEqual([fixture.grant])
+
+    await rm(fixture.dbPath, { recursive: true })
+    await rename(backupPath, fixture.dbPath)
+    fixture.store.close()
+    const reopened = await createLocalStore({ dbPath: fixture.dbPath })
+    await expect(reopened.getCoordinationRecoverySnapshot(fixture.coordination.id))
+      .resolves.toMatchObject({ state: fixture.started.coordination, leases: [fixture.lease] })
+    await expect(reopened.getAgentRuntime(fixture.waiting.id)).resolves.toEqual(fixture.waiting)
+    reopened.close()
   })
 
   it('atomically binds one attenuated child Runtime to the exact ready task', async () => {
