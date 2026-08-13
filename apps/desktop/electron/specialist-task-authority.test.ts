@@ -3,10 +3,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  acceptAgentActionResult,
   assembleAgentRuntimeContext,
   createAgentRuntime,
   createWarnOnlyDefaultPolicy,
   createWorkflowRunFromRequest,
+  requestAgentAction,
+  resumeAgentRuntime,
   resolveEffectivePolicy,
   type AgentTaskGraph,
   type CoordinationSessionRequest,
@@ -23,10 +26,14 @@ afterEach(async () => {
   tempDirs.length = 0
 })
 
-async function authorityFixture(capabilityIds = ['repository_read']) {
+async function authorityFixture(
+  capabilityIds = ['repository_read'],
+  withDependentTask = false,
+) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'devflow-specialist-authority-'))
   tempDirs.push(dir)
-  const store = await createLocalStore({ dbPath: path.join(dir, 'devflow.sqlite') })
+  const dbPath = path.join(dir, 'devflow.sqlite')
+  const store = await createLocalStore({ dbPath })
   const now = '2026-08-13T15:00:00.000Z'
   const deadline = '2026-08-13T15:10:00.000Z'
   const project = {
@@ -174,18 +181,35 @@ async function authorityFixture(capabilityIds = ['repository_read']) {
     coordinationId: coordination.id,
     version: 1,
     entryTaskIds: ['specialist-task-1'],
-    nodes: [{
-      id: 'specialist-task-1',
-      roleId: 'contract-analyst',
-      contextDigest: 'c'.repeat(64),
-      capabilityIds,
-      resourceRequirements: [{
-        resourceId: 'specialist-repository-1',
-        resourceDigest: 'd'.repeat(64),
-        mode: 'read',
-      }],
-    }],
-    edges: [],
+    nodes: [
+      {
+        id: 'specialist-task-1',
+        roleId: 'contract-analyst',
+        contextDigest: 'c'.repeat(64),
+        capabilityIds,
+        resourceRequirements: [{
+          resourceId: 'specialist-repository-1',
+          resourceDigest: 'd'.repeat(64),
+          mode: 'read',
+        }],
+      },
+      ...(withDependentTask ? [{
+        id: 'specialist-task-2',
+        roleId: 'test-analyst',
+        contextDigest: 'e'.repeat(64),
+        capabilityIds: ['repository_read'],
+        resourceRequirements: [{
+          resourceId: 'specialist-repository-1',
+          resourceDigest: 'd'.repeat(64),
+          mode: 'read' as const,
+        }],
+      }] : []),
+    ],
+    edges: withDependentTask ? [{
+      id: 'specialist-edge-1-2',
+      sourceTaskId: 'specialist-task-1',
+      targetTaskId: 'specialist-task-2',
+    }] : [],
   }
   await expect(store.createCoordinationSession({
     coordination,
@@ -193,7 +217,17 @@ async function authorityFixture(capabilityIds = ['repository_read']) {
     startedAt: now,
   })).resolves.toMatchObject({ committed: true, replayed: false })
 
-  return { store, coordination, graph, run, pairing, policy, supervisor: supervisor.runtime, now }
+  return {
+    store,
+    dbPath,
+    coordination,
+    graph,
+    run,
+    pairing,
+    policy,
+    supervisor: supervisor.runtime,
+    now,
+  }
 }
 
 describe('Specialist task authority broker', () => {
@@ -474,5 +508,177 @@ describe('Specialist Runtime coordinator', () => {
       },
     })
     fixture.store.close()
+  })
+
+  it('atomically persists one terminal result and handoff before joining its dependency', async () => {
+    const fixture = await authorityFixture(['repository_read'], true)
+    const ids = {
+      allocation: 'specialist-allocation-completion-1',
+      agent: 'specialist-agent-completion-1',
+      runtime: 'specialist-runtime-completion-1',
+      context: 'specialist-runtime-context-completion-1',
+    }
+    const coordinator = createSpecialistRuntimeCoordinator({
+      store: fixture.store,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: fixture.store }),
+      clock: () => fixture.now,
+      createId: (kind) => ids[kind],
+    })
+    const started = await coordinator.start({
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: 1,
+      taskId: 'specialist-task-1',
+      expectedTaskVersion: 1,
+    })
+    const resumed = resumeAgentRuntime({
+      runtime: started.runtime,
+      expectedCheckpointVersion: started.runtime.checkpointVersion,
+      authority: started.runtime.authority,
+      contextDigest: started.runtime.contextDigest,
+      capabilitySetDigest: started.runtime.capabilitySetDigest,
+      now: '2026-08-13T15:00:01.000Z',
+    })
+    await fixture.store.commitAgentRuntimeTransition({
+      expectedRuntime: started.runtime,
+      transition: resumed,
+    })
+    const waiting = requestAgentAction({
+      runtime: resumed.runtime,
+      expectedCheckpointVersion: resumed.runtime.checkpointVersion,
+      now: '2026-08-13T15:00:02.000Z',
+      action: {
+        id: 'specialist-action-completion-1',
+        kind: 'tool',
+        capabilityId: 'repository_read',
+        capabilityVersion: 1,
+        requestDigest: '4'.repeat(64),
+        requiresPermission: false,
+      },
+    })
+    await fixture.store.commitAgentRuntimeTransition({
+      expectedRuntime: resumed.runtime,
+      transition: waiting,
+    })
+    const resultDigest = '5'.repeat(64)
+    const terminal = acceptAgentActionResult({
+      runtime: waiting.runtime,
+      expectedCheckpointVersion: waiting.runtime.checkpointVersion,
+      actionId: waiting.runtime.activeAction!.id,
+      requestDigest: waiting.runtime.activeAction!.requestDigest,
+      result: {
+        outcome: 'success',
+        resultDigest,
+        resultBytes: 128,
+        tokens: 200,
+        costUsd: 0.1,
+        evaluation: 'success',
+        evaluationSummary: 'The exact contract was validated with bounded evidence.',
+      },
+      now: '2026-08-13T15:00:03.000Z',
+    })
+
+    const completionInput: Parameters<typeof coordinator.complete>[0] = {
+      coordinationId: fixture.coordination.id,
+      expectedSessionVersion: started.coordination.version,
+      taskId: 'specialist-task-1',
+      expectedTaskVersion: 2,
+      expectedRuntimeVersion: waiting.runtime.version,
+      transition: terminal,
+      evidenceDigests: ['6'.repeat(64)],
+      resourceLeaseOutcome: 'not_required',
+      handoffs: [{
+        id: 'specialist-handoff-completion-1',
+        targetTaskId: 'specialist-task-2',
+        expectedTargetTaskVersion: 1,
+        summary: 'The contract analysis completed with one bounded Evidence reference.',
+      }],
+    }
+    await expect(coordinator.complete({
+      ...completionInput,
+      handoffs: [{
+        ...completionInput.handoffs[0]!,
+        targetTaskId: 'specialist-task-1',
+      }],
+    })).rejects.toThrowError('specialist_runtime_completion_failed')
+    await expect(fixture.store.getAgentRuntime(ids.runtime)).resolves.toEqual(waiting.runtime)
+    await expect(fixture.store.getCoordinationSession(fixture.coordination.id)).resolves.toMatchObject({
+      state: started.coordination,
+    })
+    const completed = await coordinator.complete(completionInput)
+
+    expect(completed.runtime).toMatchObject({
+      id: ids.runtime,
+      version: terminal.runtime.version,
+      status: 'terminal',
+      stopReason: 'success',
+      lastResultDigest: resultDigest,
+    })
+    expect(completed.coordination).toMatchObject({
+      version: 4,
+      status: 'running',
+      counters: {
+        specialistStarts: 1,
+        activeSpecialists: 0,
+        acceptedHandoffs: 1,
+        steps: 1,
+        toolCalls: 1,
+        tokens: 200,
+        costUsd: 0.1,
+      },
+      tasks: [
+        {
+          id: 'specialist-task-1',
+          version: 3,
+          status: 'succeeded',
+          runtimeId: ids.runtime,
+          runtimeVersion: terminal.runtime.version,
+          resultDigest,
+        },
+        {
+          id: 'specialist-task-2',
+          version: 2,
+          status: 'ready',
+          acceptedDependencyHandoffIds: ['specialist-handoff-completion-1'],
+        },
+      ],
+      acceptedHandoffIds: ['specialist-handoff-completion-1'],
+    })
+    expect(completed.handoffs).toEqual([expect.objectContaining({
+      id: 'specialist-handoff-completion-1',
+      sourceTaskId: 'specialist-task-1',
+      sourceTaskVersion: 3,
+      sourceRuntimeId: ids.runtime,
+      sourceRuntimeVersion: terminal.runtime.version,
+      targetTaskId: 'specialist-task-2',
+      resultDigest,
+      evidenceDigests: ['6'.repeat(64)],
+      contextDigest: fixture.graph.nodes[0]!.contextDigest,
+      resourceLeaseOutcome: 'not_required',
+    })])
+    await expect(fixture.store.getAgentRuntime(ids.runtime)).resolves.toEqual(terminal.runtime)
+    await expect(fixture.store.getCoordinationRecoverySnapshot(fixture.coordination.id))
+      .resolves.toMatchObject({
+        state: completed.coordination,
+        handoffs: completed.handoffs,
+        audits: [{}, {}, {}, {}],
+        checkpoints: [{}, {}, {}, {}],
+    })
+    await expect(coordinator.complete(completionInput)).resolves.toEqual(completed)
+    fixture.store.close()
+
+    const reopenedStore = await createLocalStore({ dbPath: fixture.dbPath })
+    const reopenedCoordinator = createSpecialistRuntimeCoordinator({
+      store: reopenedStore,
+      authorityBroker: createSpecialistTaskAuthorityBroker({ store: reopenedStore }),
+    })
+    await expect(reopenedCoordinator.complete(completionInput)).resolves.toEqual(completed)
+    await expect(reopenedStore.getCoordinationRecoverySnapshot(fixture.coordination.id))
+      .resolves.toMatchObject({
+        state: completed.coordination,
+        handoffs: completed.handoffs,
+        audits: [{}, {}, {}, {}],
+        checkpoints: [{}, {}, {}, {}],
+      })
+    reopenedStore.close()
   })
 })

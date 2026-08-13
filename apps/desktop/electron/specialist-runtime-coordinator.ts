@@ -2,11 +2,14 @@ import { randomUUID } from 'node:crypto'
 import {
   assembleAgentRuntimeContext,
   createAgentRuntime,
+  type AgentHandoff,
   type AgentRuntimeState,
+  type AgentRuntimeTransition,
   type CoordinationSessionState,
   type SpecialistAllocationRequest,
 } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
+import type { SpecialistRuntimeHandoffDraft } from './local-store.js'
 import {
   digestSpecialistCapabilitySet,
   SPECIALIST_RUNTIME_MAX_CHECKPOINT_BYTES,
@@ -30,10 +33,28 @@ export type SpecialistRuntimeCoordinator = {
     runtime: AgentRuntimeState
     coordination: CoordinationSessionState
   }>
+  complete(input: {
+    coordinationId: string
+    expectedSessionVersion: number
+    taskId: string
+    expectedTaskVersion: number
+    expectedRuntimeVersion: number
+    transition: AgentRuntimeTransition
+    evidenceDigests: string[]
+    resourceLeaseOutcome: 'not_required' | 'released'
+    handoffs: SpecialistRuntimeHandoffDraft[]
+  }): Promise<{
+    runtime: AgentRuntimeState
+    coordination: CoordinationSessionState
+    handoffs: AgentHandoff[]
+  }>
 }
 
 export type CreateSpecialistRuntimeCoordinatorInput = {
-  store: Pick<LocalStore, 'commitSpecialistRuntimeStart'>
+  store: Pick<LocalStore,
+    | 'commitSpecialistRuntimeStart'
+    | 'commitSpecialistRuntimeCompletion'
+  >
   authorityBroker: SpecialistTaskAuthorityBroker
   clock?: () => string
   createId?: (kind: 'allocation' | 'agent' | 'runtime' | 'context') => string
@@ -162,6 +183,20 @@ export function createSpecialistRuntimeCoordinator(
         return { runtime: committed.runtime, coordination: committed.state }
       } catch {
         throw new Error('specialist_runtime_start_failed')
+      }
+    },
+
+    async complete(request) {
+      try {
+        const committed = await input.store.commitSpecialistRuntimeCompletion(request)
+        if (!committed.committed) throw new Error(committed.reason)
+        return {
+          runtime: committed.runtime,
+          coordination: committed.state,
+          handoffs: committed.handoffs,
+        }
+      } catch {
+        throw new Error('specialist_runtime_completion_failed')
       }
     },
   }

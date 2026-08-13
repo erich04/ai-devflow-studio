@@ -16,6 +16,7 @@ import {
 import {
   digestSpecialistCapabilitySet,
   getAcceptedSpecialistRoleIds,
+  resolveSpecialistDescriptor,
   SPECIALIST_RUNTIME_MAX_CHECKPOINT_BYTES,
   SPECIALIST_RUNTIME_MAX_TOOL_RESULT_BYTES,
   SPECIALIST_RUNTIME_MAX_TRAJECTORY_METADATA_BYTES,
@@ -799,6 +800,9 @@ export type LocalStore = {
   commitSpecialistRuntimeStart(
     input: CommitSpecialistRuntimeStartInput,
   ): Promise<CommitSpecialistRuntimeStartResult>
+  commitSpecialistRuntimeCompletion(
+    input: CommitSpecialistRuntimeCompletionInput,
+  ): Promise<CommitSpecialistRuntimeCompletionResult>
   commitCoordinationTaskStart(
     input: CommitCoordinationTaskStartInput,
   ): Promise<CommitCoordinationTaskStartResult>
@@ -1060,6 +1064,38 @@ export type CommitSpecialistRuntimeStartResult =
         | 'invalid_input'
         | 'authority_mismatch'
         | 'stale_state'
+    }
+
+export type SpecialistRuntimeHandoffDraft = {
+  id: string
+  targetTaskId: string
+  expectedTargetTaskVersion: number
+  summary: string
+}
+
+export type CommitSpecialistRuntimeCompletionInput = {
+  coordinationId: string
+  expectedSessionVersion: number
+  taskId: string
+  expectedTaskVersion: number
+  expectedRuntimeVersion: number
+  transition: AgentRuntimeTransition
+  evidenceDigests: string[]
+  resourceLeaseOutcome: AgentHandoff['resourceLeaseOutcome']
+  handoffs: SpecialistRuntimeHandoffDraft[]
+}
+
+export type CommitSpecialistRuntimeCompletionResult =
+  | {
+      committed: true
+      replayed: boolean
+      runtime: AgentRuntimeState
+      state: CoordinationSessionState
+      handoffs: AgentHandoff[]
+    }
+  | {
+      committed: false
+      reason: 'invalid_input' | 'authority_mismatch' | 'not_found' | 'stale_state'
     }
 
 export type CommitCoordinationTaskResultInput = {
@@ -4261,6 +4297,7 @@ function validateCoordinationTaskResultCheckpoint(
       state: previous,
       taskId: transitionInput.taskId,
       runtimeId: transitionInput.runtimeId,
+      expectedRuntimeVersion: previousTask.runtimeVersion ?? transitionInput.runtimeVersion,
       runtimeVersion: transitionInput.runtimeVersion,
       result: transitionInput.result,
       usage: transitionInput.usage,
@@ -8983,6 +9020,449 @@ class SqlJsLocalStore implements LocalStore {
     }
   }
 
+  async commitSpecialistRuntimeCompletion(
+    input: CommitSpecialistRuntimeCompletionInput,
+  ): Promise<CommitSpecialistRuntimeCompletionResult> {
+    let transition: AgentRuntimeTransition
+    try {
+      transition = parseAgentRuntimeTransition(input.transition)
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    if (
+      !isNonEmptyIdentifier(input.coordinationId) ||
+      !isNonEmptyIdentifier(input.taskId) ||
+      !Number.isInteger(input.expectedSessionVersion) ||
+      input.expectedSessionVersion < 1 ||
+      !Number.isInteger(input.expectedTaskVersion) ||
+      input.expectedTaskVersion < 1 ||
+      !Number.isInteger(input.expectedRuntimeVersion) ||
+      input.expectedRuntimeVersion < 1 ||
+      transition.runtime.status !== 'terminal' ||
+      transition.runtime.stopReason !== 'success' ||
+      transition.runtime.lastResultDigest === null ||
+      !Array.isArray(input.evidenceDigests) ||
+      (input.resourceLeaseOutcome !== 'not_required' &&
+        input.resourceLeaseOutcome !== 'released') ||
+      !Array.isArray(input.handoffs)
+    ) return { committed: false, reason: 'invalid_input' }
+
+    const stored = selectCoordinationRecoverySnapshot(this.db, input.coordinationId)
+    if (stored === null) return { committed: false, reason: 'not_found' }
+    const storedTask = stored.state.tasks.find((task) => task.id === input.taskId)
+    const graphTask = stored.graph.nodes.find((task) => task.id === input.taskId)
+    const currentRuntime = selectAgentRuntime(this.db, transition.runtime.id)
+    const outgoingEdges = stored.graph.edges.filter((edge) => edge.sourceTaskId === input.taskId)
+    if (
+      input.handoffs.length !== outgoingEdges.length ||
+      new Set(input.handoffs.map((handoff) => handoff.id)).size !== input.handoffs.length ||
+      input.handoffs.some((handoff, index) =>
+        handoff.targetTaskId !== outgoingEdges[index]?.targetTaskId)
+    ) return { committed: false, reason: 'invalid_input' }
+    if (
+      storedTask !== undefined &&
+      graphTask !== undefined &&
+      currentRuntime !== null &&
+      sameJson(currentRuntime, transition.runtime) &&
+      stored.state.version === input.expectedSessionVersion + 1 + input.handoffs.length &&
+      storedTask.version === input.expectedTaskVersion + 1 &&
+      storedTask.status === 'succeeded' &&
+      storedTask.runtimeId === transition.runtime.id &&
+      storedTask.runtimeVersion === transition.runtime.version &&
+      storedTask.resultDigest === transition.runtime.lastResultDigest
+    ) {
+      const events = selectAgentRuntimeEvents(
+        this.db,
+        transition.runtime.id,
+        transition.runtime.checkpointVersion,
+      )
+      const checkpoint = selectAgentRuntimeCheckpoints(this.db, transition.runtime.id)
+        .find((candidate) => candidate.version === transition.checkpoint.version)
+      const firstSequence = stored.state.counters.acceptedHandoffs - input.handoffs.length + 1
+      const replayedHandoffs = input.handoffs.map((draft, index): AgentHandoff => ({
+        stateVersion: 1,
+        id: draft.id,
+        coordinationId: stored.coordination.id,
+        sequence: firstSequence + index,
+        scope: { ...stored.coordination.scope },
+        sourceTaskId: storedTask.id,
+        sourceTaskVersion: storedTask.version,
+        sourceRuntimeId: transition.runtime.id,
+        sourceRuntimeVersion: transition.runtime.version,
+        targetTaskId: draft.targetTaskId,
+        targetTaskVersion: draft.expectedTargetTaskVersion,
+        resultDigest: transition.runtime.lastResultDigest!,
+        evidenceDigests: [...input.evidenceDigests],
+        contextDigest: graphTask.contextDigest,
+        resourceLeaseOutcome: input.resourceLeaseOutcome,
+        summary: draft.summary,
+        createdAt: transition.runtime.updatedAt,
+      }))
+      const exactHandoffReplay = replayedHandoffs.every((handoff) => {
+        const persisted = stored.handoffs.find((candidate) => candidate.id === handoff.id)
+        const targetTask = stored.state.tasks.find((task) => task.id === handoff.targetTaskId)
+        return sameJson(persisted, handoff) &&
+          targetTask !== undefined &&
+          targetTask.version === handoff.targetTaskVersion + 1 &&
+          targetTask.acceptedDependencyHandoffIds.includes(handoff.id) &&
+          stored.state.acceptedHandoffIds.includes(handoff.id)
+      })
+      return sameJson(events, transition.events) &&
+        sameJson(checkpoint, transition.checkpoint) &&
+        exactHandoffReplay
+        ? {
+            committed: true,
+            replayed: true,
+            runtime: currentRuntime,
+            state: stored.state,
+            handoffs: replayedHandoffs,
+          }
+        : { committed: false, reason: 'stale_state' }
+    }
+    if (
+      stored.state.version !== input.expectedSessionVersion ||
+      storedTask === undefined ||
+      graphTask === undefined ||
+      storedTask.version !== input.expectedTaskVersion ||
+      storedTask.status !== 'running' ||
+      storedTask.runtimeId !== transition.runtime.id ||
+      storedTask.runtimeVersion === null ||
+      currentRuntime === null ||
+      currentRuntime.id !== storedTask.runtimeId ||
+      currentRuntime.version !== input.expectedRuntimeVersion ||
+      !isExactAgentRuntimeTransition(currentRuntime, transition)
+    ) return { committed: false, reason: 'stale_state' }
+    if (
+      !await this.isCoordinationSupervisorAuthorityCurrent(stored.coordination) ||
+      !await this.isAgentRuntimeContextCurrent(currentRuntime.id, transition.runtime.updatedAt)
+    ) return { committed: false, reason: 'authority_mismatch' }
+
+    const expectedRuntimeScope = {
+      kind: 'team' as const,
+      organizationId: stored.coordination.scope.organizationId,
+      projectId: stored.coordination.scope.projectId,
+      userId: stored.coordination.scope.userId,
+      sessionId: stored.coordination.scope.sessionId,
+      localProjectId: stored.coordination.scope.localProjectId,
+    }
+    const expectedRuntimeAuthority = {
+      runId: stored.coordination.authority.runId,
+      nodeId: stored.coordination.authority.nodeId,
+      runVersion: stored.coordination.authority.runVersion,
+      policyVersion: stored.coordination.authority.policyVersion,
+    }
+    let descriptor
+    try {
+      descriptor = resolveSpecialistDescriptor(graphTask.roleId)
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+    const expectedCapabilitySetDigest = digestSpecialistCapabilitySet({
+      roleId: descriptor.id,
+      roleVersion: descriptor.version,
+      taskContextDigest: graphTask.contextDigest,
+      capabilityIds: graphTask.capabilityIds,
+    })
+    if (
+      !sameJson(currentRuntime.scope, expectedRuntimeScope) ||
+      !sameJson(currentRuntime.authority, expectedRuntimeAuthority) ||
+      currentRuntime.capabilitySetDigest !== expectedCapabilitySetDigest ||
+      transition.runtime.contextDigest !== currentRuntime.contextDigest ||
+      transition.runtime.capabilitySetDigest !== currentRuntime.capabilitySetDigest ||
+      transition.runtime.updatedAt > transition.runtime.deadline
+    ) return { committed: false, reason: 'authority_mismatch' }
+
+    const resultInput: CommitCoordinationTaskResultInput = {
+      expectedState: stored.state,
+      taskId: storedTask.id,
+      runtimeId: currentRuntime.id,
+      runtimeVersion: transition.runtime.version,
+      result: {
+        status: 'succeeded',
+        resultDigest: transition.runtime.lastResultDigest,
+        failure: null,
+      },
+      usage: { ...transition.runtime.counters },
+      now: transition.runtime.updatedAt,
+    }
+    let resultState: CoordinationSessionState
+    let finalState: CoordinationSessionState
+    const acceptedHandoffs: AgentHandoff[] = []
+    try {
+      resultState = parseCoordinationSessionState(recordCoordinationTaskResult({
+        state: stored.state,
+        expectedSessionVersion: stored.state.version,
+        taskId: storedTask.id,
+        expectedTaskVersion: storedTask.version,
+        runtimeId: currentRuntime.id,
+        expectedRuntimeVersion: storedTask.runtimeVersion,
+        runtimeVersion: transition.runtime.version,
+        result: resultInput.result,
+        usage: resultInput.usage,
+        now: resultInput.now,
+      }))
+      const sourceTask = resultState.tasks.find((task) => task.id === storedTask.id)
+      if (
+        sourceTask === undefined ||
+        sourceTask.status !== 'succeeded' ||
+        sourceTask.runtimeId === null ||
+        sourceTask.runtimeVersion === null ||
+        sourceTask.resultDigest === null
+      ) throw new Error('invalid_specialist_result')
+      const sourceResult: AcceptedSpecialistResult = {
+        taskId: sourceTask.id,
+        taskVersion: sourceTask.version,
+        runtimeId: sourceTask.runtimeId,
+        runtimeVersion: sourceTask.runtimeVersion,
+        status: 'succeeded',
+        resultDigest: sourceTask.resultDigest,
+        evidenceDigests: [...input.evidenceDigests],
+        contextDigest: graphTask.contextDigest,
+        resourceLeaseOutcome: input.resourceLeaseOutcome,
+      }
+      finalState = resultState
+      for (const draft of input.handoffs) {
+        const targetTask = finalState.tasks.find((task) => task.id === draft.targetTaskId)
+        if (targetTask === undefined || targetTask.version !== draft.expectedTargetTaskVersion) {
+          throw new Error('invalid_specialist_handoff_target')
+        }
+        const handoff = acceptAgentHandoff({
+          stateVersion: 1,
+          id: draft.id,
+          coordinationId: stored.coordination.id,
+          sequence: finalState.counters.acceptedHandoffs + 1,
+          scope: { ...stored.coordination.scope },
+          sourceTaskId: sourceResult.taskId,
+          sourceTaskVersion: sourceResult.taskVersion,
+          sourceRuntimeId: sourceResult.runtimeId,
+          sourceRuntimeVersion: sourceResult.runtimeVersion,
+          targetTaskId: draft.targetTaskId,
+          targetTaskVersion: draft.expectedTargetTaskVersion,
+          resultDigest: sourceResult.resultDigest,
+          evidenceDigests: [...sourceResult.evidenceDigests],
+          contextDigest: sourceResult.contextDigest,
+          resourceLeaseOutcome: sourceResult.resourceLeaseOutcome,
+          summary: draft.summary,
+          createdAt: transition.runtime.updatedAt,
+        }, {
+          coordination: stored.coordination,
+          graph: stored.graph,
+          sourceResult,
+          targetTaskVersion: targetTask.version,
+          expectedSequence: finalState.counters.acceptedHandoffs + 1,
+          maxSummaryBytes: stored.coordination.bounds.maxHandoffSummaryBytes,
+          existingHandoff: null,
+        }).handoff
+        finalState = parseCoordinationSessionState(applyCoordinationHandoff({
+          state: finalState,
+          coordination: stored.coordination,
+          graph: stored.graph,
+          handoff,
+          sourceResult,
+          expectedSessionVersion: finalState.version,
+          expectedTargetTaskVersion: targetTask.version,
+          priorAcceptedHandoffs: acceptedHandoffs,
+        }))
+        acceptedHandoffs.push(handoff)
+      }
+    } catch {
+      return { committed: false, reason: 'invalid_input' }
+    }
+
+    const changedTasks = finalState.tasks.flatMap((nextTask) => {
+      const previousTask = stored.state.tasks.find((task) => task.id === nextTask.id)
+      return previousTask === undefined || sameJson(previousTask, nextTask)
+        ? []
+        : [{ previousTask, nextTask }]
+    })
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      writeAgentRuntimeTransition(this.db, transition)
+      this.db.run(
+        `update agent_coordination_sessions
+         set version = ?, status = ?, stop_reason = ?, state_json = ?, updated_at = ?
+         where id = ? and version = ? and graph_id = ? and graph_version = ? and state_json = ?`,
+        [
+          finalState.version,
+          finalState.status,
+          finalState.stopReason,
+          JSON.stringify(finalState),
+          finalState.updatedAt,
+          stored.coordination.id,
+          stored.state.version,
+          stored.graph.id,
+          stored.graph.version,
+          JSON.stringify(stored.state),
+        ],
+      )
+      if (this.db.getRowsModified() !== 1) throw new Error('stale_coordination_session')
+      for (const { previousTask, nextTask } of changedTasks) {
+        this.db.run(
+          `update agent_coordination_tasks
+           set version = ?, status = ?, agent_id = ?, runtime_id = ?, runtime_version = ?,
+               state_json = ?, updated_at = ?
+           where coordination_id = ? and task_id = ? and graph_id = ?
+             and version = ? and state_json = ?`,
+          [
+            nextTask.version,
+            nextTask.status,
+            nextTask.agentId,
+            nextTask.runtimeId,
+            nextTask.runtimeVersion,
+            JSON.stringify(nextTask),
+            finalState.updatedAt,
+            stored.coordination.id,
+            nextTask.id,
+            stored.graph.id,
+            previousTask.version,
+            JSON.stringify(previousTask),
+          ],
+        )
+        if (this.db.getRowsModified() !== 1) throw new Error('stale_coordination_task')
+      }
+      this.db.run(
+        `insert into agent_coordination_audits (
+           id, coordination_id, task_id, event_kind, session_version,
+           metadata_json, created_at
+         ) values (?, ?, ?, 'task_result', ?, ?, ?)`,
+        [
+          coordinationTransitionAuditId(stored.coordination.id, resultState.version),
+          stored.coordination.id,
+          storedTask.id,
+          resultState.version,
+          JSON.stringify(coordinationTaskResultAuditMetadata(resultInput, resultState)),
+          resultState.updatedAt,
+        ],
+      )
+      this.db.run(
+        `insert into agent_coordination_checkpoints (
+           coordination_id, checkpoint_version, session_version, graph_version,
+           checkpoint_json, created_at
+         ) values (?, ?, ?, ?, ?, ?)`,
+        [
+          stored.coordination.id,
+          resultState.version,
+          resultState.version,
+          resultState.graphVersion,
+          JSON.stringify(resultState),
+          resultState.updatedAt,
+        ],
+      )
+      let handoffState = resultState
+      for (const handoff of acceptedHandoffs) {
+        const nextVersion = handoffState.version + 1
+        const checkpoint = nextVersion === finalState.version
+          ? finalState
+          : applyCoordinationHandoff({
+              state: handoffState,
+              coordination: stored.coordination,
+              graph: stored.graph,
+              handoff,
+              sourceResult: {
+                taskId: handoff.sourceTaskId,
+                taskVersion: handoff.sourceTaskVersion,
+                runtimeId: handoff.sourceRuntimeId,
+                runtimeVersion: handoff.sourceRuntimeVersion,
+                status: 'succeeded',
+                resultDigest: handoff.resultDigest,
+                evidenceDigests: handoff.evidenceDigests,
+                contextDigest: handoff.contextDigest,
+                resourceLeaseOutcome: handoff.resourceLeaseOutcome,
+              },
+              expectedSessionVersion: handoffState.version,
+              expectedTargetTaskVersion: handoff.targetTaskVersion,
+              priorAcceptedHandoffs: acceptedHandoffs.filter(
+                (candidate) => candidate.sequence < handoff.sequence,
+              ),
+            })
+        this.db.run(
+          `insert into agent_coordination_handoffs (
+             id, coordination_id, sequence, source_task_id, target_task_id,
+             result_digest, handoff_json, created_at
+           ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            handoff.id,
+            handoff.coordinationId,
+            handoff.sequence,
+            handoff.sourceTaskId,
+            handoff.targetTaskId,
+            handoff.resultDigest,
+            JSON.stringify(handoff),
+            handoff.createdAt,
+          ],
+        )
+        this.db.run(
+          `insert into agent_coordination_audits (
+             id, coordination_id, task_id, event_kind, session_version,
+             metadata_json, created_at
+           ) values (?, ?, ?, 'handoff_accepted', ?, ?, ?)`,
+          [
+            coordinationTransitionAuditId(stored.coordination.id, checkpoint.version),
+            stored.coordination.id,
+            handoff.targetTaskId,
+            checkpoint.version,
+            JSON.stringify(coordinationHandoffAuditMetadata(handoff, checkpoint)),
+            checkpoint.updatedAt,
+          ],
+        )
+        this.db.run(
+          `insert into agent_coordination_checkpoints (
+             coordination_id, checkpoint_version, session_version, graph_version,
+             checkpoint_json, created_at
+           ) values (?, ?, ?, ?, ?, ?)`,
+          [
+            stored.coordination.id,
+            checkpoint.version,
+            checkpoint.version,
+            checkpoint.graphVersion,
+            JSON.stringify(checkpoint),
+            checkpoint.updatedAt,
+          ],
+        )
+        handoffState = checkpoint
+      }
+      this.enqueueCanonicalRemoteSyncOperation({
+        kind: 'agent-runtime-summary',
+        localProjectId: transition.runtime.scope.localProjectId,
+        runId: transition.runtime.authority.runId,
+        entityId: transition.runtime.id,
+        createdAt: transition.runtime.updatedAt,
+      })
+      assertCoordinationMetadataBound(this.db, stored.coordination.id)
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return {
+        committed: true,
+        replayed: false,
+        runtime: transition.runtime,
+        state: finalState,
+        handoffs: acceptedHandoffs,
+      }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      if (
+        error instanceof Error &&
+        (error.message === 'stale_coordination_session' ||
+          error.message === 'stale_coordination_task')
+      ) return { committed: false, reason: 'stale_state' }
+      if (error instanceof Error && error.message === 'coordination_metadata_too_large') {
+        return { committed: false, reason: 'invalid_input' }
+      }
+      throw error
+    }
+  }
+
   async commitCoordinationTaskResult(
     input: CommitCoordinationTaskResultInput,
   ): Promise<CommitCoordinationTaskResultOutcome> {
@@ -8992,12 +9472,26 @@ class SqlJsLocalStore implements LocalStore {
       expectedState = parseCoordinationSessionState(input.expectedState)
       const expectedTask = expectedState.tasks.find((candidate) => candidate.id === input.taskId)
       if (expectedTask === undefined) throw new Error('invalid_coordination_task')
+      if (input.runtimeVersion !== expectedTask.runtimeVersion) {
+        const terminalRuntime = selectAgentRuntime(this.db, input.runtimeId)
+        if (
+          terminalRuntime === null ||
+          terminalRuntime.status !== 'terminal' ||
+          terminalRuntime.version !== input.runtimeVersion ||
+          (input.result.status === 'succeeded' && (
+            terminalRuntime.stopReason !== 'success' ||
+            terminalRuntime.lastResultDigest !== input.result.resultDigest
+          )) ||
+          (input.result.status === 'failed' && terminalRuntime.stopReason === 'success')
+        ) throw new Error('invalid_coordination_runtime_result')
+      }
       nextState = parseCoordinationSessionState(recordCoordinationTaskResult({
         state: expectedState,
         expectedSessionVersion: expectedState.version,
         taskId: input.taskId,
         expectedTaskVersion: expectedTask.version,
         runtimeId: input.runtimeId,
+        expectedRuntimeVersion: expectedTask.runtimeVersion ?? input.runtimeVersion,
         runtimeVersion: input.runtimeVersion,
         result: input.result,
         usage: input.usage,
@@ -13763,6 +14257,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'commitAgentRuntimeTransition',
   'createCoordinationSession',
   'commitSpecialistRuntimeStart',
+  'commitSpecialistRuntimeCompletion',
   'commitCoordinationTaskStart',
   'commitCoordinationTaskResult',
   'commitCoordinationHandoff',

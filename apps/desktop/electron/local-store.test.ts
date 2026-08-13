@@ -929,6 +929,7 @@ async function persistCompletedResearchCoordination(store: LocalStore) {
     taskId: acceptedResearchResult.taskId,
     expectedTaskVersion: 2,
     runtimeId: acceptedResearchResult.runtimeId,
+    expectedRuntimeVersion: acceptedResearchResult.runtimeVersion,
     runtimeVersion: acceptedResearchResult.runtimeVersion,
     result: {
       status: 'succeeded',
@@ -3443,6 +3444,7 @@ describe('createLocalStore', () => {
       taskId: resultInput.taskId,
       expectedTaskVersion: 2,
       runtimeId: resultInput.runtimeId,
+      expectedRuntimeVersion: resultInput.runtimeVersion,
       runtimeVersion: resultInput.runtimeVersion,
       result: resultInput.result,
       usage: resultInput.usage,

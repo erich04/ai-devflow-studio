@@ -301,6 +301,7 @@ export type CoordinationTaskResultInput = {
   taskId: string
   expectedTaskVersion: number
   runtimeId: string
+  expectedRuntimeVersion: number
   runtimeVersion: number
   result: CoordinationTaskResult
   usage: CoordinationUsageDelta
@@ -1335,7 +1336,9 @@ export function recordCoordinationTaskResult(
     task.version !== input.expectedTaskVersion ||
     task.status !== 'running' ||
     task.runtimeId !== input.runtimeId ||
-    task.runtimeVersion !== input.runtimeVersion ||
+    task.runtimeVersion !== input.expectedRuntimeVersion ||
+    !isPositiveVersion(input.runtimeVersion) ||
+    input.runtimeVersion < input.expectedRuntimeVersion ||
     !isPlainRecord(input.result) ||
     !hasExactKeys(input.result, ['status', 'resultDigest', 'failure']) ||
     (!succeededResult && !failedResult) ||
@@ -1365,6 +1368,7 @@ export function recordCoordinationTaskResult(
         ...item,
         version: item.version + 1,
         status: succeededResult ? 'succeeded' : 'failed',
+        runtimeVersion: input.runtimeVersion,
         resultDigest: succeededResult ? input.result.resultDigest : null,
         failure: failedResult ? failure : null,
       }
