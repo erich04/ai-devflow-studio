@@ -90,8 +90,8 @@ contains the signoff-bound release artifacts.
 | Active version line | 2.x DevFlow-native Agent Runtime |
 | Completed 2.x milestones | V2.0 Native Agent Runtime Foundation; V2.1 Evaluated Retrieval And Memory |
 | Completion evidence | `docs/releases/v2.0.0/`; `docs/releases/v2.1.0/` |
-| Active milestone | V2.2 Slice 4 — Execution Tenancy And Resource Arbitration |
-| Next gate | Bind exact read and single-writer leases to Specialist task authority |
+| Active milestone | V2.2 Slice 5 — Recovery, Cancellation, And Desktop UX |
+| Next gate | Propagate one monotonic parent cancellation through every child Runtime and active lease |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -165,13 +165,14 @@ The superseded implementation-period markers `### Now — Run V2.1 Evaluation An
 `| Next gate | Freeze the exact V2.1 candidate and run the full completion matrix |` remain here only
 as auditable phase vocabulary; the current table and the single `Now` heading below are authoritative.
 
-### Now — Implement V2.2 Execution Tenancy And Resource Arbitration
+### Now — Implement V2.2 Recovery, Cancellation, And Desktop UX
 
-- Permit parallel reads only through exact task/capability/resource-bound leases.
-- Enforce one Electron-main-owned writer lease and reject a second writer, stale lease, wrong task,
-  reader-to-writer upgrade, or expired/cancelled commit.
-- Deduct Tool, token, cost, retry, and time use from the same Specialist and Coordination bounds
-  before the next side effect, while reusing the accepted V2.0 Tool/MCP/Coding boundaries.
+- Propagate one parent cancellation monotonically through every ready/running Specialist, active
+  Tool/MCP/Coding action, pending handoff, and resource lease before a late result can commit.
+- Reopen an exact partially completed DAG after cold restart without repeating accepted Specialist
+  starts, Tool calls, workspace writes, handoffs, joins, or terminal events.
+- Expose only a strict metadata-only Desktop projection and keep every start/retry/cancel authority
+  inside Electron main while the existing single-Agent runtime remains unchanged.
 
 The V2.2 contract set is frozen in:
 
@@ -180,7 +181,7 @@ The V2.2 contract set is frozen in:
 - `docs/plans/v2.2-multi-agent-execution-tenancy.md`
 - `scripts/fixtures/v2.2-multi-agent-evaluation.json`
 
-Slices 0 through 3 are complete. The pure shared domain enforces the frozen DAG, attenuated
+Slices 0 through 4 are complete. The pure shared domain enforces the frozen DAG, attenuated
 Specialist authority, immutable handoffs, monotonic transitions, shared bounds, exact tenancy, and
 the unchanged deterministic V2.0 single-Agent baseline. Desktop schema 28 now persists one exact
 Supervisor-owned Coordination Session and frozen graph, applies task/result/handoff/join/checkpoint
@@ -190,7 +191,12 @@ Specialist registry to opaque main-owned task authority; atomically starts child
 terminal result and usage from accepted Runtime transitions, joins exact dependencies once, records
 fail-fast attribution without a handoff, and permits one deterministic `repository_read` recovery
 through a `task_retried` checkpoint. Same-process and cold-restart replay repeat zero accepted starts,
-results, handoffs, or retries. No open-ended swarm, remote executor, hosted tenancy, or new
+results, handoffs, or retries. Slice 4 adds exact concurrent-reader and single-writer arbitration,
+atomically reserves child budgets, binds Native Tool, trusted Local MCP, and Coding Executor grants
+to the exact active Specialist lease, rejects transferred or repeated action authority, and settles
+release, expiry, and cancellation monotonically before completion or bounded recovery. The full unit
+suite, production build, and Electron smoke pass with the unchanged V2.0 single-Agent path. No
+open-ended swarm, remote executor, hosted tenancy, or new
 publication authority is implied by this milestone.
 
 ### Next — Implement And Evaluate V2.2

@@ -19,9 +19,9 @@ describe('V2.2 Multi-Agent and Execution Tenancy contract', () => {
     }
 
     expect(roadmap).toContain('V2.2 contract set is frozen')
-    expect(roadmap).toContain('### Now — Implement V2.2 Execution Tenancy And Resource Arbitration')
-    expect(roadmap).toContain('| Active milestone | V2.2 Slice 4 — Execution Tenancy And Resource Arbitration |')
-    expect(roadmap).toContain('| Next gate | Bind exact read and single-writer leases to Specialist task authority |')
+    expect(roadmap).toContain('### Now — Implement V2.2 Recovery, Cancellation, And Desktop UX')
+    expect(roadmap).toContain('| Active milestone | V2.2 Slice 5 — Recovery, Cancellation, And Desktop UX |')
+    expect(roadmap).toContain('| Next gate | Propagate one monotonic parent cancellation through every child Runtime and active lease |')
     expect(roadmap.match(/^### Now —/gmu)).toHaveLength(1)
   })
 
@@ -91,13 +91,16 @@ describe('V2.2 Multi-Agent and Execution Tenancy contract', () => {
     expect(plan).toContain('Team schema 19')
     expect(plan).toContain('full single-Agent baseline remains executable')
     expect(plan).toContain('clean direct child')
-    expect(plan).toContain('Status: Active — Slice 4 in progress')
+    expect(plan).toContain('Status: Active — Slice 5 in progress')
     expect(plan).toMatch(/\| Slice 1 \| Complete \|/u)
     expect(plan).toMatch(/\| Slice 2 \| Complete \|/u)
     expect(plan).toMatch(/\| Slice 3 \| Complete \|/u)
-    expect(plan).toMatch(/\| Slice 4 \| In progress \|/u)
+    expect(plan).toMatch(/\| Slice 4 \| Complete \|/u)
+    expect(plan).toMatch(/\| Slice 5 \| In progress \|/u)
     expect(plan).toContain('task_retried')
     expect(plan).toContain('repository_read')
+    expect(plan).toContain('settleCoordinationResourceLease')
+    expect(plan).toContain('369 focused Tool, MCP, Coding, coordination, and persistence tests pass')
   })
 
   it('freezes no-cost quality, termination, replay, and isolation scenarios', () => {
