@@ -5,6 +5,7 @@ import {
   KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION,
   KNOWLEDGE_RETRIEVAL_QUERY_MAX_LENGTH,
   KNOWLEDGE_RETRIEVAL_TOP_K_MAX,
+  KNOWLEDGE_RETRIEVAL_VECTOR_DIMENSIONS_MAX,
   parseKnowledgeCitation,
   parseKnowledgeRetrievalCandidateSet,
   parseKnowledgeRetrievalRequest,
@@ -197,6 +198,20 @@ describe('V2.1 Knowledge Retrieval candidate-set contract', () => {
         ...validLexicalCandidateSet.candidates[0]!,
         vectorDimensions: 2,
       }],
+    }, validRequest)).toThrowError('invalid_knowledge_retrieval_request')
+  })
+
+  it('rejects embedding dimensions above the frozen hard maximum', () => {
+    expect(KNOWLEDGE_RETRIEVAL_VECTOR_DIMENSIONS_MAX).toBe(4_096)
+    expect(() => parseKnowledgeRetrievalCandidateSet({
+      ...validLexicalCandidateSet,
+      strategy: 'vector',
+      embedding: {
+        modelId: 'fixture-embedding',
+        modelVersion: '1',
+        dimensions: 4_097,
+      },
+      candidates: [],
     }, validRequest)).toThrowError('invalid_knowledge_retrieval_request')
   })
 })

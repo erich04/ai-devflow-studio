@@ -3,7 +3,7 @@ import type { KnowledgeDocumentCategory } from './domain'
 export const KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION = 1 as const
 export const KNOWLEDGE_RETRIEVAL_QUERY_MAX_LENGTH = 8 * 1_024
 export const KNOWLEDGE_RETRIEVAL_TOP_K_MAX = 20
-export const KNOWLEDGE_RETRIEVAL_VECTOR_DIMENSIONS_MAX = 16_384
+export const KNOWLEDGE_RETRIEVAL_VECTOR_DIMENSIONS_MAX = 4_096
 
 const MAX_VERSION = 2_147_483_647
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u
