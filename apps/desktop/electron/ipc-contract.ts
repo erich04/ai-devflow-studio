@@ -9,6 +9,7 @@ import type {
   AgentReviewExecutionResult,
   AgentRuntimeRendererListItem,
   AgentRuntimeRendererSnapshot,
+  CoordinationRendererSnapshot,
   AgentMemoryRendererSnapshot,
   Artifact,
   CommandSafetyResult,
@@ -85,6 +86,14 @@ export type GetAgentRuntimeInput = ListAgentRuntimesInput & {
 export type AgentRuntimeSnapshot = AgentRuntimeRendererSnapshot
 export type AgentRuntimeListItem = AgentRuntimeRendererListItem
 
+export type ListCoordinationSessionsInput = ListAgentRuntimesInput
+
+export type GetCoordinationSessionInput = ListCoordinationSessionsInput & {
+  coordinationId: string
+}
+
+export type CoordinationSessionSnapshot = CoordinationRendererSnapshot
+
 export type ListAgentMemoryLifecycleInput = GetAgentRuntimeInput
 
 export type AgentMemoryLifecycleSnapshot = AgentMemoryRendererSnapshot
@@ -141,6 +150,8 @@ export const ipcChannels = {
   listAgentRuntimes: 'devflow:agent-runtime:list',
   getAgentRuntime: 'devflow:agent-runtime:get',
   agentRuntimeUpdated: 'devflow:agent-runtime:updated',
+  listCoordinationSessions: 'devflow:agent-coordination:list',
+  getCoordinationSession: 'devflow:agent-coordination:get',
   listAgentMemoryLifecycle: 'devflow:agent-memory:lifecycle:list',
   promoteAgentMemoryCandidate: 'devflow:agent-memory:candidate:promote',
   reviseAgentMemory: 'devflow:agent-memory:revise',
@@ -497,6 +508,12 @@ export type DevFlowDesktopApi = {
   cancelAgentRuntime: (input: CancelAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
   listAgentRuntimes: (input: ListAgentRuntimesInput) => Promise<AgentRuntimeListItem[]>
   getAgentRuntime: (input: GetAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
+  listCoordinationSessions: (
+    input: ListCoordinationSessionsInput,
+  ) => Promise<CoordinationSessionSnapshot[]>
+  getCoordinationSession: (
+    input: GetCoordinationSessionInput,
+  ) => Promise<CoordinationSessionSnapshot>
   listAgentMemoryLifecycle: (
     input: ListAgentMemoryLifecycleInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
@@ -858,6 +875,37 @@ export function parseGetAgentRuntimeInput(value: unknown): GetAgentRuntimeInput 
   )
   return {
     runtimeId: readExactRequiredIdentifier(value, 'runtimeId'),
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+  }
+}
+
+export function parseListCoordinationSessionsInput(
+  value: unknown,
+): ListCoordinationSessionsInput {
+  if (!isRecord(value)) throw new Error('Invalid list Agent Coordinations payload')
+  rejectUnexpectedFields(
+    value,
+    ['runId', 'localProjectId'],
+    'list Agent Coordinations payload',
+  )
+  return {
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+  }
+}
+
+export function parseGetCoordinationSessionInput(
+  value: unknown,
+): GetCoordinationSessionInput {
+  if (!isRecord(value)) throw new Error('Invalid get Agent Coordination payload')
+  rejectUnexpectedFields(
+    value,
+    ['coordinationId', 'runId', 'localProjectId'],
+    'get Agent Coordination payload',
+  )
+  return {
+    coordinationId: readExactRequiredIdentifier(value, 'coordinationId'),
     runId: readExactRequiredIdentifier(value, 'runId'),
     localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
   }

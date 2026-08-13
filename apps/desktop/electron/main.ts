@@ -55,6 +55,7 @@ import {
 import { createLocalStore, type LocalStore } from './local-store.js'
 import { createDesktopAgentRuntime, type DesktopAgentRuntime } from './agent-runtime-runtime.js'
 import { createAgentRuntimeRendererAccess } from './agent-runtime-renderer-access.js'
+import { createAgentCoordinationRendererAccess } from './agent-coordination-renderer-access.js'
 import { createAgentMemoryRendererAccess } from './agent-memory-renderer-access.js'
 import { createAgentMemoryHumanActions } from './agent-memory-human-actions.js'
 import {
@@ -90,6 +91,8 @@ import {
   parseListAgentReviewsInput,
   parseListAgentRuntimesInput,
   parseGetAgentRuntimeInput,
+  parseListCoordinationSessionsInput,
+  parseGetCoordinationSessionInput,
   parseListAgentMemoryLifecycleInput,
   parseDeleteAgentMemoryInput,
   parsePromoteAgentMemoryCandidateInput,
@@ -2155,6 +2158,18 @@ function registerIpcHandlers() {
     const input = parseGetAgentRuntimeInput(payload)
     const store = await getStore()
     return createAgentRuntimeRendererAccess(store).get(input)
+  })
+
+  ipcMain.handle(ipcChannels.listCoordinationSessions, async (_, payload: unknown) => {
+    const input = parseListCoordinationSessionsInput(payload)
+    const store = await getStore()
+    return createAgentCoordinationRendererAccess(store).list(input)
+  })
+
+  ipcMain.handle(ipcChannels.getCoordinationSession, async (_, payload: unknown) => {
+    const input = parseGetCoordinationSessionInput(payload)
+    const store = await getStore()
+    return createAgentCoordinationRendererAccess(store).get(input)
   })
 
   ipcMain.handle(ipcChannels.listAgentMemoryLifecycle, async (_, payload: unknown) => {

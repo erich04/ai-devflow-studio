@@ -25,11 +25,13 @@ import {
   parseReplyCodingPermissionInput,
   parseLoadRepositoryKnowledgeInput,
   parseGetAgentRuntimeInput,
+  parseGetCoordinationSessionInput,
   parseListAgentMemoryLifecycleInput,
   parseDeleteAgentMemoryInput,
   parsePromoteAgentMemoryCandidateInput,
   parseReviseAgentMemoryInput,
   parseListAgentRuntimesInput,
+  parseListCoordinationSessionsInput,
   parseListWorkRequestsInput,
   parseMaterializeWorkRequestInput,
   parseRefreshRepositoryKnowledgeInput,
@@ -192,6 +194,33 @@ describe('IPC contract parsers', () => {
       runId: 'run-1',
       localProjectId: 'project-1',
       path: '/Users/example/repo',
+    })).toThrow(/unexpected field/i)
+  })
+
+  it('binds Agent Coordination list and detail reads to one selected Run and local project', () => {
+    expect(parseListCoordinationSessionsInput({
+      runId: 'run-1',
+      localProjectId: 'project-1',
+    })).toEqual({ runId: 'run-1', localProjectId: 'project-1' })
+    expect(parseGetCoordinationSessionInput({
+      coordinationId: 'coordination-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+    })).toEqual({
+      coordinationId: 'coordination-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+    })
+    expect(() => parseListCoordinationSessionsInput({
+      runId: 'run-1',
+      localProjectId: 'project-1',
+      scope: { sessionId: 'secret' },
+    })).toThrow(/unexpected field/i)
+    expect(() => parseGetCoordinationSessionInput({
+      coordinationId: 'coordination-1',
+      runId: 'run-1',
+      localProjectId: 'project-1',
+      summary: 'hidden reasoning',
     })).toThrow(/unexpected field/i)
   })
 

@@ -857,6 +857,7 @@ export type LocalStore = {
   getCoordinationRecoverySnapshot(
     coordinationId: string,
   ): Promise<CoordinationRecoverySnapshot | null>
+  listCoordinationRecoverySnapshots(): Promise<CoordinationRecoverySnapshot[]>
   authorizeCoordinationSessionRecovery(
     input: AuthorizeCoordinationSessionRecoveryInput,
   ): Promise<AuthorizeCoordinationSessionRecoveryResult>
@@ -9029,6 +9030,15 @@ class SqlJsLocalStore implements LocalStore {
   ): Promise<CoordinationRecoverySnapshot | null> {
     if (!isNonEmptyIdentifier(coordinationId) || coordinationId.length > 200) return null
     return selectCoordinationRecoverySnapshot(this.db, coordinationId)
+  }
+
+  async listCoordinationRecoverySnapshots(): Promise<CoordinationRecoverySnapshot[]> {
+    return selectStringColumn(
+      this.db,
+      `select id from agent_coordination_sessions
+       order by updated_at desc, id asc`,
+    ).map((coordinationId) => selectCoordinationRecoverySnapshot(this.db, coordinationId))
+      .filter((snapshot): snapshot is CoordinationRecoverySnapshot => snapshot !== null)
   }
 
   async authorizeCoordinationSessionRecovery(

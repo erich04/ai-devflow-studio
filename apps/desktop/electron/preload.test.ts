@@ -39,6 +39,15 @@ type ExposedDesktopApi = {
     runId: string
     localProjectId: string
   }) => Promise<unknown>
+  listCoordinationSessions: (input: {
+    runId: string
+    localProjectId: string
+  }) => Promise<unknown>
+  getCoordinationSession: (input: {
+    coordinationId: string
+    runId: string
+    localProjectId: string
+  }) => Promise<unknown>
   listAgentMemoryLifecycle: (input: {
     runtimeId: string
     runId: string
@@ -140,6 +149,11 @@ describe('Electron preload remote sync operator surface', () => {
       runtimeId: 'agent-runtime-1',
       ...selection,
     })).resolves.toBe(snapshot)
+    await expect(exposedApi.listCoordinationSessions(selection)).resolves.toBe(snapshot)
+    await expect(exposedApi.getCoordinationSession({
+      coordinationId: 'coordination-1',
+      ...selection,
+    })).resolves.toBe(snapshot)
     await expect(exposedApi.listAgentMemoryLifecycle({
       runtimeId: 'agent-runtime-1',
       ...selection,
@@ -184,6 +198,14 @@ describe('Electron preload remote sync operator surface', () => {
     expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.listAgentRuntimes, selection)
     expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.getAgentRuntime, {
       runtimeId: 'agent-runtime-1',
+      ...selection,
+    })
+    expect(electron.invoke).toHaveBeenCalledWith(
+      ipcChannels.listCoordinationSessions,
+      selection,
+    )
+    expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.getCoordinationSession, {
+      coordinationId: 'coordination-1',
       ...selection,
     })
     expect(electron.invoke).toHaveBeenCalledWith(ipcChannels.listAgentMemoryLifecycle, {

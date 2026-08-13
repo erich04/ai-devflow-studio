@@ -33,11 +33,14 @@ import type {
   AgentRuntimeSnapshot,
   AgentMemoryLifecycleSnapshot,
   GetAgentRuntimeInput,
+  GetCoordinationSessionInput,
+  CoordinationSessionSnapshot,
   DeleteAgentMemoryInput,
   ListAgentMemoryLifecycleInput,
   PromoteAgentMemoryCandidateInput,
   ReviseAgentMemoryInput,
   ListAgentRuntimesInput,
+  ListCoordinationSessionsInput,
   CreateRunInput,
   DeleteRunInput,
   DeleteRunResult,
@@ -243,6 +246,12 @@ export type DevFlowDesktopApi = {
   cancelAgentRuntime: (input: AgentRuntimeCommandInput) => Promise<AgentRuntimeSnapshot>
   listAgentRuntimes: (input: ListAgentRuntimesInput) => Promise<AgentRuntimeListItem[]>
   getAgentRuntime: (input: GetAgentRuntimeInput) => Promise<AgentRuntimeSnapshot>
+  listCoordinationSessions: (
+    input: ListCoordinationSessionsInput,
+  ) => Promise<CoordinationSessionSnapshot[]>
+  getCoordinationSession: (
+    input: GetCoordinationSessionInput,
+  ) => Promise<CoordinationSessionSnapshot>
   listAgentMemoryLifecycle: (
     input: ListAgentMemoryLifecycleInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>

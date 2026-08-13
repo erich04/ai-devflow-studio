@@ -548,6 +548,10 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     getAgentRuntime: vi.fn().mockRejectedValue(
       new Error('Agent Runtime is not configured for this test.'),
     ),
+    listCoordinationSessions: async () => [],
+    getCoordinationSession: vi.fn().mockRejectedValue(
+      new Error('Agent Coordination is not configured for this test.'),
+    ),
     listAgentMemoryLifecycle: vi.fn(async ({ localProjectId }: {
       runtimeId: string
       runId: string

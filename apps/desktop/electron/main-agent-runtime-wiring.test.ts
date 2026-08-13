@@ -46,6 +46,23 @@ describe('Electron Agent Runtime production wiring', () => {
     expect(handlers).not.toContain('loadState()')
   })
 
+  it('exposes Agent Coordination through one read-only metadata projection', () => {
+    const handlers = main.slice(
+      main.indexOf('ipcMain.handle(ipcChannels.listCoordinationSessions'),
+      main.indexOf('ipcMain.handle(ipcChannels.deleteRun'),
+    )
+    expect(main).toContain("from './agent-coordination-renderer-access.js'")
+    expect(handlers).toMatch(
+      /parseListCoordinationSessionsInput\(payload\)[\s\S]*?getStore\(\)[\s\S]*?createAgentCoordinationRendererAccess\(store\)\.list\(input\)/,
+    )
+    expect(handlers).toMatch(
+      /parseGetCoordinationSessionInput\(payload\)[\s\S]*?getStore\(\)[\s\S]*?createAgentCoordinationRendererAccess\(store\)\.get\(input\)/,
+    )
+    expect(handlers).not.toMatch(
+      /commitCoordination|authorizeCoordination|resume\(|start\(|cancel\(|scope|summary|sessionId/,
+    )
+  })
+
   it('recovers durable nonterminal runtimes after app readiness', () => {
     const ready = main.slice(main.indexOf('app.whenReady().then'))
     expect(ready).toMatch(
