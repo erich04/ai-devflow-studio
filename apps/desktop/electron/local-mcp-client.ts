@@ -23,6 +23,7 @@ const MAX_STDIO_MESSAGE_BYTES = 256 * 1_024
 const MAX_STDERR_BYTES = 16 * 1_024
 const SHUTDOWN_GRACE_MS = 1_000
 const MAX_ENVIRONMENT_VALUE_BYTES = 8 * 1_024
+const ISOLATED_ENVIRONMENT_NAME = 'DEVFLOW_MCP_ENVIRONMENT_ISOLATED'
 
 type JsonRecord = Record<string, unknown>
 
@@ -71,6 +72,7 @@ function buildEnvironment(
     throw safeError('local_mcp_environment_denied')
   }
   const childEnvironment: NodeJS.ProcessEnv = Object.create(null) as NodeJS.ProcessEnv
+  childEnvironment[ISOLATED_ENVIRONMENT_NAME] = '1'
   for (const name of installation.allowedEnvironmentNames) {
     const value = environment[name]
     if (value === undefined) continue
@@ -341,7 +343,6 @@ export async function createLocalMcpClient(input: {
       fatalError = safeError('local_mcp_spawn_failed')
       channel.rejectAll(fatalError)
     }
-    resolveExit()
   })
   child.once('exit', () => {
     closed = true
@@ -349,6 +350,9 @@ export async function createLocalMcpClient(input: {
       fatalError = safeError('local_mcp_process_exited')
       channel.rejectAll(fatalError)
     }
+  })
+  child.once('close', () => {
+    closed = true
     resolveExit()
   })
 

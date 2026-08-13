@@ -43,7 +43,10 @@ not occur. Non-idempotent Tools require an idempotency or reconciliation contrac
 verified executable identity/path, fixed argument vector, `stdio` transport, bounded startup and
 call deadlines, allowed environment-variable names, working-directory policy, expected server/tool
 identity, enabled state, and installation version. Secret values stay in the credential boundary and
-are injected only by Electron main. The parent process environment is not inherited wholesale.
+are injected only by Electron main. The child receives a fixed non-secret isolation sentinel so an
+otherwise empty environment block cannot degrade into parent-environment inheritance on Windows;
+all other product environment values require the installation allowlist. The parent process
+environment is not inherited wholesale.
 
 Installation or material revision is an explicit local developer action. Team metadata may suggest
 or describe a server, but cannot create, enable, revise, or execute an installation. Renderer input

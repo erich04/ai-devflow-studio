@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { evaluateV20CompletionRecord } from './v20-agent-runtime-evaluator.mjs'
 import {
@@ -218,7 +219,7 @@ describe('V2.0 Agent Runtime evaluation runner', () => {
     expect(readCandidateState).toHaveBeenCalledTimes(2)
     expect(writeRecord).toHaveBeenCalledOnce()
     expect(writeRecord).toHaveBeenCalledWith(
-      `/workspace/out/v20-evaluation/${candidateSha}.json`,
+      resolve('/workspace', `out/v20-evaluation/${candidateSha}.json`),
       expect.stringMatching(/^\{[\s\S]+\}\n$/u),
       { encoding: 'utf8', mode: 0o600 },
     )

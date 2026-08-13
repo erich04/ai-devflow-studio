@@ -18,7 +18,10 @@ import type { LocalMcpInstallation } from './local-mcp-installation.js'
 import { createNativeToolRegistry, digestNativeToolValue } from './native-tool-registry.js'
 
 const tempDirs: string[] = []
-const platformEnvironmentNames = process.platform === 'darwin' ? ['__CF_USER_TEXT_ENCODING'] : []
+const platformEnvironmentNames = [
+  'DEVFLOW_MCP_ENVIRONMENT_ISOLATED',
+  ...(process.platform === 'darwin' ? ['__CF_USER_TEXT_ENCODING'] : []),
+].sort()
 const authorizeFixtureCall = async () => undefined
 
 afterEach(async () => {

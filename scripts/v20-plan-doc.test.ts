@@ -48,6 +48,7 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(adr).toContain('cancellation')
     expect(adr).toContain('organization, project, user, session, and Local Project')
     expect(adr).toContain('stdio')
+    expect(adr).toContain('fixed non-secret isolation sentinel')
     expect(adr).toContain('remote MCP transports are deferred')
   })
 
