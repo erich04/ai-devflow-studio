@@ -5,6 +5,7 @@ import {
   AGENT_RUNTIME_MAX_TOOL_CALLS,
   AGENT_RUNTIME_MAX_WALL_TIME_MS,
 } from './agent-runtime'
+import { redactSensitiveText } from './redaction'
 
 export const COORDINATION_CONTRACT_VERSION = 1 as const
 export const COORDINATION_MAX_SPECIALISTS = 4
@@ -139,6 +140,53 @@ export type SpecialistAllocationParseOptions = {
   remainingBudget: SpecialistBudget
 }
 
+export type AgentHandoff = {
+  stateVersion: typeof COORDINATION_CONTRACT_VERSION
+  id: string
+  coordinationId: string
+  sequence: number
+  scope: CoordinationScope
+  sourceTaskId: string
+  sourceTaskVersion: number
+  sourceRuntimeId: string
+  sourceRuntimeVersion: number
+  targetTaskId: string
+  targetTaskVersion: number
+  resultDigest: string
+  evidenceDigests: string[]
+  contextDigest: string
+  resourceLeaseOutcome: 'not_required' | 'released'
+  summary: string
+  createdAt: string
+}
+
+export type AcceptedSpecialistResult = {
+  taskId: string
+  taskVersion: number
+  runtimeId: string
+  runtimeVersion: number
+  status: 'succeeded'
+  resultDigest: string
+  evidenceDigests: string[]
+  contextDigest: string
+  resourceLeaseOutcome: AgentHandoff['resourceLeaseOutcome']
+}
+
+export type AgentHandoffAcceptOptions = {
+  coordination: CoordinationSessionRequest
+  graph: AgentTaskGraph
+  sourceResult: AcceptedSpecialistResult
+  targetTaskVersion: number
+  expectedSequence: number
+  maxSummaryBytes: number
+  existingHandoff: AgentHandoff | null
+}
+
+export type AcceptedAgentHandoff = {
+  handoff: AgentHandoff
+  replayed: boolean
+}
+
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actual = Object.keys(value).sort()
   const expected = [...keys].sort()
@@ -147,6 +195,21 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function canonicalJson(value: unknown): string {
+  const normalize = (entry: unknown): unknown => {
+    if (Array.isArray(entry)) return entry.map(normalize)
+    if (isPlainRecord(entry)) {
+      return Object.fromEntries(
+        Object.entries(entry)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, item]) => [key, normalize(item)]),
+      )
+    }
+    return entry
+  }
+  return JSON.stringify(normalize(value))
 }
 
 function isIdentifier(value: unknown): value is string {
@@ -167,6 +230,23 @@ function isNonNegativeIntegerAtMost(value: unknown, maximum: number): value is n
 
 function isDigest(value: unknown): value is string {
   return typeof value === 'string' && digestPattern.test(value)
+}
+
+function isCanonicalDigestList(value: unknown): value is string[] {
+  return Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(isDigest) &&
+    new Set(value).size === value.length &&
+    value.every((digest, index) => {
+      const previous = value[index - 1]
+      return previous === undefined || previous.localeCompare(digest) < 0
+    })
+}
+
+function hasSameDigestList(value: unknown, expected: readonly string[]): value is string[] {
+  return isCanonicalDigestList(value) &&
+    value.length === expected.length &&
+    value.every((digest, index) => digest === expected[index])
 }
 
 function isCanonicalIso(value: unknown): value is string {
@@ -590,4 +670,107 @@ export function parseSpecialistAllocationRequest(
     throw new Error('invalid_specialist_allocation_request')
   }
   return value as SpecialistAllocationRequest
+}
+
+export function acceptAgentHandoff(
+  value: unknown,
+  options: AgentHandoffAcceptOptions,
+): AcceptedAgentHandoff {
+  const isNewHandoff = options.existingHandoff === null
+  if (
+    !isPlainRecord(value) ||
+    value.stateVersion !== COORDINATION_CONTRACT_VERSION ||
+    !hasExactKeys(value, [
+      'stateVersion',
+      'id',
+      'coordinationId',
+      'sequence',
+      'scope',
+      'sourceTaskId',
+      'sourceTaskVersion',
+      'sourceRuntimeId',
+      'sourceRuntimeVersion',
+      'targetTaskId',
+      'targetTaskVersion',
+      'resultDigest',
+      'evidenceDigests',
+      'contextDigest',
+      'resourceLeaseOutcome',
+      'summary',
+      'createdAt',
+    ]) ||
+    !isIdentifier(value.id) ||
+    value.coordinationId !== options.coordination.id ||
+    options.graph.coordinationId !== options.coordination.id ||
+    !isExactCoordinationScope(value.scope) ||
+    !hasSameCoordinationScope(value.scope, options.coordination.scope) ||
+    !isPositiveIntegerAtMost(
+      value.sequence,
+      Math.min(
+        options.coordination.bounds.maxAcceptedHandoffs,
+        COORDINATION_MAX_ACCEPTED_HANDOFFS,
+      ),
+    ) ||
+    (isNewHandoff && value.sequence !== options.expectedSequence) ||
+    !isPositiveIntegerAtMost(
+      options.maxSummaryBytes,
+      Math.min(
+        options.coordination.bounds.maxHandoffSummaryBytes,
+        COORDINATION_MAX_HANDOFF_SUMMARY_BYTES,
+      ),
+    ) ||
+    typeof value.summary !== 'string' ||
+    value.summary.length === 0 ||
+    value.summary.trim() !== value.summary ||
+    /[\u0000-\u001f\u007f-\u009f]/u.test(value.summary) ||
+    new TextEncoder().encode(value.summary).byteLength > Math.min(
+      options.maxSummaryBytes,
+      options.coordination.bounds.maxHandoffSummaryBytes,
+      COORDINATION_MAX_HANDOFF_SUMMARY_BYTES,
+    ) ||
+    redactSensitiveText(value.summary).value !== value.summary ||
+    !isCanonicalIso(value.createdAt) ||
+    Date.parse(value.createdAt) < Date.parse(options.coordination.requestedAt) ||
+    Date.parse(value.createdAt) > Date.parse(options.coordination.deadline) ||
+    !isIdentifier(value.sourceTaskId) ||
+    !isIdentifier(value.targetTaskId) ||
+    !isPositiveVersion(value.sourceTaskVersion) ||
+    !isIdentifier(value.sourceRuntimeId) ||
+    !isPositiveVersion(value.sourceRuntimeVersion) ||
+    !isDigest(value.resultDigest) ||
+    !isCanonicalDigestList(value.evidenceDigests) ||
+    !isDigest(value.contextDigest) ||
+    !options.graph.nodes.some((node) =>
+      node.id === value.sourceTaskId && node.contextDigest === value.contextDigest
+    ) ||
+    (value.resourceLeaseOutcome !== 'not_required' &&
+      value.resourceLeaseOutcome !== 'released') ||
+    !isPositiveVersion(value.targetTaskVersion) ||
+    !options.graph.nodes.some((node) => node.id === value.sourceTaskId) ||
+    !options.graph.nodes.some((node) => node.id === value.targetTaskId) ||
+    !options.graph.edges.some((edge) =>
+      edge.sourceTaskId === value.sourceTaskId && edge.targetTaskId === value.targetTaskId
+    ) ||
+    (isNewHandoff && (
+      value.sourceTaskId !== options.sourceResult.taskId ||
+      value.sourceTaskVersion !== options.sourceResult.taskVersion ||
+      value.sourceRuntimeId !== options.sourceResult.runtimeId ||
+      value.sourceRuntimeVersion !== options.sourceResult.runtimeVersion ||
+      options.sourceResult.status !== 'succeeded' ||
+      value.resultDigest !== options.sourceResult.resultDigest ||
+      !hasSameDigestList(value.evidenceDigests, options.sourceResult.evidenceDigests) ||
+      value.contextDigest !== options.sourceResult.contextDigest ||
+      value.resourceLeaseOutcome !== options.sourceResult.resourceLeaseOutcome ||
+      value.targetTaskVersion !== options.targetTaskVersion
+    ))
+  ) {
+    throw new Error('invalid_agent_handoff')
+  }
+  if (options.existingHandoff !== null) {
+    if (canonicalJson(value) !== canonicalJson(options.existingHandoff)) {
+      throw new Error('conflicting_agent_handoff_replay')
+    }
+    return { handoff: options.existingHandoff, replayed: true }
+  }
+  return { handoff: value as AgentHandoff, replayed: false }
 }

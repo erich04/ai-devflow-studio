@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  acceptAgentHandoff,
   COORDINATION_CONTRACT_VERSION,
   parseAgentTaskGraph,
   parseCoordinationSessionRequest,
   parseSpecialistAllocationRequest,
   type AgentTaskGraph,
+  type AgentHandoff,
+  type AgentHandoffAcceptOptions,
   type CoordinationSessionRequest,
   type SpecialistAllocationRequest,
 } from './agent-coordination'
@@ -111,6 +114,49 @@ const specialistAllocation: SpecialistAllocationRequest = {
   requestedAt: '2026-08-13T15:00:01.000Z',
   deadline: '2026-08-13T15:05:01.000Z',
 }
+
+const agentHandoff: AgentHandoff = {
+  stateVersion: 1,
+  id: 'handoff-task-a-task-c-1',
+  coordinationId: request.id,
+  sequence: 1,
+  scope: request.scope,
+  sourceTaskId: 'task-a',
+  sourceTaskVersion: 2,
+  sourceRuntimeId: 'specialist-runtime-1',
+  sourceRuntimeVersion: 4,
+  targetTaskId: 'task-c',
+  targetTaskVersion: 1,
+  resultDigest: '1'.repeat(64),
+  evidenceDigests: ['2'.repeat(64), '3'.repeat(64)],
+  contextDigest: 'e'.repeat(64),
+  resourceLeaseOutcome: 'not_required',
+  summary: 'Contract analysis completed with bounded evidence references.',
+  createdAt: '2026-08-13T15:04:00.000Z',
+}
+
+const handoffAcceptOptions = (
+  overrides: Partial<AgentHandoffAcceptOptions> = {},
+): AgentHandoffAcceptOptions => ({
+  coordination: request,
+  graph: taskGraph,
+  sourceResult: {
+    taskId: 'task-a',
+    taskVersion: 2,
+    runtimeId: 'specialist-runtime-1',
+    runtimeVersion: 4,
+    status: 'succeeded',
+    resultDigest: '1'.repeat(64),
+    evidenceDigests: ['2'.repeat(64), '3'.repeat(64)],
+    contextDigest: 'e'.repeat(64),
+    resourceLeaseOutcome: 'not_required',
+  },
+  targetTaskVersion: 1,
+  expectedSequence: 1,
+  maxSummaryBytes: request.bounds.maxHandoffSummaryBytes,
+  existingHandoff: null,
+  ...overrides,
+})
 
 describe('Coordination Session request contract', () => {
   it('parses one exact canonical Team-scoped request within its Supervisor bounds', () => {
@@ -878,5 +924,196 @@ describe('Specialist allocation contract', () => {
         maxCostUsd: 5,
       },
     })).toThrowError('invalid_specialist_allocation_request')
+  })
+})
+
+describe('Agent Handoff contract', () => {
+  it('accepts one exact immutable dependency handoff', () => {
+    expect(acceptAgentHandoff(agentHandoff, handoffAcceptOptions())).toEqual({
+      handoff: agentHandoff,
+      replayed: false,
+    })
+  })
+
+  it('rejects unknown handoff fields instead of widening the metadata boundary', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      hiddenReasoning: 'private scratchpad',
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects a handoff crossing the execution-tenancy boundary', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      scope: { ...agentHandoff.scope, projectId: 'project-2' },
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects a handoff whose source is not a dependency of its target', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      targetTaskId: 'task-b',
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects a handoff from a stale accepted source result', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      sourceTaskVersion: agentHandoff.sourceTaskVersion - 1,
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects a handoff to a stale target task version', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      targetTaskVersion: agentHandoff.targetTaskVersion + 1,
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects a handoff from a stale Specialist Runtime result', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      sourceRuntimeVersion: agentHandoff.sourceRuntimeVersion - 1,
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects a dependency result that was not accepted as succeeded', () => {
+    const sourceResult = {
+      ...handoffAcceptOptions().sourceResult,
+      status: 'failed' as never,
+    }
+    expect(() => acceptAgentHandoff(
+      agentHandoff,
+      handoffAcceptOptions({ sourceResult }),
+    )).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects a handoff whose result digest was not accepted for the dependency', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      resultDigest: '4'.repeat(64),
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects a handoff whose Context digest is not the accepted source Context', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      contextDigest: '4'.repeat(64),
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects Evidence references not present in the accepted dependency result', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      evidenceDigests: ['2'.repeat(64), '4'.repeat(64)],
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects a resource-lease outcome not accepted with the dependency result', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      resourceLeaseOutcome: 'released',
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects a nonmonotonic handoff sequence', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      sequence: 2,
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects a handoff summary above the attenuated UTF-8 byte bound', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      summary: 'é'.repeat((request.bounds.maxHandoffSummaryBytes / 2) + 1),
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('fails closed when the authoritative summary bound is not finite', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      summary: 'a'.repeat(request.bounds.maxHandoffSummaryBytes + 1),
+    }, handoffAcceptOptions({ maxSummaryBytes: Number.NaN }))).toThrowError(
+      'invalid_agent_handoff',
+    )
+  })
+
+  it('rejects a handoff summary containing non-allowlisted sensitive text', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      summary: 'Result is at /Users/Alice/private/repo with API_TOKEN=summary-secret.',
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects an empty or untrimmed handoff summary', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      summary: ' ',
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects control characters in the allowlisted handoff summary', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      summary: 'Safe prefix\u0000hidden suffix',
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects a noncanonical handoff timestamp', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      createdAt: '2026-08-13T15:04:00Z',
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects a handoff timestamp outside the Coordination Session lifetime', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      createdAt: '2026-08-13T15:10:00.001Z',
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('rejects a noncanonical handoff identity', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      id: '../handoff-1',
+    }, handoffAcceptOptions())).toThrowError('invalid_agent_handoff')
+  })
+
+  it('accepts an exact duplicate handoff idempotently', () => {
+    expect(acceptAgentHandoff(
+      JSON.parse(JSON.stringify(agentHandoff)),
+      handoffAcceptOptions({ expectedSequence: 2, existingHandoff: agentHandoff }),
+    )).toEqual({ handoff: agentHandoff, replayed: true })
+  })
+
+  it('accepts an exact duplicate independently of object key insertion order', () => {
+    const reordered = Object.fromEntries(Object.entries(agentHandoff).reverse())
+    expect(acceptAgentHandoff(
+      reordered,
+      handoffAcceptOptions({ expectedSequence: 2, existingHandoff: agentHandoff }),
+    )).toEqual({ handoff: agentHandoff, replayed: true })
+  })
+
+  it('accepts an exact duplicate after the target task version has advanced', () => {
+    expect(acceptAgentHandoff(
+      agentHandoff,
+      handoffAcceptOptions({
+        targetTaskVersion: agentHandoff.targetTaskVersion + 1,
+        expectedSequence: 2,
+        existingHandoff: agentHandoff,
+      }),
+    )).toEqual({ handoff: agentHandoff, replayed: true })
+  })
+
+  it('rejects a conflicting replay of an accepted handoff identity', () => {
+    expect(() => acceptAgentHandoff({
+      ...agentHandoff,
+      summary: 'Conflicting replacement summary.',
+    }, handoffAcceptOptions({
+      expectedSequence: 2,
+      existingHandoff: agentHandoff,
+    }))).toThrowError('conflicting_agent_handoff_replay')
   })
 })
