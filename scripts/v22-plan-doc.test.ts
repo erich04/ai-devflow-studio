@@ -1,7 +1,9 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const read = (path: string) => readFileSync(path, 'utf8')
+const hasCompletionEvidence = existsSync('docs/releases/v2.2.0/required-gates.json') &&
+  existsSync('docs/releases/v2.2.0/multi-agent-evaluation.json')
 
 describe('V2.2 Multi-Agent and Execution Tenancy contract', () => {
   it('promotes one frozen contract set through the single Roadmap', () => {
@@ -19,9 +21,16 @@ describe('V2.2 Multi-Agent and Execution Tenancy contract', () => {
     }
 
     expect(roadmap).toContain('V2.2 contract set is frozen')
-    expect(roadmap).toContain('### Now — Evaluate And Close V2.2')
-    expect(roadmap).toContain('| Active milestone | V2.2 Slice 7 — Evaluation And 2.x Completion Gate |')
-    expect(roadmap).toContain('| Next gate | Freeze the exact V2.2 candidate and run the full completion matrix |')
+    if (hasCompletionEvidence) {
+      expect(roadmap).toContain('### Now — Maintain The Completed 2.x Line')
+      expect(roadmap).toContain('| Current 2.x state | Maintenance and evidence-promoted work; no automatic V2.3 |')
+      expect(roadmap).toContain('| Next gate | No automatic V2.3; a future charter requires explicit Roadmap promotion |')
+      expect(roadmap).toContain('docs/releases/v2.2.0/')
+    } else {
+      expect(roadmap).toContain('### Now — Evaluate And Close V2.2')
+      expect(roadmap).toContain('| Active milestone | V2.2 Slice 7 — Evaluation And 2.x Completion Gate |')
+      expect(roadmap).toContain('| Next gate | Freeze the exact V2.2 candidate and run the full completion matrix |')
+    }
     expect(roadmap.match(/^### Now —/gmu)).toHaveLength(1)
   })
 
@@ -91,14 +100,18 @@ describe('V2.2 Multi-Agent and Execution Tenancy contract', () => {
     expect(plan).toContain('Team schema 19')
     expect(plan).toContain('full single-Agent baseline remains executable')
     expect(plan).toContain('clean direct child')
-    expect(plan).toContain('Status: Active — Slice 7 in progress')
+    expect(plan).toContain(hasCompletionEvidence
+      ? 'Status: Complete'
+      : 'Status: Active — Slice 7 in progress')
     expect(plan).toMatch(/\| Slice 1 \| Complete \|/u)
     expect(plan).toMatch(/\| Slice 2 \| Complete \|/u)
     expect(plan).toMatch(/\| Slice 3 \| Complete \|/u)
     expect(plan).toMatch(/\| Slice 4 \| Complete \|/u)
     expect(plan).toMatch(/\| Slice 5 \| Complete \|/u)
     expect(plan).toMatch(/\| Slice 6 \| Complete \|/u)
-    expect(plan).toMatch(/\| Slice 7 \| In progress \|/u)
+    expect(plan).toMatch(hasCompletionEvidence
+      ? /\| Slice 7 \| Complete \|/u
+      : /\| Slice 7 \| In progress \|/u)
     expect(plan).toContain('task_retried')
     expect(plan).toContain('repository_read')
     expect(plan).toContain('settleCoordinationResourceLease')

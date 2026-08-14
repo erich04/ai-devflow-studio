@@ -5,13 +5,20 @@ const hasV20CompletionEvidence = existsSync('docs/releases/v2.0.0/required-gates
   existsSync('docs/releases/v2.0.0/agent-runtime-evaluation.json')
 const hasV21CompletionEvidence = existsSync('docs/releases/v2.1.0/required-gates.json') &&
   existsSync('docs/releases/v2.1.0/retrieval-memory-evaluation.json')
+const hasV22CompletionEvidence = existsSync('docs/releases/v2.2.0/required-gates.json') &&
+  existsSync('docs/releases/v2.2.0/multi-agent-evaluation.json')
 
 describe('V1.5 README truth', () => {
   it('records the released V1.5 GitHub Delivery baseline and active V2.0 line', () => {
     const readme = readFileSync('README.md', 'utf8')
 
     expect(readme).toContain('`v1.5.0` is released and the finite 1.x line is complete')
-    if (hasV21CompletionEvidence) {
+    if (hasV22CompletionEvidence) {
+      expect(readme).toContain(
+        'V2.2 Multi-Agent and Execution Tenancy are complete',
+      )
+      expect(readme).toContain('the finite accepted 2.x line is complete')
+    } else if (hasV21CompletionEvidence) {
       expect(readme).toContain(
         'V2.0 Native Agent Runtime and V2.1 Evaluated Retrieval and Memory are complete',
       )

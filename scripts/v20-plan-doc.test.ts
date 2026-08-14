@@ -6,6 +6,8 @@ const hasCompletionEvidence = existsSync('docs/releases/v2.0.0/required-gates.js
   existsSync('docs/releases/v2.0.0/agent-runtime-evaluation.json')
 const hasV21CompletionEvidence = existsSync('docs/releases/v2.1.0/required-gates.json') &&
   existsSync('docs/releases/v2.1.0/retrieval-memory-evaluation.json')
+const hasV22CompletionEvidence = existsSync('docs/releases/v2.2.0/required-gates.json') &&
+  existsSync('docs/releases/v2.2.0/multi-agent-evaluation.json')
 
 describe('V2.0 Native Agent Runtime contract', () => {
   it('records the bounded runtime and observable trajectory decision', () => {
@@ -86,7 +88,10 @@ describe('V2.0 Native Agent Runtime contract', () => {
       expect(roadmap).toContain(path)
     }
 
-    if (hasV21CompletionEvidence) {
+    if (hasV22CompletionEvidence) {
+      expect(roadmap).toContain('### Now — Maintain The Completed 2.x Line')
+      expect(roadmap).toContain('V2.0, V2.1, and V2.2 are complete')
+    } else if (hasV21CompletionEvidence) {
       expect(roadmap).toMatch(/^### Now — .*V2\.2/gmu)
       expect(roadmap).toContain('V2.0 and V2.1 are complete')
     } else if (hasCompletionEvidence) {
@@ -159,7 +164,9 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(plan).toContain('negotiated capability-set digest')
 
     expect(roadmap).toMatch(/Slice 7\s+is complete/)
-    if (hasV21CompletionEvidence) {
+    if (hasV22CompletionEvidence) {
+      expect(roadmap).toContain('### Now — Maintain The Completed 2.x Line')
+    } else if (hasV21CompletionEvidence) {
       expect(roadmap).toMatch(/^### Now — .*V2\.2/gmu)
     } else if (hasCompletionEvidence) {
       expect(roadmap).toMatch(/^### Now — .*V2\.1/gmu)
