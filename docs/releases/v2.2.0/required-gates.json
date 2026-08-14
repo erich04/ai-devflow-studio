@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "targetMilestone": "v2.2",
+  "candidateSha": "c765147be5e86b5b931999c552d951a0c9002562",
+  "status": "passed",
+  "recordedAt": "2026-08-14T02:40:57.000Z",
+  "localMatrix": {
+    "candidateSha": "c765147be5e86b5b931999c552d951a0c9002562",
+    "verify": "passed",
+    "evaluator": "passed",
+    "postgres": "passed",
+    "docker": "passed",
+    "packagedDesktop": "passed",
+    "singleAgentRegression": "passed",
+    "worktreeCleanAfter": true
+  },
+  "verifyRun": {
+    "workflow": "Verify",
+    "event": "workflow_dispatch",
+    "runId": 31764135684,
+    "runAttempt": 1,
+    "url": "https://github.com/erich04/ai-devflow-studio/actions/runs/31764135684",
+    "headSha": "c765147be5e86b5b931999c552d951a0c9002562",
+    "conclusion": "success",
+    "jobs": {
+      "Docker smoke": "success",
+      "Postgres integration": "success",
+      "Windows compatibility": "success",
+      "Docker lifecycle smoke": "success",
+      "macOS verify": "success"
+    }
+  },
+  "desktopArtifact": {
+    "name": "ai-devflow-studio-v15-candidate-desktop",
+    "productVersion": "1.5.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "electronVersion": "33.4.11",
+    "archiveSha256": "809285036a6fc6589f521ae5006c9db8611d5747acb4bd029b2d5facb04dbfe6",
+    "archiveSizeBytes": 107138586,
+    "signed": false,
+    "installer": false
+  },
+  "evaluation": {
+    "path": "docs/releases/v2.2.0/multi-agent-evaluation.json",
+    "datasetId": "v2.2-multi-agent-execution-tenancy",
+    "datasetVersion": 1,
+    "datasetSha256": "276c584b042d2185980822721722cdb76740b4f1c991869170a5aa77b71b868e",
+    "contractSha256": "0bf47d7c8659151de0ba86be1cdfcaaa4a1254bf206bea4cad33b6a753cb499e",
+    "coordinationContractVersion": 1,
+    "executionTenancyContractVersion": 1,
+    "scenarioCount": 10,
+    "aggregateSingleQuality": 0.5,
+    "aggregateMultiQuality": 0.75,
+    "aggregateImprovementOverSingle": 0.25,
+    "costMultiplierOverSingle": 1.25,
+    "latencyMultiplierOverSingle": 1.25,
+    "additionalHumanInterventions": 0,
+    "isolationViolations": 0,
+    "authorityViolations": 0,
+    "terminationViolations": 0,
+    "replayViolations": 0,
+    "redactionViolations": 0,
+    "paidProviderCalls": 0,
+    "scans": {
+      "secretLeaks": 0,
+      "absolutePathLeaks": 0,
+      "sourceContentLeaks": 0,
+      "rawOutputLeaks": 0,
+      "isolationViolations": 0,
+      "authorityViolations": 0,
+      "terminationViolations": 0,
+      "replayViolations": 0,
+      "redactionViolations": 0
+    },
+    "status": "passed"
+  },
+  "roadmapClosure": {
+    "versionLine": "2.x",
+    "status": "completed",
+    "automaticNextMilestone": false
+  }
+}

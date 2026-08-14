@@ -9,9 +9,8 @@ DevFlow turns an AI-assisted code change into a governed delivery flow with loca
 _A real Electron workbench showing the six-stage workflow, local repository controls, Gate Enforcement, knowledge evidence, and agent actions._
 
 > **Current release and roadmap status:** `v1.5.0` is released and the finite 1.x line is complete.
-> V2.0 Native Agent Runtime and V2.1 Evaluated Retrieval and Memory are complete, with immutable
-> candidate-bound evidence under `docs/releases/v2.0.0/` and `docs/releases/v2.1.0/`. V2.2
-> Multi-Agent and Execution Tenancy is now the active priority. The
+> V2.0 Native Agent Runtime and V2.1 Evaluated Retrieval and Memory are complete. V2.2 Multi-Agent and Execution Tenancy are complete, with immutable candidate-bound evidence under
+> `docs/releases/v2.0.0/`, `docs/releases/v2.1.0/`, and `docs/releases/v2.2.0/`; the finite accepted 2.x line is complete. The
 > [Roadmap](docs/roadmap.md) is the single source of truth; package labels and this README do not
 > substitute for immutable proof under `docs/releases/`.
 
@@ -202,9 +201,8 @@ For the API/Web/Postgres team path, use the [self-hosted pilot guide](docs/guide
 - Full real-window validation is macOS-local. Windows has CI compatibility checks and a source-validation guide, but no signed installer or full Electron release signoff.
 - The current product is a self-hosted team pilot, not a managed public SaaS offering.
 
-The [roadmap](docs/roadmap.md) is the source of truth for the completed 1.x line, completed V2.0
-and V2.1 milestones, active V2.2 sequence, and deferred
-platform work.
+The [roadmap](docs/roadmap.md) is the source of truth for the completed 1.x line, completed V2.0,
+V2.1, and V2.2 milestones, the completed finite 2.x line, and deferred platform work.
 
 ## Documentation Map
 
@@ -217,7 +215,7 @@ platform work.
 | V1.5 governed GitHub Delivery | [v1.5 Walkthrough](docs/guides/devflow-studio-v1.5-walkthrough.md) |
 | V2.0 Native Agent Runtime contract | [V2.0 PRD](docs/product/prd/v2.0-native-agent-runtime-prd.md) and [implementation plan](docs/plans/v2.0-native-agent-runtime.md) |
 | V2.1 Evaluated Retrieval and Memory | [V2.1 PRD](docs/product/prd/v2.1-evaluated-retrieval-memory-prd.md), [implementation plan](docs/plans/v2.1-evaluated-retrieval-memory.md), and [completion evidence](docs/releases/v2.1.0/) |
-| V2.2 Multi-Agent and Execution Tenancy | [V2.2 PRD](docs/product/prd/v2.2-multi-agent-execution-tenancy-prd.md), [architecture decision](docs/adr/0019-bounded-multi-agent-coordination.md), and [implementation plan](docs/plans/v2.2-multi-agent-execution-tenancy.md) |
+| V2.2 Multi-Agent and Execution Tenancy | [V2.2 PRD](docs/product/prd/v2.2-multi-agent-execution-tenancy-prd.md), [architecture decision](docs/adr/0019-bounded-multi-agent-coordination.md), [implementation plan](docs/plans/v2.2-multi-agent-execution-tenancy.md), and [completion evidence](docs/releases/v2.2.0/) |
 | Self-hosted API/Web/Postgres pilot | [Self-Hosted Pilot](docs/guides/devflow-studio-self-hosted-pilot.md) |
 | Windows source and ZIP validation | [Windows ZIP Smoke Guide](docs/guides/windows-zip-smoke.md) |
 | Test layers and quality gates | [Testing Strategy](docs/engineering/testing-strategy.md) |

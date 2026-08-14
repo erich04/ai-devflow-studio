@@ -58,7 +58,7 @@ rules.
 | --- | --- | --- | --- | --- |
 | 0.x | Engineering foundation | Real Electron execution, durable local state, team sync, Knowledge Governance, Gate policy, a managed external Coding Agent Adapter, runtime observability, and release discipline. | Fake and explicitly authorized real Coding paths can execute in managed worktrees, preserve auditable evidence, obey human Gates, sync only redacted summaries, and pass reproducible verification. | Completed at v0.9.0. |
 | 1.x | Governed self-hosted delivery | Authenticated team pilot, Desktop pairing, project scope, policy and budget controls, durable sync, repository knowledge, Web collaboration commands, reproducible lifecycle, and human-approved GitHub delivery. | One authenticated Work Request becomes one canonical local Run, reaches tested and evidence-backed delivery, and publishes a branch and pull request only after explicit human approval. V1.5 is the final planned 1.x feature milestone. | Completed at v1.5.0. |
-| 2.x | DevFlow-native Agent Runtime | A bounded first-party Agent loop, native Tool and MCP execution, pluggable Coding Executors, trajectory and evaluation, scoped Context and Memory, evaluated RAG, Multi-Agent orchestration, and tenant-scoped execution. | Benchmarked scenarios demonstrate bounded single- and Multi-Agent execution, native and delegated coding, MCP/tool use, evaluated retrieval and Memory, failure recovery, tenant isolation, and auditable trajectories while Workflow and Gate authority remains intact. | Active; V2.0 and V2.1 are complete and V2.2 is the current priority. |
+| 2.x | DevFlow-native Agent Runtime | A bounded first-party Agent loop, native Tool and MCP execution, pluggable Coding Executors, trajectory and evaluation, scoped Context and Memory, evaluated RAG, Multi-Agent orchestration, and tenant-scoped execution. | Benchmarked scenarios demonstrate bounded single- and Multi-Agent execution, native and delegated coding, MCP/tool use, evaluated retrieval and Memory, failure recovery, tenant isolation, and auditable trajectories while Workflow and Gate authority remains intact. | Completed at V2.2. |
 
 The version lines are finite product contracts, not an instruction to keep adding versions. A line
 ends when its completion gate passes; remaining ideas move to maintenance, evidence-promoted work,
@@ -88,10 +88,10 @@ contains the signoff-bound release artifacts.
 | V1.5 execution history | `docs/plans/v1.5-github-delivery.md` and the four immutable release evidence files |
 | Completed version line | 1.x governed self-hosted delivery |
 | Active version line | 2.x DevFlow-native Agent Runtime |
-| Completed 2.x milestones | V2.0 Native Agent Runtime Foundation; V2.1 Evaluated Retrieval And Memory |
-| Completion evidence | `docs/releases/v2.0.0/`; `docs/releases/v2.1.0/` |
-| Active milestone | V2.2 Slice 7 — Evaluation And 2.x Completion Gate |
-| Next gate | Freeze the exact V2.2 candidate and run the full completion matrix |
+| Completed 2.x milestones | V2.0 Native Agent Runtime Foundation; V2.1 Evaluated Retrieval And Memory; V2.2 Multi-Agent And Execution Tenancy |
+| Completion evidence | `docs/releases/v2.0.0/`; `docs/releases/v2.1.0/`; `docs/releases/v2.2.0/` |
+| Current 2.x state | Maintenance and evidence-promoted work; no automatic V2.3 |
+| Next gate | No automatic V2.3; a future charter requires explicit Roadmap promotion |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -165,15 +165,17 @@ The superseded implementation-period markers `### Now — Run V2.1 Evaluation An
 `| Next gate | Freeze the exact V2.1 candidate and run the full completion matrix |` remain here only
 as auditable phase vocabulary; the current table and the single `Now` heading below are authoritative.
 
-### Now — Evaluate And Close V2.2
+### Now — Maintain The Completed 2.x Line
 
-- Complete the frozen single-vs-Multi evaluator and require the selected-task quality improvement,
-  bounded cost/latency/intervention, zero paid calls, and zero authority, isolation, termination,
-  replay, or redaction violations.
-- Freeze one exact candidate and run the full unit/type/build, real Postgres, Docker lifecycle,
-  Windows, macOS, Electron, packaged restart, single-Agent regression, and artifact matrix.
-- Record immutable candidate-bound evaluator and required-gates evidence as the clean direct child of
-  the passing candidate, then close the finite accepted 2.x line without an automatic V2.3.
+V2.0, V2.1, and V2.2 are complete, and the finite accepted 2.x line is closed. Candidate
+`c765147be5e86b5b931999c552d951a0c9002562` passed the exact ten-scenario Single-vs-Multi evaluator,
+the full local/PG16/Docker/packaged matrix, first-attempt five-job Verify run `31764135684`, and the
+exclusive Desktop artifact gate. Immutable V2.2 completion records are stored under
+`docs/releases/v2.2.0/`.
+
+Current work is limited to maintenance, security/dependency updates, and evidence-promoted fixes.
+There is no automatic V2.3; a future feature charter must be explicitly promoted through this single
+Roadmap before product implementation begins.
 
 The V2.2 contract set is frozen in:
 
@@ -211,10 +213,10 @@ Web projection. Seed/Postgres parity, full unit/type/build, real PG16, Docker sm
 lifecycle migration/rollback gates pass. No open-ended swarm, remote executor, hosted tenancy, or new
 publication authority is implied by this milestone.
 
-### Next — Close The Finite Accepted 2.x Line
+### Next — Require A New Charter For Any Feature Line
 
-- Publish no further 2.x feature milestone unless a separately approved future charter changes the
-  single Roadmap after V2.2 completion.
+- Publish no further 2.x feature milestone automatically. A future charter must define a new finite
+  contract and be explicitly promoted through this single Roadmap.
 
 ### Later — Evidence-Promoted Maintenance Or A Separately Approved Charter
 
@@ -258,7 +260,25 @@ publication authority is implied by this milestone.
 - Candidate `2c11faa09f35c4930b3c4cf489469b696ccd84ea` passed the frozen no-cost evaluator,
   zero-leak/isolation/deletion scans, full local and exact-SHA cross-platform matrices, and exclusive
   Desktop artifact verification. Immutable records are under `docs/releases/v2.1.0/`.
-- Slice 7 is complete with the exact direct-child completion records; V2.2 is now active.
+- Slice 7 is complete with the exact direct-child completion records; V2.2 completed the finite 2.x
+  line.
+
+### v2.2: Multi-Agent And Execution Tenancy
+
+- Completed one bounded Supervisor and fixed Specialist coordination model with an immutable DAG,
+  attenuated authority, exact tenancy, shared budget/resource arbitration, deterministic handoffs,
+  cancellation, failure attribution, and restart-safe recovery.
+- Completed Desktop schema 29 and Team schema 19 persistence, metadata-only sync, and read-only Web
+  visibility without adding Workflow, Gate, publication, or renderer-owned execution authority.
+- Candidate `c765147be5e86b5b931999c552d951a0c9002562` passed the frozen ten-scenario evaluator: aggregate
+  quality improved from `0.5` to `0.75`, cost and latency multipliers were each `1.25`, additional
+  human interventions and paid-provider calls were zero, and all authority, isolation, termination,
+  replay, and redaction violation counts were zero.
+- The candidate passed the full local, PG16, Docker, packaged Desktop, and first-attempt five-job
+  exact-SHA Verify matrix. The exclusive Desktop archive SHA-256 is
+  `809285036a6fc6589f521ae5006c9db8611d5747acb4bd029b2d5facb04dbfe6`; immutable completion
+  records are under `docs/releases/v2.2.0/`.
+- Slice 7 is complete, V2.2 is complete, and there is no automatic V2.3.
 
 ### v0.1: Fixture-Backed Team Workbench
 
