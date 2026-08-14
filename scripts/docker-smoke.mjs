@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'node:net'
 import { createSessionCookie } from '../apps/api/src/auth/session-cookie'
+import { runDockerComposeBuildWithInfrastructureRetry } from './docker-smoke-infrastructure'
 
 const projectName = `devflow-docker-smoke-${Date.now()}`
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
@@ -169,7 +170,11 @@ function expectNoCredentialLeak(value, credentials, label) {
 }
 
 try {
-  await runDocker(['compose', '-p', projectName, 'up', '--build', '-d'])
+  await runDockerComposeBuildWithInfrastructureRetry({
+    run: () => runDocker(['compose', '-p', projectName, 'up', '--build', '-d']),
+    cleanup: () =>
+      runDocker(['compose', '-p', projectName, 'down', '-v', '--remove-orphans']),
+  })
 
   const apiUrl = `http://127.0.0.1:${apiPort}`
   const webUrl = `http://127.0.0.1:${webPort}`
