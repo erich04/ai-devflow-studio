@@ -78,7 +78,7 @@ describe('V2.2 Multi-Agent evaluation runner', () => {
     expect(result.evaluation).toEqual({ ready: true, failures: [] })
     expect(runScenario).toHaveBeenCalledTimes(10)
     expect(writeRecord).toHaveBeenCalledWith(
-      expect.stringContaining(`/out/v22-evaluation/${candidateSha}.json`),
+      resolve(`out/v22-evaluation/${candidateSha}.json`),
       expect.stringContaining(`"candidateSha": "${candidateSha}"`),
       { encoding: 'utf8', mode: 0o600 },
     )
