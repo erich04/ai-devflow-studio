@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   createGitHubDeliveryIntent,
+  hasSupportedCodingDiffSanitization,
   redactTestEvidenceForStorage,
   validateTestCommandSafety,
   type Artifact,
@@ -690,7 +691,7 @@ async function resolveDeliverySource(
     diffArtifact.id !== packageSource.diffArtifactId ||
     diffArtifact.sourceDigest !== packageSource.diffSourceDigest ||
     diffArtifact.truncated ||
-    diffArtifact.redacted !== true ||
+    !hasSupportedCodingDiffSanitization(diffArtifact) ||
     !selectedTestEvidence ||
     selectedTestEvidence.runId !== run.id ||
     selectedTestEvidence.nodeId !== codingRun.nodeId ||

@@ -158,6 +158,9 @@ const diffArtifact: CodingDiffArtifact = {
   sourceDigest: '2222222222222222222222222222222222222222222222222222222222222222',
   truncated: false,
   redacted: true,
+  sanitizerVersion: 2,
+  sanitizedAt: '2026-08-11T10:18:00.000Z',
+  secretReplacementCount: 0,
   createdAt: '2026-08-11T10:18:00.000Z',
 }
 
@@ -399,6 +402,19 @@ describe('GitHub Delivery Intent', () => {
         },
       },
     })).rejects.toThrow('PR Delivery Package does not match the managed coding source')
+  })
+
+  it('fails closed when the Coding Diff sanitizer version is missing or unknown', async () => {
+    const { sanitizerVersion: _sanitizerVersion, ...missingVersion } = diffArtifact
+    await expect(createGitHubDeliveryIntent({
+      ...baseInput,
+      diffArtifact: missingVersion,
+    })).rejects.toThrow('Coding Diff Artifact does not match the completed Coding Agent run')
+
+    await expect(createGitHubDeliveryIntent({
+      ...baseInput,
+      diffArtifact: { ...diffArtifact, sanitizerVersion: 3 },
+    })).rejects.toThrow('Coding Diff Artifact does not match the completed Coding Agent run')
   })
 
   it('changes the intent digest when commit-bound Test Evidence changes', async () => {

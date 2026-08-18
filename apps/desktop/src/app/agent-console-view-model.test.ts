@@ -377,6 +377,9 @@ describe('agent console view model', () => {
       patch: '+changed',
       truncated: false,
       redacted: true,
+      sanitizerVersion: 2,
+      sanitizedAt: '2026-06-17T00:02:00.000Z',
+      secretReplacementCount: 2,
       createdAt: '2026-06-17T00:02:00.000Z',
     }
     const testEvidence: TestEvidence = {
@@ -422,5 +425,8 @@ describe('agent console view model', () => {
       'test-evidence',
       'cost',
     ])
+    expect(viewModel.evidenceGroups.find((group) => group.id === 'diff')?.items[0]?.eyebrow).toBe(
+      '2 secret replacements',
+    )
   })
 })

@@ -529,7 +529,13 @@ function buildEvidenceGroups(input: BuildAgentConsoleViewModelInput): AgentConso
       tone: 'accent',
       items: [{
         id: input.diff.id,
-        eyebrow: input.diff.redacted ? 'redacted diff' : 'diff',
+        eyebrow: typeof input.diff.secretReplacementCount === 'number'
+          ? input.diff.secretReplacementCount > 0
+            ? `${input.diff.secretReplacementCount} secret replacement${input.diff.secretReplacementCount === 1 ? '' : 's'}`
+            : `sanitized v${input.diff.sanitizerVersion ?? 'unknown'}`
+          : input.diff.redacted
+            ? 'legacy redacted diff'
+            : 'unsanitized diff',
         title: input.diff.changedPaths.join(', ') || 'Coding Diff Artifact',
         body: input.diff.patch.slice(0, 1800),
         meta: [input.diff.truncated ? 'truncated' : 'full patch'],

@@ -6,6 +6,7 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from './domain'
+import { hasSupportedCodingDiffSanitization } from './coding-agent'
 
 export const GITHUB_CREDENTIAL_TOKEN_MIN_LENGTH = 16
 export const GITHUB_CREDENTIAL_TOKEN_MAX_LENGTH = 8_192
@@ -515,7 +516,7 @@ export async function createGitHubDeliveryIntent(
     input.diffArtifact.runId !== input.run.id ||
     input.diffArtifact.nodeId !== input.codingRun.nodeId ||
     input.diffArtifact.projectId !== input.run.projectId ||
-    input.diffArtifact.redacted !== true ||
+    !hasSupportedCodingDiffSanitization(input.diffArtifact) ||
     input.diffArtifact.truncated ||
     !input.diffArtifact.sourceDigest ||
     !/^[a-f0-9]{64}$/.test(input.diffArtifact.sourceDigest) ||

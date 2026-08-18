@@ -21,6 +21,7 @@ import {
   buildCodingBrief,
   canRunCodingAgentOnNode,
   createRemoteCodingAgentSummary,
+  hasSupportedCodingDiffSanitization,
   redactRemoteCodingAgentSummaryForSync,
   sanitizeCodingDiffArtifact,
   selectDependencyBootstrap,
@@ -435,6 +436,16 @@ describe('sanitizeCodingDiffArtifact', () => {
     expect(artifact.sanitizerVersion).toBe(2)
     expect(artifact.sanitizedAt).toBe('2026-08-17T10:00:00.000Z')
     expect(artifact.secretReplacementCount).toBe(3)
+    expect(hasSupportedCodingDiffSanitization(artifact)).toBe(true)
+    expect(hasSupportedCodingDiffSanitization({ ...artifact, redacted: false })).toBe(true)
+    expect(hasSupportedCodingDiffSanitization({ ...artifact, sanitizerVersion: 3 })).toBe(false)
+    const {
+      sanitizerVersion: _sanitizerVersion,
+      sanitizedAt: _sanitizedAt,
+      secretReplacementCount: _secretReplacementCount,
+      ...legacyArtifact
+    } = artifact
+    expect(hasSupportedCodingDiffSanitization(legacyArtifact)).toBe(false)
   })
 })
 

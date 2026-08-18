@@ -36,6 +36,25 @@ export const activeCodingAgentRunStatuses: readonly CodingAgentRun['status'][] =
   'testing',
 ]
 
+export function hasSupportedCodingDiffSanitization(
+  artifact: CodingDiffArtifact,
+): boolean {
+  const sanitizedAt = artifact.sanitizedAt
+  return (
+    typeof artifact.sanitizerVersion === 'number' &&
+    SUPPORTED_CODING_DIFF_SANITIZER_VERSIONS.some(
+      (version) => version === artifact.sanitizerVersion,
+    ) &&
+    typeof sanitizedAt === 'string' &&
+    Number.isFinite(Date.parse(sanitizedAt)) &&
+    new Date(sanitizedAt).toISOString() === sanitizedAt &&
+    Date.parse(sanitizedAt) >= Date.parse(artifact.createdAt) &&
+    Number.isSafeInteger(artifact.secretReplacementCount) &&
+    artifact.secretReplacementCount! >= 0 &&
+    artifact.secretReplacementCount! <= MAX_DIFF_CHARS
+  )
+}
+
 export function isActiveCodingAgentRunStatus(status: CodingAgentRun['status']): boolean {
   return activeCodingAgentRunStatuses.includes(status)
 }

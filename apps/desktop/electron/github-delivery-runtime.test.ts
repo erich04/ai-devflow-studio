@@ -490,7 +490,13 @@ describe('GitHub Delivery preparation runtime', () => {
 
   it('rejects a diff without sanitizer provenance before commit or test side effects', async () => {
     const source = fixture()
-    source.diff = { ...source.diff, redacted: false }
+    const {
+      sanitizerVersion: _sanitizerVersion,
+      sanitizedAt: _sanitizedAt,
+      secretReplacementCount: _secretReplacementCount,
+      ...legacyDiff
+    } = source.diff
+    source.diff = legacyDiff
     const store = fakeStore(source)
     const commitWorkspace = vi.fn()
     const runTestCommand = vi.fn()
