@@ -77,7 +77,7 @@ describe('V1.5 living documentation truth', () => {
       expect(markdown).toContain('does not authorize paid-provider smoke')
     }
 
-    expect(testingStrategy).toContain('Desktop schema v29')
+    expect(testingStrategy).toContain('Desktop schema v32')
     expect(testingStrategy).toContain('Desktop schema 17-to-18')
     expect(testingStrategy).toContain('18-to-19')
     expect(testingStrategy).toContain('19-to-20')
@@ -85,7 +85,7 @@ describe('V1.5 living documentation truth', () => {
     expect(testingStrategy).toContain('21-to-22')
     expect(testingStrategy).toContain('Local MCP')
     expect(testingStrategy).toContain('accepted action count remains exactly one after cold restart')
-    expect(demoAndSmoke).toContain('Desktop schema v29')
+    expect(demoAndSmoke).toContain('Desktop schema v32')
 
     for (const command of [
       'corepack pnpm test:build-output-smoke',
@@ -190,7 +190,7 @@ describe('V1.5 living documentation truth', () => {
     }
 
     expect(backendMatrix).toContain('Team schema v19')
-    expect(backendMatrix).toContain('Desktop schema v29')
+    expect(backendMatrix).toContain('Desktop schema v32')
     expect(backendMatrix).toContain('Agent Runtime')
     expect(backendMatrix).toContain('Local MCP')
     expect(backendMatrix).toContain('provider-authoritative expiry')

@@ -9,7 +9,7 @@ finite 1.x completion gate passed, and its immutable candidate-bound evidence li
 - Team/API/Postgres must report Team schema v19 with provider-authoritative expiry, bounded
   provider retry, verified publication adoption, and metadata-only Agent Runtime, Memory, and
   Coordination projection contracts.
-- Electron/SQLite must report Desktop schema v29.
+- Electron/SQLite must report Desktop schema v32.
 - The Web/API/Postgres walkthrough needs authenticated owner, lead, and paired Desktop identities.
 - A GitHub Delivery walkthrough needs a verified GitHub App repository binding, one tested canonical
   managed-worktree commit, a PR Delivery Package, and an exact Delivery Intent.
