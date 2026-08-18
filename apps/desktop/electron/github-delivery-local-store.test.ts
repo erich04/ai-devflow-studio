@@ -13,6 +13,7 @@ import type {
   CodingAgentRun,
   CodingDiffArtifact,
   DesktopPairingCredential,
+  GitHubDeliveryContentScanRecord,
   GitHubDeliveryRevocationCheck,
   GitHubRepositoryBinding,
   LocalProject,
@@ -51,6 +52,7 @@ const dropAgentMemorySchemaSql = `
   drop table if exists agent_memory_candidates;
 `
 const dropAgentCoordinationSchemaSql = `
+  drop table if exists github_delivery_content_scans;
   drop table if exists agent_coordination_checkpoints;
   drop table if exists agent_coordination_audits;
   drop table if exists agent_coordination_leases;
@@ -689,6 +691,118 @@ describe('GitHub repository binding observation CAS', () => {
 })
 
 describe('GitHub Delivery Intent local persistence', () => {
+  it('durably records one exact metadata-only content scan before publication', async () => {
+    const dbPath = await tempDbPath()
+    const sources = createSources()
+    const first = await createLocalStore({ dbPath })
+    await saveSources(first, sources)
+    const intent = await savePreparedIntent(first, sources)
+    const scan: GitHubDeliveryContentScanRecord = {
+      stateVersion: 1,
+      intentId: intent.id,
+      intentUpdatedAt: intent.updatedAt,
+      workspaceId: intent.workspaceId,
+      baseCommitSha: intent.baseCommitSha,
+      expectedCommitSha: intent.expectedCommitSha,
+      scannerVersion: 1,
+      commitCount: 1,
+      scannedByteCount: 512,
+      secretMatchCount: 0,
+      scanDigest: 'a'.repeat(64),
+      status: 'safe',
+      scannedAt: '2026-08-11T10:31:30.000Z',
+      redacted: true,
+    }
+
+    await expect(first.commitGitHubDeliveryContentScan({
+      expectedIntent: intent,
+      scan,
+    })).resolves.toEqual({ committed: true, replayed: false, scan })
+    await expect(first.commitGitHubDeliveryContentScan({
+      expectedIntent: intent,
+      scan: { ...scan, scannedAt: '2026-08-11T10:32:00.000Z' },
+    })).resolves.toEqual({ committed: true, replayed: true, scan })
+    first.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.listGitHubDeliveryContentScans(intent.id)).resolves.toEqual([scan])
+    await expect(reopened.loadState()).resolves.toMatchObject({
+      githubDeliveryContentScans: [scan],
+    })
+    await expect(reopened.commitGitHubDeliveryContentScan({
+      expectedIntent: intent,
+      scan: { ...scan, scanDigest: 'b'.repeat(64) },
+    })).resolves.toEqual({ committed: false, reason: 'scan_conflict' })
+    reopened.close()
+  })
+
+  it('rejects forged content scan authority and secret-bearing extra fields', async () => {
+    const sources = createSources()
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    await saveSources(store, sources)
+    const intent = await savePreparedIntent(store, sources)
+    const scan: GitHubDeliveryContentScanRecord = {
+      stateVersion: 1,
+      intentId: intent.id,
+      intentUpdatedAt: intent.updatedAt,
+      workspaceId: intent.workspaceId,
+      baseCommitSha: intent.baseCommitSha,
+      expectedCommitSha: intent.expectedCommitSha,
+      scannerVersion: 1,
+      commitCount: 1,
+      scannedByteCount: 512,
+      secretMatchCount: 0,
+      scanDigest: 'a'.repeat(64),
+      status: 'safe',
+      scannedAt: '2026-08-11T10:31:30.000Z',
+      redacted: true,
+    }
+
+    await expect(store.commitGitHubDeliveryContentScan({
+      expectedIntent: intent,
+      scan: { ...scan, expectedCommitSha: 'c'.repeat(40) },
+    })).resolves.toEqual({ committed: false, reason: 'invalid_scan' })
+    await expect(store.commitGitHubDeliveryContentScan({
+      expectedIntent: intent,
+      scan: { ...scan, token: 'must-not-persist' } as GitHubDeliveryContentScanRecord,
+    })).resolves.toEqual({ committed: false, reason: 'invalid_scan' })
+    await expect(store.listGitHubDeliveryContentScans()).resolves.toEqual([])
+    store.close()
+  })
+
+  it('restores an empty scan set when durable content scan persistence fails', async () => {
+    const dbPath = await tempDbPath()
+    const sources = createSources()
+    const store = await createLocalStore({ dbPath })
+    await saveSources(store, sources)
+    const intent = await savePreparedIntent(store, sources)
+    const scan: GitHubDeliveryContentScanRecord = {
+      stateVersion: 1,
+      intentId: intent.id,
+      intentUpdatedAt: intent.updatedAt,
+      workspaceId: intent.workspaceId,
+      baseCommitSha: intent.baseCommitSha,
+      expectedCommitSha: intent.expectedCommitSha,
+      scannerVersion: 1,
+      commitCount: 1,
+      scannedByteCount: 512,
+      secretMatchCount: 0,
+      scanDigest: 'a'.repeat(64),
+      status: 'safe',
+      scannedAt: '2026-08-11T10:31:30.000Z',
+      redacted: true,
+    }
+    await rename(dbPath, `${dbPath}.backup`)
+    await mkdir(dbPath)
+
+    await expect(store.commitGitHubDeliveryContentScan({
+      expectedIntent: intent,
+      scan,
+    })).rejects.toThrow()
+    await expect(store.listGitHubDeliveryContentScans()).resolves.toEqual([])
+    store.close()
+  })
+
   it('discards schema 16 revocation checks and writes only proof state version 2', async () => {
     const dbPath = await tempDbPath()
     const sources = createSources()
@@ -758,7 +872,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(30)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(31)
     await expect(migrated.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])
 
     const v2Check: GitHubDeliveryRevocationCheck = {
@@ -788,10 +902,10 @@ describe('GitHub Delivery Intent local persistence', () => {
     verified.close()
   })
 
-  it('keeps schema 17 revocation checks isolated after migrating through schema 30', async () => {
+  it('keeps schema 17 revocation checks isolated after migrating through schema 31', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
-    expect(await store.getSchemaVersion()).toBe(30)
+    expect(await store.getSchemaVersion()).toBe(31)
     store.close()
 
     const SQL = await initSqlJs()
@@ -1149,7 +1263,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     store.close()
   })
 
-  it('preserves an existing v14 JSON series and non-first attempt through schema 30', async () => {
+  it('preserves an existing v14 JSON series and non-first attempt through schema 31', async () => {
     const dbPath = await tempDbPath()
     const sources = createSources()
     const store = await createLocalStore({ dbPath })
@@ -1195,7 +1309,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(30)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(31)
     await expect(migrated.listGitHubDeliveryIntents(sources.run.id))
       .resolves.toEqual([attemptTwo])
     migrated.close()
@@ -1221,7 +1335,7 @@ describe('GitHub Delivery Intent local persistence', () => {
     database.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(30)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(31)
     await expect(migrated.listGitHubDeliveryIntents(sources.run.id))
       .resolves.toEqual([completed])
     await expect(migrated.listGitHubDeliveryRevocationChecks()).resolves.toEqual([])

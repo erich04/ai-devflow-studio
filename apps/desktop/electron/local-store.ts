@@ -161,6 +161,7 @@ import {
   type GateEnforcementDecision,
   type GitHubDeliveryIntent,
   type GitHubDeliveryCompletion,
+  type GitHubDeliveryContentScanRecord,
   type GitHubDeliveryOperatorOutcome,
   type GitHubDeliveryOperatorOutcomeCode,
   type GitHubDeliveryRevocationCheck,
@@ -180,7 +181,7 @@ import {
   type WorkRequest,
   AGENT_MEMORY_ACTIVE_REVISIONS_MAX,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 30
+export const CURRENT_SCHEMA_VERSION = 31
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -300,6 +301,22 @@ export type GitHubDeliveryIntentCompletionMutation = {
 
 export type GitHubDeliveryIntentCompletionMutationResult =
   GitHubDeliveryIntentStatusMutationResult
+
+export type CommitGitHubDeliveryContentScanInput = {
+  expectedIntent: GitHubDeliveryIntent
+  scan: GitHubDeliveryContentScanRecord
+}
+
+export type CommitGitHubDeliveryContentScanResult =
+  | {
+      committed: true
+      replayed: boolean
+      scan: GitHubDeliveryContentScanRecord
+    }
+  | {
+      committed: false
+      reason: 'intent_not_found' | 'source_stale' | 'invalid_scan' | 'scan_conflict'
+    }
 
 export type StopGitHubDeliveryIntentInput = {
   intentId: string
@@ -955,6 +972,12 @@ export type LocalStore = {
     mutation: GitHubDeliveryIntentCompletionMutation,
   ): Promise<GitHubDeliveryIntentCompletionMutationResult>
   listGitHubDeliveryIntents(runId?: string): Promise<GitHubDeliveryIntent[]>
+  commitGitHubDeliveryContentScan(
+    input: CommitGitHubDeliveryContentScanInput,
+  ): Promise<CommitGitHubDeliveryContentScanResult>
+  listGitHubDeliveryContentScans(
+    intentId?: string,
+  ): Promise<GitHubDeliveryContentScanRecord[]>
   listGitHubDeliveryOperatorOutcomes(
     intentId?: string,
   ): Promise<GitHubDeliveryOperatorOutcome[]>
@@ -3840,6 +3863,99 @@ const schemaMigrations: readonly SchemaMigration[] = [
       `)
     },
   },
+  {
+    version: 31,
+    migrate(db) {
+      db.run(`
+    alter table github_delivery_operator_outcomes
+      rename to github_delivery_operator_outcomes_v30;
+
+    create table github_delivery_operator_outcomes (
+      intent_id text primary key,
+      intent_updated_at text not null,
+      outcome_code text not null,
+      state_version integer not null,
+      json text not null,
+      recorded_at text not null,
+      check (length(trim(intent_id)) > 0 and length(intent_id) <= 200 and trim(intent_id) = intent_id),
+      check (outcome_code in (
+        'content_scan_blocked', 'content_scan_incomplete',
+        'invalid_delivery_source', 'operation_cancelled',
+        'publisher_cleanup_failed', 'remote_branch_diverged',
+        'remote_unavailable', 'repository_mismatch', 'push_result_unknown',
+        'workspace_dirty', 'workspace_mismatch'
+      )),
+      check (state_version = 1),
+      check (json_valid(json)),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.intentId') = intent_id),
+      check (json_extract(json, '$.intentUpdatedAt') = intent_updated_at),
+      check (json_extract(json, '$.outcomeCode') = outcome_code),
+      check (json_extract(json, '$.recordedAt') = recorded_at),
+      check (json_extract(json, '$.redacted') = 1)
+    );
+
+    insert into github_delivery_operator_outcomes (
+      intent_id, intent_updated_at, outcome_code, state_version, json, recorded_at
+    )
+    select intent_id, intent_updated_at, outcome_code, state_version, json, recorded_at
+    from github_delivery_operator_outcomes_v30;
+
+    drop table github_delivery_operator_outcomes_v30;
+
+    create index idx_github_delivery_operator_outcomes_recorded
+      on github_delivery_operator_outcomes(recorded_at, intent_id);
+
+    create table github_delivery_content_scans (
+      intent_id text primary key references github_delivery_intents(id) on delete cascade,
+      intent_updated_at text not null,
+      workspace_id text not null,
+      base_commit_sha text not null,
+      expected_commit_sha text not null,
+      scanner_version integer not null,
+      commit_count integer not null,
+      scanned_byte_count integer not null,
+      secret_match_count integer not null,
+      scan_digest text not null,
+      status text not null,
+      state_version integer not null,
+      json text not null,
+      scanned_at text not null,
+      check (length(trim(intent_id)) > 0 and length(intent_id) <= 200 and trim(intent_id) = intent_id),
+      check (length(trim(workspace_id)) > 0 and length(workspace_id) <= 200 and trim(workspace_id) = workspace_id),
+      check (base_commit_sha not glob '*[^0-9a-f]*' and length(base_commit_sha) = 40),
+      check (expected_commit_sha not glob '*[^0-9a-f]*' and length(expected_commit_sha) = 40),
+      check (base_commit_sha <> expected_commit_sha),
+      check (scanner_version = 1),
+      check (commit_count between 1 and 256),
+      check (scanned_byte_count between 0 and 67108864),
+      check (secret_match_count = 0),
+      check (scan_digest not glob '*[^0-9a-f]*' and length(scan_digest) = 64),
+      check (status = 'safe'),
+      check (state_version = 1),
+      check (json_valid(json)),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.intentId') = intent_id),
+      check (json_extract(json, '$.intentUpdatedAt') = intent_updated_at),
+      check (json_extract(json, '$.workspaceId') = workspace_id),
+      check (json_extract(json, '$.baseCommitSha') = base_commit_sha),
+      check (json_extract(json, '$.expectedCommitSha') = expected_commit_sha),
+      check (json_extract(json, '$.scannerVersion') = scanner_version),
+      check (json_extract(json, '$.commitCount') = commit_count),
+      check (json_extract(json, '$.scannedByteCount') = scanned_byte_count),
+      check (json_extract(json, '$.secretMatchCount') = secret_match_count),
+      check (json_extract(json, '$.scanDigest') = scan_digest),
+      check (json_extract(json, '$.status') = status),
+      check (json_extract(json, '$.scannedAt') = scanned_at),
+      check (json_extract(json, '$.redacted') = 1),
+      check (scanned_at >= intent_updated_at)
+    );
+
+    create index idx_github_delivery_content_scans_scanned
+      on github_delivery_content_scans(scanned_at, intent_id);
+      `)
+    },
+  },
 ]
 
 function migrateSchema(db: Database) {
@@ -5916,6 +6032,8 @@ function writeGitHubDeliveryIntent(db: Database, intent: GitHubDeliveryIntent): 
 const gitHubDeliveryOperatorOutcomeCodes: ReadonlySet<
   GitHubDeliveryOperatorOutcomeCode
 > = new Set([
+  'content_scan_blocked',
+  'content_scan_incomplete',
   'invalid_delivery_source',
   'operation_cancelled',
   'publisher_cleanup_failed',
@@ -5926,6 +6044,120 @@ const gitHubDeliveryOperatorOutcomeCodes: ReadonlySet<
   'workspace_dirty',
   'workspace_mismatch',
 ])
+
+const GITHUB_DELIVERY_CONTENT_SCAN_KEYS = [
+  'stateVersion',
+  'intentId',
+  'intentUpdatedAt',
+  'workspaceId',
+  'baseCommitSha',
+  'expectedCommitSha',
+  'scannerVersion',
+  'commitCount',
+  'scannedByteCount',
+  'secretMatchCount',
+  'scanDigest',
+  'status',
+  'scannedAt',
+  'redacted',
+] as const
+
+function isCanonicalGitHubDeliveryContentScan(
+  scan: GitHubDeliveryContentScanRecord,
+): boolean {
+  const actualKeys = Object.keys(scan).sort()
+  const expectedKeys = [...GITHUB_DELIVERY_CONTENT_SCAN_KEYS].sort()
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key, index) => key === expectedKeys[index]) &&
+    scan.stateVersion === 1 &&
+    isNonEmptyIdentifier(scan.intentId) &&
+    scan.intentId.length <= 200 &&
+    isNonEmptyIdentifier(scan.workspaceId) &&
+    scan.workspaceId.length <= 200 &&
+    isCanonicalIsoTimestamp(scan.intentUpdatedAt) &&
+    isCanonicalIsoTimestamp(scan.scannedAt) &&
+    Date.parse(scan.scannedAt) >= Date.parse(scan.intentUpdatedAt) &&
+    /^[a-f0-9]{40}$/u.test(scan.baseCommitSha) &&
+    /^[a-f0-9]{40}$/u.test(scan.expectedCommitSha) &&
+    scan.baseCommitSha !== scan.expectedCommitSha &&
+    scan.scannerVersion === 1 &&
+    Number.isSafeInteger(scan.commitCount) &&
+    scan.commitCount >= 1 &&
+    scan.commitCount <= 256 &&
+    Number.isSafeInteger(scan.scannedByteCount) &&
+    scan.scannedByteCount >= 0 &&
+    scan.scannedByteCount <= 64 * 1024 * 1024 &&
+    scan.secretMatchCount === 0 &&
+    /^[a-f0-9]{64}$/u.test(scan.scanDigest) &&
+    scan.status === 'safe' &&
+    scan.redacted === true
+  )
+}
+
+function selectGitHubDeliveryContentScan(
+  db: Database,
+  intentId: string,
+): GitHubDeliveryContentScanRecord | null {
+  return selectJson<GitHubDeliveryContentScanRecord>(
+    db,
+    'select json from github_delivery_content_scans where intent_id = ? limit 1',
+    [intentId],
+  )[0] ?? null
+}
+
+function isEquivalentGitHubDeliveryContentScan(
+  existing: GitHubDeliveryContentScanRecord,
+  incoming: GitHubDeliveryContentScanRecord,
+): boolean {
+  return (
+    existing.stateVersion === incoming.stateVersion &&
+    existing.intentId === incoming.intentId &&
+    existing.intentUpdatedAt === incoming.intentUpdatedAt &&
+    existing.workspaceId === incoming.workspaceId &&
+    existing.baseCommitSha === incoming.baseCommitSha &&
+    existing.expectedCommitSha === incoming.expectedCommitSha &&
+    existing.scannerVersion === incoming.scannerVersion &&
+    existing.commitCount === incoming.commitCount &&
+    existing.scannedByteCount === incoming.scannedByteCount &&
+    existing.secretMatchCount === incoming.secretMatchCount &&
+    existing.scanDigest === incoming.scanDigest &&
+    existing.status === incoming.status &&
+    existing.redacted === incoming.redacted
+  )
+}
+
+function writeGitHubDeliveryContentScan(
+  db: Database,
+  scan: GitHubDeliveryContentScanRecord,
+): void {
+  if (!isCanonicalGitHubDeliveryContentScan(scan)) {
+    throw new Error('GitHub Delivery content scan is invalid')
+  }
+  db.run(
+    `insert into github_delivery_content_scans (
+       intent_id, intent_updated_at, workspace_id, base_commit_sha,
+       expected_commit_sha, scanner_version, commit_count, scanned_byte_count,
+       secret_match_count, scan_digest, status, state_version, json, scanned_at
+     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      scan.intentId,
+      scan.intentUpdatedAt,
+      scan.workspaceId,
+      scan.baseCommitSha,
+      scan.expectedCommitSha,
+      scan.scannerVersion,
+      scan.commitCount,
+      scan.scannedByteCount,
+      scan.secretMatchCount,
+      scan.scanDigest,
+      scan.status,
+      scan.stateVersion,
+      JSON.stringify(scan),
+      scan.scannedAt,
+    ],
+  )
+}
 
 function createGitHubDeliveryOperatorOutcome(
   intent: GitHubDeliveryIntent,
@@ -14399,6 +14631,71 @@ class SqlJsLocalStore implements LocalStore {
     )
   }
 
+  async commitGitHubDeliveryContentScan(
+    input: CommitGitHubDeliveryContentScanInput,
+  ): Promise<CommitGitHubDeliveryContentScanResult> {
+    const { expectedIntent, scan } = input
+    if (
+      !isCanonicalGitHubDeliveryContentScan(scan) ||
+      scan.intentId !== expectedIntent.id ||
+      scan.intentUpdatedAt !== expectedIntent.updatedAt ||
+      scan.workspaceId !== expectedIntent.workspaceId ||
+      scan.baseCommitSha !== expectedIntent.baseCommitSha ||
+      scan.expectedCommitSha !== expectedIntent.expectedCommitSha
+    ) {
+      return { committed: false, reason: 'invalid_scan' }
+    }
+    const current = selectGitHubDeliveryIntent(this.db, 'id', expectedIntent.id)
+    if (!current) return { committed: false, reason: 'intent_not_found' }
+    if (!isDeepStrictEqual(current, expectedIntent)) {
+      return { committed: false, reason: 'source_stale' }
+    }
+    const existing = selectGitHubDeliveryContentScan(this.db, expectedIntent.id)
+    if (existing) {
+      return isEquivalentGitHubDeliveryContentScan(existing, scan)
+        ? { committed: true, replayed: true, scan: existing }
+        : { committed: false, reason: 'scan_conflict' }
+    }
+
+    const snapshot = this.db.export()
+    let transactionOpen = false
+    try {
+      this.db.run('begin transaction')
+      transactionOpen = true
+      writeGitHubDeliveryContentScan(this.db, scan)
+      this.db.run('commit')
+      transactionOpen = false
+      await this.persist()
+      return { committed: true, replayed: false, scan }
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.db.run('rollback')
+        } catch {
+          // The exported snapshot remains authoritative.
+        }
+      }
+      this.restore(snapshot)
+      throw error
+    }
+  }
+
+  async listGitHubDeliveryContentScans(
+    intentId?: string,
+  ): Promise<GitHubDeliveryContentScanRecord[]> {
+    if (intentId) {
+      return selectJson<GitHubDeliveryContentScanRecord>(
+        this.db,
+        'select json from github_delivery_content_scans where intent_id = ? limit 1',
+        [intentId],
+      )
+    }
+    return selectJson<GitHubDeliveryContentScanRecord>(
+      this.db,
+      'select json from github_delivery_content_scans order by scanned_at asc, intent_id asc',
+    )
+  }
+
   async listGitHubDeliveryOperatorOutcomes(
     intentId?: string,
   ): Promise<GitHubDeliveryOperatorOutcome[]> {
@@ -15964,6 +16261,7 @@ class SqlJsLocalStore implements LocalStore {
       codingDiffArtifacts,
       githubRepositoryBindings,
       githubDeliveryIntents,
+      githubDeliveryContentScans,
       githubDeliveryOperatorOutcomes,
       githubDeliveryRevocationChecks,
       retryAttempts,
@@ -15989,6 +16287,7 @@ class SqlJsLocalStore implements LocalStore {
       this.listCodingDiffArtifacts(),
       this.listGitHubRepositoryBindings(),
       this.listGitHubDeliveryIntents(),
+      this.listGitHubDeliveryContentScans(),
       this.listGitHubDeliveryOperatorOutcomes(),
       this.listGitHubDeliveryRevocationChecks(),
       this.listRetryAttempts(),
@@ -16016,6 +16315,7 @@ class SqlJsLocalStore implements LocalStore {
       codingDiffArtifacts,
       githubRepositoryBindings,
       githubDeliveryIntents,
+      githubDeliveryContentScans,
       githubDeliveryOperatorOutcomes,
       githubDeliveryRevocationChecks,
       retryAttempts,
@@ -16098,6 +16398,7 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'commitGitHubDeliveryReplacement',
   'commitGitHubDeliveryIntentStatus',
   'commitGitHubDeliveryIntentCompletion',
+  'commitGitHubDeliveryContentScan',
   'commitGitHubDeliveryRevocationCheck',
   'stopGitHubDeliveryIntent',
   'commitGitHubRepositoryBindingObservation',

@@ -3,12 +3,17 @@ import { isDeepStrictEqual } from 'node:util'
 import {
   createGitHubDeliveryCompletion,
   type Artifact,
+  type GitHubDeliveryOperatorOutcomeCode,
   type GitHubDeliveryIntent,
 } from '@ai-devflow/shared'
 import {
   type GitHubGitPublisher,
   type GitHubGitPublisherErrorCode,
 } from './github-git-publisher.js'
+import {
+  GitHubOutboundContentScanError,
+  type GitHubOutboundContentScanner,
+} from './github-outbound-content-scan.js'
 import type {
   AdoptVerifiedGitHubBranchPublicationInput,
   AdoptVerifiedGitHubBranchPublicationResult,
@@ -62,6 +67,7 @@ type ProcessorStore = Pick<
   | 'getRun'
   | 'commitGitHubDeliveryIntentStatus'
   | 'commitGitHubDeliveryIntentCompletion'
+  | 'commitGitHubDeliveryContentScan'
 >
 
 type CompletedReconciliationStore = Pick<
@@ -114,6 +120,7 @@ export type GitHubDeliveryProcessorDeps = {
   store: ProcessorStore
   remote: ProcessorRemote
   publisher: GitHubGitPublisher
+  contentScanner: GitHubOutboundContentScanner
   workflow: WorkflowRuntime
   preparationRuntime: GitHubDeliveryRuntime
   workspaceCoordinator: WorkspaceOperationCoordinator
@@ -855,6 +862,22 @@ async function advanceRecovered(
     return requireRecovery(deps, publishing, request.id, 'authority_mismatch')
   }
 
+  try {
+    await scanAndPersistOutboundContent(deps, publishing)
+  } catch (error) {
+    const scanCode = error instanceof GitHubOutboundContentScanError
+      ? error.code
+      : 'content_scan_incomplete'
+    return requireRecovery(
+      deps,
+      publishing,
+      request.id,
+      scanCode,
+      true,
+      scanCode,
+    )
+  }
+
   const published = await deps.remote.withCredentialGrant(
     {
       projectId: source.teamProjectId,
@@ -954,6 +977,48 @@ async function advanceRecovered(
     : await transitionTo(deps, publishing, 'branch_published')
   if (!branchPublished) return safeResult(source.id, request.id, 'local_conflict', 'stale_intent')
   return createPullRequest(deps, branchPublished, report.request, report.publication)
+}
+
+async function scanAndPersistOutboundContent(
+  deps: GitHubDeliveryProcessorDeps,
+  source: GitHubDeliveryIntent,
+): Promise<void> {
+  await deps.workspaceCoordinator.runExclusive(source.workspaceId, async () => {
+    const currentIntent = await reloadIntent(deps, source.id)
+    if (!currentIntent || !isDeepStrictEqual(currentIntent, source)) {
+      throw new GitHubOutboundContentScanError('invalid_delivery_source')
+    }
+    const workspaces = await deps.store.listManagedCodingWorkspaces(source.localProjectId)
+    const matchingWorkspaces = workspaces.filter((workspace) => (
+      workspace.id === source.workspaceId &&
+      workspace.projectId === source.localProjectId &&
+      workspace.headCommitSha === source.expectedCommitSha &&
+      workspace.cleanupStatus === 'active' &&
+      !workspace.deletedAt
+    ))
+    const workspace = matchingWorkspaces[0]
+    if (!workspace || matchingWorkspaces.length !== 1) {
+      throw new GitHubOutboundContentScanError('invalid_delivery_source')
+    }
+    const receipt = await deps.contentScanner.scan({
+      worktreePath: workspace.worktreePath,
+      baseCommitSha: source.baseCommitSha,
+      expectedCommitSha: source.expectedCommitSha,
+    })
+    const committed = await deps.store.commitGitHubDeliveryContentScan({
+      expectedIntent: source,
+      scan: {
+        ...receipt,
+        intentId: source.id,
+        intentUpdatedAt: source.updatedAt,
+        workspaceId: source.workspaceId,
+        redacted: true,
+      },
+    })
+    if (!committed.committed) {
+      throw new GitHubOutboundContentScanError('content_scan_incomplete')
+    }
+  })
 }
 
 async function createPullRequest(
@@ -1293,7 +1358,7 @@ async function requireRecovery(
   requestId: string | null,
   outcomeCode: string | null,
   approvalValidated = false,
-  operatorOutcomeCode?: GitHubGitPublisherErrorCode,
+  operatorOutcomeCode?: GitHubDeliveryOperatorOutcomeCode,
 ): Promise<GitHubDeliveryProcessorResult> {
   if (source.status === 'approval_required') {
     if (!approvalValidated) {
@@ -1353,7 +1418,7 @@ async function transitionTo(
   deps: GitHubDeliveryProcessorDeps,
   source: GitHubDeliveryIntent,
   target: GitHubDeliveryIntent['status'],
-  operatorOutcomeCode?: GitHubGitPublisherErrorCode,
+  operatorOutcomeCode?: GitHubDeliveryOperatorOutcomeCode,
 ): Promise<GitHubDeliveryIntent | null> {
   if (source.status === target) return source
   let current = source

@@ -34,6 +34,8 @@ const browserPreviewWorkflowWriteMessage =
   '浏览器预览不执行工作流推进，请在 Electron 应用中继续'
 
 const safePublisherOutcomeCopy = {
+  content_scan_blocked: 'outbound content contains blocked credential material',
+  content_scan_incomplete: 'outbound content scan did not complete safely',
   invalid_delivery_source: 'approved delivery source is invalid',
   operation_cancelled: 'publication was cancelled safely',
   publisher_cleanup_failed: 'credential cleanup failed safely',

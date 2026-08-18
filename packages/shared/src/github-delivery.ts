@@ -32,6 +32,8 @@ export type GitHubDeliveryStatus =
   | 'revoked'
 
 export type GitHubDeliveryOperatorOutcomeCode =
+  | 'content_scan_blocked'
+  | 'content_scan_incomplete'
   | 'invalid_delivery_source'
   | 'operation_cancelled'
   | 'publisher_cleanup_failed'
@@ -48,6 +50,23 @@ export type GitHubDeliveryOperatorOutcome = {
   intentUpdatedAt: string
   outcomeCode: GitHubDeliveryOperatorOutcomeCode
   recordedAt: string
+  redacted: true
+}
+
+export type GitHubDeliveryContentScanRecord = {
+  stateVersion: 1
+  intentId: string
+  intentUpdatedAt: string
+  workspaceId: string
+  baseCommitSha: string
+  expectedCommitSha: string
+  scannerVersion: 1
+  commitCount: number
+  scannedByteCount: number
+  secretMatchCount: 0
+  scanDigest: string
+  status: 'safe'
+  scannedAt: string
   redacted: true
 }
 

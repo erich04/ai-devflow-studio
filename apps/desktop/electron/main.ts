@@ -178,6 +178,7 @@ import {
   GITHUB_GIT_PUBLISHER_REQUIRED_CREDENTIAL_LIFETIME_MS,
   createGitHubGitPublisher,
 } from './github-git-publisher.js'
+import { createGitHubOutboundContentScanner } from './github-outbound-content-scan.js'
 import { createManagedWorkspaceCleanupService } from './managed-workspace-cleanup.js'
 import { createWorkspaceOperationCoordinator } from './workspace-operation-coordinator.js'
 import { createOpencodeProcessManager } from './opencode-process.js'
@@ -550,6 +551,9 @@ function createScopedGitHubDeliveryStore(
     commitGitHubDeliveryIntentCompletion: (
       mutation: Parameters<LocalStore['commitGitHubDeliveryIntentCompletion']>[0],
     ) => store.commitGitHubDeliveryIntentCompletion(mutation),
+    commitGitHubDeliveryContentScan: (
+      input: Parameters<LocalStore['commitGitHubDeliveryContentScan']>[0],
+    ) => store.commitGitHubDeliveryContentScan(input),
   }
 }
 
@@ -560,10 +564,12 @@ async function createActiveGitHubDeliveryProcessor(
   const { store, remote } = context
   const scopedStore = createScopedGitHubDeliveryStore(context)
   const publisher = createGitHubGitPublisher({ signal })
+  const contentScanner = createGitHubOutboundContentScanner({ signal })
   return createGitHubDeliveryProcessor({
     store: scopedStore,
     remote,
     publisher,
+    contentScanner,
     workflow: createWorkflowRuntime(store),
     preparationRuntime: await getGitHubDeliveryRuntime(),
     workspaceCoordinator: workspaceOperationCoordinator,

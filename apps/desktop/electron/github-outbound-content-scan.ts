@@ -4,6 +4,7 @@ import path from 'node:path'
 import {
   assertFullGitCommitSha,
   inspectHighConfidenceOutboundSecrets,
+  type GitHubDeliveryContentScanRecord,
 } from '@ai-devflow/shared'
 import { terminateProcessTree } from './opencode-process.js'
 
@@ -46,18 +47,10 @@ export type GitHubOutboundContentScanInput = {
   expectedCommitSha: string
 }
 
-export type GitHubOutboundContentScanReceipt = {
-  stateVersion: 1
-  scannerVersion: 1
-  baseCommitSha: string
-  expectedCommitSha: string
-  commitCount: number
-  scannedByteCount: number
-  secretMatchCount: 0
-  scanDigest: string
-  status: 'safe'
-  scannedAt: string
-}
+export type GitHubOutboundContentScanReceipt = Omit<
+  GitHubDeliveryContentScanRecord,
+  'intentId' | 'intentUpdatedAt' | 'workspaceId' | 'redacted'
+>
 
 export type GitHubOutboundContentScanner = {
   scan(input: GitHubOutboundContentScanInput): Promise<GitHubOutboundContentScanReceipt>

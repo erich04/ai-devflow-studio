@@ -868,6 +868,7 @@ export type LocalExecutionState = {
   dependencyBootstrapEvidence: DependencyBootstrapEvidence[]
   codingDiffArtifacts: CodingDiffArtifact[]
   githubDeliveryIntents?: import('./github-delivery').GitHubDeliveryIntent[]
+  githubDeliveryContentScans?: import('./github-delivery').GitHubDeliveryContentScanRecord[]
   githubDeliveryOperatorOutcomes?: import('./github-delivery').GitHubDeliveryOperatorOutcome[]
   githubDeliveryRevocationChecks?: import('./github-delivery').GitHubDeliveryRevocationCheck[]
   githubRepositoryBindings?: import('./github-delivery').GitHubRepositoryBinding[]

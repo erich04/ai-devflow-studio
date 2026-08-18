@@ -17,6 +17,7 @@ import type {
 } from './github-delivery-remote-client.js'
 import { GitHubDeliveryRemoteError } from './github-delivery-remote-client.js'
 import { GitHubGitPublisherError } from './github-git-publisher.js'
+import { GitHubOutboundContentScanError } from './github-outbound-content-scan.js'
 
 const sha = 'a'.repeat(40)
 const baseSha = 'b'.repeat(40)
@@ -357,6 +358,10 @@ function harness(
       current = next
       return { committed: true as const, replayed: false, intent: current }
     }),
+    commitGitHubDeliveryContentScan: vi.fn(async ({ expectedIntent, scan }) => {
+      if (current !== expectedIntent) return { committed: false as const, reason: 'source_stale' as const }
+      return { committed: true as const, replayed: false, scan }
+    }),
   }
   const remote = {
     submit: vi.fn(),
@@ -368,6 +373,24 @@ function harness(
     createDraftPullRequest: vi.fn(),
   }
   const publisher = { publish: vi.fn() }
+  const contentScanner = {
+    scan: vi.fn(async (input: {
+      worktreePath: string
+      baseCommitSha: string
+      expectedCommitSha: string
+    }) => ({
+      stateVersion: 1 as const,
+      scannerVersion: 1 as const,
+      baseCommitSha: input.baseCommitSha,
+      expectedCommitSha: input.expectedCommitSha,
+      commitCount: 1,
+      scannedByteCount: 128,
+      secretMatchCount: 0 as const,
+      scanDigest: 'f'.repeat(64),
+      status: 'safe' as const,
+      scannedAt: '2026-08-11T12:04:00.000Z',
+    })),
+  }
   const workflow = { execute: vi.fn() }
   const preparationRuntime = {
     prepare: vi.fn(async (_input: { runId: string }) => ({
@@ -384,6 +407,7 @@ function harness(
     store,
     remote,
     publisher,
+    contentScanner,
     workflow,
     preparationRuntime,
     workspaceCoordinator,
@@ -406,6 +430,7 @@ function harness(
     store,
     remote,
     publisher,
+    contentScanner,
     workflow,
     preparationRuntime,
     workspaceCoordinator,
@@ -414,6 +439,34 @@ function harness(
 }
 
 describe('GitHub Delivery processor', () => {
+  it('durably blocks hostile outbound content before requesting any GitHub credential', async () => {
+    const source = intent({ status: 'approved' })
+    const approvedRequest = request(source, { stateVersion: 2, status: 'approved' })
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([approvedRequest])
+    test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(approvedRequest, {
+      approval: approval(source, approvedRequest),
+    }))
+    test.contentScanner.scan.mockRejectedValue(
+      new GitHubOutboundContentScanError('content_scan_blocked'),
+    )
+
+    await expect(test.processor.recoverAndAdvance()).resolves.toEqual({
+      results: [{
+        intentId: source.id,
+        remoteRequestId: approvedRequest.id,
+        disposition: 'recovery_required',
+        outcomeCode: 'content_scan_blocked',
+      }],
+    })
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+    expect(test.publisher.publish).not.toHaveBeenCalled()
+    expect(test.store.commitGitHubDeliveryContentScan).not.toHaveBeenCalled()
+    expect(test.store.commitGitHubDeliveryIntentStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({ operatorOutcomeCode: 'content_scan_blocked' }),
+    )
+  })
+
   it('submits one exact prepared intent and returns only redacted identifiers and disposition', async () => {
     const source = intent()
     const deliveryRequest = request(source)
@@ -697,6 +750,27 @@ describe('GitHub Delivery processor', () => {
       { projectId: source.teamProjectId, requestId: approvedRequest.id, expectedStateVersion: 2 },
       expect.any(Function),
     )
+    expect(test.contentScanner.scan).toHaveBeenCalledWith({
+      worktreePath: '/private/managed/worktree',
+      baseCommitSha: source.baseCommitSha,
+      expectedCommitSha: source.expectedCommitSha,
+    })
+    expect(test.store.commitGitHubDeliveryContentScan).toHaveBeenCalledWith({
+      expectedIntent: expect.objectContaining({
+        id: source.id,
+        status: 'publishing_branch',
+      }),
+      scan: expect.objectContaining({
+        intentId: source.id,
+        workspaceId: source.workspaceId,
+        expectedCommitSha: source.expectedCommitSha,
+        scanDigest: 'f'.repeat(64),
+        status: 'safe',
+      }),
+    })
+    expect(
+      test.store.commitGitHubDeliveryContentScan.mock.invocationCallOrder[0],
+    ).toBeLessThan(test.remote.withCredentialGrant.mock.invocationCallOrder[0]!)
     expect(test.publisher.publish).toHaveBeenCalledWith({
       worktreePath: '/private/managed/worktree',
       repository: source.repository,
@@ -773,7 +847,7 @@ describe('GitHub Delivery processor', () => {
         intentId: source.id,
         remoteRequestId: approvedRequest.id,
         disposition: 'recovery_required',
-        outcomeCode: 'processor_failed',
+        outcomeCode: 'invalid_delivery_source',
       }],
     })
     expect(test.publisher.publish).not.toHaveBeenCalled()
@@ -1383,7 +1457,8 @@ describe('GitHub Delivery processor', () => {
     const result = await test.processor.recoverAndAdvance()
 
     expect(result.results[0]).toMatchObject({ disposition: 'recovery_required' })
-    expect(test.workspaceCoordinator.runExclusive).not.toHaveBeenCalled()
+    expect(test.workspaceCoordinator.runExclusive).toHaveBeenCalledTimes(1)
+    expect(test.remote.withCredentialGrant).toHaveBeenCalledTimes(1)
     expect(test.publisher.publish).not.toHaveBeenCalled()
   })
 
