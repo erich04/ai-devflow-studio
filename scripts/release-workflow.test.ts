@@ -54,7 +54,7 @@ describe('GitHub release workflow', () => {
     expect(workflow).toContain('runs-on: windows-latest')
     expect(workflow).toContain('--mode=pre-tag')
     expect(workflow).toContain('--mode=tagged')
-    expect(workflow).toContain('actions/upload-artifact@v4')
+    expect(workflow).toContain('actions/upload-artifact@v7')
     expect(workflow).toContain('gh release create')
     expect(workflow).toContain('gh release upload')
     expect(workflow).not.toContain('DEVFLOW_RUN_OPENCODE_SMOKE=1')
@@ -97,7 +97,7 @@ describe('GitHub release workflow', () => {
     const workflow = readWorkflow(releaseWorkflowPath)
     const artifactsJob = jobBlock(workflow, 'release-artifacts')
 
-    expect(artifactsJob).toContain('actions/download-artifact@v4')
+    expect(artifactsJob).toContain('actions/download-artifact@v8')
     expect(artifactsJob).toContain('node scripts/validate-release-verify-run.mjs')
     expect(artifactsJob).toContain('id: recorded-verify')
     expect(artifactsJob).toContain('run-id: ${{ steps.recorded-verify.outputs.run-id }}')
@@ -236,7 +236,7 @@ describe('GitHub verify workflow', () => {
     const workflow = readWorkflow(verifyWorkflowPath)
     const macosJob = jobBlock(workflow, 'macos-verify')
 
-    expect(macosJob).toContain('actions/upload-artifact@v4')
+    expect(macosJob).toContain('actions/upload-artifact@v7')
     expect(macosJob).toContain('name: ai-devflow-studio-v22-candidate-desktop')
     expect(macosJob).toContain(
       'desktop-artifact-trio.mjs stage out/desktop-pilot/artifact-index.json out/verify-candidate-desktop',

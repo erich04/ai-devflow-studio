@@ -207,7 +207,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/validate-release-verify-run.mjs docs/releases/v2.2.0/release-required-gates.json
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ai-devflow-studio-v22-candidate-desktop
           path: out/release-candidate-desktop
@@ -254,7 +254,7 @@ jobs:
           test "$(find release-artifacts -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = "${EXPECTED_FILE_COUNT}"
           test "$(find release-artifacts -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = "${EXPECTED_FILE_COUNT}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ai-devflow-studio-release-artifacts
           path: release-artifacts/
