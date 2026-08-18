@@ -13,6 +13,8 @@ describe('LocalStore architecture invariants', () => {
     ])
 
     expect(storeSource).toContain("from './local-store-persistence'")
+    expect(storeSource).toContain("from './local-store-privacy'")
+    expect(storeSource).toContain("from './local-store-workflow'")
     expect(storeSource).not.toMatch(/\brename\s*\(/u)
     expect(storeSource).not.toMatch(/\bwriteFile\s*\(/u)
     expect(persistenceSource.match(/\bwriteFile\s*\(/gu)).toHaveLength(1)

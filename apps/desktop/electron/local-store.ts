@@ -14,6 +14,22 @@ import {
   persistDatabase,
   persistDatabaseSnapshot,
 } from './local-store-persistence'
+import {
+  maintainStoredEvidencePrivacy,
+} from './local-store-privacy'
+import {
+  migrateWorkflowRunsIntoRelationalTables,
+  readWorkflowRuns,
+  writeAgentEvent,
+  writeArtifact,
+  writeCodingAgentEvent,
+  writeCodingAgentRun,
+  writeCodingDiffArtifact,
+  writeCodingPermissionDecision,
+  writeCodingPermissionRequest,
+  writeTestEvidence,
+  writeWorkflowRun,
+} from './local-store-workflow'
 export { CURRENT_SCHEMA_VERSION, DEFAULT_LOCAL_SETTINGS } from './local-store-schema'
 import {
   parseNativeToolAuditRecord,
@@ -76,7 +92,6 @@ import {
   createCoordinationSessionState,
   createGitHubDeliveryCompletion,
   createGitHubDeliveryIntent,
-  hasSupportedCodingDiffSanitization,
   createRemoteSyncIdempotencyKey,
   createRemoteSyncOperation,
   createWorkflowRunFromRequest,
@@ -84,8 +99,6 @@ import {
   isActiveCodingAgentRunStatus,
   normalizeGitHubRepository,
   REMOTE_SYNC_CLAIM_LEASE_MS,
-  createTestEvidenceArtifact,
-  createTestEvidenceEvent,
   normalizeWorkflowRunProgress,
   parseAgentMemoryCandidate,
   parseAgentRuntimeContextAttachment,
@@ -108,12 +121,10 @@ import {
   reviseAgentMemoryRevision,
   startCoordinationTask,
   settleCoordinationResourceLease,
-  redactCodingAgentEventForStorage,
   redactSensitiveText,
   redactTestEvidenceForStorage,
   validateTestCommandSafety,
   sanitizeRemoteSyncErrorMessage,
-  sanitizeCodingDiffArtifact,
   parseGateCommandRecord,
   parseGateCommandAcknowledgementRecord,
   parseGateCommandReceiptRecord,
@@ -184,8 +195,6 @@ import {
   type RemoteSyncOperation,
   type RemoteSyncRecovery,
   type TestEvidence,
-  type WorkflowEdge,
-  type WorkflowNode,
   type WorkflowEvidenceSnapshot,
   type WorkflowRun,
   type WorkRequest,
@@ -3054,457 +3063,6 @@ function deleteWhereIn(db: Database, table: string, column: string, values: stri
   db.run(`delete from ${table} where ${column} in (${placeholders})`, values)
 }
 
-type StoredWorkflowRunJson = Omit<WorkflowRun, 'nodes' | 'edges' | 'version'> & {
-  version?: number
-  nodes?: WorkflowNode[]
-  edges?: WorkflowEdge[]
-}
-
-function hydrateStoredWorkflowRun(input: {
-  storedRun: StoredWorkflowRunJson
-  nodes: WorkflowNode[]
-  edges: WorkflowEdge[]
-}): WorkflowRun {
-  return normalizeWorkflowRunProgress({
-    ...input.storedRun,
-    version: input.storedRun.version ?? 1,
-    nodes: input.nodes,
-    edges: input.edges,
-  })
-}
-
-function workflowRunEnvelope(run: WorkflowRun): Omit<WorkflowRun, 'nodes' | 'edges'> {
-  const { nodes: _nodes, edges: _edges, ...envelope } = run
-  return envelope
-}
-
-function writeWorkflowRunEnvelope(db: Database, run: WorkflowRun): void {
-  const envelope = workflowRunEnvelope(run)
-  db.run(
-    `
-    insert into workflow_runs (id, json, created_at, updated_at)
-    values (?, ?, ?, ?)
-    on conflict(id) do update set json = excluded.json, updated_at = excluded.updated_at
-    `,
-    [run.id, JSON.stringify(envelope), run.createdAt, run.updatedAt],
-  )
-}
-
-function replaceWorkflowNodes(db: Database, run: WorkflowRun): void {
-  db.run('delete from workflow_nodes where run_id = ?', [run.id])
-  for (const [position, node] of run.nodes.entries()) {
-    db.run(
-      `
-      insert into workflow_nodes (
-        id,
-        run_id,
-        stage,
-        title,
-        subtitle,
-        kind,
-        status,
-        owner_id,
-        required_role,
-        retry_count,
-        token_usage_id,
-        artifact_ids,
-        position,
-        json,
-        created_at,
-        updated_at
-      )
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        node.id,
-        run.id,
-        node.stage,
-        node.title,
-        node.subtitle,
-        node.kind,
-        node.status,
-        node.ownerId,
-        node.requiredRole ?? null,
-        node.retryCount,
-        node.tokenUsageId ?? null,
-        JSON.stringify(node.artifactIds),
-        position,
-        JSON.stringify(node),
-        run.createdAt,
-        run.updatedAt,
-      ],
-    )
-  }
-}
-
-function replaceWorkflowEdges(db: Database, run: WorkflowRun): void {
-  db.run('delete from workflow_edges where run_id = ?', [run.id])
-  for (const [position, edge] of run.edges.entries()) {
-    db.run(
-      `
-      insert into workflow_edges (
-        id,
-        run_id,
-        source_node_id,
-        target_node_id,
-        kind,
-        position,
-        json,
-        created_at
-      )
-      values (?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        edge.id,
-        run.id,
-        edge.source,
-        edge.target,
-        edge.kind,
-        position,
-        JSON.stringify(edge),
-        run.createdAt,
-      ],
-    )
-  }
-}
-
-function selectWorkflowNodeRows(db: Database): Array<{ runId: string; node: WorkflowNode }> {
-  const result = db.exec('select run_id, json from workflow_nodes order by run_id asc, position asc')
-  const first = result[0]
-  if (!first) {
-    return []
-  }
-
-  return first.values.map((row) => ({
-    runId: String(row[0]),
-    node: JSON.parse(String(row[1])) as WorkflowNode,
-  }))
-}
-
-function selectWorkflowEdgeRows(db: Database): Array<{ runId: string; edge: WorkflowEdge }> {
-  const result = db.exec('select run_id, json from workflow_edges order by run_id asc, position asc')
-  const first = result[0]
-  if (!first) {
-    return []
-  }
-
-  return first.values.map((row) => ({
-    runId: String(row[0]),
-    edge: JSON.parse(String(row[1])) as WorkflowEdge,
-  }))
-}
-
-function groupRowsByRunId<T>(rows: Array<{ runId: string } & T>): Map<string, T[]> {
-  const grouped = new Map<string, T[]>()
-  for (const row of rows) {
-    const existing = grouped.get(row.runId) ?? []
-    const { runId: _runId, ...value } = row
-    grouped.set(row.runId, [...existing, value as T])
-  }
-  return grouped
-}
-
-function migrateWorkflowRunsIntoRelationalTables(db: Database): void {
-  const storedRuns = selectJson<StoredWorkflowRunJson>(
-    db,
-    'select json from workflow_runs order by updated_at desc, created_at desc',
-  )
-  for (const storedRun of storedRuns) {
-    const runNodes = storedRun.nodes ?? []
-    const runEdges = storedRun.edges ?? []
-    if (runNodes.length === 0 && runEdges.length === 0) {
-      continue
-    }
-
-    const run = hydrateStoredWorkflowRun({
-      storedRun,
-      nodes: runNodes,
-      edges: runEdges,
-    })
-    writeWorkflowRunEnvelope(db, run)
-    replaceWorkflowNodes(db, run)
-    replaceWorkflowEdges(db, run)
-  }
-}
-
-function readWorkflowRuns(db: Database): WorkflowRun[] {
-  const storedRuns = selectJson<StoredWorkflowRunJson>(
-    db,
-    'select json from workflow_runs order by updated_at desc, created_at desc',
-  )
-  const nodesByRun = groupRowsByRunId(selectWorkflowNodeRows(db)).entries()
-  const edgesByRun = groupRowsByRunId(selectWorkflowEdgeRows(db)).entries()
-  const nodeMap = new Map(
-    Array.from(nodesByRun).map(([runId, rows]) => [
-      runId,
-      rows.map((row) => row.node),
-    ]),
-  )
-  const edgeMap = new Map(
-    Array.from(edgesByRun).map(([runId, rows]) => [
-      runId,
-      rows.map((row) => row.edge),
-    ]),
-  )
-
-  return storedRuns.map((storedRun) =>
-    hydrateStoredWorkflowRun({
-      storedRun,
-      nodes: nodeMap.get(storedRun.id) ?? storedRun.nodes ?? [],
-      edges: edgeMap.get(storedRun.id) ?? storedRun.edges ?? [],
-    }),
-  )
-}
-
-function writeWorkflowRun(db: Database, run: WorkflowRun): void {
-  writeWorkflowRunEnvelope(db, run)
-  replaceWorkflowNodes(db, run)
-  replaceWorkflowEdges(db, run)
-}
-
-function redactArtifactForStorage(artifact: Artifact): Artifact {
-  if (artifact.kind !== 'test_report') {
-    return artifact
-  }
-  const title = redactSensitiveText(artifact.title)
-  const summary = redactSensitiveText(artifact.summary)
-  const content = redactSensitiveText(artifact.content)
-  return {
-    ...artifact,
-    title: title.value,
-    summary: summary.value,
-    content: content.value,
-    redacted: true,
-  }
-}
-
-const STORED_EVIDENCE_PRIVACY_VERSION = 1
-
-function writeArtifact(db: Database, artifact: Artifact): void {
-  const safeArtifact = redactArtifactForStorage(artifact)
-  db.run(
-    `
-    insert into artifacts (id, run_id, json, updated_at, privacy_version)
-    values (?, ?, ?, ?, ?)
-    on conflict(id) do update set
-      json = excluded.json,
-      updated_at = excluded.updated_at,
-      privacy_version = excluded.privacy_version
-    `,
-    [
-      safeArtifact.id,
-      safeArtifact.runId,
-      JSON.stringify(safeArtifact),
-      safeArtifact.updatedAt,
-      STORED_EVIDENCE_PRIVACY_VERSION,
-    ],
-  )
-}
-
-function redactAgentEventForStorage(event: AgentEvent): AgentEvent {
-  return event.kind === 'test_result'
-    ? { ...event, message: redactSensitiveText(event.message).value }
-    : event
-}
-
-function writeAgentEvent(db: Database, event: AgentEvent): void {
-  const safeEvent = redactAgentEventForStorage(event)
-  db.run(
-    `
-    insert into agent_events (id, run_id, sequence, json, timestamp, privacy_version)
-    values (?, ?, ?, ?, ?, ?)
-    on conflict(id) do update set
-      json = excluded.json,
-      sequence = excluded.sequence,
-      timestamp = excluded.timestamp,
-      privacy_version = excluded.privacy_version
-    `,
-    [
-      safeEvent.id,
-      safeEvent.runId,
-      safeEvent.sequence,
-      JSON.stringify(safeEvent),
-      safeEvent.timestamp,
-      STORED_EVIDENCE_PRIVACY_VERSION,
-    ],
-  )
-}
-
-function writeCodingAgentEvent(db: Database, event: CodingAgentEvent): void {
-  const safeEvent = redactCodingAgentEventForStorage(event)
-  db.run(
-    `
-    insert into coding_agent_events (
-      id, coding_run_id, run_id, node_id, sequence, json, timestamp, privacy_version
-    )
-    values (?, ?, ?, ?, ?, ?, ?, ?)
-    on conflict(id) do update set
-      json = excluded.json,
-      sequence = excluded.sequence,
-      timestamp = excluded.timestamp,
-      privacy_version = excluded.privacy_version
-    `,
-    [
-      safeEvent.id,
-      safeEvent.codingRunId,
-      safeEvent.runId,
-      safeEvent.nodeId,
-      safeEvent.sequence,
-      JSON.stringify(safeEvent),
-      safeEvent.timestamp,
-      STORED_EVIDENCE_PRIVACY_VERSION,
-    ],
-  )
-}
-
-function writeCodingAgentRun(db: Database, run: CodingAgentRun): void {
-  db.run(
-    `
-    insert into coding_agent_runs (id, run_id, node_id, json, started_at, updated_at)
-    values (?, ?, ?, ?, ?, ?)
-    on conflict(id) do update set json = excluded.json, updated_at = excluded.updated_at
-    `,
-    [
-      run.id,
-      run.runId,
-      run.nodeId,
-      JSON.stringify(run),
-      run.startedAt,
-      run.completedAt ?? run.startedAt,
-    ],
-  )
-}
-
-function writeCodingPermissionRequest(db: Database, request: CodingPermissionRequest): void {
-  db.run(
-    `
-    insert into coding_permission_requests (id, coding_run_id, run_id, node_id, json, requested_at)
-    values (?, ?, ?, ?, ?, ?)
-    on conflict(id) do update set json = excluded.json, requested_at = excluded.requested_at
-    `,
-    [
-      request.id,
-      request.codingRunId,
-      request.runId,
-      request.nodeId,
-      JSON.stringify(request),
-      request.requestedAt,
-    ],
-  )
-}
-
-function writeCodingPermissionDecision(db: Database, decision: CodingPermissionDecision): void {
-  db.run(
-    `
-    insert into coding_permission_decisions (id, request_id, coding_run_id, json, decided_at)
-    values (?, ?, ?, ?, ?)
-    on conflict(id) do update set json = excluded.json, decided_at = excluded.decided_at
-    `,
-    [
-      decision.id,
-      decision.requestId,
-      decision.codingRunId,
-      JSON.stringify(decision),
-      decision.decidedAt,
-    ],
-  )
-}
-
-function writeCodingDiffArtifact(db: Database, artifact: CodingDiffArtifact): void {
-  if (!hasSupportedCodingDiffSanitization(artifact)) {
-    throw new Error('Coding Diff Artifact must carry supported sanitizer provenance')
-  }
-  const canonicalArtifact = sanitizeCodingDiffArtifact({
-    id: artifact.id,
-    runId: artifact.runId,
-    nodeId: artifact.nodeId,
-    projectId: artifact.projectId,
-    changedPaths: artifact.changedPaths,
-    patch: artifact.patch,
-    ...(artifact.sourceDigest ? { sourceDigest: artifact.sourceDigest } : {}),
-    sanitizedAt: artifact.sanitizedAt!,
-    createdAt: artifact.createdAt,
-  })
-  if (!isDeepStrictEqual(canonicalArtifact, artifact)) {
-    throw new Error('Coding Diff Artifact must be canonically sanitized')
-  }
-  db.run(
-    `
-    insert into coding_diff_artifacts (
-      id, run_id, node_id, project_id, json, sanitizer_version,
-      sanitized_at, secret_replacement_count, created_at
-    )
-    values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    on conflict(id) do update set
-      json = excluded.json,
-      sanitizer_version = excluded.sanitizer_version,
-      sanitized_at = excluded.sanitized_at,
-      secret_replacement_count = excluded.secret_replacement_count,
-      created_at = excluded.created_at
-    `,
-    [
-      artifact.id,
-      artifact.runId,
-      artifact.nodeId,
-      artifact.projectId,
-      JSON.stringify(artifact),
-      artifact.sanitizerVersion!,
-      artifact.sanitizedAt!,
-      artifact.secretReplacementCount!,
-      artifact.createdAt,
-    ],
-  )
-}
-
-function writeTestEvidence(db: Database, evidence: TestEvidence): void {
-  const safeEvidence = redactTestEvidenceForStorage(evidence)
-  db.run(
-    `
-    insert into test_evidence (
-      id, run_id, node_id, project_id, json, created_at, privacy_version
-    )
-    values (?, ?, ?, ?, ?, ?, ?)
-    on conflict(id) do update set
-      json = excluded.json,
-      created_at = excluded.created_at,
-      privacy_version = excluded.privacy_version
-    `,
-    [
-      safeEvidence.id,
-      safeEvidence.runId,
-      safeEvidence.nodeId,
-      safeEvidence.projectId,
-      JSON.stringify(safeEvidence),
-      safeEvidence.createdAt,
-      STORED_EVIDENCE_PRIVACY_VERSION,
-    ],
-  )
-  const artifact = selectJson<Artifact>(
-    db,
-    'select json from artifacts where id = ? limit 1',
-    [`artifact-${safeEvidence.id}`],
-  )[0]
-  if (
-    artifact?.kind === 'test_report' &&
-    artifact.runId === safeEvidence.runId &&
-    artifact.nodeId === safeEvidence.nodeId
-  ) {
-    writeArtifact(db, createTestEvidenceArtifact(safeEvidence))
-  }
-  const event = selectJson<AgentEvent>(
-    db,
-    'select json from agent_events where id = ? limit 1',
-    [`event-${safeEvidence.id}`],
-  )[0]
-  if (
-    event?.kind === 'test_result' &&
-    event.runId === safeEvidence.runId &&
-    event.nodeId === safeEvidence.nodeId
-  ) {
-    writeAgentEvent(db, createTestEvidenceEvent(safeEvidence, event.sequence))
-  }
-}
-
 function selectGitHubDeliveryIntent(
   db: Database,
   column: 'id' | 'intent_digest' | 'idempotency_key',
@@ -4008,129 +3566,6 @@ function isCanonicalBindingObservationInput(
       input.binding.organizationId === pairing.organizationId &&
       input.binding.teamProjectId === pairing.projectId)
   )
-}
-
-function redactStoredEvidencePrivacy(db: Database): void {
-  for (const table of ['artifacts', 'agent_events', 'coding_agent_events', 'test_evidence']) {
-    const unsupportedVersion = db.exec(
-      `select privacy_version from ${table}
-       where privacy_version > ${STORED_EVIDENCE_PRIVACY_VERSION}
-       order by privacy_version desc limit 1`,
-    )[0]?.values[0]?.[0]
-    if (unsupportedVersion !== undefined) {
-      throw new Error(
-        `Stored evidence privacy version ${String(unsupportedVersion)} is newer than supported`,
-      )
-    }
-  }
-  const unsupportedFutureVersion = db.exec(`
-    select sanitizer_version
-    from coding_diff_artifacts
-    where sanitizer_version > 2
-    order by sanitizer_version desc
-    limit 1
-  `)[0]?.values[0]?.[0]
-  if (unsupportedFutureVersion !== undefined) {
-    throw new Error(
-      `Coding Diff sanitizer version ${String(unsupportedFutureVersion)} is newer than supported`,
-    )
-  }
-  const legacyCodingDiffs = selectJson<CodingDiffArtifact>(
-    db,
-    `select json from coding_diff_artifacts
-     where sanitizer_version is null or sanitizer_version < 2
-     order by created_at asc, id asc`,
-  )
-  const sanitizedAt = new Date().toISOString()
-  for (const artifact of legacyCodingDiffs) {
-    const sanitized = sanitizeCodingDiffArtifact({
-      id: artifact.id,
-      runId: artifact.runId,
-      nodeId: artifact.nodeId,
-      projectId: artifact.projectId,
-      changedPaths: artifact.changedPaths,
-      patch: artifact.patch,
-      ...(artifact.sourceDigest ? { sourceDigest: artifact.sourceDigest } : {}),
-      sanitizedAt,
-      createdAt: artifact.createdAt,
-    })
-    writeCodingDiffArtifact(db, sanitized)
-  }
-  const stored = selectJson<TestEvidence>(
-    db,
-    `select json from test_evidence
-     where privacy_version is null or privacy_version < ${STORED_EVIDENCE_PRIVACY_VERSION}
-     order by created_at asc, id asc`,
-  )
-  const artifacts = selectJson<Artifact>(
-    db,
-    `select json from artifacts
-     where privacy_version is null or privacy_version < ${STORED_EVIDENCE_PRIVACY_VERSION}
-     order by updated_at asc, id asc`,
-  )
-  for (const artifact of artifacts) {
-    const safeArtifact = redactArtifactForStorage(artifact)
-    writeArtifact(db, safeArtifact)
-  }
-  const artifactsById = new Map(artifacts.map((artifact) => [artifact.id, artifact]))
-  const eventsById = new Map(
-    selectJson<AgentEvent>(
-      db,
-      `select json from agent_events
-       where privacy_version is null or privacy_version < ${STORED_EVIDENCE_PRIVACY_VERSION}
-       order by timestamp asc, id asc`,
-    ).map((event) => [event.id, event]),
-  )
-  const codingEvents = selectJson<CodingAgentEvent>(
-    db,
-    `select json from coding_agent_events
-     where privacy_version is null or privacy_version < ${STORED_EVIDENCE_PRIVACY_VERSION}
-     order by timestamp asc, id asc`,
-  )
-  for (const event of codingEvents) {
-    const safeEvent = redactCodingAgentEventForStorage(event)
-    writeCodingAgentEvent(db, safeEvent)
-  }
-  for (const event of eventsById.values()) {
-    const safeEvent = redactAgentEventForStorage(event)
-    writeAgentEvent(db, safeEvent)
-  }
-  for (const evidence of stored) {
-    const safeEvidence = redactTestEvidenceForStorage(evidence)
-    const artifactId = `artifact-${evidence.id}`
-    const artifact = artifactsById.get(artifactId) ?? selectJson<Artifact>(
-      db,
-      'select json from artifacts where id = ? limit 1',
-      [artifactId],
-    )[0]
-    if (
-      artifact?.kind === 'test_report' &&
-      artifact.runId === evidence.runId &&
-      artifact.nodeId === evidence.nodeId
-    ) {
-      const safeArtifact = createTestEvidenceArtifact(safeEvidence)
-      if (JSON.stringify(safeArtifact) !== JSON.stringify(artifact)) {
-        writeArtifact(db, safeArtifact)
-      }
-    }
-    const eventId = `event-${evidence.id}`
-    const event = eventsById.get(eventId) ?? selectJson<AgentEvent>(
-      db,
-      'select json from agent_events where id = ? limit 1',
-      [eventId],
-    )[0]
-    if (
-      event?.kind === 'test_result' &&
-      event.runId === evidence.runId &&
-      event.nodeId === evidence.nodeId
-    ) {
-      const safeEvent = createTestEvidenceEvent(safeEvidence, event.sequence)
-      if (JSON.stringify(safeEvent) !== JSON.stringify(event)) {
-        writeAgentEvent(db, safeEvent)
-      }
-    }
-    writeTestEvidence(db, safeEvidence)
-  }
 }
 
 function assertWorkflowMutationScope(mutation: WorkflowMutation): void {
@@ -14032,7 +13467,13 @@ export async function createLocalStore(options: LocalStoreOptions): Promise<Loca
 
     migrateLocalStoreSchema(db, {
       migrateWorkflowRunsIntoRelationalTables,
-      afterMigrations: redactStoredEvidencePrivacy,
+      afterMigrations: (database) => maintainStoredEvidencePrivacy(database, {
+        writeArtifact,
+        writeAgentEvent,
+        writeCodingAgentEvent,
+        writeCodingDiffArtifact,
+        writeTestEvidence,
+      }),
     })
     await persistDatabase(db, options.dbPath)
 
