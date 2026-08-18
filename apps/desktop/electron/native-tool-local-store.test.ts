@@ -64,7 +64,7 @@ describe('Native Tool durable local audit', () => {
   it('atomically consumes one capability and persists bounded audit across restart', async () => {
     const storePath = await dbPath()
     const store = await createLocalStore({ dbPath: storePath })
-    expect(await store.getSchemaVersion()).toBe(29)
+    expect(await store.getSchemaVersion()).toBe(31)
 
     const project = {
       id: 'local-project-1',

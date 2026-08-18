@@ -38,6 +38,7 @@ import {
 } from '../apps/desktop/electron/github-delivery-processor'
 import { createGitHubDeliveryRemoteClient } from '../apps/desktop/electron/github-delivery-remote-client'
 import { createGitHubDeliveryRuntime } from '../apps/desktop/electron/github-delivery-runtime'
+import { createGitHubOutboundContentScanner } from '../apps/desktop/electron/github-outbound-content-scan'
 import {
   createGitHubGitPublisher,
   type RunGitCommand,
@@ -297,7 +298,10 @@ async function persistDeliverySource(
     patch: '+[REDACTED]',
     sourceDigest: fixture.diffDigest,
     truncated: false,
-    redacted: true,
+    redacted: false,
+    sanitizerVersion: 2,
+    sanitizedAt: fixedNow,
+    secretReplacementCount: 0,
     createdAt: fixedNow,
   }
   const precommitEvidence: TestEvidence = {
@@ -637,6 +641,8 @@ function createProcessor(
       ? {
           listGitHubDeliveryIntents: (runId?: string) =>
             store.listGitHubDeliveryIntents(runId),
+          listGitHubDeliveryOperatorOutcomes: (intentId?: string) =>
+            store.listGitHubDeliveryOperatorOutcomes(intentId),
           listArtifacts: (selectedRunId?: string) =>
             store.listArtifacts(selectedRunId),
           listManagedCodingWorkspaces: (projectId?: string) =>
@@ -644,6 +650,8 @@ function createProcessor(
           getRun: (selectedRunId: string) => store.getRun(selectedRunId),
           commitGitHubDeliveryIntentStatus: (mutation) =>
             store.commitGitHubDeliveryIntentStatus(mutation),
+          commitGitHubDeliveryContentScan: (mutation) =>
+            store.commitGitHubDeliveryContentScan(mutation),
           commitGitHubDeliveryIntentCompletion: async () => {
             throw new Error(rawProviderFailure)
           },
@@ -651,6 +659,9 @@ function createProcessor(
       : store,
     remote: harness.remote,
     publisher: harness.publisher,
+    contentScanner: createGitHubOutboundContentScanner({
+      now: () => '2026-08-11T12:30:00.000Z',
+    }),
     workflow: createWorkflowRuntime(store),
     preparationRuntime,
     workspaceCoordinator: coordinator,

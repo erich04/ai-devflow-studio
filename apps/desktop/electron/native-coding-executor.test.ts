@@ -485,7 +485,9 @@ describe('Native Coding Executor', () => {
       diff: {
         id: 'coding-diff-coding-run-native-1',
         changedPaths: ['devflow-native-change.txt'],
-        redacted: true,
+        redacted: false,
+        sanitizerVersion: 2,
+        secretReplacementCount: 0,
         truncated: false,
       },
     })

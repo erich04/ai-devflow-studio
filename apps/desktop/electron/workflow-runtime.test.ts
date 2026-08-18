@@ -524,7 +524,10 @@ describe('workflow runtime', () => {
       changedPaths: ['src/workflow.ts'],
       patch: 'diff --git a/src/workflow.ts b/src/workflow.ts',
       truncated: false,
-      redacted: true,
+      redacted: false,
+      sanitizerVersion: 2,
+      sanitizedAt: '2026-07-31T12:05:00.000Z',
+      secretReplacementCount: 0,
       createdAt: '2026-07-31T12:05:00.000Z',
     }
     const missingCodingEvidence = await runtime.execute({

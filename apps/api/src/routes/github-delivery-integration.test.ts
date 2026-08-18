@@ -146,7 +146,10 @@ function createIntentSource(repositoryBinding: GitHubRepositoryBinding) {
     patch: '+ redacted patch',
     sourceDigest: diffDigest,
     truncated: false,
-    redacted: true,
+    redacted: false,
+    sanitizerVersion: 2,
+    sanitizedAt: '2026-08-11T09:25:00.000Z',
+    secretReplacementCount: 0,
     createdAt: '2026-08-11T09:25:00.000Z',
   }
   const testEvidence = {
