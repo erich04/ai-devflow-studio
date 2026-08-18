@@ -15,6 +15,10 @@ const pilotSessionCookie = createSessionCookieValue('acct-demo-u-erich', session
 const pilotSessionHeaders = {
   cookie: pilotSessionCookie,
 }
+const leadSessionCookie = createSessionCookieValue('acct-demo-u-ling', sessionSecret)
+const leadCookieHeaders = {
+  cookie: leadSessionCookie,
+}
 const ownerSessionHeaders = {
   'x-devflow-session-source': 'demo',
   'x-devflow-organization-id': 'org-demo',
@@ -2064,7 +2068,7 @@ try {
     'Postgres overview did not start with the warn-only default enforcement policy.',
   )
 
-  const pairingCode = await postJson('/api/team/projects/p-payments/pairing-codes', {}, leadSessionHeaders)
+  const pairingCode = await postJson('/api/team/projects/p-payments/pairing-codes', {}, leadCookieHeaders)
   expect(pairingCode.projectId === 'p-payments', 'Desktop pairing code was not scoped to the Payments project.')
   expect(
     typeof pairingCode.code === 'string' && pairingCode.code.includes('.'),
@@ -2077,6 +2081,45 @@ try {
   expect(desktopPairing.token?.includes('.'), 'Desktop pairing exchange did not return a copy-once bearer token.')
   expect(desktopPairing.projectId === 'p-payments', 'Desktop bearer token was not scoped to the Payments project.')
   expect(desktopPairing.userId === leadSessionHeaders['x-devflow-user-id'], 'Desktop token user did not match the pairing lead.')
+
+  const bearerReplication = await postJsonResult(
+    '/api/team/projects/p-payments/pairing-codes',
+    {},
+    { authorization: `Bearer ${desktopPairing.token}` },
+  )
+  expect(
+    bearerReplication.status === 403 && bearerReplication.body?.error === 'forbidden',
+    'Desktop bearer token unexpectedly created a replacement credential.',
+  )
+
+  const concurrentPairingCode = await postJson(
+    '/api/team/projects/p-payments/pairing-codes',
+    {},
+    leadCookieHeaders,
+  )
+  const concurrentExchanges = await Promise.all([
+    postJsonResult('/api/desktop/pairing/exchange', { code: concurrentPairingCode.code }, {}),
+    postJsonResult('/api/desktop/pairing/exchange', { code: concurrentPairingCode.code }, {}),
+  ])
+  expect(
+    concurrentExchanges.filter(({ status }) => status === 201).length === 1 &&
+      concurrentExchanges.filter(({ status }) => status === 401).length === 1,
+    'Concurrent pairing exchange did not create exactly one Desktop token.',
+  )
+
+  const oversizedBodyResponse = await fetch(`${apiUrl}/api/desktop/pairing/exchange`, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ code: 'x'.repeat(1024 * 1024) }),
+  })
+  const oversizedBody = await oversizedBodyResponse.json()
+  expect(
+    oversizedBodyResponse.status === 413 && oversizedBody.error === 'payload_too_large',
+    'API did not reject an oversized JSON request before routing.',
+  )
 
   const gatePairingCode = await postJson(
     '/api/team/projects/p-payments/pairing-codes',
