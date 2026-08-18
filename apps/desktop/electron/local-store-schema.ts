@@ -1,7 +1,7 @@
 import type { Database } from 'sql.js'
 import type { LocalSettings } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 31
+export const CURRENT_SCHEMA_VERSION = 32
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 export type SchemaMigration = {
@@ -2466,6 +2466,34 @@ export const schemaMigrations: readonly SchemaMigration[] = [
 
     create index idx_github_delivery_content_scans_scanned
       on github_delivery_content_scans(scanned_at, intent_id);
+      `)
+    },
+  },
+  {
+    version: 32,
+    migrate(db) {
+      for (const table of ['artifacts', 'agent_events', 'coding_agent_events', 'test_evidence']) {
+        const columns = db.exec(`pragma table_info(${table})`)[0]?.values ?? []
+        if (!columns.some((column) => String(column[1]) === 'privacy_version')) {
+          db.run(`alter table ${table} add column privacy_version integer`)
+        }
+      }
+      db.run(`
+    create index if not exists idx_artifacts_pending_privacy
+      on artifacts(updated_at, id)
+      where privacy_version is null or privacy_version < 1;
+
+    create index if not exists idx_agent_events_pending_privacy
+      on agent_events(timestamp, id)
+      where privacy_version is null or privacy_version < 1;
+
+    create index if not exists idx_coding_agent_events_pending_privacy
+      on coding_agent_events(timestamp, id)
+      where privacy_version is null or privacy_version < 1;
+
+    create index if not exists idx_test_evidence_pending_privacy
+      on test_evidence(created_at, id)
+      where privacy_version is null or privacy_version < 1;
       `)
     },
   },

@@ -519,8 +519,8 @@ try {
     )[0]?.values ?? [],
   }
   database.close()
-  if (schemaVersion !== 31) {
-    throw new Error(`Packaged Desktop did not initialize schema 31: ${schemaVersion}`)
+  if (schemaVersion !== 32) {
+    throw new Error(`Packaged Desktop did not initialize schema 32: ${schemaVersion}`)
   }
   const [toolId, source, installationId, installationVersion, started, succeeded, records, results] =
     localMcpAudit ?? []

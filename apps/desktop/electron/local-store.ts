@@ -3278,19 +3278,25 @@ function redactArtifactForStorage(artifact: Artifact): Artifact {
   }
 }
 
+const STORED_EVIDENCE_PRIVACY_VERSION = 1
+
 function writeArtifact(db: Database, artifact: Artifact): void {
   const safeArtifact = redactArtifactForStorage(artifact)
   db.run(
     `
-    insert into artifacts (id, run_id, json, updated_at)
-    values (?, ?, ?, ?)
-    on conflict(id) do update set json = excluded.json, updated_at = excluded.updated_at
+    insert into artifacts (id, run_id, json, updated_at, privacy_version)
+    values (?, ?, ?, ?, ?)
+    on conflict(id) do update set
+      json = excluded.json,
+      updated_at = excluded.updated_at,
+      privacy_version = excluded.privacy_version
     `,
     [
       safeArtifact.id,
       safeArtifact.runId,
       JSON.stringify(safeArtifact),
       safeArtifact.updatedAt,
+      STORED_EVIDENCE_PRIVACY_VERSION,
     ],
   )
 }
@@ -3305,9 +3311,13 @@ function writeAgentEvent(db: Database, event: AgentEvent): void {
   const safeEvent = redactAgentEventForStorage(event)
   db.run(
     `
-    insert into agent_events (id, run_id, sequence, json, timestamp)
-    values (?, ?, ?, ?, ?)
-    on conflict(id) do update set json = excluded.json, sequence = excluded.sequence, timestamp = excluded.timestamp
+    insert into agent_events (id, run_id, sequence, json, timestamp, privacy_version)
+    values (?, ?, ?, ?, ?, ?)
+    on conflict(id) do update set
+      json = excluded.json,
+      sequence = excluded.sequence,
+      timestamp = excluded.timestamp,
+      privacy_version = excluded.privacy_version
     `,
     [
       safeEvent.id,
@@ -3315,6 +3325,7 @@ function writeAgentEvent(db: Database, event: AgentEvent): void {
       safeEvent.sequence,
       JSON.stringify(safeEvent),
       safeEvent.timestamp,
+      STORED_EVIDENCE_PRIVACY_VERSION,
     ],
   )
 }
@@ -3323,9 +3334,15 @@ function writeCodingAgentEvent(db: Database, event: CodingAgentEvent): void {
   const safeEvent = redactCodingAgentEventForStorage(event)
   db.run(
     `
-    insert into coding_agent_events (id, coding_run_id, run_id, node_id, sequence, json, timestamp)
-    values (?, ?, ?, ?, ?, ?, ?)
-    on conflict(id) do update set json = excluded.json, sequence = excluded.sequence, timestamp = excluded.timestamp
+    insert into coding_agent_events (
+      id, coding_run_id, run_id, node_id, sequence, json, timestamp, privacy_version
+    )
+    values (?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(id) do update set
+      json = excluded.json,
+      sequence = excluded.sequence,
+      timestamp = excluded.timestamp,
+      privacy_version = excluded.privacy_version
     `,
     [
       safeEvent.id,
@@ -3335,6 +3352,7 @@ function writeCodingAgentEvent(db: Database, event: CodingAgentEvent): void {
       safeEvent.sequence,
       JSON.stringify(safeEvent),
       safeEvent.timestamp,
+      STORED_EVIDENCE_PRIVACY_VERSION,
     ],
   )
 }
@@ -3442,9 +3460,14 @@ function writeTestEvidence(db: Database, evidence: TestEvidence): void {
   const safeEvidence = redactTestEvidenceForStorage(evidence)
   db.run(
     `
-    insert into test_evidence (id, run_id, node_id, project_id, json, created_at)
-    values (?, ?, ?, ?, ?, ?)
-    on conflict(id) do update set json = excluded.json, created_at = excluded.created_at
+    insert into test_evidence (
+      id, run_id, node_id, project_id, json, created_at, privacy_version
+    )
+    values (?, ?, ?, ?, ?, ?, ?)
+    on conflict(id) do update set
+      json = excluded.json,
+      created_at = excluded.created_at,
+      privacy_version = excluded.privacy_version
     `,
     [
       safeEvidence.id,
@@ -3453,8 +3476,33 @@ function writeTestEvidence(db: Database, evidence: TestEvidence): void {
       safeEvidence.projectId,
       JSON.stringify(safeEvidence),
       safeEvidence.createdAt,
+      STORED_EVIDENCE_PRIVACY_VERSION,
     ],
   )
+  const artifact = selectJson<Artifact>(
+    db,
+    'select json from artifacts where id = ? limit 1',
+    [`artifact-${safeEvidence.id}`],
+  )[0]
+  if (
+    artifact?.kind === 'test_report' &&
+    artifact.runId === safeEvidence.runId &&
+    artifact.nodeId === safeEvidence.nodeId
+  ) {
+    writeArtifact(db, createTestEvidenceArtifact(safeEvidence))
+  }
+  const event = selectJson<AgentEvent>(
+    db,
+    'select json from agent_events where id = ? limit 1',
+    [`event-${safeEvidence.id}`],
+  )[0]
+  if (
+    event?.kind === 'test_result' &&
+    event.runId === safeEvidence.runId &&
+    event.nodeId === safeEvidence.nodeId
+  ) {
+    writeAgentEvent(db, createTestEvidenceEvent(safeEvidence, event.sequence))
+  }
 }
 
 function selectGitHubDeliveryIntent(
@@ -3963,6 +4011,18 @@ function isCanonicalBindingObservationInput(
 }
 
 function redactStoredEvidencePrivacy(db: Database): void {
+  for (const table of ['artifacts', 'agent_events', 'coding_agent_events', 'test_evidence']) {
+    const unsupportedVersion = db.exec(
+      `select privacy_version from ${table}
+       where privacy_version > ${STORED_EVIDENCE_PRIVACY_VERSION}
+       order by privacy_version desc limit 1`,
+    )[0]?.values[0]?.[0]
+    if (unsupportedVersion !== undefined) {
+      throw new Error(
+        `Stored evidence privacy version ${String(unsupportedVersion)} is newer than supported`,
+      )
+    }
+  }
   const unsupportedFutureVersion = db.exec(`
     select sanitizer_version
     from coding_diff_artifacts
@@ -3998,38 +4058,51 @@ function redactStoredEvidencePrivacy(db: Database): void {
   }
   const stored = selectJson<TestEvidence>(
     db,
-    'select json from test_evidence order by created_at asc',
+    `select json from test_evidence
+     where privacy_version is null or privacy_version < ${STORED_EVIDENCE_PRIVACY_VERSION}
+     order by created_at asc, id asc`,
   )
-  const artifacts = selectJson<Artifact>(db, 'select json from artifacts')
+  const artifacts = selectJson<Artifact>(
+    db,
+    `select json from artifacts
+     where privacy_version is null or privacy_version < ${STORED_EVIDENCE_PRIVACY_VERSION}
+     order by updated_at asc, id asc`,
+  )
   for (const artifact of artifacts) {
     const safeArtifact = redactArtifactForStorage(artifact)
-    if (JSON.stringify(safeArtifact) !== JSON.stringify(artifact)) {
-      writeArtifact(db, safeArtifact)
-    }
+    writeArtifact(db, safeArtifact)
   }
   const artifactsById = new Map(artifacts.map((artifact) => [artifact.id, artifact]))
   const eventsById = new Map(
-    selectJson<AgentEvent>(db, 'select json from agent_events').map((event) => [event.id, event]),
+    selectJson<AgentEvent>(
+      db,
+      `select json from agent_events
+       where privacy_version is null or privacy_version < ${STORED_EVIDENCE_PRIVACY_VERSION}
+       order by timestamp asc, id asc`,
+    ).map((event) => [event.id, event]),
   )
   const codingEvents = selectJson<CodingAgentEvent>(
     db,
-    'select json from coding_agent_events order by timestamp asc, sequence asc',
+    `select json from coding_agent_events
+     where privacy_version is null or privacy_version < ${STORED_EVIDENCE_PRIVACY_VERSION}
+     order by timestamp asc, id asc`,
   )
   for (const event of codingEvents) {
     const safeEvent = redactCodingAgentEventForStorage(event)
-    if (JSON.stringify(safeEvent) !== JSON.stringify(event)) {
-      writeCodingAgentEvent(db, safeEvent)
-    }
+    writeCodingAgentEvent(db, safeEvent)
   }
   for (const event of eventsById.values()) {
     const safeEvent = redactAgentEventForStorage(event)
-    if (JSON.stringify(safeEvent) !== JSON.stringify(event)) {
-      writeAgentEvent(db, safeEvent)
-    }
+    writeAgentEvent(db, safeEvent)
   }
   for (const evidence of stored) {
     const safeEvidence = redactTestEvidenceForStorage(evidence)
-    const artifact = artifactsById.get(`artifact-${evidence.id}`)
+    const artifactId = `artifact-${evidence.id}`
+    const artifact = artifactsById.get(artifactId) ?? selectJson<Artifact>(
+      db,
+      'select json from artifacts where id = ? limit 1',
+      [artifactId],
+    )[0]
     if (
       artifact?.kind === 'test_report' &&
       artifact.runId === evidence.runId &&
@@ -4040,7 +4113,12 @@ function redactStoredEvidencePrivacy(db: Database): void {
         writeArtifact(db, safeArtifact)
       }
     }
-    const event = eventsById.get(`event-${evidence.id}`)
+    const eventId = `event-${evidence.id}`
+    const event = eventsById.get(eventId) ?? selectJson<AgentEvent>(
+      db,
+      'select json from agent_events where id = ? limit 1',
+      [eventId],
+    )[0]
     if (
       event?.kind === 'test_result' &&
       event.runId === evidence.runId &&
@@ -4051,9 +4129,7 @@ function redactStoredEvidencePrivacy(db: Database): void {
         writeAgentEvent(db, safeEvent)
       }
     }
-    if (JSON.stringify(safeEvidence) !== JSON.stringify(evidence)) {
-      writeTestEvidence(db, safeEvidence)
-    }
+    writeTestEvidence(db, safeEvidence)
   }
 }
 

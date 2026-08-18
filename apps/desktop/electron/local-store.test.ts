@@ -1154,7 +1154,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(31)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(32)
     const [sanitized] = await migrated.listCodingDiffArtifacts(legacyDiff.runId)
     expect(sanitized).toMatchObject({
       id: legacyDiff.id,
@@ -1233,16 +1233,49 @@ describe('createLocalStore', () => {
     durable.close()
   })
 
-  it('initializes schema version 31 and keeps it stable across reopen', async () => {
+  it('initializes schema version 32 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(31)
+    expect(await first.getSchemaVersion()).toBe(32)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(31)
+    expect(await second.getSchemaVersion()).toBe(32)
     second.close()
+  })
+
+  it('persists privacy provenance and indexes only rows that still need maintenance', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveArtifact(artifact)
+    await store.saveEvent(event)
+    await store.saveCodingAgentEvent(codingEvent)
+    await store.saveTestEvidence(evidence)
+    store.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const inspected = new SQL.Database(await readFile(dbPath))
+    for (const [table, orderColumn] of [
+      ['artifacts', 'updated_at'],
+      ['agent_events', 'timestamp'],
+      ['coding_agent_events', 'timestamp'],
+      ['test_evidence', 'created_at'],
+    ] as const) {
+      expect(
+        inspected.exec(`select distinct privacy_version from ${table}`)[0]?.values,
+      ).toEqual([[1]])
+      expect(
+        inspected.exec(
+          `explain query plan select json from ${table}
+           where privacy_version is null or privacy_version < 1
+           order by ${orderColumn} asc, id asc`,
+        )[0]?.values.map((row) => String(row[3])),
+      ).toEqual([expect.stringContaining(`idx_${table}_pending_privacy`)])
+    }
+    inspected.close()
   })
 
   it('migrates retained schema 21 to 22 without fabricating retrieval index rows', async () => {
@@ -1266,7 +1299,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(31)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(32)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     await expect(migrated.listRuns()).resolves.toEqual([run])
     migrated.close()
@@ -1303,7 +1336,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(31)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(32)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     await expect(migrated.listRuns()).resolves.toEqual([run])
     migrated.close()
@@ -1339,7 +1372,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(31)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(32)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     migrated.close()
 
@@ -1390,7 +1423,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(31)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(32)
     await expect(migrated.listAgentMemoryRevisions('memory-retained-schema-24')).resolves.toEqual([
       authorization.revision,
     ])
@@ -1472,7 +1505,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(31)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(32)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     await expect(migrated.listRuns()).resolves.toEqual([run])
     await expect(migrated.getAgentRuntimeContextAttachment('missing-runtime')).resolves.toBeNull()
@@ -3144,7 +3177,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(31)
+    expect(await migrated.getSchemaVersion()).toBe(32)
     expect(await migrated.listMcpServers()).toEqual([mcpServer])
     expect(await migrated.listLocalMcpInstallations()).toEqual([])
     migrated.close()
@@ -3181,7 +3214,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(31)
+    expect(await migrated.getSchemaVersion()).toBe(32)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     migrated.close()
@@ -3251,7 +3284,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(31)
+    expect(await migrated.getSchemaVersion()).toBe(32)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     expect(await migrated.listAgentRuntimeCapabilityGrants()).toEqual([])
@@ -8067,7 +8100,7 @@ describe('createLocalStore', () => {
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(31)
+    expect(await store.getSchemaVersion()).toBe(32)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -8078,12 +8111,12 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const db = new SQL.Database(await readFile(dbPath))
-    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('31')
+    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('32')
     expect(db.exec("select name from sqlite_master where type = 'table' and name = 'workflow_nodes'")[0]?.values[0]?.[0]).toBe('workflow_nodes')
     db.close()
   })
 
-  it('migrates retained schema 27 through schema 31 without fabricating coordination state', async () => {
+  it('migrates retained schema 27 through schema 32 without fabricating coordination state', async () => {
     const dbPath = await tempDbPath()
     const initial = await createLocalStore({ dbPath })
     await initial.upsertProject(project)
@@ -8109,7 +8142,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(31)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(32)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     await expect(migrated.listRuns()).resolves.toEqual([run])
     migrated.close()
@@ -8158,7 +8191,7 @@ describe('createLocalStore', () => {
     v8Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(31)
+    expect(await migrated.getSchemaVersion()).toBe(32)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     migrated.close()
@@ -8172,7 +8205,7 @@ describe('createLocalStore', () => {
     expect(columnNames).not.toEqual(expect.arrayContaining(['json', 'payload', 'raw_body']))
   })
 
-  it('migrates a retained v20 outbox through schema 31 without losing queued metadata', async () => {
+  it('migrates a retained v20 outbox through schema 32 without losing queued metadata', async () => {
     const dbPath = await tempDbPath()
     const retainedOperation = createRemoteSyncOperation({
       id: 'sync-retained-v20',
@@ -8243,7 +8276,7 @@ describe('createLocalStore', () => {
     v20Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(31)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(32)
     await expect(migrated.listRemoteSyncOperations()).resolves.toEqual([retainedOperation])
     await expect(migrated.enqueueRemoteSyncOperation(createRemoteSyncOperation({
       id: 'sync-runtime-v21',
@@ -8280,7 +8313,7 @@ describe('createLocalStore', () => {
     v26Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(31)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(32)
     await expect(migrated.listRemoteSyncOperations()).resolves.toEqual([retainedOperation])
     await expect(migrated.enqueueRemoteSyncOperation(createRemoteSyncOperation({
       id: 'sync-memory-v27',
@@ -8317,7 +8350,7 @@ describe('createLocalStore', () => {
     v9Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(31)
+    expect(await migrated.getSchemaVersion()).toBe(32)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -8356,7 +8389,7 @@ describe('createLocalStore', () => {
     v10Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(31)
+    expect(await migrated.getSchemaVersion()).toBe(32)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -8427,7 +8460,7 @@ describe('createLocalStore', () => {
     v11Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(31)
+    expect(await migrated.getSchemaVersion()).toBe(32)
     await expect(
       migrated.getGateCommandReceiptObservation(receipt.id),
     ).resolves.toMatchObject({
@@ -8704,19 +8737,19 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const newerDb = new SQL.Database(await readFile(dbPath))
-    newerDb.run("update schema_meta set value = '32' where key = 'schema_version'")
+    newerDb.run("update schema_meta set value = '33' where key = 'schema_version'")
     await writeFile(dbPath, Buffer.from(newerDb.export()))
     newerDb.close()
 
     await expect(createLocalStore({ dbPath })).rejects.toThrow(
-      /schema version 32 is newer than supported version 31/,
+      /schema version 33 is newer than supported version 32/,
     )
 
     const unchangedDb = new SQL.Database(await readFile(dbPath))
     expect(
       unchangedDb.exec("select value from schema_meta where key = 'schema_version'")[0]
         ?.values[0]?.[0],
-    ).toBe('32')
+    ).toBe('33')
     unchangedDb.close()
   })
 
@@ -8760,7 +8793,7 @@ describe('createLocalStore', () => {
     unchangedDb.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(31)
+    expect(await migrated.getSchemaVersion()).toBe(32)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
   })
@@ -8852,7 +8885,7 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const legacyDb = new SQL.Database(await readFile(dbPath))
-    legacyDb.run('update test_evidence set json = ? where id = ?', [
+    legacyDb.run('update test_evidence set json = ?, privacy_version = null where id = ?', [
       JSON.stringify(legacyEvidence),
       legacyEvidence.id,
     ])
@@ -8903,11 +8936,11 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const legacyDb = new SQL.Database(await readFile(dbPath))
-    legacyDb.run('update test_evidence set json = ? where id = ?', [
+    legacyDb.run('update test_evidence set json = ?, privacy_version = null where id = ?', [
       JSON.stringify(legacyEvidence),
       legacyEvidence.id,
     ])
-    legacyDb.run('update agent_events set json = ? where id = ?', [
+    legacyDb.run('update agent_events set json = ?, privacy_version = null where id = ?', [
       JSON.stringify(legacyEvent),
       legacyEvent.id,
     ])
@@ -8949,7 +8982,7 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const legacyDb = new SQL.Database(await readFile(dbPath))
-    legacyDb.run('update agent_events set json = ? where id = ?', [
+    legacyDb.run('update agent_events set json = ?, privacy_version = null where id = ?', [
       JSON.stringify(orphanedEvent),
       orphanedEvent.id,
     ])
@@ -9011,11 +9044,11 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const legacyDb = new SQL.Database(await readFile(dbPath))
-    legacyDb.run('update test_evidence set json = ? where id = ?', [
+    legacyDb.run('update test_evidence set json = ?, privacy_version = null where id = ?', [
       JSON.stringify(legacyEvidence),
       legacyEvidence.id,
     ])
-    legacyDb.run('update artifacts set json = ? where id = ?', [
+    legacyDb.run('update artifacts set json = ?, privacy_version = null where id = ?', [
       JSON.stringify(legacyReport),
       legacyReport.id,
     ])
@@ -9074,7 +9107,7 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const legacyDb = new SQL.Database(await readFile(dbPath))
-    legacyDb.run('update artifacts set json = ? where id = ?', [
+    legacyDb.run('update artifacts set json = ?, privacy_version = null where id = ?', [
       JSON.stringify(orphanedReport),
       orphanedReport.id,
     ])
@@ -9115,7 +9148,7 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const legacyDb = new SQL.Database(await readFile(dbPath))
-    legacyDb.run('update artifacts set json = ? where id = ?', [
+    legacyDb.run('update artifacts set json = ?, privacy_version = null where id = ?', [
       JSON.stringify(mismatchedReport),
       mismatchedReport.id,
     ])
@@ -10307,7 +10340,7 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const legacyDb = new SQL.Database(await readFile(dbPath))
-    legacyDb.run('update coding_agent_events set json = ? where id = ?', [
+    legacyDb.run('update coding_agent_events set json = ?, privacy_version = null where id = ?', [
       JSON.stringify(legacyEvent),
       legacyEvent.id,
     ])

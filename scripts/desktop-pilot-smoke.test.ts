@@ -33,7 +33,7 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).toContain('installation_id')
     expect(smoke).toContain('installation_version')
     expect(smoke).toContain("toolId !== 'scenario.evaluate'")
-    expect(smoke).toContain('schemaVersion !== 31')
+    expect(smoke).toContain('schemaVersion !== 32')
     expect(smoke).toMatch(
       /startAgentRuntime\(\{\s*runId: run\.id,\s*nodeId: run\.currentNodeId,\s*localProjectId: project\.id,\s*\}\)/,
     )
