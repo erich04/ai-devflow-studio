@@ -94,12 +94,17 @@ release until V1.5 candidate-bound signoff passes.
 
 ## Agent Boundaries
 
-Use two main Agent paths:
+Present the Agent capability as one focused Agent group around one Run:
 
+- **Workflow Stage Agent** turns the request into clarification and solution-design artifacts.
 - **Knowledge Review Agent** reviews requirements or solution design against team knowledge,
   evidence, and policy context. It produces risks, missing evidence, references, and Gate Advisory.
 - **Coding Agent** writes code through a managed worktree, permission relay, diff capture, and test
-  evidence path.
+  evidence path. It can connect to opencode / OpenCode through the CRI boundary.
+
+This is a workflow-driven, single-group Agent mode. The Agents do not need open-ended conversation:
+each one works at the relevant stage and writes its output back to the same evidence chain. Do not
+describe this as general-purpose multi-agent orchestration or autonomous Agent handoff.
 
 Skill is not a third main Agent path. It is a reusable capability catalog that can support Review
 and Coding, but it cannot bypass Gate, policy, or evidence requirements.
@@ -130,7 +135,7 @@ Use a 9-slide structure:
 4. **Team knowledge foundation**: one knowledge repository connects multiple code repositories.
 5. **Delivery workflow**: requirement clarification through business acceptance, with Gates.
 6. **Design-to-engineering**: Open Design HTML prototype -> React components -> Electron Workbench.
-7. **Dual Agent paths**: Knowledge Review Agent and Coding Agent have separate responsibilities.
+7. **One Agent group**: stage generation, Knowledge Review, and OpenCode-backed Coding have separate responsibilities inside one Run.
 8. **Architecture boundaries**: Electron, SQLite/Postgres, external Coding Engine, team management platform.
 9. **Closing**: this is not the endpoint, but a verifiable path.
 
@@ -185,5 +190,7 @@ Supporting points:
 - 从个人 Agent 使用到团队治理
 
 Mention that the 1.x artifact is a governed self-hosted delivery system. After the 1.x completion
-gate, future work should focus on the 2.x first-party Agent Runtime, native Tool/MCP execution,
-evaluated RAG/Memory, Multi-Agent orchestration, and tenant-scoped execution.
+gate, 2.x expands into first-party Agent Runtime, native Tool/MCP execution, evaluated RAG/Memory,
+Multi-Agent orchestration, and tenant-scoped execution. Future work should keep strengthening
+runtime hardening, knowledge review flow, and team operation rather than presenting the system as
+open-ended autonomous orchestration.

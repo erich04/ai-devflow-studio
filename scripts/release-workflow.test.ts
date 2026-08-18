@@ -36,6 +36,7 @@ describe('GitHub release workflow', () => {
     expect(workflow).toContain('contents: read')
     expect(workflow).toContain('actions: read')
     expect(workflow).toContain('corepack pnpm verify')
+    expect(workflow).toContain('corepack pnpm audit:production')
     expect(workflow).toContain('corepack pnpm build')
     expect(workflow).toContain('corepack pnpm test:build-output-smoke')
     expect(workflow).toContain('corepack pnpm test:e2e')
@@ -102,7 +103,10 @@ describe('GitHub release workflow', () => {
     expect(artifactsJob).toContain('run-id: ${{ steps.recorded-verify.outputs.run-id }}')
     expect(artifactsJob).not.toContain('fs.readFileSync')
     expect(artifactsJob).not.toContain('Resolve exact-SHA candidate Desktop artifact')
-    expect(artifactsJob).toContain('name: ai-devflow-studio-v15-candidate-desktop')
+    expect(artifactsJob).toContain('name: ai-devflow-studio-v22-candidate-desktop')
+    expect(artifactsJob).toContain(
+      'docs/releases/v2.2.0/release-required-gates.json',
+    )
     expect(artifactsJob).toContain('path: out/release-candidate-desktop')
     expect(artifactsJob).toContain(
       'DEVFLOW_RELEASE_DESKTOP_ARTIFACT_INDEX: out/release-candidate-desktop/artifact-index.json',
@@ -206,6 +210,10 @@ describe('GitHub verify workflow', () => {
     const postgresJob = jobBlock(workflow, 'postgres-integration')
 
     expect(workflow).toContain('corepack pnpm verify')
+    expect(workflow).toContain('corepack pnpm audit:production')
+    expect(workflow).toContain('corepack pnpm test:v20-agent-runtime-evaluator')
+    expect(workflow).toContain('corepack pnpm test:v21-retrieval-memory-evaluator')
+    expect(workflow).toContain('corepack pnpm test:v22-multi-agent-evaluator')
     expect(workflow).toContain('corepack pnpm build')
     expect(workflow).toContain('corepack pnpm test:build-output-smoke')
     expect(workflow).toContain('corepack pnpm test:e2e')
@@ -229,7 +237,7 @@ describe('GitHub verify workflow', () => {
     const macosJob = jobBlock(workflow, 'macos-verify')
 
     expect(macosJob).toContain('actions/upload-artifact@v4')
-    expect(macosJob).toContain('name: ai-devflow-studio-v15-candidate-desktop')
+    expect(macosJob).toContain('name: ai-devflow-studio-v22-candidate-desktop')
     expect(macosJob).toContain(
       'desktop-artifact-trio.mjs stage out/desktop-pilot/artifact-index.json out/verify-candidate-desktop',
     )

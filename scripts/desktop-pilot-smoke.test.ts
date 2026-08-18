@@ -69,3 +69,12 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).toContain('memoryRestartDuplicateEffects')
   })
 })
+
+describe('Desktop pilot build contract', () => {
+  const build = readFileSync('scripts/build-desktop-pilot.mjs', 'utf8')
+
+  it('uses the Packager 20 named CommonJS export', () => {
+    expect(build).toContain("const { packager } = requireFromDesktop('@electron/packager')")
+    expect(build).not.toContain("const packager = requireFromDesktop('@electron/packager')")
+  })
+})

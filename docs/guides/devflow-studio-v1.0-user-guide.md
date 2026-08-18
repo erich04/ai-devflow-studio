@@ -29,7 +29,8 @@ v1.0 不是一个打包签名后的商业发行版，而是一个能跑通本地
 在项目根目录：
 
 ```bash
-cd /Users/erich/File/claude/10-showcase/ai-devflow-studio
+# 从 workbench 根目录进入本 Project
+cd projects/agent-engineering/ai-devflow-studio
 corepack pnpm install
 ```
 
@@ -61,10 +62,10 @@ corepack pnpm dev:electron
 
 ### 1. 选择本地仓库
 
-你可以直接选择当前仓库：
+你可以在文件选择器中选择当前 Project 根目录；从 workbench 根目录看，它是：
 
 ```text
-/Users/erich/File/claude/10-showcase/ai-devflow-studio
+projects/agent-engineering/ai-devflow-studio
 ```
 
 通过标准：

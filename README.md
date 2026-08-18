@@ -8,17 +8,27 @@ DevFlow turns an AI-assisted code change into a governed delivery flow with loca
 
 _A real Electron workbench showing the six-stage workflow, local repository controls, Gate Enforcement, knowledge evidence, and agent actions._
 
-> **Current release and roadmap status:** `v1.5.0` is released and the finite 1.x line is complete.
-> V2.0 Native Agent Runtime and V2.1 Evaluated Retrieval and Memory are complete. V2.2 Multi-Agent and Execution Tenancy are complete, with immutable candidate-bound evidence under
-> `docs/releases/v2.0.0/`, `docs/releases/v2.1.0/`, and `docs/releases/v2.2.0/`; the finite accepted 2.x line is complete. The
-> [Roadmap](docs/roadmap.md) is the single source of truth; package labels and this README do not
-> substitute for immutable proof under `docs/releases/`.
+> **Current release and roadmap status:** `v1.5.0` remains the published baseline. The V2.0,
+> V2.1, and V2.2 feature milestones are complete, and the repository is preparing the formal
+> `v2.2.0` release. Historical milestone evidence remains immutable; the release is complete only
+> after a new exact candidate passes the formal signoff, is tagged, and is published. See the
+> [Roadmap](docs/roadmap.md) for current truth.
 
 ## Why It Exists
 
 An AI prompt can produce code, but a team still needs to know what changed, which standards were used, whether tests passed, who approved the risk, and what the runtime cost.
 
 DevFlow keeps repository execution on the developer's machine. It turns requests, designs, diffs, tests, reviews, policy decisions, and costs into evidence that a team can inspect before delivery.
+
+### Workflow + One Agent Group
+
+The workflow is the backbone, but the product is more than a workflow editor. Within one Run, a focused Agent group handles three clear responsibilities:
+
+- Workflow Stage Agent turns the request into clarification and design artifacts.
+- Knowledge Review Agent checks the work against team knowledge, policy, and existing evidence.
+- Coding Agent connects to OpenCode through the CRI boundary and returns code changes, tests, and runtime evidence.
+
+This is a workflow-driven, single-group Agent mode rather than open-ended multi-agent orchestration. Each Agent works at the right stage and writes its result back to the same evidence chain.
 
 ### Target Users
 
@@ -38,6 +48,7 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 ## Implemented Capabilities
 
 - A six-stage Run model covers request intake, Clarify, Design, Build, Test, PR handoff, and Acceptance.
+- A focused Agent group covers workflow-stage generation, knowledge review, and OpenCode-backed coding within the same Run.
 - Shared trusted commands enforce current-node order and required evidence across all six stages.
 - Electron selects a local Git repository, validates test commands, runs tests through controlled IPC, and persists local state in SQLite.
 - Coding Agent runs use managed worktrees, explicit permission relay, diff capture, Test Evidence, runtime trace, and cleanup state.
@@ -85,6 +96,7 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 
 | Evidence path | What it checks |
 | --- | --- |
+| `corepack pnpm audit:production` | The current registry advisory set contains no known production dependency vulnerability. |
 | `corepack pnpm verify` | TypeScript checks, the unit/component suite, and the cross-platform static audit. |
 | `corepack pnpm verify:demo` | The default gate plus browser E2E and a real Electron main/preload/SQLite smoke path. |
 | `corepack pnpm test:postgres-smoke` | Migration, persistence, policy, approval, sync, and redacted team reads against Postgres. |
@@ -100,8 +112,9 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 | `corepack pnpm v22:completion-status` | The V2.2 direct-child signoff validator; it requires the exact evaluator, first-attempt Verify, Desktop artifact, local matrix, immutable evidence identity, and a clean finite-2.x close. |
 | Release-only opencode smoke | A paid, explicit signoff for the real local coding runtime; it is never part of default CI. |
 
-Deterministic results become release evidence only when `required-gates.json` binds them to the clean
-candidate commit `C`; the README does not substitute for those records or `release:status`.
+Deterministic results become formal V2.2 release evidence only when
+`release-required-gates.json` binds them to the clean candidate commit `C`; the README does not
+substitute for those records or `release:status`.
 
 See the [testing strategy](docs/engineering/testing-strategy.md), [demo and smoke guide](docs/engineering/demo-and-smoke.md), and [release-only runtime policy](docs/plans/release-only-real-opencode-smoke.md) for exact evidence boundaries.
 
@@ -159,8 +172,8 @@ require explicit configuration.
 5. Open Agents and Tests to review the trace, command result, redaction state, and cost source.
 
 The [full feature walkthrough](docs/guides/devflow-studio-full-feature-walkthrough.md) is the
-historical v1.3 feature tour. Use the [V1.5 operator walkthrough](docs/guides/devflow-studio-v1.5-walkthrough.md)
-for the current governed GitHub Delivery path.
+historical v1.3 feature tour. Use the [V2.2 release walkthrough](docs/guides/devflow-studio-v2.2-walkthrough.md)
+for the current workflow, Agent, Memory, coordination, and governed GitHub Delivery path.
 
 Use `corepack pnpm dev:electron` for local execution. The browser-only `dev:desktop` path is a visual preview: it cannot select folders, run local tests, or execute Agent, Gate, PR, and Acceptance workflow writes. Those actions fail closed unless the trusted Electron main-process runtime is available.
 
@@ -208,6 +221,7 @@ V2.1, and V2.2 milestones, the completed finite 2.x line, and deferred platform 
 
 | Need | Start here |
 | --- | --- |
+| Concise Chinese project introduction | [项目简介（中文）](docs/product/project-introduction.zh-CN.md) |
 | Product positioning and user workflow | [Product Definition](docs/product/product-definition.md) |
 | Current status and future priorities | [Roadmap](docs/roadmap.md) |
 | Historical v1.3 feature tour | [Full feature walkthrough](docs/guides/devflow-studio-full-feature-walkthrough.md) |

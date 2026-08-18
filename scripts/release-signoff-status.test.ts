@@ -69,17 +69,24 @@ const otherRevocationIntentId =
 const revocationCheckedAt = '2026-08-11T12:30:00.000Z'
 
 function walkthroughContent(releaseSeries: string): string {
-  if (releaseSeries !== '1.5') {
+  const governedRelease = releaseSeries === '1.5' || releaseSeries === '2.2'
+  if (!governedRelease) {
     return `# V${releaseSeries} walkthrough\n\nStatus: Passed\n\nCandidate: ${candidateSha}\n`
   }
 
-  return `# V1.5 walkthrough result
+  const targetVersion = releaseSeries === '2.2' ? '2.2.0' : '1.5.0'
+  const teamSchema = releaseSeries === '2.2' ? 19 : 15
+  const desktopSchema = releaseSeries === '2.2' ? 32 : 17
+  const checkedAt =
+    releaseSeries === '2.2' ? '2026-08-18T12:30:00.000Z' : revocationCheckedAt
+
+  return `# V${releaseSeries} walkthrough result
 
 Status: Passed
 
 Candidate: ${candidateSha}
-Packaged artifact: 1.5.0 darwin-arm64 ${desktopArtifactSha}
-Team schema v15; Desktop schema v17.
+Packaged artifact: ${targetVersion} darwin-arm64 ${desktopArtifactSha}
+Team schema v${teamSchema}; Desktop schema v${desktopSchema}.
 Verify: https://github.com/devflow/ai-devflow-studio/actions/runs/123456
 Delivery series: github-delivery:${'a'.repeat(64)}
 Delivery attempt: 1; intent revision: 1.
@@ -96,7 +103,7 @@ Lifecycle counts: Work Request 1, canonical Run 1, credential grant 1, branch pu
 Sandbox/App: private devflow/release-sandbox via devflow-release-sandbox.
 Draft state: true; merged: false; automatic retry: false.
 Restart side-effect repeats: credential 0, push 0, pull request 0.
-Revocation proof: state version 2; intent ${revocationIntentId}; revoked binding version 2; outcome binding_inactive; checked at ${revocationCheckedAt}; durable check count 1.
+Revocation proof: state version 2; intent ${revocationIntentId}; revoked binding version 2; outcome binding_inactive; checked at ${checkedAt}; durable check count 1.
 `
 }
 
@@ -112,7 +119,16 @@ function record(path: string, value: Record<string, unknown>): EvidenceRecord {
 function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSignoffSnapshot {
   const targetVersion = overrides.targetVersion ?? '1.3.0'
   const releaseSeries = targetVersion.split('.').slice(0, 2).join('.')
-  const evidenceDate = releaseSeries === '1.5' ? '2026-08-11' : '2026-07-31'
+  const governedRelease = releaseSeries === '1.5' || releaseSeries === '2.2'
+  const evidenceDate =
+    releaseSeries === '2.2'
+      ? '2026-08-18'
+      : releaseSeries === '1.5'
+        ? '2026-08-11'
+        : '2026-07-31'
+  const gateRecordedAt = `${evidenceDate}T12:00:00.000Z`
+  const sandboxRecordedAt = `${evidenceDate}T13:00:00.000Z`
+  const proofCheckedAt = `${evidenceDate}T12:30:00.000Z`
   const profile = releaseProfileFor(targetVersion)
   const evidencePaths = releaseEvidencePaths(targetVersion)
   const releaseEvidencePath = evidencePaths.githubSandbox ?? evidencePaths.realOpencode
@@ -163,9 +179,9 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
       targetVersion,
       candidateSha,
       status: 'passed',
-      ...(releaseSeries === '1.5'
+      ...(governedRelease
         ? {
-            recordedAt: '2026-08-11T12:00:00.000Z',
+            recordedAt: gateRecordedAt,
             localMatrix: {
               candidateSha,
               result: 'passed',
@@ -196,13 +212,13 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
         : {}),
       gates: Object.fromEntries((profile?.requiredGateIds ?? []).map((gate) => [gate, 'passed'])),
     }),
-    ...(releaseSeries === '1.5'
+    ...(governedRelease
       ? {
           githubSandboxRecord: record(releaseEvidencePath, {
             targetVersion,
             candidateSha,
             status: 'passed',
-            recordedAt: '2026-08-11T13:00:00.000Z',
+            recordedAt: sandboxRecordedAt,
             repository: 'devflow/release-sandbox',
             repositoryVisibility: 'private',
             appSlug: 'devflow-release-sandbox',
@@ -219,7 +235,7 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
             expectedCommitSha: 'e'.repeat(40),
             remoteHeadSha: 'e'.repeat(40),
             baseBranch: 'main',
-            headBranch: 'devflow/v1.5-release',
+            headBranch: `devflow/v${releaseSeries}-release`,
             pullRequestNumber: 17,
             pullRequestUrl: 'https://github.com/devflow/release-sandbox/pull/17',
             draft: true,
@@ -239,7 +255,7 @@ function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSigno
               intentId: revocationIntentId,
               revokedBindingVersion: 2,
               outcomeCode: 'binding_inactive',
-              checkedAt: revocationCheckedAt,
+              checkedAt: proofCheckedAt,
               durableCheckCount: 1,
             },
             redactionCheck: 'passed',
@@ -324,7 +340,7 @@ describe('release signoff status', () => {
     expect(collected.candidateSha).toMatch(/^[0-9a-f]{40}$/)
     expect(collected.changedFilesFromCandidate).toEqual(expect.any(Array))
     expect(collected.walkthroughEvidence.path).toBe(
-      `docs/releases/v${currentRootVersion}/walkthrough.json`,
+      `docs/releases/v${currentRootVersion}/release-walkthrough.json`,
     )
     expect(collected.desktopArtifactEvidence.indexPath).toBe(
       'out/desktop-pilot/artifact-index.json',
@@ -515,6 +531,64 @@ describe('release signoff status', () => {
       requiredGates: 'docs/releases/v1.5.0/required-gates.json',
       githubSandbox: 'docs/releases/v1.5.0/github-sandbox.json',
     })
+  })
+
+  it('defines a separate formal v2.2 release profile without rewriting milestone evidence', () => {
+    expect(releaseProfileFor('2.2.0')?.requiredDocPaths).toEqual([
+      'docs/product/prd/v2.0-native-agent-runtime-prd.md',
+      'docs/adr/0014-bounded-agent-runtime.md',
+      'docs/plans/v2.0-native-agent-runtime.md',
+      'docs/product/prd/v2.1-evaluated-retrieval-memory-prd.md',
+      'docs/adr/0017-evaluated-hybrid-retrieval-and-citation.md',
+      'docs/plans/v2.1-evaluated-retrieval-memory.md',
+      'docs/product/prd/v2.2-multi-agent-execution-tenancy-prd.md',
+      'docs/adr/0019-bounded-multi-agent-coordination.md',
+      'docs/plans/v2.2-multi-agent-execution-tenancy.md',
+      'docs/plans/v2.2-release-signoff.md',
+      'docs/guides/devflow-studio-v2.2-walkthrough.md',
+      'docs/guides/devflow-studio-self-hosted-pilot.md',
+    ])
+    expect(releaseProfileFor('2.2.0')?.requiredGateIds).toEqual([
+      'verify',
+      'production-dependency-audit',
+      'windows-compatibility',
+      'v15-github-delivery-deterministic',
+      'v20-agent-runtime-evaluator',
+      'v21-retrieval-memory-evaluator',
+      'v22-multi-agent-evaluator',
+      'e2e',
+      'electron-smoke',
+      'postgres-smoke',
+      'docker-smoke',
+      'docker-lifecycle-smoke',
+      'build',
+      'build-output-smoke',
+      'desktop-pilot-build',
+      'desktop-pilot-smoke',
+      'v15-github-delivery-packaged-smoke',
+      'github-sandbox-draft-pr',
+    ])
+    expect(releaseEvidencePaths('2.2.0')).toEqual({
+      walkthrough: 'docs/releases/v2.2.0/release-walkthrough.json',
+      requiredGates: 'docs/releases/v2.2.0/release-required-gates.json',
+      githubSandbox: 'docs/releases/v2.2.0/release-github-sandbox.json',
+    })
+    expect(releaseEvidencePaths('2.2.0').requiredGates).not.toBe(
+      'docs/releases/v2.2.0/required-gates.json',
+    )
+  })
+
+  it('accepts a complete candidate-bound formal v2.2 release snapshot', () => {
+    const ready = snapshot({ targetVersion: '2.2.0' })
+    const items = evaluateReleaseSignoffSnapshot(ready)
+
+    expect(items.every((item) => item.state === 'ready')).toBe(true)
+    expect(items).toContainEqual(
+      expect.objectContaining({ id: 'github-sandbox', state: 'ready' }),
+    )
+    expect(items).toContainEqual(
+      expect.objectContaining({ id: 'release-profile', state: 'ready' }),
+    )
   })
 
   it('collects v1.5 GitHub sandbox evidence without touching paid OpenCode configuration', () => {

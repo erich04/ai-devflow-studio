@@ -31,9 +31,12 @@ jobs:
           cache: pnpm
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm audit:production
       - run: node scripts/ensure-electron-install.mjs
       - run: corepack pnpm exec playwright install chromium
       - run: corepack pnpm verify
+      - name: V2.0 candidate-bound evaluator
+        run: corepack pnpm test:v20-agent-runtime-evaluator -- --candidate-sha "${GITHUB_SHA}" --output "out/v20-evaluation/${GITHUB_SHA}.json"
       - name: V2.1 candidate-bound evaluator
         run: corepack pnpm test:v21-retrieval-memory-evaluator -- --candidate-sha "${GITHUB_SHA}" --output "out/v21-evaluation/${GITHUB_SHA}.json"
       - name: V2.2 candidate-bound evaluator
@@ -49,7 +52,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'workflow_dispatch'
         with:
-          name: ai-devflow-studio-v15-candidate-desktop
+          name: ai-devflow-studio-v22-candidate-desktop
           path: out/verify-candidate-desktop/
           if-no-files-found: error
           retention-days: 30

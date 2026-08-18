@@ -89,7 +89,7 @@ describe('V2.0 Native Agent Runtime contract', () => {
     }
 
     if (hasV22CompletionEvidence) {
-      expect(roadmap).toContain('### Now — Maintain The Completed 2.x Line')
+      expect(roadmap).toContain('### Now — Formally Release The Completed 2.x Line')
       expect(roadmap).toContain('V2.0, V2.1, and V2.2 are complete')
     } else if (hasV21CompletionEvidence) {
       expect(roadmap).toMatch(/^### Now — .*V2\.2/gmu)
@@ -165,7 +165,7 @@ describe('V2.0 Native Agent Runtime contract', () => {
 
     expect(roadmap).toMatch(/Slice 7\s+is complete/)
     if (hasV22CompletionEvidence) {
-      expect(roadmap).toContain('### Now — Maintain The Completed 2.x Line')
+      expect(roadmap).toContain('### Now — Formally Release The Completed 2.x Line')
     } else if (hasV21CompletionEvidence) {
       expect(roadmap).toMatch(/^### Now — .*V2\.2/gmu)
     } else if (hasCompletionEvidence) {

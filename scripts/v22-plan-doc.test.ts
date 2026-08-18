@@ -22,9 +22,10 @@ describe('V2.2 Multi-Agent and Execution Tenancy contract', () => {
 
     expect(roadmap).toContain('V2.2 contract set is frozen')
     if (hasCompletionEvidence) {
-      expect(roadmap).toContain('### Now — Maintain The Completed 2.x Line')
-      expect(roadmap).toContain('| Current 2.x state | Maintenance and evidence-promoted work; no automatic V2.3 |')
-      expect(roadmap).toContain('| Next gate | No automatic V2.3; a future charter requires explicit Roadmap promotion |')
+      expect(roadmap).toContain('### Now — Formally Release The Completed 2.x Line')
+      expect(roadmap).toContain('| Current 2.x state | Feature milestones complete; formal release signoff remains open |')
+      expect(roadmap).toContain('| Next gate | Freeze a new V2.2 release candidate, pass the formal matrix, add direct-child release evidence, then tag and publish |')
+      expect(roadmap).toContain('docs/plans/v2.2-release-signoff.md')
       expect(roadmap).toContain('docs/releases/v2.2.0/')
     } else {
       expect(roadmap).toContain('### Now — Evaluate And Close V2.2')

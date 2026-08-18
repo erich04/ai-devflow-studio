@@ -149,6 +149,12 @@ Core responsibilities:
 
 DevFlow Studio contains multiple agent-related capabilities. They are intentionally different:
 
+### Workflow Stage Agent
+
+The Workflow Stage Agent turns the current request and upstream artifacts into clarification or
+solution-design evidence. It works only at the matching workflow stage and records provider and
+model provenance with the generated artifact.
+
 ### Knowledge Review Agent
 
 DevFlow assembles review context, retrieves knowledge references, calls a selected review model provider, and parses a structured review result.

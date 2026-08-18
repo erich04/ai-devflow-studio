@@ -56,6 +56,11 @@ const githubSandboxEvidence = {
   canonicalSignoffPaths: true,
 }
 
+const v22GithubSandboxEvidence = {
+  ...githubSandboxEvidence,
+  fileName: 'release-github-sandbox.json',
+}
+
 const releaseProfiles = {
   '1.3': {
     requiredDocPaths,
@@ -126,6 +131,47 @@ const releaseProfiles = {
     ],
     evidence: githubSandboxEvidence,
   },
+  '2.2': {
+    requiredDocPaths: [
+      'docs/product/prd/v2.0-native-agent-runtime-prd.md',
+      'docs/adr/0014-bounded-agent-runtime.md',
+      'docs/plans/v2.0-native-agent-runtime.md',
+      'docs/product/prd/v2.1-evaluated-retrieval-memory-prd.md',
+      'docs/adr/0017-evaluated-hybrid-retrieval-and-citation.md',
+      'docs/plans/v2.1-evaluated-retrieval-memory.md',
+      'docs/product/prd/v2.2-multi-agent-execution-tenancy-prd.md',
+      'docs/adr/0019-bounded-multi-agent-coordination.md',
+      'docs/plans/v2.2-multi-agent-execution-tenancy.md',
+      'docs/plans/v2.2-release-signoff.md',
+      'docs/guides/devflow-studio-v2.2-walkthrough.md',
+      'docs/guides/devflow-studio-self-hosted-pilot.md',
+    ],
+    requiredGateIds: [
+      'verify',
+      'production-dependency-audit',
+      'windows-compatibility',
+      'v15-github-delivery-deterministic',
+      'v20-agent-runtime-evaluator',
+      'v21-retrieval-memory-evaluator',
+      'v22-multi-agent-evaluator',
+      'e2e',
+      'electron-smoke',
+      'postgres-smoke',
+      'docker-smoke',
+      'docker-lifecycle-smoke',
+      'build',
+      'build-output-smoke',
+      'desktop-pilot-build',
+      'desktop-pilot-smoke',
+      'v15-github-delivery-packaged-smoke',
+      'github-sandbox-draft-pr',
+    ],
+    recordNames: {
+      walkthrough: 'release-walkthrough.json',
+      requiredGates: 'release-required-gates.json',
+    },
+    evidence: v22GithubSandboxEvidence,
+  },
 }
 
 function releaseSeriesFor(targetVersion) {
@@ -183,6 +229,10 @@ export function releaseEvidencePaths(targetVersion, env = process.env) {
   const releaseDir = `docs/releases/v${targetVersion}`
   const profile = releaseProfileFor(targetVersion)
   const evidence = profile?.evidence ?? realOpencodeEvidence
+  const recordNames = profile?.recordNames ?? {
+    walkthrough: 'walkthrough.json',
+    requiredGates: 'required-gates.json',
+  }
 
   if (
     evidence.canonicalSignoffPaths === true &&
@@ -192,14 +242,20 @@ export function releaseEvidencePaths(targetVersion, env = process.env) {
       env[evidence.envName],
     ].some((value) => typeof value === 'string' && value.trim().length > 0)
   ) {
-    throw new Error('noncanonical_v15_evidence_path')
+    throw new Error(
+      releaseSeriesFor(targetVersion) === '1.5'
+        ? 'noncanonical_v15_evidence_path'
+        : 'noncanonical_release_evidence_path',
+    )
   }
 
   return {
     walkthrough:
-      env.DEVFLOW_RELEASE_WALKTHROUGH_RECORD?.trim() || `${releaseDir}/walkthrough.json`,
+      env.DEVFLOW_RELEASE_WALKTHROUGH_RECORD?.trim() ||
+      `${releaseDir}/${recordNames.walkthrough}`,
     requiredGates:
-      env.DEVFLOW_RELEASE_GATE_RECORD?.trim() || `${releaseDir}/required-gates.json`,
+      env.DEVFLOW_RELEASE_GATE_RECORD?.trim() ||
+      `${releaseDir}/${recordNames.requiredGates}`,
     [evidence.pathKey]:
       env[evidence.envName]?.trim() || `${releaseDir}/${evidence.fileName}`,
   }
@@ -497,7 +553,8 @@ const v15GitHubSandboxKeys = [
 ]
 
 function v15EvidenceShapeIssue(snapshot, kind, value) {
-  if (releaseSeriesFor(snapshot.targetVersion) !== '1.5') {
+  const releaseSeries = releaseSeriesFor(snapshot.targetVersion)
+  if (releaseSeries !== '1.5' && releaseSeries !== '2.2') {
     return null
   }
   const profileGateIds = releaseProfileFor(snapshot.targetVersion)?.requiredGateIds ?? []
@@ -540,7 +597,9 @@ function v15EvidenceShapeIssue(snapshot, kind, value) {
             'checkedAt',
             'durableCheckCount',
           ])
-  return valid ? null : `Unexpected or missing fields in the v1.5 ${kind} evidence.`
+  return valid
+    ? null
+    : `Unexpected or missing fields in the v${releaseSeries} ${kind} evidence.`
 }
 
 function evidenceBaseState(record, snapshot) {
@@ -630,7 +689,7 @@ function evaluateWalkthroughEvidence(snapshot) {
     value.evidencePath === expectedPath &&
     snapshot.walkthroughEvidence.referencedEvidenceExists === true &&
     snapshot.walkthroughEvidence.referencedEvidenceReadError === null &&
-    (releaseSeries !== '1.5' ||
+    ((releaseSeries !== '1.5' && releaseSeries !== '2.2') ||
       isValidV15WalkthroughContent(
         snapshot.walkthroughEvidence.referencedEvidenceContent,
         snapshot,
@@ -683,7 +742,7 @@ function evaluateRequiredGateRecord(snapshot) {
       : profileGateIds.filter((gate) => gates[gate] !== 'passed')
 
   const v15MetadataValid =
-    releaseSeriesFor(snapshot.targetVersion) !== '1.5' ||
+    !['1.5', '2.2'].includes(releaseSeriesFor(snapshot.targetVersion)) ||
     isValidV15GateMetadata(value, snapshot)
   return {
     id: 'required-gates',
@@ -887,6 +946,11 @@ function isValidV15WalkthroughContent(content, snapshot) {
   const pullRequestUrl = sandboxValue?.pullRequestUrl
   const revocationProof = sandboxValue?.revocationProof
   const walkthroughDate = snapshot.walkthroughEvidence?.value?.date
+  const releaseSeries = releaseSeriesFor(snapshot.targetVersion)
+  const schemaVersions =
+    releaseSeries === '2.2'
+      ? { team: 19, desktop: 32 }
+      : { team: 15, desktop: 17 }
   const sameUtcEvidenceDate =
     typeof walkthroughDate === 'string' &&
     /^\d{4}-\d{2}-\d{2}$/u.test(walkthroughDate) &&
@@ -920,8 +984,8 @@ function isValidV15WalkthroughContent(content, snapshot) {
     ) &&
     sameUtcEvidenceDate &&
     /Status:\s*Passed/i.test(content) &&
-    /Team schema v15/i.test(content) &&
-    /Desktop schema v17/i.test(content) &&
+    new RegExp(`Team schema v${schemaVersions.team}`, 'i').test(content) &&
+    new RegExp(`Desktop schema v${schemaVersions.desktop}`, 'i').test(content) &&
     new RegExp(
       `Packaged artifact:[^\\n]*${escapeRegExp(String(artifactVersion))}[^\\n]*${escapeRegExp(String(artifactPlatform))}[^\\n]*${escapeRegExp(String(artifactSha))}`,
       'i',
@@ -1336,13 +1400,13 @@ function evaluateSignoffContents(snapshot) {
   const walkthroughPath = snapshot.walkthroughEvidence.value?.evidencePath
   const evidence = releaseProfileFor(snapshot.targetVersion)?.evidence ?? realOpencodeEvidence
   const releaseEvidenceRecord = snapshot[evidence.snapshotKey]
-  const releaseDir = `docs/releases/v${snapshot.targetVersion}`
+  const canonicalPaths = releaseEvidencePaths(snapshot.targetVersion, {})
   const evidenceRecordPaths =
     evidence.canonicalSignoffPaths === true
       ? [
-          `${releaseDir}/walkthrough.json`,
-          `${releaseDir}/required-gates.json`,
-          `${releaseDir}/${evidence.fileName}`,
+          canonicalPaths.walkthrough,
+          canonicalPaths.requiredGates,
+          canonicalPaths[evidence.pathKey],
         ]
       : [
           snapshot.walkthroughEvidence.path,

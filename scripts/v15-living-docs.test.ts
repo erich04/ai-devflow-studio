@@ -97,7 +97,7 @@ describe('V1.5 living documentation truth', () => {
     }
 
     expect(v15Prd).toContain('Lifecycle: Implemented; release/signoff pending')
-    expect(testingStrategy).toContain('ai-devflow-studio-v15-candidate-desktop')
+    expect(testingStrategy).toContain('ai-devflow-studio-v22-candidate-desktop')
 
     expect(demoAndSmoke).toContain('`v1.5.0` is the current release')
     expect(demoAndSmoke).toContain('Revise')

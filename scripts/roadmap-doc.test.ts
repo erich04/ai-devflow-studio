@@ -98,7 +98,7 @@ describe('product roadmap source of truth', () => {
       'V1.5 and the finite 1.x line are released and complete',
     )
     if (hasV22CompletionEvidence) {
-      expect(markdown).toContain('### Now — Maintain The Completed 2.x Line')
+      expect(markdown).toContain('### Now — Formally Release The Completed 2.x Line')
       expect(markdown).toContain('| 2.x | DevFlow-native Agent Runtime')
       expect(markdown).toContain('Completed at V2.2.')
     } else if (hasV21CompletionEvidence) {
@@ -129,9 +129,11 @@ describe('product roadmap source of truth', () => {
     expect(currentRelease).toContain('The finite 1.x product line is complete')
     expect(currentRelease).not.toContain('release and 1.x completion gate remain pending')
     if (hasV22CompletionEvidence) {
-      expect(priorities).toContain('### Now — Maintain The Completed 2.x Line')
+      expect(priorities).toContain('### Now — Formally Release The Completed 2.x Line')
       expect(priorities).toContain('V2.0, V2.1, and V2.2 are complete')
       expect(priorities).toContain('docs/releases/v2.2.0/')
+      expect(priorities).toContain('milestone-completion evidence, not a published `v2.2.0` release')
+      expect(priorities).toContain('docs/plans/v2.2-release-signoff.md')
       expect(priorities).toContain('There is no automatic V2.3')
     } else if (hasV21CompletionEvidence) {
       expect(priorities).toMatch(/^### Now — .*V2\.2/gmu)

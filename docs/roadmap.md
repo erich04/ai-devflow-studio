@@ -87,11 +87,11 @@ contains the signoff-bound release artifacts.
 | V1.5 product contract | `docs/product/prd/v1.5-github-delivery-prd.md` |
 | V1.5 execution history | `docs/plans/v1.5-github-delivery.md` and the four immutable release evidence files |
 | Completed version line | 1.x governed self-hosted delivery |
-| Active version line | 2.x DevFlow-native Agent Runtime |
+| Release candidate | Formal `v2.2.0` closeout in progress; no tag or publication claimed |
 | Completed 2.x milestones | V2.0 Native Agent Runtime Foundation; V2.1 Evaluated Retrieval And Memory; V2.2 Multi-Agent And Execution Tenancy |
 | Completion evidence | `docs/releases/v2.0.0/`; `docs/releases/v2.1.0/`; `docs/releases/v2.2.0/` |
-| Current 2.x state | Maintenance and evidence-promoted work; no automatic V2.3 |
-| Next gate | No automatic V2.3; a future charter requires explicit Roadmap promotion |
+| Current 2.x state | Feature milestones complete; formal release signoff remains open |
+| Next gate | Freeze a new V2.2 release candidate, pass the formal matrix, add direct-child release evidence, then tag and publish |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -165,13 +165,18 @@ The superseded implementation-period markers `### Now — Run V2.1 Evaluation An
 `| Next gate | Freeze the exact V2.1 candidate and run the full completion matrix |` remain here only
 as auditable phase vocabulary; the current table and the single `Now` heading below are authoritative.
 
-### Now — Maintain The Completed 2.x Line
+### Now — Formally Release The Completed 2.x Line
 
 V2.0, V2.1, and V2.2 are complete, and the finite accepted 2.x line is closed. Candidate
 `c765147be5e86b5b931999c552d951a0c9002562` passed the exact ten-scenario Single-vs-Multi evaluator,
 the full local/PG16/Docker/packaged matrix, first-attempt five-job Verify run `31764135684`, and the
 exclusive Desktop artifact gate. Immutable V2.2 completion records are stored under
 `docs/releases/v2.2.0/`.
+
+That record is milestone-completion evidence, not a published `v2.2.0` release. Security,
+persistence, and documentation changes landed after the milestone candidate, so the formal release
+uses a new clean candidate and separate `release-*` evidence records. The procedure is defined in
+`docs/plans/v2.2-release-signoff.md`; the old V2.2 records remain immutable.
 
 Current work is limited to maintenance, security/dependency updates, and evidence-promoted fixes.
 There is no automatic V2.3; a future feature charter must be explicitly promoted through this single

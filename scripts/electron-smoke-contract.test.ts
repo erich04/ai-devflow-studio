@@ -23,6 +23,15 @@ describe('Electron smoke V1.5 trusted workflow contract', () => {
     expect(smoke).not.toContain('const ports = [4310, 4311, 5173]')
   })
 
+  it('creates pairing authority through a signed browser session', () => {
+    expect(smoke).toContain("import { createHmac } from 'node:crypto'")
+    expect(smoke).toContain('DEVFLOW_SESSION_SECRET: sessionSecret')
+    expect(smoke).toMatch(
+      /async function createSmokePairingCode\(\)[\s\S]*?\.\.\.createBrowserSessionHeaders\('acct-demo-u-ling'\)/,
+    )
+    expect(smoke).toContain('cookie: `devflow_session=${payload}.${signature}`')
+  })
+
   it('never invokes removed generic workflow persistence channels', () => {
     expect(smoke).not.toMatch(
       /window\.aiDevFlowDesktop\.(?:saveRun|saveArtifact|saveEvent)\s*\(/,

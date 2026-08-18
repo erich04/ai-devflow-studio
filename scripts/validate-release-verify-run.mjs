@@ -5,6 +5,16 @@ import { readBoundedJsonFileSync } from './release-evidence-file.mjs'
 
 export const canonicalV15GateRecord =
   'docs/releases/v1.5.0/required-gates.json'
+export const canonicalV22GateRecord =
+  'docs/releases/v2.2.0/release-required-gates.json'
+export const canonicalReleaseGateRecords = new Set([
+  canonicalV15GateRecord,
+  canonicalV22GateRecord,
+])
+
+export function isCanonicalReleaseGateRecord(path) {
+  return canonicalReleaseGateRecords.has(path)
+}
 
 const expectedJobNames = [
   'macOS verify',
@@ -111,7 +121,7 @@ function runCli() {
   try {
     const recordPath = process.argv[2]
     const repository = process.env.GITHUB_REPOSITORY
-    if (recordPath !== canonicalV15GateRecord || !repository) {
+    if (!isCanonicalReleaseGateRecord(recordPath) || !repository) {
       throw new Error('missing_input')
     }
     const record = readBoundedJsonFileSync(recordPath)

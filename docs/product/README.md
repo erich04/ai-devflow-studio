@@ -23,6 +23,7 @@ Use this folder to answer product questions:
 
 - [`product-definition.md`](./product-definition.md): Durable product positioning, users, core workflow,
   feature modules, and product boundaries. Current release and milestone status live in the Roadmap.
+- [`project-introduction.zh-CN.md`](./project-introduction.zh-CN.md): Concise Chinese introduction for sharing the workflow, Agent group, OpenCode CRI integration, and adoption value.
 - [`details/`](./details/README.md): Indexed product details for UX and implementation decisions, split by user jobs, object model, workflow, surfaces, evidence, and UI refactor anchors.
 - [`design-references/`](./design-references/README.md): Visual references captured from OpenDesign prototypes for frontend refactor work.
 - [`prd/`](./prd/README.md): Product Requirements Documents for the current product baseline and future scoped product changes.

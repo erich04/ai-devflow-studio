@@ -10,8 +10,8 @@ const packagePaths = [
   'apps/worker/package.json',
 ]
 
-describe('V1.5 package version alignment', () => {
-  it('keeps every first-party package on the exact V1.5 release version', () => {
+describe('V2.2 package version alignment', () => {
+  it('keeps every first-party package on the exact V2.2 release version', () => {
     const versions = Object.fromEntries(
       packagePaths.map((packagePath) => [
         packagePath,
@@ -20,7 +20,7 @@ describe('V1.5 package version alignment', () => {
     )
 
     expect(versions).toEqual(
-      Object.fromEntries(packagePaths.map((packagePath) => [packagePath, '1.5.0'])),
+      Object.fromEntries(packagePaths.map((packagePath) => [packagePath, '2.2.0'])),
     )
   })
 })

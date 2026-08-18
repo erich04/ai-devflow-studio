@@ -28,7 +28,8 @@
 在项目根目录：
 
 ```bash
-cd /Users/erich/File/claude/10-showcase/ai-devflow-studio
+# 从 workbench 根目录进入本 Project
+cd projects/agent-engineering/ai-devflow-studio
 corepack pnpm install
 ```
 
@@ -60,10 +61,10 @@ corepack pnpm dev:electron
 
 - App 标题或界面显示 AI DevFlow Studio，而不是 Electron default app。
 - 能看到 Workbench、Team Overview、Knowledge、Agents、Skills、MCP、Tests 等入口。
-- 选择本地仓库时，可以选当前仓库：
+- 选择本地仓库时，可以在文件选择器中选择当前 Project 根目录；从 workbench 根目录看，它是：
 
 ```text
-/Users/erich/File/claude/10-showcase/ai-devflow-studio
+projects/agent-engineering/ai-devflow-studio
 ```
 
 ## 2. Workbench 与 Gate Enforcement

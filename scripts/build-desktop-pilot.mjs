@@ -15,7 +15,7 @@ const desktopDirectory = path.join(rootDirectory, 'apps', 'desktop')
 const outputDirectory = path.join(rootDirectory, 'out', 'desktop-pilot')
 const packagedAppsDirectory = path.join(outputDirectory, 'app-directory')
 const requireFromDesktop = createRequire(path.join(desktopDirectory, 'package.json'))
-const packager = requireFromDesktop('@electron/packager')
+const { packager } = requireFromDesktop('@electron/packager')
 
 function safeArtifactLabel(version, platform, arch) {
   const label = `ai-devflow-studio-desktop-${version}-${platform}-${arch}`

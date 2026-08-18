@@ -1,6 +1,6 @@
 {
   "name": "ai-devflow-studio",
-  "version": "1.5.0",
+  "version": "2.2.0",
   "private": true,
   "description": "Team AI development workflow platform with an Electron developer client.",
   "packageManager": "pnpm@9.15.0",
@@ -11,6 +11,7 @@
     "dev:web": "corepack pnpm --filter @ai-devflow/web dev",
     "dev:api": "corepack pnpm --filter @ai-devflow/api dev",
     "build": "corepack pnpm -r --if-present build",
+    "audit:production": "corepack pnpm audit --prod",
     "build:desktop-pilot": "corepack pnpm --filter @ai-devflow/desktop build && node scripts/build-desktop-pilot.mjs",
     "typecheck": "corepack pnpm -r --if-present typecheck && corepack pnpm typecheck:opencode-smoke",
     "typecheck:opencode-smoke": "tsc --noEmit -p tsconfig.opencode-smoke.json",
@@ -53,5 +54,13 @@
     "typescript": "^5.9.3",
     "vite": "^7.2.7",
     "vitest": "^3.2.4"
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild": "0.28.1",
+      "nanoid": "3.3.18",
+      "postcss": "8.5.23",
+      "sharp": "0.35.0"
+    }
   }
 }

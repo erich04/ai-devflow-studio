@@ -27,7 +27,8 @@ checks。
 在项目根目录运行：
 
 ```bash
-cd /Users/erich/File/claude/10-showcase/ai-devflow-studio
+# 从 workbench 根目录进入本 Project
+cd projects/agent-engineering/ai-devflow-studio
 corepack pnpm dev:electron
 ```
 

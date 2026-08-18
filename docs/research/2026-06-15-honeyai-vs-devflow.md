@@ -1,6 +1,14 @@
 # HoneyAI vs AI DevFlow Studio
 
-Date: 2026-06-15
+> **Historical research snapshot — not an active product plan.**
+>
+> Captured on 2026-06-15. [HoneyAI](https://github.com/xiaohanarch/HoneyAI) is an external project by `xiaohanarch`; it is not authored or owned by the AI DevFlow Studio maintainer.
+>
+> The convergence and bridge sections below record hypotheses from that date. They are not current roadmap commitments. The [DevFlow roadmap](../roadmap.md) is authoritative and currently defers a HoneyAI bridge.
+
+- Status: `historical-research-snapshot`
+- Observation date: 2026-06-15
+- External source: `xiaohanarch/HoneyAI`
 
 ## Snapshot
 
@@ -49,7 +57,7 @@ Observed DevFlow Studio page:
 | Manager view | Tenant/run/cost concepts exist; no strong current management dashboard | Team Overview is already in product shell | DevFlow is stronger for team enablement |
 | Deployment | Self-hosted Next.js on k3s/ECS with Postgres/Redis/MinIO | Desktop client plus web/API/worker platform | Different operational envelope |
 
-## Recommended Convergence
+## Recommended Convergence (Historical Hypothesis)
 
 Do not merge the two projects immediately.
 
@@ -100,7 +108,7 @@ Recommended vocabulary:
 - MCP Server: a callable tool connector with permissions and audit policy.
 - Knowledge Base: Git/Markdown source of truth for standards, glossary, examples, and decisions.
 
-## Next MVP Bridge
+## Next MVP Bridge (Historical Proposal)
 
 The next practical integration should be small:
 

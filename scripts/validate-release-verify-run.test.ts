@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   canonicalV15GateRecord,
+  canonicalV22GateRecord,
+  isCanonicalReleaseGateRecord,
   validateRecordedVerifyRun,
   writeVerifiedRunIdOutput,
 } from './validate-release-verify-run.mjs'
@@ -52,10 +54,16 @@ function fixture() {
 }
 
 describe('release Verify run authority', () => {
-  it('binds the validator to the canonical v1.5 gate record', () => {
+  it('binds the validator to the canonical v1.5 and v2.2 gate records', () => {
     expect(canonicalV15GateRecord).toBe(
       'docs/releases/v1.5.0/required-gates.json',
     )
+    expect(canonicalV22GateRecord).toBe(
+      'docs/releases/v2.2.0/release-required-gates.json',
+    )
+    expect(isCanonicalReleaseGateRecord(canonicalV15GateRecord)).toBe(true)
+    expect(isCanonicalReleaseGateRecord(canonicalV22GateRecord)).toBe(true)
+    expect(isCanonicalReleaseGateRecord('tmp/required-gates.json')).toBe(false)
   })
 
   it('exports the verified run id through the GitHub step output file', () => {

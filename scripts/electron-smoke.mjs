@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { createHmac } from 'node:crypto'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
@@ -19,6 +20,7 @@ const {
   desktopUrl: devServerUrl,
 } = await resolveE2eRuntime()
 const smokeReviewProviderId = 'fake-knowledge-review'
+const sessionSecret = 'electron-smoke-session-secret-non-production-32-plus'
 const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'devflow-electron-smoke-'))
 const repoDir = path.join(tempRoot, 'fixture-repo')
 const userDataDir = path.join(tempRoot, 'user-data')
@@ -31,11 +33,17 @@ const demoSessionHeaders = {
   'x-devflow-user-role': 'owner',
   'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
 }
-const leadSessionHeaders = {
-  ...demoSessionHeaders,
-  'x-devflow-user-id': 'u-ling',
-  'x-devflow-user-role': 'lead',
-  'x-devflow-project-roles': 'p-payments:lead',
+function createBrowserSessionHeaders(authAccountId) {
+  const claims = {
+    v: 1,
+    authAccountId,
+    expiresAt: Math.floor(Date.now() / 1_000) + 8 * 60 * 60,
+  }
+  const payload = Buffer.from(JSON.stringify(claims), 'utf8').toString('base64url')
+  const signature = createHmac('sha256', sessionSecret)
+    .update(payload)
+    .digest('base64url')
+  return { cookie: `devflow_session=${payload}.${signature}` }
 }
 
 function run(command, args, options = {}) {
@@ -281,7 +289,7 @@ async function saveAgentFindingBlockingPolicy() {
       headers: {
         accept: 'application/json',
         'content-type': 'application/json',
-        ...leadSessionHeaders,
+        ...createBrowserSessionHeaders('acct-demo-u-ling'),
       },
       body: JSON.stringify({ organizationPolicy: policy }),
     },
@@ -301,7 +309,7 @@ async function createSmokePairingCode() {
       headers: {
         accept: 'application/json',
         'content-type': 'application/json',
-        ...leadSessionHeaders,
+        ...createBrowserSessionHeaders('acct-demo-u-ling'),
       },
       body: JSON.stringify({}),
     },
@@ -548,6 +556,7 @@ try {
   api = spawnQuiet(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'dev'], {
     DEVFLOW_ENABLE_DEMO_DATA: 'true',
     DEV_AUTH_ENABLED: 'true',
+    DEVFLOW_SESSION_SECRET: sessionSecret,
     PORT: String(apiPort),
   })
   web = spawnQuiet(

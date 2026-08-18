@@ -184,7 +184,7 @@ artifacts, or credentials. Their results must be recorded separately against the
 candidate.
 
 The exact-candidate `workflow_dispatch` is also the artifact authority. Its `macOS verify` job
-uploads `ai-devflow-studio-v15-candidate-desktop`; signoff records that archive's digest, and both
+uploads `ai-devflow-studio-v22-candidate-desktop`; formal V2.2 signoff records that archive's digest, and both
 local `release:status` and the Release workflow re-read its index/manifest and hash the same archive
 bytes. The Release workflow also checks the recorded run against GitHub's run and job APIs before
 downloading it. A current-runner rebuild may be smoked, but it cannot silently replace the candidate
@@ -192,10 +192,10 @@ artifact.
 
 ## External-Cost And Remote-Write Boundary
 
-The deterministic and packaged V1.5 gates use local fakes and local bare remotes. A real private
+The deterministic and packaged GitHub Delivery gates use local fakes and local bare remotes. A real private
 GitHub sandbox run is a separately authorized release-only gate: one candidate, one approved branch,
 one Draft pull request, no automatic retry, and never merge.
 
-This strategy does not authorize paid-provider smoke. V1.5 GitHub Delivery verification requires no
+This strategy does not authorize paid-provider smoke. GitHub Delivery verification requires no
 paid model request, and routine test commands must not call OpenCode or another paid provider unless
 a separate, explicit, candidate-bound authorization exists.

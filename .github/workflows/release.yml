@@ -173,6 +173,7 @@ jobs:
 
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm audit:production
       - run: node scripts/ensure-electron-install.mjs
       - run: corepack pnpm exec playwright install chromium
       - run: corepack pnpm verify
@@ -187,11 +188,11 @@ jobs:
         id: recorded-verify
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/validate-release-verify-run.mjs docs/releases/v1.5.0/required-gates.json
+        run: node scripts/validate-release-verify-run.mjs docs/releases/v2.2.0/release-required-gates.json
 
       - uses: actions/download-artifact@v4
         with:
-          name: ai-devflow-studio-v15-candidate-desktop
+          name: ai-devflow-studio-v22-candidate-desktop
           path: out/release-candidate-desktop
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
