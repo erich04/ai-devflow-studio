@@ -410,6 +410,32 @@ describe('sanitizeCodingDiffArtifact', () => {
     expect(artifact.truncated).toBe(true)
     expect(artifact.redacted).toBe(true)
   })
+
+  it('sanitizes every diff line and records versioned replacement provenance', () => {
+    const artifact = sanitizeCodingDiffArtifact({
+      id: 'diff-all-lines',
+      runId: run.id,
+      nodeId: buildNode.id,
+      projectId: project.id,
+      changedPaths: ['src/config.ts'],
+      patch: [
+        'diff --git a/src/config.ts b/src/config.ts',
+        ' const existing = "ghp_1234567890abcdefghijklmnop";',
+        '-const removed = "sk-oldsecret1234567890";',
+        '+const added = "sk-newsecret1234567890";',
+      ].join('\n'),
+      createdAt: '2026-08-17T10:00:00.000Z',
+    })
+
+    expect(artifact.patch).not.toContain('ghp_1234567890abcdefghijklmnop')
+    expect(artifact.patch).not.toContain('sk-oldsecret1234567890')
+    expect(artifact.patch).not.toContain('sk-newsecret1234567890')
+    expect(artifact.patch).toContain('[REDACTED:github_token]')
+    expect(artifact.patch.match(/\[REDACTED:openai_api_key\]/g)).toHaveLength(2)
+    expect(artifact.sanitizerVersion).toBe(2)
+    expect(artifact.sanitizedAt).toBe('2026-08-17T10:00:00.000Z')
+    expect(artifact.secretReplacementCount).toBe(3)
+  })
 })
 
 describe('createRemoteCodingAgentSummary', () => {

@@ -17,6 +17,7 @@ describe('redactSecrets', () => {
     expect(result.redacted).toBe(true)
     expect(result.value).toContain('[REDACTED:env_secret_assignment]')
     expect(result.value).toContain('[REDACTED:github_token]')
+    expect(result.replacementCount).toBe(2)
   })
 
   it('redacts an opaque bearer credential from an Authorization header', () => {

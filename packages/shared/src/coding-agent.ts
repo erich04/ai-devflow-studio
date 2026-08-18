@@ -21,6 +21,8 @@ import { redactSecrets, redactSensitiveText } from './redaction'
 import { assertCanonicalLocalNodeId } from './remote-node-identity'
 
 export const MAX_DIFF_CHARS = 50_000
+export const CURRENT_CODING_DIFF_SANITIZER_VERSION = 2
+export const SUPPORTED_CODING_DIFF_SANITIZER_VERSIONS = Object.freeze([2] as const)
 export const MAX_REMOTE_CHANGED_PATHS = 50
 export const MAX_CODING_KNOWLEDGE_REFERENCES = 8
 export const MAX_CODING_KNOWLEDGE_EXCERPT_CHARS = 1_200
@@ -74,6 +76,7 @@ export type RawCodingDiffArtifact = {
   changedPaths: string[]
   patch: string
   sourceDigest?: string
+  sanitizedAt?: string
   createdAt: string
 }
 
@@ -257,7 +260,11 @@ export function sanitizeCodingDiffArtifact(input: RawCodingDiffArtifact): Coding
     throw new Error('Coding Diff source digest must be a lowercase SHA-256 digest')
   }
   const filteredPaths = input.changedPaths.filter(isRepoRelativePath).slice(0, MAX_REMOTE_CHANGED_PATHS)
-  const redactedPatch = redactDiffAddedLines(input.patch)
+  const sanitizedAt = input.sanitizedAt ?? input.createdAt
+  if (!Number.isFinite(Date.parse(sanitizedAt)) || new Date(sanitizedAt).toISOString() !== sanitizedAt) {
+    throw new Error('Coding Diff sanitization timestamp must be canonical ISO-8601')
+  }
+  const redactedPatch = redactDiffLines(input.patch)
   const truncated = redactedPatch.value.length > MAX_DIFF_CHARS
   const truncationMarker = `\n[TRUNCATED:diff_exceeded_${MAX_DIFF_CHARS}_chars]`
   const patch = truncated
@@ -274,6 +281,9 @@ export function sanitizeCodingDiffArtifact(input: RawCodingDiffArtifact): Coding
     ...(input.sourceDigest ? { sourceDigest: input.sourceDigest } : {}),
     truncated,
     redacted: true,
+    sanitizerVersion: CURRENT_CODING_DIFF_SANITIZER_VERSION,
+    sanitizedAt,
+    secretReplacementCount: redactedPatch.replacementCount,
     createdAt: input.createdAt,
   }
 }
@@ -429,20 +439,17 @@ function hashDependencyInputs(files: Record<string, string>): string {
   return `fnv1a-${(hash >>> 0).toString(16)}`
 }
 
-function redactDiffAddedLines(patch: string): { value: string; redacted: boolean } {
-  let redacted = false
+function redactDiffLines(patch: string): { value: string; replacementCount: number } {
+  let replacementCount = 0
   const lines = patch.split('\n').map((line) => {
-    if (!line.startsWith('+') || line.startsWith('+++')) {
-      return line
-    }
     const result = redactSecrets(line)
-    redacted ||= result.redacted
+    replacementCount += result.replacementCount
     return result.value
   })
 
   return {
     value: lines.join('\n'),
-    redacted,
+    replacementCount,
   }
 }
 

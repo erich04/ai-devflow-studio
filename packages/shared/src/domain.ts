@@ -838,6 +838,9 @@ export type CodingDiffArtifact = {
   sourceDigest?: string
   truncated: boolean
   redacted: boolean
+  sanitizerVersion?: number
+  sanitizedAt?: string
+  secretReplacementCount?: number
   createdAt: string
 }
 

@@ -4,6 +4,7 @@ export type RedactionResult = {
   value: string
   redacted: boolean
   matches: string[]
+  replacementCount: number
 }
 
 const secretPatterns: Array<{ label: string; pattern: RegExp }> = [
@@ -71,10 +72,12 @@ function isProtocolRelativeWebUrl(value: string): boolean {
 export function redactSecrets(input: string): RedactionResult {
   let value = input
   const matches: string[] = []
+  let replacementCount = 0
 
   for (const { label, pattern } of secretPatterns) {
     value = value.replace(pattern, () => {
       matches.push(label)
+      replacementCount += 1
       return `[REDACTED:${label}]`
     })
   }
@@ -83,16 +86,19 @@ export function redactSecrets(input: string): RedactionResult {
     value,
     redacted: matches.length > 0,
     matches: Array.from(new Set(matches)),
+    replacementCount,
   }
 }
 
 export function redactLocalAbsolutePaths(input: string): RedactionResult {
   let value = input
   const matches: string[] = []
+  let replacementCount = 0
 
   for (const pattern of localAbsolutePathPatterns) {
     value = value.replace(pattern, () => {
       matches.push('local_absolute_path')
+      replacementCount += 1
       return '[REDACTED:local_absolute_path]'
     })
   }
@@ -102,6 +108,7 @@ export function redactLocalAbsolutePaths(input: string): RedactionResult {
       return match
     }
     matches.push('local_absolute_path')
+    replacementCount += 1
     return '[REDACTED:local_absolute_path]'
   })
 
@@ -118,6 +125,7 @@ export function redactLocalAbsolutePaths(input: string): RedactionResult {
       return match
     }
     matches.push('local_absolute_path')
+    replacementCount += 1
     return `${prefix}[REDACTED:local_absolute_path]`
   })
 
@@ -125,6 +133,7 @@ export function redactLocalAbsolutePaths(input: string): RedactionResult {
     value,
     redacted: matches.length > 0,
     matches: Array.from(new Set(matches)),
+    replacementCount,
   }
 }
 
@@ -135,6 +144,7 @@ export function redactSensitiveText(input: string): RedactionResult {
     value: secretResult.value,
     redacted: pathResult.redacted || secretResult.redacted,
     matches: Array.from(new Set([...pathResult.matches, ...secretResult.matches])),
+    replacementCount: pathResult.replacementCount + secretResult.replacementCount,
   }
 }
 
