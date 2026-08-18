@@ -157,7 +157,7 @@ const diffArtifact: CodingDiffArtifact = {
   patch: '+ redacted patch',
   sourceDigest: '2222222222222222222222222222222222222222222222222222222222222222',
   truncated: false,
-  redacted: true,
+  redacted: false,
   sanitizerVersion: 2,
   sanitizedAt: '2026-08-11T10:18:00.000Z',
   secretReplacementCount: 0,

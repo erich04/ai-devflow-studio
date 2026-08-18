@@ -650,7 +650,10 @@ const codingDiff: CodingDiffArtifact = {
   changedPaths: ['src/export.ts'],
   patch: '+export const ok = true',
   truncated: false,
-  redacted: true,
+  redacted: false,
+  sanitizerVersion: 2,
+  sanitizedAt: '2026-06-15T00:03:30.000Z',
+  secretReplacementCount: 0,
   createdAt: '2026-06-15T00:03:30.000Z',
 }
 
@@ -1092,15 +1095,150 @@ async function persistAcceptedMemoryCandidate(
 }
 
 describe('createLocalStore', () => {
-  it('initializes schema version 29 and keeps it stable across reopen', async () => {
+  it('migrates retained schema 29 Coding Diff artifacts through the versioned privacy sweep', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const retained = new SQL.Database(await readFile(dbPath))
+    const columnNames = retained.exec('pragma table_info(coding_diff_artifacts)')[0]?.values
+      .map((row) => String(row[1])) ?? []
+    if (columnNames.includes('sanitizer_version')) {
+      retained.run(`
+        alter table coding_diff_artifacts rename to coding_diff_artifacts_current;
+        create table coding_diff_artifacts (
+          id text primary key,
+          run_id text not null,
+          node_id text not null,
+          project_id text not null,
+          json text not null,
+          created_at text not null
+        );
+        insert into coding_diff_artifacts (id, run_id, node_id, project_id, json, created_at)
+        select id, run_id, node_id, project_id, json, created_at
+        from coding_diff_artifacts_current;
+        drop table coding_diff_artifacts_current;
+      `)
+    }
+    const legacyDiff: CodingDiffArtifact = {
+      id: 'coding-diff-retained-v29',
+      runId: 'run-retained-v29',
+      nodeId: 'node-build',
+      projectId: 'project-retained-v29',
+      changedPaths: ['src/config.ts'],
+      patch: '-const token = "ghp_1234567890abcdefghijklmnop";',
+      truncated: false,
+      redacted: true,
+      createdAt: '2026-08-16T10:00:00.000Z',
+    }
+    retained.run('delete from coding_diff_artifacts')
+    retained.run(
+      `insert into coding_diff_artifacts (id, run_id, node_id, project_id, json, created_at)
+       values (?, ?, ?, ?, ?, ?)`,
+      [
+        legacyDiff.id,
+        legacyDiff.runId,
+        legacyDiff.nodeId,
+        legacyDiff.projectId,
+        JSON.stringify(legacyDiff),
+        legacyDiff.createdAt,
+      ],
+    )
+    retained.run("update schema_meta set value = '29' where key = 'schema_version'")
+    await writeFile(dbPath, Buffer.from(retained.export()))
+    retained.close()
+
+    const migrated = await createLocalStore({ dbPath })
+    await expect(migrated.getSchemaVersion()).resolves.toBe(30)
+    const [sanitized] = await migrated.listCodingDiffArtifacts(legacyDiff.runId)
+    expect(sanitized).toMatchObject({
+      id: legacyDiff.id,
+      sanitizerVersion: 2,
+      secretReplacementCount: 1,
+    })
+    expect(sanitized?.patch).toContain('[REDACTED:github_token]')
+    expect(sanitized?.patch).not.toContain('ghp_1234567890abcdefghijklmnop')
+    expect(sanitized?.sanitizedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u)
+    migrated.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.listCodingDiffArtifacts(legacyDiff.runId)).resolves.toEqual([sanitized])
+    reopened.close()
+
+    const inspected = new SQL.Database(await readFile(dbPath))
+    expect(inspected.exec(
+      `select sanitizer_version, secret_replacement_count
+       from coding_diff_artifacts where id = '${legacyDiff.id}'`,
+    )[0]?.values).toEqual([[2, 1]])
+    expect(inspected.exec(
+      `explain query plan
+       select json from coding_diff_artifacts
+       where sanitizer_version is null or sanitizer_version < 2
+       order by created_at asc, id asc`,
+    )[0]?.values.map((row) => String(row[3]))).toEqual([
+      expect.stringContaining('idx_coding_diff_artifacts_pending_sanitization'),
+    ])
+    inspected.close()
+  })
+
+  it('keeps schema 29 durable when the post-migration Coding Diff sweep fails', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    initial.close()
+
+    const SQL = await initSqlJs({
+      locateFile: (fileName) => path.join(sqlJsDist, fileName),
+    })
+    const retained = new SQL.Database(await readFile(dbPath))
+    retained.run(`
+      alter table coding_diff_artifacts rename to coding_diff_artifacts_current;
+      create table coding_diff_artifacts (
+        id text primary key,
+        run_id text not null,
+        node_id text not null,
+        project_id text not null,
+        json text not null,
+        created_at text not null
+      );
+      insert into coding_diff_artifacts (id, run_id, node_id, project_id, json, created_at)
+      values (
+        'coding-diff-corrupt-v29', 'run-corrupt-v29', 'node-build',
+        'project-corrupt-v29', '{', '2026-08-16T11:00:00.000Z'
+      );
+      drop table coding_diff_artifacts_current;
+      update schema_meta set value = '29' where key = 'schema_version';
+    `)
+    await writeFile(dbPath, Buffer.from(retained.export()))
+    retained.close()
+
+    await expect(createLocalStore({ dbPath })).rejects.toThrow()
+
+    const durable = new SQL.Database(await readFile(dbPath))
+    expect(durable.exec(
+      "select value from schema_meta where key = 'schema_version'",
+    )[0]?.values).toEqual([['29']])
+    expect(
+      durable.exec('pragma table_info(coding_diff_artifacts)')[0]?.values
+        .map((row) => String(row[1])),
+    ).not.toContain('sanitizer_version')
+    expect(durable.exec(
+      "select json from coding_diff_artifacts where id = 'coding-diff-corrupt-v29'",
+    )[0]?.values).toEqual([['{']])
+    durable.close()
+  })
+
+  it('initializes schema version 30 and keeps it stable across reopen', async () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(29)
+    expect(await first.getSchemaVersion()).toBe(30)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(29)
+    expect(await second.getSchemaVersion()).toBe(30)
     second.close()
   })
 
@@ -1125,7 +1263,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(29)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(30)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     await expect(migrated.listRuns()).resolves.toEqual([run])
     migrated.close()
@@ -1162,7 +1300,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(29)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(30)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     await expect(migrated.listRuns()).resolves.toEqual([run])
     migrated.close()
@@ -1198,7 +1336,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(29)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(30)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     migrated.close()
 
@@ -1249,7 +1387,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(29)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(30)
     await expect(migrated.listAgentMemoryRevisions('memory-retained-schema-24')).resolves.toEqual([
       authorization.revision,
     ])
@@ -1331,7 +1469,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(29)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(30)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     await expect(migrated.listRuns()).resolves.toEqual([run])
     await expect(migrated.getAgentRuntimeContextAttachment('missing-runtime')).resolves.toBeNull()
@@ -3003,7 +3141,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(29)
+    expect(await migrated.getSchemaVersion()).toBe(30)
     expect(await migrated.listMcpServers()).toEqual([mcpServer])
     expect(await migrated.listLocalMcpInstallations()).toEqual([])
     migrated.close()
@@ -3040,7 +3178,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(29)
+    expect(await migrated.getSchemaVersion()).toBe(30)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     migrated.close()
@@ -3110,7 +3248,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(29)
+    expect(await migrated.getSchemaVersion()).toBe(30)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     expect(await migrated.listAgentRuntimeCapabilityGrants()).toEqual([])
@@ -7926,7 +8064,7 @@ describe('createLocalStore', () => {
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(29)
+    expect(await store.getSchemaVersion()).toBe(30)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -7937,12 +8075,12 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const db = new SQL.Database(await readFile(dbPath))
-    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('29')
+    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('30')
     expect(db.exec("select name from sqlite_master where type = 'table' and name = 'workflow_nodes'")[0]?.values[0]?.[0]).toBe('workflow_nodes')
     db.close()
   })
 
-  it('migrates retained schema 27 through schema 29 without fabricating coordination state', async () => {
+  it('migrates retained schema 27 through schema 30 without fabricating coordination state', async () => {
     const dbPath = await tempDbPath()
     const initial = await createLocalStore({ dbPath })
     await initial.upsertProject(project)
@@ -7967,7 +8105,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(29)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(30)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     await expect(migrated.listRuns()).resolves.toEqual([run])
     migrated.close()
@@ -8016,7 +8154,7 @@ describe('createLocalStore', () => {
     v8Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(29)
+    expect(await migrated.getSchemaVersion()).toBe(30)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     migrated.close()
@@ -8030,7 +8168,7 @@ describe('createLocalStore', () => {
     expect(columnNames).not.toEqual(expect.arrayContaining(['json', 'payload', 'raw_body']))
   })
 
-  it('migrates a retained v20 outbox through schema 29 without losing queued metadata', async () => {
+  it('migrates a retained v20 outbox through schema 30 without losing queued metadata', async () => {
     const dbPath = await tempDbPath()
     const retainedOperation = createRemoteSyncOperation({
       id: 'sync-retained-v20',
@@ -8101,7 +8239,7 @@ describe('createLocalStore', () => {
     v20Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(29)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(30)
     await expect(migrated.listRemoteSyncOperations()).resolves.toEqual([retainedOperation])
     await expect(migrated.enqueueRemoteSyncOperation(createRemoteSyncOperation({
       id: 'sync-runtime-v21',
@@ -8138,7 +8276,7 @@ describe('createLocalStore', () => {
     v26Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(29)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(30)
     await expect(migrated.listRemoteSyncOperations()).resolves.toEqual([retainedOperation])
     await expect(migrated.enqueueRemoteSyncOperation(createRemoteSyncOperation({
       id: 'sync-memory-v27',
@@ -8175,7 +8313,7 @@ describe('createLocalStore', () => {
     v9Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(29)
+    expect(await migrated.getSchemaVersion()).toBe(30)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -8214,7 +8352,7 @@ describe('createLocalStore', () => {
     v10Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(29)
+    expect(await migrated.getSchemaVersion()).toBe(30)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -8285,7 +8423,7 @@ describe('createLocalStore', () => {
     v11Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(29)
+    expect(await migrated.getSchemaVersion()).toBe(30)
     await expect(
       migrated.getGateCommandReceiptObservation(receipt.id),
     ).resolves.toMatchObject({
@@ -8562,19 +8700,19 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const newerDb = new SQL.Database(await readFile(dbPath))
-    newerDb.run("update schema_meta set value = '30' where key = 'schema_version'")
+    newerDb.run("update schema_meta set value = '31' where key = 'schema_version'")
     await writeFile(dbPath, Buffer.from(newerDb.export()))
     newerDb.close()
 
     await expect(createLocalStore({ dbPath })).rejects.toThrow(
-      /schema version 30 is newer than supported version 29/,
+      /schema version 31 is newer than supported version 30/,
     )
 
     const unchangedDb = new SQL.Database(await readFile(dbPath))
     expect(
       unchangedDb.exec("select value from schema_meta where key = 'schema_version'")[0]
         ?.values[0]?.[0],
-    ).toBe('30')
+    ).toBe('31')
     unchangedDb.close()
   })
 
@@ -8618,7 +8756,7 @@ describe('createLocalStore', () => {
     unchangedDb.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(29)
+    expect(await migrated.getSchemaVersion()).toBe(30)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
   })
@@ -9941,6 +10079,28 @@ describe('createLocalStore', () => {
       codingDiffArtifacts: [codingDiff],
     })
     second.close()
+  })
+
+  it('rejects forged Coding Diff sanitizer provenance without persisting the hostile patch', async () => {
+    const dbPath = await tempDbPath()
+    const forged: CodingDiffArtifact = {
+      ...codingDiff,
+      id: 'coding-diff-forged-provenance',
+      patch: '-const token = "ghp_1234567890abcdefghijklmnop";',
+      redacted: false,
+      secretReplacementCount: 0,
+    }
+
+    const store = await createLocalStore({ dbPath })
+    await expect(store.saveCodingDiffArtifact(forged)).rejects.toThrow(
+      'Coding Diff Artifact must be canonically sanitized',
+    )
+    await expect(store.listCodingDiffArtifacts(forged.runId)).resolves.toEqual([])
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.listCodingDiffArtifacts(forged.runId)).resolves.toEqual([])
+    reopened.close()
   })
 
   it('compare-and-swaps the delivery commit onto an unchanged active workspace', async () => {

@@ -36,6 +36,11 @@ const secretPatterns: Array<{ label: string; pattern: RegExp }> = [
   { label: 'jwt', pattern: /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g },
 ]
 
+const canonicalSecretRedactionMarkerPattern = new RegExp(
+  `\\[REDACTED:(?:${secretPatterns.map(({ label }) => label).join('|')})\\]`,
+  'g',
+)
+
 const localAbsolutePathPatterns: RegExp[] = [
   /\x1b\[[0-?]*[ -/]*[@-~]\/[^\s/<>"')\]},;!?]+(?:\/[^\s/<>"')\]},;!?]+)*/g,
   /\\\/[^\\\s<>"')\]},;!?]+(?:\\\/[^\\\s<>"')\]},;!?]+)*/g,
@@ -88,6 +93,10 @@ export function redactSecrets(input: string): RedactionResult {
     matches: Array.from(new Set(matches)),
     replacementCount,
   }
+}
+
+export function countCanonicalSecretRedactionMarkers(input: string): number {
+  return Array.from(input.matchAll(canonicalSecretRedactionMarkerPattern)).length
 }
 
 export function redactLocalAbsolutePaths(input: string): RedactionResult {

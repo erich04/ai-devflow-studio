@@ -368,7 +368,7 @@ describe('selectDependencyBootstrap', () => {
 })
 
 describe('sanitizeCodingDiffArtifact', () => {
-  it('marks a safe processed diff as redacted even when no replacement was needed', () => {
+  it('keeps replacement state separate from supported sanitizer provenance', () => {
     const safePatch = [
       'diff --git a/devflow-fake-change.txt b/devflow-fake-change.txt',
       '+DevFlow fake coding adapter was approved.',
@@ -384,7 +384,9 @@ describe('sanitizeCodingDiffArtifact', () => {
     })
 
     expect(artifact.patch).toBe(safePatch)
-    expect(artifact.redacted).toBe(true)
+    expect(artifact.redacted).toBe(false)
+    expect(artifact.secretReplacementCount).toBe(0)
+    expect(hasSupportedCodingDiffSanitization(artifact)).toBe(true)
   })
 
   it('redacts secrets in added diff lines, drops non-relative paths, and caps large patches', () => {
@@ -410,6 +412,19 @@ describe('sanitizeCodingDiffArtifact', () => {
     expect(artifact.patch.length).toBeLessThanOrEqual(MAX_DIFF_CHARS + 32)
     expect(artifact.truncated).toBe(true)
     expect(artifact.redacted).toBe(true)
+
+    const resanitized = sanitizeCodingDiffArtifact({
+      id: artifact.id,
+      runId: artifact.runId,
+      nodeId: artifact.nodeId,
+      projectId: artifact.projectId,
+      changedPaths: artifact.changedPaths,
+      patch: artifact.patch,
+      ...(artifact.sourceDigest ? { sourceDigest: artifact.sourceDigest } : {}),
+      sanitizedAt: artifact.sanitizedAt!,
+      createdAt: artifact.createdAt,
+    })
+    expect(resanitized).toEqual(artifact)
   })
 
   it('sanitizes every diff line and records versioned replacement provenance', () => {
@@ -446,6 +461,19 @@ describe('sanitizeCodingDiffArtifact', () => {
       ...legacyArtifact
     } = artifact
     expect(hasSupportedCodingDiffSanitization(legacyArtifact)).toBe(false)
+
+    const resanitized = sanitizeCodingDiffArtifact({
+      id: artifact.id,
+      runId: artifact.runId,
+      nodeId: artifact.nodeId,
+      projectId: artifact.projectId,
+      changedPaths: artifact.changedPaths,
+      patch: artifact.patch,
+      sanitizedAt: artifact.sanitizedAt!,
+      createdAt: artifact.createdAt,
+    })
+    expect(resanitized.patch).toBe(artifact.patch)
+    expect(resanitized.secretReplacementCount).toBe(artifact.secretReplacementCount)
   })
 })
 

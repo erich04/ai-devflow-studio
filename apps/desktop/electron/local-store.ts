@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import { isDeepStrictEqual } from 'node:util'
 import initSqlJs, { type Database, type SqlJsStatic, type SqlValue } from 'sql.js'
 import {
   parseNativeToolAuditRecord,
@@ -65,6 +66,7 @@ import {
   createCoordinationSessionState,
   createGitHubDeliveryCompletion,
   createGitHubDeliveryIntent,
+  hasSupportedCodingDiffSanitization,
   createRemoteSyncIdempotencyKey,
   createRemoteSyncOperation,
   createWorkflowRunFromRequest,
@@ -101,6 +103,7 @@ import {
   redactTestEvidenceForStorage,
   validateTestCommandSafety,
   sanitizeRemoteSyncErrorMessage,
+  sanitizeCodingDiffArtifact,
   parseGateCommandRecord,
   parseGateCommandAcknowledgementRecord,
   parseGateCommandReceiptRecord,
@@ -177,7 +180,7 @@ import {
   type WorkRequest,
   AGENT_MEMORY_ACTIVE_REVISIONS_MAX,
 } from '@ai-devflow/shared'
-export const CURRENT_SCHEMA_VERSION = 29
+export const CURRENT_SCHEMA_VERSION = 30
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 const require = createRequire(import.meta.url)
@@ -3793,6 +3796,50 @@ const schemaMigrations: readonly SchemaMigration[] = [
       `)
     },
   },
+  {
+    version: 30,
+    migrate(db) {
+      db.run(`
+    alter table coding_diff_artifacts rename to coding_diff_artifacts_v29;
+
+    create table coding_diff_artifacts (
+      id text primary key,
+      run_id text not null,
+      node_id text not null,
+      project_id text not null,
+      json text not null,
+      sanitizer_version integer,
+      sanitized_at text,
+      secret_replacement_count integer,
+      created_at text not null,
+      check (
+        (sanitizer_version is null and sanitized_at is null and secret_replacement_count is null) or
+        (
+          sanitizer_version between 1 and 2147483647 and
+          sanitized_at is not null and
+          secret_replacement_count between 0 and 50000
+        )
+      )
+    );
+
+    insert into coding_diff_artifacts (
+      id, run_id, node_id, project_id, json, sanitizer_version,
+      sanitized_at, secret_replacement_count, created_at
+    )
+    select id, run_id, node_id, project_id, json, null, null, null, created_at
+    from coding_diff_artifacts_v29;
+
+    drop table coding_diff_artifacts_v29;
+
+    create index idx_coding_diff_artifacts_sanitizer_version
+      on coding_diff_artifacts(sanitizer_version, created_at, id);
+
+    create index idx_coding_diff_artifacts_pending_sanitization
+      on coding_diff_artifacts(created_at, id)
+      where sanitizer_version is null or sanitizer_version < 2;
+      `)
+    },
+  },
 ]
 
 function migrateSchema(db: Database) {
@@ -5738,11 +5785,36 @@ function writeCodingPermissionDecision(db: Database, decision: CodingPermissionD
 }
 
 function writeCodingDiffArtifact(db: Database, artifact: CodingDiffArtifact): void {
+  if (!hasSupportedCodingDiffSanitization(artifact)) {
+    throw new Error('Coding Diff Artifact must carry supported sanitizer provenance')
+  }
+  const canonicalArtifact = sanitizeCodingDiffArtifact({
+    id: artifact.id,
+    runId: artifact.runId,
+    nodeId: artifact.nodeId,
+    projectId: artifact.projectId,
+    changedPaths: artifact.changedPaths,
+    patch: artifact.patch,
+    ...(artifact.sourceDigest ? { sourceDigest: artifact.sourceDigest } : {}),
+    sanitizedAt: artifact.sanitizedAt!,
+    createdAt: artifact.createdAt,
+  })
+  if (!isDeepStrictEqual(canonicalArtifact, artifact)) {
+    throw new Error('Coding Diff Artifact must be canonically sanitized')
+  }
   db.run(
     `
-    insert into coding_diff_artifacts (id, run_id, node_id, project_id, json, created_at)
-    values (?, ?, ?, ?, ?, ?)
-    on conflict(id) do update set json = excluded.json, created_at = excluded.created_at
+    insert into coding_diff_artifacts (
+      id, run_id, node_id, project_id, json, sanitizer_version,
+      sanitized_at, secret_replacement_count, created_at
+    )
+    values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(id) do update set
+      json = excluded.json,
+      sanitizer_version = excluded.sanitizer_version,
+      sanitized_at = excluded.sanitized_at,
+      secret_replacement_count = excluded.secret_replacement_count,
+      created_at = excluded.created_at
     `,
     [
       artifact.id,
@@ -5750,6 +5822,9 @@ function writeCodingDiffArtifact(db: Database, artifact: CodingDiffArtifact): vo
       artifact.nodeId,
       artifact.projectId,
       JSON.stringify(artifact),
+      artifact.sanitizerVersion!,
+      artifact.sanitizedAt!,
+      artifact.secretReplacementCount!,
       artifact.createdAt,
     ],
   )
@@ -6164,6 +6239,39 @@ function isCanonicalBindingObservationInput(
 }
 
 function redactStoredEvidencePrivacy(db: Database): void {
+  const unsupportedFutureVersion = db.exec(`
+    select sanitizer_version
+    from coding_diff_artifacts
+    where sanitizer_version > 2
+    order by sanitizer_version desc
+    limit 1
+  `)[0]?.values[0]?.[0]
+  if (unsupportedFutureVersion !== undefined) {
+    throw new Error(
+      `Coding Diff sanitizer version ${String(unsupportedFutureVersion)} is newer than supported`,
+    )
+  }
+  const legacyCodingDiffs = selectJson<CodingDiffArtifact>(
+    db,
+    `select json from coding_diff_artifacts
+     where sanitizer_version is null or sanitizer_version < 2
+     order by created_at asc, id asc`,
+  )
+  const sanitizedAt = new Date().toISOString()
+  for (const artifact of legacyCodingDiffs) {
+    const sanitized = sanitizeCodingDiffArtifact({
+      id: artifact.id,
+      runId: artifact.runId,
+      nodeId: artifact.nodeId,
+      projectId: artifact.projectId,
+      changedPaths: artifact.changedPaths,
+      patch: artifact.patch,
+      ...(artifact.sourceDigest ? { sourceDigest: artifact.sourceDigest } : {}),
+      sanitizedAt,
+      createdAt: artifact.createdAt,
+    })
+    writeCodingDiffArtifact(db, sanitized)
+  }
   const stored = selectJson<TestEvidence>(
     db,
     'select json from test_evidence order by created_at asc',

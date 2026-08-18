@@ -5,7 +5,10 @@ import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
-import { sanitizeCodingDiffArtifact } from '@ai-devflow/shared'
+import {
+  hasSupportedCodingDiffSanitization,
+  sanitizeCodingDiffArtifact,
+} from '@ai-devflow/shared'
 import type { CodingAgentRun, CodingDiffArtifact, LocalProject, ManagedCodingWorkspace } from '@ai-devflow/shared'
 import {
   createFakeCodingRunBundle,
@@ -284,7 +287,8 @@ describe('fake coding harness helpers', () => {
     expect(completed.codingRun.changedPaths).toEqual(['devflow-fake-change.txt'])
     expect(completed.diff.changedPaths).toEqual(['devflow-fake-change.txt'])
     expect(completed.diff.patch).toContain('DevFlow fake coding adapter')
-    expect(completed.diff.redacted).toBe(true)
+    expect(completed.diff.redacted).toBe(false)
+    expect(hasSupportedCodingDiffSanitization(completed.diff)).toBe(true)
     expect(completed.bootstrapEvidence.status).toBe('skipped')
     expect(await readFile(path.join(workspace.worktreePath, 'devflow-fake-change.txt'), 'utf8')).toContain(
       'Add the fake marker file.',

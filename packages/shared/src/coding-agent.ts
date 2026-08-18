@@ -17,7 +17,11 @@ import type {
 } from './domain'
 import type { RemediationPlan, RetryAttempt } from './remediation'
 import { detectPackageManager } from './local-execution'
-import { redactSecrets, redactSensitiveText } from './redaction'
+import {
+  countCanonicalSecretRedactionMarkers,
+  redactSecrets,
+  redactSensitiveText,
+} from './redaction'
 import { assertCanonicalLocalNodeId } from './remote-node-identity'
 
 export const MAX_DIFF_CHARS = 50_000
@@ -284,9 +288,11 @@ export function sanitizeCodingDiffArtifact(input: RawCodingDiffArtifact): Coding
     throw new Error('Coding Diff sanitization timestamp must be canonical ISO-8601')
   }
   const redactedPatch = redactDiffLines(input.patch)
-  const truncated = redactedPatch.value.length > MAX_DIFF_CHARS
   const truncationMarker = `\n[TRUNCATED:diff_exceeded_${MAX_DIFF_CHARS}_chars]`
-  const patch = truncated
+  const exceedsDiffLimit = redactedPatch.value.length > MAX_DIFF_CHARS
+  const truncated =
+    exceedsDiffLimit || redactedPatch.value.endsWith(truncationMarker)
+  const patch = exceedsDiffLimit
     ? `${redactedPatch.value.slice(0, Math.max(0, MAX_DIFF_CHARS - truncationMarker.length))}${truncationMarker}`
     : redactedPatch.value
 
@@ -299,7 +305,7 @@ export function sanitizeCodingDiffArtifact(input: RawCodingDiffArtifact): Coding
     patch,
     ...(input.sourceDigest ? { sourceDigest: input.sourceDigest } : {}),
     truncated,
-    redacted: true,
+    redacted: redactedPatch.replacementCount > 0,
     sanitizerVersion: CURRENT_CODING_DIFF_SANITIZER_VERSION,
     sanitizedAt,
     secretReplacementCount: redactedPatch.replacementCount,
@@ -461,6 +467,7 @@ function hashDependencyInputs(files: Record<string, string>): string {
 function redactDiffLines(patch: string): { value: string; replacementCount: number } {
   let replacementCount = 0
   const lines = patch.split('\n').map((line) => {
+    replacementCount += countCanonicalSecretRedactionMarkers(line)
     const result = redactSecrets(line)
     replacementCount += result.replacementCount
     return result.value
