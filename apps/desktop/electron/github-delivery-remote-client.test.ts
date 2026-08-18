@@ -1162,6 +1162,38 @@ describe('GitHub Delivery remote client', () => {
     })
   })
 
+  it('preserves an exact blocked-provider-text conflict without exposing its message', async () => {
+    const rawMessage = 'Blocked provider text contained hidden credential material.'
+    const client = createGitHubDeliveryRemoteClient({
+      apiBaseUrl: 'https://api.devflow.test',
+      authToken: 'desktop-secret-token',
+      fetcher: vi.fn(async () => jsonResponse({
+        error: 'conflict',
+        message: rawMessage,
+        code: 'github_delivery_content_blocked',
+        retryable: false,
+        phase: 'pull_request',
+      }, 409)),
+    })
+
+    const error = await client.createDraftPullRequest({
+      projectId,
+      requestId,
+      publicationId: 'publication-1',
+      expectedStateVersion: 6,
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({
+      name: 'GitHubDeliveryRemoteError',
+      status: 409,
+      code: 'conflict',
+      operation: 'draft_pull_request',
+      retryable: false,
+      outcomeCode: null,
+    })
+    expect(`${String(error)} ${JSON.stringify(error)}`).not.toContain(rawMessage)
+  })
+
   it('rejects a provider retry boundary on a non-recovery Draft PR outcome', async () => {
     const fetcher = vi.fn(async () =>
       jsonResponse({

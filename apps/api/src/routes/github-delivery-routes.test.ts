@@ -1282,6 +1282,37 @@ describe('GitHub Delivery routes', () => {
     expect(JSON.stringify(result)).not.toMatch(/token|privateKey|Authorization/i)
   })
 
+  it('maps blocked provider text to an exact non-retryable conflict', async () => {
+    const harness = createHarness()
+    vi.mocked(harness.service.createDraftPullRequest).mockRejectedValue(
+      new GitHubDeliveryServiceError({
+        code: 'github_delivery_content_blocked',
+        retryable: false,
+        phase: 'pull_request',
+      }),
+    )
+
+    await expect(resolveGitHubDeliveryRoute(
+      'POST',
+      '/api/desktop/projects/project-a/github-deliveries/delivery-1/draft-pull-request',
+      harness.repository,
+      harness.service,
+      {
+        principal: desktopMember,
+        body: { publicationId: 'publication-1', expectedStateVersion: 6 },
+      },
+    )).resolves.toEqual({
+      status: 409,
+      body: {
+        error: 'conflict',
+        message: 'The approved GitHub delivery text contains blocked credential material.',
+        code: 'github_delivery_content_blocked',
+        retryable: false,
+        phase: 'pull_request',
+      },
+    })
+  })
+
   it('maps unconfirmed credential revocation to a fixed non-retryable bad gateway', async () => {
     const harness = createHarness()
     vi.mocked(harness.service.issueCredentialGrant).mockRejectedValue(

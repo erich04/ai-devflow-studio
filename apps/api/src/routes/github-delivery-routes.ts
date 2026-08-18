@@ -455,6 +455,7 @@ function serviceFailureResult(
     'github_pull_request_conflict',
     'github_repository_mismatch',
     'github_scope_mismatch',
+    'github_delivery_content_blocked',
     'github_delivery_state_conflict',
   ])
   const unavailableCodes = new Set([

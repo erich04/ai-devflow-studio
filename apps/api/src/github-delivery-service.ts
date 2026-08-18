@@ -3,7 +3,10 @@ import {
   type GitHubAppClient,
   type GitHubAppClientErrorCode,
 } from './github-app-client'
-import { isGitHubCredentialToken } from '@ai-devflow/shared'
+import {
+  inspectHighConfidenceOutboundSecrets,
+  isGitHubCredentialToken,
+} from '@ai-devflow/shared'
 import type {
   AdoptGitHubVerifiedBranchPublicationInput,
   GitHubBranchPublicationAdoptionResult,
@@ -23,6 +26,7 @@ import {
 
 export type GitHubDeliveryServiceErrorCode =
   | GitHubAppClientErrorCode
+  | 'github_delivery_content_blocked'
   | 'github_delivery_state_conflict'
   | 'github_delivery_unavailable'
 
@@ -44,6 +48,7 @@ const safeMessages: Record<GitHubDeliveryServiceErrorCode, string> = {
   github_unauthorized: 'GitHub did not accept the configured App authority.',
   github_unavailable: 'GitHub is temporarily unavailable.',
   github_validation_failed: 'GitHub could not validate the approved delivery operation.',
+  github_delivery_content_blocked: 'The approved GitHub delivery text contains blocked credential material.',
   github_delivery_state_conflict: 'The durable GitHub delivery state changed before completion.',
   github_delivery_unavailable: 'The GitHub delivery operation could not be completed safely.',
 }
@@ -961,6 +966,47 @@ export function createGitHubDeliveryService(
         request: reserved.request,
         pullRequest: reserved.pullRequest,
       }
+    }
+
+    const providerTextInspection = inspectHighConfidenceOutboundSecrets(
+      `${reserved.request.prTitle}\n${reserved.request.prBody}`,
+    )
+    if (providerTextInspection.matchCount > 0) {
+      let finalized: GitHubPullRequestMutationResult
+      try {
+        finalized = await input.repository.finalizeGitHubDraftPullRequest(
+          {
+            projectId: pullRequestInput.projectId,
+            requestId: reserved.request.id,
+            pullRequestOutcomeId: reserved.pullRequest.id,
+            expectedStateVersion: reserved.request.stateVersion,
+            expectedPullRequestVersion: reserved.pullRequest.version,
+            outcome: {
+              status: 'failed',
+              outcomeCode: 'pull_request_failed',
+            },
+          },
+          principal,
+        )
+      } catch {
+        throw new GitHubDeliveryServiceError({
+          code: 'github_delivery_state_conflict',
+          retryable: false,
+          phase: 'pull_request',
+        })
+      }
+      if (!finalized.ok) {
+        throw new GitHubDeliveryServiceError({
+          code: 'github_delivery_state_conflict',
+          retryable: false,
+          phase: 'pull_request',
+        })
+      }
+      throw new GitHubDeliveryServiceError({
+        code: 'github_delivery_content_blocked',
+        retryable: false,
+        phase: 'pull_request',
+      })
     }
 
     let resolved: Awaited<

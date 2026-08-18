@@ -1398,6 +1398,7 @@ const serviceFailureStatuses = {
   github_unauthorized: 502,
   github_unavailable: 503,
   github_validation_failed: 400,
+  github_delivery_content_blocked: 409,
   github_delivery_state_conflict: 409,
   github_delivery_unavailable: 503,
 } as const

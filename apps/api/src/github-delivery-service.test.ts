@@ -1452,6 +1452,52 @@ describe('GitHub Delivery service', () => {
     expect(result).toMatchObject({ ok: true, outcomeCode: 'pull_request_completed' })
   })
 
+  it('fails stored provider text closed before any GitHub Draft credential or write', async () => {
+    const harness = createHarness()
+    const blockedToken = ['gh', `p_${'A'.repeat(36)}`].join('')
+    vi.mocked(harness.repository.reserveGitHubDraftPullRequest).mockResolvedValue({
+      ok: true,
+      responseStatus: 201,
+      outcomeCode: 'pull_request_reserved',
+      replayed: false,
+      request: request({
+        stateVersion: 7,
+        status: 'creating_pr',
+        prBody: `Approved evidence\n\n${blockedToken}`,
+      }),
+      pullRequest: pullRequest(),
+    })
+
+    const error = await harness.service.createDraftPullRequest(
+      {
+        projectId: 'project-a',
+        requestId: 'delivery-1',
+        publicationId: 'publication-1',
+        expectedStateVersion: 6,
+      },
+      desktopPrincipal,
+    ).catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(GitHubDeliveryServiceError)
+    expect(error).toMatchObject({
+      code: 'github_delivery_content_blocked',
+      retryable: false,
+      phase: 'pull_request',
+    })
+    expect(harness.client.findDraftPullRequest).not.toHaveBeenCalled()
+    expect(harness.client.findOrCreateDraftPullRequest).not.toHaveBeenCalled()
+    expect(harness.repository.finalizeGitHubDraftPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: {
+          status: 'failed',
+          outcomeCode: 'pull_request_failed',
+        },
+      }),
+      desktopPrincipal,
+    )
+    expect(JSON.stringify(error)).not.toContain(blockedToken)
+  })
+
   it('records Draft PR recovery without retaining an ambiguous raw provider failure', async () => {
     const harness = createHarness()
     vi.mocked(harness.client.findOrCreateDraftPullRequest).mockRejectedValue(
