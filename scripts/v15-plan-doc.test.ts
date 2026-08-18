@@ -135,6 +135,26 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(walkthrough).toContain('provider backoff expires')
   })
 
+  it('separates both outbound-content boundaries and documents the only safe rebuild path', () => {
+    const adr = read('docs/adr/0013-github-app-delivery-authority.md')
+    const plan = read('docs/plans/v1.5-github-delivery.md')
+    const walkthrough = read('docs/guides/devflow-studio-v1.5-walkthrough.md')
+    const guide = read('docs/guides/devflow-studio-self-hosted-pilot.md')
+
+    for (const contract of [adr, plan, walkthrough, guide]) {
+      expect(contract).toContain('exact outbound Git objects')
+      expect(contract).toContain('PR title and body')
+      expect(contract).toContain('content_scan_blocked')
+      expect(contract).toContain('must not Resume or override')
+      expect(contract).toContain('new Work Request/Run')
+      expect(contract).toContain('clean Coding Agent workspace')
+    }
+    expect(adr).toContain('before any GitHub credential is requested')
+    expect(plan).toContain('durable non-secret scan receipt')
+    expect(guide).toContain('Git content block occurs before push')
+    expect(guide).toContain('PR-text block may occur after the verified branch publication')
+  })
+
   it('defines one candidate-bound V1.5 walkthrough without reusing paid-provider authority', () => {
     const walkthrough = read('docs/guides/devflow-studio-v1.5-walkthrough.md')
 

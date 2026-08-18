@@ -5,6 +5,7 @@ import {
   type Artifact,
   type GateEnforcementDecision,
   type GitHubDeliveryIntent,
+  type GitHubDeliveryOperatorOutcome,
   type NodeStage,
   type PolicySnapshot,
   type WorkflowNode,
@@ -818,6 +819,7 @@ function buildNextAction(input: {
   isSelectedCurrentNode: boolean
   artifacts: Artifact[]
   githubDeliveryIntent?: GitHubDeliveryIntent
+  githubDeliveryOperatorOutcome?: GitHubDeliveryOperatorOutcome
   latestAgentReview: AgentReviewResult | undefined
   canApprove: boolean
   hasTeamProjectBinding: boolean
@@ -945,6 +947,17 @@ function buildNextAction(input: {
       }
     }
     if (input.githubDeliveryIntent?.status === 'recovery_required') {
+      if (
+        input.githubDeliveryOperatorOutcome?.intentId === input.githubDeliveryIntent.id &&
+        input.githubDeliveryOperatorOutcome.intentUpdatedAt === input.githubDeliveryIntent.updatedAt &&
+        input.githubDeliveryOperatorOutcome.outcomeCode === 'content_scan_blocked'
+      ) {
+        return {
+          title: '发布内容已安全阻断',
+          copy: '这个交付意图的 Git 内容或 PR 文本含有凭据材料，不能 Resume 或绕过扫描。请在 Web 创建新的 Work Request/Run，并由 Coding Agent 从干净来源重建实现、重新测试和准备交付；旧意图不会继续执行远端写入。',
+          secondaryActionIds: [],
+        }
+      }
       return {
         title: '恢复 GitHub Delivery',
         copy: '自动恢复已安全停止；只有显式 Resume 才会按当前 intent 版本继续，并且不会隐式批准。',
@@ -1011,6 +1024,7 @@ export function buildNodeInspectorViewModel(input: {
   isSelectedCurrentNode: boolean
   artifacts: Artifact[]
   githubDeliveryIntent?: GitHubDeliveryIntent
+  githubDeliveryOperatorOutcome?: GitHubDeliveryOperatorOutcome
   events: AgentEvent[]
   latestAgentReview: AgentReviewResult | undefined
   policySnapshot: PolicySnapshot | null
@@ -1044,7 +1058,10 @@ export function buildNodeInspectorViewModel(input: {
       input.node.status === 'success'
     ) {
       addAction('verifyGitHubDeliveryRevocation')
-    } else if (input.githubDeliveryIntent?.status === 'recovery_required') {
+    } else if (
+      input.githubDeliveryIntent?.status === 'recovery_required' &&
+      input.githubDeliveryOperatorOutcome?.outcomeCode !== 'content_scan_blocked'
+    ) {
       addAction('resumeGitHubDelivery')
     } else if (!input.githubDeliveryIntent) {
       addAction(hasExactPrDeliveryPackage(input.artifacts) ? 'prepareGitHubDelivery' : 'createPrDraft')

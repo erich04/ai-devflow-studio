@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import type { Artifact, GitHubDeliveryIntent, WorkflowRun } from '@ai-devflow/shared'
+import type {
+  Artifact,
+  GitHubDeliveryIntent,
+  GitHubDeliveryOperatorOutcome,
+  WorkflowRun,
+} from '@ai-devflow/shared'
 import {
   createGitHubDeliveryProcessor,
   reconcileCompletedGitHubDeliveryIntents,
@@ -338,6 +343,9 @@ function harness(
   let current = source
   const store = {
     listGitHubDeliveryIntents: vi.fn(async () => [current]),
+    listGitHubDeliveryOperatorOutcomes: vi.fn(
+      async (): Promise<GitHubDeliveryOperatorOutcome[]> => [],
+    ),
     listArtifacts: vi.fn(async () => [packageArtifact(source)]),
     listManagedCodingWorkspaces: vi.fn(async () => [{
       id: source.workspaceId,
@@ -465,6 +473,76 @@ describe('GitHub Delivery processor', () => {
     expect(test.store.commitGitHubDeliveryIntentStatus).toHaveBeenLastCalledWith(
       expect.objectContaining({ operatorOutcomeCode: 'content_scan_blocked' }),
     )
+  })
+
+  it('never resumes an exact credential-content block or re-enters the provider boundary', async () => {
+    const source = intent({ status: 'recovery_required' })
+    const test = harness(source)
+    test.store.listGitHubDeliveryOperatorOutcomes.mockResolvedValue([{
+      stateVersion: 1,
+      intentId: source.id,
+      intentUpdatedAt: source.updatedAt,
+      outcomeCode: 'content_scan_blocked',
+      recordedAt: source.updatedAt,
+      redacted: true,
+    }])
+
+    await expect(test.processor.resume({
+      intentId: source.id,
+      expectedUpdatedAt: source.updatedAt,
+    })).resolves.toEqual({
+      intentId: source.id,
+      remoteRequestId: null,
+      disposition: 'recovery_required',
+      outcomeCode: 'content_scan_blocked',
+    })
+    expect(test.remote.listInbox).not.toHaveBeenCalled()
+    expect(test.contentScanner.scan).not.toHaveBeenCalled()
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
+  })
+
+  it('durably converts a provider-text block into the same non-resumable operator outcome', async () => {
+    const source = intent({ status: 'recovery_required' })
+    const recoveryRequest = request(source, {
+      stateVersion: 9,
+      status: 'recovery_required',
+      outcomeCode: 'pull_request_failed',
+    })
+    const verified = publication()
+    const test = harness(source)
+    test.remote.listInbox.mockResolvedValue([recoveryRequest])
+    test.remote.getRecoverySnapshot.mockResolvedValue(snapshot(recoveryRequest, {
+      approval: approval(source, recoveryRequest),
+      grant: grant({ status: 'consumed', consumedAt: initialTime }),
+      publication: verified,
+      pullRequest: pullRequest({
+        status: 'recovery_required',
+        pullRequestId: null,
+        pullRequestNumber: null,
+        safeUrl: null,
+        providerCreatedAt: null,
+        outcomeCode: 'pull_request_failed',
+      }),
+    }))
+    test.remote.createDraftPullRequest.mockRejectedValue(new GitHubDeliveryRemoteError({
+      status: 409,
+      code: 'conflict',
+      operation: 'draft_pull_request',
+      retryable: false,
+      operatorOutcomeCode: 'content_scan_blocked',
+    }))
+
+    await expect(test.processor.resume({
+      intentId: source.id,
+      expectedUpdatedAt: source.updatedAt,
+    })).resolves.toMatchObject({
+      disposition: 'recovery_required',
+      outcomeCode: 'conflict',
+    })
+    expect(test.store.commitGitHubDeliveryIntentStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ operatorOutcomeCode: 'content_scan_blocked' }),
+    )
+    expect(test.remote.withCredentialGrant).not.toHaveBeenCalled()
   })
 
   it('submits one exact prepared intent and returns only redacted identifiers and disposition', async () => {

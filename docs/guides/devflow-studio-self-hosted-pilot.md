@@ -145,7 +145,15 @@ After the stack is ready:
 | `branch_published` | GitHub contains the approved commit and the API verified it. | Keep Desktop/API available so Draft creation can continue. |
 | `creating_pr` | Draft creation or lookup is active or ambiguous. | Resume once; DevFlow first searches for the exact head/base/commit marker and never creates a blind duplicate. |
 | `recovery_required` | A typed conflict, timeout, revoked binding, or ambiguous external result needs attention. | Read the redacted outcome, restore provider/binding authority or resolve the named remote conflict, then use the explicit Desktop resume action. |
+| `content_scan_blocked` | A high-confidence credential match was found in the exact outbound Git objects or the PR title and body. | This intent must not Resume or override the block. Create a new Work Request/Run and use a clean Coding Agent workspace to rebuild and retest the change. |
 | `completed` | The exact branch and Draft pull request are durable evidence. | Continue Acceptance. The managed worktree can be cleaned only through the normal terminal cleanup path. |
+
+These are two separate outbound boundaries. Electron main writes a non-secret safe receipt for the
+exact outbound Git objects before any GitHub credential is requested. The API scans the PR title and
+body before PR-write provider authority. A Git content block occurs before push.
+A PR-text block may occur after the verified branch publication. In either case
+`content_scan_blocked` permits no further remote write for that intent, and the clean rebuild path
+above is the only supported continuation.
 
 DevFlow will never force-push, delete a remote branch, or publish a tag; it will never merge or
 auto-merge, close a pull request, or silently widen GitHub App permissions. If a remote `devflow/`

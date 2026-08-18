@@ -66,6 +66,15 @@ local attempt before publication.
 - Missing, stale, revoked, cross-project, cross-repository, or over-broad authority fails closed.
 - No credential is issued before an approved intent exists.
 - A changed expected commit or evidence digest invalidates approval.
+- Electron main scans the exact outbound Git objects and durably records a non-secret safe receipt
+  before any GitHub credential is requested. The API separately scans the PR title and body before
+  it requests PR-write provider authority. These are distinct outbound-content boundaries; neither
+  evidence redaction nor one passing boundary substitutes for the other.
+- A high-confidence match at either boundary becomes `content_scan_blocked`.
+  The operator must not Resume or override the block.
+  The only safe continuation is a new Work Request/Run. Its implementation is rebuilt and retested
+  in a clean Coding Agent workspace. A Git-content block is pre-push; a PR-text block can occur after
+  a verified branch publication, but no further remote write may be made for the blocked intent.
 - An ambiguous push or PR response is reconciled against GitHub before another write is attempted.
 - A conflicting remote branch or pull request becomes operator-visible recovery work; DevFlow does
   not rewrite it.

@@ -326,6 +326,9 @@ export function Inspector({
     ...(selectedGitHubDeliveryIntent
       ? { githubDeliveryIntent: selectedGitHubDeliveryIntent }
       : {}),
+    ...(selectedGitHubDeliveryOperatorOutcome
+      ? { githubDeliveryOperatorOutcome: selectedGitHubDeliveryOperatorOutcome }
+      : {}),
   })
   const focusedArtifactId =
     supportContext?.focusTarget === 'artifact' &&

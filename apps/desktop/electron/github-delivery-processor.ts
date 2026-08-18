@@ -62,6 +62,7 @@ export type GitHubDeliveryProcessorSummary = {
 type ProcessorStore = Pick<
   LocalStore,
   | 'listGitHubDeliveryIntents'
+  | 'listGitHubDeliveryOperatorOutcomes'
   | 'listArtifacts'
   | 'listManagedCodingWorkspaces'
   | 'getRun'
@@ -138,7 +139,8 @@ export type GitHubDeliveryActiveIntentOperation = Readonly<{
   expectedUpdatedAt: string
 }>
 
-const persistedPublisherOutcomeCodes: ReadonlySet<GitHubGitPublisherErrorCode> = new Set([
+const persistedOperatorOutcomeCodes: ReadonlySet<GitHubDeliveryOperatorOutcomeCode> = new Set([
+  'content_scan_blocked',
   'invalid_delivery_source',
   'operation_cancelled',
   'publisher_cleanup_failed',
@@ -409,6 +411,20 @@ export function createGitHubDeliveryProcessor(
       if (!intent || intent.updatedAt !== input.expectedUpdatedAt) {
         return safeResult(input.intentId, null, 'local_conflict', 'stale_intent')
       }
+      const blocked = (await deps.store.listGitHubDeliveryOperatorOutcomes(intent.id))
+        .find((outcome) => (
+          outcome.intentId === intent.id &&
+          outcome.intentUpdatedAt === intent.updatedAt &&
+          outcome.outcomeCode === 'content_scan_blocked'
+        ))
+      if (blocked) {
+        return safeResult(
+          intent.id,
+          null,
+          'recovery_required',
+          'content_scan_blocked',
+        )
+      }
       return processIntentWithFence(
         deps,
         intent,
@@ -626,7 +642,7 @@ async function processIntent(
     const failure = error
     if (failure instanceof GitHubDeliveryRemoteError) {
       const operatorOutcomeCode = failure.operatorOutcomeCode !== null &&
-        persistedPublisherOutcomeCodes.has(failure.operatorOutcomeCode)
+        persistedOperatorOutcomeCodes.has(failure.operatorOutcomeCode)
         ? failure.operatorOutcomeCode
         : undefined
       if (failure.outcomeCode === 'binding_inactive') {

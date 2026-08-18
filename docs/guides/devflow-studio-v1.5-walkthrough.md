@@ -61,6 +61,13 @@ repository credential. A dated result is written only after every step passes.
 7. In Web, use a live lead or owner signed session to approve that exact request. Desktop bearer
    authority must be unable to approve it. Any changed commit, evidence, package, binding, or Run
    version must require **Revise** and a new approval.
+   Before publication, Electron main scans the exact outbound Git objects and commits a non-secret
+   receipt before any GitHub credential is requested. The API separately scans the PR title and body
+   before PR-write provider access. If either reports `content_scan_blocked`, the operator
+   must not Resume or override the block. Create a new Work Request/Run and have the Coding Agent
+   rebuild and retest the change in a clean Coding Agent workspace. A Git-content block is pre-push;
+   a PR-text block may follow verified branch publication, but the blocked intent performs no
+   further remote write.
 8. Let Desktop obtain one short-lived, repository-scoped Contents credential in Electron main,
    publish the approved SHA to the approved `devflow/` branch without force, and report the result.
 9. Let the API independently verify the remote head and create or reconcile exactly one Draft pull

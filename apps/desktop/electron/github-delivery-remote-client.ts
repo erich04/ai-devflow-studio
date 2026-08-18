@@ -3,6 +3,7 @@ import {
   assertSafeGitHubBranch,
   isGitHubCredentialToken,
   normalizeGitHubRepository,
+  type GitHubDeliveryOperatorOutcomeCode,
   type GitHubDeliveryIntent,
   type GitHubDeliveryStatus,
   type GitHubRepositoryBinding,
@@ -107,7 +108,7 @@ export class GitHubDeliveryRemoteError extends Error {
   readonly operation: GitHubDeliveryRemoteOperation
   readonly retryable: boolean
   readonly outcomeCode: GitHubDeliveryRejectionOutcome | null
-  readonly operatorOutcomeCode: GitHubGitPublisherErrorCode | null
+  readonly operatorOutcomeCode: GitHubDeliveryOperatorOutcomeCode | null
 
   constructor(input: {
     status: number | null
@@ -115,7 +116,7 @@ export class GitHubDeliveryRemoteError extends Error {
     operation: GitHubDeliveryRemoteOperation
     retryable: boolean
     outcomeCode?: GitHubDeliveryRejectionOutcome | null
-    operatorOutcomeCode?: GitHubGitPublisherErrorCode | null
+    operatorOutcomeCode?: GitHubDeliveryOperatorOutcomeCode | null
   }) {
     super(safeErrorMessages[input.code])
     this.name = 'GitHubDeliveryRemoteError'
@@ -134,7 +135,7 @@ export class GitHubDeliveryRemoteError extends Error {
     operation: GitHubDeliveryRemoteOperation
     retryable: boolean
     outcomeCode: GitHubDeliveryRejectionOutcome | null
-    operatorOutcomeCode: GitHubGitPublisherErrorCode | null
+    operatorOutcomeCode: GitHubDeliveryOperatorOutcomeCode | null
   } {
     return {
       name: 'GitHubDeliveryRemoteError',
@@ -1295,7 +1296,7 @@ function invalid(
   status: number | null,
   retryable: boolean,
   outcomeCode: GitHubDeliveryRejectionOutcome | null = null,
-  operatorOutcomeCode: GitHubGitPublisherErrorCode | null = null,
+  operatorOutcomeCode: GitHubDeliveryOperatorOutcomeCode | null = null,
 ): GitHubDeliveryRemoteError {
   return new GitHubDeliveryRemoteError({
     status,
@@ -1403,6 +1404,12 @@ const serviceFailureStatuses = {
   github_delivery_unavailable: 503,
 } as const
 
+const serviceFailureOperatorOutcomes: Partial<
+  Record<keyof typeof serviceFailureStatuses, GitHubDeliveryOperatorOutcomeCode>
+> = {
+  github_delivery_content_blocked: 'content_scan_blocked',
+}
+
 const serviceFailurePhases = new Set([
   'binding',
   'credential',
@@ -1499,6 +1506,7 @@ async function throwHttpError(
 ): Promise<never> {
   let outcomeCode: GitHubDeliveryRejectionOutcome | null = null
   let serviceRetryable: boolean | null = null
+  let operatorOutcomeCode: GitHubDeliveryOperatorOutcomeCode | null = null
   try {
     const body = await readBoundedJson(response, operation, signal)
     if (
@@ -1517,6 +1525,11 @@ async function throwHttpError(
         response.status,
         operation,
       )
+      if (serviceRetryable !== null && isRecord(body) && typeof body.code === 'string') {
+        operatorOutcomeCode = serviceFailureOperatorOutcomes[
+          body.code as keyof typeof serviceFailureStatuses
+        ] ?? null
+      }
     }
   } catch (error) {
     if (signal?.aborted) throw new Error('github_delivery_request_aborted')
@@ -1534,6 +1547,7 @@ async function throwHttpError(
     response.status,
     serviceRetryable ?? isRetryableHttpStatus(response.status),
     outcomeCode,
+    operatorOutcomeCode,
   )
 }
 

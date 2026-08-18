@@ -534,6 +534,8 @@ function createScopedGitHubDeliveryStore(
           intent.teamProjectId === credential.projectId &&
           intent.localProjectId === localProjectId,
       ),
+    listGitHubDeliveryOperatorOutcomes: (intentId?: string) =>
+      store.listGitHubDeliveryOperatorOutcomes(intentId),
     listArtifacts: (runId?: string) => store.listArtifacts(runId),
     listManagedCodingWorkspaces: async (projectId?: string) => {
       if (projectId && projectId !== localProjectId) return []

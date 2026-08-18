@@ -1190,6 +1190,7 @@ describe('GitHub Delivery remote client', () => {
       operation: 'draft_pull_request',
       retryable: false,
       outcomeCode: null,
+      operatorOutcomeCode: 'content_scan_blocked',
     })
     expect(`${String(error)} ${JSON.stringify(error)}`).not.toContain(rawMessage)
   })

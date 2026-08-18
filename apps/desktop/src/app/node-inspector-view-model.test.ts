@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import type { Artifact, GitHubDeliveryIntent, WorkflowNode } from '@ai-devflow/shared'
+import type {
+  Artifact,
+  GitHubDeliveryIntent,
+  GitHubDeliveryOperatorOutcome,
+  WorkflowNode,
+} from '@ai-devflow/shared'
 import { artifacts as fixtureArtifacts, runs as fixtureRuns } from '@ai-devflow/shared/fixtures'
 import {
   buildNodeInspectorViewModel,
@@ -370,6 +375,34 @@ describe('node inspector view model', () => {
     })
     expect(viewModel.nextAction.copy).toContain('显式 Resume')
     expect(viewModel.actions.map((action) => action.id)).not.toContain('prepareGitHubDelivery')
+  })
+
+  it('never offers Resume for a credential-content block and names the safe rebuild path', () => {
+    const prNode = findNode((candidate) => candidate.kind === 'pr')
+    const blockedIntent = githubDeliveryIntent('recovery_required')
+    const blockedOutcome: GitHubDeliveryOperatorOutcome = {
+      stateVersion: 1,
+      intentId: blockedIntent.id,
+      intentUpdatedAt: blockedIntent.updatedAt,
+      outcomeCode: 'content_scan_blocked',
+      recordedAt: blockedIntent.updatedAt,
+      redacted: true,
+    }
+    const viewModel = viewModelFor(prNode, {
+      artifacts: [prDeliveryPackage(prNode.id)],
+      githubDeliveryIntent: blockedIntent,
+      githubDeliveryOperatorOutcome: blockedOutcome,
+    })
+
+    expect(viewModel.nextAction).toMatchObject({
+      title: '发布内容已安全阻断',
+      secondaryActionIds: [],
+    })
+    expect(viewModel.nextAction.primaryActionId).toBeUndefined()
+    expect(viewModel.nextAction.copy).toContain('不能 Resume')
+    expect(viewModel.nextAction.copy).toContain('新的 Work Request/Run')
+    expect(viewModel.nextAction.copy).toContain('Coding Agent')
+    expect(viewModel.actions.map((action) => action.id)).not.toContain('resumeGitHubDelivery')
   })
 
   it.each([
