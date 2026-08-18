@@ -934,6 +934,48 @@ describe('API HTTP authentication boundary', () => {
     })
   })
 
+  it('does not let a project-scoped bearer read or sync another project', async () => {
+    const repository = createSeedTeamRepository()
+    const getGitHubRepositoryBinding = vi.spyOn(repository, 'getGitHubRepositoryBinding')
+    const uploadRunSummary = vi.spyOn(repository, 'uploadRunSummary')
+    vi.spyOn(repository, 'resolveDesktopTokenSession').mockResolvedValue({
+      tokenRecordId: 'desktop-token-payments-only',
+      session: projectMemberSession,
+    })
+    const headers = { authorization: 'Bearer paired-desktop-secret' }
+
+    await expect(
+      resolveApiRouteRequest(
+        {
+          method: 'GET',
+          pathname: '/api/desktop/projects/p-admin/github-repository-binding',
+          headers,
+        },
+        { repository, sessionSecret: 'server-request-test-secret' },
+      ),
+    ).resolves.toMatchObject({
+      status: 403,
+      body: { outcomeCode: 'project_forbidden' },
+    })
+    await expect(
+      resolveApiRouteRequest(
+        {
+          method: 'POST',
+          pathname: '/api/sync/run-summary',
+          headers,
+          body: { ...runSummary('run-cross-project'), projectId: 'p-admin' },
+        },
+        { repository, sessionSecret: 'server-request-test-secret' },
+      ),
+    ).resolves.toEqual({
+      status: 403,
+      body: { error: 'forbidden', message: 'Project role member required' },
+    })
+
+    expect(getGitHubRepositoryBinding).not.toHaveBeenCalled()
+    expect(uploadRunSummary).not.toHaveBeenCalled()
+  })
+
   it('keeps GitHub Delivery routes visible with a fixed unavailable result when the App is not configured', async () => {
     const repository = createSeedTeamRepository()
     const sessionSecret = 'server-request-test-secret'

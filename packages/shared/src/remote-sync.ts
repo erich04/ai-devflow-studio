@@ -13,6 +13,162 @@ import { redactTestEvidenceForStorage } from './local-execution'
 import { redactLocalAbsolutePaths, redactSecrets, redactSensitiveText } from './redaction'
 import { assertCanonicalLocalNodeId } from './remote-node-identity'
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function hasLocalOnlyEvidenceField(value: Record<string, unknown>): boolean {
+  return 'cwd' in value || 'stdout' in value || 'stderr' in value
+}
+
+function isRunStatus(value: unknown): boolean {
+  return (
+    value === 'created' ||
+    value === 'clarifying' ||
+    value === 'designing' ||
+    value === 'building' ||
+    value === 'testing' ||
+    value === 'paused_at_gate' ||
+    value === 'completed' ||
+    value === 'failed' ||
+    value === 'cancelled'
+  )
+}
+
+function isRemoteRunNodeSummary(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  const stage = value['stage']
+  const kind = value['kind']
+  const status = value['status']
+  const requiredRole = value['requiredRole']
+  return (
+    typeof value['id'] === 'string' &&
+    (stage === 'clarify' || stage === 'design' || stage === 'build' || stage === 'test' || stage === 'pr' || stage === 'accept') &&
+    (kind === 'agent' || kind === 'gate' || kind === 'task' || kind === 'test' || kind === 'pr' || kind === 'acceptance') &&
+    (status === 'pending' || status === 'running' || status === 'blocked' || status === 'success' || status === 'failed' || status === 'skipped') &&
+    (requiredRole === undefined || requiredRole === 'member' || requiredRole === 'lead' || requiredRole === 'owner')
+  )
+}
+
+function isRemoteRunSummary(value: unknown): value is RemoteRunSummary {
+  return (
+    isRecord(value) &&
+    (value['kind'] === 'run' || value['kind'] === 'approval' || value['kind'] === 'event') &&
+    typeof value['runId'] === 'string' &&
+    Number.isInteger(value['version']) &&
+    (value['version'] as number) >= 1 &&
+    typeof value['projectId'] === 'string' &&
+    typeof value['title'] === 'string' &&
+    isRunStatus(value['status']) &&
+    typeof value['currentNodeId'] === 'string' &&
+    isRemoteRunNodeSummary(value['currentNode']) &&
+    (value['currentNode'] as Record<string, unknown>)['id'] === value['currentNodeId'] &&
+    typeof value['branchName'] === 'string' &&
+    typeof value['updatedAt'] === 'string'
+  )
+}
+
+function isRemoteTestEvidenceSummary(value: unknown): value is RemoteTestEvidenceSummary {
+  if (!isRecord(value) || hasLocalOnlyEvidenceField(value)) return false
+  const status = value['status']
+  return (
+    typeof value['id'] === 'string' &&
+    typeof value['runId'] === 'string' &&
+    typeof value['nodeId'] === 'string' &&
+    typeof value['projectId'] === 'string' &&
+    typeof value['command'] === 'string' &&
+    (status === 'running' || status === 'passed' || status === 'failed' || status === 'timed_out') &&
+    (typeof value['exitCode'] === 'number' || value['exitCode'] === null) &&
+    typeof value['durationMs'] === 'number' &&
+    typeof value['summary'] === 'string' &&
+    value['redacted'] === true &&
+    typeof value['createdAt'] === 'string'
+  )
+}
+
+function isRemoteAgentReviewSummary(value: unknown): value is RemoteAgentReviewSummary {
+  if (!isRecord(value)) return false
+  const policyFindingCount = value['policyFindingCount']
+  const policyFindingCategories = value['policyFindingCategories']
+  const policyFindings = value['policyFindings']
+  const validCount =
+    policyFindingCount === undefined ||
+    (Number.isInteger(policyFindingCount) && (policyFindingCount as number) >= 0)
+  const validCategories =
+    policyFindingCategories === undefined ||
+    (Array.isArray(policyFindingCategories) && policyFindingCategories.every((category) =>
+      category === 'missing_evidence' ||
+      category === 'test_risk' ||
+      category === 'api_contract_risk' ||
+      category === 'security_risk' ||
+      category === 'review_gap'))
+  const validFindings =
+    policyFindings === undefined
+      ? policyFindingCount === undefined || policyFindingCount === 0
+      : Array.isArray(policyFindings) &&
+        (policyFindingCount === undefined || policyFindingCount === policyFindings.length) &&
+        policyFindings.every((finding) =>
+          isRecord(finding) &&
+          typeof finding['id'] === 'string' &&
+          finding['reviewId'] === value['id'] &&
+          finding['runId'] === value['runId'] &&
+          finding['nodeId'] === value['nodeId'] &&
+          (finding['category'] === 'missing_evidence' ||
+            finding['category'] === 'test_risk' ||
+            finding['category'] === 'api_contract_risk' ||
+            finding['category'] === 'security_risk' ||
+            finding['category'] === 'review_gap') &&
+          (finding['severity'] === 'low' || finding['severity'] === 'medium' || finding['severity'] === 'high') &&
+          typeof finding['summary'] === 'string' &&
+          typeof finding['createdAt'] === 'string')
+
+  return (
+    typeof value['id'] === 'string' &&
+    typeof value['runId'] === 'string' &&
+    typeof value['nodeId'] === 'string' &&
+    typeof value['projectId'] === 'string' &&
+    (value['runtime'] === 'electron' || value['runtime'] === 'api') &&
+    typeof value['providerId'] === 'string' &&
+    typeof value['model'] === 'string' &&
+    typeof value['conclusion'] === 'string' &&
+    typeof value['summary'] === 'string' &&
+    typeof value['riskCount'] === 'number' &&
+    typeof value['missingEvidenceCount'] === 'number' &&
+    validCount &&
+    validCategories &&
+    validFindings &&
+    (value['advisoryLevel'] === 'info' || value['advisoryLevel'] === 'warn' || value['advisoryLevel'] === 'block') &&
+    typeof value['blocksApproval'] === 'boolean' &&
+    typeof value['confidence'] === 'number' &&
+    value['redacted'] === true &&
+    typeof value['createdAt'] === 'string'
+  )
+}
+
+export function parseRemoteRunSummary(value: unknown): RemoteRunSummary {
+  if (!isRemoteRunSummary(value)) {
+    throw new Error('Invalid remote run summary payload')
+  }
+  return redactRemoteRunSummaryForSync(value)
+}
+
+export function parseRemoteTestEvidenceSummary(value: unknown): RemoteTestEvidenceSummary {
+  if (isRecord(value) && hasLocalOnlyEvidenceField(value)) {
+    throw new Error('Remote test evidence summary contains local-only fields')
+  }
+  if (!isRemoteTestEvidenceSummary(value)) {
+    throw new Error('Invalid remote test evidence summary payload')
+  }
+  return redactRemoteTestEvidenceSummaryForSync(value)
+}
+
+export function parseRemoteAgentReviewSummary(value: unknown): RemoteAgentReviewSummary {
+  if (!isRemoteAgentReviewSummary(value)) {
+    throw new Error('Invalid remote agent review summary payload')
+  }
+  return redactRemoteAgentReviewSummaryForSync(value)
+}
+
 export function resolveTeamProjectId(input: {
   localProjectId: string
   credential: DesktopPairingCredential | null | undefined

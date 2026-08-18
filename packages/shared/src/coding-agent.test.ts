@@ -21,6 +21,7 @@ import {
   buildCodingBrief,
   canRunCodingAgentOnNode,
   createRemoteCodingAgentSummary,
+  parseRemoteCodingAgentSummary,
   hasSupportedCodingDiffSanitization,
   redactRemoteCodingAgentSummaryForSync,
   sanitizeCodingDiffArtifact,
@@ -526,6 +527,15 @@ describe('createRemoteCodingAgentSummary', () => {
     expect(serialized).not.toContain('stdout')
     expect(serialized).not.toContain('stderr')
     expect(serialized).not.toContain('sk-live')
+    expect(parseRemoteCodingAgentSummary(summary)).toEqual(summary)
+    expect(() => parseRemoteCodingAgentSummary({
+      ...summary,
+      prompt: 'local prompt',
+    })).toThrow('Remote coding agent summary contains local-only fields')
+    expect(() => parseRemoteCodingAgentSummary({
+      ...summary,
+      changedPaths: ['../outside.ts'],
+    })).toThrow('Invalid remote coding agent summary payload')
   })
 
   it('redacts local paths and secrets from outbound branch and summary strings', () => {

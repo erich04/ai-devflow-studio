@@ -1,6 +1,7 @@
 export type ThemePreference = 'light' | 'dark' | 'system'
 
-export type Role = 'owner' | 'lead' | 'member'
+export const TEAM_ROLES = ['owner', 'lead', 'member'] as const
+export type Role = (typeof TEAM_ROLES)[number]
 
 export type RunStatus =
   | 'created'

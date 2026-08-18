@@ -23,6 +23,7 @@ import {
   redactSensitiveText,
 } from './redaction'
 import { assertCanonicalLocalNodeId } from './remote-node-identity'
+import { parseBudgetGuardDecision } from './cost'
 
 export const MAX_DIFF_CHARS = 50_000
 export const CURRENT_CODING_DIFF_SANITIZER_VERSION = 2
@@ -423,6 +424,99 @@ export function redactRemoteCodingAgentSummaryForSync(
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function hasLocalOnlyCodingField(value: Record<string, unknown>): boolean {
+  return (
+    'cwd' in value ||
+    'stdout' in value ||
+    'stderr' in value ||
+    'prompt' in value ||
+    'patch' in value ||
+    'rawTrace' in value ||
+    'providerSecret' in value ||
+    'secret' in value
+  )
+}
+
+function isRemoteCodingCostSummary(value: unknown): boolean {
+  if (!isRecord(value) || hasLocalOnlyCodingField(value)) return false
+  return (
+    typeof value['id'] === 'string' &&
+    typeof value['runId'] === 'string' &&
+    typeof value['nodeId'] === 'string' &&
+    typeof value['userId'] === 'string' &&
+    typeof value['projectId'] === 'string' &&
+    (value['provider'] === 'openai' || value['provider'] === 'anthropic' || value['provider'] === 'dashscope' || value['provider'] === 'local') &&
+    typeof value['providerId'] === 'string' &&
+    typeof value['model'] === 'string' &&
+    typeof value['inputTokens'] === 'number' &&
+    typeof value['outputTokens'] === 'number' &&
+    typeof value['cacheReadTokens'] === 'number' &&
+    typeof value['costUsd'] === 'number' &&
+    typeof value['timestamp'] === 'string' &&
+    (value['source'] === 'provider_reported' || value['source'] === 'estimated') &&
+    value['redacted'] === true
+  )
+}
+
+function isRemoteBudgetDecision(value: unknown): boolean {
+  if (!isRecord(value) || hasLocalOnlyCodingField(value)) return false
+  try {
+    parseBudgetGuardDecision(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function parseRemoteCodingAgentSummary(value: unknown): RemoteCodingAgentSummary {
+  if (isRecord(value) && hasLocalOnlyCodingField(value)) {
+    throw new Error('Remote coding agent summary contains local-only fields')
+  }
+  if (!isRecord(value)) {
+    throw new Error('Invalid remote coding agent summary payload')
+  }
+  const status = value['status']
+  const validStatus =
+    status === 'queued' ||
+    status === 'preparing' ||
+    status === 'waiting_permission' ||
+    status === 'bootstrapping' ||
+    status === 'running' ||
+    status === 'testing' ||
+    status === 'completed' ||
+    status === 'failed' ||
+    status === 'timed_out' ||
+    status === 'interrupted' ||
+    status === 'cancelled'
+  if (!(
+    typeof value['id'] === 'string' &&
+    typeof value['runId'] === 'string' &&
+    typeof value['nodeId'] === 'string' &&
+    typeof value['projectId'] === 'string' &&
+    typeof value['requestedBy'] === 'string' &&
+    typeof value['providerId'] === 'string' &&
+    (value['engine'] === 'fake' || value['engine'] === 'opencode-http' || value['engine'] === 'opencode-acp') &&
+    validStatus &&
+    typeof value['branchName'] === 'string' &&
+    typeof value['summary'] === 'string' &&
+    Array.isArray(value['changedPaths']) &&
+    value['changedPaths'].length <= MAX_REMOTE_CHANGED_PATHS &&
+    value['changedPaths'].every(isRepoRelativePath) &&
+    typeof value['startedAt'] === 'string' &&
+    (value['completedAt'] === undefined || typeof value['completedAt'] === 'string') &&
+    (value['costSummary'] === undefined || isRemoteCodingCostSummary(value['costSummary'])) &&
+    (value['budgetDecision'] === undefined || isRemoteBudgetDecision(value['budgetDecision'])) &&
+    value['redacted'] === true
+  )) {
+    throw new Error('Invalid remote coding agent summary payload')
+  }
+  return redactRemoteCodingAgentSummaryForSync(value as unknown as RemoteCodingAgentSummary)
+}
+
 function frozenInstallCommand(files: Record<string, string>, packageManager: PackageManager): string {
   if ('pnpm-lock.yaml' in files) {
     return 'corepack pnpm install --frozen-lockfile'
@@ -479,7 +573,8 @@ function redactDiffLines(patch: string): { value: string; replacementCount: numb
   }
 }
 
-function isRepoRelativePath(value: string): boolean {
+function isRepoRelativePath(value: unknown): value is string {
+  if (typeof value !== 'string') return false
   const normalized = value.replace(/\\/g, '/').trim()
   if (!normalized || normalized.startsWith('/') || normalized.startsWith('../') || normalized.includes('/../')) {
     return false

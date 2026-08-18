@@ -20,6 +20,16 @@ request creation, or acceptance steps.
 A human decision point that checks whether the current stage has enough evidence to move into the
 next risky stage.
 
+## Team Role
+
+The exact product role vocabulary is `owner`, `lead`, and `member`; there is no implicit `viewer`
+role. A member is the least-privileged project participant and all reads remain filtered by live
+organization and project membership. Role ordering supports ordinary project access and Gate
+requirements, but it is not a universal override hierarchy: selected budget, policy, and
+separation-of-duties actions intentionally require an exact non-conflicted lead, so an owner cannot
+bypass those checks. A Desktop Bearer Token is immutable to one paired project and grants at most
+lead authority, even when its browser pairing actor is an organization owner.
+
 ## Clarification Gate
 
 The Gate that reviews whether requirement clarification is complete enough to proceed into solution

@@ -6,6 +6,9 @@ import {
   createRemoteAgentReviewSummary,
   createRemoteTestEvidenceSummary,
   createRemoteRunSummary,
+  parseRemoteAgentReviewSummary,
+  parseRemoteRunSummary,
+  parseRemoteTestEvidenceSummary,
   redactRemoteTestEvidenceSummaryForSync,
   resolveTeamProjectId,
 } from './remote-sync'
@@ -155,7 +158,8 @@ describe('remote sync helpers', () => {
   })
 
   it('creates a remote run summary without local-only execution details', () => {
-    expect(createRemoteRunSummary(run, 'approval')).toEqual({
+    const summary = createRemoteRunSummary(run, 'approval')
+    expect(summary).toEqual({
       kind: 'approval',
       runId: 'run-1',
       version: 4,
@@ -173,6 +177,11 @@ describe('remote sync helpers', () => {
       branchName: 'ai/remote-sync',
       updatedAt: '2026-06-16T00:10:00.000Z',
     })
+    expect(parseRemoteRunSummary(summary)).toEqual(summary)
+    expect(() => parseRemoteRunSummary({
+      ...summary,
+      currentNode: { ...summary.currentNode, requiredRole: 'viewer' },
+    })).toThrow('Invalid remote run summary payload')
   })
 
   it('rejects local node IDs that impersonate the Team storage namespace', () => {
@@ -232,6 +241,11 @@ describe('remote sync helpers', () => {
     expect(JSON.stringify(summary)).not.toContain('SECRET_TOKEN')
     expect(JSON.stringify(summary)).not.toContain('stack trace')
     expect(JSON.stringify(summary)).not.toContain('C:\\Users\\erich')
+    expect(parseRemoteTestEvidenceSummary(summary)).toEqual(summary)
+    expect(() => parseRemoteTestEvidenceSummary({
+      ...summary,
+      cwd: '/Users/alice/private',
+    })).toThrow('Remote test evidence summary contains local-only fields')
   })
 
   it('redacts paths and secrets embedded in otherwise allowed remote evidence fields', () => {
@@ -319,6 +333,14 @@ describe('remote sync helpers', () => {
     expect(JSON.stringify(summary)).not.toContain('finding-secret')
     expect(JSON.stringify(summary)).not.toContain('local-evidence-id')
     expect(JSON.stringify(summary)).not.toContain('local-knowledge-reference-id')
+    expect(parseRemoteAgentReviewSummary(summary)).toEqual(summary)
+    expect(() => parseRemoteAgentReviewSummary({
+      ...summary,
+      policyFindings: summary.policyFindings?.map((finding) => ({
+        ...finding,
+        runId: 'run-other',
+      })),
+    })).toThrow('Invalid remote agent review summary payload')
     expect(() =>
       createRemoteAgentReviewSummary({
         ...review,
