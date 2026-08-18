@@ -139,9 +139,21 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
       expect(packagedBuildIndex).toBeLessThan(gateIndex)
       expect(workflow).toContain('DEVFLOW_PACKAGED_SMOKE_DATABASE_ADMIN_URL')
       expect(workflow).toContain('DEVFLOW_PACKAGED_SMOKE_NETWORK_MODE: offline')
+      expect(workflow).toContain('DEBIAN_FRONTEND: noninteractive')
+      expect(workflow).toContain('NEEDRESTART_MODE: a')
       expect(workflow).toContain(
-        'sudo apt-get install -y --no-install-recommends dbus-x11 gnome-keyring libsecret-1-0',
+        "sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt",
       )
+      expect(workflow).toContain(
+        'sudo -E timeout --signal=TERM --kill-after=10s 240s apt-get update',
+      )
+      expect(workflow).toContain(
+        'sudo -E timeout --signal=TERM --kill-after=10s 240s apt-get install -y --no-install-recommends',
+      )
+      expect(workflow).toContain('Acquire::Retries=3')
+      expect(workflow).toContain('Acquire::ForceIPv4=true')
+      expect(workflow).toContain('DPkg::Lock::Timeout=60')
+      expect(workflow).toContain('dbus-x11 gnome-keyring libsecret-1-0')
     }
   })
 
