@@ -273,6 +273,16 @@ describe('V2.0 Agent Runtime evaluation runner', () => {
       candidateSha,
       outputPath: `out/v20-evaluation/${candidateSha}.json`,
     })
+    expect(parseV20EvaluationRunnerArguments([
+      '--',
+      '--candidate-sha',
+      candidateSha,
+      '--output',
+      `out/v20-evaluation/${candidateSha}.json`,
+    ])).toEqual({
+      candidateSha,
+      outputPath: `out/v20-evaluation/${candidateSha}.json`,
+    })
     expect(() => parseV20EvaluationRunnerArguments([
       '--candidate-sha',
       candidateSha,

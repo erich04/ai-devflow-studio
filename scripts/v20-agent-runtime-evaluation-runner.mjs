@@ -271,14 +271,15 @@ export async function runV20EvaluationCli(input, dependencies = {}) {
 }
 
 export function parseV20EvaluationRunnerArguments(arguments_) {
+  const normalizedArguments = arguments_[0] === '--' ? arguments_.slice(1) : arguments_
   if (
-    arguments_.length !== 4 ||
-    arguments_[0] !== '--candidate-sha' ||
-    !sha1Pattern.test(String(arguments_[1])) ||
-    arguments_[2] !== '--output' ||
-    arguments_[3] !== `out/v20-evaluation/${arguments_[1]}.json`
+    normalizedArguments.length !== 4 ||
+    normalizedArguments[0] !== '--candidate-sha' ||
+    !sha1Pattern.test(String(normalizedArguments[1])) ||
+    normalizedArguments[2] !== '--output' ||
+    normalizedArguments[3] !== `out/v20-evaluation/${normalizedArguments[1]}.json`
   ) fail('v20_evaluation_arguments_invalid')
-  return { candidateSha: arguments_[1], outputPath: arguments_[3] }
+  return { candidateSha: normalizedArguments[1], outputPath: normalizedArguments[3] }
 }
 
 async function main() {

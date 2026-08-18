@@ -67,10 +67,10 @@ describe('GitHub release workflow', () => {
     const artifactsJob = jobBlock(workflow, 'release-artifacts')
 
     expect(windowsJob).toMatch(
-      /- uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 2[\s\S]*?corepack pnpm test/,
+      /- uses: actions\/checkout@v5\n\s+with:\n\s+fetch-depth: 2[\s\S]*?corepack pnpm test/,
     )
     expect(artifactsJob).toMatch(
-      /- uses: actions\/checkout@v4\n\s+with:\n\s+ref: \$\{\{ github\.ref \}\}\n\s+fetch-depth: 0[\s\S]*?release:status/,
+      /- uses: actions\/checkout@v5\n\s+with:\n\s+ref: \$\{\{ github\.ref \}\}\n\s+fetch-depth: 0[\s\S]*?release:status/,
     )
     expect(artifactsJob).not.toContain('fetch-tags: true')
   })
@@ -158,7 +158,7 @@ describe('GitHub release workflow', () => {
       'release-artifacts',
     ]) {
       expect(jobBlock(workflow, id)).toMatch(
-        /actions\/checkout@v4[\s\S]*?persist-credentials: false/,
+        /actions\/checkout@v5[\s\S]*?persist-credentials: false/,
       )
     }
   })
@@ -196,10 +196,10 @@ describe('GitHub verify workflow', () => {
 
     expect(workflow).toMatch(/on:\n(?:.|\n)*?workflow_dispatch:/)
     expect(macosJob).toMatch(
-      /- uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 0[\s\S]*?corepack pnpm verify/,
+      /- uses: actions\/checkout@v5\n\s+with:\n\s+fetch-depth: 0[\s\S]*?corepack pnpm verify/,
     )
     expect(windowsJob).toMatch(
-      /- uses: actions\/checkout@v4\n\s+with:\n\s+fetch-depth: 0[\s\S]*?corepack pnpm test/,
+      /- uses: actions\/checkout@v5\n\s+with:\n\s+fetch-depth: 0[\s\S]*?corepack pnpm test/,
     )
   })
 
@@ -261,7 +261,7 @@ describe('GitHub verify workflow', () => {
       'docker-lifecycle-smoke',
     ]) {
       expect(jobBlock(workflow, id)).toMatch(
-        /actions\/checkout@v4[\s\S]*?persist-credentials: false/,
+        /actions\/checkout@v5[\s\S]*?persist-credentials: false/,
       )
     }
   })
