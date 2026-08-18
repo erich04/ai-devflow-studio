@@ -1,7 +1,7 @@
 # AI DevFlow Studio Stabilization Plan V0.3
 
 Date: 2026-08-17  
-Lifecycle: Implementation complete; final candidate verification and evidence archival in progress.  
+Lifecycle: Complete; accepted against implementation candidate `1cb0482a9afe157c4e1dcdd7ae4e8026939f2b9d`.
 Scope: Security boundary repair, authoritative-source convergence, tenant isolation, and progressive
 LocalStore decomposition. This plan is distinct from the historical product milestone named v0.3.
 
@@ -97,3 +97,10 @@ idempotent; the only filesystem persistence sequence remains `write temp → ren
 - Adding a new `viewer` role without a product/authority decision.
 - Paid-provider or production GitHub writes as a substitute for deterministic release gates.
 - Reusing the historical v0.3 release evidence namespace for this stabilization effort.
+
+## Acceptance record
+
+The repository-contained acceptance record is
+[`docs/releases/stabilization-v0.3-2026-08-17/result.md`](../releases/stabilization-v0.3-2026-08-17/result.md).
+It binds the implementation candidate to the complete test matrix, the reproducible Desktop artifact,
+the disposable infrastructure gates, and the sealed standard security scan.
