@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { createServer, type ServerResponse } from 'node:http'
 import { createGitHubOAuthClient } from './auth/github-oauth'
 import { createGitHubAppClientFromEnv } from './github-app-auth'
 import { createGitHubDeliveryService } from './github-delivery-service'
@@ -9,6 +9,7 @@ import {
   createInternalErrorResponse,
   resolveApiRouteRequest,
 } from './server-request'
+import { readBoundedJsonBody, RequestBodyTooLargeError } from './http-json-body'
 
 const { devAuthEnabled, host, port, secureCookies, sessionSecret, webAppUrl } =
   resolveServerRuntimeConfig()
@@ -45,21 +46,6 @@ function sendJson(
   }
 
   response.end(JSON.stringify(body, null, 2))
-}
-
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = []
-
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-  }
-
-  const rawBody = Buffer.concat(chunks).toString('utf8').trim()
-  if (!rawBody) {
-    return undefined
-  }
-
-  return JSON.parse(rawBody) as unknown
 }
 
 const server = createServer(async (request, response) => {
@@ -99,8 +85,15 @@ const server = createServer(async (request, response) => {
   let requestBody: unknown
   if (request.method === 'POST' || request.method === 'PUT') {
     try {
-      requestBody = await readJsonBody(request)
-    } catch {
+      requestBody = await readBoundedJsonBody(request)
+    } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        sendJson(response, 413, {
+          error: 'payload_too_large',
+          message: 'JSON request body exceeds the maximum allowed size',
+        })
+        return
+      }
       sendJson(response, 400, {
         error: 'bad_request',
         message: 'Invalid JSON body',

@@ -963,6 +963,10 @@ describe('team API route resolver', () => {
       '/api/team/projects/p-payments/pairing-codes',
       repository,
       {
+        principal: {
+          session: leadSession,
+          authentication: { kind: 'session_cookie', tokenRecordId: null },
+        },
         session: leadSession,
       },
     )
@@ -986,6 +990,44 @@ describe('team API route resolver', () => {
     )
   })
 
+  it.each([
+    {
+      label: 'desktop bearer',
+      authentication: {
+        kind: 'desktop_bearer' as const,
+        tokenRecordId: 'desktop-token-1',
+      },
+    },
+    {
+      label: 'development header',
+      authentication: {
+        kind: 'development_header' as const,
+        tokenRecordId: null,
+      },
+    },
+  ])('does not let a $label replicate desktop credentials', async ({ authentication }) => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/team/projects/p-payments/pairing-codes',
+      repository,
+      {
+        principal: { session: leadSession, authentication },
+        session: leadSession,
+      },
+    )
+
+    expect(result).toEqual({
+      status: 403,
+      body: {
+        error: 'forbidden',
+        message: 'Signed browser session required',
+      },
+    })
+    expect(repository.createDesktopPairingCode).not.toHaveBeenCalled()
+  })
+
   it('rejects desktop pairing code creation without lead access to the project', async () => {
     const repository = createRepository()
 
@@ -994,6 +1036,10 @@ describe('team API route resolver', () => {
       '/api/team/projects/p-admin/pairing-codes',
       repository,
       {
+        principal: {
+          session: memberSession,
+          authentication: { kind: 'session_cookie', tokenRecordId: null },
+        },
         session: memberSession,
       },
     )
@@ -1022,7 +1068,13 @@ describe('team API route resolver', () => {
       'POST',
       '/api/team/projects/p-payments/pairing-codes',
       repository,
-      { session: otherOrganizationOwner },
+      {
+        principal: {
+          session: otherOrganizationOwner,
+          authentication: { kind: 'session_cookie', tokenRecordId: null },
+        },
+        session: otherOrganizationOwner,
+      },
     )
 
     expect(result).toEqual({

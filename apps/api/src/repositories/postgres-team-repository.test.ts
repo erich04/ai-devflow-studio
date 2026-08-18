@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type { RequestPrincipal } from '../auth/request-auth'
 import type { TeamDbRepositoryClient } from '../db/client'
@@ -461,6 +462,63 @@ class FakeTeamDbClient implements TeamDbRepositoryClient {
 
   async close(): Promise<void> {
     return undefined
+  }
+}
+
+class PairingExchangeDbClient extends FakeTeamDbClient {
+  private consumedAt: string | null = null
+  private failedAttempts = 0
+  private tokenRow: Record<string, unknown> | null = null
+
+  override async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    if (sql.includes('FROM desktop_pairing_codes')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [{
+        id: 'desktop-pairing-test',
+        organization_id: 'org-demo',
+        project_id: 'p-payments',
+        created_by_user_id: 'u-ling',
+        code_hash: createHash('sha256').update('copy-once-secret').digest('hex'),
+        expires_at: '2999-01-01T00:00:00.000Z',
+        consumed_at: this.consumedAt,
+        failed_attempts: this.failedAttempts,
+        created_at: '2026-06-20T00:00:00.000Z',
+      }] as T[]
+    }
+
+    if (sql.includes('INSERT INTO desktop_tokens')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      this.tokenRow = {
+        token_id: params?.[0],
+        organization_id: params?.[1],
+        project_id: params?.[2],
+        user_id: params?.[3],
+        token_hash: params?.[4],
+        revoked_at: null,
+        role: 'lead',
+        auth_account_id: 'acct-github-ling',
+      }
+      return []
+    }
+
+    if (sql.includes('UPDATE desktop_pairing_codes') && sql.includes('SET consumed_at')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      this.consumedAt = String(params?.[1])
+      return [{ id: params?.[0] }] as T[]
+    }
+
+    if (sql.includes('UPDATE desktop_pairing_codes') && sql.includes('failed_attempts + 1')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      this.failedAttempts += 1
+      return []
+    }
+
+    if (sql.includes('FROM desktop_tokens') && this.tokenRow) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [this.tokenRow] as T[]
+    }
+
+    return super.query<T>(sql, params)
   }
 }
 
@@ -1669,6 +1727,87 @@ describe('Postgres team repository', () => {
     expect(write?.params).toHaveLength(8)
     expect(write?.params).not.toContain(result.code)
     expect(write?.params).not.toContain(result.code.split('.')[1])
+  })
+
+  it('locks and consumes a desktop pairing code in the same transaction as token creation', async () => {
+    const db = new PairingExchangeDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.exchangeDesktopPairingCode({
+        code: 'desktop-pairing-test.copy-once-secret',
+      }),
+    ).resolves.toMatchObject({
+      organizationId: 'org-demo',
+      projectId: 'p-payments',
+      userId: 'u-ling',
+      role: 'lead',
+    })
+
+    const statements = db.queries.map(({ sql }) => sql.trim())
+    const beginIndex = statements.indexOf('BEGIN')
+    const lockIndex = statements.findIndex((sql) => sql.includes('FROM desktop_pairing_codes'))
+    const insertIndex = statements.findIndex((sql) => sql.includes('INSERT INTO desktop_tokens'))
+    const consumeIndex = statements.findIndex((sql) => sql.includes('SET consumed_at'))
+    const commitIndex = statements.indexOf('COMMIT')
+    expect(beginIndex).toBeGreaterThanOrEqual(0)
+    expect(statements[lockIndex]).toContain('FOR UPDATE')
+    expect(lockIndex).toBeGreaterThan(beginIndex)
+    expect(insertIndex).toBeGreaterThan(lockIndex)
+    expect(consumeIndex).toBeGreaterThan(insertIndex)
+    expect(commitIndex).toBeGreaterThan(consumeIndex)
+    expect(db.checkoutCount).toBe(1)
+    expect(db.releaseCount).toBe(1)
+
+    await expect(
+      repository.exchangeDesktopPairingCode({
+        code: 'desktop-pairing-test.copy-once-secret',
+      }),
+    ).rejects.toThrow('invalid desktop pairing code')
+    expect(db.queries.map(({ sql }) => sql.trim()).at(-1)).toBe('ROLLBACK')
+  })
+
+  it('commits failed pairing attempts without issuing a desktop token', async () => {
+    const db = new PairingExchangeDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.exchangeDesktopPairingCode({
+        code: 'desktop-pairing-test.wrong-secret',
+      }),
+    ).rejects.toThrow('invalid desktop pairing code')
+
+    const statements = db.queries.map(({ sql }) => sql.trim())
+    expect(statements).toContain('BEGIN')
+    expect(statements.some((sql) => sql.includes('failed_attempts + 1'))).toBe(true)
+    expect(statements).toContain('COMMIT')
+    expect(statements).not.toContain('ROLLBACK')
+    expect(statements.some((sql) => sql.includes('INSERT INTO desktop_tokens'))).toBe(false)
+  })
+
+  it('blocks the correct pairing secret after five committed failures', async () => {
+    const db = new PairingExchangeDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(
+        repository.exchangeDesktopPairingCode({
+          code: `desktop-pairing-test.wrong-${attempt}`,
+        }),
+      ).rejects.toThrow('invalid desktop pairing code')
+    }
+    await expect(
+      repository.exchangeDesktopPairingCode({
+        code: 'desktop-pairing-test.copy-once-secret',
+      }),
+    ).rejects.toThrow('invalid desktop pairing code')
+
+    expect(
+      db.queries.filter(({ sql }) => sql.includes('failed_attempts + 1')),
+    ).toHaveLength(5)
+    expect(
+      db.queries.some(({ sql }) => sql.includes('INSERT INTO desktop_tokens')),
+    ).toBe(false)
   })
 
   it('resolves desktop bearer tokens as authenticated project-scoped sessions', async () => {

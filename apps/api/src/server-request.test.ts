@@ -310,6 +310,33 @@ describe('API HTTP authentication boundary', () => {
     )
   })
 
+  it('does not let a paired bearer token mint a replacement desktop credential', async () => {
+    const repository = createSeedTeamRepository()
+    const createDesktopPairingCode = vi.spyOn(repository, 'createDesktopPairingCode')
+    vi.spyOn(repository, 'resolveDesktopTokenSession').mockResolvedValue({
+      tokenRecordId: 'desktop-token-valid',
+      session: projectLeadSession,
+    })
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'POST',
+        pathname: '/api/team/projects/p-payments/pairing-codes',
+        headers: { authorization: 'Bearer valid-desktop-token' },
+      },
+      {
+        repository,
+        sessionSecret: 'server-request-test-secret',
+      },
+    )
+
+    expect(result).toEqual({
+      status: 403,
+      body: { error: 'forbidden', message: 'Signed browser session required' },
+    })
+    expect(createDesktopPairingCode).not.toHaveBeenCalled()
+  })
+
   it('returns 401 for an invalid bearer credential without exposing it', async () => {
     const repository = createSeedTeamRepository()
     const bearerSecret = 'desktop-token-id.invalid-private-secret'

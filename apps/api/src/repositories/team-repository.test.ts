@@ -981,6 +981,43 @@ describe('seed team repository', () => {
         projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
       },
     })
+
+    await expect(
+      repository.exchangeDesktopPairingCode({ code: pairing.code }),
+    ).rejects.toThrow('invalid desktop pairing code')
+  })
+
+  it('rejects unknown seed desktop pairing codes instead of fabricating authority', async () => {
+    const repository = createSeedTeamRepository()
+
+    await expect(
+      repository.exchangeDesktopPairingCode({
+        code: 'desktop-pairing-p-payments.attacker-controlled',
+      }),
+    ).rejects.toThrow('invalid desktop pairing code')
+    await expect(
+      repository.resolveDesktopTokenSession('devflow-desktop-token-p-payments'),
+    ).resolves.toBeNull()
+  })
+
+  it('invalidates a seed pairing code after five failed secret attempts', async () => {
+    const repository = createSeedTeamRepository()
+    const pairing = await repository.createDesktopPairingCode(
+      { projectId: 'p-payments' },
+      gateBrowserPrincipal.session,
+    )
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(
+        repository.exchangeDesktopPairingCode({
+          code: `${pairing.id}.wrong-${attempt}`,
+        }),
+      ).rejects.toThrow('invalid desktop pairing code')
+    }
+
+    await expect(
+      repository.exchangeDesktopPairingCode({ code: pairing.code }),
+    ).rejects.toThrow('invalid desktop pairing code')
   })
 
   it('limits seed owner pairing tokens to lead authority on the paired project', async () => {

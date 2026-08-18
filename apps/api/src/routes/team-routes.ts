@@ -1006,6 +1006,10 @@ export async function resolveTeamRoute(
       return unauthorized()
     }
 
+    if (options.principal?.authentication.kind !== 'session_cookie') {
+      return forbidden('Signed browser session required')
+    }
+
     const projectId = decodeURIComponent(projectPairingMatch[1] ?? '')
     if (!projectId) {
       return badRequest('Invalid projectId')

@@ -1572,13 +1572,14 @@ export function createPostgresTeamRepository(
 
   async function resolveDesktopTokenSessionFromToken(
     token: string,
+    queryClient: Pick<TeamDbClient, 'query'> = db,
   ): Promise<ResolvedDesktopTokenSession | null> {
     const parsed = parseCopyOnceSecret(token)
     if (!parsed) {
       return null
     }
 
-    const [tokenRow] = await db.query<DesktopTokenSessionRow>(
+    const [tokenRow] = await queryClient.query<DesktopTokenSessionRow>(
       `
         SELECT
           desktop_tokens.id AS token_id,
@@ -1607,7 +1608,7 @@ export function createPostgresTeamRepository(
       return null
     }
 
-    const membershipRows = await db.query<ProjectMembershipRow>(
+    const membershipRows = await queryClient.query<ProjectMembershipRow>(
       `
         SELECT project_members.project_id, project_members.user_id, project_members.role
         FROM project_members
@@ -1624,7 +1625,7 @@ export function createPostgresTeamRepository(
       return null
     }
 
-    await db.query(
+    await queryClient.query(
       `
         UPDATE desktop_tokens
         SET last_used_at = $2
@@ -1799,90 +1800,106 @@ export function createPostgresTeamRepository(
         throw new Error('invalid desktop pairing code')
       }
 
-      const [pairing] = await db.query<DesktopPairingCodeRow>(
-        `
-          SELECT *
-          FROM desktop_pairing_codes
-          WHERE id = $1
-          LIMIT 1
-        `,
-        [parsed.id],
-      )
-      if (!pairing) {
-        throw new Error('invalid desktop pairing code')
-      }
+      const exchange = await withTeamDbTransaction(db, async (tx) => {
+        const [pairing] = await tx.query<DesktopPairingCodeRow>(
+          `
+            SELECT *
+            FROM desktop_pairing_codes
+            WHERE id = $1
+            LIMIT 1
+            FOR UPDATE
+          `,
+          [parsed.id],
+        )
+        if (!pairing) {
+          throw new Error('invalid desktop pairing code')
+        }
 
-      if (pairing.consumed_at || pairing.failed_attempts >= 5) {
-        throw new Error('invalid desktop pairing code')
-      }
+        if (pairing.consumed_at || pairing.failed_attempts >= 5) {
+          throw new Error('invalid desktop pairing code')
+        }
 
-      if (Date.parse(timestamp(pairing.expires_at)) <= Date.now()) {
-        throw new Error('expired desktop pairing code')
-      }
+        if (Date.parse(timestamp(pairing.expires_at)) <= Date.now()) {
+          throw new Error('expired desktop pairing code')
+        }
 
-      if (pairing.code_hash !== hashSecret(parsed.secret)) {
-        await db.query(
+        if (pairing.code_hash !== hashSecret(parsed.secret)) {
+          await tx.query(
+            `
+              UPDATE desktop_pairing_codes
+              SET failed_attempts = failed_attempts + 1
+              WHERE id = $1
+            `,
+            [pairing.id],
+          )
+          return { ok: false as const }
+        }
+
+        const tokenId = `desktop-token-${randomUUID()}`
+        const tokenSecret = randomSecret(32)
+        const token = `${tokenId}.${tokenSecret}`
+        const createdAt = new Date().toISOString()
+        await tx.query(
+          `
+            INSERT INTO desktop_tokens (
+              id,
+              organization_id,
+              project_id,
+              user_id,
+              token_hash,
+              created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+          `,
+          [
+            tokenId,
+            pairing.organization_id,
+            pairing.project_id,
+            pairing.created_by_user_id,
+            hashSecret(tokenSecret),
+            createdAt,
+          ],
+        )
+        const [consumedPairingCode] = await tx.query<{ id: string }>(
           `
             UPDATE desktop_pairing_codes
-            SET failed_attempts = failed_attempts + 1
+            SET consumed_at = $2
             WHERE id = $1
+              AND consumed_at IS NULL
+            RETURNING id
           `,
-          [pairing.id],
+          [pairing.id, createdAt],
         )
+        if (!consumedPairingCode) {
+          throw new Error('invalid desktop pairing code')
+        }
+
+        const resolvedSession = await resolveDesktopTokenSessionFromToken(token, tx)
+        if (!resolvedSession) {
+          throw new Error('unable to create desktop session')
+        }
+        const session = resolvedSession.session
+
+        return {
+          ok: true as const,
+          result: {
+            token,
+            tokenId,
+            organizationId: session.organizationId,
+            projectId: pairing.project_id,
+            userId: session.userId,
+            role: session.role,
+            authAccountId: session.authAccountId,
+            projectMemberships: session.projectMemberships,
+            createdAt,
+          },
+        }
+      })
+
+      if (!exchange.ok) {
         throw new Error('invalid desktop pairing code')
       }
-
-      const tokenId = `desktop-token-${randomUUID()}`
-      const tokenSecret = randomSecret(32)
-      const token = `${tokenId}.${tokenSecret}`
-      const createdAt = new Date().toISOString()
-      await db.query(
-        `
-          INSERT INTO desktop_tokens (
-            id,
-            organization_id,
-            project_id,
-            user_id,
-            token_hash,
-            created_at
-          )
-          VALUES ($1, $2, $3, $4, $5, $6)
-        `,
-        [
-          tokenId,
-          pairing.organization_id,
-          pairing.project_id,
-          pairing.created_by_user_id,
-          hashSecret(tokenSecret),
-          createdAt,
-        ],
-      )
-      await db.query(
-        `
-          UPDATE desktop_pairing_codes
-          SET consumed_at = $2
-          WHERE id = $1
-        `,
-        [pairing.id, createdAt],
-      )
-
-      const resolvedSession = await resolveDesktopTokenSessionFromToken(token)
-      if (!resolvedSession) {
-        throw new Error('unable to create desktop session')
-      }
-      const session = resolvedSession.session
-
-      return {
-        token,
-        tokenId,
-        organizationId: session.organizationId,
-        projectId: pairing.project_id,
-        userId: session.userId,
-        role: session.role,
-        authAccountId: session.authAccountId,
-        projectMemberships: session.projectMemberships,
-        createdAt,
-      }
+      return exchange.result
     },
 
     async resolveDesktopTokenSession(token): Promise<ResolvedDesktopTokenSession | null> {

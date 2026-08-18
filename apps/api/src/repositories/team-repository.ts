@@ -376,7 +376,13 @@ export function createSeedTeamRepository(): TeamRepository {
   const gateOverrides: GateOverrideDecision[] = []
   const runtimeBudgetPolicies: RuntimeBudgetPolicy[] = []
   const runtimeBudgetApprovals: RuntimeBudgetApproval[] = []
-  const desktopPairingCodes = new Map<string, Omit<DesktopPairingExchangeResult, 'token' | 'tokenId'>>()
+  const desktopPairingCodes = new Map<
+    string,
+    Omit<DesktopPairingExchangeResult, 'token' | 'tokenId'> & {
+      code: string
+      failedAttempts: number
+    }
+  >()
   const desktopTokenSessions = new Map<string, ResolvedDesktopTokenSession>()
   const workRequestRepository = createSeedWorkRequestRepository({
     projectExists: (organizationId, projectId) =>
@@ -781,8 +787,9 @@ export function createSeedTeamRepository(): TeamRepository {
         ) ?? { projectId: input.projectId, userId: context.userId, role }
       const tokenRole = role === 'owner' ? 'lead' : role
       const tokenMembership = { ...projectMembership, role: tokenRole }
-      const code = `desktop-pairing-${input.projectId}.demo-secret`
-      desktopPairingCodes.set(code, {
+      const id = `desktop-pairing-${input.projectId}`
+      const code = `${id}.demo-secret`
+      desktopPairingCodes.set(id, {
         organizationId: context.organizationId,
         projectId: input.projectId,
         userId: context.userId,
@@ -790,9 +797,11 @@ export function createSeedTeamRepository(): TeamRepository {
         authAccountId,
         projectMemberships: [tokenMembership],
         createdAt,
+        code,
+        failedAttempts: 0,
       })
       return {
-        id: `desktop-pairing-${input.projectId}`,
+        id,
         organizationId: context.organizationId,
         projectId: input.projectId,
         createdByUserId: context.userId,
@@ -803,17 +812,18 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
     async exchangeDesktopPairingCode(input) {
-      const projectId = input.code.split('.')[0]?.replace('desktop-pairing-', '') || 'p-payments'
-      const createdAt = new Date(0).toISOString()
-      const stored = desktopPairingCodes.get(input.code) ?? {
-        organizationId: DEMO_ORGANIZATION_ID,
-        projectId,
-        userId: 'u-erich',
-        role: 'lead' as const,
-        authAccountId: 'acct-demo-erich',
-        projectMemberships: [{ projectId, userId: 'u-erich', role: 'owner' as const }],
-        createdAt,
+      const separator = input.code.indexOf('.')
+      const id = separator > 0 ? input.code.slice(0, separator) : ''
+      const stored = id ? desktopPairingCodes.get(id) : undefined
+      if (!stored || stored.failedAttempts >= 5) {
+        throw new Error('invalid desktop pairing code')
       }
+      if (stored.code !== input.code) {
+        stored.failedAttempts += 1
+        throw new Error('invalid desktop pairing code')
+      }
+      desktopPairingCodes.delete(id)
+      const projectId = stored.projectId
       const token = `devflow-desktop-token-${projectId}`
       const tokenId = `desktop-token-${projectId}`
       desktopTokenSessions.set(token, {
@@ -830,7 +840,13 @@ export function createSeedTeamRepository(): TeamRepository {
       return {
         token,
         tokenId,
-        ...stored,
+        organizationId: stored.organizationId,
+        projectId: stored.projectId,
+        userId: stored.userId,
+        role: stored.role,
+        authAccountId: stored.authAccountId,
+        projectMemberships: stored.projectMemberships,
+        createdAt: stored.createdAt,
       }
     },
     async resolveDesktopTokenSession(token) {
