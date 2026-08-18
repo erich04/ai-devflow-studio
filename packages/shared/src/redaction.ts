@@ -7,6 +7,59 @@ export type RedactionResult = {
   replacementCount: number
 }
 
+export type HighConfidenceOutboundSecretCategory =
+  | 'github_token'
+  | 'private_key'
+  | 'anthropic_api_key'
+  | 'openai_api_key'
+  | 'authorization_secret'
+  | 'jwt'
+  | 'cloud_access_key'
+  | 'secret_assignment'
+
+export type HighConfidenceOutboundSecretInspection = {
+  matchCount: number
+  categories: HighConfidenceOutboundSecretCategory[]
+}
+
+const highConfidenceOutboundSecretPatterns: ReadonlyArray<{
+  category: Exclude<HighConfidenceOutboundSecretCategory, 'secret_assignment'>
+  pattern: RegExp
+}> = [
+  {
+    category: 'github_token',
+    pattern: /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{22,})\b/g,
+  },
+  {
+    category: 'private_key',
+    pattern:
+      /-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |)PRIVATE KEY-----/g,
+  },
+  {
+    category: 'anthropic_api_key',
+    pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g,
+  },
+  {
+    category: 'openai_api_key',
+    pattern: /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g,
+  },
+  {
+    category: 'authorization_secret',
+    pattern: /\bAuthorization\s*:\s*(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]{20,}={0,2}/gi,
+  },
+  {
+    category: 'jwt',
+    pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+  },
+  {
+    category: 'cloud_access_key',
+    pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
+  },
+]
+
+const highConfidenceSecretAssignmentPattern =
+  /\b[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|COOKIE)\s*=\s*([A-Za-z0-9._~+/=-]{20,})/g
+
 const secretPatterns: Array<{ label: string; pattern: RegExp }> = [
   {
     label: 'authorization_secret',
@@ -97,6 +150,33 @@ export function redactSecrets(input: string): RedactionResult {
 
 export function countCanonicalSecretRedactionMarkers(input: string): number {
   return Array.from(input.matchAll(canonicalSecretRedactionMarkerPattern)).length
+}
+
+export function inspectHighConfidenceOutboundSecrets(
+  input: string,
+): HighConfidenceOutboundSecretInspection {
+  let matchCount = 0
+  const categories: HighConfidenceOutboundSecretCategory[] = []
+  for (const { category, pattern } of highConfidenceOutboundSecretPatterns) {
+    const matches = Array.from(input.matchAll(pattern))
+    if (matches.length === 0) continue
+    matchCount += matches.length
+    categories.push(category)
+  }
+
+  const assignmentMatches = Array.from(input.matchAll(highConfidenceSecretAssignmentPattern))
+    .filter((match) => isHighEntropySecretAssignment(match[1] ?? ''))
+  if (assignmentMatches.length > 0) {
+    matchCount += assignmentMatches.length
+    categories.push('secret_assignment')
+  }
+  return { matchCount, categories }
+}
+
+function isHighEntropySecretAssignment(value: string): boolean {
+  const characterClasses = [/[a-z]/u, /[A-Z]/u, /[0-9]/u, /[^A-Za-z0-9]/u]
+    .filter((pattern) => pattern.test(value)).length
+  return characterClasses >= 3 && new Set(value).size >= 8
 }
 
 export function redactLocalAbsolutePaths(input: string): RedactionResult {

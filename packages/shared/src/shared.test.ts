@@ -6,6 +6,7 @@ import {
   redactCodingAgentEventForStorage,
   redactLocalAbsolutePaths,
   redactSecrets,
+  inspectHighConfidenceOutboundSecrets,
 } from './redaction'
 import { parseThemePreference, resolveThemePreference } from './theme'
 import { rollupTokenUsage } from './cost'
@@ -55,6 +56,33 @@ describe('redactSecrets', () => {
     expect(result.redacted).toBe(true)
     expect(result.value).not.toContain('opaque-demo-token')
     expect(result.value).not.toContain('opaque-demo-api-key')
+  })
+})
+
+describe('inspectHighConfidenceOutboundSecrets', () => {
+  it('reports only safe categories for provider tokens, private keys, and high-entropy assignments', () => {
+    const githubToken = `ghp_${'a1B2'.repeat(6)}`
+    const privateKey = [
+      '-----BEGIN PRIVATE KEY-----',
+      'opaque-private-key-material',
+      '-----END PRIVATE KEY-----',
+    ].join('\n')
+    const result = inspectHighConfidenceOutboundSecrets(
+      `${githubToken}\n${privateKey}\nDEPLOY_PASSWORD=A1b2C3d4E5f6G7h8I9j0`,
+    )
+
+    expect(result).toEqual({
+      matchCount: 3,
+      categories: ['github_token', 'private_key', 'secret_assignment'],
+    })
+    expect(JSON.stringify(result)).not.toContain(githubToken)
+    expect(JSON.stringify(result)).not.toContain('opaque-private-key-material')
+  })
+
+  it('does not block placeholders and short test values', () => {
+    expect(inspectHighConfidenceOutboundSecrets(
+      'TOKEN=example API_KEY=placeholder PASSWORD=test-value Authorization: Bearer example',
+    )).toEqual({ matchCount: 0, categories: [] })
   })
 })
 
