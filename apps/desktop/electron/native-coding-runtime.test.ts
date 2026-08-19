@@ -3,11 +3,16 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalProject, WorkflowRun } from '@ai-devflow/shared'
 import { createCodingRuntime } from './coding-runtime.js'
+import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 import { createLocalStore } from './local-store.js'
-import { createNativeCodingExecutor } from './native-coding-executor.js'
+import {
+  createDeterministicNativeCodingDecisionProvider,
+  createNativeCodingExecutor,
+} from './native-coding-executor.js'
+import { runLocalTestCommand } from './test-runner.js'
 
 const execFileAsync = promisify(execFile)
 const tempDirectories: string[] = []
@@ -24,6 +29,147 @@ async function temporaryDirectory(prefix: string): Promise<string> {
 }
 
 describe('Native Coding Runtime integration', () => {
+  it('keeps a non-frozen dependency bootstrap out of the approved delivery diff', async () => {
+    const repositoryPath = await temporaryDirectory('devflow-native-bootstrap-repository')
+    const worktreeRoot = await temporaryDirectory('devflow-native-bootstrap-worktrees')
+    const storeDirectory = await temporaryDirectory('devflow-native-bootstrap-store')
+    await writeFile(
+      path.join(repositoryPath, 'package.json'),
+      '{"name":"native-bootstrap","scripts":{"test":"node test.mjs"}}\n',
+      'utf8',
+    )
+    await writeFile(
+      path.join(repositoryPath, 'test.mjs'),
+      "import { readFile } from 'node:fs/promises'\nif ((await readFile('devflow-native-change.txt', 'utf8')) !== 'DevFlow deterministic Native Coding repair.\\n') process.exit(1)\n",
+      'utf8',
+    )
+    await execFileAsync('git', ['-C', repositoryPath, 'init', '-b', 'main'])
+    await execFileAsync('git', ['-C', repositoryPath, 'config', 'user.email', 'native@example.invalid'])
+    await execFileAsync('git', ['-C', repositoryPath, 'config', 'user.name', 'Native Runtime Test'])
+    await execFileAsync('git', ['-C', repositoryPath, 'add', '.'])
+    await execFileAsync('git', ['-C', repositoryPath, 'commit', '-m', 'baseline'])
+
+    const project: LocalProject = {
+      id: 'native-bootstrap-project-1',
+      name: 'native-bootstrap',
+      path: repositoryPath,
+      packageManager: 'npm',
+      detectedTestCommand: 'npm test',
+      testCommand: 'npm test',
+      createdAt: '2026-08-19T16:30:00.000Z',
+      updatedAt: '2026-08-19T16:30:00.000Z',
+    }
+    const run: WorkflowRun = {
+      id: 'native-bootstrap-run-1',
+      version: 1,
+      title: 'Native bootstrap integration',
+      request: 'Apply one bounded native repair after dependency bootstrap.',
+      projectId: project.id,
+      creatorId: 'native-bootstrap-user-1',
+      status: 'building',
+      currentNodeId: 'native-bootstrap-build-1',
+      branchName: 'devflow/native-bootstrap',
+      createdAt: '2026-08-19T16:30:00.000Z',
+      updatedAt: '2026-08-19T16:30:00.000Z',
+      nodes: [{
+        id: 'native-bootstrap-build-1',
+        stage: 'build',
+        title: 'Apply the repair',
+        subtitle: 'Use the narrow Native Coding Executor.',
+        kind: 'task',
+        status: 'running',
+        ownerId: 'native-bootstrap-user-1',
+        retryCount: 0,
+        artifactIds: [],
+      }],
+      edges: [],
+    }
+    const store = await createLocalStore({ dbPath: path.join(storeDirectory, 'devflow.sqlite') })
+    await store.upsertProject(project)
+    await store.saveRun(run)
+    const clock = () => '2026-08-19T16:30:01.000Z'
+    const executor = createNativeCodingExecutor({
+      store,
+      decisionProvider: createDeterministicNativeCodingDecisionProvider(),
+      clock,
+    })
+    const runtime = createCodingRuntime({
+      store,
+      executor,
+      worktreeRoot,
+      now: clock,
+      runDependencyBootstrap: ({
+        codingRun,
+        project: bootstrapProject,
+        workspace,
+        previousDependencyHash,
+        approvedNonFrozenInstall,
+        timestamp,
+      }) => runDependencyBootstrap({
+        codingRunId: codingRun.id,
+        runId: codingRun.runId,
+        nodeId: codingRun.nodeId,
+        projectId: bootstrapProject.id,
+        worktreePath: workspace.worktreePath,
+        ...(previousDependencyHash ? { previousDependencyHash } : {}),
+        ...(approvedNonFrozenInstall ? { approvedNonFrozenInstall } : {}),
+        runCommand: runLocalTestCommand,
+        timeoutMs: 20_000,
+        now: timestamp,
+      }),
+    })
+
+    const resultPromise = runtime.runCodingAgent({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      projectId: project.id,
+      requestedBy: run.creatorId,
+      providerId: executor.providerId,
+      userInstruction: 'Apply the bounded integration repair.',
+    })
+    await vi.waitFor(async () => {
+      expect((await store.listCodingPermissionRequests()).find(
+        (candidate) => candidate.origin === 'dependency_bootstrap' && candidate.status === 'pending',
+      )).toBeDefined()
+    })
+    const bootstrapPermission = (await store.listCodingPermissionRequests()).find(
+      (candidate) => candidate.origin === 'dependency_bootstrap' && candidate.status === 'pending',
+    )!
+    await runtime.replyCodingPermission({
+      requestId: bootstrapPermission.id,
+      codingRunId: bootstrapPermission.codingRunId,
+      decidedBy: run.creatorId,
+      decision: 'approved',
+      comment: 'Approve the exact non-frozen dependency bootstrap once.',
+    })
+    const waitingForEdit = await resultPromise
+    expect(waitingForEdit.codingRun.status).toBe('waiting_permission')
+    const editPermission = (await store.listCodingPermissionRequests(waitingForEdit.codingRun.id)).find(
+      (candidate) => candidate.permission === 'edit' && candidate.status === 'pending',
+    )!
+
+    await runtime.replyCodingPermission({
+      requestId: editPermission.id,
+      codingRunId: editPermission.codingRunId,
+      decidedBy: run.creatorId,
+      decision: 'approved',
+      comment: 'Approve the one bounded Native Coding edit once.',
+    })
+
+    const [completed] = await store.listCodingAgentRuns(run.id)
+    expect(completed).toMatchObject({
+      status: 'completed',
+      changedPaths: ['devflow-native-change.txt'],
+    })
+    const [diff] = await store.listCodingDiffArtifacts(run.id)
+    expect(diff).toMatchObject({ changedPaths: ['devflow-native-change.txt'] })
+    expect(diff?.patch).not.toContain('package-lock.json')
+    const [workspace] = await store.listManagedCodingWorkspaces(project.id)
+    await expect(readFile(path.join(workspace!.worktreePath, 'package-lock.json'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+    store.close()
+  }, 20_000)
+
   it.each([
     {
       name: 'completes one approved repair',

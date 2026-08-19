@@ -353,7 +353,7 @@ describe('selectDependencyBootstrap', () => {
 
     expect(decision.status).toBe('needs_approval')
     expect(decision.risk).toBe('warn')
-    expect(decision.command).toBe('npm install')
+    expect(decision.command).toBe('npm install --package-lock=false')
     expect(decision.reason).toContain('No package-manager lockfile')
   })
 

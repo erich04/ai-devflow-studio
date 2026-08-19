@@ -272,7 +272,7 @@ export function selectDependencyBootstrap(
   return {
     status: 'needs_approval',
     packageManager,
-    command: packageManager === 'bun' ? 'bun install' : 'npm install',
+    command: packageManager === 'bun' ? 'bun install' : 'npm install --package-lock=false',
     dependencyHash,
     risk: 'warn',
     reason: 'No package-manager lockfile found; non-frozen dependency install requires human approval.',

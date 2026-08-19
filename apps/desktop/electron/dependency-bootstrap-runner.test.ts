@@ -94,7 +94,11 @@ describe('dependency bootstrap runner', () => {
     })
 
     expect(runCommand).toHaveBeenCalledOnce()
-    expect(runCommand).toHaveBeenCalledWith({ command: 'npm install', cwd: repo, timeoutMs: 120_000 })
+    expect(runCommand).toHaveBeenCalledWith({
+      command: 'npm install --package-lock=false',
+      cwd: repo,
+      timeoutMs: 120_000,
+    })
     expect(evidence.status).toBe('passed')
   })
 
