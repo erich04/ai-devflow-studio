@@ -73,6 +73,10 @@ const baseCodingExecutorCapabilities: CodingExecutorCapability[] = [
   'workspace_edit',
   'workspace_read',
 ]
+const pendingBootstrapPermissions = new Map<
+  string,
+  (decision: CodingPermissionDecision['decision']) => void
+>()
 
 function requiredCapabilitiesForExecutor(executor: CodingExecutor): CodingExecutorCapability[] {
   return executor.descriptor.kind === 'opencode'
@@ -182,6 +186,10 @@ export type CodingRuntimeDependencyBootstrapRunner = (input: {
   project: LocalProject
   workspace: ManagedCodingWorkspace
   previousDependencyHash?: string | undefined
+  approvedNonFrozenInstall?: {
+    command: string
+    dependencyHash: string
+  } | undefined
   timestamp: string
 }) => Promise<DependencyBootstrapEvidence>
 
@@ -299,7 +307,6 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     'running',
     'testing',
   ])
-
   async function findProject(projectId: string): Promise<LocalProject> {
     const project = (await deps.store.listProjects()).find((candidate) => candidate.id === projectId)
     if (!project) {
@@ -706,6 +713,10 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     workspace: ManagedCodingWorkspace
     timestamp: string
     engineBootstrapEvidence?: DependencyBootstrapEvidence
+    approvedNonFrozenInstall?: {
+      command: string
+      dependencyHash: string
+    }
   }): Promise<{ codingRun: CodingAgentRun; canContinue: boolean }> {
     const previousDependencyHash = deps.runDependencyBootstrap
       ? await latestDependencyHash(input.project.id)
@@ -718,6 +729,9 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             project: input.project,
             workspace: input.workspace,
             ...(previousDependencyHash ? { previousDependencyHash } : {}),
+            ...(input.approvedNonFrozenInstall
+              ? { approvedNonFrozenInstall: input.approvedNonFrozenInstall }
+              : {}),
             timestamp: input.timestamp,
           })
         : undefined)
@@ -742,25 +756,79 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     await saveEvents([event])
 
     const canContinue = evidence.status === 'passed' || evidence.status === 'skipped'
+    const needsApproval = evidence.status === 'needs_approval'
     const codingRun: CodingAgentRun = {
       ...input.codingRun,
       bootstrapEvidenceId: evidence.id,
       ...(canContinue
         ? { summary: `${input.codingRun.summary} Dependency bootstrap ${evidence.status}.` }
-        : {
-            status: 'failed',
-            summary: `Dependency bootstrap ${evidence.status}; coding tests were not run.`,
-            completedAt: input.timestamp,
-          }),
+        : needsApproval
+          ? {
+              status: 'waiting_permission',
+              summary: 'Waiting for one-time approval to install dependencies without a lockfile.',
+            }
+          : {
+              status: 'failed',
+              summary: `Dependency bootstrap ${evidence.status}; coding tests were not run.`,
+              completedAt: input.timestamp,
+            }),
     }
 
     return { codingRun, canContinue }
   }
 
+  function createBootstrapPermissionRequest(input: {
+    codingRun: CodingAgentRun
+    evidence: DependencyBootstrapEvidence
+    timestamp: string
+  }): CodingPermissionRequest {
+    return {
+      id: idGenerator('coding-permission'),
+      codingRunId: input.codingRun.id,
+      runId: input.codingRun.runId,
+      nodeId: input.codingRun.nodeId,
+      origin: 'dependency_bootstrap',
+      permission: 'install',
+      title: 'Install dependencies without a lockfile',
+      command: input.evidence.command,
+      risk: 'warn',
+      reasons: [
+        'No package-manager lockfile is present.',
+        'Approve this exact dependency command and dependency snapshot once before Native Coding starts.',
+      ],
+      status: 'pending',
+      requestedAt: input.timestamp,
+      expiresAt: new Date(Date.parse(input.timestamp) + 5 * 60_000).toISOString(),
+    }
+  }
+
+  function waitForBootstrapPermission(
+    requestId: string,
+  ): Promise<CodingPermissionDecision['decision']> {
+    return new Promise((resolve) => {
+      pendingBootstrapPermissions.set(requestId, resolve)
+    })
+  }
+
+  function resolveBootstrapPermission(
+    requestId: string,
+    decision: CodingPermissionDecision['decision'],
+  ): void {
+    const resolve = pendingBootstrapPermissions.get(requestId)
+    if (!resolve) return
+    pendingBootstrapPermissions.delete(requestId)
+    resolve(decision)
+  }
+
   async function latestDependencyHash(projectId: string): Promise<string | undefined> {
     const evidence = await deps.store.listDependencyBootstrapEvidence()
     return evidence
-      .filter((candidate) => candidate.projectId === projectId && candidate.dependencyHash)
+      .filter(
+        (candidate) =>
+          candidate.projectId === projectId &&
+          candidate.dependencyHash &&
+          (candidate.status === 'passed' || candidate.status === 'skipped'),
+      )
       .at(-1)?.dependencyHash
   }
 
@@ -999,6 +1067,11 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         events: [...toolResultEvents, event],
       })
       if (committed.committed) {
+        for (const request of pendingRequests) {
+          if (request.origin === 'dependency_bootstrap') {
+            resolveBootstrapPermission(request.id, 'expired')
+          }
+        }
         const cleanup = await cleanupWorkspaceForRun(updated, timestamp)
         await saveEvents([
           await buildCodingExecutorTerminalEvent({
@@ -1185,6 +1258,104 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       decidedAt: timestamp,
     }
     const codingRun = await findCodingRun(input.codingRunId)
+    if (request.origin === 'dependency_bootstrap') {
+      if (!activeCodingStatuses.has(codingRun.status) || request.status !== 'pending') {
+        return request
+      }
+
+      const canResumeApprovedBootstrap =
+        input.decision === 'approved' && pendingBootstrapPermissions.has(request.id)
+      const terminalStatus =
+        input.decision === 'expired'
+          ? 'timed_out'
+          : input.decision === 'rejected' || !canResumeApprovedBootstrap
+            ? 'interrupted'
+            : undefined
+      const nextRun: CodingAgentRun = terminalStatus
+        ? {
+            ...codingRun,
+            status: terminalStatus,
+            summary:
+              input.decision === 'expired'
+                ? 'Dependency bootstrap permission expired; Coding Agent timed out.'
+                : input.decision === 'rejected'
+                  ? 'Dependency bootstrap permission was rejected; Coding Agent was interrupted.'
+                  : 'Dependency bootstrap approval could not resume after restart; start a new Coding Agent run.',
+            completedAt: timestamp,
+          }
+        : {
+            ...codingRun,
+            status: 'bootstrapping',
+            summary: 'Dependency bootstrap approved; installing the approved dependency snapshot.',
+          }
+      const sequence = await nextSequence(codingRun.id)
+      const permissionEvent: CodingAgentEvent = {
+        id: idGenerator('coding-event'),
+        codingRunId: codingRun.id,
+        runId: codingRun.runId,
+        nodeId: codingRun.nodeId,
+        sequence,
+        kind: 'permission',
+        message:
+          input.decision === 'approved'
+            ? canResumeApprovedBootstrap
+              ? 'Dependency bootstrap permission approved once.'
+              : 'Dependency bootstrap approval could not resume after restart.'
+            : input.decision === 'expired'
+              ? 'Dependency bootstrap permission expired.'
+              : 'Dependency bootstrap permission rejected.',
+        timestamp,
+        metadata: { requestId: request.id, origin: request.origin },
+        redacted: true,
+      }
+      const toolResultEvent = createRelayToolResultEvent({
+        codingRun: nextRun,
+        request,
+        timestamp,
+        sequence: sequence + 1,
+        decision: input.decision,
+        status:
+          input.decision === 'approved' && canResumeApprovedBootstrap
+            ? 'continued'
+            : input.decision === 'approved'
+              ? 'rejected'
+              : input.decision,
+        outputSummary:
+          input.decision === 'approved' && canResumeApprovedBootstrap
+            ? 'DevFlow approved this exact dependency bootstrap once.'
+            : input.decision === 'approved'
+              ? 'DevFlow could not resume the approved bootstrap after restart.'
+              : `DevFlow ${input.decision} the dependency bootstrap permission.`,
+      })
+      const committed = await commitCodingAgentMutation({
+        expectedRun: codingRun,
+        expectedPendingPermissionRequestIds: [request.id],
+        expectedPermissionRequests: [request],
+        run: nextRun,
+        permissionRequests: [updatedRequest],
+        permissionDecisions: [decision],
+        events: [permissionEvent, toolResultEvent],
+      })
+      if (!committed.committed) {
+        return (await deps.store.listCodingPermissionRequests(input.codingRunId)).find(
+          (candidate) => candidate.id === input.requestId,
+        ) ?? request
+      }
+
+      resolveBootstrapPermission(request.id, input.decision)
+      if (terminalStatus) {
+        const cleanup = await cleanupWorkspaceForRun(nextRun, timestamp)
+        await saveEvents([
+          await buildCodingExecutorTerminalEvent({
+            codingRun: nextRun,
+            stopReason: input.decision === 'expired' ? 'timeout' : 'cancelled',
+            cleanup,
+            timestamp,
+          }),
+        ])
+      }
+      return updatedRequest
+    }
     const nativeApprovedRecovery =
       recoveryDecisionAt !== undefined &&
       executor.descriptor.id === 'coding-executor-native' &&
@@ -1542,6 +1713,21 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           deps.store.listCodingPermissionDecisions(codingRun.id),
           loadExecutorContinuationState(codingRun.id),
         ])
+        const bootstrapRequest = requests.find(
+          (candidate) =>
+            candidate.origin === 'dependency_bootstrap' && candidate.status === 'pending',
+        )
+        if (bootstrapRequest) {
+          await replyCodingPermission({
+            requestId: bootstrapRequest.id,
+            codingRunId: codingRun.id,
+            decidedBy: 'devflow-recovery',
+            decision: 'expired',
+            comment: 'Dependency bootstrap approval expired when the desktop runtime restarted.',
+          })
+          recovered.push(await findCodingRun(codingRun.id))
+          continue
+        }
         const request = requests.find(
           (candidate) => candidate.id === continuation.activePermissionRequestId,
         )
@@ -1963,9 +2149,42 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           )
           throw error
         }
-        const terminalEvent = prepared.canContinue
-          ? undefined
-          : await buildCodingExecutorTerminalEvent({
+        const bootstrapEvidence = prepared.codingRun.bootstrapEvidenceId
+          ? (await deps.store.listDependencyBootstrapEvidence(prepared.codingRun.id)).find(
+              (evidence) => evidence.id === prepared.codingRun.bootstrapEvidenceId,
+            )
+          : undefined
+        const needsApproval = bootstrapEvidence?.status === 'needs_approval'
+        const bootstrapPermission = needsApproval
+          ? createBootstrapPermissionRequest({
+              codingRun: prepared.codingRun,
+              evidence: bootstrapEvidence,
+              timestamp: reservationTimestamp,
+            })
+          : undefined
+        const permissionEvent: CodingAgentEvent | undefined = bootstrapPermission
+          ? {
+              id: idGenerator('coding-event'),
+              codingRunId: prepared.codingRun.id,
+              runId: prepared.codingRun.runId,
+              nodeId: prepared.codingRun.nodeId,
+              sequence: await nextSequence(prepared.codingRun.id),
+              kind: 'permission',
+              message: 'Dependency bootstrap requires one-time human approval.',
+              timestamp: reservationTimestamp,
+              metadata: {
+                requestId: bootstrapPermission.id,
+                origin: bootstrapPermission.origin,
+                permission: bootstrapPermission.permission,
+              },
+              redacted: true,
+            }
+          : undefined
+        const permissionDecision = bootstrapPermission
+          ? waitForBootstrapPermission(bootstrapPermission.id)
+          : undefined
+        const terminalEvent = !prepared.canContinue && !needsApproval
+          ? await buildCodingExecutorTerminalEvent({
               codingRun: prepared.codingRun,
               stopReason: 'failure',
               cleanup: {
@@ -1974,13 +2193,24 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
               },
               timestamp: reservationTimestamp,
             })
+          : undefined
         const bootstrapCommitted = await commitCodingAgentMutation({
           expectedRun: workspacePreparingRun,
           expectedPendingPermissionRequestIds: [],
           run: prepared.codingRun,
-          ...(terminalEvent ? { events: [terminalEvent] } : {}),
+          ...(bootstrapPermission ? { permissionRequests: [bootstrapPermission] } : {}),
+          ...(permissionEvent || terminalEvent
+            ? {
+                events: [permissionEvent, terminalEvent].filter(
+                  (event): event is CodingAgentEvent => Boolean(event),
+                ),
+              }
+            : {}),
         })
         if (!bootstrapCommitted.committed) {
+          if (bootstrapPermission) {
+            resolveBootstrapPermission(bootstrapPermission.id, 'rejected')
+          }
           const cleanup = await cleanupWorkspaceForRun(
             bootstrapCommitted.run ?? workspacePreparingRun,
             reservationTimestamp,
@@ -1996,9 +2226,80 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           throw new Error('Native Coding dependency bootstrap could not be persisted safely.')
         }
         executorReadyRun = prepared.codingRun
-        if (!prepared.canContinue) {
+        if (bootstrapPermission && bootstrapEvidence && permissionDecision) {
+          const decided = await permissionDecision
+          const currentRun = await findCodingRun(prepared.codingRun.id)
+          if (decided !== 'approved' || !activeCodingStatuses.has(currentRun.status)) {
+            return {
+              codingRun: currentRun,
+              state: await deps.store.loadState(),
+            }
+          }
+          const approvedTimestamp = now()
+          let approvedBootstrap: { codingRun: CodingAgentRun; canContinue: boolean }
+          try {
+            approvedBootstrap = await runCodingBootstrap({
+              codingRun: currentRun,
+              project,
+              workspace,
+              timestamp: approvedTimestamp,
+              approvedNonFrozenInstall: {
+                command: bootstrapEvidence.command,
+                dependencyHash: bootstrapEvidence.dependencyHash,
+              },
+            })
+          } catch (error) {
+            await failActiveCodingRun(
+              currentRun,
+              'Approved dependency bootstrap failed before Native Coding started.',
+              approvedTimestamp,
+              { status: 'not_required', reasonCode: 'workspace_retained_for_recovery' },
+            )
+            throw error
+          }
+          const approvedTerminalEvent = approvedBootstrap.canContinue
+            ? undefined
+            : await buildCodingExecutorTerminalEvent({
+                codingRun: approvedBootstrap.codingRun,
+                stopReason: 'failure',
+                cleanup: {
+                  status: 'not_required',
+                  reasonCode: 'workspace_retained_for_recovery',
+                },
+                timestamp: approvedTimestamp,
+              })
+          const approvedCommitted = await commitCodingAgentMutation({
+            expectedRun: currentRun,
+            expectedPendingPermissionRequestIds: [],
+            run: approvedBootstrap.codingRun,
+            ...(approvedTerminalEvent ? { events: [approvedTerminalEvent] } : {}),
+          })
+          if (!approvedCommitted.committed) {
+            const cleanup = await cleanupWorkspaceForRun(
+              approvedCommitted.run ?? currentRun,
+              approvedTimestamp,
+            )
+            if (approvedCommitted.run && activeCodingStatuses.has(approvedCommitted.run.status)) {
+              await failActiveCodingRun(
+                approvedCommitted.run,
+                'Approved dependency bootstrap could not be persisted safely.',
+                approvedTimestamp,
+                cleanup,
+              )
+            }
+            throw new Error('Approved dependency bootstrap could not be persisted safely.')
+          }
+          executorReadyRun = approvedBootstrap.codingRun
+          if (!approvedBootstrap.canContinue) {
+            return {
+              codingRun: approvedBootstrap.codingRun,
+              state: await deps.store.loadState(),
+            }
+          }
+        }
+        if (!prepared.canContinue && !bootstrapPermission) {
           return {
-            codingRun: prepared.codingRun,
+            codingRun: executorReadyRun,
             state: await deps.store.loadState(),
           }
         }
@@ -2363,7 +2664,13 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       if (!activeCodingStatuses.has(expectedRun.status)) {
         return expectedRun
       }
-      await executor.cancel({ codingRun: expectedRun })
+      const initialPendingRequests = await deps.store.listCodingPermissionRequests(expectedRun.id)
+      const waitingForBootstrap = initialPendingRequests.some(
+        (request) => request.status === 'pending' && request.origin === 'dependency_bootstrap',
+      )
+      if (!waitingForBootstrap) {
+        await executor.cancel({ codingRun: expectedRun })
+      }
       const timestamp = now()
       for (let attempt = 0; attempt < 8; attempt += 1) {
         if (!activeCodingStatuses.has(expectedRun.status)) {
@@ -2419,6 +2726,11 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           events: [...toolResultEvents, event],
         })
         if (committed.committed) {
+          for (const request of pendingRequests) {
+            if (request.origin === 'dependency_bootstrap') {
+              resolveBootstrapPermission(request.id, 'rejected')
+            }
+          }
           const cleanup = await cleanupWorkspaceForRun(updated, timestamp)
           await saveEvents([
             await buildCodingExecutorTerminalEvent({

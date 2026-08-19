@@ -1296,7 +1296,14 @@ async function createCodingRuntimeForRequest(
     },
     cleanupWorkspace: async (input) => (await getManagedWorkspaceCleanup())(input),
     runTestCommand: runLocalTestCommand,
-    runDependencyBootstrap: ({ codingRun, project, workspace, previousDependencyHash, timestamp }) =>
+    runDependencyBootstrap: ({
+      codingRun,
+      project,
+      workspace,
+      previousDependencyHash,
+      approvedNonFrozenInstall,
+      timestamp,
+    }) =>
       runDependencyBootstrap({
         codingRunId: codingRun.id,
         runId: codingRun.runId,
@@ -1304,6 +1311,7 @@ async function createCodingRuntimeForRequest(
         projectId: project.id,
         worktreePath: workspace.worktreePath,
         ...(previousDependencyHash ? { previousDependencyHash } : {}),
+        ...(approvedNonFrozenInstall ? { approvedNonFrozenInstall } : {}),
         runCommand: runLocalTestCommand,
         timeoutMs: DEFAULT_TEST_TIMEOUT_MS,
         now: timestamp,

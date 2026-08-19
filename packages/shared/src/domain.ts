@@ -756,6 +756,7 @@ export type CodingPermissionRequest = {
   codingRunId: string
   runId: string
   nodeId: string
+  origin?: 'coding_executor' | 'dependency_bootstrap'
   permission: 'bash' | 'edit' | 'write' | 'patch' | 'install' | 'external_directory'
   title: string
   command?: string

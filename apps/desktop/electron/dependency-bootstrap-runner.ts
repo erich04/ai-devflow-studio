@@ -21,6 +21,10 @@ export type DependencyBootstrapRunnerInput = {
   projectId: string
   worktreePath: string
   previousDependencyHash?: string | undefined
+  approvedNonFrozenInstall?: {
+    command: string
+    dependencyHash: string
+  } | undefined
   runCommand: DependencyBootstrapCommandRunner
   timeoutMs: number
   now: string
@@ -36,7 +40,7 @@ export async function runDependencyBootstrap(
     ...(input.previousDependencyHash ? { previousDependencyHash: input.previousDependencyHash } : {}),
   })
 
-  if (decision.status === 'skipped' || decision.status === 'needs_approval') {
+  if (decision.status === 'skipped') {
     return evidenceFromDecision({
       input,
       decision,
@@ -46,6 +50,38 @@ export async function runDependencyBootstrap(
       stdout: '',
       stderr: '',
       summary: decision.reason,
+      redacted: true,
+    })
+  }
+
+  if (decision.status === 'needs_approval' && !input.approvedNonFrozenInstall) {
+    return evidenceFromDecision({
+      input,
+      decision,
+      status: decision.status,
+      exitCode: null,
+      durationMs: 0,
+      stdout: '',
+      stderr: '',
+      summary: decision.reason,
+      redacted: true,
+    })
+  }
+
+  if (
+    decision.status === 'needs_approval' &&
+    (input.approvedNonFrozenInstall?.command !== decision.command ||
+      input.approvedNonFrozenInstall.dependencyHash !== decision.dependencyHash)
+  ) {
+    return evidenceFromDecision({
+      input,
+      decision,
+      status: 'failed',
+      exitCode: null,
+      durationMs: 0,
+      stdout: '',
+      stderr: '',
+      summary: 'Dependency inputs changed after approval; a new bootstrap approval is required.',
       redacted: true,
     })
   }

@@ -743,6 +743,7 @@ export function useDesktopActions(input: {
       return
     }
 
+    const isBootstrapPermission = pendingCodingPermission.origin === 'dependency_bootstrap'
     try {
       await desktopApi.replyCodingPermission({
         requestId: pendingCodingPermission.id,
@@ -752,7 +753,15 @@ export function useDesktopActions(input: {
         comment: decision === 'approved' ? 'Approved from DevFlow Agent Workbench.' : 'Rejected from DevFlow Agent Workbench.',
       })
       applyLocalExecutionState(await desktopApi.loadState())
-      setToast(decision === 'approved' ? 'Coding Agent 已完成 diff 归档' : 'Coding Agent 权限已拒绝')
+      setToast(
+        decision === 'approved'
+          ? isBootstrapPermission
+            ? '依赖安装已批准，Coding Agent 正在继续运行'
+            : 'Coding Agent 已完成 diff 归档'
+          : isBootstrapPermission
+            ? '依赖安装已拒绝，Coding Agent 已安全停止'
+            : 'Coding Agent 权限已拒绝',
+      )
     } catch (error) {
       setToast(error instanceof Error ? error.message : '权限回复失败')
     }

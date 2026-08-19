@@ -38,7 +38,10 @@ import {
   CodingEngineContinuationCleanupError,
   CodingEngineStartupCleanupError,
 } from './coding-engine-lifecycle'
-import { createCodingRuntime } from './coding-runtime'
+import {
+  createCodingRuntime,
+  type CodingRuntimeDependencyBootstrapRunner,
+} from './coding-runtime'
 import type {
   CodingAgentMutation,
   CodingAgentMutationResult,
@@ -559,7 +562,119 @@ describe('CodingRuntime', () => {
     expect(store.bootstrapEvidence).toHaveLength(1)
   })
 
-  it('fails closed before native provider or Tool work when dependency bootstrap cannot proceed', async () => {
+  it('pauses for exact dependency approval before native provider or Tool work, then resumes once', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const executor = createCodingExecutorCompatibilityAdapter(createFakeCodingEngineAdapter())
+    executor.descriptor = {
+      ...executor.descriptor,
+      id: 'coding-executor-native',
+      kind: 'native',
+    }
+    const start = vi.spyOn(executor, 'start')
+    const runDependencyBootstrap = vi.fn(async (
+      input: Parameters<CodingRuntimeDependencyBootstrapRunner>[0],
+    ): Promise<DependencyBootstrapEvidence> => ({
+      id: 'bootstrap-native-needs-approval',
+      codingRunId: 'coding-run-native-bootstrap-denied',
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      command: 'npm install',
+      status: input.approvedNonFrozenInstall ? 'passed' : 'needs_approval',
+      exitCode: input.approvedNonFrozenInstall ? 0 : null,
+      durationMs: input.approvedNonFrozenInstall ? 12 : 0,
+      stdout: '',
+      stderr: '',
+      summary: input.approvedNonFrozenInstall
+        ? 'Approved dependency installation passed.'
+        : 'Dependency installation requires explicit approval.',
+      dependencyHash: 'native-needs-approval-hash',
+      redacted: true,
+      createdAt: '2026-08-12T23:33:00.000Z',
+    }))
+    const worktreeRoot = await tempDir('devflow-worktrees-')
+    const runtime = createCodingRuntime({
+      store,
+      executor,
+      runDependencyBootstrap,
+      worktreeRoot,
+      idGenerator: fixedIds('coding-run-native-bootstrap-denied'),
+      now: fixedNow('2026-08-12T23:33:00.000Z'),
+    })
+
+    const resultPromise = runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Do not run before dependencies are safe.',
+    })
+
+    await vi.waitFor(() => {
+      expect(store.permissionRequests).toEqual([
+        expect.objectContaining({
+          origin: 'dependency_bootstrap',
+          permission: 'install',
+          command: 'npm install',
+          status: 'pending',
+        }),
+      ])
+    })
+    expect(start).not.toHaveBeenCalled()
+    expect(store.diffArtifacts).toHaveLength(0)
+    const bootstrapRequest = store.permissionRequests[0]!
+
+    const replyRuntime = createCodingRuntime({
+      store,
+      executor,
+      runDependencyBootstrap,
+      worktreeRoot,
+      idGenerator: fixedIds('reply-native-bootstrap-approved'),
+      now: fixedNow('2026-08-12T23:33:30.000Z'),
+    })
+    await replyRuntime.replyCodingPermission({
+      requestId: bootstrapRequest.id,
+      codingRunId: bootstrapRequest.codingRunId,
+      decidedBy: 'user-1',
+      decision: 'approved',
+      comment: 'Approve the exact dependency snapshot once.',
+    })
+
+    const result = await resultPromise
+    expect(result.codingRun.status).toBe('waiting_permission')
+    expect(start).toHaveBeenCalledOnce()
+    expect(runDependencyBootstrap).toHaveBeenCalledTimes(2)
+    expect(runDependencyBootstrap.mock.calls[1]?.[0]).toMatchObject({
+      approvedNonFrozenInstall: {
+        command: 'npm install',
+        dependencyHash: 'native-needs-approval-hash',
+      },
+    })
+    expect(runDependencyBootstrap.mock.calls[1]?.[0]).not.toHaveProperty('previousDependencyHash')
+    expect(store.permissionRequests).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: bootstrapRequest.id,
+        origin: 'dependency_bootstrap',
+        status: 'approved',
+      }),
+      expect.objectContaining({ status: 'pending' }),
+    ]))
+    expect(store.permissionDecisions).toContainEqual(expect.objectContaining({
+      requestId: bootstrapRequest.id,
+      decision: 'approved',
+      decidedBy: 'user-1',
+    }))
+    expect(store.bootstrapEvidence).toEqual([
+      expect.objectContaining({ status: 'passed', dependencyHash: 'native-needs-approval-hash' }),
+    ])
+  })
+
+  it('rejects dependency bootstrap without starting the native executor', async () => {
     const repo = await gitRepo()
     const store = new MemoryCodingStore({
       projects: [project(repo)],
@@ -576,8 +691,8 @@ describe('CodingRuntime', () => {
       store,
       executor,
       runDependencyBootstrap: async () => ({
-        id: 'bootstrap-native-needs-approval',
-        codingRunId: 'coding-run-native-bootstrap-denied',
+        id: 'bootstrap-native-rejected',
+        codingRunId: 'coding-run-native-bootstrap-rejected',
         runId: 'run-1',
         nodeId: 'node-build',
         projectId: 'project-1',
@@ -588,39 +703,124 @@ describe('CodingRuntime', () => {
         stdout: '',
         stderr: '',
         summary: 'Dependency installation requires explicit approval.',
-        dependencyHash: 'native-needs-approval-hash',
+        dependencyHash: 'native-rejected-hash',
         redacted: true,
-        createdAt: '2026-08-12T23:33:00.000Z',
+        createdAt: '2026-08-12T23:34:00.000Z',
       }),
       worktreeRoot: await tempDir('devflow-worktrees-'),
-      idGenerator: fixedIds('coding-run-native-bootstrap-denied'),
-      now: fixedNow('2026-08-12T23:33:00.000Z'),
+      idGenerator: fixedIds('coding-run-native-bootstrap-rejected'),
+      now: fixedNow('2026-08-12T23:34:00.000Z'),
     })
 
-    const result = await runtime.runCodingAgent({
+    const resultPromise = runtime.runCodingAgent({
       runId: 'run-1',
       nodeId: 'node-build',
       projectId: 'project-1',
       requestedBy: 'user-1',
       providerId: 'fake-coding-engine',
-      userInstruction: 'Do not run before dependencies are safe.',
+      userInstruction: 'Stop when dependency installation is rejected.',
+    })
+    await vi.waitFor(() => expect(store.permissionRequests).toHaveLength(1))
+    const request = store.permissionRequests[0]!
+
+    await runtime.replyCodingPermission({
+      requestId: request.id,
+      codingRunId: request.codingRunId,
+      decidedBy: 'user-1',
+      decision: 'rejected',
+      comment: 'Reject non-frozen installation.',
     })
 
-    expect(result.codingRun).toMatchObject({
-      status: 'failed',
-      bootstrapEvidenceId: 'bootstrap-native-needs-approval',
-      summary: 'Dependency bootstrap needs_approval; coding tests were not run.',
-    })
+    await expect(resultPromise).resolves.toEqual(expect.objectContaining({
+      codingRun: expect.objectContaining({
+        status: 'interrupted',
+        summary: 'Dependency bootstrap permission was rejected; Coding Agent was interrupted.',
+      }),
+    }))
     expect(start).not.toHaveBeenCalled()
-    expect(store.diffArtifacts).toHaveLength(0)
-    expect(store.permissionRequests).toHaveLength(0)
+    expect(store.permissionRequests).toEqual([
+      expect.objectContaining({ origin: 'dependency_bootstrap', status: 'rejected' }),
+    ])
     expect(store.codingEvents.at(-1)?.metadata?.codingExecutorTerminalResult).toMatchObject({
-      stopReason: 'failure',
-      cleanup: {
-        status: 'not_required',
-        reasonCode: 'workspace_retained_for_recovery',
-      },
+      stopReason: 'cancelled',
     })
+  })
+
+  it('expires a pending bootstrap approval after restart without running the install or executor', async () => {
+    const interrupted = codingRun({
+      id: 'coding-run-bootstrap-restart',
+      status: 'waiting_permission',
+      managedWorkspaceId: 'workspace-bootstrap-restart',
+      summary: 'Waiting for bootstrap approval.',
+    })
+    const workspace = managedWorkspace({
+      id: 'workspace-bootstrap-restart',
+      codingRunId: interrupted.id,
+      projectId: interrupted.projectId,
+    })
+    const store = new MemoryCodingStore({
+      codingRuns: [interrupted],
+      workspaces: [workspace],
+    })
+    store.permissionRequests.push({
+      id: 'coding-permission-bootstrap-restart',
+      codingRunId: interrupted.id,
+      runId: interrupted.runId,
+      nodeId: interrupted.nodeId,
+      origin: 'dependency_bootstrap',
+      permission: 'install',
+      title: 'Install dependencies without a lockfile',
+      command: 'npm install',
+      risk: 'warn',
+      reasons: ['Approval is required.'],
+      status: 'pending',
+      requestedAt: '2026-08-12T23:34:00.000Z',
+      expiresAt: '2026-08-12T23:39:00.000Z',
+    })
+    const executor = createCodingExecutorCompatibilityAdapter(createFakeCodingEngineAdapter())
+    executor.descriptor = {
+      ...executor.descriptor,
+      id: 'coding-executor-native',
+      kind: 'native',
+    }
+    const start = vi.spyOn(executor, 'start')
+    const cancel = vi.spyOn(executor, 'cancel')
+    const cleanupWorkspace = vi.fn(async () => {
+      const deleted = {
+        ...workspace,
+        deletedAt: '2026-08-12T23:40:00.000Z',
+        cleanupStatus: 'deleted' as const,
+      }
+      await store.saveManagedCodingWorkspace(deleted)
+      return deleted
+    })
+    const runtime = createCodingRuntime({
+      store,
+      executor,
+      cleanupWorkspace,
+      idGenerator: fixedIds(
+        'coding-permission-decision-bootstrap-restart',
+        'coding-event-bootstrap-restart',
+      ),
+      now: fixedNow('2026-08-12T23:40:00.000Z'),
+    })
+
+    await expect(runtime.recoverCodingAgentRuns()).resolves.toEqual([
+      expect.objectContaining({
+        id: interrupted.id,
+        status: 'timed_out',
+        summary: 'Dependency bootstrap permission expired; Coding Agent timed out.',
+      }),
+    ])
+    expect(start).not.toHaveBeenCalled()
+    expect(cancel).not.toHaveBeenCalled()
+    expect(cleanupWorkspace).toHaveBeenCalledOnce()
+    expect(store.permissionRequests).toEqual([
+      expect.objectContaining({ status: 'expired' }),
+    ])
+    expect(store.permissionDecisions).toEqual([
+      expect.objectContaining({ decision: 'expired', decidedBy: 'devflow-recovery' }),
+    ])
   })
 
   it.each(['preparing', 'bootstrapping', 'testing'] as const)(
