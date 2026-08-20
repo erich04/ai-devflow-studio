@@ -13,6 +13,7 @@ import {
 type AgentRuntimePanelProps = {
   desktopApi: DevFlowDesktopApi | null
   runId: string | undefined
+  nodeId: string | undefined
   localProjectId: string | undefined
 }
 
@@ -36,6 +37,7 @@ function mergeSnapshot(
 export function AgentRuntimePanel({
   desktopApi,
   runId,
+  nodeId,
   localProjectId,
 }: AgentRuntimePanelProps) {
   const [state, setState] = useState<AgentRuntimeConsoleState | null>(null)
@@ -139,6 +141,20 @@ export function AgentRuntimePanel({
     }
   }
 
+  async function startRuntime() {
+    if (!desktopApi || !state || !runId || !nodeId || !localProjectId || isActing) return
+    setIsActing(true)
+    setError(null)
+    try {
+      const snapshot = await desktopApi.startAgentRuntime({ runId, nodeId, localProjectId })
+      setState((current) => current ? mergeSnapshot(current, snapshot) : current)
+    } catch {
+      setError('Agent Runtime start was rejected or became stale. Reload the current Run.')
+    } finally {
+      setIsActing(false)
+    }
+  }
+
   async function executeAction(kind: 'advance' | 'cancel') {
     if (!desktopApi || !detail || isActing) return
     setIsActing(true)
@@ -174,6 +190,17 @@ export function AgentRuntimePanel({
       {state && state.items.length === 0 ? (
         <article className="agent-evidence-card">
           <p className="empty-note">No Agent Runtime has been recorded for this Run.</p>
+          <div className="inspector-actions">
+            <button
+              className="primary-button"
+              type="button"
+              disabled={!nodeId || isActing}
+              onClick={() => void startRuntime()}
+            >
+              <Activity size={15} />
+              Start Runtime
+            </button>
+          </div>
         </article>
       ) : null}
 

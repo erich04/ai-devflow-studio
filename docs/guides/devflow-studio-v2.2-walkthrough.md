@@ -30,12 +30,16 @@ giving an Agent authority over human Gates or GitHub publication.
    required human Gate explicitly.
 4. Run Knowledge Review. Confirm citations and policy findings are evidence, not approval authority,
    and that only redacted metadata reaches Team storage.
-5. Start the Coding Agent through the CRI boundary. Review its permission request, bounded Tool/MCP
+5. From the Agent Runtime panel, start exactly one standalone Runtime for the current Build node and
+   advance its `scenario.evaluate` action to terminal success. Exercise the resulting Memory
+   candidate through human-controlled promotion, revision, deletion, and purge. Separately start one
+   bounded Coordination Session and one read-only Specialist, cold-restart while that session is
+   partial, confirm zero repeated starts or effects, then cancel the session and child Runtime before
+   continuing. Do not advance a Supervisor or Specialist Runtime as the standalone Runtime check;
+   their capability digest and leases are coordination-scoped.
+6. Start the Coding Agent through the CRI boundary. Review its permission request, bounded Tool/MCP
    use, managed-worktree diff, tests, runtime trace, and cost evidence. Confirm cancellation and
    failure paths leave a safe resumable or terminal state.
-6. Exercise the accepted Agent Runtime, Memory, and Coordination views. Confirm checkpoints recover
-   without repeated side effects, Memory promotion/revision/deletion stays human-controlled, and a
-   coordinated session cannot cross project or tenant scope or bypass Workflow order.
 7. At the PR node, prepare one exact Delivery Intent. Approve it separately in Web as a lead or
    owner, then publish one namespaced branch and create or reconcile exactly one Draft pull request.
 8. Cold-restart Desktop after the remote effect. Confirm there is no second credential grant, push,

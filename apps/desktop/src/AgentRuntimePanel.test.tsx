@@ -112,6 +112,36 @@ function runtimeProjection() {
 }
 
 describe('AgentRuntimePanel', () => {
+  it('starts one standalone Runtime for the exact selected Run and node', async () => {
+    const { startedSnapshot } = runtimeProjection()
+    const startAgentRuntime = vi.fn().mockResolvedValue(startedSnapshot)
+    const api = {
+      listAgentRuntimes: vi.fn().mockResolvedValue([]),
+      getAgentRuntime: vi.fn(),
+      startAgentRuntime,
+      advanceAgentRuntime: vi.fn(),
+      cancelAgentRuntime: vi.fn(),
+      onAgentRuntimeUpdated: vi.fn(() => () => undefined),
+    } as unknown as DevFlowDesktopApi
+
+    render(
+      <AgentRuntimePanel
+        desktopApi={api}
+        runId="run-1"
+        nodeId="run-1-build"
+        localProjectId="project-1"
+      />,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start Runtime' }))
+    await waitFor(() => expect(startAgentRuntime).toHaveBeenCalledWith({
+      runId: 'run-1',
+      nodeId: 'run-1-build',
+      localProjectId: 'project-1',
+    }))
+    expect(await screen.findAllByText('checkpointed')).toHaveLength(2)
+  })
+
   it('shows metadata-only Knowledge and Durable Memory provenance', async () => {
     const { startedSnapshot } = runtimeProjection()
     const api = {
@@ -127,7 +157,14 @@ describe('AgentRuntimePanel', () => {
       onAgentRuntimeUpdated: vi.fn(() => () => undefined),
     } as unknown as DevFlowDesktopApi
 
-    render(<AgentRuntimePanel desktopApi={api} runId="run-1" localProjectId="project-1" />)
+    render(
+      <AgentRuntimePanel
+        desktopApi={api}
+        runId="run-1"
+        nodeId="run-1-build"
+        localProjectId="project-1"
+      />,
+    )
 
     expect(await screen.findByText('Runtime Context')).toBeInTheDocument()
     expect(screen.getByText('2 Knowledge Citations')).toBeInTheDocument()
@@ -167,6 +204,7 @@ describe('AgentRuntimePanel', () => {
       <AgentRuntimePanel
         desktopApi={api}
         runId="run-1"
+        nodeId="run-1-build"
         localProjectId="project-1"
       />,
     )
@@ -203,7 +241,14 @@ describe('AgentRuntimePanel', () => {
       onAgentRuntimeUpdated: vi.fn(() => () => undefined),
     } as unknown as DevFlowDesktopApi
 
-    render(<AgentRuntimePanel desktopApi={api} runId="run-1" localProjectId="project-1" />)
+    render(
+      <AgentRuntimePanel
+        desktopApi={api}
+        runId="run-1"
+        nodeId="run-1-build"
+        localProjectId="project-1"
+      />,
+    )
 
     expect(await screen.findByText('Latest evaluation')).toBeInTheDocument()
     expect(screen.getByText('continue')).toBeInTheDocument()

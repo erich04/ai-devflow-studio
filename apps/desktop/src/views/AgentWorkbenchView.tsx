@@ -403,6 +403,7 @@ export function AgentWorkbenchView({
         <AgentRuntimePanel
           desktopApi={desktopApi}
           runId={selectedRun?.id}
+          nodeId={selectedRun?.currentNodeId}
           localProjectId={localProjectId}
         />
 
