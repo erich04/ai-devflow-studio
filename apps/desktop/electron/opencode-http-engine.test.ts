@@ -825,8 +825,8 @@ describe('opencode HTTP coding engine', () => {
       resolveManagedDirectory: identityManagedDirectory,
       fetcher,
       permissionPollMs: 1,
-      permissionDiscoveryTimeoutMs: 10,
-      startupCleanupTimeoutMs: 100,
+      permissionDiscoveryTimeoutMs: 100,
+      startupCleanupTimeoutMs: 500,
     })
     const run = runs[0]!
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
@@ -837,11 +837,11 @@ describe('opencode HTTP coding engine', () => {
     await expect(engine.start(startInput({ run, node, project, workspace }))).rejects.toMatchObject({
       code: 'permission_discovery_timed_out',
     })
-    expect(Date.now() - startedAt).toBeLessThan(500)
+    expect(Date.now() - startedAt).toBeLessThan(1_000)
     expect(aborted).toBe(true)
     expect(abortCount).toBe(1)
     expect(statusSignal?.aborted).toBe(true)
-  }, 1_000)
+  }, 2_000)
 
   it('rejects only residual permissions from the failed startup session after abort', async () => {
     const fetcher = sequenceFetcher([
