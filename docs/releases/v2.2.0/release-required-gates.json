@@ -1,8 +1,8 @@
 {
   "targetVersion": "2.2.0",
-  "candidateSha": "4ddd754da20eefd1321cb72230b759a8d3ff475d",
+  "candidateSha": "e7ba425c4c57e736a40d3231bdfe3e70ee33a5a9",
   "status": "passed",
-  "recordedAt": "2026-08-27T08:53:14.000Z",
+  "recordedAt": "2026-08-27T09:19:11.000Z",
   "gates": {
     "verify": "passed",
     "production-dependency-audit": "passed",
@@ -24,17 +24,17 @@
     "github-sandbox-draft-pr": "passed"
   },
   "localMatrix": {
-    "candidateSha": "4ddd754da20eefd1321cb72230b759a8d3ff475d",
+    "candidateSha": "e7ba425c4c57e736a40d3231bdfe3e70ee33a5a9",
     "result": "passed",
     "worktreeCleanAfter": true
   },
   "verifyRun": {
     "workflow": "Verify",
     "event": "workflow_dispatch",
-    "runId": 32986231652,
+    "runId": 33057209702,
     "runAttempt": 1,
-    "url": "https://github.com/erich04/ai-devflow-studio/actions/runs/32986231652",
-    "headSha": "4ddd754da20eefd1321cb72230b759a8d3ff475d",
+    "url": "https://github.com/erich04/ai-devflow-studio/actions/runs/33057209702",
+    "headSha": "e7ba425c4c57e736a40d3231bdfe3e70ee33a5a9",
     "conclusion": "success",
     "jobs": {
       "macOS verify": "success",

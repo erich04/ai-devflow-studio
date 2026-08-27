@@ -1,10 +1,10 @@
 # V2.2 walkthrough result
 
 Status: Passed
-Candidate: 4ddd754da20eefd1321cb72230b759a8d3ff475d
+Candidate: e7ba425c4c57e736a40d3231bdfe3e70ee33a5a9
 Packaged artifact: 2.2.0 darwin-arm64 70672c5c4a6b560e33a9a163fb1038bff9c028d5a667509dcbf645293b48368d
 Team schema v19; Desktop schema v32.
-Verify: https://github.com/erich04/ai-devflow-studio/actions/runs/32986231652
+Verify: https://github.com/erich04/ai-devflow-studio/actions/runs/33057209702
 Delivery series: github-delivery:5dada9da0fc8e65e6f0c8b3c314061ef5d0e60b240cd1637ed5aa7cff99741b0
 Delivery attempt: 1; intent revision: 1.
 Intent digest: 73a049cdb46066c2e4bc94942894a290dd17af3c7d0c8fa3e8db03d74ce0d00d
