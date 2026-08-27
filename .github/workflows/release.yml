@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: false
 
       - uses: pnpm/action-setup@v5
@@ -145,6 +145,7 @@ jobs:
           node-version: 24
 
       - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm test:docker-lifecycle-smoke
 
   release-artifacts:

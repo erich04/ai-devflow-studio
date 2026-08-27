@@ -61,13 +61,13 @@ describe('GitHub release workflow', () => {
     expect(workflow).not.toContain('test:opencode-smoke')
   })
 
-  it('checks out the signoff parent history and the exact annotated tag object', () => {
+  it('checks out full completion history and the exact annotated tag object', () => {
     const workflow = readWorkflow(releaseWorkflowPath)
     const windowsJob = jobBlock(workflow, 'windows-compatibility')
     const artifactsJob = jobBlock(workflow, 'release-artifacts')
 
     expect(windowsJob).toMatch(
-      /- uses: actions\/checkout@v5\n\s+with:\n\s+fetch-depth: 2[\s\S]*?corepack pnpm test/,
+      /- uses: actions\/checkout@v5\n\s+with:\n\s+fetch-depth: 0[\s\S]*?corepack pnpm test/,
     )
     expect(artifactsJob).toMatch(
       /- uses: actions\/checkout@v5\n\s+with:\n\s+ref: \$\{\{ github\.ref \}\}\n\s+fetch-depth: 0[\s\S]*?release:status/,
@@ -185,6 +185,17 @@ describe('GitHub release workflow', () => {
     expect(postgresJob).toContain('timeout-minutes: 30')
     expect(dockerJob).toContain('timeout-minutes: 30')
     expect(lifecycleJob).toContain('timeout-minutes: 45')
+  })
+
+  it('installs dependencies before Docker lifecycle smoke so setup-node can save its pnpm cache', () => {
+    const lifecycleJob = jobBlock(
+      readWorkflow(releaseWorkflowPath),
+      'docker-lifecycle-smoke',
+    )
+
+    expect(lifecycleJob).toMatch(
+      /corepack enable[\s\S]*?corepack pnpm install --frozen-lockfile[\s\S]*?corepack pnpm test:docker-lifecycle-smoke/,
+    )
   })
 })
 
