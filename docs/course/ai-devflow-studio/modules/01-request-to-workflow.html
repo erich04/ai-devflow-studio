@@ -1,0 +1,255 @@
+<section class="module" id="module-1" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">01</span>
+      <h1 class="module-title">一句话如何变成工作流</h1>
+      <p class="module-subtitle">从一个 <span class="term" data-definition="Run 是一次可单独追踪的工作执行：它有自己的目标、当前步骤、产物和历史，像一趟有独立车次号的旅程。">Run</span> 出发，看模糊请求怎样变成有顺序、有证据、有人工闸门的 <span class="term" data-definition="workflow 是工作流：一组按依赖关系连接起来的步骤。和 AI 沟通时，你可以说“调整 workflow，让测试必须先于验收”。">workflow</span>。</p>
+    </header>
+
+    <div>
+      <section class="screen animate-in">
+        <h2 class="screen-heading">你点的不是聊天框，而是一条交付路线</h2>
+        <p>在左侧新建一次运行，AI DevFlow Studio 会把“我想要什么”展开成一条能追踪、能暂停、也能验收的路线。先看看你熟悉的工作台，再认识路线上的四类标记。</p>
+
+        <figure class="arch-diagram">
+          <img src="assets/devflow-workbench.png" alt="AI DevFlow Studio 工作台：左侧为 Run 列表，中间为工作流，右侧为当前步骤详情" style="display: block; width: 100%; height: auto; border-radius: var(--radius-md)">
+          <figcaption class="arch-description">一个请求进入工作台后，不再只是一段对话：每一步都有位置、状态与可复查的结果。</figcaption>
+        </figure>
+
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top-color: var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">🤖</div>
+            <h3 class="pattern-title"><span class="term" data-definition="Agent 是能接收目标、使用工具并产出结果的 AI 执行者。你可以要求它负责某个明确步骤，而不是让一个 Agent 包办整条流程。">Agent</span></h3>
+            <p class="pattern-desc">执行工作：澄清、设计、构建或测试。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top-color: var(--color-actor-3)">
+            <div class="pattern-icon" style="background: var(--color-actor-3)">✓</div>
+            <h3 class="pattern-title"><span class="term" data-definition="Task 是一个边界清楚、可以完成和检查的工作单元。好的 Task 会说明目标、输入和完成条件。">Task</span></h3>
+            <p class="pattern-desc">把大目标切成可完成、可检查的工作单元。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top-color: var(--color-actor-4)">
+            <div class="pattern-icon" style="background: var(--color-actor-4)">🚧</div>
+            <h3 class="pattern-title"><span class="term" data-definition="Gate 是人工闸门：流程到这里必须获得明确批准才能继续。它负责做决定，不是另一个替你工作的 AI。">Gate</span></h3>
+            <p class="pattern-desc">让人确认方向或结果，再放行下一段路线。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top-color: var(--color-actor-5)">
+            <div class="pattern-icon" style="background: var(--color-actor-5)">📎</div>
+            <h3 class="pattern-title">Evidence</h3>
+            <p class="pattern-desc">把日志、报告或补丁保存为可复查的 <span class="term" data-definition="artifact 是流程产出的持久化材料，例如设计文档、测试报告或代码补丁。向 AI 提要求时，可以说“把测试报告作为 artifact 附到本步骤”。">artifact</span>，让“完成了”有证据。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">地铁图：八站、两道闸门</h2>
+        <p>一段 <span class="term" data-definition="stage 是工作流里的业务阶段，例如设计或测试；它描述这段旅程要完成哪类工作。">stage</span> 会落成一个 <span class="term" data-definition="node 是工作流图上的节点，也就是一个有身份和状态的具体停靠点。你可以让 AI“在 Build 前新增一个 node”。">node</span>，站与站之间的 <span class="term" data-definition="edge 是连接两个节点的有方向关系，决定完成一个节点后可以去哪里。要防止跳站，就要检查和改对 edge。">edge</span> 决定下一站能不能到。两道 Gate 把关键方向交还给人，而最后的 Accept 让交付有明确终点。</p>
+
+        <div class="flow-steps">
+          <div class="flow-step">
+            <div class="flow-step-num">1</div>
+            <p><strong>Clarify</strong><br>澄清请求</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">2</div>
+            <p><strong>Gate</strong><br>确认理解</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">3</div>
+            <p><strong>Design</strong><br>设计方案</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">4</div>
+            <p><strong>Gate</strong><br>批准方案</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">5</div>
+            <p><strong>Build</strong><br>实施改动</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">6</div>
+            <p><strong>Test</strong><br>验证结果</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">7</div>
+            <p><strong>Draft <span class="term" data-definition="PR 是 Pull Request 的简称：一份请求团队审查并合并代码改动的提案。Draft PR 表示它还在准备中。">PR</span></strong><br>准备变更</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">8</div>
+            <p><strong>Accept</strong><br>人工验收</p>
+          </div>
+        </div>
+
+        <div class="callout callout-accent">
+          <div class="callout-icon">💡</div>
+          <div class="callout-content">
+            <strong class="callout-title">Aha：顺序本身就是产品规则</strong>
+            <p>“有八个步骤”还不够；真正阻止 Build 绕过审批的，是连接这些步骤的方向。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">代码里的站名表</h2>
+        <p>系统先为当前 Run 建一张站名表。每个 <span class="term" data-definition="property 是对象里一个带名字的值，就像表单中的一个字段；你可以让 AI“新增一个 property 保存审批人”。">property</span> 都把业务角色和这趟 Run 的身份绑在一起，所以不同运行不会撞站。</p>
+
+        <div class="translation-block">
+          <div class="translation-code">
+            <span class="translation-label">EXACT SOURCE</span>
+            <pre><code><span class="code-line">  <span class="code-keyword">const</span> nodeIds = {</span>
+<span class="code-line">    <span class="code-property">clarify</span>: `${input.runId}-clarify`,</span>
+<span class="code-line">    <span class="code-property">clarifyGate</span>: `${input.runId}-clarify-gate`,</span>
+<span class="code-line">    <span class="code-property">design</span>: `${input.runId}-design`,</span>
+<span class="code-line">    <span class="code-property">designGate</span>: `${input.runId}-design-gate`,</span>
+<span class="code-line">    <span class="code-property">build</span>: `${input.runId}-build`,</span>
+<span class="code-line">    <span class="code-property">test</span>: `${input.runId}-test`,</span>
+<span class="code-line">    <span class="code-property">pr</span>: `${input.runId}-pr`,</span>
+<span class="code-line">    <span class="code-property">accept</span>: `${input.runId}-accept`,</span>
+<span class="code-line">  }</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">人话翻译</span>
+            <div class="translation-lines">
+              <p class="tl">先建立一张叫 nodeIds 的站名表。</p>
+              <p class="tl">澄清站和第一道闸门，都带上当前 Run 的编号。</p>
+              <p class="tl">设计站和设计闸门沿用同一规则，身份清楚但角色不同。</p>
+              <p class="tl">Build、Test、PR、Accept 各自拿到唯一站名。</p>
+              <p class="tl">站名表到这里结束；后面的连接会引用这些名字。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">追踪一次“Create Run”点击</h2>
+        <p><span class="term" data-definition="desktop API 是前台界面获准调用的一小组桌面能力。它像一个有白名单的服务窗口，不让界面直接碰数据库或文件系统。">desktop API</span> 返回保存后的 Run，界面随后重新读取 <span class="term" data-definition="persisted state 是已经写入持久存储、关闭应用后仍能找回的状态。它比界面临时记住的内容更可信。">persisted state</span>。这让屏幕显示的是后台确认过的事实，不是一份乐观猜测。</p>
+
+        <div class="translation-block">
+          <div class="translation-code">
+            <span class="translation-label">EXACT SOURCE</span>
+            <pre><code><span class="code-line">    <span class="code-keyword">if</span> (desktopApi) {</span>
+<span class="code-line">      <span class="code-keyword">try</span> {</span>
+<span class="code-line">        <span class="code-keyword">const</span> persistedRun = <span class="code-keyword">await</span> desktopApi.createRun(createInput)</span>
+<span class="code-line">        <span class="code-keyword">const</span> nextState = <span class="code-keyword">await</span> desktopApi.loadState()</span>
+<span class="code-line">        applyLocalExecutionState(nextState)</span>
+<span class="code-line">        setRuns((previousRuns) =&gt;</span>
+<span class="code-line">          previousRuns.some((run) =&gt; run.id === persistedRun.id)</span>
+<span class="code-line">            ? previousRuns.map((run) =&gt; (run.id === persistedRun.id ? persistedRun : run))</span>
+<span class="code-line">            : [persistedRun, ...previousRuns],</span>
+<span class="code-line">        )</span>
+<span class="code-line">        setSelectedRunId(persistedRun.id)</span>
+<span class="code-line">        setSelectedNodeId(persistedRun.currentNodeId)</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">三步落地</span>
+            <div class="step-cards">
+              <div class="step-card">
+                <div class="step-num">1</div>
+                <div class="step-body">
+                  <strong>保存</strong>
+                  <p>把创建输入交给后台，等它返回真正保存好的 Run。</p>
+                </div>
+              </div>
+              <div class="step-card">
+                <div class="step-num">2</div>
+                <div class="step-body">
+                  <strong>重载权威状态</strong>
+                  <p>重新读取整份状态，并把本地执行视图更新到同一事实。</p>
+                </div>
+              </div>
+              <div class="step-card">
+                <div class="step-num">3</div>
+                <div class="step-body">
+                  <strong>选中当前位置</strong>
+                  <p>让列表聚焦新 Run，让画布聚焦它的当前节点。</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">把路线设计用到新问题里</h2>
+        <p>下面三题不考文件名，考你会不会守住顺序、权责与保存后的事实。</p>
+
+        <div class="quiz-container" id="quiz-module1">
+          <div class="quiz-question-block"
+               data-correct="option-b"
+               data-explanation-right="正是这样：新增节点还不够，必须同时改写两侧连接，并移除能绕过安全审查的旧直达边。"
+               data-explanation-wrong="再看看路线的关键：能否跳站由连接决定。只创建一个孤立节点，或保留旧的直达边，都不能保证审查发生。">
+            <h3 class="quiz-question">1. 你要在 Design Gate 与 Build 之间加入 Security Review，而且绝不能被跳过。最稳妥的改法是什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>只创建 Security Review 节点，其他连接不动</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>把 Design Gate 连到 Security Review，再连到 Build，并移除原来的直达连接</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>把 Security Review 放在 Accept 之后</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-c"
+               data-explanation-right="没错：Gate 把高影响决定留给人；Agent 可以准备材料，但不能把“批准自己继续”当成同一件事。"
+               data-explanation-wrong="不完全是。Gate 的价值不是多做一份工作，而是在关键路径上暂停，并要求一个明确的人类决定。">
+            <h3 class="quiz-question">2. 团队说“再加一个 AI Agent 来批准设计，就等于 Gate”。你会怎样判断？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>同意，因为只要步骤数量增加，控制就更强</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>同意，因为 AI 总能比人更快做决定</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>不同意；Gate 负责暂停并等待人的批准，Agent 负责执行工作</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-a"
+               data-explanation-right="完全正确：创建可能已经成功，症状更像界面没有重载并应用后台保存后的权威状态。"
+               data-explanation-wrong="先别急着重建流程。既然后台返回成功，优先追踪保存后的状态有没有被重新读取、应用和选中。">
+            <h3 class="quiz-question">3. 后台确认 Create Run 成功，但左侧列表仍显示旧内容。你首先会追踪哪一段？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>创建后是否重新 loadState、应用新状态，并选中新 Run</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>先给工作流再加一道 Gate</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>先删除所有历史 Run，再试一次</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" type="button" onclick="checkQuiz('quiz-module1')">检查答案</button>
+          <button class="quiz-reset-btn" type="button" onclick="resetQuiz('quiz-module1')">重新思考</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

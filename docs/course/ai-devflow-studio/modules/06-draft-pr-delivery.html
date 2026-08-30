@@ -1,0 +1,339 @@
+<section class="module" id="module-6" style="background: var(--color-bg)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">06</span>
+      <h1 class="module-title">一枚可信 <span class="term" data-definition="Draft PR 是 GitHub 上尚未准备合并的拉取请求草稿。它让团队先审阅变化，同时明确表示这批代码还不能直接进入主分支。">Draft PR</span> 的诞生</h1>
+      <p class="module-subtitle">从本地改动到 GitHub 回执，<span class="term" data-definition="Delivery intent 是一次已封存、待批准的发布计划，明确绑定仓库、分支、代码版本、测试和 PR 文案。">delivery intent</span> 把每一枚指纹锁成同一个包裹。</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">像防拆封快递一样，九站都要核对封条</h2>
+        <p>“代码写完了”只代表包裹开始装箱。系统还要证明：被复测、被批准、被扫描并最终送达的，始终是同一份内容。</p>
+
+        <div class="flow-steps">
+          <div class="flow-step">
+            <div class="flow-step-num">1</div>
+            <p><span class="term" data-definition="Managed worktree 是系统管理的独立 Git 工作目录，用来隔离这次任务的文件和分支。它提供工作区隔离，但不是阻止恶意代码越界的安全沙箱。">managed worktree</span></p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">2</div>
+            <p>重新测试</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">3</div>
+            <p><span class="term" data-definition="Commit SHA 是 Git 为一次提交计算的唯一标识，像代码快照的指纹。SHA 改变，代表待发布代码已不是原来那份。">commit SHA</span> + <span class="term" data-definition="Diff 是两份代码状态之间的逐行差异。交付链用它确认批准者看到的改动与发布的改动一致。">diff</span> + <span class="term" data-definition="Digest 是从内容计算出的固定长度指纹。内容只要发生变化，digest 就应随之变化。">digest</span> 封存</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">4</div>
+            <p><span class="term" data-definition="Web approval 是人在网页界面上明确批准这一份已封存交付意图，而不是笼统批准未来可能变化的代码。">Web approval</span></p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">5</div>
+            <p><span class="term" data-definition="Outbound scan 是内容离开本机前的最后检查，用来阻止凭据、密钥等敏感信息被发送到外部服务。">outbound scan</span></p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">6</div>
+            <p><span class="term" data-definition="Short-lived credential 是只在很短时间内有效、且权限范围受限的访问凭据。即使泄露，它的可用窗口也更小。">short-lived credential</span></p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">7</div>
+            <p>发布 <span class="term" data-definition="Branch 是 Git 中一条独立的开发线。发布 branch 意味着把被批准的提交推送到指定远端分支。">branch</span></p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">8</div>
+            <p>创建并验证 Draft PR</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">9</div>
+            <p>接受回执</p>
+          </div>
+        </div>
+
+        <div class="callout callout-warning">
+          <div class="callout-icon">🧱</div>
+          <div class="callout-content">
+            <strong class="callout-title">隔离不等于安全边界</strong>
+            <p>Managed worktree 隔离文件与分支，但不是 <span class="term" data-definition="Security sandbox 是限制程序能访问哪些文件、网络或系统能力的安全边界。Worktree 本身不提供这种限制。">security sandbox</span>；危险代码仍需要真正的权限与执行隔离。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">五类内容指纹，把“批准的那份”钉死</h2>
+        <p>字段不是行政表格，而是防拆封条。<span class="term" data-definition="Idempotency key 是一次操作的唯一请求标识；重复发送同一个 key 时，系统可以识别这是同一次交付，而不是再创建一个副本。">idempotency key</span> 还让重复请求不会意外生产第二份交付。</p>
+
+        <div class="pattern-cards">
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-1)">
+            <div class="pattern-icon" style="background: var(--color-actor-1)">🧬</div>
+            <h4 class="pattern-title"><code>expectedCommitSha</code></h4>
+            <p class="pattern-desc">代码封条：发布时的提交必须仍是批准时预期的那个 commit。</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">🧾</div>
+            <h4 class="pattern-title"><code>diffSourceDigest</code></h4>
+            <p class="pattern-desc">差异封条：审阅过的 diff 内容不能在批准后被偷换。</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-3)">
+            <div class="pattern-icon" style="background: var(--color-actor-3)">🧪</div>
+            <h4 class="pattern-title"><code>testEvidenceDigest</code></h4>
+            <p class="pattern-desc">测试封条：通过的测试证据必须对应即将发布的那份代码。</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-4)">
+            <div class="pattern-icon" style="background: var(--color-actor-4)">📦</div>
+            <h4 class="pattern-title"><code>prPackageDigest</code></h4>
+            <p class="pattern-desc"><span class="term" data-definition="PR package 是准备提交给 GitHub 的标题、正文和关联元数据集合；它也必须被批准和封存。">PR package</span> 封条：标题与说明也属于被批准内容。</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-5)">
+            <div class="pattern-icon" style="background: var(--color-actor-5)">🛡️</div>
+            <h4 class="pattern-title"><code>intentDigest</code></h4>
+            <p class="pattern-desc">总封条：把仓库、分支、commit、diff、测试与 PR package 汇成一个意图指纹。</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-info)">
+            <div class="pattern-icon" style="background: var(--color-info)">🔁</div>
+            <h4 class="pattern-title"><code>idempotencyKey</code></h4>
+            <p class="pattern-desc">投递编号：同一交付即使网络重试，也应被识别为同一件包裹。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">一次性钥匙，也只能开指定仓库的指定门</h2>
+        <p>短时凭据不是“有 GitHub 权限就行”。它的 <span class="term" data-definition="Authority 是凭据被允许执行动作的精确范围，例如哪个仓库、哪条分支、哪个预期 commit。">authority</span> 必须同时匹配仓库 ID、仓库名、交付分支与预期 commit。</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line">    <span class="code-keyword">async</span> (credential) =&gt; {</span>
+<span class="code-line">      <span class="code-keyword">if</span> (</span>
+<span class="code-line">        credential.repositoryId !== source.repositoryId ||</span>
+<span class="code-line">        credential.repository !== source.repository ||</span>
+<span class="code-line">        credential.headBranch !== source.headBranch ||</span>
+<span class="code-line">        credential.expectedCommitSha !== source.expectedCommitSha</span>
+<span class="code-line">      ) {</span>
+<span class="code-line">        <span class="code-keyword">throw</span> <span class="code-keyword">new</span> Error(<span class="code-string">'Credential authority mismatch'</span>)</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">拿到刚刚签发的短时凭据，准备执行受控发布。</p>
+              <p class="tl">先做四项一致性检查；其中任何一项不同都算不匹配。</p>
+              <p class="tl"><span class="term" data-definition="Repository ID 是代码仓库在平台内部的稳定身份；即使名字相似，ID 不同也不是同一个仓库。">Repository ID</span> 与仓库名称必须都是被批准的目标。</p>
+              <p class="tl">凭据允许的 head branch 必须正是这次交付的分支。</p>
+              <p class="tl">凭据绑定的 expected commit 也必须与封存意图一致。</p>
+              <p class="tl">只要一枚印章不同，就抛出明确错误；不会拿“差不多”的权限继续写远端。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">点击生命周期：成功是窄路，恢复是显式分支</h2>
+        <p>发布是一台可观察的 <span class="term" data-definition="State machine 是一组明确状态以及它们之间允许转换的规则。它让系统知道当前在哪一步、下一步能去哪里。">state machine</span>。遇到 <span class="term" data-definition="Stale intent 指已批准的交付意图变旧了，通常因为 commit、diff、测试或 PR package 在批准后发生变化。">stale intent</span> 或权限错配，流程进入 <span class="term" data-definition="Recovery 是危险写操作中断后的人工恢复路径：重新检查现状、生成新意图并再次批准，而不是盲目自动重试。">recovery</span>，不会偷偷重试写操作。</p>
+
+        <div class="arch-diagram">
+          <div class="arch-zone arch-zone-browser">
+            <h4 class="arch-zone-label">Approved path</h4>
+            <div class="arch-component" data-desc="交付意图已经封存，正在等待人在 Web 上明确批准这一份内容。" onclick="showArchDesc(this)">
+              <div class="arch-icon">🙋</div>
+              <span><code>approval_required</code></span>
+            </div>
+            <div class="arch-component" data-desc="批准已绑定到当前 intent digest；接下来仍要重新验证外发条件。" onclick="showArchDesc(this)">
+              <div class="arch-icon">✅</div>
+              <span><code>approved</code></span>
+            </div>
+            <div class="arch-component" data-desc="正在使用范围受限的短时凭据发布已批准 head branch。" onclick="showArchDesc(this)">
+              <div class="arch-icon">🚚</div>
+              <span><code>publishing_branch</code></span>
+            </div>
+            <div class="arch-component" data-desc="远端分支已经出现，但交付还没有完成；仍需创建并核验 Draft PR。" onclick="showArchDesc(this)">
+              <div class="arch-icon">🌿</div>
+              <span><code>branch_published</code></span>
+            </div>
+            <div class="arch-component" data-desc="正在用被封存的 PR package 创建 Draft PR，并等待提供方回执。" onclick="showArchDesc(this)">
+              <div class="arch-icon">📝</div>
+              <span><code>creating_pr</code></span>
+            </div>
+            <div class="arch-component" data-desc="只有回执中的仓库、分支、head SHA 与 draft 状态全部匹配，交付才算完成。" onclick="showArchDesc(this)">
+              <div class="arch-icon">🎯</div>
+              <span><code>completed</code></span>
+            </div>
+          </div>
+          <div class="arch-zone arch-zone-external">
+            <h4 class="arch-zone-label">Explicit recovery branch</h4>
+            <div class="arch-component" data-desc="意图过期、authority 不匹配、扫描无法完成或回执不符时停在这里。人需要 Resume：重新核对、重建意图、再次批准。" onclick="showArchDesc(this)">
+              <div class="arch-icon">🛟</div>
+              <span><code>recovery_required</code></span>
+            </div>
+          </div>
+          <div class="arch-description" id="m6-delivery-lifecycle-desc">点击任意状态，查看它如何保护外部写操作</div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">GitHub 回一句“成功”还不够：回执也要验真</h2>
+        <p>系统把提供方返回的仓库、base、head、实际 head SHA 与 draft 状态重新对回批准意图。任何一项不同，都拒绝把这次交付记为完成。</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line">  <span class="code-keyword">if</span> (</span>
+<span class="code-line">    repository !== input.intent.repository ||</span>
+<span class="code-line">    baseBranch !== input.intent.baseBranch ||</span>
+<span class="code-line">    headBranch !== input.intent.headBranch ||</span>
+<span class="code-line">    headSha !== input.intent.expectedCommitSha ||</span>
+<span class="code-line">    input.draft !== <span class="code-keyword">true</span></span>
+<span class="code-line">  ) {</span>
+<span class="code-line">    <span class="code-keyword">throw</span> <span class="code-keyword">new</span> Error(<span class="code-string">'GitHub Delivery completion does not match the approved intent'</span>)</span>
+<span class="code-line">  }</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">收到 GitHub 结果后，开始逐项对回批准内容。</p>
+              <p class="tl">仓库、base branch 和 head branch 必须完全一致。</p>
+              <p class="tl">实际 head SHA 必须就是意图里的 expected commit SHA。</p>
+              <p class="tl">返回对象还必须明确是 draft；普通 PR 不是可接受的近似值。</p>
+              <p class="tl">任何差异都会变成错误，阻止系统错误宣告“交付完成”。</p>
+            </div>
+          </div>
+        </div>
+
+        <h2 class="screen-heading">现在，把整套系统重新拼回一张地图</h2>
+        <div class="flow-steps">
+          <div class="flow-step">
+            <div class="flow-step-num">1</div>
+            <p><span class="term" data-definition="UI 是用户界面：你看到并点击的桌面应用画面。它发起操作，但不应私自绕过主进程的规则。">UI</span></p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">2</div>
+            <p><span class="term" data-definition="Electron Main 是桌面应用的主进程，负责受信任的本机能力与跨进程协调。">Electron Main</span></p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">3</div>
+            <p><span class="term" data-definition="Shared contracts 是各组件共同遵守的数据形状与规则，让桌面端、服务端和存储层对同一概念说同一种语言。">Shared contracts</span></p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">4</div>
+            <p><span class="term" data-definition="SQLite 是嵌入桌面应用的本地关系数据库，适合可靠保存运行状态。">SQLite</span> / <span class="term" data-definition="Outbox 是先把待发送事件可靠写入本地存储、再异步投递的模式；这样网络故障不会悄悄丢掉动作。">outbox</span></p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">5</div>
+            <p><span class="term" data-definition="API 是组件之间约定好的请求入口；桌面端通过它与后端交换结构化数据。">API</span> / <span class="term" data-definition="Postgres 是服务端关系数据库，用来持久保存 Web 与 API 侧的数据。">Postgres</span> / Web</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">6</div>
+            <p><span class="term" data-definition="GitHub 是最终接收 branch 与 Draft PR 的外部代码托管服务；它的回执仍需由本地交付逻辑验证。">GitHub</span></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">终局应用题：安全交付时，你会怎么选？</h2>
+        <p>危险写操作没有“先发了再说”。正确答案总是维护同一份证据链，拒绝不符回执，并在不确定时进入恢复。</p>
+
+        <div class="quiz-container" id="quiz-module6">
+          <div class="quiz-question-block"
+               data-correct="option-c"
+               data-explanation-right="正确。commit 变化让已批准 intent 变旧；应进入 recovery，重新测试、封存并批准新意图。"
+               data-explanation-wrong="还不安全。测试曾经通过不代表它覆盖新的 commit；原批准也不能自动扩展到变化后的内容。">
+            <h3 class="quiz-question">测试通过并获批后，workspace commit 在发布前发生变化。你会怎么做？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>只要 diff 看起来很小，就继续发布</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>自动把 expectedCommitSha 改成新值并重试</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>判定 stale intent，进入 recovery 并重新封存、批准</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-b"
+               data-explanation-right="正是。draft 状态是批准意图的一部分；普通 PR 必须被拒绝，并转入可观察的恢复路径。"
+               data-explanation-wrong="不应接受近似结果。即使仓库和 SHA 正确，非 draft 回执仍违反已批准的交付类型。">
+            <h3 class="quiz-question">提供方返回仓库和 head SHA 都正确，但创建的是普通 PR。系统应当？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>接受，因为代码内容没有变化</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>拒绝 completion，进入 recovery 并调查提供方结果</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>自动把普通 PR 转成 draft，再标记 completed</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-a"
+               data-explanation-right="完全正确。扫描无法给出可信结论时应 fail closed，进入 recovery 让人检查；不能把“没扫完”当成“没有秘密”。"
+               data-explanation-wrong="扫描失败不是扫描通过。任何继续外发或自动忽略的做法，都会把未知风险变成真实泄露。">
+            <h3 class="quiz-question">Outbound secret scan 无法完成，但发布时间很紧。正确动作是？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>停止发布，进入 recovery，完成人工或重新扫描</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>只发布 branch，暂时不创建 PR</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>记录警告后继续，因为测试已经 passed</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module6')">检查答案</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module6')">再想一次</button>
+        </div>
+
+        <div class="pattern-cards">
+          <div class="pattern-card" style="border-top: 3px solid var(--color-info)">
+            <div class="pattern-icon" style="background: var(--color-info)">🧭</div>
+            <h4 class="pattern-title">读状态</h4>
+            <p class="pattern-desc">先问流程当前在哪个 lifecycle state，为什么没有进入下一步。</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-5)">
+            <div class="pattern-icon" style="background: var(--color-actor-5)">🔍</div>
+            <h4 class="pattern-title">核指纹</h4>
+            <p class="pattern-desc">让 AI 对比 commit、diff、test、PR package 与 intent digest，指出哪枚封条变化。</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-4)">
+            <div class="pattern-icon" style="background: var(--color-actor-4)">🛟</div>
+            <h4 class="pattern-title">走恢复</h4>
+            <p class="pattern-desc">对 stale intent 或 authority mismatch 明确 Resume；不要让危险写操作盲目重试。</p>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

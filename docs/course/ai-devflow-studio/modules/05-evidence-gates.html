@@ -1,0 +1,254 @@
+<section class="module" id="module-5" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">05</span>
+      <h1 class="module-title">为什么 <span class="term" data-definition="Gate 是工作流里的放行关卡：只有条件全部满足，它才允许流程进入下一步。和 AI 沟通时，你可以问：是哪一道 Gate 拒绝了这次转换？">Gate</span> 不肯放行</h1>
+      <p class="module-subtitle">一条 <span class="term" data-definition="Fail-closed 指系统拿不准时选择拒绝，而不是猜测后继续。它把未知情况当成需要先解决的风险。">fail-closed</span> 的 <span class="term" data-definition="State transition 是系统从一个明确状态进入另一个明确状态的过程，例如从测试中进入测试完成。">state transition</span>，只会被当前、匹配且完整的证据打开。</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">一张“像登机牌的纸”，还不是登机牌</h2>
+        <p>AI 说“测试通过了”只是口头声明。系统要的是可核对的 <span class="term" data-definition="Test Evidence 是一次真实测试运行留下的结构化记录，包含它属于谁、测了什么以及最终结果。">Test Evidence</span>：它必须属于当前 <span class="term" data-definition="Run 是一次完整工作流执行的身份容器；同一项目的两次运行，也有不同的 Run。">Run</span>、当前 <span class="term" data-definition="Project 是工作流正在处理的具体代码项目；证据不能从另一个项目借用。">Project</span> 和当前 <span class="term" data-definition="Node 是工作流中的一个具体步骤，例如测试节点。Gate 会核对证据是否属于正在转换的那个 Node。">Node</span>。</p>
+
+        <div class="pattern-cards">
+          <div class="pattern-card" style="border-top: 3px solid var(--color-error)">
+            <div class="pattern-icon" style="background: var(--color-error)">💬</div>
+            <h4 class="pattern-title">Claim · “通过了”</h4>
+            <p class="pattern-desc">一句话没有身份、时间或可追溯结果，Gate 无法验证它。</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-info)">
+            <div class="pattern-icon" style="background: var(--color-info)">🪪</div>
+            <h4 class="pattern-title">Scope · 对上号</h4>
+            <p class="pattern-desc"><span class="term" data-definition="Evidence scope 是证据被允许使用的边界，通常由 Run、Project 和 Node 身份共同限定。">Evidence scope</span> 必须与眼前这次旅程完全一致。</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-success)">
+            <div class="pattern-icon" style="background: var(--color-success)">✅</div>
+            <h4 class="pattern-title">Result · 最新且终结</h4>
+            <p class="pattern-desc"><span class="term" data-definition="Terminal status 是已经结束、不会再变化的结果状态，例如 passed 或 failed；running 还不是最终答案。">Terminal status</span>、<span class="term" data-definition="Latest test 是与当前测试节点匹配、时间上最新的那次测试。旧成功不能覆盖新失败。">latest test</span> 和报告 <span class="term" data-definition="Artifact 是工作流生成并保存的可追溯产物，例如测试报告、差异文件或 PR 文案包。">artifact</span> 缺一不可。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">一条 <span class="term" data-definition="Command 是要求工作流执行一个明确动作的结构化指令，例如完成当前测试节点。">command</span>，要连续通过五道闸</h2>
+        <p>每道闸都能返回一个 <span class="term" data-definition="Blocker 是阻止动作继续的结构化原因。它不只是说“不行”，还告诉你缺少哪个条件。">blocker</span>。系统不会跳过前一道失败，替你猜后面也许没问题。</p>
+
+        <div class="flow-steps">
+          <div class="flow-step">
+            <div class="flow-step-num">1</div>
+            <p>Base blockers</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">2</div>
+            <p>Current-node <span class="term" data-definition="Invariant 是系统无论何时都必须保持为真的规则，例如命令只能作用于当前节点。">invariant</span></p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">3</div>
+            <p>Evidence scope</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">4</div>
+            <p>Evidence status</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">5</div>
+            <p>Next-node invariant</p>
+          </div>
+        </div>
+
+        <div class="callout callout-info">
+          <div class="callout-icon">🔒</div>
+          <div class="callout-content">
+            <strong class="callout-title">Aha：Gate 不是挑错比赛</strong>
+            <p>它在保护一次状态改变：任何一道印章不匹配，就保持原状态并交回可行动的 blocker。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">源码先做通用检查，再问当前节点</h2>
+        <p>这个 <span class="term" data-definition="Function 是一段可被调用、负责完成特定工作的代码。这里的函数接收命令上下文并返回是否允许执行。">function</span> 有两层短路：通用 blocker 先裁决，当前节点 invariant 再裁决。</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line"><span class="code-keyword">export</span> <span class="code-keyword">function</span> <span class="code-function">evaluateWorkflowCommand</span>(input: EvaluateWorkflowCommandInput): WorkflowCommandDecision {</span>
+<span class="code-line">  <span class="code-keyword">const</span> command = input.command</span>
+<span class="code-line">  <span class="code-keyword">const</span> blockers = baseBlockers(input.run, command)</span>
+<span class="code-line">  <span class="code-keyword">if</span> (blockers.length &gt; 0) {</span>
+<span class="code-line">    <span class="code-keyword">return</span> { allowed: <span class="code-keyword">false</span>, blockers }</span>
+<span class="code-line">  }</span>
+
+<span class="code-line">  <span class="code-keyword">const</span> node = input.run.nodes.find((candidate) =&gt; candidate.id === command.nodeId)!</span>
+<span class="code-line">  <span class="code-keyword">const</span> invariantBlocker = evaluateCurrentNodeInvariant(input.run, node)</span>
+<span class="code-line">  <span class="code-keyword">if</span> (invariantBlocker) {</span>
+<span class="code-line">    <span class="code-keyword">return</span> { allowed: <span class="code-keyword">false</span>, blockers: [invariantBlocker] }</span>
+<span class="code-line">  }</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">建立一个专门评估工作流命令的入口。</p>
+              <p class="tl">拿出命令，并收集对所有命令都适用的基础阻断原因。</p>
+              <p class="tl">只要这个 <span class="term" data-definition="Array 是按顺序装着多个值的集合；这里用它保存零个或多个 blocker。">array</span> 不为空，就立刻拒绝并原样交回原因。</p>
+              <p class="tl">只有基础检查通过，才寻找命令指向的当前节点。</p>
+              <p class="tl">接着评估这个节点自身必须满足的规则。</p>
+              <p class="tl">发现节点规则不成立，同样立刻拒绝；一个 blocker 就足够关门。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">点击六枚印章，检查证据能否登机</h2>
+        <p>这里没有编造代码 bug；每张卡都对应源码实际核对的身份、状态或附件条件。点击卡片，看它回答“这份证据究竟属于谁、现在算不算数”。</p>
+
+        <div class="arch-diagram">
+          <div class="arch-zone arch-zone-browser">
+            <h4 class="arch-zone-label">Identity seals</h4>
+            <div class="arch-component" data-desc="testEvidence.runId 必须等于当前 input.run.id；另一次 Run 的通过结果不能借用。" onclick="showArchDesc(this)">
+              <div class="arch-icon">🏷️</div>
+              <span>Run identity</span>
+            </div>
+            <div class="arch-component" data-desc="testEvidence.projectId 必须等于当前 input.run.projectId；Project 不同就是作用域不匹配。" onclick="showArchDesc(this)">
+              <div class="arch-icon">📁</div>
+              <span>Project identity</span>
+            </div>
+            <div class="arch-component" data-desc="testEvidence.nodeId 必须等于当前测试 node.id；证据必须服务眼前这个节点。" onclick="showArchDesc(this)">
+              <div class="arch-icon">📍</div>
+              <span>Node identity</span>
+            </div>
+          </div>
+          <div class="arch-zone arch-zone-external">
+            <h4 class="arch-zone-label">Freshness &amp; attachment seals</h4>
+            <div class="arch-component" data-desc="running 不是终结结果；仍在运行的测试不能完成一次工作流转换。" onclick="showArchDesc(this)">
+              <div class="arch-icon">⏳</div>
+              <span>Terminal status</span>
+            </div>
+            <div class="arch-component" data-desc="系统选择最新匹配测试；它必须是 passed，旧的 passed 不能覆盖新的 failed。" onclick="showArchDesc(this)">
+              <div class="arch-icon">🕒</div>
+              <span>Latest test</span>
+            </div>
+            <div class="arch-component" data-desc="最新通过测试还必须有同 Run、同 Node、kind 为 test_report 且被节点引用的报告 artifact。" onclick="showArchDesc(this)">
+              <div class="arch-icon">📎</div>
+              <span>Attached report</span>
+            </div>
+          </div>
+          <div class="arch-description" id="m5-evidence-inspection-desc">点击任意印章，查看 Gate 实际核对的条件</div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">“最新”压过“曾经”，通过也必须带回执</h2>
+        <p>Gate 判断的是此刻可证明的事实，不是历史最佳成绩。修复方向也写在 blocker 里：补当前证据、让最新测试通过、把匹配报告挂回当前节点。</p>
+
+        <div class="pattern-cards">
+          <div class="pattern-card" style="border-top: 3px solid var(--color-error)">
+            <div class="pattern-icon" style="background: var(--color-error)">🕳️</div>
+            <h4 class="pattern-title"><code>test_evidence_missing</code></h4>
+            <p class="pattern-desc">没有当前测试节点的证据。恢复动作是运行并保存这次测试，而不是引用一段聊天记录。</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-error)">
+            <div class="pattern-icon" style="background: var(--color-error)">📉</div>
+            <h4 class="pattern-title"><code>latest_test_not_passed</code></h4>
+            <p class="pattern-desc">最新匹配测试不是 passed。先修复并重新测试，不能用更旧的成功结果顶替。</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-error)">
+            <div class="pattern-icon" style="background: var(--color-error)">📭</div>
+            <h4 class="pattern-title"><code>test_report_missing</code></h4>
+            <p class="pattern-desc">最新通过测试缺少匹配报告。生成并附加同 Run、同 Node 的 test report artifact。</p>
+          </div>
+        </div>
+
+        <div class="callout callout-accent">
+          <div class="callout-icon">💡</div>
+          <div class="callout-content">
+            <strong class="callout-title">调试语言升级</strong>
+            <p>别让 AI “绕过 Gate”；让它读取 blocker，并指出哪个身份、时效或附件 invariant 尚未成立。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">应用题：你会怎样让 Gate 安全放行？</h2>
+        <p>每题都在考恢复路径：找出当前证据链断在哪里，再补上它，而不是关闭检查。</p>
+
+        <div class="quiz-container" id="quiz-module5">
+          <div class="quiz-question-block"
+               data-correct="option-b"
+               data-explanation-right="正是如此。Gate 采用最新匹配结果；先修复失败并产出新的 passing evidence，才能恢复可信状态。"
+               data-explanation-wrong="还差一步：旧成功不能覆盖新失败。应处理最新测试对应的 blocker，而不是挑一个更好看的历史结果。">
+            <h3 class="quiz-question">较早一次测试 passed，但最新一次匹配测试 failed。你会怎么做？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>选择较早的 passing evidence，继续转换</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>按 <code>latest_test_not_passed</code> 修复并重新测试</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>删除最新失败记录，让旧结果重新变成最新</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-c"
+               data-explanation-right="对。passed 只是结果；Run、Project、Node 都匹配，才是当前转换可接受的证据。"
+               data-explanation-wrong="不完全对。结果为 passed 不能修复作用域错误；需要为当前 Run 和 Node 生成自己的证据。">
+            <h3 class="quiz-question">一份 Test Evidence 是 passed，但属于另一个 Run。正确恢复方式是什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>只要 Project 相同，就接受这份证据</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>把证据的 runId 手动改成当前值</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>按 <code>evidence_scope_mismatch</code> 为当前 Run 重新取得证据</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-a"
+               data-explanation-right="没错。测试结果与报告是成对的：补齐同 Run、同 Node 且被节点引用的 test_report artifact。"
+               data-explanation-wrong="还不能放行。passed 说明测试结果合格，但 Gate 仍需要可追溯、正确挂接的报告回执。">
+            <h3 class="quiz-question">最新测试 passed，但匹配的报告 artifact 不在当前节点附件中。下一步是？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>按 <code>test_report_missing</code> 生成并附加匹配报告</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>因为状态已 passed，直接进入下一节点</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>随便附加同 Project 的任意测试报告</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module5')">检查答案</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module5')">再想一次</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

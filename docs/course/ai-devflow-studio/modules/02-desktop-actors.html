@@ -1,0 +1,344 @@
+<section class="module" id="module-2" style="background: var(--color-bg)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">02</span>
+      <h1 class="module-title">桌面端的五位角色</h1>
+      <p class="module-subtitle">一次点击要穿过清楚的 <span class="term" data-definition="process boundary 是进程边界：不同程序区域拥有不同权限，只能通过受控通道交换消息。它把“谁能做什么”写进结构，而不是只靠大家记得小心。">process boundary</span>，才会变成可信的本地记录。</p>
+    </header>
+
+    <div>
+      <section class="screen animate-in">
+        <h2 class="screen-heading">剧院开场：舞台看得见，权限藏在后台</h2>
+        <p>点击“新建 <span class="term" data-definition="Run 是一次有独立身份、步骤和历史的工作执行。把每次请求做成 Run，才方便暂停、恢复和追踪。">Run</span>”后，<span class="term" data-definition="Renderer 是 Electron 窗口里负责显示和交互的渲染进程，像观众看得见的舞台。它权限较低，不应直接访问本地数据库或文件系统。">Renderer</span> 用 <span class="term" data-definition="React 是构建用户界面的 JavaScript 库，它把屏幕拆成可组合的组件，并在状态变化时更新画面。">React</span> 画出界面，却没有资格直接碰文件和数据库。<span class="term" data-definition="Preload 是在页面显示前加载的受控桥接脚本，负责只暴露经过批准的桌面能力。它像只转达指定口令的舞台监督。">Preload</span> 把获准的请求交给 <span class="term" data-definition="Electron Main 是桌面应用的主进程，掌握窗口、文件、数据库等后台权限。它像剧院总控，接到请求后负责验证和执行。">Electron Main</span>，每位角色只做自己那一段。</p>
+
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top-color: var(--color-actor-1)">
+            <div class="pattern-icon" style="background: var(--color-actor-1)">🎭</div>
+            <h3 class="pattern-title">Renderer</h3>
+            <p class="pattern-desc">舞台：收集点击、展示状态，不直接碰高权限资源。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top-color: var(--color-actor-4)">
+            <div class="pattern-icon" style="background: var(--color-actor-4)">🎧</div>
+            <h3 class="pattern-title">Preload</h3>
+            <p class="pattern-desc">舞台监督：用受控的 <span class="term" data-definition="IPC 是 Inter-Process Communication，即进程间通信。它让 Renderer 通过命名频道向 Main 发请求，像拨通一条有编号的内部电话线。">IPC</span> 频道和 <span class="term" data-definition="contextBridge 是 Electron 提供的安全桥梁，用来把一小组明确能力暴露给页面，而不是把整个后台权限交出去。">contextBridge</span> 转达白名单口令。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top-color: var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">🎛️</div>
+            <h3 class="pattern-title">Electron Main</h3>
+            <p class="pattern-desc">后台总控：在 <span class="term" data-definition="Node.js 是让 JavaScript 在浏览器之外运行的环境；桌面主进程借它访问文件、系统和本地服务。">Node.js</span> 权限区验证 <span class="term" data-definition="payload 是一次消息携带的数据正文。Main 收到 payload 后要先验证，不能假设前台传来的内容一定安全或完整。">payload</span>，再执行真正操作。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top-color: var(--color-actor-3)">
+            <div class="pattern-icon" style="background: var(--color-actor-3)">📜</div>
+            <h3 class="pattern-title"><span class="term" data-definition="shared package 是多个应用部分共同使用的代码包；这里集中工作流的领域规则，让前台和后台对节点、连接和状态说同一种语言。">Shared package</span></h3>
+            <p class="pattern-desc">剧本规则：生成工作流节点与连接，不负责画界面或写数据库。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top-color: var(--color-actor-5)">
+            <div class="pattern-icon" style="background: var(--color-actor-5)">🗄️</div>
+            <h3 class="pattern-title"><span class="term" data-definition="SQLite 是把数据保存在单个本地文件里的轻量关系型数据库。它适合桌面应用保存 Run、步骤和事件，让重启后的状态仍然存在。">SQLite</span></h3>
+            <p class="pattern-desc">档案室：确认写入，重启应用后仍能找回演出记录。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">责任住在哪里？看文件树就够了</h2>
+        <p>当功能放错层时，先按责任定位，不必在整个仓库里乱搜。舞台、桥、规则和档案各有清楚住址。</p>
+
+        <div class="file-tree">
+          <div class="ft-folder">
+            <span class="ft-name">apps/desktop/</span>
+            <span class="ft-desc">桌面产品边界</span>
+            <div class="ft-children">
+              <div class="ft-folder">
+                <span class="ft-name">src/</span>
+                <span class="ft-desc">Renderer：React 界面、交互与可见状态</span>
+              </div>
+              <div class="ft-folder">
+                <span class="ft-name">electron/</span>
+                <span class="ft-desc">受控桥梁与后台总控</span>
+                <div class="ft-children">
+                  <div class="ft-file">
+                    <span class="ft-name">preload.ts</span>
+                    <span class="ft-desc">只暴露命名后的桌面能力</span>
+                  </div>
+                  <div class="ft-file">
+                    <span class="ft-name">main.ts</span>
+                    <span class="ft-desc">验证请求、调用规则、协调持久化</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="ft-folder">
+            <span class="ft-name">packages/shared/</span>
+            <span class="ft-desc">共享领域规则：Run、节点、连接与状态</span>
+          </div>
+          <div class="ft-file">
+            <span class="ft-name">local SQLite</span>
+            <span class="ft-desc">本机档案室：保存工作流与执行记录</span>
+          </div>
+        </div>
+
+        <div class="callout callout-info">
+          <div class="callout-icon">🧭</div>
+          <div class="callout-content">
+            <strong class="callout-title">调试口诀：先问“谁有资格知道或改变这件事？”</strong>
+            <p>画面错了查 Renderer；桥接失败查 Preload 与 IPC；规则错了查 Shared；重启丢失则沿 Main 追到 SQLite。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">听一次后台对讲：七句话创建一个 Run</h2>
+        <p>点击“下一条”逐句追踪请求。注意：Renderer 从不越权，Preload 只转发 <span class="term" data-definition="命名频道是 IPC 中预先约定名称的一条消息路线，例如 createRun。只允许明确频道，比让前台随意指定后台操作更安全。">命名频道</span>，而 SQLite 的确认发生在结果返回之前。</p>
+
+        <div class="chat-window" id="chat-module2">
+          <div class="chat-messages">
+            <div class="chat-message" data-msg="0" data-sender="renderer" style="display: none">
+              <div class="chat-avatar" style="background: var(--color-actor-1)">R</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-1)">Renderer · 舞台</span>
+                <p>Preload，请替我创建这个 Run。</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="1" data-sender="preload" style="display: none">
+              <div class="chat-avatar" style="background: var(--color-actor-4)">P</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-4)">Preload · 舞台监督</span>
+                <p>我只通过 createRun 这个命名频道转发请求。</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="2" data-sender="main" style="display: none">
+              <div class="chat-avatar" style="background: var(--color-actor-2)">M</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-2)">Electron Main · 总控</span>
+                <p>收到 payload；我先验证结构，不信任舞台传来的任何东西。</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="3" data-sender="shared" style="display: none">
+              <div class="chat-avatar" style="background: var(--color-actor-3)">S</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-3)">Shared · 剧本</span>
+                <p>规则通过：我生成节点和连接，返回完整 workflow。</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="4" data-sender="sqlite" style="display: none">
+              <div class="chat-avatar" style="background: var(--color-actor-5)">DB</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-5)">SQLite · 档案室</span>
+                <p>已写入本地数据库，这次演出不会因重启失忆。</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="5" data-sender="main" style="display: none">
+              <div class="chat-avatar" style="background: var(--color-actor-2)">M</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-2)">Electron Main · 总控</span>
+                <p>这是确认保存后的 Run；现在把它送回前台。</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="6" data-sender="renderer" style="display: none">
+              <div class="chat-avatar" style="background: var(--color-actor-1)">R</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-1)">Renderer · 舞台</span>
+                <p>收到。我重新加载状态，把当前节点画到屏幕上。</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="chat-typing" style="display: none">
+            <div class="chat-avatar" id="chat-module2-typing-avatar">?</div>
+            <div class="chat-typing-dots">
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+            </div>
+          </div>
+
+          <div class="chat-controls">
+            <button class="btn chat-next-btn" type="button">下一条</button>
+            <button class="btn chat-all-btn" type="button">播放全部</button>
+            <button class="btn chat-reset-btn" type="button">重播</button>
+            <span class="chat-progress">0 / 7 messages</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Preload：只接通批准过的分机</h2>
+        <p>这份 <span class="term" data-definition="desktop API 是 Renderer 获准使用的一小组桌面能力。API 像服务菜单：前台能点菜单上的项目，却不能闯进后台随意操作。">desktop API</span> 把每项能力映射到一个 IPC 频道；<span class="term" data-definition="invoke 是发起一次有返回值的 IPC 调用：前台把请求送到命名频道，并等待 Main 回一条结果。">invoke</span> 就像拨通指定分机并等一个答复。列表很窄，是刻意设计的安全边界。</p>
+
+        <div class="translation-block">
+          <div class="translation-code">
+            <span class="translation-label">EXACT SOURCE</span>
+            <pre><code><span class="code-line"><span class="code-keyword">const</span> desktopApi: DevFlowDesktopApi = {</span>
+<span class="code-line">  <span class="code-property">platform</span>: process.platform,</span>
+<span class="code-line">  <span class="code-property">loadState</span>: () =&gt; ipcRenderer.invoke(ipcChannels.loadState),</span>
+<span class="code-line">  <span class="code-property">loadDesktopPairing</span>: () =&gt; ipcRenderer.invoke(ipcChannels.loadDesktopPairing),</span>
+<span class="code-line">  <span class="code-property">pairDesktop</span>: (input) =&gt; ipcRenderer.invoke(ipcChannels.pairDesktop, input),</span>
+<span class="code-line">  <span class="code-property">loadRemoteSnapshot</span>: (input) =&gt; ipcRenderer.invoke(ipcChannels.loadRemoteSnapshot, input),</span>
+<span class="code-line">  <span class="code-property">listWorkRequests</span>: (input) =&gt; ipcRenderer.invoke(ipcChannels.listWorkRequests, input),</span>
+<span class="code-line">  <span class="code-property">materializeWorkRequest</span>: (input) =&gt;</span>
+<span class="code-line">    ipcRenderer.invoke(ipcChannels.materializeWorkRequest, input),</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">人话翻译</span>
+            <div class="translation-lines">
+              <p class="tl">先声明一份明确类型的桌面服务菜单。</p>
+              <p class="tl">平台信息可以读取；状态和配对信息各走自己的分机。</p>
+              <p class="tl">配对与远程快照会携带输入，但仍只能拨预先命名的频道。</p>
+              <p class="tl">工作请求的读取与落地也各有单独入口。</p>
+              <p class="tl">没有出现在菜单里的后台能力，Renderer 就拿不到。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="callout callout-info">
+          <div class="callout-icon">🌉</div>
+          <div class="callout-content">
+            <strong class="callout-title"><code>contextBridge.exposeInMainWorld('aiDevFlowDesktop', desktopApi)</code></strong>
+            <p>桥只把 desktopApi 这一小份菜单挂到页面世界；不是把整个后台控制台递给舞台。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">点击角色，定位一次 Create Run</h2>
+        <p>这张图把权限方向和真实调用放在一起：先点任一角色看职责，再读 Main 的 <span class="term" data-definition="handler 是收到某类事件或请求后负责处理它的函数。排查问题时，可以说“检查 createRun handler 是否验证并保存了 payload”。">handler</span>。Main 不是简单转发员，它验证输入、调用共享规则，并等待档案室写入。</p>
+
+        <div class="arch-diagram">
+          <div class="arch-zone">
+            <h3 class="arch-zone-label">可见舞台 · 低权限</h3>
+            <div class="arch-component" data-desc="Renderer 收集用户意图并绘制返回状态；它不直接访问本地 Git、文件或数据库。" style="border-top: 3px solid var(--color-actor-1)">
+              <div class="arch-icon">🎭</div>
+              <span>Renderer</span>
+            </div>
+          </div>
+          <div class="arch-zone">
+            <h3 class="arch-zone-label">窄桥 · 白名单</h3>
+            <div class="arch-component" data-desc="Preload 只暴露 desktopApi 中列出的命名调用，并把每个调用送往固定 IPC 频道。" style="border-top: 3px solid var(--color-actor-4)">
+              <div class="arch-icon">🎧</div>
+              <span>Preload</span>
+            </div>
+          </div>
+          <div class="arch-zone">
+            <h3 class="arch-zone-label">后台 · 高权限与领域规则</h3>
+            <div class="arch-component" data-desc="Electron Main 验证 payload、协调共享规则与存储，并把确认后的结果返回前台。" style="border-top: 3px solid var(--color-actor-2)">
+              <div class="arch-icon">🎛️</div>
+              <span>Electron Main</span>
+            </div>
+            <div class="arch-component" data-desc="Shared workflow 根据输入生成 Run、节点和连接，让业务规则不依赖具体界面。" style="border-top: 3px solid var(--color-actor-3)">
+              <div class="arch-icon">📜</div>
+              <span>Shared</span>
+            </div>
+            <div class="arch-component" data-desc="SQLite 把完整工作流写入本机，并用保存成功确认这次操作可以返回。" style="border-top: 3px solid var(--color-actor-5)">
+              <div class="arch-icon">🗄️</div>
+              <span>SQLite</span>
+            </div>
+          </div>
+          <div class="arch-description" id="arch-desc-module2">点击任一角色，查看它在 Create Run 中该做什么，以及不该做什么。</div>
+        </div>
+
+        <div class="translation-block">
+          <div class="translation-code">
+            <span class="translation-label">EXACT SOURCE · MAIN</span>
+            <pre><code><span class="code-line">  ipcMain.handle(ipcChannels.createRun, <span class="code-keyword">async</span> (_, payload: unknown) =&gt; {</span>
+<span class="code-line">    <span class="code-keyword">const</span> input = parseCreateRunInput(payload)</span>
+<span class="code-line">    <span class="code-keyword">const</span> created = createWorkflowRunFromRequest({</span>
+<span class="code-line">      ...input,</span>
+<span class="code-line">      runId: `run-${randomUUID()}`,</span>
+<span class="code-line">      now: <span class="code-keyword">new</span> Date().toISOString(),</span>
+<span class="code-line">    })</span>
+<span class="code-line">    <span class="code-keyword">const</span> store = <span class="code-keyword">await</span> getStore()</span>
+<span class="code-line">    <span class="code-keyword">const</span> result = <span class="code-keyword">await</span> store.createWorkflow({</span>
+<span class="code-line">      run: created.run,</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">后台总控在做什么</span>
+            <div class="translation-lines">
+              <p class="tl">createRun 分机接到一份来源未知的数据，先交给解析器验证。</p>
+              <p class="tl">共享工作流规则用验证后的输入创建 Run，并补上唯一编号和当前时间。</p>
+              <p class="tl">Main 获取档案室连接，然后等待工作流真正写入。</p>
+              <p class="tl">只有保存动作返回后，确认过的结果才适合送回 Renderer。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">把边界判断用到新功能与故障里</h2>
+        <p>三题分别考权限放置、持久化排错和桥接面的取舍。选择你会真正交给团队执行的方案。</p>
+
+        <div class="quiz-container" id="quiz-module2">
+          <div class="quiz-question-block"
+               data-correct="option-b"
+               data-explanation-right="正解：读取本地 Git 状态需要后台权限，应由 Main 执行；Renderer 只能通过 Preload 新增的窄接口请求它。"
+               data-explanation-wrong="想想谁拥有本地系统权限。把读取动作直接放进 Renderer 会跨越边界；只改 Shared 又没有真正访问 Git 的执行者。">
+            <h3 class="quiz-question">1. 你要新增“读取本地 <span class="term" data-definition="Git 是记录代码版本与变更历史的工具。读取本地 Git 状态意味着访问工作目录，因此应放在有本地权限且受验证的后台边界。">Git</span> 状态”功能，能力应该怎样穿过边界？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>让 Renderer 直接调用本地系统命令</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>在 Preload 增加一个明确接口，经命名 IPC 到 Main，由 Main 验证并读取</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>只在 Shared package 增加一个按钮组件</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-c"
+               data-explanation-right="就是这里：如果重启后消失，优先验证 Main 是否等待 store.createWorkflow 成功，以及 SQLite 是否真的提交了记录。"
+               data-explanation-wrong="界面能暂时显示，说明 Renderer 可能只是拿到了内存结果。重启丢失把线索指向 Main 到 SQLite 的持久化链。">
+            <h3 class="quiz-question">2. 界面提示 Create Run 成功，但应用重启后什么都没有。你首先检查哪里？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Renderer 的按钮颜色是否更新</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Shared 是否把节点图画得更漂亮</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Main 是否等待 store.createWorkflow 完成，以及 SQLite 是否确认写入</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-b"
+               data-explanation-right="完全正确：窄桥把可调用能力限制在经过审查的名单里；暴露整个 ipcRenderer 会让任意页面代码尝试更多后台频道。"
+               data-explanation-wrong="便利不是唯一目标。安全边界要限制“能够尝试什么”；把整个 ipcRenderer 暴露出去，会把白名单变成开放总机。">
+            <h3 class="quiz-question">3. 有人建议把整个 ipcRenderer 暴露给页面，省得以后逐项加接口。这个取舍的问题是什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>唯一问题是函数名会变长</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>页面将能尝试调用未批准的频道，白名单边界被显著扩大</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>SQLite 会因此自动停止持久化</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" type="button" onclick="checkQuiz('quiz-module2')">检查答案</button>
+          <button class="quiz-reset-btn" type="button" onclick="resetQuiz('quiz-module2')">重新思考</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

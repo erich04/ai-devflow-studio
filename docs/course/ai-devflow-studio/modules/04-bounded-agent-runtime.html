@@ -1,0 +1,336 @@
+<section class="module" id="module-4" style="background: var(--color-bg)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">04</span>
+      <h1 class="module-title">给 Agent 装上护栏</h1>
+      <p class="module-subtitle">能力不是通行证；可靠执行来自可核对的任务合同。</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">登山队不会只拿一句“注意安全”就出发</h2>
+        <p>把 <span class="term" data-definition="Agent runtime 是实际执行 AI 任务、调用工具并记录结果的运行环境；它负责把计划约束成一次可管理的执行。">Agent runtime（Agent 运行时）</span>想成登山队的出发许可：路线、证件、补给、工具票和检查点缺一不可。“会爬山”只说明有能力，不说明任何路线都获准进入。</p>
+
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">🗺️</div>
+            <h4 class="pattern-title"><span class="term" data-definition="Scope 是任务允许触及的范围，例如指定 Run、Node、仓库或资源；范围外的目标不因任务困难而自动开放。">Scope（范围）</span></h4>
+            <p class="pattern-desc">指定路线边界：这次任务可以触及哪些 Run、Node 和工作区。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-3)">
+            <div class="pattern-icon" style="background: var(--color-actor-3)">🪪</div>
+            <h4 class="pattern-title"><span class="term" data-definition="Authority 是当前执行被明确授予的行动资格；系统必须能核对它属于哪次任务，而不是只相信 Agent 的自述。">Authority（权限依据）</span></h4>
+            <p class="pattern-desc">证件绑定精确 Run、Node 和策略 <span class="term" data-definition="Version 是某份合同或策略的明确修订编号；绑定版本可以防止执行时悄悄换规则。">version（版本）</span>，便于逐项核对。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-4)">
+            <div class="pattern-icon" style="background: var(--color-actor-4)">⏱️</div>
+            <h4 class="pattern-title"><span class="term" data-definition="Bound 是系统会强制执行的硬上限，例如时间、步数或成本；达到上限时，运行必须停止，而不是仅收到提醒。">Bounds（硬边界）</span></h4>
+            <p class="pattern-desc">氧气、时间、步数和成本都有上限，耗尽就停。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-5)">
+            <div class="pattern-icon" style="background: var(--color-actor-5)">🎫</div>
+            <h4 class="pattern-title"><span class="term" data-definition="Capability grant 是对某个具体工具和资源签发的短时许可；它应有明确目标、状态和到期时间。">Capability Grant（能力授权）</span></h4>
+            <p class="pattern-desc">需要工具时才签发短时 <span class="term" data-definition="Permission 是系统明确允许执行的动作；可靠运行会按工具和资源细分，而不是一次性开放所有能力。">permission（许可）</span>，而不是发一张万能钥匙。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-1)">
+            <div class="pattern-icon" style="background: var(--color-actor-1)">🏕️</div>
+            <h4 class="pattern-title"><span class="term" data-definition="Checkpoint 是运行途中保存的可恢复状态与证据；失败后可以从已确认的位置继续，而不必盲目重跑全部过程。">Checkpoint（检查点）</span></h4>
+            <p class="pattern-desc">按站回报状态与证据，失败时从已知位置恢复。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">这不是建议清单，而是八个硬停止器</h2>
+        <p>每个字段都回答同一个问题：远征怎样在失控前被强制停下？就算还有 <span class="term" data-definition="Token 是模型读取或生成文本时计量的小单位；token 上限控制一次运行能消耗多少模型处理额度。">token（模型处理额度）</span>，其他任何边界先到也必须停止。</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line"><span class="code-keyword">export</span> <span class="code-keyword">type</span> AgentRuntimeBounds = {</span>
+<span class="code-line">  maxSteps: <span class="code-keyword">number</span></span>
+<span class="code-line">  maxWallTimeMs: <span class="code-keyword">number</span></span>
+<span class="code-line">  maxToolCalls: <span class="code-keyword">number</span></span>
+<span class="code-line">  maxToolResultBytes: <span class="code-keyword">number</span></span>
+<span class="code-line">  maxTrajectoryMetadataBytes: <span class="code-keyword">number</span></span>
+<span class="code-line">  maxCheckpointBytes: <span class="code-keyword">number</span></span>
+<span class="code-line">  maxTokens: <span class="code-keyword">number</span></span>
+<span class="code-line">  maxCostUsd: <span class="code-keyword">number</span></span>
+<span class="code-line">}</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">导出一份运行边界合同，下面八项都能独立叫停任务。</p>
+              <p class="tl"><strong>maxSteps</strong>：执行步骤不能无限增长。</p>
+              <p class="tl"><strong>maxWallTimeMs</strong>：真实经过的 <span class="term" data-definition="Wall time 是从开始到结束实际流逝的钟表时间，包括等待工具或许可的时间。">wall time（钟表时间）</span>到点即停。</p>
+              <p class="tl"><strong>maxToolCalls</strong>：工具调用次数有封顶。</p>
+              <p class="tl"><strong>maxToolResultBytes</strong>：单次运行接收的工具结果总量不能膨胀。</p>
+              <p class="tl"><strong>maxTrajectoryMetadataBytes</strong>：描述执行轨迹的 <span class="term" data-definition="Trajectory metadata 是描述 Agent 执行路径的结构化附加信息，例如步骤状态和工具调用摘要。">trajectory metadata（轨迹元数据）</span>也有体积上限。</p>
+              <p class="tl"><strong>maxCheckpointBytes</strong>：恢复快照不能无限变大。</p>
+              <p class="tl"><strong>maxTokens</strong>：模型处理额度耗尽时停止。</p>
+              <p class="tl"><strong>maxCostUsd</strong>：达到美元成本预算时停止，然后结束这份合同。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">把四道护栏拖到它负责的岗位</h2>
+        <p>预算、路线、证件和工具票各解决不同风险。拖动四个概念，看看你能否把“安全一点”拆成可实现的合同条款。</p>
+
+        <div class="dnd-container" id="dnd-module4">
+          <div class="dnd-chips">
+            <div class="dnd-chip" draggable="true" data-answer="m4-scope">Scope</div>
+            <div class="dnd-chip" draggable="true" data-answer="m4-authority">Authority</div>
+            <div class="dnd-chip" draggable="true" data-answer="m4-bounds">Bounds</div>
+            <div class="dnd-chip" draggable="true" data-answer="m4-capability">Capability Grant</div>
+          </div>
+          <div class="dnd-zones">
+            <div class="dnd-zone" data-correct="m4-scope">
+              <p class="dnd-zone-label">定义允许进入的路线与资源边界</p>
+              <div class="dnd-zone-target">拖到这里</div>
+            </div>
+            <div class="dnd-zone" data-correct="m4-authority">
+              <p class="dnd-zone-label">绑定精确 Run、Node 与策略版本，供系统核验</p>
+              <div class="dnd-zone-target">拖到这里</div>
+            </div>
+            <div class="dnd-zone" data-correct="m4-bounds">
+              <p class="dnd-zone-label">限制步数、时间、工具调用、数据量与成本预算</p>
+              <div class="dnd-zone-target">拖到这里</div>
+            </div>
+            <div class="dnd-zone" data-correct="m4-capability">
+              <p class="dnd-zone-label">为特定工具和资源签发短时许可</p>
+              <div class="dnd-zone-target">拖到这里</div>
+            </div>
+          </div>
+          <button type="button" class="btn" onclick="checkDnD('dnd-module4')">检查匹配</button>
+          <button type="button" class="btn" onclick="resetDnD('dnd-module4')">重置</button>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">并行可以快，但任务图仍然有围栏</h2>
+        <p><span class="term" data-definition="Supervisor 是协调整个任务图的上层 Agent；它分派、汇总和检查工作，但同样受运行边界约束。">Supervisor（监督者）</span>最多并行安排两个只读 <span class="term" data-definition="Specialist 是承担一个窄子任务的专门 Agent，例如调查测试或阅读实现；它只得到完成该任务所需的权限。">specialist（专家 Agent）</span>，再把证据交给一个受限实施者。<span class="term" data-definition="Delegation depth 是任务从一个 Agent 再交给下一个 Agent 的层级数；限制深度可以阻止递归扩张成不可控的任务树。">delegation depth（委派深度）</span>固定为 1，工作再大也不能递归扩队。</p>
+
+        <div class="arch-diagram">
+          <div class="arch-zone">
+            <h4 class="arch-zone-label">1 · Dispatch</h4>
+            <div class="arch-component" data-desc="Supervisor 绑定当前 Run、Node 和策略版本，分派的每个任务都继承可核对的范围。" onclick="showArchDesc(this)">
+              <div class="arch-icon">🧭</div>
+              <span>Supervisor</span>
+            </div>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="arch-zone">
+            <h4 class="arch-zone-label">2 · Parallel Read</h4>
+            <div class="arch-component" data-desc="Read Specialist A 只调查证据，不获得写入工作区的能力。" onclick="showArchDesc(this)">
+              <div class="arch-icon">🔎</div>
+              <span>Read Specialist A</span>
+            </div>
+            <div class="arch-component" data-desc="Read Specialist B 与 A 并行调查另一个窄问题，同样保持只读。" onclick="showArchDesc(this)">
+              <div class="arch-icon">🔍</div>
+              <span>Read Specialist B</span>
+            </div>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="arch-zone">
+            <h4 class="arch-zone-label">3 · Bounded Change</h4>
+            <div class="arch-component" data-desc="一个实施者汇总只读证据，只在受管工作区内做获准修改。" onclick="showArchDesc(this)">
+              <div class="arch-icon">🛠️</div>
+              <span>Bounded Implementer</span>
+            </div>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="arch-zone">
+            <h4 class="arch-zone-label">4 · Verify</h4>
+            <div class="arch-component" data-desc="保存检查点和测试证据，再用确定性评估决定通过、停止或恢复。" onclick="showArchDesc(this)">
+              <div class="arch-icon">✅</div>
+              <span>Checkpoint / Evaluation</span>
+            </div>
+          </div>
+          <div class="arch-description" id="arch-desc-module4">点击任一角色，查看它在边界内负责什么</div>
+        </div>
+
+        <div class="badge-list">
+          <div class="badge-item">
+            <code class="badge-code">read</code>
+            <span class="badge-desc">两位调查专家只读证据</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">managed workspace edit</code>
+            <span class="badge-desc">只有受限实施者可在受管工作区修改</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">saved test</code>
+            <span class="badge-desc">检查点保存可复查的测试证据</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">deterministic evaluation</code>
+            <span class="badge-desc">同样输入得到可重复的放行判断</span>
+          </div>
+        </div>
+
+        <div class="badge-list">
+          <div class="badge-item">
+            <code class="badge-code">maxSpecialists: 3,</code>
+            <span class="badge-desc">最多三位专家</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">maxParallelSpecialists: 2,</code>
+            <span class="badge-desc">同时最多两位</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">maxDelegationDepth: 1,</code>
+            <span class="badge-desc">只允许一层委派</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">maxSpecialistRetries: 1,</code>
+            <span class="badge-desc">每位专家最多重试一次</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">工具票有指纹、有目标，也会过期</h2>
+        <p>授权记录用 <span class="term" data-definition="Digest 是从请求内容计算出的固定长度指纹；内容一变，指纹通常也会变，因此系统能核对授权对应的是否仍是同一个请求。">digest（请求摘要指纹）</span>绑定原请求，再锁定资源种类与资源标识。短时票据只能被消费、拒绝、过期或取消，不会悄悄升级成永久权限。</p>
+
+        <div class="badge-list">
+          <div class="badge-item">
+            <code class="badge-code">requestDigest</code>
+            <span class="badge-desc">核对工具请求是否仍是获准的那一份</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">resourceKind</code>
+            <span class="badge-desc">限定资源类别</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">resourceId</code>
+            <span class="badge-desc">限定精确资源</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">expiresAt</code>
+            <span class="badge-desc">到时即失效，不靠 Agent 自觉归还</span>
+          </div>
+        </div>
+
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-5)">
+            <div class="pattern-icon" style="background: var(--color-actor-5)">🎟️</div>
+            <h4 class="pattern-title">主路径 · active → consumed</h4>
+            <p class="pattern-desc">票据有效时执行获准动作；结算后变成已消费，不能重复扩大使用。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-4)">
+            <div class="pattern-icon" style="background: var(--color-actor-4)">⌛</div>
+            <h4 class="pattern-title">时间分支 · expired</h4>
+            <p class="pattern-desc">等待许可过久，票据到期；运行留下停止原因，而不是偷偷继续。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-error)">
+            <div class="pattern-icon" style="background: var(--color-error)">✋</div>
+            <h4 class="pattern-title">拒绝分支 · denied / cancelled</h4>
+            <p class="pattern-desc"><span class="term" data-definition="Deny-by-default 是没有明确许可就拒绝执行的策略；它让新增能力必须被主动审核，而不是意外开放。">deny-by-default（默认拒绝）</span>，没有有效票据就不调用工具。</p>
+          </div>
+        </div>
+
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-error)">
+            <div class="pattern-icon" style="background: var(--color-error)">🧱</div>
+            <h4 class="pattern-title">Scope 不匹配</h4>
+            <p class="pattern-desc">目标在路线之外：停止，并报告越界资源。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-error)">
+            <div class="pattern-icon" style="background: var(--color-error)">🔐</div>
+            <h4 class="pattern-title">Grant 无效</h4>
+            <p class="pattern-desc">授权被拒、过期或取消：停止，并记录票据状态。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-4)">
+            <div class="pattern-icon" style="background: var(--color-actor-4)">🪫</div>
+            <h4 class="pattern-title">Bounds 耗尽</h4>
+            <p class="pattern-desc">任一资源预算触顶：停止，并保存最后检查点。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">🚧</div>
+            <h4 class="pattern-title">Evaluation 未通过</h4>
+            <p class="pattern-desc">证据不满足确定性检查：停止或恢复，不宣称完成。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">把“安全一点”改写成可执行决定</h2>
+        <p>每道题都故意保留一些预算或能力作为诱饵。真正的判断顺序是：范围与权限先成立，运行才有资格继续消耗预算。</p>
+
+        <div class="quiz-container" id="quiz-module4">
+          <div class="quiz-question-block"
+               data-correct="option-m4q1-b"
+               data-explanation-right="正确：剩余 token 只是预算，不会扩大 Scope；目标工作区没有对应授权就必须停止。"
+               data-explanation-wrong="预算回答“还能花多少”，不回答“可以去哪里”。先核对目标资源是否在 Scope 和 Grant 内。">
+            <h3 class="quiz-question">1. Agent 还有一半 token 预算，但一次工具调用指向合同之外的另一个工作区。应该怎么做？</h3>
+            <div class="quiz-options">
+              <button type="button" class="quiz-option" data-value="option-m4q1-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>继续调用，因为预算足够且任务目标相关</span>
+              </button>
+              <button type="button" class="quiz-option" data-value="option-m4q1-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>拒绝调用并报告 Scope/资源授权不匹配</span>
+              </button>
+              <button type="button" class="quiz-option" data-value="option-m4q1-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>先读取另一个工作区，再决定是否需要许可</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-m4q2-c"
+               data-explanation-right="对：等待也消耗 wall time；许可未明确生效就默认拒绝，并从检查点留下可恢复状态。"
+               data-explanation-wrong="超时不是默许。可靠运行会把等待计入时间边界，并在没有有效 Grant 时停止。">
+            <h3 class="quiz-question">2. 一位只读 Specialist 等待写工具许可时超时，但它确信修改很小。最可靠的处理是什么？</h3>
+            <div class="quiz-options">
+              <button type="button" class="quiz-option" data-value="option-m4q2-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>临时借用 Supervisor 的写权限完成修改</span>
+              </button>
+              <button type="button" class="quiz-option" data-value="option-m4q2-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>忽略超时，继续等待直到有人批准</span>
+              </button>
+              <button type="button" class="quiz-option" data-value="option-m4q2-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>按默认拒绝停止，保存检查点并记录 permission timeout</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-m4q3-a"
+               data-explanation-right="正是：大任务不改变图的硬边界。应在固定的深度、并行度和节点预算内重新切分或缩小目标。"
+               data-explanation-wrong="递归委派会让任务图、成本和权限传播失去上界；工作量大不是绕过合同的理由。">
+            <h3 class="quiz-question">3. 因为工作量很大，AI 建议让 Specialist 再创建自己的 Specialist 树。该怎样回应？</h3>
+            <div class="quiz-options">
+              <button type="button" class="quiz-option" data-value="option-m4q3-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>拒绝递归委派，在深度 1 和固定节点预算内重切任务</span>
+              </button>
+              <button type="button" class="quiz-option" data-value="option-m4q3-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>只要每个子 Agent 都是只读，就允许无限递归</span>
+              </button>
+              <button type="button" class="quiz-option" data-value="option-m4q3-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>先递归创建，成本接近上限时再删掉多余 Agent</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button type="button" class="quiz-check-btn" onclick="checkQuiz('quiz-module4')">检查答案</button>
+          <button type="button" class="quiz-reset-btn" onclick="resetQuiz('quiz-module4')">再想一次</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

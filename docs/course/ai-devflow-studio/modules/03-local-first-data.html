@@ -1,0 +1,274 @@
+<section class="module" id="module-3" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">03</span>
+      <h1 class="module-title">数据的两条旅程</h1>
+      <p class="module-subtitle">原件留在本地，安全摘要可靠地抵达团队。</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">先过海关，再去团队</h2>
+        <p>把 <span class="term" data-definition="Local-first 是先把本机数据定义为主要、可信的数据来源，再有选择地同步副本；它不等于永远离线。">local-first（本地优先）</span>想成机场海关：行李原件不必交出去，跨境的是检查后的申报单。桌面端保管 <span class="term" data-definition="Authoritative copy 是发生冲突时被当作最终依据的那一份数据，就像档案馆里的原始卷宗。">authoritative copy（权威副本）</span>，团队端只接收适合协作的版本。</p>
+
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">🧳</div>
+            <h4 class="pattern-title">本地行李库 · <span class="term" data-definition="SQLite 是嵌入应用、以单个本地文件保存结构化数据的数据库；这里它是桌面端的私人档案柜。">SQLite</span></h4>
+            <p class="pattern-desc"><span class="term" data-definition="Raw evidence 是尚未裁剪或脱敏的原始日志、工具结果和错误细节，最适合调查，但也最可能含敏感信息。">raw evidence（原始证据）</span>、完整工具结果和错误细节留在机器上。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-5)">
+            <div class="pattern-icon" style="background: var(--color-actor-5)">🛃</div>
+            <h4 class="pattern-title">团队申报单 · 安全摘要</h4>
+            <p class="pattern-desc">先做 <span class="term" data-definition="Redaction 是在数据离开信任边界前删除或替换敏感片段，同时保留足够上下文供团队理解。">redaction（脱敏）</span>，把 <span class="term" data-definition="Secret 是不应进入日志或共享系统的敏感值，例如访问令牌、密码或私钥。">secret（秘密值）</span>替换成可识别但不可还原的标记。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">切换视角：谁能看到什么？</h2>
+        <p>同一个 Run 可以有两种视图，但不是两份地位相同的原件。点击两层，检查哪些信息能跨过信任边界。</p>
+
+        <div class="layer-demo">
+          <div class="layer-tabs">
+            <button type="button" class="layer-tab active" onclick="showLayer('module3-layer-local', this)">本地原件</button>
+            <button type="button" class="layer-tab" onclick="showLayer('module3-layer-team', this)">团队摘要</button>
+          </div>
+          <div class="layer-viewport">
+            <div class="layer" id="module3-layer-local" style="display:block">
+              <div class="pattern-cards">
+                <div class="pattern-card">
+                  <div class="pattern-icon" style="background: var(--color-actor-2)">📜</div>
+                  <h4 class="pattern-title">完整执行轨迹</h4>
+                  <p class="pattern-desc">逐步日志、命令输出和模型响应，供本机调查。</p>
+                </div>
+                <div class="pattern-card">
+                  <div class="pattern-icon" style="background: var(--color-actor-3)">🧪</div>
+                  <h4 class="pattern-title">原始工具证据</h4>
+                  <p class="pattern-desc">完整测试输出、文件片段和失败上下文。</p>
+                </div>
+                <div class="pattern-card">
+                  <div class="pattern-icon" style="background: var(--color-actor-4)">🔒</div>
+                  <h4 class="pattern-title">敏感细节</h4>
+                  <p class="pattern-desc">可能含本地路径、令牌或内部错误信息，因此不自动外发。</p>
+                </div>
+              </div>
+            </div>
+            <div class="layer" id="module3-layer-team" style="display:none">
+              <div class="pattern-cards">
+                <div class="pattern-card">
+                  <div class="pattern-icon" style="background: var(--color-actor-5)">✅</div>
+                  <h4 class="pattern-title">状态与结论</h4>
+                  <p class="pattern-desc">Run 结果、关键摘要和可协作的下一步。</p>
+                </div>
+                <div class="pattern-card">
+                  <div class="pattern-icon" style="background: var(--color-actor-1)">▧</div>
+                  <h4 class="pattern-title">规范脱敏标记</h4>
+                  <p class="pattern-desc">团队知道哪类信息被遮住，却看不到原值。</p>
+                </div>
+                <div class="pattern-card">
+                  <div class="pattern-icon" style="background: var(--color-actor-2)">🏷️</div>
+                  <h4 class="pattern-title">协作 <span class="term" data-definition="Metadata 是描述主要数据的附加信息，例如 Run 标识、创建时间和状态；它像档案盒外面的标签。">metadata（元数据）</span></h4>
+                  <p class="pattern-desc">标识、时间和状态让团队能定位同一次运行。</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="layer-description">本地视图为调查保真；团队视图为协作最小化暴露。</p>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">脱敏不是“删掉整段”，而是留下路标</h2>
+        <p>这个 <span class="term" data-definition="Loop 是让同一段代码依次处理一组项目的结构；这里它逐个检查每类秘密模式。">loop（循环）</span>逐个拿出标签和 <span class="term" data-definition="Pattern 是用来识别特定文本形状的规则；命中后，代码就知道哪一段需要替换。">pattern（匹配模式）</span>。命中时，<span class="term" data-definition="Callback function 是交给另一段代码、在特定事件发生时再执行的函数；这里它在每次替换时记录命中并返回标记。">callback function（回调函数）</span>既记账，也返回统一标记。</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line">  <span class="code-keyword">for</span> (<span class="code-keyword">const</span> { label, pattern } <span class="code-keyword">of</span> secretPatterns) {</span>
+<span class="code-line">    value = value.<span class="code-function">replace</span>(pattern, () =&gt; {</span>
+<span class="code-line">      matches.<span class="code-function">push</span>(label)</span>
+<span class="code-line">      replacementCount += 1</span>
+<span class="code-line">      <span class="code-keyword">return</span> <span class="code-string">`[REDACTED:${label}]`</span></span>
+<span class="code-line">    })</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">逐个取出一类秘密的名称，以及识别它的规则。</p>
+              <p class="tl">找到匹配内容时，让替换回调接手处理。</p>
+              <p class="tl">记下命中了哪类秘密，并把替换次数加一。</p>
+              <p class="tl">用统一的 <code>[REDACTED:类别]</code> 路标代替原值，然后结束这次回调。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">点“下一步”，跟着摘要走完全程</h2>
+        <p><span class="term" data-definition="Durable outbox 是写进持久存储的待发队列；应用重启或网络中断后，未完成的同步仍能继续。">durable outbox（持久待发箱）</span>把“准备发送”和“真的送达”拆开。<span class="term" data-definition="API 是两个软件系统约定好的沟通入口；客户端按合同发送请求，服务端按合同返回结果。">API</span> 接收摘要，团队侧的 <span class="term" data-definition="Postgres 是面向服务端的关系型数据库；这里它保存团队可以共享的安全记录。">Postgres</span> 再把它变成 Web 视图。</p>
+
+        <div class="flow-animation" data-steps='[
+          {"highlight":"flow-module3-local","label":"1 在本地保存私有原始证据"},
+          {"highlight":"flow-module3-redaction","label":"2 创建经过脱敏的安全摘要","packet":true,"from":"module3-local","to":"module3-redaction"},
+          {"highlight":"flow-module3-outbox","label":"3 将幂等同步操作放入持久待发箱","packet":true,"from":"module3-redaction","to":"module3-outbox"},
+          {"highlight":"flow-module3-api","label":"4 网络可用时传输待发操作","packet":true,"from":"module3-outbox","to":"module3-api"},
+          {"highlight":"flow-module3-team","label":"5 保存团队安全记录","packet":true,"from":"module3-api","to":"module3-team"},
+          {"highlight":"flow-module3-team","label":"6 在团队 Web 中渲染共享视图"}
+        ]'>
+          <div class="flow-actors">
+            <div class="flow-actor" id="flow-module3-local">
+              <div class="flow-actor-icon">🗄️</div>
+              <span>Local SQLite</span>
+            </div>
+            <div class="flow-actor" id="flow-module3-redaction">
+              <div class="flow-actor-icon">🕶️</div>
+              <span>Redaction</span>
+            </div>
+            <div class="flow-actor" id="flow-module3-outbox">
+              <div class="flow-actor-icon">📮</div>
+              <span>Outbox</span>
+            </div>
+            <div class="flow-actor" id="flow-module3-api">
+              <div class="flow-actor-icon">⇄</div>
+              <span>API</span>
+            </div>
+            <div class="flow-actor" id="flow-module3-team">
+              <div class="flow-actor-icon">👥</div>
+              <span>Team Postgres/Web</span>
+            </div>
+          </div>
+          <div class="flow-packet" id="flow-packet-module3"></div>
+          <div class="flow-step-label" id="flow-label-module3">点击“下一步”开始追踪</div>
+          <div class="flow-controls">
+            <button type="button" class="btn flow-next-btn">下一步</button>
+            <button type="button" class="btn flow-reset-btn">重新开始</button>
+            <span class="flow-progress"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">待发箱的超能力：安全地再试一次</h2>
+        <p><span class="term" data-definition="Idempotency key 是同一个业务操作的稳定防重标识；重发时服务端能认出它，不会把一次动作执行成两次。">idempotency key（幂等键）</span>让“响应丢了”不等于“再创建一份”。状态、代次、尝试次数和下次时间，则让恢复过程可以检查，而不是靠猜。</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line">  <span class="code-keyword">return</span> {</span>
+<span class="code-line">    id: input.id,</span>
+<span class="code-line">    ...metadata,</span>
+<span class="code-line">    idempotencyKey: <span class="code-function">createRemoteSyncIdempotencyKey</span>(metadata),</span>
+<span class="code-line">    status: <span class="code-string">'pending'</span>,</span>
+<span class="code-line">    generation: 1,</span>
+<span class="code-line">    attemptCount: 0,</span>
+<span class="code-line">    nextAttemptAt: input.createdAt,</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">创建待发记录，并沿用这次操作原本的标识。</p>
+              <p class="tl">复制同步上下文，再从它生成稳定的防重键。</p>
+              <p class="tl">记录从 pending、第一代开始。</p>
+              <p class="tl">目前尝试零次，最早可以从创建时刻开始发送。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-4)">
+            <div class="pattern-icon" style="background: var(--color-actor-4)">↻</div>
+            <h4 class="pattern-title"><span class="term" data-definition="Retryable 表示失败很可能是暂时的，例如断网或服务繁忙；系统应保留操作并在合适时间再试。">Retryable（可重试）</span></h4>
+            <p class="pattern-desc">网络超时或服务繁忙：保留同一操作，增加尝试次数后再发。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">🛟</div>
+            <h4 class="pattern-title"><span class="term" data-definition="Recovery 是从不确定状态恢复到可确认状态；这里会重放同一个键，再确认远端是否已经接收。">Recovery（恢复确认）</span></h4>
+            <p class="pattern-desc">请求已被接收但响应丢失：用同一幂等键重放，远端识别为同一次操作。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-error)">
+            <div class="pattern-icon" style="background: var(--color-error)">⛔</div>
+            <h4 class="pattern-title"><span class="term" data-definition="Terminal failure 是继续重试也不会自行好转的失败，例如合同无效或权限被拒；它需要人工或代码修正。">Terminal（终止性失败）</span></h4>
+            <p class="pattern-desc">数据合同无效或权限被拒：停止自动重试，留下明确原因等待修正。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">轮到你给同步链路做判断</h2>
+        <p>下面没有文件名背诵题。请选择在新情境下最能保护本地权威、又能可靠协作的做法。</p>
+
+        <div class="quiz-container" id="quiz-module3">
+          <div class="quiz-question-block"
+               data-correct="option-m3q1-b"
+               data-explanation-right="正是如此：原始 token 留在本机，团队只收到经过脱敏且仍可理解的摘要。"
+               data-explanation-wrong="再想想海关边界：共享需要的是可协作证据，不是把含 token 的原始日志整箱外发。">
+            <h3 class="quiz-question">1. 一段原始测试日志含有访问 token，团队需要知道测试为何失败。什么可以同步？</h3>
+            <div class="quiz-options">
+              <button type="button" class="quiz-option" data-value="option-m3q1-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>同步整段原始日志，因为团队成员受信任</span>
+              </button>
+              <button type="button" class="quiz-option" data-value="option-m3q1-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>本地保留原始日志，同步带规范脱敏标记的失败摘要</span>
+              </button>
+              <button type="button" class="quiz-option" data-value="option-m3q1-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>删除整段日志，只同步“失败”两个字</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-m3q2-c"
+               data-explanation-right="对：远端用幂等键认出重放的是同一次操作，因此恢复不会制造重复记录。"
+               data-explanation-wrong="请求可能已经成功；如果把重试当成全新操作，团队端就可能出现两份记录。">
+            <h3 class="quiz-question">2. API 已接收请求，但网络在响应返回前断开。为什么下一次发送必须沿用幂等键？</h3>
+            <div class="quiz-options">
+              <button type="button" class="quiz-option" data-value="option-m3q2-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>它能让网络连接自动提速</span>
+              </button>
+              <button type="button" class="quiz-option" data-value="option-m3q2-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>它会把原始证据自动上传以便核对</span>
+              </button>
+              <button type="button" class="quiz-option" data-value="option-m3q2-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>它让远端把重发识别为同一次操作，避免重复落库</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-m3q3-a"
+               data-explanation-right="完全正确：沿数据旅程逐站检查，能定位问题发生在存储、脱敏、排队、传输、落库还是渲染。"
+               data-explanation-wrong="不要从链路中间随机猜。先确认权威副本，再顺着每个边界向团队视图推进。">
+            <h3 class="quiz-question">3. 本地 Run 明明存在，团队 Web 却仍是旧状态。最有效的排查顺序是什么？</h3>
+            <div class="quiz-options">
+              <button type="button" class="quiz-option" data-value="option-m3q3-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>本地记录 → 脱敏输出 → Outbox 状态/重试 → API 响应 → Postgres 记录 → Web 渲染</span>
+              </button>
+              <button type="button" class="quiz-option" data-value="option-m3q3-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>先刷新 Web，多次无效后直接删除本地 Run</span>
+              </button>
+              <button type="button" class="quiz-option" data-value="option-m3q3-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>先查 Postgres，找不到就假设本地也没有保存</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button type="button" class="quiz-check-btn" onclick="checkQuiz('quiz-module3')">检查答案</button>
+          <button type="button" class="quiz-reset-btn" onclick="resetQuiz('quiz-module3')">再想一次</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
