@@ -1511,7 +1511,9 @@ describe('App', () => {
     expect(screen.getByTestId('workflow-empty-state')).toHaveTextContent('暂无 Run')
 
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('no selected provider')
+    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent(
+      '未选择 Provider 请先添加 Provider ID、Base URL、模型和 API Key',
+    )
 
     fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
     expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('not indexed')
@@ -1894,6 +1896,47 @@ describe('App', () => {
         deleteRemote: false,
       }),
     )
+  })
+
+  it('keeps the run menu open internally and closes it on outside click, pointer, or Escape', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    const menuTrigger = screen.getByRole('button', { name: `${fixtureRuns[0]!.title} actions` })
+    await act(async () => {
+      fireEvent.click(menuTrigger)
+    })
+
+    const menu = screen.getByRole('menu')
+    await act(async () => {
+      fireEvent.pointerDown(menu)
+      fireEvent.click(menu)
+    })
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(document.body)
+    })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(menuTrigger)
+    })
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+    await act(async () => {
+      fireEvent.pointerDown(document.body)
+    })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(menuTrigger)
+    })
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+    await act(async () => {
+      fireEvent.keyDown(document, { key: 'Escape' })
+    })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
   })
 
   it('completes the current clarify agent through the desktop write path', async () => {
@@ -4224,7 +4267,9 @@ describe('App', () => {
 
     expect(await screen.findByText('Add Agent Provider')).toBeInTheDocument()
     expect(screen.getByLabelText('Saved Agent Provider')).toBeInTheDocument()
-    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('stored provider metadata')
+    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent(
+      '已保存 Provider 配置 实时 OpenAI 兼容服务 · 可能消耗模型 Token',
+    )
     fireEvent.change(screen.getByLabelText('Agent Provider ID'), {
       target: { value: 'doubao-review' },
     })
@@ -4249,7 +4294,9 @@ describe('App', () => {
       }),
     )
     await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalledTimes(2))
-    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent('stored provider metadata')
+    expect(screen.getByTestId('review-provider-mode')).toHaveTextContent(
+      '已保存 Provider 配置 实时 OpenAI 兼容服务 · 可能消耗模型 Token',
+    )
     expect(screen.getByText('Agent provider saved and selected: e8...test')).toBeInTheDocument()
   })
 

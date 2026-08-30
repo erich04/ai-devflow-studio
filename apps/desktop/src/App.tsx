@@ -13,7 +13,7 @@ import {
   Users,
   Workflow,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   buildKnowledgeGovernanceChecks,
   buildKnowledgeReferences,
@@ -208,11 +208,40 @@ export function App() {
   const [projectGitStatus, setProjectGitStatus] = useState<ProjectGitStatus | null>(null)
   const [isRefreshingGitStatus, setIsRefreshingGitStatus] = useState(false)
   const [openRunMenuId, setOpenRunMenuId] = useState<string | null>(null)
+  const openRunMenuRef = useRef<HTMLDivElement>(null)
   const [deleteRunTarget, setDeleteRunTarget] = useState<{
     run: WorkflowRun
     deleteRemote: boolean
   } | null>(null)
   const [isDeletingRun, setIsDeletingRun] = useState(false)
+
+  useEffect(() => {
+    if (!openRunMenuId) {
+      return
+    }
+
+    const closeOnOutsideInteraction = (event: Event) => {
+      const target = event.target as Node | null
+      if (target && openRunMenuRef.current?.contains(target)) {
+        return
+      }
+      setOpenRunMenuId(null)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpenRunMenuId(null)
+      }
+    }
+
+    document.addEventListener('pointerdown', closeOnOutsideInteraction)
+    document.addEventListener('click', closeOnOutsideInteraction)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideInteraction)
+      document.removeEventListener('click', closeOnOutsideInteraction)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [openRunMenuId])
 
   const refreshProjectGitStatus = useCallback(async () => {
     if (!desktopApi || !selectedLocalProject) {
@@ -1101,7 +1130,10 @@ export function App() {
                         </span>
                       </button>
                       {!isPreviewRun && (
-                        <div className="run-row-actions">
+                        <div
+                          className="run-row-actions"
+                          ref={openRunMenuId === run.id ? openRunMenuRef : undefined}
+                        >
                           <button
                             className="run-menu-trigger"
                             aria-label={`${run.title} actions`}

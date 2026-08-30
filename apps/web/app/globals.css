@@ -250,8 +250,17 @@ button {
   width: fit-content;
 }
 
+.pairing-code-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .pairing-code-panel code {
   display: block;
+  flex: 1;
+  min-width: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
   border-radius: 8px;
@@ -264,6 +273,17 @@ button {
 
 .pairing-code-panel small {
   color: var(--muted);
+}
+
+.pairing-code-panel small[role='alert'] {
+  color: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .pairing-code-result {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 .member-row {

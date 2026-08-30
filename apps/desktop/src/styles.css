@@ -1747,18 +1747,32 @@ button:disabled {
   white-space: nowrap;
 }
 
-.test-bars {
-  height: 10px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--surface-3);
+.test-state-list {
+  display: grid;
+  gap: 8px;
 }
 
-.test-bars span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--green), var(--cyan));
+.test-state-row {
+  display: grid;
+  grid-template-columns: minmax(90px, auto) auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.test-state-row > span {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.test-state-row small {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .modal-backdrop {
@@ -3138,10 +3152,6 @@ code {
 
 .test-report {
   margin-top: 14px;
-}
-
-.test-bars span {
-  background: var(--green);
 }
 
 .search-results {

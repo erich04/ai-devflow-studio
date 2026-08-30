@@ -171,7 +171,7 @@ export function buildAgentConsoleViewModel(input: BuildAgentConsoleViewModelInpu
       summary: selectedProvider ? `Agent provider: ${selectedProvider.id}` : 'No Agent Provider selected',
       providerDataSource,
       selectedProvider,
-      providerMode: buildProviderModeLabel(selectedProvider, providerDataSource),
+      providerMode: buildProviderModeLabel(selectedProvider),
       fields: [
         { label: 'Selected provider', value: selectedProvider?.id ?? 'none' },
         { label: 'Total reviews', value: String(input.reviews.length) },
@@ -628,14 +628,14 @@ function evidenceTone(status: string): AgentConsoleTone {
   return 'warn'
 }
 
-function buildProviderModeLabel(provider: AgentProviderConfig | undefined, dataSource: FieldDataSource): string {
+function buildProviderModeLabel(provider: AgentProviderConfig | undefined): string {
   if (!provider) {
-    return `${dataSource.label} · add Provider ID, Base URL, Model, and API Key before running review`
+    return '请先添加 Provider ID、Base URL、模型和 API Key'
   }
   if (provider.kind === 'fake') {
-    return `${dataSource.label} · deterministic dev adapter · no model cost`
+    return '确定性开发适配器 · 不产生模型费用'
   }
-  return `${dataSource.label} · live OpenAI-compatible · may spend provider tokens`
+  return '实时 OpenAI 兼容服务 · 可能消耗模型 Token'
 }
 
 function isPresent(value: string | undefined): value is string {

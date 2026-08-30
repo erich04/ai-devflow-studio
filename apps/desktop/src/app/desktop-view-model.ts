@@ -169,6 +169,9 @@ export type BackendReadinessStatus =
   | 'local index unavailable'
   | 'missing contract'
   | 'not configured'
+  | '本地已保存'
+  | '开发适配器'
+  | '未配置'
 
 export type FieldDataSource = {
   status: BackendReadinessStatus
@@ -308,26 +311,26 @@ export function buildKnowledgeDataSource(input: {
 export function buildAgentProviderDataSource(provider: AgentProviderConfig | undefined): FieldDataSource {
   if (!provider) {
     return {
-      status: 'not configured',
-      label: 'no selected provider',
-      detail: 'No Agent Provider is selected for Knowledge Review.',
+      status: '未配置',
+      label: '未选择 Provider',
+      detail: 'Knowledge Review 尚未选择 Agent Provider。',
       tone: 'soft',
     }
   }
 
   if (provider.kind === 'fake') {
     return {
-      status: 'development adapter',
-      label: 'development provider',
-      detail: 'A persisted development provider is selected; review runs are deterministic and spend no provider tokens.',
+      status: '开发适配器',
+      label: '开发 Provider',
+      detail: '已选择本地保存的开发 Provider；Review 结果固定，不消耗 Provider Token。',
       tone: 'warn',
     }
   }
 
   return {
-    status: 'local persisted',
-    label: 'stored provider metadata',
-    detail: 'Provider credential metadata came from Electron local credential storage; the raw key stays outside renderer.',
+    status: '本地已保存',
+    label: '已保存 Provider 配置',
+    detail: 'Provider 凭证元数据来自 Electron 本地凭证存储；原始密钥不会进入渲染进程。',
     tone: 'good',
   }
 }
