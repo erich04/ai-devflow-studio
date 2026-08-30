@@ -96,6 +96,25 @@ export type AgentProvider = {
   }) => Promise<{ value: Record<string, unknown>; usage?: AgentProviderUsage }>
 }
 
+function parseStructuredProviderOutput(raw: string): Record<string, unknown> {
+  const trimmed = raw.trim()
+  const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
+  const jsonText = fenced ? fenced[1]!.trim() : trimmed
+  if ((!fenced && jsonText.includes('```')) || !jsonText) {
+    throw new Error('Agent provider structured output is invalid')
+  }
+  let value: unknown
+  try {
+    value = JSON.parse(jsonText) as unknown
+  } catch {
+    throw new Error('Agent provider structured output is invalid')
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Agent provider structured output is invalid')
+  }
+  return value as Record<string, unknown>
+}
+
 export type BuildAgentReviewContextInput = {
   run: WorkflowRun
   node: WorkflowNode
@@ -1097,10 +1116,7 @@ export function createOpenAiCompatibleAgentProvider({
         if (typeof raw !== 'string' || new TextEncoder().encode(raw).byteLength > 32 * 1_024) {
           throw new Error('Agent provider structured response is invalid')
         }
-        const value = JSON.parse(raw) as unknown
-        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-          throw new Error('Agent provider structured output is invalid')
-        }
+        const value = parseStructuredProviderOutput(raw)
         let usage: AgentProviderUsage | undefined
         if (typeof usageValue === 'object' && usageValue !== null && !Array.isArray(usageValue)) {
           const candidate = usageValue as Record<string, unknown>
@@ -1119,7 +1135,7 @@ export function createOpenAiCompatibleAgentProvider({
               : {}),
           }
         }
-        return { value: value as Record<string, unknown>, ...(usage ? { usage } : {}) }
+        return { value, ...(usage ? { usage } : {}) }
       } catch (error) {
         if (
           error instanceof Error &&

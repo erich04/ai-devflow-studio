@@ -651,6 +651,35 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     expect(redirect).toBe('error')
   })
 
+  it('accepts one json Markdown fence but rejects prose or nested fences', async () => {
+    const responseFor = (content: string) => new Response(JSON.stringify({
+      choices: [{ message: { content } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+    const fenced = createOpenAiCompatibleAgentProvider({
+      model: 'deepseek-v4-flash',
+      apiKey: 'secret-key',
+      fetcher: async () => responseFor('```json\n{"stateVersion":2,"ok":true}\n```'),
+    })
+    await expect(fenced.completeStructuredJson?.({
+      systemPrompt: 'Return JSON.', userPrompt: 'Plan.', maxOutputTokens: 100,
+    })).resolves.toMatchObject({ value: { stateVersion: 2, ok: true } })
+
+    for (const content of [
+      'Here is JSON: {"stateVersion":2}',
+      '```json\n```json\n{"stateVersion":2}\n```\n```',
+    ]) {
+      const invalid = createOpenAiCompatibleAgentProvider({
+        model: 'deepseek-v4-flash',
+        apiKey: 'secret-key',
+        fetcher: async () => responseFor(content),
+      })
+      await expect(invalid.completeStructuredJson?.({
+        systemPrompt: 'Return JSON.', userPrompt: 'Plan.', maxOutputTokens: 100,
+      })).rejects.toThrow('Agent provider structured output is invalid')
+    }
+  })
+
   it('caps Knowledge Review output tokens before calling a real compatible provider', async () => {
     let requestBody: Record<string, unknown> | undefined
     const provider = createOpenAiCompatibleAgentProvider({
