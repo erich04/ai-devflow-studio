@@ -6,6 +6,9 @@ import type {
   Artifact,
   CommandSafetyResult,
   CodingAgentRun,
+  CodingChangeSetPreview,
+  CodingRuntimeConfiguration,
+  CodingRuntimeReadiness,
   CodingAgentEvent,
   CodingPermissionDecision,
   CodingPermissionRequest,
@@ -23,6 +26,8 @@ import type {
   RepositoryKnowledgeSnapshot,
   RemoteTeamSnapshot,
   RetryAttempt,
+  RuntimeBudgetApproval,
+  RuntimeBudgetPolicy,
   TestEvidence,
   WorkRequest,
   WorkflowRun,
@@ -178,7 +183,6 @@ export type RunCodingAgentInput = {
   nodeId: string
   projectId: string
   requestedBy: string
-  providerId: string
   userInstruction: string
   runtimeBudgetApprovalId?: string
 }
@@ -193,7 +197,6 @@ export type StartRetryAttemptInput = {
   nodeId: string
   projectId: string
   requestedBy: string
-  providerId: string
   candidateIds: string[]
   userInstruction: string
 }
@@ -313,6 +316,40 @@ export type DevFlowDesktopApi = {
   runKnowledgeReview: (input: RunKnowledgeReviewInput) => Promise<RunKnowledgeReviewResult>
   listAgentReviews: (input?: { runId?: string }) => Promise<AgentReviewResult[]>
   ensureCodingEngine: (input: { projectId: string }) => Promise<{ projectId: string; engine: CodingAgentRun['engine']; status: 'ready' }>
+  getCodingRuntimeConfiguration: (input: {
+    projectId: string
+  }) => Promise<CodingRuntimeConfiguration | null>
+  saveCodingRuntimeConfiguration: (input: {
+    projectId: string
+    executor: 'native-model'
+    providerId: string
+  }) => Promise<CodingRuntimeConfiguration>
+  getCodingRuntimeReadiness: (input: {
+    runId: string
+    nodeId: string
+    projectId: string
+    requestedBy: string
+    runtimeBudgetApprovalId?: string
+  }) => Promise<CodingRuntimeReadiness>
+  getCodingChangeSetPreview: (input: {
+    changeSetId: string
+    codingRunId: string
+  }) => Promise<CodingChangeSetPreview>
+  getCodingRuntimeBudgetPolicy: (input: {
+    projectId: string
+  }) => Promise<RuntimeBudgetPolicy | null>
+  saveCodingRuntimeBudgetPolicy: (input: {
+    projectId: string
+    enabled: boolean
+    monthlyLimitUsd: number
+    warningThresholdUsd: number
+  }) => Promise<RuntimeBudgetPolicy>
+  createCodingRuntimeBudgetApproval: (input: {
+    projectId: string
+    requestedBy: string
+    maxAdditionalCostUsd: number
+    reason: string
+  }) => Promise<RuntimeBudgetApproval>
   runCodingAgent: (input: RunCodingAgentInput) => Promise<RunCodingAgentResult>
   startRetryAttempt: (input: StartRetryAttemptInput) => Promise<StartRetryAttemptResult>
   cancelCodingAgentRun: (input: { codingRunId: string }) => Promise<CodingAgentRun>

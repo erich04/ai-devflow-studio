@@ -15,6 +15,8 @@ import {
   type DesktopPairingCredential,
   type DesktopPairingExchangeResult,
   type BudgetGuardDecision,
+  type RuntimeBudgetApproval,
+  type RuntimeBudgetPolicy,
   type MaterializeWorkRequestInput,
   type RemoteAgentReviewSummary,
   type RemoteAgentCoordinationSummary,
@@ -136,6 +138,21 @@ export type RemoteSyncClient = {
     summary: RemoteAgentCoordinationSummary,
   ): Promise<RemoteSyncUploadResult>
   saveGateOverride(input: RemoteGateOverrideInput): Promise<GateOverrideDecision>
+  getRuntimeBudgetPolicy(projectId: string): Promise<RuntimeBudgetPolicy | null>
+  saveRuntimeBudgetPolicy(input: {
+    projectId: string
+    enabled: boolean
+    monthlyLimitUsd: number
+    warningThresholdUsd: number
+  }): Promise<RuntimeBudgetPolicy>
+  createRuntimeBudgetApproval(input: {
+    projectId: string
+    providerId: string
+    requestedBy: string
+    maxAdditionalCostUsd: number
+    reason: string
+    expiresAt: string
+  }): Promise<RuntimeBudgetApproval>
   evaluateRuntimeBudget(input: RemoteRuntimeBudgetEvaluateInput): Promise<BudgetGuardDecision>
 }
 
@@ -364,12 +381,13 @@ async function postJson<T>(
   path: string,
   headers: Record<string, string>,
   signal?: AbortSignal,
+  method: 'POST' | 'PUT' = 'POST',
 ): Promise<T> {
   const response = await fetchRemote(
     fetcher,
     url,
     {
-      method: 'POST',
+      method,
       headers,
       body: JSON.stringify(body),
     },
@@ -1176,6 +1194,44 @@ export function createRemoteSyncClient(
           policyVersion: input.policyVersion,
         },
         '/api/gates/override',
+        requirePostHeaders({ authToken, sessionHeaders }),
+        signal,
+      )
+    },
+
+    async getRuntimeBudgetPolicy(projectId) {
+      const safePath = '/api/runtime/budget-policy'
+      const url = new URL(buildUrl(apiBaseUrl, safePath))
+      url.searchParams.set('projectId', projectId)
+      const response = await fetchRemote(
+        fetcher,
+        url.toString(),
+        { headers: requireGetHeaders({ authToken, sessionHeaders }) },
+        safePath,
+        signal,
+      )
+      const result = await readJson<{ policy: RuntimeBudgetPolicy | null }>(response, safePath)
+      return result.policy
+    },
+
+    async saveRuntimeBudgetPolicy(input) {
+      return postJson<RuntimeBudgetPolicy>(
+        fetcher,
+        buildUrl(apiBaseUrl, '/api/runtime/budget-policy'),
+        input,
+        '/api/runtime/budget-policy',
+        requirePostHeaders({ authToken, sessionHeaders }),
+        signal,
+        'PUT',
+      )
+    },
+
+    async createRuntimeBudgetApproval(input) {
+      return postJson<RuntimeBudgetApproval>(
+        fetcher,
+        buildUrl(apiBaseUrl, '/api/runtime/budget-approvals'),
+        input,
+        '/api/runtime/budget-approvals',
         requirePostHeaders({ authToken, sessionHeaders }),
         signal,
       )

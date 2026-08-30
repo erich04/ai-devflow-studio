@@ -59,6 +59,7 @@ import {
   CodingEngineContinuationCleanupError,
   CodingEngineStartupCleanupError,
 } from './coding-engine-lifecycle.js'
+import { estimateNativeCodingWorstCaseCost } from './coding-runtime-configuration.js'
 import type {
   CodingAgentMutation,
   CodingAgentMutationResult,
@@ -198,7 +199,7 @@ export type RunCodingAgentRuntimeInput = {
   nodeId: string
   projectId: string
   requestedBy: string
-  providerId: string
+  providerId?: string
   userInstruction: string
   runtimeBudgetApprovalId?: string
   remediationPlan?: RemediationPlan
@@ -227,7 +228,7 @@ export type StartRetryAttemptRuntimeInput = {
   nodeId: string
   projectId: string
   requestedBy: string
-  providerId: string
+  providerId?: string
   remediationPlan: RemediationPlan
   candidateIds: string[]
   userInstruction: string
@@ -1408,6 +1409,18 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         if (!activeCodingStatuses.has(currentRun.status)) {
           throw error
         }
+        if (
+          recoveryDecisionAt !== undefined &&
+          executor.descriptor.id === 'coding-executor-native'
+        ) {
+          await failActiveCodingRun(
+            currentRun,
+            'Interrupted Native Coding continuation was recovered safely; the managed workspace was retained for inspection.',
+            timestamp,
+            { status: 'not_required', reasonCode: 'workspace_retained_for_recovery' },
+          )
+          throw error
+        }
         if (error instanceof CodingEngineContinuationCleanupError) {
           await recordContinuationCleanupFailure(currentRun, timestamp)
           throw error
@@ -1683,6 +1696,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       for (const codingRun of codingRuns) {
         if (
           codingRun.status === 'preparing' ||
+          codingRun.status === 'running' ||
           codingRun.status === 'bootstrapping' ||
           codingRun.status === 'testing'
         ) {
@@ -1731,6 +1745,22 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         const request = requests.find(
           (candidate) => candidate.id === continuation.activePermissionRequestId,
         )
+        if (request?.status === 'pending') {
+          if (Date.parse(request.expiresAt) <= Date.parse(now())) {
+            await replyCodingPermission({
+              requestId: request.id,
+              codingRunId: codingRun.id,
+              decidedBy: 'devflow-recovery',
+              decision: 'expired',
+              comment: 'Permission request expired while the desktop runtime was stopped.',
+            })
+            recovered.push(await findCodingRun(codingRun.id))
+          } else {
+            publishPermissionRequest(request)
+            recovered.push(codingRun)
+          }
+          continue
+        }
         if (!request || request.status !== 'approved') continue
         const approvedDecisions = decisions.filter(
           (decision) =>
@@ -1791,21 +1821,28 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
         ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
       })
-      const estimatedCost = estimateCodingRuntimeCost({
-        engine: configuredEngine,
-        providerId,
-        model,
-        prompt: canonicalBrief.prompt,
-        runId: run.id,
-        nodeId: node.id,
-        projectId: project.id,
-        userId: input.requestedBy,
-        timestamp: now(),
-        noCost: !metered,
-        ...(metered && executor.descriptor.kind === 'native'
-          ? { maxOutputTokens: 1_024, providerCallLimit: 3 }
-          : {}),
-      })
+      const estimatedCost = metered && executor.descriptor.kind === 'native'
+        ? estimateNativeCodingWorstCaseCost({
+            runId: run.id,
+            nodeId: node.id,
+            projectId: project.id,
+            requestedBy: input.requestedBy,
+            providerId,
+            model,
+            timestamp: now(),
+          })
+        : estimateCodingRuntimeCost({
+            engine: configuredEngine,
+            providerId,
+            model,
+            prompt: canonicalBrief.prompt,
+            runId: run.id,
+            nodeId: node.id,
+            projectId: project.id,
+            userId: input.requestedBy,
+            timestamp: now(),
+            noCost: !metered,
+          })
       const budgetDecision = deps.budgetGuard
         ? await deps.budgetGuard({
             codingRunId,
@@ -2471,6 +2508,9 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         throw error
       }
       if (bundle.kind === 'engine_completed') {
+        const providerReportedCost = bundle.codingRun.runtimeCostSummary?.source === 'provider_reported'
+          ? bundle.codingRun.runtimeCostSummary
+          : estimatedCost
         const completed: CodingExecutorCompletedResult = {
           ...bundle,
           codingRun: {
@@ -2478,7 +2518,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             ...(executorReadyRun.bootstrapEvidenceId
               ? { bootstrapEvidenceId: executorReadyRun.bootstrapEvidenceId }
               : {}),
-            runtimeCostSummary: estimatedCost,
+            runtimeCostSummary: providerReportedCost,
             budgetDecision,
           },
         }
@@ -2523,12 +2563,15 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
               }
             : event,
         )
+        const providerReportedCost = bundle.codingRun.runtimeCostSummary?.source === 'provider_reported'
+          ? bundle.codingRun.runtimeCostSummary
+          : estimatedCost
         startupRun = {
           ...bundle.codingRun,
           ...(executorReadyRun.bootstrapEvidenceId
             ? { bootstrapEvidenceId: executorReadyRun.bootstrapEvidenceId }
             : {}),
-          runtimeCostSummary: estimatedCost,
+          runtimeCostSummary: providerReportedCost,
           budgetDecision,
         }
         bundleCommitted = await commitCodingAgentMutation({
@@ -2641,7 +2684,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         nodeId: input.nodeId,
         projectId: input.projectId,
         requestedBy: input.requestedBy,
-        providerId: input.providerId,
+        ...(input.providerId ? { providerId: input.providerId } : {}),
         userInstruction: input.userInstruction,
         remediationPlan: input.remediationPlan,
         retryAttempt,

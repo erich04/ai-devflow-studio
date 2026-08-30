@@ -1,7 +1,7 @@
 import type { Database } from 'sql.js'
 import type { LocalSettings } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 32
+export const CURRENT_SCHEMA_VERSION = 33
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 export type SchemaMigration = {
@@ -2494,6 +2494,72 @@ export const schemaMigrations: readonly SchemaMigration[] = [
     create index if not exists idx_test_evidence_pending_privacy
       on test_evidence(created_at, id)
       where privacy_version is null or privacy_version < 1;
+      `)
+    },
+  },
+  {
+    version: 33,
+    migrate(db) {
+      db.run(`
+    create table if not exists coding_runtime_configurations (
+      project_id text primary key references local_projects(id) on delete cascade,
+      executor text not null,
+      provider_id text not null,
+      version integer not null,
+      json text not null,
+      updated_at text not null,
+      check (executor = 'native-model'),
+      check (length(trim(provider_id)) between 1 and 200 and trim(provider_id) = provider_id),
+      check (version between 1 and 2147483647),
+      check (json_valid(json)),
+      check (json_extract(json, '$.projectId') = project_id),
+      check (json_extract(json, '$.executor') = executor),
+      check (json_extract(json, '$.providerId') = provider_id),
+      check (json_extract(json, '$.version') = version),
+      check (json_extract(json, '$.updatedAt') = updated_at)
+    );
+
+    create table if not exists coding_change_sets (
+      id text primary key,
+      state_version integer not null,
+      coding_run_id text not null references coding_agent_runs(id) on delete cascade,
+      project_id text not null references local_projects(id) on delete cascade,
+      workspace_id text not null references managed_coding_workspaces(id) on delete cascade,
+      phase text not null,
+      executor_version integer not null,
+      config_version integer not null,
+      provider_id text not null,
+      change_set_digest text not null,
+      json text not null,
+      created_at text not null,
+      expires_at text not null,
+      check (state_version = 2),
+      check (phase in ('initial', 'repair')),
+      check (executor_version = 2),
+      check (config_version between 1 and 2147483647),
+      check (length(trim(provider_id)) between 1 and 200 and trim(provider_id) = provider_id),
+      check (change_set_digest not glob '*[^0-9a-f]*' and length(change_set_digest) = 64),
+      check (json_valid(json)),
+      check (json_extract(json, '$.id') = id),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.codingRunId') = coding_run_id),
+      check (json_extract(json, '$.projectId') = project_id),
+      check (json_extract(json, '$.workspaceId') = workspace_id),
+      check (json_extract(json, '$.phase') = phase),
+      check (json_extract(json, '$.executorVersion') = executor_version),
+      check (json_extract(json, '$.configVersion') = config_version),
+      check (json_extract(json, '$.providerId') = provider_id),
+      check (json_extract(json, '$.changeSetDigest') = change_set_digest),
+      check (json_extract(json, '$.createdAt') = created_at),
+      check (json_extract(json, '$.expiresAt') = expires_at),
+      check (expires_at > created_at),
+      unique (coding_run_id, phase)
+    );
+
+    create index if not exists idx_coding_change_sets_run
+      on coding_change_sets(coding_run_id, created_at, id);
+    create index if not exists idx_coding_change_sets_expiry
+      on coding_change_sets(expires_at, id);
       `)
     },
   },

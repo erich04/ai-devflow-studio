@@ -77,6 +77,9 @@ export class CanonicalRemoteSyncEntityError extends Error {
 export type ProjectBoundRemoteSync = Pick<
   RemoteSyncClient,
   | 'saveGateOverride'
+  | 'getRuntimeBudgetPolicy'
+  | 'saveRuntimeBudgetPolicy'
+  | 'createRuntimeBudgetApproval'
   | 'evaluateRuntimeBudget'
 > & {
   uploadCanonicalRunSummary(runId: string): Promise<RemoteSyncUploadResult>
@@ -434,6 +437,20 @@ export function createProjectBoundRemoteSync(input: {
     async saveGateOverride(override) {
       return input.remoteSync.saveGateOverride(
         await bindProjectId(override, input.credentialSource),
+      )
+    },
+    async getRuntimeBudgetPolicy(projectId) {
+      const bound = await bindProjectId({ projectId }, input.credentialSource)
+      return input.remoteSync.getRuntimeBudgetPolicy(bound.projectId)
+    },
+    async saveRuntimeBudgetPolicy(policy) {
+      return input.remoteSync.saveRuntimeBudgetPolicy(
+        await bindProjectId(policy, input.credentialSource),
+      )
+    },
+    async createRuntimeBudgetApproval(approval) {
+      return input.remoteSync.createRuntimeBudgetApproval(
+        await bindProjectId(approval, input.credentialSource),
       )
     },
     async evaluateRuntimeBudget(request) {

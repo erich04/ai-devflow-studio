@@ -26,6 +26,7 @@ import {
   parseLoadRepositoryKnowledgeInput,
   parseGetAgentRuntimeInput,
   parseGetCoordinationSessionInput,
+  parseGetCodingChangeSetPreviewInput,
   parseStartCoordinationPlanInput,
   parseResumeCoordinationSessionInput,
   parseStartCoordinationTaskInput,
@@ -951,14 +952,13 @@ describe('IPC contract parsers', () => {
     ).toThrow(/projectId/)
   })
 
-  it('accepts coding agent payloads without accepting renderer-supplied raw prompts', () => {
+  it('accepts only identifier-bound coding agent payloads and rejects renderer provider or prompt authority', () => {
     expect(
       parseRunCodingAgentInput({
         runId: 'run-1',
         nodeId: 'node-build',
         projectId: 'project-1',
         requestedBy: 'user-1',
-        providerId: 'fake-coding-engine',
         userInstruction: 'Keep changes minimal.',
       }),
     ).toEqual({
@@ -966,7 +966,6 @@ describe('IPC contract parsers', () => {
       nodeId: 'node-build',
       projectId: 'project-1',
       requestedBy: 'user-1',
-      providerId: 'fake-coding-engine',
       userInstruction: 'Keep changes minimal.',
     })
 
@@ -976,7 +975,6 @@ describe('IPC contract parsers', () => {
         nodeId: 'node-build',
         projectId: 'project-1',
         requestedBy: 'user-1',
-        providerId: 'opencode-http',
         userInstruction: 'Use the approved runtime budget.',
         runtimeBudgetApprovalId: ' runtime-budget-approval-1 ',
       }),
@@ -985,7 +983,6 @@ describe('IPC contract parsers', () => {
       nodeId: 'node-build',
       projectId: 'project-1',
       requestedBy: 'user-1',
-      providerId: 'opencode-http',
       userInstruction: 'Use the approved runtime budget.',
       runtimeBudgetApprovalId: 'runtime-budget-approval-1',
     })
@@ -996,11 +993,36 @@ describe('IPC contract parsers', () => {
         nodeId: 'node-build',
         projectId: 'project-1',
         requestedBy: 'user-1',
-        providerId: 'fake-coding-engine',
         userInstruction: 'Do it.',
         prompt: 'renderer must not send prebuilt prompts',
       }),
     ).toThrow(/prompt/)
+
+    expect(() =>
+      parseRunCodingAgentInput({
+        runId: 'run-1',
+        nodeId: 'node-build',
+        projectId: 'project-1',
+        requestedBy: 'user-1',
+        providerId: 'renderer-selected-provider',
+        userInstruction: 'Do it.',
+      }),
+    ).toThrow(/providerId/)
+  })
+
+  it('accepts only an exact Coding Change Set preview lookup', () => {
+    expect(parseGetCodingChangeSetPreviewInput({
+      changeSetId: 'change-set-1',
+      codingRunId: 'coding-run-1',
+    })).toEqual({
+      changeSetId: 'change-set-1',
+      codingRunId: 'coding-run-1',
+    })
+    expect(() => parseGetCodingChangeSetPreviewInput({
+      changeSetId: 'change-set-1',
+      codingRunId: 'coding-run-1',
+      providerId: 'renderer-selected-provider',
+    })).toThrow(/providerId/)
   })
 
   it('accepts coding permission replies, cancellations, and managed worktree actions', () => {

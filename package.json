@@ -26,6 +26,7 @@
     "v22:completion-status": "tsx scripts/v22-completion-evidence.ts",
     "test:cross-platform": "node scripts/check-cross-platform.mjs",
     "test:postgres-smoke": "node scripts/postgres-smoke.mjs",
+    "test:local-auth-postgres-smoke": "node scripts/local-auth-postgres-smoke.mjs",
     "test:docker-smoke": "tsx scripts/docker-smoke.mjs",
     "test:docker-lifecycle-smoke": "node scripts/docker-lifecycle-smoke.mjs",
     "test:build-output-smoke": "node scripts/build-output-smoke.mjs",
@@ -35,11 +36,12 @@
     "opencode:release-preflight": "tsx scripts/opencode-release-config-preflight.ts",
     "test:e2e": "node scripts/e2e.mjs",
     "test:electron-smoke": "node scripts/electron-smoke.mjs",
+    "test:native-coding-electron-smoke": "node scripts/native-coding-electron-smoke.mjs",
     "test:desktop-pilot-smoke": "node scripts/desktop-pilot-smoke.mjs",
     "test:v15-github-delivery-packaged-smoke": "node scripts/v15-github-delivery-packaged-smoke.mjs",
     "visual:desktop": "node scripts/capture-desktop-visuals.mjs",
     "verify": "corepack pnpm typecheck && corepack pnpm test && corepack pnpm test:cross-platform",
-    "verify:demo": "corepack pnpm verify && corepack pnpm test:e2e && corepack pnpm test:electron-smoke",
+    "verify:demo": "corepack pnpm verify && corepack pnpm test:e2e && corepack pnpm test:electron-smoke && corepack pnpm test:native-coding-electron-smoke",
     "release:status": "node scripts/release-signoff-status.mjs"
   },
   "devDependencies": {

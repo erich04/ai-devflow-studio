@@ -779,6 +779,9 @@ export function codingTraceSourceLabel(source: string | undefined): string {
 }
 
 export function codingRuntimeLabel(engine: CodingAgentRun['engine']): string {
+  if (engine === 'native') {
+    return 'Native 模型执行器'
+  }
   if (engine === 'opencode-http') {
     return 'real opencode'
   }

@@ -620,18 +620,66 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
         engine: 'fake',
         status: 'ready',
       }),
+      getCodingRuntimeConfiguration: async () => null,
+      saveCodingRuntimeConfiguration: async ({ projectId, providerId }: { projectId: string; providerId: string }) => ({
+        projectId,
+        executor: 'native-model',
+        providerId,
+        version: 1,
+        updatedAt: '2026-06-15T00:03:30.000Z',
+      }),
+      getCodingRuntimeReadiness: async ({ runId, nodeId, projectId }: { runId: string; nodeId: string; projectId: string }) => ({
+        projectId,
+        runId,
+        nodeId,
+        status: 'ready',
+        engine: 'fake',
+        checks: [],
+        evaluatedAt: '2026-06-15T00:03:30.000Z',
+      }),
+      getCodingChangeSetPreview: async ({ changeSetId, codingRunId }: { changeSetId: string; codingRunId: string }) => ({
+        stateVersion: 2,
+        id: changeSetId,
+        codingRunId,
+        phase: 'initial',
+        changedPaths: ['devflow-fake-change.txt'],
+        unifiedDiff: 'diff --git a/devflow-fake-change.txt b/devflow-fake-change.txt\n+fake change',
+        changeSetDigest: 'c'.repeat(64),
+        createdAt: '2026-06-15T00:05:00.000Z',
+        expiresAt: '2099-06-15T00:20:00.000Z',
+      }),
+      getCodingRuntimeBudgetPolicy: async () => null,
+      saveCodingRuntimeBudgetPolicy: async ({ projectId, enabled, monthlyLimitUsd, warningThresholdUsd }: { projectId: string; enabled: boolean; monthlyLimitUsd: number; warningThresholdUsd: number }) => ({
+        projectId,
+        enabled,
+        monthlyLimitUsd,
+        warningThresholdUsd,
+        currency: 'USD',
+        updatedAt: '2026-06-15T00:03:30.000Z',
+      }),
+      createCodingRuntimeBudgetApproval: async ({ projectId, requestedBy, maxAdditionalCostUsd, reason }: { projectId: string; requestedBy: string; maxAdditionalCostUsd: number; reason: string }) => ({
+        id: 'runtime-budget-approval-1',
+        projectId,
+        providerId: 'fake-coding-engine',
+        requestedBy,
+        approvedBy: requestedBy,
+        role: 'owner',
+        maxAdditionalCostUsd,
+        reason,
+        status: 'approved',
+        createdAt: '2026-06-15T00:03:30.000Z',
+        expiresAt: '2026-06-15T00:18:30.000Z',
+      }),
       runCodingAgent: async ({
         runId,
         nodeId,
         projectId,
         requestedBy,
-        providerId,
       }: {
         runId: string
         nodeId: string
         projectId: string
         requestedBy: string
-        providerId: string
         userInstruction: string
       }) => {
         const startedAt = '2026-06-15T00:05:00.000Z'
@@ -641,7 +689,7 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
           nodeId,
           projectId,
           requestedBy,
-          providerId,
+          providerId: 'fake-coding-engine',
           engine: 'fake',
           status: 'waiting_permission',
           branchName: 'devflow/run-1-node-build-coding-run-1',

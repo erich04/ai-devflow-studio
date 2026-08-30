@@ -15,6 +15,9 @@ import type {
   CommandSafetyResult,
   CodingAgentEvent,
   CodingAgentRun,
+  CodingChangeSetPreview,
+  CodingRuntimeConfiguration,
+  CodingRuntimeReadiness,
   CodingPermissionDecision,
   CodingPermissionRequest,
   DesktopPairingCredential,
@@ -33,6 +36,8 @@ import type {
   RemoteRunDeleteResult,
   RemoteTeamSnapshot,
   RetryAttempt,
+  RuntimeBudgetApproval,
+  RuntimeBudgetPolicy,
   TestEvidence,
   AgentReviewRuntime,
   WorkRequest,
@@ -209,6 +214,13 @@ export const ipcChannels = {
   runKnowledgeReview: 'devflow:agent:knowledge-review:run',
   listAgentReviews: 'devflow:agent:reviews:list',
   ensureCodingEngine: 'devflow:coding:engine:ensure',
+  getCodingRuntimeConfiguration: 'devflow:coding:runtime-configuration:get',
+  saveCodingRuntimeConfiguration: 'devflow:coding:runtime-configuration:save',
+  getCodingRuntimeReadiness: 'devflow:coding:runtime-readiness:get',
+  getCodingChangeSetPreview: 'devflow:coding:change-set-preview:get',
+  getCodingRuntimeBudgetPolicy: 'devflow:coding:runtime-budget-policy:get',
+  saveCodingRuntimeBudgetPolicy: 'devflow:coding:runtime-budget-policy:save',
+  createCodingRuntimeBudgetApproval: 'devflow:coding:runtime-budget-approval:create',
   runCodingAgent: 'devflow:coding:agent:run',
   startRetryAttempt: 'devflow:remediation:retry:start',
   cancelCodingAgentRun: 'devflow:coding:agent:cancel',
@@ -410,8 +422,45 @@ export type EnsureCodingEngineInput = {
 
 export type EnsureCodingEngineResult = {
   projectId: string
-  engine: 'fake' | 'opencode-http' | 'opencode-acp'
+  engine: 'fake' | 'native' | 'opencode-http' | 'opencode-acp'
   status: 'ready'
+}
+
+export type GetCodingRuntimeConfigurationInput = {
+  projectId: string
+}
+
+export type SaveCodingRuntimeConfigurationInput = {
+  projectId: string
+  executor: 'native-model'
+  providerId: string
+}
+
+export type GetCodingRuntimeReadinessInput = {
+  runId: string
+  nodeId: string
+  projectId: string
+  requestedBy: string
+  runtimeBudgetApprovalId?: string
+}
+
+export type GetCodingChangeSetPreviewInput = {
+  changeSetId: string
+  codingRunId: string
+}
+
+export type SaveCodingRuntimeBudgetPolicyInput = {
+  projectId: string
+  enabled: boolean
+  monthlyLimitUsd: number
+  warningThresholdUsd: number
+}
+
+export type CreateCodingRuntimeBudgetApprovalInput = {
+  projectId: string
+  requestedBy: string
+  maxAdditionalCostUsd: number
+  reason: string
 }
 
 export type RunCodingAgentInput = {
@@ -419,7 +468,6 @@ export type RunCodingAgentInput = {
   nodeId: string
   projectId: string
   requestedBy: string
-  providerId: string
   userInstruction: string
   runtimeBudgetApprovalId?: string
 }
@@ -434,7 +482,6 @@ export type StartRetryAttemptInput = {
   nodeId: string
   projectId: string
   requestedBy: string
-  providerId: string
   candidateIds: string[]
   userInstruction: string
 }
@@ -596,6 +643,27 @@ export type DevFlowDesktopApi = {
   runKnowledgeReview: (input: RunKnowledgeReviewInput) => Promise<RunKnowledgeReviewResult>
   listAgentReviews: (input?: ListAgentReviewsInput) => Promise<AgentReviewExecutionResult['review'][]>
   ensureCodingEngine: (input: EnsureCodingEngineInput) => Promise<EnsureCodingEngineResult>
+  getCodingRuntimeConfiguration: (
+    input: GetCodingRuntimeConfigurationInput,
+  ) => Promise<CodingRuntimeConfiguration | null>
+  saveCodingRuntimeConfiguration: (
+    input: SaveCodingRuntimeConfigurationInput,
+  ) => Promise<CodingRuntimeConfiguration>
+  getCodingRuntimeReadiness: (
+    input: GetCodingRuntimeReadinessInput,
+  ) => Promise<CodingRuntimeReadiness>
+  getCodingChangeSetPreview: (
+    input: GetCodingChangeSetPreviewInput,
+  ) => Promise<CodingChangeSetPreview>
+  getCodingRuntimeBudgetPolicy: (
+    input: GetCodingRuntimeConfigurationInput,
+  ) => Promise<RuntimeBudgetPolicy | null>
+  saveCodingRuntimeBudgetPolicy: (
+    input: SaveCodingRuntimeBudgetPolicyInput,
+  ) => Promise<RuntimeBudgetPolicy>
+  createCodingRuntimeBudgetApproval: (
+    input: CreateCodingRuntimeBudgetApprovalInput,
+  ) => Promise<RuntimeBudgetApproval>
   runCodingAgent: (input: RunCodingAgentInput) => Promise<RunCodingAgentResult>
   startRetryAttempt: (input: StartRetryAttemptInput) => Promise<StartRetryAttemptResult>
   cancelCodingAgentRun: (input: CancelCodingAgentRunInput) => Promise<CodingAgentRun>
@@ -1486,13 +1554,134 @@ export function parseEnsureCodingEngineInput(value: unknown): EnsureCodingEngine
   return { projectId: readRequiredString(value, 'projectId') }
 }
 
+export function parseGetCodingRuntimeConfigurationInput(
+  value: unknown,
+): GetCodingRuntimeConfigurationInput {
+  if (!isRecord(value)) throw new Error('Invalid Coding Runtime configuration payload')
+  rejectUnexpectedFields(value, ['projectId'], 'Coding Runtime configuration payload')
+  return { projectId: readRequiredString(value, 'projectId') }
+}
+
+export function parseSaveCodingRuntimeConfigurationInput(
+  value: unknown,
+): SaveCodingRuntimeConfigurationInput {
+  if (!isRecord(value)) throw new Error('Invalid Coding Runtime configuration payload')
+  rejectUnexpectedFields(
+    value,
+    ['projectId', 'executor', 'providerId'],
+    'Coding Runtime configuration payload',
+  )
+  if (value['executor'] !== 'native-model') {
+    throw new Error('Invalid Coding Runtime executor')
+  }
+  return {
+    projectId: readRequiredString(value, 'projectId'),
+    executor: 'native-model',
+    providerId: readRequiredString(value, 'providerId'),
+  }
+}
+
+export function parseGetCodingRuntimeReadinessInput(
+  value: unknown,
+): GetCodingRuntimeReadinessInput {
+  if (!isRecord(value)) throw new Error('Invalid Coding Runtime readiness payload')
+  rejectUnexpectedFields(
+    value,
+    ['runId', 'nodeId', 'projectId', 'requestedBy', 'runtimeBudgetApprovalId'],
+    'Coding Runtime readiness payload',
+  )
+  const runtimeBudgetApprovalId = value['runtimeBudgetApprovalId']
+  return {
+    runId: readRequiredString(value, 'runId'),
+    nodeId: readRequiredString(value, 'nodeId'),
+    projectId: readRequiredString(value, 'projectId'),
+    requestedBy: readRequiredString(value, 'requestedBy'),
+    ...(typeof runtimeBudgetApprovalId === 'string' && runtimeBudgetApprovalId.trim()
+      ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
+      : {}),
+  }
+}
+
+export function parseGetCodingChangeSetPreviewInput(
+  value: unknown,
+): GetCodingChangeSetPreviewInput {
+  if (!isRecord(value)) throw new Error('Invalid Coding Change Set preview payload')
+  rejectUnexpectedFields(
+    value,
+    ['changeSetId', 'codingRunId'],
+    'Coding Change Set preview payload',
+  )
+  return {
+    changeSetId: readRequiredString(value, 'changeSetId'),
+    codingRunId: readRequiredString(value, 'codingRunId'),
+  }
+}
+
+export function parseSaveCodingRuntimeBudgetPolicyInput(
+  value: unknown,
+): SaveCodingRuntimeBudgetPolicyInput {
+  if (!isRecord(value)) throw new Error('Invalid Coding Runtime budget policy payload')
+  rejectUnexpectedFields(
+    value,
+    ['projectId', 'enabled', 'monthlyLimitUsd', 'warningThresholdUsd'],
+    'Coding Runtime budget policy payload',
+  )
+  const monthlyLimitUsd = value['monthlyLimitUsd']
+  const warningThresholdUsd = value['warningThresholdUsd']
+  if (
+    typeof value['enabled'] !== 'boolean' ||
+    typeof monthlyLimitUsd !== 'number' ||
+    !Number.isFinite(monthlyLimitUsd) ||
+    monthlyLimitUsd <= 0 ||
+    typeof warningThresholdUsd !== 'number' ||
+    !Number.isFinite(warningThresholdUsd) ||
+    warningThresholdUsd < 0 ||
+    warningThresholdUsd > monthlyLimitUsd
+  ) {
+    throw new Error('Invalid Coding Runtime budget policy values')
+  }
+  return {
+    projectId: readRequiredString(value, 'projectId'),
+    enabled: value['enabled'],
+    monthlyLimitUsd,
+    warningThresholdUsd,
+  }
+}
+
+export function parseCreateCodingRuntimeBudgetApprovalInput(
+  value: unknown,
+): CreateCodingRuntimeBudgetApprovalInput {
+  if (!isRecord(value)) throw new Error('Invalid Coding Runtime budget approval payload')
+  rejectUnexpectedFields(
+    value,
+    ['projectId', 'requestedBy', 'maxAdditionalCostUsd', 'reason'],
+    'Coding Runtime budget approval payload',
+  )
+  const maxAdditionalCostUsd = value['maxAdditionalCostUsd']
+  if (
+    typeof maxAdditionalCostUsd !== 'number' ||
+    !Number.isFinite(maxAdditionalCostUsd) ||
+    maxAdditionalCostUsd <= 0
+  ) {
+    throw new Error('Invalid Coding Runtime budget approval amount')
+  }
+  return {
+    projectId: readRequiredString(value, 'projectId'),
+    requestedBy: readRequiredString(value, 'requestedBy'),
+    maxAdditionalCostUsd,
+    reason: readRequiredString(value, 'reason'),
+  }
+}
+
 export function parseRunCodingAgentInput(value: unknown): RunCodingAgentInput {
   if (!isRecord(value)) {
     throw new Error('Invalid coding agent run payload')
   }
-  if ('prompt' in value) {
-    throw new Error('Invalid coding agent run payload: renderer must not send prompt')
-  }
+  rejectUnexpectedFields(
+    value,
+    ['runId', 'nodeId', 'projectId', 'requestedBy', 'userInstruction', 'runtimeBudgetApprovalId'],
+    'coding agent run payload',
+  )
   const runtimeBudgetApprovalId = value['runtimeBudgetApprovalId']
 
   return {
@@ -1500,7 +1689,6 @@ export function parseRunCodingAgentInput(value: unknown): RunCodingAgentInput {
     nodeId: readRequiredString(value, 'nodeId'),
     projectId: readRequiredString(value, 'projectId'),
     requestedBy: readRequiredString(value, 'requestedBy'),
-    providerId: readRequiredString(value, 'providerId'),
     userInstruction: readRequiredString(value, 'userInstruction'),
     ...(typeof runtimeBudgetApprovalId === 'string' && runtimeBudgetApprovalId.trim()
       ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
@@ -1512,9 +1700,11 @@ export function parseStartRetryAttemptInput(value: unknown): StartRetryAttemptIn
   if (!isRecord(value)) {
     throw new Error('Invalid retry attempt payload')
   }
-  if ('prompt' in value || 'remediationPlan' in value) {
-    throw new Error('Invalid retry attempt payload: renderer must not send prompt or remediation plan')
-  }
+  rejectUnexpectedFields(
+    value,
+    ['runId', 'nodeId', 'projectId', 'requestedBy', 'candidateIds', 'userInstruction'],
+    'retry attempt payload',
+  )
   const candidateIds = value['candidateIds']
   if (
     !Array.isArray(candidateIds) ||
@@ -1529,7 +1719,6 @@ export function parseStartRetryAttemptInput(value: unknown): StartRetryAttemptIn
     nodeId: readRequiredString(value, 'nodeId'),
     projectId: readRequiredString(value, 'projectId'),
     requestedBy: readRequiredString(value, 'requestedBy'),
-    providerId: readRequiredString(value, 'providerId'),
     candidateIds: candidateIds.map((candidateId) => candidateId.trim()),
     userInstruction: readRequiredString(value, 'userInstruction'),
   }

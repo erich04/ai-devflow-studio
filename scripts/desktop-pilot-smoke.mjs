@@ -324,7 +324,6 @@ try {
       nodeId: node.id,
       projectId: project.id,
       requestedBy: 'packaged-smoke-user',
-      providerId: 'native-decision-deterministic',
       userInstruction: 'Apply the exact bounded Native Coding repair.',
     })
     const pending = started.state.codingPermissionRequests.find(
@@ -520,7 +519,7 @@ try {
   }
   database.close()
   if (schemaVersion !== 32) {
-    throw new Error(`Packaged Desktop did not initialize schema 32: ${schemaVersion}`)
+    throw new Error(`Packaged Desktop did not initialize schema 33: ${schemaVersion}`)
   }
   const [toolId, source, installationId, installationVersion, started, succeeded, records, results] =
     localMcpAudit ?? []

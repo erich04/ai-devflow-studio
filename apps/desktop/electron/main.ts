@@ -73,6 +73,12 @@ import {
   parseDeleteRunInput,
   parseDeleteManagedWorktreeInput,
   parseEnsureCodingEngineInput,
+  parseGetCodingRuntimeConfigurationInput,
+  parseGetCodingRuntimeReadinessInput,
+  parseGetCodingChangeSetPreviewInput,
+  parseSaveCodingRuntimeConfigurationInput,
+  parseSaveCodingRuntimeBudgetPolicyInput,
+  parseCreateCodingRuntimeBudgetApprovalInput,
   parseListCodingAgentRunsInput,
   parseListWorkRequestsInput,
   parseMcpServersInput,
@@ -148,9 +154,13 @@ import {
 } from './coding-executor.js'
 import {
   createDeterministicNativeCodingDecisionProvider,
-  createAgentProviderNativeCodingDecisionProvider,
   createNativeCodingExecutor,
 } from './native-coding-executor.js'
+import {
+  createAgentProviderNativeCodingV2DecisionProvider,
+  createNativeCodingExecutorV2,
+} from './native-coding-executor-v2.js'
+import { verifyCodingChangeSetDigest } from './coding-change-set.js'
 import { createCodingRuntime } from './coding-runtime.js'
 import {
   createGitHubDeliveryRuntime,
@@ -205,6 +215,11 @@ import {
   createKnowledgeReviewRuntimeBudgetGuard,
   createRuntimeBudgetGuard,
 } from './runtime-budget-guard.js'
+import {
+  evaluateCodingRuntimeReadiness,
+  resolveCodingRuntimeSelection,
+  type ResolvedCodingRuntimeSelection,
+} from './coding-runtime-configuration.js'
 import { createKnowledgeReviewRuntime } from './knowledge-review-runtime.js'
 import { createRepositoryKnowledgeCache } from './repository-knowledge-cache.js'
 import { createRepositoryKnowledgeResolver } from './repository-knowledge-resolver.js'
@@ -282,7 +297,7 @@ const codingEngineAdapter = createCodingEngineAdapterFromEnv(process.env, {
   processManager: opencodeProcessManager,
 })
 const compatibilityCodingExecutor = createCodingExecutorCompatibilityAdapter(codingEngineAdapter)
-let codingExecutorPromise: Promise<CodingExecutor> | undefined
+const codingExecutorPromises = new Map<string, Promise<CodingExecutor>>()
 let quitCleanupComplete = false
 let quitCleanupPromise: Promise<void> | undefined
 const repositoryKnowledgeService = createRepositoryKnowledgeService()
@@ -312,23 +327,51 @@ function getStore() {
   return storePromise
 }
 
-async function getCodingExecutor(): Promise<CodingExecutor> {
-  const selection = resolveDevFlowCodingExecutorSelection(process.env)
-  if (selection.executor === 'compatibility') return compatibilityCodingExecutor
-  codingExecutorPromise ??= getStore().then(async (store) => {
-    const decisionProvider =
-      selection.executor === 'native-deterministic'
-        ? createDeterministicNativeCodingDecisionProvider()
-        : createAgentProviderNativeCodingDecisionProvider(
-            await resolveAgentProvider(store, selection.providerId),
-          )
-    return createNativeCodingExecutor({
-      store,
-      decisionProvider,
-      runSavedTest: runLocalTestCommand,
-    })
-  })
-  return codingExecutorPromise
+async function resolveCodingExecutorForProject(projectId: string): Promise<{
+  selection: ResolvedCodingRuntimeSelection
+  executor: CodingExecutor | null
+}> {
+  const store = await getStore()
+  const selection = await resolveCodingRuntimeSelection({ store, projectId, env: process.env })
+  if (selection.executor === 'unconfigured') return { selection, executor: null }
+  if (selection.executor === 'compatibility') {
+    return { selection, executor: compatibilityCodingExecutor }
+  }
+  const key = `${projectId}:${selection.configVersion}:${selection.executor}:${selection.providerId ?? ''}`
+  let executorPromise = codingExecutorPromises.get(key)
+  if (!executorPromise) {
+    executorPromise = (async () => {
+      if (selection.executor === 'native-deterministic') {
+        return createNativeCodingExecutor({
+          store,
+          decisionProvider: createDeterministicNativeCodingDecisionProvider(),
+          runSavedTest: runLocalTestCommand,
+        })
+      }
+      return createNativeCodingExecutorV2({
+        store,
+        decisionProvider: createAgentProviderNativeCodingV2DecisionProvider(
+          await resolveAgentProvider(store, selection.providerId!),
+        ),
+        configVersion: Math.max(1, selection.configVersion),
+        runSavedTest: runLocalTestCommand,
+        testTimeoutMs: DEFAULT_TEST_TIMEOUT_MS,
+      })
+    })()
+    codingExecutorPromises.set(key, executorPromise)
+  }
+  try {
+    return { selection, executor: await executorPromise }
+  } catch (error) {
+    codingExecutorPromises.delete(key)
+    throw error
+  }
+}
+
+async function getCodingExecutor(projectId?: string): Promise<CodingExecutor> {
+  if (!projectId) return compatibilityCodingExecutor
+  const resolved = await resolveCodingExecutorForProject(projectId)
+  return resolved.executor ?? compatibilityCodingExecutor
 }
 
 function getGitHubDeliveryRuntime() {
@@ -1255,11 +1298,12 @@ function scheduleCodingRunTimeout(codingRunId: string, expire: () => Promise<voi
 
 async function createCodingRuntimeForRequest(
   knowledgeSnapshot?: RepositoryKnowledgeSnapshot,
+  projectId?: string,
 ) {
   const [remoteSync, store, executor] = await Promise.all([
     getProjectBoundRemoteSync(),
     getStore(),
-    getCodingExecutor(),
+    getCodingExecutor(projectId),
   ])
   return createCodingRuntime({
     store,
@@ -1330,6 +1374,44 @@ async function createCodingRuntimeForRequest(
       publishPermission: (request) => broadcastToRenderers(ipcChannels.codingPermissionUpdated, request),
     },
     idGenerator: (prefix = 'id') => `${prefix}-${randomUUID()}`,
+  })
+}
+
+async function getCodingReadiness(input: {
+  runId: string
+  nodeId: string
+  projectId: string
+  requestedBy: string
+  runtimeBudgetApprovalId?: string
+}) {
+  const [store, remoteSync] = await Promise.all([
+    getStore(),
+    getProjectBoundRemoteSync(),
+  ])
+  let selection: ResolvedCodingRuntimeSelection = {
+    source: 'none',
+    executor: 'unconfigured',
+    configVersion: 0,
+  }
+  let executor: CodingExecutor | null = null
+  try {
+    const resolved = await resolveCodingExecutorForProject(input.projectId)
+    selection = resolved.selection
+    executor = resolved.executor
+  } catch {
+    selection = await resolveCodingRuntimeSelection({
+      store,
+      projectId: input.projectId,
+      env: process.env,
+    })
+  }
+  return evaluateCodingRuntimeReadiness({
+    store,
+    selection,
+    executor,
+    ...input,
+    getBudgetPolicy: (projectId) => remoteSync.getRuntimeBudgetPolicy(projectId),
+    evaluateBudget: (budgetInput) => remoteSync.evaluateRuntimeBudget(budgetInput),
   })
 }
 
@@ -2776,8 +2858,105 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.ensureCodingEngine, async (_, payload: unknown) => {
     const input = parseEnsureCodingEngineInput(payload)
-    const runtime = await createCodingRuntimeForRequest()
+    const runtime = await createCodingRuntimeForRequest(undefined, input.projectId)
     return runtime.ensureCodingEngine(input)
+  })
+
+  ipcMain.handle(ipcChannels.getCodingRuntimeConfiguration, async (_, payload: unknown) => {
+    const input = parseGetCodingRuntimeConfigurationInput(payload)
+    return (await getStore()).getCodingRuntimeConfiguration(input.projectId)
+  })
+
+  ipcMain.handle(ipcChannels.saveCodingRuntimeConfiguration, async (_, payload: unknown) => {
+    const input = parseSaveCodingRuntimeConfigurationInput(payload)
+    const store = await getStore()
+    await findProject(input.projectId)
+    const [metadata, encryptedSecret, current] = await Promise.all([
+      store.listProviderCredentials().then((credentials) =>
+        credentials.find((candidate) => candidate.providerId === input.providerId),
+      ),
+      store.getProviderEncryptedSecret(input.providerId),
+      store.getCodingRuntimeConfiguration(input.projectId),
+    ])
+    if (!metadata || !encryptedSecret) {
+      throw new Error(`Coding Provider credential is unavailable: ${input.providerId}`)
+    }
+    const configuration = await store.saveCodingRuntimeConfiguration({
+      projectId: input.projectId,
+      executor: input.executor,
+      providerId: input.providerId,
+      version: (current?.version ?? 0) + 1,
+      updatedAt: new Date().toISOString(),
+    })
+    for (const key of codingExecutorPromises.keys()) {
+      if (key.startsWith(`${input.projectId}:`)) codingExecutorPromises.delete(key)
+    }
+    return configuration
+  })
+
+  ipcMain.handle(ipcChannels.getCodingRuntimeReadiness, async (_, payload: unknown) => {
+    return getCodingReadiness(parseGetCodingRuntimeReadinessInput(payload))
+  })
+
+  ipcMain.handle(ipcChannels.getCodingChangeSetPreview, async (_, payload: unknown) => {
+    const input = parseGetCodingChangeSetPreviewInput(payload)
+    const store = await getStore()
+    const [changeSet, codingRun] = await Promise.all([
+      store.getCodingChangeSet(input.changeSetId),
+      store.listCodingAgentRuns().then((runs) =>
+        runs.find((candidate) => candidate.id === input.codingRunId),
+      ),
+    ])
+    if (
+      !changeSet ||
+      !codingRun ||
+      changeSet.codingRunId !== codingRun.id ||
+      codingRun.changeSetId !== changeSet.id
+    ) {
+      throw new Error('Coding Change Set preview is unavailable or stale')
+    }
+    verifyCodingChangeSetDigest(changeSet)
+    return {
+      stateVersion: 2 as const,
+      id: changeSet.id,
+      codingRunId: changeSet.codingRunId,
+      phase: changeSet.phase,
+      changedPaths: changeSet.changes.map((change) => change.path),
+      unifiedDiff: changeSet.unifiedDiff,
+      changeSetDigest: changeSet.changeSetDigest,
+      createdAt: changeSet.createdAt,
+      expiresAt: changeSet.expiresAt,
+    }
+  })
+
+  ipcMain.handle(ipcChannels.getCodingRuntimeBudgetPolicy, async (_, payload: unknown) => {
+    const input = parseGetCodingRuntimeConfigurationInput(payload)
+    return (await getProjectBoundRemoteSync()).getRuntimeBudgetPolicy(input.projectId)
+  })
+
+  ipcMain.handle(ipcChannels.saveCodingRuntimeBudgetPolicy, async (_, payload: unknown) => {
+    const input = parseSaveCodingRuntimeBudgetPolicyInput(payload)
+    return (await getProjectBoundRemoteSync()).saveRuntimeBudgetPolicy(input)
+  })
+
+  ipcMain.handle(ipcChannels.createCodingRuntimeBudgetApproval, async (_, payload: unknown) => {
+    const input = parseCreateCodingRuntimeBudgetApprovalInput(payload)
+    const store = await getStore()
+    const [configuration, pairing] = await Promise.all([
+      store.getCodingRuntimeConfiguration(input.projectId),
+      store.getDesktopPairingCredential(),
+    ])
+    if (!configuration || !pairing || pairing.localProjectId !== input.projectId) {
+      throw new Error('Coding Runtime project configuration or Team pairing is unavailable')
+    }
+    return (await getProjectBoundRemoteSync()).createRuntimeBudgetApproval({
+      projectId: input.projectId,
+      providerId: configuration.providerId,
+      requestedBy: pairing.userId,
+      maxAdditionalCostUsd: input.maxAdditionalCostUsd,
+      reason: input.reason,
+      expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+    })
   })
 
   ipcMain.handle(ipcChannels.listCodingAgentRuns, async (_, payload: unknown) => {
@@ -2788,15 +2967,27 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.runCodingAgent, async (_, payload: unknown) => {
     const input = parseRunCodingAgentInput(payload)
+    const readiness = await getCodingReadiness(input)
+    if (readiness.status !== 'ready') {
+      const blockers = readiness.checks
+        .filter((check) => check.status === 'blocked')
+        .map((check) => check.message)
+        .join(' ')
+      throw new Error(`Coding Runtime is not ready. ${blockers}`)
+    }
     const { knowledgeSnapshot } = await loadTrustedRunKnowledge(input)
-    const runtime = await createCodingRuntimeForRequest(knowledgeSnapshot)
+    const runtime = await createCodingRuntimeForRequest(knowledgeSnapshot, input.projectId)
     return runtime.runCodingAgent(input)
   })
 
   ipcMain.handle(ipcChannels.startRetryAttempt, async (_, payload: unknown) => {
     const input = parseStartRetryAttemptInput(payload)
     const { knowledgeSnapshot } = await loadTrustedRunKnowledge(input)
-    const runtime = await createCodingRuntimeForRequest(knowledgeSnapshot)
+    const readiness = await getCodingReadiness(input)
+    if (readiness.status !== 'ready') {
+      throw new Error('Coding Runtime is not ready for this remediation retry.')
+    }
+    const runtime = await createCodingRuntimeForRequest(knowledgeSnapshot, input.projectId)
     const {
       run,
       node,
@@ -2831,13 +3022,21 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.cancelCodingAgentRun, async (_, payload: unknown) => {
     const input = parseCancelCodingAgentRunInput(payload)
-    const runtime = await createCodingRuntimeForRequest()
+    const store = await getStore()
+    const codingRun = (await store.listCodingAgentRuns()).find(
+      (candidate) => candidate.id === input.codingRunId,
+    )
+    const runtime = await createCodingRuntimeForRequest(undefined, codingRun?.projectId)
     return runtime.cancelCodingAgentRun(input)
   })
 
   ipcMain.handle(ipcChannels.replyCodingPermission, async (_, payload: unknown) => {
     const input = parseReplyCodingPermissionInput(payload)
-    const runtime = await createCodingRuntimeForRequest()
+    const store = await getStore()
+    const codingRun = (await store.listCodingAgentRuns()).find(
+      (candidate) => candidate.id === input.codingRunId,
+    )
+    const runtime = await createCodingRuntimeForRequest(undefined, codingRun?.projectId)
     return runtime.replyCodingPermission(input)
   })
 
@@ -2964,8 +3163,20 @@ if (hasSingleInstanceLock) {
       .catch(() => {
         console.warn('[agent-runtime] Unable to recover a durable runtime.')
       })
-    void createCodingRuntimeForRequest()
-      .then((runtime) => runtime.recoverCodingAgentRuns())
+    void getStore()
+      .then(async (store) => {
+        const activeProjectIds = [
+          ...new Set(
+            (await store.listCodingAgentRuns())
+              .filter((run) => isActiveCodingAgentRunStatus(run.status))
+              .map((run) => run.projectId),
+          ),
+        ]
+        for (const projectId of activeProjectIds) {
+          await (await createCodingRuntimeForRequest(undefined, projectId))
+            .recoverCodingAgentRuns()
+        }
+      })
       .catch(() => {
         console.warn('[native-coding] Unable to recover a durable Coding Executor run.')
       })

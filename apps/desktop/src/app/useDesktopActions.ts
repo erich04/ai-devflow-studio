@@ -680,7 +680,6 @@ export function useDesktopActions(input: {
         nodeId: selectedNode.id,
         projectId: selectedLocalProject.id,
         requestedBy: currentUser.id,
-        providerId: 'opencode-http',
         userInstruction: `Implement ${displayNodeTitle(selectedNode)} with the existing DevFlow context.`,
         ...(runtimeBudgetApprovalId.trim() ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() } : {}),
       })
@@ -721,7 +720,6 @@ export function useDesktopActions(input: {
         nodeId: selectedNode.id,
         projectId: selectedLocalProject.id,
         requestedBy: currentUser.id,
-        providerId: 'opencode-http',
         candidateIds: [candidateId],
         userInstruction: 'Apply the selected remediation candidate with the smallest safe change.',
       })

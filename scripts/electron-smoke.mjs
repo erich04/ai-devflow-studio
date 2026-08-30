@@ -441,7 +441,6 @@ async function runCodingAgentViaDesktopApi(
       nodeId: input.nodeId,
       projectId: input.projectId,
       requestedBy: 'u-erich',
-      providerId: 'fake-coding-engine',
       userInstruction: 'Electron smoke should archive a fake implementation diff.',
     })
     if (result.codingRun.nodeId !== input.nodeId) {
@@ -470,7 +469,6 @@ async function startRetryAttemptViaDesktopApi(
       nodeId: input.nodeId,
       projectId: input.projectId,
       requestedBy: 'u-erich',
-      providerId: 'fake-coding-engine',
       candidateIds: [input.candidateId],
       userInstruction: 'Electron smoke should retry coding from the remediation candidate.',
     })
@@ -650,6 +648,14 @@ try {
       localProjectId: projectId,
     })
   }, { code: pairingCode, projectId: localProjectId })
+  await first.page.evaluate(async (projectId) => {
+    await window.aiDevFlowDesktop.saveCodingRuntimeBudgetPolicy({
+      projectId,
+      enabled: true,
+      monthlyLimitUsd: 0.20,
+      warningThresholdUsd: 0.10,
+    })
+  }, localProjectId)
 
   await first.page.getByRole('button', { name: /^测试$/ }).click()
   await expect(first.page.getByLabel('测试命令')).toHaveValue('npm test')

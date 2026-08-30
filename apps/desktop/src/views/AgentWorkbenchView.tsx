@@ -1,4 +1,5 @@
 import { ArrowLeft, Bot, CheckCircle2, Code2, FolderOpen, Save, Settings2, TestTube2 } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   formatUsd,
   type AgentProviderConfig,
@@ -7,11 +8,15 @@ import {
   type AgentTrace,
   type CodingAgentEvent,
   type CodingAgentRun,
+  type CodingChangeSetPreview,
   type CodingDiffArtifact,
   type CodingPermissionDecision,
   type CodingPermissionRequest,
+  type CodingRuntimeConfiguration,
+  type CodingRuntimeReadiness,
   type DependencyBootstrapEvidence,
   type ManagedCodingWorkspace,
+  type RuntimeBudgetPolicy,
   type RetryAttempt,
   type TestEvidence,
   type WorkflowNode,
@@ -32,6 +37,7 @@ import type { PendingInspectorAction } from '../app/node-inspector-view-model'
 export function AgentWorkbenchView({
   desktopApi,
   localProjectId,
+  requestedBy,
   providers,
   selectedProviderId,
   onProviderChange,
@@ -80,6 +86,7 @@ export function AgentWorkbenchView({
 }: {
   desktopApi: DevFlowDesktopApi | null
   localProjectId: string | undefined
+  requestedBy: string
   providers: AgentProviderConfig[]
   selectedProviderId: string
   onProviderChange: (providerId: string) => void
@@ -126,6 +133,160 @@ export function AgentWorkbenchView({
   supportContext: SupportContext | null
   onReturnToInspector: () => void
 }) {
+  const [codingConfiguration, setCodingConfiguration] = useState<CodingRuntimeConfiguration | null>(null)
+  const [codingProviderId, setCodingProviderId] = useState('')
+  const [codingReadiness, setCodingReadiness] = useState<CodingRuntimeReadiness | null>(null)
+  const [pendingChangeSetPreview, setPendingChangeSetPreview] = useState<CodingChangeSetPreview | null>(null)
+  const [budgetPolicy, setBudgetPolicy] = useState<RuntimeBudgetPolicy | null>(null)
+  const [monthlyLimitUsd, setMonthlyLimitUsd] = useState('0.20')
+  const [warningThresholdUsd, setWarningThresholdUsd] = useState('0.10')
+  const [codingConfigurationStatus, setCodingConfigurationStatus] = useState('')
+  const [isSavingCodingConfiguration, setIsSavingCodingConfiguration] = useState(false)
+
+  async function refreshCodingReadiness(approvalId = runtimeBudgetApprovalId) {
+    if (!desktopApi || !localProjectId || !selectedRun || !selectedNode) {
+      setCodingReadiness(null)
+      return
+    }
+    const readiness = await desktopApi.getCodingRuntimeReadiness({
+      projectId: localProjectId,
+      runId: selectedRun.id,
+      nodeId: selectedNode.id,
+      requestedBy,
+      ...(approvalId.trim() ? { runtimeBudgetApprovalId: approvalId.trim() } : {}),
+    })
+    setCodingReadiness(readiness)
+  }
+
+  useEffect(() => {
+    if (!desktopApi || !localProjectId) {
+      setCodingConfiguration(null)
+      setBudgetPolicy(null)
+      setCodingReadiness(null)
+      return
+    }
+    let active = true
+    void Promise.all([
+      desktopApi.getCodingRuntimeConfiguration({ projectId: localProjectId }),
+      Promise.resolve(
+        desktopApi.getCodingRuntimeBudgetPolicy({ projectId: localProjectId }),
+      ).catch(() => null),
+    ]).then(async ([configuration, policy]) => {
+      if (!active) return
+      setCodingConfiguration(configuration)
+      setCodingProviderId(configuration?.providerId ?? selectedProviderId)
+      setBudgetPolicy(policy)
+      if (policy) {
+        setMonthlyLimitUsd(policy.monthlyLimitUsd.toFixed(2))
+        setWarningThresholdUsd(policy.warningThresholdUsd.toFixed(2))
+      }
+      try {
+        await refreshCodingReadiness()
+      } catch (error) {
+        if (active) setCodingConfigurationStatus(error instanceof Error ? error.message : '无法读取 Coding Readiness')
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [desktopApi, localProjectId, selectedRun?.id, selectedNode?.id, requestedBy])
+
+  useEffect(() => {
+    if (!codingProviderId && selectedProviderId) setCodingProviderId(selectedProviderId)
+  }, [codingProviderId, selectedProviderId])
+
+  useEffect(() => {
+    if (!desktopApi || !pendingCodingPermission?.changeSetId) {
+      setPendingChangeSetPreview(null)
+      return
+    }
+    let active = true
+    void desktopApi.getCodingChangeSetPreview({
+      changeSetId: pendingCodingPermission.changeSetId,
+      codingRunId: pendingCodingPermission.codingRunId,
+    }).then((preview) => {
+      if (active) setPendingChangeSetPreview(preview)
+    }).catch((error) => {
+      if (!active) return
+      setPendingChangeSetPreview(null)
+      setCodingConfigurationStatus(
+        error instanceof Error ? error.message : '无法读取待审批 Change Set',
+      )
+    })
+    return () => {
+      active = false
+    }
+  }, [desktopApi, pendingCodingPermission?.changeSetId, pendingCodingPermission?.codingRunId])
+
+  async function saveCodingConfiguration() {
+    if (!desktopApi || !localProjectId || !codingProviderId) return
+    setIsSavingCodingConfiguration(true)
+    setCodingConfigurationStatus('正在保存项目级 Native Executor…')
+    try {
+      const saved = await desktopApi.saveCodingRuntimeConfiguration({
+        projectId: localProjectId,
+        executor: 'native-model',
+        providerId: codingProviderId,
+      })
+      setCodingConfiguration(saved)
+      setCodingConfigurationStatus(`已保存 Native Executor · ${saved.providerId} · v${saved.version}`)
+      await refreshCodingReadiness()
+    } catch (error) {
+      setCodingConfigurationStatus(error instanceof Error ? error.message : '保存 Coding Agent 配置失败')
+    } finally {
+      setIsSavingCodingConfiguration(false)
+    }
+  }
+
+  async function saveBudgetPolicy() {
+    if (!desktopApi || !localProjectId) return
+    const monthly = Number(monthlyLimitUsd)
+    const warning = Number(warningThresholdUsd)
+    setIsSavingCodingConfiguration(true)
+    setCodingConfigurationStatus('正在保存项目预算…')
+    try {
+      const saved = await desktopApi.saveCodingRuntimeBudgetPolicy({
+        projectId: localProjectId,
+        enabled: true,
+        monthlyLimitUsd: monthly,
+        warningThresholdUsd: warning,
+      })
+      setBudgetPolicy(saved)
+      setCodingConfigurationStatus(`预算已保存：${formatUsd(saved.monthlyLimitUsd)} / 月`)
+      await refreshCodingReadiness()
+    } catch (error) {
+      setCodingConfigurationStatus(error instanceof Error ? error.message : '保存 Runtime Budget 失败')
+    } finally {
+      setIsSavingCodingConfiguration(false)
+    }
+  }
+
+  async function approveOverBudgetOnce() {
+    if (!desktopApi || !localProjectId) return
+    setIsSavingCodingConfiguration(true)
+    try {
+      const approval = await desktopApi.createCodingRuntimeBudgetApproval({
+        projectId: localProjectId,
+        requestedBy,
+        maxAdditionalCostUsd: Math.max(0.01, codingReadiness?.budgetDecision?.projectedCostUsd ?? 0.20),
+        reason: 'One-time local owner approval for this exact Native Coding run.',
+      })
+      onRuntimeBudgetApprovalIdChange(approval.id)
+      setCodingConfigurationStatus(`一次性预算批准已创建：${approval.id}`)
+      await refreshCodingReadiness(approval.id)
+    } catch (error) {
+      setCodingConfigurationStatus(error instanceof Error ? error.message : '创建一次性预算批准失败')
+    } finally {
+      setIsSavingCodingConfiguration(false)
+    }
+  }
+
+  const pendingPermissionPaths = useMemo(
+    () => pendingChangeSetPreview?.changedPaths ?? (pendingCodingPermission?.diffPreview
+      ? [...pendingCodingPermission.diffPreview.matchAll(/^diff --git a\/(.+?) b\/.+$/gmu)].map((match) => match[1]!)
+      : pendingCodingPermission?.filePath ? [pendingCodingPermission.filePath] : []),
+    [pendingChangeSetPreview, pendingCodingPermission],
+  )
   const viewModel = buildAgentConsoleViewModel({
     providers,
     selectedProviderId,
@@ -243,6 +404,24 @@ export function AgentWorkbenchView({
                   <span>{viewModel.pendingPermission.risk}</span>
                   {viewModel.pendingPermission.filePath ? <code>{viewModel.pendingPermission.filePath}</code> : null}
                 </div>
+                {pendingCodingPermission?.changeSetDigest ? (
+                  <div className="agent-advisory agent-advisory--warn">
+                    <span>精确 Change Set</span>
+                    <strong>{pendingPermissionPaths.length} 个文件 · 仅写入 managed worktree</strong>
+                    <div className="knowledge-reference-meta">
+                      {pendingPermissionPaths.map((filePath) => <code key={filePath}>{filePath}</code>)}
+                    </div>
+                    <code>{pendingChangeSetPreview?.changeSetDigest ?? pendingCodingPermission.changeSetDigest}</code>
+                    <p>
+                      审批剩余：{formatApprovalTimeRemaining(pendingChangeSetPreview?.expiresAt ?? pendingCodingPermission.expiresAt)}
+                      {' · '}
+                      截止 {new Date(pendingChangeSetPreview?.expiresAt ?? pendingCodingPermission.expiresAt).toLocaleString()}
+                    </p>
+                    {pendingChangeSetPreview?.unifiedDiff ? (
+                      <pre className="diff-preview">{pendingChangeSetPreview.unifiedDiff}</pre>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="inspector-actions">
                   <button className="primary-button" onClick={() => onReplyCodingPermission('approved')}>
                     <CheckCircle2 size={16} />
@@ -257,7 +436,7 @@ export function AgentWorkbenchView({
               <>
               <button
                 className="primary-button"
-                disabled={viewModel.primaryAction.disabled}
+                disabled={viewModel.primaryAction.disabled || (viewModel.primaryAction.id === 'run-coding' && codingReadiness?.status !== 'ready')}
                 aria-busy={viewModel.primaryAction.label === '生成中' || undefined}
                 title={viewModel.primaryAction.disabledReason}
                 onClick={() => runPrimaryAction(viewModel.primaryAction)}
@@ -265,7 +444,9 @@ export function AgentWorkbenchView({
                   {primaryActionIcon(viewModel.primaryAction.id)}
                   {viewModel.primaryAction.label}
                 </button>
-                <p>{viewModel.primaryAction.disabledReason ?? viewModel.primaryAction.summary}</p>
+                <p>{viewModel.primaryAction.id === 'run-coding' && codingReadiness?.status !== 'ready'
+                  ? 'Coding Runtime 尚未就绪，请先完成下方项目执行配置。'
+                  : viewModel.primaryAction.disabledReason ?? viewModel.primaryAction.summary}</p>
               </>
             )}
           </div>
@@ -439,6 +620,60 @@ export function AgentWorkbenchView({
           )}
         </section>
 
+        <details className="runtime-settings" open={codingReadiness?.status !== 'ready'}>
+          <summary>
+            <span><Code2 size={16} />Coding Agent 执行配置</span>
+            <strong>{codingReadiness?.status === 'ready' ? '已就绪' : '需要配置'}</strong>
+          </summary>
+          <div className="runtime-settings__body">
+            <article className="agent-evidence-card runtime-settings-form">
+              <div className="section-heading">
+                <span>项目级 Executor</span>
+                <strong>Native v2 · managed worktree</strong>
+              </div>
+              <p>这里与 Knowledge Review Provider 分开配置。Renderer 只选择已保存 Provider，真正执行时由 Electron Main 重新解析项目配置。</p>
+              <label>
+                Coding Provider
+                <select aria-label="Coding Agent Provider" value={codingProviderId} onChange={(event) => setCodingProviderId(event.target.value)}>
+                  <option value="">请选择已保存 Provider</option>
+                  {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
+                </select>
+              </label>
+              <button className="ghost-button" disabled={!codingProviderId || isSavingCodingConfiguration} onClick={saveCodingConfiguration}>
+                <Save size={16} />保存并用于当前项目
+              </button>
+              <p className="empty-note">当前：{codingConfiguration ? `${codingConfiguration.providerId} · v${codingConfiguration.version}` : '未配置'}</p>
+            </article>
+
+            <article className="agent-evidence-card runtime-settings-form">
+              <div className="section-heading">
+                <span>Runtime Budget</span>
+                <strong>{budgetPolicy ? `${formatUsd(budgetPolicy.monthlyLimitUsd)} / 月` : '必须显式保存'}</strong>
+              </div>
+              <label>月上限（USD）<input aria-label="Coding monthly budget" inputMode="decimal" value={monthlyLimitUsd} onChange={(event) => setMonthlyLimitUsd(event.target.value)} /></label>
+              <label>预警阈值（USD）<input aria-label="Coding warning budget" inputMode="decimal" value={warningThresholdUsd} onChange={(event) => setWarningThresholdUsd(event.target.value)} /></label>
+              <button className="ghost-button" disabled={isSavingCodingConfiguration} onClick={saveBudgetPolicy}><Save size={16} />保存预算策略</button>
+              {codingReadiness?.budgetDecision?.status === 'requires_lead_approval' ? (
+                <button className="primary-button" disabled={isSavingCodingConfiguration} onClick={approveOverBudgetOnce}>创建 Owner/Lead 一次性批准</button>
+              ) : null}
+            </article>
+
+            <article className="agent-evidence-card">
+              <div className="section-heading"><span>启动前检查</span><strong>{codingReadiness?.status ?? '未读取'}</strong></div>
+              <div className="trace-list">
+                {codingReadiness?.checks.map((check) => (
+                  <div className="trace-step" key={check.code}>
+                    <span>{check.status === 'ready' ? '通过' : '阻塞'}</span>
+                    <strong>{check.code}</strong>
+                    <p>{check.message}</p>
+                  </div>
+                )) ?? <p className="empty-note">选择开发实现节点后会显示完整 Readiness。</p>}
+              </div>
+              {codingConfigurationStatus ? <p className="empty-note">{codingConfigurationStatus}</p> : null}
+            </article>
+          </div>
+        </details>
+
         <details className="runtime-settings" open={!viewModel.runtimeSettings.selectedProvider}>
           <summary>
             <span>
@@ -592,6 +827,14 @@ function primaryActionIcon(actionId: AgentConsoleAction['id']) {
     return <TestTube2 size={16} />
   }
   return <ArrowLeft size={16} />
+}
+
+function formatApprovalTimeRemaining(expiresAt: string): string {
+  const remainingMs = Date.parse(expiresAt) - Date.now()
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return '已过期'
+  const remainingSeconds = Math.ceil(remainingMs / 1_000)
+  if (remainingSeconds < 60) return `${remainingSeconds} 秒`
+  return `${Math.ceil(remainingSeconds / 60)} 分钟`
 }
 
 function toneClass(tone: AgentConsoleAction['tone']): string {

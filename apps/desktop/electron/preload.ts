@@ -88,6 +88,20 @@ const desktopApi: DevFlowDesktopApi = {
   runKnowledgeReview: (input) => ipcRenderer.invoke(ipcChannels.runKnowledgeReview, input),
   listAgentReviews: (input) => ipcRenderer.invoke(ipcChannels.listAgentReviews, input),
   ensureCodingEngine: (input) => ipcRenderer.invoke(ipcChannels.ensureCodingEngine, input),
+  getCodingRuntimeConfiguration: (input) =>
+    ipcRenderer.invoke(ipcChannels.getCodingRuntimeConfiguration, input),
+  saveCodingRuntimeConfiguration: (input) =>
+    ipcRenderer.invoke(ipcChannels.saveCodingRuntimeConfiguration, input),
+  getCodingRuntimeReadiness: (input) =>
+    ipcRenderer.invoke(ipcChannels.getCodingRuntimeReadiness, input),
+  getCodingChangeSetPreview: (input) =>
+    ipcRenderer.invoke(ipcChannels.getCodingChangeSetPreview, input),
+  getCodingRuntimeBudgetPolicy: (input) =>
+    ipcRenderer.invoke(ipcChannels.getCodingRuntimeBudgetPolicy, input),
+  saveCodingRuntimeBudgetPolicy: (input) =>
+    ipcRenderer.invoke(ipcChannels.saveCodingRuntimeBudgetPolicy, input),
+  createCodingRuntimeBudgetApproval: (input) =>
+    ipcRenderer.invoke(ipcChannels.createCodingRuntimeBudgetApproval, input),
   runCodingAgent: (input) => ipcRenderer.invoke(ipcChannels.runCodingAgent, input),
   startRetryAttempt: (input) => ipcRenderer.invoke(ipcChannels.startRetryAttempt, input),
   cancelCodingAgentRun: (input) => ipcRenderer.invoke(ipcChannels.cancelCodingAgentRun, input),

@@ -1283,6 +1283,7 @@ export function App() {
           <AgentWorkbenchView
             desktopApi={desktopApi}
             localProjectId={selectedLocalProject?.id}
+            requestedBy={currentUser?.id ?? 'local-user'}
             providers={agentProviders}
             selectedProviderId={selectedAgentProviderId}
             onProviderChange={setSelectedAgentProviderId}

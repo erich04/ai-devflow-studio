@@ -152,9 +152,11 @@ import {
   type Artifact,
   type CodingAgentEvent,
   type CodingAgentRun,
+  type CodingChangeSet,
   type CodingDiffArtifact,
   type CodingPermissionDecision,
   type CodingPermissionRequest,
+  type CodingRuntimeConfiguration,
   type CoordinationSessionRequest,
   type CoordinationRendererSnapshot,
   type CoordinationResourceLease,
@@ -1027,6 +1029,14 @@ export type LocalStore = {
   saveAgentTokenUsage(usage: AgentTokenUsage): Promise<void>
   listAgentTokenUsage(runId?: string): Promise<AgentTokenUsage[]>
   saveCodingAgentRun(run: CodingAgentRun): Promise<void>
+  saveCodingRuntimeConfiguration(
+    configuration: CodingRuntimeConfiguration,
+  ): Promise<CodingRuntimeConfiguration>
+  getCodingRuntimeConfiguration(projectId: string): Promise<CodingRuntimeConfiguration | null>
+  listCodingRuntimeConfigurations(): Promise<CodingRuntimeConfiguration[]>
+  saveCodingChangeSet(changeSet: CodingChangeSet): Promise<CodingChangeSet>
+  getCodingChangeSet(changeSetId: string): Promise<CodingChangeSet | null>
+  listCodingChangeSets(codingRunId?: string): Promise<CodingChangeSet[]>
   reserveCodingAgentRun(run: CodingAgentRun): Promise<ReserveCodingAgentRunResult>
   commitCodingAgentMutation(
     mutation: CodingAgentMutation,
@@ -12334,6 +12344,166 @@ class SqlJsLocalStore implements LocalStore {
     await this.persist()
   }
 
+  async saveCodingRuntimeConfiguration(
+    configuration: CodingRuntimeConfiguration,
+  ): Promise<CodingRuntimeConfiguration> {
+    if (
+      configuration.executor !== 'native-model' ||
+      !configuration.projectId.trim() ||
+      !configuration.providerId.trim() ||
+      configuration.projectId !== configuration.projectId.trim() ||
+      configuration.providerId !== configuration.providerId.trim() ||
+      !Number.isSafeInteger(configuration.version) ||
+      configuration.version < 1 ||
+      new Date(Date.parse(configuration.updatedAt)).toISOString() !== configuration.updatedAt
+    ) {
+      throw new Error('Coding Runtime configuration is invalid')
+    }
+    const project = selectJson<LocalProject>(
+      this.db,
+      'select json from local_projects where id = ? limit 1',
+      [configuration.projectId],
+    )[0]
+    if (!project) throw new Error('Coding Runtime configuration project is unavailable')
+
+    const active = selectJson<CodingAgentRun>(
+      this.db,
+      'select json from coding_agent_runs order by updated_at desc, started_at desc',
+    ).find(
+      (run) =>
+        run.projectId === configuration.projectId &&
+        isActiveCodingAgentRunStatus(run.status),
+    )
+    if (active) {
+      throw new Error(`Coding Runtime configuration is locked by active run: ${active.id}`)
+    }
+
+    const current = selectJson<CodingRuntimeConfiguration>(
+      this.db,
+      'select json from coding_runtime_configurations where project_id = ? limit 1',
+      [configuration.projectId],
+    )[0]
+    if (current && JSON.stringify(current) === JSON.stringify(configuration)) return current
+    const expectedVersion = (current?.version ?? 0) + 1
+    if (configuration.version !== expectedVersion) {
+      throw new Error(`Coding Runtime configuration version must be ${expectedVersion}`)
+    }
+    this.db.run(
+      `insert into coding_runtime_configurations (
+         project_id, executor, provider_id, version, json, updated_at
+       ) values (?, ?, ?, ?, ?, ?)
+       on conflict(project_id) do update set
+         executor = excluded.executor,
+         provider_id = excluded.provider_id,
+         version = excluded.version,
+         json = excluded.json,
+         updated_at = excluded.updated_at`,
+      [
+        configuration.projectId,
+        configuration.executor,
+        configuration.providerId,
+        configuration.version,
+        JSON.stringify(configuration),
+        configuration.updatedAt,
+      ],
+    )
+    await this.persist()
+    return configuration
+  }
+
+  async getCodingRuntimeConfiguration(
+    projectId: string,
+  ): Promise<CodingRuntimeConfiguration | null> {
+    return selectJson<CodingRuntimeConfiguration>(
+      this.db,
+      'select json from coding_runtime_configurations where project_id = ? limit 1',
+      [projectId],
+    )[0] ?? null
+  }
+
+  async listCodingRuntimeConfigurations(): Promise<CodingRuntimeConfiguration[]> {
+    return selectJson<CodingRuntimeConfiguration>(
+      this.db,
+      'select json from coding_runtime_configurations order by updated_at desc, project_id asc',
+    )
+  }
+
+  async saveCodingChangeSet(changeSet: CodingChangeSet): Promise<CodingChangeSet> {
+    if (
+      changeSet.stateVersion !== 2 ||
+      changeSet.executorVersion !== 2 ||
+      (changeSet.phase !== 'initial' && changeSet.phase !== 'repair') ||
+      !/^[a-f0-9]{64}$/u.test(changeSet.changeSetDigest) ||
+      changeSet.changes.length < 1 ||
+      changeSet.changes.length > 6 ||
+      Date.parse(changeSet.expiresAt) <= Date.parse(changeSet.createdAt)
+    ) {
+      throw new Error('Coding Change Set is invalid')
+    }
+    const current = selectJson<CodingChangeSet>(
+      this.db,
+      'select json from coding_change_sets where id = ? limit 1',
+      [changeSet.id],
+    )[0]
+    if (current) {
+      if (JSON.stringify(current) !== JSON.stringify(changeSet)) {
+        throw new Error('Coding Change Set is immutable')
+      }
+      return current
+    }
+    const phaseCurrent = selectJson<CodingChangeSet>(
+      this.db,
+      'select json from coding_change_sets where coding_run_id = ? and phase = ? limit 1',
+      [changeSet.codingRunId, changeSet.phase],
+    )[0]
+    if (phaseCurrent) throw new Error('Coding Change Set phase already exists')
+    this.db.run(
+      `insert into coding_change_sets (
+         id, state_version, coding_run_id, project_id, workspace_id, phase,
+         executor_version, config_version, provider_id, change_set_digest,
+         json, created_at, expires_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        changeSet.id,
+        changeSet.stateVersion,
+        changeSet.codingRunId,
+        changeSet.projectId,
+        changeSet.workspaceId,
+        changeSet.phase,
+        changeSet.executorVersion,
+        changeSet.configVersion,
+        changeSet.providerId,
+        changeSet.changeSetDigest,
+        JSON.stringify(changeSet),
+        changeSet.createdAt,
+        changeSet.expiresAt,
+      ],
+    )
+    await this.persist()
+    return changeSet
+  }
+
+  async getCodingChangeSet(changeSetId: string): Promise<CodingChangeSet | null> {
+    return selectJson<CodingChangeSet>(
+      this.db,
+      'select json from coding_change_sets where id = ? limit 1',
+      [changeSetId],
+    )[0] ?? null
+  }
+
+  async listCodingChangeSets(codingRunId?: string): Promise<CodingChangeSet[]> {
+    return codingRunId
+      ? selectJson<CodingChangeSet>(
+          this.db,
+          'select json from coding_change_sets where coding_run_id = ? order by created_at asc, id asc',
+          [codingRunId],
+        )
+      : selectJson<CodingChangeSet>(
+          this.db,
+          'select json from coding_change_sets order by created_at asc, id asc',
+        )
+  }
+
   async reserveCodingAgentRun(run: CodingAgentRun): Promise<ReserveCodingAgentRunResult> {
     if (!isActiveCodingAgentRunStatus(run.status)) {
       throw new Error('Coding Agent reservation requires an active run status')
@@ -13413,6 +13583,8 @@ const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
   'saveAgentTrace',
   'saveAgentTokenUsage',
   'saveCodingAgentRun',
+  'saveCodingRuntimeConfiguration',
+  'saveCodingChangeSet',
   'reserveCodingAgentRun',
   'commitCodingAgentMutation',
   'saveCodingAgentEvent',

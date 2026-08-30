@@ -23,7 +23,7 @@ describe('Electron repository knowledge wiring', () => {
 
   it('injects canonical run knowledge into review and coding executions', () => {
     expect(main).toMatch(
-      /ipcMain\.handle\(ipcChannels\.runCodingAgent[\s\S]*?loadTrustedRunKnowledge[\s\S]*?createCodingRuntimeForRequest\(knowledgeSnapshot\)/,
+      /ipcMain\.handle\(ipcChannels\.runCodingAgent[\s\S]*?loadTrustedRunKnowledge[\s\S]*?createCodingRuntimeForRequest\(knowledgeSnapshot, input\.projectId\)/,
     )
     expect(main).toMatch(
       /ipcMain\.handle\(ipcChannels\.runKnowledgeReview[\s\S]*?loadTrustedRunKnowledge[\s\S]*?createKnowledgeReviewRuntimeForRequest\(knowledgeSnapshot\)/,
@@ -32,7 +32,7 @@ describe('Electron repository knowledge wiring', () => {
 
   it('uses the same captured snapshot for retry remediation and coding', () => {
     expect(main).toMatch(
-      /ipcMain\.handle\(ipcChannels\.startRetryAttempt[\s\S]*?loadTrustedRunKnowledge[\s\S]*?createCodingRuntimeForRequest\(knowledgeSnapshot\)[\s\S]*?evaluateLocalGateEnforcement\([\s\S]*?knowledgeSnapshot/,
+      /ipcMain\.handle\(ipcChannels\.startRetryAttempt[\s\S]*?loadTrustedRunKnowledge[\s\S]*?createCodingRuntimeForRequest\(knowledgeSnapshot, input\.projectId\)[\s\S]*?evaluateLocalGateEnforcement\([\s\S]*?knowledgeSnapshot/,
     )
   })
 

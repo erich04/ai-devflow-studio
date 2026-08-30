@@ -25,16 +25,16 @@ describe('Electron durable remote sync wiring', () => {
       /const opencodeProcessManager = createOpencodeProcessManager\(\)[\s\S]*?const codingEngineAdapter = createCodingEngineAdapterFromEnv\(process\.env, \{[\s\S]*?processManager: opencodeProcessManager[\s\S]*?\}\)/,
     )
     expect(main).toMatch(
-      /const compatibilityCodingExecutor = createCodingExecutorCompatibilityAdapter\(codingEngineAdapter\)[\s\S]*?async function getCodingExecutor\(\)[\s\S]*?resolveDevFlowCodingExecutorSelection\(process\.env\)[\s\S]*?createNativeCodingExecutor[\s\S]*?async function createCodingRuntimeForRequest[\s\S]*?getCodingExecutor\(\)[\s\S]*?return createCodingRuntime\(\{[\s\S]*?executor/,
+      /const compatibilityCodingExecutor = createCodingExecutorCompatibilityAdapter\(codingEngineAdapter\)[\s\S]*?async function resolveCodingExecutorForProject\(projectId: string\)[\s\S]*?resolveCodingRuntimeSelection\([\s\S]*?createNativeCodingExecutorV2[\s\S]*?async function createCodingRuntimeForRequest[\s\S]*?getCodingExecutor\(projectId\)[\s\S]*?return createCodingRuntime\(\{[\s\S]*?executor/,
     )
     expect(main).toMatch(
-      /selection\.executor === 'native-deterministic'[\s\S]*?createDeterministicNativeCodingDecisionProvider\(\)[\s\S]*?createAgentProviderNativeCodingDecisionProvider\([\s\S]*?resolveAgentProvider\(store, selection\.providerId\)/,
+      /selection\.executor === 'native-deterministic'[\s\S]*?createDeterministicNativeCodingDecisionProvider\(\)[\s\S]*?createAgentProviderNativeCodingV2DecisionProvider\([\s\S]*?resolveAgentProvider\(store, selection\.providerId/,
     )
     expect(main).toMatch(
       /app\.on\('before-quit'[\s\S]*?stopOpencodeWithRetry\(opencodeProcessManager\)/,
     )
     expect(main).toMatch(
-      /app\.whenReady\(\)\.then[\s\S]*?createCodingRuntimeForRequest\(\)[\s\S]*?recoverCodingAgentRuns\(\)/,
+      /app\.whenReady\(\)\.then[\s\S]*?activeProjectIds[\s\S]*?createCodingRuntimeForRequest\(undefined, projectId\)[\s\S]*?recoverCodingAgentRuns\(\)/,
     )
   })
 
