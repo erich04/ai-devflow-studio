@@ -6,7 +6,7 @@ retroactive TDD rewrites unless it is touched.
 
 ## Current Persistence Baseline
 
-- Team/API/Postgres uses Team schema v19. Migration tests must prove a fresh v19 database, the
+- Team/API/Postgres uses Team schema v21. Migration tests must prove a fresh v21 database, the
   populated v11-to-v12 delivery-series upgrade, and the v12-to-v13 provider-authoritative expiry
   contract without inventing expiry evidence for legacy issued credentials, followed by the
   v13-to-v14 bounded provider retry boundary, the v14-to-v15 verified publication adoption
@@ -14,9 +14,12 @@ retroactive TDD rewrites unless it is touched.
   Agent Runtime projection without inventing runtime summaries or audit rows, followed by the
   v16-to-v17 metadata-only Agent Memory projection without inventing Memory summaries or audit rows,
   followed by v17-to-v18 independent same-head Memory quality audit versioning, then an empty
-  v18-to-v19 metadata-only Agent Coordination projection. Retained rows keep reserved quality
-  version 0 until the first new projection converges them; new writes start at 1.
-- Electron/SQLite uses Desktop schema v32. Local-store tests must prove a fresh v32 database, the
+  v18-to-v19 metadata-only Agent Coordination projection, then the v19-to-v20 bounded auth-provider
+  constraint that preserves GitHub accounts, accepts `local-development`, and rejects unknown
+  providers, then the v20-to-v21 Coding summary constraint that accepts the `native` engine while
+  preserving the existing engine values. Retained rows keep reserved quality version 0 until the first new projection converges
+  them; new writes start at 1.
+- Electron/SQLite uses Desktop schema v33. Local-store tests must prove a fresh v33 database, the
   Desktop schema 17-to-18 retained Runtime upgrade, the 18-to-19 metadata-only Native Tool audit
   upgrade with no invented grant or audit rows, and the 19-to-20 Local MCP installation/audit
   provenance upgrade with no invented installation or MCP audit, and the 20-to-21 retained outbox
@@ -32,7 +35,8 @@ retroactive TDD rewrites unless it is touched.
   handoffs, leases, audits, or checkpoints, followed by the 28-to-29 retained outbox migration that
   admits exact Coordination Session IDs without changing existing operations, followed by the
   29-to-30 Coding Diff sanitizer-provenance migration, the 30-to-31 content-scan/operator-outcome
-  migration, and the 31-to-32 indexed stored-evidence privacy provenance migration. Tests also lock
+  migration, the 31-to-32 indexed stored-evidence privacy provenance migration, and the 32-to-33
+  project Coding Runtime configuration plus immutable Native v2 Change Set migration. Tests also lock
   every migration source digest, require all migrations to commit before privacy maintenance, keep
   a single atomic temporary-file-to-rename persistence outlet, prove rollback on migration failure,
   and refuse a newer unknown schema.
@@ -167,8 +171,10 @@ corepack pnpm build
 corepack pnpm test:build-output-smoke
 corepack pnpm test:e2e
 corepack pnpm test:electron-smoke
+corepack pnpm test:native-coding-electron-smoke
 corepack pnpm test:v15-github-delivery
 DEVFLOW_DATABASE_URL=postgres://... corepack pnpm test:postgres-smoke
+DEVFLOW_DATABASE_URL=postgres://... corepack pnpm test:local-auth-postgres-smoke
 corepack pnpm test:docker-smoke
 corepack pnpm test:docker-lifecycle-smoke
 corepack pnpm build:desktop-pilot

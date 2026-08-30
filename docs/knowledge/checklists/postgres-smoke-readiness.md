@@ -3,7 +3,7 @@ title: Postgres Smoke Readiness Checklist
 category: review_checklist
 ownerId: u-erich
 tags: postgres, api, smoke, policy, github-delivery
-summary: Postgres smoke should prove Team schema v19, retained migration, governed GitHub Delivery, Agent Runtime, Memory, and Coordination projections, policy, sync, and redaction.
+summary: Postgres smoke should prove Team schema v21, retained migration, bounded local-development identity and native Coding summary engines, governed GitHub Delivery, Agent Runtime, Memory, and Coordination projections, policy, sync, and redaction.
 ---
 
 # Postgres Smoke Readiness Checklist
@@ -12,7 +12,7 @@ Use this checklist when API, repository, migration, policy, override, sync, GitH
 manager-summary code changes.
 
 - Set `DEVFLOW_DATABASE_URL` explicitly before running Postgres smoke.
-- Prove a disposable fresh database reaches Team schema v19.
+- Prove a disposable fresh database reaches Team schema v21.
 - Prove a populated v11-to-v12 migration retains exact repository binding, Delivery Request,
   approval, publication, recovery, and audit data.
 - Prove a failed v11-to-v12 migration rolls back transactionally and succeeds once on explicit
@@ -33,6 +33,13 @@ manager-summary code changes.
   version 0 for first-sync convergence, and does not change local content rules.
 - Prove v18-to-v19 creates empty `agent_coordination_summaries` and
   `agent_coordination_projection_audits` tables without fabricating coordination lifecycle rows.
+- Prove v19-to-v20 preserves existing GitHub auth accounts, accepts `local-development`, and rejects
+  every unknown auth provider.
+- Prove v20-to-v21 preserves existing Coding summaries, accepts `native`, and keeps rejecting every
+  unknown Coding engine.
+- Run `DEVFLOW_DATABASE_URL=postgres://... corepack pnpm test:local-auth-postgres-smoke` and prove
+  fixed local-owner login, empty Team Overview, Team Project and budget writes, copy-once pairing,
+  and paired Desktop Bearer reads in an isolated schema.
 - Verify seeded team data can be read through the API repository boundary.
 - Verify policy save/read and enforcement evaluation behavior.
 - Verify override rejection for owner, member, and conflicted lead cases.

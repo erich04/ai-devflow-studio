@@ -6,10 +6,10 @@ finite 1.x completion gate passed, and its immutable candidate-bound evidence li
 
 ## Baseline Prerequisites
 
-- Team/API/Postgres must report Team schema v19 with provider-authoritative expiry, bounded
+- Team/API/Postgres must report Team schema v21 with provider-authoritative expiry, bounded
   provider retry, verified publication adoption, and metadata-only Agent Runtime, Memory, and
   Coordination projection contracts.
-- Electron/SQLite must report Desktop schema v32.
+- Electron/SQLite must report Desktop schema v33.
 - The Web/API/Postgres walkthrough needs authenticated owner, lead, and paired Desktop identities.
 - A GitHub Delivery walkthrough needs a verified GitHub App repository binding, one tested canonical
   managed-worktree commit, a PR Delivery Package, and an exact Delivery Intent.
@@ -78,6 +78,7 @@ Suggested path:
 ```bash
 corepack pnpm test:e2e
 corepack pnpm test:electron-smoke
+corepack pnpm test:native-coding-electron-smoke
 corepack pnpm test:v15-github-delivery
 corepack pnpm test:v15-github-delivery-packaged-smoke
 ```
@@ -87,9 +88,10 @@ For Postgres, use a disposable clean database or an intentional populated v11 fi
 ```bash
 export DEVFLOW_DATABASE_URL='postgres://postgres:devflow@127.0.0.1:55432/devflow_v15'
 corepack pnpm test:postgres-smoke
+corepack pnpm test:local-auth-postgres-smoke
 ```
 
-The Postgres smoke must prove fresh Team schema v19, populated v11-to-v12 retention, a v12-to-v13
+The Postgres smoke must prove fresh Team schema v21, populated v11-to-v12 retention, a v12-to-v13
 legacy issued credential that remains fail closed when its raw provider expiry is NULL, and the
 v13-to-v14 nullable bounded provider retry field. It must also prove v14-to-v15
 `source_publication_id` retention and the exact grant-or-adoption authority constraint. The
@@ -101,6 +103,12 @@ The v17-to-v18 migration must add an independent `quality_version` to summaries 
 `(memory_id, head_version, quality_version)` as the audit identity.
 The v18-to-v19 migration must create empty `agent_coordination_summaries` and
 `agent_coordination_projection_audits` tables without local content or fabricated lifecycle rows.
+The v19-to-v20 migration must preserve GitHub accounts, accept only `github` and
+`local-development`, and reject unknown providers. The v20-to-v21 migration must preserve existing
+Coding summaries and admit only the bounded `native` Coding engine in addition to the existing
+engine values. The separate local-auth smoke uses an isolated
+schema to prove local login, an empty overview, project creation, budget persistence, pairing-code
+exchange, and a paired Desktop Bearer read without Demo Seed or a GitHub OAuth call.
 It also proves repository binding and revocation, exact Delivery Request approval, credential
 grant, remote verification, Draft completion, recovery/audit behavior, and redaction.
 
