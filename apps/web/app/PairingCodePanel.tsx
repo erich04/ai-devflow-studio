@@ -1,13 +1,13 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import type { DesktopPairingCode } from '@ai-devflow/shared'
+import type { DesktopPairingCode, Role } from '@ai-devflow/shared'
 import { parseDesktopPairingCodePayload } from './lib/pairing-code'
 
 type PairingPanelState = {
   projectId: string
   pairingCode: DesktopPairingCode | null
-  status: 'idle' | 'creating' | 'ready' | 'error'
+  status: 'idle' | 'creating' | 'ready' | 'revoking' | 'error'
   message: string
 }
 
@@ -34,13 +34,31 @@ function createIdleCopyState(projectId: string): PairingCopyState {
   }
 }
 
-export function PairingCodePanel({ projectId }: { projectId: string }) {
+export type PairingSubject = {
+  userId: string
+  userName: string
+  role: Role
+}
+
+type PairingCodePanelProps = {
+  projectId: string
+  projectName: string
+  subject: PairingSubject | null
+}
+
+function issuedRoleFor(role: Role): Role {
+  return role === 'owner' ? 'lead' : role
+}
+
+export function PairingCodePanel({ projectId, projectName, subject }: PairingCodePanelProps) {
   const [state, setState] = useState<PairingPanelState>(() => createIdleState(projectId))
   const [copyState, setCopyState] = useState<PairingCopyState>(() => createIdleCopyState(projectId))
   const requestVersion = useRef(0)
   const currentProjectId = useRef(projectId)
+  const currentSubjectKey = useRef(subject ? `${subject.userId}:${subject.role}` : '')
   const copyFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   currentProjectId.current = projectId
+  currentSubjectKey.current = subject ? `${subject.userId}:${subject.role}` : ''
 
   useEffect(() => {
     requestVersion.current += 1
@@ -50,7 +68,7 @@ export function PairingCodePanel({ projectId }: { projectId: string }) {
     }
     setState(createIdleState(projectId))
     setCopyState(createIdleCopyState(projectId))
-  }, [projectId])
+  }, [projectId, subject?.userId, subject?.role])
 
   useEffect(() => () => {
     if (copyFeedbackTimer.current) {
@@ -64,7 +82,11 @@ export function PairingCodePanel({ projectId }: { projectId: string }) {
     : createIdleCopyState(projectId)
 
   async function createPairingCode() {
+    if (!subject) {
+      return
+    }
     const requestProjectId = projectId
+    const requestSubjectKey = `${subject.userId}:${subject.role}`
     const currentRequestVersion = requestVersion.current + 1
     requestVersion.current = currentRequestVersion
     if (copyFeedbackTimer.current) {
@@ -100,7 +122,14 @@ export function PairingCodePanel({ projectId }: { projectId: string }) {
         requestProjectId,
       )
       if (
+        nextPairingCode.createdByUserId !== subject.userId ||
+        nextPairingCode.issuedRole !== issuedRoleFor(subject.role)
+      ) {
+        throw new Error('Pairing code subject did not match the signed-in member.')
+      }
+      if (
         currentProjectId.current !== requestProjectId ||
+        currentSubjectKey.current !== requestSubjectKey ||
         requestVersion.current !== currentRequestVersion
       ) {
         return
@@ -114,6 +143,7 @@ export function PairingCodePanel({ projectId }: { projectId: string }) {
     } catch (error) {
       if (
         currentProjectId.current !== requestProjectId ||
+        currentSubjectKey.current !== requestSubjectKey ||
         requestVersion.current !== currentRequestVersion
       ) {
         return
@@ -124,6 +154,52 @@ export function PairingCodePanel({ projectId }: { projectId: string }) {
         status: 'error',
         message: error instanceof Error ? error.message : 'Failed to create desktop pairing code',
       })
+    }
+  }
+
+  async function revokePairingCode() {
+    if (!subject || !visibleState.pairingCode || visibleState.status !== 'ready') {
+      return
+    }
+    const pairingCodeId = visibleState.pairingCode.id
+    const requestProjectId = projectId
+    const currentRequestVersion = requestVersion.current
+    setState((current) => ({ ...current, status: 'revoking', message: '' }))
+    try {
+      const response = await fetch('/api/pairing-code', {
+        method: 'DELETE',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ projectId: requestProjectId, pairingCodeId }),
+      })
+      if (!response.ok) {
+        throw new Error(`Pairing code revoke failed with ${response.status}`)
+      }
+      if (
+        currentProjectId.current !== requestProjectId ||
+        requestVersion.current !== currentRequestVersion
+      ) {
+        return
+      }
+      setState({
+        ...createIdleState(requestProjectId),
+        message: '配对码已撤销。',
+      })
+      setCopyState(createIdleCopyState(requestProjectId))
+    } catch (error) {
+      if (
+        currentProjectId.current !== requestProjectId ||
+        requestVersion.current !== currentRequestVersion
+      ) {
+        return
+      }
+      setState((current) => ({
+        ...current,
+        status: 'ready',
+        message: error instanceof Error ? error.message : '无法撤销配对码。',
+      }))
     }
   }
 
@@ -187,7 +263,19 @@ export function PairingCodePanel({ projectId }: { projectId: string }) {
 
   return (
     <div className="pairing-code-panel">
-      <button type="button" onClick={createPairingCode} disabled={visibleState.status === 'creating'}>
+      {subject ? (
+        <p className="pairing-subject">
+          将以 <strong>{subject.userName}</strong> / {subject.role} 绑定到{' '}
+          <strong>{projectName}</strong>；Desktop 有效权限上限为 {issuedRoleFor(subject.role)}。
+        </p>
+      ) : (
+        <p className="pairing-subject">登录并成为当前项目成员后，才能为自己创建配对码。</p>
+      )}
+      <button
+        type="button"
+        onClick={createPairingCode}
+        disabled={!subject || visibleState.status === 'creating' || visibleState.status === 'revoking'}
+      >
         {visibleState.status === 'creating' ? 'Creating code...' : 'Create desktop pairing code'}
       </button>
       {visibleState.pairingCode ? (
@@ -203,6 +291,13 @@ export function PairingCodePanel({ projectId }: { projectId: string }) {
               : visibleCopyState.status === 'copied'
                 ? '已复制'
                 : '复制配对码'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void revokePairingCode()}
+            disabled={visibleState.status === 'revoking'}
+          >
+            {visibleState.status === 'revoking' ? '撤销中...' : '撤销配对码'}
           </button>
         </div>
       ) : null}

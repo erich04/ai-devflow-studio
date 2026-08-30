@@ -16,6 +16,7 @@ import type {
   OrganizationEnforcementPolicy,
   PolicyAwareDeliverySummary,
   Project,
+  ProjectMembership,
   ProjectEnforcementPolicyOverride,
   RemoteCodingAgentSummary,
   RemoteAgentMemorySummary,
@@ -89,6 +90,7 @@ export type BrowserAuthSessionResponse = {
   authentication: {
     provider: AuthProvider
   }
+  projectMemberships: ProjectMembership[]
 }
 
 export class DevFlowApiError extends Error {
@@ -223,7 +225,15 @@ export async function fetchAuthSession(
     typeof value.user?.id !== 'string' ||
     typeof value.user?.name !== 'string' ||
     !['owner', 'lead', 'member'].includes(value.user?.role) ||
-    !['github', 'local-development'].includes(value.authentication?.provider)
+    !['github', 'local-development'].includes(value.authentication?.provider) ||
+    !Array.isArray(value.projectMemberships) ||
+    value.projectMemberships.some(
+      (membership) =>
+        !membership ||
+        typeof membership.projectId !== 'string' ||
+        membership.userId !== value.user.id ||
+        !['owner', 'lead', 'member'].includes(membership.role),
+    )
   ) {
     throw new Error('DevFlow API /api/auth/session returned an invalid session')
   }
@@ -463,6 +473,30 @@ export async function createDesktopPairingCode(
     throw new Error('Pairing code response was invalid.')
   })
   return parseDesktopPairingCodePayload(payload, options.projectId)
+}
+
+export type RevokeDesktopPairingCodeOptions = FetchTeamOverviewOptions & {
+  projectId: string
+  pairingCodeId: string
+}
+
+export async function revokeDesktopPairingCode(
+  options: RevokeDesktopPairingCodeOptions,
+): Promise<void> {
+  const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
+  const fetcher = options.fetcher ?? fetch
+  const endpoint = '/api/team/projects/:projectId/pairing-codes/:pairingCodeId'
+  const response = await fetcher(
+    `${apiBaseUrl}/api/team/projects/${encodeURIComponent(options.projectId)}/pairing-codes/${encodeURIComponent(options.pairingCodeId)}`,
+    {
+      method: 'DELETE',
+      cache: 'no-store',
+      headers: createApiHeaders({ accept: 'application/json' }, options),
+    },
+  )
+  if (!response.ok) {
+    throw new DevFlowApiError(endpoint, response.status)
+  }
 }
 
 function isExactRecord(

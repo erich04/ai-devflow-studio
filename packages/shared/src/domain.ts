@@ -20,6 +20,52 @@ export type NodeKind = 'agent' | 'gate' | 'task' | 'test' | 'pr' | 'acceptance'
 
 export type NodeStatus = 'pending' | 'running' | 'blocked' | 'success' | 'failed' | 'skipped'
 
+export const WORKFLOW_CONTEXT_FIELD_IDS = [
+  'raw_request',
+  'artifacts',
+  'knowledge_references',
+  'generation_references',
+  'agent_review',
+  'test_evidence',
+  'trace',
+  'coding_result',
+  'budget',
+  'policy',
+  'github_delivery',
+  'acceptance_evidence',
+] as const
+
+export type WorkflowContextFieldId = (typeof WORKFLOW_CONTEXT_FIELD_IDS)[number]
+
+export type WorkflowContextApplicability =
+  | 'not_applicable'
+  | 'not_yet_expected'
+  | 'optional'
+  | 'required'
+
+export type WorkflowContextFieldState =
+  | WorkflowContextApplicability
+  | 'available'
+  | 'missing_required'
+
+export type WorkflowContextFieldProjection = {
+  field: WorkflowContextFieldId
+  applicability: WorkflowContextApplicability
+  state: WorkflowContextFieldState
+  visible: boolean
+  includeInProviderPrompt: boolean
+  role: 'primary' | 'supplemental' | 'historical'
+  reason: string
+  expectedStage?: NodeStage
+}
+
+export type WorkflowContextProjection = {
+  version: 1
+  stage: NodeStage
+  nodeKind: NodeKind
+  fields: WorkflowContextFieldProjection[]
+}
+
 export type ArtifactKind =
   | 'raw_request'
   | 'clarification'
@@ -135,6 +181,7 @@ export type DesktopPairingCode = {
   organizationId: string
   projectId: string
   createdByUserId: string
+  issuedRole: Role
   code: string
   expiresAt: string
   createdAt: string
@@ -148,6 +195,15 @@ export type DesktopPairingExchangeResult = {
   projectId: string
   userId: string
   role: Role
+  /**
+   * The immutable maximum role captured when the code was issued. Older local
+   * credentials may omit this field and are treated as lead-capability tokens.
+   */
+  issuedRole?: Role
+  /** Absolute server-side token expiry. Older local credentials may omit it. */
+  expiresAt?: string
+  userName?: string
+  projectName?: string
   authAccountId: string
   projectMemberships: ProjectMembership[]
   createdAt: string
@@ -323,10 +379,77 @@ export type AgentReviewRequest = {
   providerId?: string
 }
 
+export type AgentReviewCoverageState =
+  | 'complete'
+  | 'deterministically_chunked'
+  | 'incomplete'
+
+export type AgentReviewSubjectChunk = {
+  index: number
+  start: number
+  end: number
+  contentDigest: string
+  content: string
+}
+
+export type AgentReviewSubjectArtifact = {
+  id: string
+  runId: string
+  nodeId: string
+  kind: ArtifactKind
+  title: string
+  summary: string
+  content: string
+  updatedAt: string
+  contentDigest: string
+  sanitizerVersion: string
+  coverage: AgentReviewCoverageState
+  chunks: AgentReviewSubjectChunk[]
+  redacted: boolean
+}
+
+export type AgentReviewContextManifest = {
+  version: 1
+  stage: NodeStage
+  coverage: AgentReviewCoverageState
+  runRequest: {
+    contentDigest: string
+    sanitizerVersion: string
+    coverage: AgentReviewCoverageState
+  }
+  subjectArtifacts: Array<{
+    id: string
+    runId: string
+    nodeId: string
+    kind: ArtifactKind
+    updatedAt: string
+    contentDigest: string
+    sanitizerVersion: string
+    coverage: AgentReviewCoverageState
+    chunks: Array<Omit<AgentReviewSubjectChunk, 'content'>>
+  }>
+  knowledgeCriteria: Array<{
+    referenceId: string
+    documentId: string
+    chunkId?: string
+    contentHash?: string
+    strategy?: KnowledgeRetrievalStrategy
+    lexicalMatch?: KnowledgeLexicalMatch
+    semanticRelevance?: KnowledgeSemanticRelevance
+    gateEvidence?: KnowledgeGateEvidence
+    /** @deprecated Legacy untyped retrieval score. */
+    score?: number
+  }>
+  criteriaCoverage: 'available' | 'unavailable' | 'empty'
+  /** Optional for persisted v1 Reviews created before workflow-aware projection. */
+  fieldProjection?: WorkflowContextProjection
+}
+
 export type AgentReviewContext = {
   run: Pick<WorkflowRun, 'id' | 'title' | 'request' | 'projectId' | 'status' | 'branchName'>
-  node: Pick<WorkflowNode, 'id' | 'stage' | 'title' | 'subtitle' | 'kind' | 'status'>
+  node: Pick<WorkflowNode, 'id' | 'stage' | 'title' | 'subtitle' | 'kind' | 'status' | 'requiredRole'>
   artifacts: Array<Pick<Artifact, 'id' | 'kind' | 'title' | 'summary' | 'content' | 'redacted'>>
+  subjectArtifacts: AgentReviewSubjectArtifact[]
   testEvidence: Array<
     Pick<TestEvidence, 'id' | 'command' | 'status' | 'exitCode' | 'durationMs' | 'summary' | 'redacted'>
   >
@@ -334,6 +457,8 @@ export type AgentReviewContext = {
   knowledgeChunks: Array<
     Pick<KnowledgeChunk, 'id' | 'documentId' | 'sourcePath' | 'headingPath' | 'contentHash' | 'content'>
   >
+  fieldProjection?: WorkflowContextProjection
+  manifest: AgentReviewContextManifest
 }
 
 export type GateAdvisory = {
@@ -384,6 +509,7 @@ export type AgentReviewResult = {
   risks: string[]
   missingEvidence: string[]
   suggestedTests: string[]
+  contextManifest?: AgentReviewContextManifest
   knowledgeReferences: KnowledgeReference[]
   policyFindings: AgentPolicyFinding[]
   confidence: number
@@ -499,6 +625,35 @@ export type KnowledgeDocument = {
 
 export type KnowledgeRetrievalStrategy = 'heuristic' | 'lexical' | 'vector' | 'hybrid'
 
+export type KnowledgeLexicalMatch = {
+  /** Raw additive keyword score. It is not normalized and has no fixed maximum. */
+  rawScore: number
+  matchedTerms: string[]
+  normalized: false
+  crossQueryComparable: false
+  source: 'retriever' | 'legacy_score'
+}
+
+export type KnowledgeSemanticRelevance = {
+  /** Provider-defined semantic relevance, kept separate from lexical matching. */
+  score: number
+  provider?: string
+  model?: string
+  source: 'retriever' | 'legacy_score'
+}
+
+export type KnowledgeGateEvidenceStatus =
+  | 'retrieval_candidate'
+  | 'reviewed_reference'
+  | 'supports_finding'
+  | 'rejected'
+
+export type KnowledgeGateEvidence = {
+  status: KnowledgeGateEvidenceStatus
+  reviewId?: string
+  findingIds?: string[]
+}
+
 export type KnowledgeChunk = {
   id: string
   documentId: string
@@ -557,6 +712,8 @@ export type KnowledgeRetrievalHit = {
   contentHash: string
   score: number
   strategy: KnowledgeRetrievalStrategy
+  lexicalMatch?: KnowledgeLexicalMatch
+  semanticRelevance?: KnowledgeSemanticRelevance
   reason: string
   matchedText?: string
   category: KnowledgeDocumentCategory
@@ -584,6 +741,11 @@ export type KnowledgeReference = {
   reason: string
   sourcePath?: string
   chunkId?: string
+  category?: KnowledgeDocumentCategory
+  lexicalMatch?: KnowledgeLexicalMatch
+  semanticRelevance?: KnowledgeSemanticRelevance
+  gateEvidence?: KnowledgeGateEvidence
+  /** @deprecated Read only for historical records; inspect typed score fields first. */
   score?: number
   strategy?: KnowledgeRetrievalStrategy
   contentHash?: string
@@ -686,12 +848,38 @@ export type TestEvidence = {
 
 export type CodingAgentEngine = 'fake' | 'native' | 'opencode-http' | 'opencode-acp'
 
-export type CodingRuntimeConfiguration = {
+type CodingRuntimeConfigurationBase = {
   projectId: string
-  executor: 'native-model'
   providerId: string
   version: number
   updatedAt: string
+}
+
+export type CodingRuntimeConfiguration =
+  | (CodingRuntimeConfigurationBase & {
+      executor: 'native-model'
+    })
+  | (CodingRuntimeConfigurationBase & {
+      executor: 'opencode-http'
+      binaryPath: string
+      modelId: string
+      detectedVersion: string
+    })
+
+export type CodingRuntimeEngineCandidate = {
+  engine: 'opencode-http'
+  executor: 'opencode-http'
+  status: 'available' | 'unavailable'
+  binaryPath?: string
+  version?: string
+  requiresConfirmation: true
+  reason: string
+}
+
+export type CodingRuntimeDiscovery = {
+  projectId: string
+  candidates: CodingRuntimeEngineCandidate[]
+  detectedAt: string
 }
 
 export type CodingRuntimeReadinessCode =
@@ -699,6 +887,8 @@ export type CodingRuntimeReadinessCode =
   | 'git_unavailable'
   | 'test_command_missing'
   | 'executor_unconfigured'
+  | 'engine_unavailable'
+  | 'capability_unavailable'
   | 'provider_unavailable'
   | 'team_project_unpaired'
   | 'budget_policy_missing'
@@ -718,6 +908,10 @@ export type CodingRuntimeReadiness = {
   nodeId?: string
   status: 'ready' | 'blocked'
   engine: CodingAgentEngine | 'unconfigured'
+  executor: 'compatibility' | 'native-deterministic' | 'native-model' | 'opencode-http' | 'unconfigured'
+  availability: 'available' | 'unavailable'
+  capabilities: import('./coding-executor').CodingExecutorCapability[]
+  providerRequirement: 'none' | 'saved-provider' | 'opencode-provider'
   providerId?: string
   configVersion?: number
   budgetPolicy?: RuntimeBudgetPolicy | null
@@ -1038,6 +1232,8 @@ export type RemoteAgentReviewSummary = {
   policyFindingCount?: number
   policyFindingCategories?: AgentPolicyFindingCategory[]
   policyFindings?: RemoteAgentPolicyFindingSummary[]
+  /** Redacted identities/digests only; subject and Knowledge content never leave the local review record. */
+  contextManifest?: AgentReviewContextManifest
   advisoryLevel: GateAdvisory['level']
   blocksApproval: boolean
   confidence: number

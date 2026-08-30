@@ -250,6 +250,17 @@ button {
   width: fit-content;
 }
 
+.pairing-subject {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pairing-subject strong {
+  color: var(--text);
+}
+
 .pairing-code-result {
   display: flex;
   align-items: center;
@@ -913,6 +924,14 @@ button {
 .studio-selection .pairing-code-panel code {
   border-color: var(--studio-line);
   background: var(--studio-surface-soft);
+  color: var(--studio-text);
+}
+
+.studio-selection .pairing-subject {
+  color: var(--studio-muted);
+}
+
+.studio-selection .pairing-subject strong {
   color: var(--studio-text);
 }
 

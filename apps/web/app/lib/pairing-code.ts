@@ -1,4 +1,4 @@
-import type { DesktopPairingCode } from '@ai-devflow/shared'
+import type { DesktopPairingCode, Role } from '@ai-devflow/shared'
 
 const pairingCodeKeys = [
   'attemptsRemaining',
@@ -7,6 +7,7 @@ const pairingCodeKeys = [
   'createdByUserId',
   'expiresAt',
   'id',
+  'issuedRole',
   'organizationId',
   'projectId',
 ] as const
@@ -48,11 +49,13 @@ export function parseDesktopPairingCodePayload(
   const createdAt = readBoundedString(value, 'createdAt')
   const expiresAt = readBoundedString(value, 'expiresAt')
   const attemptsRemaining = value.attemptsRemaining
+  const issuedRole = readBoundedString(value, 'issuedRole')
   if (
     projectId !== expectedProjectId ||
     !Number.isFinite(Date.parse(createdAt)) ||
     !Number.isFinite(Date.parse(expiresAt)) ||
     Date.parse(expiresAt) <= Date.parse(createdAt) ||
+    !['owner', 'lead', 'member'].includes(issuedRole) ||
     !Number.isInteger(attemptsRemaining) ||
     (attemptsRemaining as number) < 0 ||
     (attemptsRemaining as number) > 5
@@ -65,6 +68,7 @@ export function parseDesktopPairingCodePayload(
     organizationId: readBoundedString(value, 'organizationId'),
     projectId,
     createdByUserId: readBoundedString(value, 'createdByUserId'),
+    issuedRole: issuedRole as Role,
     code: readBoundedString(value, 'code'),
     expiresAt,
     createdAt,

@@ -265,8 +265,38 @@ function createRepository(): TeamRepository & GateCommandRepository {
             retryCount: 0,
             artifactIds: ['artifact-payments'],
           },
+          {
+            id: 'node-clarify',
+            stage: 'clarify',
+            title: 'Clarification',
+            subtitle: 'Clarify the request.',
+            kind: 'agent',
+            status: 'success',
+            ownerId: 'u-yu',
+            retryCount: 0,
+            artifactIds: ['artifact-payments-clarification'],
+          },
+          {
+            id: 'node-clarify-gate',
+            stage: 'clarify',
+            title: 'Clarification Gate',
+            subtitle: 'Approved requirements.',
+            kind: 'gate',
+            status: 'success',
+            ownerId: 'u-yu',
+            requiredRole: 'member',
+            retryCount: 0,
+            artifactIds: ['artifact-payments-clarification'],
+          },
         ],
-        edges: [],
+        edges: [
+          {
+            id: 'edge-payments-clarification',
+            source: 'node-clarify',
+            target: 'node-clarify-gate',
+            kind: 'gate',
+          },
+        ],
       },
       {
         id: 'run-admin',
@@ -285,6 +315,17 @@ function createRepository(): TeamRepository & GateCommandRepository {
       },
     ],
     artifacts: [
+      {
+        id: 'artifact-payments-clarification',
+        runId: 'run-payments',
+        nodeId: 'node-clarify',
+        kind: 'clarification',
+        title: 'Payments clarification',
+        summary: 'Approved payments requirements.',
+        content: 'Goals: ship payments. Acceptance Criteria: preserve authorization.',
+        redacted: true,
+        updatedAt: '2026-06-16T00:00:30.000Z',
+      },
       {
         id: 'artifact-payments',
         runId: 'run-payments',
@@ -477,6 +518,12 @@ function createRepository(): TeamRepository & GateCommandRepository {
       organizationId: context.organizationId,
       projectId: input.projectId,
       createdByUserId: context.userId,
+      issuedRole: (() => {
+        const role = (context as TeamSession).projectMemberships.find(
+          (membership) => membership.projectId === input.projectId,
+        )?.role ?? 'member'
+        return role === 'owner' ? 'lead' as const : role
+      })(),
       code: `pair-${input.projectId}.copy-once-secret`,
       expiresAt: '2026-06-20T00:10:00.000Z',
       createdAt: '2026-06-20T00:00:00.000Z',
@@ -872,6 +919,7 @@ describe('team API route resolver', () => {
       body: {
         user: { id: 'u-local-owner', name: 'Local Developer', role: 'owner' },
         authentication: { provider: 'local-development' },
+        projectMemberships: [],
       },
     })
     expect(repository.getAuthenticatedIdentityByAuthAccountId).toHaveBeenCalledWith(
@@ -1213,6 +1261,7 @@ describe('team API route resolver', () => {
         organizationId: 'org-demo',
         projectId: 'p-payments',
         createdByUserId: 'u-ling',
+        issuedRole: 'lead',
         code: 'pair-p-payments.copy-once-secret',
         expiresAt: '2026-06-20T00:10:00.000Z',
         createdAt: '2026-06-20T00:00:00.000Z',
@@ -1222,6 +1271,48 @@ describe('team API route resolver', () => {
     expect(repository.createDesktopPairingCode).toHaveBeenCalledWith(
       { projectId: 'p-payments' },
       leadSession,
+    )
+  })
+
+  it.each([
+    { label: 'member', session: memberSession, expectedIssuedRole: 'member' as const },
+    {
+      label: 'owner',
+      session: {
+        ...ownerSession,
+        projectMemberships: [
+          { projectId: 'p-payments', userId: ownerSession.userId, role: 'owner' as const },
+        ],
+      },
+      expectedIssuedRole: 'lead' as const,
+    },
+  ])('lets an active project $label create only their own pairing code', async ({
+    session,
+    expectedIssuedRole,
+  }) => {
+    const repository = createRepository()
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/team/projects/p-payments/pairing-codes',
+      repository,
+      {
+        principal: {
+          session,
+          authentication: { kind: 'session_cookie', tokenRecordId: null },
+        },
+        session,
+      },
+    )
+    expect(result).toMatchObject({
+      status: 201,
+      body: {
+        createdByUserId: session.userId,
+        issuedRole: expectedIssuedRole,
+      },
+    })
+    expect(repository.createDesktopPairingCode).toHaveBeenCalledWith(
+      { projectId: 'p-payments' },
+      session,
     )
   })
 
@@ -1263,7 +1354,60 @@ describe('team API route resolver', () => {
     expect(repository.createDesktopPairingCode).not.toHaveBeenCalled()
   })
 
-  it('rejects desktop pairing code creation without lead access to the project', async () => {
+  it('lets a signed member explicitly revoke only a scoped pairing code', async () => {
+    const repository = createRepository()
+    const revoke = vi.spyOn(repository, 'revokeDesktopPairingCode').mockResolvedValueOnce(true)
+    const result = await resolveTeamRoute(
+      'DELETE',
+      '/api/team/projects/p-payments/pairing-codes/pair-p-payments',
+      repository,
+      {
+        principal: {
+          session: memberSession,
+          authentication: { kind: 'session_cookie', tokenRecordId: null },
+        },
+        session: memberSession,
+      },
+    )
+    expect(result).toEqual({ status: 200, body: { revoked: true } })
+    expect(revoke).toHaveBeenCalledWith(
+      { projectId: 'p-payments', pairingCodeId: 'pair-p-payments' },
+      memberSession,
+    )
+  })
+
+  it('lets a Desktop bearer revoke only its own token record', async () => {
+    const repository = createRepository()
+    const revoke = vi.spyOn(repository, 'revokeDesktopToken').mockResolvedValueOnce(true)
+    const principal = {
+      session: memberSession,
+      authentication: { kind: 'desktop_bearer' as const, tokenRecordId: 'desktop-token-1' },
+    }
+    await expect(
+      resolveTeamRoute(
+        'DELETE',
+        '/api/team/projects/p-payments/desktop-tokens/desktop-token-other',
+        repository,
+        { principal, session: memberSession },
+      ),
+    ).resolves.toMatchObject({ status: 403 })
+    expect(revoke).not.toHaveBeenCalled()
+
+    await expect(
+      resolveTeamRoute(
+        'DELETE',
+        '/api/team/projects/p-payments/desktop-tokens/desktop-token-1',
+        repository,
+        { principal, session: memberSession },
+      ),
+    ).resolves.toEqual({ status: 200, body: { revoked: true } })
+    expect(revoke).toHaveBeenCalledWith(
+      { projectId: 'p-payments', tokenId: 'desktop-token-1' },
+      memberSession,
+    )
+  })
+
+  it('rejects desktop pairing code creation without active access to the project', async () => {
     const repository = createRepository()
 
     const result = await resolveTeamRoute(
@@ -1283,7 +1427,7 @@ describe('team API route resolver', () => {
       status: 403,
       body: {
         error: 'forbidden',
-        message: 'Project role lead required',
+        message: 'Active project membership required',
       },
     })
     expect(repository.createDesktopPairingCode).not.toHaveBeenCalled()
@@ -1345,6 +1489,19 @@ describe('team API route resolver', () => {
     })
   })
 
+  it('rejects client-supplied identity or role during pairing exchange', async () => {
+    const repository = createRepository()
+    const result = await resolveTeamRoute('POST', '/api/desktop/pairing/exchange', repository, {
+      body: {
+        code: 'pair-p-payments.copy-once-secret',
+        userId: 'u-attacker',
+        role: 'owner',
+      },
+    })
+    expect(result).toMatchObject({ status: 400 })
+    expect(repository.exchangeDesktopPairingCode).not.toHaveBeenCalled()
+  })
+
   it('rejects invalid desktop pairing codes with a reconnect-safe message', async () => {
     const repository = createRepository()
     vi.mocked(repository.exchangeDesktopPairingCode).mockRejectedValueOnce(
@@ -1395,7 +1552,10 @@ describe('team API route resolver', () => {
 
     expect(runsResult?.body).toMatchObject({
       runs: [{ id: 'run-payments' }],
-      artifacts: [{ id: 'artifact-payments' }],
+      artifacts: expect.arrayContaining([
+        expect.objectContaining({ id: 'artifact-payments' }),
+        expect.objectContaining({ id: 'artifact-payments-clarification' }),
+      ]),
       events: [{ id: 'event-payments' }],
     })
     expect(JSON.stringify(runsResult?.body)).not.toContain('run-admin')
@@ -1714,7 +1874,7 @@ describe('team API route resolver', () => {
       },
       encryptedSecret: encryptAgentCredential('sk-test-provider-secret'),
     })
-    const providerFetch = vi.fn(async () =>
+    const providerFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       new Response(
         JSON.stringify({
           choices: [
@@ -1766,8 +1926,29 @@ describe('team API route resolver', () => {
         },
       })
       expect(providerFetch).toHaveBeenCalledOnce()
+      const providerRequest = JSON.parse(
+        String(providerFetch.mock.calls[0]?.[1]?.body),
+      ) as { messages: Array<{ role: string; content: string }> }
+      const providerPrompt = providerRequest.messages.find((message) => message.role === 'user')?.content ?? ''
+      expect(providerPrompt).toContain('Ship payments.')
+      expect(providerPrompt).toContain('Goals: ship payments. Acceptance Criteria: preserve authorization.')
+      expect(providerPrompt).toContain('Payments private content.')
+      expect(providerPrompt).toContain('"REVIEW_SUBJECT"')
+      expect(providerPrompt).toContain('"REVIEW_CRITERIA"')
+      expect(providerPrompt).toContain('"CONTEXT_APPLICABILITY"')
+      expect(providerPrompt).toContain('"supplementalTestEvidence"')
       expect(repository.getAgentProviderCredential).toHaveBeenCalledOnce()
       expect(repository.saveAgentReviewBundle).toHaveBeenCalledOnce()
+      const savedManifest = vi.mocked(repository.saveAgentReviewBundle).mock.calls[0]?.[0].review.contextManifest
+      expect(savedManifest).toMatchObject({ stage: 'design', coverage: 'complete' })
+      expect(savedManifest?.fieldProjection?.fields).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          field: 'test_evidence',
+          state: 'available',
+          role: 'supplemental',
+          includeInProviderPrompt: true,
+        }),
+      ]))
       expect(repository.saveAgentEvent).not.toHaveBeenCalled()
     } finally {
       globalThis.fetch = originalFetch

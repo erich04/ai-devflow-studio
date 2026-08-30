@@ -367,6 +367,10 @@ beforeEach(() => {
   mockedFetchAuthSession.mockResolvedValue({
     user: { id: 'u-session', name: 'Session User', role: 'owner' },
     authentication: { provider: 'github' },
+    projectMemberships: [
+      { projectId: 'p-local', userId: 'u-session', role: 'owner' },
+      { projectId: 'p-remote', userId: 'u-session', role: 'owner' },
+    ],
   })
   mockedFetchWorkRequests.mockResolvedValue([])
   mockedFetchGateCommands.mockResolvedValue([])

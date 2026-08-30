@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from
 import {
   buildRemediationPlan,
   canApproveGate,
+  projectKnowledgeReferencesForNode,
   type AgentReviewResult,
   type Artifact,
   type GateEnforcementDecision,
@@ -208,7 +209,12 @@ export function useGateEnforcement(input: {
         .filter((review) => review.runId === selectedRun.id && review.nodeId === selectedNode.id)
         .flatMap((review) => review.policyFindings),
       testEvidence,
-      knowledgeReferences,
+      knowledgeReferences: projectKnowledgeReferencesForNode({
+        node: selectedNode,
+        references: knowledgeReferences,
+        subjectArtifactIds: selectedNode.artifactIds,
+        testEvidenceIds: testEvidence.map((evidence) => evidence.id),
+      }),
       createdAt: new Date().toISOString(),
     })
   }, [agentReviews, decision, governanceChecks, knowledgeReferences, selectedNode, selectedRun, testEvidence])

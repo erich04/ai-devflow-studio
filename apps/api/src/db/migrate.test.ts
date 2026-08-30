@@ -150,6 +150,16 @@ describe('team database migration runner', () => {
         name: '0022_agent_provider_identity',
         fileName: '0022_agent_provider_identity.sql',
       },
+      {
+        version: 23,
+        name: '0023_secure_desktop_pairing',
+        fileName: '0023_secure_desktop_pairing.sql',
+      },
+      {
+        version: 24,
+        name: '0024_agent_review_subject_manifest',
+        fileName: '0024_agent_review_subject_manifest.sql',
+      },
     ])
 
     const [
@@ -169,6 +179,8 @@ describe('team database migration runner', () => {
       localDevelopmentAuth,
       nativeCodingAgentEngine,
       agentProviderIdentity,
+      secureDesktopPairing,
+      agentReviewSubjectManifest,
     ] = await readTeamMigrationCatalog()
     expect(baseline).toMatchObject({ version: 7, name: '0001_initial' })
     expect(baseline?.sql).toMatch(/^BEGIN;/)
@@ -261,6 +273,17 @@ describe('team database migration runner', () => {
       name: '0022_agent_provider_identity',
     })
     expect(agentProviderIdentity?.sql).toContain('SET provider_name = CASE')
+    expect(secureDesktopPairing).toMatchObject({
+      version: 23,
+      name: '0023_secure_desktop_pairing',
+    })
+    expect(secureDesktopPairing?.sql).toContain("SET issued_role = 'lead'")
+    expect(secureDesktopPairing?.sql).toContain('ADD COLUMN revoked_at timestamptz')
+    expect(agentReviewSubjectManifest).toMatchObject({
+      version: 24,
+      name: '0024_agent_review_subject_manifest',
+    })
+    expect(agentReviewSubjectManifest?.sql).toContain('ADD COLUMN IF NOT EXISTS context_manifest jsonb')
     expect(localDevelopmentAuth?.sql).toContain("'local-development'")
     expect(localDevelopmentAuth?.sql).toContain('auth_accounts_provider_check')
   })

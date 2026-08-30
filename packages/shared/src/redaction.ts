@@ -106,10 +106,10 @@ const forwardSlashUncOrWebUrlPattern =
   /(?<!:)\/\/[^/\s<>"')\]},;!?]+\/[^/\s<>"')\]},;!?]+(?:\/[^/\s<>"')\]},;!?]+)*/g
 
 const posixAbsolutePathPattern =
-  /(^|[\s("'=\[:,])(\/[^\s/<>"')\]},;!?]+(?:\/[^\s/<>"')\]},;!?]+)*)/g
+  /(^|[\s("'=\[:,])(\/[^\s/<>"')\]},;!?。；，！？：]+(?:\/[^\s/<>"')\]},;!?。；，！？：]+)*)/g
 
 function isSafeApiRoute(value: string, context: string): boolean {
-  const routeCandidate = value.replace(/[.,;:!?]+$/, '')
+  const routeCandidate = value.replace(/[.,;:!?。；，！？：]+$/, '')
   if (!/^\/(?:api|health|metrics|v\d+)(?:\/|$)/.test(routeCandidate)) {
     return false
   }

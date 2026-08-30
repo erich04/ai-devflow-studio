@@ -199,6 +199,12 @@ export function useDesktopActions(input: {
   eventsRef.current = events
   const pendingInspectorActionRef = useRef(pendingInspectorAction)
   pendingInspectorActionRef.current = pendingInspectorAction
+  const desktopPairingExpired = Boolean(
+    desktopPairing?.expiresAt &&
+      Number.isFinite(Date.parse(desktopPairing.expiresAt)) &&
+      Date.parse(desktopPairing.expiresAt) <= Date.now(),
+  )
+  const activeDesktopPairing = desktopPairingExpired ? undefined : desktopPairing
 
   function samePendingInspectorAction(
     current: PendingInspectorAction | null,
@@ -262,7 +268,7 @@ export function useDesktopActions(input: {
       return
     }
 
-    if (!desktopPairing?.organizationId) {
+    if (!activeDesktopPairing?.organizationId) {
       setToast('请先 Pair Team Project 后再同步团队远端状态')
       return
     }
@@ -272,7 +278,7 @@ export function useDesktopActions(input: {
 
     try {
       const snapshot = await desktopApi.loadRemoteSnapshot({
-        organizationId: desktopPairing.organizationId,
+        organizationId: activeDesktopPairing.organizationId,
       })
       const remoteRuns = snapshot.runs.map(normalizeWorkflowRunProgress)
       const mergedSnapshot = mergeLocalAndRemoteSnapshot({
@@ -349,7 +355,9 @@ export function useDesktopActions(input: {
       })
       setDesktopPairing(result.credential)
       setPairingCodeDraft('')
-      setToast(`已配对团队项目 ${result.credential.projectId}`)
+      setToast(
+        `已绑定 ${result.credential.userName ?? result.credential.userId} / ${result.credential.role} 到 ${result.credential.projectName ?? result.credential.projectId}`,
+      )
     } catch (error) {
       setToast(error instanceof Error ? error.message : 'Desktop 配对失败')
     } finally {
@@ -898,7 +906,7 @@ export function useDesktopActions(input: {
       setToast(browserPreviewWorkflowWriteMessage)
       return
     }
-    if (desktopPairing?.localProjectId !== selectedRun.projectId) {
+    if (activeDesktopPairing?.localProjectId !== selectedRun.projectId) {
       setToast(prDraftMissingBindingMessage)
       return
     }
@@ -948,7 +956,7 @@ export function useDesktopActions(input: {
       setToast(browserPreviewWorkflowWriteMessage)
       return
     }
-    if (desktopPairing?.localProjectId !== selectedRun.projectId) {
+    if (activeDesktopPairing?.localProjectId !== selectedRun.projectId) {
       setToast('请先将当前 Local Project 绑定到 Team Project，再准备 GitHub Delivery')
       return
     }
@@ -1018,7 +1026,7 @@ export function useDesktopActions(input: {
       setToast(browserPreviewWorkflowWriteMessage)
       return
     }
-    if (desktopPairing?.localProjectId !== selectedRun.projectId) {
+    if (activeDesktopPairing?.localProjectId !== selectedRun.projectId) {
       setToast('当前 Local Project 与 Team Project 未绑定，不能修改 GitHub Delivery')
       return
     }
@@ -1099,7 +1107,7 @@ export function useDesktopActions(input: {
       setToast(browserPreviewWorkflowWriteMessage)
       return
     }
-    if (desktopPairing?.localProjectId !== selectedRun.projectId) {
+    if (activeDesktopPairing?.localProjectId !== selectedRun.projectId) {
       setToast('当前 Local Project 与 Team Project 未绑定，不能恢复 GitHub Delivery')
       return
     }

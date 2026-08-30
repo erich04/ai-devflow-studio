@@ -101,6 +101,16 @@ export const teamMigrationCatalog = [
     name: '0022_agent_provider_identity',
     fileName: '0022_agent_provider_identity.sql',
   },
+  {
+    version: 23,
+    name: '0023_secure_desktop_pairing',
+    fileName: '0023_secure_desktop_pairing.sql',
+  },
+  {
+    version: 24,
+    name: '0024_agent_review_subject_manifest',
+    fileName: '0024_agent_review_subject_manifest.sql',
+  },
 ] as const
 
 export function splitSqlStatements(sql: string): string[] {

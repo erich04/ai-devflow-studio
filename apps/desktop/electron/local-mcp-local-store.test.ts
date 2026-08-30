@@ -69,7 +69,7 @@ describe('Local MCP installation persistence', () => {
     store.close()
 
     const reopened = await createLocalStore({ dbPath })
-    expect(await reopened.getSchemaVersion()).toBe(33)
+    expect(await reopened.getSchemaVersion()).toBe(34)
     expect(await reopened.listMcpServers()).toEqual([teamDefinition])
     expect(await reopened.listLocalMcpInstallations()).toEqual([installation])
     reopened.close()

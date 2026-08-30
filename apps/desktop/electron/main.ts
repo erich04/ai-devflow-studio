@@ -15,6 +15,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import {
+  assessAgentReviewFreshness,
   buildKnowledgeGovernanceChecks,
   buildKnowledgeReferences,
   buildRemediationPlan,
@@ -192,6 +193,8 @@ import { createGitHubOutboundContentScanner } from './github-outbound-content-sc
 import { createManagedWorkspaceCleanupService } from './managed-workspace-cleanup.js'
 import { createWorkspaceOperationCoordinator } from './workspace-operation-coordinator.js'
 import { createOpencodeProcessManager } from './opencode-process.js'
+import { createOpencodeHttpCodingEngineAdapter } from './opencode-http-engine.js'
+import { detectCodingRuntimeEngines } from './opencode-discovery.js'
 import { stopOpencodeWithRetry } from './opencode-shutdown.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 import {
@@ -342,6 +345,21 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
   let executorPromise = codingExecutorPromises.get(key)
   if (!executorPromise) {
     executorPromise = (async () => {
+      if (selection.executor === 'opencode-http') {
+        const configuration = selection.configuration
+        if (configuration.executor !== 'opencode-http') {
+          throw new Error('Project Coding Runtime configuration does not match the selected executor')
+        }
+        return createCodingExecutorCompatibilityAdapter(
+          createOpencodeHttpCodingEngineAdapter({
+            binaryPath: configuration.binaryPath,
+            providerID: configuration.providerId,
+            modelID: configuration.modelId,
+            processManager: opencodeProcessManager,
+            runtimeEnv: process.env,
+          }),
+        )
+      }
       if (selection.executor === 'native-deterministic') {
         return createNativeCodingExecutor({
           store,
@@ -1395,10 +1413,30 @@ async function getCodingReadiness(input: {
     configVersion: 0,
   }
   let executor: CodingExecutor | null = null
+  let engineAvailable: boolean | undefined
   try {
     const resolved = await resolveCodingExecutorForProject(input.projectId)
     selection = resolved.selection
     executor = resolved.executor
+    if (selection.source === 'project' && selection.executor === 'opencode-http') {
+      const configuration = selection.configuration
+      if (configuration.executor !== 'opencode-http') {
+        throw new Error('Project Coding Runtime configuration does not match the selected executor')
+      }
+      const discovery = await detectCodingRuntimeEngines({
+        projectId: input.projectId,
+        env: {
+          ...process.env,
+          DEVFLOW_OPENCODE_BIN: configuration.binaryPath,
+        },
+      })
+      const candidate = discovery.candidates[0]
+      engineAvailable = Boolean(
+        candidate?.status === 'available' &&
+          candidate.binaryPath === configuration.binaryPath &&
+          candidate.version === configuration.detectedVersion,
+      )
+    }
   } catch {
     selection = await resolveCodingRuntimeSelection({
       store,
@@ -1410,6 +1448,7 @@ async function getCodingReadiness(input: {
     store,
     selection,
     executor,
+    ...(engineAvailable === undefined ? {} : { engineAvailable }),
     ...input,
     getBudgetPolicy: (projectId) => remoteSync.getRuntimeBudgetPolicy(projectId),
     evaluateBudget: (budgetInput) => remoteSync.evaluateRuntimeBudget(budgetInput),
@@ -1806,12 +1845,20 @@ async function evaluateLocalGateEnforcement(
     chunks: knowledgeSnapshot.chunks,
     testEvidence,
   })
+  const nodeAgentReviews = agentReviews.filter((review) => review.nodeId === node.id)
+  const reviewFreshness = await Promise.all(
+    nodeAgentReviews.map(async (review) => ({
+      review,
+      freshness: await assessAgentReviewFreshness({ review, run, node, artifacts }),
+    })),
+  )
+  const currentAgentReviews = reviewFreshness
+    .filter(({ freshness }) => freshness.status !== 'stale')
+    .map(({ review }) => review)
   const latestAgentReview =
-    agentReviews
-      .filter((review) => review.nodeId === node.id)
+    currentAgentReviews
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null
-  const agentPolicyFindings = agentReviews
-    .filter((review) => review.nodeId === node.id)
+  const agentPolicyFindings = currentAgentReviews
     .flatMap((review) => review.policyFindings)
   const decision = evaluateGateEnforcement({
     run,
@@ -2879,27 +2926,58 @@ function registerIpcHandlers() {
     const input = parseSaveCodingRuntimeConfigurationInput(payload)
     const store = await getStore()
     await findProject(input.projectId)
-    const [metadata, encryptedSecret, current] = await Promise.all([
-      store.listProviderCredentials().then((credentials) =>
-        credentials.find((candidate) => candidate.providerId === input.providerId),
-      ),
-      store.getProviderEncryptedSecret(input.providerId),
-      store.getCodingRuntimeConfiguration(input.projectId),
-    ])
-    if (!metadata || !encryptedSecret) {
-      throw new Error(`Coding Provider credential is unavailable: ${input.providerId}`)
+    const current = await store.getCodingRuntimeConfiguration(input.projectId)
+    if (input.executor === 'native-model') {
+      const [metadata, encryptedSecret] = await Promise.all([
+        store.listProviderCredentials().then((credentials) =>
+          credentials.find((candidate) => candidate.providerId === input.providerId),
+        ),
+        store.getProviderEncryptedSecret(input.providerId),
+      ])
+      if (!metadata || !encryptedSecret) {
+        throw new Error(`Coding Provider credential is unavailable: ${input.providerId}`)
+      }
+    } else {
+      const discovery = await detectCodingRuntimeEngines({
+        projectId: input.projectId,
+        env: { ...process.env, DEVFLOW_OPENCODE_BIN: input.binaryPath },
+      })
+      const candidate = discovery.candidates[0]
+      if (
+        candidate?.status !== 'available' ||
+        candidate.binaryPath !== input.binaryPath ||
+        candidate.version !== input.detectedVersion
+      ) {
+        throw new Error('OpenCode confirmation is stale; detect the local engine again')
+      }
     }
-    const configuration = await store.saveCodingRuntimeConfiguration({
+    const commonConfiguration = {
       projectId: input.projectId,
-      executor: input.executor,
       providerId: input.providerId,
       version: (current?.version ?? 0) + 1,
       updatedAt: new Date().toISOString(),
-    })
+    }
+    const configuration = await store.saveCodingRuntimeConfiguration(
+      input.executor === 'native-model'
+        ? { ...commonConfiguration, executor: 'native-model' }
+        : {
+            ...commonConfiguration,
+            executor: 'opencode-http',
+            binaryPath: input.binaryPath,
+            modelId: input.modelId,
+            detectedVersion: input.detectedVersion,
+          },
+    )
     for (const key of codingExecutorPromises.keys()) {
       if (key.startsWith(`${input.projectId}:`)) codingExecutorPromises.delete(key)
     }
     return configuration
+  })
+
+  ipcMain.handle(ipcChannels.detectCodingRuntimeEngines, async (_, payload: unknown) => {
+    const input = parseGetCodingRuntimeConfigurationInput(payload)
+    await findProject(input.projectId)
+    return detectCodingRuntimeEngines({ projectId: input.projectId })
   })
 
   ipcMain.handle(ipcChannels.getCodingRuntimeReadiness, async (_, payload: unknown) => {

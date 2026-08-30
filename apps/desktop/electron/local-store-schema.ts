@@ -1,7 +1,7 @@
 import type { Database } from 'sql.js'
 import type { LocalSettings } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 33
+export const CURRENT_SCHEMA_VERSION = 34
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 export type SchemaMigration = {
@@ -2560,6 +2560,47 @@ export const schemaMigrations: readonly SchemaMigration[] = [
       on coding_change_sets(coding_run_id, created_at, id);
     create index if not exists idx_coding_change_sets_expiry
       on coding_change_sets(expires_at, id);
+      `)
+    },
+  },
+  {
+    version: 34,
+    migrate(db) {
+      db.run(`
+    alter table coding_runtime_configurations rename to coding_runtime_configurations_v33;
+
+    create table coding_runtime_configurations (
+      project_id text primary key references local_projects(id) on delete cascade,
+      executor text not null,
+      provider_id text not null,
+      version integer not null,
+      json text not null,
+      updated_at text not null,
+      check (executor in ('native-model', 'opencode-http')),
+      check (length(trim(provider_id)) between 1 and 200 and trim(provider_id) = provider_id),
+      check (version between 1 and 2147483647),
+      check (json_valid(json)),
+      check (json_extract(json, '$.projectId') = project_id),
+      check (json_extract(json, '$.executor') = executor),
+      check (json_extract(json, '$.providerId') = provider_id),
+      check (json_extract(json, '$.version') = version),
+      check (json_extract(json, '$.updatedAt') = updated_at),
+      check (
+        executor = 'native-model' or (
+          length(trim(json_extract(json, '$.binaryPath'))) between 1 and 4096 and
+          length(trim(json_extract(json, '$.modelId'))) between 1 and 200 and
+          length(trim(json_extract(json, '$.detectedVersion'))) between 1 and 160
+        )
+      )
+    );
+
+    insert into coding_runtime_configurations (
+      project_id, executor, provider_id, version, json, updated_at
+    )
+    select project_id, executor, provider_id, version, json, updated_at
+      from coding_runtime_configurations_v33;
+
+    drop table coding_runtime_configurations_v33;
       `)
     },
   },

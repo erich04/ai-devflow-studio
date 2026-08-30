@@ -1,6 +1,7 @@
 import {
   buildAgentReviewContext,
   createAgentReviewArtifacts,
+  deriveWorkflowContextPolicyRequirements,
   redactSensitiveText,
   runBudgetedKnowledgeReviewAgent,
   type AgentEvent,
@@ -13,6 +14,7 @@ import {
   type KnowledgeDocument,
   type KnowledgeReviewBudgetGuard,
   type LocalExecutionState,
+  type PolicySnapshot,
   type TestEvidence,
   type WorkflowRun,
 } from '@ai-devflow/shared'
@@ -25,6 +27,7 @@ export type KnowledgeReviewRuntimeStore = {
   listArtifacts(runId?: string): Promise<Artifact[]>
   listTestEvidence(runId?: string): Promise<TestEvidence[]>
   listEvents(runId?: string): Promise<AgentEvent[]>
+  getPolicySnapshot?(projectId: string): Promise<PolicySnapshot | null>
   saveArtifact(artifact: Artifact): Promise<void>
   saveEvent(event: AgentEvent): Promise<void>
   saveAgentReview(review: AgentReviewResult): Promise<void>
@@ -119,18 +122,29 @@ export function createKnowledgeReviewRuntime(
         throw new Error(`基于知识的门禁审查在调用 Provider 前被阻断：${detail}`)
       }
 
-      const [artifacts, testEvidence] = await Promise.all([
+      const [artifacts, testEvidence, policySnapshot] = await Promise.all([
         deps.store.listArtifacts(input.runId),
         deps.store.listTestEvidence(input.runId),
+        deps.store.getPolicySnapshot?.(input.projectId) ?? Promise.resolve(null),
       ])
-      const context = buildAgentReviewContext({
-        run,
-        node,
-        artifacts,
-        testEvidence,
-        knowledgeDocuments: deps.knowledgeDocuments,
-        knowledgeChunks: deps.knowledgeChunks,
-      })
+      let context
+      try {
+        context = await buildAgentReviewContext({
+          run,
+          node,
+          artifacts,
+          testEvidence,
+          knowledgeDocuments: deps.knowledgeDocuments,
+          knowledgeChunks: deps.knowledgeChunks,
+          requiredContextFields: deriveWorkflowContextPolicyRequirements(
+            policySnapshot?.effectivePolicy,
+          ),
+        })
+      } catch (error) {
+        const detail = failureMessage(error)
+        await persistError(input, requestId, `门禁审查对象不完整：${detail}`)
+        throw new Error(`基于知识的门禁审查在调用 Provider 前被阻断：${detail}`)
+      }
 
       const lazyProvider: AgentProvider = {
         ...providerMetadata,

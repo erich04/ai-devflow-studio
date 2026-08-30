@@ -12347,12 +12347,23 @@ class SqlJsLocalStore implements LocalStore {
   async saveCodingRuntimeConfiguration(
     configuration: CodingRuntimeConfiguration,
   ): Promise<CodingRuntimeConfiguration> {
+    const providerValid =
+      Boolean(configuration.providerId.trim()) &&
+      configuration.providerId === configuration.providerId.trim()
+    const executorValid = configuration.executor === 'native-model' || (
+      configuration.executor === 'opencode-http' &&
+      path.isAbsolute(configuration.binaryPath) &&
+      configuration.binaryPath === configuration.binaryPath.trim() &&
+      Boolean(configuration.modelId.trim()) &&
+      configuration.modelId === configuration.modelId.trim() &&
+      Boolean(configuration.detectedVersion.trim()) &&
+      configuration.detectedVersion === configuration.detectedVersion.trim()
+    )
     if (
-      configuration.executor !== 'native-model' ||
+      !executorValid ||
       !configuration.projectId.trim() ||
-      !configuration.providerId.trim() ||
+      !providerValid ||
       configuration.projectId !== configuration.projectId.trim() ||
-      configuration.providerId !== configuration.providerId.trim() ||
       !Number.isSafeInteger(configuration.version) ||
       configuration.version < 1 ||
       new Date(Date.parse(configuration.updatedAt)).toISOString() !== configuration.updatedAt

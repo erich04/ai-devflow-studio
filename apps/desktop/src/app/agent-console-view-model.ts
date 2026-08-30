@@ -1,4 +1,5 @@
 import {
+  canRunKnowledgeReviewOnNode,
   formatUsd,
   type AgentProviderConfig,
   type AgentReviewResult,
@@ -17,6 +18,7 @@ import {
 } from '@ai-devflow/shared'
 import {
   buildAgentProviderDataSource,
+  buildWorkflowNodePresentation,
   codingRuntimeLabel,
   codingTerminalLabel,
   codingTraceMetadataString,
@@ -183,12 +185,13 @@ export function buildAgentConsoleViewModel(input: BuildAgentConsoleViewModelInpu
 }
 
 function buildCurrentTarget(run: WorkflowRun | undefined, node: WorkflowNode | undefined): AgentConsoleViewModel['currentTarget'] {
+  const presentation = node ? buildWorkflowNodePresentation(node) : undefined
   return {
     runTitle: run?.title ?? 'No selected Run',
     nodeTitle: node ? displayNodeTitle(node) : 'No selected node',
     stageLabel: node ? stageLabels[node.stage] : 'No stage',
-    nodeKind: node?.kind ?? 'none',
-    nodeStatus: node?.status ?? 'not selected',
+    nodeKind: presentation?.nodeKindLabel ?? 'none',
+    nodeStatus: presentation?.statusLabel ?? 'not selected',
   }
 }
 
@@ -302,6 +305,16 @@ function buildPrimaryAction(input: {
     }
   }
 
+  if (!canRunKnowledgeReviewOnNode(input.selectedNode)) {
+    return {
+      id: 'return-workbench',
+      label: 'Return to Workbench',
+      summary: '当前节点没有可在 Agent 执行台运行的门禁审查或 Coding 动作。',
+      tone: 'soft',
+      disabled: false,
+    }
+  }
+
   return {
     id: 'run-review',
     label: input.isRunningReview ? '门禁审查中' : '运行门禁审查',
@@ -378,12 +391,13 @@ function buildPathStatuses(input: {
   latestUsage: AgentTokenUsage | undefined
   selectedNode: WorkflowNode | undefined
 }): AgentConsolePathStatus[] {
+  const paths: AgentConsolePathStatus[] = []
   const codingDisabledReason = input.selectedNode && !isBuildTask(input.selectedNode)
     ? 'Coding Agent 只能从开发实现任务启动。'
     : undefined
 
-  return [
-    {
+  if (input.selectedNode && canRunKnowledgeReviewOnNode(input.selectedNode)) {
+    paths.push({
       id: 'review',
       label: '门禁审查',
       title: '基于知识的门禁审查',
@@ -395,8 +409,11 @@ function buildPathStatuses(input: {
         { label: '当前节点审查', value: String(input.selectedReviews.length) },
       ],
       ...(!input.selectedProvider ? { disabledReason: '请先配置真实 Agent Provider：Provider Name、Base URL、Model 和 API Key。' } : {}),
-    },
-    {
+    })
+  }
+
+  if (input.selectedNode && (isBuildTask(input.selectedNode) || input.codingRuns.length > 0)) {
+    paths.push({
       id: 'coding',
       label: 'Coding',
       title: 'Coding Agent',
@@ -415,8 +432,10 @@ function buildPathStatuses(input: {
         { label: 'Retries', value: String(input.retryAttempts.length) },
       ],
       ...(codingDisabledReason ? { disabledReason: codingDisabledReason } : {}),
-    },
-  ]
+    })
+  }
+
+  return paths
 }
 
 function buildEvidenceGroups(input: BuildAgentConsoleViewModelInput): AgentConsoleEvidenceGroup[] {

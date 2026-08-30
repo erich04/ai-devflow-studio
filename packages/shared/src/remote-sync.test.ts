@@ -286,6 +286,50 @@ describe('remote sync helpers', () => {
       risks: [],
       missingEvidence: [],
       suggestedTests: [],
+      contextManifest: {
+        version: 1,
+        stage: 'design',
+        coverage: 'complete',
+        runRequest: {
+          contentDigest: 'a'.repeat(64),
+          sanitizerVersion: 'sensitive-text-v1',
+          coverage: 'complete',
+        },
+        subjectArtifacts: [{
+          id: 'artifact-design',
+          runId: 'run-1',
+          nodeId: 'node-design',
+          kind: 'design',
+          updatedAt: '2026-07-31T11:59:00.000Z',
+          contentDigest: 'b'.repeat(64),
+          sanitizerVersion: 'sensitive-text-v1',
+          coverage: 'complete',
+          chunks: [{ index: 0, start: 0, end: 20, contentDigest: 'c'.repeat(64) }],
+        }],
+        knowledgeCriteria: [{
+          referenceId: 'knowledge-reference-safe',
+          documentId: '/Users/Alice/private/knowledge.md',
+          chunkId: 'knowledge-chunk-safe',
+          contentHash: 'kh-safe',
+          strategy: 'hybrid',
+          score: 0.91,
+          lexicalMatch: {
+            rawScore: 8,
+            matchedTerms: ['mini', 'API_TOKEN=criteria-secret'],
+            normalized: false,
+            crossQueryComparable: false,
+            source: 'retriever',
+          },
+          semanticRelevance: {
+            score: 0.91,
+            provider: 'provider-safe',
+            model: 'reranker-v1',
+            source: 'retriever',
+          },
+          gateEvidence: { status: 'retrieval_candidate' },
+        }],
+        criteriaCoverage: 'available',
+      },
       knowledgeReferences: [],
       policyFindings: [
         {
@@ -333,6 +377,20 @@ describe('remote sync helpers', () => {
     expect(JSON.stringify(summary)).not.toContain('finding-secret')
     expect(JSON.stringify(summary)).not.toContain('local-evidence-id')
     expect(JSON.stringify(summary)).not.toContain('local-knowledge-reference-id')
+    expect(summary.contextManifest?.subjectArtifacts[0]).toMatchObject({
+      id: 'artifact-design',
+      contentDigest: 'b'.repeat(64),
+      updatedAt: '2026-07-31T11:59:00.000Z',
+    })
+    expect(JSON.stringify(summary.contextManifest)).not.toContain('/Users/Alice')
+    expect(summary.contextManifest?.knowledgeCriteria[0]).toMatchObject({
+      strategy: 'hybrid',
+      lexicalMatch: { rawScore: 8, normalized: false },
+      semanticRelevance: { score: 0.91, model: 'reranker-v1' },
+      gateEvidence: { status: 'retrieval_candidate' },
+    })
+    expect(JSON.stringify(summary.contextManifest)).not.toContain('criteria-secret')
+    expect(JSON.stringify(summary.contextManifest)).not.toContain('"content"')
     expect(parseRemoteAgentReviewSummary(summary)).toEqual(summary)
     expect(() => parseRemoteAgentReviewSummary({
       ...summary,
@@ -340,6 +398,22 @@ describe('remote sync helpers', () => {
         ...finding,
         runId: 'run-other',
       })),
+    })).toThrow('Invalid remote agent review summary payload')
+    expect(() => parseRemoteAgentReviewSummary({
+      ...summary,
+      contextManifest: {
+        ...summary.contextManifest!,
+        knowledgeCriteria: [{
+          ...summary.contextManifest!.knowledgeCriteria[0]!,
+          lexicalMatch: {
+            rawScore: 8,
+            matchedTerms: [],
+            normalized: true,
+            crossQueryComparable: false,
+            source: 'retriever',
+          },
+        }],
+      },
     })).toThrow('Invalid remote agent review summary payload')
     expect(() =>
       createRemoteAgentReviewSummary({

@@ -156,11 +156,10 @@ v0.4.x 后，知识层已经为未来 RAG 做好边界：retrieval hit 不等于
 
 在 Inspector 中点击 `Agent Review` 后，Knowledge Review Agent 会读取：
 
-- 当前 Run / Node
-- Knowledge References
-- Governance Checks
-- Test Evidence 摘要
-- Artifact 摘要
+- 当前 Run / Gate
+- 当前 Gate 关联的完整 Artifact 内容（审查对象）
+- Knowledge / Policy References（审查依据，不是 Evidence）
+- 当前阶段适用的 Test Evidence；不适用或可选且为空时不会制造缺失项
 
 它会生成：
 
@@ -171,6 +170,10 @@ v0.4.x 后，知识层已经为未来 RAG 做好边界：retrieval hit 不等于
 - v0.7+ Agent Policy Findings
 
 打开左侧 `Agents` 可以查看 review history、trace、cost，以及 v0.8 的 retry attempt 记录。
+
+Gate Inspector 中，`引用来源` 展示 Knowledge 文档、chunk、相对路径、heading、hash 和明确的
+词法/语义相关性；`Evidence` 只展示 Artifact revision/digest、Review/Policy finding、Test
+Evidence 等可审计结果。同一条 Knowledge 引用不会同时冒充 Evidence。
 
 ## 7. Coding Agent 与 v0.8 Retry
 

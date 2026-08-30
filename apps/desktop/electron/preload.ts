@@ -92,6 +92,8 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.getCodingRuntimeConfiguration, input),
   saveCodingRuntimeConfiguration: (input) =>
     ipcRenderer.invoke(ipcChannels.saveCodingRuntimeConfiguration, input),
+  detectCodingRuntimeEngines: (input) =>
+    ipcRenderer.invoke(ipcChannels.detectCodingRuntimeEngines, input),
   getCodingRuntimeReadiness: (input) =>
     ipcRenderer.invoke(ipcChannels.getCodingRuntimeReadiness, input),
   getCodingChangeSetPreview: (input) =>

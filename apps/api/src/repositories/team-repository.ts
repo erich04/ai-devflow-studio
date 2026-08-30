@@ -42,6 +42,7 @@ import {
   type RemoteRunDeleteResult,
   type RuntimeBudgetApproval,
   type RuntimeBudgetPolicy,
+  type Role,
   type PolicyAwareDeliverySummary,
   type RemoteRunSummary,
   type RemoteSyncUploadResult,
@@ -127,6 +128,10 @@ export type TeamRepositorySyncContext = TeamRepositoryReadContext &
 export type ResolvedDesktopTokenSession = {
   tokenRecordId: string
   session: AuthenticatedSession
+  issuedRole?: Role
+  expiresAt?: string
+  userName?: string
+  projectName?: string
 }
 
 export class CanonicalRunRequiredError extends Error {
@@ -217,6 +222,14 @@ export type TeamRepository = WorkRequestRepository &
   ): Promise<DesktopPairingCode>
   exchangeDesktopPairingCode(input: { code: string }): Promise<DesktopPairingExchangeResult>
   resolveDesktopTokenSession(token: string): Promise<ResolvedDesktopTokenSession | null>
+  revokeDesktopPairingCode(
+    input: { projectId: string; pairingCodeId: string },
+    context: TeamRepositorySyncContext,
+  ): Promise<boolean>
+  revokeDesktopToken(
+    input: { projectId: string; tokenId: string },
+    context: TeamRepositorySyncContext,
+  ): Promise<boolean>
   getRunsBundle(context: TeamRepositoryReadContext): Promise<RunsBundle>
   getTeamOverview(context: TeamRepositoryReadContext): Promise<TeamOverviewPayload>
   getSkills(context: TeamRepositoryReadContext): Promise<SkillDefinition[]>
@@ -389,9 +402,16 @@ export function createSeedTeamRepository(): TeamRepository {
     Omit<DesktopPairingExchangeResult, 'token' | 'tokenId'> & {
       code: string
       failedAttempts: number
+      revokedAt: string | null
     }
   >()
-  const desktopTokenSessions = new Map<string, ResolvedDesktopTokenSession>()
+  const desktopTokenSessions = new Map<
+    string,
+    ResolvedDesktopTokenSession & {
+      expiresAt: string
+      issuedRole: Role
+    }
+  >()
   const workRequestRepository = createSeedWorkRequestRepository({
     projectExists: (organizationId, projectId) =>
       projectOrganizationIds.get(projectId) === organizationId,
@@ -798,39 +818,51 @@ export function createSeedTeamRepository(): TeamRepository {
       if (projectOrganizationIds.get(input.projectId) !== context.organizationId) {
         throw new TeamProjectScopeError()
       }
-      const createdAt = new Date(0).toISOString()
+      const createdAt = new Date().toISOString()
+      const expiresAt = new Date(Date.parse(createdAt) + 10 * 60 * 1000).toISOString()
       const sessionContext = context as TeamRepositorySyncContext & Partial<TeamSession>
-      const role = sessionContext.role ?? 'owner'
+      const projectMembership = sessionContext.projectMemberships?.find(
+        (membership) =>
+          membership.projectId === input.projectId && membership.userId === context.userId,
+      )
+      if (!projectMembership) {
+        throw new TeamProjectScopeError()
+      }
+      const role = projectMembership.role
       const authAccountId =
         'authAccountId' in sessionContext && typeof sessionContext.authAccountId === 'string'
           ? sessionContext.authAccountId
           : `acct-demo-${context.userId}`
-      const projectMembership =
-        sessionContext.projectMemberships?.find(
-          (membership) => membership.projectId === input.projectId,
-        ) ?? { projectId: input.projectId, userId: context.userId, role }
       const tokenRole = role === 'owner' ? 'lead' : role
       const tokenMembership = { ...projectMembership, role: tokenRole }
-      const id = `desktop-pairing-${input.projectId}`
+      const id = `desktop-pairing-${input.projectId}-${desktopPairingCodes.size + 1}`
       const code = `${id}.demo-secret`
+      const project = teamProjects.find((candidate) => candidate.id === input.projectId)
+      const user = members.find((candidate) => candidate.id === context.userId)
       desktopPairingCodes.set(id, {
         organizationId: context.organizationId,
         projectId: input.projectId,
         userId: context.userId,
         role: tokenRole,
+        issuedRole: tokenRole,
         authAccountId,
         projectMemberships: [tokenMembership],
         createdAt,
+        expiresAt: new Date(Date.parse(createdAt) + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        userName: user?.name ?? context.userId,
+        projectName: project?.name ?? input.projectId,
         code,
         failedAttempts: 0,
+        revokedAt: null,
       })
       return {
         id,
         organizationId: context.organizationId,
         projectId: input.projectId,
         createdByUserId: context.userId,
+        issuedRole: tokenRole,
         code,
-        expiresAt: new Date(10 * 60 * 1000).toISOString(),
+        expiresAt,
         createdAt,
         attemptsRemaining: 5,
       }
@@ -839,7 +871,12 @@ export function createSeedTeamRepository(): TeamRepository {
       const separator = input.code.indexOf('.')
       const id = separator > 0 ? input.code.slice(0, separator) : ''
       const stored = id ? desktopPairingCodes.get(id) : undefined
-      if (!stored || stored.failedAttempts >= 5) {
+      if (
+        !stored ||
+        stored.revokedAt ||
+        stored.failedAttempts >= 5 ||
+        Date.parse(stored.createdAt) + 10 * 60 * 1000 <= Date.now()
+      ) {
         throw new Error('invalid desktop pairing code')
       }
       if (stored.code !== input.code) {
@@ -848,17 +885,31 @@ export function createSeedTeamRepository(): TeamRepository {
       }
       desktopPairingCodes.delete(id)
       const projectId = stored.projectId
-      const token = `devflow-desktop-token-${projectId}`
-      const tokenId = `desktop-token-${projectId}`
+      const liveMember = members.find((candidate) => candidate.id === stored.userId)
+      if (!liveMember || projectOrganizationIds.get(projectId) !== stored.organizationId) {
+        throw new Error('invalid desktop pairing code')
+      }
+      const liveRole = liveMember.role
+      const roleRank: Record<Role, number> = { member: 1, lead: 2, owner: 3 }
+      const effectiveRole =
+        roleRank[liveRole] <= roleRank[stored.issuedRole ?? 'lead']
+          ? liveRole
+          : (stored.issuedRole ?? 'lead')
+      const token = `devflow-desktop-token-${id}`
+      const tokenId = `desktop-token-${id}`
+      const tokenExpiresAt =
+        stored.expiresAt ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
       desktopTokenSessions.set(token, {
         tokenRecordId: tokenId,
+        issuedRole: stored.issuedRole ?? 'lead',
+        expiresAt: tokenExpiresAt,
         session: {
           source: 'authenticated',
           organizationId: stored.organizationId,
           userId: stored.userId,
-          role: stored.role,
+          role: effectiveRole,
           authAccountId: stored.authAccountId,
-          projectMemberships: stored.projectMemberships,
+          projectMemberships: [{ projectId, userId: stored.userId, role: effectiveRole }],
         },
       })
       return {
@@ -867,9 +918,13 @@ export function createSeedTeamRepository(): TeamRepository {
         organizationId: stored.organizationId,
         projectId: stored.projectId,
         userId: stored.userId,
-        role: stored.role,
+        role: effectiveRole,
+        issuedRole: stored.issuedRole ?? 'lead',
+        expiresAt: tokenExpiresAt,
+        ...(stored.userName ? { userName: stored.userName } : {}),
+        ...(stored.projectName ? { projectName: stored.projectName } : {}),
         authAccountId: stored.authAccountId,
-        projectMemberships: stored.projectMemberships,
+        projectMemberships: [{ projectId, userId: stored.userId, role: effectiveRole }],
         createdAt: stored.createdAt,
       }
     },
@@ -878,7 +933,59 @@ export function createSeedTeamRepository(): TeamRepository {
         return null
       }
 
-      return desktopTokenSessions.get(token) ?? null
+      const stored = desktopTokenSessions.get(token)
+      if (!stored || Date.parse(stored.expiresAt) <= Date.now()) {
+        return null
+      }
+      const liveMember = members.find((candidate) => candidate.id === stored.session.userId)
+      if (!liveMember) {
+        return null
+      }
+      const roleRank: Record<Role, number> = { member: 1, lead: 2, owner: 3 }
+      const effectiveRole =
+        roleRank[liveMember.role] <= roleRank[stored.issuedRole]
+          ? liveMember.role
+          : stored.issuedRole
+      return {
+        tokenRecordId: stored.tokenRecordId,
+        session: {
+          ...stored.session,
+          role: effectiveRole,
+          projectMemberships: stored.session.projectMemberships.map((membership) => ({
+            ...membership,
+            role: effectiveRole,
+          })),
+        },
+      }
+    },
+    async revokeDesktopPairingCode(input, context) {
+      const stored = desktopPairingCodes.get(input.pairingCodeId)
+      if (
+        !stored ||
+        stored.organizationId !== context.organizationId ||
+        stored.projectId !== input.projectId ||
+        stored.userId !== context.userId
+      ) {
+        return false
+      }
+      stored.revokedAt = new Date().toISOString()
+      return true
+    },
+    async revokeDesktopToken(input, context) {
+      const entry = [...desktopTokenSessions.entries()].find(
+        ([, stored]) =>
+          stored.tokenRecordId === input.tokenId &&
+          stored.session.organizationId === context.organizationId &&
+          stored.session.userId === context.userId &&
+          stored.session.projectMemberships.some(
+            (membership) => membership.projectId === input.projectId,
+          ),
+      )
+      if (!entry) {
+        return false
+      }
+      desktopTokenSessions.delete(entry[0])
+      return true
     },
 
     async getRunsBundle(context) {
@@ -1178,6 +1285,7 @@ export function createSeedTeamRepository(): TeamRepository {
           (_, index) => `Remote summary missing evidence ${index + 1}`,
         ),
         suggestedTests: [],
+        ...(summary.contextManifest ? { contextManifest: summary.contextManifest } : {}),
         knowledgeReferences: [],
         policyFindings: (summary.policyFindings ?? []).map((finding) => ({
           ...finding,

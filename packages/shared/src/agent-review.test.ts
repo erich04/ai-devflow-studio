@@ -6,6 +6,7 @@ import {
   runs,
 } from './fixtures'
 import {
+  assessAgentReviewFreshness,
   buildAgentReviewContext,
   createAgentReviewArtifacts,
   createFakeAgentProvider,
@@ -16,6 +17,7 @@ import {
   isTrustedNoCostKnowledgeReviewProvider,
   runBudgetedKnowledgeReviewAgent,
   runKnowledgeReviewAgent,
+  KNOWLEDGE_REVIEW_MAX_ARTIFACT_CHARACTERS,
   type KnowledgeReviewBudgetGuardInput,
 } from './agent-review'
 import type { Artifact, TestEvidence } from './domain'
@@ -24,7 +26,7 @@ const run = runs[0]!
 const node = run.nodes.find((item) => item.id === 'n-design-gate')!
 
 describe('Knowledge Review cost preflight', () => {
-  it('trusts only the exact built-in fake provider as no-cost', () => {
+  it('trusts only the exact built-in fake provider as no-cost', async () => {
     expect(
       isTrustedNoCostKnowledgeReviewProvider({
         id: 'fake-knowledge-review',
@@ -45,8 +47,8 @@ describe('Knowledge Review cost preflight', () => {
     ).toBe(false)
   })
 
-  it('deterministically estimates the current real review request from its exact prompt and output cap', () => {
-    const context = buildAgentReviewContext({
+  it('deterministically estimates the current real review request from its exact prompt and output cap', async () => {
+    const context = await buildAgentReviewContext({
       run,
       node,
       artifacts,
@@ -86,8 +88,8 @@ describe('Knowledge Review cost preflight', () => {
     expect(estimateKnowledgeReviewCostPreflight(input)).toEqual(preflight)
   })
 
-  it('does not let a real provider become no-cost by claiming the fake model name', () => {
-    const context = buildAgentReviewContext({
+  it('does not let a real provider become no-cost by claiming the fake model name', async () => {
+    const context = await buildAgentReviewContext({
       run,
       node,
       artifacts,
@@ -115,7 +117,7 @@ describe('Knowledge Review cost preflight', () => {
 
 describe('runBudgetedKnowledgeReviewAgent', () => {
   it('blocks a real provider when no authoritative budget guard is available', async () => {
-    const context = buildAgentReviewContext({
+    const context = await buildAgentReviewContext({
       run,
       node,
       artifacts,
@@ -160,7 +162,7 @@ describe('runBudgetedKnowledgeReviewAgent', () => {
   })
 
   it('runs the exact trusted fake provider without a guard under an explicit no-cost decision', async () => {
-    const context = buildAgentReviewContext({
+    const context = await buildAgentReviewContext({
       run,
       node,
       artifacts,
@@ -201,7 +203,7 @@ describe('runBudgetedKnowledgeReviewAgent', () => {
   })
 
   it('returns redacted blocked evidence without calling a provider when the guard rejects', async () => {
-    const context = buildAgentReviewContext({
+    const context = await buildAgentReviewContext({
       run,
       node,
       artifacts,
@@ -266,7 +268,7 @@ describe('runBudgetedKnowledgeReviewAgent', () => {
   })
 
   it('runs the existing Knowledge Review agent once after the guard allows the paid call', async () => {
-    const context = buildAgentReviewContext({
+    const context = await buildAgentReviewContext({
       run,
       node,
       artifacts,
@@ -340,8 +342,8 @@ const evidence: TestEvidence = {
 }
 
 describe('buildAgentReviewContext', () => {
-  it('builds a minimal redacted review context without local-only evidence fields', () => {
-    const context = buildAgentReviewContext({
+  it('builds a minimal redacted review context without local-only evidence fields', async () => {
+    const context = await buildAgentReviewContext({
       run,
       node,
       artifacts,
@@ -364,27 +366,36 @@ describe('buildAgentReviewContext', () => {
     expect(serialized).not.toContain(evidence.stderr)
     expect(serialized).not.toContain('sk-secret')
     expect(context.knowledgeReferences.length).toBeGreaterThan(0)
+    expect(context.knowledgeReferences).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        lexicalMatch: expect.objectContaining({ normalized: false }),
+        gateEvidence: { status: 'retrieval_candidate' },
+      }),
+    ]))
+    expect(context.knowledgeReferences.every((reference) => reference.semanticRelevance === undefined)).toBe(true)
+    expect(context.fieldProjection).toEqual(context.manifest.fieldProjection)
   })
 
-  it('normalizes legacy non-string artifact fields before redaction', () => {
+  it('normalizes legacy non-string artifact fields before redaction', async () => {
     const legacyArtifact = {
-      ...artifacts[0]!,
+      ...artifacts.find((artifact) => artifact.id === 'art-design')!,
       runId: run.id,
-      nodeId: node.id,
       summary: { reason: 'missing route contract' },
       content: { OPENAI_API_KEY: 'sk-secret', result: 'object content' },
     } as unknown as Artifact
 
-    const context = buildAgentReviewContext({
+    const context = await buildAgentReviewContext({
       run,
       node,
-      artifacts: [legacyArtifact],
+      artifacts: artifacts.map((artifact) =>
+        artifact.id === legacyArtifact.id ? legacyArtifact : artifact,
+      ),
       testEvidence: [],
       knowledgeDocuments,
       knowledgeChunks,
     })
 
-    expect(context.artifacts[0]).toMatchObject({
+    expect(context.artifacts.find((artifact) => artifact.id === legacyArtifact.id)).toMatchObject({
       summary: '{"reason":"missing route contract"}',
       content: expect.stringContaining('REDACTED'),
       redacted: true,
@@ -392,12 +403,12 @@ describe('buildAgentReviewContext', () => {
     expect(JSON.stringify(context)).not.toContain('sk-secret')
   })
 
-  it('redacts secrets and local absolute paths from repository knowledge before review', () => {
+  it('redacts secrets and local absolute paths from repository knowledge before review', async () => {
     const document = knowledgeDocuments.find((item) => item.category === 'api_contract')!
     const sourceChunk = knowledgeChunks.find((item) => item.documentId === document.id)!
     const secret = 'sk-review-secret-123456'
     const localPath = '/Users/alice/private/payments-api/.env'
-    const context = buildAgentReviewContext({
+    const context = await buildAgentReviewContext({
       run,
       node,
       artifacts,
@@ -443,14 +454,14 @@ describe('buildAgentReviewContext', () => {
     const input = {
       run,
       node,
-      artifacts: [],
+      artifacts,
       testEvidence: [],
       knowledgeDocuments: largeDocuments,
       knowledgeChunks: largeChunks,
     }
 
-    const context = buildAgentReviewContext(input)
-    const repeatedContext = buildAgentReviewContext(input)
+    const context = await buildAgentReviewContext(input)
+    const repeatedContext = await buildAgentReviewContext(input)
     const contentCharacters = context.knowledgeChunks.reduce(
       (total, chunk) => total + chunk.content.length,
       0,
@@ -473,15 +484,357 @@ describe('buildAgentReviewContext', () => {
     expect(context.knowledgeChunks.length).toBeLessThanOrEqual(8)
     expect(context.knowledgeChunks.every((chunk) => chunk.content.length <= 4_000)).toBe(true)
     expect(contentCharacters).toBeLessThanOrEqual(24_000)
-    expect(preflight.prompt.length).toBeLessThan(26_000)
+    expect(preflight.prompt.length).toBeLessThan(96_000)
     expect(reviewKnowledge).toHaveBeenCalledTimes(1)
     expect(reviewKnowledge.mock.calls[0]![0].prompt).toBe(preflight.prompt)
+  })
+
+  it('sends the original request and complete clarification/design bodies as Subject while keeping Knowledge as Criteria', async () => {
+    const requestCanary = 'REQUEST_ONLY_CANARY preserve backward compatibility'
+    const clarificationCanary = 'ASSUMPTION_ONLY_CANARY upstream service remains available'
+    const designCanary = 'OPEN_QUESTION_ONLY_CANARY migration order is unresolved'
+    const criteriaCanary = 'KNOWLEDGE_ONLY_CANARY use contract tests'
+    const secret = 'sk-review-secret-1234567890'
+    const localPath = '/Users/alice/private/review/.env'
+    const reviewRun = { ...run, request: `${run.request}\n${requestCanary}` }
+    const reviewArtifacts = artifacts.map((artifact) => {
+      if (artifact.id === 'art-clarify') {
+        return {
+          ...artifact,
+          summary: 'Harmless clarification summary.',
+          content: [
+            'Goals:',
+            'Clarify the health endpoint.',
+            'Acceptance Criteria:',
+            'Return explicit status codes.',
+            'Non-goals:',
+            'Do not replace auth.',
+            'Assumptions:',
+            clarificationCanary,
+            'Risks:',
+            'Redis timeout may hide a degraded state.',
+            'Open Questions:',
+            'Who owns the production probe?',
+          ].join('\n'),
+        }
+      }
+      if (artifact.id === 'art-design') {
+        return {
+          ...artifact,
+          summary: 'Harmless design summary.',
+          content: [
+            'Goals:',
+            'Add the route without broad changes.',
+            'Assumptions:',
+            `OPENAI_API_KEY=${secret}`,
+            `Local diagnostic path: ${localPath}`,
+            'Risks:',
+            'The compatibility contract may conflict with the approved requirement.',
+            'Open Questions:',
+            designCanary,
+          ].join('\n'),
+        }
+      }
+      return artifact
+    })
+    const criteriaChunks = knowledgeChunks.map((chunk, index) =>
+      index === 0 ? { ...chunk, content: `${chunk.content}\n${criteriaCanary}` } : chunk,
+    )
+
+    const context = await buildAgentReviewContext({
+      run: reviewRun,
+      node,
+      artifacts: reviewArtifacts,
+      testEvidence: [evidence],
+      knowledgeDocuments,
+      knowledgeChunks: criteriaChunks,
+    })
+    const prompt = createKnowledgeReviewPrompt(context)
+
+    expect(context.subjectArtifacts.map((artifact) => artifact.kind)).toEqual([
+      'clarification',
+      'design',
+    ])
+    expect(prompt).toContain(requestCanary)
+    expect(prompt).toContain(clarificationCanary)
+    expect(prompt).toContain(designCanary)
+    expect(prompt).toContain('Acceptance Criteria:')
+    expect(prompt).toContain(criteriaCanary)
+    expect(prompt).toContain('"REVIEW_SUBJECT"')
+    expect(prompt).toContain('"REVIEW_CRITERIA"')
+    expect(prompt.indexOf(designCanary)).toBeLessThan(prompt.indexOf(criteriaCanary))
+    expect(prompt).not.toContain(secret)
+    expect(prompt).not.toContain(localPath)
+    expect(prompt).toContain('[REDACTED')
+    expect(context.manifest).toMatchObject({
+      version: 1,
+      stage: 'design',
+      coverage: 'complete',
+      criteriaCoverage: 'available',
+      subjectArtifacts: [
+        { id: 'art-clarify', kind: 'clarification', coverage: 'complete' },
+        { id: 'art-design', kind: 'design', coverage: 'complete' },
+      ],
+    })
+    expect(context.manifest.subjectArtifacts.every((artifact) =>
+      artifact.contentDigest.match(/^[a-f0-9]{64}$/u))).toBe(true)
+    expect(JSON.stringify(context.manifest)).not.toContain('completeRedactedContentChunks')
+    expect(JSON.stringify(context.manifest)).not.toContain(designCanary)
+  })
+
+  it('uses deterministic complete chunking and fails closed instead of silently truncating an oversized subject', async () => {
+    const chunkedContent = `Goals:\n${'chunk-body '.repeat(700)}`
+    const chunkedArtifacts = artifacts.map((artifact) =>
+      artifact.id === 'art-design' ? { ...artifact, content: chunkedContent } : artifact,
+    )
+    const first = await buildAgentReviewContext({
+      run,
+      node,
+      artifacts: chunkedArtifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const second = await buildAgentReviewContext({
+      run,
+      node,
+      artifacts: chunkedArtifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const chunked = first.subjectArtifacts.find((artifact) => artifact.id === 'art-design')!
+
+    expect(first.manifest.coverage).toBe('deterministically_chunked')
+    expect(chunked.coverage).toBe('deterministically_chunked')
+    expect(chunked.chunks.map((chunk) => chunk.content).join('')).toBe(chunkedContent)
+    expect(second.manifest).toEqual(first.manifest)
+
+    const oversizedArtifacts = artifacts.map((artifact) =>
+      artifact.id === 'art-design'
+        ? { ...artifact, content: 'x'.repeat(KNOWLEDGE_REVIEW_MAX_ARTIFACT_CHARACTERS + 1) }
+        : artifact,
+    )
+    const incomplete = await buildAgentReviewContext({
+      run,
+      node,
+      artifacts: oversizedArtifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const reviewKnowledge = vi.fn()
+
+    expect(incomplete.manifest.coverage).toBe('incomplete')
+    expect(() => createKnowledgeReviewPrompt(incomplete)).toThrow(/coverage is incomplete/i)
+    await expect(runKnowledgeReviewAgent({
+      request: {
+        id: 'review-request-oversized',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+      },
+      context: incomplete,
+      provider: {
+        id: 'capture-provider',
+        name: 'Capture Provider',
+        model: 'gpt-4.1-mini',
+        reviewKnowledge,
+      },
+    })).rejects.toThrow(/coverage is incomplete/i)
+    expect(reviewKnowledge).not.toHaveBeenCalled()
+  })
+
+  it('fails closed for missing, ambiguous, wrong-run, and wrong-node Artifact associations', async () => {
+    const input = {
+      run,
+      node,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    }
+
+    await expect(buildAgentReviewContext({
+      ...input,
+      artifacts: artifacts.filter((artifact) => artifact.id !== 'art-design'),
+    })).rejects.toThrow(/art-design is missing/i)
+    await expect(buildAgentReviewContext({
+      ...input,
+      artifacts: [...artifacts, { ...artifacts.find((artifact) => artifact.id === 'art-design')! }],
+    })).rejects.toThrow(/art-design is ambiguous/i)
+    await expect(buildAgentReviewContext({
+      ...input,
+      artifacts: artifacts.map((artifact) =>
+        artifact.id === 'art-design' ? { ...artifact, runId: 'wrong-run' } : artifact,
+      ),
+    })).rejects.toThrow(/art-design is missing/i)
+    await expect(buildAgentReviewContext({
+      ...input,
+      artifacts: artifacts.map((artifact) =>
+        artifact.id === 'art-design' ? { ...artifact, nodeId: 'n-test' } : artifact,
+      ),
+    })).rejects.toThrow(/wrong workflow node/i)
+  })
+
+  it('marks a completed Review stale when a subject body changes or an Artifact is replaced', async () => {
+    const context = await buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const result = await runKnowledgeReviewAgent({
+      request: {
+        id: 'review-request-freshness',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+      },
+      context,
+      provider: createFakeAgentProvider(),
+      now: () => '2026-06-16T12:05:00.000Z',
+    })
+
+    await expect(assessAgentReviewFreshness({
+      review: result.review,
+      run,
+      node,
+      artifacts,
+    })).resolves.toEqual({ status: 'current', reasons: [] })
+    const changed = artifacts.map((artifact) =>
+      artifact.id === 'art-design'
+        ? { ...artifact, content: `${artifact.content}\nRisk: digest-only change`, updatedAt: artifact.updatedAt }
+        : artifact,
+    )
+    await expect(assessAgentReviewFreshness({
+      review: result.review,
+      run,
+      node,
+      artifacts: changed,
+    })).resolves.toMatchObject({ status: 'stale', reasons: [expect.stringContaining('content revision')] })
+    const replacementNode = {
+      ...node,
+      artifactIds: ['art-design-v2'],
+    }
+    const replacement = artifacts
+      .filter((artifact) => artifact.id !== 'art-design')
+      .concat({
+        ...artifacts.find((artifact) => artifact.id === 'art-design')!,
+        id: 'art-design-v2',
+        updatedAt: '2026-06-16T12:06:00.000Z',
+      })
+    await expect(assessAgentReviewFreshness({
+      review: result.review,
+      run: {
+        ...run,
+        nodes: run.nodes.map((candidate) => candidate.id === node.id ? replacementNode : candidate),
+      },
+      node: replacementNode,
+      artifacts: replacement,
+    })).resolves.toMatchObject({ status: 'stale', reasons: expect.arrayContaining([
+      expect.stringContaining('replaced'),
+    ]) })
+  })
+
+  it('lets the deterministic fake inspect risks present only in the Artifact body', async () => {
+    const riskyArtifacts = artifacts.map((artifact) =>
+      artifact.id === 'art-design'
+        ? {
+            ...artifact,
+            summary: 'Everything is routine.',
+            content: `${artifact.content}\nOpen Questions: BLOCKER_CANARY compatibility conflict is unresolved.`,
+          }
+        : artifact,
+    )
+    const context = await buildAgentReviewContext({
+      run,
+      node,
+      artifacts: riskyArtifacts,
+      testEvidence: [evidence],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const output = await createFakeAgentProvider().reviewKnowledge({
+      request: {
+        id: 'review-request-fake-body-risk',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+      },
+      context,
+      prompt: createKnowledgeReviewPrompt(context),
+    })
+
+    expect(output.risks).toEqual(expect.arrayContaining([
+      expect.stringContaining('BLOCKER_CANARY'),
+    ]))
+  })
+
+  it('keeps a local-only Review usable without Team Knowledge while declaring criteria unavailable', async () => {
+    const context = await buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments: [],
+      knowledgeChunks: [],
+    })
+    const provider = createFakeAgentProvider()
+
+    expect(context.manifest.criteriaCoverage).toBe('unavailable')
+    expect(context.knowledgeChunks).toEqual([])
+    await expect(runKnowledgeReviewAgent({
+      request: {
+        id: 'review-request-local-no-knowledge',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+      },
+      context,
+      provider,
+    })).resolves.toMatchObject({
+      review: {
+        contextManifest: { criteriaCoverage: 'unavailable' },
+        gateAdvisory: { blocksApproval: false },
+      },
+    })
+  })
+
+  it('omits an inapplicable empty Test Evidence field from a clarification Gate prompt', async () => {
+    const clarifyGate = run.nodes.find((candidate) => candidate.kind === 'gate' && candidate.stage === 'clarify')!
+    const context = await buildAgentReviewContext({
+      run,
+      node: clarifyGate,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const prompt = createKnowledgeReviewPrompt(context)
+
+    expect(context.testEvidence).toEqual([])
+    expect(context.fieldProjection?.fields.find((field) => field.field === 'test_evidence')).toMatchObject({
+      state: 'not_applicable',
+      includeInProviderPrompt: false,
+    })
+    expect(prompt).not.toContain('supplementalTestEvidence')
+    expect(prompt).toContain('"state":"not_applicable"')
   })
 })
 
 describe('runKnowledgeReviewAgent', () => {
   it('returns deterministic structured review output with trace and provider usage', async () => {
-    const context = buildAgentReviewContext({
+    const context = await buildAgentReviewContext({
       run,
       node,
       artifacts,
@@ -512,6 +865,14 @@ describe('runKnowledgeReviewAgent', () => {
       },
     })
     expect(result.review.knowledgeReferences.length).toBeGreaterThan(0)
+    expect(result.review.knowledgeReferences).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        gateEvidence: expect.objectContaining({
+          status: expect.stringMatching(/^(reviewed_reference|supports_finding)$/),
+          reviewId: result.review.id,
+        }),
+      }),
+    ]))
     expect(result.review.policyFindings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -531,14 +892,15 @@ describe('runKnowledgeReviewAgent', () => {
     expect(result.tokenUsage.costUsd).toBeGreaterThanOrEqual(0)
   })
 
-  it('derives deterministic missing-evidence policy findings when evidence is absent', async () => {
-    const context = buildAgentReviewContext({
+  it('derives deterministic missing-evidence findings only when policy requires Test Evidence', async () => {
+    const context = await buildAgentReviewContext({
       run,
       node,
       artifacts,
       testEvidence: [],
       knowledgeDocuments,
       knowledgeChunks,
+      requiredContextFields: { test_evidence: true },
     })
     const result = await runKnowledgeReviewAgent({
       request: {
@@ -559,14 +921,42 @@ describe('runKnowledgeReviewAgent', () => {
         expect.objectContaining({
           category: 'missing_evidence',
           severity: 'medium',
-          summary: expect.stringContaining('passing local test evidence'),
+          summary: expect.stringContaining('passing local test evidence required'),
         }),
       ]),
     )
   })
 
+  it('does not invent missing Test Evidence for an early Gate where it is optional', async () => {
+    const context = await buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+    const result = await runKnowledgeReviewAgent({
+      request: {
+        id: 'review-request-no-early-test-gap',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+      },
+      context,
+      provider: createFakeAgentProvider(),
+      now: () => '2026-06-16T12:01:00.000Z',
+    })
+
+    expect(result.review.missingEvidence).toEqual([])
+    expect(result.review.policyFindings.map((finding) => finding.category)).not.toContain('missing_evidence')
+    expect(createKnowledgeReviewPrompt(context)).not.toContain('supplementalTestEvidence')
+  })
+
   it('creates an Agent Review artifact and event without making gate advisory blocking', async () => {
-    const context = buildAgentReviewContext({
+    const context = await buildAgentReviewContext({
       run,
       node,
       artifacts,
@@ -592,13 +982,16 @@ describe('runKnowledgeReviewAgent', () => {
     expect(output.artifact.kind).toBe('agent_review')
     expect(output.artifact.redacted).toBe(true)
     expect(output.artifact.content).toContain('Policy findings:')
+    expect(output.artifact.content).toContain('Design review assessment:')
+    expect(output.artifact.content).toContain('Requirement coverage:')
+    expect(output.artifact.content).toContain('API, compatibility, security, and migration risks:')
     expect(output.event.kind).toBe('agent_review')
     expect(output.gateAdvisory.blocksApproval).toBe(false)
   })
 })
 
 describe('estimateAgentTokenUsage', () => {
-  it('marks token usage as estimated when provider usage is absent', () => {
+  it('marks token usage as estimated when provider usage is absent', async () => {
     const usage = estimateAgentTokenUsage({
       id: 'usage-1',
       runId: run.id,
@@ -709,6 +1102,18 @@ describe('createOpenAiCompatibleAgentProvider', () => {
       },
     })
 
+    const context = await buildAgentReviewContext({
+      run: { ...run, request: `${run.request} REQUEST_PROVIDER_CANARY` },
+      node,
+      artifacts: artifacts.map((artifact) =>
+        artifact.id === 'art-design'
+          ? { ...artifact, content: `${artifact.content}\nRisks: PROVIDER_BODY_ONLY_CANARY` }
+          : artifact,
+      ),
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
     await provider.reviewKnowledge({
       request: {
         id: 'review-request-bounded-output',
@@ -718,18 +1123,13 @@ describe('createOpenAiCompatibleAgentProvider', () => {
         requestedBy: 'u-ling',
         runtime: 'api',
       },
-      context: buildAgentReviewContext({
-        run,
-        node,
-        artifacts,
-        testEvidence: [],
-        knowledgeDocuments,
-        knowledgeChunks,
-      }),
-      prompt: 'Return a bounded review.',
+      context,
+      prompt: createKnowledgeReviewPrompt(context),
     })
 
     expect(requestBody).toMatchObject({ max_tokens: 1_024 })
+    expect(JSON.stringify(requestBody)).toContain('REQUEST_PROVIDER_CANARY')
+    expect(JSON.stringify(requestBody)).toContain('PROVIDER_BODY_ONLY_CANARY')
   })
 
   it('sends a plain chat-completions request without provider-specific JSON mode', async () => {
@@ -772,7 +1172,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
         requestedBy: 'u-ling',
         runtime: 'api',
       },
-      context: buildAgentReviewContext({
+      context: await buildAgentReviewContext({
         run,
         node,
         artifacts,
@@ -822,7 +1222,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
         requestedBy: 'u-ling',
         runtime: 'api',
       },
-      context: buildAgentReviewContext({
+      context: await buildAgentReviewContext({
         run,
         node,
         artifacts,
@@ -943,7 +1343,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
         ),
     })
 
-    const context = buildAgentReviewContext({
+    const context = await buildAgentReviewContext({
       run,
       node,
       artifacts,
@@ -1005,7 +1405,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
           requestedBy: 'u-ling',
           runtime: 'api',
         },
-        context: buildAgentReviewContext({
+        context: await buildAgentReviewContext({
           run,
           node,
           artifacts,
@@ -1026,7 +1426,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
           requestedBy: 'u-ling',
           runtime: 'api',
         },
-        context: buildAgentReviewContext({
+        context: await buildAgentReviewContext({
           run,
           node,
           artifacts,

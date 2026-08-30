@@ -9,6 +9,7 @@ import { artifacts as fixtureArtifacts, runs as fixtureRuns } from '@ai-devflow/
 import {
   buildGateReadinessPresentation,
   buildNodeInspectorViewModel,
+  inspectorTabPlansByNodeType,
   resolveInspectorTabForSearchResult,
   selectGitHubDeliveryIntentForInspector,
 } from './node-inspector-view-model'
@@ -140,24 +141,32 @@ describe('node inspector view model', () => {
       label: '生成需求澄清',
       testId: 'complete-clarify-agent',
     })
+    expect(viewModel.contextProjection.fields.find((field) => field.field === 'agent_review')).toMatchObject({
+      state: 'not_applicable',
+      visible: false,
+    })
     expect(viewModel.actions.map((action) => action.id)).not.toContain('approveGate')
   })
 
-  it('maps design agents to Review tabs and falls back from invalid requested tabs', () => {
+  it('maps design agents to Task tabs and keeps Gate Review separate', () => {
     const node: WorkflowNode = {
       ...findNode((candidate) => candidate.kind === 'agent' && candidate.stage === 'design'),
       status: 'running',
     }
     const viewModel = viewModelFor(node, { requestedTab: 'Trace' })
 
-    expect(viewModel.visualKind).toBe('Review')
-    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', '门禁审查', '引用来源', 'Evidence'])
-    expect(viewModel.activeTab.label).toBe('状态')
-    expect(viewModel.activeTab.sections).toEqual(['statusMatrix'])
+    expect(viewModel.visualKind).toBe('Task')
+    expect(viewModel.header.presentation).toMatchObject({
+      nodeKind: 'Task',
+      sourceKind: 'run_template',
+      displayMode: 'standard',
+    })
+    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', '产物', 'Trace', 'Gate影响'])
+    expect(viewModel.activeTab.label).toBe('Trace')
+    expect(viewModel.activeTab.sections).toEqual(['trace'])
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
       'node-status',
       'design-artifact',
-      'knowledge-review',
       'trace',
     ])
     expect(viewModel.nextAction).toMatchObject({
@@ -211,7 +220,7 @@ describe('node inspector view model', () => {
     const viewModel = viewModelFor(node, { canApprove: true })
 
     expect(viewModel.visualKind).toBe('Gate')
-    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', 'Gate条件', 'Evidence', 'Remediation'])
+    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', 'Gate条件', '引用来源', 'Evidence', 'Remediation'])
     expect(viewModel.activeTab.sections).toEqual(['statusMatrix'])
     expect(viewModel.activeTab.sections).not.toContain('nodeSummary')
     expect(viewModel.activeTab.sections).not.toContain('gateEnforcementPanel')
@@ -225,6 +234,41 @@ describe('node inspector view model', () => {
       'knowledge-review',
       'required-artifact',
     ])
+  })
+
+  it('separates Knowledge reference sources from auditable Review Evidence for Gate nodes', () => {
+    const node = findNode((candidate) => candidate.kind === 'gate' && candidate.stage === 'design')
+    const viewModel = viewModelFor(node, {
+      requestedTab: '引用来源',
+      knowledgeReferenceCount: 2,
+      testEvidenceCount: 0,
+    })
+    const referencesTab = viewModel.tabs.find((tab) => tab.label === '引用来源')
+    const evidenceTab = viewModel.tabs.find((tab) => tab.label === 'Evidence')
+
+    expect(referencesTab?.sections).toEqual(['knowledgeReferences'])
+    expect(evidenceTab?.sections).toEqual(['reviewEvidence'])
+    expect(referencesTab?.sections).not.toEqual(evidenceTab?.sections)
+    expect(viewModel.activeTab).toEqual(referencesTab)
+    expect(viewModel.contextProjection.fields.find((field) => field.field === 'test_evidence')).toMatchObject({
+      state: 'optional',
+      visible: false,
+    })
+  })
+
+  it('audits every tab plan for accidental semantic aliases', () => {
+    for (const tabs of Object.values(inspectorTabPlansByNodeType)) {
+      const uniqueSemanticPlans = new Map<string, string>()
+      for (const tab of tabs) {
+        const signature = tab.sections.join('|')
+        const previous = uniqueSemanticPlans.get(signature)
+        expect(
+          previous,
+          `${previous ?? 'unknown'} and ${tab.label} unexpectedly share ${signature}`,
+        ).toBeUndefined()
+        uniqueSemanticPlans.set(signature, tab.label)
+      }
+    }
   })
 
   it('hides local test actions and requirements on design gates', () => {
@@ -277,6 +321,10 @@ describe('node inspector view model', () => {
     expect(viewModel.nextAction.copy).toContain('Tests')
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toContain('test-evidence')
     expect(viewModel.gateRequirementRows.map((row) => row.label)).toContain('Test Evidence')
+    expect(viewModel.contextProjection.fields.find((field) => field.field === 'test_evidence')).toMatchObject({
+      state: 'missing_required',
+      visible: true,
+    })
   })
 
   it('summarizes passed, warning, missing, and blocked readiness and opens only attention groups', () => {
@@ -814,7 +862,8 @@ describe('node inspector view model', () => {
     const prNode = findNode((candidate) => candidate.kind === 'pr')
 
     expect(resolveInspectorTabForSearchResult(clarifyNode, 'artifact')).toBe('产物')
-    expect(resolveInspectorTabForSearchResult(designNode, 'artifact')).toBe('Evidence')
+    expect(resolveInspectorTabForSearchResult(designNode, 'artifact')).toBe('产物')
+    expect(resolveInspectorTabForSearchResult(designNode, 'event')).toBe('Trace')
     expect(resolveInspectorTabForSearchResult(prNode, 'artifact')).toBe('Artifacts')
     expect(resolveInspectorTabForSearchResult(clarifyNode, 'event')).toBe('Trace')
     expect(resolveInspectorTabForSearchResult(prNode, 'event')).toBe('Handoff')

@@ -19,6 +19,7 @@ import type {
   CodingAgentRun,
   CodingChangeSetPreview,
   CodingRuntimeConfiguration,
+  CodingRuntimeDiscovery,
   CodingRuntimeReadiness,
   CodingPermissionDecision,
   CodingPermissionRequest,
@@ -218,6 +219,7 @@ export const ipcChannels = {
   ensureCodingEngine: 'devflow:coding:engine:ensure',
   getCodingRuntimeConfiguration: 'devflow:coding:runtime-configuration:get',
   saveCodingRuntimeConfiguration: 'devflow:coding:runtime-configuration:save',
+  detectCodingRuntimeEngines: 'devflow:coding:runtime-engines:detect',
   getCodingRuntimeReadiness: 'devflow:coding:runtime-readiness:get',
   getCodingChangeSetPreview: 'devflow:coding:change-set-preview:get',
   getCodingRuntimeBudgetPolicy: 'devflow:coding:runtime-budget-policy:get',
@@ -434,11 +436,20 @@ export type GetCodingRuntimeConfigurationInput = {
   projectId: string
 }
 
-export type SaveCodingRuntimeConfigurationInput = {
-  projectId: string
-  executor: 'native-model'
-  providerId: string
-}
+export type SaveCodingRuntimeConfigurationInput =
+  | {
+      projectId: string
+      executor: 'native-model'
+      providerId: string
+    }
+  | {
+      projectId: string
+      executor: 'opencode-http'
+      providerId: string
+      binaryPath: string
+      modelId: string
+      detectedVersion: string
+    }
 
 export type GetCodingRuntimeReadinessInput = {
   runId: string
@@ -653,6 +664,9 @@ export type DevFlowDesktopApi = {
   saveCodingRuntimeConfiguration: (
     input: SaveCodingRuntimeConfigurationInput,
   ) => Promise<CodingRuntimeConfiguration>
+  detectCodingRuntimeEngines: (
+    input: GetCodingRuntimeConfigurationInput,
+  ) => Promise<CodingRuntimeDiscovery>
   getCodingRuntimeReadiness: (
     input: GetCodingRuntimeReadinessInput,
   ) => Promise<CodingRuntimeReadiness>
@@ -1580,19 +1594,29 @@ export function parseSaveCodingRuntimeConfigurationInput(
   value: unknown,
 ): SaveCodingRuntimeConfigurationInput {
   if (!isRecord(value)) throw new Error('Invalid Coding Runtime configuration payload')
-  rejectUnexpectedFields(
-    value,
-    ['projectId', 'executor', 'providerId'],
-    'Coding Runtime configuration payload',
-  )
-  if (value['executor'] !== 'native-model') {
+  if (value['executor'] !== 'native-model' && value['executor'] !== 'opencode-http') {
     throw new Error('Invalid Coding Runtime executor')
   }
-  return {
-    projectId: readRequiredString(value, 'projectId'),
-    executor: 'native-model',
-    providerId: readRequiredString(value, 'providerId'),
-  }
+  const executor = value['executor']
+  rejectUnexpectedFields(
+    value,
+    executor === 'native-model'
+      ? ['projectId', 'executor', 'providerId']
+      : ['projectId', 'executor', 'providerId', 'binaryPath', 'modelId', 'detectedVersion'],
+    'Coding Runtime configuration payload',
+  )
+  const projectId = readRequiredString(value, 'projectId')
+  const providerId = readRequiredString(value, 'providerId')
+  return executor === 'native-model'
+    ? { projectId, executor, providerId }
+    : {
+        projectId,
+        executor,
+        providerId,
+        binaryPath: readRequiredString(value, 'binaryPath'),
+        modelId: readRequiredString(value, 'modelId'),
+        detectedVersion: readRequiredString(value, 'detectedVersion'),
+      }
 }
 
 export function parseGetCodingRuntimeReadinessInput(

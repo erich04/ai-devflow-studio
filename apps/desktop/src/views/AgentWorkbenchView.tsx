@@ -13,6 +13,7 @@ import {
   type CodingPermissionDecision,
   type CodingPermissionRequest,
   type CodingRuntimeConfiguration,
+  type CodingRuntimeDiscovery,
   type CodingRuntimeReadiness,
   type DependencyBootstrapEvidence,
   type ManagedCodingWorkspace,
@@ -33,6 +34,7 @@ import { AgentMemoryPanel } from '../AgentMemoryPanel'
 import { codingRuntimeLabel, codingTerminalLabel, type SupportContext } from '../app/desktop-view-model'
 import type { DevFlowDesktopApi } from '../desktop-api'
 import type { PendingInspectorAction } from '../app/node-inspector-view-model'
+import { buildCodingReadinessDisplay } from '../app/coding-runtime-readiness-view-model'
 
 export function AgentWorkbenchView({
   desktopApi,
@@ -83,6 +85,9 @@ export function AgentWorkbenchView({
   testEvidence,
   supportContext,
   onReturnToInspector,
+  codingReadiness,
+  codingReadinessError,
+  onRefreshCodingReadiness,
 }: {
   desktopApi: DevFlowDesktopApi | null
   localProjectId: string | undefined
@@ -132,10 +137,16 @@ export function AgentWorkbenchView({
   testEvidence: TestEvidence | undefined
   supportContext: SupportContext | null
   onReturnToInspector: () => void
+  codingReadiness: CodingRuntimeReadiness | null
+  codingReadinessError: string
+  onRefreshCodingReadiness: (approvalId?: string) => Promise<CodingRuntimeReadiness | null>
 }) {
   const [codingConfiguration, setCodingConfiguration] = useState<CodingRuntimeConfiguration | null>(null)
+  const [codingExecutor, setCodingExecutor] = useState<'native-model' | 'opencode-http'>('native-model')
   const [codingProviderId, setCodingProviderId] = useState('')
-  const [codingReadiness, setCodingReadiness] = useState<CodingRuntimeReadiness | null>(null)
+  const [codingDiscovery, setCodingDiscovery] = useState<CodingRuntimeDiscovery | null>(null)
+  const [opencodeProviderId, setOpencodeProviderId] = useState('openai')
+  const [opencodeModelId, setOpencodeModelId] = useState('gpt-4.1-mini')
   const [pendingChangeSetPreview, setPendingChangeSetPreview] = useState<CodingChangeSetPreview | null>(null)
   const [budgetPolicy, setBudgetPolicy] = useState<RuntimeBudgetPolicy | null>(null)
   const [monthlyLimitUsd, setMonthlyLimitUsd] = useState('0.20')
@@ -149,26 +160,10 @@ export function AgentWorkbenchView({
     ? providers.find((provider) => provider.id === latestCodingRun.providerId)?.name ?? '旧版 Provider'
     : undefined
 
-  async function refreshCodingReadiness(approvalId = runtimeBudgetApprovalId) {
-    if (!desktopApi || !localProjectId || !selectedRun || !selectedNode) {
-      setCodingReadiness(null)
-      return
-    }
-    const readiness = await desktopApi.getCodingRuntimeReadiness({
-      projectId: localProjectId,
-      runId: selectedRun.id,
-      nodeId: selectedNode.id,
-      requestedBy,
-      ...(approvalId.trim() ? { runtimeBudgetApprovalId: approvalId.trim() } : {}),
-    })
-    setCodingReadiness(readiness)
-  }
-
   useEffect(() => {
     if (!desktopApi || !localProjectId) {
       setCodingConfiguration(null)
       setBudgetPolicy(null)
-      setCodingReadiness(null)
       return
     }
     let active = true
@@ -180,16 +175,16 @@ export function AgentWorkbenchView({
     ]).then(async ([configuration, policy]) => {
       if (!active) return
       setCodingConfiguration(configuration)
+      setCodingExecutor(configuration?.executor ?? 'native-model')
       setCodingProviderId(configuration?.providerId ?? selectedProviderId)
+      if (configuration?.executor === 'opencode-http') {
+        setOpencodeProviderId(configuration.providerId)
+        setOpencodeModelId(configuration.modelId)
+      }
       setBudgetPolicy(policy)
       if (policy) {
         setMonthlyLimitUsd(policy.monthlyLimitUsd.toFixed(2))
         setWarningThresholdUsd(policy.warningThresholdUsd.toFixed(2))
-      }
-      try {
-        await refreshCodingReadiness()
-      } catch (error) {
-        if (active) setCodingConfigurationStatus(error instanceof Error ? error.message : '无法读取 Coding Readiness')
       }
     })
     return () => {
@@ -225,21 +220,61 @@ export function AgentWorkbenchView({
   }, [desktopApi, pendingCodingPermission?.changeSetId, pendingCodingPermission?.codingRunId])
 
   async function saveCodingConfiguration() {
-    if (!desktopApi || !localProjectId || !codingProviderId) return
+    if (!desktopApi || !localProjectId) return
+    const opencode = codingDiscovery?.candidates.find((candidate) =>
+      candidate.engine === 'opencode-http' && candidate.status === 'available',
+    )
+    if (codingExecutor === 'native-model' && !codingProviderId) return
+    if (
+      codingExecutor === 'opencode-http' &&
+      (!opencode?.binaryPath || !opencode.version || !opencodeProviderId.trim() || !opencodeModelId.trim())
+    ) return
     setIsSavingCodingConfiguration(true)
-    setCodingConfigurationStatus('正在保存项目级 Native Executor…')
+    setCodingConfigurationStatus('正在保存项目级 Coding Executor…')
     try {
-      const saved = await desktopApi.saveCodingRuntimeConfiguration({
-        projectId: localProjectId,
-        executor: 'native-model',
-        providerId: codingProviderId,
-      })
+      const saved = await desktopApi.saveCodingRuntimeConfiguration(
+        codingExecutor === 'native-model'
+          ? {
+              projectId: localProjectId,
+              executor: 'native-model',
+              providerId: codingProviderId,
+            }
+          : {
+              projectId: localProjectId,
+              executor: 'opencode-http',
+              providerId: opencodeProviderId.trim(),
+              modelId: opencodeModelId.trim(),
+              binaryPath: opencode!.binaryPath!,
+              detectedVersion: opencode!.version!,
+            },
+      )
       setCodingConfiguration(saved)
       const savedProviderName = providers.find((provider) => provider.id === saved.providerId)?.name
-      setCodingConfigurationStatus(`已保存 Native Executor · ${savedProviderName ?? '已保存 Provider'} · v${saved.version}`)
-      await refreshCodingReadiness()
+      setCodingConfigurationStatus(
+        saved.executor === 'native-model'
+          ? `已保存 Native Executor · ${savedProviderName ?? '已保存 Provider'} · v${saved.version}`
+          : `已确认 OpenCode · ${saved.detectedVersion} · ${saved.providerId}/${saved.modelId} · v${saved.version}`,
+      )
+      await onRefreshCodingReadiness()
     } catch (error) {
       setCodingConfigurationStatus(error instanceof Error ? error.message : '保存 Coding Agent 配置失败')
+    } finally {
+      setIsSavingCodingConfiguration(false)
+    }
+  }
+
+  async function detectOpenCode() {
+    if (!desktopApi || !localProjectId) return
+    setIsSavingCodingConfiguration(true)
+    setCodingConfigurationStatus('正在检测本机 OpenCode…')
+    try {
+      const discovery = await desktopApi.detectCodingRuntimeEngines({ projectId: localProjectId })
+      setCodingDiscovery(discovery)
+      const candidate = discovery.candidates[0]
+      setCodingConfigurationStatus(candidate?.reason ?? '未检测到 Coding Engine')
+    } catch (error) {
+      setCodingDiscovery(null)
+      setCodingConfigurationStatus(error instanceof Error ? error.message : '检测 OpenCode 失败')
     } finally {
       setIsSavingCodingConfiguration(false)
     }
@@ -260,7 +295,7 @@ export function AgentWorkbenchView({
       })
       setBudgetPolicy(saved)
       setCodingConfigurationStatus(`预算已保存：${formatUsd(saved.monthlyLimitUsd)} / 月`)
-      await refreshCodingReadiness()
+      await onRefreshCodingReadiness()
     } catch (error) {
       setCodingConfigurationStatus(error instanceof Error ? error.message : '保存 Runtime Budget 失败')
     } finally {
@@ -280,7 +315,7 @@ export function AgentWorkbenchView({
       })
       onRuntimeBudgetApprovalIdChange(approval.id)
       setCodingConfigurationStatus(`一次性预算批准已创建：${approval.id}`)
-      await refreshCodingReadiness(approval.id)
+      await onRefreshCodingReadiness(approval.id)
     } catch (error) {
       setCodingConfigurationStatus(error instanceof Error ? error.message : '创建一次性预算批准失败')
     } finally {
@@ -329,6 +364,9 @@ export function AgentWorkbenchView({
           ? 'Managed workspace is still available for inspection.'
           : 'No managed workspace attached.'
   const budgetDecision = latestCodingRun?.budgetDecision
+  const codingReadinessDisplay = codingReadiness
+    ? buildCodingReadinessDisplay(codingReadiness)
+    : null
 
   function runPrimaryAction(action: AgentConsoleAction) {
     if (action.disabled) {
@@ -639,21 +677,62 @@ export function AgentWorkbenchView({
           <div className="runtime-settings__body">
             <article className="agent-evidence-card runtime-settings-form">
               <div className="section-heading">
-                <span>项目级 Executor</span>
-                <strong>Native v2 · managed worktree</strong>
+                <span>Coding Engine / Executor</span>
+                <strong>{codingExecutor === 'native-model' ? 'DevFlow Native v2' : 'OpenCode'}</strong>
               </div>
-              <p>这里与门禁审查 Provider 分开配置。Renderer 只选择已保存 Provider，真正执行时由 Electron Main 重新解析项目配置。</p>
+              <p>Stage/Review Provider、Coding Engine 和 Coding Executor 是三项独立配置。真正执行时由 Electron Main 重新验证当前项目配置。</p>
               <label>
-                Coding Provider
-                <select aria-label="Coding Agent Provider" value={codingProviderId} onChange={(event) => setCodingProviderId(event.target.value)}>
-                  <option value="">请选择已保存 Provider</option>
-                  {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
+                Coding Executor
+                <select aria-label="Coding Executor" value={codingExecutor} onChange={(event) => setCodingExecutor(event.target.value as 'native-model' | 'opencode-http')}>
+                  <option value="native-model">DevFlow Native · 使用本地安全保存的 Provider</option>
+                  <option value="opencode-http">OpenCode · 使用 OpenCode Provider</option>
                 </select>
               </label>
-              <button className="ghost-button" disabled={!codingProviderId || isSavingCodingConfiguration} onClick={saveCodingConfiguration}>
-                <Save size={16} />保存并用于当前项目
+              {codingExecutor === 'native-model' ? (
+                <label>
+                  Native Executor Provider
+                  <select aria-label="Coding Agent Provider" value={codingProviderId} onChange={(event) => setCodingProviderId(event.target.value)}>
+                    <option value="">请选择已保存 Provider</option>
+                    {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
+                  </select>
+                </label>
+              ) : (
+                <>
+                  <button className="ghost-button" disabled={isSavingCodingConfiguration} onClick={detectOpenCode}>
+                    检测本机 OpenCode
+                  </button>
+                  <p className="empty-note" data-testid="opencode-discovery-status">
+                    {codingDiscovery?.candidates[0]?.status === 'available'
+                      ? `已检测：${codingDiscovery.candidates[0].version}；尚未确认用于当前项目。`
+                      : codingDiscovery?.candidates[0]?.reason ?? '检测不会自动选择或启动 OpenCode。'}
+                  </p>
+                  <label>
+                    OpenCode Provider ID
+                    <input aria-label="OpenCode Provider ID" value={opencodeProviderId} onChange={(event) => setOpencodeProviderId(event.target.value)} />
+                  </label>
+                  <label>
+                    OpenCode Model ID
+                    <input aria-label="OpenCode Model ID" value={opencodeModelId} onChange={(event) => setOpencodeModelId(event.target.value)} />
+                  </label>
+                </>
+              )}
+              <button
+                className="ghost-button"
+                disabled={
+                  isSavingCodingConfiguration ||
+                  (codingExecutor === 'native-model'
+                    ? !codingProviderId
+                    : codingDiscovery?.candidates[0]?.status !== 'available' || !opencodeProviderId.trim() || !opencodeModelId.trim())
+                }
+                onClick={saveCodingConfiguration}
+              >
+                <Save size={16} />{codingExecutor === 'opencode-http' ? '确认并用于当前项目' : '保存并用于当前项目'}
               </button>
-              <p className="empty-note">当前：{codingConfiguration ? `${codingConfigurationProviderName} · v${codingConfiguration.version}` : '未配置'}</p>
+              <p className="empty-note">当前：{codingConfiguration
+                ? codingConfiguration.executor === 'native-model'
+                  ? `Native · ${codingConfigurationProviderName} · v${codingConfiguration.version}`
+                  : `OpenCode ${codingConfiguration.detectedVersion} · ${codingConfiguration.providerId}/${codingConfiguration.modelId} · v${codingConfiguration.version}`
+                : '未配置'}</p>
             </article>
 
             <article className="agent-evidence-card runtime-settings-form">
@@ -670,16 +749,19 @@ export function AgentWorkbenchView({
             </article>
 
             <article className="agent-evidence-card">
-              <div className="section-heading"><span>启动前检查</span><strong>{codingReadiness?.status ?? '未读取'}</strong></div>
+              <div className="section-heading"><span>启动前检查</span><strong>{codingReadinessDisplay?.statusLabel ?? '未读取'}</strong></div>
               <div className="trace-list">
-                {codingReadiness?.checks.map((check) => (
-                  <div className="trace-step" key={check.code}>
-                    <span>{check.status === 'ready' ? '通过' : '阻塞'}</span>
-                    <strong>{check.code}</strong>
-                    <p>{check.message}</p>
+                {codingReadinessDisplay?.items.map((item) => (
+                  <div className="trace-step" key={item.code}>
+                    <span>{item.state === 'ready' ? '通过' : '阻塞'}</span>
+                    <strong>{item.label}：{item.statusLabel}</strong>
+                    <p>{item.detail}</p>
+                    {item.remediation ? <p>处理方式：{item.remediation}</p> : null}
+                    {item.diagnosticCode ? <details><summary>诊断详情</summary><code>{item.diagnosticCode}</code></details> : null}
                   </div>
                 )) ?? <p className="empty-note">选择开发实现节点后会显示完整 Readiness。</p>}
               </div>
+              {codingReadinessError ? <p className="empty-note">{codingReadinessError}</p> : null}
               {codingConfigurationStatus ? <p className="empty-note">{codingConfigurationStatus}</p> : null}
             </article>
           </div>

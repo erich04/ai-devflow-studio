@@ -1,5 +1,7 @@
 import {
   canRunCodingAgentOnNode,
+  deriveWorkflowContextPolicyRequirements,
+  projectWorkflowContext,
   type AgentEvent,
   type AgentReviewResult,
   type Artifact,
@@ -10,9 +12,16 @@ import {
   type PolicySnapshot,
   type WorkflowNode,
   type WorkflowRun,
+  type WorkflowContextProjection,
 } from '@ai-devflow/shared'
+import {
+  buildWorkflowNodePresentation,
+  type BoardNodeKind,
+  type WorkflowNodePresentation,
+  workflowNodeStatusLabels,
+} from './workflow-node-presentation'
 
-export type BoardNodeKind = 'Task' | 'Gate' | 'Review' | 'Delivery'
+export type { BoardNodeKind, WorkflowNodePresentation } from './workflow-node-presentation'
 
 export type InspectorSectionId =
   | 'statusMatrix'
@@ -21,7 +30,8 @@ export type InspectorSectionId =
   | 'gateRequirementMatrix'
   | 'gateEnforcementPanel'
   | 'governance'
-  | 'evidenceReferences'
+  | 'knowledgeReferences'
+  | 'reviewEvidence'
   | 'remediationActions'
   | 'agentReview'
   | 'artifacts'
@@ -82,7 +92,7 @@ export type InspectorTabPlan = {
 
 export type InspectorNodeType =
   | 'clarification'
-  | 'designReview'
+  | 'designTask'
   | 'gate'
   | 'build'
   | 'test'
@@ -186,6 +196,7 @@ export type NodeInspectorHeader = {
   visualKind: BoardNodeKind
   statusLabel: string
   statusTone: StatusTone
+  presentation: WorkflowNodePresentation
 }
 
 export type NodeInspectorViewModel = {
@@ -200,6 +211,7 @@ export type NodeInspectorViewModel = {
   gateReadinessSummary?: GateReadinessSummary
   gateReadinessGroups: GateReadinessGroup[]
   gateRequirementRows: GateRequirementRow[]
+  contextProjection: WorkflowContextProjection
 }
 
 export const stageLabels: Record<NodeStage, string> = {
@@ -226,7 +238,7 @@ export function getInspectorNodeType(node: WorkflowNode): InspectorNodeType {
     return 'clarification'
   }
   if (node.kind === 'agent' && node.stage === 'design') {
-    return 'designReview'
+    return 'designTask'
   }
   if (node.kind === 'gate') {
     return 'gate'
@@ -253,16 +265,17 @@ export const inspectorTabPlansByNodeType: Record<InspectorNodeType, InspectorTab
     { tabId: 'Trace', label: 'Trace', sections: ['trace'] },
     { tabId: 'Gate影响', label: 'Gate影响', sections: ['gateImpactSummary'] },
   ],
-  designReview: [
+  designTask: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
-    { tabId: 'Knowledge Review', label: '门禁审查', sections: ['agentReview'] },
-    { tabId: '引用来源', label: '引用来源', sections: ['governance', 'artifacts', 'agentReview'] },
-    { tabId: 'Evidence', label: 'Evidence', sections: ['governance', 'artifacts', 'agentReview'] },
+    { tabId: '产物', label: '产物', sections: ['artifacts'] },
+    { tabId: 'Trace', label: 'Trace', sections: ['trace'] },
+    { tabId: 'Gate影响', label: 'Gate影响', sections: ['gateImpactSummary'] },
   ],
   gate: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
     { tabId: 'Gate条件', label: 'Gate条件', sections: ['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'] },
-    { tabId: 'Evidence', label: 'Evidence', sections: ['evidenceReferences', 'artifacts', 'agentReview'] },
+    { tabId: '引用来源', label: '引用来源', sections: ['knowledgeReferences'] },
+    { tabId: 'Evidence', label: 'Evidence', sections: ['reviewEvidence'] },
     { tabId: 'Remediation', label: 'Remediation', sections: ['remediationActions'] },
   ],
   build: [
@@ -279,13 +292,14 @@ export const inspectorTabPlansByNodeType: Record<InspectorNodeType, InspectorTab
   pr: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix', 'nodeSummary', 'deliveryHandoff'] },
     { tabId: 'Artifacts', label: 'Artifacts', sections: ['artifacts'] },
-    { tabId: 'Evidence', label: 'Evidence', sections: ['governance', 'artifacts', 'agentReview'] },
+    { tabId: 'Evidence', label: 'Evidence', sections: ['reviewEvidence'] },
     { tabId: 'Handoff', label: 'Handoff', sections: ['deliveryHandoff', 'trace'] },
   ],
   acceptance: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix', 'nodeSummary', 'deliveryHandoff'] },
     { tabId: 'Artifacts', label: 'Artifacts', sections: ['artifacts'] },
-    { tabId: 'Evidence', label: 'Evidence', sections: ['evidenceReferences', 'artifacts', 'agentReview'] },
+    { tabId: '引用来源', label: '引用来源', sections: ['knowledgeReferences'] },
+    { tabId: 'Evidence', label: 'Evidence', sections: ['reviewEvidence'] },
     { tabId: 'Final Gate', label: 'Final Gate', sections: ['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'] },
   ],
   task: [
@@ -298,20 +312,24 @@ export const inspectorTabPlansByNodeType: Record<InspectorNodeType, InspectorTab
 export const inspectorTabPlansByKind: Record<BoardNodeKind, InspectorTabPlan[]> = {
   Task: inspectorTabPlansByNodeType.clarification,
   Gate: inspectorTabPlansByNodeType.gate,
-  Review: inspectorTabPlansByNodeType.designReview,
+  Review: inspectorTabPlansByNodeType.designTask,
+  Test: inspectorTabPlansByNodeType.test,
   Delivery: inspectorTabPlansByNodeType.pr,
+  Acceptance: inspectorTabPlansByNodeType.acceptance,
 }
 
 export const inspectorTabsByKind: Record<BoardNodeKind, string[]> = {
   Task: inspectorTabPlansByKind.Task.map((tab) => tab.label),
   Gate: inspectorTabPlansByKind.Gate.map((tab) => tab.label),
   Review: inspectorTabPlansByKind.Review.map((tab) => tab.label),
+  Test: inspectorTabPlansByKind.Test.map((tab) => tab.label),
   Delivery: inspectorTabPlansByKind.Delivery.map((tab) => tab.label),
+  Acceptance: inspectorTabPlansByKind.Acceptance.map((tab) => tab.label),
 }
 
 export const inspectorTabsByNodeType: Record<InspectorNodeType, string[]> = {
   clarification: inspectorTabPlansByNodeType.clarification.map((tab) => tab.label),
-  designReview: inspectorTabPlansByNodeType.designReview.map((tab) => tab.label),
+  designTask: inspectorTabPlansByNodeType.designTask.map((tab) => tab.label),
   gate: inspectorTabPlansByNodeType.gate.map((tab) => tab.label),
   build: inspectorTabPlansByNodeType.build.map((tab) => tab.label),
   test: inspectorTabPlansByNodeType.test.map((tab) => tab.label),
@@ -347,16 +365,7 @@ export function displayNodeSubtitle(node: WorkflowNode): string {
 }
 
 export function getBoardNodeKind(node: WorkflowNode): BoardNodeKind {
-  if (node.kind === 'gate') {
-    return 'Gate'
-  }
-  if (node.kind === 'pr' || node.kind === 'acceptance') {
-    return 'Delivery'
-  }
-  if (node.kind === 'agent' && node.stage === 'design') {
-    return 'Review'
-  }
-  return 'Task'
+  return buildWorkflowNodePresentation(node).nodeKind
 }
 
 export function getNodeStatusTone(status: WorkflowNode['status']): StatusTone {
@@ -376,14 +385,7 @@ export function getNodeStatusTone(status: WorkflowNode['status']): StatusTone {
 }
 
 export function getNodeStatusLabel(status: WorkflowNode['status']): string {
-  return {
-    pending: '等待中',
-    running: '当前步骤',
-    blocked: '已阻断',
-    success: '已完成',
-    failed: '失败',
-    skipped: '已跳过',
-  }[status]
+  return workflowNodeStatusLabels[status]
 }
 
 export function resolveInspectorTabForSearchResult(
@@ -616,12 +618,11 @@ export function buildStatusDescriptors(input: {
     ]
   }
 
-  if (nodeType === 'designReview') {
+  if (nodeType === 'designTask') {
     return [
       nodeStatus(),
       artifactStatus('design-artifact', '设计产物', 'design', '还没有生成设计方案。', '设计方案已经生成。', '点击顶部“生成设计方案”。', 'Design output'),
-      reviewStatus(false),
-      traceStatus('Review trace'),
+      traceStatus('Design Agent trace'),
     ]
   }
 
@@ -1235,8 +1236,11 @@ export function buildNodeInspectorViewModel(input: {
   canApprove: boolean
   hasTeamProjectBinding: boolean
   canVerifyGitHubDeliveryRevocation: boolean
+  knowledgeReferenceCount?: number
+  testEvidenceCount?: number
 }): NodeInspectorViewModel {
-  const visualKind = getBoardNodeKind(input.node)
+  const presentation = buildWorkflowNodePresentation(input.node)
+  const visualKind = presentation.nodeKind
   const nodeType = getInspectorNodeType(input.node)
   const tabs = inspectorTabPlansByNodeType[nodeType]
   const activeTab = tabs.find((tab) => tab.tabId === input.requestedTab || tab.label === input.requestedTab) ?? tabs[0]!
@@ -1301,6 +1305,25 @@ export function buildNodeInspectorViewModel(input: {
         canApprove: input.canApprove,
       })
     : undefined
+  const contextProjection = projectWorkflowContext({
+    node: input.node,
+    availability: {
+      raw_request: true,
+      artifacts: input.artifacts.length,
+      knowledge_references: input.knowledgeReferenceCount ?? 0,
+      agent_review: Boolean(input.latestAgentReview),
+      test_evidence: input.testEvidenceCount ?? 0,
+      trace: input.events.length,
+      coding_result: input.artifacts.filter((artifact) => artifact.kind === 'diff').length,
+      budget: Boolean(input.latestAgentReview),
+      policy: Boolean(input.policySnapshot?.effectivePolicy),
+      github_delivery: Boolean(input.githubDeliveryIntent),
+      acceptance_evidence: input.artifacts.filter((artifact) => artifact.kind === 'acceptance').length,
+    },
+    requiredByPolicy: deriveWorkflowContextPolicyRequirements(
+      input.policySnapshot?.effectivePolicy,
+    ),
+  })
 
   return {
     header: {
@@ -1310,6 +1333,7 @@ export function buildNodeInspectorViewModel(input: {
       visualKind,
       statusLabel: getNodeStatusLabel(input.node.status),
       statusTone: getNodeStatusTone(input.node.status),
+      presentation,
     },
     visualKind,
     tabs,
@@ -1329,5 +1353,6 @@ export function buildNodeInspectorViewModel(input: {
       isLoadingGateEnforcement: input.isLoadingGateEnforcement,
       canApprove: input.canApprove,
     }),
+    contextProjection,
   }
 }

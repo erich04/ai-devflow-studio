@@ -137,7 +137,7 @@ describe('agent console view model', () => {
     expect(viewModel.primaryAction.id).toBe('complete-agent-node')
     expect(viewModel.primaryAction.label).toBe('生成需求澄清')
     expect(viewModel.primaryAction.summary).toContain('运行当前澄清 Agent')
-    expect(viewModel.pathStatuses.find((section) => section.id === 'review')?.emphasis).toBe('secondary')
+    expect(viewModel.pathStatuses.find((section) => section.id === 'review')).toBeUndefined()
   })
 
   it('shows generating only when the pending workflow agent action matches the selected node', () => {
@@ -186,6 +186,10 @@ describe('agent console view model', () => {
     expect(viewModel.primaryAction.id).toBe('complete-agent-node')
     expect(viewModel.primaryAction.label).toBe('生成设计方案')
     expect(viewModel.primaryAction.summary).toContain('运行当前设计 Agent')
+    expect(viewModel.currentTarget.nodeKind).toBe('Task')
+    expect(viewModel.currentTarget.nodeStatus).toBe('已完成')
+    expect(viewModel.pathStatuses.map((section) => section.id)).not.toContain('review')
+    expect(viewModel.pathStatuses.map((section) => section.id)).not.toContain('coding')
   })
 
   it('uses Coding Agent as the primary action for build task nodes', () => {

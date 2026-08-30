@@ -170,6 +170,15 @@ describe('redactLocalAbsolutePaths', () => {
     expect(result.value).toContain('//cdn.example.com/assets/app.js')
   })
 
+  it('preserves an API route followed by Chinese punctuation', () => {
+    const result = redactLocalAbsolutePaths(
+      '目标：新增 GET /health。非目标：不改现有 auth middleware。',
+    )
+
+    expect(result.value).toContain('/health。非目标')
+    expect(result.redacted).toBe(false)
+  })
+
   it('redacts a file-shaped path under /api without hiding an API endpoint', () => {
     const localFile = redactLocalAbsolutePaths(
       'Read local file /api/private/config.json; keep endpoint /api/runs.',

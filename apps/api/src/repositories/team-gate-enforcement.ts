@@ -1,4 +1,5 @@
 import {
+  assessAgentReviewFreshness,
   buildKnowledgeGovernanceChecks,
   evaluateGateEnforcement,
   type GateEnforcementDecision,
@@ -107,15 +108,16 @@ export async function evaluateTeamGateEnforcement(
     throw new Error(`Run node not found: ${input.nodeId}`)
   }
 
+  const localArtifacts = bundle.artifacts
+    .filter((artifact) => artifact.runId === run.id)
+    .map((artifact) => ({
+      ...artifact,
+      nodeId: localNodeId(artifact.nodeId),
+    }))
   const governanceChecks = buildKnowledgeGovernanceChecks({
     run,
     node,
-    artifacts: bundle.artifacts
-      .filter((artifact) => artifact.runId === run.id)
-      .map((artifact) => ({
-        ...artifact,
-        nodeId: localNodeId(artifact.nodeId),
-      })),
+    artifacts: localArtifacts,
     documents: [],
     chunks: [],
     testEvidence: overview.testEvidenceSummaries
@@ -139,11 +141,25 @@ export async function evaluateTeamGateEnforcement(
         nodeId: localNodeId(finding.nodeId),
       })),
     }))
+  const reviewFreshness = await Promise.all(
+    agentReviews.map(async (review) => ({
+      review,
+      freshness: await assessAgentReviewFreshness({
+        review,
+        run,
+        node,
+        artifacts: localArtifacts,
+      }),
+    })),
+  )
+  const currentAgentReviews = reviewFreshness
+    .filter(({ freshness }) => freshness.status !== 'stale')
+    .map(({ review }) => review)
   const latestAgentReview =
-    agentReviews.sort((left, right) =>
+    currentAgentReviews.sort((left, right) =>
       right.createdAt.localeCompare(left.createdAt),
     )[0] ?? null
-  const agentPolicyFindings = agentReviews.flatMap(
+  const agentPolicyFindings = currentAgentReviews.flatMap(
     (review) => review.policyFindings,
   )
   const overrides = storedOverrides.map((override) => ({

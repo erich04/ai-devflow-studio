@@ -6,9 +6,11 @@ import type {
   RemoteRunSummaryKind,
   RemoteTestEvidenceSummary,
   AgentReviewResult,
+  AgentReviewContextManifest,
   TestEvidence,
   WorkflowRun,
 } from './domain'
+import { WORKFLOW_CONTEXT_FIELD_IDS } from './domain'
 import { redactTestEvidenceForStorage } from './local-execution'
 import { redactLocalAbsolutePaths, redactSecrets, redactSensitiveText } from './redaction'
 import { assertCanonicalLocalNodeId } from './remote-node-identity'
@@ -91,6 +93,7 @@ function isRemoteAgentReviewSummary(value: unknown): value is RemoteAgentReviewS
   const policyFindingCount = value['policyFindingCount']
   const policyFindingCategories = value['policyFindingCategories']
   const policyFindings = value['policyFindings']
+  const contextManifest = value['contextManifest']
   const validCount =
     policyFindingCount === undefined ||
     (Number.isInteger(policyFindingCount) && (policyFindingCount as number) >= 0)
@@ -121,6 +124,8 @@ function isRemoteAgentReviewSummary(value: unknown): value is RemoteAgentReviewS
           (finding['severity'] === 'low' || finding['severity'] === 'medium' || finding['severity'] === 'high') &&
           typeof finding['summary'] === 'string' &&
           typeof finding['createdAt'] === 'string')
+  const validContextManifest =
+    contextManifest === undefined || isAgentReviewContextManifest(contextManifest)
 
   return (
     typeof value['id'] === 'string' &&
@@ -137,12 +142,204 @@ function isRemoteAgentReviewSummary(value: unknown): value is RemoteAgentReviewS
     validCount &&
     validCategories &&
     validFindings &&
+    validContextManifest &&
     (value['advisoryLevel'] === 'info' || value['advisoryLevel'] === 'warn' || value['advisoryLevel'] === 'block') &&
     typeof value['blocksApproval'] === 'boolean' &&
     typeof value['confidence'] === 'number' &&
     value['redacted'] === true &&
     typeof value['createdAt'] === 'string'
   )
+}
+
+function isCoverageState(value: unknown): boolean {
+  return value === 'complete' || value === 'deterministically_chunked' || value === 'incomplete'
+}
+
+function isKnowledgeLexicalMatch(value: unknown): boolean {
+  return isRecord(value) &&
+    typeof value['rawScore'] === 'number' &&
+    Number.isFinite(value['rawScore']) &&
+    value['rawScore'] >= 0 &&
+    Array.isArray(value['matchedTerms']) &&
+    value['matchedTerms'].every((term) => typeof term === 'string') &&
+    value['normalized'] === false &&
+    value['crossQueryComparable'] === false &&
+    (value['source'] === 'retriever' || value['source'] === 'legacy_score')
+}
+
+function isKnowledgeSemanticRelevance(value: unknown): boolean {
+  return isRecord(value) &&
+    typeof value['score'] === 'number' &&
+    Number.isFinite(value['score']) &&
+    (value['provider'] === undefined || typeof value['provider'] === 'string') &&
+    (value['model'] === undefined || typeof value['model'] === 'string') &&
+    (value['source'] === 'retriever' || value['source'] === 'legacy_score')
+}
+
+function isKnowledgeGateEvidence(value: unknown): boolean {
+  return isRecord(value) &&
+    (value['status'] === 'retrieval_candidate' ||
+      value['status'] === 'reviewed_reference' ||
+      value['status'] === 'supports_finding' ||
+      value['status'] === 'rejected') &&
+    (value['reviewId'] === undefined || typeof value['reviewId'] === 'string') &&
+    (value['findingIds'] === undefined || (
+      Array.isArray(value['findingIds']) && value['findingIds'].every((id) => typeof id === 'string')
+    ))
+}
+
+function isWorkflowContextProjection(value: unknown): boolean {
+  if (!isRecord(value) || value['version'] !== 1 || !Array.isArray(value['fields'])) return false
+  const fields = value['fields']
+  return (
+    (value['stage'] === 'clarify' || value['stage'] === 'design' || value['stage'] === 'build' ||
+      value['stage'] === 'test' || value['stage'] === 'pr' || value['stage'] === 'accept') &&
+    (value['nodeKind'] === 'agent' || value['nodeKind'] === 'gate' || value['nodeKind'] === 'task' ||
+      value['nodeKind'] === 'test' || value['nodeKind'] === 'pr' || value['nodeKind'] === 'acceptance') &&
+    fields.length === WORKFLOW_CONTEXT_FIELD_IDS.length &&
+    fields.every((field) =>
+      isRecord(field) &&
+      WORKFLOW_CONTEXT_FIELD_IDS.includes(field['field'] as typeof WORKFLOW_CONTEXT_FIELD_IDS[number]) &&
+      (field['applicability'] === 'not_applicable' || field['applicability'] === 'not_yet_expected' ||
+        field['applicability'] === 'optional' || field['applicability'] === 'required') &&
+      (field['state'] === 'not_applicable' || field['state'] === 'not_yet_expected' ||
+        field['state'] === 'optional' || field['state'] === 'required' ||
+        field['state'] === 'available' || field['state'] === 'missing_required') &&
+      typeof field['visible'] === 'boolean' &&
+      typeof field['includeInProviderPrompt'] === 'boolean' &&
+      (field['role'] === 'primary' || field['role'] === 'supplemental' || field['role'] === 'historical') &&
+      typeof field['reason'] === 'string' &&
+      (field['expectedStage'] === undefined || field['expectedStage'] === 'clarify' ||
+        field['expectedStage'] === 'design' || field['expectedStage'] === 'build' ||
+        field['expectedStage'] === 'test' || field['expectedStage'] === 'pr' ||
+        field['expectedStage'] === 'accept'))
+  )
+}
+
+function isAgentReviewContextManifest(value: unknown): value is AgentReviewContextManifest {
+  if (!isRecord(value) || value['version'] !== 1 || !isCoverageState(value['coverage'])) return false
+  const runRequest = value['runRequest']
+  const subjectArtifacts = value['subjectArtifacts']
+  const knowledgeCriteria = value['knowledgeCriteria']
+  const fieldProjection = value['fieldProjection']
+  return (
+    (value['stage'] === 'clarify' || value['stage'] === 'design' || value['stage'] === 'build' ||
+      value['stage'] === 'test' || value['stage'] === 'pr' || value['stage'] === 'accept') &&
+    isRecord(runRequest) &&
+    typeof runRequest['contentDigest'] === 'string' &&
+    typeof runRequest['sanitizerVersion'] === 'string' &&
+    isCoverageState(runRequest['coverage']) &&
+    Array.isArray(subjectArtifacts) &&
+    subjectArtifacts.every((artifact) =>
+      isRecord(artifact) &&
+      typeof artifact['id'] === 'string' &&
+      typeof artifact['runId'] === 'string' &&
+      typeof artifact['nodeId'] === 'string' &&
+      typeof artifact['kind'] === 'string' &&
+      typeof artifact['updatedAt'] === 'string' &&
+      typeof artifact['contentDigest'] === 'string' &&
+      typeof artifact['sanitizerVersion'] === 'string' &&
+      isCoverageState(artifact['coverage']) &&
+      Array.isArray(artifact['chunks']) &&
+      artifact['chunks'].every((chunk) =>
+        isRecord(chunk) &&
+        Number.isInteger(chunk['index']) &&
+        Number.isInteger(chunk['start']) &&
+        Number.isInteger(chunk['end']) &&
+        typeof chunk['contentDigest'] === 'string' &&
+        !('content' in chunk)),
+    ) &&
+    Array.isArray(knowledgeCriteria) &&
+    knowledgeCriteria.every((criteria) =>
+      isRecord(criteria) &&
+      typeof criteria['referenceId'] === 'string' &&
+      typeof criteria['documentId'] === 'string' &&
+      (criteria['score'] === undefined || (
+        typeof criteria['score'] === 'number' && Number.isFinite(criteria['score'])
+      )) &&
+      (criteria['lexicalMatch'] === undefined || isKnowledgeLexicalMatch(criteria['lexicalMatch'])) &&
+      (criteria['semanticRelevance'] === undefined || isKnowledgeSemanticRelevance(criteria['semanticRelevance'])) &&
+      (criteria['gateEvidence'] === undefined || isKnowledgeGateEvidence(criteria['gateEvidence']))) &&
+    (fieldProjection === undefined || isWorkflowContextProjection(fieldProjection)) &&
+    (value['criteriaCoverage'] === 'available' ||
+      value['criteriaCoverage'] === 'unavailable' ||
+      value['criteriaCoverage'] === 'empty')
+  )
+}
+
+function redactAgentReviewContextManifest(
+  manifest: AgentReviewContextManifest,
+): AgentReviewContextManifest {
+  return {
+    ...manifest,
+    runRequest: { ...manifest.runRequest },
+    subjectArtifacts: manifest.subjectArtifacts.map((artifact) => ({
+      ...artifact,
+      id: redactSensitiveText(artifact.id).value,
+      runId: redactSensitiveText(artifact.runId).value,
+      nodeId: redactSensitiveText(artifact.nodeId).value,
+      chunks: artifact.chunks.map((chunk) => ({ ...chunk })),
+    })),
+    knowledgeCriteria: manifest.knowledgeCriteria.map((criteria) => ({
+      ...criteria,
+      referenceId: redactSensitiveText(criteria.referenceId).value,
+      documentId: redactSensitiveText(criteria.documentId).value,
+      ...(criteria.chunkId
+        ? { chunkId: redactSensitiveText(criteria.chunkId).value }
+        : {}),
+      ...(criteria.lexicalMatch
+        ? {
+            lexicalMatch: {
+              ...criteria.lexicalMatch,
+              matchedTerms: criteria.lexicalMatch.matchedTerms.map(
+                (term) => redactSensitiveText(term).value,
+              ),
+            },
+          }
+        : {}),
+      ...(criteria.semanticRelevance
+        ? {
+            semanticRelevance: {
+              ...criteria.semanticRelevance,
+              ...(criteria.semanticRelevance.provider
+                ? { provider: redactSensitiveText(criteria.semanticRelevance.provider).value }
+                : {}),
+              ...(criteria.semanticRelevance.model
+                ? { model: redactSensitiveText(criteria.semanticRelevance.model).value }
+                : {}),
+            },
+          }
+        : {}),
+      ...(criteria.gateEvidence
+        ? {
+            gateEvidence: {
+              ...criteria.gateEvidence,
+              ...(criteria.gateEvidence.reviewId
+                ? { reviewId: redactSensitiveText(criteria.gateEvidence.reviewId).value }
+                : {}),
+              ...(criteria.gateEvidence.findingIds
+                ? {
+                    findingIds: criteria.gateEvidence.findingIds.map(
+                      (findingId) => redactSensitiveText(findingId).value,
+                    ),
+                  }
+                : {}),
+            },
+          }
+        : {}),
+    })),
+    ...(manifest.fieldProjection
+      ? {
+          fieldProjection: {
+            ...manifest.fieldProjection,
+            fields: manifest.fieldProjection.fields.map((field) => ({
+              ...field,
+              reason: redactSensitiveText(field.reason).value,
+            })),
+          },
+        }
+      : {}),
+  }
 }
 
 export function parseRemoteRunSummary(value: unknown): RemoteRunSummary {
@@ -337,6 +534,9 @@ export function redactRemoteAgentReviewSummaryForSync(
   for (const finding of summary.policyFindings ?? []) {
     assertCanonicalLocalNodeId(finding.runId, finding.nodeId)
   }
+  for (const artifact of summary.contextManifest?.subjectArtifacts ?? []) {
+    assertCanonicalLocalNodeId(summary.runId, artifact.nodeId)
+  }
   const policyFindings = summary.policyFindings?.map((finding) => ({
     id: finding.id,
     reviewId: finding.reviewId,
@@ -371,6 +571,9 @@ export function redactRemoteAgentReviewSummaryForSync(
         }
       : {}),
     ...(policyFindings ? { policyFindings } : {}),
+    ...(summary.contextManifest
+      ? { contextManifest: redactAgentReviewContextManifest(summary.contextManifest) }
+      : {}),
     advisoryLevel: summary.advisoryLevel,
     blocksApproval: summary.blocksApproval,
     confidence: summary.confidence,
@@ -408,6 +611,7 @@ export function createRemoteAgentReviewSummary(
       summary: finding.summary,
       createdAt: finding.createdAt,
     })),
+    ...(review.contextManifest ? { contextManifest: review.contextManifest } : {}),
     advisoryLevel: review.gateAdvisory.level,
     blocksApproval: review.gateAdvisory.blocksApproval,
     confidence: review.confidence,

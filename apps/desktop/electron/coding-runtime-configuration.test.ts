@@ -118,6 +118,14 @@ describe('project Coding Runtime configuration', () => {
       })
 
       const executor = {
+        descriptor: {
+          stateVersion: 1,
+          id: 'coding-executor-native',
+          version: 2,
+          kind: 'native',
+          availability: { status: 'available', reasonCode: null },
+          capabilities: ['cancellation', 'structured_diff', 'workspace_edit', 'workspace_read'],
+        },
         engine: 'native',
         providerId: 'deepseek',
         modelId: 'deepseek-v4-flash',
@@ -152,6 +160,9 @@ describe('project Coding Runtime configuration', () => {
       expect(readiness).toMatchObject({
         status: 'ready',
         engine: 'native',
+        executor: 'native-model',
+        availability: 'available',
+        providerRequirement: 'saved-provider',
         providerId: 'deepseek',
         configVersion: 1,
         budgetPolicy: { monthlyLimitUsd: 0.20, warningThresholdUsd: 0.10 },
@@ -185,6 +196,31 @@ describe('project Coding Runtime configuration', () => {
       executor: 'native-model',
       providerId: 'operator-provider',
       configVersion: 0,
+    })
+  })
+
+  it('resolves an explicitly confirmed project OpenCode configuration without environment flags', async () => {
+    const configuration = {
+      projectId: 'project-1',
+      executor: 'opencode-http' as const,
+      providerId: 'openai',
+      modelId: 'gpt-4.1-mini',
+      binaryPath: '/opt/devflow/bin/opencode',
+      detectedVersion: '1.2.3',
+      version: 3,
+      updatedAt: '2026-08-30T18:00:00.000Z',
+    }
+
+    await expect(resolveCodingRuntimeSelection({
+      store: { getCodingRuntimeConfiguration: async () => configuration },
+      projectId: configuration.projectId,
+      env: {},
+    })).resolves.toEqual({
+      source: 'project',
+      executor: 'opencode-http',
+      providerId: 'openai',
+      configVersion: 3,
+      configuration,
     })
   })
 })

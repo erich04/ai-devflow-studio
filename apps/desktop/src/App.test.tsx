@@ -9,7 +9,9 @@ import {
   createWarnOnlyDefaultPolicy,
   indexKnowledgeSources,
   resolveEffectivePolicy,
+  type AgentReviewResult,
   type Artifact,
+  type CodingRuntimeReadiness,
   type DesktopPairingCredential,
   type GitHubDeliveryIntent,
   type GitHubDeliveryOperatorOutcome,
@@ -17,6 +19,7 @@ import {
   type GitHubRepositoryBinding,
   type RepositoryKnowledgeSnapshot,
   type RemoteSyncOperation,
+  type TestEvidence,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import {
@@ -80,6 +83,10 @@ const fixturePairingCredential: DesktopPairingCredential = {
   localProjectId: localProject.id,
   userId: 'u-ling',
   role: 'lead',
+  issuedRole: 'lead',
+  expiresAt: '2999-01-01T00:00:00.000Z',
+  userName: 'Ling',
+  projectName: 'Payments API',
   authAccountId: 'acct-ling',
   projectMemberships: [{ projectId: fixtureRuns[0]!.projectId, userId: 'u-ling', role: 'lead' }],
   createdAt: '2026-06-20T00:00:00.000Z',
@@ -192,6 +199,157 @@ function localStateAtCurrentNode(nodeId: string) {
   return desktopState({
     projects: [localProject],
     runs: [fixtureRunAtCurrentNode(nodeId)],
+    desktopPairingCredential: fixturePairingCredential,
+  })
+}
+
+function codingReadinessFixture(
+  overrides: Partial<CodingRuntimeReadiness> = {},
+): CodingRuntimeReadiness {
+  return {
+    projectId: localProject.id,
+    runId: fixtureRuns[0]!.id,
+    nodeId: 'n-build',
+    status: 'ready',
+    engine: 'native',
+    executor: 'native-model',
+    availability: 'available',
+    capabilities: ['cancellation', 'structured_diff', 'workspace_edit', 'workspace_read'],
+    providerRequirement: 'saved-provider',
+    providerId: agentProvider.id,
+    configVersion: 1,
+    checks: [
+      { code: 'executor_unconfigured', status: 'ready', message: 'Coding Executor 已配置。' },
+      { code: 'engine_unavailable', status: 'ready', message: 'Coding Engine 可用。' },
+      { code: 'capability_unavailable', status: 'ready', message: '执行能力满足要求。' },
+      { code: 'provider_unavailable', status: 'ready', message: 'Provider 可用。' },
+      { code: 'team_project_unpaired', status: 'ready', message: 'Team Project 已配对。' },
+      { code: 'test_command_missing', status: 'ready', message: '测试命令已配置。' },
+      { code: 'budget_policy_missing', status: 'ready', message: '预算策略已配置。' },
+      { code: 'budget_blocked', status: 'ready', message: '预算评估允许执行。' },
+    ],
+    evaluatedAt: '2026-06-15T00:03:30.000Z',
+    ...overrides,
+  }
+}
+
+function reviewedDesignGateState() {
+  const subjectArtifact = fixtureArtifacts.find((artifact) => artifact.id === 'art-design')!
+  const reference = {
+    id: 'knowledge-reference-design-review',
+    runId: fixtureRuns[0]!.id,
+    targetType: 'node' as const,
+    nodeId: 'n-design-gate',
+    documentId: 'document-api-design-standard',
+    chunkId: 'chunk-api-design-standard-contract',
+    relation: 'cites' as const,
+    reason: 'The design Gate uses the API contract checklist as review criteria.',
+    sourcePath: 'docs/standards/api-design.md',
+    headingPath: ['API design', 'Status mapping'],
+    contentHash: 'knowledge-hash-design-1',
+    category: 'api_contract' as const,
+    strategy: 'lexical' as const,
+    lexicalMatch: {
+      rawScore: 7,
+      matchedTerms: ['status', 'mapping'],
+      normalized: false as const,
+      crossQueryComparable: false as const,
+      source: 'retriever' as const,
+    },
+    gateEvidence: {
+      status: 'reviewed_reference' as const,
+      reviewId: 'agent-review-design-gate',
+    },
+  }
+  const review: AgentReviewResult = {
+    id: 'agent-review-design-gate',
+    requestId: 'agent-review-request-design-gate',
+    runId: fixtureRuns[0]!.id,
+    nodeId: 'n-design-gate',
+    projectId: fixtureRuns[0]!.projectId,
+    runtime: 'electron',
+    providerId: 'fake-agent-provider',
+    model: 'fake',
+    conclusion: 'The complete design Artifact satisfies the API contract criteria.',
+    summary: 'Reviewed the exact design revision against one Knowledge source.',
+    risks: [],
+    missingEvidence: [],
+    suggestedTests: [],
+    contextManifest: {
+      version: 1,
+      stage: 'design',
+      coverage: 'complete',
+      runRequest: {
+        contentDigest: 'request-digest-design-1',
+        sanitizerVersion: 'redaction-v1',
+        coverage: 'complete',
+      },
+      subjectArtifacts: [{
+        id: subjectArtifact.id,
+        runId: subjectArtifact.runId,
+        nodeId: subjectArtifact.nodeId,
+        kind: subjectArtifact.kind,
+        updatedAt: subjectArtifact.updatedAt,
+        contentDigest: 'artifact-digest-design-1',
+        sanitizerVersion: 'redaction-v1',
+        coverage: 'complete',
+        chunks: [{
+          index: 0,
+          start: 0,
+          end: subjectArtifact.content.length,
+          contentDigest: 'artifact-chunk-digest-design-1',
+        }],
+      }],
+      knowledgeCriteria: [{
+        referenceId: reference.id,
+        documentId: reference.documentId,
+        chunkId: reference.chunkId,
+        contentHash: reference.contentHash,
+        strategy: reference.strategy,
+        lexicalMatch: reference.lexicalMatch,
+        gateEvidence: reference.gateEvidence,
+      }],
+      criteriaCoverage: 'available',
+    },
+    knowledgeReferences: [reference],
+    policyFindings: [],
+    confidence: 0.91,
+    gateAdvisory: {
+      id: 'gate-advisory-design-gate',
+      runId: fixtureRuns[0]!.id,
+      nodeId: 'n-design-gate',
+      level: 'info',
+      blocksApproval: false,
+      summary: 'The design subject is ready for reviewer approval.',
+      missingEvidence: [],
+      riskCount: 0,
+      createdAt: '2026-08-20T12:00:00.000Z',
+    },
+    createdAt: '2026-08-20T12:00:00.000Z',
+  }
+  const testEvidence: TestEvidence = {
+    id: 'test-evidence-design-baseline',
+    runId: fixtureRuns[0]!.id,
+    nodeId: 'n-design-gate',
+    projectId: fixtureRuns[0]!.projectId,
+    command: 'pnpm test -- --run',
+    cwd: '/redacted/project',
+    status: 'passed',
+    exitCode: 0,
+    durationMs: 420,
+    stdout: '',
+    stderr: '',
+    summary: 'Baseline tests passed before implementation.',
+    redacted: true,
+    createdAt: '2026-08-20T11:59:00.000Z',
+  }
+
+  return desktopState({
+    projects: [localProject],
+    runs: [fixtureRuns[0]!],
+    artifacts: [subjectArtifact],
+    testEvidence: [testEvidence],
+    agentReviews: [review],
     desktopPairingCredential: fixturePairingCredential,
   })
 }
@@ -379,6 +537,10 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
         localProjectId: localProject.id,
         userId: 'u-ling',
         role: 'lead',
+        issuedRole: 'lead',
+        expiresAt: '2999-01-01T00:00:00.000Z',
+        userName: 'Ling',
+        projectName: 'Payments API',
         authAccountId: 'acct-ling',
         projectMemberships: [{ projectId: 'p-payments', userId: 'u-ling', role: 'lead' }],
         createdAt: '2026-06-20T00:00:00.000Z',
@@ -928,12 +1090,29 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       version: 1,
       updatedAt: '2026-06-15T00:03:30.000Z',
     })),
+    detectCodingRuntimeEngines: vi.fn().mockResolvedValue({
+      projectId: localProject.id,
+      candidates: [{
+        engine: 'opencode-http',
+        executor: 'opencode-http',
+        status: 'available',
+        binaryPath: '/opt/devflow/bin/opencode',
+        version: '1.2.3',
+        requiresConfirmation: true,
+        reason: '已检测到本机 OpenCode。确认后才会把它用于当前项目。',
+      }],
+      detectedAt: '2026-06-15T00:03:30.000Z',
+    }),
     getCodingRuntimeReadiness: vi.fn().mockResolvedValue({
       projectId: localProject.id,
       runId: fixtureRuns[0]!.id,
       nodeId: 'n-build',
       status: 'ready',
       engine: 'fake',
+      executor: 'native-deterministic',
+      availability: 'available',
+      capabilities: ['cancellation', 'structured_diff', 'workspace_edit', 'workspace_read'],
+      providerRequirement: 'none',
       checks: [],
       evaluatedAt: '2026-06-15T00:03:30.000Z',
     }),
@@ -1652,9 +1831,9 @@ describe('App', () => {
 
     const projectSelector = screen.getByLabelText('Project selector')
     const localProjectPanel = screen.getByLabelText('Local project')
-    expect(within(projectSelector).getByText('p-payments')).toBeInTheDocument()
+    expect(within(projectSelector).getByText('Payments API')).toBeInTheDocument()
     expect(within(projectSelector).getByText('已绑定 · 待同步')).toBeInTheDocument()
-    expect(within(localProjectPanel).getByText('p-payments')).toBeInTheDocument()
+    expect(within(localProjectPanel).getByText('Payments API')).toBeInTheDocument()
     expect(within(localProjectPanel).getByText('已绑定 · 待同步')).toBeInTheDocument()
   })
 
@@ -2010,7 +2189,7 @@ describe('App', () => {
         runId: 'run-created-from-request',
         nodeId: 'run-created-from-request-clarify',
         userId: 'u-ling',
-        userName: 'u-ling',
+        userName: 'Ling',
         providerId: agentProvider.id,
       })),
     )
@@ -2043,7 +2222,7 @@ describe('App', () => {
         runId: 'run-created-from-request',
         nodeId: 'run-created-from-request-clarify',
         userId: 'u-ling',
-        userName: 'u-ling',
+        userName: 'Ling',
         providerId: agentProvider.id,
       })),
     )
@@ -2179,6 +2358,7 @@ describe('App', () => {
   it('routes the current build node primary CTA to the coding agent handler', async () => {
     const api = installDesktopApi({
       loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-build')),
+      getCodingRuntimeReadiness: vi.fn().mockResolvedValue(codingReadinessFixture()),
     })
     render(<App />)
 
@@ -2188,7 +2368,9 @@ describe('App', () => {
     expect(inspector).not.toHaveTextContent('Gate Enforcement')
     expect(api.loadEnforcementPolicy).not.toHaveBeenCalled()
     expect(api.evaluateGateEnforcement).not.toHaveBeenCalled()
-    fireEvent.click(within(inspector).getByRole('button', { name: /Coding Agent/ }))
+    const codingAction = within(inspector).getByRole('button', { name: /Coding Agent/ })
+    await waitFor(() => expect(codingAction).toBeEnabled())
+    fireEvent.click(codingAction)
 
     await waitFor(() =>
       expect(api.runCodingAgent).toHaveBeenCalledWith(expect.objectContaining({
@@ -2198,6 +2380,128 @@ describe('App', () => {
       })),
     )
     expect(api.ensureCodingEngine).not.toHaveBeenCalled()
+  })
+
+  it('fails closed in Workbench when no Coding Engine is available and opens the shared configuration', async () => {
+    const readiness = codingReadinessFixture({
+      status: 'blocked',
+      availability: 'unavailable',
+      engine: 'unconfigured',
+      executor: 'unconfigured',
+      capabilities: [],
+      providerRequirement: 'none',
+      checks: [
+        { code: 'executor_unconfigured', status: 'blocked', message: '请先选择 Coding Executor。' },
+        { code: 'engine_unavailable', status: 'blocked', message: '当前没有可用的 Coding Engine。' },
+      ],
+    })
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-build')),
+      getCodingRuntimeReadiness: vi.fn().mockResolvedValue(readiness),
+    })
+    render(<App />)
+
+    const inspector = await screen.findByTestId('node-inspector')
+    const codingAction = within(inspector).getByRole('button', { name: /Coding Agent/ })
+    await waitFor(() => expect(codingAction).toBeDisabled())
+    expect(within(inspector).getByTestId('workbench-coding-readiness')).toHaveTextContent(
+      '请先选择 Coding Executor。',
+    )
+    expect(api.runCodingAgent).not.toHaveBeenCalled()
+
+    fireEvent.click(within(inspector).getByRole('button', { name: /配置 Coding Engine \/ Executor/ }))
+    expect(await screen.findByTestId('agent-workbench')).toBeInTheDocument()
+    expect(screen.getByLabelText('Coding Executor')).toBeInTheDocument()
+  })
+
+  it('uses the same budget blocker in Workbench and Agents without exposing its machine code as status copy', async () => {
+    const readiness = codingReadinessFixture({
+      status: 'blocked',
+      checks: [
+        ...codingReadinessFixture().checks.slice(0, -1),
+        {
+          code: 'budget_blocked',
+          status: 'blocked',
+          message: '预算评估阻止本次运行，请取得一次性批准。',
+        },
+      ],
+    })
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-build')),
+      getCodingRuntimeReadiness: vi.fn().mockResolvedValue(readiness),
+    })
+    render(<App />)
+
+    const inspector = await screen.findByTestId('node-inspector')
+    await waitFor(() =>
+      expect(within(inspector).getByRole('button', { name: /Coding Agent/ })).toBeDisabled(),
+    )
+    expect(within(inspector).getByTestId('workbench-coding-readiness')).toHaveTextContent(
+      '预算评估阻止本次运行',
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    const workbench = await screen.findByTestId('agent-workbench')
+    await waitFor(() => expect(workbench).toHaveTextContent('预算评估：阻止执行'))
+    expect(workbench).toHaveTextContent('Team Project：已配对')
+    expect(workbench).toHaveTextContent('测试命令：已配置')
+    expect(workbench).toHaveTextContent('预算策略：已配置')
+    expect(workbench).not.toHaveTextContent('budget_policy_missing：通过')
+    expect(within(workbench).getByText('budget_blocked')).toBeInTheDocument()
+  })
+
+  it('detects OpenCode as a recommendation and saves it only after explicit project confirmation', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-build')),
+      getCodingRuntimeReadiness: vi.fn().mockResolvedValue(codingReadinessFixture()),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    const executorPicker = await screen.findByLabelText('Coding Executor')
+    await waitFor(() => expect(api.getCodingRuntimeConfiguration).toHaveBeenCalled())
+    await waitFor(() => expect(executorPicker).toHaveValue('native-model'))
+    fireEvent.change(executorPicker, {
+      target: { value: 'opencode-http' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '检测本机 OpenCode' }))
+
+    await waitFor(() => expect(api.detectCodingRuntimeEngines).toHaveBeenCalledWith({
+      projectId: localProject.id,
+    }))
+    expect(api.saveCodingRuntimeConfiguration).not.toHaveBeenCalled()
+    expect(screen.getByTestId('opencode-discovery-status')).toHaveTextContent('尚未确认用于当前项目')
+
+    fireEvent.click(screen.getByRole('button', { name: '确认并用于当前项目' }))
+    await waitFor(() => expect(api.saveCodingRuntimeConfiguration).toHaveBeenCalledWith({
+      projectId: localProject.id,
+      executor: 'opencode-http',
+      providerId: 'openai',
+      modelId: 'gpt-4.1-mini',
+      binaryPath: '/opt/devflow/bin/opencode',
+      detectedVersion: '1.2.3',
+    }))
+  })
+
+  it('binds Native Coding to an explicitly selected locally saved Provider', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-build')),
+      getCodingRuntimeReadiness: vi.fn().mockResolvedValue(codingReadinessFixture()),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    const provider = await screen.findByLabelText('Coding Agent Provider')
+    await waitFor(() => expect(provider).toHaveValue(agentProvider.id))
+    fireEvent.click(screen.getByRole('button', { name: '保存并用于当前项目' }))
+
+    await waitFor(() => expect(api.saveCodingRuntimeConfiguration).toHaveBeenCalledWith({
+      projectId: localProject.id,
+      executor: 'native-model',
+      providerId: agentProvider.id,
+    }))
   })
 
   it('routes the current test node primary CTA to Tests', async () => {
@@ -3351,16 +3655,29 @@ describe('App', () => {
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('healthService.check()')
   })
 
-  it('explains board provenance, folded attachments, and inspector status states', async () => {
+  it('separates workflow node type, source, display mode, and Inspector semantics', async () => {
     const api = installDesktopApi()
     render(<App />)
 
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     const board = await screen.findByTestId('workflow-canvas')
-    expect(board).toHaveTextContent('Run template')
-    expect(board).toHaveTextContent('Team policy 插入')
-    expect(board).toHaveTextContent('Local runtime 结果')
-    expect(board).toHaveTextContent('折叠输出节点')
+    expect(board).toHaveTextContent('Run 模板')
+    expect(board).toHaveTextContent('Team Policy')
+    expect(board).toHaveTextContent('本地 Runtime')
+    expect(board).toHaveTextContent('系统派生')
+    expect(board).toHaveTextContent('折叠输出')
+    expect(board).toHaveTextContent('Test')
+    expect(board).toHaveTextContent('Delivery')
+    expect(board).toHaveTextContent('Acceptance')
+    expect(screen.getByTestId('stage-summary-clarify')).toHaveTextContent('节点：Task 1 · Gate 1')
+    expect(screen.getByTestId('stage-summary-clarify')).toHaveTextContent('来源：Run 模板 1 · Team Policy 1')
+    expect(screen.getByTestId('stage-summary-clarify')).not.toHaveTextContent('展示：')
+    expect(screen.getByTestId('stage-summary-pr')).toHaveTextContent('节点：Delivery 1')
+    expect(screen.getByTestId('stage-summary-pr')).toHaveTextContent('来源：系统派生 1')
+    expect(screen.getByTestId('stage-summary-pr')).toHaveTextContent('展示：折叠输出 1')
+    const designCard = within(board).getByTestId('flow-node-n-design')
+    expect(designCard).toHaveTextContent('Task')
+    expect(designCard).not.toHaveTextContent('Review')
     expect(board).toHaveTextContent('产物')
     expect(board).toHaveTextContent('证据')
     expect(board).toHaveTextContent('轨迹')
@@ -3386,10 +3703,40 @@ describe('App', () => {
     expect(stageProgressSegments.some((segment) => segment.classList.contains('stage-progress--design'))).toBe(false)
 
     const inspector = screen.getByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('类型：Gate · 来源：Team Policy')
     expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('Policy snapshot')
     expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('门禁审查')
     expect(inspector).toHaveTextContent('Next best action')
     expect(inspector).toHaveTextContent('通过 Gate')
+  })
+
+  it('derives a Task Gate impact from workflow edges and navigates to the Gate read-only', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [fixtureRuns[0]!],
+        artifacts: fixtureArtifacts,
+        events: fixtureEvents,
+        desktopPairingCredential: fixturePairingCredential,
+      })),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByTestId('flow-node-n-clarify'))
+    const inspector = clickInspectorTab('Gate影响')
+    const impact = within(inspector).getByTestId('gate-impact-summary')
+
+    expect(impact).toHaveTextContent('直接下游 Gate')
+    expect(impact).toHaveTextContent('需求确认 Gate')
+    expect(impact).toHaveTextContent('已完成')
+    expect(impact).toHaveTextContent('需求澄清结果')
+    expect(impact).toHaveTextContent('此处只展示前向影响')
+    expect(within(impact).queryByRole('button', { name: /通过 Gate|Override/ })).not.toBeInTheDocument()
+
+    fireEvent.click(within(impact).getByRole('button', { name: '查看 Gate' }))
+    await waitFor(() => expect(screen.getByTestId('node-inspector')).toHaveTextContent('需求确认 Gate'))
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('类型：Gate · 来源：Team Policy')
   })
 
   it('derives workflow stage color from the visible cards in each stage', () => {
@@ -3569,12 +3916,74 @@ describe('App', () => {
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Gate Enforcement')
 
     clickInspectorTab(/Evidence/)
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('基于知识的门禁审查')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Evidence · 可审计结果')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('当前节点尚未产生可审计 Evidence')
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('Gate Enforcement · 详细结论')
 
     clickInspectorTab(/Remediation/)
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Remediation · 处理动作')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Remediation · 恢复计划')
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('Gate Enforcement · 详细结论')
+  })
+
+  it('keeps Knowledge sources separate from auditable Review and Test Evidence', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(reviewedDesignGateState()),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    const inspector = await screen.findByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('方案评审 Gate')
+
+    clickInspectorTab(/引用来源/)
+    const sources = within(inspector).getByTestId('knowledge-reference-sources')
+    expect(sources).toHaveTextContent('docs/standards/api-design.md')
+    expect(sources).toHaveTextContent('document document-api-design-standard')
+    expect(sources).toHaveTextContent('chunk chunk-api-design-standard-contract')
+    expect(sources).toHaveTextContent('API design / Status mapping')
+    expect(sources).toHaveTextContent('knowledge-hash-design-1')
+    expect(sources).toHaveTextContent('关键词匹配分 7（原始累加）')
+    expect(sources).toHaveTextContent('未进行语义相关性判断')
+    expect(sources).toHaveTextContent('Gate 使用状态：已审查引用')
+    expect(sources).not.toHaveTextContent('Review Subject')
+    expect(sources).not.toHaveTextContent('Baseline tests passed before implementation.')
+
+    clickInspectorTab(/^Evidence$/)
+    const evidence = within(inspector).getByTestId('review-evidence-results')
+    expect(evidence).toHaveTextContent('方案设计')
+    expect(evidence).toHaveTextContent('Review Subject')
+    expect(evidence).toHaveTextContent('artifact-digest-design-1')
+    expect(evidence).toHaveTextContent('The complete design Artifact satisfies the API contract criteria.')
+    expect(evidence).toHaveTextContent('Baseline tests passed before implementation.')
+    expect(evidence).not.toHaveTextContent('docs/standards/api-design.md')
+    expect(evidence).not.toHaveTextContent('关键词匹配分')
+
+    clickInspectorTab(/引用来源/)
+    fireEvent.click(within(inspector).getByRole('button', { name: /查看引用来源/ }))
+    expect(await screen.findByTestId('knowledge-view')).toHaveTextContent('来自 Workbench Inspector')
+    fireEvent.click(screen.getByRole('button', { name: /返回当前 Inspector/ }))
+    expect(await screen.findByTestId('node-inspector')).toHaveTextContent('方案评审 Gate')
+    expect(screen.getByTestId('knowledge-reference-sources')).toBeInTheDocument()
+  })
+
+  it('does not surface Gate Review or empty Evidence on a design generation Agent', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [fixtureRuns[0]!],
+        artifacts: fixtureArtifacts,
+        desktopPairingCredential: fixturePairingCredential,
+      })),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByTestId('flow-node-n-design'))
+    const inspector = screen.getByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('方案设计')
+    expect(within(inspector).queryByRole('tab', { name: /引用来源|Evidence/ })).not.toBeInTheDocument()
+    expect(within(inspector).queryByRole('button', { name: /运行门禁审查/ })).not.toBeInTheDocument()
+    expect(inspector).not.toHaveTextContent('当前阶段缺少 Policy 要求的 Test Evidence')
   })
 
   it('pairs the desktop client with a team project through the desktop API', async () => {
@@ -3593,8 +4002,35 @@ describe('App', () => {
         localProjectId: localProject.id,
       }),
     )
-    expect(screen.getByText('已配对 Team')).toBeInTheDocument()
-    expect(screen.getByTestId('toast')).toHaveTextContent('已配对团队项目 p-payments')
+    expect(screen.getByTestId('desktop-pairing-identity')).toHaveTextContent(
+      'Ling · lead · Payments API',
+    )
+    expect(screen.getByTestId('toast')).toHaveTextContent(
+      '已绑定 Ling / lead 到 Payments API',
+    )
+  })
+
+  it('fails closed and prompts re-pairing when the persisted Desktop token has expired', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue({
+        ...persistedFixtureRunState(),
+        desktopPairingCredential: {
+          ...fixturePairingCredential,
+          expiresAt: '2000-01-01T00:00:00.000Z',
+        },
+      }),
+    })
+    render(<App />)
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    expect(await screen.findByTestId('desktop-pairing-identity')).toHaveTextContent(
+      '配对已过期 · 请重新绑定',
+    )
+    vi.mocked(api.loadRemoteSnapshot).mockClear()
+    fireEvent.click(screen.getByRole('button', { name: '同步团队' }))
+    expect(api.loadRemoteSnapshot).not.toHaveBeenCalled()
+    expect(screen.getByTestId('toast')).toHaveTextContent(
+      '请先 Pair Team Project 后再同步团队远端状态',
+    )
   })
 
   it('persists gate approval through the desktop write-path guard', async () => {
@@ -4225,9 +4661,9 @@ describe('App', () => {
     clickInspectorTab(/Gate条件/)
     expect(screen.getByTestId('knowledge-governance-flow')).toHaveTextContent('2 · 完成审查已完成')
     clickInspectorTab(/Evidence/)
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('基于知识的门禁审查')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Evidence · 可审计结果')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge review completed for the selected gate.')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('warning-only')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('已保存 Provider')
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent(agentProvider.id)
   })
 

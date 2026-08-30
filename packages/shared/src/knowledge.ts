@@ -33,6 +33,8 @@ export type KnowledgeReferenceInput = {
   chunks?: KnowledgeChunk[]
   testEvidence: TestEvidence[]
   retriever?: KnowledgeRetriever
+  /** Project retrieval and reference ownership to one workflow node. */
+  targetNode?: WorkflowNode
 }
 
 export type KnowledgeGovernanceInput = KnowledgeReferenceInput & {
@@ -435,14 +437,16 @@ function scoreLexicalHit(
     score += 2
   }
 
-  if (query.stage && documentsForNodeStage(query.stage).includes(document.category)) {
+  if (query.stage && knowledgeDocumentCategoriesForStage(query.stage).includes(document.category)) {
     score += 1
   }
 
   return { score, matchedTokens }
 }
 
-function documentsForNodeStage(stage: WorkflowNode['stage']): KnowledgeDocumentCategory[] {
+export function knowledgeDocumentCategoriesForStage(
+  stage: WorkflowNode['stage'],
+): KnowledgeDocumentCategory[] {
   if (stage === 'test') {
     return ['testing_standard']
   }
@@ -456,7 +460,7 @@ function documentsForNodeStage(stage: WorkflowNode['stage']): KnowledgeDocumentC
     return ['api_contract', 'adr', 'review_checklist', 'testing_standard']
   }
   if (stage === 'clarify') {
-    return ['development_standard', 'onboarding']
+    return ['development_standard', 'review_checklist', 'onboarding']
   }
 
   return ['development_standard']
@@ -494,7 +498,14 @@ export const lexicalKnowledgeRetriever: KnowledgeRetriever = {
             contentHash: chunk.contentHash,
             score,
             strategy: 'lexical',
-            reason: `Matched ${matchedTokens.length} terms for ${document.title}.`,
+            lexicalMatch: {
+              rawScore: score,
+              matchedTerms: matchedTokens,
+              normalized: false,
+              crossQueryComparable: false,
+              source: 'retriever',
+            },
+            reason: `Raw lexical match ${score}: ${matchedTokens.length} exact term(s) matched for ${document.title}. This is not semantic relevance or Gate evidence.`,
             ...(matchedText ? { matchedText } : {}),
             category: document.category,
           } satisfies KnowledgeRetrievalHit,
@@ -540,8 +551,12 @@ function referenceMetadataFromHit(hit: KnowledgeRetrievalHit) {
   return {
     sourcePath: hit.sourcePath,
     chunkId: hit.chunkId,
+    category: hit.category,
     score: hit.score,
     strategy: hit.strategy,
+    ...(hit.lexicalMatch ? { lexicalMatch: hit.lexicalMatch } : {}),
+    ...(hit.semanticRelevance ? { semanticRelevance: hit.semanticRelevance } : {}),
+    gateEvidence: { status: 'retrieval_candidate' as const },
     contentHash: hit.contentHash,
     headingPath: hit.headingPath,
   }
@@ -550,28 +565,35 @@ function referenceMetadataFromHit(hit: KnowledgeRetrievalHit) {
 function firstChunkMetadataForDocument(
   document: KnowledgeDocument,
   chunks: KnowledgeChunk[],
-): Pick<KnowledgeReference, 'sourcePath' | 'chunkId' | 'contentHash' | 'headingPath'> {
+): Pick<
+  KnowledgeReference,
+  'sourcePath' | 'chunkId' | 'category' | 'contentHash' | 'headingPath' | 'gateEvidence'
+> {
   const chunk = chunks.find((item) => item.documentId === document.id)
 
   if (!chunk) {
     return {
       sourcePath: document.sourcePath,
       chunkId: `knowledge-chunk-${slugify(basenameWithoutExtension(document.sourcePath))}-1-body`,
+      category: document.category,
       contentHash: stableContentHash(document.markdown || document.summary),
       headingPath: [document.title],
+      gateEvidence: { status: 'retrieval_candidate' },
     }
   }
 
   return {
     sourcePath: chunk.sourcePath,
     chunkId: chunk.id,
+    category: document.category,
     contentHash: chunk.contentHash,
     headingPath: chunk.headingPath,
+    gateEvidence: { status: 'retrieval_candidate' },
   }
 }
 
 function documentsForNode(node: WorkflowNode, documents: KnowledgeDocument[]): KnowledgeDocument[] {
-  const categories = documentsForNodeStage(node.stage)
+  const categories = knowledgeDocumentCategoriesForStage(node.stage)
   return documents.filter((document) => categories.includes(document.category))
 }
 
@@ -593,7 +615,43 @@ function pushReference(references: KnowledgeReference[], reference: Omit<Knowled
     return
   }
 
-  references.push({ id, ...reference })
+  references.push({
+    id,
+    ...reference,
+    gateEvidence: reference.gateEvidence ?? { status: 'retrieval_candidate' },
+  })
+}
+
+export function projectKnowledgeReferencesForNode(input: {
+  node: WorkflowNode
+  references: KnowledgeReference[]
+  subjectArtifactIds?: readonly string[]
+  testEvidenceIds?: readonly string[]
+}): KnowledgeReference[] {
+  const subjectArtifactIds = new Set(input.subjectArtifactIds ?? [])
+  const testEvidenceIds = new Set(input.testEvidenceIds ?? [])
+  const allowedCategories = new Set(knowledgeDocumentCategoriesForStage(input.node.stage))
+  const directlyScoped = input.references.filter((reference) =>
+    reference.nodeId === input.node.id ||
+    (reference.artifactId ? subjectArtifactIds.has(reference.artifactId) : false) ||
+    (reference.evidenceId ? testEvidenceIds.has(reference.evidenceId) : false))
+  const directlyScopedIds = new Set(directlyScoped.map((reference) => reference.id))
+  const directlyScopedDocumentIds = new Set(directlyScoped.map((reference) => reference.documentId))
+
+  return input.references.filter((reference) => {
+    if (reference.category && !allowedCategories.has(reference.category)) {
+      return false
+    }
+    if (directlyScopedIds.has(reference.id)) {
+      return true
+    }
+    if (reference.targetType === 'run') {
+      return directlyScopedDocumentIds.has(reference.documentId) || (
+        reference.category !== undefined && allowedCategories.has(reference.category)
+      )
+    }
+    return false
+  })
 }
 
 export function buildKnowledgeReferences({
@@ -603,6 +661,7 @@ export function buildKnowledgeReferences({
   chunks,
   testEvidence,
   retriever = lexicalKnowledgeRetriever,
+  targetNode,
 }: KnowledgeReferenceInput): KnowledgeReference[] {
   const references: KnowledgeReference[] = []
   const index = indexFromDocuments(documents, chunks)
@@ -614,6 +673,13 @@ export function buildKnowledgeReferences({
       runId: run.id,
       targetType: 'run',
       text: runText,
+      ...(targetNode
+        ? {
+            nodeId: targetNode.id,
+            stage: targetNode.stage,
+            categories: knowledgeDocumentCategoriesForStage(targetNode.stage),
+          }
+        : {}),
       topK: 3,
       minScore: 2,
     },
@@ -644,6 +710,12 @@ export function buildKnowledgeReferences({
         artifactId: artifact.id,
         nodeId: artifact.nodeId,
         text: artifactText,
+        ...(targetNode
+          ? {
+              stage: targetNode.stage,
+              categories: knowledgeDocumentCategoriesForStage(targetNode.stage),
+            }
+          : {}),
         topK: 3,
         minScore: 2,
       },
@@ -662,7 +734,12 @@ export function buildKnowledgeReferences({
     }
   }
 
-  for (const node of run.nodes.filter((node) => node.kind === 'gate')) {
+  const reviewNodes = targetNode
+    ? [targetNode]
+    : run.nodes.filter((candidate) => candidate.kind === 'gate')
+  for (const node of reviewNodes.filter(
+    (candidate) => candidate.kind === 'gate' || candidate.kind === 'acceptance',
+  )) {
     for (const document of documentsForNode(node, documents)) {
       pushReference(references, {
         runId: run.id,
@@ -710,6 +787,7 @@ export function buildKnowledgeGovernanceChecks({
     ...(chunks ? { chunks } : {}),
     testEvidence,
     retriever,
+    targetNode: node,
   })
   const runEvidence = testEvidence.filter((evidence) => evidence.runId === run.id)
 

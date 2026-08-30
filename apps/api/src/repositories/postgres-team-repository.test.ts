@@ -183,6 +183,10 @@ class FakeTeamDbClient implements TeamDbRepositoryClient {
         : []) as T[]
     }
 
+    if (sql.includes('INSERT INTO desktop_pairing_codes')) {
+      return [{ id: params?.[0], issued_role: 'lead' }] as T[]
+    }
+
     if (sql.includes('FROM projects')) {
       return [
         {
@@ -262,10 +266,13 @@ class FakeTeamDbClient implements TeamDbRepositoryClient {
           organization_id: 'org-demo',
           project_id: 'p-payments',
           user_id: 'u-ling',
+          issued_role: 'lead',
           token_hash: 'cd577fe2561ebff23505db0bb006300c7cdecbd46bc0e03c449afafaca2c25bf',
+          expires_at: '2999-01-01T00:00:00.000Z',
           revoked_at: null,
-          role: this.desktopUserRole,
           auth_account_id: 'acct-github-ling',
+          user_name: 'Ling',
+          project_name: 'Payments API',
         },
       ] as T[]
     }
@@ -430,6 +437,7 @@ class FakeTeamDbClient implements TeamDbRepositoryClient {
           version: '0.1.0',
           enabled: true,
           source: 'team',
+          issued_role: 'lead',
         },
       ] as T[]
     }
@@ -478,9 +486,11 @@ class PairingExchangeDbClient extends FakeTeamDbClient {
         organization_id: 'org-demo',
         project_id: 'p-payments',
         created_by_user_id: 'u-ling',
+        issued_role: 'lead',
         code_hash: createHash('sha256').update('copy-once-secret').digest('hex'),
         expires_at: '2999-01-01T00:00:00.000Z',
         consumed_at: this.consumedAt,
+        revoked_at: null,
         failed_attempts: this.failedAttempts,
         created_at: '2026-06-20T00:00:00.000Z',
       }] as T[]
@@ -493,10 +503,13 @@ class PairingExchangeDbClient extends FakeTeamDbClient {
         organization_id: params?.[1],
         project_id: params?.[2],
         user_id: params?.[3],
-        token_hash: params?.[4],
+        issued_role: params?.[4],
+        token_hash: params?.[5],
+        expires_at: params?.[7],
         revoked_at: null,
-        role: 'lead',
         auth_account_id: 'acct-github-ling',
+        user_name: 'Ling',
+        project_name: 'Payments API',
       }
       return []
     }
@@ -518,6 +531,61 @@ class PairingExchangeDbClient extends FakeTeamDbClient {
       return [this.tokenRow] as T[]
     }
 
+    return super.query<T>(sql, params)
+  }
+}
+
+class DesktopTokenSecurityDbClient extends FakeTeamDbClient {
+  constructor(
+    liveRole: 'owner' | 'lead' | 'member',
+    private readonly security: {
+      issuedRole?: 'owner' | 'lead' | 'member'
+      membershipActive?: boolean
+      expiresAt?: string
+      revokedAt?: string | null
+    } = {},
+  ) {
+    super(true, true, liveRole)
+  }
+
+  override async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    if (sql.includes('FROM desktop_tokens')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [{
+        token_id: 'desktop-token-p-payments',
+        organization_id: 'org-demo',
+        project_id: 'p-payments',
+        user_id: 'u-ling',
+        issued_role: this.security.issuedRole ?? 'lead',
+        token_hash: 'cd577fe2561ebff23505db0bb006300c7cdecbd46bc0e03c449afafaca2c25bf',
+        expires_at: this.security.expiresAt ?? '2999-01-01T00:00:00.000Z',
+        revoked_at: this.security.revokedAt ?? null,
+        auth_account_id: 'acct-github-ling',
+        user_name: 'Ling',
+        project_name: 'Payments API',
+      }] as T[]
+    }
+    if (
+      sql.includes('FROM project_members') &&
+      params?.length === 3 &&
+      this.security.membershipActive === false
+    ) {
+      this.queries.push({ sql, params })
+      return []
+    }
+    return super.query<T>(sql, params)
+  }
+}
+
+class PairingRevocationDbClient extends FakeTeamDbClient {
+  override async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    if (
+      (sql.includes('UPDATE desktop_pairing_codes') || sql.includes('UPDATE desktop_tokens')) &&
+      sql.includes('SET revoked_at')
+    ) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [{ id: params?.[0] }] as T[]
+    }
     return super.query<T>(sql, params)
   }
 }
@@ -1927,16 +1995,48 @@ describe('Postgres team repository', () => {
       organizationId: 'org-demo',
       projectId: 'p-payments',
       createdByUserId: 'u-ling',
+      issuedRole: 'lead',
       attemptsRemaining: 5,
     })
     expect(result.code).toContain('.')
     const insert = db.queries.find((query) => query.sql.includes('INSERT INTO desktop_pairing_codes'))
     expect(insert?.sql).toMatch(/INSERT INTO desktop_pairing_codes[\s\S]+SELECT[\s\S]+FROM projects/)
     expect(insert?.sql).toMatch(/projects\.organization_id\s*=\s*\$2/)
+    expect(insert?.sql).toContain('JOIN project_members')
+    expect(insert?.sql).toContain("project_members.role = 'owner'")
     const write = db.queries.find((query) => query.sql.includes('INSERT INTO desktop_pairing_codes'))
     expect(write?.params).toHaveLength(8)
     expect(write?.params).not.toContain(result.code)
     expect(write?.params).not.toContain(result.code.split('.')[1])
+  })
+
+  it('revokes pairing codes and tokens only within the authenticated subject scope', async () => {
+    const db = new PairingRevocationDbClient()
+    const repository = createPostgresTeamRepository(db)
+    const context = { organizationId: 'org-demo', userId: 'u-ling' }
+    await expect(repository.revokeDesktopPairingCode({
+      projectId: 'p-payments',
+      pairingCodeId: 'pair-1',
+    }, context)).resolves.toBe(true)
+    await expect(repository.revokeDesktopToken({
+      projectId: 'p-payments',
+      tokenId: 'desktop-token-1',
+    }, context)).resolves.toBe(true)
+
+    const pairingRevoke = db.queries.find(({ sql }) =>
+      sql.includes('UPDATE desktop_pairing_codes') && sql.includes('SET revoked_at'),
+    )
+    const tokenRevoke = db.queries.find(({ sql }) =>
+      sql.includes('UPDATE desktop_tokens') && sql.includes('SET revoked_at'),
+    )
+    expect(pairingRevoke?.sql).toContain('created_by_user_id = $4')
+    expect(tokenRevoke?.sql).toContain('user_id = $4')
+    expect(pairingRevoke?.params?.slice(0, 4)).toEqual([
+      'pair-1', 'org-demo', 'p-payments', 'u-ling',
+    ])
+    expect(tokenRevoke?.params?.slice(0, 4)).toEqual([
+      'desktop-token-1', 'org-demo', 'p-payments', 'u-ling',
+    ])
   })
 
   it('locks and consumes a desktop pairing code in the same transaction as token creation', async () => {
@@ -2026,6 +2126,10 @@ describe('Postgres team repository', () => {
 
     await expect(repository.resolveDesktopTokenSession('desktop-token-p-payments.demo-secret')).resolves.toEqual({
       tokenRecordId: 'desktop-token-p-payments',
+      issuedRole: 'lead',
+      expiresAt: '2999-01-01T00:00:00.000Z',
+      userName: 'Ling',
+      projectName: 'Payments API',
       session: {
         source: 'authenticated',
         organizationId: 'org-demo',
@@ -2051,7 +2155,7 @@ describe('Postgres team repository', () => {
     expect(membershipQuery?.params).toEqual(['u-ling', 'p-payments', 'org-demo'])
   })
 
-  it('preserves organization-owner authority for desktop bearer budget approvals', async () => {
+  it('caps organization-owner desktop bearer authority at its issued lead role', async () => {
     const repository = createPostgresTeamRepository(new FakeTeamDbClient(true, true, 'owner'))
 
     await expect(
@@ -2059,12 +2163,60 @@ describe('Postgres team repository', () => {
     ).resolves.toMatchObject({
       tokenRecordId: 'desktop-token-p-payments',
       session: {
-        role: 'owner',
+        role: 'lead',
         projectMemberships: [
-          { projectId: 'p-payments', userId: 'u-ling', role: 'owner' },
+          { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
         ],
       },
     })
+  })
+
+  it('downgrades a Desktop token to the current project membership and never upgrades it', async () => {
+    const downgraded = createPostgresTeamRepository(
+      new DesktopTokenSecurityDbClient('member', { issuedRole: 'lead' }),
+    )
+    await expect(
+      downgraded.resolveDesktopTokenSession('desktop-token-p-payments.demo-secret'),
+    ).resolves.toMatchObject({
+      issuedRole: 'lead',
+      session: {
+        role: 'member',
+        projectMemberships: [
+          { projectId: 'p-payments', userId: 'u-ling', role: 'member' },
+        ],
+      },
+    })
+
+    const notUpgraded = createPostgresTeamRepository(
+      new DesktopTokenSecurityDbClient('owner', { issuedRole: 'member' }),
+    )
+    await expect(
+      notUpgraded.resolveDesktopTokenSession('desktop-token-p-payments.demo-secret'),
+    ).resolves.toMatchObject({
+      issuedRole: 'member',
+      session: { role: 'member' },
+    })
+  })
+
+  it('fails closed after project membership removal, token expiry, or revocation', async () => {
+    const removed = createPostgresTeamRepository(
+      new DesktopTokenSecurityDbClient('lead', { membershipActive: false }),
+    )
+    const expired = createPostgresTeamRepository(
+      new DesktopTokenSecurityDbClient('lead', { expiresAt: '2000-01-01T00:00:00.000Z' }),
+    )
+    const revoked = createPostgresTeamRepository(
+      new DesktopTokenSecurityDbClient('lead', { revokedAt: '2026-08-01T00:00:00.000Z' }),
+    )
+    await expect(
+      removed.resolveDesktopTokenSession('desktop-token-p-payments.demo-secret'),
+    ).resolves.toBeNull()
+    await expect(
+      expired.resolveDesktopTokenSession('desktop-token-p-payments.demo-secret'),
+    ).resolves.toBeNull()
+    await expect(
+      revoked.resolveDesktopTokenSession('desktop-token-p-payments.demo-secret'),
+    ).resolves.toBeNull()
   })
 
   it('writes run summaries into workflow_runs with tenant context', async () => {
@@ -2643,6 +2795,51 @@ describe('Postgres team repository', () => {
           missingEvidenceCount: 0,
           policyFindingCount: 0,
           policyFindingCategories: [],
+          contextManifest: {
+            version: 1,
+            stage: 'design',
+            coverage: 'complete',
+            runRequest: {
+              contentDigest: 'a'.repeat(64),
+              sanitizerVersion: 'sensitive-text-v1',
+              coverage: 'complete',
+            },
+            subjectArtifacts: [{
+              id: 'art-design',
+              runId: 'run-synced',
+              nodeId: 'n-design',
+              kind: 'design',
+              updatedAt: '2026-06-16T12:05:00.000Z',
+              contentDigest: 'b'.repeat(64),
+              sanitizerVersion: 'sensitive-text-v1',
+              coverage: 'complete',
+              chunks: [{
+                index: 0,
+                start: 0,
+                end: 20,
+                contentDigest: 'c'.repeat(64),
+              }],
+            }],
+            knowledgeCriteria: [{
+              referenceId: 'knowledge-ref-1',
+              documentId: 'knowledge-doc-1',
+              chunkId: 'knowledge-chunk-1',
+              contentHash: 'kh-safe',
+              strategy: 'lexical',
+              lexicalMatch: {
+                rawScore: 5,
+                matchedTerms: ['design', 'contract'],
+                normalized: false,
+                crossQueryComparable: false,
+                source: 'retriever',
+              },
+              gateEvidence: {
+                status: 'reviewed_reference',
+                reviewId: 'review-synced',
+              },
+            }],
+            criteriaCoverage: 'available',
+          },
           advisoryLevel: 'info',
           blocksApproval: false,
           confidence: 0.9,
@@ -2658,7 +2855,30 @@ describe('Postgres team repository', () => {
 
     expect(db.queries.some((query) => query.sql.includes('INSERT INTO workflow_runs'))).toBe(false)
     expect(db.queries.some((query) => query.sql.includes('FROM workflow_runs'))).toBe(true)
-    expect(db.queries.at(-1)?.sql).toContain('INSERT INTO agent_reviews')
+    const reviewWrite = db.queries.at(-1)
+    expect(reviewWrite?.sql).toContain('INSERT INTO agent_reviews')
+    expect(reviewWrite?.sql).toContain('context_manifest')
+    expect(JSON.stringify(reviewWrite?.params)).toContain('art-design')
+    expect(JSON.stringify(reviewWrite?.params)).toContain('b'.repeat(64))
+    const persistedManifestText = reviewWrite?.params?.find(
+      (parameter) => typeof parameter === 'string' && parameter.includes('"knowledgeCriteria"'),
+    )
+    const persistedManifest = JSON.parse(String(persistedManifestText)) as {
+      knowledgeCriteria: Array<Record<string, unknown>>
+    }
+    expect(persistedManifest.knowledgeCriteria[0]).toMatchObject({
+      lexicalMatch: {
+        rawScore: 5,
+        normalized: false,
+        crossQueryComparable: false,
+      },
+      gateEvidence: {
+        status: 'reviewed_reference',
+        reviewId: 'review-synced',
+      },
+    })
+    expect(JSON.stringify(reviewWrite?.params)).toContain('reviewed_reference')
+    expect(JSON.stringify(reviewWrite?.params)).not.toContain('Payments private content')
   })
 
   it('persists synced agent policy findings for canonical enforcement evaluation', async () => {

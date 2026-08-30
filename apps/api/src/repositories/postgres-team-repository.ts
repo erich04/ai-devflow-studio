@@ -311,6 +311,7 @@ type AgentReviewRow = {
   policy_findings: unknown
   confidence: string | number
   gate_advisory: unknown
+  context_manifest?: unknown
   created_at: TimestampValue
 }
 
@@ -495,9 +496,11 @@ type DesktopPairingCodeRow = {
   organization_id: string
   project_id: string
   created_by_user_id: string
+  issued_role: Role | null
   code_hash: string
   expires_at: TimestampValue
   consumed_at: TimestampValue | null
+  revoked_at: TimestampValue | null
   failed_attempts: number
   created_at: TimestampValue
 }
@@ -507,14 +510,24 @@ type DesktopTokenSessionRow = {
   organization_id: string
   project_id: string
   user_id: string
+  issued_role: Role | null
   token_hash: string
+  expires_at: TimestampValue
   revoked_at: TimestampValue | null
-  role: Role
   auth_account_id: string
+  user_name: string
+  project_name: string
 }
 
 function timestamp(value: TimestampValue): string {
   return value instanceof Date ? value.toISOString() : value
+}
+
+const DESKTOP_TOKEN_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000
+
+function capDesktopRole(issuedRole: Role, liveRole: Role): Role {
+  const rank: Record<Role, number> = { member: 1, lead: 2, owner: 3 }
+  return rank[liveRole] <= rank[issuedRole] ? liveRole : issuedRole
 }
 
 function groupBy<T>(items: T[], key: (item: T) => string): Map<string, T[]> {
@@ -826,6 +839,9 @@ function mapAgentReview(row: AgentReviewRow): AgentReviewResult {
     policyFindings: readArray(row.policy_findings),
     confidence: Number(row.confidence),
     gateAdvisory: row.gate_advisory as AgentReviewResult['gateAdvisory'],
+    ...(row.context_manifest && typeof row.context_manifest === 'object'
+      ? { contextManifest: row.context_manifest as NonNullable<AgentReviewResult['contextManifest']> }
+      : {}),
     createdAt: timestamp(row.created_at),
   }
 }
@@ -1668,9 +1684,12 @@ export function createPostgresTeamRepository(
           desktop_tokens.organization_id,
           desktop_tokens.project_id,
           desktop_tokens.user_id,
+          desktop_tokens.issued_role,
           desktop_tokens.token_hash,
+          desktop_tokens.expires_at,
           desktop_tokens.revoked_at,
-          users.role,
+          users.name AS user_name,
+          projects.name AS project_name,
           auth_accounts.id AS auth_account_id
         FROM desktop_tokens
         JOIN users
@@ -1686,7 +1705,12 @@ export function createPostgresTeamRepository(
       [parsed.id],
     )
 
-    if (!tokenRow || tokenRow.revoked_at || tokenRow.token_hash !== hashSecret(parsed.secret)) {
+    if (
+      !tokenRow ||
+      tokenRow.revoked_at ||
+      Date.parse(timestamp(tokenRow.expires_at)) <= Date.now() ||
+      tokenRow.token_hash !== hashSecret(parsed.secret)
+    ) {
       return null
     }
 
@@ -1706,6 +1730,8 @@ export function createPostgresTeamRepository(
     if (!projectMembership) {
       return null
     }
+    const issuedRole = tokenRow.issued_role ?? 'lead'
+    const effectiveRole = capDesktopRole(issuedRole, projectMembership.role)
 
     await queryClient.query(
       `
@@ -1718,13 +1744,22 @@ export function createPostgresTeamRepository(
 
     return {
       tokenRecordId: tokenRow.token_id,
+      issuedRole,
+      ...(tokenRow.expires_at ? { expiresAt: timestamp(tokenRow.expires_at) } : {}),
+      ...(tokenRow.user_name ? { userName: tokenRow.user_name } : {}),
+      ...(tokenRow.project_name ? { projectName: tokenRow.project_name } : {}),
       session: {
         source: 'authenticated',
         organizationId: tokenRow.organization_id,
         userId: tokenRow.user_id,
-        role: projectMembership.role,
+        role: effectiveRole,
         authAccountId: tokenRow.auth_account_id,
-        projectMemberships: [mapProjectMembership(projectMembership)],
+        projectMemberships: [
+          {
+            ...mapProjectMembership(projectMembership),
+            role: effectiveRole,
+          },
+        ],
       },
     }
   }
@@ -1817,13 +1852,14 @@ export function createPostgresTeamRepository(
       const createdAt = new Date().toISOString()
       const expiresAt = new Date(Date.parse(createdAt) + 10 * 60 * 1000).toISOString()
 
-      const [acceptedPairingCode] = await db.query<{ id: string }>(
+      const [acceptedPairingCode] = await db.query<{ id: string; issued_role: Role }>(
         `
           INSERT INTO desktop_pairing_codes (
             id,
             organization_id,
             project_id,
             created_by_user_id,
+            issued_role,
             code_hash,
             expires_at,
             failed_attempts,
@@ -1834,6 +1870,7 @@ export function createPostgresTeamRepository(
             projects.organization_id,
             projects.id,
             users.id,
+            CASE WHEN project_members.role = 'owner' THEN 'lead' ELSE project_members.role END,
             $5,
             $6,
             $7,
@@ -1842,9 +1879,12 @@ export function createPostgresTeamRepository(
           JOIN users
             ON users.id = $4
            AND users.organization_id = projects.organization_id
+          JOIN project_members
+            ON project_members.project_id = projects.id
+           AND project_members.user_id = users.id
           WHERE projects.id = $3
             AND projects.organization_id = $2
-          RETURNING id
+          RETURNING id, issued_role
         `,
         [
           id,
@@ -1866,6 +1906,7 @@ export function createPostgresTeamRepository(
         organizationId: context.organizationId,
         projectId: input.projectId,
         createdByUserId: context.userId,
+        issuedRole: acceptedPairingCode.issued_role,
         code: `${id}.${secret}`,
         expiresAt,
         createdAt,
@@ -1894,7 +1935,7 @@ export function createPostgresTeamRepository(
           throw new Error('invalid desktop pairing code')
         }
 
-        if (pairing.consumed_at || pairing.failed_attempts >= 5) {
+        if (pairing.consumed_at || pairing.revoked_at || pairing.failed_attempts >= 5) {
           throw new Error('invalid desktop pairing code')
         }
 
@@ -1918,6 +1959,8 @@ export function createPostgresTeamRepository(
         const tokenSecret = randomSecret(32)
         const token = `${tokenId}.${tokenSecret}`
         const createdAt = new Date().toISOString()
+        const expiresAt = new Date(Date.parse(createdAt) + DESKTOP_TOKEN_LIFETIME_MS).toISOString()
+        const issuedRole = pairing.issued_role ?? 'lead'
         await tx.query(
           `
             INSERT INTO desktop_tokens (
@@ -1925,18 +1968,22 @@ export function createPostgresTeamRepository(
               organization_id,
               project_id,
               user_id,
+              issued_role,
               token_hash,
-              created_at
+              created_at,
+              expires_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           `,
           [
             tokenId,
             pairing.organization_id,
             pairing.project_id,
             pairing.created_by_user_id,
+            issuedRole,
             hashSecret(tokenSecret),
             createdAt,
+            expiresAt,
           ],
         )
         const [consumedPairingCode] = await tx.query<{ id: string }>(
@@ -1968,6 +2015,10 @@ export function createPostgresTeamRepository(
             projectId: pairing.project_id,
             userId: session.userId,
             role: session.role,
+            issuedRole: resolvedSession.issuedRole ?? issuedRole,
+            expiresAt: resolvedSession.expiresAt ?? expiresAt,
+            ...(resolvedSession.userName ? { userName: resolvedSession.userName } : {}),
+            ...(resolvedSession.projectName ? { projectName: resolvedSession.projectName } : {}),
             authAccountId: session.authAccountId,
             projectMemberships: session.projectMemberships,
             createdAt,
@@ -1983,6 +2034,49 @@ export function createPostgresTeamRepository(
 
     async resolveDesktopTokenSession(token): Promise<ResolvedDesktopTokenSession | null> {
       return resolveDesktopTokenSessionFromToken(token)
+    },
+
+    async revokeDesktopPairingCode(input, context) {
+      const revokedAt = new Date().toISOString()
+      const [revoked] = await db.query<{ id: string }>(
+        `
+          UPDATE desktop_pairing_codes
+          SET revoked_at = $5
+          WHERE id = $1
+            AND organization_id = $2
+            AND project_id = $3
+            AND created_by_user_id = $4
+            AND consumed_at IS NULL
+            AND revoked_at IS NULL
+          RETURNING id
+        `,
+        [
+          input.pairingCodeId,
+          context.organizationId,
+          input.projectId,
+          context.userId,
+          revokedAt,
+        ],
+      )
+      return Boolean(revoked)
+    },
+
+    async revokeDesktopToken(input, context) {
+      const revokedAt = new Date().toISOString()
+      const [revoked] = await db.query<{ id: string }>(
+        `
+          UPDATE desktop_tokens
+          SET revoked_at = $5
+          WHERE id = $1
+            AND organization_id = $2
+            AND project_id = $3
+            AND user_id = $4
+            AND revoked_at IS NULL
+          RETURNING id
+        `,
+        [input.tokenId, context.organizationId, input.projectId, context.userId, revokedAt],
+      )
+      return Boolean(revoked)
     },
 
     async getRunsBundle(context) {
@@ -2663,9 +2757,10 @@ export function createPostgresTeamRepository(
             policy_findings,
             confidence,
             gate_advisory,
+            context_manifest,
             created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, '[]'::jsonb, '[]'::jsonb, $14::jsonb, $15, $16::jsonb, $17)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, '[]'::jsonb, '[]'::jsonb, $14::jsonb, $15, $16::jsonb, $17::jsonb, $18)
           ON CONFLICT (id) DO UPDATE
           SET conclusion = excluded.conclusion,
               summary = excluded.summary,
@@ -2673,7 +2768,8 @@ export function createPostgresTeamRepository(
               missing_evidence = excluded.missing_evidence,
               policy_findings = excluded.policy_findings,
               confidence = excluded.confidence,
-              gate_advisory = excluded.gate_advisory
+              gate_advisory = excluded.gate_advisory,
+              context_manifest = excluded.context_manifest
           WHERE agent_reviews.organization_id = excluded.organization_id
             AND agent_reviews.run_id = excluded.run_id
             AND agent_reviews.node_id = excluded.node_id
@@ -2712,6 +2808,7 @@ export function createPostgresTeamRepository(
             riskCount: summary.riskCount,
             createdAt: summary.createdAt,
           }),
+          summary.contextManifest ? JSON.stringify(summary.contextManifest) : null,
           summary.createdAt,
         ],
       )
@@ -3516,9 +3613,10 @@ export function createPostgresTeamRepository(
             policy_findings,
             confidence,
             gate_advisory,
+            context_manifest,
             created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18::jsonb, $19)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18::jsonb, $19::jsonb, $20)
           ON CONFLICT (id) DO UPDATE
           SET conclusion = excluded.conclusion,
               summary = excluded.summary,
@@ -3528,7 +3626,8 @@ export function createPostgresTeamRepository(
               knowledge_references = excluded.knowledge_references,
               policy_findings = excluded.policy_findings,
               confidence = excluded.confidence,
-              gate_advisory = excluded.gate_advisory
+              gate_advisory = excluded.gate_advisory,
+              context_manifest = excluded.context_manifest
         `,
         [
           bundle.review.id,
@@ -3549,6 +3648,7 @@ export function createPostgresTeamRepository(
           JSON.stringify(bundle.review.policyFindings),
           bundle.review.confidence,
           JSON.stringify(bundle.review.gateAdvisory),
+          bundle.review.contextManifest ? JSON.stringify(bundle.review.contextManifest) : null,
           bundle.review.createdAt,
         ],
       )

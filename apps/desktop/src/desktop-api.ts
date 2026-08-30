@@ -8,6 +8,7 @@ import type {
   CodingAgentRun,
   CodingChangeSetPreview,
   CodingRuntimeConfiguration,
+  CodingRuntimeDiscovery,
   CodingRuntimeReadiness,
   CodingAgentEvent,
   CodingPermissionDecision,
@@ -323,9 +324,15 @@ export type DevFlowDesktopApi = {
   }) => Promise<CodingRuntimeConfiguration | null>
   saveCodingRuntimeConfiguration: (input: {
     projectId: string
-    executor: 'native-model'
+    executor: 'native-model' | 'opencode-http'
     providerId: string
+    binaryPath?: string
+    modelId?: string
+    detectedVersion?: string
   }) => Promise<CodingRuntimeConfiguration>
+  detectCodingRuntimeEngines: (input: {
+    projectId: string
+  }) => Promise<CodingRuntimeDiscovery>
   getCodingRuntimeReadiness: (input: {
     runId: string
     nodeId: string

@@ -18,7 +18,18 @@ the governance layer harder to audit and harder to explain to teams.
 ## Decision
 
 Treat Knowledge Retrieval as a recommendation layer. Retrieval can create or explain Knowledge
-References, including source chunks, scores, strategies, and content hashes.
+References, including source chunks, typed relevance, strategies, and content hashes.
+
+The data contract keeps three meanings separate:
+
+- `lexicalMatch` is a raw additive keyword match. It is not normalized and cannot be compared
+  across queries.
+- `semanticRelevance` exists only when a semantic retriever actually produced it.
+- `gateEvidence` records whether a completed Review used a reference; the Review or finding is the
+  auditable Evidence, not the reference itself.
+
+Historical `score` values remain readable according to their recorded retrieval strategy, but a
+lexical score is never presented as semantic relevance or Gate Evidence.
 
 Knowledge Governance Checks must still be driven by auditable workflow evidence:
 
@@ -33,5 +44,7 @@ Knowledge Governance Checks must still be driven by auditable workflow evidence:
 - Future RAG implementations can improve recall and explanation without rewriting the governance UI.
 - Reviewers can inspect retrieval provenance while still asking for concrete evidence.
 - The product avoids treating model or search confidence as proof of compliance.
+- Inspector renders Knowledge provenance under `引用来源` and auditable workflow results under
+  `Evidence`; one reference is not duplicated across both meanings.
 - Enforcement work in v0.5 can reuse Knowledge Governance Checks without depending on a specific
   retrieval provider.

@@ -14,9 +14,13 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import type * as React from 'react'
 import {
   formatUsd,
+  projectKnowledgeReferencesForNode,
+  resolveKnowledgeReferenceSemantics,
+  workflowContextField,
   type AgentEvent,
   type AgentReviewResult,
   type Artifact,
+  type CodingRuntimeReadiness,
   type DataOrigin,
   type GateEnforcementDecision,
   type GateOverrideDecision,
@@ -40,11 +44,14 @@ import {
 } from '@ai-devflow/shared'
 import { GateEnforcementPanel, GateRemediationPanel } from '../GateEnforcementPanel'
 import { GitHubDeliveryPanel } from '../GitHubDeliveryPanel'
+import { buildCodingReadinessDisplay } from '../app/coding-runtime-readiness-view-model'
 import {
+  buildWorkflowNodePresentation,
   buildWorkflowBoard,
   currentRunPhaseCopy,
   displayNodeSubtitle,
   displayNodeTitle,
+  getNodeStatusTone,
   matchesQuery,
   stageOrder,
   stageLabels,
@@ -60,6 +67,7 @@ import {
   type InspectorSectionId,
   type PendingInspectorAction,
 } from '../app/node-inspector-view-model'
+import { buildWorkflowGateImpact } from '../app/workflow-gate-impact'
 
 export { AgentWorkbenchView } from './AgentWorkbenchView'
 export { LocalProjectPanel, Metric, NavButton, ThemeToggle } from './ShellControls'
@@ -67,14 +75,7 @@ export { McpView, SkillView, TestsView } from './SupportViews'
 
 export function AppNode({ data, selected }: NodeProps<Node<{ workflowNode: WorkflowNode }>>) {
   const workflowNode = data.workflowNode
-  const statusLabel = {
-    pending: 'Pending',
-    running: 'Running',
-    blocked: 'Gate',
-    success: 'Done',
-    failed: 'Failed',
-    skipped: 'Skipped',
-  }[workflowNode.status]
+  const presentation = buildWorkflowNodePresentation(workflowNode)
 
   return (
     <div
@@ -83,12 +84,13 @@ export function AppNode({ data, selected }: NodeProps<Node<{ workflowNode: Workf
     >
       <div className="flow-node__top">
         <span className="flow-node__stage">{stageLabels[workflowNode.stage]}</span>
-        <span className="flow-node__status">{statusLabel}</span>
+        <span className="flow-node__status">{presentation.statusLabel}</span>
       </div>
       <strong>{displayNodeTitle(workflowNode)}</strong>
       <p>{displayNodeSubtitle(workflowNode)}</p>
       <div className="flow-node__meta">
-        <span>{workflowNode.kind}</span>
+        <span>{presentation.nodeKindLabel}</span>
+        <span>来源：{presentation.sourceLabel}</span>
         <span>{workflowNode.retryCount} retries</span>
       </div>
     </div>
@@ -148,7 +150,8 @@ export function WorkflowBoard({
           </div>
         </div>
         <div className="board-semantics" aria-label="卡片阅读方式">
-          <span className="semantic-chip"><strong>主卡片</strong>只放 Task / Gate / Review / Delivery Step</span>
+          <span className="semantic-chip"><strong>节点类型</strong>Task / Gate / Test / Delivery / Acceptance</span>
+          <span className="semantic-chip"><strong>节点来源</strong>与展示方式分开标注</span>
           <span className="semantic-chip"><strong>卡片底部</strong>显示 Artifact / Evidence / Trace 摘要</span>
           <span className="semantic-chip"><strong>Inspector</strong>按节点类型显示不同诊断 tab</span>
         </div>
@@ -161,9 +164,28 @@ export function WorkflowBoard({
               <strong>{stage.label}</strong>
               <em>{stage.completionLabel}</em>
             </div>
-            <p className={`stage-provenance stage-provenance--${stage.completionState}`}>
-              {stage.provenanceSummary}
-            </p>
+            <div
+              className={`stage-provenance stage-provenance--${stage.completionState}`}
+              data-testid={`stage-summary-${stage.stage}`}
+            >
+              {stage.summary.totalNodeCount === 0 ? (
+                <span>当前阶段没有节点</span>
+              ) : (
+                <>
+                  <span>
+                    节点：{stage.summary.nodeKinds.map((item) => `${item.label} ${item.count}`).join(' · ')}
+                  </span>
+                  <span title="节点由哪个工作流来源提供">
+                    来源：{stage.summary.sources.map((item) => `${item.label} ${item.count}`).join(' · ')}
+                  </span>
+                  {stage.summary.specialDisplayModes.length ? (
+                    <span title="仅列出非标准的特殊展示方式">
+                      展示：{stage.summary.specialDisplayModes.map((item) => `${item.label} ${item.count}`).join(' · ')}
+                    </span>
+                  ) : null}
+                </>
+              )}
+            </div>
             <div className={`stage-progress stage-progress--${stage.completionState}`} />
             <div className="stage-cards">
               {stage.cards.map((card) => (
@@ -176,11 +198,14 @@ export function WorkflowBoard({
                   onClick={() => onSelectNode(card.node.id)}
                 >
                   <div className="row">
-                    <span className="pill soft">{card.visualKind}</span>
+                    <span className="pill soft" title="节点类型">{card.presentation.nodeKindLabel}</span>
                     <span className={`pill ${card.statusTone}`}>{card.statusLabel}</span>
                   </div>
                   <div className="card-provenance">
-                    <span>{card.provenanceLabel}</span>
+                    <span title="节点来源">来源：{card.presentation.sourceLabel}</span>
+                    {card.presentation.displayMode === 'folded' ? (
+                      <span title="展示方式">展示：{card.presentation.displayModeLabel}</span>
+                    ) : null}
                   </div>
                   <strong>{displayNodeTitle(card.node)}</strong>
                   <p>{displayNodeSubtitle(card.node)}</p>
@@ -206,11 +231,14 @@ export function Inspector({
   selectedNode,
   isSelectedCurrentNode,
   artifacts,
+  workflowArtifacts,
   events,
+  testEvidence,
   governanceChecks,
   references,
   latestAgentReview,
   supportContext,
+  onConsumeSupportContext,
   policySnapshot,
   gateEnforcementDecision,
   gateOverrides,
@@ -237,6 +265,7 @@ export function Inspector({
   onStopGitHubDelivery,
   onVerifyGitHubDeliveryRevocation,
   onCreateAcceptanceBundle,
+  onSelectWorkflowNode,
   selectedGitHubDeliveryIntent,
   selectedGitHubDeliveryOperatorOutcome,
   selectedGitHubDeliveryRevocationCheck,
@@ -245,16 +274,22 @@ export function Inspector({
   isRunningAgentReview,
   isStartingCodingAgent,
   pendingInspectorAction,
+  codingReadiness,
+  codingReadinessError,
+  onOpenCodingConfiguration,
 }: {
   selectedRun: WorkflowRun | undefined
   selectedNode: WorkflowNode | undefined
   isSelectedCurrentNode: boolean
   artifacts: Artifact[]
+  workflowArtifacts: Artifact[]
   events: AgentEvent[]
+  testEvidence: TestEvidence[]
   governanceChecks: KnowledgeGovernanceCheck[]
   references: KnowledgeReference[]
   latestAgentReview: AgentReviewResult | undefined
   supportContext: SupportContext | null
+  onConsumeSupportContext?: () => void
   policySnapshot: PolicySnapshot | null
   gateEnforcementDecision: GateEnforcementDecision | null
   gateOverrides: GateOverrideDecision[]
@@ -281,6 +316,7 @@ export function Inspector({
   onStopGitHubDelivery: () => void
   onVerifyGitHubDeliveryRevocation: () => void
   onCreateAcceptanceBundle: () => void
+  onSelectWorkflowNode: (nodeId: string) => void
   selectedGitHubDeliveryIntent: GitHubDeliveryIntent | undefined
   selectedGitHubDeliveryOperatorOutcome?: GitHubDeliveryOperatorOutcome
   selectedGitHubDeliveryRevocationCheck?: GitHubDeliveryRevocationCheck
@@ -289,6 +325,9 @@ export function Inspector({
   isRunningAgentReview: boolean
   isStartingCodingAgent: boolean
   pendingInspectorAction: PendingInspectorAction | null
+  codingReadiness: CodingRuntimeReadiness | null
+  codingReadinessError: string
+  onOpenCodingConfiguration: () => void
 }) {
   const [requestedTab, setRequestedTab] = useState('状态')
 
@@ -304,18 +343,30 @@ export function Inspector({
     }
 
     setRequestedTab(supportContext.inspectorTab)
-  }, [selectedNode, selectedRun, supportContext])
+    onConsumeSupportContext?.()
+  }, [onConsumeSupportContext, selectedNode, selectedRun, supportContext])
 
   if (!selectedNode) {
     return <aside className="inspector">请选择一个节点</aside>
   }
 
+  const reviewSubjectArtifactIds = latestAgentReview?.contextManifest?.subjectArtifacts.map(
+    (artifact) => artifact.id,
+  ) ?? selectedNode.artifactIds
+  const scopedReferences = projectKnowledgeReferencesForNode({
+    node: selectedNode,
+    references: latestAgentReview?.knowledgeReferences ?? references,
+    subjectArtifactIds: reviewSubjectArtifactIds,
+    testEvidenceIds: testEvidence.map((evidence) => evidence.id),
+  })
   const viewModel = buildNodeInspectorViewModel({
     node: selectedNode,
     requestedTab,
     isSelectedCurrentNode,
     artifacts,
     events,
+    knowledgeReferenceCount: scopedReferences.length,
+    testEvidenceCount: testEvidence.length,
     latestAgentReview,
     policySnapshot,
     gateEnforcementDecision,
@@ -330,6 +381,9 @@ export function Inspector({
       ? { githubDeliveryOperatorOutcome: selectedGitHubDeliveryOperatorOutcome }
       : {}),
   })
+  const gateImpact = selectedRun
+    ? buildWorkflowGateImpact({ run: selectedRun, node: selectedNode, artifacts: workflowArtifacts })
+    : { state: 'none' as const, summary: '当前节点不影响后续 Gate。' }
   const focusedArtifactId =
     supportContext?.focusTarget === 'artifact' &&
     supportContext.runId === selectedRun?.id &&
@@ -394,13 +448,20 @@ export function Inspector({
   }
   const isActionWriteLocked = (action: InspectorAction) => writeActionIds.has(action.id) && hasInspectorWriteLock
   const isActionDisabled = (action: InspectorAction) =>
-    action.disabledReasons.some((reason) => isDisabledReasonActive(reason)) || isActionWriteLocked(action)
+    action.disabledReasons.some((reason) => isDisabledReasonActive(reason)) ||
+    isActionWriteLocked(action) ||
+    (action.id === 'runCodingAgent' && codingReadiness?.status !== 'ready')
   const actionTitle = (action: InspectorAction) => {
     if (isActionWriteLocked(action) && !action.disabledReasons.some((reason) => isDisabledReasonActive(reason))) {
       return pendingMatchesSelectedNode ? '当前节点操作正在进行中' : '其他 Inspector 操作正在进行中'
     }
     if (action.disabledReasons.includes('team_project_binding_missing') && !hasDeliveryProjectBinding) {
       return '先绑定当前 Local Project 与 Team Project'
+    }
+    if (action.id === 'runCodingAgent' && codingReadiness?.status !== 'ready') {
+      return codingReadiness?.checks.find((check) => check.status === 'blocked')?.message ??
+        codingReadinessError ??
+        '正在读取 Coding Runtime Readiness'
     }
     return undefined
   }
@@ -497,15 +558,56 @@ export function Inspector({
   const secondaryNextActions = viewModel.nextAction.secondaryActionIds
     .filter((actionId) => actionId !== viewModel.nextAction.primaryActionId)
     .map((actionId) => viewModel.actionCatalog[actionId])
+  const codingReadinessDisplay = codingReadiness
+    ? buildCodingReadinessDisplay(codingReadiness)
+    : null
+  const exposesCodingAction = primaryNextAction?.id === 'runCodingAgent' ||
+    secondaryNextActions.some((action) => action.id === 'runCodingAgent')
+
+  const retrievalStrategyLabel = (reference: KnowledgeReference) => ({
+    heuristic: '启发式检索',
+    lexical: '词法检索',
+    vector: '向量语义检索',
+    hybrid: '混合检索',
+  } as const)[reference.strategy ?? 'lexical']
+  const renderReferenceSemantics = (reference: KnowledgeReference) => {
+    const semantics = resolveKnowledgeReferenceSemantics(reference)
+    const evidenceStatus = ({
+      retrieval_candidate: '检索候选',
+      reviewed_reference: '已审查引用',
+      supports_finding: '支持审查结论',
+      rejected: '审查未采用',
+    } as const)[semantics.gateEvidence.status]
+
+    return (
+      <div className="knowledge-reference-meta" data-testid="knowledge-reference-semantics">
+        <span>{retrievalStrategyLabel(reference)}</span>
+        {semantics.lexicalMatch ? (
+          <span title="原始关键词累加分；无固定满分，不能跨查询比较，也不是语义或 Gate 合规评分。">
+            关键词匹配分 {semantics.lexicalMatch.rawScore}（原始累加）
+          </span>
+        ) : null}
+        {semantics.lexicalMatch?.matchedTerms.length ? (
+          <span>命中词：{semantics.lexicalMatch.matchedTerms.join('、')}</span>
+        ) : null}
+        {semantics.semanticRelevance ? (
+          <span>语义相关性 {semantics.semanticRelevance.score}</span>
+        ) : (
+          <span>未进行语义相关性判断</span>
+        )}
+        <span>Gate 使用状态：{evidenceStatus}</span>
+      </div>
+    )
+  }
 
   const renderGovernance = () => (
     <div className="governance-list">
       <span className="panel-label">Knowledge Governance</span>
       <p className="empty-note">Knowledge 是 Gate 审查依据；Gate 条件和阶段产物才是审查对象。</p>
       <ol className="knowledge-governance-flow" aria-label="Knowledge Governance 状态链" data-testid="knowledge-governance-flow">
-        <li className={references.length > 0 || governanceChecks.length > 0 ? 'is-complete' : 'is-pending'}>
+        <li className={scopedReferences.length > 0 || governanceChecks.length > 0 ? 'is-complete' : 'is-pending'}>
           <strong>1 · 找到候选</strong>
-          <span>{references.length > 0 || governanceChecks.length > 0 ? `${Math.max(references.length, governanceChecks.length)} 个` : '尚未找到'}</span>
+          <span>{scopedReferences.length > 0 || governanceChecks.length > 0 ? `${Math.max(scopedReferences.length, governanceChecks.length)} 个` : '尚未找到'}</span>
         </li>
         <li className={latestAgentReview ? 'is-complete' : 'is-pending'}>
           <strong>2 · 完成审查</strong>
@@ -521,7 +623,7 @@ export function Inspector({
       ) : (
         governanceChecks.map((check) => {
           const supportingReference = check.referenceIds
-            .map((referenceId) => references.find((reference) => reference.id === referenceId))
+            .map((referenceId) => scopedReferences.find((reference) => reference.id === referenceId))
             .find(Boolean)
 
           return (
@@ -538,10 +640,7 @@ export function Inspector({
                 <summary>查看候选详情</summary>
                 <div className="knowledge-reference-meta">
                   <code>{check.category}</code>
-                  {supportingReference?.strategy ? <span>{supportingReference.strategy}</span> : null}
-                  {typeof supportingReference?.score === 'number' ? (
-                    <span>score {supportingReference.score}</span>
-                  ) : null}
+                  {supportingReference ? renderReferenceSemantics(supportingReference) : null}
                   {supportingReference?.headingPath ? (
                     <span>{supportingReference.headingPath.join(' / ')}</span>
                   ) : null}
@@ -585,19 +684,31 @@ export function Inspector({
     </div>
   )
 
-  const renderEvidenceReferences = () => (
-    <div className="artifact-list" data-testid="gate-evidence-references">
-      <span className="panel-label">Evidence · 引用与证据</span>
-      {references.length === 0 ? (
-        <p className="empty-note">当前 Gate 还没有真实 Knowledge 引用；这里不会重复 Enforcement finding。</p>
+  const renderKnowledgeReferences = () => (
+    <div className="artifact-list" data-testid="knowledge-reference-sources">
+      <span className="panel-label">引用来源 · Review Criteria</span>
+      <p className="empty-note">
+        这里仅展示 Knowledge / Policy 来源。引用用于支持审查，不等于 Artifact、Test Evidence 或 Gate 通过结论。
+      </p>
+      {scopedReferences.length === 0 ? (
+        <p className="empty-note">当前 Gate 尚无节点作用域内的 Knowledge 引用。</p>
       ) : (
-        references.map((reference) => (
+        scopedReferences.map((reference) => (
           <article className="artifact-card" key={reference.id}>
             <div className="compact-row">
               <strong>{reference.sourcePath ?? reference.documentId}</strong>
               <span className="pill soft">{reference.relation}</span>
             </div>
             <p>{reference.reason}</p>
+            {renderReferenceSemantics(reference)}
+            <div className="knowledge-reference-meta">
+              <code>reference {reference.id}</code>
+              <code>document {reference.documentId}</code>
+              {reference.chunkId ? <code>chunk {reference.chunkId}</code> : null}
+              {reference.category ? <span>{reference.category}</span> : null}
+              {reference.headingPath?.length ? <span>{reference.headingPath.join(' / ')}</span> : null}
+              {reference.contentHash ? <code>{reference.contentHash}</code> : null}
+            </div>
             <button
               className="inline-link-button"
               type="button"
@@ -610,6 +721,88 @@ export function Inspector({
       )}
     </div>
   )
+
+  const renderReviewEvidence = () => {
+    const subjectManifest = latestAgentReview?.contextManifest?.subjectArtifacts ?? []
+    const subjectArtifacts = reviewSubjectArtifactIds.flatMap((artifactId) => {
+      const artifact = workflowArtifacts.find((candidate) => candidate.id === artifactId)
+      return artifact ? [artifact] : []
+    })
+    const testProjection = workflowContextField(viewModel.contextProjection, 'test_evidence')
+    const visibleTestEvidence = testProjection?.visible ? testEvidence : []
+    const hasEvidence = subjectArtifacts.length > 0 || Boolean(latestAgentReview) || visibleTestEvidence.length > 0
+
+    return (
+      <div className="artifact-list" data-testid="review-evidence-results">
+        <span className="panel-label">Evidence · 可审计结果</span>
+        <p className="empty-note">
+          这里展示被审查的 Artifact、门禁审查结果和当前阶段适用的 Test Evidence；Knowledge 引用只在“引用来源”中展示。
+        </p>
+        {!hasEvidence ? (
+          <p className="empty-note" data-testid="review-evidence-empty-state">
+            {testProjection?.state === 'missing_required'
+              ? `当前阶段缺少 Policy 要求的 Test Evidence。${testProjection.reason}`
+              : testProjection?.state === 'not_applicable'
+                ? '当前阶段不要求 Test Evidence，且尚未产生可审计的 Review 或 Artifact Evidence。'
+                : '当前节点尚未产生可审计 Evidence；检索候选不会在这里重复显示。'}
+          </p>
+        ) : null}
+        {subjectArtifacts.map((artifact) => {
+          const manifest = subjectManifest.find((candidate) => candidate.id === artifact.id)
+          return (
+            <article className="artifact-card" key={artifact.id}>
+              <div className="compact-row">
+                <strong>{artifact.title}</strong>
+                <span className="pill soft">Review Subject</span>
+              </div>
+              <p>{artifact.summary}</p>
+              <div className="knowledge-reference-meta">
+                <code>{artifact.id}</code>
+                <span>{artifact.kind}</span>
+                <span>revision {manifest?.updatedAt ?? artifact.updatedAt}</span>
+                {manifest?.contentDigest ? <code>{manifest.contentDigest}</code> : <span>legacy digest unavailable</span>}
+                <span>coverage {manifest?.coverage ?? 'legacy_unverifiable'}</span>
+              </div>
+            </article>
+          )
+        })}
+        {latestAgentReview ? (
+          <article className={`agent-advisory agent-advisory--${latestAgentReview.gateAdvisory.level}`}>
+            <div className="compact-row">
+              <strong>{latestAgentReview.conclusion}</strong>
+              <span>{Math.round(latestAgentReview.confidence * 100)}%</span>
+            </div>
+            <p>{latestAgentReview.summary}</p>
+            <div className="knowledge-reference-meta">
+              <code>{latestAgentReview.id}</code>
+              <span>{latestAgentReview.gateAdvisory.blocksApproval ? 'blocking' : 'warning-only'}</span>
+              <span>{latestAgentReview.policyFindings.length} policy finding(s)</span>
+            </div>
+            {latestAgentReview.policyFindings.map((finding) => (
+              <p key={finding.id}>{finding.severity} · {finding.category} · {finding.summary}</p>
+            ))}
+          </article>
+        ) : null}
+        {visibleTestEvidence.map((evidence) => (
+          <article className="artifact-card" key={evidence.id}>
+            <div className="compact-row">
+              <strong>Test Evidence</strong>
+              <span className={`pill ${evidence.status === 'passed' ? 'good' : evidence.status === 'running' ? 'warn' : 'bad'}`}>
+                {evidence.status}
+              </span>
+            </div>
+            <p>{evidence.summary}</p>
+            <div className="knowledge-reference-meta">
+              <code>{evidence.id}</code>
+              <code>{evidence.command}</code>
+              <span>{evidence.durationMs}ms</span>
+              <span>{testProjection?.role ?? 'primary'}</span>
+            </div>
+          </article>
+        ))}
+      </div>
+    )
+  }
 
   const renderTrace = () => (
     <div className="event-list">
@@ -776,7 +969,11 @@ export function Inspector({
   const renderNodeSummary = () => (
     <div className="node-summary mini-card">
       <span>{viewModel.header.stageLabel}</span>
-      <strong>{viewModel.header.visualKind}</strong>
+      <strong>类型：{viewModel.header.presentation.nodeKindLabel}</strong>
+      <span>来源：{viewModel.header.presentation.sourceLabel}</span>
+      {viewModel.header.presentation.displayMode === 'folded' ? (
+        <span>展示：{viewModel.header.presentation.displayModeLabel}</span>
+      ) : null}
       <p>{viewModel.header.subtitle}</p>
     </div>
   )
@@ -784,17 +981,55 @@ export function Inspector({
   const renderGateImpactSummary = () => (
     <div className="gate-impact-summary" data-testid="gate-impact-summary">
       <span className="panel-label">Gate 影响</span>
-      <article className="mini-card">
-        <div className="compact-row">
-          <strong>后续 Gate</strong>
-          <span className="pill soft">not active</span>
-        </div>
-        <p className="meta">
-          {selectedNode?.kind === 'agent'
-            ? '当前节点还不是 Gate。先完成当前 Agent 产物，进入对应 Gate 后再查看 policy、review、evidence 和审批条件。'
-            : '当前节点还不是 Gate。Gate 条件会在对应 Gate 节点中展开。'}
-        </p>
-      </article>
+      {gateImpact.state === 'none' ? (
+        <p className="empty-note">{gateImpact.summary}</p>
+      ) : (
+        <article className="mini-card gate-impact-card">
+          <div className="compact-row">
+            <div>
+              <span className="meta">{gateImpact.relationshipLabel}</span>
+              <strong>{gateImpact.gateTitle}</strong>
+            </div>
+            <div className="row">
+              {gateImpact.isCurrentStep ? <span className="pill warn">当前步骤</span> : null}
+              <span className={`pill ${getNodeStatusTone(gateImpact.gateStatus)}`}>
+                {gateImpact.gateStatusLabel}
+              </span>
+            </div>
+          </div>
+          <div className="gate-impact-artifacts">
+            <strong>已向 Gate 提供的产物</strong>
+            {gateImpact.linkedArtifacts.length ? (
+              <ul>
+                {gateImpact.linkedArtifacts.map((artifact) => (
+                  <li key={artifact.id}>
+                    <span>{artifact.title}</span>
+                    <code>{artifact.kind}</code>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="meta">
+                {gateImpact.providedArtifactCount === 0
+                  ? '当前 Task 尚未生成产物。'
+                  : '当前 Task 的产物尚未关联到该 Gate。'}
+              </p>
+            )}
+            {gateImpact.unconsumedArtifactCount > 0 ? (
+              <p className="meta">另有 {gateImpact.unconsumedArtifactCount} 个 Task 产物尚未被该 Gate 关联。</p>
+            ) : null}
+          </div>
+          <button
+            className="ghost-button"
+            type="button"
+            data-testid="open-downstream-gate"
+            onClick={() => onSelectWorkflowNode(gateImpact.gateId)}
+          >
+            查看 Gate
+          </button>
+          <p className="meta">此处只展示前向影响；审批和 Override 仍只能在 Gate Inspector 中执行。</p>
+        </article>
+      )}
     </div>
   )
 
@@ -815,11 +1050,15 @@ export function Inspector({
     <GateRemediationPanel
       decision={gateEnforcementDecision}
       remediationPlan={remediationPlan}
+      overrides={gateOverrides}
       isLoading={isLoadingGateEnforcement}
+      canSaveOverride={canSaveOverride}
       pairingState={pairingState}
       isStartingRetry={isStartingCodingAgent}
       isInspectorWriteBlocked={hasInspectorWriteLock}
       onSyncTeam={onSyncTeam}
+      onOpenTests={onOpenTests}
+      onOpenOverride={() => setRequestedTab('Gate条件')}
       onRunKnowledgeReview={onOpenKnowledgeReview}
       onStartRetry={onStartRemediationRetry}
     />
@@ -832,7 +1071,8 @@ export function Inspector({
     gateRequirementMatrix: renderGateRequirementMatrix,
     gateEnforcementPanel: renderGateEnforcementPanel,
     governance: renderGovernance,
-    evidenceReferences: renderEvidenceReferences,
+    knowledgeReferences: renderKnowledgeReferences,
+    reviewEvidence: renderReviewEvidence,
     remediationActions: renderRemediationActions,
     agentReview: renderAgentReview,
     artifacts: renderArtifacts,
@@ -843,7 +1083,15 @@ export function Inspector({
   return (
     <aside className="inspector" data-testid="node-inspector">
       <div className="panel-head panel-head--compact">
-        <span className="panel-title">{viewModel.header.title}</span>
+        <div className="inspector-node-heading">
+          <span className="panel-title">{viewModel.header.title}</span>
+          <span className="meta">
+            类型：{viewModel.header.presentation.nodeKindLabel} · 来源：{viewModel.header.presentation.sourceLabel}
+            {viewModel.header.presentation.displayMode === 'folded'
+              ? ` · 展示：${viewModel.header.presentation.displayModeLabel}`
+              : ''}
+          </span>
+        </div>
         <span className={`pill ${viewModel.header.statusTone}`}>
           {viewModel.header.statusLabel}
         </span>
@@ -860,6 +1108,15 @@ export function Inspector({
                 {secondaryNextActions.map((action) => renderActionButton(action, 'ghost'))}
               </div>
             ) : null}
+          </div>
+        ) : null}
+        {exposesCodingAction && codingReadinessDisplay?.status !== 'ready' ? (
+          <div className="coding-readiness-summary" data-testid="workbench-coding-readiness">
+            <strong>Coding Runtime：{codingReadinessDisplay?.statusLabel ?? '正在检查'}</strong>
+            <p>{codingReadinessDisplay?.items.find((item) => item.state === 'blocked')?.detail ?? codingReadinessError ?? '读取启动前检查后才可执行；此时不会创建 worktree 或修改代码。'}</p>
+            <button className="ghost-button" type="button" onClick={onOpenCodingConfiguration}>
+              配置 Coding Engine / Executor
+            </button>
           </div>
         ) : null}
       </div>
@@ -1309,6 +1566,7 @@ export function KnowledgeView({
         ) : (
           references.slice(0, 8).map((reference) => {
             const document = documentById.get(reference.documentId)
+            const semantics = resolveKnowledgeReferenceSemantics(reference)
 
             return (
               <article
@@ -1322,8 +1580,21 @@ export function KnowledgeView({
                 <strong>{reference.relation}</strong>
                 <p>{document?.title ?? reference.documentId}</p>
                 <div className="knowledge-reference-meta">
-                  {reference.strategy ? <span>{reference.strategy}</span> : null}
-                  {typeof reference.score === 'number' ? <span>score {reference.score}</span> : null}
+                  {reference.strategy ? <span>检索策略：{reference.strategy}</span> : null}
+                  {semantics.lexicalMatch ? (
+                    <span title="原始关键词累加分；无固定满分，不能跨查询比较。">
+                      关键词匹配分 {semantics.lexicalMatch.rawScore}
+                    </span>
+                  ) : null}
+                  {semantics.lexicalMatch?.matchedTerms.length ? (
+                    <span>命中词：{semantics.lexicalMatch.matchedTerms.join('、')}</span>
+                  ) : null}
+                  {semantics.semanticRelevance ? (
+                    <span>语义相关性：{semantics.semanticRelevance.score}</span>
+                  ) : (
+                    <span>未进行语义相关性判断</span>
+                  )}
+                  <span>Gate 状态：{semantics.gateEvidence.status}</span>
                   {reference.headingPath ? <span>{reference.headingPath.join(' / ')}</span> : null}
                 </div>
                 <code>{reference.artifactId ?? reference.evidenceId ?? reference.nodeId ?? reference.runId}</code>

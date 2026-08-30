@@ -17,23 +17,30 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
-  it('reserves Team schema v22 for generated Provider identities while retaining Native Coding and local auth', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(22)
+  it('reserves Team schema v24 for persisted Agent Review subject provenance', async () => {
+    expect(TEAM_SCHEMA_VERSION).toBe(24)
     expect(teamMigrationCatalog.at(-1)).toEqual({
-      version: 22,
-      name: '0022_agent_provider_identity',
-      fileName: '0022_agent_provider_identity.sql',
+      version: 24,
+      name: '0024_agent_review_subject_manifest',
+      fileName: '0024_agent_review_subject_manifest.sql',
     })
 
     const migrations = await readTeamMigrationCatalog()
     const providerIdentityMigration = migrations.find((candidate) => candidate.version === 22)
+    const reviewManifestMigration = migrations.find((candidate) => candidate.version === 24)
     expect(providerIdentityMigration?.sql).toContain('ADD COLUMN IF NOT EXISTS provider_name text')
     expect(providerIdentityMigration?.sql).toContain('ALTER COLUMN provider_name SET NOT NULL')
+    expect(reviewManifestMigration?.sql).toContain('ADD COLUMN IF NOT EXISTS context_manifest jsonb')
     expect(
       teamTableDefinitions
         .find((table) => table.name === 'agent_provider_credentials')
         ?.columns.map((column) => column.name),
     ).toContain('provider_name')
+    expect(
+      teamTableDefinitions
+        .find((table) => table.name === 'agent_reviews')
+        ?.columns.find((column) => column.name === 'context_manifest'),
+    ).toMatchObject({ sqlType: 'jsonb', nullable: true })
     const nativeCodingMigration = migrations.find((candidate) => candidate.version === 21)
     expect(nativeCodingMigration?.sql).toContain("engine IN ('fake', 'native', 'opencode-http', 'opencode-acp')")
     const localAuthMigration = migrations.find((candidate) => candidate.version === 20)
@@ -97,7 +104,7 @@ describe('team database schema', () => {
   })
 
   it('reserves Team schema v18 for an independently versioned Memory quality projection', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(22)
+    expect(TEAM_SCHEMA_VERSION).toBe(24)
     expect(teamMigrationCatalog.find((migration) => migration.version === 18)).toEqual({
       version: 18,
       name: '0018_agent_memory_projection_quality_version',
@@ -160,7 +167,7 @@ describe('team database schema', () => {
   })
 
   it('retains Team schema v16 as a safe Agent Runtime projection authority', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(22)
+    expect(TEAM_SCHEMA_VERSION).toBe(24)
     expect(teamMigrationCatalog.find((migration) => migration.version === 16)).toEqual({
       version: 16,
       name: '0016_agent_runtime_team_projection',
@@ -198,7 +205,7 @@ describe('team database schema', () => {
   })
 
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(22)
+    expect(TEAM_SCHEMA_VERSION).toBe(24)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -262,9 +269,11 @@ describe('team database schema', () => {
         'organization_id',
         'project_id',
         'created_by_user_id',
+        'issued_role',
         'code_hash',
         'expires_at',
         'consumed_at',
+        'revoked_at',
         'failed_attempts',
       ]),
     )
@@ -277,8 +286,10 @@ describe('team database schema', () => {
         'organization_id',
         'project_id',
         'user_id',
+        'issued_role',
         'token_hash',
         'created_at',
+        'expires_at',
         'last_used_at',
         'revoked_at',
       ]),
@@ -466,6 +477,16 @@ describe('team database schema', () => {
         version: 22,
         name: '0022_agent_provider_identity',
         fileName: '0022_agent_provider_identity.sql',
+      },
+      {
+        version: 23,
+        name: '0023_secure_desktop_pairing',
+        fileName: '0023_secure_desktop_pairing.sql',
+      },
+      {
+        version: 24,
+        name: '0024_agent_review_subject_manifest',
+        fileName: '0024_agent_review_subject_manifest.sql',
       },
     ])
 

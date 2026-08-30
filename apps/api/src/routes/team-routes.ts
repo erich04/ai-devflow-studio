@@ -8,6 +8,7 @@ import {
   createGeneratedAgentProviderId,
   createWarnOnlyDefaultPolicy,
   createOpenAiCompatibleAgentProvider,
+  deriveWorkflowContextPolicyRequirements,
   evaluateRuntimeBudgetGuard,
   type AgentProvider,
   type GateOverrideDecision,
@@ -358,7 +359,7 @@ function parseTeamProjectCreateInput(value: unknown): TeamProjectCreateInput {
 }
 
 function parseDesktopPairingExchangeInput(value: unknown): DesktopPairingExchangeInput {
-  if (!isRecord(value)) {
+  if (!isRecord(value) || !hasSameStringSet(Object.keys(value), ['code'])) {
     throw new Error('Invalid desktop pairing payload')
   }
 
@@ -753,6 +754,7 @@ export async function resolveTeamRoute(
         authentication: {
           provider: identity.authAccount.provider,
         },
+        projectMemberships: identity.projectMemberships,
       },
     }
   }
@@ -874,13 +876,12 @@ export async function resolveTeamRoute(
       return badRequest('Invalid projectId')
     }
 
-    if (!canSyncProject(options.session, projectId, 'lead')) {
-      return forbidden('Project role lead required')
-    }
-
     const overview = await repository.getTeamOverview(options.session)
     if (!overview.projects.some((project) => project.id === projectId)) {
       return notFound('Project not found')
+    }
+    if (!getProjectMembershipRole(options.session, projectId)) {
+      return forbidden('Active project membership required')
     }
 
     try {
@@ -894,6 +895,70 @@ export async function resolveTeamRoute(
       }
       throw error
     }
+  }
+
+  const revokePairingMatch = pathname.match(
+    /^\/api\/team\/projects\/([^/]+)\/pairing-codes\/([^/]+)$/,
+  )
+  if (method === 'DELETE' && revokePairingMatch) {
+    if (!options.session) {
+      return unauthorized()
+    }
+    if (options.principal?.authentication.kind !== 'session_cookie') {
+      return forbidden('Signed browser session required')
+    }
+    const projectId = decodeURIComponent(revokePairingMatch[1] ?? '')
+    const pairingCodeId = decodeURIComponent(revokePairingMatch[2] ?? '')
+    if (!projectId || !pairingCodeId) {
+      return badRequest('Invalid pairing code scope')
+    }
+    if (!getProjectMembershipRole(options.session, projectId)) {
+      return forbidden('Active project membership required')
+    }
+    const revoked = await repository.revokeDesktopPairingCode(
+      { projectId, pairingCodeId },
+      options.session,
+    )
+    return revoked
+      ? { status: 200, body: { revoked: true } }
+      : notFound('Pairing code not found')
+  }
+
+  const revokeDesktopTokenMatch = pathname.match(
+    /^\/api\/team\/projects\/([^/]+)\/desktop-tokens\/([^/]+)$/,
+  )
+  if (method === 'DELETE' && revokeDesktopTokenMatch) {
+    if (!options.session || !options.principal) {
+      return unauthorized()
+    }
+    const authentication = options.principal.authentication
+    if (
+      authentication.kind !== 'session_cookie' &&
+      authentication.kind !== 'desktop_bearer'
+    ) {
+      return forbidden('Signed session required')
+    }
+    const projectId = decodeURIComponent(revokeDesktopTokenMatch[1] ?? '')
+    const tokenId = decodeURIComponent(revokeDesktopTokenMatch[2] ?? '')
+    if (!projectId || !tokenId) {
+      return badRequest('Invalid Desktop token scope')
+    }
+    if (!getProjectMembershipRole(options.session, projectId)) {
+      return forbidden('Active project membership required')
+    }
+    if (
+      authentication.kind === 'desktop_bearer' &&
+      authentication.tokenRecordId !== tokenId
+    ) {
+      return forbidden('Desktop tokens may revoke only themselves')
+    }
+    const revoked = await repository.revokeDesktopToken(
+      { projectId, tokenId },
+      options.session,
+    )
+    return revoked
+      ? { status: 200, body: { revoked: true } }
+      : notFound('Desktop token not found')
   }
 
   if (method === 'POST' && pathname === '/api/desktop/pairing/exchange') {
@@ -911,7 +976,7 @@ export async function resolveTeamRoute(
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to exchange desktop pairing code'
-      return message.includes('expired') || message.includes('invalid')
+      return message.includes('expired') || message.includes('invalid') || message.includes('revoked')
         ? unauthorized('Desktop pairing code is invalid or expired. Reconnect DevFlow Studio.')
         : badRequest(message)
     }
@@ -1303,9 +1368,10 @@ export async function resolveTeamRoute(
       return forbidden('Project role member required')
     }
 
-    const [bundle, overview] = await Promise.all([
+    const [bundle, overview, enforcementPolicy] = await Promise.all([
       repository.getRunsBundle(options.session),
       repository.getTeamOverview(options.session),
+      repository.getEnforcementPolicy(input.projectId, options.session),
     ])
     const run = bundle.runs.find((candidate) => candidate.id === input.runId)
     if (!run || run.projectId !== input.projectId || !canAccessProject(options.session, run.projectId)) {
@@ -1375,16 +1441,32 @@ export async function resolveTeamRoute(
         ? badRequest('Fake Gate Review requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.')
         : badRequest(`Agent provider credential not found: ${providerId}`)
     }
-    const context = buildAgentReviewContext({
-      run,
-      node,
-      artifacts: bundle.artifacts.filter((artifact) => artifact.runId === run.id),
-      testEvidence: overview.testEvidenceSummaries
-        .filter((summary) => summary.runId === run.id)
-        .map(toTestEvidence),
-      knowledgeDocuments: defaultKnowledgeDocuments,
-      knowledgeChunks: defaultKnowledgeChunks,
-    })
+    let context
+    try {
+      context = await buildAgentReviewContext({
+        run,
+        node,
+        artifacts: bundle.artifacts.filter((artifact) => artifact.runId === run.id),
+        testEvidence: overview.testEvidenceSummaries
+          .filter((summary) => summary.runId === run.id)
+          .map(toTestEvidence),
+        knowledgeDocuments: defaultKnowledgeDocuments,
+        knowledgeChunks: defaultKnowledgeChunks,
+        requiredContextFields: deriveWorkflowContextPolicyRequirements(
+          enforcementPolicy.effectivePolicy,
+        ),
+      })
+    } catch (error) {
+      return {
+        status: 409,
+        body: {
+          error: 'review_subject_incomplete',
+          message: redactSensitiveText(
+            error instanceof Error ? error.message : String(error),
+          ).value,
+        },
+      }
+    }
     const request = {
       id: `api-review-request-${Date.now()}`,
       runId: run.id,

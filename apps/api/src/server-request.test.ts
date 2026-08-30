@@ -486,7 +486,7 @@ describe('API HTTP authentication boundary', () => {
     expect(first?.status).toBe(201)
     expect(afterRevocation).toEqual({
       status: 403,
-      body: { error: 'forbidden', message: 'Project role lead required' },
+      body: { error: 'forbidden', message: 'Active project membership required' },
     })
     expect(repository.resolveBrowserSession).toHaveBeenCalledTimes(2)
   })

@@ -27,6 +27,7 @@ import {
   parseGetAgentRuntimeInput,
   parseGetCoordinationSessionInput,
   parseGetCodingChangeSetPreviewInput,
+  parseSaveCodingRuntimeConfigurationInput,
   parseStartCoordinationPlanInput,
   parseResumeCoordinationSessionInput,
   parseStartCoordinationTaskInput,
@@ -1044,6 +1045,44 @@ describe('IPC contract parsers', () => {
       codingRunId: 'coding-run-1',
       providerId: 'renderer-selected-provider',
     })).toThrow(/providerId/)
+  })
+
+  it('keeps Native Provider and confirmed OpenCode configuration payloads distinct', () => {
+    expect(parseSaveCodingRuntimeConfigurationInput({
+      projectId: 'project-1',
+      executor: 'native-model',
+      providerId: 'saved-deepseek',
+    })).toEqual({
+      projectId: 'project-1',
+      executor: 'native-model',
+      providerId: 'saved-deepseek',
+    })
+    expect(parseSaveCodingRuntimeConfigurationInput({
+      projectId: 'project-1',
+      executor: 'opencode-http',
+      providerId: 'openai',
+      modelId: 'gpt-4.1-mini',
+      binaryPath: '/opt/devflow/bin/opencode',
+      detectedVersion: '1.2.3',
+    })).toEqual({
+      projectId: 'project-1',
+      executor: 'opencode-http',
+      providerId: 'openai',
+      modelId: 'gpt-4.1-mini',
+      binaryPath: '/opt/devflow/bin/opencode',
+      detectedVersion: '1.2.3',
+    })
+    expect(() => parseSaveCodingRuntimeConfigurationInput({
+      projectId: 'project-1',
+      executor: 'native-model',
+      providerId: 'saved-deepseek',
+      binaryPath: '/tmp/forged-opencode',
+    })).toThrow(/binaryPath/)
+    expect(() => parseSaveCodingRuntimeConfigurationInput({
+      projectId: 'project-1',
+      executor: 'opencode-http',
+      providerId: 'openai',
+    })).toThrow(/binaryPath/)
   })
 
   it('accepts coding permission replies, cancellations, and managed worktree actions', () => {

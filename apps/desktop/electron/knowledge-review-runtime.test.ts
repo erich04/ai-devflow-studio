@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   createFakeAgentProvider,
+  createRecommendedEnforcementPreset,
+  resolveEffectivePolicy,
   type AgentEvent,
   type AgentProvider,
   type AgentReviewResult,
@@ -8,6 +10,7 @@ import {
   type AgentTrace,
   type Artifact,
   type LocalExecutionState,
+  type PolicySnapshot,
   type TestEvidence,
   type WorkflowRun,
 } from '@ai-devflow/shared'
@@ -146,6 +149,58 @@ describe('KnowledgeReviewRuntime', () => {
     expect(store.tokenUsage).toHaveLength(1)
   })
 
+  it('projects policy-required missing Test Evidence into the same Electron provider contract', async () => {
+    const organizationPolicy = createRecommendedEnforcementPreset({
+      organizationId: 'org-demo',
+      updatedAt: '2026-07-31T12:01:10.000Z',
+    })
+    const store = new MemoryKnowledgeReviewStore(artifacts, {
+      projectId: fixtureRun.projectId,
+      organizationPolicy,
+      projectOverride: null,
+      effectivePolicy: resolveEffectivePolicy(organizationPolicy, null),
+      version: organizationPolicy.version,
+      updatedAt: organizationPolicy.updatedAt,
+      syncedAt: organizationPolicy.updatedAt,
+      source: 'remote_cache',
+    })
+    const provider = createFakeAgentProvider()
+    const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
+    const runtime = createKnowledgeReviewRuntime({
+      store,
+      knowledgeDocuments,
+      knowledgeChunks,
+      resolveProviderMetadata: vi.fn(async () => ({
+        id: provider.id,
+        name: provider.name,
+        model: provider.model,
+      })),
+      resolveProvider: vi.fn(async () => provider),
+      now: () => '2026-07-31T12:01:15.000Z',
+      createRequestId: () => 'review-request-policy-projection',
+    })
+
+    const result = await runtime.run(reviewInput(provider.id))
+    const providerInput = reviewKnowledge.mock.calls[0]![0]
+
+    expect(providerInput.context.testEvidence).toEqual([])
+    expect(providerInput.context.manifest.fieldProjection?.fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: 'test_evidence',
+          applicability: 'required',
+          state: 'missing_required',
+          includeInProviderPrompt: true,
+        }),
+      ]),
+    )
+    expect(providerInput.prompt).toContain('missing_required')
+    expect(providerInput.prompt).not.toContain('supplementalTestEvidence')
+    expect(result.review.missingEvidence).toContain(
+      'Attach passing local test evidence required for this workflow stage before final approval.',
+    )
+  })
+
   it('records Electron as the trusted runtime instead of renderer-supplied provenance', async () => {
     const store = new MemoryKnowledgeReviewStore()
     const provider = createFakeAgentProvider()
@@ -168,10 +223,43 @@ describe('KnowledgeReviewRuntime', () => {
     expect(result.review.runtime).toBe('electron')
   })
 
+  it('fails closed with an auditable error when the exact linked Design Artifact is missing', async () => {
+    const store = new MemoryKnowledgeReviewStore(
+      artifacts.filter((artifact) => artifact.id !== 'art-design'),
+    )
+    const provider = createFakeAgentProvider()
+    const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
+    const runtime = createKnowledgeReviewRuntime({
+      store,
+      knowledgeDocuments,
+      knowledgeChunks,
+      resolveProviderMetadata: vi.fn(async () => ({
+        id: provider.id,
+        name: provider.name,
+        model: provider.model,
+      })),
+      resolveProvider: vi.fn(async () => provider),
+      now: () => '2026-07-31T12:01:45.000Z',
+      createRequestId: () => 'review-request-missing-subject',
+    })
+
+    await expect(runtime.run(reviewInput(provider.id))).rejects.toThrow(
+      /linked Artifact art-design is missing/i,
+    )
+    expect(reviewKnowledge).not.toHaveBeenCalled()
+    expect(store.events).toEqual([
+      expect.objectContaining({
+        kind: 'error',
+        message: expect.stringContaining('门禁审查对象不完整'),
+      }),
+    ])
+    expect(store.reviews).toEqual([])
+  })
+
   it('resolves and calls a paid provider exactly once only after the budget guard allows it', async () => {
     const store = new MemoryKnowledgeReviewStore()
     const order: string[] = []
-    const reviewKnowledge = vi.fn(async () => {
+    const reviewKnowledge = vi.fn(async (_input: Parameters<AgentProvider['reviewKnowledge']>[0]) => {
       order.push('provider-call')
       return {
         model: 'gpt-4.1-mini',
@@ -227,7 +315,35 @@ describe('KnowledgeReviewRuntime', () => {
     expect(order).toEqual(['metadata', 'budget', 'resolve-secret', 'provider-call'])
     expect(resolveProvider).toHaveBeenCalledTimes(1)
     expect(reviewKnowledge).toHaveBeenCalledTimes(1)
+    const providerInput = reviewKnowledge.mock.calls[0]![0]
+    expect(providerInput.prompt).toContain(fixtureRun.request)
+    expect(providerInput.prompt).toContain(
+      artifacts.find((artifact) => artifact.id === 'art-clarify')!.content,
+    )
+    expect(providerInput.prompt).toContain(
+      artifacts.find((artifact) => artifact.id === 'art-design')!.content,
+    )
+    expect(providerInput.prompt).toContain('CONTEXT_APPLICABILITY')
+    expect(providerInput.prompt).not.toContain('SUPPLEMENTAL_TEST_EVIDENCE')
+    expect(providerInput.context.manifest.fieldProjection?.fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: 'test_evidence',
+          state: 'optional',
+          includeInProviderPrompt: false,
+        }),
+        expect.objectContaining({
+          field: 'agent_review',
+          applicability: 'optional',
+        }),
+      ]),
+    )
+    expect(providerInput.context.manifest.subjectArtifacts.map((artifact) => artifact.id)).toEqual([
+      'art-clarify',
+      'art-design',
+    ])
     expect(result.review.summary).toBe('Budget-authorized Knowledge Review.')
+    expect(result.review.contextManifest).toEqual(providerInput.context.manifest)
     expect(store.savedArtifacts).toEqual([expect.objectContaining({ kind: 'agent_review' })])
     expect(store.reviews).toHaveLength(1)
     expect(store.traces).toHaveLength(1)
@@ -255,12 +371,17 @@ class MemoryKnowledgeReviewStore implements KnowledgeReviewRuntimeStore {
   readonly traces: AgentTrace[] = []
   readonly tokenUsage: AgentTokenUsage[] = []
 
+  constructor(
+    private readonly artifactFixtures: Artifact[] = artifacts,
+    private readonly policySnapshot: PolicySnapshot | null = null,
+  ) {}
+
   async listRuns(): Promise<WorkflowRun[]> {
     return [fixtureRun]
   }
 
   async listArtifacts(runId?: string): Promise<Artifact[]> {
-    return artifacts.filter((artifact) => !runId || artifact.runId === runId)
+    return this.artifactFixtures.filter((artifact) => !runId || artifact.runId === runId)
   }
 
   async listTestEvidence(): Promise<TestEvidence[]> {
@@ -269,6 +390,10 @@ class MemoryKnowledgeReviewStore implements KnowledgeReviewRuntimeStore {
 
   async listEvents(runId?: string): Promise<AgentEvent[]> {
     return this.events.filter((event) => !runId || event.runId === runId)
+  }
+
+  async getPolicySnapshot(): Promise<PolicySnapshot | null> {
+    return this.policySnapshot
   }
 
   async saveArtifact(artifact: Artifact): Promise<void> {

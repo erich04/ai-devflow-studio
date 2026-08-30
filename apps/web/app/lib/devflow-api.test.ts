@@ -8,6 +8,7 @@ import {
   fetchTeamOverview,
   fetchAuthSession,
   createDesktopPairingCode,
+  revokeDesktopPairingCode,
   createTeamProject,
   createRuntimeBudgetApproval,
   createGateCommand,
@@ -514,6 +515,9 @@ describe('DevFlow web API client', () => {
         role: 'owner',
       },
       authentication: { provider: 'local-development' },
+      projectMemberships: [
+        { projectId: 'p-agent-platform', userId: 'u-local-owner', role: 'owner' },
+      ],
     }), { status: 200 }))
 
     await expect(fetchAuthSession({
@@ -527,6 +531,9 @@ describe('DevFlow web API client', () => {
         role: 'owner',
       },
       authentication: { provider: 'local-development' },
+      projectMemberships: [
+        { projectId: 'p-agent-platform', userId: 'u-local-owner', role: 'owner' },
+      ],
     })
     expect(fetcher).toHaveBeenCalledWith('http://api.local/api/auth/session', {
       cache: 'no-store',
@@ -1022,6 +1029,7 @@ describe('DevFlow web API client', () => {
           organizationId: 'org-demo',
           projectId: 'p-agent-platform',
           createdByUserId: 'u-ling',
+          issuedRole: 'lead',
           code: 'pair-p-agent-platform.copy-once-secret',
           expiresAt: '2026-06-20T00:10:00.000Z',
           createdAt: '2026-06-20T00:00:00.000Z',
@@ -1069,6 +1077,31 @@ describe('DevFlow web API client', () => {
     })
   })
 
+  it('revokes an exact pairing code without sending a secret', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ revoked: true }), {
+      status: 200,
+    }))
+    await expect(revokeDesktopPairingCode({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      cookieHeader: 'devflow_session=session-1',
+      projectId: 'p-agent-platform',
+      pairingCodeId: 'pair-p-agent-platform',
+    })).resolves.toBeUndefined()
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://api.local/api/team/projects/p-agent-platform/pairing-codes/pair-p-agent-platform',
+      {
+        method: 'DELETE',
+        cache: 'no-store',
+        headers: {
+          accept: 'application/json',
+          cookie: 'devflow_session=session-1',
+        },
+      },
+    )
+    expect(JSON.stringify(fetcher.mock.calls)).not.toContain('copy-once-secret')
+  })
+
   it('rejects a pairing payload with the wrong project or unknown secret fields', async () => {
     const fetcher = vi.fn(async () =>
       new Response(JSON.stringify({
@@ -1076,6 +1109,7 @@ describe('DevFlow web API client', () => {
         organizationId: 'org-demo',
         projectId: 'p-other',
         createdByUserId: 'u-ling',
+        issuedRole: 'lead',
         code: 'p-other.copy-once-secret',
         expiresAt: '2026-06-20T00:10:00.000Z',
         createdAt: '2026-06-20T00:00:00.000Z',

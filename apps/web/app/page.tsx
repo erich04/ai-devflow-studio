@@ -410,7 +410,23 @@ export default async function Page({ searchParams }: PageProps) {
             <section aria-label={`Desktop pairing for ${activeProject.name}`}>
               <span>Desktop</span>
               <strong>Pair this project</strong>
-              <PairingCodePanel key={activeProject.id} projectId={activeProject.id} />
+              <PairingCodePanel
+                key={activeProject.id}
+                projectId={activeProject.id}
+                projectName={activeProject.name}
+                subject={(() => {
+                  const membership = browserSession?.projectMemberships?.find(
+                    (candidate) => candidate.projectId === activeProject.id,
+                  )
+                  return browserSession && membership
+                    ? {
+                        userId: browserSession.user.id,
+                        userName: browserSession.user.name,
+                        role: membership.role,
+                      }
+                    : null
+                })()}
+              />
             </section>
           ) : null}
         </section>

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import type { GateEnforcementDecision, RemediationPlan } from '@ai-devflow/shared'
+import type { GateEnforcementDecision, GateOverrideDecision, RemediationPlan } from '@ai-devflow/shared'
 import { GateEnforcementPanel, GateRemediationPanel } from './GateEnforcementPanel'
 
 const decision: GateEnforcementDecision = {
@@ -129,18 +129,28 @@ describe('GateEnforcementPanel', () => {
       <GateRemediationPanel
         decision={decision}
         remediationPlan={remediationPlan}
+        overrides={[]}
         isLoading={false}
+        canSaveOverride={false}
         pairingState="paired"
         isStartingRetry={false}
         isInspectorWriteBlocked={false}
         onSyncTeam={vi.fn()}
+        onOpenTests={vi.fn()}
+        onOpenOverride={vi.fn()}
         onRunKnowledgeReview={vi.fn()}
         onStartRetry={onStartRetry}
       />,
     )
 
-    expect(screen.getByText('Remediation · 处理动作')).toBeInTheDocument()
+    expect(screen.getByText('Remediation · 恢复计划')).toBeInTheDocument()
     expect(screen.getByText('Fix API contract violation')).toBeInTheDocument()
+    expect(screen.getByText('阻断')).toBeInTheDocument()
+    expect(screen.getByText('必做')).toBeInTheDocument()
+    expect(screen.getByText('来源：governance_check · check-api')).toBeInTheDocument()
+    expect(screen.getByText('api_contract:violated')).toBeInTheDocument()
+    expect(screen.getByText(/负责角色/).parentElement).toHaveTextContent('开发者执行，人工批准 Retry')
+    expect(screen.queryByText('Gate Enforcement · 详细结论')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /Retry Coding/ }))
 
@@ -164,11 +174,15 @@ describe('GateEnforcementPanel', () => {
       <GateRemediationPanel
         decision={decision}
         remediationPlan={reviewPlan}
+        overrides={[]}
         isLoading={false}
+        canSaveOverride={false}
         pairingState="paired"
         isStartingRetry={false}
         isInspectorWriteBlocked={false}
         onSyncTeam={vi.fn()}
+        onOpenTests={vi.fn()}
+        onOpenOverride={vi.fn()}
         onRunKnowledgeReview={onRunKnowledgeReview}
         onStartRetry={vi.fn()}
       />,
@@ -176,5 +190,134 @@ describe('GateEnforcementPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '运行门禁审查' }))
     expect(onRunKnowledgeReview).toHaveBeenCalledOnce()
+  })
+
+  it('routes Test Evidence to the existing Tests surface', () => {
+    const onOpenTests = vi.fn()
+    render(
+      <GateRemediationPanel
+        decision={decision}
+        remediationPlan={{
+          ...remediationPlan,
+          candidates: [{
+            ...remediationPlan.candidates[0]!,
+            id: 'candidate-test',
+            kind: 'add_test_evidence',
+            title: 'Attach passing test evidence',
+            eligibleForCodingRetry: false,
+          }],
+        }}
+        overrides={[]}
+        isLoading={false}
+        canSaveOverride={false}
+        pairingState="paired"
+        isStartingRetry={false}
+        isInspectorWriteBlocked={false}
+        onSyncTeam={vi.fn()}
+        onOpenTests={onOpenTests}
+        onOpenOverride={vi.fn()}
+        onRunKnowledgeReview={vi.fn()}
+        onStartRetry={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '去 Tests 处理' }))
+    expect(onOpenTests).toHaveBeenCalledOnce()
+  })
+
+  it('keeps unavailable policy recovery explicit when Team is not paired', () => {
+    render(
+      <GateRemediationPanel
+        decision={{
+          ...decision,
+          status: 'blocked_policy_unavailable',
+          canOverride: false,
+          blockingReasons: [{
+            id: 'policy-unavailable',
+            target: 'governance_check',
+            ruleKey: 'policy-unavailable',
+            action: 'block',
+            summary: 'Team Policy snapshot is unavailable.',
+          }],
+        }}
+        remediationPlan={null}
+        overrides={[]}
+        isLoading={false}
+        canSaveOverride={false}
+        pairingState="unpaired"
+        isStartingRetry={false}
+        isInspectorWriteBlocked={false}
+        onSyncTeam={vi.fn()}
+        onOpenTests={vi.fn()}
+        onOpenOverride={vi.fn()}
+        onRunKnowledgeReview={vi.fn()}
+        onStartRetry={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('先绑定 Team Project，再同步团队策略。')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '同步团队策略' })).not.toBeInTheDocument()
+  })
+
+  it('shows Override as a separately authorized path with its audit reason', () => {
+    const onOpenOverride = vi.fn()
+    const override: GateOverrideDecision = {
+      id: 'override-1',
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      userId: 'lead-1',
+      role: 'lead',
+      reason: 'Approved temporary exception.',
+      blockedReasonIds: decision.blockingReasons.map((reason) => reason.id),
+      policyVersion: decision.policyVersion,
+      provisional: false,
+      status: 'accepted',
+      createdAt: '2026-08-30T00:00:00.000Z',
+    }
+    render(
+      <GateRemediationPanel
+        decision={decision}
+        remediationPlan={remediationPlan}
+        overrides={[override]}
+        isLoading={false}
+        canSaveOverride
+        pairingState="paired"
+        isStartingRetry={false}
+        isInspectorWriteBlocked={false}
+        onSyncTeam={vi.fn()}
+        onOpenTests={vi.fn()}
+        onOpenOverride={onOpenOverride}
+        onRunKnowledgeReview={vi.fn()}
+        onStartRetry={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByTestId('remediation-override')).toHaveTextContent('治理例外（非整改）')
+    expect(screen.getByTestId('remediation-override')).toHaveTextContent('Approved temporary exception.')
+    fireEvent.click(screen.getByRole('button', { name: '前往独立 Lead Override' }))
+    expect(onOpenOverride).toHaveBeenCalledOnce()
+  })
+
+  it('shows an empty recovery state when the current decision passes', () => {
+    render(
+      <GateRemediationPanel
+        decision={{ ...decision, status: 'pass', blocksApproval: false, blockingReasons: [], requiredActions: [] }}
+        remediationPlan={{ ...remediationPlan, status: 'pass', blockingReasonIds: [], candidates: [] }}
+        overrides={[]}
+        isLoading={false}
+        canSaveOverride={false}
+        pairingState="paired"
+        isStartingRetry={false}
+        isInspectorWriteBlocked={false}
+        onSyncTeam={vi.fn()}
+        onOpenTests={vi.fn()}
+        onOpenOverride={vi.fn()}
+        onRunKnowledgeReview={vi.fn()}
+        onStartRetry={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('当前没有需要整改的事项；Gate 可按现有条件继续。')).toBeInTheDocument()
   })
 })

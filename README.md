@@ -58,6 +58,9 @@ This is a workflow-driven, single-group Agent mode rather than open-ended multi-
 - Runtime budgets model projected provider cost and lead approval.
 - Paid Coding and Gate Review runtimes fail closed before provider invocation when authoritative budget context is missing, invalid, unavailable, unauthenticated, or out of scope.
 - Desktop pairing explicitly binds a Local Project to its Team Project; Web Work Requests and Gate Commands preserve Desktop authority over the canonical local Run.
+- Desktop pairing is self-service for any active project member while remaining subject-bound,
+  role-capped, expiring, one-time, and revocable; see
+  [`docs/engineering/desktop-pairing-security.md`](docs/engineering/desktop-pairing-security.md).
 - Durable redacted sync uses a persisted outbox with bounded backoff, restart recovery, immutable project scope, and operator-visible retry state.
 - GitHub Delivery binds one Delivery Intent to the managed-worktree commit, Test Evidence, Run
   version, repository binding, and PR Delivery Package; a separate signed Web approval is required
@@ -110,7 +113,7 @@ This is a workflow-driven, single-group Agent mode rather than open-ended multi-
 | `corepack pnpm test:docker-lifecycle-smoke` | Fresh Team schema v21, retained V1.4 schema v10 upgrade, transactional populated v11-to-v12 retry, fail-closed v12-to-v13 provider-authoritative expiry migration, durable v13-to-v14 provider backoff, v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, empty v16-to-v17 metadata-only Agent Memory projection, v17-to-v18 independent Memory quality audit versioning, empty v18-to-v19 Agent Coordination projection, the v19-to-v20 bounded local-development auth-provider constraint, v20-to-v21 native Coding summary-engine constraint, and bounded V1.4 backup/restore rollback. |
 | `corepack pnpm test:v15-github-delivery` | The full offline Delivery Intent → separate approval → exact branch → Draft PR → Acceptance story, including restart and revocation. |
 | `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive and packaged launch isolation; Local MCP and native Coding counts remain exact after cold restart, while one accepted Memory Candidate is promoted, revised, tombstoned, purged, and reopened with `memoryRestartDuplicateEffects: 0`. |
-| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v33 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
+| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v34 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
 | `corepack pnpm test:v20-agent-runtime-evaluator` | The clean-candidate V2.0 scenario collector and strict completion evaluator; provider credentials are removed and only a path/secret-free structured record is retained. |
 | `corepack pnpm test:v21-retrieval-memory-evaluator` | The clean-candidate V2.1 evaluator; it binds the corpus and contract digests, compares lexical/hybrid and no-Memory/Memory outcomes, and requires zero paid-provider, isolation, deletion, resurrection, or redaction violations. |
 | `corepack pnpm v21:completion-status` | The V2.1 direct-child signoff validator; it requires exact evaluator, first-attempt Verify, Desktop artifact, local matrix, and immutable evidence identity. |

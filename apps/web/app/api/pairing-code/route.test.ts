@@ -1,7 +1,11 @@
 import { NextRequest } from 'next/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { DevFlowApiError, createDesktopPairingCode } from '../../lib/devflow-api'
-import { POST } from './route'
+import {
+  DevFlowApiError,
+  createDesktopPairingCode,
+  revokeDesktopPairingCode,
+} from '../../lib/devflow-api'
+import { DELETE, POST } from './route'
 
 vi.mock('next/headers', () => ({
   cookies: vi.fn(async () => ({
@@ -16,22 +20,46 @@ vi.mock('../../lib/devflow-api', async (importOriginal) => {
   return {
     ...actual,
     createDesktopPairingCode: vi.fn(),
+    revokeDesktopPairingCode: vi.fn(),
   }
 })
 
 const mockedCreateDesktopPairingCode = vi.mocked(createDesktopPairingCode)
+const mockedRevokeDesktopPairingCode = vi.mocked(revokeDesktopPairingCode)
 
 beforeEach(() => {
   vi.clearAllMocks()
 })
 
 describe('pairing-code Web proxy', () => {
+  it('revokes only the exact generated code under the signed session', async () => {
+    mockedRevokeDesktopPairingCode.mockResolvedValueOnce(undefined)
+    const response = await DELETE(
+      new NextRequest('http://web.local/api/pairing-code', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          projectId: 'p-remote',
+          pairingCodeId: 'pair-p-remote',
+          createdByUserId: 'u-other',
+        }),
+      }),
+    )
+    expect(response.status).toBe(200)
+    expect(mockedRevokeDesktopPairingCode).toHaveBeenCalledWith({
+      projectId: 'p-remote',
+      pairingCodeId: 'pair-p-remote',
+      cookieHeader: 'devflow_session=signed-session-1',
+    })
+  })
+
   it('forwards only the selected project identifier under the signed session', async () => {
     mockedCreateDesktopPairingCode.mockResolvedValueOnce({
       id: 'pair-p-remote',
       organizationId: 'org-demo',
       projectId: 'p-remote',
       createdByUserId: 'u-lead',
+      issuedRole: 'lead',
       code: 'new.copy-once-code',
       expiresAt: '2026-08-01T12:10:00.000Z',
       createdAt: '2026-08-01T12:00:00.000Z',
@@ -86,6 +114,7 @@ describe('pairing-code Web proxy', () => {
       organizationId: 'org-demo',
       projectId: 'p-other',
       createdByUserId: 'u-lead',
+      issuedRole: 'lead',
       code: 'p-other.copy-once-secret',
       expiresAt: '2026-08-01T12:10:00.000Z',
       createdAt: '2026-08-01T12:00:00.000Z',

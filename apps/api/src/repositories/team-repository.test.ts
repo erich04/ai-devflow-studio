@@ -1057,6 +1057,76 @@ describe('seed team repository', () => {
     })
   })
 
+  it('issues a member pairing token to the same member without role escalation', async () => {
+    const repository = createSeedTeamRepository()
+    const memberContext = {
+      source: 'authenticated' as const,
+      organizationId: 'org-demo',
+      userId: 'u-yu',
+      role: 'member' as const,
+      authAccountId: 'acct-demo-u-yu',
+      projectMemberships: [
+        { projectId: 'p-payments', userId: 'u-yu', role: 'member' as const },
+      ],
+    }
+    const pairing = await repository.createDesktopPairingCode(
+      { projectId: 'p-payments' },
+      memberContext,
+    )
+    expect(pairing).toMatchObject({ createdByUserId: 'u-yu', issuedRole: 'member' })
+    const exchange = await repository.exchangeDesktopPairingCode({ code: pairing.code })
+    expect(exchange).toMatchObject({
+      userId: 'u-yu',
+      role: 'member',
+      issuedRole: 'member',
+      projectMemberships: [
+        { projectId: 'p-payments', userId: 'u-yu', role: 'member' },
+      ],
+    })
+  })
+
+  it('revokes pairing codes and Desktop tokens only for their immutable subject', async () => {
+    const repository = createSeedTeamRepository()
+    const pairing = await repository.createDesktopPairingCode(
+      { projectId: 'p-payments' },
+      gateBrowserPrincipal.session,
+    )
+    await expect(
+      repository.revokeDesktopPairingCode(
+        { projectId: 'p-payments', pairingCodeId: pairing.id },
+        { organizationId: 'org-demo', userId: 'u-yu' },
+      ),
+    ).resolves.toBe(false)
+    await expect(
+      repository.revokeDesktopPairingCode(
+        { projectId: 'p-payments', pairingCodeId: pairing.id },
+        gateBrowserPrincipal.session,
+      ),
+    ).resolves.toBe(true)
+    await expect(
+      repository.exchangeDesktopPairingCode({ code: pairing.code }),
+    ).rejects.toThrow('invalid desktop pairing code')
+
+    const nextPairing = await repository.createDesktopPairingCode(
+      { projectId: 'p-payments' },
+      gateBrowserPrincipal.session,
+    )
+    const exchange = await repository.exchangeDesktopPairingCode({ code: nextPairing.code })
+    await expect(
+      repository.revokeDesktopToken(
+        { projectId: 'p-payments', tokenId: exchange.tokenId },
+        { organizationId: 'org-demo', userId: 'u-yu' },
+      ),
+    ).resolves.toBe(false)
+    await expect(
+      repository.revokeDesktopToken(
+        { projectId: 'p-payments', tokenId: exchange.tokenId },
+        gateBrowserPrincipal.session,
+      ),
+    ).resolves.toBe(true)
+    await expect(repository.resolveDesktopTokenSession(exchange.token)).resolves.toBeNull()
+  })
+
   it('rejects a seed desktop token that was never created by pairing exchange', async () => {
     const repository = createSeedTeamRepository()
 

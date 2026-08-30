@@ -29,6 +29,27 @@ workspace read, workspace edit, approved command/test execution, permission rela
 checkpoint continuation, and structured diff/test Evidence. Missing capability is a deterministic
 selection denial, not a prompt instruction asking the executor to behave differently.
 
+### Project Selection And Readiness
+
+Coding configuration is explicit and project-scoped. The Desktop may detect an executable OpenCode
+candidate, but detection is advisory: it never selects, starts, or persists OpenCode until the user
+confirms that exact canonical binary and detected version for the current Local Project. Electron
+main re-probes both on save and before a run. The Native executor instead binds an existing Provider
+whose credential is already stored by the trusted local credential boundary; the renderer never
+receives the secret.
+
+`Stage/Review Provider`, `Coding Engine`, and `Coding Executor` are separate concepts. The first
+grounds workflow review, the second is an available implementation such as OpenCode or DevFlow
+Native, and the third is the governed CRI contract used to run it. Product UI must not substitute a
+transport label such as `opencode-http` for these identities.
+
+Workbench and Agents consume the same main-owned readiness result. Readiness separately reports
+executor selection, engine availability, required capabilities, Provider configuration, Team
+Project pairing, saved test command, budget policy/evaluation, active-run concurrency, and pending
+permission. Any blocked or unreadable check disables the run action. Machine codes remain in an
+explicit diagnostic detail; primary UI uses the positive product names above. Fake executors are
+available only behind explicit test configuration and never satisfy production readiness by default.
+
 The Agent Runtime selects only an executor whose descriptor satisfies the immutable request and the
 current policy-approved capability set. Capability negotiation occurs before provider or workspace
 side effects and is persisted in the trajectory.
@@ -78,6 +99,8 @@ bounded repair loop, and stop deterministically. Feature parity with OpenCode is
 - Executor capability differences remain visible instead of being hidden in provider prompts.
 - Existing OpenCode test coverage remains valuable while contract-parity tests are added above it.
 - Additional CLI candidates require a separate evidence-backed decision but can target this contract.
+- Local engine discovery does not create ambient execution authority; the saved per-project choice
+  and the live readiness probe are both required.
 
 ## Rejected Alternatives
 

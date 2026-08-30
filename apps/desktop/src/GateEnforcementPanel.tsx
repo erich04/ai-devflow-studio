@@ -6,6 +6,10 @@ import type {
   PolicySnapshot,
   RemediationPlan,
 } from '@ai-devflow/shared'
+import {
+  buildGateRemediationViewModel,
+  type GateRemediationItem,
+} from './app/gate-remediation-view-model'
 
 const policySourceLabels: Record<GateEnforcementDecision['policySource'], string> = {
   remote_cache: '团队远端缓存',
@@ -79,6 +83,12 @@ function overrideLabel(override: GateOverrideDecision): string {
     return 'Rejected override'
   }
   return override.provisional ? 'Provisional override' : 'Confirmed override'
+}
+
+const remediationSeverityLabels: Record<GateRemediationItem['severity'], string> = {
+  hard_block: '强制阻断',
+  block: '阻断',
+  warning: '警告',
 }
 
 export function GateEnforcementPanel({
@@ -206,82 +216,138 @@ export function GateEnforcementPanel({
 export function GateRemediationPanel({
   decision,
   remediationPlan,
+  overrides,
   isLoading,
+  canSaveOverride,
   pairingState,
   isStartingRetry,
   isInspectorWriteBlocked,
   onSyncTeam,
+  onOpenTests,
+  onOpenOverride,
   onRunKnowledgeReview,
   onStartRetry,
 }: {
   decision: GateEnforcementDecision | null
   remediationPlan: RemediationPlan | null
+  overrides: GateOverrideDecision[]
   isLoading: boolean
+  canSaveOverride: boolean
   pairingState: 'unpaired' | 'paired' | 'sync_failed'
   isStartingRetry: boolean
   isInspectorWriteBlocked: boolean
   onSyncTeam: () => void
+  onOpenTests: () => void
+  onOpenOverride: () => void
   onRunKnowledgeReview: () => void
   onStartRetry: (candidateId: string) => void
 }) {
+  const viewModel = buildGateRemediationViewModel({
+    decision,
+    remediationPlan,
+    overrides,
+    canSaveOverride,
+    isStartingRetry,
+  })
+
   if (isLoading) {
     return <p className="empty-note">正在整理处理动作...</p>
   }
 
-  const candidates = remediationPlan?.candidates ?? []
-  const fallbackActions = candidates.length === 0 ? (decision?.requiredActions ?? []) : []
+  const renderAction = (item: GateRemediationItem) => {
+    if (!item.cta) return null
+    if (item.cta.kind === 'knowledge_review') {
+      return (
+        <button className="ghost-button" disabled={isInspectorWriteBlocked} onClick={onRunKnowledgeReview}>
+          {item.cta.label}
+        </button>
+      )
+    }
+    if (item.cta.kind === 'tests') {
+      return <button className="ghost-button" onClick={onOpenTests}>{item.cta.label}</button>
+    }
+    if (item.cta.kind === 'sync_policy') {
+      return pairingState === 'paired' ? (
+        <button className="ghost-button" disabled={isInspectorWriteBlocked} onClick={onSyncTeam}>
+          {item.cta.label}
+        </button>
+      ) : (
+        <small>先绑定 Team Project，再同步团队策略。</small>
+      )
+    }
+    if (!item.candidateId) {
+      return <small>当前 Retry 缺少受控 candidate，请重新评估 Gate。</small>
+    }
+    return (
+      <button
+        className="ghost-button"
+        data-testid={`retry-coding-${item.candidateId}`}
+        disabled={isStartingRetry || isInspectorWriteBlocked}
+        title={isInspectorWriteBlocked && !isStartingRetry ? '其他 Inspector 操作正在进行中' : undefined}
+        onClick={() => onStartRetry(item.candidateId!)}
+      >
+        {isStartingRetry ? 'Starting retry...' : item.cta.label}
+      </button>
+    )
+  }
 
   return (
     <div className="remediation-plan" data-testid="remediation-actions">
-      <span className="panel-label">Remediation · 处理动作</span>
-      {candidates.length === 0 && fallbackActions.length === 0 ? (
-        <p className="empty-note">当前没有需要执行的处理动作。</p>
+      <span className="panel-label">Remediation · 恢复计划</span>
+      {viewModel.emptyMessage ? (
+        <p className="empty-note">{viewModel.emptyMessage}</p>
       ) : null}
-      {candidates.map((candidate, index) => {
-        const canRunReview = candidate.kind === 'run_agent_review'
-        const canSyncPolicy = candidate.kind === 'sync_policy' && pairingState === 'paired'
-        const canRetryCoding = candidate.eligibleForCodingRetry
-
-        return (
-          <article className="remediation-candidate" key={candidate.id}>
-            <div className="compact-row">
-              <strong>{candidate.title}</strong>
-              <span>{index === 0 ? '主要下一步' : candidate.priority}</span>
+      {viewModel.activeItems.map((item) => (
+        <article className={`remediation-candidate remediation-candidate--${item.severity}`} key={item.id}>
+          <div className="compact-row">
+            <strong>{item.title}</strong>
+            <div className="row">
+              <span className={`pill ${item.severity === 'warning' ? 'warn' : 'bad'}`}>
+                {remediationSeverityLabels[item.severity]}
+              </span>
+              <span className={`pill ${item.status === 'stale' ? 'soft' : item.severity === 'warning' ? 'warn' : 'bad'}`}>
+                {item.statusLabel}
+              </span>
+              <span className={`pill ${item.mandatory ? 'bad' : 'soft'}`}>
+                {item.mandatory ? '必做' : '可选'}
+              </span>
             </div>
-            <p>{candidate.summary}</p>
-            {candidate.kind === 'sync_policy' && pairingState === 'unpaired' ? (
-              <small>先绑定 Team Project，再同步团队策略。</small>
-            ) : null}
-            {canRunReview ? (
-              <button className="ghost-button" disabled={isInspectorWriteBlocked} onClick={onRunKnowledgeReview}>
-                运行门禁审查
-              </button>
-            ) : null}
-            {canSyncPolicy ? (
-              <button className="ghost-button" disabled={isInspectorWriteBlocked} onClick={onSyncTeam}>
-                同步团队策略
-              </button>
-            ) : null}
-            {canRetryCoding ? (
-              <button
-                className="ghost-button"
-                data-testid={`retry-coding-${candidate.id}`}
-                disabled={isStartingRetry || isInspectorWriteBlocked}
-                title={isInspectorWriteBlocked && !isStartingRetry ? '其他 Inspector 操作正在进行中' : undefined}
-                onClick={() => onStartRetry(candidate.id)}
-              >
-                {isStartingRetry ? 'Starting retry...' : 'Retry Coding'}
-              </button>
-            ) : null}
-          </article>
-        )
-      })}
-      {fallbackActions.map((action) => (
-        <article className="remediation-candidate" key={action}>
-          <strong>待处理</strong>
-          <p>{action}</p>
+          </div>
+          <div className="knowledge-reference-meta">
+            <span>来源：{item.source}</span>
+            <code>{item.ruleKey}</code>
+          </div>
+          <p><strong>为什么：</strong>{item.why}</p>
+          <p><strong>怎么做：</strong>{item.action}</p>
+          <dl className="remediation-facts">
+            <div><dt>负责角色</dt><dd>{item.requiredRole}</dd></div>
+            <div><dt>所需证据</dt><dd>{item.requiredEvidence}</dd></div>
+            <div><dt>完成标准</dt><dd>{item.completion}</dd></div>
+          </dl>
+          {item.manualGuidance ? <small>{item.manualGuidance}</small> : null}
+          {renderAction(item)}
         </article>
       ))}
+      {viewModel.resolvedItems.length > 0 ? (
+        <details className="gate-technical-details" data-testid="resolved-remediation-items">
+          <summary>已解决 {viewModel.resolvedItems.length} 项</summary>
+          {viewModel.resolvedItems.map((item) => <p key={item.id}>{item.title} · {item.statusLabel}</p>)}
+        </details>
+      ) : null}
+      {viewModel.override.active || viewModel.override.canOpen ? (
+        <section className="remediation-override" data-testid="remediation-override">
+          <span className="panel-label">治理例外（非整改）</span>
+          {viewModel.override.active ? (
+            <div className={`override-state override-state--${viewModel.override.active.status}`}>
+              <strong>{overrideLabel(viewModel.override.active)}</strong>
+              <p>{viewModel.override.active.reason}</p>
+            </div>
+          ) : null}
+          {viewModel.override.canOpen ? (
+            <button className="ghost-button" onClick={onOpenOverride}>前往独立 Lead Override</button>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   )
 }

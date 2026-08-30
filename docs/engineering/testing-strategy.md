@@ -19,7 +19,7 @@ retroactive TDD rewrites unless it is touched.
   providers, then the v20-to-v21 Coding summary constraint that accepts the `native` engine while
   preserving the existing engine values. Retained rows keep reserved quality version 0 until the first new projection converges
   them; new writes start at 1.
-- Electron/SQLite uses Desktop schema v33. Local-store tests must prove a fresh v33 database, the
+- Electron/SQLite uses Desktop schema v34. Local-store tests must prove a fresh v34 database, the
   Desktop schema 17-to-18 retained Runtime upgrade, the 18-to-19 metadata-only Native Tool audit
   upgrade with no invented grant or audit rows, and the 19-to-20 Local MCP installation/audit
   provenance upgrade with no invented installation or MCP audit, and the 20-to-21 retained outbox

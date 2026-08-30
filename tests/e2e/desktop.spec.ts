@@ -2,6 +2,8 @@ import { expect, test } from '@playwright/test'
 
 async function installDesktopApi(page: import('@playwright/test').Page) {
   await page.addInitScript(() => {
+    const codingConfigurationSaves: unknown[] = []
+    ;(window as unknown as { __codingConfigurationSaves: unknown[] }).__codingConfigurationSaves = codingConfigurationSaves
     const localProject = {
       id: 'local-project-1',
       name: 'fixture-project',
@@ -203,7 +205,15 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
               artifactIds: [],
             },
           ],
-          edges: [],
+          edges: [
+            { id: `${runId}-edge-1`, source: nodeIds.clarify, target: nodeIds.clarifyGate, kind: 'gate' },
+            { id: `${runId}-edge-2`, source: nodeIds.clarifyGate, target: nodeIds.design, kind: 'normal' },
+            { id: `${runId}-edge-3`, source: nodeIds.design, target: nodeIds.designGate, kind: 'gate' },
+            { id: `${runId}-edge-4`, source: nodeIds.designGate, target: nodeIds.build, kind: 'normal' },
+            { id: `${runId}-edge-5`, source: nodeIds.build, target: nodeIds.test, kind: 'normal' },
+            { id: `${runId}-edge-6`, source: nodeIds.test, target: nodeIds.pr, kind: 'normal' },
+            { id: `${runId}-edge-7`, source: nodeIds.pr, target: nodeIds.accept, kind: 'gate' },
+          ],
         }
       },
       completeWorkflowAgentNode: async (input: {
@@ -280,7 +290,12 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
               artifactIds: [artifact.id],
             },
           ],
-          edges: [],
+          edges: [{
+            id: `${input.runId}-edge-clarify-gate`,
+            source: input.nodeId,
+            target: clarifyGateId,
+            kind: 'gate',
+          }],
         }
 
         return {
@@ -578,11 +593,12 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
             {
               id: nodeId,
               stage: 'clarify',
-              title: '需求澄清',
-              subtitle: '补齐验收口径与非目标',
-              kind: 'agent',
-              status: 'running',
+              title: '需求确认 Gate',
+              subtitle: '确认需求已准备进入方案设计',
+              kind: 'gate',
+              status: 'blocked',
               ownerId: 'u-ling',
+              requiredRole: 'member',
               retryCount: 0,
               artifactIds: [],
             },
@@ -621,20 +637,69 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
         status: 'ready',
       }),
       getCodingRuntimeConfiguration: async () => null,
-      saveCodingRuntimeConfiguration: async ({ projectId, providerId }: { projectId: string; providerId: string }) => ({
+      detectCodingRuntimeEngines: async ({ projectId }: { projectId: string }) => ({
         projectId,
-        executor: 'native-model',
-        providerId,
-        version: 1,
-        updatedAt: '2026-06-15T00:03:30.000Z',
+        candidates: [{
+          engine: 'opencode-http',
+          executor: 'opencode-http',
+          status: 'available',
+          binaryPath: '/opt/devflow/bin/opencode',
+          version: '1.2.3',
+          requiresConfirmation: true,
+          reason: '已检测到本机 OpenCode。确认后才会把它用于当前项目。',
+        }],
+        detectedAt: '2026-06-15T00:03:30.000Z',
       }),
+      saveCodingRuntimeConfiguration: async (input: {
+        projectId: string
+        executor: 'native-model' | 'opencode-http'
+        providerId: string
+        binaryPath?: string
+        modelId?: string
+        detectedVersion?: string
+      }) => {
+        codingConfigurationSaves.push(input)
+        return input.executor === 'opencode-http'
+          ? {
+              projectId: input.projectId,
+              executor: input.executor,
+              providerId: input.providerId,
+              binaryPath: input.binaryPath,
+              modelId: input.modelId,
+              detectedVersion: input.detectedVersion,
+              version: 1,
+              updatedAt: '2026-06-15T00:03:30.000Z',
+            }
+          : {
+              projectId: input.projectId,
+              executor: input.executor,
+              providerId: input.providerId,
+              version: 1,
+              updatedAt: '2026-06-15T00:03:30.000Z',
+            }
+      },
       getCodingRuntimeReadiness: async ({ runId, nodeId, projectId }: { runId: string; nodeId: string; projectId: string }) => ({
         projectId,
         runId,
         nodeId,
         status: 'ready',
         engine: 'fake',
-        checks: [],
+        executor: 'native-model',
+        availability: 'available',
+        capabilities: ['cancellation', 'structured_diff', 'workspace_edit', 'workspace_read'],
+        providerRequirement: 'saved-provider',
+        providerId: 'doubao-review',
+        configVersion: 1,
+        checks: [
+          { code: 'executor_unconfigured', status: 'ready', message: 'Coding Executor 已配置。' },
+          { code: 'engine_unavailable', status: 'ready', message: 'Coding Engine 可用。' },
+          { code: 'capability_unavailable', status: 'ready', message: '执行能力满足要求。' },
+          { code: 'provider_unavailable', status: 'ready', message: 'Provider 可用。' },
+          { code: 'team_project_unpaired', status: 'ready', message: 'Team Project 已配对。' },
+          { code: 'test_command_missing', status: 'ready', message: '测试命令已配置。' },
+          { code: 'budget_policy_missing', status: 'ready', message: '预算策略已配置。' },
+          { code: 'budget_blocked', status: 'ready', message: '预算评估允许执行。' },
+        ],
         evaluatedAt: '2026-06-15T00:03:30.000Z',
       }),
       getCodingChangeSetPreview: async ({ changeSetId, codingRunId }: { changeSetId: string; codingRunId: string }) => ({
@@ -847,6 +912,32 @@ test.describe('AI DevFlow desktop workbench', () => {
 
     await createFixtureRun(page)
 
+    const workflow = page.getByTestId('workflow-canvas')
+    await expect(page.getByTestId('stage-summary-clarify')).toContainText('节点：Task 1 · Gate 1')
+    await expect(page.getByTestId('stage-summary-design')).toContainText('节点：Task 1 · Gate 1')
+    await expect(page.getByTestId('stage-summary-build')).toContainText('节点：Task 1')
+    await expect(page.getByTestId('stage-summary-test')).toContainText('节点：Test 1')
+    await expect(page.getByTestId('stage-summary-pr')).toContainText('节点：Delivery 1')
+    await expect(page.getByTestId('stage-summary-accept')).toContainText('节点：Acceptance 1')
+    await expect(page.getByTestId('stage-summary-pr')).toContainText('展示：折叠输出 1')
+    await expect(page.getByTestId('stage-summary-build')).not.toContainText('展示：')
+    const clarifyCard = workflow.getByTestId('flow-node-run-created-from-request-clarify')
+    await clarifyCard.click()
+    await page.getByRole('tab', { name: 'Gate影响' }).click()
+    const gateImpact = page.getByTestId('gate-impact-summary')
+    await expect(gateImpact).toContainText('直接下游 Gate')
+    await expect(gateImpact).toContainText('需求确认 Gate')
+    await expect(gateImpact).toContainText('等待中')
+    await expect(gateImpact).toContainText('当前 Task 的产物尚未关联到该 Gate')
+    await expect(gateImpact.getByRole('button', { name: /通过 Gate|Override/ })).toHaveCount(0)
+    await gateImpact.getByRole('button', { name: '查看 Gate' }).click()
+    await expect(page.getByTestId('node-inspector')).toContainText('类型：Gate · 来源：Team Policy')
+    const designCard = workflow.getByTestId('flow-node-run-created-from-request-design')
+    await expect(designCard).toContainText('Task')
+    await expect(designCard).not.toContainText('Review')
+    await designCard.click()
+    await expect(page.getByTestId('node-inspector')).toContainText('类型：Task · 来源：Run 模板')
+
     await page.getByRole('button', { name: /选择本地仓库/ }).click()
     await expect(page.locator('.local-project-panel').getByText('fixture-project', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: /^测试$/ }).click()
@@ -892,6 +983,22 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('agent-workbench')).toContainText('warning-only')
     await expect(page.getByTestId('agent-workbench')).toContainText('Build redacted context')
 
+    await page.getByRole('button', { name: /工作台/ }).click()
+    const reviewedGateInspector = page.getByTestId('node-inspector')
+    await expect(reviewedGateInspector).toContainText('需求确认 Gate')
+    await reviewedGateInspector.getByRole('tab', { name: '引用来源' }).click()
+    await expect(page.getByTestId('knowledge-reference-sources')).toContainText(
+      '当前 Gate 尚无节点作用域内的 Knowledge 引用',
+    )
+    await expect(page.getByTestId('knowledge-reference-sources')).not.toContainText(
+      'Knowledge review completed for this node.',
+    )
+    await reviewedGateInspector.getByRole('tab', { name: 'Evidence' }).click()
+    await expect(page.getByTestId('review-evidence-results')).toContainText(
+      'Knowledge review completed for this node.',
+    )
+    await expect(page.getByTestId('review-evidence-results')).not.toContainText('Review Criteria')
+
     await page.getByLabel('Search runs and knowledge').fill('missing knowledge node')
     await page.getByRole('button', { name: /Team Overview/ }).click()
     await expect(page.getByTestId('team-overview')).toContainText('项目交付健康')
@@ -924,5 +1031,50 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('tests-view')).not.toContainText('Local test evidence')
     await expect(page.getByTestId('tests-view')).not.toContainText('passed')
     expect(pageErrors).toEqual([])
+  })
+
+  test('keeps Coding Engine detection advisory until the user confirms the project executor', async ({ page }) => {
+    await installDesktopApi(page)
+    await page.goto('/')
+    await createFixtureRun(page)
+
+    await page.getByRole('button', { name: /^Agents$/ }).click()
+    const codingSettings = page.locator('details.runtime-settings').filter({
+      hasText: 'Coding Agent 执行配置',
+    })
+    if (!(await codingSettings.getAttribute('open'))) {
+      await codingSettings.locator('summary').click()
+    }
+    await expect(codingSettings).toContainText('Coding Executor：已配置')
+    await expect(codingSettings).toContainText('Coding Engine：可用')
+    await expect(codingSettings).toContainText('Provider：可用')
+    await expect(codingSettings).toContainText('Team Project：已配对')
+    await expect(codingSettings).toContainText('测试命令：已配置')
+    await expect(codingSettings).toContainText('预算策略：已配置')
+    await expect(codingSettings).toContainText('预算评估：允许执行')
+
+    await codingSettings.getByLabel('Coding Executor').selectOption('opencode-http')
+    await codingSettings.getByRole('button', { name: '检测本机 OpenCode' }).click()
+    await expect(codingSettings.getByTestId('opencode-discovery-status')).toContainText(
+      '尚未确认用于当前项目',
+    )
+    expect(await page.evaluate(() => (
+      window as unknown as { __codingConfigurationSaves: unknown[] }
+    ).__codingConfigurationSaves)).toEqual([])
+
+    await codingSettings.getByRole('button', { name: '确认并用于当前项目' }).click()
+    await expect.poll(() => page.evaluate(() => (
+      window as unknown as { __codingConfigurationSaves: unknown[] }
+    ).__codingConfigurationSaves.length)).toBe(1)
+    expect(await page.evaluate(() => (
+      window as unknown as { __codingConfigurationSaves: Array<Record<string, unknown>> }
+    ).__codingConfigurationSaves[0])).toEqual({
+      projectId: 'local-project-1',
+      executor: 'opencode-http',
+      providerId: 'openai',
+      modelId: 'gpt-4.1-mini',
+      binaryPath: '/opt/devflow/bin/opencode',
+      detectedVersion: '1.2.3',
+    })
   })
 })

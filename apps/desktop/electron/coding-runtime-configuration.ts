@@ -4,6 +4,7 @@ import {
   resolveDevFlowCodingExecutorSelection,
   validateTestCommandSafety,
   type BudgetGuardDecision,
+  type CodingExecutorCapability,
   type CodingRuntimeConfiguration,
   type CodingRuntimeReadiness,
   type CodingRuntimeReadinessCheck,
@@ -26,7 +27,7 @@ export type ResolvedCodingRuntimeSelection =
     }
   | {
       source: 'project'
-      executor: 'native-model'
+      executor: 'native-model' | 'opencode-http'
       providerId: string
       configVersion: number
       configuration: CodingRuntimeConfiguration
@@ -109,6 +110,7 @@ export async function evaluateCodingRuntimeReadiness(input: {
   store: LocalStore
   selection: ResolvedCodingRuntimeSelection
   executor: CodingExecutor | null
+  engineAvailable?: boolean
   projectId: string
   runId: string
   nodeId: string
@@ -181,6 +183,38 @@ export async function evaluateCodingRuntimeReadiness(input: {
     configured ? '项目已选择 Coding Agent Executor。' : '请先配置项目级 Coding Agent Executor。',
   )
 
+  const engineReady = Boolean(
+    configured &&
+      input.executor?.engine !== 'not-configured' &&
+      input.executor?.descriptor.availability.status === 'available' &&
+      input.engineAvailable !== false,
+  )
+  check(
+    checks,
+    'engine_unavailable',
+    engineReady,
+    engineReady
+      ? '所选 Coding Engine 可用。'
+      : '所选 Coding Engine 不可用；请重新检测或选择其他 Executor。',
+  )
+
+  const requiredCapabilities: CodingExecutorCapability[] =
+    input.executor?.descriptor.kind === 'opencode'
+      ? ['cancellation', 'permission_relay', 'structured_diff', 'workspace_edit', 'workspace_read']
+      : ['cancellation', 'structured_diff', 'workspace_edit', 'workspace_read']
+  const availableCapabilities = input.executor?.descriptor.capabilities ?? []
+  const capabilityReady = Boolean(
+    configured && requiredCapabilities.every((capability) => availableCapabilities.includes(capability)),
+  )
+  check(
+    checks,
+    'capability_unavailable',
+    capabilityReady,
+    capabilityReady
+      ? 'Coding Executor 满足当前运行所需能力。'
+      : 'Coding Executor 缺少当前运行所需能力。',
+  )
+
   const providerId =
     ('providerId' in input.selection ? input.selection.providerId : undefined) ??
     input.executor?.providerId
@@ -190,18 +224,25 @@ export async function evaluateCodingRuntimeReadiness(input: {
   const providerSecret = providerId
     ? await input.store.getProviderEncryptedSecret(providerId)
     : null
+  const usesOpenCodeProvider = input.selection.executor === 'opencode-http' ||
+    input.executor?.descriptor.kind === 'opencode'
   const providerReady = Boolean(
     input.selection.executor === 'native-deterministic' ||
       input.selection.executor === 'compatibility' ||
+      (usesOpenCodeProvider && providerId && input.executor?.modelId) ||
       (providerMetadata && providerSecret),
   )
   check(
     checks,
     'provider_unavailable',
     providerReady,
-    providerReady
-      ? 'Coding Provider metadata 与本地加密 credential 可用。'
-      : '项目所选 Coding Provider 缺少 metadata 或加密 credential。',
+    usesOpenCodeProvider
+      ? providerReady
+        ? 'OpenCode Provider 与 Model 已由用户确认；Provider credential 由 OpenCode 管理。'
+        : '项目尚未确认 OpenCode Provider 与 Model。'
+      : providerReady
+        ? 'Native Coding Provider metadata 与本地加密 credential 可用。'
+        : '项目所选 Native Coding Provider 缺少 metadata 或本地加密 credential。',
   )
 
   const paired = Boolean(pairing && pairing.localProjectId === input.projectId)
@@ -234,7 +275,7 @@ export async function evaluateCodingRuntimeReadiness(input: {
 
   let budgetPolicy: RuntimeBudgetPolicy | null = null
   let budgetDecision: BudgetGuardDecision | undefined
-  if (paired && configured && providerReady && providerId && workflowReady && project) {
+  if (paired && configured && engineReady && capabilityReady && providerReady && providerId && workflowReady && project) {
     try {
       budgetPolicy = await input.getBudgetPolicy(project.id)
       check(
@@ -296,6 +337,15 @@ export async function evaluateCodingRuntimeReadiness(input: {
       input.executor?.engine && input.executor.engine !== 'not-configured'
         ? input.executor.engine
         : 'unconfigured',
+    executor: input.selection.executor,
+    availability: engineReady ? 'available' : 'unavailable',
+    capabilities: availableCapabilities,
+    providerRequirement:
+      input.selection.executor === 'native-model'
+        ? 'saved-provider'
+        : usesOpenCodeProvider
+          ? 'opencode-provider'
+          : 'none',
     ...(providerId ? { providerId } : {}),
     ...(input.selection.configVersion > 0
       ? { configVersion: input.selection.configVersion }

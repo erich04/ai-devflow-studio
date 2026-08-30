@@ -209,7 +209,22 @@ export default async function Page() {
                   <div>
                     <strong>{project.name}</strong>
                     <p>{project.repository}</p>
-                    <PairingCodePanel projectId={project.id} />
+                    <PairingCodePanel
+                      projectId={project.id}
+                      projectName={project.name}
+                      subject={(() => {
+                        const membership = browserSession?.projectMemberships?.find(
+                          (candidate) => candidate.projectId === project.id,
+                        )
+                        return browserSession && membership
+                          ? {
+                              userId: browserSession.user.id,
+                              userName: browserSession.user.name,
+                              role: membership.role,
+                            }
+                          : null
+                      })()}
+                    />
                   </div>
                   <span>{project.health}</span>
                 </article>

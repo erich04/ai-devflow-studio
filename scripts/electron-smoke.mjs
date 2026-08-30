@@ -219,7 +219,7 @@ function createRecommendedEnforcementPolicy(version, updatedAt) {
     rules: [
       enforcementRule('missing_agent_review', 'protected_gate', 'missing', 'block', updatedAt, {
         floorAction: 'block',
-        remediation: 'Run Knowledge Review Agent for this protected Gate.',
+        remediation: 'Run the knowledge-grounded Gate Review for this protected Gate.',
       }),
       enforcementRule('governance_check', 'testing_standard', 'needs_evidence', 'block', updatedAt, {
         floorAction: 'block',
@@ -276,7 +276,7 @@ async function saveAgentFindingBlockingPolicy() {
           ...rule,
           defaultAction: 'block',
           floorAction: 'block',
-          remediation: 'Address the Agent Review finding with a focused implementation retry.',
+          remediation: 'Address the Gate Review finding with a focused implementation retry.',
           updatedAt,
         }
       : { ...rule, updatedAt },
@@ -417,7 +417,7 @@ async function runKnowledgeReviewViaDesktopApi(
     const reviews = await window.aiDevFlowDesktop.listAgentReviews({ runId: input.runId })
     const matched = reviews.find((review) => review.id === result.review.id)
     if (!matched) {
-      throw new Error(`Knowledge Review was not persisted for ${input.nodeId}`)
+      throw new Error(`Gate Review was not persisted for ${input.nodeId}`)
     }
     return { id: matched.id, nodeId: matched.nodeId }
   }, { runId, nodeId, projectId, providerId: smokeReviewProviderId })
@@ -739,13 +739,13 @@ try {
     runTitle: '重构 GitHub webhook 重试策略',
     nodeTitle: localNodes.clarifyGate.title,
   })
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('Knowledge Review ready')
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('1 evidence gap')
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('基于知识的门禁审查')
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('Gate Review ready')
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('Reviewed 1 complete subject Artifact')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('provider_reported')
   await first.page.getByRole('button', { name: /工作台/ }).click()
   await selectWorkflowNode(first.page, `flow-node-${localNodes.clarifyGate.id}`, localNodes.clarifyGate.title)
-  await expect(first.page.getByTestId('node-inspector')).toContainText('已有 Knowledge Review advisory')
+  await expect(first.page.getByTestId('node-inspector')).toContainText('基于知识的门禁审查已生成 Gate Advisory')
   const clarifyGateDecision = await first.page.evaluate(async ({ runId, nodeId, projectId }) => {
     return window.aiDevFlowDesktop.evaluateGateEnforcement({
       runId,
@@ -786,11 +786,11 @@ try {
     runTitle: '重构 GitHub webhook 重试策略',
     nodeTitle: localNodes.designGate.title,
   })
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('Knowledge Review ready')
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('基于知识的门禁审查')
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('Gate Review ready')
   await first.page.getByRole('button', { name: /工作台/ }).click()
   await selectWorkflowNode(first.page, `flow-node-${localNodes.designGate.id}`, localNodes.designGate.title)
-  await expect(first.page.getByTestId('node-inspector')).toContainText('已有 Knowledge Review advisory')
+  await expect(first.page.getByTestId('node-inspector')).toContainText('基于知识的门禁审查已生成 Gate Advisory')
   const designGateDecision = await first.page.evaluate(async ({ runId, nodeId, projectId }) => {
     return window.aiDevFlowDesktop.evaluateGateEnforcement({
       runId,
@@ -1059,7 +1059,7 @@ try {
     ),
   ).toBe(false)
   await second.page.getByRole('button', { name: /^Agents$/ }).click()
-  await expect(second.page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
+  await expect(second.page.getByTestId('agent-workbench')).toContainText('暂无 Gate Advisory')
   await expect(second.page.getByTestId('agent-workbench')).toContainText('completed')
   await expect(second.page.getByTestId('agent-workbench')).toContainText('devflow-fake-change.txt')
   await expect(second.page.getByTestId('agent-workbench')).toContainText('Total reviews2')

@@ -56,7 +56,7 @@ describe('v1.4 pilot trust boundary contract', () => {
     expect(readme).toContain('Current release and roadmap status')
     expect(readme).toContain('[Roadmap](docs/roadmap.md)')
     expect(readme).not.toContain('V1.4 candidate preparation')
-    expect(readme).toContain('Paid Coding and Knowledge Review runtimes fail closed')
+    expect(readme).toContain('Paid Coding and Gate Review runtimes fail closed')
     expect(readme).toContain('Durable redacted sync uses a persisted outbox')
     expect(readme).not.toContain('fail-closed paid-runtime hardening remains open')
 

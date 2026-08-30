@@ -976,6 +976,87 @@ button:disabled {
   gap: 8px;
 }
 
+.remediation-candidate--hard_block,
+.remediation-candidate--block {
+  border-left: 3px solid var(--danger);
+}
+
+.remediation-candidate--warning {
+  border-left: 3px solid var(--amber);
+}
+
+.remediation-facts {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.remediation-facts > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.remediation-facts dt {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.remediation-facts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.remediation-override {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.gate-impact-card,
+.gate-impact-artifacts {
+  display: grid;
+  gap: 8px;
+}
+
+.gate-impact-card .compact-row > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.gate-impact-artifacts ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gate-impact-artifacts li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.gate-impact-artifacts li span,
+.gate-impact-artifacts li code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
 .gate-enforcement-summary {
   display: grid;
   gap: 10px;
@@ -1691,6 +1772,26 @@ button:disabled {
 .runtime-provider-picker select:focus,
 .runtime-budget-retry input:focus {
   box-shadow: var(--focus-ring);
+}
+
+.coding-readiness-summary {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--amber) 60%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--amber) 8%, var(--surface));
+  color: var(--text);
+}
+
+.coding-readiness-summary p {
+  margin: 0;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.coding-readiness-summary .ghost-button {
+  justify-self: start;
 }
 
 .diff-preview {
@@ -2767,6 +2868,9 @@ code {
 }
 
 .stage-provenance {
+  display: grid;
+  align-content: center;
+  gap: 2px;
   min-height: 42px;
   margin: 0;
   padding: 8px 10px;
@@ -2864,11 +2968,24 @@ code {
 
 .card-provenance {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 4px 10px;
   min-height: 20px;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 900;
+}
+
+.inspector-node-heading {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.inspector-node-heading .meta {
+  overflow-wrap: anywhere;
+  font-size: 11px;
 }
 
 .artifact-chip-row {

@@ -45,6 +45,7 @@ import {
 import { useDesktopActions } from './app/useDesktopActions'
 import { useDesktopWorkspace } from './app/useDesktopWorkspace'
 import { useWorkRequestInbox } from './app/useWorkRequestInbox'
+import { useCodingRuntimeReadiness } from './app/useCodingRuntimeReadiness'
 import { WorkRequestInbox } from './WorkRequestInbox'
 import { WorkbenchSplitter } from './WorkbenchSplitter'
 import {
@@ -420,8 +421,15 @@ export function App() {
     selectedGitHubDeliveryIntent,
     selectedRevokedGitHubRepositoryBinding,
   ])
+  const desktopPairingExpired = Boolean(
+    desktopPairing?.expiresAt &&
+      Number.isFinite(Date.parse(desktopPairing.expiresAt)) &&
+      Date.parse(desktopPairing.expiresAt) <= Date.now(),
+  )
   const hasSelectedLocalProjectBinding = Boolean(
-    selectedLocalProject && desktopPairing?.localProjectId === selectedLocalProject.id,
+    !desktopPairingExpired &&
+      selectedLocalProject &&
+      desktopPairing?.localProjectId === selectedLocalProject.id,
   )
   const handleWorkRequestMaterialized = useCallback(
     async (result: Awaited<ReturnType<NonNullable<typeof desktopApi>['materializeWorkRequest']>>) => {
@@ -446,7 +454,9 @@ export function App() {
     onMaterialized: handleWorkRequestMaterialized,
   })
   const hasDeliveryProjectBinding = Boolean(
-    desktopPairing?.localProjectId && desktopPairing.localProjectId === selectedRun?.projectId,
+    !desktopPairingExpired &&
+      desktopPairing?.localProjectId &&
+      desktopPairing.localProjectId === selectedRun?.projectId,
   )
   const selectedTeamProjectId = hasSelectedLocalProjectBinding
     ? desktopPairing?.projectId
@@ -454,7 +464,11 @@ export function App() {
       ? undefined
       : selectedRun?.projectId
   const selectedTeamProject = teamProjects.find((project) => project.id === selectedTeamProjectId)
-  const teamProjectLabel = selectedTeamProject?.name ?? (hasSelectedLocalProjectBinding ? desktopPairing?.projectId ?? '' : '')
+  const teamProjectLabel =
+    selectedTeamProject?.name ??
+    (hasSelectedLocalProjectBinding
+      ? desktopPairing?.projectName ?? desktopPairing?.projectId ?? ''
+      : '')
   const teamProjectSource = !hasSelectedLocalProjectBinding
     ? 'unbound'
     : selectedTeamProject
@@ -484,10 +498,10 @@ export function App() {
       (!selectedNode || event.nodeId === selectedNode.id) &&
       matchesQuery(normalizedSearchQuery, [event.kind, event.message]),
   )
-  const pairedUser = desktopPairing
+  const pairedUser = !desktopPairingExpired && desktopPairing
     ? {
         id: desktopPairing.userId,
-        name: desktopPairing.userId,
+        name: desktopPairing.userName ?? desktopPairing.userId,
         role: desktopPairing.role,
         avatarInitials: desktopPairing.userId.slice(0, 2).toUpperCase(),
         focus: 'Paired desktop',
@@ -502,11 +516,12 @@ export function App() {
         focus: 'Local run',
       }
     : undefined
-  const currentUser =
-    teamMembers.find((member) => member.id === desktopPairing?.userId || member.id === selectedRun?.creatorId) ??
-    teamMembers[0] ??
-    pairedUser ??
-    runCreatorUser
+  const pairedTeamMember = teamMembers.find((member) => member.id === desktopPairing?.userId)
+  const currentUser = pairedUser
+    ? { ...pairedTeamMember, ...pairedUser, role: pairedUser.role }
+    : teamMembers.find((member) => member.id === selectedRun?.creatorId) ??
+      teamMembers[0] ??
+      runCreatorUser
   const knowledgeReferences = useMemo(
     () =>
       selectedRun
@@ -623,6 +638,20 @@ export function App() {
   const selectedCodingTestEvidence = latestCodingRun
     ? scopedTestEvidence.find((evidence) => evidence.id === latestCodingRun.testEvidenceId)
     : undefined
+  const codingRuntime = useCodingRuntimeReadiness({
+    desktopApi,
+    projectId: selectedLocalProject?.id,
+    runId: selectedRun?.id,
+    nodeId: selectedNode?.id,
+    requestedBy: currentUser?.id,
+    runtimeBudgetApprovalId,
+    refreshKey: [
+      desktopPairing?.tokenId ?? '',
+      selectedLocalProject?.updatedAt ?? '',
+      selectedCodingRuns.map((run) => `${run.id}:${run.status}`).join(','),
+      pendingCodingPermission?.status ?? '',
+    ].join('|'),
+  })
   const remoteRunIdSet = useMemo(() => new Set(remoteRunIds), [remoteRunIds])
   const remoteRunCount = scopedRuns.filter((run) => remoteRunIdSet.has(run.id)).length
   const localRunCount = scopedRuns.length - remoteRunCount
@@ -706,7 +735,7 @@ export function App() {
     executeTestPlan,
     saveAgentProviderCredential,
     runKnowledgeReview,
-    runCodingAgent,
+    runCodingAgent: runCodingAgentAction,
     startRemediationRetry,
     replyCodingPermission,
     cancelCodingRun,
@@ -742,6 +771,19 @@ export function App() {
     gateEnforcementDecision: gateEnforcement.decision,
     applyLocalExecutionState,
   })
+
+  const runCodingAgent = useCallback(() => {
+    if (codingRuntime.readiness?.status !== 'ready') {
+      setActiveView('agents')
+      setToast(
+        codingRuntime.readiness?.checks.find((check) => check.status === 'blocked')?.message ??
+          codingRuntime.error ??
+          'Coding Runtime 尚未就绪，请先完成执行配置。',
+      )
+      return
+    }
+    void runCodingAgentAction()
+  }, [codingRuntime.error, codingRuntime.readiness, runCodingAgentAction, setActiveView, setToast])
 
   async function retryTerminalRemoteSyncOperation(operationId: string) {
     if (!desktopApi) {
@@ -812,7 +854,7 @@ export function App() {
   function openKnowledgeReference(referenceId: string, documentId?: string) {
     const reference = knowledgeReferences.find((candidate) => candidate.id === referenceId)
     const nextRunId = reference?.runId ?? selectedRun?.id
-    const nextNodeId = reference?.nodeId ?? selectedNode?.id
+    const nextNodeId = selectedNode?.id ?? reference?.nodeId
     if (!nextRunId || !nextNodeId) {
       return
     }
@@ -827,6 +869,7 @@ export function App() {
       label: 'Knowledge Governance 引用来源',
       referenceId,
       documentId: documentId ?? reference?.documentId,
+      inspectorTab: '引用来源',
       createdAt: new Date().toISOString(),
     })
     setSearchQuery('')
@@ -836,7 +879,9 @@ export function App() {
   function returnToInspector() {
     if (supportContext) {
       selectRunNode(supportContext.runId, supportContext.nodeId)
-      setSupportContext(null)
+      if (supportContext.focusTarget !== 'knowledge-reference' || !supportContext.inspectorTab) {
+        setSupportContext(null)
+      }
     }
     setActiveView('workbench')
   }
@@ -977,7 +1022,20 @@ export function App() {
           <div className="topbar-actions">
             <ThemeToggle value={themePreference} onChange={changeThemePreference} />
             <form className="desktop-pairing-form" onSubmit={pairDesktopWithTeam}>
-              <span>{hasSelectedLocalProjectBinding ? '已配对 Team' : '未配对 Team'}</span>
+              <span
+                data-testid="desktop-pairing-identity"
+                title={
+                  desktopPairing
+                    ? `${desktopPairing.userName ?? desktopPairing.userId} / ${desktopPairing.role} / ${desktopPairing.projectName ?? desktopPairing.projectId}`
+                    : undefined
+                }
+              >
+                {desktopPairingExpired
+                  ? '配对已过期 · 请重新绑定'
+                  : hasSelectedLocalProjectBinding && desktopPairing
+                    ? `${desktopPairing.userName ?? desktopPairing.userId} · ${desktopPairing.role} · ${desktopPairing.projectName ?? desktopPairing.projectId}`
+                    : '未配对 Team'}
+              </span>
               <input
                 aria-label="Desktop pairing code"
                 placeholder="输入 pairing code"
@@ -1194,11 +1252,15 @@ export function App() {
                   selectedNode={selectedNode}
                   isSelectedCurrentNode={isSelectedCurrentNode}
                   artifacts={selectedArtifacts}
+                  workflowArtifacts={scopedArtifacts}
                   events={selectedEvents}
+                  testEvidence={scopedTestEvidence}
                   governanceChecks={selectedGovernanceChecks}
                   references={knowledgeReferences}
                   latestAgentReview={latestAgentReview}
                   supportContext={supportContext}
+                  onConsumeSupportContext={() => setSupportContext((current) =>
+                    current?.focusTarget === 'knowledge-reference' ? null : current)}
                   policySnapshot={gateEnforcement.policySnapshot}
                   gateEnforcementDecision={gateEnforcement.decision}
                   gateOverrides={gateEnforcement.overrides.filter((override) => override.nodeId === selectedNode?.id)}
@@ -1216,6 +1278,9 @@ export function App() {
                   onOpenTests={() => openSupportContext('local-tests', '执行本地测试并生成 Test Evidence')}
                   onOpenKnowledgeReview={() => openSupportContext('knowledge-review', '运行门禁审查并补齐 Gate Advisory')}
                   onOpenKnowledgeReference={openKnowledgeReference}
+                  codingReadiness={codingRuntime.readiness}
+                  codingReadinessError={codingRuntime.error}
+                  onOpenCodingConfiguration={() => setActiveView('agents')}
                   onRunCodingAgent={runCodingAgent}
                   onCreatePrDraft={generatePrDraft}
                   onPrepareGitHubDelivery={prepareSelectedGitHubDelivery}
@@ -1225,6 +1290,7 @@ export function App() {
                   onStopGitHubDelivery={stopSelectedGitHubDelivery}
                   onVerifyGitHubDeliveryRevocation={verifySelectedGitHubDeliveryRevocation}
                   onCreateAcceptanceBundle={generateAcceptanceBundle}
+                  onSelectWorkflowNode={setSelectedNodeId}
                   selectedGitHubDeliveryIntent={selectedGitHubDeliveryIntent}
                   canVerifyGitHubDeliveryRevocation={canVerifyGitHubDeliveryRevocation}
                   {...(selectedGitHubDeliveryOperatorOutcome
@@ -1365,6 +1431,9 @@ export function App() {
             testEvidence={selectedCodingTestEvidence}
             supportContext={supportContext}
             onReturnToInspector={returnToInspector}
+            codingReadiness={codingRuntime.readiness}
+            codingReadinessError={codingRuntime.error}
+            onRefreshCodingReadiness={codingRuntime.refresh}
           />
         )}
 

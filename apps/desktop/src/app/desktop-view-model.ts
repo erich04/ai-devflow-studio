@@ -19,13 +19,21 @@ import {
 import {
   displayNodeSubtitle,
   displayNodeTitle,
-  getBoardNodeKind,
   getNodeStatusLabel,
   getNodeStatusTone,
   stageLabels,
   type BoardNodeKind,
   type StatusTone,
 } from './node-inspector-view-model'
+import {
+  buildWorkflowNodePresentation,
+  workflowNodeDisplayModeLabels,
+  workflowNodeKindLabels,
+  workflowNodeSourceLabels,
+  type WorkflowNodeDisplayMode,
+  type WorkflowNodePresentation,
+  type WorkflowNodeSourceKind,
+} from './workflow-node-presentation'
 
 export {
   buildGateRequirementMatrix,
@@ -55,6 +63,16 @@ export {
   type StatusDescriptor,
   type StatusTone,
 } from './node-inspector-view-model'
+
+export {
+  buildWorkflowNodePresentation,
+  workflowNodeDisplayModeLabels,
+  workflowNodeKindLabels,
+  workflowNodeSourceLabels,
+  type WorkflowNodeDisplayMode,
+  type WorkflowNodePresentation,
+  type WorkflowNodeSourceKind,
+} from './workflow-node-presentation'
 
 export type ViewId = 'workbench' | 'team' | 'knowledge' | 'agents' | 'skills' | 'mcp' | 'tests'
 
@@ -130,8 +148,6 @@ export function getRunStatusLabel(status: RunStatus): string {
   return runStatusLabels[status]
 }
 
-export type BoardCardProvenance = 'template' | 'policy' | 'runtime' | 'folded-output'
-
 export type StageCompletionState = 'passed' | 'current' | 'blocked' | 'waiting'
 
 export type BoardAttachmentChip = {
@@ -142,12 +158,24 @@ export type BoardAttachmentChip = {
 
 export type WorkflowBoardCard = {
   node: WorkflowNode
+  presentation: WorkflowNodePresentation
   visualKind: BoardNodeKind
   statusLabel: string
   statusTone: StatusTone
-  provenance: BoardCardProvenance
-  provenanceLabel: string
   attachmentChips: BoardAttachmentChip[]
+}
+
+export type WorkflowStageSummaryItem<TKind extends string> = {
+  kind: TKind
+  label: string
+  count: number
+}
+
+export type WorkflowStageSummary = {
+  totalNodeCount: number
+  nodeKinds: Array<WorkflowStageSummaryItem<BoardNodeKind>>
+  sources: Array<WorkflowStageSummaryItem<WorkflowNodeSourceKind>>
+  specialDisplayModes: Array<WorkflowStageSummaryItem<Extract<WorkflowNodeDisplayMode, 'folded'>>>
 }
 
 export type WorkflowBoardStage = {
@@ -156,7 +184,7 @@ export type WorkflowBoardStage = {
   label: string
   completionState: StageCompletionState
   completionLabel: string
-  provenanceSummary: string
+  summary: WorkflowStageSummary
   cards: WorkflowBoardCard[]
 }
 
@@ -341,26 +369,6 @@ export function buildAgentProviderDataSource(provider: AgentProviderConfig | und
   }
 }
 
-function provenanceForNode(node: WorkflowNode, visualKind: BoardNodeKind): BoardCardProvenance {
-  if (visualKind === 'Gate' || visualKind === 'Review') {
-    return 'policy'
-  }
-  if (node.kind === 'test' || node.stage === 'build') {
-    return 'runtime'
-  }
-  if (visualKind === 'Delivery') {
-    return 'folded-output'
-  }
-  return 'template'
-}
-
-const provenanceLabels: Record<BoardCardProvenance, string> = {
-  template: 'Run template',
-  policy: 'Team policy 插入',
-  runtime: 'Local runtime 结果',
-  'folded-output': '折叠输出节点',
-}
-
 function buildAttachmentChips(input: {
   node: WorkflowNode
   artifacts: Artifact[]
@@ -404,21 +412,37 @@ function stageCompletion(input: {
   return { completionState: 'waiting', completionLabel: '等待' }
 }
 
-function stageProvenanceSummary(cards: WorkflowBoardCard[]): string {
-  if (cards.length === 0) {
-    return '无节点，等待 Run template 或 policy 生成。'
+function countPresentationDimension<TKind extends string>(
+  values: readonly TKind[],
+  labels: Record<TKind, string>,
+): Array<WorkflowStageSummaryItem<TKind>> {
+  const counts = new Map<TKind, number>()
+  for (const value of values) {
+    counts.set(value, (counts.get(value) ?? 0) + 1)
   }
+  return Array.from(counts, ([kind, count]) => ({ kind, label: labels[kind], count }))
+}
 
-  const counts = cards.reduce<Record<BoardCardProvenance, number>>(
-    (summary, card) => ({ ...summary, [card.provenance]: summary[card.provenance] + 1 }),
-    { template: 0, policy: 0, runtime: 0, 'folded-output': 0 },
-  )
-  return [
-    counts.template ? `${counts.template} template` : '',
-    counts.policy ? `${counts.policy} policy` : '',
-    counts.runtime ? `${counts.runtime} runtime` : '',
-    counts['folded-output'] ? `${counts['folded-output']} folded` : '',
-  ].filter(Boolean).join(' · ')
+function buildStageSummary(cards: WorkflowBoardCard[]): WorkflowStageSummary {
+  const presentations = cards.map((card) => card.presentation)
+  const foldedModes = presentations
+    .map((presentation) => presentation.displayMode)
+    .filter((displayMode): displayMode is 'folded' => displayMode === 'folded')
+
+  return {
+    totalNodeCount: cards.length,
+    nodeKinds: countPresentationDimension(
+      presentations.map((presentation) => presentation.nodeKind),
+      workflowNodeKindLabels,
+    ),
+    sources: countPresentationDimension(
+      presentations.map((presentation) => presentation.sourceKind),
+      workflowNodeSourceLabels,
+    ),
+    specialDisplayModes: countPresentationDimension(foldedModes, {
+      folded: workflowNodeDisplayModeLabels.folded,
+    }),
+  }
 }
 
 export function buildWorkflowBoard(input: WorkflowRun | {
@@ -437,16 +461,15 @@ export function buildWorkflowBoard(input: WorkflowRun | {
     const cards = run.nodes
       .filter((node) => node.stage === stage)
       .map((node) => {
-        const visualKind = getBoardNodeKind(node)
-        const provenance = provenanceForNode(node, visualKind)
+        const presentation = buildWorkflowNodePresentation(node)
+        const visualKind = presentation.nodeKind
 
         return {
           node,
+          presentation,
           visualKind,
-          statusLabel: getNodeStatusLabel(node.status),
+          statusLabel: presentation.statusLabel,
           statusTone: getNodeStatusTone(node.status),
-          provenance,
-          provenanceLabel: provenanceLabels[provenance],
           attachmentChips: buildAttachmentChips({ node, artifacts, events, testEvidence }),
         }
       })
@@ -460,7 +483,7 @@ export function buildWorkflowBoard(input: WorkflowRun | {
       index: String(index + 1).padStart(2, '0'),
       label: stageLabels[stage],
       ...completion,
-      provenanceSummary: stageProvenanceSummary(cards),
+      summary: buildStageSummary(cards),
       cards,
     }
   })

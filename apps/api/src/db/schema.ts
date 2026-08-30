@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 22
+export const TEAM_SCHEMA_VERSION = 24
 
 export const requiredTeamTableNames = [
   'team_schema_migrations',
@@ -155,9 +155,11 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('organization_id', 'text', { references: 'organizations.id' }),
       column('project_id', 'text', { references: 'projects.id' }),
       column('created_by_user_id', 'text', { references: 'users.id' }),
+      column('issued_role', 'text'),
       column('code_hash', 'text'),
       column('expires_at', 'timestamptz'),
       column('consumed_at', 'timestamptz', { nullable: true }),
+      column('revoked_at', 'timestamptz', { nullable: true }),
       column('failed_attempts', 'integer'),
       column('created_at', 'timestamptz'),
     ],
@@ -169,8 +171,10 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('organization_id', 'text', { references: 'organizations.id' }),
       column('project_id', 'text', { references: 'projects.id' }),
       column('user_id', 'text', { references: 'users.id' }),
+      column('issued_role', 'text'),
       column('token_hash', 'text'),
       column('created_at', 'timestamptz'),
+      column('expires_at', 'timestamptz'),
       column('last_used_at', 'timestamptz', { nullable: true }),
       column('revoked_at', 'timestamptz', { nullable: true }),
     ],
@@ -372,6 +376,7 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('policy_findings', 'jsonb'),
       column('confidence', 'numeric(4,3)'),
       column('gate_advisory', 'jsonb'),
+      column('context_manifest', 'jsonb', { nullable: true }),
       column('created_at', 'timestamptz'),
     ],
   },

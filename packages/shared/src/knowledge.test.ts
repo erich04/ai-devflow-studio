@@ -5,6 +5,7 @@ import {
   buildKnowledgeReferences,
   indexKnowledgeSources,
   lexicalKnowledgeRetriever,
+  projectKnowledgeReferencesForNode,
 } from './knowledge'
 
 const sources = [
@@ -122,10 +123,36 @@ describe('lexicalKnowledgeRetriever', () => {
       chunkId: 'knowledge-chunk-api-health-1-api-health-endpoint-standard',
       strategy: 'lexical',
       score: expect.any(Number),
+      lexicalMatch: {
+        rawScore: expect.any(Number),
+        matchedTerms: expect.arrayContaining(['health', 'degraded']),
+        normalized: false,
+        crossQueryComparable: false,
+        source: 'retriever',
+      },
       contentHash: expect.stringMatching(/^kh-[a-f0-9]{8}$/),
       headingPath: ['API Health Endpoint Standard'],
     })
     expect(hits[0]!.score).toBeGreaterThanOrEqual(2)
+    expect(hits[0]!.semanticRelevance).toBeUndefined()
+    expect(hits[0]!.reason).toContain('not semantic relevance or Gate evidence')
+  })
+
+  it('uses the raw lexical threshold deterministically and does not invent semantic state', () => {
+    const index = indexKnowledgeSources(sources)
+    const query = {
+      id: 'query-threshold',
+      runId: 'run-health-001',
+      targetType: 'run' as const,
+      text: 'health endpoint degraded',
+      topK: 3,
+    }
+    const scored = lexicalKnowledgeRetriever.retrieve({ ...query, minScore: 0 }, index)
+    const topScore = scored[0]!.lexicalMatch!.rawScore
+
+    expect(lexicalKnowledgeRetriever.retrieve({ ...query, minScore: topScore }, index)).not.toHaveLength(0)
+    expect(lexicalKnowledgeRetriever.retrieve({ ...query, minScore: topScore + 1 }, index)).toHaveLength(0)
+    expect(scored.every((hit) => hit.semanticRelevance === undefined)).toBe(true)
   })
 })
 
@@ -175,6 +202,11 @@ describe('buildKnowledgeReferences', () => {
           sourcePath: 'docs/knowledge/standards/api-health.md',
           strategy: 'lexical',
           score: expect.any(Number),
+          lexicalMatch: expect.objectContaining({
+            rawScore: expect.any(Number),
+            normalized: false,
+          }),
+          gateEvidence: { status: 'retrieval_candidate' },
           contentHash: expect.stringMatching(/^kh-[a-f0-9]{8}$/),
         }),
         expect.objectContaining({
@@ -191,6 +223,89 @@ describe('buildKnowledgeReferences', () => {
         }),
       ]),
     )
+  })
+
+  it('projects candidates to the current Gate instead of leaking high lexical hits across stages', () => {
+    const crossStageIndex = indexKnowledgeSources([
+      {
+        sourcePath: 'README.md',
+        markdown: `---
+title: Mini Agent Verify
+category: testing_standard
+tags: mini, agent, deepseek, api, pnpm, verify
+---
+# Verify
+Run pnpm verify for Mini Agent DeepSeek API changes.
+`,
+        updatedAt: '2026-08-28T00:00:00.000Z',
+      },
+      {
+        sourcePath: 'docs/knowledge/requirements.md',
+        markdown: `---
+title: Requirement Scope Checklist
+category: review_checklist
+tags: requirement, acceptance, scope
+---
+# Requirement Scope Checklist
+Clarify acceptance criteria, scope boundaries, assumptions, and non-goals.
+`,
+        updatedAt: '2026-08-28T00:00:00.000Z',
+      },
+    ])
+    const sourceRun = runs[0]!
+    const clarifyGate = sourceRun.nodes.find((node) => node.kind === 'gate' && node.stage === 'clarify')!
+    const references = buildKnowledgeReferences({
+      run: {
+        ...sourceRun,
+        title: 'Simplify Mini Agent DeepSeek API copy',
+        request: 'Simplify Mini Agent and run pnpm verify.',
+      },
+      artifacts: artifacts.filter((artifact) => artifact.kind === 'clarification'),
+      documents: crossStageIndex.documents,
+      chunks: crossStageIndex.chunks,
+      testEvidence: [],
+      targetNode: clarifyGate,
+    })
+
+    expect(references.some((reference) => reference.category === 'testing_standard')).toBe(false)
+    expect(references).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        nodeId: clarifyGate.id,
+        documentId: 'knowledge-doc-requirements',
+        category: 'review_checklist',
+      }),
+    ]))
+  })
+
+  it('keeps legacy untyped references node-scoped without treating run-wide records as current Evidence', () => {
+    const sourceRun = runs[0]!
+    const designGate = sourceRun.nodes.find((node) => node.kind === 'gate' && node.stage === 'design')!
+    const projected = projectKnowledgeReferencesForNode({
+      node: designGate,
+      references: [
+        {
+          id: 'legacy-run-only',
+          runId: sourceRun.id,
+          targetType: 'run',
+          documentId: 'legacy-unscoped-doc',
+          relation: 'cites',
+          reason: 'Old score-only record.',
+          strategy: 'lexical',
+          score: 8,
+        },
+        {
+          id: 'legacy-current-gate',
+          runId: sourceRun.id,
+          nodeId: designGate.id,
+          targetType: 'gate_decision',
+          documentId: 'legacy-current-doc',
+          relation: 'requires_evidence',
+          reason: 'Current Gate record.',
+        },
+      ],
+    })
+
+    expect(projected.map((reference) => reference.id)).toEqual(['legacy-current-gate'])
   })
 })
 
